@@ -75,4 +75,10 @@ void record_repeatable_transform(
 		const EditorSession& session,
 		const TransformDragState& drag,
 		bool duplicate_selected);
+void record_repeatable_transform(
+		RepeatLastActionState& state,
+		std::span<const PolygonObject> selection_objects,
+		SelectionMode selection_mode,
+		const TransformDragState& drag,
+		bool duplicate_selected);
 } // namespace quader_editor_core

@@ -11,6 +11,7 @@
 #include "assets/mesh_asset_payload.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/modeling/operations/portable_operation_mapping.hpp"
+#include "editor/modeling/services/modeling_host_publication_transaction.hpp"
 #include "editor/modeling/services/modeling_mesh_sync_service.hpp"
 #include "editor/modeling/services/modeling_selection_service.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
@@ -38,6 +39,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 
 namespace quader {
 namespace {
@@ -63,6 +65,50 @@ using quader::modeling::SessionWorkspaceDocument;
 using quader::modeling::Vec3;
 using quader::modeling::VertexId;
 using quader::modeling::VertexPositionUpdate;
+
+template <typename ResultType>
+[[nodiscard]] ResultType rollback_publication_result(
+    ModelingHostPublicationTransaction &publication, ResultType result) {
+  if (publication.rollback()) {
+    return result;
+  }
+  const auto mark_rollback_failure = [](auto &command) {
+    command.ok = false;
+    command.changed = true;
+    if (!command.message.empty()) {
+      command.message += " ";
+    }
+    command.message += "Host publication rollback failed.";
+  };
+  if constexpr (requires { result.command; }) {
+    mark_rollback_failure(result.command);
+  } else {
+    mark_rollback_failure(result);
+  }
+  return result;
+}
+
+template <typename ResultType>
+[[nodiscard]] ResultType commit_publication_result(
+    ModelingHostPublicationTransaction &publication, ResultType result) {
+  if (publication.commit()) {
+    return result;
+  }
+  const auto mark_commit_failure = [](auto &command) {
+    command.ok = false;
+    command.changed = false;
+    if (!command.message.empty()) {
+      command.message += " ";
+    }
+    command.message += "Host publication finalize failed.";
+  };
+  if constexpr (requires { result.command; }) {
+    mark_commit_failure(result.command);
+  } else {
+    mark_commit_failure(result);
+  }
+  return rollback_publication_result(publication, std::move(result));
+}
 
 [[nodiscard]] constexpr std::uint64_t sdk_object_key(ObjectId object) {
   return (static_cast<std::uint64_t>(object.generation) << 32U) |
@@ -99,12 +145,6 @@ struct SdkProjectedObjectSnapshot {
   std::optional<CurveAsset> curve;
 };
 
-/// Captures the existing component that a curve publication may detach.
-struct ProjectedCurveBinding {
-  EntityId entity = kInvalidEntityId;
-  AssetId curve = kInvalidAssetId;
-};
-
 /// Caches one exact scene/asset-revision proof for a curve preview binding.
 struct CurvePreviewSharingProof {
   bool valid = false;
@@ -114,6 +154,20 @@ struct CurvePreviewSharingProof {
   std::uint64_t scene_revision = 0;
   std::uint64_t asset_revision = 0;
 };
+
+[[nodiscard]] std::uint32_t identity_material_slot(
+    const ModelingObjectSceneIdentity &identity) {
+  return identity.modeling_object.has_value()
+             ? identity.modeling_object->material_slot
+             : 0u;
+}
+
+[[nodiscard]] std::uint32_t identity_local_frame_version(
+    const ModelingObjectSceneIdentity &identity) {
+  return identity.modeling_object.has_value()
+             ? identity.modeling_object->local_frame_version
+             : kLegacyUnknownModelingObjectLocalFrameVersion;
+}
 
 [[nodiscard]] quader::modeling::Vec3 to_sdk(QVec3 value) {
   return {value.x, value.y, value.z};
@@ -364,17 +418,11 @@ scene_transform_from_modeling_transform(const ModelingTransform3 &transform) {
 }
 
 [[nodiscard]] bool scene_mesh_is_shared(const SceneDocument &scene,
-                                        EntityId owner, AssetId mesh) {
+                                        AssetId mesh) {
   if (mesh == kInvalidAssetId) {
     return false;
   }
-  for (const EntityId entity : scene.entities()) {
-    const MeshComponent *component = scene.mesh(entity);
-    if (entity != owner && component != nullptr && component->mesh == mesh) {
-      return true;
-    }
-  }
-  return false;
+  return scene.mesh_binding_reference_count(mesh) > 1u;
 }
 
 } // namespace
@@ -433,12 +481,15 @@ private:
       std::function<Result<OperationResult>(PolygonDocument &)>;
   using DocumentMutationByObject =
       std::function<Result<OperationResult>(ObjectId, PolygonDocument &)>;
+  using CurveDocumentMutationByObject =
+      std::function<Result<OperationResult>(ObjectId,
+                                            modeling::CurveDocument &)>;
   using WorkspaceTransformResolver = std::function<
       std::optional<quader::modeling::Transform3>(ObjectId)>;
 
   /// Tracks one selected authored vertex and every compiled position derived
   /// from it during a topology-stable transform preview.
-  struct WorkspaceTransformSelectedVertex {
+  struct TransientTransformSelectedVertex {
     std::uint32_t source_vertex_id = 0u;
     QVec3 base_position;
     QVec3 preview_position;
@@ -447,7 +498,7 @@ private:
 
   /// Owns reusable preview buffers and retained topology state for one SDK
   /// object participating in a workspace transform.
-  struct WorkspaceTransformParticipant {
+  struct TransientTransformParticipant {
     ObjectId object;
     int native_object_id = kInvalidModelingObjectId;
     EntityId entity = kInvalidEntityId;
@@ -459,7 +510,7 @@ private:
     PolygonDocument preview_document;
     MeshAsset preview_mesh;
     std::vector<QVec3> base_mesh_positions;
-    std::vector<WorkspaceTransformSelectedVertex> selected_vertices;
+    std::vector<TransientTransformSelectedVertex> selected_vertices;
     std::unordered_map<std::uint32_t, std::size_t> selected_vertex_lookup;
     // The pool owns mutable packed position buffers. A buffer is reused only
     // when no immutable render snapshot still pins it (use_count == 1).
@@ -513,7 +564,6 @@ private:
     std::uint64_t object_map_revision = 0;
     int active_native_object_id = kInvalidModelingObjectId;
     ModelingSelectionMode mode = ModelingSelectionMode::Object;
-    bool workspace_preview_active = false;
     bool sdk_preview_active = false;
     PreviewId preview_id{};
     ObjectId preview_object_id{};
@@ -523,8 +573,8 @@ private:
                            const SelectionSummaryCacheKey &) = default;
   };
 
-  /// Keys the immutable native projection used by read-only host queries.
-  struct NativeSelectionProjectionCacheKey {
+  /// Keys the immutable selection snapshot used by native host queries.
+  struct SelectionProjectionSnapshotCacheKey {
     std::uint64_t persistent_content_revision = 0;
     std::uint64_t session_content_revision = 0;
     std::uint64_t session_selection_revision = 0;
@@ -534,15 +584,236 @@ private:
     std::uint64_t object_map_revision = 0;
     int active_native_object_id = kInvalidModelingObjectId;
     ModelingSelectionMode mode = ModelingSelectionMode::Object;
-    bool workspace_preview_active = false;
     bool sdk_preview_active = false;
     PreviewId preview_id{};
     ObjectId preview_object_id{};
     std::uint64_t preview_content_revision = 0;
 
-    friend bool operator==(const NativeSelectionProjectionCacheKey &,
-                           const NativeSelectionProjectionCacheKey &) = default;
+    friend bool operator==(const SelectionProjectionSnapshotCacheKey &,
+                           const SelectionProjectionSnapshotCacheKey &) =
+        default;
   };
+
+  /// Stores only adapter-local state; owner checkpoints live in the shared
+  /// host-publication transaction and binding registry.
+  struct AdapterPublicationState {
+    int next_native_object_id = 1;
+    int active_native_object_id = kInvalidModelingObjectId;
+    ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
+    std::uint64_t persistent_content_revision = 0;
+    std::uint64_t mode_revision = 0;
+    std::uint64_t curve_preview_scene_revision = 0;
+    std::uint64_t curve_preview_asset_revision = 0;
+    bool curve_preview_external_changes = false;
+    AssetId curve_preview_asset_id = kInvalidAssetId;
+    CurvePreviewSharingProof curve_preview_sharing_proof;
+    bool preview_changed = false;
+    std::string active_preview_operation_id;
+    std::optional<quader_editor_core::EditorOperationId>
+        active_preview_operation;
+    std::optional<quader_editor_core::EditorOperationSettings>
+        active_preview_settings;
+    std::size_t active_preview_deleted_vertex_count = 0;
+    ModelingSdkProjectionStats stats;
+  };
+
+  /** Host identities created or suppressed by one SDK structural preview. */
+  struct StructuralPreviewHostState {
+    struct AddedObject {
+      int modeling_object_id = kInvalidModelingObjectId;
+    };
+
+    PreviewId preview_id{};
+    int next_native_object_id_before = 1;
+    std::vector<AddedObject> added_objects;
+    std::vector<ObjectId> source_objects;
+    std::vector<std::pair<ObjectId, ObjectId>> half_cut_added_by_source;
+    std::optional<ObjectId> bridge_survivor;
+    std::optional<ObjectId> bridge_source;
+    std::optional<quader::modeling::Transform3> bridge_survivor_from_source;
+
+    [[nodiscard]] bool active_for(PreviewId id) const noexcept {
+      return preview_id.valid() && preview_id == id;
+    }
+  };
+
+  /** Participant set for one bounded native host publication. */
+  struct HostPublicationScope {
+    std::vector<EntityId> scene_entities;
+    std::vector<AssetId> asset_ids;
+    std::vector<int> modeling_object_ids;
+  };
+
+  /** Exact pre-preview host identity and binding proof retained for rollback. */
+  struct PreviewHistoryAssetIdentity {
+    ObjectId object{};
+    modeling::SessionObjectKind kind = modeling::SessionObjectKind::Mesh;
+    AssetId asset = kInvalidAssetId;
+    ModelingObjectSceneIdentity identity;
+    bool binding_was_unique = false;
+  };
+
+  /** Exact SDK participant state acknowledged after our last publication. */
+  struct PreviewSdkObjectFence {
+    ObjectId object{};
+    modeling::SessionPreviewAction action =
+        modeling::SessionPreviewAction::ReplaceExisting;
+    modeling::SessionObjectKind kind = modeling::SessionObjectKind::Mesh;
+    std::uint64_t base_content_revision = 0U;
+    std::uint64_t content_revision = 0U;
+    bool changed = false;
+    std::uint32_t material_slot = 0U;
+    bool selected = false;
+
+    friend bool operator==(const PreviewSdkObjectFence &,
+                           const PreviewSdkObjectFence &) = default;
+  };
+
+  struct PreviewSdkFence {
+    PreviewId preview{};
+    std::string operation_id;
+    std::uint64_t preview_content_revision = 0U;
+    std::vector<PreviewSdkObjectFence> preview_objects;
+
+    friend bool operator==(const PreviewSdkFence &,
+                           const PreviewSdkFence &) = default;
+  };
+
+  /** Bounded native projection baseline keyed to the SDK preview identity. */
+  struct MeshPreviewHostBaseline {
+    PreviewId preview_id{};
+    // Only used to transfer a committed transform into native history. It is
+    // never a rollback cursor; the active SDK preview is the rollback owner.
+    std::size_t transform_history_undo_mark = 0U;
+    AdapterPublicationState adapter_before;
+    HostPublicationScope scope;
+    std::optional<ModelingHostProjectionCheckpoint> owner;
+    std::vector<EntityId> created_entities;
+    std::vector<AssetId> created_assets;
+    std::vector<PreviewHistoryAssetIdentity> history_asset_identities;
+    PreviewSdkFence acknowledged_sdk;
+    bool fence_acknowledged = false;
+
+    [[nodiscard]] bool valid() const noexcept {
+      return owner.has_value() && owner->valid();
+    }
+
+    [[nodiscard]] bool active_for(PreviewId id) const noexcept {
+      return valid() && preview_id.valid() && preview_id == id;
+    }
+  };
+
+  /// Carries the complete candidate set required by one SDK mesh preview.
+  struct PreparedMeshPreviewBatch {
+    std::vector<modeling::SessionPreviewDocumentUpdate> updates;
+    std::size_t deleted_vertex_count = 0U;
+    bool changed = false;
+    std::string message;
+  };
+
+  struct PreparedHalfCutObject {
+    ObjectId source{};
+    PolygonDocument front;
+    std::optional<PolygonDocument> back;
+    OperationResult receipt;
+    ModelingObjectSceneIdentity source_identity;
+    std::uint32_t material_slot = 0u;
+  };
+
+  template <typename Value>
+  static void sort_unique(std::vector<Value> &values) {
+    std::ranges::sort(values);
+    values.erase(std::unique(values.begin(), values.end()), values.end());
+  }
+
+  static void finalize_host_publication_scope(HostPublicationScope &scope) {
+    std::erase(scope.scene_entities, kInvalidEntityId);
+    std::erase(scope.asset_ids, kInvalidAssetId);
+    std::erase(scope.modeling_object_ids, kInvalidModelingObjectId);
+    sort_unique(scope.scene_entities);
+    sort_unique(scope.asset_ids);
+    sort_unique(scope.modeling_object_ids);
+  }
+
+  void append_scene_entity_publication_scope(HostPublicationScope &scope,
+                                             EntityId entity,
+                                             bool include_descendants) const {
+    if (entity == kInvalidEntityId) {
+      return;
+    }
+    if (!scene_.exists(entity)) {
+      scope.scene_entities.push_back(entity);
+      return;
+    }
+
+    std::vector<EntityId> entities;
+    if (include_descendants) {
+      entities = scene_.descendants(entity, true);
+    } else {
+      entities.push_back(entity);
+    }
+    scope.scene_entities.insert(scope.scene_entities.end(), entities.begin(),
+                                entities.end());
+    for (const EntityId scoped_entity : entities) {
+      if (const MeshComponent *mesh = scene_.mesh(scoped_entity)) {
+        scope.asset_ids.push_back(mesh->mesh);
+      }
+      if (const CurveComponent *curve = scene_.curve(scoped_entity)) {
+        scope.asset_ids.push_back(curve->curve);
+      }
+      if (const ModelingObjectComponent *modeling =
+              scene_.modeling_object(scoped_entity)) {
+        scope.modeling_object_ids.push_back(modeling->object_id);
+      }
+    }
+  }
+
+  [[nodiscard]] bool append_native_modeling_publication_scope(
+      HostPublicationScope &scope, int native_id,
+      bool include_descendants) const {
+    if (native_id == kInvalidModelingObjectId) {
+      return false;
+    }
+    scope.modeling_object_ids.push_back(native_id);
+    const std::optional<EntityId> entity =
+        object_map_.entity_for_modeling_object(native_id);
+    if (!entity.has_value() || !scene_.exists(*entity)) {
+      return false;
+    }
+    append_scene_entity_publication_scope(scope, *entity, include_descendants);
+    return true;
+  }
+
+  [[nodiscard]] bool append_sdk_object_publication_scope(
+      HostPublicationScope &scope, ObjectId object_id,
+      bool include_descendants) const {
+    const std::optional<int> native = native_object(object_id);
+    return native.has_value() &&
+           append_native_modeling_publication_scope(
+               scope, *native, include_descendants);
+  }
+
+  void append_selected_scene_publication_scope(HostPublicationScope &scope,
+                                               bool include_descendants) const {
+    for (const EntityId selected : scene_.selected_entities()) {
+      append_scene_entity_publication_scope(scope, selected,
+                                            include_descendants);
+    }
+  }
+
+  void append_future_modeling_ids(HostPublicationScope &scope, int first,
+                                  std::size_t count) const {
+    if (first == kInvalidModelingObjectId) {
+      return;
+    }
+    for (std::size_t index = 0; index < count; ++index) {
+      if (index >
+          static_cast<std::size_t>(std::numeric_limits<int>::max() - first)) {
+        break;
+      }
+      scope.modeling_object_ids.push_back(first + static_cast<int>(index));
+    }
+  }
 
   friend class ModelingSdkProjectionAdapter;
 
@@ -585,18 +856,18 @@ public:
     // cursors from still-matching native identities, including canceled preview
     // IDs, without changing the authored asset or its publication revision.
     std::map<int, modeling::CurveIdentityHighWater> retained_curve_cursors;
-    for (const auto &[native_id, object_id] : object_ids_) {
+    for (const auto &[native_id, object_id] : sdk_bindings()) {
       const auto identity =
           object_map_.scene_identity_for_modeling_object(native_id);
       if (!identity.has_value() || !identity->curve.has_value() ||
-          !scene_.exists(identity->entity) ||
-          scene_.uuid(identity->entity) != identity->uuid ||
-          scene_.editor_object_id(identity->entity) != identity->editor_object_id) {
+          !scene_.exists(identity->id) ||
+          scene_.uuid(identity->id) != identity->uuid ||
+          scene_.editor_object_id(identity->id) != identity->editor_object_id) {
         continue;
       }
-      const auto *component = scene_.modeling_object(identity->entity);
+      const auto *component = scene_.modeling_object(identity->id);
       if (component == nullptr || component->object_id != native_id ||
-          scene_.curve(identity->entity) == nullptr) {
+          scene_.curve(identity->id) == nullptr) {
         continue;
       }
       const auto document = session_.curve_document_copy(object_id);
@@ -606,26 +877,18 @@ public:
       }
     }
     object_map_.clear();
-    object_ids_.clear();
-    preview_base_snapshot_.reset();
-    workspace_update_base_snapshot_.reset();
-    preview_asset_checkpoint_.reset();
-    preview_scene_checkpoint_.reset();
+    object_map_.clear_sdk_object_bindings();
+    mesh_preview_host_baseline_.reset();
+    structural_preview_host_state_.reset();
     preview_changed_ = false;
     curve_preview_external_changes_ = false;
     curve_preview_asset_id_ = kInvalidAssetId;
     curve_preview_sharing_proof_ = {};
-    workspace_preview_active_ = false;
-    workspace_preview_undo_mark_ = 0U;
-    workspace_preview_world_from_object_.clear();
-    workspace_transform_participants_.clear();
-    workspace_transform_commit_mutation_ = {};
-    workspace_transform_transient_active_ = false;
-    workspace_transform_snapshotless_ = false;
-    workspace_transform_preexisting_changed_ = false;
+    transient_transform_payload_participants_.clear();
+    transient_transform_payload_active_ = false;
     committed_transform_history_delta_ = {};
     committed_transform_undo_mark_.reset();
-    ++workspace_transform_preview_revision_;
+    ++transient_transform_payload_revision_;
     active_preview_operation_id_.clear();
     active_preview_operation_.reset();
     active_preview_settings_.reset();
@@ -738,9 +1001,15 @@ public:
     for (std::size_t index = 0; index < workspace_objects.size(); ++index) {
       const SceneWorkspaceObject &workspace_object = workspace_objects[index];
       const ObjectId object_id = hydrated.value()[index];
-      object_ids_.emplace(workspace_object.native_object_id, object_id);
-      object_map_.bind(workspace_object.native_object_id,
-                       workspace_object.entity);
+      if (!object_map_.bind_sdk_object(workspace_object.native_object_id,
+                                       object_id) ||
+          !object_map_.bind(workspace_object.native_object_id,
+                            workspace_object.entity)) {
+        session_.reset_workspace_preserving_clipboard();
+        object_map_.clear();
+        active_native_object_id_ = kInvalidModelingObjectId;
+        return;
+      }
       object_map_.remember_scene_entity(workspace_object.native_object_id,
                                         scene_, workspace_object.entity);
       if (workspace_object.mark_sdk_owned) {
@@ -830,7 +1099,7 @@ public:
   }
 
   [[nodiscard]] bool owns_object(int modeling_object_id) const {
-    return object_ids_.contains(modeling_object_id);
+    return sdk_bindings().contains(modeling_object_id);
   }
 
   [[nodiscard]] bool owns_entity(EntityId entity) const {
@@ -839,7 +1108,7 @@ public:
   }
 
   [[nodiscard]] std::size_t object_count() const noexcept {
-    return object_ids_.size();
+    return sdk_bindings().size();
   }
 
   [[nodiscard]] bool has_selection() const {
@@ -1050,15 +1319,15 @@ public:
     return preview;
   }
 
-  [[nodiscard]] quader_editor_core::EditorSession
-  build_native_selection_projection() const {
-    QDR_PROFILE_SCOPE("Modeling SDK rebuild native selection projection");
+  [[nodiscard]] ModelingSelectionProjectionSnapshot
+  build_selection_projection_snapshot() const {
+    QDR_PROFILE_SCOPE("Modeling SDK rebuild selection projection snapshot");
     ++stats_.native_selection_projection_build_count;
     std::vector<quader_editor_core::PolygonObject> objects;
-    objects.reserve(object_ids_.size());
+    objects.reserve(sdk_bindings().size());
     const std::vector<quader::modeling::SessionObjectSummary> summaries =
         session_.objects();
-    for (const auto &[native_id, object_id] : object_ids_) {
+    for (const auto &[native_id, object_id] : sdk_bindings()) {
       const std::optional<EntityId> entity =
           object_map_.entity_for_modeling_object(native_id);
       const MeshComponent *binding =
@@ -1127,32 +1396,29 @@ public:
       objects.push_back(std::move(object));
     }
 
-    quader_editor_core::EditorSession projected(std::move(objects));
-    projected.state().content_revision = content_revision();
-    projected.state().selection_revision = selection_revision();
-    projected.state().active_object_id = active_native_object_id_;
+    quader_editor_core::SelectionMode projected_mode =
+        quader_editor_core::SelectionMode::Object;
     switch (selection_mode_) {
     case ModelingSelectionMode::Object:
     case ModelingSelectionMode::Group:
-      projected.state().selection_mode =
-          quader_editor_core::SelectionMode::Object;
       break;
     case ModelingSelectionMode::Vertex:
-      projected.state().selection_mode =
-          quader_editor_core::SelectionMode::Vertex;
+      projected_mode = quader_editor_core::SelectionMode::Vertex;
       break;
     case ModelingSelectionMode::Edge:
-      projected.state().selection_mode = quader_editor_core::SelectionMode::Edge;
+      projected_mode = quader_editor_core::SelectionMode::Edge;
       break;
     case ModelingSelectionMode::Face:
-      projected.state().selection_mode = quader_editor_core::SelectionMode::Face;
+      projected_mode = quader_editor_core::SelectionMode::Face;
       break;
     }
-    return projected;
+    return ModelingSelectionProjectionSnapshot(
+        std::move(objects), projected_mode, active_native_object_id_,
+        content_revision(), selection_revision());
   }
 
-  [[nodiscard]] const quader_editor_core::EditorSession &
-  native_selection_projection_view() const {
+  [[nodiscard]] const ModelingSelectionProjectionSnapshot &
+  selection_projection_snapshot() const {
     QDR_PROFILE_FUNCTION();
     const quader::modeling::PreviewTransactionSummary preview =
         session_.preview_summary();
@@ -1161,7 +1427,7 @@ public:
     // while a curve candidate advances SDK and global asset revisions.
     const bool curve_preview_active =
         preview.active && preview.kind == modeling::SessionObjectKind::Curve;
-    const NativeSelectionProjectionCacheKey cache_key{
+    const SelectionProjectionSnapshotCacheKey cache_key{
         .persistent_content_revision = persistent_content_revision_,
         .session_content_revision =
             curve_preview_active ? 0U : session_.content_revision(),
@@ -1174,31 +1440,27 @@ public:
         .object_map_revision = object_map_.revision(),
         .active_native_object_id = active_native_object_id_,
         .mode = selection_mode_,
-        .workspace_preview_active = workspace_preview_active_,
         .sdk_preview_active = preview.active && !curve_preview_active,
         .preview_id = curve_preview_active ? PreviewId{} : preview.id,
         .preview_object_id = curve_preview_active ? ObjectId{} : preview.object_id,
         .preview_content_revision =
             curve_preview_active ? 0U : preview.content_revision,
     };
-    if (!native_selection_projection_cache_key_.has_value() ||
-        *native_selection_projection_cache_key_ != cache_key ||
-        !native_selection_projection_cache_.has_value()) {
-      native_selection_projection_cache_ = build_native_selection_projection();
-      native_selection_projection_cache_key_ = cache_key;
+    if (!selection_projection_snapshot_cache_key_.has_value() ||
+        *selection_projection_snapshot_cache_key_ != cache_key ||
+        !selection_projection_snapshot_cache_.has_value()) {
+      selection_projection_snapshot_cache_ =
+          build_selection_projection_snapshot();
+      selection_projection_snapshot_cache_key_ = cache_key;
     }
-    return *native_selection_projection_cache_;
-  }
-
-  [[nodiscard]] quader_editor_core::EditorSession
-  native_selection_projection() const {
-    return native_selection_projection_view();
+    return *selection_projection_snapshot_cache_;
   }
 
   [[nodiscard]] std::optional<EntityId> pick_object_entity(
       const ModelingPickSelectRequest &request,
       std::optional<EntityId> competing_native) const {
-    quader_editor_core::EditorSession projected = native_selection_projection();
+    const ModelingSelectionProjectionSnapshot &projected =
+        selection_projection_snapshot();
     ModelingSelectionService selection;
     const std::optional<int> object = selection.pick_object_id(
         projected, scene_, object_map_, request);
@@ -1211,9 +1473,10 @@ public:
   [[nodiscard]] std::vector<EntityId> box_pick_object_entities(
       const ModelingBoxSelectRequest &request) const {
     QDR_PROFILE_SCOPE("Modeling SDK box pick objects");
-    quader_editor_core::EditorSession projected = [&]() {
+    const ModelingSelectionProjectionSnapshot &projected = [&]()
+        -> const ModelingSelectionProjectionSnapshot & {
       QDR_PROFILE_SCOPE("Box selection build SDK pick projection");
-      return native_selection_projection();
+      return selection_projection_snapshot();
     }();
     ModelingSelectionService selection;
     const std::vector<int> object_ids = [&]() {
@@ -1256,36 +1519,47 @@ public:
       }
     }
 
-    const std::size_t undo_mark = session_.undo_depth();
-    const quader::modeling::ModelingSession session_before = session_;
-    const auto object_ids_before = object_ids_;
-    const ModelingObjectRuntimeMap object_map_before = object_map_;
-    const int next_native_before = next_native_object_id_;
-    const int active_before = active_native_object_id_;
-    const ModelingSelectionMode mode_before = selection_mode_;
-    const std::uint64_t mode_revision_before = mode_revision_;
-    const AssetRegistryProjectionCheckpoint assets_before =
-        assets_.capture_projection_checkpoint();
-    const SceneProjectionCheckpoint scene_before =
-        scene_.capture_projection_checkpoint();
-    std::vector<EntityId> created_entities;
+    const int native_object_id = next_available_native_object_id();
+    if (native_object_id == kInvalidModelingObjectId ||
+        native_object_id == std::numeric_limits<int>::max()) {
+      return {.ok = false,
+              .changed = false,
+              .message = "Native modeling object IDs are exhausted."};
+    }
+    std::vector<EntityId> affected_entities;
+    for (const EntityId selected : scene_.selected_entities()) {
+      std::vector<EntityId> subtree = scene_.descendants(selected, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+    }
+    const std::array affected_modeling_ids{native_object_id};
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_hierarchy = true,
+         .capture_scene_selection = true,
+         .affected_scene_entities = affected_entities,
+         .affected_modeling_object_ids = affected_modeling_ids});
+    if (!publication.ready()) {
+      return {.ok = false,
+              .changed = false,
+              .message = "SDK box publication checkpoint is unavailable."};
+    }
+    const std::size_t undo_mark = publication.sdk_undo_mark();
 
     const auto rollback = [&](std::string message) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      object_ids_ = object_ids_before;
-      object_map_ = object_map_before;
-      next_native_object_id_ = next_native_before;
-      active_native_object_id_ = active_before;
-      selection_mode_ = mode_before;
-      mode_revision_ = mode_revision_before;
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      (void)scene_.restore_projection_checkpoint(scene_before,
-                                                 created_entities);
-      return ModelingCreateBoxResult{
-          .ok = false,
-          .changed = false,
-          .message = std::move(message),
-      };
+      return rollback_publication_result(
+          publication,
+          ModelingCreateBoxResult{
+              .ok = false,
+              .changed = false,
+              .message = std::move(message),
+          });
     };
 
     Result<PolygonDocument> document = PolygonDocument::make_box({
@@ -1332,6 +1606,7 @@ public:
     if (mesh_id == kInvalidAssetId) {
       return rollback("SDK box mesh asset could not be installed.");
     }
+    publication.track_created_asset(mesh_id);
     ++stats_.asset_publication_count;
     if (fails(ModelingSdkProjectionFailurePoint::AfterAssetInstall)) {
       return rollback("Injected failure after SDK mesh asset publication.");
@@ -1342,7 +1617,7 @@ public:
     if (entity == kInvalidEntityId) {
       return rollback("SDK box scene entity could not be created.");
     }
-    created_entities.push_back(entity);
+    publication.track_created_entity(entity);
     if (fails(ModelingSdkProjectionFailurePoint::AfterEntityCreate)) {
       return rollback("Injected failure after SDK scene entity creation.");
     }
@@ -1362,11 +1637,6 @@ public:
             {.sampling_from_local = scene_.world_transform_matrix(entity)})) {
       return rollback("SDK box initial world texture mapping could not be stored.");
     }
-    const int native_object_id = next_available_native_object_id();
-    if (native_object_id == kInvalidModelingObjectId ||
-        native_object_id == std::numeric_limits<int>::max()) {
-      return rollback("Native modeling object IDs are exhausted.");
-    }
     if (!mesh_sync_.bind_projected_object(
             scene_, entity, native_object_id, 0u, true, mesh_id)) {
       return rollback("SDK box scene binding could not be installed.");
@@ -1381,8 +1651,10 @@ public:
       return rollback("Injected failure after SDK scene binding publication.");
     }
 
-    object_ids_.emplace(native_object_id, added.value());
-    object_map_.bind(native_object_id, entity);
+    if (!object_map_.bind_sdk_object(native_object_id, added.value()) ||
+        !object_map_.bind(native_object_id, entity)) {
+      return rollback("SDK box identity binding could not be installed.");
+    }
     object_map_.remember_scene_entity(native_object_id, scene_, entity);
     scene_.clear_selection();
     if (!scene_.set_selected(entity, true)) {
@@ -1412,12 +1684,12 @@ public:
     session_.squash_undo_since(undo_mark);
     ++persistent_content_revision_;
     ++stats_.scene_publication_count;
-    return {
-        .ok = true,
-        .changed = true,
-        .message = "Created box.",
-        .object = std::move(record),
-    };
+    return commit_publication_result<ModelingCreateBoxResult>(
+        publication,
+        {.ok = true,
+         .changed = true,
+         .message = "Created box.",
+         .object = std::move(record)});
   }
 
   [[nodiscard]] ModelingCreateBoxResult
@@ -1573,36 +1845,47 @@ public:
       }
     }
 
-    const std::size_t undo_mark = session_.undo_depth();
-    const quader::modeling::ModelingSession session_before = session_;
-    const auto object_ids_before = object_ids_;
-    const ModelingObjectRuntimeMap object_map_before = object_map_;
-    const int next_native_before = next_native_object_id_;
-    const int active_before = active_native_object_id_;
-    const ModelingSelectionMode mode_before = selection_mode_;
-    const std::uint64_t mode_revision_before = mode_revision_;
-    const AssetRegistryProjectionCheckpoint assets_before =
-        assets_.capture_projection_checkpoint();
-    const SceneProjectionCheckpoint scene_before =
-        scene_.capture_projection_checkpoint();
-    std::vector<EntityId> created_entities;
+    const int native_object_id = next_available_native_object_id();
+    if (native_object_id == kInvalidModelingObjectId ||
+        native_object_id == std::numeric_limits<int>::max()) {
+      return {.ok = false,
+              .changed = false,
+              .message = "Native modeling object IDs are exhausted."};
+    }
+    std::vector<EntityId> affected_entities;
+    for (const EntityId selected : scene_.selected_entities()) {
+      std::vector<EntityId> subtree = scene_.descendants(selected, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+    }
+    const std::array affected_modeling_ids{native_object_id};
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_hierarchy = true,
+         .capture_scene_selection = true,
+         .affected_scene_entities = affected_entities,
+         .affected_modeling_object_ids = affected_modeling_ids});
+    if (!publication.ready()) {
+      return {.ok = false,
+              .changed = false,
+              .message = "SDK object publication checkpoint is unavailable."};
+    }
+    const std::size_t undo_mark = publication.sdk_undo_mark();
 
     const auto rollback = [&](std::string message) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      object_ids_ = object_ids_before;
-      object_map_ = object_map_before;
-      next_native_object_id_ = next_native_before;
-      active_native_object_id_ = active_before;
-      selection_mode_ = mode_before;
-      mode_revision_ = mode_revision_before;
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      (void)scene_.restore_projection_checkpoint(scene_before,
-                                                 created_entities);
-      return ModelingCreateBoxResult{
-          .ok = false,
-          .changed = false,
-          .message = std::move(message),
-      };
+      return rollback_publication_result(
+          publication,
+          ModelingCreateBoxResult{
+              .ok = false,
+              .changed = false,
+              .message = std::move(message),
+          });
     };
 
     const std::string name = requested_name.empty()
@@ -1668,6 +1951,7 @@ public:
                                     : "SDK mesh asset could not be installed.")
                           : std::move(projection_error));
     }
+    publication.track_created_asset(mesh_id);
     ++stats_.asset_publication_count;
     if (fails(ModelingSdkProjectionFailurePoint::AfterAssetInstall)) {
       return rollback("Injected failure after SDK mesh asset publication.");
@@ -1679,7 +1963,7 @@ public:
     if (entity == kInvalidEntityId) {
       return rollback("SDK mesh scene entity could not be created.");
     }
-    created_entities.push_back(entity);
+    publication.track_created_entity(entity);
     if (fails(ModelingSdkProjectionFailurePoint::AfterEntityCreate)) {
       return rollback("Injected failure after SDK scene entity creation.");
     }
@@ -1700,11 +1984,6 @@ public:
             {.sampling_from_local = scene_.world_transform_matrix(entity)})) {
       return rollback("SDK mesh initial world texture mapping could not be stored.");
     }
-    const int native_object_id = next_available_native_object_id();
-    if (native_object_id == kInvalidModelingObjectId ||
-        native_object_id == std::numeric_limits<int>::max()) {
-      return rollback("Native modeling object IDs are exhausted.");
-    }
     const bool bound = kCurve
         ? mesh_sync_.bind_projected_curve_object(
               scene_, entity, native_object_id, mesh_id)
@@ -1723,8 +2002,10 @@ public:
       return rollback("Injected failure after SDK scene binding publication.");
     }
 
-    object_ids_.emplace(native_object_id, added.value());
-    object_map_.bind(native_object_id, entity);
+    if (!object_map_.bind_sdk_object(native_object_id, added.value()) ||
+        !object_map_.bind(native_object_id, entity)) {
+      return rollback("SDK mesh identity binding could not be installed.");
+    }
     object_map_.remember_scene_entity(native_object_id, scene_, entity);
     scene_.clear_selection();
     if (!scene_.set_selected(entity, true)) {
@@ -1754,12 +2035,12 @@ public:
     (void)session_.squash_undo_since(undo_mark);
     ++persistent_content_revision_;
     ++stats_.scene_publication_count;
-    return {
-        .ok = true,
-        .changed = true,
-        .message = kCurve ? "Created curve." : "Created mesh.",
-        .object = std::move(record),
-    };
+    return commit_publication_result<ModelingCreateBoxResult>(
+        publication,
+        {.ok = true,
+         .changed = true,
+         .message = kCurve ? "Created curve." : "Created mesh.",
+         .object = std::move(record)});
   }
 
   [[nodiscard]] ModelingCreateBoxResult create_curve(
@@ -1814,18 +2095,34 @@ public:
     if (document.has_same_geometry(*current)) {
       return {.ok = true, .message = "Curve unchanged."};
     }
-    const auto session_before = session_;
-    const auto assets_before = assets_.capture_projection_checkpoint();
-    const auto scene_before = scene_.capture_projection_checkpoint();
-    const auto binding_before = capture_curve_projection_binding(*object);
-    const auto stats_before = stats_;
+    const auto native = native_object(*object);
+    const auto entity = native.has_value()
+                            ? object_map_.entity_for_modeling_object(*native)
+                            : std::nullopt;
+    if (!native.has_value() || !entity.has_value() ||
+        !scene_.exists(*entity)) {
+      return failure("Curve object has no live host identity.");
+    }
+    const std::array<EntityId, 1> affected_entity{
+        *entity};
+    const std::array<int, 1> affected_modeling_object{*native};
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::CurveProjection,
+         .capture_hierarchy = false,
+         .affected_scene_entities = affected_entity,
+         .affected_modeling_object_ids = affected_modeling_object});
+    if (!publication.ready()) {
+      return failure("Curve publication checkpoint is unavailable.");
+    }
     const auto rollback = [&](std::string message) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      restore_curve_projection_binding(binding_before);
-      (void)scene_.restore_projection_checkpoint(scene_before);
-      stats_ = stats_before;
-      return failure(std::move(message));
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
     };
     auto committed = session_.commit_curve_document(
         *object, std::move(document),
@@ -1835,12 +2132,13 @@ public:
       return rollback(committed.error_message());
     }
     if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
-        !project_committed_object(*object) ||
+        !project_committed_object(publication, *object) ||
         fails(ModelingSdkProjectionFailurePoint::BeforeCommit)) {
       return rollback("Curve projection could not be published.");
     }
     ++persistent_content_revision_;
-    return from_sdk(committed, "Edited curve.");
+    return commit_publication_result(publication,
+                                     from_sdk(committed, "Edited curve."));
   }
 
   [[nodiscard]] bool curve_document_preview_active() const {
@@ -1865,34 +2163,51 @@ public:
     if (!object.has_value() || !document.has_value()) {
       return failure("Curve object does not exist.");
     }
-    preview_base_snapshot_ = capture_snapshot(true);
-    preview_asset_checkpoint_ = assets_.capture_projection_checkpoint();
-    preview_scene_checkpoint_ = scene_.capture_projection_checkpoint();
+    if (!capture_mesh_preview_host_baseline(
+            std::span<const ObjectId>{&*object, 1u}, {}, std::nullopt,
+            SceneModelingProjectionDomain::CurveBindings)) {
+      return failure("Bounded Curve preview baseline is unavailable.");
+    }
+
     auto begun = session_.begin_curve_document_preview(
         *object, "edit_curve", std::move(*document), {});
-    if (!begun.ok() || fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
-      session_.restore_snapshot_preserving_identity_high_water(
-          preview_base_snapshot_->impl_->session);
-      clear_preview_checkpoints();
-      return failure(begun.ok() ? "Curve preview could not begin."
-                                : begun.error_message());
+    if (!begun.ok()) {
+      mesh_preview_host_baseline_.reset();
+      return failure(begun.error_message());
     }
+    if (!activate_mesh_preview_host_baseline(begun.value()) ||
+        fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
+      return abort_preview_publication(begun.value(),
+                                       "Curve preview could not begin.");
+    }
+
     preview_changed_ = false;
     active_preview_operation_id_ = "edit_curve";
     curve_preview_scene_revision_ = scene_.revision();
     curve_preview_asset_revision_ = assets_.revision();
     curve_preview_external_changes_ = false;
-    const auto entity = object_map_.entity_for_modeling_object(modeling_object_id);
-    curve_preview_asset_id_ = entity.has_value() && scene_.curve(*entity) != nullptr
-                                  ? scene_.curve(*entity)->curve : kInvalidAssetId;
+    const auto entity =
+        object_map_.entity_for_modeling_object(modeling_object_id);
+    curve_preview_asset_id_ =
+        entity.has_value() && scene_.curve(*entity) != nullptr
+            ? scene_.curve(*entity)->curve
+            : kInvalidAssetId;
     refresh_curve_preview_sharing_proof(
         entity.value_or(kInvalidEntityId), curve_preview_asset_id_);
-    return {.ok = true, .changed = true, .message = "Curve preview started."};
+    if (!acknowledge_preview_owner_fence()) {
+      return abort_preview_publication(
+          begun.value(), "Curve preview baseline could not be acknowledged.");
+    }
+    return {
+        .ok = true,
+        .changed = true,
+        .message = "Curve preview started.",
+    };
   }
 
   [[nodiscard]] ModelingCommandResult
   update_curve_document_preview(modeling::CurveDocument document) {
-    if (!curve_document_preview_active() || !preview_base_snapshot_.has_value()) {
+    if (!curve_document_preview_active()) {
       return failure("No curve preview is active.");
     }
     const auto validated = document.validate();
@@ -1901,6 +2216,10 @@ public:
                                     : validated.error_message());
     }
     const auto preview = session_.preview_summary();
+    if (!preflight_preview_mutation(preview.id)) {
+      return failure(
+          "Curve preview participants changed outside this preview.");
+    }
     const auto current = session_.preview_curve_document_copy(preview.id);
     if (!current.ok()) {
       return failure(current.error_message());
@@ -1908,47 +2227,30 @@ public:
     if (document.has_same_geometry(current.value())) {
       return {.ok = true, .message = "Curve preview unchanged."};
     }
-    const auto base =
-        preview_base_snapshot_->impl_->session.curve_document_copy(preview.object_id);
+    const auto base = session_.preview_base_curve_document_copy(
+        preview.id, preview.object_id);
     if (!base.ok()) {
       return failure(base.error_message());
     }
     const bool changed_from_base = !document.has_same_geometry(base.value());
-    curve_preview_external_changes_ = curve_preview_external_changes_ ||
-        scene_.revision() != curve_preview_scene_revision_ ||
-        assets_.revision() != curve_preview_asset_revision_;
-    const auto preview_before = session_.capture_preview_checkpoint(preview.id);
-    if (!preview_before.ok()) {
-      return failure(preview_before.error_message());
-    }
-    const auto assets_before = assets_.capture_curve_projection_checkpoint();
-    const auto scene_before = scene_.capture_curve_projection_checkpoint();
-    const auto binding_before = capture_curve_projection_binding(preview.object_id);
-    const CurvePreviewSharingProof sharing_before = curve_preview_sharing_proof_;
-    const auto stats_before = stats_;
+
     ++stats_.curve_preview_checkpoint_capture_count;
     stats_.curve_preview_checkpoint_curve_asset_count +=
-        assets_before.curve_count();
-    const auto rollback = [&](std::string message) {
-      (void)session_.restore_preview_checkpoint(preview_before.value());
-      (void)assets_.restore_curve_projection_checkpoint(assets_before);
-      restore_curve_projection_binding(binding_before);
-      (void)scene_.restore_curve_projection_checkpoint(scene_before);
-      curve_preview_sharing_proof_ = sharing_before;
-      stats_ = stats_before;
-      return failure(std::move(message));
-    };
+        mesh_preview_host_baseline_->scope.asset_ids.size();
+
     auto updated = session_.update_curve_document_preview(
         preview.id, std::move(document),
         {.changed = changed_from_base,
          .dirty = {.topology = true, .geometry = true, .overlays = true}});
     if (!updated.ok()) {
-      return rollback(updated.error_message());
+      return failure(updated.error_message());
     }
     if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
         !project_preview_object()) {
-      return rollback("Curve preview projection could not be published.");
+      return abort_preview_publication(
+          preview.id, "Curve preview projection could not be published.");
     }
+
     preview_changed_ = changed_from_base;
     curve_preview_scene_revision_ = scene_.revision();
     curve_preview_asset_revision_ = assets_.revision();
@@ -1959,9 +2261,17 @@ public:
       }
     }
     ++stats_.preview_publication_count;
-    return {.ok = true, .changed = true, .message = "Curve preview updated."};
+    if (!acknowledge_preview_owner_fence()) {
+      return abort_preview_publication(
+          preview.id,
+          "Curve preview publication could not be acknowledged.");
+    }
+    return {
+        .ok = true,
+        .changed = updated.value().changed,
+        .message = "Curve preview updated.",
+    };
   }
-
   [[nodiscard]] ModelingCommandResult
   replace_mesh_document(int modeling_object_id,
                         const quader_poly::Document &document) {
@@ -2305,6 +2615,586 @@ public:
     return result;
   }
 
+  [[nodiscard]] std::optional<PreparedHalfCutObject>
+  prepare_half_cut_preview_object(
+      ObjectId source,
+      const quader_editor_core::HalfCutOperationSettings &settings,
+      std::optional<PreviewId> preview_id, std::string &error) const {
+    const std::optional<int> native = native_object(source);
+    const std::optional<EntityId> entity =
+        native.has_value()
+            ? object_map_.entity_for_modeling_object(*native)
+            : std::nullopt;
+    const ModelingObjectComponent *component =
+        entity.has_value() && scene_.exists(*entity)
+            ? scene_.modeling_object(*entity)
+            : nullptr;
+    const std::optional<SceneEntityState> scene_identity =
+        entity.has_value() && scene_.exists(*entity)
+            ? capture_scene_entity_state(scene_, *entity)
+            : std::nullopt;
+    if (!native.has_value() || !entity.has_value() || component == nullptr ||
+        !scene_identity.has_value()) {
+      error = "Half-Cut source scene identity is incomplete.";
+      return std::nullopt;
+    }
+
+    Result<PolygonDocument> copied =
+        preview_id.has_value()
+            ? session_.preview_base_document_copy(*preview_id, source)
+            : session_.document_copy(source);
+    if (!copied.ok()) {
+      error = copied.error_message();
+      return std::nullopt;
+    }
+    PolygonDocument working = std::move(copied).value();
+    Result<AuthoredTopology> topology = working.authored_topology();
+    if (!topology.ok() || topology.value().vertices.empty()) {
+      error = topology.ok() ? "Half-Cut target mesh has no vertices."
+                            : topology.error_message();
+      return std::nullopt;
+    }
+    quader::modeling::Vec3 minimum = topology.value().vertices.front().position;
+    quader::modeling::Vec3 maximum = minimum;
+    for (const quader::modeling::AuthoredTopologyVertex &vertex :
+         topology.value().vertices) {
+      minimum.x = std::min(minimum.x, vertex.position.x);
+      minimum.y = std::min(minimum.y, vertex.position.y);
+      minimum.z = std::min(minimum.z, vertex.position.z);
+      maximum.x = std::max(maximum.x, vertex.position.x);
+      maximum.y = std::max(maximum.y, vertex.position.y);
+      maximum.z = std::max(maximum.z, vertex.position.z);
+    }
+    const quader::modeling::Vec3 center{
+        (minimum.x + maximum.x) * 0.5F,
+        (minimum.y + maximum.y) * 0.5F,
+        (minimum.z + maximum.z) * 0.5F,
+    };
+    quader::modeling::PlaneSplitSpec split{
+        .a = center,
+        .cap = settings.fill_parts,
+    };
+    switch (settings.axis) {
+    case quader_editor_core::HalfCutAxis::X:
+      split.b = {center.x, center.y + 1.0F, center.z};
+      split.c = {center.x, center.y, center.z + 1.0F};
+      break;
+    case quader_editor_core::HalfCutAxis::Y:
+      split.b = {center.x, center.y, center.z + 1.0F};
+      split.c = {center.x + 1.0F, center.y, center.z};
+      break;
+    case quader_editor_core::HalfCutAxis::Z:
+      split.b = {center.x + 1.0F, center.y, center.z};
+      split.c = {center.x, center.y + 1.0F, center.z};
+      break;
+    }
+
+    PreparedHalfCutObject prepared;
+    prepared.source = source;
+    static_cast<SceneEntityState &>(prepared.source_identity) = *scene_identity;
+    prepared.material_slot = component->material_slot;
+    if (!settings.separate_parts) {
+      Result<OperationResult> cut = working.cut_surface_by_plane(split);
+      if (!cut.ok() || !cut.value().success || !cut.value().changed) {
+        error = cut.ok() ? cut.value().message : cut.error_message();
+        return std::nullopt;
+      }
+      Result<OperationResult> cleared = working.clear_selection();
+      if (!cleared.ok()) {
+        error = cleared.error_message();
+        return std::nullopt;
+      }
+      prepared.front = std::move(working);
+      prepared.receipt = std::move(cut).value();
+      return prepared;
+    }
+
+    Result<quader::modeling::SplitPolygonDocuments> cut =
+        working.split_by_plane(split);
+    if (!cut.ok()) {
+      error = cut.error_message();
+      return std::nullopt;
+    }
+    Result<OperationResult> cleared_front = cut.value().front.clear_selection();
+    Result<OperationResult> cleared_back = cut.value().back.clear_selection();
+    if (!cleared_front.ok() || !cleared_back.ok()) {
+      error = !cleared_front.ok() ? cleared_front.error_message()
+                                  : cleared_back.error_message();
+      return std::nullopt;
+    }
+    prepared.front = std::move(cut.value().front);
+    prepared.back.emplace(std::move(cut.value().back));
+    prepared.receipt = cut.value().receipt;
+    return prepared;
+  }
+
+  [[nodiscard]] ModelingCommandResult begin_half_cut_preview(
+      const quader_editor_core::HalfCutOperationSettings &settings) {
+    if (selection_mode_ != ModelingSelectionMode::Object &&
+        selection_mode_ != ModelingSelectionMode::Group) {
+      return failure("Half-Cut requires object selection mode.");
+    }
+    const std::vector<ObjectId> sources = selected_sdk_objects();
+    if (sources.empty()) {
+      return failure("Half-Cut needs one or more selected meshes.");
+    }
+
+    std::vector<PreparedHalfCutObject> prepared;
+    prepared.reserve(sources.size());
+    std::string error;
+    for (const ObjectId source : sources) {
+      std::optional<PreparedHalfCutObject> object =
+          prepare_half_cut_preview_object(source, settings, std::nullopt, error);
+      if (!object.has_value()) {
+        return failure(std::move(error));
+      }
+      prepared.push_back(std::move(*object));
+    }
+
+    modeling::SessionPreviewTransactionRequest request;
+    request.replace_object_selection = true;
+    request.participants.reserve(prepared.size() *
+                                 (settings.separate_parts ? 2u : 1u));
+    std::vector<std::pair<std::size_t, std::size_t>> add_request_sources;
+    for (std::size_t index = 0; index < prepared.size(); ++index) {
+      PreparedHalfCutObject &object = prepared[index];
+      request.participants.push_back({
+          .action = modeling::SessionPreviewAction::ReplaceExisting,
+          .object = object.source,
+          .document = modeling::SessionPreviewDocument{object.front},
+          .receipt = object.receipt,
+          .name = object.source_identity.name,
+          .material_slot = object.material_slot,
+          .selected = true,
+      });
+      if (object.back.has_value()) {
+        const std::size_t request_index = request.participants.size();
+        request.participants.push_back({
+            .action = modeling::SessionPreviewAction::AddProvisional,
+            .object = {},
+            .document = modeling::SessionPreviewDocument{*object.back},
+            .receipt = object.receipt,
+            .name = object.source_identity.name,
+            .material_slot = object.material_slot,
+            .selected = true,
+        });
+        add_request_sources.emplace_back(request_index, index);
+      }
+    }
+    request.active_participant_index = request.participants.size() - 1u;
+
+    AdapterPublicationState host_before =
+        capture_adapter_publication_state();
+    std::optional<int> first_added_native;
+    if (!add_request_sources.empty()) {
+      first_added_native = reserve_native_object_ids(add_request_sources.size());
+      if (!first_added_native.has_value()) {
+        return failure("Native modeling object IDs are exhausted.");
+      }
+    }
+    std::vector<int> affected_modeling_ids;
+    affected_modeling_ids.reserve(sources.size() + add_request_sources.size());
+    for (const ObjectId source : sources) {
+      const std::optional<int> native = native_object(source);
+      const std::optional<EntityId> entity =
+          native.has_value()
+              ? object_map_.entity_for_modeling_object(*native)
+              : std::nullopt;
+      if (!native.has_value() || !entity.has_value()) {
+        restore_adapter_publication_state(std::move(host_before));
+        return failure("Half-Cut source scene identity is not live.");
+      }
+      affected_modeling_ids.push_back(*native);
+    }
+    for (std::size_t index = 0; index < add_request_sources.size(); ++index) {
+      affected_modeling_ids.push_back(*first_added_native +
+                                      static_cast<int>(index));
+    }
+    if (!capture_mesh_preview_host_baseline(
+            sources, affected_modeling_ids, host_before,
+            SceneModelingProjectionDomain::MeshBindings |
+                SceneModelingProjectionDomain::Selection)) {
+      restore_adapter_publication_state(std::move(host_before));
+      return failure("Bounded Half-Cut preview baseline is unavailable.");
+    }
+
+    Result<modeling::SessionPreviewBeginResult> begun =
+        session_.begin_preview_transaction("half_cut", std::move(request));
+    if (!begun.ok()) {
+      restore_adapter_publication_state(
+          std::move(mesh_preview_host_baseline_->adapter_before));
+      mesh_preview_host_baseline_.reset();
+      return failure(begun.error_message());
+    }
+    if (!activate_mesh_preview_host_baseline(begun.value().preview_id) ||
+        fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
+        !project_preview_object(true)) {
+      return abort_preview_publication(
+          begun.value().preview_id,
+          "Half-Cut preview publication failed.");
+    }
+    StructuralPreviewHostState structural;
+    structural.preview_id = begun.value().preview_id;
+    structural.next_native_object_id_before = host_before.next_native_object_id;
+    structural.source_objects = sources;
+    std::size_t added_index = 0u;
+    for (const auto &[request_index, prepared_index] : add_request_sources) {
+      const auto identity = std::ranges::find(
+          begun.value().participants, request_index,
+          &modeling::SessionPreviewParticipantIdentity::participant_index);
+      if (identity == begun.value().participants.end() ||
+          identity->action != modeling::SessionPreviewAction::AddProvisional) {
+        return abort_preview_publication(
+            begun.value().preview_id,
+            "Half-Cut preview identity mapping failed.");
+      }
+      int native = kInvalidModelingObjectId;
+      EntityId entity = kInvalidEntityId;
+      PreparedHalfCutObject &source = prepared[prepared_index];
+      const bool published = publish_new_object(
+          nullptr, identity->object_id, source.source_identity,
+          source.material_slot,
+          native, entity, false,
+          *first_added_native + static_cast<int>(added_index),
+          begun.value().preview_id);
+      if (!published) {
+        return abort_preview_publication(
+            begun.value().preview_id,
+            "Half-Cut back preview projection failed.");
+      }
+      structural.added_objects.push_back(
+          {.modeling_object_id = native});
+      structural.half_cut_added_by_source.emplace_back(source.source,
+                                                       identity->object_id);
+      ++added_index;
+    }
+    structural_preview_host_state_ = std::move(structural);
+    preview_changed_ = true;
+    active_preview_operation_id_ = "half_cut";
+    active_preview_operation_ = quader_editor_core::EditorOperationId::HalfCut;
+    ++stats_.preview_publication_count;
+    if (!acknowledge_preview_owner_fence()) {
+      return abort_preview_publication(
+          begun.value().preview_id,
+          "Half-Cut preview publication could not be acknowledged.");
+    }
+    return {.ok = true,
+            .changed = true,
+            .message = "Half-Cut preview started."};
+  }
+
+  [[nodiscard]] ModelingCommandResult update_half_cut_preview(
+      const quader_editor_core::HalfCutOperationSettings &settings) {
+    const modeling::PreviewTransactionSummary preview =
+        session_.preview_summary();
+    if (!structural_preview_host_state_.has_value() ||
+        !structural_preview_host_state_->active_for(preview.id)) {
+      return failure("Half-Cut preview host state is unavailable.");
+    }
+    if (!preflight_preview_mutation(preview.id)) {
+      return failure(
+          "Half-Cut preview participants changed outside this preview.");
+    }
+    const bool preview_separates_parts =
+        !structural_preview_host_state_->half_cut_added_by_source.empty();
+    if (preview_separates_parts != settings.separate_parts) {
+      const auto *previous_settings =
+          active_preview_settings_.has_value()
+              ? std::get_if<quader_editor_core::HalfCutOperationSettings>(
+                    &*active_preview_settings_)
+              : nullptr;
+      if (previous_settings == nullptr) {
+        return failure("Half-Cut preview settings are unavailable.");
+      }
+      const quader_editor_core::HalfCutOperationSettings rollback_settings =
+          *previous_settings;
+      // AddProvisional participants cannot be inserted into or removed from an
+      // active portable transaction. End only this preview generation at its
+      // retained owner baseline, then begin a new generation directly in the
+      // adapter. The outer command remains UpdatePreview, so this structural
+      // settings edit cannot create an editor or SDK history entry.
+      // Failure injection is checked while the prior generation is still
+      // intact. It models a rejected candidate rebuild without sacrificing
+      // the live preview that still represents the committed settings.
+      if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
+        return failure("Half-Cut preview rebuild failed.");
+      }
+      if (!restore_preview_to_original_baseline(preview.id, false)) {
+        return {.ok = false,
+                .changed = true,
+                .message = "Half-Cut preview could not be rebuilt."};
+      }
+      ModelingCommandResult rebuilt = begin_half_cut_preview(settings);
+      if (!rebuilt.ok) {
+        const std::string rebuild_message = rebuilt.message.empty()
+                                                ? "Half-Cut preview rebuild failed."
+                                                : rebuilt.message;
+        if (preview_active()) {
+          return rebuilt;
+        }
+        ModelingCommandResult rolled_back =
+            begin_half_cut_preview(rollback_settings);
+        if (!rolled_back.ok) {
+          return {
+              .ok = false,
+              .changed = true,
+              .message = rebuild_message +
+                         " The previous preview could not be restored.",
+          };
+        }
+        active_preview_settings_ = rollback_settings;
+        return failure(rebuild_message);
+      }
+      rebuilt.message = "Half-Cut preview rebuilt.";
+      return rebuilt;
+    }
+    std::vector<modeling::SessionPreviewDocumentUpdate> updates;
+    updates.reserve(preview.objects.size());
+    std::string error;
+    for (const ObjectId source :
+         structural_preview_host_state_->source_objects) {
+      std::optional<PreparedHalfCutObject> object =
+          prepare_half_cut_preview_object(source, settings, preview.id, error);
+      if (!object.has_value()) {
+        return failure(std::move(error));
+      }
+      updates.push_back({.object = source,
+                         .document = std::move(object->front),
+                         .receipt = object->receipt});
+      const auto added = std::ranges::find(
+          structural_preview_host_state_->half_cut_added_by_source, source,
+          &std::pair<ObjectId, ObjectId>::first);
+      if (object->back.has_value()) {
+        if (added ==
+            structural_preview_host_state_->half_cut_added_by_source.end()) {
+          return failure("Half-Cut preview participant mapping is incomplete.");
+        }
+        updates.push_back({.object = added->second,
+                           .document = std::move(*object->back),
+                           .receipt = object->receipt});
+      } else if (added !=
+                 structural_preview_host_state_->half_cut_added_by_source.end()) {
+        return failure("Half-Cut preview participant mapping is inconsistent.");
+      }
+    }
+
+    Result<modeling::SessionPreviewCheckpoint> sdk_checkpoint =
+        session_.capture_preview_checkpoint(preview.id);
+    if (!sdk_checkpoint.ok()) {
+      return failure(sdk_checkpoint.error_message());
+    }
+    Result<OperationResult> updated =
+        session_.update_preview_transaction(preview.id, std::move(updates));
+    if (!updated.ok()) {
+      return failure(updated.error_message());
+    }
+    if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
+      Result<OperationResult> restored =
+          session_.restore_preview_checkpoint(sdk_checkpoint.value());
+      if (!restored.ok() || !preview_fence_matches(preview.id)) {
+        return {.ok = false,
+                .changed = true,
+                .message =
+                    "Half-Cut preview candidate and rollback both failed."};
+      }
+      return failure("Half-Cut preview publication failed.");
+    }
+    if (!project_preview_object()) {
+      return abort_preview_publication(
+          preview.id, "Half-Cut preview publication failed.");
+    }
+    preview_changed_ = true;
+    ++stats_.preview_publication_count;
+    if (!acknowledge_preview_owner_fence()) {
+      return abort_preview_publication(
+          preview.id,
+          "Half-Cut preview publication could not be acknowledged.");
+    }
+    return {.ok = true,
+            .changed = true,
+            .message = "Half-Cut preview updated."};
+  }
+
+  [[nodiscard]] ModelingCommandResult begin_bridge_preview(int steps) {
+    if (selection_mode_ != ModelingSelectionMode::Edge &&
+        selection_mode_ != ModelingSelectionMode::Face) {
+      return failure("Bridge works only in edge or face mode.");
+    }
+    std::vector<ObjectId> sources = selected_component_objects();
+    if (sources.size() != 2u) {
+      return failure("Bridge preview needs exactly two selected meshes.");
+    }
+    if (const std::optional<ObjectId> active = active_sdk_object()) {
+      const auto found = std::ranges::find(sources, *active);
+      if (found != sources.end()) {
+        std::rotate(sources.begin(), found, std::next(found));
+      }
+    }
+    const ObjectId survivor = sources[0];
+    const ObjectId source = sources[1];
+    const std::optional<int> survivor_native = native_object(survivor);
+    const std::optional<int> source_native = native_object(source);
+    const std::optional<EntityId> survivor_entity =
+        survivor_native.has_value()
+            ? object_map_.entity_for_modeling_object(*survivor_native)
+            : std::nullopt;
+    const std::optional<EntityId> source_entity =
+        source_native.has_value()
+            ? object_map_.entity_for_modeling_object(*source_native)
+            : std::nullopt;
+    if (!survivor_entity.has_value() || !source_entity.has_value() ||
+        !scene_.exists(*survivor_entity) || !scene_.exists(*source_entity)) {
+      return failure("Bridge source scene identity is not live.");
+    }
+    const std::optional<QMat4> survivor_from_world =
+        try_scene_matrix_inverse(scene_.world_transform_matrix(*survivor_entity));
+    if (!survivor_from_world.has_value()) {
+      return failure("Bridge survivor transform is not invertible.");
+    }
+    const quader::modeling::Transform3 survivor_from_source = to_sdk(
+        scene_transform_multiply(*survivor_from_world,
+                                 scene_.world_transform_matrix(*source_entity)));
+    Result<modeling::SessionBridgePreviewCandidate> candidate =
+        session_.prepare_bridge_documents(
+            survivor, source, survivor_from_source,
+            selection_mode_ == ModelingSelectionMode::Face
+                ? SelectionKind::Face
+                : SelectionKind::Edge,
+            steps);
+    if (!candidate.ok()) {
+      return failure(candidate.error_message());
+    }
+    const ModelingObjectComponent *survivor_component =
+        scene_.modeling_object(*survivor_entity);
+    const ModelingObjectComponent *source_component =
+        scene_.modeling_object(*source_entity);
+    if (survivor_component == nullptr || source_component == nullptr) {
+      return failure("Bridge source modeling identity is incomplete.");
+    }
+    modeling::SessionPreviewTransactionRequest request;
+    request.replace_object_selection = true;
+    request.active_participant_index = 0u;
+    request.participants.push_back({
+        .action = modeling::SessionPreviewAction::ReplaceExisting,
+        .object = survivor,
+        .document = modeling::SessionPreviewDocument{
+            candidate.value().survivor_document},
+        .receipt = candidate.value().receipt,
+        .name = scene_.name(*survivor_entity) != nullptr
+                    ? scene_.name(*survivor_entity)->name
+                    : "Mesh",
+        .material_slot = survivor_component->material_slot,
+        .selected = true,
+    });
+    request.participants.push_back({
+        .action = modeling::SessionPreviewAction::RemoveExisting,
+        .object = source,
+        .document = std::nullopt,
+        .receipt = candidate.value().receipt,
+        .name = scene_.name(*source_entity) != nullptr
+                    ? scene_.name(*source_entity)->name
+                    : "Mesh",
+        .material_slot = source_component->material_slot,
+        .selected = false,
+    });
+    const std::array<int, 2> affected_modeling_ids{*survivor_native,
+                                                   *source_native};
+    AdapterPublicationState host_before =
+        capture_adapter_publication_state();
+    if (!capture_mesh_preview_host_baseline(
+            sources, affected_modeling_ids, host_before)) {
+      return failure("Bounded Bridge preview baseline is unavailable.");
+    }
+    Result<modeling::SessionPreviewBeginResult> begun =
+        session_.begin_preview_transaction("bridge", std::move(request));
+    if (!begun.ok()) {
+      mesh_preview_host_baseline_.reset();
+      return failure(begun.error_message());
+    }
+    if (!activate_mesh_preview_host_baseline(begun.value().preview_id) ||
+        fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
+        !project_preview_object(true) || !scene_.clear_mesh(*source_entity)) {
+      return abort_preview_publication(
+          begun.value().preview_id, "Bridge preview publication failed.");
+    }
+    structural_preview_host_state_ = StructuralPreviewHostState{
+        .preview_id = begun.value().preview_id,
+        .next_native_object_id_before = next_native_object_id_,
+        .source_objects = sources,
+        .bridge_survivor = survivor,
+        .bridge_source = source,
+        .bridge_survivor_from_source = survivor_from_source,
+    };
+    preview_changed_ = true;
+    active_preview_operation_id_ = "bridge";
+    active_preview_operation_ = quader_editor_core::EditorOperationId::Bridge;
+    ++stats_.preview_publication_count;
+    if (!acknowledge_preview_owner_fence()) {
+      return abort_preview_publication(
+          begun.value().preview_id,
+          "Bridge preview publication could not be acknowledged.");
+    }
+    return {.ok = true,
+            .changed = true,
+            .message = "Bridge preview started."};
+  }
+
+  [[nodiscard]] ModelingCommandResult update_bridge_preview(int steps) {
+    const modeling::PreviewTransactionSummary preview =
+        session_.preview_summary();
+    if (!structural_preview_host_state_.has_value() ||
+        !structural_preview_host_state_->active_for(preview.id) ||
+        !structural_preview_host_state_->bridge_survivor.has_value() ||
+        !structural_preview_host_state_->bridge_source.has_value() ||
+        !structural_preview_host_state_->bridge_survivor_from_source.has_value()) {
+      return failure("Bridge preview host state is unavailable.");
+    }
+    if (!preflight_preview_mutation(preview.id)) {
+      return failure(
+          "Bridge preview participants changed outside this preview.");
+    }
+    Result<modeling::SessionBridgePreviewCandidate> candidate =
+        session_.prepare_bridge_documents(
+            *structural_preview_host_state_->bridge_survivor,
+            *structural_preview_host_state_->bridge_source,
+            *structural_preview_host_state_->bridge_survivor_from_source,
+            selection_mode_ == ModelingSelectionMode::Face
+                ? SelectionKind::Face
+                : SelectionKind::Edge,
+            steps);
+    if (!candidate.ok()) {
+      return failure(candidate.error_message());
+    }
+    const ObjectId survivor =
+        *structural_preview_host_state_->bridge_survivor;
+    std::vector<modeling::SessionPreviewDocumentUpdate> updates;
+    updates.push_back({
+        .object = survivor,
+        .document = std::move(candidate.value().survivor_document),
+        .receipt = std::move(candidate.value().receipt),
+    });
+    Result<OperationResult> updated =
+        session_.update_preview_transaction(preview.id, std::move(updates));
+    if (!updated.ok()) {
+      return failure(updated.error_message());
+    }
+    if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
+        !project_preview_object()) {
+      return abort_preview_publication(
+          preview.id, "Bridge preview publication failed.");
+    }
+    preview_changed_ = true;
+    ++stats_.preview_publication_count;
+    if (!acknowledge_preview_owner_fence()) {
+      return abort_preview_publication(
+          preview.id,
+          "Bridge preview publication could not be acknowledged.");
+    }
+    return {.ok = true,
+            .changed = true,
+            .message = "Bridge preview updated."};
+  }
+
   [[nodiscard]] ModelingCommandResult begin_operation_preview(
       quader_editor_core::EditorOperationId operation,
       const quader_editor_core::EditorOperationSettings &settings) {
@@ -2318,22 +3208,10 @@ public:
       if (half_cut == nullptr) {
         return failure("Half-Cut preview settings are invalid.");
       }
-      workspace_preview_undo_mark_ = session_.undo_depth();
-      const ModelingSdkProjectionSnapshot base = capture_snapshot(true);
-      preview_base_snapshot_ = base;
-      preview_asset_checkpoint_ = assets_.capture_projection_checkpoint();
-      preview_scene_checkpoint_ = scene_.capture_projection_checkpoint();
-      workspace_preview_active_ = true;
-      active_preview_operation_id_ = std::string(sdk_operation_id(operation));
-      active_preview_operation_ = operation;
-      ModelingCommandResult result = half_cut_selected_objects(*half_cut, true);
-      if (!result.ok) {
-        const std::string message = result.message;
-        (void)restore_snapshot_exact(base);
-        return failure(message);
+      ModelingCommandResult result = begin_half_cut_preview(*half_cut);
+      if (result.ok) {
+        active_preview_settings_ = settings;
       }
-      preview_changed_ = result.changed;
-      active_preview_settings_ = settings;
       return result;
     }
     if (operation == quader_editor_core::EditorOperationId::Bridge &&
@@ -2343,177 +3221,69 @@ public:
       if (bridge == nullptr) {
         return failure("Bridge preview settings are invalid.");
       }
-      workspace_preview_undo_mark_ = session_.undo_depth();
-      const ModelingSdkProjectionSnapshot base = capture_snapshot(true);
-      preview_base_snapshot_ = base;
-      preview_asset_checkpoint_ = assets_.capture_projection_checkpoint();
-      preview_scene_checkpoint_ = scene_.capture_projection_checkpoint();
-      workspace_preview_active_ = true;
-      active_preview_operation_id_ = std::string(sdk_operation_id(operation));
-      active_preview_operation_ = operation;
       const auto normalized =
           quader_editor_core::normalize_bridge_operation_settings(*bridge);
-      ModelingCommandResult result =
-          bridge_selected_components(normalized.steps, true);
-      if (!result.ok) {
-        const std::string message = result.message;
-        (void)restore_snapshot_exact(base);
-        return failure(message);
+      ModelingCommandResult result = begin_bridge_preview(normalized.steps);
+      if (result.ok) {
+        active_preview_settings_ = settings;
       }
-      preview_changed_ = result.changed;
-      active_preview_settings_ = settings;
       return result;
     }
     const DocumentMutation mutation = preview_mutation_for(operation, settings);
     if (!mutation) {
       return failure("SDK operation does not support a document preview.");
     }
-    if (selected_component_objects().size() > 1U) {
-      workspace_preview_undo_mark_ = session_.undo_depth();
-      const ModelingSdkProjectionSnapshot base = capture_snapshot(true);
-      preview_base_snapshot_ = base;
-      preview_asset_checkpoint_ = assets_.capture_projection_checkpoint();
-      preview_scene_checkpoint_ = scene_.capture_projection_checkpoint();
-      workspace_preview_active_ = true;
-      active_preview_operation_id_ = std::string(sdk_operation_id(operation));
-      active_preview_operation_ = operation;
-      ModelingCommandResult result = mutate_selected_documents(
-          mutation, sdk_operation_id(operation), true);
-      if (!result.ok) {
-        const std::string message = result.message;
-        (void)restore_snapshot_exact(base);
-        return failure(message);
+    const std::vector<ObjectId> component_objects =
+        selected_component_objects();
+    std::vector<ObjectId> preview_objects = component_objects;
+    if (preview_objects.empty()) {
+      const std::optional<ObjectId> object = active_sdk_object();
+      if (object.has_value()) {
+        preview_objects.push_back(*object);
       }
-      preview_changed_ = result.changed;
-      active_preview_settings_ = settings;
-      return result;
     }
-    const std::optional<ObjectId> object = active_sdk_object();
-    if (!object.has_value()) {
+    if (preview_objects.empty()) {
       return failure("No active SDK modeling selection.");
     }
-    Result<PolygonDocument> base = session_.document_copy(*object);
-    if (!base.ok()) {
-      return failure(base.error_message());
+    ModelingCommandResult result = begin_mesh_preview_transaction(
+        preview_objects, mutation, sdk_operation_id(operation),
+        "SDK operation preview failed.");
+    if (result.ok) {
+      active_preview_operation_ = operation;
+      active_preview_settings_ = settings;
     }
-    PolygonDocument working = std::move(base).value();
-    Result<OperationResult> operated = mutation(working);
-    if (!operated.ok() || !operated.value().success) {
-      return failure(operated.ok() && !operated.value().message.empty()
-                         ? operated.value().message
-                         : operated.error_message());
-    }
-
-    const quader::modeling::ModelingSession session_before = session_;
-    preview_base_snapshot_ = capture_snapshot(true);
-    preview_asset_checkpoint_ = assets_.capture_projection_checkpoint();
-    preview_scene_checkpoint_ = scene_.capture_projection_checkpoint();
-    preview_changed_ = operated.value().changed;
-    active_preview_deleted_vertex_count_ = operated.value().deleted.vertices.size();
-    active_preview_operation_id_ = std::string(sdk_operation_id(operation));
-    active_preview_operation_ = operation;
-    Result<quader::modeling::PreviewId> begun = session_.begin_document_preview(
-        *object, active_preview_operation_id_, std::move(working),
-        std::move(operated).value());
-    if (!begun.ok() || !project_preview_object()) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      if (preview_asset_checkpoint_.has_value()) {
-        (void)assets_.restore_projection_checkpoint(*preview_asset_checkpoint_);
-      }
-      if (preview_scene_checkpoint_.has_value()) {
-        (void)scene_.restore_projection_checkpoint(*preview_scene_checkpoint_);
-      }
-      const std::string message =
-          begun.ok() ? "SDK operation preview asset publication failed."
-                     : begun.error_message();
-      clear_preview_checkpoints();
-      return failure(message);
-    }
-    ++stats_.preview_publication_count;
-    active_preview_settings_ = settings;
-    return {.ok = true,
-            .changed = preview_changed_,
-            .message = "SDK operation preview started."};
+    return result;
   }
 
   [[nodiscard]] ModelingCommandResult update_operation_preview(
       quader_editor_core::EditorOperationId operation,
       const quader_editor_core::EditorOperationSettings &settings) {
-    if (active_preview_operation_id_ != sdk_operation_id(operation)) {
+    if (!active_preview_operation_.has_value() ||
+        *active_preview_operation_ != operation) {
       return failure("Active SDK preview belongs to another operation.");
     }
-    if (operation == quader_editor_core::EditorOperationId::HalfCut &&
-        workspace_preview_active_) {
+    if (operation == quader_editor_core::EditorOperationId::HalfCut) {
       const auto *half_cut =
           std::get_if<quader_editor_core::HalfCutOperationSettings>(&settings);
-      if (half_cut == nullptr || !preview_base_snapshot_.has_value()) {
+      if (half_cut == nullptr) {
         return failure("Half-Cut preview settings are invalid.");
       }
-      const ModelingSdkProjectionSnapshot base = *preview_base_snapshot_;
-      const std::optional<AssetRegistryProjectionCheckpoint> asset_checkpoint =
-          preview_asset_checkpoint_;
-      const std::optional<SceneProjectionCheckpoint> scene_checkpoint =
-          preview_scene_checkpoint_;
-      const std::size_t undo_mark = workspace_preview_undo_mark_;
-      ModelingCommandResult restored = restore_snapshot_exact(base);
-      if (!restored.ok) {
-        return restored;
-      }
-      preview_base_snapshot_ = base;
-      preview_asset_checkpoint_ = asset_checkpoint;
-      preview_scene_checkpoint_ = scene_checkpoint;
-      workspace_preview_undo_mark_ = undo_mark;
-      workspace_preview_active_ = true;
-      active_preview_operation_id_ = std::string(sdk_operation_id(operation));
-      active_preview_operation_ = operation;
-      ModelingCommandResult result = half_cut_selected_objects(*half_cut, true);
-      if (!result.ok) {
-        const std::string message = result.message;
-        (void)restore_snapshot_exact(base);
-        return failure(message);
-      }
-      preview_changed_ = result.changed;
+      ModelingCommandResult result = update_half_cut_preview(*half_cut);
       if (result.ok) {
         active_preview_settings_ = settings;
       }
       return result;
     }
-    if (operation == quader_editor_core::EditorOperationId::Bridge &&
-        workspace_preview_active_) {
+    if (operation == quader_editor_core::EditorOperationId::Bridge) {
       const auto *bridge =
           std::get_if<quader_editor_core::BridgeOperationSettings>(&settings);
-      if (bridge == nullptr || !preview_base_snapshot_.has_value()) {
+      if (bridge == nullptr) {
         return failure("Bridge preview settings are invalid.");
       }
-      const ModelingSdkProjectionSnapshot base = *preview_base_snapshot_;
-      const std::optional<AssetRegistryProjectionCheckpoint> asset_checkpoint =
-          preview_asset_checkpoint_;
-      const std::optional<SceneProjectionCheckpoint> scene_checkpoint =
-          preview_scene_checkpoint_;
-      const std::size_t undo_mark = workspace_preview_undo_mark_;
-      const auto world_from_object = workspace_preview_world_from_object_;
-      ModelingCommandResult restored = restore_snapshot_exact(base);
-      if (!restored.ok) {
-        return restored;
-      }
-      preview_base_snapshot_ = base;
-      preview_asset_checkpoint_ = asset_checkpoint;
-      preview_scene_checkpoint_ = scene_checkpoint;
-      workspace_preview_undo_mark_ = undo_mark;
-      workspace_preview_world_from_object_ = world_from_object;
-      workspace_preview_active_ = true;
-      active_preview_operation_id_ = std::string(sdk_operation_id(operation));
-      active_preview_operation_ = operation;
       const auto normalized =
           quader_editor_core::normalize_bridge_operation_settings(*bridge);
       ModelingCommandResult result =
-          bridge_selected_components(normalized.steps, true);
-      if (!result.ok) {
-        const std::string message = result.message;
-        (void)restore_snapshot_exact(base);
-        return failure(message);
-      }
-      preview_changed_ = result.changed;
+          update_bridge_preview(normalized.steps);
       if (result.ok) {
         active_preview_settings_ = settings;
       }
@@ -2523,42 +3293,8 @@ public:
     if (!mutation) {
       return failure("SDK operation does not support a document preview.");
     }
-    if (workspace_preview_active_) {
-      if (!preview_base_snapshot_.has_value()) {
-        return failure("SDK workspace preview restore point is unavailable.");
-      }
-      const ModelingSdkProjectionSnapshot base = *preview_base_snapshot_;
-      const std::optional<AssetRegistryProjectionCheckpoint> asset_checkpoint =
-          preview_asset_checkpoint_;
-      const std::optional<SceneProjectionCheckpoint> scene_checkpoint =
-          preview_scene_checkpoint_;
-      const std::size_t undo_mark = workspace_preview_undo_mark_;
-      ModelingCommandResult restored = restore_snapshot_exact(base);
-      if (!restored.ok) {
-        return restored;
-      }
-      preview_base_snapshot_ = base;
-      preview_asset_checkpoint_ = asset_checkpoint;
-      preview_scene_checkpoint_ = scene_checkpoint;
-      workspace_preview_undo_mark_ = undo_mark;
-      workspace_preview_active_ = true;
-      active_preview_operation_id_ = std::string(sdk_operation_id(operation));
-      active_preview_operation_ = operation;
-      ModelingCommandResult result = mutate_selected_documents(
-          mutation, sdk_operation_id(operation), true);
-      if (!result.ok) {
-        const std::string message = result.message;
-        (void)restore_snapshot_exact(base);
-        return failure(message);
-      }
-      preview_changed_ = result.changed;
-      if (result.ok) {
-        active_preview_settings_ = settings;
-      }
-      return result;
-    }
-    ModelingCommandResult result =
-        update_preview_from_base(mutation, "SDK operation preview failed.");
+    ModelingCommandResult result = update_mesh_preview_transaction(
+        mutation, "SDK operation preview failed.");
     if (result.ok) {
       active_preview_settings_ = settings;
     }
@@ -2589,7 +3325,8 @@ public:
 
   [[nodiscard]] ModelingCommandResult
   set_object_selection(std::span<const EntityId> entities, EntityId active,
-                       bool publish_scene = true) {
+                       bool publish_scene = true,
+                       bool preserve_selection_mode = false) {
     std::vector<ObjectId> selected;
     selected.reserve(entities.size());
     int active_native = kInvalidModelingObjectId;
@@ -2644,11 +3381,6 @@ public:
           return object.selected ==
                  selected_ids.contains(sdk_object_key(object.id));
         });
-    if (same_selection && active_native_object_id_ == active_native &&
-        selection_mode_ == ModelingSelectionMode::Object) {
-      return {.ok = true, .changed = false};
-    }
-
     std::vector<EntityId> projected_entities;
     if (publish_scene) {
       projected_entities.reserve(entities.size());
@@ -2667,57 +3399,100 @@ public:
                                    : projected_entities.back();
     const SceneSelectionState desired_scene_selection =
         make_scene_selection(scene_, projected_entities, projected_active);
+    const bool scene_selection_changed =
+        publish_scene &&
+        !same_scene_selection(capture_scene_selection(scene_),
+                              desired_scene_selection);
+    const bool adapter_selection_changed =
+        active_native_object_id_ != active_native ||
+        (!preserve_selection_mode &&
+         selection_mode_ != ModelingSelectionMode::Object);
+    if (same_selection && !scene_selection_changed &&
+        !adapter_selection_changed) {
+      return {.ok = true, .changed = false};
+    }
 
-    const bool injected_rollback_required =
-        fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
-        (publish_scene &&
-         fails(ModelingSdkProjectionFailurePoint::SelectionScenePublication));
-    const std::optional<quader::modeling::ModelingSession> session_before =
-        injected_rollback_required
-            ? std::optional<quader::modeling::ModelingSession>{session_}
-            : std::nullopt;
-    const std::optional<SceneProjectionCheckpoint> scene_before =
-        injected_rollback_required
-            ? std::optional<SceneProjectionCheckpoint>{
-                  scene_.capture_projection_checkpoint()}
-            : std::nullopt;
-    const auto rollback_injected_failure = [&](std::string message) {
-      if (session_before.has_value()) {
-        session_.restore_snapshot_preserving_identity_high_water(
-            *session_before);
-      }
-      if (scene_before.has_value()) {
-        (void)scene_.restore_projection_checkpoint(*scene_before);
-      }
-      return failure(std::move(message));
+    if (curve_document_preview_active()) {
+      return set_object_selection_during_curve_preview(
+          selected, active_native, desired_scene_selection,
+          scene_selection_changed, adapter_selection_changed,
+          preserve_selection_mode);
+    }
+
+    std::vector<ObjectId> mutation_participants;
+    mutation_participants.reserve(current_objects.size());
+    std::ranges::transform(current_objects,
+                           std::back_inserter(mutation_participants),
+                           &modeling::SessionObjectSummary::id);
+
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    const ModelingSdkRollbackPolicy sdk_rollback =
+        current_objects.empty() ? ModelingSdkRollbackPolicy::None
+                                : ModelingSdkRollbackPolicy::MutationCheckpoint;
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.sdk_rollback = sdk_rollback,
+         .checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_assets = false,
+         .capture_scene = publish_scene,
+         .capture_scene_entities = false,
+         .capture_bindings = false,
+         .capture_hierarchy = false,
+         .capture_scene_selection = publish_scene,
+         .affected_sdk_object_ids = mutation_participants});
+    if (!publication.ready()) {
+      return failure("SDK object-selection checkpoint is unavailable.");
+    }
+    const auto rollback = [&](std::string message) {
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
     };
     Result<OperationResult> result =
-        session_.apply_object_selection(selected, SelectionEdit::Replace);
+        current_objects.empty()
+            ? Result<OperationResult>::success(OperationResult{})
+            : session_.apply_object_selection(selected, SelectionEdit::Replace);
     if (!result.ok()) {
-      return failure(result.error_message());
+      return rollback(result.error_message());
     }
-    if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
-      return rollback_injected_failure(
+    if (!result.value().changed && !scene_selection_changed &&
+        !adapter_selection_changed) {
+      return rollback_publication_result(publication, from_sdk(result));
+    }
+    if (result.value().changed &&
+        fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
+      return rollback(
           "Injected failure after SDK selection mutation.");
     }
 
-    if (publish_scene) {
+    if (scene_selection_changed) {
       if (fails(
               ModelingSdkProjectionFailurePoint::SelectionScenePublication)) {
-        return rollback_injected_failure(
+        return rollback(
             "Injected failure during SDK selection publication.");
       }
       QDR_PROFILE_SCOPE("Object selection atomic scene publication");
-      (void)apply_scene_selection(
-          scene_, desired_scene_selection,
-          SceneSelectionApplicationMode::RuntimeSync);
+      (void)apply_scene_selection(scene_, desired_scene_selection,
+                                  SceneSelectionApplicationMode::RuntimeSync);
+      if (!same_scene_selection(capture_scene_selection(scene_),
+                                desired_scene_selection)) {
+        return rollback("SDK scene selection could not be published.");
+      }
     }
     active_native_object_id_ = active_native;
-    if (selection_mode_ != ModelingSelectionMode::Object) {
-      ++mode_revision_;
+    if (!preserve_selection_mode) {
+      if (selection_mode_ != ModelingSelectionMode::Object) {
+        ++mode_revision_;
+      }
+      selection_mode_ = ModelingSelectionMode::Object;
     }
-    selection_mode_ = ModelingSelectionMode::Object;
-    return from_sdk(result);
+    result.value().changed = result.value().changed ||
+                             scene_selection_changed ||
+                             adapter_selection_changed;
+    return commit_publication_result(publication, from_sdk(result));
   }
 
   [[nodiscard]] ModelingCommandResult
@@ -3115,35 +3890,43 @@ public:
                                          : selected_entities.back());
     const SceneSelectionState desired_scene_selection =
         make_scene_selection(scene_, selected_entities, scene_active);
+    const bool scene_selection_changed =
+        !same_scene_selection(capture_scene_selection(scene_),
+                              desired_scene_selection);
+    const bool adapter_selection_changed =
+        active_native_object_id_ != final_request.modeling_object_id ||
+        selection_mode_ != final_request.mode;
 
-    const std::size_t undo_mark = session_.undo_depth();
-    const int active_before = active_native_object_id_;
-    const ModelingSelectionMode selection_mode_before = selection_mode_;
-    const std::uint64_t mode_revision_before = mode_revision_;
-    const bool injected_rollback_required =
-        fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
-        fails(ModelingSdkProjectionFailurePoint::SelectionScenePublication);
-    const std::optional<quader::modeling::ModelingSession> session_before =
-        injected_rollback_required
-            ? std::optional<quader::modeling::ModelingSession>{session_}
-            : std::nullopt;
-    const std::optional<SceneProjectionCheckpoint> scene_before =
-        injected_rollback_required
-            ? std::optional<SceneProjectionCheckpoint>{
-                  scene_.capture_projection_checkpoint()}
-            : std::nullopt;
+    std::vector<ObjectId> mutation_participants;
+    mutation_participants.reserve(session_objects.size());
+    std::ranges::transform(session_objects,
+                           std::back_inserter(mutation_participants),
+                           &modeling::SessionObjectSummary::id);
+
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.sdk_rollback = ModelingSdkRollbackPolicy::MutationCheckpoint,
+         .checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_assets = false,
+         .capture_scene_entities = false,
+         .capture_bindings = false,
+         .capture_hierarchy = false,
+         .capture_scene_selection = true,
+         .affected_sdk_object_ids = mutation_participants});
+    if (!publication.ready()) {
+      return finish_operation_preview_selection_edit(
+          preview_edit,
+          failure("SDK component-selection checkpoint is unavailable."));
+    }
+    const std::size_t undo_mark = publication.sdk_undo_mark();
     const auto rollback = [&](std::string message) {
-      if (session_before.has_value()) {
-        session_.restore_snapshot_preserving_identity_high_water(
-            *session_before);
-      }
-      active_native_object_id_ = active_before;
-      selection_mode_ = selection_mode_before;
-      mode_revision_ = mode_revision_before;
-      if (scene_before.has_value()) {
-        (void)scene_.restore_projection_checkpoint(*scene_before);
-      }
-      return failure(std::move(message));
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
     };
 
     Result<OperationResult> committed = [&]() {
@@ -3155,40 +3938,61 @@ public:
       return finish_operation_preview_selection_edit(
           preview_edit, rollback(committed.error_message()));
     }
-    if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
+    if (!committed.value().changed && !scene_selection_changed &&
+        !adapter_selection_changed) {
+      if (!result_message.empty()) {
+        committed.value().message = std::move(result_message);
+      }
+      return finish_operation_preview_selection_edit(
+          preview_edit,
+          commit_publication_result(publication, from_sdk(committed)));
+    }
+    if (committed.value().changed &&
+        fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
       return finish_operation_preview_selection_edit(
           preview_edit,
           rollback("Injected failure after SDK component selection."));
     }
-    if (fails(
-            ModelingSdkProjectionFailurePoint::SelectionScenePublication)) {
+    if (fails(ModelingSdkProjectionFailurePoint::SelectionScenePublication)) {
       return finish_operation_preview_selection_edit(
           preview_edit,
           rollback("Injected failure during SDK component selection publication."));
     }
     {
       QDR_PROFILE_SCOPE("Component selection atomic scene publication");
-      (void)apply_scene_selection(
-          scene_, desired_scene_selection,
-          SceneSelectionApplicationMode::RuntimeSync);
+      (void)apply_scene_selection(scene_, desired_scene_selection,
+                                  SceneSelectionApplicationMode::RuntimeSync);
+      if (!same_scene_selection(capture_scene_selection(scene_),
+                                desired_scene_selection)) {
+        return finish_operation_preview_selection_edit(
+            preview_edit,
+            rollback("SDK component selection scene publication failed."));
+      }
     }
 
     active_native_object_id_ = final_request.modeling_object_id;
+    if (selection_mode_ != final_request.mode) {
+      ++mode_revision_;
+    }
     selection_mode_ = final_request.mode;
+    committed.value().changed = committed.value().changed ||
+                                scene_selection_changed ||
+                                adapter_selection_changed;
     session_.squash_undo_since(undo_mark);
     if (!result_message.empty()) {
       committed.value().message = std::move(result_message);
     }
-    return finish_operation_preview_selection_edit(preview_edit,
-                                                   from_sdk(committed));
+    return finish_operation_preview_selection_edit(
+        preview_edit,
+        commit_publication_result(publication, from_sdk(committed)));
   }
 
   [[nodiscard]] ModelingCommandResult select_all() {
     if (selection_mode_ == ModelingSelectionMode::Object ||
         selection_mode_ == ModelingSelectionMode::Group) {
       std::vector<EntityId> entities;
-      entities.reserve(object_ids_.size());
-      for (const auto &[native_id, object_id] : object_ids_) {
+      entities.reserve(sdk_bindings().size());
+      for (const auto &[native_id, object_id] : sdk_bindings()) {
         (void)object_id;
         const std::optional<EntityId> entity =
             object_map_.entity_for_modeling_object(native_id);
@@ -3201,8 +4005,8 @@ public:
     }
 
     std::vector<int> targets;
-    targets.reserve(object_ids_.size());
-    for (const auto &[native_id, object_id] : object_ids_) {
+    targets.reserve(sdk_bindings().size());
+    for (const auto &[native_id, object_id] : sdk_bindings()) {
       const auto entity = object_map_.entity_for_modeling_object(native_id);
       if (entity.has_value() && scene_.curve(*entity) != nullptr) {
         continue;
@@ -3282,7 +4086,7 @@ public:
       EntityId active = kInvalidEntityId;
       const std::vector<quader::modeling::SessionObjectSummary> objects =
           session_.objects();
-      for (const auto &[native_id, object_id] : object_ids_) {
+      for (const auto &[native_id, object_id] : sdk_bindings()) {
         const auto summary = std::find_if(
             objects.begin(), objects.end(),
             [object_id](const auto &candidate) {
@@ -3302,8 +4106,8 @@ public:
     }
 
     std::vector<int> targets;
-    targets.reserve(object_ids_.size());
-    for (const auto &[native_id, object_id] : object_ids_) {
+    targets.reserve(sdk_bindings().size());
+    for (const auto &[native_id, object_id] : sdk_bindings()) {
       const auto entity = object_map_.entity_for_modeling_object(native_id);
       if (entity.has_value() && scene_.curve(*entity) != nullptr) {
         continue;
@@ -3428,38 +4232,55 @@ public:
     if (removed.empty()) {
       return {.ok = true, .changed = false};
     }
+    std::vector<int> affected_modeling_ids;
+    affected_modeling_ids.reserve(removed.size());
+    for (const auto &[native_id, object_id] : removed) {
+      (void)object_id;
+      affected_modeling_ids.push_back(native_id);
+    }
 
-    const quader::modeling::ModelingSession before = session_;
-    const auto object_ids_before = object_ids_;
-    const ModelingObjectRuntimeMap object_map_before = object_map_;
-    const int active_before = active_native_object_id_;
-    const ModelingSelectionMode mode_before = selection_mode_;
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_assets = false,
+         .capture_scene = false,
+         .capture_hierarchy = false,
+         .affected_modeling_object_ids = affected_modeling_ids});
+    if (!publication.ready()) {
+      return failure("Object-removal publication checkpoint is unavailable.");
+    }
+    const auto rollback = [&](std::string message) {
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
+    };
     for (const auto &[native_id, object_id] : removed) {
       Result<OperationResult> result = session_.remove_object(object_id);
       if (!result.ok()) {
-        session_.restore_snapshot_preserving_identity_high_water(before);
-        object_ids_ = object_ids_before;
-        object_map_ = object_map_before;
-        active_native_object_id_ = active_before;
-        selection_mode_ = mode_before;
-        return failure(result.error_message());
+        return rollback(result.error_message());
       }
-      object_ids_.erase(native_id);
+      object_map_.unbind_sdk_object(native_id);
       object_map_.unbind_object(native_id);
       if (active_native_object_id_ == native_id) {
         active_native_object_id_ = kInvalidModelingObjectId;
       }
     }
-    if (object_ids_.empty()) {
+    if (sdk_bindings().empty()) {
       selection_mode_ = ModelingSelectionMode::Object;
     }
     ++persistent_content_revision_;
     clear_preview_checkpoints();
-    return {.ok = true, .changed = true, .message = "Deleted SDK objects."};
+    return commit_publication_result<ModelingCommandResult>(
+        publication,
+        {.ok = true, .changed = true, .message = "Deleted SDK objects."});
   }
 
-  [[nodiscard]] ModelingSelectionSummary apply_native_selection_projection(
-      const quader_editor_core::EditorSession &projected) {
+  [[nodiscard]] ModelingCommandResult apply_selection_projection_checked(
+      const ModelingSelectionProjectionSnapshot &projected) {
     const ModelingSelectionMode projected_mode =
         from_native_selection_mode(projected.selection_mode());
     if (projected_mode == ModelingSelectionMode::Object) {
@@ -3480,8 +4301,7 @@ public:
           active = *entity;
         }
       }
-      (void)set_object_selection(selected, active);
-      return selection_summary();
+      return set_object_selection(selected, active);
     }
 
     std::vector<const quader_editor_core::PolygonObject *> desired_objects;
@@ -3560,10 +4380,10 @@ public:
     for (const quader_editor_core::PolygonObject *object : desired_objects) {
       append_request(*object);
     }
-    if (!requests.empty()) {
-      (void)set_component_selections(requests);
+    if (requests.empty()) {
+      return set_selection_mode(projected_mode);
     }
-    return selection_summary();
+    return set_component_selections(requests);
   }
 
   [[nodiscard]] ModelingSelectionSummary
@@ -3574,19 +4394,26 @@ public:
     if (!preview_edit.ok) {
       return selection_summary();
     }
-    quader_editor_core::EditorSession projected = native_selection_projection();
+    const ModelingSelectionProjectionSnapshot &projected =
+        selection_projection_snapshot();
     ModelingPickSelectRequest effective_request = request;
     if (preview_edit.active) {
       effective_request.preserve_selection_on_miss = true;
     }
-    const ModelingSelectionApplyResult applied = selection.apply_pick_selection(
-        projected, scene_, object_map_, effective_request);
+    const ModelingSelectionProjectionApplyResult applied =
+        selection.apply_pick_selection(projected, scene_, object_map_,
+                                       effective_request);
+    ModelingCommandResult published{
+        .ok = applied.applied,
+        .changed = false,
+        .message = applied.applied
+                       ? std::string{}
+                       : "Resolved pick selection could not be applied.",
+    };
     if (applied.applied && applied.changed) {
-      (void)apply_native_selection_projection(projected);
+      published = apply_selection_projection_checked(applied.projection);
     }
-    (void)finish_operation_preview_selection_edit(
-        preview_edit,
-        {.ok = true, .changed = applied.applied && applied.changed});
+    (void)finish_operation_preview_selection_edit(preview_edit, published);
     return selection_summary();
   }
 
@@ -3601,9 +4428,10 @@ public:
     if (!preview_edit.ok) {
       return selection_summary();
     }
-    quader_editor_core::EditorSession projected = [&]() {
+    const ModelingSelectionProjectionSnapshot &projected = [&]()
+        -> const ModelingSelectionProjectionSnapshot & {
       QDR_PROFILE_SCOPE("Box selection build SDK selection projection");
-      return native_selection_projection();
+      return selection_projection_snapshot();
     }();
     const quader_editor_core::RectangleSelectionState baseline = [&]() {
       QDR_PROFILE_SCOPE("Box selection capture SDK runtime baseline");
@@ -3624,9 +4452,10 @@ public:
     if (!preview_edit.ok) {
       return selection_summary();
     }
-    quader_editor_core::EditorSession projected = [&]() {
+    const ModelingSelectionProjectionSnapshot &projected = [&]()
+        -> const ModelingSelectionProjectionSnapshot & {
       QDR_PROFILE_SCOPE("Box selection build SDK selection projection");
-      return native_selection_projection();
+      return selection_projection_snapshot();
     }();
     const quader_editor_core::RectangleSelectionState effective_baseline =
         [&]() {
@@ -3643,23 +4472,23 @@ public:
       const ModelingBoxSelectRequest &request,
       const quader_editor_core::RectangleSelectionState &baseline,
       ModelingSelectionService &selection,
-      quader_editor_core::EditorSession &projected,
+      const ModelingSelectionProjectionSnapshot &projected,
       const PreviewSelectionEditState &preview_edit) {
     QDR_PROFILE_SCOPE("Modeling SDK apply box selection");
-    const ModelingSelectionApplyResult applied = [&]() {
+    const ModelingSelectionProjectionApplyResult applied = [&]() {
       QDR_PROFILE_SCOPE("Box selection resolve SDK rectangle selection");
       return selection.apply_rectangle_selection(projected, scene_,
                                                   object_map_, request,
                                                   baseline);
     }();
+    ModelingCommandResult published{.ok = true, .changed = false};
     if (applied.changed) {
       QDR_PROFILE_SCOPE("Box selection publish SDK native selection");
-      (void)apply_native_selection_projection(projected);
+      published = apply_selection_projection_checked(applied.projection);
     }
     {
       QDR_PROFILE_SCOPE("Box selection finish operation preview edit");
-      (void)finish_operation_preview_selection_edit(
-          preview_edit, {.ok = true, .changed = applied.changed});
+      (void)finish_operation_preview_selection_edit(preview_edit, published);
     }
     {
       QDR_PROFILE_SCOPE("Box selection summarize SDK selection");
@@ -3718,17 +4547,56 @@ public:
     if (preview_active()) {
       return failure("Commit or cancel the active preview first.");
     }
-    const auto session_before = session_;
-    const auto assets_before = assets_.capture_projection_checkpoint();
-    const auto scene_before = scene_.capture_projection_checkpoint();
-    const auto stats_before = stats_;
-    const auto undo_mark = session_.undo_depth();
+    std::vector<ObjectId> affected_sdk_objects;
+    std::vector<EntityId> affected_entities;
+    std::vector<AssetId> affected_assets;
+    std::vector<int> affected_modeling_ids;
+    for (const auto &object : session_.objects()) {
+      if (!object.selected) {
+        continue;
+      }
+      affected_sdk_objects.push_back(object.id);
+      const std::optional<int> native = native_object(object.id);
+      const std::optional<EntityId> entity =
+          native.has_value()
+              ? object_map_.entity_for_modeling_object(*native)
+              : std::nullopt;
+      if (!native.has_value() || !entity.has_value()) {
+        return failure("Selected transform participant has no host identity.");
+      }
+      affected_modeling_ids.push_back(*native);
+      affected_entities.push_back(*entity);
+      if (const MeshComponent *mesh = scene_.mesh(*entity)) {
+        affected_assets.push_back(mesh->mesh);
+      }
+      if (const CurveComponent *curve = scene_.curve(*entity)) {
+        affected_assets.push_back(curve->curve);
+      }
+    }
+    if (affected_sdk_objects.empty()) {
+      return {.ok = true, .changed = false};
+    }
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.sdk_rollback = ModelingSdkRollbackPolicy::MutationCheckpoint,
+         .checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_hierarchy = false,
+         .affected_scene_entities = affected_entities,
+         .affected_asset_ids = affected_assets,
+         .affected_modeling_object_ids = affected_modeling_ids,
+         .affected_sdk_object_ids = affected_sdk_objects});
+    if (!publication.ready()) {
+      return failure("Transform publication checkpoint is unavailable.");
+    }
+    const auto undo_mark = publication.sdk_undo_mark();
     const auto rollback = [&](std::string message) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      (void)scene_.restore_projection_checkpoint(scene_before);
-      stats_ = stats_before;
-      return failure(std::move(message));
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
     };
     std::vector<ObjectId> changed_objects;
     for (const auto &object : session_.objects()) {
@@ -3775,13 +4643,14 @@ public:
       changed_objects.push_back(object.id);
     }
     if (changed_objects.empty()) {
-      return {.ok = true, .changed = false};
+      return commit_publication_result<ModelingCommandResult>(
+          publication, {.ok = true, .changed = false});
     }
     if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
       return rollback("Transform selection could not be committed.");
     }
     for (const auto object : changed_objects) {
-      if (!project_committed_object(object)) {
+      if (!project_committed_object(publication, object)) {
         return rollback("Transform selection could not be projected.");
       }
     }
@@ -3790,7 +4659,9 @@ public:
     }
     session_.squash_undo_since(undo_mark);
     ++persistent_content_revision_;
-    return {.ok = true, .changed = true, .message = "Transformed selection."};
+    return commit_publication_result<ModelingCommandResult>(
+        publication,
+        {.ok = true, .changed = true, .message = "Transformed selection."});
   }
 
   [[nodiscard]] ModelingCommandResult
@@ -4222,16 +5093,15 @@ public:
         edge_a == edge_b) {
       return failure("Edge loop target is not live.");
     }
-    const std::size_t undo_mark = session_.undo_depth();
     const EdgeKey edge = quader::modeling::make_edge_key(
         quader::modeling::make_id<quader::modeling::VertexTag>(
             static_cast<std::uint32_t>(edge_a)),
         quader::modeling::make_id<quader::modeling::VertexTag>(
             static_cast<std::uint32_t>(edge_b)));
     const std::array<ObjectId, 1> objects{*object};
-    ModelingCommandResult result = mutate_documents(
+    return mutate_documents_by_object(
         objects,
-        [edge, factor](PolygonDocument &document) {
+        [edge, factor](ObjectId, PolygonDocument &document) {
           Result<OperationResult> mode =
               document.set_selection_mode(SelectionMode::Edge);
           if (!mode.ok()) {
@@ -4245,20 +5115,23 @@ public:
           }
           return document.insert_edge_loop(factor);
         },
-        "Could not insert edge loop.");
-    if (!result.ok || !result.changed) {
-      return result;
-    }
-    Result<OperationResult> selected = session_.apply_object_selection(
-        objects, SelectionEdit::Replace);
-    if (!selected.ok()) {
-      return failure(selected.error_message());
-    }
-    (void)session_.squash_undo_since(undo_mark);
-    selection_mode_ = ModelingSelectionMode::Edge;
-    active_native_object_id_ = modeling_object_id;
-    add_selection_to_scene();
-    return result;
+        "Could not insert edge loop.", false, false, false, false, true,
+        [this, objects, modeling_object_id]() {
+          Result<OperationResult> selected = session_.apply_object_selection(
+              objects, SelectionEdit::Replace);
+          if (!selected.ok()) {
+            return failure(selected.error_message());
+          }
+          selection_mode_ = ModelingSelectionMode::Edge;
+          active_native_object_id_ = modeling_object_id;
+          if (fails(
+                  ModelingSdkProjectionFailurePoint::SelectionScenePublication) ||
+              !add_selection_to_scene()) {
+            return failure(
+                "Insert Edge Loop selection could not be published.");
+          }
+          return ModelingCommandResult{.ok = true};
+        });
   }
 
   [[nodiscard]] ModelingCommandResult knife_stroke(
@@ -4314,14 +5187,13 @@ public:
       });
     }
 
-    const std::size_t undo_mark = session_.undo_depth();
     const ModelingSelectionMode selection_mode_before = selection_mode_;
     const std::array<ObjectId, 1> objects{*object};
-    ModelingCommandResult result = mutate_documents(
+    return mutate_documents_by_object(
         objects,
         [sdk_points = std::move(sdk_points),
          sdk_segments = std::move(sdk_segments),
-         selection_mode_before](PolygonDocument &document) {
+         selection_mode_before](ObjectId, PolygonDocument &document) {
           Result<OperationResult> cut =
               document.knife_stroke(sdk_points, sdk_segments);
           if (!cut.ok() || !cut.value().success || !cut.value().changed ||
@@ -4336,32 +5208,52 @@ public:
           }
           return cut;
         },
-        "Could not apply the knife stroke.");
-    if (!result.ok || !result.changed) {
-      return result;
-    }
-    Result<OperationResult> selected = session_.apply_object_selection(
-        objects, SelectionEdit::Replace);
-    if (!selected.ok()) {
-      return failure(selected.error_message());
-    }
-    (void)session_.squash_undo_since(undo_mark);
-    selection_mode_ = selection_mode_before;
-    active_native_object_id_ = modeling_object_id;
-    add_selection_to_scene();
-    return result;
+        "Could not apply the knife stroke.", false, false, false, false, true,
+        [this, objects, modeling_object_id, selection_mode_before]() {
+          Result<OperationResult> selected = session_.apply_object_selection(
+              objects, SelectionEdit::Replace);
+          if (!selected.ok()) {
+            return failure(selected.error_message());
+          }
+          selection_mode_ = selection_mode_before;
+          active_native_object_id_ = modeling_object_id;
+          if (fails(
+                  ModelingSdkProjectionFailurePoint::SelectionScenePublication) ||
+              !add_selection_to_scene()) {
+            return failure("Knife selection could not be published.");
+          }
+          return ModelingCommandResult{.ok = true};
+        });
   }
 
-  [[nodiscard]] bool initialize_workspace_transform_participants() {
+  [[nodiscard]] bool initialize_transient_transform_payload() {
     QDR_PROFILE_FUNCTION();
-    workspace_transform_participants_.clear();
-    const std::vector<ObjectId> selected = selected_sdk_objects();
-    Result<std::vector<PolygonDocument>> documents =
-        session_.document_copies(selected);
-    if (!documents.ok() || documents.value().size() != selected.size()) {
-      return false;
+    transient_transform_payload_participants_.clear();
+    transient_transform_payload_active_ = false;
+    std::vector<ObjectId> selected;
+    for (const modeling::SessionObjectSummary &object : session_.objects()) {
+      if (object.selected && object.kind == modeling::SessionObjectKind::Mesh) {
+        selected.push_back(object.id);
+      }
     }
-    workspace_transform_participants_.reserve(selected.size());
+    if (selected.empty()) {
+      return true;
+    }
+    std::vector<PolygonDocument> documents;
+    documents.reserve(selected.size());
+    const modeling::PreviewTransactionSummary active_preview =
+        session_.preview_summary();
+    for (const ObjectId object : selected) {
+      Result<PolygonDocument> document =
+          active_preview.active
+              ? session_.preview_document_copy(active_preview.id, object)
+              : session_.document_copy(object);
+      if (!document.ok()) {
+        return false;
+      }
+      documents.push_back(std::move(document).value());
+    }
+    transient_transform_payload_participants_.reserve(selected.size());
     for (std::size_t index = 0; index < selected.size(); ++index) {
       const ObjectId object = selected[index];
       const std::optional<int> native = native_object(object);
@@ -4374,14 +5266,14 @@ public:
       const MeshAsset *current =
           binding != nullptr ? assets_.mesh(binding->mesh) : nullptr;
       if (!native.has_value() || !entity.has_value() || current == nullptr) {
-        workspace_transform_participants_.clear();
+        transient_transform_payload_participants_.clear();
         return false;
       }
 
-      PolygonDocument &document = documents.value()[index];
+      PolygonDocument &document = documents[index];
       Result<AuthoredTopology> authored = document.authored_topology();
       if (!authored.ok()) {
-        workspace_transform_participants_.clear();
+        transient_transform_payload_participants_.clear();
         return false;
       }
       MeshAsset base_mesh = *current;
@@ -4395,7 +5287,7 @@ public:
         std::optional<MeshAsset> compiled =
             MeshProjectionService::compile_sdk_document_mesh(document);
         if (!compiled.has_value()) {
-          workspace_transform_participants_.clear();
+          transient_transform_payload_participants_.clear();
           return false;
         }
         compiled->name = current->name;
@@ -4456,7 +5348,7 @@ public:
         }
         face_vertices.emplace(face.id.index, std::move(vertices));
       }
-      std::vector<WorkspaceTransformSelectedVertex>
+      std::vector<TransientTransformSelectedVertex>
           selected_transform_vertices;
       std::unordered_map<std::uint32_t, std::size_t> selected_vertex_lookup;
       selected_transform_vertices.reserve(selected_vertices.size());
@@ -4493,7 +5385,7 @@ public:
       auto initial_positions =
           std::make_shared<std::vector<QVec3>>(base_mesh_positions);
       const MaterialComponent *material = scene_.material(*entity);
-      WorkspaceTransformParticipant participant{
+      TransientTransformParticipant participant{
           .object = object,
           .native_object_id = *native,
           .entity = *entity,
@@ -4506,7 +5398,7 @@ public:
           .double_sided = binding->double_sided,
           .layout_key = transform_mesh_layout_key(
               object, base_mesh.geometry().vertices),
-          .position_revision = workspace_transform_preview_revision_,
+          .position_revision = transient_transform_payload_revision_,
           .preview_document = document,
           .preview_mesh = std::move(base_mesh),
           .base_mesh_positions = std::move(base_mesh_positions),
@@ -4516,26 +5408,48 @@ public:
           .base_positions = std::move(base_positions),
           .face_vertices = std::move(face_vertices),
       };
-      workspace_transform_participants_.push_back(std::move(participant));
+      transient_transform_payload_participants_.push_back(std::move(participant));
     }
-    return !workspace_transform_participants_.empty();
+    transient_transform_payload_active_ =
+        !transient_transform_payload_participants_.empty();
+    return transient_transform_payload_active_;
   }
 
-  [[nodiscard]] ModelingCommandResult update_workspace_transform_meshes(
+  [[nodiscard]] ModelingCommandResult
+  ensure_component_transform_payload() {
+    if (transient_transform_payload_active_ ||
+        selection_mode_ == ModelingSelectionMode::Object ||
+        selection_mode_ == ModelingSelectionMode::Group) {
+      return {.ok = true};
+    }
+    const modeling::PreviewTransactionSummary preview =
+        session_.preview_summary();
+    if (!preview.active) {
+      return failure("No active SDK transform preview.");
+    }
+    if (!initialize_transient_transform_payload()) {
+      return abort_preview_publication(
+          preview.id,
+          "Transform preview participants could not be built.");
+    }
+    return {.ok = true};
+  }
+
+  [[nodiscard]] ModelingCommandResult update_transient_transform_payload(
       const WorkspaceTransformResolver &resolve_transform,
       DocumentMutationByObject commit_mutation,
       std::string_view fallback_message) {
     QDR_PROFILE_FUNCTION();
-    if (!workspace_preview_active_ ||
-        workspace_transform_participants_.empty()) {
+    if (!session_.preview_active() ||
+        transient_transform_payload_participants_.empty()) {
       return failure("No active transient transform workspace.");
     }
     std::vector<std::optional<quader::modeling::Transform3>> transforms;
-    transforms.reserve(workspace_transform_participants_.size());
+    transforms.reserve(transient_transform_payload_participants_.size());
     {
       QDR_PROFILE_SCOPE("Transform preview resolve participant transforms");
-      for (const WorkspaceTransformParticipant &participant :
-           workspace_transform_participants_) {
+      for (const TransientTransformParticipant &participant :
+           transient_transform_payload_participants_) {
         transforms.push_back(resolve_transform(participant.object));
       }
     }
@@ -4543,20 +5457,20 @@ public:
     bool changed = false;
     bool effective_changed = false;
     std::vector<std::uint8_t> participant_packed_positions_changed(
-        workspace_transform_participants_.size(), 0u);
+        transient_transform_payload_participants_.size(), 0u);
     {
       QDR_PROFILE_SCOPE("Transform preview update selected positions");
       for (std::size_t participant_index = 0u;
-           participant_index < workspace_transform_participants_.size();
+           participant_index < transient_transform_payload_participants_.size();
            ++participant_index) {
-        WorkspaceTransformParticipant &participant =
-            workspace_transform_participants_[participant_index];
+        TransientTransformParticipant &participant =
+            transient_transform_payload_participants_[participant_index];
         const std::optional<quader::modeling::Transform3> &transform =
             transforms[participant_index];
         const std::vector<QVec3> &published_positions =
             *participant
                  .position_buffers[participant.published_position_buffer];
-        for (WorkspaceTransformSelectedVertex &vertex :
+        for (TransientTransformSelectedVertex &vertex :
              participant.selected_vertices) {
           const QVec3 next = transform.has_value()
                                  ? transform_sdk_point(*transform,
@@ -4591,14 +5505,14 @@ public:
     {
       QDR_PROFILE_SCOPE("Transform preview publish packed positions");
       for (std::size_t participant_index = 0u;
-           participant_index < workspace_transform_participants_.size();
+           participant_index < transient_transform_payload_participants_.size();
            ++participant_index) {
         if (!participant_packed_positions_changed[participant_index]) {
           continue;
         }
         packed_positions_changed = true;
-        WorkspaceTransformParticipant &participant =
-            workspace_transform_participants_[participant_index];
+        TransientTransformParticipant &participant =
+            transient_transform_payload_participants_[participant_index];
         std::size_t buffer_index = participant.position_buffers.size();
         for (std::size_t candidate = 0u;
              candidate < participant.position_buffers.size(); ++candidate) {
@@ -4614,7 +5528,7 @@ public:
 
         std::vector<VertexPositionUpdate> updates;
         updates.reserve(participant.selected_vertices.size());
-        for (const WorkspaceTransformSelectedVertex &vertex :
+        for (const TransientTransformSelectedVertex &vertex :
              participant.selected_vertices) {
           updates.push_back({
               .vertex = quader::modeling::make_id<
@@ -4653,21 +5567,20 @@ public:
         participant.published_position_buffer = buffer_index;
       }
     }
-    workspace_transform_commit_mutation_ = std::move(commit_mutation);
-    workspace_transform_transient_active_ = true;
+    (void)commit_mutation;
+    transient_transform_payload_active_ = true;
     if (packed_positions_changed) {
-      ++workspace_transform_preview_revision_;
+      ++transient_transform_payload_revision_;
       for (std::size_t participant_index = 0u;
-           participant_index < workspace_transform_participants_.size();
+           participant_index < transient_transform_payload_participants_.size();
            ++participant_index) {
         if (participant_packed_positions_changed[participant_index]) {
-          workspace_transform_participants_[participant_index]
-              .position_revision = workspace_transform_preview_revision_;
+          transient_transform_payload_participants_[participant_index]
+              .position_revision = transient_transform_payload_revision_;
         }
       }
     }
-    preview_changed_ =
-        workspace_transform_preexisting_changed_ || effective_changed;
+    preview_changed_ = effective_changed;
     return {.ok = true,
             .changed = changed,
             .message = changed ? std::string(fallback_message)
@@ -4678,12 +5591,12 @@ public:
   workspace_transform_preview_meshes() const {
     QDR_PROFILE_FUNCTION();
     std::vector<ModelingToolPreviewMesh> meshes;
-    if (!workspace_transform_transient_active_) {
+    if (!transient_transform_payload_active_) {
       return meshes;
     }
-    meshes.reserve(workspace_transform_participants_.size());
-    for (const WorkspaceTransformParticipant &participant :
-         workspace_transform_participants_) {
+    meshes.reserve(transient_transform_payload_participants_.size());
+    for (const TransientTransformParticipant &participant :
+         transient_transform_payload_participants_) {
       meshes.push_back({
           .source_object_id = participant.native_object_id,
           .source_entity = participant.entity,
@@ -4703,30 +5616,30 @@ public:
   }
 
   [[nodiscard]] std::uint64_t workspace_transform_preview_revision() const {
-    return workspace_transform_preview_revision_;
+    return transient_transform_payload_revision_;
   }
 
   [[nodiscard]] bool workspace_transform_preview_active() const {
-    return workspace_transform_transient_active_;
+    return transient_transform_payload_active_;
   }
 
   void apply_workspace_transform_preview_to_overlay(
       ViewportOverlayFrame &frame) const {
-    if (!workspace_transform_transient_active_) {
+    if (!transient_transform_payload_active_) {
       return;
     }
-    std::unordered_map<int, const WorkspaceTransformParticipant *>
+    std::unordered_map<int, const TransientTransformParticipant *>
         participants;
-    participants.reserve(workspace_transform_participants_.size());
-    for (const WorkspaceTransformParticipant &participant :
-         workspace_transform_participants_) {
+    participants.reserve(transient_transform_payload_participants_.size());
+    for (const TransientTransformParticipant &participant :
+         transient_transform_payload_participants_) {
       participants.emplace(participant.native_object_id, &participant);
     }
     const auto participant_for = [&participants](int object_id) {
       const auto found = participants.find(object_id);
       return found != participants.end() ? found->second : nullptr;
     };
-    const auto preview_world = [](const WorkspaceTransformParticipant &entry,
+    const auto preview_world = [](const TransientTransformParticipant &entry,
                                   int vertex_id) -> std::optional<QVec3> {
       if (vertex_id < 0) {
         return std::nullopt;
@@ -4742,7 +5655,7 @@ public:
           entry.selected_vertices[found->second].preview_position);
     };
     for (ViewportOverlayPoint &point : frame.points) {
-      const WorkspaceTransformParticipant *participant =
+      const TransientTransformParticipant *participant =
           participant_for(point.element.object_id);
       if (participant == nullptr) {
         continue;
@@ -4753,7 +5666,7 @@ public:
       }
     }
     for (ViewportOverlayLine &line : frame.lines) {
-      const WorkspaceTransformParticipant *participant =
+      const TransientTransformParticipant *participant =
           participant_for(line.element.object_id);
       if (participant == nullptr) {
         continue;
@@ -4768,7 +5681,7 @@ public:
       }
     }
     const auto remap_face_point = [&preview_world](
-                                      const WorkspaceTransformParticipant &entry,
+                                      const TransientTransformParticipant &entry,
                                       int face_id, QVec3 point) {
       if (face_id < 0) {
         return point;
@@ -4797,7 +5710,7 @@ public:
       return point;
     };
     for (ViewportOverlayTriangle &triangle : frame.triangles) {
-      const WorkspaceTransformParticipant *participant =
+      const TransientTransformParticipant *participant =
           participant_for(triangle.element.object_id);
       if (participant == nullptr) {
         continue;
@@ -4813,57 +5726,113 @@ public:
 
   [[nodiscard]] ModelingCommandResult
   begin_translate_preview(bool duplicate_selected = false,
-                          bool topology_stable_transform = false) {
+                           bool topology_stable_transform = false,
+                           std::span<const ModelingStructuralEntityClone>
+                               structural_duplicates = {}) {
     QDR_PROFILE_FUNCTION();
+    (void)topology_stable_transform;
     if (preview_active()) {
       return failure("An SDK modeling preview is already active.");
     }
-    if (selected_sdk_objects().empty()) {
+    std::vector<ObjectId> participants;
+    if (!structural_duplicates.empty()) {
+      participants.reserve(structural_duplicates.size());
+      for (const ModelingStructuralEntityClone &clone : structural_duplicates) {
+        const std::optional<ObjectId> object =
+            sdk_object(clone.duplicate_modeling_object_id);
+        if (!object.has_value()) {
+          return failure("A structural duplicate has no live SDK identity.");
+        }
+        participants.push_back(*object);
+      }
+      std::ranges::sort(participants);
+      participants.erase(std::unique(participants.begin(), participants.end()),
+                         participants.end());
+    } else {
+      participants = selected_sdk_objects();
+    }
+    if (participants.empty()) {
       return failure("No active SDK modeling selection.");
     }
-    workspace_preview_undo_mark_ = session_.undo_depth();
+
+    const std::vector<modeling::SessionObjectSummary> summaries =
+        session_.objects();
+    modeling::SessionPreviewTransactionRequest request;
+    request.participants.reserve(participants.size());
+    for (std::size_t index = 0; index < participants.size(); ++index) {
+      const ObjectId object = participants[index];
+      const auto summary = std::ranges::find(summaries, object,
+                                             &modeling::SessionObjectSummary::id);
+      if (summary == summaries.end()) {
+        return failure("Transform preview participant is not live.");
+      }
+      std::optional<modeling::SessionPreviewDocument> document;
+      if (summary->kind == modeling::SessionObjectKind::Curve) {
+        Result<modeling::CurveDocument> copied =
+            session_.curve_document_copy(object);
+        if (!copied.ok()) {
+          return failure(copied.error_message());
+        }
+        document.emplace(std::move(copied).value());
+      } else {
+        Result<PolygonDocument> copied = session_.document_copy(object);
+        if (!copied.ok()) {
+          return failure(copied.error_message());
+        }
+        document.emplace(std::move(copied).value());
+      }
+      const std::optional<int> native = native_object(object);
+      const std::optional<EntityId> entity =
+          native.has_value()
+              ? object_map_.entity_for_modeling_object(*native)
+              : std::nullopt;
+      const ModelingObjectComponent *modeling_object =
+          entity.has_value() ? scene_.modeling_object(*entity) : nullptr;
+      request.participants.push_back({
+          .action = modeling::SessionPreviewAction::ReplaceExisting,
+          .object = object,
+          .document = std::move(document),
+          .receipt = {},
+          .name = summary->name,
+          .material_slot = modeling_object != nullptr
+                               ? modeling_object->material_slot
+                               : 0u,
+          .selected = summary->selected,
+      });
+    }
+    request.replace_object_selection = false;
+
+    if (!capture_mesh_preview_host_baseline(participants)) {
+      return failure("Bounded transform preview baseline is unavailable.");
+    }
+    Result<modeling::SessionPreviewBeginResult> begun =
+        session_.begin_preview_transaction("translate_selection",
+                                           std::move(request));
+    if (!begun.ok()) {
+      mesh_preview_host_baseline_.reset();
+      return failure(begun.error_message());
+    }
+    if (!activate_mesh_preview_host_baseline(begun.value().preview_id) ||
+        fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
+      return abort_preview_publication(
+          begun.value().preview_id, "Transform preview could not begin.");
+    }
     committed_transform_history_delta_ = {};
     committed_transform_undo_mark_.reset();
-    workspace_transform_snapshotless_ =
-        topology_stable_transform && !duplicate_selected &&
-        selection_mode_ != ModelingSelectionMode::Object &&
-        selection_mode_ != ModelingSelectionMode::Group;
-    if (!workspace_transform_snapshotless_) {
-      QDR_PROFILE_SCOPE("Transform preview capture topology-changing base");
-      preview_base_snapshot_ = capture_snapshot(true);
-      preview_asset_checkpoint_ = assets_.capture_projection_checkpoint();
-      preview_scene_checkpoint_ = scene_.capture_projection_checkpoint();
-    }
-    preview_changed_ = false;
-    if (duplicate_selected &&
-        (selection_mode_ == ModelingSelectionMode::Object ||
-         selection_mode_ == ModelingSelectionMode::Group)) {
-      ModelingCommandResult duplicated = duplicate_selected_objects(
-          {}, {}, "Duplicated selected meshes.", true);
-      if (!duplicated.ok) {
-        clear_preview_checkpoints();
-        return duplicated;
-      }
-      preview_changed_ = duplicated.changed;
-    }
-    if (!workspace_transform_snapshotless_) {
-      QDR_PROFILE_SCOPE("Transform preview capture update base");
-      workspace_update_base_snapshot_ = capture_snapshot(true);
-    }
-    workspace_transform_preexisting_changed_ = preview_changed_;
-    {
-      QDR_PROFILE_SCOPE("Transform preview initialize retained participants");
-      if (!initialize_workspace_transform_participants()) {
-        clear_preview_checkpoints();
-        return failure("Transform preview participants could not be built.");
-      }
-    }
-    workspace_preview_active_ = true;
+    preview_changed_ =
+        duplicate_selected || !structural_duplicates.empty();
+    transient_transform_payload_participants_.clear();
+    transient_transform_payload_active_ = false;
     active_preview_operation_id_ = "translate_selection";
     active_preview_operation_.reset();
     active_preview_settings_.reset();
+    if (!acknowledge_preview_owner_fence()) {
+      return abort_preview_publication(
+          begun.value().preview_id,
+          "Transform preview baseline could not be acknowledged.");
+    }
     return {.ok = true,
-            .changed = preview_changed_,
+            .changed = duplicate_selected || !structural_duplicates.empty(),
             .message = "Transform preview started."};
   }
 
@@ -4871,96 +5840,100 @@ public:
   update_workspace_transform_preview_by_object(
       const DocumentMutationByObject &mutation,
       std::string_view fallback_message,
-      bool position_only_projection = false) {
-    if (!workspace_preview_active_ ||
-        !workspace_update_base_snapshot_.has_value() ||
-        !preview_base_snapshot_.has_value()) {
+      bool position_only_projection = false,
+      const CurveDocumentMutationByObject &curve_mutation = {},
+      bool preview_preflighted = false) {
+    if (!session_.preview_active()) {
       return failure("No active SDK workspace transform preview.");
     }
-    const ModelingSdkProjectionSnapshot cancel_base = *preview_base_snapshot_;
-    const ModelingSdkProjectionSnapshot update_base =
-        *workspace_update_base_snapshot_;
-    const std::optional<AssetRegistryProjectionCheckpoint> asset_checkpoint =
-        preview_asset_checkpoint_;
-    const std::optional<SceneProjectionCheckpoint> scene_checkpoint =
-        preview_scene_checkpoint_;
-    const std::size_t undo_mark = workspace_preview_undo_mark_;
-    const bool changed_before = preview_changed_;
-    const quader::modeling::ModelingSession session_before_attempt = session_;
-    const AssetRegistryProjectionCheckpoint assets_before_attempt =
-        assets_.capture_projection_checkpoint();
-    const SceneProjectionCheckpoint scene_before_attempt =
-        scene_.capture_projection_checkpoint();
-    const ModelingSdkProjectionStats stats_before_attempt = stats_;
-    const int active_before_attempt = active_native_object_id_;
-    const ModelingSelectionMode mode_before_attempt = selection_mode_;
-    const std::uint64_t persistent_revision_before_attempt =
-        persistent_content_revision_;
-    const std::uint64_t mode_revision_before_attempt = mode_revision_;
-    const std::size_t deleted_before_attempt =
-        active_preview_deleted_vertex_count_;
-    const std::vector<ObjectId> selected = selected_sdk_objects();
-    const bool sdk_only_reset =
-        preview_targets_have_unique_mesh_bindings(selected);
-    ModelingCommandResult restored;
-    if (sdk_only_reset) {
-      QDR_PROFILE_SCOPE("Modeling transform preview restore SDK base only");
-      session_.restore_snapshot_preserving_identity_high_water(
-          update_base.impl_->session);
-      active_preview_deleted_vertex_count_ = 0U;
-      restored = {.ok = true, .changed = true};
-    } else {
-      QDR_PROFILE_SCOPE("Modeling transform preview restore full projection");
-      restored = restore_snapshot_exact(update_base);
+    const modeling::PreviewTransactionSummary preview =
+        session_.preview_summary();
+    if (!preview_preflighted && !preflight_preview_mutation(preview.id)) {
+      return failure(
+          "Transform preview participants changed outside this preview.");
     }
-    if (!restored.ok) {
-      return restored;
+    std::vector<modeling::SessionPreviewDocumentUpdate> updates;
+    updates.reserve(preview.objects.size());
+    bool changed = false;
+    std::size_t deleted_vertex_count = 0u;
+    std::string message;
+    for (const modeling::PreviewTransactionObjectSummary &participant :
+         preview.objects) {
+      if (participant.action ==
+          modeling::SessionPreviewAction::RemoveExisting) {
+        continue;
+      }
+      Result<OperationResult> operated;
+      std::optional<modeling::SessionPreviewDocument> document;
+      if (participant.kind == modeling::SessionObjectKind::Curve) {
+        Result<modeling::CurveDocument> base =
+            session_.preview_base_curve_document_copy(preview.id,
+                                                      participant.object_id);
+        if (!base.ok()) {
+          return failure(base.error_message());
+        }
+        if (curve_mutation) {
+          operated = curve_mutation(participant.object_id, base.value());
+        } else {
+          OperationResult unchanged;
+          unchanged.success = true;
+          unchanged.message = "Curve transform preview unchanged.";
+          operated = Result<OperationResult>::success(std::move(unchanged));
+        }
+        document.emplace(std::move(base).value());
+      } else {
+        Result<PolygonDocument> base = session_.preview_base_document_copy(
+            preview.id, participant.object_id);
+        if (!base.ok()) {
+          return failure(base.error_message());
+        }
+        operated = mutation(participant.object_id, base.value());
+        document.emplace(std::move(base).value());
+      }
+      if (!operated.ok() || !operated.value().success) {
+        return failure(operated.ok() && !operated.value().message.empty()
+                           ? operated.value().message
+                           : (operated.error_message().empty()
+                                  ? std::string(fallback_message)
+                                  : operated.error_message()));
+      }
+      changed = changed || operated.value().changed;
+      deleted_vertex_count += operated.value().deleted.vertices.size();
+      if (!operated.value().message.empty()) {
+        message = operated.value().message;
+      }
+      updates.push_back({
+          .object = participant.object_id,
+          .document = std::move(*document),
+          .receipt = std::move(operated).value(),
+      });
     }
-    preview_base_snapshot_ = cancel_base;
-    workspace_update_base_snapshot_ = update_base;
-    preview_asset_checkpoint_ = asset_checkpoint;
-    preview_scene_checkpoint_ = scene_checkpoint;
-    workspace_preview_undo_mark_ = undo_mark;
-    workspace_preview_active_ = true;
-    active_preview_operation_id_ = "translate_selection";
-    active_preview_operation_.reset();
-    active_preview_settings_.reset();
-    ModelingCommandResult result;
-    {
-      QDR_PROFILE_SCOPE("Modeling transform preview mutate selected documents");
-      result = mutate_documents_by_object(selected, mutation, fallback_message,
-                                          true, sdk_only_reset,
-                                          position_only_projection &&
-                                              sdk_only_reset);
+    Result<OperationResult> updated = session_.update_preview_transaction(
+        preview.id, std::move(updates));
+    if (!updated.ok()) {
+      return failure(updated.error_message());
     }
-    if (!result.ok) {
-      session_.restore_snapshot_preserving_identity_high_water(
-          session_before_attempt);
-      (void)assets_.restore_projection_checkpoint(assets_before_attempt);
-      (void)scene_.restore_projection_checkpoint(scene_before_attempt);
-      stats_ = stats_before_attempt;
-      active_native_object_id_ = active_before_attempt;
-      selection_mode_ = mode_before_attempt;
-      persistent_content_revision_ = persistent_revision_before_attempt;
-      mode_revision_ = mode_revision_before_attempt;
-      active_preview_deleted_vertex_count_ = deleted_before_attempt;
-      preview_base_snapshot_ = cancel_base;
-      workspace_update_base_snapshot_ = update_base;
-      preview_asset_checkpoint_ = asset_checkpoint;
-      preview_scene_checkpoint_ = scene_checkpoint;
-      workspace_preview_undo_mark_ = undo_mark;
-      workspace_preview_active_ = true;
-      active_preview_operation_id_ = "translate_selection";
-      active_preview_operation_.reset();
-      active_preview_settings_.reset();
-      preview_changed_ = changed_before;
-      return result;
+    const bool publish_host_projection =
+        !position_only_projection && (preview_changed_ || changed);
+    if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
+        (publish_host_projection && !project_preview_object())) {
+      return abort_preview_publication(
+          preview.id, "Transform preview publication failed.");
     }
-    preview_changed_ = changed_before || (result.ok && result.changed);
-    if (result.ok && result.changed) {
+    active_preview_deleted_vertex_count_ = deleted_vertex_count;
+    preview_changed_ = changed || updated.value().changed;
+    if (publish_host_projection) {
       ++stats_.preview_publication_count;
     }
-    return result;
+    if (!acknowledge_preview_owner_fence()) {
+      return abort_preview_publication(
+          preview.id,
+          "Transform preview publication could not be acknowledged.");
+    }
+    return {.ok = updated.value().success,
+            .changed = updated.value().changed,
+            .message = message.empty() ? std::string(fallback_message)
+                                       : std::move(message)};
   }
 
   [[nodiscard]] ModelingCommandResult update_workspace_transform_preview(
@@ -4979,6 +5952,11 @@ public:
     }
     if (!finite(delta)) {
       return failure("Translation delta must be finite.");
+    }
+    const ModelingCommandResult payload =
+        ensure_component_transform_payload();
+    if (!payload.ok) {
+      return payload;
     }
     const ModelingSelectionMode mode = selection_mode_;
     const DocumentMutation mutation =
@@ -5003,25 +5981,55 @@ public:
           translated.value().dirty.selection = false;
           return translated;
         };
-    if (workspace_preview_active_) {
-      const quader::modeling::Transform3 preview_transform{
-          .origin = to_sdk(delta),
-      };
-      return update_workspace_transform_meshes(
-          [preview_transform](ObjectId) {
-            return std::optional{preview_transform};
+    const quader::modeling::Transform3 curve_transform{
+        .origin = to_sdk(delta),
+    };
+    const bool position_only_projection = transient_transform_payload_active_;
+    bool preview_preflighted = false;
+    if (position_only_projection) {
+      const modeling::PreviewTransactionSummary preview =
+          session_.preview_summary();
+      if (!preflight_preview_mutation(preview.id)) {
+        return failure(
+            "Transform preview participants changed outside this preview.");
+      }
+      preview_preflighted = true;
+      ModelingCommandResult transient = update_transient_transform_payload(
+          [curve_transform](ObjectId) {
+            return std::optional{curve_transform};
           },
           [mutation](ObjectId, PolygonDocument &document) {
             return mutation(document);
           },
           "Transform preview updated.");
+      if (!transient.ok) {
+        return transient;
+      }
     }
-    return update_preview_from_base(mutation,
-                                    "SDK translate preview failed.");
+    ModelingCommandResult result = update_workspace_transform_preview_by_object(
+        [&mutation](ObjectId, PolygonDocument &document) {
+          return mutation(document);
+        },
+        "SDK translate preview failed.", position_only_projection,
+        [curve_transform](ObjectId, modeling::CurveDocument &document) {
+          return document.transform(curve_transform);
+        },
+        preview_preflighted);
+    if (!result.ok && position_only_projection &&
+        !initialize_transient_transform_payload()) {
+      result.changed = true;
+      result.message += " Transient transform payload repair failed.";
+    }
+    return result;
   }
 
   [[nodiscard]] ModelingCommandResult update_transform_preview(
       const ModelingTransform3 &transform, QVec3 pivot) {
+    const ModelingCommandResult payload =
+        ensure_component_transform_payload();
+    if (!payload.ok) {
+      return payload;
+    }
     const quader::modeling::Transform3 sdk_transform = to_sdk(transform, pivot);
     const ModelingSelectionMode mode = selection_mode_;
     const DocumentMutation mutation =
@@ -5046,8 +6054,17 @@ public:
           transformed.value().dirty.selection = false;
           return transformed;
         };
-    if (workspace_preview_active_) {
-      return update_workspace_transform_meshes(
+    const bool position_only_projection = transient_transform_payload_active_;
+    bool preview_preflighted = false;
+    if (position_only_projection) {
+      const modeling::PreviewTransactionSummary preview =
+          session_.preview_summary();
+      if (!preflight_preview_mutation(preview.id)) {
+        return failure(
+            "Transform preview participants changed outside this preview.");
+      }
+      preview_preflighted = true;
+      ModelingCommandResult transient = update_transient_transform_payload(
           [sdk_transform](ObjectId) {
             return std::optional{sdk_transform};
           },
@@ -5055,15 +6072,38 @@ public:
             return mutation(document);
           },
           "Transform preview updated.");
+      if (!transient.ok) {
+        return transient;
+      }
     }
-    return update_preview_from_base(mutation,
-                                    "SDK transform preview failed.");
+    ModelingCommandResult result = update_workspace_transform_preview_by_object(
+        [&mutation](ObjectId, PolygonDocument &document) {
+          return mutation(document);
+        },
+        "SDK transform preview failed.", position_only_projection,
+        [sdk_transform](ObjectId, modeling::CurveDocument &document) {
+          return document.transform(sdk_transform);
+        },
+        preview_preflighted);
+    if (!result.ok && position_only_projection &&
+        !initialize_transient_transform_payload()) {
+      result.changed = true;
+      result.message += " Transient transform payload repair failed.";
+    }
+    return result;
   }
 
   [[nodiscard]] ModelingCommandResult update_object_transform_preview(
       std::span<const ModelingSdkObjectTransformPreview> transforms,
       ModelingSdkTransformPreviewKind kind,
       float closed_edge_ledge_size) {
+    if (kind == ModelingSdkTransformPreviewKind::Transform) {
+      const ModelingCommandResult payload =
+          ensure_component_transform_payload();
+      if (!payload.ok) {
+        return payload;
+      }
+    }
     /// Stores one resolved SDK object and its portable preview transform.
     struct SdkTransform {
       ObjectId object;
@@ -5113,9 +6153,38 @@ public:
                   quader::modeling::ErrorCode::UnsupportedOperation,
                   "Transform preview kind is unsupported."));
         };
-    if (kind == ModelingSdkTransformPreviewKind::Transform &&
-        workspace_preview_active_) {
-      return update_workspace_transform_meshes(
+    const CurveDocumentMutationByObject curve_mutation =
+        [resolved_transforms, kind](ObjectId object,
+                                    modeling::CurveDocument &document) {
+          if (kind != ModelingSdkTransformPreviewKind::Transform) {
+            OperationResult unchanged;
+            unchanged.success = true;
+            unchanged.message = "Curve preview unchanged.";
+            return Result<OperationResult>::success(std::move(unchanged));
+          }
+          const auto found = std::ranges::lower_bound(
+              *resolved_transforms, object, {}, &SdkTransform::object);
+          if (found == resolved_transforms->end() || found->object != object) {
+            OperationResult unchanged;
+            unchanged.success = true;
+            unchanged.message = "Curve preview unchanged.";
+            return Result<OperationResult>::success(std::move(unchanged));
+          }
+          return document.transform(found->transform);
+        };
+    const bool position_only_projection =
+        kind == ModelingSdkTransformPreviewKind::Transform &&
+        transient_transform_payload_active_;
+    bool preview_preflighted = false;
+    if (position_only_projection) {
+      const modeling::PreviewTransactionSummary preview =
+          session_.preview_summary();
+      if (!preflight_preview_mutation(preview.id)) {
+        return failure(
+            "Transform preview participants changed outside this preview.");
+      }
+      preview_preflighted = true;
+      ModelingCommandResult transient = update_transient_transform_payload(
           [resolved_transforms](ObjectId object)
               -> std::optional<quader::modeling::Transform3> {
             const auto found = std::ranges::lower_bound(
@@ -5126,9 +6195,19 @@ public:
                        : std::nullopt;
           },
           mutation, "Transform preview updated.");
+      if (!transient.ok) {
+        return transient;
+      }
     }
-    return update_workspace_transform_preview_by_object(
-        mutation, "SDK object-local transform preview failed.");
+    ModelingCommandResult result = update_workspace_transform_preview_by_object(
+        mutation, "SDK object-local transform preview failed.",
+        position_only_projection, curve_mutation, preview_preflighted);
+    if (!result.ok && position_only_projection &&
+        !initialize_transient_transform_payload()) {
+      result.changed = true;
+      result.message += " Transient transform payload repair failed.";
+    }
+    return result;
   }
 
   [[nodiscard]] ModelingCommandResult
@@ -5138,11 +6217,8 @@ public:
           return document.extrude_selected_elements(
               to_sdk(offset), closed_edge_ledge_size);
         };
-    return workspace_preview_active_
-               ? update_workspace_transform_preview(
-                     mutation, "SDK extrude preview failed.")
-               : update_preview_from_base(
-                     mutation, "SDK extrude preview failed.");
+    return update_workspace_transform_preview(
+        mutation, "SDK extrude preview failed.");
   }
 
   [[nodiscard]] ModelingCommandResult
@@ -5153,11 +6229,8 @@ public:
           return document.inset_selected_elements(sdk_transform,
                                                    to_sdk(pivot));
         };
-    return workspace_preview_active_
-               ? update_workspace_transform_preview(
-                     mutation, "SDK inset preview failed.")
-               : update_preview_from_base(
-                     mutation, "SDK inset preview failed.");
+    return update_workspace_transform_preview(
+        mutation, "SDK inset preview failed.");
   }
 
   [[nodiscard]] ModelingSdkTransformHistoryDelta
@@ -5165,14 +6238,14 @@ public:
     QDR_PROFILE_SCOPE("Transform history build sparse authored positions");
     auto delta =
         std::make_shared<ModelingSdkTransformHistoryDelta::Impl>();
-    delta->objects.reserve(workspace_transform_participants_.size());
-    for (const WorkspaceTransformParticipant &participant :
-         workspace_transform_participants_) {
+    delta->objects.reserve(transient_transform_payload_participants_.size());
+    for (const TransientTransformParticipant &participant :
+         transient_transform_payload_participants_) {
       ModelingSdkTransformHistoryDelta::Impl::ObjectDelta object_delta;
       object_delta.object = participant.object;
       object_delta.before.reserve(participant.selected_vertices.size());
       object_delta.after.reserve(participant.selected_vertices.size());
-      for (const WorkspaceTransformSelectedVertex &vertex :
+      for (const TransientTransformSelectedVertex &vertex :
            participant.selected_vertices) {
         if (vertex.base_position.x == vertex.preview_position.x &&
             vertex.base_position.y == vertex.preview_position.y &&
@@ -5201,83 +6274,160 @@ public:
     if (!preview_active()) {
       return failure("No active SDK translate preview.");
     }
-    if (curve_document_preview_active() && !preview_changed_) {
-      ModelingCommandResult canceled = cancel_curve_preview_projection();
+    if (!preview_changed_) {
+      const bool curve_preview = curve_document_preview_active();
+      ModelingCommandResult canceled = cancel_translate_preview();
       if (canceled.ok) {
         canceled.changed = false;
-        canceled.message = "Curve unchanged.";
+        canceled.message =
+            curve_preview ? "Curve unchanged." : "Preview unchanged.";
       }
       return canceled;
     }
-    if (curve_document_preview_active() &&
-        (curve_preview_external_changes_ ||
-         scene_.revision() != curve_preview_scene_revision_ ||
-         assets_.revision() != curve_preview_asset_revision_)) {
-      return failure("Scene changed during the curve edit; cancel this preview first.");
+
+    const modeling::PreviewTransactionSummary preview =
+        session_.preview_summary();
+    if (!mesh_preview_host_baseline_.has_value() ||
+        !mesh_preview_host_baseline_->active_for(preview.id)) {
+      return failure("Preview commit baseline is unavailable.");
     }
-    if (workspace_preview_active_) {
-      if (workspace_transform_transient_active_ &&
-          workspace_transform_commit_mutation_) {
-        if (!preview_changed_) {
-          (void)session_.rollback_undo_since(workspace_preview_undo_mark_);
-          clear_preview_checkpoints();
-          return {.ok = true,
-                  .changed = false,
-                  .message = "Transform preview unchanged."};
-        }
-        const std::size_t workspace_undo_mark = workspace_preview_undo_mark_;
-        const ModelingSdkTransformHistoryDelta history_delta =
-            build_transform_history_delta();
-        if (!history_delta.valid()) {
-          return failure(
-              "Transform preview changed without authored position history.");
-        }
-        workspace_preview_active_ = false;
-        ModelingCommandResult committed;
-        {
-          QDR_PROFILE_SCOPE("Transform commit position-only documents");
-          const std::shared_ptr<
-              const ModelingSdkTransformHistoryDelta::Impl>
-              exact_positions = history_delta.impl_;
-          committed = commit_sparse_transform_positions(exact_positions);
-        }
-        if (!committed.ok) {
-          workspace_preview_active_ = true;
-          return committed;
-        }
-        session_.squash_undo_since(workspace_undo_mark);
-        committed_transform_history_delta_ = history_delta;
-        committed_transform_undo_mark_ = workspace_undo_mark;
-        clear_preview_checkpoints();
-        return committed;
+    const ModelingSdkTransformHistoryDelta transform_history_delta =
+        transient_transform_payload_active_ ? build_transform_history_delta()
+                                            : ModelingSdkTransformHistoryDelta{};
+    const std::optional<std::size_t> transform_history_undo_mark =
+        transform_history_delta.valid()
+            ? std::optional{
+                  mesh_preview_host_baseline_->transform_history_undo_mark}
+            : std::nullopt;
+
+    if (!preflight_preview_mutation(preview.id)) {
+      return failure(
+          "Preview participants changed outside this preview.");
+    }
+
+    struct RemovedHostObject {
+      int modeling_object_id = kInvalidModelingObjectId;
+      EntityId entity = kInvalidEntityId;
+    };
+    std::vector<RemovedHostObject> removed;
+    std::vector<EntityId> preview_selected;
+    bool structural_preview = false;
+    removed.reserve(preview.objects.size());
+    preview_selected.reserve(preview.objects.size());
+    for (const modeling::PreviewTransactionObjectSummary &object :
+         preview.objects) {
+      structural_preview =
+          structural_preview ||
+          object.action != modeling::SessionPreviewAction::ReplaceExisting;
+      const std::optional<int> native = native_object(object.object_id);
+      const std::optional<EntityId> entity =
+          native.has_value()
+              ? object_map_.entity_for_modeling_object(*native)
+              : std::nullopt;
+      if (!native.has_value() || !entity.has_value() ||
+          !scene_.exists(*entity)) {
+        return failure("Preview object has no live host identity.");
       }
-      const bool changed = preview_changed_;
-      session_.squash_undo_since(workspace_preview_undo_mark_);
-      if (changed) {
-        ++persistent_content_revision_;
+      if (object.action ==
+          modeling::SessionPreviewAction::RemoveExisting) {
+        removed.push_back({.modeling_object_id = *native, .entity = *entity});
+      } else if (scene_.mesh(*entity) == nullptr &&
+                 scene_.curve(*entity) == nullptr) {
+        return failure("Preview object has no published host payload.");
       }
-      clear_preview_checkpoints();
-      return {.ok = true, .changed = changed, .message = "Preview committed."};
+      if (object.selected &&
+          object.action != modeling::SessionPreviewAction::RemoveExisting) {
+        preview_selected.push_back(*entity);
+      }
     }
-    const quader::modeling::ModelingSession session_before = session_;
-    Result<OperationResult> committed = session_.commit_preview();
-    if (!committed.ok()) {
-      return failure(committed.error_message());
-    }
+
+    // All injected/recoverable publication failures are decided while the
+    // SDK preview and retained owner baseline are still untouched.
     if (fails(ModelingSdkProjectionFailurePoint::BeforeCommit)) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
       return failure("Injected failure before SDK preview commit.");
     }
-    const bool changed = committed.value().changed || preview_changed_;
+    if (fails(ModelingSdkProjectionFailurePoint::CommittedAssetReplace) ||
+        fails(ModelingSdkProjectionFailurePoint::CommittedSceneNotify)) {
+      return failure("Committed preview projection could not be published.");
+    }
+    if (transient_transform_payload_active_ &&
+        !project_preview_object(true, true)) {
+      return abort_preview_publication(
+          preview.id,
+          "Committed transform projection could not be published.");
+    }
+
+    if (structural_preview) {
+      std::vector<EntityId> combined;
+      for (const EntityId entity : scene_.selected_entities()) {
+        if (!owns_entity(entity)) {
+          combined.push_back(entity);
+        }
+      }
+      combined.insert(combined.end(), preview_selected.begin(),
+                      preview_selected.end());
+      EntityId active = preview_selected.empty()
+                            ? (combined.empty() ? kInvalidEntityId
+                                                : combined.front())
+                            : preview_selected.back();
+      const SceneSelectionState desired =
+          make_scene_selection(scene_, combined, active);
+      (void)apply_scene_selection(scene_, desired,
+                                  SceneSelectionApplicationMode::RuntimeSync);
+      if (!same_scene_selection(capture_scene_selection(scene_), desired)) {
+        return abort_preview_publication(
+            preview.id,
+            "Committed preview selection could not be published.");
+      }
+    }
+
+    for (const RemovedHostObject &object : removed) {
+      object_map_.remember_scene_entity(object.modeling_object_id, scene_,
+                                        object.entity);
+      if (!mesh_sync_.destroy_projected_entity(scene_, object.entity)) {
+        return abort_preview_publication(
+            preview.id,
+            "Removed preview scene entity could not be destroyed.");
+      }
+      object_map_.unbind_object(object.modeling_object_id);
+      object_map_.unbind_sdk_object(object.modeling_object_id);
+    }
+
+    Result<modeling::SessionPreviewCommitResult> committed =
+        session_.commit_preview_transaction(preview.id);
+    if (!committed.ok()) {
+      // The SDK still owns the active preview on validation failure, so the
+      // original retained baseline can end it and restore every host owner.
+      return abort_preview_publication(preview.id,
+                                       committed.error_message());
+    }
+
+    active_native_object_id_ =
+        native_object(committed.value().active_object)
+            .value_or(kInvalidModelingObjectId);
+    const bool changed =
+        committed.value().operation.changed || preview_changed_;
     if (changed) {
       ++persistent_content_revision_;
     }
-    clear_preview_checkpoints();
-    return {.ok = committed.value().success,
-            .changed = changed,
-            .message = committed.value().message};
-  }
 
+    const std::vector<AssetId> original_assets =
+        mesh_preview_host_baseline_->scope.asset_ids;
+    mesh_sync_.remove_unreferenced_history_mesh_assets(
+        scene_, assets_, original_assets);
+    mesh_sync_.remove_unreferenced_history_curve_assets(
+        scene_, assets_, original_assets);
+
+    committed_transform_history_delta_ = transform_history_delta;
+    committed_transform_undo_mark_ = transform_history_undo_mark;
+    const ModelingCommandResult result{
+        .ok = committed.value().operation.success,
+        .changed = changed,
+        .message = committed.value().operation.message,
+    };
+    clear_preview_checkpoints();
+    return result;
+  }
   [[nodiscard]] ModelingCommandResult cancel_translate_preview() {
     QDR_PROFILE_FUNCTION();
     if (!preview_active()) {
@@ -5286,37 +6436,26 @@ public:
     if (curve_document_preview_active()) {
       return cancel_curve_preview_projection();
     }
-    if (workspace_preview_active_ && workspace_transform_snapshotless_) {
-      QDR_PROFILE_SCOPE("Transform preview cancel transient positions");
-      const bool changed = preview_changed_;
-      (void)session_.rollback_undo_since(workspace_preview_undo_mark_);
-      committed_transform_history_delta_ = {};
-      committed_transform_undo_mark_.reset();
-      clear_preview_checkpoints();
-      return {.ok = true,
-              .changed = changed,
-              .message = "Preview canceled."};
+    const modeling::PreviewTransactionSummary preview =
+        session_.preview_summary();
+    if (!mesh_preview_host_baseline_.has_value() ||
+        !mesh_preview_host_baseline_->active_for(preview.id)) {
+      return failure("SDK preview host restore point is unavailable.");
     }
-    if (!preview_base_snapshot_.has_value()) {
-      return failure("SDK preview restore point is unavailable.");
+    if (!preflight_preview_mutation(preview.id)) {
+      return failure(
+          "Preview participants changed outside this preview.");
     }
     const bool changed = preview_changed_;
-    const ModelingSdkProjectionSnapshot base = *preview_base_snapshot_;
-    if (session_.preview_active()) {
-      Result<OperationResult> canceled = session_.cancel_preview();
-      if (!canceled.ok()) {
-        return failure(canceled.error_message());
-      }
+    if (!restore_preview_to_original_baseline(preview.id, false)) {
+      return {.ok = false,
+              .changed = true,
+              .message = "Preview could not be canceled."};
     }
-    ModelingCommandResult restored = restore_snapshot_exact(base);
-    if (!restored.ok) {
-      return restored;
-    }
-    restored.changed = changed;
-    restored.message = "Preview canceled.";
-    return restored;
+    return {.ok = true,
+            .changed = changed,
+            .message = "Preview canceled."};
   }
-
   [[nodiscard]] ModelingSdkTransformHistoryDelta
   take_committed_transform_history_delta() {
     QDR_PROFILE_SCOPE("Transform history transfer sparse delta");
@@ -5351,7 +6490,7 @@ public:
   }
 
   [[nodiscard]] bool preview_active() const noexcept {
-    return workspace_preview_active_ || session_.preview_active();
+    return session_.preview_active();
   }
 
   [[nodiscard]] ModelingSelectionMode selection_mode() const noexcept {
@@ -5369,7 +6508,6 @@ public:
         .object_map_revision = object_map_.revision(),
         .active_native_object_id = active_native_object_id_,
         .mode = selection_mode_,
-        .workspace_preview_active = workspace_preview_active_,
         .sdk_preview_active = preview.active,
         .preview_id = preview.id,
         .preview_object_id = preview.object_id,
@@ -5519,7 +6657,7 @@ public:
     for (const auto &summary : summaries) {
       summaries_by_id.emplace(sdk_object_key(summary.id), &summary);
     }
-    for (const auto &[native_id, object_id] : object_ids_) {
+    for (const auto &[native_id, object_id] : sdk_bindings()) {
       const auto summary = summaries_by_id.find(sdk_object_key(object_id));
       if (summary == summaries_by_id.end() ||
           (!summary->second->selected &&
@@ -5760,7 +6898,7 @@ public:
         .value_or(kInvalidEntityId);
   }
 
-  void add_selection_to_scene() {
+  [[nodiscard]] bool add_selection_to_scene() {
     std::vector<EntityId> combined;
     for (const EntityId entity : scene_.selected_entities()) {
       if (!owns_entity(entity)) {
@@ -5783,7 +6921,17 @@ public:
                    : (combined.empty() ? kInvalidEntityId
                                        : combined.front());
     }
-    (void)scene_.replace_selection(combined, active);
+    const SceneSelectionState desired =
+        make_scene_selection(scene_, combined, active);
+    (void)apply_scene_selection(scene_, desired,
+                                SceneSelectionApplicationMode::RuntimeSync);
+    return same_scene_selection(capture_scene_selection(scene_), desired);
+  }
+
+  [[nodiscard]] bool acknowledge_active_preview_host_publication() {
+    const modeling::PreviewTransactionSummary preview =
+        session_.preview_summary();
+    return !preview.active || acknowledge_preview_owner_fence();
   }
 
   [[nodiscard]] std::uint64_t content_revision() const {
@@ -5805,23 +6953,23 @@ public:
     } else {
       snapshot->session = session_.current_workspace_checkpoint();
     }
-    snapshot->object_ids = object_ids_;
+    snapshot->object_ids = sdk_bindings();
     snapshot->next_native_object_id = next_native_object_id_;
     snapshot->active_native_object_id = active_native_object_id_;
     snapshot->selection_mode = selection_mode_;
     snapshot->persistent_content_revision = persistent_content_revision_;
     snapshot->mode_revision = mode_revision_;
-    snapshot->projected_objects.reserve(object_ids_.size());
+    snapshot->projected_objects.reserve(sdk_bindings().size());
     std::unordered_set<int> projected_ids;
-    projected_ids.reserve(object_ids_.size());
-    for (const auto &[native_id, object_id] : object_ids_) {
+    projected_ids.reserve(sdk_bindings().size());
+    for (const auto &[native_id, object_id] : sdk_bindings()) {
       (void)object_id;
       projected_ids.insert(native_id);
     }
     const auto live_identities =
         object_map_.capture_scene_identities_for_modeling_objects(
             scene_, projected_ids);
-    for (const auto &[native_id, object_id] : object_ids_) {
+    for (const auto &[native_id, object_id] : sdk_bindings()) {
       (void)object_id;
       const std::optional<EntityId> entity =
           object_map_.entity_for_modeling_object(native_id);
@@ -5908,15 +7056,15 @@ public:
       const auto identity =
           current_identities.find(projected.modeling_object_id);
       if (identity == current_identities.end() ||
-          !scene_.exists(identity->second.entity)) {
+          !scene_.exists(identity->second.id)) {
         continue;
       }
       const ModelingObjectComponent *component =
-          scene_.modeling_object(identity->second.entity);
+          scene_.modeling_object(identity->second.id);
       const MeshComponent *mesh_component =
-          scene_.mesh(identity->second.entity);
+          scene_.mesh(identity->second.id);
       if (component != nullptr && projected.curve.has_value()) {
-        const CurveComponent *binding = scene_.curve(identity->second.entity);
+        const CurveComponent *binding = scene_.curve(identity->second.id);
         const CurveAsset *curve = binding != nullptr
                                       ? assets_.curve(binding->curve) : nullptr;
         if (curve != nullptr && curve->document != nullptr) {
@@ -5942,59 +7090,201 @@ public:
 
   [[nodiscard]] ModelingSdkProjectionSnapshot
   capture_active_preview_base_snapshot() const {
-    if (!preview_base_snapshot_.has_value()) {
+    const modeling::PreviewTransactionSummary preview =
+        session_.preview_summary();
+    if (!preview.active || !mesh_preview_host_baseline_.has_value() ||
+        !mesh_preview_host_baseline_->valid() ||
+        mesh_preview_host_baseline_->preview_id != preview.id) {
       return {};
     }
-    return ModelingSdkProjectionSnapshot(
-        clone_host_checkpoint_impl(*preview_base_snapshot_));
+    ModelingSdkProjectionSnapshot current = capture_snapshot(false);
+    auto base = clone_host_checkpoint_impl(current);
+    if (!base) {
+      return {};
+    }
+    for (const modeling::PreviewTransactionObjectSummary &participant :
+         preview.objects) {
+      if (participant.action ==
+          modeling::SessionPreviewAction::AddProvisional) {
+        continue;
+      }
+      const auto history_asset = std::ranges::lower_bound(
+          mesh_preview_host_baseline_->history_asset_identities,
+          participant.object_id, {}, &PreviewHistoryAssetIdentity::object);
+      if (history_asset ==
+              mesh_preview_host_baseline_->history_asset_identities.end() ||
+          history_asset->object != participant.object_id ||
+          history_asset->kind != participant.kind ||
+          history_asset->asset == kInvalidAssetId) {
+        return {};
+      }
+      const std::optional<int> native = native_object(participant.object_id);
+      if (!native.has_value()) {
+        return {};
+      }
+      SdkProjectedObjectSnapshot projected{
+          .modeling_object_id = *native,
+          .identity = history_asset->identity,
+          .material_slot =
+              identity_material_slot(history_asset->identity),
+      };
+      if (participant.kind == modeling::SessionObjectKind::Curve) {
+        Result<modeling::CurveDocument> document =
+            session_.preview_base_curve_document_copy(preview.id,
+                                                      participant.object_id);
+        if (!document.ok()) {
+          return {};
+        }
+        projected.curve_id = history_asset->asset;
+        projected.identity.mesh.reset();
+        projected.identity.curve = CurveComponent{history_asset->asset};
+        CurveAsset curve;
+        curve.name = history_asset->identity.name;
+        curve.document = std::make_shared<const modeling::CurveDocument>(
+            std::move(document).value());
+        projected.curve = std::move(curve);
+      } else {
+        Result<PolygonDocument> document =
+            session_.preview_base_document_copy(preview.id,
+                                                participant.object_id);
+        if (!document.ok()) {
+          return {};
+        }
+        std::optional<MeshAsset> mesh =
+            MeshProjectionService::compile_sdk_document_mesh(document.value());
+        if (!mesh.has_value()) {
+          return {};
+        }
+        mesh->name = history_asset->identity.name;
+        projected.mesh_id = history_asset->asset;
+        projected.identity.curve.reset();
+        projected.identity.mesh = MeshComponent{history_asset->asset};
+        projected.mesh = std::move(*mesh);
+      }
+      const auto existing = std::ranges::find(
+          base->projected_objects, *native,
+          &SdkProjectedObjectSnapshot::modeling_object_id);
+      if (existing == base->projected_objects.end()) {
+        base->projected_objects.push_back(std::move(projected));
+      } else {
+        *existing = std::move(projected);
+      }
+    }
+    if (structural_preview_host_state_.has_value() &&
+        structural_preview_host_state_->active_for(preview.id)) {
+      base->next_native_object_id =
+          structural_preview_host_state_->next_native_object_id_before;
+      for (const StructuralPreviewHostState::AddedObject &added :
+           structural_preview_host_state_->added_objects) {
+        base->object_ids.erase(added.modeling_object_id);
+        std::erase_if(base->projected_objects,
+                      [&added](const SdkProjectedObjectSnapshot &projected) {
+                        return projected.modeling_object_id ==
+                               added.modeling_object_id;
+                      });
+      }
+    }
+    return ModelingSdkProjectionSnapshot(std::move(base));
   }
 
   [[nodiscard]] ModelingCommandResult
   restore_snapshot(const ModelingSdkProjectionSnapshot &snapshot) {
-    return restore_snapshot(snapshot, true);
+    return restore_snapshot(snapshot, true, false);
+  }
+
+  [[nodiscard]] ModelingCommandResult
+  restore_snapshot_preserving_scene_selection(
+      const ModelingSdkProjectionSnapshot &snapshot) {
+    return restore_snapshot(snapshot, true, true);
   }
 
   [[nodiscard]] ModelingCommandResult
   restore_snapshot_exact(const ModelingSdkProjectionSnapshot &snapshot) {
-    return restore_snapshot(snapshot, false);
+    return restore_snapshot(snapshot, false, false);
+  }
+
+  [[nodiscard]] ModelingCommandResult
+  restore_snapshot_exact_preserving_scene_selection(
+      const ModelingSdkProjectionSnapshot &snapshot) {
+    return restore_snapshot(snapshot, false, true);
   }
 
   [[nodiscard]] ModelingCommandResult
   restore_snapshot(const ModelingSdkProjectionSnapshot &snapshot,
-                   bool history_transition) {
+                   bool history_transition, bool preserve_scene_selection) {
     if (!snapshot.valid()) {
       return failure("SDK projection restore point is invalid.");
     }
 
     const int host_identity_high_water = next_available_native_object_id();
-    const auto object_ids_before = object_ids_;
-    const ModelingObjectRuntimeMap object_map_before = object_map_;
-    const int next_native_before = next_native_object_id_;
-    const int active_before = active_native_object_id_;
-    const ModelingSelectionMode selection_mode_before = selection_mode_;
-    const std::uint64_t persistent_content_revision_before =
-        persistent_content_revision_;
-    const std::uint64_t mode_revision_before = mode_revision_;
-    const AssetRegistryProjectionCheckpoint assets_before =
-        assets_.capture_projection_checkpoint();
-    const SceneProjectionCheckpoint scene_before =
-        scene_.capture_projection_checkpoint();
-    std::vector<EntityId> created_entities;
-    // The SDK checkpoint is installed only after every fallible host
-    // projection step below. Rollback therefore keeps the still-live SDK
-    // state in place instead of cloning its accumulated local history.
+    std::vector<EntityId> affected_entities;
+    std::vector<AssetId> affected_assets;
+    std::vector<int> affected_modeling_ids;
+    affected_entities.reserve(object_map_.size() +
+                              snapshot.impl_->projected_objects.size());
+    affected_modeling_ids.reserve(object_map_.size() +
+                                  snapshot.impl_->object_ids.size());
+    for (const auto &[modeling_object_id, entity] :
+         object_map_.object_entity_bindings_by_modeling_object()) {
+      affected_modeling_ids.push_back(modeling_object_id);
+      if (scene_.exists(entity)) {
+        std::vector<EntityId> subtree = scene_.descendants(entity, true);
+        affected_entities.insert(affected_entities.end(), subtree.begin(),
+                                 subtree.end());
+        if (const MeshComponent *mesh = scene_.mesh(entity)) {
+          affected_assets.push_back(mesh->mesh);
+        }
+        if (const CurveComponent *curve = scene_.curve(entity)) {
+          affected_assets.push_back(curve->curve);
+        }
+      } else {
+        affected_entities.push_back(entity);
+      }
+    }
+    for (const auto &[modeling_object_id, object] : snapshot.impl_->object_ids) {
+      (void)object;
+      affected_modeling_ids.push_back(modeling_object_id);
+    }
+    for (const SdkProjectedObjectSnapshot &projected :
+         snapshot.impl_->projected_objects) {
+      if (scene_.exists(projected.identity.id)) {
+        std::vector<EntityId> subtree =
+            scene_.descendants(projected.identity.id, true);
+        affected_entities.insert(affected_entities.end(), subtree.begin(),
+                                 subtree.end());
+      } else {
+        affected_entities.push_back(projected.identity.id);
+      }
+      affected_assets.push_back(projected.curve.has_value()
+                                    ? projected.curve_id
+                                    : projected.mesh_id);
+    }
+    for (const EntityId selected : scene_.selected_entities()) {
+      std::vector<EntityId> subtree = scene_.descendants(selected, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+    }
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.sdk_rollback = ModelingSdkRollbackPolicy::Snapshot,
+         .checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_bindings = !affected_modeling_ids.empty(),
+         .capture_hierarchy = true,
+         .capture_scene_selection = true,
+         .affected_scene_entities = affected_entities,
+         .affected_asset_ids = affected_assets,
+         .affected_modeling_object_ids = affected_modeling_ids});
+    if (!publication.ready()) {
+      return failure("History restore checkpoint is unavailable.");
+    }
     const auto rollback = [&](std::string message) {
-      object_ids_ = object_ids_before;
-      object_map_ = object_map_before;
-      next_native_object_id_ = next_native_before;
-      active_native_object_id_ = active_before;
-      selection_mode_ = selection_mode_before;
-      persistent_content_revision_ = persistent_content_revision_before;
-      mode_revision_ = mode_revision_before;
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      (void)scene_.restore_projection_checkpoint(scene_before,
-                                                 created_entities);
-      return failure(std::move(message));
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
     };
 
     std::unordered_set<int> restored_ids;
@@ -6012,7 +7302,7 @@ public:
 
     std::vector<AssetId> displaced_meshes;
     std::vector<AssetId> displaced_curves;
-    for (const auto &[native_id, object_id] : object_ids_) {
+    for (const auto &[native_id, object_id] : sdk_bindings()) {
       (void)object_id;
       if (restored_ids.contains(native_id)) {
         continue;
@@ -6029,7 +7319,9 @@ public:
           if (const CurveComponent *curve = scene_.curve(*entity)) {
             displaced_curves.push_back(curve->curve);
           }
-          (void)mesh_sync_.destroy_projected_entity(scene_, *entity);
+          if (!mesh_sync_.destroy_projected_entity(scene_, *entity)) {
+            return rollback("SDK history scene entity could not be removed.");
+          }
           object_map_.unbind_object(native_id);
         }
       } else {
@@ -6039,12 +7331,20 @@ public:
 
     std::unordered_map<AssetId, MeshAsset> restored_meshes;
     std::unordered_map<AssetId, CurveAsset> restored_curves;
+    std::vector<AssetId> created_mesh_assets;
+    std::vector<AssetId> created_curve_assets;
     restored_meshes.reserve(snapshot.impl_->projected_objects.size());
     for (const SdkProjectedObjectSnapshot &projected :
          snapshot.impl_->projected_objects) {
       if (projected.curve.has_value()) {
+        if (!assets_.has_curve(projected.curve_id)) {
+          created_curve_assets.push_back(projected.curve_id);
+        }
         restored_curves.emplace(projected.curve_id, *projected.curve);
       } else {
+        if (!assets_.has_mesh(projected.mesh_id)) {
+          created_mesh_assets.push_back(projected.mesh_id);
+        }
         restored_meshes.emplace(projected.mesh_id,
                                 clone_mesh_asset_payload(projected.mesh));
       }
@@ -6052,10 +7352,20 @@ public:
     if (!mesh_sync_.restore_history_mesh_assets(assets_, restored_meshes)) {
       return rollback("SDK history mesh assets could not be restored.");
     }
+    publication.track_created_assets(created_mesh_assets);
     if (!mesh_sync_.restore_history_curve_assets(assets_, restored_curves)) {
       return rollback("SDK history curve assets could not be restored.");
     }
+    publication.track_created_assets(created_curve_assets);
 
+    struct RestoredSceneIdentity {
+      int modeling_object_id = kInvalidModelingObjectId;
+      EntityId entity = kInvalidEntityId;
+      ModelingObjectSceneIdentity identity;
+    };
+    std::vector<RestoredSceneIdentity> restored_scene_identities;
+    restored_scene_identities.reserve(
+        snapshot.impl_->projected_objects.size());
     for (const SdkProjectedObjectSnapshot &projected :
          snapshot.impl_->projected_objects) {
       ModelingObjectSceneIdentity restored_identity = projected.identity;
@@ -6073,7 +7383,11 @@ public:
             mesh.mesh = projected.mesh_id;
             restored_identity.mesh = mesh;
           }
-          restored_identity.material_slot = projected.material_slot;
+          ModelingObjectComponent modeling_object =
+              restored_identity.modeling_object.value_or(
+                  ModelingObjectComponent{});
+          modeling_object.material_slot = projected.material_slot;
+          restored_identity.modeling_object = modeling_object;
           if (baseline_curve.has_value()) {
             restored_identity.curve = CurveComponent{projected.curve_id};
           }
@@ -6094,36 +7408,73 @@ public:
           displaced_curves.push_back(current_curve->curve);
         }
       }
-      EntityId entity = restored_identity.entity;
+      EntityId entity = restored_identity.id;
       if (!scene_.exists(entity)) {
         entity = mesh_sync_.restore_projected_mesh_entity(
             scene_, restored_identity);
         if (entity == kInvalidEntityId) {
           return rollback("SDK history scene entity could not be recreated.");
         }
-        created_entities.push_back(entity);
+        publication.track_created_entity(entity);
       }
-      mesh_sync_.apply_scene_identity_to_entity(scene_, entity,
-                                                restored_identity);
+      if (!mesh_sync_.apply_scene_identity_to_entity(
+              scene_, entity, restored_identity,
+              !preserve_scene_selection, false)) {
+        return rollback(
+            "SDK history scene identity payload could not be restored.");
+      }
       const bool bound = projected.curve.has_value()
           ? mesh_sync_.bind_projected_curve_object(
                 scene_, entity, projected.modeling_object_id, projected.curve_id,
-                restored_identity.local_frame_version)
+                identity_local_frame_version(restored_identity))
           : mesh_sync_.bind_projected_object(
                 scene_, entity, projected.modeling_object_id,
                 projected.material_slot, true, projected.mesh_id,
-                restored_identity.local_frame_version);
+                identity_local_frame_version(restored_identity));
       if (!bound) {
         return rollback("SDK history scene binding could not be restored.");
       }
-      (void)mesh_sync_.set_projected_material(
-          scene_, entity,
-          restored_identity.material.has_value()
-              ? &*restored_identity.material
-              : nullptr);
-      object_map_.bind(projected.modeling_object_id, entity);
-      object_map_.remember_scene_entity(projected.modeling_object_id, scene_,
-                                        entity);
+      if (!mesh_sync_.set_projected_material(
+              scene_, entity,
+              restored_identity.material.has_value()
+                  ? &*restored_identity.material
+                  : nullptr)) {
+        return rollback("SDK history scene material could not be restored.");
+      }
+      if (!object_map_.bind(projected.modeling_object_id, entity)) {
+        return rollback("SDK history native scene binding could not be restored.");
+      }
+      restored_scene_identities.push_back({
+          .modeling_object_id = projected.modeling_object_id,
+          .entity = entity,
+          .identity = std::move(restored_identity),
+      });
+    }
+
+    // Restore every captured parent before applying any captured sibling
+    // ordinal. Merely recreating every participant is insufficient: a later
+    // Bridge participant can exist at the scene root while an earlier
+    // participant's ordinal is validated against their eventual parent.
+    for (const RestoredSceneIdentity &restored :
+         restored_scene_identities) {
+      if (!mesh_sync_.apply_scene_identity_parent(
+              scene_, restored.entity, restored.identity)) {
+        return rollback(
+            "SDK history scene identity parent could not be restored.");
+      }
+    }
+    for (const RestoredSceneIdentity &restored :
+         restored_scene_identities) {
+      if (!mesh_sync_.apply_scene_identity_sibling_ordinal(
+              scene_, restored.entity, restored.identity)) {
+        return rollback(
+            "SDK history scene identity sibling order could not be restored.");
+      }
+    }
+    for (const RestoredSceneIdentity &restored :
+         restored_scene_identities) {
+      object_map_.remember_scene_entity(restored.modeling_object_id, scene_,
+                                        restored.entity);
     }
 
     mesh_sync_.remove_unreferenced_history_mesh_assets(
@@ -6136,7 +7487,9 @@ public:
       session_.restore_snapshot_preserving_identity_high_water(
           snapshot.impl_->session);
     }
-    object_ids_ = snapshot.impl_->object_ids;
+    if (!object_map_.restore_sdk_object_bindings(snapshot.impl_->object_ids)) {
+      return rollback("SDK history native object bindings could not be restored.");
+    }
     next_native_object_id_ =
         std::max({next_native_object_id_, snapshot.impl_->next_native_object_id,
                   host_identity_high_water});
@@ -6153,8 +7506,11 @@ public:
     }
     mode_revision_ = snapshot.impl_->mode_revision;
     clear_preview_checkpoints();
-    add_selection_to_scene();
-    return {.ok = true, .changed = true};
+    if (!preserve_scene_selection && !add_selection_to_scene()) {
+      return rollback("SDK history selection could not be restored.");
+    }
+    return commit_publication_result<ModelingCommandResult>(
+        publication, {.ok = true, .changed = true});
   }
 
   void set_failure_point_for_tests(ModelingSdkProjectionFailurePoint point) {
@@ -6174,8 +7530,7 @@ private:
     }
     state.active = true;
     if (!active_preview_operation_.has_value() ||
-        !active_preview_settings_.has_value() ||
-        !preview_base_snapshot_.has_value()) {
+        !active_preview_settings_.has_value()) {
       state.ok = false;
       state.message =
           "Component selection cannot change during this SDK preview.";
@@ -6183,11 +7538,10 @@ private:
     }
     state.operation = *active_preview_operation_;
     state.settings = *active_preview_settings_;
-    const ModelingSdkProjectionSnapshot base = *preview_base_snapshot_;
-    ModelingCommandResult restored = restore_snapshot_exact(base);
-    if (!restored.ok) {
+    ModelingCommandResult canceled = cancel_translate_preview();
+    if (!canceled.ok) {
       state.ok = false;
-      state.message = restored.message;
+      state.message = canceled.message;
     }
     return state;
   }
@@ -6209,6 +7563,126 @@ private:
     return result;
   }
 
+  [[nodiscard]] ModelingCommandResult set_object_selection_during_curve_preview(
+      std::span<const ObjectId> selected, int active_native,
+      const SceneSelectionState &desired_scene_selection,
+      bool scene_selection_changed, bool adapter_selection_changed,
+      bool preserve_selection_mode) {
+    const modeling::PreviewTransactionSummary preview =
+        session_.preview_summary();
+    if (!preview.active ||
+        preview.kind != modeling::SessionObjectKind::Curve ||
+        !mesh_preview_host_baseline_.has_value() ||
+        !mesh_preview_host_baseline_->active_for(preview.id) ||
+        !preflight_preview_mutation(preview.id)) {
+      return failure(
+          "Curve preview participants changed outside this preview.");
+    }
+
+    Result<modeling::CurveDocument> authored =
+        session_.preview_curve_document_copy(preview.id);
+    if (!authored.ok()) {
+      return failure(authored.error_message());
+    }
+
+    // A checked scene-selection command has already authored its scene side
+    // before it calls this projection. Canceling and republishing the live
+    // Curve preview here would advance scene/asset revisions inside that
+    // command's scalar fence. Prepare the complete SDK transition on an
+    // isolated candidate instead, then publish it with one no-throw move.
+    // The portable session's active-preview and mutation-checkpoint exclusion
+    // remains intact: selection is applied only after the candidate preview
+    // has been canceled.
+    modeling::ModelingSession candidate = session_;
+    Result<OperationResult> canceled = candidate.cancel_preview(preview.id);
+    if (!canceled.ok()) {
+      return failure(canceled.error_message());
+    }
+    Result<OperationResult> selected_result =
+        candidate.apply_object_selection(selected, SelectionEdit::Replace);
+    if (!selected_result.ok()) {
+      return failure(selected_result.error_message());
+    }
+    if (selected_result.value().changed &&
+        fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
+      return failure("Injected failure after SDK selection mutation.");
+    }
+
+    OperationResult preview_receipt;
+    preview_receipt.changed = preview_changed_;
+    preview_receipt.dirty.topology = true;
+    preview_receipt.dirty.geometry = true;
+    preview_receipt.dirty.overlays = true;
+    Result<PreviewId> rebuilt = candidate.begin_curve_document_preview(
+        preview.object_id, preview.operation_id,
+        std::move(authored).value(), std::move(preview_receipt));
+    if (!rebuilt.ok()) {
+      return failure(rebuilt.error_message());
+    }
+    const PreviewSdkFence rebuilt_fence =
+        capture_preview_sdk_fence(candidate, rebuilt.value());
+    if (rebuilt_fence.preview != rebuilt.value()) {
+      return failure("Curve preview SDK fence could not be rebuilt.");
+    }
+
+    std::optional<SceneModelingProjectionCheckpoint> scene_checkpoint;
+    if (scene_selection_changed) {
+      if (fails(
+              ModelingSdkProjectionFailurePoint::SelectionScenePublication)) {
+        return failure(
+            "Injected failure during SDK selection publication.");
+      }
+      const SceneSelectionState before = capture_scene_selection(scene_);
+      scene_checkpoint.emplace(capture_scene_selection_checkpoint(
+          scene_, before, desired_scene_selection));
+      if (!scene_checkpoint->valid()) {
+        return failure("SDK scene-selection checkpoint is unavailable.");
+      }
+      QDR_PROFILE_SCOPE("Curve preview object selection scene publication");
+      (void)apply_scene_selection(scene_, desired_scene_selection,
+                                  SceneSelectionApplicationMode::RuntimeSync);
+      if (!same_scene_selection(capture_scene_selection(scene_),
+                                desired_scene_selection)) {
+        const bool restored =
+            restore_scene_selection_checkpoint(scene_, *scene_checkpoint);
+        return {
+            .ok = false,
+            .changed = !restored,
+            .message =
+                restored
+                    ? "SDK scene selection could not be published."
+                    : "SDK scene selection publication and rollback failed.",
+        };
+      }
+    }
+
+    session_ = std::move(candidate);
+    MeshPreviewHostBaseline &baseline = *mesh_preview_host_baseline_;
+    baseline.preview_id = rebuilt.value();
+    baseline.acknowledged_sdk = rebuilt_fence;
+    baseline.fence_acknowledged = true;
+
+    active_native_object_id_ = active_native;
+    if (!preserve_selection_mode) {
+      if (selection_mode_ != ModelingSelectionMode::Object) {
+        ++mode_revision_;
+      }
+      selection_mode_ = ModelingSelectionMode::Object;
+    }
+    // Cancel must restore the adapter state that existed after every external
+    // selection edit, while the retained Curve/asset checkpoint continues to
+    // restore only the original authored Curve projection.
+    baseline.adapter_before.active_native_object_id =
+        active_native_object_id_;
+    baseline.adapter_before.selection_mode = selection_mode_;
+    baseline.adapter_before.mode_revision = mode_revision_;
+
+    selected_result.value().changed = selected_result.value().changed ||
+                                      scene_selection_changed ||
+                                      adapter_selection_changed;
+    return from_sdk(selected_result);
+  }
+
   [[nodiscard]] std::vector<ObjectId> selected_sdk_objects() const {
     std::vector<ObjectId> selected;
     const std::vector<quader::modeling::SessionObjectSummary> objects =
@@ -6222,24 +7696,41 @@ private:
   }
 
   [[nodiscard]] bool publish_new_object(
-      ObjectId object_id, const ModelingObjectSceneIdentity &source_identity,
+      ModelingHostPublicationTransaction *publication, ObjectId object_id,
+      const ModelingObjectSceneIdentity &source_identity,
       std::uint32_t material_slot, int &native_id, EntityId &entity,
       bool share_source_mesh = false,
-      std::optional<int> reserved_native_id = std::nullopt) {
+      std::optional<int> reserved_native_id = std::nullopt,
+      std::optional<PreviewId> preview_id = std::nullopt) {
     const bool is_curve = source_identity.curve.has_value();
     AssetId curve_id = share_source_mesh && is_curve
                            ? source_identity.curve->curve : kInvalidAssetId;
     if (is_curve && (curve_id == kInvalidAssetId || assets_.curve(curve_id) == nullptr)) {
-      const auto document = session_.curve_document_snapshot(object_id);
+      Result<modeling::CurveDocument> document = [&]() {
+        if (preview_id.has_value()) {
+          return session_.preview_curve_document_copy(*preview_id, object_id);
+        }
+        const auto snapshot = session_.curve_document_snapshot(object_id);
+        return snapshot.ok()
+                   ? Result<modeling::CurveDocument>::success(*snapshot.value())
+                   : Result<modeling::CurveDocument>::failure(snapshot.error());
+      }();
       if (!document.ok()) {
         return false;
       }
       CurveAsset projected;
       projected.name = source_identity.name;
-      projected.document = document.value();
+      projected.document =
+          std::make_shared<const modeling::CurveDocument>(document.value());
       curve_id = mesh_sync_.install_projected_curve(assets_, std::move(projected));
       if (curve_id == kInvalidAssetId) {
         return false;
+      }
+      if (publication != nullptr) {
+        publication->track_created_asset(curve_id);
+      }
+      if (preview_id.has_value()) {
+        record_preview_created_asset(curve_id);
       }
       ++stats_.asset_publication_count;
     }
@@ -6247,7 +7738,10 @@ private:
                           ? source_identity.mesh->mesh
                           : kInvalidAssetId;
     if (!is_curve && (mesh_id == kInvalidAssetId || assets_.mesh(mesh_id) == nullptr)) {
-      Result<PolygonDocument> document = session_.document_copy(object_id);
+      Result<PolygonDocument> document =
+          preview_id.has_value()
+              ? session_.preview_document_copy(*preview_id, object_id)
+              : session_.document_copy(object_id);
       if (!document.ok()) {
         return false;
       }
@@ -6267,6 +7761,12 @@ private:
       if (mesh_id == kInvalidAssetId) {
         return false;
       }
+      if (publication != nullptr) {
+        publication->track_created_asset(mesh_id);
+      }
+      if (preview_id.has_value()) {
+        record_preview_created_asset(mesh_id);
+      }
       ++stats_.asset_publication_count;
     }
     entity = is_curve
@@ -6274,6 +7774,12 @@ private:
         : mesh_sync_.create_projected_mesh_entity(scene_, source_identity.name);
     if (entity == kInvalidEntityId) {
       return false;
+    }
+    if (publication != nullptr) {
+      publication->track_created_entity(entity);
+    }
+    if (preview_id.has_value()) {
+      record_preview_created_entity(entity);
     }
     const std::optional<int> allocated_native_id =
         reserved_native_id.has_value()
@@ -6289,17 +7795,22 @@ private:
     }
     const bool bound = is_curve
         ? mesh_sync_.bind_projected_curve_object(
-              scene_, entity, native_id, curve_id, source_identity.local_frame_version)
+              scene_, entity, native_id, curve_id,
+              identity_local_frame_version(source_identity))
         : mesh_sync_.bind_projected_object(
               scene_, entity, native_id, material_slot, true, mesh_id,
-              source_identity.local_frame_version);
+              identity_local_frame_version(source_identity));
     if (!bound) {
       return false;
     }
-    mesh_sync_.apply_scene_identity_to_duplicate_entity(scene_, entity,
-                                                        source_identity);
-    object_ids_.emplace(native_id, object_id);
-    object_map_.bind(native_id, entity);
+    if (!mesh_sync_.apply_scene_identity_to_duplicate_entity(
+            scene_, entity, source_identity)) {
+      return false;
+    }
+    if (!object_map_.bind_sdk_object(native_id, object_id) ||
+        !object_map_.bind(native_id, entity)) {
+      return false;
+    }
     object_map_.remember_scene_entity(native_id, scene_, entity);
     return true;
   }
@@ -6343,33 +7854,76 @@ private:
         std::numeric_limits<std::size_t>::max() / sources.size()) {
       return failure_result("Duplicate object count is too large.");
     }
+    const std::size_t duplicate_count = sources.size() * copies_per_source;
+    const int first_native_candidate = next_available_native_object_id();
+    const std::size_t available_native_ids =
+        first_native_candidate == kInvalidModelingObjectId
+            ? 0u
+            : static_cast<std::size_t>(std::numeric_limits<int>::max() -
+                                       first_native_candidate);
+    if (first_native_candidate == kInvalidModelingObjectId ||
+        duplicate_count > available_native_ids) {
+      return failure_result("Native modeling object IDs are exhausted.");
+    }
+    std::vector<int> affected_modeling_ids;
+    std::vector<EntityId> affected_entities;
+    std::vector<AssetId> affected_assets;
+    affected_modeling_ids.reserve(duplicate_count);
+    for (std::size_t index = 0; index < duplicate_count; ++index) {
+      affected_modeling_ids.push_back(first_native_candidate +
+                                      static_cast<int>(index));
+    }
+    for (const int source_native : source_modeling_object_ids) {
+      const std::optional<EntityId> source_entity =
+          object_map_.entity_for_modeling_object(source_native);
+      if (!source_entity.has_value() || !scene_.exists(*source_entity)) {
+        return failure_result("Duplicate source scene identity is not live.");
+      }
+      std::vector<EntityId> subtree =
+          scene_.descendants(*source_entity, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+      if (const MeshComponent *mesh = scene_.mesh(*source_entity)) {
+        affected_assets.push_back(mesh->mesh);
+      }
+      if (const CurveComponent *curve = scene_.curve(*source_entity)) {
+        affected_assets.push_back(curve->curve);
+      }
+    }
+    for (const EntityId selected : scene_.selected_entities()) {
+      std::vector<EntityId> subtree = scene_.descendants(selected, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+    }
 
-    const std::size_t undo_mark = session_.undo_depth();
-    const quader::modeling::ModelingSession session_before = session_;
-    const auto object_ids_before = object_ids_;
-    const ModelingObjectRuntimeMap object_map_before = object_map_;
-    const int next_native_before = next_native_object_id_;
-    const int active_before = active_native_object_id_;
-    const std::uint64_t revision_before = persistent_content_revision_;
-    const ModelingSdkProjectionStats stats_before = stats_;
-    const AssetRegistryProjectionCheckpoint assets_before =
-        assets_.capture_projection_checkpoint();
-    const SceneProjectionCheckpoint scene_before =
-        scene_.capture_projection_checkpoint();
-    std::vector<EntityId> created_entities;
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_hierarchy = true,
+         .capture_scene_selection = true,
+         .affected_scene_entities = affected_entities,
+         .affected_asset_ids = affected_assets,
+         .affected_modeling_object_ids = affected_modeling_ids});
+    if (!publication.ready()) {
+      return failure_result("Duplicate publication checkpoint is unavailable.");
+    }
+    const std::size_t undo_mark = publication.sdk_undo_mark();
     const auto rollback = [&](std::string message) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      object_ids_ = object_ids_before;
-      object_map_ = object_map_before;
-      next_native_object_id_ = next_native_before;
-      active_native_object_id_ = active_before;
-      persistent_content_revision_ = revision_before;
-      stats_ = stats_before;
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      (void)scene_.restore_projection_checkpoint(scene_before,
-                                                 created_entities);
-      return failure_result(std::move(message));
+      return rollback_publication_result(
+          publication, failure_result(std::move(message)));
     };
+    const std::optional<int> first_native_id =
+        reserve_preflighted_native_object_ids(first_native_candidate,
+                                              duplicate_count);
+    if (!first_native_id.has_value() ||
+        *first_native_id != first_native_candidate) {
+      return rollback("Native modeling object IDs could not be reserved.");
+    }
 
     /// Retains native scene facts needed to publish one duplicated SDK object.
     struct DuplicateSourceProjection {
@@ -6400,7 +7954,6 @@ private:
       });
     }
 
-    const std::size_t duplicate_count = sources.size() * copies_per_source;
     std::vector<ObjectId> expanded_sources;
     expanded_sources.reserve(duplicate_count);
     for (const ObjectId source : sources) {
@@ -6421,12 +7974,6 @@ private:
     ++stats_.sdk_duplicate_batch_mutation_count;
     stats_.sdk_duplicate_object_count += duplicated_objects.size();
 
-    const std::optional<int> first_native_id =
-        reserve_native_object_ids(duplicate_count);
-    if (!first_native_id.has_value()) {
-      return rollback("Native modeling object IDs are exhausted.");
-    }
-
     ModelingSdkDuplicateBatchResult result{
         .command = {.ok = true,
                     .changed = true,
@@ -6444,12 +7991,12 @@ private:
         int native_id = kInvalidModelingObjectId;
         EntityId entity = kInvalidEntityId;
         const bool published = publish_new_object(
-            duplicated, source_projections[source_index].identity,
+            &publication, duplicated, source_projections[source_index].identity,
             source_projections[source_index].material_slot, native_id, entity,
             share_source_mesh_assets,
             *first_native_id + static_cast<int>(duplicate_index));
         if (entity != kInvalidEntityId) {
-          created_entities.push_back(entity);
+          publication.track_created_entity(entity);
         }
         if (!published) {
           return rollback("SDK duplicate host projection failed.");
@@ -6482,8 +8029,10 @@ private:
       ++persistent_content_revision_;
     }
     ++stats_.scene_publication_count;
-    add_selection_to_scene();
-    return result;
+    if (!add_selection_to_scene()) {
+      return rollback("SDK duplicate selection could not be published.");
+    }
+    return commit_publication_result(publication, std::move(result));
   }
 
   [[nodiscard]] ModelingSdkClipboardCopyResult
@@ -6536,34 +8085,55 @@ private:
     if (preview_active()) {
       return failed("Commit or cancel the active preview before pasting.");
     }
+    const std::size_t pasted_count = source_identities.size();
+    const int first_native_candidate = next_available_native_object_id();
+    const std::size_t available_native_ids =
+        first_native_candidate == kInvalidModelingObjectId
+            ? 0u
+            : static_cast<std::size_t>(std::numeric_limits<int>::max() -
+                                       first_native_candidate);
+    if (first_native_candidate == kInvalidModelingObjectId ||
+        pasted_count > available_native_ids) {
+      return failed("Native modeling object IDs are exhausted.");
+    }
+    std::vector<int> affected_modeling_ids;
+    affected_modeling_ids.reserve(pasted_count);
+    for (std::size_t index = 0; index < pasted_count; ++index) {
+      affected_modeling_ids.push_back(first_native_candidate +
+                                      static_cast<int>(index));
+    }
+    std::vector<EntityId> affected_entities;
+    for (const EntityId selected : scene_.selected_entities()) {
+      std::vector<EntityId> subtree = scene_.descendants(selected, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+    }
 
-    const quader::modeling::ModelingSession session_before = session_;
-    const auto object_ids_before = object_ids_;
-    const ModelingObjectRuntimeMap object_map_before = object_map_;
-    const int next_native_before = next_native_object_id_;
-    const int active_before = active_native_object_id_;
-    const ModelingSelectionMode mode_before = selection_mode_;
-    const std::uint64_t revision_before = persistent_content_revision_;
-    const ModelingSdkProjectionStats stats_before = stats_;
-    const AssetRegistryProjectionCheckpoint assets_before =
-        assets_.capture_projection_checkpoint();
-    const SceneProjectionCheckpoint scene_before =
-        scene_.capture_projection_checkpoint();
-    std::vector<EntityId> created_entities;
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_hierarchy = true,
+         .capture_scene_selection = true,
+         .affected_scene_entities = affected_entities,
+         .affected_modeling_object_ids = affected_modeling_ids});
+    if (!publication.ready()) {
+      return failed("Paste publication checkpoint is unavailable.");
+    }
     const auto rollback = [&](std::string message) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      object_ids_ = object_ids_before;
-      object_map_ = object_map_before;
-      next_native_object_id_ = next_native_before;
-      active_native_object_id_ = active_before;
-      selection_mode_ = mode_before;
-      persistent_content_revision_ = revision_before;
-      stats_ = stats_before;
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      (void)scene_.restore_projection_checkpoint(scene_before,
-                                                 created_entities);
-      return failed(std::move(message));
+      return rollback_publication_result(publication,
+                                         failed(std::move(message)));
     };
+    const std::optional<int> first_native_id =
+        reserve_native_object_ids(pasted_count);
+    if (!first_native_id.has_value() ||
+        *first_native_id != first_native_candidate) {
+      return rollback("Native modeling object IDs could not be reserved.");
+    }
 
     Result<quader::modeling::ClipboardPasteResult> pasted =
         session_.paste_clipboard({});
@@ -6589,11 +8159,6 @@ private:
     for (const quader::modeling::SessionObjectSummary &summary : summaries) {
       summary_by_object.emplace(sdk_object_key(summary.id), &summary);
     }
-    const std::optional<int> first_native_id =
-        reserve_native_object_ids(pasted.value().objects.size());
-    if (!first_native_id.has_value()) {
-      return rollback("Native modeling object IDs are exhausted.");
-    }
     for (std::size_t index = 0; index < pasted.value().objects.size(); ++index) {
       ModelingObjectSceneIdentity identity = source_identities[index];
       const auto summary =
@@ -6605,14 +8170,15 @@ private:
         identity.name = summary->second->name;
       }
       const std::uint32_t material_slot =
-          identity.material_slot;
+          identity_material_slot(identity);
       int native_id = kInvalidModelingObjectId;
       EntityId entity = kInvalidEntityId;
       const bool published = publish_new_object(
-          pasted.value().objects[index], identity, material_slot, native_id,
-          entity, false, *first_native_id + static_cast<int>(index));
+          &publication, pasted.value().objects[index], identity, material_slot,
+          native_id, entity, false,
+          *first_native_id + static_cast<int>(index));
       if (entity != kInvalidEntityId) {
-        created_entities.push_back(entity);
+        publication.track_created_entity(entity);
       }
       if (!published) {
         return rollback("SDK clipboard host projection failed.");
@@ -6639,8 +8205,10 @@ private:
     }
     ++persistent_content_revision_;
     ++stats_.scene_publication_count;
-    add_selection_to_scene();
-    return result;
+    if (!add_selection_to_scene()) {
+      return rollback("SDK paste selection could not be published.");
+    }
+    return commit_publication_result(publication, std::move(result));
   }
 
   [[nodiscard]] bool clipboard_available() const {
@@ -6673,35 +8241,72 @@ private:
       return failure("Commit or cancel the active preview first.");
     }
 
-    const std::size_t undo_mark = session_.undo_depth();
-    const quader::modeling::ModelingSession session_before = session_;
-    const auto object_ids_before = object_ids_;
-    const ModelingObjectRuntimeMap object_map_before = object_map_;
-    const int next_native_before = next_native_object_id_;
-    const int active_before = active_native_object_id_;
-    const ModelingSelectionMode mode_before = selection_mode_;
-    const std::uint64_t revision_before = persistent_content_revision_;
-    const ModelingSdkProjectionStats stats_before = stats_;
-    const AssetRegistryProjectionCheckpoint assets_before =
-        assets_.capture_projection_checkpoint();
-    const SceneProjectionCheckpoint scene_before =
-        scene_.capture_projection_checkpoint();
-    std::vector<EntityId> created_entities;
+    const int first_native_candidate = next_available_native_object_id();
+    const std::size_t available_native_ids =
+        first_native_candidate == kInvalidModelingObjectId
+            ? 0u
+            : static_cast<std::size_t>(std::numeric_limits<int>::max() -
+                                       first_native_candidate);
+    if (first_native_candidate == kInvalidModelingObjectId ||
+        sources.size() > available_native_ids) {
+      return failure("Native modeling object IDs are exhausted.");
+    }
+    const std::optional<int> first_native_id{first_native_candidate};
+    std::vector<int> affected_modeling_ids;
+    std::vector<EntityId> affected_entities;
+    std::vector<AssetId> affected_assets;
+    affected_modeling_ids.reserve(sources.size());
+    for (std::size_t index = 0; index < sources.size(); ++index) {
+      affected_modeling_ids.push_back(*first_native_id +
+                                      static_cast<int>(index));
+      const std::optional<int> source_native = native_object(sources[index]);
+      const std::optional<EntityId> source_entity =
+          source_native.has_value()
+              ? object_map_.entity_for_modeling_object(*source_native)
+              : std::nullopt;
+      if (!source_entity.has_value() || !scene_.exists(*source_entity)) {
+        return failure("Duplicate source scene identity is not live.");
+      }
+      std::vector<EntityId> subtree =
+          scene_.descendants(*source_entity, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+      if (const MeshComponent *mesh = scene_.mesh(*source_entity)) {
+        affected_assets.push_back(mesh->mesh);
+      }
+    }
+    for (const EntityId selected : scene_.selected_entities()) {
+      std::vector<EntityId> subtree = scene_.descendants(selected, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+    }
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_hierarchy = true,
+         .capture_scene_selection = true,
+         .affected_scene_entities = affected_entities,
+         .affected_asset_ids = affected_assets,
+         .affected_modeling_object_ids = affected_modeling_ids});
+    if (!publication.ready()) {
+      return failure("Host publication checkpoint is unavailable.");
+    }
+    const std::size_t undo_mark = publication.sdk_undo_mark();
 
     const auto rollback = [&](std::string message) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      object_ids_ = object_ids_before;
-      object_map_ = object_map_before;
-      next_native_object_id_ = next_native_before;
-      active_native_object_id_ = active_before;
-      selection_mode_ = mode_before;
-      persistent_content_revision_ = revision_before;
-      stats_ = stats_before;
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      (void)scene_.restore_projection_checkpoint(scene_before,
-                                                 created_entities);
-      return failure(std::move(message));
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
     };
+    const std::optional<int> reserved_native_ids =
+        reserve_native_object_ids(sources.size());
+    if (reserved_native_ids != first_native_id) {
+      return rollback("Native modeling object IDs could not be reserved.");
+    }
 
     Result<std::vector<ObjectId>> duplicated_batch = [&]() {
       QDR_PROFILE_SCOPE("SDK duplicate selected objects atomic batch");
@@ -6718,12 +8323,6 @@ private:
     }
     ++stats_.sdk_duplicate_batch_mutation_count;
     stats_.sdk_duplicate_object_count += duplicates.size();
-    const std::optional<int> first_native_id =
-        reserve_native_object_ids(duplicates.size());
-    if (!first_native_id.has_value()) {
-      return rollback("Native modeling object IDs are exhausted.");
-    }
-
     QDR_PROFILE_SCOPE("SDK duplicate publish host objects");
     for (std::size_t source_index = 0; source_index < sources.size();
          ++source_index) {
@@ -6800,6 +8399,7 @@ private:
         if (mesh_id == kInvalidAssetId) {
           return rollback("SDK duplicate mesh asset could not be installed.");
         }
+        publication.track_created_asset(mesh_id);
         ++stats_.asset_publication_count;
       }
 
@@ -6808,20 +8408,24 @@ private:
       if (entity == kInvalidEntityId) {
         return rollback("SDK duplicate scene entity could not be created.");
       }
-      created_entities.push_back(entity);
+      publication.track_created_entity(entity);
       const int native_id =
           *first_native_id + static_cast<int>(source_index);
       if (native_id == kInvalidModelingObjectId ||
           native_id >= std::numeric_limits<int>::max() ||
           !mesh_sync_.bind_projected_object(
               scene_, entity, native_id, source_component->material_slot, true,
-              mesh_id, duplicate_identity.local_frame_version)) {
+              mesh_id, identity_local_frame_version(duplicate_identity))) {
         return rollback("SDK duplicate scene binding could not be installed.");
       }
-      mesh_sync_.apply_scene_identity_to_duplicate_entity(
-          scene_, entity, duplicate_identity);
-      object_ids_.emplace(native_id, duplicated);
-      object_map_.bind(native_id, entity);
+      if (!mesh_sync_.apply_scene_identity_to_duplicate_entity(
+              scene_, entity, duplicate_identity)) {
+        return rollback("SDK duplicate scene identity could not be applied.");
+      }
+      if (!object_map_.bind_sdk_object(native_id, duplicated) ||
+          !object_map_.bind(native_id, entity)) {
+        return rollback("SDK duplicate identity binding could not be installed.");
+      }
       object_map_.remember_scene_entity(native_id, scene_, entity);
       active_native_object_id_ = native_id;
     }
@@ -6840,10 +8444,14 @@ private:
       ++persistent_content_revision_;
     }
     ++stats_.scene_publication_count;
-    add_selection_to_scene();
-    return {.ok = true,
-            .changed = true,
-            .message = std::string(success_message)};
+    if (!add_selection_to_scene()) {
+      return rollback("SDK duplicate selection could not be published.");
+    }
+    return commit_publication_result<ModelingCommandResult>(
+        publication,
+        {.ok = true,
+         .changed = true,
+         .message = std::string(success_message)});
   }
 
   [[nodiscard]] ModelingCommandResult mirror_selected_objects_across_plane(
@@ -6864,86 +8472,187 @@ private:
     if (requests.empty()) {
       return failure("Mirror needs selected mesh objects.");
     }
-    const std::size_t undo_mark = session_.undo_depth();
-    const ModelingSdkProjectionSnapshot base = capture_snapshot(true);
-    std::vector<int> sources;
-    sources.reserve(requests.size());
-    for (const ModelingSdkPlaneCutRequest &request : requests) {
-      sources.push_back(request.modeling_object_id);
-    }
-    ModelingSdkDuplicateBatchResult duplicated =
-        duplicate_objects(sources, 1U, false, true);
-    if (!duplicated.command.ok ||
-        duplicated.duplicates.size() != requests.size()) {
-      return duplicated.command;
-    }
-    /// Stores one validated object-local reflection request.
-    struct Reflection {
-      ObjectId object;
+    /// Stores one validated source plus its object-local reflection.
+    struct PreparedMirror {
+      ObjectId source;
+      ModelingObjectSceneIdentity identity;
+      std::uint32_t material_slot = 0u;
       Vec3 origin;
       Vec3 normal;
     };
-    std::vector<Reflection> reflections;
-    std::vector<ObjectId> objects;
-    reflections.reserve(requests.size());
-    objects.reserve(requests.size());
-    for (std::size_t index = 0; index < requests.size(); ++index) {
-      const std::optional<ObjectId> object = sdk_object(
-          duplicated.duplicates[index].modeling_object_id);
-      if (!object.has_value()) {
-        (void)restore_snapshot_exact(base);
-        return failure("Mirror duplicate projection mapping was lost.");
-      }
-      const QVec3 first = requests[index].local_plane_points[0];
-      const QVec3 second = requests[index].local_plane_points[1];
-      const QVec3 third = requests[index].local_plane_points[2];
+    std::vector<PreparedMirror> prepared;
+    std::vector<ObjectId> sources;
+    std::unordered_set<std::uint64_t> unique_sources;
+    prepared.reserve(requests.size());
+    sources.reserve(requests.size());
+    unique_sources.reserve(requests.size());
+    for (const ModelingSdkPlaneCutRequest &request : requests) {
+      const std::optional<ObjectId> source =
+          sdk_object(request.modeling_object_id);
+      const std::optional<EntityId> entity =
+          object_map_.entity_for_modeling_object(request.modeling_object_id);
+      const ModelingObjectComponent *component =
+          entity.has_value() && scene_.exists(*entity)
+              ? scene_.modeling_object(*entity)
+              : nullptr;
+      const std::optional<SceneEntityState> state =
+          entity.has_value() ? capture_scene_entity_state(scene_, *entity)
+                             : std::nullopt;
+      const QVec3 first = request.local_plane_points[0];
+      const QVec3 second = request.local_plane_points[1];
+      const QVec3 third = request.local_plane_points[2];
       const QVec3 normal = cross(second - first, third - first);
+      if (!source.has_value() || !entity.has_value() ||
+          component == nullptr || !state.has_value() ||
+          !unique_sources.emplace(sdk_object_key(*source)).second) {
+        return failure("Mirror source object is not live or unique.");
+      }
       if (!finite(first) || !finite(normal) ||
           length_squared(normal) <= 0.0000001F) {
-        (void)restore_snapshot_exact(base);
         return failure("Mirror plane is degenerate.");
       }
-      reflections.push_back({
-          .object = *object,
+      ModelingObjectSceneIdentity identity;
+      static_cast<SceneEntityState &>(identity) = *state;
+      prepared.push_back({
+          .source = *source,
+          .identity = std::move(identity),
+          .material_slot = component->material_slot,
           .origin = to_sdk(first),
           .normal = to_sdk(normal),
       });
-      objects.push_back(*object);
+      sources.push_back(*source);
     }
-    ModelingCommandResult reflected = mutate_documents_by_object(
-        objects,
-        [reflections = std::move(reflections)](
-            ObjectId object, PolygonDocument &document) {
-          const auto found = std::ranges::find_if(
-              reflections,
-              [object](const Reflection &candidate) {
-                return candidate.object == object;
-              });
-          if (found == reflections.end()) {
-            return Result<OperationResult>::failure(
-                quader::modeling::make_error(
-                    quader::modeling::ErrorCode::InvalidId,
-                    "Mirror duplicate target is not live."));
-          }
-          return document.reflect_across_plane(found->origin, found->normal);
+
+    const int first_native_candidate = next_available_native_object_id();
+    const std::size_t available_native_ids =
+        first_native_candidate == kInvalidModelingObjectId
+            ? 0u
+            : static_cast<std::size_t>(std::numeric_limits<int>::max() -
+                                       first_native_candidate);
+    if (first_native_candidate == kInvalidModelingObjectId ||
+        prepared.size() > available_native_ids) {
+      return failure("Native modeling object IDs are exhausted.");
+    }
+    std::vector<int> affected_modeling_ids;
+    std::vector<EntityId> affected_entities;
+    std::vector<AssetId> affected_assets;
+    affected_modeling_ids.reserve(prepared.size());
+    for (std::size_t index = 0; index < prepared.size(); ++index) {
+      affected_modeling_ids.push_back(first_native_candidate +
+                                      static_cast<int>(index));
+      const EntityId source_entity = prepared[index].identity.id;
+      std::vector<EntityId> subtree =
+          scene_.descendants(source_entity, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+      if (const MeshComponent *mesh = scene_.mesh(source_entity)) {
+        affected_assets.push_back(mesh->mesh);
+      }
+    }
+    for (const EntityId selected : scene_.selected_entities()) {
+      std::vector<EntityId> subtree = scene_.descendants(selected, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+    }
+
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
         },
-        "Mirror selected meshes failed.", true);
-    if (!reflected.ok) {
-      const std::string message = reflected.message;
-      const ModelingCommandResult restored = restore_snapshot_exact(base);
-      return {.ok = false,
-              .changed = !restored.ok,
-              .message = restored.ok
-                             ? message
-                             : message + " The pre-mirror workspace could "
-                                         "not be restored."};
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_hierarchy = true,
+         .capture_scene_selection = true,
+         .affected_scene_entities = affected_entities,
+         .affected_asset_ids = affected_assets,
+         .affected_modeling_object_ids = affected_modeling_ids});
+    if (!publication.ready()) {
+      return failure("Host publication checkpoint is unavailable.");
+    }
+    const std::size_t undo_mark = publication.sdk_undo_mark();
+    const auto rollback = [&](std::string message) {
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
+    };
+    const std::optional<int> first_native_id =
+        reserve_native_object_ids(prepared.size());
+    if (!first_native_id.has_value() ||
+        *first_native_id != first_native_candidate) {
+      return rollback("Native modeling object IDs could not be reserved.");
+    }
+    Result<std::vector<ObjectId>> duplicated =
+        session_.duplicate_objects(sources, {});
+    if (!duplicated.ok() || duplicated.value().size() != prepared.size()) {
+      return rollback(duplicated.ok()
+                          ? "SDK mirror duplicate batch was incomplete."
+                          : duplicated.error_message());
+    }
+    ++stats_.sdk_duplicate_batch_mutation_count;
+    stats_.sdk_duplicate_object_count += duplicated.value().size();
+
+    std::vector<SessionDocumentUpdate> updates;
+    updates.reserve(duplicated.value().size());
+    for (std::size_t index = 0u; index < duplicated.value().size(); ++index) {
+      Result<PolygonDocument> document =
+          session_.document_copy(duplicated.value()[index]);
+      if (!document.ok()) {
+        return rollback(document.error_message());
+      }
+      Result<OperationResult> reflected = document.value().reflect_across_plane(
+          prepared[index].origin, prepared[index].normal);
+      if (!reflected.ok() || !reflected.value().success) {
+        return rollback(reflected.error_message().empty()
+                            ? "Mirror selected meshes failed."
+                            : reflected.error_message());
+      }
+      updates.push_back({.object = duplicated.value()[index],
+                         .document = std::move(document).value(),
+                         .receipt = std::move(reflected).value()});
+    }
+    Result<OperationResult> committed =
+        session_.commit_documents_batch(std::move(updates), true);
+    if (!committed.ok() || !committed.value().success) {
+      return rollback(committed.error_message().empty()
+                          ? "Mirror selected meshes failed."
+                          : committed.error_message());
+    }
+    for (std::size_t index = 0u; index < duplicated.value().size(); ++index) {
+      int native_id = kInvalidModelingObjectId;
+      EntityId entity = kInvalidEntityId;
+      const bool published = publish_new_object(
+          &publication, duplicated.value()[index], prepared[index].identity,
+          prepared[index].material_slot, native_id, entity, false,
+          *first_native_id + static_cast<int>(index));
+      if (entity != kInvalidEntityId) {
+        publication.track_created_entity(entity);
+      }
+      if (!published) {
+        return rollback("SDK mirror duplicate projection failed.");
+      }
+      active_native_object_id_ = native_id;
+    }
+    Result<OperationResult> selected = session_.apply_object_selection(
+        duplicated.value(), SelectionEdit::Replace);
+    if (!selected.ok()) {
+      return rollback(selected.error_message());
+    }
+    if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
+        fails(ModelingSdkProjectionFailurePoint::BeforeCommit)) {
+      return rollback("Injected failure during SDK mirror publication.");
     }
     session_.squash_undo_since(undo_mark);
     ++persistent_content_revision_;
-    add_selection_to_scene();
-    return {.ok = true,
-            .changed = true,
-            .message = "Mirrored selected meshes."};
+    ++stats_.scene_publication_count;
+    if (!add_selection_to_scene()) {
+      return rollback("SDK mirror selection could not be published.");
+    }
+    return commit_publication_result<ModelingCommandResult>(
+        publication,
+        {.ok = true,
+         .changed = true,
+         .message = "Mirrored selected meshes."});
   }
 
   [[nodiscard]] ModelingCommandResult
@@ -7156,8 +8865,7 @@ private:
         "Snap vertices to floor failed.", false, true, true, true);
   }
 
-  [[nodiscard]] ModelingCommandResult bridge_selected_components(
-      int steps, bool preview_publication = false) {
+  [[nodiscard]] ModelingCommandResult bridge_selected_components(int steps) {
     if (selection_mode_ != ModelingSelectionMode::Edge &&
         selection_mode_ != ModelingSelectionMode::Face) {
       return failure("Bridge works only in edge or face mode.");
@@ -7194,28 +8902,9 @@ private:
         !scene_.exists(*survivor_entity) || !scene_.exists(*merged_entity)) {
       return failure("Bridge source scene identity is not live.");
     }
-    if (preview_publication && workspace_preview_world_from_object_.empty()) {
-      workspace_preview_world_from_object_.emplace(
-          *survivor_native,
-          scene_.world_transform_matrix(*survivor_entity));
-      workspace_preview_world_from_object_.emplace(
-          *merged_native, scene_.world_transform_matrix(*merged_entity));
-    }
-    const auto world_from_object = [&](int native_object,
-                                       EntityId entity) -> QMat4 {
-      if (preview_publication) {
-        const auto found =
-            workspace_preview_world_from_object_.find(native_object);
-        if (found != workspace_preview_world_from_object_.end()) {
-          return found->second;
-        }
-      }
-      return scene_.world_transform_matrix(entity);
-    };
     const QMat4 survivor_world =
-        world_from_object(*survivor_native, *survivor_entity);
-    const QMat4 merged_world =
-        world_from_object(*merged_native, *merged_entity);
+        scene_.world_transform_matrix(*survivor_entity);
+    const QMat4 merged_world = scene_.world_transform_matrix(*merged_entity);
     const std::optional<QMat4> survivor_from_world =
         try_scene_matrix_inverse(survivor_world);
     if (!survivor_from_world.has_value()) {
@@ -7223,27 +8912,45 @@ private:
     }
     const QMat4 survivor_from_merged = scene_transform_multiply(
         *survivor_from_world, merged_world);
-    const std::size_t undo_mark = session_.undo_depth();
-    const quader::modeling::ModelingSession session_before = session_;
-    const auto object_ids_before = object_ids_;
-    const ModelingObjectRuntimeMap object_map_before = object_map_;
-    const int active_before = active_native_object_id_;
-    const std::uint64_t revision_before = persistent_content_revision_;
-    const ModelingSdkProjectionStats stats_before = stats_;
-    const AssetRegistryProjectionCheckpoint assets_before =
-        assets_.capture_projection_checkpoint();
-    const SceneProjectionCheckpoint scene_before =
-        scene_.capture_projection_checkpoint();
+    std::vector<EntityId> affected_entities =
+        scene_.descendants(*survivor_entity, true);
+    std::vector<EntityId> merged_subtree =
+        scene_.descendants(*merged_entity, true);
+    affected_entities.insert(affected_entities.end(), merged_subtree.begin(),
+                             merged_subtree.end());
+    for (const EntityId selected : scene_.selected_entities()) {
+      std::vector<EntityId> subtree = scene_.descendants(selected, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+    }
+    std::vector<AssetId> affected_assets;
+    if (const MeshComponent *mesh = scene_.mesh(*survivor_entity)) {
+      affected_assets.push_back(mesh->mesh);
+    }
+    if (const MeshComponent *mesh = scene_.mesh(*merged_entity)) {
+      affected_assets.push_back(mesh->mesh);
+    }
+    const std::array affected_modeling_ids{*survivor_native, *merged_native};
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_hierarchy = true,
+         .capture_scene_selection = true,
+         .affected_scene_entities = affected_entities,
+         .affected_asset_ids = affected_assets,
+         .affected_modeling_object_ids = affected_modeling_ids});
+    if (!publication.ready()) {
+      return failure("Host publication checkpoint is unavailable.");
+    }
+    const std::size_t undo_mark = publication.sdk_undo_mark();
     const auto rollback = [&](std::string message) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      object_ids_ = object_ids_before;
-      object_map_ = object_map_before;
-      active_native_object_id_ = active_before;
-      persistent_content_revision_ = revision_before;
-      stats_ = stats_before;
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      (void)scene_.restore_projection_checkpoint(scene_before);
-      return failure(std::move(message));
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
     };
 
     Result<OperationResult> bridged = session_.bridge_objects(
@@ -7260,7 +8967,8 @@ private:
     Result<OperationResult> selected_survivor = session_.apply_object_selection(
         std::span<const ObjectId>(&survivor_selection_id, 1U),
         SelectionEdit::Replace);
-    if (!selected_survivor.ok() || !project_committed_object(survivor)) {
+    if (!selected_survivor.ok() ||
+        !project_committed_object(publication, survivor)) {
       return rollback(selected_survivor.ok()
                           ? "Bridge survivor projection failed."
                           : selected_survivor.error_message());
@@ -7274,7 +8982,7 @@ private:
       return rollback("Bridge source scene entity could not be removed.");
     }
     object_map_.unbind_object(*merged_native);
-    object_ids_.erase(*merged_native);
+    object_map_.unbind_sdk_object(*merged_native);
     if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
         fails(ModelingSdkProjectionFailurePoint::BeforeCommit)) {
       return rollback("Injected failure during SDK Bridge publication.");
@@ -7283,11 +8991,13 @@ private:
         scene_, assets_, displaced_meshes);
     active_native_object_id_ = *survivor_native;
     session_.squash_undo_since(undo_mark);
-    if (!preview_publication) {
-      ++persistent_content_revision_;
+    ++persistent_content_revision_;
+    if (!add_selection_to_scene()) {
+      return rollback("SDK bridge selection could not be published.");
     }
-    add_selection_to_scene();
-    return {.ok = true, .changed = true, .message = "Bridged selection."};
+    return commit_publication_result<ModelingCommandResult>(
+        publication,
+        {.ok = true, .changed = true, .message = "Bridged selection."});
   }
 
   [[nodiscard]] ModelingCommandResult combine_selected_objects() {
@@ -7326,30 +9036,55 @@ private:
       return failure("Combine Mesh survivor transform is not invertible.");
     }
 
-    const std::size_t undo_mark = session_.undo_depth();
-    const quader::modeling::ModelingSession session_before = session_;
-    const auto object_ids_before = object_ids_;
-    const ModelingObjectRuntimeMap object_map_before = object_map_;
-    const int active_before = active_native_object_id_;
-    const ModelingSelectionMode mode_before = selection_mode_;
-    const std::uint64_t revision_before = persistent_content_revision_;
-    const ModelingSdkProjectionStats stats_before = stats_;
-    const AssetRegistryProjectionCheckpoint assets_before =
-        assets_.capture_projection_checkpoint();
-    const SceneProjectionCheckpoint scene_before =
-        scene_.capture_projection_checkpoint();
+    std::vector<int> affected_modeling_ids;
+    std::vector<EntityId> affected_entities;
+    std::vector<AssetId> affected_assets;
+    affected_modeling_ids.reserve(sources.size());
+    for (const ObjectId source : sources) {
+      const std::optional<int> native = native_object(source);
+      const std::optional<EntityId> entity =
+          native.has_value()
+              ? object_map_.entity_for_modeling_object(*native)
+              : std::nullopt;
+      if (!native.has_value() || !entity.has_value() ||
+          !scene_.exists(*entity)) {
+        return failure("Combine Mesh source scene identity is not live.");
+      }
+      affected_modeling_ids.push_back(*native);
+      std::vector<EntityId> subtree = scene_.descendants(*entity, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+      if (const MeshComponent *mesh = scene_.mesh(*entity)) {
+        affected_assets.push_back(mesh->mesh);
+      }
+    }
+    for (const EntityId selected : scene_.selected_entities()) {
+      std::vector<EntityId> subtree = scene_.descendants(selected, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+    }
+
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_hierarchy = true,
+         .capture_scene_selection = true,
+         .affected_scene_entities = affected_entities,
+         .affected_asset_ids = affected_assets,
+         .affected_modeling_object_ids = affected_modeling_ids});
+    if (!publication.ready()) {
+      return failure("Host publication checkpoint is unavailable.");
+    }
+    const std::size_t undo_mark = publication.sdk_undo_mark();
 
     const auto rollback = [&](std::string message) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      object_ids_ = object_ids_before;
-      object_map_ = object_map_before;
-      active_native_object_id_ = active_before;
-      selection_mode_ = mode_before;
-      persistent_content_revision_ = revision_before;
-      stats_ = stats_before;
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      (void)scene_.restore_projection_checkpoint(scene_before);
-      return failure(std::move(message));
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
     };
 
     for (ObjectId source : sources) {
@@ -7413,7 +9148,7 @@ private:
                                     : combined.error_message());
     }
     if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
-        !project_committed_object(survivor)) {
+        !project_committed_object(publication, survivor)) {
       return rollback("SDK Combine Mesh projection failed.");
     }
 
@@ -7438,7 +9173,7 @@ private:
         return rollback("Combined source scene entity could not be removed.");
       }
       object_map_.unbind_object(*native);
-      object_ids_.erase(*native);
+      object_map_.unbind_sdk_object(*native);
     }
     if (fails(ModelingSdkProjectionFailurePoint::BeforeCommit)) {
       return rollback("Injected failure before SDK Combine Mesh commit.");
@@ -7448,10 +9183,12 @@ private:
     active_native_object_id_ = *survivor_native;
     session_.squash_undo_since(undo_mark);
     ++persistent_content_revision_;
-    add_selection_to_scene();
-    return {.ok = true,
-            .changed = true,
-            .message = combined.value().message};
+    if (!add_selection_to_scene()) {
+      return rollback("SDK combine selection could not be published.");
+    }
+    return commit_publication_result<ModelingCommandResult>(
+        publication,
+        {.ok = true, .changed = true, .message = combined.value().message});
   }
 
   [[nodiscard]] ModelingCommandResult extract_selected_faces() {
@@ -7480,33 +9217,46 @@ private:
     if (!source_identity.has_value() || source_component == nullptr) {
       return failure("Extract Faces source scene identity is incomplete.");
     }
+    const int extracted_native_candidate = next_available_native_object_id();
+    if (extracted_native_candidate == kInvalidModelingObjectId ||
+        extracted_native_candidate == std::numeric_limits<int>::max()) {
+      return failure("Native modeling object IDs are exhausted.");
+    }
+    std::vector<EntityId> affected_entities =
+        scene_.descendants(*source_entity, true);
+    for (const EntityId selected : scene_.selected_entities()) {
+      std::vector<EntityId> subtree = scene_.descendants(selected, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+    }
+    std::vector<AssetId> affected_assets;
+    if (const MeshComponent *mesh = scene_.mesh(*source_entity)) {
+      affected_assets.push_back(mesh->mesh);
+    }
+    const std::array affected_modeling_ids{*source_native,
+                                           extracted_native_candidate};
 
-    const std::size_t undo_mark = session_.undo_depth();
-    const quader::modeling::ModelingSession session_before = session_;
-    const auto object_ids_before = object_ids_;
-    const ModelingObjectRuntimeMap object_map_before = object_map_;
-    const int next_native_before = next_native_object_id_;
-    const int active_before = active_native_object_id_;
-    const std::uint64_t revision_before = persistent_content_revision_;
-    const ModelingSdkProjectionStats stats_before = stats_;
-    const AssetRegistryProjectionCheckpoint assets_before =
-        assets_.capture_projection_checkpoint();
-    const SceneProjectionCheckpoint scene_before =
-        scene_.capture_projection_checkpoint();
-    std::vector<EntityId> created_entities;
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_hierarchy = true,
+         .capture_scene_selection = true,
+         .affected_scene_entities = affected_entities,
+         .affected_asset_ids = affected_assets,
+         .affected_modeling_object_ids = affected_modeling_ids});
+    if (!publication.ready()) {
+      return failure("Host publication checkpoint is unavailable.");
+    }
+    const std::size_t undo_mark = publication.sdk_undo_mark();
 
     const auto rollback = [&](std::string message) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      object_ids_ = object_ids_before;
-      object_map_ = object_map_before;
-      next_native_object_id_ = next_native_before;
-      active_native_object_id_ = active_before;
-      persistent_content_revision_ = revision_before;
-      stats_ = stats_before;
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      (void)scene_.restore_projection_checkpoint(scene_before,
-                                                 created_entities);
-      return failure(std::move(message));
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
     };
 
     Result<PolygonDocument> copied = session_.document_copy(*source);
@@ -7564,26 +9314,32 @@ private:
     if (extracted_mesh == kInvalidAssetId) {
       return rollback("SDK extracted mesh asset could not be installed.");
     }
+    publication.track_created_asset(extracted_mesh);
     ++stats_.asset_publication_count;
     const EntityId extracted_entity = mesh_sync_.create_projected_mesh_entity(
         scene_, source_identity->name);
     if (extracted_entity == kInvalidEntityId) {
       return rollback("SDK extracted scene entity could not be created.");
     }
-    created_entities.push_back(extracted_entity);
+    publication.track_created_entity(extracted_entity);
     const int extracted_native = next_available_native_object_id();
     if (extracted_native == kInvalidModelingObjectId ||
         extracted_native == std::numeric_limits<int>::max() ||
+        extracted_native != extracted_native_candidate ||
         !mesh_sync_.bind_projected_object(
             scene_, extracted_entity, extracted_native,
             source_component->material_slot, true, extracted_mesh,
-            source_identity->local_frame_version)) {
+            identity_local_frame_version(*source_identity))) {
       return rollback("SDK extracted scene binding could not be installed.");
     }
-    mesh_sync_.apply_scene_identity_to_duplicate_entity(
-        scene_, extracted_entity, *source_identity);
-    object_ids_.emplace(extracted_native, extracted_id);
-    object_map_.bind(extracted_native, extracted_entity);
+    if (!mesh_sync_.apply_scene_identity_to_duplicate_entity(
+            scene_, extracted_entity, *source_identity)) {
+      return rollback("SDK extracted scene identity could not be applied.");
+    }
+    if (!object_map_.bind_sdk_object(extracted_native, extracted_id) ||
+        !object_map_.bind(extracted_native, extracted_entity)) {
+      return rollback("SDK extracted identity binding could not be installed.");
+    }
     object_map_.remember_scene_entity(extracted_native, scene_,
                                       extracted_entity);
     next_native_object_id_ = extracted_native + 1;
@@ -7599,8 +9355,8 @@ private:
         return rollback("Empty extraction source entity could not be removed.");
       }
       object_map_.unbind_object(*source_native);
-      object_ids_.erase(*source_native);
-    } else if (!project_committed_object(*source)) {
+      object_map_.unbind_sdk_object(*source_native);
+    } else if (!project_committed_object(publication, *source)) {
       return rollback("SDK extraction source projection failed.");
     }
     if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
@@ -7612,10 +9368,14 @@ private:
     session_.squash_undo_since(undo_mark);
     ++persistent_content_revision_;
     ++stats_.scene_publication_count;
-    add_selection_to_scene();
-    return {.ok = true,
-            .changed = true,
-            .message = "Extracted selected faces."};
+    if (!add_selection_to_scene()) {
+      return rollback("SDK extract selection could not be published.");
+    }
+    return commit_publication_result<ModelingCommandResult>(
+        publication,
+        {.ok = true,
+         .changed = true,
+         .message = "Extracted selected faces."});
   }
 
   [[nodiscard]] ModelingCommandResult plane_cut(
@@ -7627,33 +9387,71 @@ private:
     if (preview_active()) {
       return failure("Commit or cancel the active preview first.");
     }
-    const std::size_t undo_mark = session_.undo_depth();
-    const quader::modeling::ModelingSession session_before = session_;
-    const auto object_ids_before = object_ids_;
-    const ModelingObjectRuntimeMap object_map_before = object_map_;
-    const int next_native_before = next_native_object_id_;
-    const int active_before = active_native_object_id_;
-    const ModelingSelectionMode mode_before = selection_mode_;
-    const std::uint64_t revision_before = persistent_content_revision_;
-    const ModelingSdkProjectionStats stats_before = stats_;
-    const AssetRegistryProjectionCheckpoint assets_before =
-        assets_.capture_projection_checkpoint();
-    const SceneProjectionCheckpoint scene_before =
-        scene_.capture_projection_checkpoint();
-    std::vector<EntityId> created_entities;
+    std::vector<int> affected_modeling_ids;
+    std::vector<EntityId> affected_entities;
+    std::vector<AssetId> affected_assets;
+    std::unordered_set<std::uint64_t> preflight_sources;
+    affected_modeling_ids.reserve(
+        requests.size() * (mode == ModelingCutMode::KeepBoth ? 2u : 1u));
+    for (const ModelingSdkPlaneCutRequest &request : requests) {
+      const std::optional<ObjectId> source =
+          sdk_object(request.modeling_object_id);
+      const std::optional<EntityId> entity =
+          object_map_.entity_for_modeling_object(request.modeling_object_id);
+      if (!source.has_value() || !entity.has_value() ||
+          !scene_.exists(*entity) ||
+          !preflight_sources.emplace(sdk_object_key(*source)).second) {
+        return failure("Cut target mesh was not found or was duplicated.");
+      }
+      affected_modeling_ids.push_back(request.modeling_object_id);
+      std::vector<EntityId> subtree = scene_.descendants(*entity, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+      if (const MeshComponent *mesh = scene_.mesh(*entity)) {
+        affected_assets.push_back(mesh->mesh);
+      }
+    }
+    std::optional<int> first_back_native_candidate;
+    if (mode == ModelingCutMode::KeepBoth) {
+      const int first = next_available_native_object_id();
+      const std::size_t available =
+          first == kInvalidModelingObjectId
+              ? 0u
+              : static_cast<std::size_t>(std::numeric_limits<int>::max() -
+                                         first);
+      if (first == kInvalidModelingObjectId || requests.size() > available) {
+        return failure("Native modeling object IDs are exhausted.");
+      }
+      first_back_native_candidate = first;
+      for (std::size_t index = 0; index < requests.size(); ++index) {
+        affected_modeling_ids.push_back(first + static_cast<int>(index));
+      }
+    }
+    for (const EntityId selected : scene_.selected_entities()) {
+      std::vector<EntityId> subtree = scene_.descendants(selected, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+    }
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_hierarchy = mode == ModelingCutMode::KeepBoth,
+         .capture_scene_selection = true,
+         .affected_scene_entities = affected_entities,
+         .affected_asset_ids = affected_assets,
+         .affected_modeling_object_ids = affected_modeling_ids});
+    if (!publication.ready()) {
+      return failure("Host publication checkpoint is unavailable.");
+    }
+    const std::size_t undo_mark = publication.sdk_undo_mark();
     const auto rollback = [&](std::string message) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      object_ids_ = object_ids_before;
-      object_map_ = object_map_before;
-      next_native_object_id_ = next_native_before;
-      active_native_object_id_ = active_before;
-      selection_mode_ = mode_before;
-      persistent_content_revision_ = revision_before;
-      stats_ = stats_before;
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      (void)scene_.restore_projection_checkpoint(scene_before,
-                                                 created_entities);
-      return failure(std::move(message));
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
     };
 
     std::vector<ObjectId> result_objects;
@@ -7664,8 +9462,8 @@ private:
     std::optional<int> first_back_native_id;
     if (mode == ModelingCutMode::KeepBoth) {
       first_back_native_id = reserve_native_object_ids(requests.size());
-      if (!first_back_native_id.has_value()) {
-        return rollback("Native modeling object IDs are exhausted.");
+      if (first_back_native_id != first_back_native_candidate) {
+        return rollback("Native modeling object IDs could not be reserved.");
       }
     }
     std::size_t published_back_count = 0U;
@@ -7723,7 +9521,8 @@ private:
       OperationResult source_receipt = cut.value().receipt;
       Result<OperationResult> committed = session_.commit_document(
           *source, std::move(source_result), std::move(source_receipt));
-      if (!committed.ok() || !project_committed_object(*source)) {
+      if (!committed.ok() ||
+          !project_committed_object(publication, *source)) {
         return rollback(committed.ok() ? "Cut source projection failed."
                                        : committed.error_message());
       }
@@ -7738,12 +9537,12 @@ private:
         int back_native = kInvalidModelingObjectId;
         EntityId back_entity = kInvalidEntityId;
         const bool published = publish_new_object(
-            back.value(), identity_copy, material_slot, back_native,
+            &publication, back.value(), identity_copy, material_slot, back_native,
             back_entity, false,
             *first_back_native_id +
                 static_cast<int>(published_back_count));
         if (back_entity != kInvalidEntityId) {
-          created_entities.push_back(back_entity);
+          publication.track_created_entity(back_entity);
         }
         if (!published) {
           return rollback("Cut back projection failed.");
@@ -7776,13 +9575,16 @@ private:
     session_.squash_undo_since(undo_mark);
     ++persistent_content_revision_;
     ++stats_.scene_publication_count;
-    add_selection_to_scene();
-    return {.ok = true, .changed = true, .message = "Cut selected meshes."};
+    if (!add_selection_to_scene()) {
+      return rollback("SDK plane-cut selection could not be published.");
+    }
+    return commit_publication_result<ModelingCommandResult>(
+        publication,
+        {.ok = true, .changed = true, .message = "Cut selected meshes."});
   }
 
   [[nodiscard]] ModelingCommandResult half_cut_selected_objects(
-      quader_editor_core::HalfCutOperationSettings settings,
-      bool preview_publication = false) {
+      quader_editor_core::HalfCutOperationSettings settings) {
     if (selection_mode_ != ModelingSelectionMode::Object &&
         selection_mode_ != ModelingSelectionMode::Group) {
       return failure("Half-Cut requires object selection mode.");
@@ -7791,38 +9593,76 @@ private:
     if (sources.empty()) {
       return failure("Half-Cut needs one or more selected meshes.");
     }
-    if (preview_active() && !preview_publication) {
+    if (preview_active()) {
       return failure("Commit or cancel the active preview first.");
     }
 
-    const std::size_t undo_mark = session_.undo_depth();
-    const quader::modeling::ModelingSession session_before = session_;
-    const auto object_ids_before = object_ids_;
-    const ModelingObjectRuntimeMap object_map_before = object_map_;
-    const int next_native_before = next_native_object_id_;
-    const int active_before = active_native_object_id_;
-    const ModelingSelectionMode mode_before = selection_mode_;
-    const std::uint64_t revision_before = persistent_content_revision_;
-    const ModelingSdkProjectionStats stats_before = stats_;
-    const AssetRegistryProjectionCheckpoint assets_before =
-        assets_.capture_projection_checkpoint();
-    const SceneProjectionCheckpoint scene_before =
-        scene_.capture_projection_checkpoint();
-    std::vector<EntityId> created_entities;
+    std::vector<int> affected_modeling_ids;
+    std::vector<EntityId> affected_entities;
+    std::vector<AssetId> affected_assets;
+    affected_modeling_ids.reserve(
+        sources.size() * (settings.separate_parts ? 2u : 1u));
+    for (const ObjectId source : sources) {
+      const std::optional<int> native = native_object(source);
+      const std::optional<EntityId> entity =
+          native.has_value()
+              ? object_map_.entity_for_modeling_object(*native)
+              : std::nullopt;
+      if (!native.has_value() || !entity.has_value() ||
+          !scene_.exists(*entity)) {
+        return failure("Half-Cut source scene identity is not live.");
+      }
+      affected_modeling_ids.push_back(*native);
+      std::vector<EntityId> subtree = scene_.descendants(*entity, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+      if (const MeshComponent *mesh = scene_.mesh(*entity)) {
+        affected_assets.push_back(mesh->mesh);
+      }
+    }
+    std::optional<int> first_back_native_candidate;
+    if (settings.separate_parts) {
+      const int first = next_available_native_object_id();
+      const std::size_t available =
+          first == kInvalidModelingObjectId
+              ? 0u
+              : static_cast<std::size_t>(std::numeric_limits<int>::max() -
+                                         first);
+      if (first == kInvalidModelingObjectId || sources.size() > available) {
+        return failure("Native modeling object IDs are exhausted.");
+      }
+      first_back_native_candidate = first;
+      for (std::size_t index = 0; index < sources.size(); ++index) {
+        affected_modeling_ids.push_back(first + static_cast<int>(index));
+      }
+    }
+    for (const EntityId selected : scene_.selected_entities()) {
+      std::vector<EntityId> subtree = scene_.descendants(selected, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(),
+                               subtree.end());
+    }
+
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_hierarchy = settings.separate_parts,
+         .capture_scene_selection = true,
+         .affected_scene_entities = affected_entities,
+         .affected_asset_ids = affected_assets,
+         .affected_modeling_object_ids = affected_modeling_ids});
+    if (!publication.ready()) {
+      return failure("Host publication checkpoint is unavailable.");
+    }
+    const std::size_t undo_mark = publication.sdk_undo_mark();
 
     const auto rollback = [&](std::string message) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      object_ids_ = object_ids_before;
-      object_map_ = object_map_before;
-      next_native_object_id_ = next_native_before;
-      active_native_object_id_ = active_before;
-      selection_mode_ = mode_before;
-      persistent_content_revision_ = revision_before;
-      stats_ = stats_before;
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      (void)scene_.restore_projection_checkpoint(scene_before,
-                                                 created_entities);
-      return failure(std::move(message));
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
     };
 
     std::vector<ObjectId> results;
@@ -7830,8 +9670,8 @@ private:
     std::optional<int> first_back_native_id;
     if (settings.separate_parts) {
       first_back_native_id = reserve_native_object_ids(sources.size());
-      if (!first_back_native_id.has_value()) {
-        return rollback("Native modeling object IDs are exhausted.");
+      if (first_back_native_id != first_back_native_candidate) {
+        return rollback("Native modeling object IDs could not be reserved.");
       }
     }
     std::size_t published_back_count = 0U;
@@ -7916,7 +9756,7 @@ private:
         if (!committed.ok()) {
           return rollback(committed.error_message());
         }
-        if (!project_committed_object(source)) {
+        if (!project_committed_object(publication, source)) {
           return rollback("Half-Cut source projection failed.");
         }
         results.push_back(source);
@@ -7946,17 +9786,17 @@ private:
       if (!back.ok()) {
         return rollback(back.error_message());
       }
-      if (!project_committed_object(source)) {
+      if (!project_committed_object(publication, source)) {
         return rollback("Half-Cut front projection failed.");
       }
       int back_native = kInvalidModelingObjectId;
       EntityId back_entity = kInvalidEntityId;
       const bool published = publish_new_object(
-          back.value(), identity_copy, material_slot, back_native,
+          &publication, back.value(), identity_copy, material_slot, back_native,
           back_entity, false,
           *first_back_native_id + static_cast<int>(published_back_count));
       if (back_entity != kInvalidEntityId) {
-        created_entities.push_back(back_entity);
+        publication.track_created_entity(back_entity);
       }
       if (!published) {
         return rollback("Half-Cut back projection failed.");
@@ -7983,11 +9823,12 @@ private:
       return rollback("Injected failure during SDK Half-Cut commit.");
     }
     session_.squash_undo_since(undo_mark);
-    if (!preview_publication) {
-      ++persistent_content_revision_;
+    ++persistent_content_revision_;
+    if (!add_selection_to_scene()) {
+      return rollback("SDK half-cut selection could not be published.");
     }
-    add_selection_to_scene();
-    return {.ok = true, .changed = true, .message = "Half-Cut"};
+    return commit_publication_result<ModelingCommandResult>(
+        publication, {.ok = true, .changed = true, .message = "Half-Cut"});
   }
 
   [[nodiscard]] ModelingCommandResult mutate_documents_by_object(
@@ -7998,7 +9839,8 @@ private:
       bool reproject_all_objects = false,
       bool position_only_projection = false,
       bool preserve_object_selection = false,
-      bool preserve_scene_selection = false) {
+      bool preserve_scene_selection = false,
+      const std::function<ModelingCommandResult()> &publication_finalizer = {}) {
     if (object_ids.empty()) {
       return failure("Select a modeling mesh or component first.");
     }
@@ -8006,29 +9848,93 @@ private:
       return failure("Commit or cancel the active preview first.");
     }
 
-    const std::size_t undo_mark = session_.undo_depth();
-    const quader::modeling::ModelingSession session_before = session_;
-    const int active_before = active_native_object_id_;
-    const ModelingSelectionMode mode_before = selection_mode_;
-    const std::uint64_t mode_revision_before = mode_revision_;
-    const std::uint64_t persistent_revision_before =
-        persistent_content_revision_;
-    const ModelingSdkProjectionStats stats_before = stats_;
-    const AssetRegistryProjectionCheckpoint assets_before =
-        assets_.capture_projection_checkpoint();
-    const SceneProjectionCheckpoint scene_before =
-        scene_.capture_projection_checkpoint();
+    std::vector<ObjectId> affected_sdk_objects(object_ids.begin(),
+                                                object_ids.end());
+    std::vector<EntityId> affected_entities;
+    std::vector<AssetId> affected_assets;
+    affected_entities.reserve(object_ids.size());
+    affected_assets.reserve(object_ids.size());
+    for (const ObjectId object : object_ids) {
+      const std::optional<int> native = native_object(object);
+      const std::optional<EntityId> entity =
+          native.has_value()
+              ? object_map_.entity_for_modeling_object(*native)
+              : std::nullopt;
+      if (!native.has_value() || !entity.has_value() ||
+          !scene_.exists(*entity)) {
+        return failure("A modeling publication participant is not live.");
+      }
+      affected_entities.push_back(*entity);
+      if (const MeshComponent *mesh = scene_.mesh(*entity)) {
+        affected_assets.push_back(mesh->mesh);
+      }
+      if (const CurveComponent *curve = scene_.curve(*entity)) {
+        affected_assets.push_back(curve->curve);
+      }
+    }
+    if (!preview_publication && !preserve_object_selection) {
+      const std::optional<ObjectId> active = active_sdk_object();
+      if (active.has_value()) {
+        affected_sdk_objects.push_back(*active);
+      }
+    }
+    if (!preview_publication && publication_finalizer) {
+      for (const modeling::SessionObjectSummary &object : session_.objects()) {
+        if (object.selected) {
+          affected_sdk_objects.push_back(object.id);
+        }
+      }
+    }
+    if (!preserve_scene_selection) {
+      const std::vector<EntityId> selected_entities =
+          scene_.selected_entities();
+      affected_entities.insert(affected_entities.end(),
+                               selected_entities.begin(),
+                               selected_entities.end());
+      for (const modeling::SessionObjectSummary &object : session_.objects()) {
+        if (!object.selected) {
+          continue;
+        }
+        const std::optional<int> native = native_object(object.id);
+        const std::optional<EntityId> entity =
+            native.has_value()
+                ? object_map_.entity_for_modeling_object(*native)
+                : std::nullopt;
+        if (entity.has_value()) {
+          affected_entities.push_back(*entity);
+        }
+      }
+    }
+    std::ranges::sort(affected_sdk_objects);
+    affected_sdk_objects.erase(
+        std::unique(affected_sdk_objects.begin(),
+                    affected_sdk_objects.end()),
+        affected_sdk_objects.end());
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.sdk_rollback = preview_publication
+                             ? ModelingSdkRollbackPolicy::PreviewCheckpoint
+                             : ModelingSdkRollbackPolicy::MutationCheckpoint,
+         .checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_bindings = false,
+         .capture_hierarchy = false,
+         .capture_scene_selection = !preserve_scene_selection,
+         .affected_scene_entities = affected_entities,
+         .affected_asset_ids = affected_assets,
+         .affected_sdk_object_ids = affected_sdk_objects});
+    if (!publication.ready()) {
+      return failure("Host publication checkpoint is unavailable.");
+    }
+    const std::size_t undo_mark = publication.sdk_undo_mark();
 
     const auto rollback = [&](std::string message) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      active_native_object_id_ = active_before;
-      selection_mode_ = mode_before;
-      mode_revision_ = mode_revision_before;
-      persistent_content_revision_ = persistent_revision_before;
-      stats_ = stats_before;
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      (void)scene_.restore_projection_checkpoint(scene_before);
-      return failure(std::move(message));
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
     };
 
     bool changed = false;
@@ -8088,15 +9994,16 @@ private:
     }
 
     if (!changed) {
-      (void)session_.rollback_undo_since(undo_mark);
       if (preview_publication && !reproject_all_objects) {
         active_preview_deleted_vertex_count_ = deleted_vertex_count;
       }
       if (!reproject_all_objects) {
-        return {.ok = true,
-                .changed = false,
-                .message = message.empty() ? std::string(fallback_message)
-                                           : std::move(message)};
+        return rollback_publication_result<ModelingCommandResult>(
+            publication,
+            {.ok = true,
+             .changed = false,
+             .message = message.empty() ? std::string(fallback_message)
+                                        : std::move(message)});
       }
     }
     if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
@@ -8188,8 +10095,12 @@ private:
             compiled_documents.empty()
                 ? std::optional<MeshAsset>{}
                 : std::move(compiled_documents[index]);
-        if (!project_document(object_id, document, preview_publication,
-                              reproject_all_objects, std::move(compiled))) {
+        if (!project_document(&publication, object_id, document,
+                              preview_publication,
+                              reproject_all_objects
+                                  ? std::optional<bool>{true}
+                                  : std::nullopt,
+                              std::move(compiled))) {
           return rollback("SDK operation host projection failed.");
         }
       }
@@ -8198,7 +10109,7 @@ private:
       for (ObjectId object_id : object_ids) {
         Result<PolygonDocument> projected = session_.document_copy(object_id);
         if (!projected.ok() ||
-            !project_document(object_id, projected.value(),
+            !project_document(&publication, object_id, projected.value(),
                               preview_publication)) {
           return rollback("SDK operation host projection failed.");
         }
@@ -8207,6 +10118,14 @@ private:
     if (fails(ModelingSdkProjectionFailurePoint::BeforeCommit)) {
       return rollback("Injected failure before SDK operation commit.");
     }
+    if (publication_finalizer) {
+      ModelingCommandResult finalized = publication_finalizer();
+      if (!finalized.ok) {
+        return rollback(finalized.message.empty()
+                            ? "SDK operation final publication failed."
+                            : std::move(finalized.message));
+      }
+    }
     session_.squash_undo_since(undo_mark);
     if (!preview_publication) {
       ++persistent_content_revision_;
@@ -8214,21 +10133,23 @@ private:
       active_preview_deleted_vertex_count_ = deleted_vertex_count;
     }
     if (!preserve_scene_selection) {
-      add_selection_to_scene();
+      if (!add_selection_to_scene()) {
+        return rollback("SDK operation selection could not be published.");
+      }
     }
-    return {.ok = true,
-            .changed = changed,
-            .message = message.empty() ? std::string(fallback_message)
-                                       : std::move(message)};
+    return commit_publication_result<ModelingCommandResult>(
+        publication,
+        {.ok = true,
+         .changed = changed,
+         .message = message.empty() ? std::string(fallback_message)
+                                    : std::move(message)});
   }
 
   /**
-   * Commits a topology-stable transform without cloning the complete SDK
-   * session, asset registry, and scene for rollback. All document mutations,
-   * canonical mesh compilation, host-target lookup, and injected failure
-   * checks finish before the first durable publication. The fast path is used
-   * only when every target owns its mesh binding, making publication two fixed
-   * owner batches with no allocation of new scene/asset identities.
+   * Commits a topology-stable transform after all document mutations,
+   * compilation, target lookup, and failure preflight have succeeded. The
+   * durable SDK/asset/scene owner batches share the host publication
+   * transaction; immutable mesh payloads keep its asset checkpoint shallow.
    */
   [[nodiscard]] ModelingCommandResult commit_sparse_transform_positions(
       const std::shared_ptr<const ModelingSdkTransformHistoryDelta::Impl>
@@ -8324,9 +10245,7 @@ private:
               .message = "Transform commit unchanged."};
     }
 
-    // Pin only affected immutable mesh payloads. This is O(changed objects)
-    // in metadata and O(1) in geometry, unlike the former complete registry
-    // checkpoint.
+    // Pin affected immutable mesh payloads for compilation and validation.
     std::vector<const MeshAsset *> retained_meshes;
     std::vector<EntityId> target_entities;
     std::vector<AssetId> target_mesh_ids;
@@ -8502,47 +10421,59 @@ private:
 
     // Stage every replacement and owner precondition before the SDK document
     // commit. Host publication below is then two fixed owner-batch calls.
-    std::vector<MeshAsset> original_meshes;
     std::vector<MeshAssetReplacement> mesh_replacements;
-    original_meshes.reserve(retained_meshes.size());
     mesh_replacements.reserve(compiled_documents.size());
     for (std::size_t index = 0; index < compiled_documents.size(); ++index) {
-      original_meshes.push_back(*retained_meshes[index]);
       mesh_replacements.push_back(
           {.id = target_mesh_ids[index],
            .mesh = std::move(*compiled_documents[index])});
     }
 
-    const std::size_t undo_mark = session_.undo_depth();
+    std::vector<ObjectId> mutation_participants;
+    mutation_participants.reserve(projection_documents.size());
+    std::ranges::transform(
+        projection_documents, std::back_inserter(mutation_participants),
+        [](const auto &entry) { return entry.first; });
+
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.sdk_rollback = ModelingSdkRollbackPolicy::MutationCheckpoint,
+         .checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::MeshProjection,
+         .capture_scene_entities = false,
+         .capture_bindings = false,
+         .capture_hierarchy = false,
+         .affected_scene_entities = target_entities,
+         .affected_asset_ids = target_mesh_ids,
+         .affected_sdk_object_ids = mutation_participants});
+    if (!publication.ready()) {
+      return failure("Transform mutation checkpoint is unavailable.");
+    }
+    const std::size_t undo_mark = publication.sdk_undo_mark();
+    const auto rollback = [&](std::string message) {
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
+    };
     Result<OperationResult> committed =
         session_.commit_documents_batch(std::move(updates), true);
     if (!committed.ok() || !committed.value().success) {
-      return failure(committed.error_message().empty()
-                         ? "Transform document commit failed."
+      return rollback(committed.error_message().empty()
+                          ? "Transform document commit failed."
                           : committed.error_message());
     }
+    if (!committed.value().changed) {
+      return rollback_publication_result(publication, from_sdk(committed));
+    }
 
-    const ModelingSdkProjectionStats stats_before_publication = stats_;
     if (!assets_.replace_meshes(mesh_replacements)) {
-      (void)session_.rollback_undo_since(undo_mark);
-      stats_ = stats_before_publication;
-      return failure("SDK transform asset batch publication failed.");
+      return rollback("SDK transform asset batch publication failed.");
     }
     if (!scene_.notify_mesh_payloads_changed(target_entities)) {
-      QDR_PROFILE_SCOPE("Transform commit emergency sparse batch rollback");
-      std::vector<MeshAssetReplacement> restore_replacements;
-      restore_replacements.reserve(original_meshes.size());
-      for (std::size_t index = 0; index < original_meshes.size(); ++index) {
-        restore_replacements.push_back(
-            {.id = target_mesh_ids[index],
-             .mesh = std::move(original_meshes[index])});
-      }
-      if (assets_.replace_meshes(restore_replacements)) {
-        (void)scene_.notify_mesh_payloads_changed(target_entities);
-      }
-      (void)session_.rollback_undo_since(undo_mark);
-      stats_ = stats_before_publication;
-      return failure("SDK transform scene batch publication failed.");
+      return rollback("SDK transform scene batch publication failed.");
     }
 
     stats_.asset_publication_count += mesh_replacements.size();
@@ -8551,20 +10482,15 @@ private:
         full_compile_fallbacks.load(std::memory_order_relaxed);
     (void)session_.squash_undo_since(undo_mark);
     ++persistent_content_revision_;
-    return {.ok = true,
-            .changed = committed.value().changed,
-            .message = "Transform committed."};
+    return commit_publication_result<ModelingCommandResult>(
+        publication,
+        {.ok = true,
+         .changed = committed.value().changed,
+         .message = "Transform committed."});
   }
 
   [[nodiscard]] bool preview_targets_have_unique_mesh_bindings(
       std::span<const ObjectId> object_ids) const {
-    std::unordered_map<AssetId, std::size_t> reference_count;
-    for (const EntityId entity : scene_.entities()) {
-      if (const MeshComponent *mesh = scene_.mesh(entity);
-          mesh != nullptr && mesh->mesh != kInvalidAssetId) {
-        ++reference_count[mesh->mesh];
-      }
-    }
     for (const ObjectId object_id : object_ids) {
       const std::optional<int> native = native_object(object_id);
       const std::optional<EntityId> entity =
@@ -8574,7 +10500,8 @@ private:
       const MeshComponent *mesh =
           entity.has_value() && scene_.exists(*entity) ? scene_.mesh(*entity)
                                                        : nullptr;
-      if (mesh == nullptr || reference_count[mesh->mesh] != 1U) {
+      if (mesh == nullptr ||
+          scene_.mesh_binding_reference_count(mesh->mesh) != 1u) {
         return false;
       }
     }
@@ -8597,7 +10524,460 @@ private:
       bool preview_publication = false) {
     const std::vector<ObjectId> selected = selected_sdk_objects();
     return mutate_documents(selected, mutation, fallback_message,
-                            preview_publication);
+                             preview_publication);
+  }
+
+  [[nodiscard]] PreviewSdkFence capture_preview_sdk_fence(
+      const modeling::ModelingSession &source, PreviewId preview_id) const {
+    PreviewSdkFence fence;
+    const modeling::PreviewTransactionSummary preview =
+        source.preview_summary();
+    if (!preview.active || preview.id != preview_id) {
+      return fence;
+    }
+    fence.preview = preview.id;
+    fence.operation_id = preview.operation_id;
+    fence.preview_content_revision = preview.content_revision;
+    fence.preview_objects.reserve(preview.objects.size());
+    for (const modeling::PreviewTransactionObjectSummary &object :
+         preview.objects) {
+      fence.preview_objects.push_back({
+          .object = object.object_id,
+          .action = object.action,
+          .kind = object.kind,
+          .base_content_revision = object.base_content_revision,
+          .content_revision = object.content_revision,
+          .changed = object.changed,
+          .material_slot = object.material_slot,
+          .selected = object.selected,
+      });
+    }
+    return fence;
+  }
+
+  [[nodiscard]] PreviewSdkFence
+  capture_preview_sdk_fence(PreviewId preview_id) const {
+    return capture_preview_sdk_fence(session_, preview_id);
+  }
+
+  [[nodiscard]] bool capture_mesh_preview_host_baseline(
+      std::span<const ObjectId> object_ids,
+      std::span<const int> affected_modeling_ids = {},
+      std::optional<AdapterPublicationState> adapter_before = std::nullopt,
+      SceneModelingProjectionDomain scene_domains =
+          SceneModelingProjectionDomain::MeshBindings) {
+    if (mesh_preview_host_baseline_.has_value()) {
+      return false;
+    }
+    HostPublicationScope scope;
+    scope.modeling_object_ids.assign(affected_modeling_ids.begin(),
+                                     affected_modeling_ids.end());
+    for (const ObjectId object_id : object_ids) {
+      if (!append_sdk_object_publication_scope(scope, object_id, false)) {
+        return false;
+      }
+    }
+    finalize_host_publication_scope(scope);
+    if (scope.scene_entities.empty() || scope.asset_ids.empty() ||
+        scope.modeling_object_ids.empty()) {
+      return false;
+    }
+
+    std::vector<PreviewHistoryAssetIdentity> history_asset_identities;
+    history_asset_identities.reserve(object_ids.size());
+    for (const ObjectId object_id : object_ids) {
+      const std::optional<int> native = native_object(object_id);
+      const std::optional<EntityId> entity =
+          native.has_value()
+              ? object_map_.entity_for_modeling_object(*native)
+              : std::nullopt;
+      if (!entity.has_value() || !scene_.exists(*entity)) {
+        return false;
+      }
+      const std::optional<SceneEntityState> scene_identity =
+          capture_scene_entity_state(scene_, *entity);
+      if (!scene_identity.has_value()) {
+        return false;
+      }
+      ModelingObjectSceneIdentity original_identity;
+      static_cast<SceneEntityState &>(original_identity) = *scene_identity;
+      if (const CurveComponent *curve = scene_.curve(*entity)) {
+        history_asset_identities.push_back({
+            .object = object_id,
+            .kind = modeling::SessionObjectKind::Curve,
+            .asset = curve->curve,
+            .identity = std::move(original_identity),
+            .binding_was_unique =
+                scene_.curve_binding_reference_count(curve->curve) == 1u,
+        });
+      } else if (const MeshComponent *mesh = scene_.mesh(*entity)) {
+        history_asset_identities.push_back({
+            .object = object_id,
+            .kind = modeling::SessionObjectKind::Mesh,
+            .asset = mesh->mesh,
+            .identity = std::move(original_identity),
+            .binding_was_unique =
+                scene_.mesh_binding_reference_count(mesh->mesh) == 1u,
+        });
+      } else {
+        return false;
+      }
+    }
+    std::ranges::sort(history_asset_identities, {},
+                      &PreviewHistoryAssetIdentity::object);
+    history_asset_identities.erase(
+        std::unique(history_asset_identities.begin(),
+                    history_asset_identities.end(),
+                    [](const PreviewHistoryAssetIdentity &left,
+                       const PreviewHistoryAssetIdentity &right) {
+                      return left.object == right.object;
+                    }),
+        history_asset_identities.end());
+
+    MeshPreviewHostBaseline baseline;
+    baseline.transform_history_undo_mark = session_.undo_depth();
+    baseline.adapter_before = adapter_before.has_value()
+                                  ? std::move(*adapter_before)
+                                  : capture_adapter_publication_state();
+    baseline.scope = std::move(scope);
+    baseline.history_asset_identities =
+        std::move(history_asset_identities);
+    baseline.owner.emplace(
+        scene_, assets_, &object_map_,
+        ModelingHostProjectionCheckpointOptions{
+            .capture_assets = true,
+            .capture_scene = true,
+            .capture_bindings = true,
+            .capture_mutation_fence = true,
+            .preserve_concurrent_owner_changes = true,
+            .scene_domains = scene_domains,
+            .scene_entities = baseline.scope.scene_entities,
+            .asset_ids = baseline.scope.asset_ids,
+            .modeling_object_ids = baseline.scope.modeling_object_ids,
+        });
+    if (!baseline.valid() || !baseline.owner->can_restore()) {
+      return false;
+    }
+    mesh_preview_host_baseline_ = std::move(baseline);
+    return true;
+  }
+
+  [[nodiscard]] bool activate_mesh_preview_host_baseline(
+      PreviewId preview_id) {
+    if (!preview_id.valid() || !mesh_preview_host_baseline_.has_value() ||
+        !mesh_preview_host_baseline_->valid() ||
+        mesh_preview_host_baseline_->preview_id.valid()) {
+      return false;
+    }
+    mesh_preview_host_baseline_->preview_id = preview_id;
+    mesh_preview_host_baseline_->acknowledged_sdk =
+        capture_preview_sdk_fence(preview_id);
+    mesh_preview_host_baseline_->fence_acknowledged =
+        mesh_preview_host_baseline_->acknowledged_sdk.preview == preview_id;
+    return mesh_preview_host_baseline_->fence_acknowledged;
+  }
+
+  [[nodiscard]] std::vector<int> preview_created_modeling_ids() const {
+    std::vector<int> ids;
+    if (structural_preview_host_state_.has_value()) {
+      ids.reserve(structural_preview_host_state_->added_objects.size());
+      for (const StructuralPreviewHostState::AddedObject &added :
+           structural_preview_host_state_->added_objects) {
+        ids.push_back(added.modeling_object_id);
+      }
+    }
+    sort_unique(ids);
+    return ids;
+  }
+
+  void record_preview_created_asset(AssetId asset) {
+    if (asset == kInvalidAssetId || !mesh_preview_host_baseline_.has_value()) {
+      return;
+    }
+    auto &created = mesh_preview_host_baseline_->created_assets;
+    if (std::ranges::find(created, asset) == created.end()) {
+      created.push_back(asset);
+    }
+  }
+
+  void record_preview_created_entity(EntityId entity) {
+    if (entity == kInvalidEntityId || !mesh_preview_host_baseline_.has_value()) {
+      return;
+    }
+    auto &created = mesh_preview_host_baseline_->created_entities;
+    if (std::ranges::find(created, entity) == created.end()) {
+      created.push_back(entity);
+    }
+  }
+
+  [[nodiscard]] bool preview_asset_was_created(AssetId asset) const {
+    return mesh_preview_host_baseline_.has_value() &&
+           std::ranges::find(mesh_preview_host_baseline_->created_assets,
+                             asset) !=
+               mesh_preview_host_baseline_->created_assets.end();
+  }
+
+  [[nodiscard]] bool acknowledge_preview_owner_fence() {
+    if (!mesh_preview_host_baseline_.has_value() ||
+        !mesh_preview_host_baseline_->valid() ||
+        !mesh_preview_host_baseline_->preview_id.valid()) {
+      return false;
+    }
+    const std::vector<int> created_modeling_ids =
+        preview_created_modeling_ids();
+    if (!mesh_preview_host_baseline_->owner->acknowledge_current_mutations(
+            mesh_preview_host_baseline_->created_entities,
+            mesh_preview_host_baseline_->created_assets,
+            created_modeling_ids)) {
+      return false;
+    }
+    mesh_preview_host_baseline_->acknowledged_sdk =
+        capture_preview_sdk_fence(mesh_preview_host_baseline_->preview_id);
+    mesh_preview_host_baseline_->fence_acknowledged =
+        mesh_preview_host_baseline_->acknowledged_sdk.preview ==
+        mesh_preview_host_baseline_->preview_id;
+    return mesh_preview_host_baseline_->fence_acknowledged;
+  }
+
+  [[nodiscard]] bool preview_fence_matches(PreviewId preview_id) const {
+    return mesh_preview_host_baseline_.has_value() &&
+           mesh_preview_host_baseline_->active_for(preview_id) &&
+           mesh_preview_host_baseline_->fence_acknowledged &&
+           mesh_preview_host_baseline_->owner
+               ->mutations_match_acknowledged_fence() &&
+           capture_preview_sdk_fence(preview_id) ==
+               mesh_preview_host_baseline_->acknowledged_sdk;
+  }
+
+  [[nodiscard]] bool preflight_preview_mutation(PreviewId preview_id) const {
+    return preview_fence_matches(preview_id) &&
+           mesh_preview_host_baseline_->owner->can_restore(
+               mesh_preview_host_baseline_->created_entities,
+               mesh_preview_host_baseline_->created_assets);
+  }
+
+  [[nodiscard]] bool restore_preview_to_original_baseline(
+      PreviewId preview_id, bool acknowledge_own_publication,
+      ModelingHostProjectionRestoreMode cancel_restore_mode =
+          ModelingHostProjectionRestoreMode::PreserveConcurrent) {
+    if (!mesh_preview_host_baseline_.has_value() ||
+        !mesh_preview_host_baseline_->active_for(preview_id)) {
+      return false;
+    }
+    MeshPreviewHostBaseline &baseline = *mesh_preview_host_baseline_;
+    const std::vector<int> created_modeling_ids =
+        preview_created_modeling_ids();
+    if (acknowledge_own_publication) {
+      if (!baseline.owner->mutations_match_acknowledged_fence()) {
+        // A failed native publication may have advanced only a prefix of its
+        // owner calls. Its caller preflighted the acknowledged fence before
+        // publishing, so only this proven own prefix may be rebased here.
+        if (!baseline.owner->acknowledge_current_mutations(
+                baseline.created_entities, baseline.created_assets,
+                created_modeling_ids)) {
+          return false;
+        }
+      }
+    } else if (!preview_fence_matches(preview_id)) {
+      return false;
+    }
+    const ModelingHostProjectionRestoreMode restore_mode =
+        acknowledge_own_publication
+            ? ModelingHostProjectionRestoreMode::PreferExact
+            : cancel_restore_mode;
+    if (!baseline.owner->can_restore(baseline.created_entities,
+                                     baseline.created_assets,
+                                     restore_mode)) {
+      return false;
+    }
+
+    const modeling::PreviewTransactionSummary current =
+        session_.preview_summary();
+    if (!current.active || current.id != preview_id ||
+        !session_.cancel_preview(preview_id).ok()) {
+      return false;
+    }
+    if (!baseline.owner->restore(baseline.created_entities,
+                                 baseline.created_assets,
+                                 restore_mode)) {
+      return false;
+    }
+
+    AdapterPublicationState adapter_before =
+        std::move(baseline.adapter_before);
+    clear_preview_checkpoints();
+    restore_adapter_publication_state(std::move(adapter_before));
+    return true;
+  }
+
+  [[nodiscard]] ModelingCommandResult abort_preview_publication(
+      PreviewId preview_id, std::string message) {
+    if (restore_preview_to_original_baseline(preview_id, true)) {
+      return failure(std::move(message));
+    }
+    return {
+        .ok = false,
+        .changed = true,
+        .message = std::move(message) +
+                   " Original preview rollback failed.",
+    };
+  }
+  [[nodiscard]] std::optional<PreparedMeshPreviewBatch>
+  prepare_mesh_preview_batch(
+      const modeling::ModelingSession &base_session,
+      std::span<const ObjectId> object_ids, const DocumentMutation &mutation,
+      std::string_view fallback_message, std::string &error,
+      std::optional<PreviewId> preview_id = std::nullopt) const {
+    std::vector<PolygonDocument> copied;
+    copied.reserve(object_ids.size());
+    if (preview_id.has_value()) {
+      for (const ObjectId object_id : object_ids) {
+        Result<PolygonDocument> document =
+            base_session.preview_base_document_copy(*preview_id, object_id);
+        if (!document.ok()) {
+          error = document.error_message();
+          return std::nullopt;
+        }
+        copied.push_back(std::move(document).value());
+      }
+    } else {
+      Result<std::vector<PolygonDocument>> documents =
+          base_session.document_copies(object_ids);
+      if (!documents.ok()) {
+        error = documents.error_message();
+        return std::nullopt;
+      }
+      copied = std::move(documents).value();
+    }
+
+    PreparedMeshPreviewBatch prepared;
+    prepared.updates.reserve(object_ids.size());
+    for (std::size_t index = 0; index < object_ids.size(); ++index) {
+      PolygonDocument document = std::move(copied[index]);
+      Result<OperationResult> operated = mutation(document);
+      if (!operated.ok() || !operated.value().success) {
+        error = operated.ok() && !operated.value().message.empty()
+                    ? operated.value().message
+                    : operated.error_message();
+        if (error.empty()) {
+          error = std::string(fallback_message);
+        }
+        return std::nullopt;
+      }
+      prepared.deleted_vertex_count +=
+          operated.value().deleted.vertices.size();
+      prepared.changed = prepared.changed || operated.value().changed;
+      if (!operated.value().message.empty()) {
+        prepared.message = operated.value().message;
+      }
+      prepared.updates.push_back({
+          .object = object_ids[index],
+          .document = std::move(document),
+          .receipt = std::move(operated).value(),
+      });
+    }
+    return prepared;
+  }
+
+  [[nodiscard]] ModelingCommandResult begin_mesh_preview_transaction(
+      std::span<const ObjectId> object_ids, const DocumentMutation &mutation,
+      std::string_view operation_id, std::string_view fallback_message) {
+    std::string error;
+    std::optional<PreparedMeshPreviewBatch> prepared =
+        prepare_mesh_preview_batch(session_, object_ids, mutation,
+                                   fallback_message, error);
+    if (!prepared.has_value()) {
+      return failure(std::move(error));
+    }
+
+    if (!capture_mesh_preview_host_baseline(object_ids)) {
+      return failure("Bounded SDK preview baseline is unavailable.");
+    }
+    Result<PreviewId> begun = session_.begin_preview_transaction(
+        std::string(operation_id), std::move(prepared->updates));
+    if (!begun.ok()) {
+      mesh_preview_host_baseline_.reset();
+      return failure(begun.error_message());
+    }
+    if (!activate_mesh_preview_host_baseline(begun.value()) ||
+        fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
+        (prepared->changed && !project_preview_object(true))) {
+      return abort_preview_publication(
+          begun.value(), "SDK operation preview publication failed.");
+    }
+
+    preview_changed_ = prepared->changed;
+    active_preview_deleted_vertex_count_ = prepared->deleted_vertex_count;
+    active_preview_operation_id_ = std::string(operation_id);
+    ++stats_.preview_publication_count;
+    if (!acknowledge_preview_owner_fence()) {
+      return abort_preview_publication(
+          begun.value(),
+          "SDK operation preview publication could not be acknowledged.");
+    }
+    return {
+        .ok = true,
+        .changed = preview_changed_,
+        .message = prepared->message.empty()
+                       ? "SDK operation preview started."
+                       : std::move(prepared->message),
+    };
+  }
+
+  [[nodiscard]] ModelingCommandResult update_mesh_preview_transaction(
+      const DocumentMutation &mutation, std::string_view fallback_message) {
+    if (!session_.preview_active()) {
+      return failure("No active SDK operation preview.");
+    }
+    const modeling::PreviewTransactionSummary preview =
+        session_.preview_summary();
+    if (!preflight_preview_mutation(preview.id)) {
+      return failure(
+          "SDK preview participants changed outside this preview.");
+    }
+    std::vector<ObjectId> object_ids;
+    object_ids.reserve(preview.objects.size());
+    for (const modeling::PreviewTransactionObjectSummary &object :
+         preview.objects) {
+      if (object.kind != modeling::SessionObjectKind::Mesh) {
+        return failure("SDK mesh preview contains a non-mesh object.");
+      }
+      object_ids.push_back(object.object_id);
+    }
+
+    std::string error;
+    std::optional<PreparedMeshPreviewBatch> prepared =
+        prepare_mesh_preview_batch(session_, object_ids, mutation,
+                                   fallback_message, error, preview.id);
+    if (!prepared.has_value()) {
+      return failure(std::move(error));
+    }
+
+    Result<OperationResult> updated = session_.update_preview_transaction(
+        preview.id, std::move(prepared->updates));
+    if (!updated.ok()) {
+      return failure(updated.error_message());
+    }
+    const bool publish_host_projection =
+        preview_changed_ || prepared->changed || updated.value().changed;
+    if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
+        (publish_host_projection && !project_preview_object())) {
+      return abort_preview_publication(
+          preview.id, "SDK operation preview publication failed.");
+    }
+    active_preview_deleted_vertex_count_ = prepared->deleted_vertex_count;
+    preview_changed_ = prepared->changed || updated.value().changed;
+    ++stats_.preview_publication_count;
+    if (!acknowledge_preview_owner_fence()) {
+      return abort_preview_publication(
+          preview.id,
+          "SDK operation preview publication could not be acknowledged.");
+    }
+    return {.ok = updated.value().success,
+            .changed = updated.value().changed,
+            .message = prepared->message.empty()
+                           ? std::string(fallback_message)
+                           : std::move(prepared->message)};
   }
 
   [[nodiscard]] DocumentMutation preview_mutation_for(
@@ -8687,14 +11067,17 @@ private:
 
   [[nodiscard]] ModelingCommandResult update_preview_from_base(
       const DocumentMutation &mutation, std::string_view fallback_message) {
-    if (!preview_active() || !preview_base_snapshot_.has_value() ||
-        !preview_base_snapshot_->valid()) {
+    if (!preview_active()) {
       return failure("No active SDK operation preview.");
     }
     const quader::modeling::PreviewTransactionSummary preview =
         session_.preview_summary();
-    Result<PolygonDocument> base =
-        preview_base_snapshot_->impl_->session.document_copy(preview.object_id);
+    if (!preflight_preview_mutation(preview.id)) {
+      return failure(
+          "SDK preview participants changed outside this preview.");
+    }
+    Result<PolygonDocument> base = session_.preview_base_document_copy(
+        preview.id, preview.object_id);
     if (!base.ok()) {
       return failure(base.error_message());
     }
@@ -8707,59 +11090,86 @@ private:
                                 ? std::string(fallback_message)
                                 : operated.error_message()));
     }
-    active_preview_deleted_vertex_count_ =
+    const std::size_t deleted_vertex_count =
         operated.value().deleted.vertices.size();
-
-    const quader::modeling::ModelingSession session_before = session_;
-    const AssetRegistryProjectionCheckpoint assets_before =
-        assets_.capture_projection_checkpoint();
-    const SceneProjectionCheckpoint scene_before =
-        scene_.capture_projection_checkpoint();
     Result<OperationResult> updated = session_.update_document_preview(
         preview.id, std::move(working), std::move(operated).value());
     if (!updated.ok()) {
       return failure(updated.error_message());
     }
-    if (!project_preview_object()) {
-      session_.restore_snapshot_preserving_identity_high_water(session_before);
-      (void)assets_.restore_projection_checkpoint(assets_before);
-      (void)scene_.restore_projection_checkpoint(scene_before);
-      return failure("SDK operation preview asset publication failed.");
+    const bool publish_host_projection =
+        preview_changed_ || updated.value().changed;
+    if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
+        (publish_host_projection && !project_preview_object())) {
+      return abort_preview_publication(
+          preview.id, "SDK operation preview asset publication failed.");
     }
-    preview_changed_ = preview_changed_ || updated.value().changed;
+    active_preview_deleted_vertex_count_ = deleted_vertex_count;
+    preview_changed_ = updated.value().changed;
     ++stats_.preview_publication_count;
+    if (!acknowledge_preview_owner_fence()) {
+      return abort_preview_publication(
+          preview.id,
+          "SDK operation preview publication could not be acknowledged.");
+    }
     return from_sdk(updated, std::string(fallback_message));
   }
-
   [[nodiscard]] bool fails(ModelingSdkProjectionFailurePoint point) const {
     return failure_point_ == point;
   }
 
+  [[nodiscard]] AdapterPublicationState capture_adapter_publication_state() const {
+    return {
+        .next_native_object_id = next_native_object_id_,
+        .active_native_object_id = active_native_object_id_,
+        .selection_mode = selection_mode_,
+        .persistent_content_revision = persistent_content_revision_,
+        .mode_revision = mode_revision_,
+        .curve_preview_scene_revision = curve_preview_scene_revision_,
+        .curve_preview_asset_revision = curve_preview_asset_revision_,
+        .curve_preview_external_changes = curve_preview_external_changes_,
+        .curve_preview_asset_id = curve_preview_asset_id_,
+        .curve_preview_sharing_proof = curve_preview_sharing_proof_,
+        .preview_changed = preview_changed_,
+        .active_preview_operation_id = active_preview_operation_id_,
+        .active_preview_operation = active_preview_operation_,
+        .active_preview_settings = active_preview_settings_,
+        .active_preview_deleted_vertex_count =
+            active_preview_deleted_vertex_count_,
+        .stats = stats_,
+    };
+  }
+
+  void restore_adapter_publication_state(AdapterPublicationState state) noexcept {
+    next_native_object_id_ = state.next_native_object_id;
+    active_native_object_id_ = state.active_native_object_id;
+    selection_mode_ = state.selection_mode;
+    persistent_content_revision_ = state.persistent_content_revision;
+    mode_revision_ = state.mode_revision;
+    curve_preview_scene_revision_ = state.curve_preview_scene_revision;
+    curve_preview_asset_revision_ = state.curve_preview_asset_revision;
+    curve_preview_external_changes_ = state.curve_preview_external_changes;
+    curve_preview_asset_id_ = state.curve_preview_asset_id;
+    curve_preview_sharing_proof_ = state.curve_preview_sharing_proof;
+    preview_changed_ = state.preview_changed;
+    active_preview_operation_id_ = std::move(state.active_preview_operation_id);
+    active_preview_operation_ = std::move(state.active_preview_operation);
+    active_preview_settings_ = std::move(state.active_preview_settings);
+    active_preview_deleted_vertex_count_ =
+        state.active_preview_deleted_vertex_count;
+    stats_ = state.stats;
+  }
+
+  [[nodiscard]] const std::map<int, ObjectId> &sdk_bindings() const {
+    return object_map_.sdk_object_bindings_by_modeling_object();
+  }
+
   [[nodiscard]] std::optional<ObjectId> sdk_object(int native_id) const {
-    const auto found = object_ids_.find(native_id);
-    return found == object_ids_.end() ? std::nullopt
-                                      : std::optional<ObjectId>{found->second};
+    return object_map_.sdk_object_for_modeling_object(native_id);
   }
 
   [[nodiscard]] std::optional<int> native_object(ObjectId object_id) const {
-    const std::uint64_t key = sdk_object_key(object_id);
-    if (const auto cached = native_object_ids_.find(key);
-        cached != native_object_ids_.end()) {
-      const auto forward = object_ids_.find(cached->second);
-      if (forward != object_ids_.end() && forward->second == object_id) {
-        return cached->second;
-      }
-    }
-
-    native_object_ids_.clear();
-    native_object_ids_.reserve(object_ids_.size());
-    for (const auto &[native_id, sdk_id] : object_ids_) {
-      native_object_ids_.emplace(sdk_object_key(sdk_id), native_id);
-    }
-    const auto rebuilt = native_object_ids_.find(key);
-    return rebuilt == native_object_ids_.end()
-               ? std::nullopt
-               : std::optional<int>{rebuilt->second};
+    return object_map_.modeling_object_for_sdk_object(object_id);
   }
 
   [[nodiscard]] std::optional<ObjectId> active_sdk_object() const {
@@ -8783,11 +11193,18 @@ private:
 
   [[nodiscard]] std::optional<int>
   reserve_native_object_ids(std::size_t count) {
+    return reserve_preflighted_native_object_ids(
+        next_available_native_object_id(), count);
+  }
+
+  /** Reserves a range whose first free ID was already verified this turn. */
+  [[nodiscard]] std::optional<int>
+  reserve_preflighted_native_object_ids(int first, std::size_t count) {
     if (count == 0U) {
       return std::nullopt;
     }
-    const int first = next_available_native_object_id();
     if (first == kInvalidModelingObjectId ||
+        first < next_native_object_id_ ||
         first >= std::numeric_limits<int>::max()) {
       return std::nullopt;
     }
@@ -8801,100 +11218,34 @@ private:
   }
 
   [[nodiscard]] ModelingCommandResult cancel_curve_preview_projection() {
-    if (!preview_base_snapshot_.has_value() ||
-        !preview_asset_checkpoint_.has_value() ||
-        !preview_scene_checkpoint_.has_value()) {
+    const modeling::PreviewTransactionSummary preview =
+        session_.preview_summary();
+    if (!preview.active ||
+        !mesh_preview_host_baseline_.has_value() ||
+        !mesh_preview_host_baseline_->active_for(preview.id)) {
       return failure("Curve preview restore point is unavailable.");
     }
-    const auto base = *preview_base_snapshot_;
+    if (!preflight_preview_mutation(preview.id)) {
+      return failure(
+          "Curve preview participants changed outside this preview.");
+    }
     const bool changed = preview_changed_;
-    const bool external = curve_preview_external_changes_ ||
-        scene_.revision() != curve_preview_scene_revision_ ||
-        assets_.revision() != curve_preview_asset_revision_;
-    const auto preview = session_.preview_summary();
-    const auto native = native_object(preview.object_id);
-    const auto entity = native.has_value()
-                            ? object_map_.entity_for_modeling_object(*native)
-                            : std::nullopt;
-    const auto saved = std::ranges::find_if(base.impl_->projected_objects,
-        [&](const SdkProjectedObjectSnapshot &projected) {
-          return projected.modeling_object_id ==
-                 native.value_or(kInvalidModelingObjectId);
-        });
-    if (!external) {
-      if (!entity.has_value() || !scene_.exists(*entity) ||
-          saved == base.impl_->projected_objects.end() ||
-          !saved->curve.has_value()) {
-        return failure("Curve preview restore binding is unavailable.");
-      }
-      (void)assets_.restore_projection_checkpoint(*preview_asset_checkpoint_);
-      restore_curve_projection_binding(
-          ProjectedCurveBinding{.entity = *entity, .curve = saved->curve_id});
-      (void)scene_.restore_projection_checkpoint(*preview_scene_checkpoint_);
-      session_.restore_snapshot_preserving_identity_high_water(base.impl_->session);
-      clear_preview_checkpoints();
-      return {.ok = true, .changed = changed, .message = "Curve preview canceled."};
+    // Curve previews have no intentionally monotonic host projection
+    // policy. Rewind exact owner stamps when uncontaminated so cancel and a
+    // returned-to-origin commit preserve clean state and redo; the checkpoint
+    // automatically falls back to participant-scoped preserving restore when
+    // an unrelated owner advanced concurrently.
+    if (!restore_preview_to_original_baseline(
+            preview.id, false,
+            ModelingHostProjectionRestoreMode::PreferExact)) {
+      return {.ok = false,
+              .changed = true,
+              .message = "Curve preview could not be canceled."};
     }
-
-    // Visibility, selection, transforms or deletion may change outside the tool.
-    // Restore only our still-installed preview; never replay the whole old scene.
-    const auto candidate = session_.preview_curve_document_copy(preview.id);
-    const CurveComponent *binding =
-        entity.has_value() && scene_.exists(*entity) ? scene_.curve(*entity) : nullptr;
-    const CurveAsset *current = binding != nullptr ? assets_.curve(binding->curve) : nullptr;
-    const auto assets_before = assets_.capture_projection_checkpoint();
-    const auto scene_before = scene_.capture_projection_checkpoint();
-    if (native.has_value() && current != nullptr && current->document != nullptr &&
-        binding->curve == curve_preview_asset_id_ && candidate.ok() &&
-        current->document->has_same_geometry(candidate.value())) {
-      if (saved != base.impl_->projected_objects.end() && saved->curve.has_value()) {
-        const AssetId displaced = binding->curve;
-        const bool restore_original = displaced == saved->curve_id ||
-                                      assets_.curve(saved->curve_id) == nullptr;
-        if ((restore_original && !mesh_sync_.restore_history_curve_assets(
-                assets_, {{saved->curve_id, *saved->curve}})) ||
-            !mesh_sync_.set_projected_curve_binding(scene_, *entity, saved->curve_id) ||
-            !mesh_sync_.notify_projected_curve_changed(scene_, *entity)) {
-          (void)assets_.restore_projection_checkpoint(assets_before);
-          restore_curve_projection_binding(
-              ProjectedCurveBinding{.entity = *entity, .curve = displaced});
-          (void)scene_.restore_projection_checkpoint(scene_before);
-          return failure("Curve preview could not be canceled.");
-        }
-        mesh_sync_.remove_unreferenced_history_curve_assets(
-            scene_, assets_, std::span<const AssetId>{&displaced, 1U});
-      }
-    }
-    const auto persistent_revision = persistent_content_revision_;
-    reset_from_scene();
-    persistent_content_revision_ = persistent_revision;
-    return {.ok = true, .changed = changed, .message = "Curve preview canceled."};
+    return {.ok = true,
+            .changed = changed,
+            .message = "Curve preview canceled."};
   }
-
-  [[nodiscard]] std::optional<ProjectedCurveBinding>
-  capture_curve_projection_binding(ObjectId object_id) const {
-    const auto native = native_object(object_id);
-    const auto entity = native.has_value()
-                            ? object_map_.entity_for_modeling_object(*native)
-                            : std::nullopt;
-    const CurveComponent *binding =
-        entity.has_value() ? scene_.curve(*entity) : nullptr;
-    if (binding == nullptr) {
-      return std::nullopt;
-    }
-    return ProjectedCurveBinding{.entity = *entity, .curve = binding->curve};
-  }
-
-  void restore_curve_projection_binding(
-      const std::optional<ProjectedCurveBinding> &binding) {
-    // Scene checkpoints restore counters and selection, not components on
-    // existing entities. Compensate before restoring their exact counters.
-    if (binding.has_value()) {
-      (void)mesh_sync_.set_projected_curve_binding(
-          scene_, binding->entity, binding->curve);
-    }
-  }
-
   [[nodiscard]] bool scan_curve_binding_shared(EntityId owner, AssetId curve,
                                                 bool track_preview = true) const {
     if (track_preview) {
@@ -8903,17 +11254,15 @@ private:
     if (owner == kInvalidEntityId || curve == kInvalidAssetId) {
       return false;
     }
-    for (const EntityId entity : scene_.entities()) {
-      if (track_preview) {
-        ++stats_.curve_preview_shared_binding_entity_visit_count;
-      }
-      const CurveComponent *component = scene_.curve(entity);
-      if (entity != owner && component != nullptr &&
-          component->curve == curve) {
-        return true;
-      }
+    SceneBindingReferenceCountWork work;
+    const std::size_t reference_count =
+        scene_.curve_binding_reference_count(
+            curve, track_preview ? &work : nullptr);
+    if (track_preview) {
+      stats_.curve_preview_shared_binding_entity_visit_count +=
+          work.owner_index_lookup_count;
     }
-    return false;
+    return reference_count > 1u;
   }
 
   void refresh_curve_preview_sharing_proof(EntityId entity, AssetId curve) {
@@ -8933,6 +11282,60 @@ private:
     };
   }
 
+  [[nodiscard]] std::optional<bool> preview_mesh_binding_is_unique(
+      ObjectId object, EntityId entity, AssetId mesh) const {
+    if (!mesh_preview_host_baseline_.has_value()) {
+      return std::nullopt;
+    }
+    if (std::ranges::find(mesh_preview_host_baseline_->scope.scene_entities,
+                          entity) ==
+        mesh_preview_host_baseline_->scope.scene_entities.end()) {
+      return std::nullopt;
+    }
+    if (preview_asset_was_created(mesh)) {
+      return true;
+    }
+    const auto baseline = std::ranges::lower_bound(
+        mesh_preview_host_baseline_->history_asset_identities, object, {},
+        &PreviewHistoryAssetIdentity::object);
+    if (baseline ==
+            mesh_preview_host_baseline_->history_asset_identities.end() ||
+        baseline->object != object ||
+        baseline->kind != modeling::SessionObjectKind::Mesh ||
+        baseline->identity.id != entity || baseline->asset != mesh) {
+      return std::nullopt;
+    }
+    return baseline->binding_was_unique &&
+           scene_.mesh_binding_reference_count(mesh) == 1u;
+  }
+
+  [[nodiscard]] std::optional<bool> preview_curve_binding_is_unique(
+      ObjectId object, EntityId entity, AssetId curve) const {
+    if (!mesh_preview_host_baseline_.has_value()) {
+      return std::nullopt;
+    }
+    if (std::ranges::find(mesh_preview_host_baseline_->scope.scene_entities,
+                          entity) ==
+        mesh_preview_host_baseline_->scope.scene_entities.end()) {
+      return std::nullopt;
+    }
+    if (preview_asset_was_created(curve)) {
+      return true;
+    }
+    const auto baseline = std::ranges::lower_bound(
+        mesh_preview_host_baseline_->history_asset_identities, object, {},
+        &PreviewHistoryAssetIdentity::object);
+    if (baseline ==
+            mesh_preview_host_baseline_->history_asset_identities.end() ||
+        baseline->object != object ||
+        baseline->kind != modeling::SessionObjectKind::Curve ||
+        baseline->identity.id != entity || baseline->asset != curve) {
+      return std::nullopt;
+    }
+    return baseline->binding_was_unique &&
+           scene_.curve_binding_reference_count(curve) == 1u;
+  }
+
   [[nodiscard]] bool curve_binding_shared_for_preview(EntityId entity,
                                                        AssetId curve) {
     if (!curve_preview_sharing_proof_.valid ||
@@ -8947,7 +11350,9 @@ private:
   }
 
   [[nodiscard]] bool project_curve_document(
-      ObjectId object_id, const modeling::CurveDocument &document, bool preview) {
+      ModelingHostPublicationTransaction *publication, ObjectId object_id,
+      const modeling::CurveDocument &document, bool preview,
+      bool track_preview_rollback_asset = false) {
     const auto native = native_object(object_id);
     const auto entity = native.has_value()
                             ? object_map_.entity_for_modeling_object(*native)
@@ -8970,17 +11375,34 @@ private:
       return false;
     }
     const AssetId original = binding->curve;
-    const bool shared = preview
-        ? curve_binding_shared_for_preview(*entity, original)
-        : scan_curve_binding_shared(*entity, original, false);
+    const std::optional<bool> preview_unique =
+        preview ? preview_curve_binding_is_unique(object_id, *entity,
+                                                   original)
+                : std::nullopt;
+    const bool shared = preview_unique.has_value()
+                            ? !*preview_unique
+                            : (preview
+                                   ? curve_binding_shared_for_preview(*entity,
+                                                                      original)
+                                   : scan_curve_binding_shared(*entity, original,
+                                                               false));
     CurveAsset projected;
     projected.name = current->name;
     projected.document = std::make_shared<const modeling::CurveDocument>(document);
     if (shared) {
       const AssetId private_asset =
           mesh_sync_.install_projected_curve(assets_, std::move(projected));
-      if (private_asset == kInvalidAssetId ||
-          !mesh_sync_.set_projected_curve_binding(scene_, *entity, private_asset)) {
+      if (private_asset == kInvalidAssetId) {
+        return false;
+      }
+      if (publication != nullptr) {
+        publication->track_created_asset(private_asset);
+      }
+      if (preview || track_preview_rollback_asset) {
+        record_preview_created_asset(private_asset);
+      }
+      if (!mesh_sync_.set_projected_curve_binding(scene_, *entity,
+                                                  private_asset)) {
         return false;
       }
     } else if (!mesh_sync_.replace_projected_curve(assets_, original,
@@ -9012,12 +11434,11 @@ private:
     return true;
   }
 
-  [[nodiscard]] bool project_document(ObjectId object_id,
-                                      const PolygonDocument &document,
-                                      bool preview,
-                                      bool mesh_binding_known_unique = false,
-                                      std::optional<MeshAsset> projected =
-                                          std::nullopt) {
+  [[nodiscard]] bool publish_projected_mesh(
+      ModelingHostPublicationTransaction *publication, ObjectId object_id,
+      MeshAsset projected, bool preview,
+      std::optional<bool> mesh_binding_unique = std::nullopt,
+      bool track_preview_rollback_asset = false) {
     const std::optional<int> native = native_object(object_id);
     const std::optional<EntityId> entity =
         native.has_value()
@@ -9032,23 +11453,7 @@ private:
         current == nullptr) {
       return false;
     }
-    const AssetId original_mesh = binding->mesh;
-    bool changed_mesh_binding = false;
-    const auto fail = [&]() {
-      if (changed_mesh_binding && scene_.exists(*entity)) {
-        (void)mesh_sync_.set_projected_mesh_binding(
-            scene_, *entity, original_mesh);
-      }
-      return false;
-    };
-    if (!projected.has_value()) {
-      ++stats_.mesh_compile_count;
-      projected = MeshProjectionService::compile_sdk_document_mesh(document);
-    }
-    if (!projected.has_value()) {
-      return false;
-    }
-    projected->name = current->name;
+    projected.name = current->name;
     const ModelingSdkProjectionFailurePoint asset_failure =
         preview ? ModelingSdkProjectionFailurePoint::PreviewAssetReplace
                 : ModelingSdkProjectionFailurePoint::CommittedAssetReplace;
@@ -9058,18 +11463,31 @@ private:
     // Transform previews only use the reproject-all path after proving every
     // target owns a unique mesh binding. Preserve that proof here instead of
     // rescanning the full scene once for every projected object (O(N^2)).
-    if (!mesh_binding_known_unique &&
-        scene_mesh_is_shared(scene_, *entity, binding->mesh)) {
+    if (!mesh_binding_unique.has_value() && preview) {
+      mesh_binding_unique =
+          preview_mesh_binding_is_unique(object_id, *entity, binding->mesh);
+    }
+    const bool shared = mesh_binding_unique.has_value()
+                            ? !*mesh_binding_unique
+                            : scene_mesh_is_shared(scene_, binding->mesh);
+    if (shared) {
       const AssetId private_mesh =
-          mesh_sync_.install_projected_mesh(assets_, std::move(*projected));
-      if (private_mesh == kInvalidAssetId ||
-          !mesh_sync_.set_projected_mesh_binding(scene_, *entity,
-                                                 private_mesh)) {
-        return fail();
+          mesh_sync_.install_projected_mesh(assets_, std::move(projected));
+      if (private_mesh == kInvalidAssetId) {
+        return false;
       }
-      changed_mesh_binding = true;
+      if (publication != nullptr) {
+        publication->track_created_asset(private_mesh);
+      }
+      if (preview || track_preview_rollback_asset) {
+        record_preview_created_asset(private_mesh);
+      }
+      if (!mesh_sync_.set_projected_mesh_binding(scene_, *entity,
+                                                 private_mesh)) {
+        return false;
+      }
     } else if (!mesh_sync_.replace_projected_mesh(
-                   assets_, binding->mesh, std::move(*projected))) {
+                   assets_, binding->mesh, std::move(projected))) {
       return false;
     }
     ++stats_.asset_publication_count;
@@ -9077,64 +11495,127 @@ private:
         preview ? ModelingSdkProjectionFailurePoint::PreviewSceneNotify
                 : ModelingSdkProjectionFailurePoint::CommittedSceneNotify;
     if (fails(scene_failure)) {
-      return fail();
+      return false;
     }
     if (!mesh_sync_.notify_projected_mesh_changed(scene_, *entity)) {
-      return fail();
+      return false;
     }
     ++stats_.scene_publication_count;
     return true;
   }
 
-  [[nodiscard]] bool project_committed_object(ObjectId object_id) {
+  [[nodiscard]] bool project_document(
+                                      ModelingHostPublicationTransaction *publication,
+                                      ObjectId object_id,
+                                      const PolygonDocument &document,
+                                      bool preview,
+                                      std::optional<bool> mesh_binding_unique =
+                                          std::nullopt,
+                                      std::optional<MeshAsset> projected =
+                                          std::nullopt) {
+    if (!projected.has_value()) {
+      ++stats_.mesh_compile_count;
+      projected = MeshProjectionService::compile_sdk_document_mesh(document);
+    }
+    return projected.has_value() &&
+           publish_projected_mesh(publication, object_id,
+                                  std::move(*projected), preview,
+                                  mesh_binding_unique);
+  }
+
+  [[nodiscard]] bool project_committed_object(
+      ModelingHostPublicationTransaction &publication, ObjectId object_id) {
     const auto native = native_object(object_id);
     const auto entity = native.has_value()
                             ? object_map_.entity_for_modeling_object(*native)
                             : std::nullopt;
     if (entity.has_value() && scene_.curve(*entity) != nullptr) {
       const auto curve = session_.curve_document_copy(object_id);
-      return curve.ok() && project_curve_document(object_id, curve.value(), false);
+      return curve.ok() &&
+             project_curve_document(&publication, object_id, curve.value(),
+                                    false);
     }
     Result<PolygonDocument> document = session_.document_copy(object_id);
     return document.ok() &&
-           project_document(object_id, document.value(), false);
+           project_document(&publication, object_id, document.value(), false);
   }
 
-  [[nodiscard]] bool project_preview_object() {
-    const quader::modeling::PreviewTransactionSummary summary =
-        session_.preview_summary();
-    if (!summary.active) {
+  [[nodiscard]] bool project_preview_object(bool initial_publication = false,
+                                            bool committed_publication = false) {
+    const Result<modeling::SessionPreviewPayload> transaction =
+        session_.preview_transaction_payload();
+    if (!transaction.ok() || transaction.value().objects.empty()) {
       return false;
     }
-    if (summary.kind == modeling::SessionObjectKind::Curve) {
-      const auto curve = session_.preview_curve_document_copy(summary.id);
-      return curve.ok() &&
-             project_curve_document(summary.object_id, curve.value(), true);
+    for (const modeling::SessionPreviewObjectPayload &object :
+         transaction.value().objects) {
+      if (object.action == modeling::SessionPreviewAction::RemoveExisting) {
+        continue;
+      }
+      bool publish = initial_publication && object.changed;
+      if (!initial_publication && mesh_preview_host_baseline_.has_value()) {
+        const auto acknowledged = std::ranges::find(
+            mesh_preview_host_baseline_->acknowledged_sdk.preview_objects,
+            object.object_id, &PreviewSdkObjectFence::object);
+        publish =
+            acknowledged ==
+                mesh_preview_host_baseline_->acknowledged_sdk.preview_objects
+                    .end() ||
+            acknowledged->content_revision != object.content_revision;
+      }
+      if (!publish) {
+        continue;
+      }
+      if (object.action == modeling::SessionPreviewAction::AddProvisional &&
+          !native_object(object.object_id).has_value()) {
+        // Structural preview begin publishes the provisional host identity
+        // after the SDK has assigned its stable ObjectId.
+        continue;
+      }
+      if (object.kind == modeling::SessionObjectKind::Curve) {
+        const auto *curve =
+            std::get_if<modeling::CurveDocument>(&object.payload);
+        if (curve == nullptr ||
+            !project_curve_document(nullptr, object.object_id, *curve,
+                                    !committed_publication,
+                                    committed_publication)) {
+          return false;
+        }
+        continue;
+      }
+      const auto *payload =
+          std::get_if<modeling::ToolPreviewPayload>(&object.payload);
+      if (payload == nullptr || !payload->valid) {
+        return false;
+      }
+      Result<PolygonDocument> authored = session_.preview_document_copy(
+          transaction.value().id, object.object_id);
+      if (!authored.ok()) {
+        return false;
+      }
+      std::optional<MeshAsset> mesh =
+          MeshProjectionService::mesh_asset_from_sdk_payload(
+              payload->mesh, authored.value());
+      if (!mesh.has_value() ||
+          !publish_projected_mesh(nullptr, object.object_id,
+                                  std::move(*mesh), !committed_publication,
+                                  std::nullopt, committed_publication)) {
+        return false;
+      }
     }
-    Result<PolygonDocument> document =
-        session_.preview_document_copy(summary.id);
-    return document.ok() &&
-           project_document(summary.object_id, document.value(), true);
+    return true;
   }
 
   void clear_preview_checkpoints() {
-    preview_base_snapshot_.reset();
-    workspace_update_base_snapshot_.reset();
-    preview_asset_checkpoint_.reset();
-    preview_scene_checkpoint_.reset();
+    mesh_preview_host_baseline_.reset();
+    structural_preview_host_state_.reset();
     preview_changed_ = false;
     curve_preview_external_changes_ = false;
     curve_preview_asset_id_ = kInvalidAssetId;
     curve_preview_sharing_proof_ = {};
-    workspace_preview_active_ = false;
-    workspace_preview_undo_mark_ = 0U;
-    workspace_preview_world_from_object_.clear();
-    workspace_transform_participants_.clear();
-    workspace_transform_commit_mutation_ = {};
-    workspace_transform_transient_active_ = false;
-    workspace_transform_snapshotless_ = false;
-    workspace_transform_preexisting_changed_ = false;
-    ++workspace_transform_preview_revision_;
+    transient_transform_payload_participants_.clear();
+    transient_transform_payload_active_ = false;
+    ++transient_transform_payload_revision_;
     active_preview_operation_id_.clear();
     active_preview_operation_.reset();
     active_preview_settings_.reset();
@@ -9148,36 +11629,25 @@ private:
   std::function<std::optional<QMat4>(int)>
       modeling_object_world_transform_resolver_;
   quader::modeling::ModelingSession session_;
-  std::map<int, ObjectId> object_ids_;
-  mutable std::unordered_map<std::uint64_t, int> native_object_ids_;
   int next_native_object_id_ = 1;
   int active_native_object_id_ = kInvalidModelingObjectId;
   ModelingSelectionMode selection_mode_ = ModelingSelectionMode::Object;
   std::uint64_t persistent_content_revision_ = 0;
   std::uint64_t mode_revision_ = 0;
-  std::optional<ModelingSdkProjectionSnapshot> preview_base_snapshot_;
-  std::optional<ModelingSdkProjectionSnapshot>
-      workspace_update_base_snapshot_;
-  std::optional<AssetRegistryProjectionCheckpoint> preview_asset_checkpoint_;
-  std::optional<SceneProjectionCheckpoint> preview_scene_checkpoint_;
+  std::optional<MeshPreviewHostBaseline> mesh_preview_host_baseline_;
+  std::optional<StructuralPreviewHostState> structural_preview_host_state_;
   std::uint64_t curve_preview_scene_revision_ = 0;
   std::uint64_t curve_preview_asset_revision_ = 0;
   bool curve_preview_external_changes_ = false;
   AssetId curve_preview_asset_id_ = kInvalidAssetId;
   CurvePreviewSharingProof curve_preview_sharing_proof_;
   bool preview_changed_ = false;
-  bool workspace_preview_active_ = false;
-  std::size_t workspace_preview_undo_mark_ = 0U;
-  std::map<int, QMat4> workspace_preview_world_from_object_;
-  std::vector<WorkspaceTransformParticipant>
-      workspace_transform_participants_;
-  DocumentMutationByObject workspace_transform_commit_mutation_;
-  bool workspace_transform_transient_active_ = false;
-  bool workspace_transform_snapshotless_ = false;
-  bool workspace_transform_preexisting_changed_ = false;
+  std::vector<TransientTransformParticipant>
+      transient_transform_payload_participants_;
+  bool transient_transform_payload_active_ = false;
   ModelingSdkTransformHistoryDelta committed_transform_history_delta_;
   std::optional<std::size_t> committed_transform_undo_mark_;
-  std::uint64_t workspace_transform_preview_revision_ = 0U;
+  std::uint64_t transient_transform_payload_revision_ = 0U;
   std::string active_preview_operation_id_;
   std::optional<quader_editor_core::EditorOperationId>
       active_preview_operation_;
@@ -9188,10 +11658,10 @@ private:
       selection_summary_cache_key_;
   mutable ModelingSelectionSummary selection_summary_cache_;
   mutable std::vector<EntityId> selected_component_entities_cache_;
-  mutable std::optional<NativeSelectionProjectionCacheKey>
-      native_selection_projection_cache_key_;
-  mutable std::optional<quader_editor_core::EditorSession>
-      native_selection_projection_cache_;
+  mutable std::optional<SelectionProjectionSnapshotCacheKey>
+      selection_projection_snapshot_cache_key_;
+  mutable std::optional<ModelingSelectionProjectionSnapshot>
+      selection_projection_snapshot_cache_;
   ModelingSdkProjectionFailurePoint failure_point_ =
       ModelingSdkProjectionFailurePoint::None;
   mutable ModelingSdkProjectionStats stats_;
@@ -9260,14 +11730,9 @@ ModelingSdkMirrorPreviewResult ModelingSdkProjectionAdapter::preview_mirror(
   return impl_->preview_mirror(modeling_object_ids, world_plane_points);
 }
 
-quader_editor_core::EditorSession
-ModelingSdkProjectionAdapter::native_selection_projection() const {
-  return impl_->native_selection_projection();
-}
-
-const quader_editor_core::EditorSession &
-ModelingSdkProjectionAdapter::native_selection_projection_view() const {
-  return impl_->native_selection_projection_view();
+const ModelingSelectionProjectionSnapshot &
+ModelingSdkProjectionAdapter::selection_projection_snapshot() const {
+  return impl_->selection_projection_snapshot();
 }
 
 std::optional<EntityId> ModelingSdkProjectionAdapter::pick_object_entity(
@@ -9434,6 +11899,11 @@ ModelingSdkProjectionAdapter::project_object_selection_from_scene(
   return impl_->set_object_selection(entities, active, false);
 }
 
+ModelingCommandResult
+ModelingSdkProjectionAdapter::clear_object_selection_preserving_mode() {
+  return impl_->set_object_selection({}, kInvalidEntityId, false, true);
+}
+
 ModelingCommandResult ModelingSdkProjectionAdapter::set_selection_mode(
     ModelingSelectionMode mode) {
   return impl_->set_selection_mode(mode);
@@ -9442,6 +11912,11 @@ ModelingCommandResult ModelingSdkProjectionAdapter::set_selection_mode(
 ModelingCommandResult ModelingSdkProjectionAdapter::set_component_selection(
     const ModelingComponentSelectionRequest &request) {
   return impl_->set_component_selection(request);
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::set_component_selections(
+    std::span<const ModelingComponentSelectionRequest> requests) {
+  return impl_->set_component_selections(requests);
 }
 
 ModelingCommandResult ModelingSdkProjectionAdapter::select_mesh_ngons(
@@ -9466,10 +11941,10 @@ ModelingCommandResult ModelingSdkProjectionAdapter::remove_objects(
   return impl_->remove_objects(modeling_object_ids);
 }
 
-ModelingSelectionSummary
-ModelingSdkProjectionAdapter::apply_native_selection_projection(
-    const quader_editor_core::EditorSession &projection) {
-  return impl_->apply_native_selection_projection(projection);
+ModelingCommandResult
+ModelingSdkProjectionAdapter::apply_selection_projection_checked(
+    const ModelingSelectionProjectionSnapshot &projection) {
+  return impl_->apply_selection_projection_checked(projection);
 }
 
 ModelingSelectionSummary ModelingSdkProjectionAdapter::pick_select(
@@ -9605,9 +12080,11 @@ ModelingCommandResult ModelingSdkProjectionAdapter::knife_stroke(
 
 ModelingCommandResult
 ModelingSdkProjectionAdapter::begin_translate_preview(
-    bool duplicate_selected, bool topology_stable_transform) {
+    bool duplicate_selected, bool topology_stable_transform,
+    std::span<const ModelingStructuralEntityClone> structural_duplicates) {
   return impl_->begin_translate_preview(duplicate_selected,
-                                        topology_stable_transform);
+                                        topology_stable_transform,
+                                        structural_duplicates);
 }
 
 ModelingCommandResult
@@ -9715,7 +12192,12 @@ EntityId ModelingSdkProjectionAdapter::active_selected_entity() const {
 }
 
 void ModelingSdkProjectionAdapter::add_selection_to_scene() {
-  impl_->add_selection_to_scene();
+  (void)impl_->add_selection_to_scene();
+}
+
+bool ModelingSdkProjectionAdapter::
+    acknowledge_active_preview_host_publication() {
+  return impl_->acknowledge_active_preview_host_publication();
 }
 
 std::uint64_t ModelingSdkProjectionAdapter::content_revision() const {
@@ -9747,9 +12229,21 @@ ModelingCommandResult ModelingSdkProjectionAdapter::restore_snapshot(
   return impl_->restore_snapshot(snapshot);
 }
 
+ModelingCommandResult
+ModelingSdkProjectionAdapter::restore_snapshot_preserving_scene_selection(
+    const ModelingSdkProjectionSnapshot &snapshot) {
+  return impl_->restore_snapshot_preserving_scene_selection(snapshot);
+}
+
 ModelingCommandResult ModelingSdkProjectionAdapter::restore_snapshot_exact(
     const ModelingSdkProjectionSnapshot &snapshot) {
   return impl_->restore_snapshot_exact(snapshot);
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::
+    restore_snapshot_exact_preserving_scene_selection(
+        const ModelingSdkProjectionSnapshot &snapshot) {
+  return impl_->restore_snapshot_exact_preserving_scene_selection(snapshot);
 }
 
 void ModelingSdkProjectionAdapter::set_failure_point_for_tests(

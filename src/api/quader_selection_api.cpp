@@ -10,12 +10,20 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_api_mutation_runner.hpp"
 #include "diagnostics/profile.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
+#include "editor/placement/scene_surface_query.hpp"
+#include "editor/selection/quader_selection_api_runtime_access.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/session/viewport_local_visibility_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
+#include "editor/viewport/viewport_scene_hit_policy.hpp"
+#include "editor/viewport/viewport_scene_projection.hpp"
 
 #include <memory>
+#include <optional>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -94,6 +102,43 @@ bool QuaderSelectionBoxBaseline::valid() const {
 QuaderSelectionApi::QuaderSelectionApi(QuaderApiSession session, QuaderApiMutationRunner& mutations)
     : session_(session)
     , mutations_(mutations) {}
+
+EditorSelectionService &
+QuaderSelectionApiRuntimeAccess::service(QuaderSelectionApi &api) {
+  return scene_session(api.session_).selection();
+}
+
+std::vector<ResolvedSelectionTarget> resolved_targets_from_hits(
+    std::span<const ViewportSceneHitCandidate> hits) {
+  std::vector<ResolvedSelectionTarget> targets;
+  targets.reserve(hits.size());
+  for (const ViewportSceneHitCandidate &hit : hits) {
+    if (std::optional<ResolvedSelectionTarget> target =
+            resolved_selection_target(hit)) {
+      targets.push_back(std::move(*target));
+    }
+  }
+  return targets;
+}
+
+QuaderApiVoidResult publish_resolved_selection_result(
+    QuaderApiMutationRunner &mutations, ModelingSelectionMode mode,
+    ModelingCommandResult command, std::string_view label) {
+  if (selection_mode_uses_scene_document(mode)) {
+    return mutations.run_document_result(
+        {.ok = command.ok,
+         .changed = command.changed,
+         .message = std::move(command.message)},
+        label);
+  }
+  return mutations.run_modeling_result(std::move(command), label);
+}
+
+const EditorSelectionService &
+QuaderSelectionApiRuntimeAccess::service(const QuaderSelectionApi &api) {
+  return QuaderApiSessionInternalAccess::read_scene_session(api.session_)
+      .selection();
+}
 
 QuaderApiVoidResult
 QuaderSelectionApi::select_objects(std::span<const EntityId> entities,
@@ -401,28 +446,70 @@ QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::pick_select(
         mutations_.stale_scene_reference_status("Selection baseline"));
   }
   SceneSession &session = scene_session(session_);
-  const bool document_selection_mode =
-      selection_mode_uses_scene_document(session.selection().mode());
-  const ModelingSelectionSummary before = session.selection().summary();
+  EditorSelectionService &selection = session.selection();
+  const ModelingSelectionMode mode = selection.mode();
   const ModelingPickSelectRequest modeling_request =
       to_modeling_pick_select_request(request);
-  const ModelingSelectionSummary picked =
-      baseline != nullptr && baseline->impl_ != nullptr
-          ? session.selection().pick_select(modeling_request,
-                                             baseline->impl_->baseline)
-          : session.selection().pick_select(modeling_request);
-  const ModelingSelectionSummary after = session.selection().summary();
-  const bool changed = before.content_revision != after.content_revision ||
-                       before.selection_revision != after.selection_revision;
-  QuaderApiVoidResult status =
-      document_selection_mode
-          ? mutations_.run_document_result(
-                DocumentCommandResult{.ok = true, .changed = changed},
-                "Pick Select")
-          : mutations_.run_modeling_result(
-                ModelingCommandResult{.ok = true, .changed = changed},
-                "Pick Select");
-  return selection_result_from_status(std::move(status), picked);
+  std::vector<ResolvedSelectionHit> modeling_hits;
+  if (const std::optional<ResolvedSelectionHit> hit =
+          selection.query_modeling_hit(modeling_request)) {
+    modeling_hits.push_back(*hit);
+  }
+  const bool scene_mode = selection_mode_uses_scene_document(mode);
+  const SceneSurfaceQuerySnapshot scene_surfaces =
+      session.scene_surface_query().snapshot();
+  SceneSurfaceQueryScratch surface_scratch;
+  const ViewportSceneRayHitQuery ordinary_query{
+      .ray = modeling_request.ray,
+      .scene_surfaces = &scene_surfaces,
+      .resolved_selection_hits = modeling_hits,
+      .include_mesh_surfaces = scene_mode,
+      .select_backfaces = modeling_request.select_backfaces,
+      .surface_scratch = &surface_scratch,
+  };
+  const std::optional<ViewportSceneHitCandidate> ordinary_hit =
+      resolve_viewport_scene_ray_hit(ordinary_query);
+  std::optional<ResolvedSelectionTarget> winner =
+      ordinary_hit.has_value() ? resolved_selection_target(*ordinary_hit)
+                               : std::nullopt;
+  ModelingPickSelectRequest apply_policy = modeling_request;
+  if (modeling_request.depth_cycle_requested(mode)) {
+    std::vector<ResolvedSelectionHit> depth_modeling_hits =
+        selection.query_modeling_depth_hits(modeling_request);
+    if (depth_modeling_hits.empty()) {
+      depth_modeling_hits = modeling_hits;
+    }
+    const std::vector<ViewportSceneHitCandidate> raw_depth_hits =
+        collect_viewport_scene_ray_hits({
+            .ray = modeling_request.ray,
+            .scene_surfaces = &scene_surfaces,
+            .resolved_selection_hits = depth_modeling_hits,
+            .include_mesh_surfaces = scene_mode,
+            .select_backfaces = modeling_request.select_backfaces,
+            .include_occluded = true,
+            .collect_all_mesh_surfaces = true,
+            .surface_scratch = &surface_scratch,
+        });
+    const std::vector<ViewportSceneHitCandidate> depth_hits =
+        resolve_viewport_scene_marquee_hits(raw_depth_hits);
+    const std::vector<ResolvedSelectionTarget> depth_targets =
+        resolved_targets_from_hits(depth_hits);
+    winner = selection.resolve_depth_arbitrated_target(
+        depth_targets, std::move(winner), modeling_request);
+    apply_policy.preserve_selection_on_miss = true;
+  }
+  ResolvedSelectionApplyResult applied = selection.apply_resolved_click({
+      .winner = std::move(winner),
+      .policy = apply_policy,
+      .baseline = baseline != nullptr && baseline->impl_ != nullptr
+                      ? std::optional<EditorSelectionBoxBaseline>(
+                            baseline->impl_->baseline)
+                      : std::nullopt,
+  });
+  QuaderApiVoidResult status = publish_resolved_selection_result(
+      mutations_, mode, std::move(applied.command), "Pick Select");
+  return selection_result_from_status(std::move(status),
+                                      std::move(applied.selection));
 }
 
 QuaderSelectionBoxBaseline
@@ -439,63 +526,76 @@ QuaderSelectionApi::capture_box_selection_baseline() const {
 
 QuaderApiResult<QuaderSelectionSummary>
 QuaderSelectionApi::box_select(const QuaderBoxSelectRequest &request) {
-  QDR_PROFILE_FUNCTION();
-  SceneSession &session = scene_session(session_);
-  const bool document_selection_mode =
-      selection_mode_uses_scene_document(session.selection().mode());
-  const ModelingSelectionSummary before = session.selection().summary();
-  const ModelingSelectionSummary selected = [&]() {
-    QDR_PROFILE_SCOPE("Box selection API route");
-    return session.selection().box_select(
-        to_modeling_box_select_request(request));
-  }();
-  const ModelingSelectionSummary after = session.selection().summary();
-  const bool changed = before.content_revision != after.content_revision ||
-                       before.selection_revision != after.selection_revision;
-  QuaderApiVoidResult status = [&]() {
-    QDR_PROFILE_SCOPE("Box selection API publish mutation");
-    return document_selection_mode
-               ? mutations_.run_document_result(
-                     DocumentCommandResult{.ok = true, .changed = changed},
-                     "Box Select")
-               : mutations_.run_modeling_result(
-                     ModelingCommandResult{.ok = true, .changed = changed},
-                     "Box Select");
-  }();
-  return selection_result_from_status(std::move(status), selected);
+  return box_select(request, nullptr);
 }
 
 QuaderApiResult<QuaderSelectionSummary>
 QuaderSelectionApi::box_select(const QuaderBoxSelectRequest &request,
                                const QuaderSelectionBoxBaseline &baseline) {
+  return box_select(request, &baseline);
+}
+
+QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::box_select(
+    const QuaderBoxSelectRequest &request,
+    const QuaderSelectionBoxBaseline *baseline) {
   QDR_PROFILE_FUNCTION();
+  if (baseline != nullptr && baseline->impl_ != nullptr &&
+      (!mutations_.belongs_to_active_scene(baseline->impl_->scene_session_id) ||
+       baseline->impl_->owner !=
+           QuaderApiSessionInternalAccess::active_scene_session(session_))) {
+    return quader_api_result_from_status<QuaderSelectionSummary>(
+        mutations_.stale_scene_reference_status("Selection baseline"));
+  }
   SceneSession &session = scene_session(session_);
-  const bool document_selection_mode =
-      selection_mode_uses_scene_document(session.selection().mode());
-  const ModelingSelectionSummary before = session.selection().summary();
-  const ModelingSelectionSummary selected = [&]() {
-    QDR_PROFILE_SCOPE("Box selection API baseline route");
-    return baseline.impl_ != nullptr
-               ? session.selection().box_select(
-                     to_modeling_box_select_request(request),
-                     baseline.impl_->baseline)
-               : session.selection().box_select(
-                     to_modeling_box_select_request(request));
-  }();
-  const ModelingSelectionSummary after = session.selection().summary();
-  const bool changed = before.content_revision != after.content_revision ||
-                       before.selection_revision != after.selection_revision;
-  QuaderApiVoidResult status = [&]() {
-    QDR_PROFILE_SCOPE("Box selection API publish mutation");
-    return document_selection_mode
-               ? mutations_.run_document_result(
-                     DocumentCommandResult{.ok = true, .changed = changed},
-                     "Box Select")
-               : mutations_.run_modeling_result(
-                     ModelingCommandResult{.ok = true, .changed = changed},
-                     "Box Select");
-  }();
-  return selection_result_from_status(std::move(status), selected);
+  EditorSelectionService &selection = session.selection();
+  const ModelingSelectionMode mode = selection.mode();
+  const ModelingBoxSelectRequest modeling_request =
+      to_modeling_box_select_request(request);
+  const EditorSelectionBoxBaseline effective_baseline =
+      baseline != nullptr && baseline->impl_ != nullptr
+          ? baseline->impl_->baseline
+          : selection.capture_box_selection_baseline();
+  const bool scene_mode = selection_mode_uses_scene_document(mode);
+  const std::vector<ResolvedSelectionHit> modeling_hits =
+      selection.query_modeling_marquee_hits(modeling_request);
+  const ViewportLocalVisibilitySnapshot local_visibility =
+      session.viewport_local_visibility().snapshot();
+  const std::vector<ViewportSceneBillboardPickCandidate> billboards =
+      scene_mode ? ViewportSceneProjection::point_light_pick_candidates(
+                       session.scene(), local_visibility)
+                 : std::vector<ViewportSceneBillboardPickCandidate>{};
+  const std::span<const ViewportSceneCurvePickCandidate> curves =
+      scene_mode
+          ? session.modeling().scene_curve_pick_candidates()
+          : std::span<const ViewportSceneCurvePickCandidate>{};
+  const SceneSurfaceQuerySnapshot scene_surfaces =
+      session.scene_surface_query().snapshot();
+  SceneSurfaceQueryScratch surface_scratch;
+  const std::vector<ViewportSceneHitCandidate> hits =
+      collect_viewport_scene_marquee_hits({
+          .camera = modeling_request.camera,
+          .start = modeling_request.start,
+          .end = modeling_request.end,
+          .rule = modeling_request.rule,
+          .billboards = billboards,
+          .curves = curves,
+          .scene_surfaces = &scene_surfaces,
+          .resolved_selection_hits = modeling_hits,
+          .include_occluded_resolved_modeling_hits =
+              modeling_request.select_backfaces,
+          .surface_scratch = &surface_scratch,
+      });
+  ResolvedSelectionApplyResult applied = selection.apply_resolved_marquee({
+      .targets = resolved_targets_from_hits(hits),
+      .edit = modeling_request.edit,
+      .mode = mode,
+      .rule = modeling_request.rule,
+      .baseline = effective_baseline,
+  });
+  QuaderApiVoidResult status = publish_resolved_selection_result(
+      mutations_, mode, std::move(applied.command), "Box Select");
+  return selection_result_from_status(std::move(status),
+                                      std::move(applied.selection));
 }
 
 QuaderApiResult<QuaderHoverSummary> QuaderSelectionApi::hover(const QuaderHoverRequest& request) {

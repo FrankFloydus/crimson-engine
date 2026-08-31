@@ -6,9 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/viewport/viewport_curve_picking.hpp"
 
+#include "editor/viewport/viewport_surface_occlusion_policy.hpp"
+
 #include "assets/curve_asset_payload.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/interactions/selection_box.hpp"
+#include "editor/placement/scene_surface_query.hpp"
 #include "math/glm_bridge.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 
@@ -65,7 +68,6 @@ constexpr double kCurveDepthEpsilon = 1.0e-5;
 constexpr double kCurvePixelDistanceEpsilon = 1.0e-5;
 constexpr double kCurveAnchorLocalPickEpsilon = 1.0e-6;
 constexpr double kCurveAnchorGlobalPickEpsilon = 1.0e-8;
-constexpr double kMeshComponentSurfaceOcclusionTolerance = 0.001;
 
 bool finite_world_point(QVec3 point) {
   return std::isfinite(point.x) && std::isfinite(point.y) &&
@@ -172,6 +174,23 @@ void append_curve_anchor_snap_point(
 
 } // namespace
 
+std::optional<CurveControlTarget> ViewportCurveControlPickingAdapter::pick(
+    const CurveToolPreviewState &preview, QVec2 mouse_local,
+    bool anchors_only) const {
+  if (camera_ == nullptr) {
+    return std::nullopt;
+  }
+  const std::optional<ViewportCurveControlPickHit> hit =
+      scene_surfaces_ != nullptr
+          ? pick_unoccluded_viewport_curve_control(
+                *camera_, preview, mouse_local, *scene_surfaces_, anchors_only)
+          : pick_viewport_curve_control(*camera_, preview, mouse_local,
+                                        anchors_only);
+  return hit.has_value()
+             ? std::optional<CurveControlTarget>{hit->target}
+             : std::nullopt;
+}
+
 std::optional<ViewportCurveControlPickHit> pick_viewport_curve_control(
     const ViewportCameraController &camera,
     const CurveToolPreviewState &preview, QVec2 local_mouse,
@@ -213,7 +232,7 @@ std::optional<ViewportCurveControlPickHit> pick_viewport_curve_control(
         if (!std::isfinite(ray_distance) || ray_distance < 0.0 ||
             (maximum_ray_distance.has_value() &&
              ray_distance > *maximum_ray_distance +
-                                kMeshComponentSurfaceOcclusionTolerance)) {
+                                kViewportSurfaceOcclusionTolerance)) {
           return;
         }
         ViewportCurveControlPickHit hit{
@@ -234,25 +253,28 @@ std::optional<ViewportCurveControlPickHit>
 pick_unoccluded_viewport_curve_control(
     const ViewportCameraController &camera,
     const CurveToolPreviewState &preview, QVec2 local_mouse,
-    const std::function<std::optional<double>(const ViewportRay &)>
-        &mesh_surface_distance,
-    bool anchors_only, double radius_pixels) {
+    const SceneSurfaceQuerySnapshot &scene_surfaces, bool anchors_only,
+    double radius_pixels) {
   auto hit = pick_viewport_curve_control(camera, preview, local_mouse,
                                          anchors_only, radius_pixels);
-  if (!hit.has_value() || !mesh_surface_distance) {
-    return hit;
+  if (!hit.has_value()) {
+    return std::nullopt;
   }
   const ViewportRay ray = camera.ray_from_viewport_point(local_mouse);
-  const std::optional<double> mesh_distance = mesh_surface_distance(ray);
-  if (!mesh_distance.has_value() || !std::isfinite(*mesh_distance) ||
-      *mesh_distance < 0.0 ||
+  const std::optional<SceneSurfaceHit> surface = scene_surfaces.nearest_hit({
+      .world_origin = ray.origin,
+      .world_direction = ray.direction,
+      .eligibility = SceneSurfaceEligibility::RenderVisible,
+  });
+  if (!surface.has_value() ||
       hit->ray_distance <=
-          *mesh_distance + kMeshComponentSurfaceOcclusionTolerance) {
+          surface->distance + kViewportSurfaceOcclusionTolerance) {
     return hit;
   }
-  return pick_viewport_curve_control(camera, preview, local_mouse,
-                                     anchors_only, radius_pixels,
-                                     mesh_distance);
+  return pick_viewport_curve_control(
+      camera, preview, local_mouse, anchors_only, radius_pixels,
+      surface.has_value() ? std::optional<double>{surface->distance}
+                          : std::nullopt);
 }
 
 std::vector<CurveControlTarget> box_pick_viewport_curve_controls(
@@ -397,7 +419,7 @@ resolve_viewport_curve_anchor_snap_target(
       if (!std::isfinite(ray_distance) || ray_distance < 0.0 ||
           (maximum_ray_distance.has_value() &&
            ray_distance > *maximum_ray_distance +
-                              kMeshComponentSurfaceOcclusionTolerance)) {
+                              kViewportSurfaceOcclusionTolerance)) {
         continue;
       }
       const QVec3 closest =
@@ -515,6 +537,32 @@ std::optional<ViewportCurvePickHit> pick_viewport_curve(
     }
   }
   return best;
+}
+
+std::optional<ViewportCurvePickHit> pick_unoccluded_viewport_curve(
+    const ViewportCameraController &camera, QVec2 local_mouse,
+    std::span<const ViewportSceneCurvePickCandidate> candidates,
+    const SceneSurfaceQuerySnapshot &scene_surfaces,
+    double radius_pixels) {
+  auto hit = pick_viewport_curve(camera, local_mouse, candidates,
+                                 radius_pixels);
+  if (!hit.has_value()) {
+    return std::nullopt;
+  }
+  const ViewportRay ray = camera.ray_from_viewport_point(local_mouse);
+  const std::optional<SceneSurfaceHit> surface = scene_surfaces.nearest_hit({
+      .world_origin = ray.origin,
+      .world_direction = ray.direction,
+      .eligibility = SceneSurfaceEligibility::RenderVisible,
+  });
+  if (!surface.has_value() ||
+      hit->ray_distance <= surface->distance + kCurveDepthEpsilon) {
+    return hit;
+  }
+  return pick_viewport_curve(
+      camera, local_mouse, candidates, radius_pixels,
+      surface.has_value() ? std::optional<double>{surface->distance}
+                          : std::nullopt);
 }
 
 } // namespace quader

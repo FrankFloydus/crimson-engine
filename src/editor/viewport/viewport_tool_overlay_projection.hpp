@@ -7,10 +7,15 @@
 #pragma once
 
 #include "editor/modeling/modeling_types.hpp"
+#include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "render/viewport_overlay_frame.hpp"
 
+#include <cstdint>
+#include <vector>
+
 namespace quader_editor_core {
+struct SelectionOverlayPoint;
 struct TransformGizmoFrame;
 }
 
@@ -21,6 +26,66 @@ struct PivotHandleState;
 struct RadialArrayCenterState;
 class ViewportCameraController;
 struct ViewportSelectionMarquee;
+
+/** Fixed owner revisions used to invalidate pane-local tool presentation. */
+struct ViewportToolOverlaySourceRevisions final {
+  std::uint64_t active_tool = 0u;
+  std::uint64_t modeling_content = 0u;
+  std::uint64_t modeling_selection = 0u;
+  std::uint64_t modeling_transform_preview = 0u;
+  std::uint64_t scene_transform = 0u;
+  std::uint64_t scene_selection = 0u;
+  std::uint64_t transform_space = 0u;
+  std::uint64_t selection_pivot = 0u;
+  std::uint64_t curve_preview = 0u;
+};
+
+/**
+ * Borrows one synchronous pane presentation without constructing overlay
+ * vectors. The render coordinator invokes the provider only after stamp
+ * invalidation; every pointer must remain valid through submit().
+ */
+struct ViewportToolOverlaySourceInputs final {
+  std::uintptr_t source_identity = 0u;
+  const ViewportOverlayCamera *overlay_camera = nullptr;
+  const ViewportCameraController *viewport_camera = nullptr;
+  const ModelingBoxPreview *box_preview = nullptr;
+  const quader_editor_core::TransformGizmoFrame *transform_gizmo = nullptr;
+  const std::vector<quader_editor_core::SelectionOverlayPoint> *
+      transform_snap_points = nullptr;
+  const ViewportSelectionMarquee *selection_marquee = nullptr;
+  const PivotHandleState *pivot_handle = nullptr;
+  const LinearArrayHandleState *linear_array_handle = nullptr;
+  const RadialArrayCenterState *radial_array_center = nullptr;
+  ViewportToolOverlaySourceRevisions revisions;
+  bool interaction_pane = false;
+  bool tool_overlay_visible = false;
+  bool gizmos_visible = false;
+  bool pivot_handle_editing = false;
+  bool overlays_visible = false;
+  bool radial_array_center_visible = false;
+};
+
+/**
+ * Lazily compiles editor-owned semantic tool state for one viewport pane.
+ * TransformGizmoInteraction remains the upstream semantic-frame owner; this
+ * source gates pane projection and ViewportOverlayFrame construction.
+ */
+class ViewportToolOverlaySource final
+    : public ViewportOverlayDynamicToolFrameProvider {
+public:
+  explicit ViewportToolOverlaySource(ViewportToolOverlaySourceInputs inputs);
+
+  [[nodiscard]] ViewportOverlayDynamicToolSourceStamp source_stamp() const {
+    return source_stamp_;
+  }
+  [[nodiscard]] ViewportOverlayFrame
+  build_dynamic_tool_overlay_frame() const override;
+
+private:
+  ViewportToolOverlaySourceInputs inputs_;
+  ViewportOverlayDynamicToolSourceStamp source_stamp_;
+};
 
 /**
  * Adapts editor tool state into renderer-neutral semantic overlay records.

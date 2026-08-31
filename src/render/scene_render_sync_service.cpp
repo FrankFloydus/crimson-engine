@@ -67,12 +67,7 @@ void SceneRenderSyncService::shutdown() {
     }
 
     light_cache_.shutdown();
-    synced_revision_ = 0;
-    synced_local_visibility_revision_ = 0;
-    synced_asset_revision_ = 0;
-    synced_project_material_revision_ = 0;
-    synced_instance_edit_scope_ = {};
-    synced_scene_binding_ = {};
+    synced_source_stamp_ = {};
     has_scene_binding_ = false;
     has_synced_ = false;
     engine_ = nullptr;
@@ -85,7 +80,8 @@ void SceneRenderSyncService::shutdown() {
 void SceneRenderSyncService::bind_scene(
     RenderSceneBindingKey scene_binding) {
   if (!initialized() ||
-      (has_scene_binding_ && synced_scene_binding_ == scene_binding)) {
+      (has_scene_binding_ &&
+       synced_source_stamp_.scene_binding == scene_binding)) {
     return;
   }
 
@@ -102,12 +98,7 @@ void SceneRenderSyncService::bind_scene(
   mesh_cache_->drain_retired_destroy_queue(
       mesh_cache_->retired_proxy_count());
   material_binding_->bind_scene(scene_binding);
-  synced_scene_binding_ = scene_binding;
-  synced_revision_ = 0;
-  synced_local_visibility_revision_ = 0;
-  synced_asset_revision_ = 0;
-  synced_project_material_revision_ = 0;
-  synced_instance_edit_scope_ = {};
+  synced_source_stamp_ = {.scene_binding = scene_binding};
   has_scene_binding_ = true;
   has_synced_ = false;
 }
@@ -126,29 +117,25 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
     bind_scene(snapshot.scene_binding);
 
     const bool document_unchanged =
-        has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
-        synced_revision_ == snapshot.scene_revision &&
-        synced_local_visibility_revision_ ==
-            snapshot.local_visibility_revision &&
-        synced_instance_edit_scope_ == snapshot.instance_edit_scope;
+        has_synced_ && render_source_dependencies_match(
+                           synced_source_stamp_, snapshot,
+                           kRenderSceneSyncDocumentDependencies);
     const bool assets_unchanged =
-        has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
-        synced_asset_revision_ == snapshot.asset_revision &&
-        synced_project_material_revision_ ==
-            snapshot.project_material_revision;
+        has_synced_ && render_source_dependencies_match(
+                           synced_source_stamp_, snapshot,
+                           kRenderSceneSyncAssetDependencies);
     if (document_unchanged && assets_unchanged &&
         instance_cache_->last_sync_succeeded()) {
       return false;
     }
     if (document_unchanged && !render_asset_revisions_changed(snapshot)) {
-      synced_asset_revision_ = snapshot.asset_revision;
-      synced_project_material_revision_ =
-          snapshot.project_material_revision;
+      synced_source_stamp_ = snapshot;
       return false;
     }
     if (has_synced_ &&
-        synced_scene_binding_ == snapshot.scene_binding &&
-        synced_instance_edit_scope_ == snapshot.instance_edit_scope &&
+        render_source_dependencies_match(
+            synced_source_stamp_, snapshot,
+            kRenderSceneSyncContextDependencies) &&
         snapshot.reused_previous_records &&
         !snapshot.dirty.selection_changed &&
         !snapshot.dirty.visibility_changed &&
@@ -163,12 +150,7 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
       // Extraction proved that only non-main-scene owner stamps advanced.
       // A curve-only publication reaches its independent overlay cache, while
       // the exact retained mesh/light records require no Filament work.
-      synced_revision_ = snapshot.scene_revision;
-      synced_local_visibility_revision_ =
-          snapshot.local_visibility_revision;
-      synced_asset_revision_ = snapshot.asset_revision;
-      synced_project_material_revision_ =
-          snapshot.project_material_revision;
+      synced_source_stamp_ = snapshot;
       return false;
     }
 
@@ -179,12 +161,7 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
     if (!instance_cache_->last_sync_succeeded()) {
       return false;
     }
-    synced_revision_ = snapshot.scene_revision;
-    synced_local_visibility_revision_ = snapshot.local_visibility_revision;
-    synced_asset_revision_ = snapshot.asset_revision;
-    synced_project_material_revision_ = snapshot.project_material_revision;
-    synced_instance_edit_scope_ = snapshot.instance_edit_scope;
-    synced_scene_binding_ = snapshot.scene_binding;
+    synced_source_stamp_ = snapshot;
     has_synced_ = true;
     return true;
 }
@@ -215,8 +192,10 @@ bool SceneRenderSyncService::render_asset_revisions_changed(
 
 bool SceneRenderSyncService::can_sync_transforms_only(
     const RenderSceneSnapshot &snapshot) const {
-  if (!has_synced_ || synced_scene_binding_ != snapshot.scene_binding ||
-      synced_instance_edit_scope_ != snapshot.instance_edit_scope ||
+  if (!has_synced_ ||
+      !render_source_dependencies_match(
+          synced_source_stamp_, snapshot,
+          kRenderSceneSyncContextDependencies) ||
       (!snapshot.dirty.transforms_changed && !snapshot.dirty.texture_mappings_changed) ||
       snapshot.dirty.visibility_changed ||
       snapshot.dirty.local_visibility_changed ||

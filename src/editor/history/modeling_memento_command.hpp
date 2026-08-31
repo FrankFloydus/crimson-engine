@@ -475,6 +475,7 @@ private:
 class ApplyActiveMaterialToTargetHistoryCommand final
     : public ModelingMementoCommand {
 public:
+  /** Selects whether targeted material application affects one face or its whole mesh. */
   enum class Scope {
     Mesh,
     Face,

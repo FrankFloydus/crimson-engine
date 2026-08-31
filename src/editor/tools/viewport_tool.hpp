@@ -13,11 +13,13 @@
 #include "scene/scene_document.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_input_types.hpp"
+#include "viewport/viewport_pointer_gesture.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <array>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -49,10 +51,17 @@ struct ViewportPointerToolEvent {
     bool gizmo_consumed = false;
     bool navigation_active = false;
     bool text_input_active = false;
+    bool viewport_focused = true;
+    bool pointer_interaction_canceled = false;
     QVec2 mouse_local = {};
+    QVec2 mouse_screen = {};
     QVec2 left_click_local = {};
     QVec2 viewport_size = {};
     ViewportModifiers modifiers = {};
+    std::span<const ViewportPointerButtonEdge> pointer_pressed_edges;
+    std::span<const ViewportPointerButtonEdge> pointer_released_edges;
+    float pointer_drag_threshold_pixels = 4.0f;
+    double monotonic_time_seconds = 0.0;
 };
 
 /**
@@ -74,6 +83,8 @@ struct ViewportModalToolState {
   bool insert_edge_loop_drag_active = false;
   bool cut_drag_active = false;
   bool mirror_drag_active = false;
+  std::optional<ViewportPointerGesture> primary_pointer_gesture;
+  ViewportPointerReleaseSuppression primary_release_suppression;
 };
 
 /**
@@ -93,7 +104,7 @@ struct ViewportToolResult {
  */
 struct ViewportBoxToolContext {
   AssetId default_material = kInvalidAssetId;
-  std::function<ModelingBoxToolEvent()> make_event;
+  std::function<ModelingBoxToolEvent(QVec2)> make_event_at;
   std::function<ModelingCommandResult(std::string, AssetId, bool)>
       accept_preview;
   std::function<ModelingCommandResult()> apply_session;

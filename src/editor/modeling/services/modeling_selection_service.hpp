@@ -9,6 +9,7 @@
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/modeling/picking/modeling_picking_cache.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/selection/modeling_selection_projection_snapshot.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -39,6 +40,19 @@ struct ModelingSelectionApplyResult {
   bool changed = false;
 };
 
+/** Reports whether a projected selection edit applied and the resulting snapshot. */
+struct ModelingSelectionProjectionApplyResult final {
+  bool applied = false;
+  bool changed = false;
+  ModelingSelectionProjectionSnapshot projection;
+};
+
+/** Pairs a modeling command outcome with its authoritative selection projection. */
+struct ModelingSelectionProjectionCommandResult final {
+  ModelingCommandResult command;
+  ModelingSelectionProjectionSnapshot projection;
+};
+
 /**
  * Coordinates Modeling Selection Service responsibilities for the modeling application service layer.
  */
@@ -47,10 +61,10 @@ public:
   [[nodiscard]] static bool
   has_component_selection(const ModelingSelectionSummary &summary);
   [[nodiscard]] ModelingSelectionMode
-  selection_mode(const quader_editor_core::EditorSession &session,
+  selection_mode(const ModelingSelectionProjectionSnapshot &session,
                  ModelingSelectionMode app_selection_mode) const;
   [[nodiscard]] ModelingSelectionSummary
-  selection_summary(const quader_editor_core::EditorSession &session,
+  selection_summary(const ModelingSelectionProjectionSnapshot &session,
                     const SceneDocument &scene,
                     ModelingSelectionMode app_selection_mode) const;
 
@@ -67,14 +81,16 @@ public:
   [[nodiscard]] bool viewport_visibility_active() const;
   [[nodiscard]] std::optional<EntityId>
   scene_target_for_picking_participant(int participant_id) const;
-  [[nodiscard]] std::optional<ModelingCommandResult>
+  [[nodiscard]] std::optional<ModelingSelectionProjectionCommandResult>
   select_all_in_constrained_component_scope(
-      quader_editor_core::EditorSession &session, const SceneDocument &scene,
+      const ModelingSelectionProjectionSnapshot &session,
+      const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map, bool invert,
       int sticky_component_object_id) const;
-  [[nodiscard]] ModelingSelectionApplyResult
+  [[nodiscard]] ModelingSelectionProjectionApplyResult
   apply_component_selection_command(
-      quader_editor_core::EditorSession &session, const SceneDocument &scene,
+      const ModelingSelectionProjectionSnapshot &session,
+      const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map,
       ModelingComponentSelectionCommand command) const;
 
@@ -84,8 +100,6 @@ public:
   }
 
   void invalidate_picking_cache() const;
-  /// Clears only transient depth-click continuity, retaining pick geometry.
-  void reset_depth_pick_cycle() const;
   [[nodiscard]] std::uint64_t
   transformed_picking_projection_build_count() const;
   [[nodiscard]] std::uint64_t
@@ -98,70 +112,84 @@ public:
   [[nodiscard]] std::uint64_t world_pick_bounds_build_count() const;
   [[nodiscard]] const std::vector<quader_editor_core::PolygonObject> &
   cached_scene_transformed_objects_for_picking(
-      const quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map) const;
   [[nodiscard]] std::vector<quader_editor_core::PolygonObject>
   scene_transformed_objects_for_picking(
-      const quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map) const;
   [[nodiscard]] const std::vector<quader_editor_core::PickObjectBounds> &
-  cached_pick_object_bounds(const quader_editor_core::EditorSession &session,
+  cached_pick_object_bounds(
+                            const ModelingSelectionProjectionSnapshot &session,
                             const SceneDocument &scene,
                             const ModelingObjectRuntimeMap &object_map) const;
   [[nodiscard]] const std::vector<quader_editor_core::PickObjectFaceGeometry> &
-  cached_pick_face_geometry(const quader_editor_core::EditorSession &session,
+  cached_pick_face_geometry(
+                            const ModelingSelectionProjectionSnapshot &session,
                             const SceneDocument &scene,
                             const ModelingObjectRuntimeMap &object_map,
                             quader_poly::PickOptions pick_options = {}) const;
   [[nodiscard]] const std::vector<quader_editor_core::PolygonObject> &
   cached_local_picking_objects(
-      const quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map) const;
   [[nodiscard]] std::span<const quader_editor_core::PickObjectTransform>
   cached_local_picking_transforms(
-      const quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map) const;
   [[nodiscard]] const std::vector<quader_editor_core::PickObjectFaceGeometry> &
   cached_local_pick_face_geometry(
-      const quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map,
       quader_poly::PickOptions pick_options = {}) const;
-  [[nodiscard]] ModelingSelectionApplyResult
-  apply_pick_selection(quader_editor_core::EditorSession &session,
+  [[nodiscard]] ModelingSelectionProjectionApplyResult
+  apply_pick_selection(const ModelingSelectionProjectionSnapshot &session,
                        const SceneDocument &scene,
                        const ModelingObjectRuntimeMap &object_map,
                        const ModelingPickSelectRequest &request) const;
   [[nodiscard]] std::optional<int>
-  pick_object_id(const quader_editor_core::EditorSession &session,
+  pick_object_id(const ModelingSelectionProjectionSnapshot &session,
                  const SceneDocument &scene,
                  const ModelingObjectRuntimeMap &object_map,
                  const ModelingPickSelectRequest &request) const;
+  [[nodiscard]] std::optional<quader_editor_core::PickHitRecord>
+  pick_selection_hit(const ModelingSelectionProjectionSnapshot &session,
+                     const SceneDocument &scene,
+                     const ModelingObjectRuntimeMap &object_map,
+                     const ModelingPickSelectRequest &request) const;
+  /** Returns one deterministic face-or-boundary depth candidate per mesh. */
+  [[nodiscard]] std::vector<quader_editor_core::PickHitRecord>
+  pick_selection_depth_hits(
+      const ModelingSelectionProjectionSnapshot &session,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_map,
+      const ModelingPickSelectRequest &request) const;
   /// Resolves and deduplicates instance targets before Object-mode depth cycling.
   [[nodiscard]] std::optional<EntityId> pick_object_entity(
-      const quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map,
       const ModelingPickSelectRequest &request) const;
   [[nodiscard]] std::optional<quader_editor_core::PickHitRecord>
-  pick_surface_hit(const quader_editor_core::EditorSession &session,
+  pick_surface_hit(const ModelingSelectionProjectionSnapshot &session,
                    const SceneDocument &scene,
                    const ModelingObjectRuntimeMap &object_map,
                    const ModelingRay &ray) const;
   [[nodiscard]] quader_editor_core::SelectionHoverUpdateResult
   selection_hover(
-      const quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map,
       const quader_editor_core::SelectionHoverState &current_hover,
       const ModelingHoverRequest &request) const;
   [[nodiscard]] quader_editor_core::RectangleSelectionState
   rectangle_selection_state(
-      const quader_editor_core::EditorSession &session) const;
+      const ModelingSelectionProjectionSnapshot &session) const;
   [[nodiscard]] quader_editor_core::RectangleProjectedHitsRequest
   rectangle_projected_hits_request(
       const std::vector<quader_editor_core::PolygonObject> &picking_objects,
@@ -170,35 +198,43 @@ public:
       quader_editor_core::SelectionMode selection_mode,
       const ModelingBoxSelectRequest &request) const;
   [[nodiscard]] std::vector<int>
-  box_pick_object_ids(const quader_editor_core::EditorSession &session,
+  box_pick_object_ids(const ModelingSelectionProjectionSnapshot &session,
                       const SceneDocument &scene,
                       const ModelingObjectRuntimeMap &object_map,
                       const ModelingBoxSelectRequest &request) const;
-  [[nodiscard]] bool apply_rectangle_selection(
-      quader_editor_core::EditorSession &session,
+  [[nodiscard]] quader_editor_core::RectangleSelectionHits
+  rectangle_selection_hits(
+      const ModelingSelectionProjectionSnapshot &session,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_map,
+      const ModelingBoxSelectRequest &request) const;
+  [[nodiscard]] ModelingSelectionProjectionApplyResult
+  apply_rectangle_selection(const ModelingSelectionProjectionSnapshot &session,
       const quader_editor_core::RectangleSelectionState &selection) const;
-  [[nodiscard]] ModelingSelectionApplyResult apply_rectangle_selection(
-      quader_editor_core::EditorSession &session, const SceneDocument &scene,
+  [[nodiscard]] ModelingSelectionProjectionApplyResult
+  apply_resolved_rectangle_selection(
+      const ModelingSelectionProjectionSnapshot &session,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_map, ModelingSelectionEdit edit,
+      const quader_editor_core::RectangleSelectionState &baseline,
+      const quader_editor_core::RectangleSelectionHits &hits) const;
+  [[nodiscard]] ModelingSelectionProjectionApplyResult apply_rectangle_selection(
+      const ModelingSelectionProjectionSnapshot &session,
+      const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map,
       const ModelingBoxSelectRequest &request,
       const quader_editor_core::RectangleSelectionState &baseline) const;
-  ModelingCommandResult
-  set_group_selection_mode(quader_editor_core::EditorSession &session,
-                           ModelingSelectionMode &app_selection_mode) const;
-  ModelingCommandResult set_component_selection(
-      quader_editor_core::EditorSession &session,
+  ModelingSelectionProjectionCommandResult set_group_selection_mode(
+      const ModelingSelectionProjectionSnapshot &session,
+      ModelingSelectionMode app_selection_mode) const;
+  ModelingSelectionProjectionCommandResult set_component_selection(
+      const ModelingSelectionProjectionSnapshot &session,
       const ModelingComponentSelectionRequest &request) const;
   [[nodiscard]] static bool
   selection_matches(const quader_poly::Selection &left,
                     const quader_poly::Selection &right);
 
 private:
-  void synchronize_depth_pick_cycle(
-      const quader_editor_core::EditorSession &session,
-      const SceneDocument &scene,
-      const ModelingObjectRuntimeMap &object_map,
-      const ModelingPickSelectRequest &request) const;
-
   /**
    * Caches screen-space rectangle candidates for one geometry/camera key.
    */
@@ -253,7 +289,7 @@ private:
 
   [[nodiscard]] const quader_editor_core::RectangleProjectedHitsRequest &
   cached_rectangle_projected_hits_request(
-      const quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map,
       quader_editor_core::SelectionMode selection_mode,
@@ -263,20 +299,17 @@ private:
   [[nodiscard]] ModelingSelectionMode app_selection_mode() const;
   [[nodiscard]] int instance_participant_id(
       EntityId occurrence,
-      const quader_editor_core::EditorSession &session) const;
+      const ModelingSelectionProjectionSnapshot &session) const;
   [[nodiscard]] const std::vector<quader_poly::Edge> &cached_document_edges(
       const quader_editor_core::PolygonObject &object) const;
   [[nodiscard]] const quader_editor_core::RectangleSelectionUniverse &
   rectangle_selection_universe(
-      const quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map,
       quader_editor_core::SelectionMode selection_mode) const;
 
   mutable ModelingPickingCache picking_cache_;
-  mutable quader_editor_core::PickCycleState depth_pick_cycle_;
-  mutable std::string depth_pick_context_signature_;
-  mutable QVec3 depth_pick_origin_;
   mutable RectangleProjectionCache rectangle_projection_cache_;
   mutable RectangleUniverseCache rectangle_universe_cache_;
   mutable RectangleResolutionCache rectangle_resolution_cache_;

@@ -316,7 +316,7 @@ TEST_F(CurveModelingBehaviorTests,
 }
 
 TEST_F(CurveModelingBehaviorTests,
-       NestedGroupDuplicateKeepsEditableCurveAndMeshBindingsThroughHistory) {
+       ModelingDuplicateMeshesKeepsNestedCurveAndMeshBindingsThroughHistory) {
   const auto mesh = create_box(editor_);
   const auto inner_curve = create_curve(editor_);
   const auto outer_curve = create_curve(editor_);
@@ -332,8 +332,7 @@ TEST_F(CurveModelingBehaviorTests,
   ASSERT_TRUE(outer_group.ok()) << outer_group.error_message();
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Group).ok());
   ASSERT_TRUE(editor_.scene().select(outer_group.value().id).ok());
-  const auto duplicated =
-      editor_.commands().execute(quader_command::kDuplicateSelection);
+  const auto duplicated = editor_.modeling().duplicate_meshes();
   ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
   const EntityId copy_root = active_entity(editor_);
   ASSERT_NE(copy_root, outer_group.value().id);
@@ -406,18 +405,419 @@ TEST_F(CurveModelingBehaviorTests,
 }
 
 TEST_F(CurveModelingBehaviorTests,
+       DirectMixedHierarchyLifecyclePreservesBindingsAndUnrelatedSelection) {
+  const auto mesh = create_box(editor_);
+  const auto curve = create_curve(editor_);
+  const auto curve_document = read_curve(editor_, curve);
+  ASSERT_TRUE(editor_.selection().select_objects({mesh, curve}).ok());
+  const auto group = editor_.scene().group_selection("Direct Mixed Kit");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+
+  const auto unrelated = create_curve(editor_);
+  ASSERT_EQ(selected_entities(editor_),
+            std::vector<EntityId>{unrelated.entity});
+  const auto duplicated = editor_.scene().duplicate(group.value().id);
+  ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
+  ASSERT_TRUE(duplicated.changed());
+  const EntityId copy_root = duplicated.value().id;
+  ASSERT_NE(copy_root, group.value().id);
+  EXPECT_EQ(editor_.query().history().undo_label, "Duplicate Entity");
+
+  std::optional<QuaderModelingObjectRef> copy_curve;
+  std::optional<QuaderModelingObjectRef> copy_mesh;
+  for (const auto &entity : editor_.query().entities()) {
+    if (entity.parent != copy_root) {
+      continue;
+    }
+    if (entity.has_curve) {
+      copy_curve = editor_.query().modeling_object_for_entity(entity.id);
+    } else if (entity.has_mesh) {
+      copy_mesh = editor_.query().modeling_object_for_entity(entity.id);
+    }
+  }
+  ASSERT_TRUE(copy_curve.has_value());
+  ASSERT_TRUE(copy_mesh.has_value());
+  EXPECT_NE(copy_curve->modeling_object_id, curve.modeling_object_id);
+  EXPECT_NE(copy_mesh->modeling_object_id, mesh.modeling_object_id);
+  expect_curve(editor_, *copy_curve, curve_document);
+  ASSERT_TRUE(editor_.query().compiled_object_mesh(*copy_mesh).has_value());
+
+  ASSERT_TRUE(editor_.history().undo().ok());
+  EXPECT_FALSE(editor_.query().entity(copy_root).has_value());
+  EXPECT_EQ(selected_entities(editor_),
+            std::vector<EntityId>{unrelated.entity});
+  expect_curve(editor_, curve, curve_document);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  EXPECT_TRUE(editor_.query().entity(copy_root).has_value());
+  expect_curve(editor_, *copy_curve, curve_document);
+
+  ASSERT_TRUE(editor_.selection().select_object(unrelated).ok());
+  const auto destroyed = editor_.scene().destroy(group.value().id);
+  ASSERT_TRUE(destroyed.ok()) << destroyed.error_message();
+  ASSERT_TRUE(destroyed.changed());
+  EXPECT_EQ(editor_.query().history().undo_label, "Destroy Entity");
+  EXPECT_FALSE(editor_.query().entity(group.value().id).has_value());
+  EXPECT_FALSE(editor_.query().entity(mesh.entity).has_value());
+  EXPECT_FALSE(editor_.query().entity(curve.entity).has_value());
+  EXPECT_TRUE(editor_.query().entity(copy_root).has_value());
+  expect_curve(editor_, *copy_curve, curve_document);
+  EXPECT_EQ(selected_entities(editor_),
+            std::vector<EntityId>{unrelated.entity});
+
+  ASSERT_TRUE(editor_.history().undo().ok());
+  EXPECT_TRUE(editor_.query().entity(group.value().id).has_value());
+  EXPECT_TRUE(editor_.query().entity(mesh.entity).has_value());
+  expect_curve(editor_, curve, curve_document);
+  EXPECT_EQ(selected_entities(editor_),
+            std::vector<EntityId>{unrelated.entity});
+  ASSERT_TRUE(editor_.history().redo().ok());
+  EXPECT_FALSE(editor_.query().entity(group.value().id).has_value());
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_curve(editor_, curve, curve_document);
+}
+
+TEST_F(CurveModelingBehaviorTests,
+       DirectStructuralPreviewMovesMixedHierarchyAndReplaysExactIdentity) {
+  const auto mesh = create_box(editor_);
+  const auto curve = create_curve(editor_);
+  const auto source_curve = read_curve(editor_, curve);
+  const auto source_mesh = editor_.query().compiled_object_mesh(mesh);
+  ASSERT_TRUE(source_mesh.has_value());
+  ASSERT_TRUE(editor_.selection().select_objects({mesh, curve}).ok());
+  const auto group = editor_.scene().group_selection("Preview Mixed Kit");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+  const auto generic = editor_.scene().create_entity({
+      .name = "Generic Marker",
+      .kind = QuaderEntityKind::Generic,
+      .parent = group.value().id,
+      .transform = {.position = {0.0F, 4.0F, 0.0F}},
+  });
+  ASSERT_TRUE(generic.ok()) << generic.error_message();
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Group).ok());
+  ASSERT_TRUE(editor_.scene().select(group.value().id).ok());
+
+  const auto children_of = [&](EntityId parent) {
+    std::vector<QuaderEntitySnapshot> children;
+    for (const QuaderEntitySnapshot &entity : editor_.query().entity_tree()) {
+      if (entity.parent == parent) {
+        children.push_back(entity);
+      }
+    }
+    return children;
+  };
+  const std::vector<QuaderEntitySnapshot> source_children =
+      children_of(group.value().id);
+  ASSERT_EQ(source_children.size(), 3U);
+
+  const auto begun = editor_.modeling().begin_transform_preview(true);
+  ASSERT_TRUE(begun.ok()) << begun.error_message();
+  ASSERT_TRUE(begun.changed());
+  const EntityId copy_root = active_entity(editor_);
+  ASSERT_NE(copy_root, kInvalidEntityId);
+  ASSERT_NE(copy_root, group.value().id);
+  const auto copy_root_at_begin = editor_.query().entity(copy_root);
+  ASSERT_TRUE(copy_root_at_begin.has_value());
+  const std::vector<QuaderEntitySnapshot> copy_children_at_begin =
+      children_of(copy_root);
+  ASSERT_EQ(copy_children_at_begin.size(), source_children.size());
+
+  std::optional<QuaderModelingObjectRef> copy_mesh;
+  std::optional<QuaderModelingObjectRef> copy_curve;
+  std::optional<QuaderEntitySnapshot> copy_generic;
+  std::vector<EntityId> copy_child_order;
+  for (const QuaderEntitySnapshot &child : copy_children_at_begin) {
+    copy_child_order.push_back(child.id);
+    if (child.has_mesh) {
+      copy_mesh = editor_.query().modeling_object_for_entity(child.id);
+    } else if (child.has_curve) {
+      copy_curve = editor_.query().modeling_object_for_entity(child.id);
+    } else {
+      copy_generic = child;
+    }
+  }
+  ASSERT_TRUE(copy_mesh.has_value());
+  ASSERT_TRUE(copy_curve.has_value());
+  ASSERT_TRUE(copy_generic.has_value());
+  const auto copy_mesh_geometry =
+      editor_.query().compiled_object_mesh(*copy_mesh);
+  ASSERT_TRUE(copy_mesh_geometry.has_value());
+  expect_same_mesh_geometry(*copy_mesh_geometry, *source_mesh);
+  expect_curve(editor_, *copy_curve, source_curve);
+
+  const QVec3 delta{3.0F, 2.0F, -1.0F};
+  const auto updated = editor_.modeling().update_transform_translate(delta);
+  ASSERT_TRUE(updated.ok()) << updated.error_message();
+  ASSERT_TRUE(updated.changed());
+  const auto moved_root = editor_.query().entity(copy_root);
+  ASSERT_TRUE(moved_root.has_value());
+  EXPECT_FLOAT_EQ(moved_root->transform.position.x,
+                  copy_root_at_begin->transform.position.x + delta.x);
+  EXPECT_FLOAT_EQ(moved_root->transform.position.y,
+                  copy_root_at_begin->transform.position.y + delta.y);
+  EXPECT_FLOAT_EQ(moved_root->transform.position.z,
+                  copy_root_at_begin->transform.position.z + delta.z);
+  const std::vector<QuaderEntitySnapshot> moved_children =
+      children_of(copy_root);
+  ASSERT_EQ(moved_children.size(), copy_children_at_begin.size());
+  for (std::size_t index = 0; index < moved_children.size(); ++index) {
+    EXPECT_EQ(moved_children[index].id, copy_children_at_begin[index].id);
+    EXPECT_FLOAT_EQ(moved_children[index].transform.position.x,
+                    copy_children_at_begin[index].transform.position.x);
+    EXPECT_FLOAT_EQ(moved_children[index].transform.position.y,
+                    copy_children_at_begin[index].transform.position.y);
+    EXPECT_FLOAT_EQ(moved_children[index].transform.position.z,
+                    copy_children_at_begin[index].transform.position.z);
+  }
+  const auto moved_mesh = editor_.query().compiled_object_mesh(*copy_mesh);
+  ASSERT_TRUE(moved_mesh.has_value());
+  expect_same_mesh_geometry(*moved_mesh, *copy_mesh_geometry);
+  expect_curve(editor_, *copy_curve, source_curve);
+
+  const auto committed = editor_.modeling().commit_transform_preview();
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  ASSERT_TRUE(committed.changed());
+  EXPECT_EQ(editor_.query().history().undo_label,
+            "Commit Transform Preview");
+  ASSERT_TRUE(editor_.history().undo().ok());
+  EXPECT_FALSE(editor_.query().entity(copy_root).has_value());
+  for (const EntityId child : copy_child_order) {
+    EXPECT_FALSE(editor_.query().entity(child).has_value());
+  }
+  EXPECT_EQ(selected_entities(editor_),
+            std::vector<EntityId>{group.value().id});
+  EXPECT_TRUE(editor_.query().entity(generic.value().id).has_value());
+  expect_curve(editor_, curve, source_curve);
+  const auto source_mesh_after_undo =
+      editor_.query().compiled_object_mesh(mesh);
+  ASSERT_TRUE(source_mesh_after_undo.has_value());
+  expect_same_mesh_geometry(*source_mesh_after_undo, *source_mesh);
+
+  ASSERT_TRUE(editor_.history().redo().ok());
+  const auto copy_root_after_redo = editor_.query().entity(copy_root);
+  ASSERT_TRUE(copy_root_after_redo.has_value());
+  EXPECT_EQ(copy_root_after_redo->uuid, copy_root_at_begin->uuid);
+  EXPECT_EQ(copy_root_after_redo->editor_object_id,
+            copy_root_at_begin->editor_object_id);
+  EXPECT_FLOAT_EQ(copy_root_after_redo->transform.position.x,
+                  moved_root->transform.position.x);
+  const std::vector<QuaderEntitySnapshot> copy_children_after_redo =
+      children_of(copy_root);
+  ASSERT_EQ(copy_children_after_redo.size(), copy_children_at_begin.size());
+  for (std::size_t index = 0; index < copy_children_after_redo.size(); ++index) {
+    const QuaderEntitySnapshot &restored = copy_children_after_redo[index];
+    const QuaderEntitySnapshot &captured = copy_children_at_begin[index];
+    EXPECT_EQ(restored.id, captured.id);
+    EXPECT_EQ(restored.uuid, captured.uuid);
+    EXPECT_EQ(restored.editor_object_id, captured.editor_object_id);
+    EXPECT_EQ(restored.modeling_object_id, captured.modeling_object_id);
+    EXPECT_EQ(restored.parent, copy_root);
+  }
+  expect_curve(editor_, *copy_curve, source_curve);
+  const auto restored_mesh = editor_.query().compiled_object_mesh(*copy_mesh);
+  ASSERT_TRUE(restored_mesh.has_value());
+  expect_same_mesh_geometry(*restored_mesh, *copy_mesh_geometry);
+
+  ASSERT_TRUE(editor_.history().undo().ok());
+  const QuaderHistorySnapshot history_before_cancel = editor_.query().history();
+  const auto cancel_begin = editor_.modeling().begin_transform_preview(true);
+  ASSERT_TRUE(cancel_begin.ok()) << cancel_begin.error_message();
+  const EntityId canceled_root = active_entity(editor_);
+  ASSERT_NE(canceled_root, group.value().id);
+  const std::vector<QuaderEntitySnapshot> canceled_children =
+      children_of(canceled_root);
+  ASSERT_EQ(canceled_children.size(), source_children.size());
+  ASSERT_TRUE(editor_.modeling().update_transform_translate(delta).ok());
+  const auto canceled = editor_.modeling().cancel_transform_preview();
+  ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+  ASSERT_TRUE(canceled.changed());
+  EXPECT_FALSE(editor_.query().entity(canceled_root).has_value());
+  for (const QuaderEntitySnapshot &child : canceled_children) {
+    EXPECT_FALSE(editor_.query().entity(child.id).has_value());
+  }
+  EXPECT_EQ(selected_entities(editor_),
+            std::vector<EntityId>{group.value().id});
+  expect_same_history(editor_.query().history(), history_before_cancel);
+  EXPECT_EQ(children_of(group.value().id).size(), source_children.size());
+  expect_curve(editor_, curve, source_curve);
+}
+
+TEST_F(CurveModelingBehaviorTests,
+       MixedHierarchyDragDuplicateUsesOneCancelableStructuralTransaction) {
+  const auto mesh = create_box(editor_);
+  const auto curve = create_curve(editor_);
+  const auto curve_document = read_curve(editor_, curve);
+  ASSERT_TRUE(editor_.selection().select_objects({mesh, curve}).ok());
+  const auto group = editor_.scene().group_selection("Drag Mixed Kit");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Group).ok());
+  ASSERT_TRUE(editor_.scene().select(group.value().id).ok());
+
+  const QuaderViewportCamera camera{
+      .orthographic = true,
+      .origin = {0.0F, 0.0F, 10.0F},
+      .x_axis = {1.0F, 0.0F, 0.0F},
+      .y_axis = {0.0F, 1.0F, 0.0F},
+      .z_axis = {0.0F, 0.0F, 1.0F},
+      .viewport_size = {100.0F, 100.0F},
+      .orthographic_size = 100.0,
+      .fov_degrees = 60.0,
+  };
+  const QuaderRay ray{
+      .origin = {0.0F, 0.0F, 10.0F},
+      .direction = {0.0F, 0.0F, -1.0F},
+  };
+  const auto begin = editor_.modeling().begin_transform_drag({
+      .tool = QuaderTransformTool::Move,
+      .operation = QuaderTransformOperation::Transform,
+      .axis = QuaderTransformAxis::X,
+      .screen_position = {0.0F, 0.0F},
+      .screen_pivot = {0.0F, 0.0F},
+      .screen_tip = {10.0F, 0.0F},
+      .has_world_direction = true,
+      .world_direction = {1.0F, 0.0F, 0.0F},
+      .ray = ray,
+      .camera = camera,
+      .grid_size = 1.0,
+      .vertex_snap_radius = 0.0,
+      .grid_snap_enabled = false,
+      .duplicate_selected = true,
+  });
+  ASSERT_TRUE(begin.ok()) << begin.error_message();
+  ASSERT_TRUE(begin.value().active);
+  EXPECT_FALSE(begin.value().preview_driven);
+  EXPECT_TRUE(begin.value().scene_transform);
+  ASSERT_EQ(selected_entities(editor_).size(), 1U);
+  const EntityId copy_root = active_entity(editor_);
+  ASSERT_NE(copy_root, group.value().id);
+  ASSERT_NE(copy_root, kInvalidEntityId);
+
+  std::optional<QuaderModelingObjectRef> copy_curve;
+  std::optional<QuaderModelingObjectRef> copy_mesh;
+  for (const auto &entity : editor_.query().entities()) {
+    if (entity.parent != copy_root) {
+      continue;
+    }
+    if (entity.has_curve) {
+      copy_curve = editor_.query().modeling_object_for_entity(entity.id);
+    } else if (entity.has_mesh) {
+      copy_mesh = editor_.query().modeling_object_for_entity(entity.id);
+    }
+  }
+  ASSERT_TRUE(copy_curve.has_value());
+  ASSERT_TRUE(copy_mesh.has_value());
+  expect_curve(editor_, *copy_curve, curve_document);
+  ASSERT_TRUE(editor_.query().compiled_object_mesh(*copy_mesh).has_value());
+
+  const auto update = editor_.modeling().update_transform_drag({
+      .screen_position = {2.0F, 0.0F},
+      .ray = ray,
+      .camera = camera,
+      .grid_size = 1.0,
+      .vertex_snap_radius = 0.0,
+      .grid_snap_enabled = false,
+  });
+  ASSERT_TRUE(update.ok()) << update.error_message();
+  ASSERT_TRUE(update.value().changed);
+  const auto committed = editor_.modeling().commit_transform_drag();
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  ASSERT_TRUE(committed.value().changed);
+  EXPECT_EQ(editor_.query().history().undo_label, "Duplicate Selection");
+
+  ASSERT_TRUE(editor_.history().undo().ok());
+  EXPECT_FALSE(editor_.query().entity(copy_root).has_value());
+  EXPECT_EQ(selected_entities(editor_),
+            std::vector<EntityId>{group.value().id});
+  expect_curve(editor_, curve, curve_document);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  EXPECT_TRUE(editor_.query().entity(copy_root).has_value());
+  expect_curve(editor_, *copy_curve, curve_document);
+  ASSERT_TRUE(editor_.query().compiled_object_mesh(*copy_mesh).has_value());
+
+  const auto repeated =
+      editor_.modeling().execute_tool("repeat_last_action");
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  ASSERT_TRUE(repeated.changed());
+  EXPECT_EQ(editor_.query().history().undo_label, "Repeat Last Action");
+  const EntityId repeated_root = active_entity(editor_);
+  ASSERT_NE(repeated_root, copy_root);
+  ASSERT_NE(repeated_root, group.value().id);
+  std::optional<QuaderModelingObjectRef> repeated_curve;
+  std::optional<QuaderModelingObjectRef> repeated_mesh;
+  for (const auto &entity : editor_.query().entities()) {
+    if (entity.parent != repeated_root) {
+      continue;
+    }
+    if (entity.has_curve) {
+      repeated_curve = editor_.query().modeling_object_for_entity(entity.id);
+    } else if (entity.has_mesh) {
+      repeated_mesh = editor_.query().modeling_object_for_entity(entity.id);
+    }
+  }
+  ASSERT_TRUE(repeated_curve.has_value());
+  ASSERT_TRUE(repeated_mesh.has_value());
+  expect_curve(editor_, *repeated_curve, curve_document);
+  ASSERT_TRUE(editor_.query().compiled_object_mesh(*repeated_mesh).has_value());
+
+  ASSERT_TRUE(editor_.history().undo().ok());
+  EXPECT_FALSE(editor_.query().entity(repeated_root).has_value());
+  EXPECT_EQ(selected_entities(editor_), std::vector<EntityId>{copy_root});
+  ASSERT_TRUE(editor_.history().redo().ok());
+  EXPECT_TRUE(editor_.query().entity(repeated_root).has_value());
+  expect_curve(editor_, *repeated_curve, curve_document);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  EXPECT_FALSE(editor_.query().entity(repeated_root).has_value());
+
+  ASSERT_TRUE(editor_.history().undo().ok());
+  const QuaderHistorySnapshot history_before_cancel = editor_.query().history();
+  const auto cancel_begin = editor_.modeling().begin_transform_drag({
+      .tool = QuaderTransformTool::Move,
+      .operation = QuaderTransformOperation::Transform,
+      .axis = QuaderTransformAxis::X,
+      .screen_position = {0.0F, 0.0F},
+      .screen_pivot = {0.0F, 0.0F},
+      .screen_tip = {10.0F, 0.0F},
+      .has_world_direction = true,
+      .world_direction = {1.0F, 0.0F, 0.0F},
+      .ray = ray,
+      .camera = camera,
+      .grid_size = 1.0,
+      .vertex_snap_radius = 0.0,
+      .grid_snap_enabled = false,
+      .duplicate_selected = true,
+  });
+  ASSERT_TRUE(cancel_begin.ok()) << cancel_begin.error_message();
+  const EntityId canceled_root = active_entity(editor_);
+  ASSERT_NE(canceled_root, group.value().id);
+  const auto canceled = editor_.modeling().cancel_transform_drag();
+  ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+  ASSERT_TRUE(canceled.changed());
+  EXPECT_FALSE(editor_.query().entity(canceled_root).has_value());
+  EXPECT_EQ(selected_entities(editor_),
+            std::vector<EntityId>{group.value().id});
+  expect_same_history(editor_.query().history(), history_before_cancel);
+  expect_curve(editor_, curve, curve_document);
+}
+
+TEST_F(CurveModelingBehaviorTests,
        CancelAfterExternalSceneEditsDoesNotRevertTransformVisibilityOrSelection) {
   const auto mesh = create_box(editor_);
   const auto curve = create_curve(editor_);
   const auto original = read_curve(editor_, curve);
+  const auto authored = with_middle_height(original, 4.0F);
   ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
-  ASSERT_TRUE(editor_.modeling().update_curve_preview(
-      with_middle_height(original, 4.0F)).ok());
+  ASSERT_TRUE(editor_.modeling().update_curve_preview(authored).ok());
   QuaderTransform transform;
   transform.position = {7.0F, 2.0F, 1.0F};
   ASSERT_TRUE(editor_.scene().set_transform(curve.entity, transform).ok());
   ASSERT_TRUE(editor_.scene().set_visible(curve.entity, false).ok());
-  ASSERT_TRUE(editor_.selection().select_object(mesh).ok());
+  const auto selected = editor_.selection().select_object(mesh);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  expect_curve(editor_, curve, authored);
+  const auto continued = with_middle_height(original, 5.0F);
+  const auto continued_update =
+      editor_.modeling().update_curve_preview(continued);
+  ASSERT_TRUE(continued_update.ok()) << continued_update.error_message();
+  expect_curve(editor_, curve, continued);
   ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
   expect_curve(editor_, curve, original);
   const auto entity = editor_.query().entity(curve.entity);

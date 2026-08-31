@@ -49,7 +49,6 @@
 #include <editor/modeling/runtime/runtime_command.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
 #include <quader/modeling/neutral/polygon/document_selection.hpp>
-#include <quader/modeling/neutral/polygon/internal/quader_poly_document_picking_helpers.hpp>
 
 namespace quader {
 namespace {
@@ -306,7 +305,7 @@ void append_selected_hover_filtered_base_frame(
 }
 
 const quader_editor_core::PolygonObject *find_polygon_object_by_id(
-    const std::vector<quader_editor_core::PolygonObject> &objects,
+    std::span<const quader_editor_core::PolygonObject> objects,
     int object_id) {
   const auto found = std::find_if(
       objects.begin(), objects.end(),
@@ -337,7 +336,7 @@ bool has_complete_source_wire_for_object(
 }
 
 bool component_hover_replaces_fallback_active_source_wire(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const quader_editor_core::SelectionHoverState &hover) {
   const quader_editor_core::SelectionMode mode = session.selection_mode();
   if (mode == quader_editor_core::SelectionMode::Object ||
@@ -696,17 +695,6 @@ ComponentSelectionEditResult validated_component_selection_edit(
   return result;
 }
 
-quader_editor_core::PolygonObject *
-find_modeling_object(quader_editor_core::EditorSession &session,
-                     int modeling_object_id) {
-  auto &objects = session.objects();
-  const auto it = std::find_if(objects.begin(), objects.end(),
-                               [modeling_object_id](const auto &object) {
-                                 return object.id == modeling_object_id;
-                               });
-  return it == objects.end() ? nullptr : &(*it);
-}
-
 quader_editor_core::RectangleSelectionMatch
 rectangle_selection_match(ModelingBoxSelectionRule rule, QVec2 start,
                           QVec2 end) {
@@ -805,7 +793,7 @@ bool ModelingSelectionService::has_component_selection(
 }
 
 ModelingSelectionMode ModelingSelectionService::selection_mode(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     ModelingSelectionMode app_selection_mode) const {
   if (app_selection_mode == ModelingSelectionMode::Group) {
     return ModelingSelectionMode::Group;
@@ -814,11 +802,11 @@ ModelingSelectionMode ModelingSelectionService::selection_mode(
 }
 
 ModelingSelectionSummary ModelingSelectionService::selection_summary(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene, ModelingSelectionMode app_selection_mode) const {
   if (app_selection_mode == ModelingSelectionMode::Group) {
     return make_scene_selection_summary(scene, ModelingSelectionMode::Group,
-                                        session.state().content_revision);
+                                        session.content_revision());
   }
 
   const quader_editor_core::ActiveSelection active =
@@ -853,8 +841,8 @@ ModelingSelectionSummary ModelingSelectionService::selection_summary(
       .selected_vertex_count = selected_vertex_count,
       .selected_edge_count = selected_edge_count,
       .selected_face_count = selected_face_count,
-      .content_revision = session.state().content_revision,
-      .selection_revision = session.state().selection_revision,
+      .content_revision = session.content_revision(),
+      .selection_revision = session.selection_revision(),
   };
 }
 
@@ -910,7 +898,7 @@ bool ModelingSelectionService::viewport_visibility_active() const {
 
 int ModelingSelectionService::instance_participant_id(
     EntityId occurrence,
-    const quader_editor_core::EditorSession &session) const {
+    const ModelingSelectionProjectionSnapshot &session) const {
   const auto runtime_id_in_use = [&](int candidate) {
     return std::any_of(session.objects().begin(), session.objects().end(),
                        [candidate](const auto &object) {
@@ -956,16 +944,9 @@ ModelingSelectionService::scene_target_for_picking_participant(
 
 void ModelingSelectionService::invalidate_picking_cache() const {
   picking_cache_ = {};
-  reset_depth_pick_cycle();
   rectangle_projection_cache_ = {};
   rectangle_universe_cache_ = {};
   rectangle_resolution_cache_ = {};
-}
-
-void ModelingSelectionService::reset_depth_pick_cycle() const {
-  quader_editor_core::reset_pick_cycle(depth_pick_cycle_);
-  depth_pick_context_signature_.clear();
-  depth_pick_origin_ = {};
 }
 
 std::uint64_t
@@ -999,11 +980,11 @@ std::uint64_t ModelingSelectionService::world_pick_bounds_build_count() const {
 
 const std::vector<quader_editor_core::PolygonObject> &
 ModelingSelectionService::cached_local_picking_objects(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_registry) const {
-  const std::uint64_t content_revision = session.state().content_revision;
-  const std::uint64_t selection_revision = session.state().selection_revision;
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
   const std::uint64_t scene_hierarchy_revision =
       scene.hierarchy_presentation_revision();
   const std::uint64_t scene_selection_revision = scene.selection_revision();
@@ -1019,9 +1000,10 @@ ModelingSelectionService::cached_local_picking_objects(
   const ModelingSelectionMode current_app_selection_mode =
       app_selection_mode();
   const ModelingSelectionMode participant_mode =
-      current_app_selection_mode == ModelingSelectionMode::Object
-          ? ModelingSelectionMode::Object
-          : ModelingSelectionMode::Group;
+      current_app_selection_mode == ModelingSelectionMode::Object ||
+              current_app_selection_mode == ModelingSelectionMode::Group
+          ? current_app_selection_mode
+          : ModelingSelectionMode::Vertex;
   const bool modeling_content_changed =
       !picking_cache_.objects_valid ||
       picking_cache_.content_revision != content_revision;
@@ -1129,7 +1111,7 @@ ModelingSelectionService::cached_local_picking_objects(
 
 const std::vector<quader_editor_core::PolygonObject> &
 ModelingSelectionService::cached_scene_transformed_objects_for_picking(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_registry) const {
   const std::vector<quader_editor_core::PolygonObject> &local_objects =
@@ -1152,7 +1134,7 @@ ModelingSelectionService::cached_scene_transformed_objects_for_picking(
 
 std::span<const quader_editor_core::PickObjectTransform>
 ModelingSelectionService::cached_local_picking_transforms(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_map) const {
   (void)cached_local_picking_objects(session, scene, object_map);
@@ -1161,7 +1143,7 @@ ModelingSelectionService::cached_local_picking_transforms(
 
 std::vector<quader_editor_core::PolygonObject>
 ModelingSelectionService::scene_transformed_objects_for_picking(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_registry) const {
   return cached_scene_transformed_objects_for_picking(session, scene,
@@ -1170,7 +1152,7 @@ ModelingSelectionService::scene_transformed_objects_for_picking(
 
 const std::vector<quader_editor_core::PickObjectBounds> &
 ModelingSelectionService::cached_pick_object_bounds(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_registry) const {
   QDR_PROFILE_FUNCTION();
@@ -1276,7 +1258,7 @@ ModelingSelectionService::cached_pick_object_bounds(
 
 const std::vector<quader_editor_core::PickObjectFaceGeometry> &
 ModelingSelectionService::cached_pick_face_geometry(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
     quader_poly::PickOptions pick_options) const {
   const std::vector<quader_editor_core::PolygonObject> &objects =
@@ -1355,7 +1337,7 @@ ModelingSelectionService::cached_pick_face_geometry(
 
 const std::vector<quader_editor_core::PickObjectFaceGeometry> &
 ModelingSelectionService::cached_local_pick_face_geometry(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
     quader_poly::PickOptions pick_options) const {
   const std::vector<quader_editor_core::PolygonObject> &objects =
@@ -1426,78 +1408,12 @@ ModelingSelectionService::cached_local_pick_face_geometry(
   return picking_cache_.local_face_geometry;
 }
 
-void ModelingSelectionService::synchronize_depth_pick_cycle(
-    const quader_editor_core::EditorSession &session,
-    const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
-    const ModelingPickSelectRequest &request) const {
-  const ModelingSelectionMode current_mode =
-      selection_mode(session, app_selection_mode());
-  if (current_mode != ModelingSelectionMode::Object ||
-      request.click_count == 0 || request.alt_pressed) {
-    reset_depth_pick_cycle();
-    return;
-  }
-  if (!depth_pick_cycle_.active && !request.depth_cycle_requested(current_mode)) {
-    return;
-  }
-  // Selection revisions intentionally do not participate: the first ordinary
-  // click in a subsequent double-click must not restart the depth stack.
-  std::string signature;
-  signature.reserve(160U);
-  const auto append = [&signature](const auto &value) {
-    signature.append(reinterpret_cast<const char *>(&value), sizeof(value));
-  };
-  append(session.state().content_revision);
-  append(scene.content_revision());
-  append(scene.transform_revision());
-  append(scene.visibility_revision());
-  append(scene.layer_revision());
-  append(scene.mesh_binding_revision());
-  append(object_map.revision());
-  append(viewport_visibility_revision());
-  const ModelingInstanceEditScope scope = instance_edit_scope();
-  append(scope.occurrence);
-  append(scope.definition);
-  append(app_selection_mode());
-  append(session.selection_mode());
-  append(request.ray.direction.x);
-  append(request.ray.direction.y);
-  append(request.ray.direction.z);
-  append(request.vertex_radius);
-  append(request.edge_radius);
-  append(request.select_backfaces);
-  const double origin_tolerance =
-      std::isfinite(request.cycle_origin_tolerance) &&
-              request.cycle_origin_tolerance > 0.0
-          ? request.cycle_origin_tolerance
-          : 0.0;
-  append(origin_tolerance);
-  const double dx =
-      static_cast<double>(request.ray.origin.x) - depth_pick_origin_.x;
-  const double dy =
-      static_cast<double>(request.ray.origin.y) - depth_pick_origin_.y;
-  const double dz =
-      static_cast<double>(request.ray.origin.z) - depth_pick_origin_.z;
-  const double origin_distance_squared = dx * dx + dy * dy + dz * dz;
-  if (signature != depth_pick_context_signature_ ||
-      !std::isfinite(origin_distance_squared) ||
-      origin_distance_squared > origin_tolerance * origin_tolerance) {
-    reset_depth_pick_cycle();
-    depth_pick_context_signature_ = std::move(signature);
-    // Keep the anchor fixed until this cycle ends, rather than accumulating
-    // small movements that eventually walk the cursor to a different stack.
-    depth_pick_origin_ = request.ray.origin;
-  }
-}
-
-ModelingSelectionApplyResult ModelingSelectionService::apply_pick_selection(
-    quader_editor_core::EditorSession &session, const SceneDocument &scene,
+ModelingSelectionProjectionApplyResult
+ModelingSelectionService::apply_pick_selection(
+    const ModelingSelectionProjectionSnapshot &session,
+    const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_registry,
     const ModelingPickSelectRequest &request) const {
-  synchronize_depth_pick_cycle(session, scene, object_registry, request);
-  const bool cycle_depth = request.depth_cycle_requested(
-      selection_mode(session, app_selection_mode()));
-  const std::uint64_t selection_before = session.state().selection_revision;
   const std::vector<quader_editor_core::PolygonObject> &cached_objects =
       cached_local_picking_objects(session, scene, object_registry);
   const quader_poly::PickOptions pick_options =
@@ -1510,16 +1426,17 @@ ModelingSelectionApplyResult ModelingSelectionService::apply_pick_selection(
   const std::span<const quader_editor_core::PickObjectTransform>
       object_transforms = cached_local_picking_transforms(
           session, scene, object_registry);
-  const quader_editor_core::ApplyPickSelectionResult result =
+  quader_editor_core::ApplyPickSelectionProjectionResult projected =
       quader_editor_core::apply_pick_selection(
-          session,
+          std::vector<quader_editor_core::PolygonObject>(
+              session.objects().begin(), session.objects().end()),
+          session.selection_mode(), session.active_object_id(),
           std::vector<quader_editor_core::PolygonObject>(cached_objects.begin(),
                                                          cached_objects.end()),
           quader_editor_core::ApplyPickSelectionRequest{
               .operation =
                   quader_editor_core::selection_edit_operation_from_modifiers(
-                      request.control_pressed ||
-                          (cycle_depth && request.command_pressed),
+                      request.control_pressed,
                       request.shift_pressed),
               .ray = to_runtime_ray(request.ray),
               .pick_options = pick_options,
@@ -1533,20 +1450,25 @@ ModelingSelectionApplyResult ModelingSelectionService::apply_pick_selection(
               .object_bounds = pick_bounds,
               .face_geometry = pick_face_geometry,
               .object_transforms = object_transforms,
-              .cycle_depth = cycle_depth,
-              .depth_cycle = &depth_pick_cycle_,
           });
   return {
-      .applied = result.applied,
-      .changed = session.state().selection_revision != selection_before,
+      .applied = projected.result.applied,
+      .changed = projected.result.changed,
+      .projection = projected.result.changed
+                        ? session.with_selection(
+                              std::move(projected.objects),
+                              projected.selection_mode,
+                              projected.active_object_id,
+                              quader_editor_core::advance_session_revision(
+                                  session.selection_revision()))
+                        : session,
   };
 }
 
 std::optional<int> ModelingSelectionService::pick_object_id(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
     const ModelingPickSelectRequest &request) const {
-  synchronize_depth_pick_cycle(session, scene, object_registry, request);
   const std::vector<quader_editor_core::PolygonObject> &cached_objects =
       cached_local_picking_objects(session, scene, object_registry);
   quader_poly::PickOptions pick_options = pick_options_from_request(request);
@@ -1568,8 +1490,53 @@ std::optional<int> ModelingSelectionService::pick_object_id(
   return hit->object_id;
 }
 
+std::optional<quader_editor_core::PickHitRecord>
+ModelingSelectionService::pick_selection_hit(
+    const ModelingSelectionProjectionSnapshot &session,
+    const SceneDocument &scene,
+    const ModelingObjectRuntimeMap &object_registry,
+    const ModelingPickSelectRequest &request) const {
+  quader_poly::PickOptions pick_options = pick_options_from_request(request);
+  switch (session.selection_mode()) {
+  case quader_editor_core::SelectionMode::Object:
+  case quader_editor_core::SelectionMode::Face:
+    pick_options.mode = quader_poly::SelectionMode::Face;
+    break;
+  case quader_editor_core::SelectionMode::Edge:
+    pick_options.mode = quader_poly::SelectionMode::Edge;
+    break;
+  case quader_editor_core::SelectionMode::Vertex:
+    pick_options.mode = quader_poly::SelectionMode::Vertex;
+    break;
+  }
+  return quader_editor_core::pick_nearest(
+      cached_local_picking_objects(session, scene, object_registry),
+      {.ray = to_runtime_ray(request.ray), .options = pick_options},
+      cached_pick_object_bounds(session, scene, object_registry),
+      cached_local_pick_face_geometry(session, scene, object_registry,
+                                      pick_options),
+      cached_local_picking_transforms(session, scene, object_registry));
+}
+
+std::vector<quader_editor_core::PickHitRecord>
+ModelingSelectionService::pick_selection_depth_hits(
+    const ModelingSelectionProjectionSnapshot &session,
+    const SceneDocument &scene,
+    const ModelingObjectRuntimeMap &object_registry,
+    const ModelingPickSelectRequest &request) const {
+  quader_poly::PickOptions pick_options = pick_options_from_request(request);
+  pick_options.mode = quader_poly::SelectionMode::Face;
+  return quader_editor_core::pick_mesh_depth_hits(
+      cached_local_picking_objects(session, scene, object_registry),
+      {.ray = to_runtime_ray(request.ray), .options = pick_options},
+      cached_pick_object_bounds(session, scene, object_registry),
+      cached_local_pick_face_geometry(session, scene, object_registry,
+                                      pick_options),
+      cached_local_picking_transforms(session, scene, object_registry));
+}
+
 std::optional<EntityId> ModelingSelectionService::pick_object_entity(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
     const ModelingPickSelectRequest &request) const {
   const auto entity_for_participant = [&](int object_id) {
@@ -1580,78 +1547,15 @@ std::optional<EntityId> ModelingSelectionService::pick_object_entity(
     }
     return entity;
   };
-  if (!request.depth_cycle_requested(
-          selection_mode(session, app_selection_mode()))) {
-    const std::optional<int> object_id =
-        pick_object_id(session, scene, object_registry, request);
-    return object_id.has_value() ? entity_for_participant(*object_id)
-                                 : std::nullopt;
-  }
-
-  synchronize_depth_pick_cycle(session, scene, object_registry, request);
-  const std::vector<quader_editor_core::PolygonObject> &objects =
-      cached_local_picking_objects(session, scene, object_registry);
-  quader_poly::PickOptions options = pick_options_from_request(request);
-  options.mode = quader_poly::SelectionMode::Face;
-  // Include authored boundaries when an open mesh is edge-on to this ray.
-  // Ordinary component picking retains its facing and occlusion policy.
-  const std::vector<quader_editor_core::PickHitRecord> hits =
-      quader_editor_core::pick_mesh_depth_hits(
-          objects,
-          quader_editor_core::PickRequest{.ray = to_runtime_ray(request.ray),
-                                          .options = options},
-          cached_pick_object_bounds(session, scene, object_registry),
-          cached_local_pick_face_geometry(session, scene, object_registry,
-                                          options),
-          cached_local_picking_transforms(session, scene, object_registry));
-  std::vector<EntityId> candidates;
-  std::unordered_set<EntityId> membership;
-  const quader_editor_core::SelectionEditOperation operation =
-      quader_editor_core::selection_edit_operation_from_modifiers(
-          request.control_pressed || request.command_pressed,
-          request.shift_pressed);
-  std::string signature = "scene:";
-  signature += std::to_string(static_cast<int>(app_selection_mode()));
-  signature += ":" + std::to_string(static_cast<int>(operation));
-  int ordinary_candidate = -1;
-  std::optional<EntityId> ordinary_target;
-  for (const quader_editor_core::PickHitRecord &hit : hits) {
-    const std::optional<EntityId> entity = entity_for_participant(hit.object_id);
-    if (!entity.has_value()) {
-      continue;
-    }
-    const EntityId target = *entity;
-    if (!ordinary_target.has_value() && target != kInvalidEntityId &&
-        hit.kind == quader_poly::ElementKind::Face) {
-      ordinary_target = target;
-    }
-    if (target == kInvalidEntityId || !membership.insert(target).second) {
-      continue;
-    }
-    candidates.push_back(target);
-    signature += "|" + std::to_string(target);
-  }
-  // The first click can remain deferred, so the previous primary is not this
-  // gesture's front target. Seed every fresh cycle from the ordinary surface;
-  // an existing same-operation cursor still advances normally.
-  if (ordinary_target.has_value()) {
-    const auto ordinary =
-        std::find(candidates.begin(), candidates.end(), *ordinary_target);
-    if (ordinary != candidates.end()) {
-      ordinary_candidate = static_cast<int>(ordinary - candidates.begin());
-    }
-  }
-  const quader_editor_core::PickCycleStep step =
-      quader_editor_core::advance_depth_pick_cycle(
-          depth_pick_cycle_, std::move(signature),
-          static_cast<int>(candidates.size()), ordinary_candidate);
-  return step.active ? std::optional<EntityId>(candidates[step.index])
-                     : std::nullopt;
+  const std::optional<int> object_id =
+      pick_object_id(session, scene, object_registry, request);
+  return object_id.has_value() ? entity_for_participant(*object_id)
+                               : std::nullopt;
 }
 
 std::optional<quader_editor_core::PickHitRecord>
 ModelingSelectionService::pick_surface_hit(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
     const ModelingRay &ray) const {
   const std::vector<quader_editor_core::PolygonObject> &cached_objects =
@@ -1673,7 +1577,7 @@ ModelingSelectionService::pick_surface_hit(
 
 quader_editor_core::SelectionHoverUpdateResult
 ModelingSelectionService::selection_hover(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
     const quader_editor_core::SelectionHoverState &current_hover,
   const ModelingHoverRequest &request) const {
@@ -1694,15 +1598,16 @@ ModelingSelectionService::selection_hover(
 
 quader_editor_core::RectangleSelectionState
 ModelingSelectionService::rectangle_selection_state(
-    const quader_editor_core::EditorSession &session) const {
+    const ModelingSelectionProjectionSnapshot &session) const {
   return rectangle_selection_state_for(session.objects(),
                                        session.selection_mode(),
                                        session.active_object_id());
 }
 
-std::optional<ModelingCommandResult>
+std::optional<ModelingSelectionProjectionCommandResult>
 ModelingSelectionService::select_all_in_constrained_component_scope(
-    quader_editor_core::EditorSession &session, const SceneDocument &scene,
+    const ModelingSelectionProjectionSnapshot &session,
+    const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_map, bool invert,
     int sticky_component_object_id) const {
   const bool instance_scope_active = instance_edit_scope().active();
@@ -1737,10 +1642,12 @@ ModelingSelectionService::select_all_in_constrained_component_scope(
   // component universe. Ordinary sticky selection only validates its added
   // target through the pickable universe; existing component-selected meshes
   // keep the same full-session scope used by the SDK fallback.
-  std::vector<quader_editor_core::PolygonObject> scoped_objects =
+  const std::span<const quader_editor_core::PolygonObject> source_objects =
       instance_scope_active || viewport_scope_active
-          ? picking_objects
+          ? std::span<const quader_editor_core::PolygonObject>(picking_objects)
           : session.objects();
+  std::vector<quader_editor_core::PolygonObject> scoped_objects(
+      source_objects.begin(), source_objects.end());
   int active_object_id = session.active_object_id();
   std::vector<std::size_t> target_indices;
   target_indices.reserve(scoped_objects.size());
@@ -1753,9 +1660,12 @@ ModelingSelectionService::select_all_in_constrained_component_scope(
     }
   }
   if (target_indices.empty()) {
-    return ModelingCommandResult{.ok = true,
-                                 .changed = false,
-                                 .message = "Selection unchanged."};
+    return ModelingSelectionProjectionCommandResult{
+        .command = {.ok = true,
+                    .changed = false,
+                    .message = "Selection unchanged."},
+        .projection = session,
+    };
   }
 
   for (const std::size_t index : target_indices) {
@@ -1818,19 +1728,25 @@ ModelingSelectionService::select_all_in_constrained_component_scope(
   const quader_editor_core::RectangleSelectionState scoped_selection =
       rectangle_selection_state_for(scoped_objects, session.selection_mode(),
                                     active_object_id);
-  const bool changed = apply_rectangle_selection(session, scoped_selection);
-  return ModelingCommandResult{
-      .ok = true,
-      .changed = changed,
-      .message = changed ? (invert ? "Visible selection inverted."
+  ModelingSelectionProjectionApplyResult applied =
+      apply_rectangle_selection(session, scoped_selection);
+  return ModelingSelectionProjectionCommandResult{
+      .command = {
+          .ok = true,
+          .changed = applied.changed,
+          .message = applied.changed
+                         ? (invert ? "Visible selection inverted."
                                    : "Components selected.")
                          : "Selection unchanged.",
+      },
+      .projection = std::move(applied.projection),
   };
 }
 
-ModelingSelectionApplyResult
+ModelingSelectionProjectionApplyResult
 ModelingSelectionService::apply_component_selection_command(
-    quader_editor_core::EditorSession &session, const SceneDocument &scene,
+    const ModelingSelectionProjectionSnapshot &session,
+    const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_map,
     ModelingComponentSelectionCommand command) const {
   using NativeMode = quader_editor_core::SelectionMode;
@@ -1847,7 +1763,7 @@ ModelingSelectionService::apply_component_selection_command(
   if ((edge_command && mode != NativeMode::Edge) ||
       (face_command && mode != NativeMode::Face) ||
       mode == NativeMode::Object) {
-    return {.applied = false, .changed = false};
+    return {.applied = false, .changed = false, .projection = session};
   }
 
   const bool comparison_space_command =
@@ -1903,7 +1819,7 @@ ModelingSelectionService::apply_component_selection_command(
     }
   }
   if (target_indices.empty()) {
-    return {.applied = true, .changed = false};
+    return {.applied = true, .changed = false, .projection = session};
   }
 
   quader_poly::SelectionMode portable_mode =
@@ -2066,7 +1982,7 @@ ModelingSelectionService::apply_component_selection_command(
   }
 
   if (!selection_changed) {
-    return {.applied = true, .changed = false};
+    return {.applied = true, .changed = false, .projection = session};
   }
 
   std::unordered_map<int, const quader_editor_core::PolygonObject *>
@@ -2076,8 +1992,10 @@ ModelingSelectionService::apply_component_selection_command(
     changed_objects.emplace(scoped_objects[index].id, &scoped_objects[index]);
   }
 
+  std::vector<quader_editor_core::PolygonObject> objects(
+      session.objects().begin(), session.objects().end());
   bool projection_changed = false;
-  for (quader_editor_core::PolygonObject &object : session.state().objects) {
+  for (quader_editor_core::PolygonObject &object : objects) {
     const auto found = changed_objects.find(object.id);
     if (found == changed_objects.end()) {
       continue;
@@ -2092,12 +2010,22 @@ ModelingSelectionService::apply_component_selection_command(
     object.selected = next_selected;
     object.component_edit_target = next_selected;
   }
-  const int active_before = session.state().active_object_id;
-  quader_editor_core::normalize_active_object_id(
-      session.state().objects, session.state().active_object_id);
+  int active_object_id = session.active_object_id();
+  const int active_before = active_object_id;
+  quader_editor_core::normalize_active_object_id(objects, active_object_id);
   projection_changed = projection_changed ||
-                       session.state().active_object_id != active_before;
-  return {.applied = true, .changed = projection_changed};
+                       active_object_id != active_before;
+  if (!projection_changed) {
+    return {.applied = true, .changed = false, .projection = session};
+  }
+  return {
+      .applied = true,
+      .changed = true,
+      .projection = session.with_selection(
+          std::move(objects), session.selection_mode(), active_object_id,
+          quader_editor_core::advance_session_revision(
+              session.selection_revision())),
+  };
 }
 
 const std::vector<quader_poly::Edge> &
@@ -2127,12 +2055,12 @@ ModelingSelectionService::cached_document_edges(
 
 const quader_editor_core::RectangleSelectionUniverse &
 ModelingSelectionService::rectangle_selection_universe(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_map,
     quader_editor_core::SelectionMode selection_mode) const {
   QDR_PROFILE_SCOPE("Box selection rectangle universe");
-  const std::uint64_t content_revision = session.state().content_revision;
+  const std::uint64_t content_revision = session.content_revision();
   const std::uint64_t scene_hierarchy_revision =
       scene.hierarchy_presentation_revision();
   const std::uint64_t scene_visibility_revision = scene.visibility_revision();
@@ -2271,11 +2199,9 @@ ModelingSelectionService::rectangle_projected_hits_request(
         object_transform != nullptr &&
         quader_editor_core::pick_object_transform_reverses_face_winding(
             *object_transform);
-    std::unique_ptr<quader_poly::document_internal::DocumentPickFacts>
-        pick_facts;
+    std::unique_ptr<quader_poly::DocumentPickQuery> pick_facts;
     if (selection_mode != quader_editor_core::SelectionMode::Object) {
-      pick_facts = std::make_unique<
-          quader_poly::document_internal::DocumentPickFacts>(
+      pick_facts = std::make_unique<quader_poly::DocumentPickQuery>(
           object.document, facing_options);
     }
     std::size_t projected_vertex_capacity =
@@ -2515,12 +2441,12 @@ ModelingSelectionService::rectangle_projected_hits_request(
 
 const quader_editor_core::RectangleProjectedHitsRequest &
 ModelingSelectionService::cached_rectangle_projected_hits_request(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
     quader_editor_core::SelectionMode selection_mode,
     const ModelingBoxSelectRequest &request) const {
   QDR_PROFILE_SCOPE("Box selection projected candidates cache");
-  const std::uint64_t content_revision = session.state().content_revision;
+  const std::uint64_t content_revision = session.content_revision();
   const std::uint64_t scene_hierarchy_revision =
       scene.hierarchy_presentation_revision();
   const std::uint64_t scene_transform_revision = scene.transform_revision();
@@ -2535,9 +2461,10 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
   const ModelingSelectionMode current_app_selection_mode =
       app_selection_mode();
   const ModelingSelectionMode participant_mode =
-      current_app_selection_mode == ModelingSelectionMode::Object
-          ? ModelingSelectionMode::Object
-          : ModelingSelectionMode::Group;
+      current_app_selection_mode == ModelingSelectionMode::Object ||
+              current_app_selection_mode == ModelingSelectionMode::Group
+          ? current_app_selection_mode
+          : ModelingSelectionMode::Vertex;
   const bool rebuild =
       !rectangle_projection_cache_.valid ||
       rectangle_projection_cache_.content_revision != content_revision ||
@@ -2601,7 +2528,7 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
 }
 
 std::vector<int> ModelingSelectionService::box_pick_object_ids(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
     const ModelingBoxSelectRequest &request) const {
   QDR_PROFILE_SCOPE("Box selection resolve object hits");
@@ -2613,13 +2540,27 @@ std::vector<int> ModelingSelectionService::box_pick_object_ids(
   return hits.object_ids;
 }
 
-bool ModelingSelectionService::apply_rectangle_selection(
-    quader_editor_core::EditorSession &session,
+quader_editor_core::RectangleSelectionHits
+ModelingSelectionService::rectangle_selection_hits(
+    const ModelingSelectionProjectionSnapshot &session,
+    const SceneDocument &scene,
+    const ModelingObjectRuntimeMap &object_registry,
+    const ModelingBoxSelectRequest &request) const {
+  return quader_editor_core::rectangle_hits_from_projected_candidates(
+      cached_rectangle_projected_hits_request(
+          session, scene, object_registry, session.selection_mode(),
+          request));
+}
+
+ModelingSelectionProjectionApplyResult
+ModelingSelectionService::apply_rectangle_selection(
+    const ModelingSelectionProjectionSnapshot &session,
     const quader_editor_core::RectangleSelectionState &selection) const {
   QDR_PROFILE_SCOPE("Box selection publish runtime selection");
-  quader_editor_core::SessionState &state = session.state();
-  bool changed = state.selection_mode != selection.mode ||
-                 state.active_object_id != selection.active_object_id;
+  std::vector<quader_editor_core::PolygonObject> objects(
+      session.objects().begin(), session.objects().end());
+  bool changed = session.selection_mode() != selection.mode ||
+                 session.active_object_id() != selection.active_object_id;
 
   std::unordered_set<int> selected_objects(
       selection.selected_object_ids.begin(),
@@ -2637,7 +2578,7 @@ bool ModelingSelectionService::apply_rectangle_selection(
     std::unordered_set<int> full_object_ids(
         selection.selected_edge_full_object_ids.begin(),
         selection.selected_edge_full_object_ids.end());
-    for (const quader_editor_core::PolygonObject &object : state.objects) {
+    for (const quader_editor_core::PolygonObject &object : objects) {
       if (full_object_ids.find(object.id) == full_object_ids.end()) {
         continue;
       }
@@ -2653,7 +2594,7 @@ bool ModelingSelectionService::apply_rectangle_selection(
     std::unordered_set<int> full_object_ids(
         selection.selected_vertex_full_object_ids.begin(),
         selection.selected_vertex_full_object_ids.end());
-    for (const quader_editor_core::PolygonObject &object : state.objects) {
+    for (const quader_editor_core::PolygonObject &object : objects) {
       if (full_object_ids.find(object.id) == full_object_ids.end()) {
         continue;
       }
@@ -2670,7 +2611,7 @@ bool ModelingSelectionService::apply_rectangle_selection(
     }
   }
 
-  for (quader_editor_core::PolygonObject &object : state.objects) {
+  for (quader_editor_core::PolygonObject &object : objects) {
     bool next_selected = false;
     quader_poly::Selection next_selection;
     if (selection.mode == quader_editor_core::SelectionMode::Object) {
@@ -2766,42 +2707,42 @@ bool ModelingSelectionService::apply_rectangle_selection(
   }
 
   if (!changed) {
-    return false;
+    return {.applied = false, .changed = false, .projection = session};
   }
-  state.selection_mode = selection.mode;
-  state.active_object_id = selection.active_object_id;
-  quader_editor_core::normalize_active_object_id(state.objects,
-                                                 state.active_object_id);
-  state.selection_revision =
-      quader_editor_core::advance_session_revision(state.selection_revision);
-  return true;
+  int active_object_id = selection.active_object_id;
+  quader_editor_core::normalize_active_object_id(objects, active_object_id);
+  return {
+      .applied = true,
+      .changed = true,
+      .projection = session.with_selection(
+          std::move(objects), selection.mode, active_object_id,
+          quader_editor_core::advance_session_revision(
+              session.selection_revision())),
+  };
 }
 
-ModelingSelectionApplyResult ModelingSelectionService::apply_rectangle_selection(
-    quader_editor_core::EditorSession &session, const SceneDocument &scene,
+ModelingSelectionProjectionApplyResult
+ModelingSelectionService::apply_resolved_rectangle_selection(
+    const ModelingSelectionProjectionSnapshot &session,
+    const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_registry,
-    const ModelingBoxSelectRequest &request,
-    const quader_editor_core::RectangleSelectionState &baseline) const {
-  QDR_PROFILE_SCOPE("Box selection resolve component selection");
+    ModelingSelectionEdit edit,
+    const quader_editor_core::RectangleSelectionState &baseline,
+    const quader_editor_core::RectangleSelectionHits &hits) const {
   quader_editor_core::RectangleSelectionRequest rectangle_request;
   rectangle_request.current_selection = baseline;
   const quader_editor_core::SelectionEditOperation operation =
-      to_runtime_selection_edit(request.edit);
+      to_runtime_selection_edit(edit);
   rectangle_request.operation = operation;
-  rectangle_request.universe_view =
-      &rectangle_selection_universe(session, scene, object_registry,
-                                    session.selection_mode());
-  rectangle_request.hits =
-      quader_editor_core::rectangle_hits_from_projected_candidates(
-          cached_rectangle_projected_hits_request(
-              session, scene, object_registry, session.selection_mode(),
-              request));
+  rectangle_request.universe_view = &rectangle_selection_universe(
+      session, scene, object_registry, session.selection_mode());
+  rectangle_request.hits = hits;
 
   if (rectangle_resolution_cache_.valid &&
       rectangle_resolution_cache_.projected_candidates_revision ==
           rectangle_picking_projection_build_count_ &&
       rectangle_resolution_cache_.content_revision ==
-          session.state().content_revision &&
+          session.content_revision() &&
       rectangle_resolution_cache_.operation == operation &&
       same_rectangle_selection_state(rectangle_resolution_cache_.baseline,
                                      baseline) &&
@@ -2816,28 +2757,37 @@ ModelingSelectionApplyResult ModelingSelectionService::apply_rectangle_selection
     QDR_PROFILE_SCOPE("Box selection execute selection policy");
     return quader_editor_core::apply_rectangle_selection(rectangle_request);
   }();
-  const std::uint64_t selection_before = session.state().selection_revision;
-  const bool applied = [&]() {
+  const ModelingSelectionProjectionApplyResult applied = [&]() {
     QDR_PROFILE_SCOPE("Box selection apply resolved state");
     return apply_rectangle_selection(session, result.selection);
   }();
   rectangle_resolution_cache_.valid = true;
   rectangle_resolution_cache_.projected_candidates_revision =
       rectangle_picking_projection_build_count_;
-  rectangle_resolution_cache_.content_revision =
-      session.state().content_revision;
+  rectangle_resolution_cache_.content_revision = session.content_revision();
   rectangle_resolution_cache_.operation = operation;
   rectangle_resolution_cache_.baseline = baseline;
   rectangle_resolution_cache_.hits = rectangle_request.hits;
-  return {
-      .applied = applied,
-      .changed = session.state().selection_revision != selection_before,
-  };
+  return applied;
 }
 
-ModelingCommandResult ModelingSelectionService::set_group_selection_mode(
-    quader_editor_core::EditorSession &session,
-    ModelingSelectionMode &app_selection_mode) const {
+ModelingSelectionProjectionApplyResult
+ModelingSelectionService::apply_rectangle_selection(
+    const ModelingSelectionProjectionSnapshot &session,
+    const SceneDocument &scene,
+    const ModelingObjectRuntimeMap &object_registry,
+    const ModelingBoxSelectRequest &request,
+    const quader_editor_core::RectangleSelectionState &baseline) const {
+  QDR_PROFILE_SCOPE("Box selection resolve component selection");
+  return apply_resolved_rectangle_selection(
+      session, scene, object_registry, request.edit, baseline,
+      rectangle_selection_hits(session, scene, object_registry, request));
+}
+
+ModelingSelectionProjectionCommandResult
+ModelingSelectionService::set_group_selection_mode(
+    const ModelingSelectionProjectionSnapshot &session,
+    ModelingSelectionMode app_selection_mode) const {
   const quader_editor_core::SelectionMode runtime_mode =
       app_selection_mode_to_runtime(ModelingSelectionMode::Group);
   const std::vector<int> selected_object_ids = session.selected_object_ids();
@@ -2846,28 +2796,45 @@ ModelingCommandResult ModelingSelectionService::set_group_selection_mode(
   const bool changed = app_selection_mode != ModelingSelectionMode::Group ||
                        session.selection_mode() != runtime_mode ||
                        had_runtime_object_selection;
-  app_selection_mode = ModelingSelectionMode::Group;
-  if (session.selection_mode() != runtime_mode) {
-    session.set_selection_mode(runtime_mode);
-  }
-  if (had_runtime_object_selection) {
-    session.set_selected_object_ids({}, -1);
+  std::vector<quader_editor_core::PolygonObject> objects(
+      session.objects().begin(), session.objects().end());
+  for (quader_editor_core::PolygonObject &object : objects) {
+    object.selected = false;
+    object.component_edit_target = false;
+    object.selection = {};
   }
   return {
-      .ok = true,
-      .changed = changed,
-      .message = changed ? "Selection mode set to Group."
-                         : "Selection mode already Group.",
+      .command = {
+          .ok = true,
+          .changed = changed,
+          .message = changed ? "Selection mode set to Group."
+                             : "Selection mode already Group.",
+      },
+      .projection =
+          changed
+              ? session.with_selection(
+                    std::move(objects), runtime_mode, -1,
+                    quader_editor_core::advance_session_revision(
+                        session.selection_revision()))
+              : session,
   };
 }
 
-ModelingCommandResult ModelingSelectionService::set_component_selection(
-    quader_editor_core::EditorSession &session,
+ModelingSelectionProjectionCommandResult
+ModelingSelectionService::set_component_selection(
+    const ModelingSelectionProjectionSnapshot &session,
     const ModelingComponentSelectionRequest &request) const {
-  quader_editor_core::PolygonObject *object =
-      find_modeling_object(session, request.modeling_object_id);
-  if (object == nullptr) {
-    return {.ok = false, .message = "Selection target mesh was not found."};
+  std::vector<quader_editor_core::PolygonObject> objects(
+      session.objects().begin(), session.objects().end());
+  const auto object = std::ranges::find(
+      objects, request.modeling_object_id,
+      &quader_editor_core::PolygonObject::id);
+  if (object == objects.end()) {
+    return {
+        .command = {.ok = false,
+                    .message = "Selection target mesh was not found."},
+        .projection = session,
+    };
   }
 
   const quader_editor_core::SelectionMode mode =
@@ -2881,124 +2848,57 @@ ModelingCommandResult ModelingSelectionService::set_component_selection(
       validated_component_selection_edit(*object, request, mode,
                                          current_selection);
   if (!selection_edit.ok) {
-    return {.ok = false, .message = std::string(selection_edit.message)};
+    return {
+        .command = {.ok = false,
+                    .message = std::string(selection_edit.message)},
+        .projection = session,
+    };
   }
 
-  const std::uint64_t selection_before = session.state().selection_revision;
-  session.set_component_selection(request.modeling_object_id,
-                                  std::move(selection_edit.selection), mode);
+  for (quader_editor_core::PolygonObject &candidate : objects) {
+    if (candidate.id != request.modeling_object_id) {
+      candidate.selected = false;
+      candidate.component_edit_target = false;
+      candidate.selection = {};
+      continue;
+    }
+    candidate.selection = std::move(selection_edit.selection);
+    candidate.selection.mode =
+        quader_editor_core::component_selection_mode(mode);
+    candidate.selected = !candidate.selection.empty();
+    candidate.component_edit_target = candidate.selected;
+  }
+  int active_object_id =
+      object->selected ? request.modeling_object_id : -1;
+  const bool changed =
+      mode != session.selection_mode() ||
+      active_object_id != session.active_object_id() ||
+      !std::equal(objects.begin(), objects.end(), session.objects().begin(),
+                  session.objects().end(),
+                  [](const quader_editor_core::PolygonObject &left,
+                     const quader_editor_core::PolygonObject &right) {
+                    return left.id == right.id &&
+                           left.selected == right.selected &&
+                           left.component_edit_target ==
+                               right.component_edit_target &&
+                           ModelingSelectionService::selection_matches(
+                               left.selection, right.selection);
+                  });
   return {
-      .ok = true,
-      .changed = session.state().selection_revision != selection_before,
+      .command = {.ok = true, .changed = changed},
+      .projection =
+          changed
+              ? session.with_selection(
+                    std::move(objects), mode, active_object_id,
+                    quader_editor_core::advance_session_revision(
+                        session.selection_revision()))
+              : session,
   };
 }
 
 bool ModelingSelectionService::selection_matches(
     const quader_poly::Selection &left, const quader_poly::Selection &right) {
   return quader_editor_core::polygon_selection_matches(left, right);
-}
-
-SceneModelingSyncService::SceneModelingSyncService(
-    ModelingObjectRuntimeMap &object_map)
-    : object_map_(object_map) {}
-
-ModelingObjectRuntimeMap &SceneModelingSyncService::object_map() {
-  return object_map_;
-}
-
-const ModelingObjectRuntimeMap &SceneModelingSyncService::object_map() const {
-  return object_map_;
-}
-
-bool SceneModelingSyncService::scene_objects_sync_valid() const {
-  return scene_objects_sync_valid_;
-}
-
-std::uint64_t
-SceneModelingSyncService::synced_modeling_content_revision() const {
-  return synced_modeling_content_revision_;
-}
-
-void SceneModelingSyncService::invalidate_scene_objects() {
-  scene_objects_sync_valid_ = false;
-  projected_mesh_signatures_by_object_.clear();
-  projected_topology_storage_by_object_.clear();
-}
-
-void SceneModelingSyncService::mark_scene_objects_synced(
-    std::uint64_t content_revision) {
-  synced_modeling_content_revision_ = content_revision;
-  scene_objects_sync_valid_ = true;
-}
-
-void SceneModelingSyncService::remember_projected_mesh_signature(
-    int modeling_object_id, std::uint64_t signature,
-    std::uintptr_t topology_storage) {
-  projected_mesh_signatures_by_object_[modeling_object_id] = signature;
-  projected_topology_storage_by_object_[modeling_object_id] =
-      topology_storage;
-}
-
-void SceneModelingSyncService::forget_projected_mesh_signature(
-    int modeling_object_id) {
-  projected_mesh_signatures_by_object_.erase(modeling_object_id);
-  projected_topology_storage_by_object_.erase(modeling_object_id);
-}
-
-bool SceneModelingSyncService::projected_mesh_signature_known(
-    int modeling_object_id) const {
-  return projected_mesh_signatures_by_object_.contains(modeling_object_id);
-}
-
-bool SceneModelingSyncService::projected_mesh_signature_matches(
-    int modeling_object_id, std::uint64_t signature) const {
-  const auto found =
-      projected_mesh_signatures_by_object_.find(modeling_object_id);
-  return found != projected_mesh_signatures_by_object_.end() &&
-         found->second == signature;
-}
-
-bool SceneModelingSyncService::projected_topology_storage_matches(
-    int modeling_object_id, std::uintptr_t topology_storage) const {
-  const auto found =
-      projected_topology_storage_by_object_.find(modeling_object_id);
-  return found != projected_topology_storage_by_object_.end() &&
-         found->second == topology_storage;
-}
-
-bool SceneModelingSyncService::
-    scene_objects_synced_for_current_modeling_content(
-        const quader_editor_core::EditorSession &session,
-        const SceneDocument &scene, const AssetRegistry &assets) const {
-  if (!scene_objects_sync_valid_ ||
-      synced_modeling_content_revision_ != session.state().content_revision) {
-    return false;
-  }
-  // The workspace map also contains SDK-owned objects. This legacy sync owner
-  // validates only its own runtime participants and must not treat the SDK
-  // adapter's workspace-scoped bindings as stale duplicates.
-  for (const quader_editor_core::PolygonObject &object : session.objects()) {
-    const std::optional<EntityId> entity =
-        object_map_.entity_for_modeling_object(object.id);
-    if (!entity.has_value() || !scene.exists(*entity)) {
-      return false;
-    }
-    const ModelingObjectComponent *modeling_object =
-        scene.modeling_object(*entity);
-    const MeshComponent *mesh = scene.mesh(*entity);
-    if (modeling_object == nullptr || mesh == nullptr ||
-        scene.kind(*entity) != EntityKind::Mesh ||
-        modeling_object->object_id != object.id ||
-        modeling_object->material_slot !=
-            static_cast<std::uint32_t>(object.material_id) ||
-        mesh->mesh == kInvalidAssetId || assets.mesh(mesh->mesh) == nullptr ||
-        !projected_mesh_signature_known(object.id) ||
-        !projected_topology_storage_matches(
-            object.id, object.document.storage_token())) {
-      return false;
-    }
-  }
-  return true;
 }
 
 ModelingToolStatus ModelingOverlayService::tool_status(
@@ -3390,10 +3290,10 @@ void ModelingOverlayService::store_selection_frame(
 
 const quader_editor_core::SelectionOverlayFrame &
 ModelingOverlayService::selection_overlay_base_frame(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     ModelingSelectionOverlayOptions options) const {
-  const std::uint64_t content_revision = session.state().content_revision;
-  const std::uint64_t selection_revision = session.state().selection_revision;
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
   const int active_object_id = session.active_object_id();
   const quader_editor_core::SelectionMode selection_mode =
       session.selection_mode();
@@ -3604,7 +3504,7 @@ ModelingOverlayService::selection_overlay_base_frame(
 
 quader_editor_core::SelectionOverlayFrame
 ModelingOverlayService::selection_overlay_current_frame(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const quader_editor_core::EditorRuntime &runtime,
     const quader_editor_core::SelectionHoverState &hover,
     ModelingSelectionOverlayOptions options) const {
@@ -3653,7 +3553,7 @@ ModelingOverlayService::selection_overlay_current_frame(
 }
 
 ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const quader_editor_core::EditorRuntime &runtime,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
     const ModelingSelectionService &selection_service,
@@ -3661,8 +3561,8 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
     ModelingSelectionOverlayOptions options) const {
   const quader_editor_core::SelectionHoverState persistent_hover;
   (void)sdk_projection;
-  const std::uint64_t content_revision = session.state().content_revision;
-  const std::uint64_t selection_revision = session.state().selection_revision;
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
   const std::uint64_t scene_revision = scene.revision();
   const std::uint64_t local_visibility_revision =
       selection_service.viewport_visibility_revision();
@@ -3748,7 +3648,7 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
 }
 
 ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &session,
     const quader_editor_core::EditorRuntime &runtime,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
     const ModelingSelectionService &selection_service,
@@ -3976,11 +3876,12 @@ void ModelingHistoryBridge::record_operation(
 }
 
 void ModelingHistoryBridge::record_transform(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &selection,
     const quader_editor_core::TransformDragState &drag,
     bool duplicate_selected) {
-  quader_editor_core::record_repeatable_transform(repeat_last_action_, session,
-                                                  drag, duplicate_selected);
+  quader_editor_core::record_repeatable_transform(
+      repeat_last_action_, selection.objects(), selection.selection_mode(),
+      drag, duplicate_selected);
 }
 
 ModelingInteractionSettingsService::ModelingInteractionSettingsService()

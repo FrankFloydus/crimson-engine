@@ -10,6 +10,7 @@
 
 #include <editor/modeling/runtime/session.hpp>
 #include <quader/modeling/mesh/polygon_document.hpp>
+#include <quader/modeling/payloads.hpp>
 
 #include <optional>
 
@@ -35,6 +36,11 @@ public:
   /** Projects one SDK document into native render and persistence payloads. */
   [[nodiscard]] static std::optional<MeshAsset>
   compile_sdk_document_mesh(const quader::modeling::PolygonDocument &document);
+  /** Converts an SDK-owned compiled payload without recompiling topology. */
+  [[nodiscard]] static std::optional<MeshAsset>
+  mesh_asset_from_sdk_payload(
+      const quader::modeling::MeshPayload &payload,
+      const quader::modeling::PolygonDocument &authored_document);
   /**
    * Canonically recompiles a topology-retained committed transform into the
    * current asset's detached buffers. Every derived vertex attribute and index

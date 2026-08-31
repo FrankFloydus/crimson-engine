@@ -10,12 +10,14 @@
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/commands/asset_command_service.hpp"
+#include "editor/commands/scene_structural_lifecycle_service.hpp"
 #include "editor/curve/curve_tool_service.hpp"
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/services/modeling_legacy_local_frame_upgrade.hpp"
 #include "editor/modeling/services/modeling_mesh_sync_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
+#include "editor/placement/scene_surface_query.hpp"
 #include "editor/placement/snap_to_floor_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
@@ -75,9 +77,23 @@ void SceneSession::rebuild_services() {
       });
   selection_ = std::make_unique<EditorSelectionService>(
       document_.scene(), *document_commands_, *modeling_);
+  structural_lifecycle_ =
+      std::make_unique<SceneStructuralLifecycleService>(
+          document_.scene(), *history_, *document_commands_, *modeling_,
+          selection_.get());
+  document_commands_->set_selection_publication([this]() {
+    if (!selection_) {
+      return CommandResult{
+          .ok = false,
+          .message = "Editor selection authority is unavailable.",
+      };
+    }
+    return selection_->publish_scene_selection();
+  });
   instances_ = std::make_unique<SceneInstanceService>(
       document_.scene(), document_.assets(), *document_commands_, *history_,
-      *modeling_, instance_edit_context_, document_.name());
+      *modeling_, *selection_, *structural_lifecycle_, instance_edit_context_,
+      document_.name());
   modeling_->set_instance_edit_scope_provider([this]() {
     if (!instances_) {
       return ModelingInstanceEditScope{};
@@ -107,6 +123,7 @@ void SceneSession::rebuild_services() {
       *selection_, *instances_);
   curve_ = std::make_unique<CurveToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_);
+  selection_->set_sub_selection_provider(curve_.get());
   primitive_creation_ = std::make_unique<PrimitiveCreationToolService>(
       *history_, *modeling_, ModelingOperationPreviewCheckpointHooks{
                                   .begin = [this]() {
@@ -126,17 +143,22 @@ void SceneSession::rebuild_services() {
   selection_->set_scene_selection_history_suppression_provider([this]() {
     return primitive_creation_ && primitive_creation_->active();
   });
-  point_placement_ = std::make_unique<ViewportPointPlacementService>();
   native_tools_ = std::make_unique<NativeViewportToolCoordinator>(
       *pivot_, *linear_array_, *radial_array_, *primitive_creation_,
       *selection_, *modeling_, *curve_);
   viewport_local_visibility_ =
       std::make_unique<ViewportLocalVisibilityService>(
           document_.scene(), document_.assets(), *modeling_, *instances_,
-          *native_tools_, viewport_workspace_);
+          *native_tools_, viewport_workspace_,
+          [this]() { (void)selection_->clear_hover(); });
+  scene_surface_query_ = std::make_unique<SceneSurfaceQuery>(
+      document_.scene(), document_.assets(), *viewport_local_visibility_);
+  point_placement_ = std::make_unique<ViewportPointPlacementService>(
+      *scene_surface_query_);
   snap_to_floor_ = std::make_unique<SnapToFloorService>(
       document_.scene(), document_.assets(), *document_commands_, *modeling_,
-      *instances_, *native_tools_, *viewport_local_visibility_);
+      *instances_, *native_tools_, *viewport_local_visibility_,
+      *scene_surface_query_);
   history_->set_change_observer([this]() {
     if (viewport_local_visibility_) {
       viewport_local_visibility_->synchronize_scene_lifecycle();
@@ -148,11 +170,6 @@ void SceneSession::rebuild_services() {
       },
       [this]() { return viewport_local_visibility_->revision(); },
       [this]() { return viewport_local_visibility_->active(); });
-  point_placement_->set_viewport_visibility_filter(
-      [this](EntityId entity) {
-        return viewport_local_visibility_->allows_selection_entity(entity);
-      },
-      [this]() { return viewport_local_visibility_->revision(); });
   document_commands_->set_entity_mutation_blocker([this](EntityId entity) {
     return native_tools_ && native_tools_->blocks_document_mutation(entity);
   });
@@ -277,7 +294,8 @@ void SceneSession::replace_document_impl(
   instance_edit_context_.clear();
   preview_content_checkpoint_.reset();
   document_ = std::move(document);
-  snap_to_floor_->invalidate_surface_cache();
+  scene_surface_query_->invalidate();
+  point_placement_->invalidate();
   {
     QDR_PROFILE_SCOPE("SceneSession replace ensure scene root");
     (void)document_.ensure_scene_root();

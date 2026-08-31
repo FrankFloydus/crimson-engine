@@ -21,9 +21,8 @@ file except through prior written authorization from Francesco Di Blasi.
 
 ## C++ Style Tool
 
-`tools/check_cpp_style.py` is the clang-tidy style gate. It validates project-owned C++ path naming,
-generates its disposable compile database in `.build/cmake-tidy`, and enforces the root
-`.clang-tidy` identifier-naming policy.
+`tools/check_cpp_style.py` validates project-owned C++ path naming and the root `.clang-tidy`
+identifier policy. Its compile database under `.build/cmake-tidy` is disposable.
 
 ## Regression Gate
 
@@ -34,19 +33,11 @@ generates its disposable compile database in `.build/cmake-tidy`, and enforces t
 
 ## Tracy Launcher
 
-- `boot_tracy.ps1` is fixed to the canonical `build/vs2026/Debug/quader.exe`. On a normal launch it
-  configures `vs2026`, incrementally builds only `vs2026-debug --target quader`, validates that
-  Debug uses Release-speed runtime/dependencies with Tracy/on-demand enabled and Release has no
-  Tracy definitions, starts the Tracy profiler first, then starts Quader and waits until both
-  application windows are ready.
-- The `Debug` path is the Profile artifact compatibility path: Release-speed code and dependencies,
-  embedded symbols, and Tracy. It is not a traditional checked Debug build and is never shipped.
-- Launcher failures remain visible until Enter is pressed. Automated callers can pass
-  `-NoPauseOnError` to preserve non-interactive failure behavior.
-- `-ValidateOnly` checks an already configured/built canonical tree without rebuilding or launching.
-  The profiler path may be overridden, but the executable, configuration, cache, and build preset
-  may not: profiling captures always use the optimized Tracy-enabled Debug executable. Validation
-  must reject the Debug CRT, checked STL, Qt `*d`, vcpkg `debug/lib`, Filament `mdd`, and `matdbg`.
-- Launcher validation must verify the required Release DLL identities and recursively inspect the
-  deployed executable, DLLs, and Qt plugins for missing dependencies before starting Quader. A
-  direct-DLL checklist is not a replacement for dependency-closure validation.
+- `boot_tracy.ps1` targets only `build/vs2026/Debug/quader.exe`: the optimized Profile artifact
+  with embedded symbols and on-demand Tracy. It configures `vs2026`, incrementally builds
+  `vs2026-debug --target quader`, validates the profile contract, starts Tracy first, then Quader.
+- The launcher must reject Debug CRT/STL, debug Qt/vcpkg, Filament `mdd`/`matdbg`, and any
+  noncanonical executable, configuration, cache, or preset. Only the profiler path is overridable.
+- `-ValidateOnly` performs validation without building or launching. `-NoPauseOnError` keeps
+  automation noninteractive.
+- Validate the recursively deployed DLL and Qt-plugin dependency closure, not just direct DLLs.

@@ -296,6 +296,11 @@ CommandResult apply_transform_drag_preview(
 		const EditorSession& session,
 		TransformDragState& state,
 		const TransformDragPreviewInput& input);
+CommandResult apply_transform_drag_preview(
+		std::span<const PolygonObject> selection_objects,
+		SelectionMode selection_mode,
+		TransformDragState& state,
+		const TransformDragPreviewInput& input);
 std::vector<SelectionOverlayPoint> transform_drag_snap_overlay_points(
 		const TransformDragState& state,
 		const SelectionOverlayStyle& style = {});

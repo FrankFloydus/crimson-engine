@@ -78,8 +78,8 @@ public:
     std::vector<EntityId> elements;
     elements.reserve(source_snapshots_.size() + duplicate_roots_.size());
     for (const DocumentEntitySnapshot &source : source_snapshots_) {
-      if (scene().exists(source.original_id)) {
-        elements.push_back(source.original_id);
+      if (scene().exists(source.id)) {
+        elements.push_back(source.id);
       }
     }
     elements.insert(elements.end(), duplicate_roots_.begin(),
@@ -125,7 +125,7 @@ private:
          ++source_index) {
       const LinkedInstanceArraySource &source = sources_[source_index];
       const DocumentEntitySnapshot &snapshot = source_snapshots_[source_index];
-      const EntityId parent = snapshot.original_parent;
+      const EntityId parent = snapshot.parent;
       if (parent != kInvalidEntityId && !scene().exists(parent)) {
         return command_invalid_result(
             "Instance array source parent no longer exists.");
@@ -172,7 +172,7 @@ private:
 
   CommandResult restore_duplicates() {
     for (const DocumentEntitySnapshot &snapshot : duplicate_snapshots_) {
-      const EntityId parent = snapshot.original_parent;
+      const EntityId parent = snapshot.parent;
       if (parent != kInvalidEntityId && !scene().exists(parent)) {
         return command_invalid_result(
             "Instance array occurrence parent no longer exists.");

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <initializer_list>
 #include <string>
@@ -43,6 +44,8 @@ public:
     [[nodiscard]] const std::string &current_locale() const {
       return current_locale_;
     }
+    /// Advances whenever the effective catalog publication changes.
+    [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
     [[nodiscard]] const std::string &fallback_locale() const {
       return fallback_locale_;
     }
@@ -70,6 +73,7 @@ private:
   Catalog active_catalog_;
   Catalog fallback_catalog_;
   std::vector<LocaleInfo> available_locales_;
+  std::uint64_t revision_ = 0u;
 };
 
 } // namespace quader

@@ -56,6 +56,7 @@ struct QtMaterialBrowserLabels final {
 };
 
 enum class QtMaterialBrowserViewMode : std::uint8_t { Grid, List };
+/** Distinguishes active-material browsing from a modal material-picking workflow. */
 enum class QtMaterialBrowserPurpose : std::uint8_t {
   ActiveMaterial,
   Picker,

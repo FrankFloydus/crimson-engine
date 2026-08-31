@@ -58,8 +58,8 @@ std::span<const ViewportSceneCurvePickCandidate> ViewportCurvePickCache::candida
     return candidates_;
   }
   candidates_.reserve(assets.curve_count());
-  const auto hierarchy = document.hierarchy_projection_snapshot();
-  for (const auto &entity : hierarchy.records()) {
+  const auto hierarchy = document.hierarchy_projection();
+  for (const auto &entity : hierarchy->records()) {
     const CurveComponent *binding = document.curve(entity.entity);
     if (binding == nullptr || !entity.effectively_visible ||
         entity.effectively_locked ||

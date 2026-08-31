@@ -54,9 +54,9 @@ public:
       if (duplicate_snapshot_.has_value()) {
         std::unordered_map<EntityId, EntityId> remapped_entities;
         const EntityId parent =
-            duplicate_snapshot_->original_parent != kInvalidEntityId &&
-                    scene().exists(duplicate_snapshot_->original_parent)
-                ? duplicate_snapshot_->original_parent
+            duplicate_snapshot_->parent != kInvalidEntityId &&
+                    scene().exists(duplicate_snapshot_->parent)
+                ? duplicate_snapshot_->parent
                 : kInvalidEntityId;
         duplicate = document_command_restore_entity_snapshot_tree(
             scene(), *duplicate_snapshot_, parent, remapped_entities, false);

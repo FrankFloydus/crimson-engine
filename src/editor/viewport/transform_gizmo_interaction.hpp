@@ -7,9 +7,12 @@
 #pragma once
 
 #include "api/quader_api_types.hpp"
+#include "editor/placement/scene_surface_query.hpp"
+#include "editor/tools/viewport_curve_interaction_port.hpp"
 #include "editor/viewport/viewport_interaction_frame.hpp"
 #include "editor/viewport/viewport_curve_picking.hpp"
 #include "viewport/curve_tool_preview.hpp"
+#include "viewport/viewport_pointer_gesture.hpp"
 
 #include <editor/interactions/move_tool.hpp>
 #include <editor/interactions/transform_gizmo.hpp>
@@ -23,7 +26,6 @@
 namespace quader {
 
 class QuaderEditorApi;
-class CurveToolService;
 
 /// Counts camera-independent selection-pivot cache work for diagnostics and tests.
 struct TransformGizmoSelectionCacheStats {
@@ -40,12 +42,13 @@ class TransformGizmoInteraction {
 public:
   [[nodiscard]] ViewportBeforeToolInteractionResult
   handle_frame(QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
-               CurveToolService *curve_tool = nullptr);
+               ViewportCurveInteractionPort *curve_tool = nullptr);
   [[nodiscard]] bool cancel_active_drag(QuaderEditorApi &editor);
   [[nodiscard]] bool cancel_active_drag(QuaderEditorApi &editor,
-                                        CurveToolService *curve_tool);
+                                        ViewportCurveInteractionPort *curve_tool);
   void reset(QuaderEditorApi *editor = nullptr);
-  void reset(QuaderEditorApi *editor, CurveToolService *curve_tool);
+  void reset(QuaderEditorApi *editor,
+             ViewportCurveInteractionPort *curve_tool);
 
   [[nodiscard]] bool dragging() const { return dragging_; }
   /// A pending gizmo click owns its release before a drag preview exists.
@@ -107,6 +110,7 @@ private:
      * Stores a gizmo hit that is waiting for drag-threshold confirmation.
      */
     struct PendingGizmoDrag {
+      ViewportPointerGesture pointer;
       QuaderTransformDragBeginRequest begin_request;
       ViewportToolId tool = ViewportToolId::Select;
       quader_editor_core::TransformAxis axis =
@@ -137,14 +141,14 @@ private:
     [[nodiscard]] bool
     begin_pending_drag(QuaderEditorApi &editor,
                        const ViewportInteractionFrame &frame,
-                       CurveToolService *curve_tool);
+                       ViewportCurveInteractionPort *curve_tool);
     [[nodiscard]] ViewportBeforeToolInteractionResult release_pending_click();
     [[nodiscard]] std::optional<CurveControlSelectionSnapshot>
-    selected_curve_controls(CurveToolService *curve_tool,
+    selected_curve_controls(ViewportCurveInteractionPort *curve_tool,
                             QuaderTransformSpace transform_space);
     [[nodiscard]] static bool
     curve_control_selection_identity_matches(
-        CurveToolService *curve_tool,
+        ViewportCurveInteractionPort *curve_tool,
         const CurveControlSelectionIdentity &identity);
     [[nodiscard]] bool
     matches_last_drag_update(const DragUpdateSignature &signature) const;
@@ -161,6 +165,7 @@ private:
     bool curve_anchor_snap_eligible_ = false;
     std::vector<ViewportCurveAnchorSnapCandidate>
         curve_anchor_snap_candidates_;
+    SceneSurfaceQueryScratch surface_query_scratch_;
     std::vector<quader_editor_core::SelectionOverlayPoint>
         snap_overlay_points_;
     quader_editor_core::TransformAxis active_axis_ =

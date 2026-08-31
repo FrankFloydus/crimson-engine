@@ -30,6 +30,8 @@ class PivotToolService;
 class PrimitiveCreationToolService;
 class RadialArrayToolService;
 class SceneInstanceService;
+class SceneSurfaceQuery;
+class SceneStructuralLifecycleService;
 class SnapToFloorService;
 class ViewportLocalVisibilityService;
 class ViewportPointPlacementService;
@@ -98,6 +100,12 @@ public:
   AssetCommandService &asset_commands() { return *asset_commands_; }
   ModelingSessionService &modeling() { return *modeling_; }
   const ModelingSessionService &modeling() const { return *modeling_; }
+  SceneStructuralLifecycleService &structural_lifecycle() {
+    return *structural_lifecycle_;
+  }
+  const SceneStructuralLifecycleService &structural_lifecycle() const {
+    return *structural_lifecycle_;
+  }
   EditorSelectionService &selection() { return *selection_; }
   const EditorSelectionService &selection() const { return *selection_; }
   SceneInstanceService &instances() { return *instances_; }
@@ -144,6 +152,10 @@ public:
   const ViewportLocalVisibilityService &viewport_local_visibility() const {
     return *viewport_local_visibility_;
   }
+  SceneSurfaceQuery &scene_surface_query() { return *scene_surface_query_; }
+  const SceneSurfaceQuery &scene_surface_query() const {
+    return *scene_surface_query_;
+  }
   SnapToFloorService &snap_to_floor() { return *snap_to_floor_; }
   const SnapToFloorService &snap_to_floor() const { return *snap_to_floor_; }
 
@@ -188,6 +200,7 @@ private:
   std::unique_ptr<AssetCommandService> asset_commands_;
   std::unique_ptr<ModelingSessionService> modeling_;
   std::unique_ptr<EditorSelectionService> selection_;
+  std::unique_ptr<SceneStructuralLifecycleService> structural_lifecycle_;
   InstanceEditContext instance_edit_context_;
   std::unique_ptr<SceneInstanceService> instances_;
   std::unique_ptr<PivotToolService> pivot_;
@@ -195,11 +208,12 @@ private:
   std::unique_ptr<RadialArrayToolService> radial_array_;
   std::unique_ptr<CurveToolService> curve_;
   std::unique_ptr<PrimitiveCreationToolService> primitive_creation_;
-  std::unique_ptr<ViewportPointPlacementService> point_placement_;
   std::unique_ptr<NativeViewportToolCoordinator> native_tools_;
   ViewportWorkspaceService viewport_workspace_{
       ViewportWorkspaceLayoutPolicy::MultiPane};
   std::unique_ptr<ViewportLocalVisibilityService> viewport_local_visibility_;
+  std::unique_ptr<SceneSurfaceQuery> scene_surface_query_;
+  std::unique_ptr<ViewportPointPlacementService> point_placement_;
   std::unique_ptr<SnapToFloorService> snap_to_floor_;
   std::function<void(SceneSession &)> document_replacement_finalizer_;
 };

@@ -111,6 +111,12 @@ enum class QuaderActiveSelectionKind {
     Light,
 };
 
+/** Identifies an editor-owned component selection projected with mesh selection. */
+enum class QuaderSubSelectionKind {
+    None,
+    CurveControl,
+};
+
 /**
  * Enumerates QuaderAssetKind values used by the api layer.
  */
@@ -403,6 +409,10 @@ struct QuaderSelectionSummary {
     std::uint32_t selected_vertex_count = 0;
     std::uint32_t selected_edge_count = 0;
     std::uint32_t selected_face_count = 0;
+    QuaderSubSelectionKind sub_selection_kind =
+        QuaderSubSelectionKind::None;
+    std::uint32_t selected_sub_element_count = 0;
+    std::uint64_t sub_selection_revision = 0;
     std::uint64_t content_revision = 0;
     std::uint64_t selection_revision = 0;
 };

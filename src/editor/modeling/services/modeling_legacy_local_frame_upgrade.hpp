@@ -14,6 +14,14 @@ class AssetRegistry;
 class ModelingMeshSyncService;
 class SceneDocument;
 
+/// Identifies deterministic publication boundaries exercised by focused tests.
+enum class ModelingLegacyLocalFrameUpgradeFailurePoint {
+  None,
+  AfterMeshPublication,
+  AfterTransformPublication,
+  AfterModelingMarkerPublication,
+};
+
 /**
  * Counts the deterministic decisions made by one legacy local-frame upgrade.
  */
@@ -43,6 +51,9 @@ public:
   [[nodiscard]] static ModelingLegacyLocalFrameUpgradeStats
   upgrade_scene(SceneDocument &scene, AssetRegistry &assets,
                 ModelingMeshSyncService &mesh_sync);
+
+  static void set_failure_point_for_tests(
+      ModelingLegacyLocalFrameUpgradeFailurePoint point) noexcept;
 };
 
 } // namespace quader

@@ -213,6 +213,7 @@ set(QUADER_EDITOR_VIEWPORT_TOOL_SOURCES
     src/editor/tools/viewport_tool.cpp
     src/editor/tools/viewport_tool_ports.cpp
     src/editor/tools/viewport_tool_runtime.cpp
+    src/editor/tools/viewport_native_tool_interaction.cpp
     src/editor/tools/base/drag_commit_tool.cpp
     src/editor/tools/base/drawn_plane_tool.cpp
     src/editor/tools/base/modal_viewport_tool.cpp
@@ -247,11 +248,13 @@ add_library(quader_modeling STATIC
     src/editor/selection/scene_selection_application.cpp
     src/editor/selection/selection_projection_service.cpp
     src/editor/modeling/picking/curve_picking_cache.cpp
+    src/editor/modeling/runtime/modeling_object_binding_registry.cpp
     src/editor/modeling/runtime/modeling_object_runtime_map.cpp
     src/editor/modeling/services/modeling_action_catalog.cpp
     src/editor/modeling/services/modeling_hierarchy_duplicate_service.cpp
     src/editor/modeling/services/modeling_instant_operation_catalog.cpp
     src/editor/modeling/services/modeling_legacy_local_frame_upgrade.cpp
+    src/editor/modeling/services/modeling_host_publication_transaction.cpp
     src/editor/modeling/services/modeling_mesh_sync_service.cpp
     src/editor/modeling/services/modeling_operation_settings.cpp
     src/editor/modeling/services/modeling_sdk_projection_adapter.cpp
@@ -328,8 +331,10 @@ target_link_libraries(quader_mesh_io PUBLIC quader_assets)
 
 add_library(quader_document STATIC
     src/scene/document/scene_content_document.cpp
+    src/scene/document/scene_entity_state.cpp
     src/scene/scene_bounds.cpp
     src/scene/scene_document.cpp
+    src/scene/scene_mesh_occurrence_projection.cpp
     src/scene/scene_transform_pivot.cpp
 )
 
@@ -350,6 +355,7 @@ add_library(quader_editor_services STATIC
     src/editor/commands/document_command_service.cpp
     src/editor/commands/editor_command_registry.cpp
     src/editor/commands/modeling_command_execution_service.cpp
+    src/editor/commands/scene_structural_lifecycle_service.cpp
     src/editor/history/editor_history_service.cpp
     src/editor/input/quader_keybinding_target_catalog.cpp
     src/editor/material/material_reference_service.cpp
@@ -454,10 +460,12 @@ endif()
 
 add_library(quader_project_session STATIC
     src/editor/instances/project_clipboard_service.cpp
+    src/editor/material/material_presentation_service.cpp
     src/editor/material/project_image_decoder.cpp
     src/editor/material/project_material_import_service.cpp
     src/editor/material/project_material_persistence.cpp
     src/editor/material/standard_material_edit_session_service.cpp
+    src/editor/render/standard_material_render_snapshot_adapter.cpp
     src/editor/session/project_session.cpp)
 quader_configure_core_module(quader_project_session)
 target_link_libraries(quader_project_session
@@ -739,6 +747,7 @@ add_library(quader_render STATIC
     src/render/overlay/render_overlay_snapshot.cpp
     src/render/overlay/overlay_renderable_builder.cpp
     src/render/overlay/overlay_renderable_cache.cpp
+    src/render/overlay/instanced_wire_render_backend.cpp
     src/render/overlay/instance_selection_overlay_cache.cpp
     src/render/overlay/scene_wireframe_overlay_cache.cpp
     src/render/overlay/selected_object_overlay_cache.cpp
@@ -746,9 +755,11 @@ add_library(quader_render STATIC
     src/render/overlay/viewport_selection_marquee_overlay_builder.cpp
     src/render/overlay/viewport_transform_gizmo_overlay_builder.cpp
     src/render/overlay/viewport_scene_overlay_builder.cpp
+    src/render/overlay/viewport_overlay_submission_coordinator.cpp
     src/render/overlay/viewport_overlay_style_resolver.cpp
     src/render/render_system.cpp
     src/render/render_signature_builder.cpp
+    src/render/render_source_stamp.cpp
     src/render/scene_render_extraction.cpp
     src/render/scene_render_bridge.cpp
     src/render/scene_render_sync_service.cpp
@@ -764,7 +775,9 @@ add_library(quader_render STATIC
 )
 
 quader_enable_common_pch(quader_render)
-target_include_directories(quader_render PUBLIC src)
+target_include_directories(quader_render
+    PUBLIC src
+    PRIVATE "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}")
 target_compile_definitions(quader_render
     PUBLIC
         QUADER_DEFAULT_FILAMENT_SDK_ROOT="${FILAMENT_SDK_ROOT}"
@@ -816,9 +829,10 @@ add_library(quader_editor_viewport STATIC
     src/editor/viewport/viewport_tool_overlay_projection.cpp
     src/editor/viewport/transform_gizmo_interaction.cpp
     src/editor/viewport/viewport_interaction_controller.cpp
-    src/editor/viewport/viewport_native_tool_interaction.cpp
     src/editor/viewport/viewport_selection_interaction.cpp
     src/editor/viewport/viewport_curve_picking.cpp
+    src/editor/viewport/viewport_vertex_snap_aggregation.cpp
+    src/editor/viewport/viewport_scene_hit_policy.cpp
 )
 
 quader_enable_common_pch(quader_editor_viewport)
@@ -851,6 +865,7 @@ add_library(quader_ui STATIC
     src/ui/qt_material_preview_surface.cpp
     src/ui/qt_standard_material_preview_image_cache.cpp
     src/ui/qt_standard_material_editor_window.cpp
+    src/ui/standard_material_preview_render_snapshot_adapter.cpp
     src/ui/qt_navigation_gizmo.cpp
     src/ui/qt_project_home_page.cpp
     src/ui/qt_relative_pointer_input.cpp
@@ -879,7 +894,6 @@ add_library(quader_ui STATIC
     src/ui/ui_panel_manager.cpp
     src/ui/ui_system.cpp
     src/ui/viewport_hover_controller.cpp
-    src/ui/viewport_pane_overlay_cache.cpp
     src/ui/viewport_shortcut_controller.cpp
 )
 
@@ -1396,6 +1410,7 @@ if(QUADER_BUILD_TESTS)
         tests/obj_export_tests.cpp
         tests/layer_panel_tests.cpp
         tests/outliner_panel_tests.cpp
+        tests/retained_ui_presenter_tests.cpp
         tests/ui_panel_manager_tests.cpp
         tests/qt_active_material_panel_tests.cpp
         tests/qt_auxiliary_window_state_tests.cpp
@@ -1444,10 +1459,13 @@ if(QUADER_BUILD_TESTS)
         tests/modeling_legacy_local_frame_upgrade_tests.cpp
         tests/modeling_tool_catalog_tests.cpp
         tests/render_extraction_tests.cpp
+        tests/render_source_stamp_tests.cpp
         tests/tool_preview_submission_tests.cpp
+        tests/scene_mesh_occurrence_projection_tests.cpp
         tests/scene_transform_tests.cpp
         tests/selection_mode_adapter_tests.cpp
         tests/viewport_interaction_controller_tests.cpp
+        tests/viewport_overlay_submission_coordinator_tests.cpp
         tests/viewport_tool_catalog_tests.cpp
         tests/support/behavior_expect.cpp
         tests/support/behavior_scenario.cpp
@@ -1464,7 +1482,9 @@ if(QUADER_BUILD_TESTS)
         target_link_options(quader_tests PRIVATE
             "$<$<CONFIG:Debug>:/INCREMENTAL:NO>")
     endif()
-    target_include_directories(quader_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
+    target_include_directories(quader_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty"
+        "${QUADER_QDR_GENERATED_DIR}")
     target_compile_definitions(quader_tests
         PRIVATE
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

@@ -419,6 +419,24 @@ mouse_chord_from_token(std::string_view token) {
     }
   }
 
+  // Press is canonically formatted as the bare mouse-button name, but accept
+  // the explicit suffix as an input/storage alias. This keeps hand-authored
+  // mappings and Settings capture vocabulary on the same physical chord.
+  constexpr std::string_view kPressSuffix = "press";
+  if (lower.size() > kPressSuffix.size() &&
+      lower.substr(lower.size() - kPressSuffix.size()) == kPressSuffix) {
+    const std::string base =
+        lower.substr(0u, lower.size() - kPressSuffix.size());
+    if (const std::optional<QuaderMouseButton> button =
+            mouse_button_from_token(base)) {
+      return QuaderInputChord{
+          .device = QuaderInputDevice::Mouse,
+          .mouse_button = *button,
+          .gesture = QuaderInputGesture::Press,
+      };
+    }
+  }
+
   if (const std::optional<QuaderMouseButton> button =
           mouse_button_from_token(lower)) {
     return QuaderInputChord{

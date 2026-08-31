@@ -11,17 +11,21 @@
 #include <quader/modeling/mesh/polygon_document.hpp>
 #include <quader/modeling/tools/tool_payload.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace quader::modeling {
 
 struct ModelingSessionImpl;
 struct SessionPreviewCheckpointImpl;
+struct SessionMutationCheckpointImpl;
 class ModelingSessionTransactionAccess;
 
 /// Identifies the authored document owned by a session object.
@@ -81,6 +85,88 @@ struct SessionDocumentUpdate {
   OperationResult receipt;
 };
 
+/** Carries the pure survivor candidate produced for a cross-object Bridge. */
+struct SessionBridgePreviewCandidate {
+  PolygonDocument survivor_document;
+  OperationResult receipt;
+};
+
+/**
+ * Stores either authored document kind accepted by an SDK preview transaction.
+ */
+using SessionPreviewDocument = std::variant<PolygonDocument, CurveDocument>;
+
+/** Selects how one object participates in an atomic preview transaction. */
+enum class SessionPreviewAction {
+  ReplaceExisting,
+  AddProvisional,
+  RemoveExisting,
+};
+
+/**
+ * Describes one structural participant before a preview becomes visible.
+ *
+ * ReplaceExisting and AddProvisional require document. RemoveExisting requires
+ * document to be empty. AddProvisional also requires object to be invalid; the
+ * session returns a stable reserved ObjectId from begin.
+ */
+struct SessionPreviewParticipant {
+  SessionPreviewAction action = SessionPreviewAction::ReplaceExisting;
+  ObjectId object{};
+  std::optional<SessionPreviewDocument> document;
+  OperationResult receipt;
+  std::string name;
+  std::uint32_t material_slot = 0;
+  bool selected = false;
+};
+
+/** Begins one atomic structural preview and its optional selection outcome. */
+struct SessionPreviewTransactionRequest {
+  std::vector<SessionPreviewParticipant> participants;
+  bool replace_object_selection = false;
+  std::optional<std::size_t> active_participant_index;
+};
+
+/** Maps one request participant to its stable preview object identity. */
+struct SessionPreviewParticipantIdentity {
+  std::size_t participant_index = 0;
+  SessionPreviewAction action = SessionPreviewAction::ReplaceExisting;
+  ObjectId object_id{};
+};
+
+/** Reports the active transaction and every request-to-preview identity. */
+struct SessionPreviewBeginResult {
+  PreviewId preview_id{};
+  std::vector<SessionPreviewParticipantIdentity> participants;
+};
+
+/** Maps one preview participant through structural commit materialization. */
+struct SessionPreviewObjectRemap {
+  SessionPreviewAction action = SessionPreviewAction::ReplaceExisting;
+  ObjectId preview_object_id{};
+  ObjectId committed_object_id{};
+  std::uint32_t material_slot = 0;
+};
+
+/** Reports one atomic structural commit and its deterministic object remap. */
+struct SessionPreviewCommitResult {
+  OperationResult operation;
+  std::vector<SessionPreviewObjectRemap> objects;
+  std::vector<ObjectId> selected_objects;
+  ObjectId active_object{};
+};
+
+/**
+ * Replaces one preview candidate as part of an atomic multi-object update.
+ * The document kind must match the transaction participant identified by
+ * object, including a stable provisional AddProvisional object ID.
+ */
+struct SessionPreviewDocumentUpdate {
+  ObjectId object{};
+  SessionPreviewDocument document;
+  OperationResult receipt;
+};
+
 /**
  * Carries one exact document into a no-history workspace hydration.
  */
@@ -103,8 +189,64 @@ struct SessionDocumentHistoryRestore {
   std::optional<CurveDocument> curve_document;
 };
 
+/** Summarizes one object participating in an SDK preview transaction. */
+struct PreviewTransactionObjectSummary {
+  ObjectId object_id{};
+  SessionPreviewAction action = SessionPreviewAction::ReplaceExisting;
+  SessionObjectKind kind = SessionObjectKind::Mesh;
+  std::uint64_t base_content_revision = 0;
+  std::uint64_t content_revision = 0;
+  DirtyFlags dirty;
+  bool changed = false;
+  std::uint32_t material_slot = 0;
+  bool selected = false;
+};
+
+/**
+ * Shares one immutable ordered summary publication across cheap summary reads.
+ * Iterators and references remain valid while this value is retained.
+ */
+class PreviewTransactionObjectSummaryList {
+public:
+  using const_iterator =
+      std::vector<PreviewTransactionObjectSummary>::const_iterator;
+
+  PreviewTransactionObjectSummaryList() = default;
+  explicit PreviewTransactionObjectSummaryList(
+      std::vector<PreviewTransactionObjectSummary> values)
+      : values_(std::make_shared<
+                const std::vector<PreviewTransactionObjectSummary>>(
+            std::move(values))) {}
+
+  [[nodiscard]] bool empty() const noexcept { return values().empty(); }
+  [[nodiscard]] std::size_t size() const noexcept { return values().size(); }
+  [[nodiscard]] const PreviewTransactionObjectSummary &
+  operator[](std::size_t index) const noexcept {
+    return values()[index];
+  }
+  [[nodiscard]] const PreviewTransactionObjectSummary &front() const {
+    return values().front();
+  }
+  [[nodiscard]] const_iterator begin() const noexcept {
+    return values().begin();
+  }
+  [[nodiscard]] const_iterator end() const noexcept { return values().end(); }
+
+private:
+  [[nodiscard]] const std::vector<PreviewTransactionObjectSummary> &
+  values() const noexcept {
+    static const std::vector<PreviewTransactionObjectSummary> empty_values;
+    return values_ != nullptr ? *values_ : empty_values;
+  }
+
+  std::shared_ptr<const std::vector<PreviewTransactionObjectSummary>> values_;
+};
+
 /**
  * Summarizes the active headless SDK preview transaction.
+ *
+ * object_id, kind, content_revision, and dirty retain the 0.1 single-object
+ * view and mirror the first ordered object. Multi-object consumers use objects.
  */
 struct PreviewTransactionSummary {
   PreviewId id{};
@@ -115,6 +257,58 @@ struct PreviewTransactionSummary {
   std::uint64_t content_revision = 0;
   DirtyFlags dirty;
   SessionObjectKind kind = SessionObjectKind::Mesh;
+  PreviewTransactionObjectSummaryList objects;
+};
+
+/**
+ * Owns one renderer-neutral preview publication. Mesh objects carry a compiled
+ * tool payload, Curve objects carry their authored document, and removed
+ * objects carry monostate so renderers can suppress them without native state.
+ */
+struct SessionPreviewObjectPayload {
+  ObjectId object_id{};
+  SessionPreviewAction action = SessionPreviewAction::ReplaceExisting;
+  SessionObjectKind kind = SessionObjectKind::Mesh;
+  std::uint64_t content_revision = 0;
+  DirtyFlags dirty;
+  bool changed = false;
+  std::uint32_t material_slot = 0;
+  bool selected = false;
+  std::variant<ToolPreviewPayload, CurveDocument, std::monostate> payload;
+};
+
+/** Carries every object publication in one ordered atomic preview. */
+struct SessionPreviewPayload {
+  PreviewId id{};
+  std::string operation_id;
+  std::uint64_t content_revision = 0;
+  DirtyFlags dirty;
+  std::vector<SessionPreviewObjectPayload> objects;
+};
+
+/** Reports deterministic preview-owner work without exposing implementation. */
+struct SessionPreviewWorkStats {
+  std::uint64_t live_object_lookup_count = 0;
+  std::uint64_t preview_object_lookup_count = 0;
+  std::uint64_t mesh_payload_build_count = 0;
+  std::uint64_t checkpoint_count = 0;
+  std::uint64_t checkpoint_participant_reference_count = 0;
+  /** Immutable authored documents are shared; checkpoint capture keeps this 0. */
+  std::uint64_t checkpoint_authored_byte_copy_count = 0;
+};
+
+/** Reports bounded participant-scoped mutation checkpoint work. */
+struct SessionMutationCheckpointWorkStats {
+  std::uint64_t capture_count = 0;
+  std::uint64_t restore_count = 0;
+  std::uint64_t commit_count = 0;
+  std::uint64_t participant_lookup_count = 0;
+  std::uint64_t participant_snapshot_count = 0;
+  std::uint64_t participant_restore_count = 0;
+  std::uint64_t transition_record_snapshot_count = 0;
+  std::uint64_t history_suffix_record_count = 0;
+  /** Mutation checkpoints never clone the complete workspace. */
+  std::uint64_t workspace_copy_count = 0;
 };
 
 /**
@@ -139,6 +333,33 @@ public:
 private:
   friend class ModelingSession;
   std::shared_ptr<const SessionPreviewCheckpointImpl> impl_;
+};
+
+/**
+ * Owns one synchronous participant-scoped rollback checkpoint.
+ *
+ * The token is move-only because capture temporarily detaches the session redo
+ * branch. It must be consumed by restore_mutation_checkpoint() on rollback or
+ * commit_mutation_checkpoint() after successful publication. Dropping an
+ * unconsumed token leaves the session blocked until its checked
+ * abort_active_mutation_checkpoint() recovery is called.
+ */
+class SessionMutationCheckpoint {
+public:
+  SessionMutationCheckpoint() = default;
+  ~SessionMutationCheckpoint();
+  SessionMutationCheckpoint(SessionMutationCheckpoint &&) noexcept;
+  SessionMutationCheckpoint &
+  operator=(SessionMutationCheckpoint &&) noexcept;
+  SessionMutationCheckpoint(const SessionMutationCheckpoint &) = delete;
+  SessionMutationCheckpoint &
+  operator=(const SessionMutationCheckpoint &) = delete;
+
+  [[nodiscard]] bool valid() const noexcept { return impl_ != nullptr; }
+
+private:
+  friend class ModelingSession;
+  std::shared_ptr<const SessionMutationCheckpointImpl> impl_;
 };
 
 /**
@@ -210,6 +431,14 @@ public:
   bridge_objects(ObjectId survivor_id, ObjectId source_id,
                  Transform3 survivor_from_source, SelectionKind selection_kind,
                  int steps = 1);
+  /**
+   * Builds the exact Bridge survivor document without mutating session state.
+   * The caller can stage it as ReplaceExisting beside a RemoveExisting source.
+   */
+  [[nodiscard]] Result<SessionBridgePreviewCandidate>
+  prepare_bridge_documents(ObjectId survivor_id, ObjectId source_id,
+                           Transform3 survivor_from_source,
+                           SelectionKind selection_kind, int steps = 1) const;
   [[nodiscard]] Result<OperationResult> select_face(ObjectId object_id,
                                                     FaceId face_id);
   [[nodiscard]] Result<OperationResult> translate_selection(Vec3 delta);
@@ -233,17 +462,76 @@ public:
   update_curve_document_preview(PreviewId preview_id,
                                 CurveDocument preview_document,
                                 OperationResult receipt);
+  /**
+   * Begins one ordered atomic preview over one or more mesh and Curve objects.
+   * Every candidate is validated before the transaction becomes visible.
+   */
+  [[nodiscard]] Result<PreviewId> begin_preview_transaction(
+      std::string operation_id,
+      std::vector<SessionPreviewDocumentUpdate> updates);
+  /**
+   * Begins one atomic Replace/Add/Remove transaction. Returned provisional
+   * object IDs stay stable for the complete preview and, for Add, after commit.
+   */
+  [[nodiscard]] Result<SessionPreviewBeginResult> begin_preview_transaction(
+      std::string operation_id, SessionPreviewTransactionRequest request);
+  /**
+   * Atomically replaces every candidate in an active multi-object preview.
+   * The update set must contain each Replace/Add document participant exactly
+   * once; Remove participants are omitted. Caller order does not change the
+   * deterministic order established by begin.
+   */
+  [[nodiscard]] Result<OperationResult> update_preview_transaction(
+      PreviewId preview_id,
+      std::vector<SessionPreviewDocumentUpdate> updates);
   /** Captures only the active candidate, receipt, and preview payload state. */
   [[nodiscard]] Result<SessionPreviewCheckpoint>
   capture_preview_checkpoint(PreviewId preview_id) const;
+  /** Checks preview-checkpoint ownership and base identity without mutation. */
+  [[nodiscard]] Result<OperationResult> preflight_preview_checkpoint(
+      const SessionPreviewCheckpoint &checkpoint) const;
   /**
    * Restores the same active preview without changing durable documents,
    * selection, clipboard, undo/redo, or allocator high-water marks.
    */
   [[nodiscard]] Result<OperationResult>
   restore_preview_checkpoint(const SessionPreviewCheckpoint &checkpoint);
+  /**
+   * Begins one synchronous rollback scope over existing participant objects.
+   * Capture detaches redo in O(1); structural inventory changes are rejected.
+   */
+  [[nodiscard]] Result<SessionMutationCheckpoint>
+  capture_mutation_checkpoint(std::span<const ObjectId> participants);
+  /**
+   * Checks restore/commit ownership, participant, inventory, and history
+   * invariants without consuming the token or changing session state.
+   */
+  [[nodiscard]] Result<OperationResult> preflight_mutation_checkpoint(
+      const SessionMutationCheckpoint &checkpoint) const;
+  /**
+   * Silently restores enrolled objects, selection, revisions, and history.
+   * Component identity allocator high-water remains monotonic.
+   */
+  [[nodiscard]] Result<OperationResult>
+  restore_mutation_checkpoint(SessionMutationCheckpoint &&checkpoint);
+  /** Finalizes the successful branch and discards the detached redo history. */
+  [[nodiscard]] Result<OperationResult>
+  commit_mutation_checkpoint(SessionMutationCheckpoint &&checkpoint);
+  /**
+   * Emergency fail-open cleanup after another owner rejects aggregate
+   * preflight. Keeps the current branch, discards detached redo, and validates
+   * token ownership only so even a stale scope can release its active guard.
+   */
+  [[nodiscard]] Result<OperationResult>
+  discard_mutation_checkpoint(SessionMutationCheckpoint &&checkpoint);
+  /** Recovers an orphaned scope after its move-only token was dropped. */
+  [[nodiscard]] Result<OperationResult> abort_active_mutation_checkpoint();
+  [[nodiscard]] bool mutation_checkpoint_active() const;
   [[nodiscard]] Result<OperationResult> commit_preview();
   [[nodiscard]] Result<OperationResult> commit_preview(PreviewId preview_id);
+  /** Commits a preview and reports deterministic structural object remaps. */
+  [[nodiscard]] Result<SessionPreviewCommitResult>
+  commit_preview_transaction(PreviewId preview_id);
   [[nodiscard]] Result<OperationResult> cancel_preview();
   [[nodiscard]] Result<OperationResult> cancel_preview(PreviewId preview_id);
   [[nodiscard]] Result<OperationResult> undo();
@@ -304,11 +592,28 @@ public:
   [[nodiscard]] Result<ToolPreviewPayload> preview_payload() const;
   [[nodiscard]] Result<ToolPreviewPayload>
   preview_payload(PreviewId preview_id) const;
+  [[nodiscard]] Result<SessionPreviewPayload>
+  preview_transaction_payload() const;
+  [[nodiscard]] Result<SessionPreviewPayload>
+  preview_transaction_payload(PreviewId preview_id) const;
   [[nodiscard]] Result<PolygonDocument>
   preview_document_copy(PreviewId preview_id) const;
+  [[nodiscard]] Result<PolygonDocument>
+  preview_document_copy(PreviewId preview_id, ObjectId object_id) const;
   [[nodiscard]] Result<CurveDocument>
   preview_curve_document_copy(PreviewId preview_id) const;
+  [[nodiscard]] Result<CurveDocument>
+  preview_curve_document_copy(PreviewId preview_id, ObjectId object_id) const;
+  /** Reads an existing participant's immutable transaction base document. */
+  [[nodiscard]] Result<PolygonDocument>
+  preview_base_document_copy(PreviewId preview_id, ObjectId object_id) const;
+  [[nodiscard]] Result<CurveDocument>
+  preview_base_curve_document_copy(PreviewId preview_id,
+                                   ObjectId object_id) const;
   [[nodiscard]] PreviewTransactionSummary preview_summary() const;
+  [[nodiscard]] SessionPreviewWorkStats preview_work_stats() const;
+  [[nodiscard]] SessionMutationCheckpointWorkStats
+  mutation_checkpoint_work_stats() const;
   [[nodiscard]] Result<SemanticOverlayPayload>
   semantic_overlay(ObjectId object_id) const;
 private:

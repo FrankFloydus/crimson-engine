@@ -42,13 +42,39 @@ struct QuaderViewportKeybindingDispatch {
     enum class Kind {
         NoMatch,
         PendingChord,
+        ViewportInputAction,
         ViewportShortcut,
         Command,
     };
 
     Kind kind = Kind::NoMatch;
+    ViewportInputActionKind action = ViewportInputActionKind::None;
     ViewportShortcut shortcut = {};
     std::string command_id;
+};
+
+/** Identifies editor intent resolved from a focused native Tool Settings edit. */
+enum class QuaderNativeToolSettingsIntent {
+  None,
+  Apply,
+  Cancel,
+};
+
+/**
+ * Preserves the shared keybinding sequence result without exposing a concrete
+ * native tool or owner-specific command to Qt.
+ */
+struct QuaderNativeToolSettingsDispatch final {
+  /** Classifies a native Tool Settings dispatch as unmatched, pending, or resolved. */
+  enum class Kind {
+    NoMatch,
+    PendingChord,
+    Intent,
+  };
+
+  Kind kind = Kind::NoMatch;
+  QuaderNativeToolSettingsIntent intent =
+      QuaderNativeToolSettingsIntent::None;
 };
 
 /**
@@ -142,6 +168,12 @@ public:
         bool viewport_focused, bool text_input_active,
         ViewportShortcut &shortcut,
         QuaderViewportKeybindingContext input_context = {});
+    /**
+     * Performs a stateless single-chord semantic probe for held/released state
+     * and deferred mouse ownership. Pressed and wheel input must use
+     * dispatch_viewport_input_binding() so sequence state and target
+     * precedence remain authoritative.
+     */
     [[nodiscard]] bool resolve_viewport_input_action(
         const QuaderInputChord &chord, const ViewportToolState &state,
         bool viewport_focused, bool text_input_active,
@@ -152,11 +184,18 @@ public:
         const ViewportToolState &state, bool viewport_focused,
         bool text_input_active,
         QuaderViewportKeybindingContext input_context = {});
+    /** Resolves one edge through the shared stateful sequence dispatcher. */
     [[nodiscard]] QuaderViewportKeybindingDispatch
     dispatch_viewport_input_binding(
         const QuaderInputChord &chord, const ViewportToolState &state,
         bool viewport_focused, bool text_input_active,
         QuaderViewportKeybindingContext input_context = {});
+    /** Resolves Apply/Cancel for a focused active native-tool settings editor. */
+    [[nodiscard]] QuaderNativeToolSettingsDispatch
+    dispatch_native_tool_settings_input_binding(
+        const QuaderInputChord &chord, const ViewportToolState &state);
+    QuaderApiVoidResult execute_native_tool_settings_intent(
+        QuaderNativeToolSettingsIntent intent);
     void reset_pending_keybinding_chord();
     [[nodiscard]] bool has_pending_keybinding_chord() const;
     QuaderApiVoidResult set_shortcut(std::string_view command_id,

@@ -13,7 +13,6 @@
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/viewport_local_visibility_service.hpp"
-#include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_hierarchy_visibility.hpp"
@@ -144,7 +143,7 @@ struct ObjectSnapSelection final {
 [[nodiscard]] ObjectSnapSelection collect_object_snap_selection(
     SceneDocument &scene, const AssetRegistry &assets,
     ModelingSessionService &modeling, SceneInstanceService &instances,
-    NativeViewportToolCoordinator &native_tools,
+    SnapToFloorToolStatePort &native_tools,
     const ViewportLocalVisibilityService &local_visibility,
     const SceneSurfaceQuerySnapshot &surface) {
   if (modeling.selection_mode() != ModelingSelectionMode::Object) {
@@ -274,12 +273,12 @@ SnapToFloorService::SnapToFloorService(
     SceneDocument &scene, const AssetRegistry &assets,
     DocumentCommandService &document_commands, ModelingSessionService &modeling,
     SceneInstanceService &instances,
-    NativeViewportToolCoordinator &native_tools,
-    const ViewportLocalVisibilityService &local_visibility)
+    SnapToFloorToolStatePort &native_tools,
+    const ViewportLocalVisibilityService &local_visibility,
+    SceneSurfaceQuery &surface_query)
     : scene_(scene), assets_(assets), document_commands_(document_commands),
       modeling_(modeling), instances_(instances), native_tools_(native_tools),
-      local_visibility_(local_visibility),
-      surface_query_(scene, assets, local_visibility) {}
+      local_visibility_(local_visibility), surface_query_(surface_query) {}
 
 bool SnapToFloorService::can_snap_selected_meshes_to_floor() const {
   if (modeling_.selection_mode() != ModelingSelectionMode::Object ||

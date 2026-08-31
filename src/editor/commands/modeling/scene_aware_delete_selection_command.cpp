@@ -11,6 +11,7 @@
 #include "scene/scene_document.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -36,6 +37,16 @@ struct SceneAwareDeleteState {
     ModelingSessionMemento after_modeling;
     bool captured = false;
     bool runtime_delete_executed = false;
+};
+
+/** Captures one exact stable side of a delete history transition. */
+struct SceneAwareDeleteTransitionCheckpoint {
+  SceneModelingProjectionCheckpoint scene;
+  std::vector<EntityId> entities;
+  std::vector<EntityId> current_roots;
+  std::vector<EntityId> current_definition_roots;
+  ModelingSessionMemento modeling;
+  ModelingSelectionMode mode = ModelingSelectionMode::Object;
 };
 
 CommandResult to_command_result(ModelingCommandResult result) {
@@ -110,11 +121,11 @@ EntityId restore_scene_delete_snapshot(
   if (restored == kInvalidEntityId || !scene.exists(restored)) {
     return kInvalidEntityId;
   }
-  if (!scene.set_parent(restored, parent, false)) {
+  if (!apply_scene_entity_state_placement(scene, restored, snapshot, parent)) {
     return kInvalidEntityId;
   }
   scene.set_transform(restored, snapshot.transform);
-  remapped_entities[snapshot.original_id] = restored;
+  remapped_entities[snapshot.id] = restored;
 
   for (const DocumentEntitySnapshot &child : snapshot.children) {
     if (restore_scene_delete_snapshot(scene, runtime, child, restored,
@@ -130,9 +141,14 @@ EntityId restore_scene_delete_snapshot(
  */
 class SceneAwareDeleteSelectionCommand final : public IUndoableCommand {
 public:
-    SceneAwareDeleteSelectionCommand(SceneDocument& scene, SceneAwareDeleteRuntime runtime)
+    SceneAwareDeleteSelectionCommand(SceneDocument& scene,
+                                     SceneAwareDeleteRuntime runtime,
+                                     std::vector<EntityId> roots,
+                                     std::string label)
         : scene_(scene)
-        , runtime_(std::move(runtime)) {}
+        , runtime_(std::move(runtime))
+        , requested_roots_(std::move(roots))
+        , label_(std::move(label)) {}
 
     [[nodiscard]] const std::string& label() const override {
         return label_;
@@ -164,15 +180,26 @@ private:
     state_.before_mode = runtime_.app_selection_mode();
     state_.before_selection = document_command_capture_selection(scene_);
 
-    const std::vector<EntityId> roots =
-        document_command_selected_root_entities(scene_);
+    const std::vector<EntityId> &roots = requested_roots_;
     if (roots.empty()) {
-      return {.ok = false, .changed = false, .message = "Selection is empty."};
+      return {.ok = false,
+              .changed = false,
+              .message = "No entity hierarchy was provided."};
     }
 
     state_.roots.reserve(roots.size());
     std::unordered_set<EntityId> deleted_entities;
     for (const EntityId root : roots) {
+      if (root == kInvalidEntityId || !scene_.exists(root)) {
+        return {.ok = false,
+                .changed = false,
+                .message = "Selected entity is missing."};
+      }
+      if (scene_.is_scene_root(root)) {
+        return {.ok = false,
+                .changed = false,
+                .message = "Scene root cannot be destroyed."};
+      }
       std::optional<DocumentEntitySnapshot> snapshot =
           document_command_capture_entity_snapshot(scene_, root);
       if (!snapshot.has_value()) {
@@ -210,12 +237,13 @@ private:
       }
     }
 
-    std::unordered_set<EntityId> captured_definitions;
+    std::unordered_set<EntityId> examined_definitions;
+    std::unordered_set<EntityId> orphan_definitions;
     for (const EntityId deleted : deleted_entities) {
       const InstanceOccurrenceComponent *occurrence =
           scene_.instance_occurrence(deleted);
       if (occurrence == nullptr ||
-          !captured_definitions.insert(occurrence->definition).second) {
+          !examined_definitions.insert(occurrence->definition).second) {
         continue;
       }
       const std::vector<EntityId> occurrences =
@@ -227,16 +255,21 @@ private:
       if (survives) {
         continue;
       }
+      orphan_definitions.insert(occurrence->definition);
+    }
+    for (const EntityId definition : scene_.entity_tree_order()) {
+      if (!orphan_definitions.contains(definition)) {
+        continue;
+      }
       std::optional<DocumentEntitySnapshot> definition_snapshot =
-          document_command_capture_entity_snapshot(scene_,
-                                                   occurrence->definition);
+          document_command_capture_entity_snapshot(scene_, definition);
       if (!definition_snapshot.has_value()) {
         return {.ok = false,
                 .changed = false,
                 .message = "Instance definition is missing."};
       }
       state_.orphan_definitions.push_back(std::move(*definition_snapshot));
-      state_.current_definition_roots.push_back(occurrence->definition);
+      state_.current_definition_roots.push_back(definition);
     }
     state_.modeling_object_ids = snapshot_modeling_object_ids(state_.roots);
     const std::vector<int> orphan_modeling_ids =
@@ -263,7 +296,14 @@ private:
     }
     ModelingCommandResult result =
         runtime_.delete_modeling_objects(state_.modeling_object_ids);
-    if (result.ok && result.changed) {
+    if (result.ok && !result.changed) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "Selected modeling objects were not deleted.",
+      };
+    }
+    if (result.ok) {
       state_.runtime_delete_executed = true;
     }
     return result;
@@ -273,11 +313,128 @@ private:
     std::vector<EntityId> destroyed = state_.current_roots;
     destroyed.insert(destroyed.end(), state_.current_definition_roots.begin(),
                      state_.current_definition_roots.end());
-    const bool changed = scene_.destroy_entities(destroyed);
+    std::ranges::sort(destroyed);
+    destroyed.erase(std::unique(destroyed.begin(), destroyed.end()),
+                    destroyed.end());
+    std::vector<EntityId> existing;
+    std::ranges::copy_if(destroyed, std::back_inserter(existing),
+                         [&](EntityId entity) { return scene_.exists(entity); });
+    if (existing.empty()) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "Deleted hierarchy is already missing.",
+      };
+    }
+
+    const bool reported = runtime_.destroy_scene_entities
+                              ? runtime_.destroy_scene_entities(existing)
+                              : scene_.destroy_entities(existing);
+    const std::size_t remaining = static_cast<std::size_t>(std::ranges::count_if(
+        existing, [&](EntityId entity) { return scene_.exists(entity); }));
+    if (!reported) {
+      return {
+          .ok = false,
+          .changed = remaining != existing.size(),
+          .message = "Deleted hierarchy could not be destroyed.",
+      };
+    }
+    if (remaining != 0u) {
+      return {
+          .ok = false,
+          .changed = remaining != existing.size(),
+          .message = "Deleted hierarchy was only partially destroyed.",
+      };
+    }
     state_.current_roots.clear();
     state_.current_definition_roots.clear();
     invalidate_selection_overlay_caches();
-    return {.ok = true, .changed = changed};
+    return {.ok = true, .changed = true};
+  }
+
+  std::optional<SceneAwareDeleteTransitionCheckpoint>
+  capture_transition_checkpoint() const {
+    if (!runtime_.capture_modeling_memento || !runtime_.app_selection_mode) {
+      return std::nullopt;
+    }
+    SceneAwareDeleteTransitionCheckpoint checkpoint;
+    checkpoint.entities = scene_.entity_tree_order();
+    checkpoint.current_roots = state_.current_roots;
+    checkpoint.current_definition_roots =
+        state_.current_definition_roots;
+    checkpoint.scene = scene_.capture_modeling_projection_checkpoint(
+        checkpoint.entities,
+        SceneModelingProjectionDomain::Structure |
+            SceneModelingProjectionDomain::MeshBindings |
+            SceneModelingProjectionDomain::CurveBindings |
+            SceneModelingProjectionDomain::Selection);
+    if (!checkpoint.scene.valid()) {
+      return std::nullopt;
+    }
+    checkpoint.modeling = runtime_.capture_modeling_memento();
+    checkpoint.mode = runtime_.app_selection_mode();
+    return checkpoint;
+  }
+
+  [[nodiscard]] bool rollback_transition(
+      const SceneAwareDeleteTransitionCheckpoint &checkpoint) {
+    std::unordered_set<EntityId> original_entities(checkpoint.entities.begin(),
+                                                   checkpoint.entities.end());
+
+    if (checkpoint.modeling.valid()) {
+      const auto &restore_modeling = runtime_.restore_modeling_memento_exact
+                                         ? runtime_.restore_modeling_memento_exact
+                                         : runtime_.restore_modeling_memento;
+      if (!restore_modeling) {
+        return false;
+      }
+      const ModelingCommandResult modeling_restore =
+          restore_modeling(checkpoint.modeling);
+      if (!modeling_restore.ok) {
+        return false;
+      }
+    }
+
+    // The Scene checkpoint owns removal of every entity allocated by the
+    // failed transition as well as the exact scalar rewind. Destroying those
+    // entities manually would add inverse mutations before preflight, and a
+    // second restore would attempt to consume the same allocation lease twice.
+    // Restore modeling first, then let Scene consume its lease exactly once.
+    std::vector<EntityId> created_entities;
+    for (const EntityId entity : scene_.entity_tree_order()) {
+      if (!original_entities.contains(entity)) {
+        created_entities.push_back(entity);
+      }
+    }
+    if (!scene_.restore_modeling_projection_checkpoint(checkpoint.scene,
+                                                       created_entities)) {
+      return false;
+    }
+    if (runtime_.set_app_selection_mode) {
+      runtime_.set_app_selection_mode(checkpoint.mode);
+    }
+    invalidate_selection_overlay_caches();
+    return true;
+  }
+
+  ModelingCommandResult compensated_failure(
+      ModelingCommandResult failure,
+      const SceneAwareDeleteTransitionCheckpoint &checkpoint) {
+    if (rollback_transition(checkpoint)) {
+      failure.changed = false;
+      state_.current_roots = checkpoint.current_roots;
+      state_.current_definition_roots =
+          checkpoint.current_definition_roots;
+      return failure;
+    }
+    failure.changed = true;
+    failure.message =
+        failure.message.empty()
+            ? "Delete Selection failed and its stable state could not be "
+              "restored."
+            : failure.message +
+                  " The stable delete state could not be restored.";
+    return failure;
   }
 
   ModelingCommandResult redo_scene_aware_delete(bool initial_redo) {
@@ -286,16 +443,26 @@ private:
       if (!captured.ok || !captured.changed) {
         return captured;
       }
+      const std::optional<SceneAwareDeleteTransitionCheckpoint> checkpoint =
+          capture_transition_checkpoint();
+      if (!checkpoint.has_value()) {
+        return {.ok = false,
+                .changed = false,
+                .message = "Delete Selection checkpoint is unavailable."};
+      }
       ModelingCommandResult runtime_delete =
           execute_scene_aware_delete_modeling_objects();
       if (!runtime_delete.ok) {
-        return runtime_delete;
+        return runtime_delete.changed
+                   ? compensated_failure(std::move(runtime_delete),
+                                         *checkpoint)
+                   : runtime_delete;
       }
       ModelingCommandResult scene_delete = destroy_scene_aware_delete_roots();
+      if (!scene_delete.ok) {
+        return compensated_failure(std::move(scene_delete), *checkpoint);
+      }
       if (runtime_delete.changed) {
-        if (!runtime_.capture_modeling_memento) {
-          return missing_runtime_result();
-        }
         state_.after_modeling = runtime_.capture_modeling_memento();
       }
       return {
@@ -305,17 +472,29 @@ private:
       };
     }
 
-    ModelingCommandResult runtime_redo{.ok = true, .changed = false};
-    if (state_.runtime_delete_executed) {
-      if (!runtime_.restore_modeling_memento) {
-        return missing_runtime_result();
-      }
-      runtime_redo = runtime_.restore_modeling_memento(state_.after_modeling);
-      if (!runtime_redo.ok) {
-        return runtime_redo;
-      }
+    const std::optional<SceneAwareDeleteTransitionCheckpoint> checkpoint =
+        capture_transition_checkpoint();
+    if (!checkpoint.has_value()) {
+      return {.ok = false,
+              .changed = false,
+              .message = "Delete Selection checkpoint is unavailable."};
+    }
+    if (state_.runtime_delete_executed &&
+        !runtime_.restore_modeling_memento) {
+      return missing_runtime_result();
     }
     ModelingCommandResult scene_delete = destroy_scene_aware_delete_roots();
+    if (!scene_delete.ok) {
+      return compensated_failure(std::move(scene_delete), *checkpoint);
+    }
+
+    ModelingCommandResult runtime_redo{.ok = true, .changed = false};
+    if (state_.runtime_delete_executed) {
+      runtime_redo = runtime_.restore_modeling_memento(state_.after_modeling);
+      if (!runtime_redo.ok) {
+        return compensated_failure(std::move(runtime_redo), *checkpoint);
+      }
+    }
     return {
         .ok = true,
         .changed = runtime_redo.changed || scene_delete.changed,
@@ -330,6 +509,14 @@ private:
               .message = "Delete selection was not captured."};
     }
 
+    const std::optional<SceneAwareDeleteTransitionCheckpoint> checkpoint =
+        capture_transition_checkpoint();
+    if (!checkpoint.has_value()) {
+      return {.ok = false,
+              .changed = false,
+              .message = "Delete Selection checkpoint is unavailable."};
+    }
+
     if (state_.runtime_delete_executed) {
       if (!runtime_.restore_modeling_memento) {
         return missing_runtime_result();
@@ -337,7 +524,9 @@ private:
       ModelingCommandResult runtime_undo =
           runtime_.restore_modeling_memento(state_.before_modeling);
       if (!runtime_undo.ok) {
-        return runtime_undo;
+        return runtime_undo.changed
+                   ? compensated_failure(std::move(runtime_undo), *checkpoint)
+                   : runtime_undo;
       }
     }
 
@@ -346,32 +535,36 @@ private:
     restored_definitions.reserve(state_.orphan_definitions.size());
     for (const DocumentEntitySnapshot &snapshot :
          state_.orphan_definitions) {
-      const EntityId parent = snapshot.original_parent != kInvalidEntityId &&
-                                      scene_.exists(snapshot.original_parent)
-                                  ? snapshot.original_parent
+      const EntityId parent = snapshot.parent != kInvalidEntityId &&
+                                      scene_.exists(snapshot.parent)
+                                  ? snapshot.parent
                                   : kInvalidEntityId;
       const EntityId restored = restore_scene_delete_snapshot(
           scene_, runtime_, snapshot, parent, remapped_entities);
       if (restored == kInvalidEntityId) {
-        return {.ok = false,
-                .changed = false,
-                .message = "Instance definition could not be restored."};
+        return compensated_failure(
+            {.ok = false,
+             .changed = true,
+             .message = "Instance definition could not be restored."},
+            *checkpoint);
       }
       restored_definitions.push_back(restored);
     }
     std::vector<EntityId> restored_roots;
     restored_roots.reserve(state_.roots.size());
     for (const DocumentEntitySnapshot &snapshot : state_.roots) {
-      const EntityId parent = snapshot.original_parent != kInvalidEntityId &&
-                                      scene_.exists(snapshot.original_parent)
-                                  ? snapshot.original_parent
+      const EntityId parent = snapshot.parent != kInvalidEntityId &&
+                                      scene_.exists(snapshot.parent)
+                                  ? snapshot.parent
                                   : kInvalidEntityId;
       const EntityId restored = restore_scene_delete_snapshot(
           scene_, runtime_, snapshot, parent, remapped_entities);
       if (restored == kInvalidEntityId) {
-        return {.ok = false,
-                .changed = false,
-                .message = "Deleted hierarchy could not be restored."};
+        return compensated_failure(
+            {.ok = false,
+             .changed = true,
+             .message = "Deleted hierarchy could not be restored."},
+            *checkpoint);
       }
       restored_roots.push_back(restored);
     }
@@ -386,14 +579,34 @@ private:
                                                  remapped_entities));
     if (state_.before_mode == ModelingSelectionMode::Object) {
       if (!runtime_.sync_object_selection_from_scene) {
-        return missing_runtime_result();
+        return compensated_failure(missing_runtime_result(), *checkpoint);
       }
-      runtime_.sync_object_selection_from_scene(true);
+      const ModelingCommandResult synchronized =
+          runtime_.sync_object_selection_from_scene(true);
+      if (!synchronized.ok) {
+        ModelingCommandResult failure = synchronized;
+        if (failure.message.empty()) {
+          failure.message =
+              "Restored scene selection could not be published to modeling.";
+        }
+        failure.changed = true;
+        return compensated_failure(std::move(failure), *checkpoint);
+      }
     } else if (state_.before_mode == ModelingSelectionMode::Group) {
       if (!runtime_.clear_runtime_object_selection_for_group_mode) {
-        return missing_runtime_result();
+        return compensated_failure(missing_runtime_result(), *checkpoint);
       }
-      runtime_.clear_runtime_object_selection_for_group_mode();
+      const ModelingCommandResult cleared =
+          runtime_.clear_runtime_object_selection_for_group_mode();
+      if (!cleared.ok) {
+        ModelingCommandResult failure = cleared;
+        if (failure.message.empty()) {
+          failure.message =
+              "Restored Group selection could not be published to modeling.";
+        }
+        failure.changed = true;
+        return compensated_failure(std::move(failure), *checkpoint);
+      }
     }
     invalidate_selection_overlay_caches();
     return {.ok = true, .changed = true, .message = "Delete Selection"};
@@ -407,9 +620,10 @@ private:
 
     SceneDocument& scene_;
     SceneAwareDeleteRuntime runtime_;
+    std::vector<EntityId> requested_roots_;
     SceneAwareDeleteState state_;
     bool executed_ = false;
-    std::string label_ = "Delete Selection";
+    std::string label_;
 };
 
 } // namespace
@@ -432,9 +646,17 @@ bool scene_aware_delete_handles_selection(ModelingSelectionSummary summary,
 
 std::unique_ptr<IUndoableCommand>
 create_scene_aware_delete_selection_command(SceneDocument &scene,
-                                            SceneAwareDeleteRuntime runtime) {
-  return std::make_unique<SceneAwareDeleteSelectionCommand>(scene,
-                                                            std::move(runtime));
+                                             SceneAwareDeleteRuntime runtime) {
+  return create_scene_aware_destroy_entities_command(
+      scene, std::move(runtime), document_command_selected_root_entities(scene),
+      "Delete Selection");
+}
+
+std::unique_ptr<IUndoableCommand> create_scene_aware_destroy_entities_command(
+    SceneDocument &scene, SceneAwareDeleteRuntime runtime,
+    std::vector<EntityId> roots, std::string label) {
+  return std::make_unique<SceneAwareDeleteSelectionCommand>(
+      scene, std::move(runtime), std::move(roots), std::move(label));
 }
 
 } // namespace quader

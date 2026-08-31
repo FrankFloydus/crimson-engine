@@ -13,6 +13,8 @@
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <span>
+#include <unordered_set>
 #include <vector>
 #include <unordered_map>
 #include <utility>
@@ -25,6 +27,13 @@ template <typename Document, typename Revision>
  */
 class TypedAssetStore {
 public:
+    /** Stores participant documents and allocator state for an exact targeted rollback. */
+    struct TargetedCheckpoint {
+      bool valid = false;
+      Revision next_revision;
+      std::unordered_map<AssetId, std::optional<Document>> documents;
+    };
+
     AssetId add(AssetId id, Document document) {
         if (id == kInvalidAssetId || documents_.contains(id)) {
           return kInvalidAssetId;
@@ -84,6 +93,79 @@ public:
     }
 
     std::size_t size() const { return documents_.size(); }
+
+    [[nodiscard]] TargetedCheckpoint
+    capture_targeted(std::span<const AssetId> ids) const {
+      TargetedCheckpoint checkpoint;
+      checkpoint.valid = true;
+      checkpoint.next_revision = next_revision_;
+      checkpoint.documents.reserve(ids.size());
+      for (const AssetId id : ids) {
+        if (id == kInvalidAssetId || checkpoint.documents.contains(id)) {
+          continue;
+        }
+        const auto existing = documents_.find(id);
+        checkpoint.documents.emplace(
+            id, existing != documents_.end()
+                    ? std::optional<Document>{existing->second}
+                    : std::nullopt);
+      }
+      return checkpoint;
+    }
+
+    bool restore_targeted(const TargetedCheckpoint &checkpoint,
+                          std::span<const AssetId> remove_ids = {}) {
+      if (!checkpoint.valid) {
+        return false;
+      }
+      for (const AssetId id : remove_ids) {
+        if (!checkpoint.documents.contains(id)) {
+          documents_.erase(id);
+        }
+      }
+      for (const auto &[id, document] : checkpoint.documents) {
+        if (document.has_value()) {
+          documents_[id] = *document;
+        } else {
+          documents_.erase(id);
+        }
+      }
+      next_revision_ = checkpoint.next_revision;
+      return true;
+    }
+
+    /**
+     * Restores only named documents while retaining the store's monotonic
+     * revision allocator. This is used when a long-lived modeling preview
+     * overlaps unrelated asset publications that must remain authored.
+     */
+    bool restore_targeted_preserving_revision(
+        const TargetedCheckpoint &checkpoint,
+        std::span<const AssetId> restore_ids,
+        std::span<const AssetId> remove_ids = {}) {
+      if (!checkpoint.valid) {
+        return false;
+      }
+      for (const AssetId id : remove_ids) {
+        if (!checkpoint.documents.contains(id)) {
+          documents_.erase(id);
+        }
+      }
+      for (const AssetId id : restore_ids) {
+        const auto captured = checkpoint.documents.find(id);
+        if (captured == checkpoint.documents.end()) {
+          continue;
+        }
+        if (!captured->second.has_value()) {
+          documents_.erase(id);
+          continue;
+        }
+        Document restored = *captured->second;
+        stamp(id, restored);
+        documents_[id] = std::move(restored);
+      }
+      return true;
+    }
 
     void restamp_after(Revision revision_floor) {
       if (next_revision_ < revision_floor) {

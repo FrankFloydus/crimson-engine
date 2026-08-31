@@ -8,6 +8,7 @@
 
 #include "core/command_result.hpp"
 #include "editor/modeling/runtime/selection_types.hpp"
+#include "editor/selection/editor_sub_selection_provider.hpp"
 #include "viewport/curve_tool_preview.hpp"
 
 #include <cstddef>
@@ -32,7 +33,7 @@ inline constexpr std::string_view kCurveNewAction = "curve.new";
  * Owns one cubic Bezier drawing/editing gesture stream. Authored edits and history
  * are delegated to the same portable modeling session used by polygon tools.
  */
-class CurveToolService final {
+class CurveToolService final : public EditorSubSelectionProvider {
 public:
   CurveToolService(SceneDocument &scene, AssetRegistry &assets,
                    EditorHistoryService &history, ModelingSessionService &modeling);
@@ -94,6 +95,25 @@ public:
   /// Returns the selected control set's world-space AABB center.
   [[nodiscard]] std::optional<QVec3> selected_controls_world_pivot() const;
 
+  [[nodiscard]] EditorSubSelectionSnapshot
+  sub_selection_snapshot() const override;
+  [[nodiscard]] EditorSubSelectionBaseline
+  capture_sub_selection_baseline() const override;
+  void synchronize_sub_selection_scope() override;
+  ModelingCommandResult edit_sub_elements(
+      std::span<const EditorSubSelectionTarget> hits,
+      EditorSubSelectionEdit edit,
+      const EditorSubSelectionBaseline *baseline,
+      std::optional<EditorSubSelectionTarget> direct_hit) override;
+  ModelingCommandResult restore_sub_selection_baseline(
+      const EditorSubSelectionBaseline &baseline) override;
+  ModelingCommandResult preview_sub_element_hover(
+      std::optional<EditorSubSelectionTarget> target) override;
+  ModelingCommandResult select_all_sub_elements() override;
+  ModelingCommandResult invert_sub_elements() override;
+  ModelingCommandResult clear_sub_elements() override;
+  ModelingCommandResult delete_selected_sub_elements() override;
+
   /// Starts an appended point gesture; its drag creates symmetric handles.
   CommandResult begin_point(QVec3 world_position);
   /// Starts one gizmo preview for the complete selected control set.
@@ -121,6 +141,12 @@ private:
   [[nodiscard]] CurveControlSelection valid_control_selection(
       const CurveControlSelection &selection,
       const modeling::CurveDocument &document) const;
+  [[nodiscard]] ModelingCommandResult edit_control_selection_checked(
+      std::span<const CurveControlTarget> hits,
+      quader_editor_core::SelectionEditOperation operation,
+      const CurveControlSelection *baseline,
+      std::optional<CurveControlTarget> direct_hit);
+  void rebuild_preview_cache(std::uint64_t presentation_revision) const;
   bool set_control_selection(CurveControlSelection selection);
   void attach_source(EntityId entity);
   void detach_source();
@@ -140,6 +166,7 @@ private:
   modeling::CurveDocument draft_;
   std::optional<Drag> drag_;
   CurveControlSelection control_selection_;
+  std::optional<EditorSubSelectionTarget> sub_element_hover_;
   std::optional<QVec3> hover_world_;
   std::uint64_t revision_ = 0;
   std::uint64_t settings_revision_ = 0;

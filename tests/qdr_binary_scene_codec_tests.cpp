@@ -14,6 +14,8 @@
 #include "io/qdr/qdr_scene_binary_codec.hpp"
 #include "scene/document/scene_content_document.hpp"
 
+#include "qdr_scene_generated.h"
+
 #include <gtest/gtest.h>
 #include <quader/modeling/curves/curve_document.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
@@ -24,6 +26,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -38,6 +42,12 @@
 
 namespace quader {
 namespace {
+
+namespace qdr_fb = ::quader::qdr::fb;
+
+#ifndef QUADER_SOURCE_DIR
+#define QUADER_SOURCE_DIR "."
+#endif
 
 [[nodiscard]] std::array<std::byte, 16> test_uuid() {
   std::array<std::byte, 16> uuid{};
@@ -204,6 +214,185 @@ parse_written_scene(const SceneContentDocument &document) {
   return quader_io::read_qdr_binary_container(std::move(bytes));
 }
 
+[[nodiscard]] bool root_flatbuffer_field_is_present(
+    std::span<const std::byte> bytes, std::size_t field_index) {
+  if (bytes.size() < sizeof(std::uint32_t)) {
+    return false;
+  }
+  std::uint32_t root_offset = 0u;
+  std::memcpy(&root_offset, bytes.data(), sizeof(root_offset));
+  if (root_offset + sizeof(std::int32_t) > bytes.size()) {
+    return false;
+  }
+  std::int32_t vtable_distance = 0;
+  std::memcpy(&vtable_distance, bytes.data() + root_offset,
+              sizeof(vtable_distance));
+  const std::int64_t vtable_offset =
+      static_cast<std::int64_t>(root_offset) - vtable_distance;
+  const std::size_t entry_offset =
+      4u + field_index * sizeof(std::uint16_t);
+  if (vtable_offset < 0 ||
+      static_cast<std::size_t>(vtable_offset) + entry_offset +
+              sizeof(std::uint16_t) >
+          bytes.size()) {
+    return false;
+  }
+  std::uint16_t vtable_size = 0u;
+  std::memcpy(&vtable_size, bytes.data() + vtable_offset,
+              sizeof(vtable_size));
+  if (vtable_size < entry_offset + sizeof(std::uint16_t)) {
+    return false;
+  }
+  std::uint16_t field_offset = 0u;
+  std::memcpy(&field_offset,
+              bytes.data() + vtable_offset + entry_offset,
+              sizeof(field_offset));
+  return field_offset != 0u;
+}
+
+[[nodiscard]] std::vector<std::byte> legacy_object_record_fixture(
+    EditorObjectId entity_object_id, EditorObjectId legacy_object_id,
+    bool legacy_visible) {
+  flatbuffers::FlatBufferBuilder builder;
+  const auto transform = qdr_fb::CreateTransformComponent(
+      builder, nullptr, nullptr, nullptr, false);
+  const auto visibility =
+      qdr_fb::CreateVisibilityComponent(builder, true, true);
+  const auto entity = qdr_fb::CreateEntity(
+      builder, 100u, {}, entity_object_id,
+      builder.CreateString("Canonical Entity"),
+      qdr_fb::EntityKind::Generic, 0u, transform, visibility);
+  const auto legacy = qdr_fb::CreateObjectRecord(
+      builder, legacy_object_id, 100u, 0u, 0u, -1,
+      builder.CreateString("Retired Authored Name"), legacy_visible, 7u);
+  const std::array entities{entity};
+  const std::array objects{legacy};
+  const auto root = qdr_fb::CreateScenePayload(
+      builder, 91u, builder.CreateString("Legacy Object Fixture"), {}, {}, {},
+      builder.CreateVector(entities.data(), entities.size()),
+      builder.CreateVector(objects.data(), objects.size()));
+  qdr_fb::FinishScenePayloadBuffer(builder, root);
+  const auto *begin =
+      reinterpret_cast<const std::byte *>(builder.GetBufferPointer());
+  std::vector<std::byte> metadata(begin, begin + builder.GetSize());
+  return quader_io::build_qdr_binary_container(
+      test_uuid(),
+      {{.type = quader_io::QdrBinaryChunkType::SceneMetadata,
+        .schema_version = 3u,
+        .flags = quader_io::QdrBinaryChunkFlags::Critical,
+        .id = 0u,
+        .content_hash = quader_io::qdr_binary_content_hash(metadata),
+        .bytes = std::move(metadata),
+      .allow_compression = false}});
+}
+
+[[nodiscard]] std::vector<std::byte>
+historical_legacy_object_record_fixture() {
+  const std::filesystem::path path =
+      std::filesystem::path(QUADER_SOURCE_DIR) / "tests" / "fixtures" /
+      "qdr" / "legacy_object_record_schema3.qdr";
+  std::ifstream stream(path, std::ios::binary | std::ios::ate);
+  if (!stream) {
+    throw std::runtime_error("Could not open historical QDR fixture: " +
+                             path.string());
+  }
+  const std::streampos end = stream.tellg();
+  if (end <= 0) {
+    throw std::runtime_error("Historical QDR fixture is empty: " +
+                             path.string());
+  }
+  std::vector<std::byte> bytes(static_cast<std::size_t>(end));
+  stream.seekg(0, std::ios::beg);
+  if (!stream.read(reinterpret_cast<char *>(bytes.data()),
+                   static_cast<std::streamsize>(bytes.size()))) {
+    throw std::runtime_error("Could not read historical QDR fixture: " +
+                             path.string());
+  }
+  return bytes;
+}
+
+[[nodiscard]] std::vector<std::byte> legacy_csr_geometry_fixture() {
+  flatbuffers::FlatBufferBuilder builder;
+  const std::vector<qdr_fb::PolygonVertex> vertices{
+      {10u, qdr_fb::Vec3(0.0f, 0.0f, 0.0f)},
+      {20u, qdr_fb::Vec3(1.0f, 0.0f, 0.0f)},
+      {30u, qdr_fb::Vec3(0.0f, 1.0f, 0.0f)},
+  };
+  const std::vector<std::uint32_t> face_ids{9u};
+  const std::vector<std::uint32_t> offsets{0u, 3u};
+  const std::vector<std::uint32_t> face_vertices{10u, 20u, 30u};
+  const std::vector<qdr_fb::Vec2> face_uvs{
+      {0.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}};
+  const std::vector<std::uint32_t> material_slots{4u};
+  const std::vector<qdr_fb::SurfaceShading> shading{
+      qdr_fb::SurfaceShading::Authored};
+  const std::vector<qdr_fb::PolygonEdge> hard_edges{{10u, 20u}};
+  const auto root = qdr_fb::CreateGeometryPayloadDirect(
+      builder, qdr_fb::GeometryKind::AuthoredPolygon, 31u, 10u, &vertices,
+      &face_ids, &offsets, &face_vertices, &offsets, &face_uvs,
+      &material_slots, &shading, &hard_edges);
+  builder.Finish(root, "QDRG");
+  const auto *begin =
+      reinterpret_cast<const std::byte *>(builder.GetBufferPointer());
+  return {begin, begin + builder.GetSize()};
+}
+
+[[nodiscard]] quader_poly::Document legacy_csr_topology() {
+  quader_poly::Document document;
+  document.next_vertex_id = 31u;
+  document.next_face_id = 10u;
+  document.vertices = {
+      {.id = 10u, .position = {0.0f, 0.0f, 0.0f}},
+      {.id = 20u, .position = {1.0f, 0.0f, 0.0f}},
+      {.id = 30u, .position = {0.0f, 1.0f, 0.0f}},
+  };
+  document.faces = {{
+      .id = 9u,
+      .vertices = {10u, 20u, 30u},
+      .uvs = {{0.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}},
+      .material_slot = 4u,
+      .normal_shading = quader_poly::SurfaceShading::Authored,
+  }};
+  document.hard_normal_edges = {quader_poly::make_edge(10u, 20u)};
+  return document;
+}
+
+void expect_polygon_topology_exact(const quader_poly::Document &actual,
+                                   const quader_poly::Document &expected) {
+  EXPECT_EQ(actual.next_vertex_id, expected.next_vertex_id);
+  EXPECT_EQ(actual.next_face_id, expected.next_face_id);
+  ASSERT_EQ(actual.vertices.size(), expected.vertices.size());
+  for (std::size_t index = 0u; index < expected.vertices.size(); ++index) {
+    EXPECT_EQ(actual.vertices[index].id, expected.vertices[index].id);
+    EXPECT_FLOAT_EQ(actual.vertices[index].position.x,
+                    expected.vertices[index].position.x);
+    EXPECT_FLOAT_EQ(actual.vertices[index].position.y,
+                    expected.vertices[index].position.y);
+    EXPECT_FLOAT_EQ(actual.vertices[index].position.z,
+                    expected.vertices[index].position.z);
+  }
+  ASSERT_EQ(actual.faces.size(), expected.faces.size());
+  for (std::size_t face_index = 0u; face_index < expected.faces.size();
+       ++face_index) {
+    const quader_poly::Face &actual_face = actual.faces[face_index];
+    const quader_poly::Face &expected_face = expected.faces[face_index];
+    EXPECT_EQ(actual_face.id, expected_face.id);
+    EXPECT_EQ(actual_face.vertices, expected_face.vertices);
+    ASSERT_EQ(actual_face.uvs.size(), expected_face.uvs.size());
+    for (std::size_t uv_index = 0u; uv_index < expected_face.uvs.size();
+         ++uv_index) {
+      EXPECT_FLOAT_EQ(actual_face.uvs[uv_index].x,
+                      expected_face.uvs[uv_index].x);
+      EXPECT_FLOAT_EQ(actual_face.uvs[uv_index].y,
+                      expected_face.uvs[uv_index].y);
+    }
+    EXPECT_EQ(actual_face.material_slot, expected_face.material_slot);
+    EXPECT_EQ(actual_face.normal_shading, expected_face.normal_shading);
+    EXPECT_EQ(actual_face.texture_transform, expected_face.texture_transform);
+  }
+  EXPECT_EQ(actual.hard_normal_edges, expected.hard_normal_edges);
+}
+
 TEST(QdrBinarySceneCodecTests, RoundTripPreservesExplicitUuidAndSceneData) {
   SceneContentDocument document = simple_scene();
   const EntityId root = document.scene().scene_root();
@@ -230,6 +419,410 @@ TEST(QdrBinarySceneCodecTests, RoundTripPreservesExplicitUuidAndSceneData) {
   EXPECT_NE(read.document.assets().mesh(10u), nullptr);
   EXPECT_TRUE(read.document.scene().selected_entities().empty())
       << "selection is transient and must not be stored in QDR";
+}
+
+TEST(QdrBinarySceneCodecTests,
+     CurrentWriterOmitsLegacyObjectRecordsAndKeepsEntityIdentityExact) {
+  SceneContentDocument document = simple_scene();
+  const EntityId entity = 100u;
+  const EditorObjectId object_id =
+      document.scene().editor_object_id(entity);
+  const quader_io::QdrBinaryContainerReadResult container =
+      parse_written_scene(document);
+  ASSERT_TRUE(container.ok) << container.message;
+  const auto metadata = std::ranges::find_if(
+      container.chunks, [](const quader_io::QdrBinaryChunk &chunk) {
+        return chunk.type == static_cast<std::uint32_t>(
+                                 quader_io::QdrBinaryChunkType::SceneMetadata);
+      });
+  ASSERT_NE(metadata, container.chunks.end());
+  // ScenePayload.objects is field 6. Keeping it absent proves the retired
+  // projection is no longer serialized by new writers.
+  EXPECT_FALSE(root_flatbuffer_field_is_present(metadata->bytes(), 6u));
+  flatbuffers::Verifier verifier(
+      reinterpret_cast<const std::uint8_t *>(metadata->bytes().data()),
+      metadata->bytes().size());
+  ASSERT_TRUE(qdr_fb::VerifyScenePayloadBuffer(verifier));
+  const qdr_fb::ScenePayload *payload = qdr_fb::GetScenePayload(
+      metadata->bytes().data());
+  ASSERT_NE(payload, nullptr);
+  EXPECT_TRUE(payload->objects() == nullptr ||
+              payload->objects()->size() == 0u);
+
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          quader_io::build_qdr_binary_container(
+              container.scene_uuid, copy_chunks(container)));
+  ASSERT_TRUE(read.ok) << read.message;
+  EXPECT_EQ(read.document.scene().editor_object_id(entity), object_id);
+  EXPECT_EQ(read.document.scene().entity_for_editor_object_id(object_id),
+            entity);
+}
+
+TEST(QdrBinarySceneCodecTests,
+     RichEntityStateRoundTripPreservesEveryDurableComponent) {
+  SceneContentDocument document = simple_scene();
+  const EntityId entity = 100u;
+  const AssetId material = document.assets().add_material(
+      20u, make_default_quader_material("Rich Material"));
+  ASSERT_EQ(material, 20u);
+  ASSERT_EQ(document.scene().create_layer_with_id(
+                7u, "Rich Layer", false, {0.2f, 0.4f, 0.6f}, true),
+            7u);
+  ASSERT_TRUE(document.scene().set_transform(
+      entity, TransformComponent{
+                  .position = {3.0f, 4.0f, 5.0f},
+                  .rotation_euler = {0.1f, 0.2f, 0.3f},
+                  .scale = {1.5f, 2.0f, 2.5f},
+                  .custom_pivot = true,
+              }));
+  ASSERT_TRUE(document.scene().set_visible(entity, false));
+  ASSERT_TRUE(document.scene().set_selectable(entity, false));
+  ASSERT_TRUE(document.scene().set_locked(entity, true));
+  ASSERT_TRUE(document.scene().set_modeling_object(
+      entity, ModelingObjectComponent{
+                  .object_id = 42,
+                  .material_slot = 3u,
+                  .sdk_owned = true,
+                  .local_frame_version = 6u,
+              }));
+  const MeshComponent mesh{
+      .mesh = 10u,
+      .editor_only = true,
+      .cast_shadows = false,
+      .double_sided = true,
+      .generate_collisions = false,
+      .collision_type = MeshCollisionType::ConvexHull,
+      .display_collision = true,
+      .body_type = MeshPhysicsBodyType::RigidBody,
+  };
+  ASSERT_TRUE(document.scene().set_mesh(entity, mesh));
+  const MaterialComponent materials{
+      .material = material,
+      .material_slots = {{3u, material}},
+  };
+  ASSERT_TRUE(document.scene().set_material(entity, materials));
+  TextureMappingComponent mapping;
+  mapping.sampling_from_local.values[12] = 8.0f;
+  mapping.sampling_from_local.values[13] = -2.0f;
+  ASSERT_TRUE(document.scene().set_texture_mapping(entity, mapping));
+  ASSERT_TRUE(document.scene().set_entity_layer(entity, 7u));
+
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          QdrDocumentWriter::serialize_project_document_bytes(
+              required_write_snapshot(document), test_uuid()));
+  ASSERT_TRUE(read.ok) << read.message;
+  const SceneDocument &scene = read.document.scene();
+  ASSERT_NE(scene.transform(entity), nullptr);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 3.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->position.y, 4.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->position.z, 5.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->rotation_euler.x, 0.1f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->rotation_euler.y, 0.2f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->rotation_euler.z, 0.3f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->scale.x, 1.5f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->scale.y, 2.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->scale.z, 2.5f);
+  EXPECT_TRUE(scene.transform(entity)->custom_pivot);
+  EXPECT_FALSE(scene.visibility(entity)->visible);
+  EXPECT_FALSE(scene.visibility(entity)->selectable);
+  EXPECT_TRUE(scene.lock(entity)->locked);
+  EXPECT_EQ(scene.modeling_object(entity)->object_id, 42);
+  EXPECT_EQ(scene.modeling_object(entity)->material_slot, 3u);
+  EXPECT_TRUE(scene.modeling_object(entity)->sdk_owned);
+  EXPECT_EQ(scene.modeling_object(entity)->local_frame_version, 6u);
+  EXPECT_EQ(*scene.mesh(entity), mesh);
+  EXPECT_EQ(*scene.material(entity), materials);
+  EXPECT_EQ(*scene.texture_mapping(entity), mapping);
+  EXPECT_EQ(scene.entity_layer(entity), 7u);
+}
+
+TEST(QdrBinarySceneCodecTests,
+     LegacyObjectRecordOnlySuppliesMissingIdentityWhileEntityStateWins) {
+  const std::vector<std::byte> fixture =
+      historical_legacy_object_record_fixture();
+  ASSERT_EQ(fixture.size(), 640u);
+  EXPECT_EQ(quader_io::qdr_binary_content_hash(fixture),
+            0xaeebe2803723d011ull)
+      << "The historical fixture must remain byte-for-byte immutable.";
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(fixture);
+  ASSERT_TRUE(read.ok) << read.message;
+  EXPECT_EQ(read.document.id(), 91u);
+  EXPECT_EQ(read.document.name(), "Legacy Object Fixture");
+  EXPECT_EQ(read.document.scene().editor_object_id(100u), 77u);
+  EXPECT_EQ(read.document.scene().parent(100u), 1u);
+  const VisibilityComponent *visibility =
+      read.document.scene().visibility(100u);
+  ASSERT_NE(visibility, nullptr);
+  EXPECT_TRUE(visibility->visible);
+  EXPECT_FALSE(visibility->selectable);
+  ASSERT_NE(read.document.scene().lock(100u), nullptr);
+  EXPECT_TRUE(read.document.scene().lock(100u)->locked);
+  ASSERT_NE(read.document.scene().transform(100u), nullptr);
+  EXPECT_FLOAT_EQ(read.document.scene().transform(100u)->position.x, 3.0f);
+  EXPECT_FLOAT_EQ(read.document.scene().transform(100u)->position.y, 4.0f);
+  EXPECT_FLOAT_EQ(read.document.scene().transform(100u)->position.z, 5.0f);
+  EXPECT_TRUE(read.document.scene().transform(100u)->custom_pivot);
+  EXPECT_EQ(read.document.scene().name(100u)->name, "Canonical Entity");
+}
+
+TEST(QdrBinarySceneCodecTests,
+     LegacyObjectRecordConflictHasDeterministicDiagnostic) {
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          legacy_object_record_fixture(55u, 77u, true));
+  ASSERT_FALSE(read.ok);
+  EXPECT_NE(read.message.find(
+                "legacy object record id conflicts with its canonical scene "
+                "entity"),
+            std::string::npos);
+}
+
+TEST(QdrBinarySceneCodecTests,
+     LegacySchemasOneThroughThreeCsrAuthoredGeometryRemainReadable) {
+  for (const std::uint16_t schema_version : {1u, 2u, 3u}) {
+    SceneContentDocument document = simple_scene();
+    ASSERT_TRUE(document.assets().replace_mesh(
+        10u, authored_triangle_mesh("Legacy CSR", 0.0f)));
+    const quader_io::QdrBinaryContainerReadResult parsed =
+        parse_written_scene(document);
+    ASSERT_TRUE(parsed.ok) << parsed.message;
+    std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
+    for (quader_io::QdrBinaryChunkInput &chunk : chunks) {
+      if (chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata) {
+        chunk.schema_version = schema_version;
+      } else if (chunk.type == quader_io::QdrBinaryChunkType::Geometry) {
+        chunk.bytes = legacy_csr_geometry_fixture();
+        chunk.content_hash = quader_io::qdr_binary_content_hash(chunk.bytes);
+      }
+    }
+
+    const QdrProjectReadResult read =
+        QdrDocumentReader::deserialize_project_document(
+            quader_io::build_qdr_binary_container(test_uuid(),
+                                                  std::move(chunks)));
+    ASSERT_TRUE(read.ok) << "schema " << schema_version << ": "
+                         << read.message;
+    const MeshAsset *mesh = read.document.assets().mesh(10u);
+    ASSERT_NE(mesh, nullptr);
+    ASSERT_TRUE(mesh->authored_polygon_document);
+    const quader_poly::Document &topology = *mesh->authored_polygon_document;
+    ASSERT_EQ(topology.vertices.size(), 3u);
+    EXPECT_EQ(topology.next_vertex_id, 31u);
+    ASSERT_EQ(topology.faces.size(), 1u);
+    EXPECT_EQ(topology.faces.front().id, 9u);
+    EXPECT_EQ(topology.faces.front().vertices,
+              (std::vector<quader_poly::ElementId>{10u, 20u, 30u}));
+    EXPECT_EQ(topology.faces.front().material_slot, 4u);
+    EXPECT_EQ(topology.faces.front().normal_shading,
+              quader_poly::SurfaceShading::Authored);
+    EXPECT_EQ(topology.hard_normal_edges,
+              (std::vector<quader_poly::Edge>{
+                  quader_poly::make_edge(10u, 20u)}));
+    EXPECT_FALSE(mesh->geometry().indices.empty());
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     SchemaEightRejectsAuthoredGeometryWithoutSdkPayload) {
+  SceneContentDocument document = simple_scene();
+  ASSERT_TRUE(document.assets().replace_mesh(
+      10u, authored_triangle_mesh("Missing SDK Payload", 0.0f)));
+  const quader_io::QdrBinaryContainerReadResult parsed =
+      parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
+  for (quader_io::QdrBinaryChunkInput &chunk : chunks) {
+    if (chunk.type == quader_io::QdrBinaryChunkType::Geometry) {
+      chunk.bytes = legacy_csr_geometry_fixture();
+      chunk.content_hash = quader_io::qdr_binary_content_hash(chunk.bytes);
+    }
+  }
+
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          quader_io::build_qdr_binary_container(test_uuid(),
+                                                std::move(chunks)));
+  ASSERT_FALSE(read.ok);
+  EXPECT_NE(read.message.find("missing its SDK topology payload"),
+            std::string::npos);
+}
+
+TEST(QdrBinarySceneCodecTests,
+     SchemasFourAndSevenAcceptSdkAuthoredGeometryPayload) {
+  for (const std::uint16_t schema_version : {4u, 7u}) {
+    SceneContentDocument document = simple_scene();
+    ASSERT_TRUE(document.assets().replace_mesh(
+        10u, authored_triangle_mesh("SDK Authored", 0.0f)));
+    const quader_io::QdrBinaryContainerReadResult parsed =
+        parse_written_scene(document);
+    ASSERT_TRUE(parsed.ok) << parsed.message;
+    std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
+    for (quader_io::QdrBinaryChunkInput &chunk : chunks) {
+      if (chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata) {
+        chunk.schema_version = schema_version;
+      }
+    }
+
+    const QdrProjectReadResult read =
+        QdrDocumentReader::deserialize_project_document(
+            quader_io::build_qdr_binary_container(test_uuid(),
+                                                  std::move(chunks)));
+    ASSERT_TRUE(read.ok) << "schema " << schema_version << ": "
+                         << read.message;
+    const MeshAsset *mesh = read.document.assets().mesh(10u);
+    ASSERT_NE(mesh, nullptr);
+    EXPECT_TRUE(mesh->authored_polygon_document);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     UnreferencedLegacyCsrGeometryResavesAsCanonicalSdkTopology) {
+  SceneContentDocument source(
+      SceneContentDocumentRecord{.id = 92u, .name = "Legacy Deferred"});
+  ASSERT_EQ(source.assets().add_mesh(
+                10u, authored_triangle_mesh("Referenced", 0.0f)),
+            10u);
+  ASSERT_EQ(source.assets().add_mesh(
+                20u, authored_triangle_mesh("Legacy Deferred", 3.0f)),
+            20u);
+  const EntityId entity = source.scene().create_entity_with_id(
+      100u, "Referenced Entity", EntityKind::Mesh);
+  ASSERT_NE(entity, kInvalidEntityId);
+  ASSERT_TRUE(source.scene().set_mesh(entity, MeshComponent{.mesh = 10u}));
+
+  const quader_io::QdrBinaryContainerReadResult current =
+      parse_written_scene(source);
+  ASSERT_TRUE(current.ok) << current.message;
+  std::vector<quader_io::QdrBinaryChunkInput> legacy_chunks =
+      copy_chunks(current);
+  std::uint64_t legacy_geometry_id = 0u;
+  for (quader_io::QdrBinaryChunkInput &chunk : legacy_chunks) {
+    if (chunk.type != quader_io::QdrBinaryChunkType::SceneMetadata) {
+      continue;
+    }
+    chunk.schema_version = 3u;
+    flatbuffers::Verifier verifier(
+        reinterpret_cast<const std::uint8_t *>(chunk.bytes.data()),
+        chunk.bytes.size());
+    ASSERT_TRUE(qdr_fb::VerifyScenePayloadBuffer(verifier));
+    const qdr_fb::ScenePayload *payload =
+        qdr_fb::GetScenePayload(chunk.bytes.data());
+    ASSERT_NE(payload, nullptr);
+    ASSERT_NE(payload->meshes(), nullptr);
+    for (const qdr_fb::MeshAsset *mesh : *payload->meshes()) {
+      if (mesh->id() == 20u) {
+        legacy_geometry_id = mesh->geometry_chunk_id();
+        break;
+      }
+    }
+  }
+  ASSERT_NE(legacy_geometry_id, 0u);
+  for (quader_io::QdrBinaryChunkInput &chunk : legacy_chunks) {
+    if (chunk.type == quader_io::QdrBinaryChunkType::Geometry &&
+        chunk.id == legacy_geometry_id) {
+      chunk.bytes = legacy_csr_geometry_fixture();
+      chunk.content_hash = quader_io::qdr_binary_content_hash(chunk.bytes);
+    }
+  }
+
+  QdrProjectReadResult legacy =
+      QdrDocumentReader::deserialize_project_document(
+          quader_io::build_qdr_binary_container(test_uuid(),
+                                                std::move(legacy_chunks)));
+  ASSERT_TRUE(legacy.ok) << legacy.message;
+  EXPECT_FALSE(legacy.document.assets().mesh_materialized(20u));
+
+  QdrProjectWriteSnapshotResult snapshot =
+      qdr_project_write_snapshot_from_document(legacy.document);
+  ASSERT_TRUE(snapshot.ok()) << snapshot.error().message;
+  EXPECT_TRUE(legacy.document.assets().mesh_materialized(20u));
+  const auto legacy_mesh_snapshot = std::ranges::find_if(
+      snapshot.value().meshes,
+      [](const QdrProjectMeshAssetWriteSnapshot &mesh) {
+        return mesh.id == 20u;
+      });
+  ASSERT_NE(legacy_mesh_snapshot, snapshot.value().meshes.end());
+  EXPECT_FALSE(legacy_mesh_snapshot->encoded_geometry);
+  EXPECT_TRUE(legacy_mesh_snapshot->geometry);
+  EXPECT_TRUE(legacy_mesh_snapshot->authored_polygon_document);
+
+  const std::vector<std::byte> canonical_bytes =
+      QdrDocumentWriter::serialize_project_document_bytes(snapshot.value(),
+                                                          test_uuid());
+  const quader_io::QdrBinaryContainerReadResult canonical =
+      quader_io::read_qdr_binary_container(canonical_bytes);
+  ASSERT_TRUE(canonical.ok) << canonical.message;
+  std::uint64_t canonical_geometry_id = 0u;
+  for (const quader_io::QdrBinaryChunk &chunk : canonical.chunks) {
+    if (chunk.type != static_cast<std::uint32_t>(
+                          quader_io::QdrBinaryChunkType::SceneMetadata)) {
+      continue;
+    }
+    EXPECT_EQ(chunk.schema_version, 8u);
+    flatbuffers::Verifier verifier(
+        reinterpret_cast<const std::uint8_t *>(chunk.bytes().data()),
+        chunk.bytes().size());
+    ASSERT_TRUE(qdr_fb::VerifyScenePayloadBuffer(verifier));
+    const qdr_fb::ScenePayload *payload =
+        qdr_fb::GetScenePayload(chunk.bytes().data());
+    ASSERT_NE(payload, nullptr);
+    ASSERT_NE(payload->meshes(), nullptr);
+    for (const qdr_fb::MeshAsset *mesh : *payload->meshes()) {
+      if (mesh->id() == 20u) {
+        canonical_geometry_id = mesh->geometry_chunk_id();
+        break;
+      }
+    }
+  }
+  ASSERT_NE(canonical_geometry_id, 0u);
+
+  const auto canonical_geometry = std::ranges::find_if(
+      canonical.chunks, [canonical_geometry_id](
+                            const quader_io::QdrBinaryChunk &chunk) {
+        return chunk.type == static_cast<std::uint32_t>(
+                                 quader_io::QdrBinaryChunkType::Geometry) &&
+               chunk.id == canonical_geometry_id;
+      });
+  ASSERT_NE(canonical_geometry, canonical.chunks.end());
+  flatbuffers::Verifier geometry_verifier(
+      reinterpret_cast<const std::uint8_t *>(
+          canonical_geometry->bytes().data()),
+      canonical_geometry->bytes().size());
+  ASSERT_TRUE(
+      geometry_verifier.VerifyBuffer<qdr_fb::GeometryPayload>("QDRG"));
+  const qdr_fb::GeometryPayload *geometry =
+      flatbuffers::GetRoot<qdr_fb::GeometryPayload>(
+          canonical_geometry->bytes().data());
+  ASSERT_NE(geometry, nullptr);
+  EXPECT_EQ(geometry->kind(), qdr_fb::GeometryKind::AuthoredPolygon);
+  ASSERT_NE(geometry->authored_payload(), nullptr);
+  EXPECT_GT(geometry->authored_payload()->size(), 0u);
+  const auto is_empty = [](const auto *values) {
+    return values == nullptr || values->size() == 0u;
+  };
+  EXPECT_EQ(geometry->next_vertex_id(), 1u);
+  EXPECT_EQ(geometry->next_face_id(), 1u);
+  EXPECT_TRUE(is_empty(geometry->polygon_vertices()));
+  EXPECT_TRUE(is_empty(geometry->face_ids()));
+  EXPECT_TRUE(is_empty(geometry->face_vertex_offsets()));
+  EXPECT_TRUE(is_empty(geometry->face_vertices()));
+  EXPECT_TRUE(is_empty(geometry->face_uv_offsets()));
+  EXPECT_TRUE(is_empty(geometry->face_uvs()));
+  EXPECT_TRUE(is_empty(geometry->face_material_slots()));
+  EXPECT_TRUE(is_empty(geometry->face_shading()));
+  EXPECT_TRUE(is_empty(geometry->hard_normal_edges()));
+
+  const QdrProjectReadResult reloaded =
+      QdrDocumentReader::deserialize_project_document(canonical_bytes);
+  ASSERT_TRUE(reloaded.ok) << reloaded.message;
+  const MeshAsset *reloaded_mesh = reloaded.document.assets().mesh(20u);
+  ASSERT_NE(reloaded_mesh, nullptr);
+  ASSERT_TRUE(reloaded_mesh->authored_polygon_document);
+  expect_polygon_topology_exact(*reloaded_mesh->authored_polygon_document,
+                                legacy_csr_topology());
 }
 
 TEST(QdrBinarySceneCodecTests, SchemaEightPreservesAuthoredCurvesAndStableIds) {
@@ -1303,6 +1896,9 @@ TEST(QdrBinarySceneCodecTests,
   ASSERT_EQ(document.assets().add_mesh(
                 20u, authored_triangle_mesh("Deferred", 3.0f)),
             20u);
+  ASSERT_EQ(document.assets().add_mesh(
+                30u, triangle_mesh("Compiled Deferred")),
+            30u);
   const EntityId entity = document.scene().create_entity_with_id(
       100u, "Referenced Entity", EntityKind::Mesh);
   ASSERT_NE(entity, kInvalidEntityId);
@@ -1315,11 +1911,12 @@ TEST(QdrBinarySceneCodecTests,
               required_write_snapshot(document),
               test_uuid()));
   ASSERT_TRUE(read.ok) << read.message;
-  EXPECT_EQ(read.stats.logical_geometry_count, 2u);
+  EXPECT_EQ(read.stats.logical_geometry_count, 3u);
   EXPECT_EQ(read.stats.unique_geometry_decoded_count, 1u);
   EXPECT_EQ(read.stats.unique_geometry_compiled_count, 1u);
   EXPECT_TRUE(read.document.assets().mesh_materialized(10u));
   EXPECT_FALSE(read.document.assets().mesh_materialized(20u));
+  EXPECT_FALSE(read.document.assets().mesh_materialized(30u));
 
   const std::optional<MeshAssetDescriptor> descriptor =
       read.document.assets().mesh_descriptor(20u);
@@ -1335,7 +1932,7 @@ TEST(QdrBinarySceneCodecTests,
       qdr_project_write_snapshot_from_document(read.document);
   ASSERT_TRUE(deferred_snapshot.ok()) << deferred_snapshot.error().message;
   EXPECT_FALSE(read.document.assets().mesh_materialized(20u));
-  ASSERT_EQ(deferred_snapshot.value().meshes.size(), 2u);
+  ASSERT_EQ(deferred_snapshot.value().meshes.size(), 3u);
   const auto deferred_write = std::ranges::find_if(
       deferred_snapshot.value().meshes,
       [](const QdrProjectMeshAssetWriteSnapshot &mesh) {
@@ -1344,15 +1941,26 @@ TEST(QdrBinarySceneCodecTests,
   ASSERT_NE(deferred_write, deferred_snapshot.value().meshes.end());
   EXPECT_TRUE(deferred_write->encoded_geometry);
   EXPECT_FALSE(deferred_write->geometry);
+  const auto compiled_deferred_write = std::ranges::find_if(
+      deferred_snapshot.value().meshes,
+      [](const QdrProjectMeshAssetWriteSnapshot &mesh) {
+        return mesh.id == 30u;
+      });
+  ASSERT_NE(compiled_deferred_write, deferred_snapshot.value().meshes.end());
+  EXPECT_TRUE(compiled_deferred_write->encoded_geometry);
+  EXPECT_FALSE(compiled_deferred_write->geometry);
+  EXPECT_FALSE(read.document.assets().mesh_materialized(30u));
 
   const QdrProjectReadResult resaved =
       QdrDocumentReader::deserialize_project_document(
           QdrDocumentWriter::serialize_project_document_bytes(
               deferred_snapshot.value(), test_uuid()));
   ASSERT_TRUE(resaved.ok) << resaved.message;
-  EXPECT_EQ(resaved.document.assets().mesh_count(), 2u);
+  EXPECT_EQ(resaved.document.assets().mesh_count(), 3u);
   EXPECT_TRUE(resaved.document.assets().has_mesh(20u));
+  EXPECT_TRUE(resaved.document.assets().has_mesh(30u));
   EXPECT_FALSE(resaved.document.assets().mesh_materialized(20u));
+  EXPECT_FALSE(resaved.document.assets().mesh_materialized(30u));
 
   const MeshAsset *deferred = read.document.assets().mesh(20u);
   ASSERT_NE(deferred, nullptr);

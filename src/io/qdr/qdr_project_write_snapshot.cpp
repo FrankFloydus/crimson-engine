@@ -29,59 +29,6 @@ mesh_asset_write_snapshot(const MeshAssetWriteSource &source) {
   return snapshot;
 }
 
-QdrProjectEntityWriteSnapshot
-entity_write_snapshot(const SceneDocument &scene, EntityId entity) {
-  QdrProjectEntityWriteSnapshot snapshot{
-      .id = entity,
-      .uuid = scene.uuid(entity),
-      .editor_object_id = scene.editor_object_id(entity),
-      .name = scene.name(entity) ? scene.name(entity)->name : std::string{},
-      .kind = scene.kind(entity),
-      .parent = scene.parent(entity),
-      .layer_id = scene.entity_layer(entity),
-  };
-  if (const TransformComponent *transform = scene.transform(entity)) {
-    snapshot.transform = *transform;
-  }
-  if (const TextureMappingComponent *mapping = scene.texture_mapping(entity)) {
-    snapshot.texture_mapping = *mapping;
-  }
-  if (const VisibilityComponent *visibility = scene.visibility(entity)) {
-    snapshot.visibility = *visibility;
-  }
-  if (const LockComponent *lock = scene.lock(entity)) {
-    snapshot.lock = *lock;
-  }
-  if (const ModelingObjectComponent *object = scene.modeling_object(entity)) {
-    snapshot.modeling_object = *object;
-  }
-  if (const MeshComponent *mesh = scene.mesh(entity)) {
-    snapshot.mesh = *mesh;
-  }
-  if (const CurveComponent *curve = scene.curve(entity)) {
-    snapshot.curve = *curve;
-  }
-  if (const MaterialComponent *material = scene.material(entity)) {
-    snapshot.material = *material;
-  }
-  if (const LightComponent *light = scene.light(entity)) {
-    snapshot.light = *light;
-  }
-  if (const InstanceDefinitionComponent *definition =
-          scene.instance_definition(entity)) {
-    snapshot.instance_definition = *definition;
-  }
-  if (const InstanceOccurrenceComponent *occurrence =
-          scene.instance_occurrence(entity)) {
-    snapshot.instance_occurrence = *occurrence;
-  }
-  if (const SceneSettingsComponent *settings = scene.scene_settings(entity)) {
-    snapshot.scene_root = scene.is_scene_root(entity);
-    snapshot.scene_settings = *settings;
-  }
-  return snapshot;
-}
-
 } // namespace
 
 QdrProjectWriteSnapshotResult
@@ -167,7 +114,15 @@ qdr_project_write_snapshot_from_document(const SceneContentDocument &document) {
           "Curve entity " + std::to_string(entity) +
               " has a missing curve asset binding.");
     }
-    snapshot.entities.push_back(entity_write_snapshot(scene, entity));
+    std::optional<SceneEntityState> entity_state =
+        capture_scene_entity_state(scene, entity);
+    if (!entity_state.has_value()) {
+      return QdrProjectWriteSnapshotResult::failure(
+          ProjectIoErrorCode::IoFailure,
+          "Scene entity " + std::to_string(entity) +
+              " could not be captured for save.");
+    }
+    snapshot.entities.push_back(std::move(*entity_state));
   }
 
   const std::vector<SceneLayerRecord> layers = scene.layers();
@@ -182,7 +137,6 @@ qdr_project_write_snapshot_from_document(const SceneContentDocument &document) {
     });
   }
 
-  snapshot.object_records = document.object_records();
   return QdrProjectWriteSnapshotResult::success(std::move(snapshot));
 }
 

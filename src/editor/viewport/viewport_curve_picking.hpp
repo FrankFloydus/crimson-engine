@@ -7,6 +7,7 @@
 #pragma once
 
 #include "editor/modeling/picking/curve_picking_cache.hpp"
+#include "editor/tools/viewport_native_tool_interaction.hpp"
 #include "viewport/curve_tool_preview.hpp"
 
 #include <cstddef>
@@ -20,7 +21,28 @@
 namespace quader {
 
 class ViewportCameraController;
+class SceneSurfaceQuerySnapshot;
 struct ViewportRay;
+
+/**
+ * Adapts the canonical viewport Curve picker to the native-tool input port.
+ */
+class ViewportCurveControlPickingAdapter final
+    : public ViewportCurveControlPickingPort {
+public:
+  ViewportCurveControlPickingAdapter(
+      const ViewportCameraController &camera,
+      const SceneSurfaceQuerySnapshot *scene_surfaces)
+      : camera_(&camera), scene_surfaces_(scene_surfaces) {}
+
+  [[nodiscard]] std::optional<CurveControlTarget>
+  pick(const CurveToolPreviewState &preview, QVec2 mouse_local,
+       bool anchors_only) const override;
+
+private:
+  const ViewportCameraController *camera_ = nullptr;
+  const SceneSurfaceQuerySnapshot *scene_surfaces_ = nullptr;
+};
 
 /// Reports one authored Curve control and its screen/ray-space pick metrics.
 struct ViewportCurveControlPickHit {
@@ -42,13 +64,12 @@ pick_viewport_curve_control(
     bool anchors_only = false, double radius_pixels = 9.0,
     std::optional<double> maximum_ray_distance = std::nullopt);
 
-/** Queries mesh depth only after finding a control, then rejects occluded hits. */
+/** Uses the session's render-visible surface index for Curve occlusion. */
 [[nodiscard]] std::optional<ViewportCurveControlPickHit>
 pick_unoccluded_viewport_curve_control(
     const ViewportCameraController &camera,
     const CurveToolPreviewState &preview, QVec2 local_mouse,
-    const std::function<std::optional<double>(const ViewportRay &)>
-        &mesh_surface_distance,
+    const SceneSurfaceQuerySnapshot &scene_surfaces,
     bool anchors_only = false, double radius_pixels = 9.0);
 
 /**
@@ -74,6 +95,7 @@ struct ViewportCurveAnchorSnapPointCandidate {
   QVec3 world_position;
 };
 
+/** Distinguishes persisted scene curves from anchors in the active draft. */
 enum class ViewportCurveAnchorSnapGroupKind : std::uint8_t {
   SceneEntity,
   ActiveDraft,
@@ -120,6 +142,7 @@ struct ViewportCurveAnchorSnapTarget {
   double pick_distance = 0.0;
 };
 
+/** Counts bounded candidate work performed by one curve-anchor snap query. */
 struct ViewportCurveAnchorSnapWorkCounters {
   std::size_t entity_bounds_tested = 0u;
   std::size_t anchors_tested = 0u;
@@ -168,5 +191,13 @@ resolve_viewport_curve_anchor_snap_target(
     std::span<const ViewportSceneCurvePickCandidate> candidates,
     double radius_pixels = 8.0,
     std::optional<double> maximum_ray_distance = std::nullopt);
+
+/** Picks sampled Curves behind no render-visible mesh surface. */
+[[nodiscard]] std::optional<ViewportCurvePickHit>
+pick_unoccluded_viewport_curve(
+    const ViewportCameraController &camera, QVec2 local_mouse,
+    std::span<const ViewportSceneCurvePickCandidate> candidates,
+    const SceneSurfaceQuerySnapshot &scene_surfaces,
+    double radius_pixels = 8.0);
 
 } // namespace quader

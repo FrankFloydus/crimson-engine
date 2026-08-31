@@ -10,6 +10,9 @@
 #include "editor/modeling/modeling_face_texture_settings.hpp"
 #include "editor/modeling/modeling_uv_peel.hpp"
 #include "editor/modeling/operations/editor_operation.hpp"
+#include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/modeling/services/modeling_structural_duplicate.hpp"
+#include "editor/selection/modeling_selection_projection_snapshot.hpp"
 #include "scene/scene_bounds.hpp"
 
 #include <quader/modeling/payloads.hpp>
@@ -27,7 +30,6 @@
 #include <vector>
 
 namespace quader_editor_core {
-class EditorSession;
 struct RectangleSelectionState;
 }
 
@@ -35,9 +37,7 @@ namespace quader {
 
 class AssetRegistry;
 class ModelingMeshSyncService;
-class ModelingObjectRuntimeMap;
 class ModelingSelectionService;
-struct ModelingObjectSceneIdentity;
 class SceneDocument;
 struct ViewportOverlayFrame;
 
@@ -278,12 +278,9 @@ public:
   [[nodiscard]] ModelingSdkMirrorPreviewResult preview_mirror(
       std::span<const int> modeling_object_ids,
       const std::array<QVec3, 3> &world_plane_points) const;
-  /** Builds a short-lived native view for host-only picking and overlays. */
-  [[nodiscard]] quader_editor_core::EditorSession
-  native_selection_projection() const;
-  /** Borrows the revision-cached native view for read-only host queries. */
-  [[nodiscard]] const quader_editor_core::EditorSession &
-  native_selection_projection_view() const;
+  /** Borrows the revision-cached immutable selection read model. */
+  [[nodiscard]] const ModelingSelectionProjectionSnapshot &
+  selection_projection_snapshot() const;
   [[nodiscard]] std::optional<EntityId> pick_object_entity(
       const ModelingPickSelectRequest &request,
       std::optional<EntityId> competing_native = std::nullopt) const;
@@ -364,9 +361,13 @@ public:
       std::span<const EntityId> entities,
       EntityId active = kInvalidEntityId);
   [[nodiscard]] ModelingCommandResult
+  clear_object_selection_preserving_mode();
+  [[nodiscard]] ModelingCommandResult
   set_selection_mode(ModelingSelectionMode mode);
   [[nodiscard]] ModelingCommandResult set_component_selection(
       const ModelingComponentSelectionRequest &request);
+  [[nodiscard]] ModelingCommandResult set_component_selections(
+      std::span<const ModelingComponentSelectionRequest> requests);
   [[nodiscard]] ModelingCommandResult
   select_mesh_ngons(std::span<const int> modeling_object_ids);
   [[nodiscard]] ModelingCommandResult select_all();
@@ -374,8 +375,8 @@ public:
   [[nodiscard]] ModelingCommandResult clear_selection();
   [[nodiscard]] ModelingCommandResult
   remove_objects(std::span<const int> modeling_object_ids);
-  [[nodiscard]] ModelingSelectionSummary apply_native_selection_projection(
-      const quader_editor_core::EditorSession &projection);
+  [[nodiscard]] ModelingCommandResult apply_selection_projection_checked(
+      const ModelingSelectionProjectionSnapshot &projection);
   [[nodiscard]] ModelingSelectionSummary
   pick_select(const ModelingPickSelectRequest &request,
               ModelingSelectionService &selection);
@@ -411,7 +412,9 @@ public:
 
   [[nodiscard]] ModelingCommandResult
   begin_translate_preview(bool duplicate_selected = false,
-                          bool topology_stable_transform = false);
+                           bool topology_stable_transform = false,
+                           std::span<const ModelingStructuralEntityClone>
+                               structural_duplicates = {});
   [[nodiscard]] ModelingCommandResult update_translate_preview(QVec3 delta);
   [[nodiscard]] ModelingCommandResult update_transform_preview(
       const ModelingTransform3 &transform, QVec3 pivot);
@@ -461,6 +464,11 @@ public:
   [[nodiscard]] std::vector<EntityId> selected_entities() const;
   [[nodiscard]] EntityId active_selected_entity() const;
   void add_selection_to_scene();
+  /**
+   * Extends the retained preview fence over host publication performed by the
+   * owning ModelingSessionService after the adapter operation returns.
+   */
+  [[nodiscard]] bool acknowledge_active_preview_host_publication();
 
   [[nodiscard]] std::uint64_t content_revision() const;
   [[nodiscard]] std::uint64_t selection_revision() const;
@@ -471,9 +479,20 @@ public:
   capture_active_preview_base_snapshot() const;
   [[nodiscard]] ModelingCommandResult
   restore_snapshot(const ModelingSdkProjectionSnapshot &snapshot);
+  /** Restores SDK-owned state without projecting its selection into Scene. */
+  [[nodiscard]] ModelingCommandResult
+  restore_snapshot_preserving_scene_selection(
+      const ModelingSdkProjectionSnapshot &snapshot);
   /** Restores a failed host operation without publishing a history revision. */
   [[nodiscard]] ModelingCommandResult
   restore_snapshot_exact(const ModelingSdkProjectionSnapshot &snapshot);
+  /**
+   * Exactly restores SDK-owned state while leaving the Scene selection to the
+   * enclosing host transaction.
+   */
+  [[nodiscard]] ModelingCommandResult
+  restore_snapshot_exact_preserving_scene_selection(
+      const ModelingSdkProjectionSnapshot &snapshot);
 
   void set_failure_point_for_tests(ModelingSdkProjectionFailurePoint point);
   [[nodiscard]] ModelingSdkProjectionStats stats() const noexcept;

@@ -63,12 +63,7 @@ public:
     MeshRenderableCache *mesh_cache_ = nullptr;
     InstanceRenderableCache *instance_cache_ = nullptr;
     MaterialBindingService *material_binding_ = nullptr;
-    std::uint64_t synced_revision_ = 0;
-    std::uint64_t synced_local_visibility_revision_ = 0;
-    std::uint64_t synced_asset_revision_ = 0;
-    std::uint64_t synced_project_material_revision_ = 0;
-    RenderInstanceEditScope synced_instance_edit_scope_;
-    RenderSceneBindingKey synced_scene_binding_;
+    RenderSourceStamp synced_source_stamp_;
     bool has_scene_binding_ = false;
     bool has_synced_ = false;
     LightRenderableCache light_cache_;

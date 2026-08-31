@@ -64,8 +64,8 @@ CI matrix protect the completed boundary.
 ## Resolved Architecture Decisions
 
 1. Direction authority: keep modeling truth in the app-owned portable core described in this
-   review; any follow-up architecture work uses `REFACTORING_PLAN.md` task IDs or a separately
-   approved successor plan.
+   review; the completed Phase 0-6 record remains in `REFACTORING_PLAN.md`, and the user-approved
+   active six-point follow-up is tracked in `ARCHITECTURE_CONSOLIDATION_PLAN.md`.
 2. Source path: `src/sdk/core/modeling`.
 3. Public namespace: `quader::modeling`.
 4. Umbrella header: `quader/modeling/modeling.hpp`.

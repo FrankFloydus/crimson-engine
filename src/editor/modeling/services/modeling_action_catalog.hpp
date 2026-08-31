@@ -65,6 +65,7 @@ enum class ModelingActionSelectionRequirement {
     AnySelection,
     SelectionMode,
     ComponentSelection,
+    ObjectOrGroupSelection,
     ObjectOrFaceSelection,
     EdgeOrFaceSelection,
 };

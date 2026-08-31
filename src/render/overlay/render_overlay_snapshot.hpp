@@ -10,8 +10,7 @@
 #include "assets/mesh_wire_geometry.hpp"
 #include "core/types.hpp"
 #include "math/types.hpp"
-#include "render/render_scene_binding.hpp"
-#include "render/render_instance_edit_scope.hpp"
+#include "render/render_source_stamp.hpp"
 #include "render/viewport_overlay_frame.hpp"
 #include "render/overlay/viewport_persistent_overlay_style.hpp"
 #include "scene/components.hpp"
@@ -153,15 +152,7 @@ struct RenderOverlayLightMarkerSnapshot {
  * Captures persistent selected-object overlay inputs and the dirty revisions
  * needed by the cache.
  */
-struct RenderOverlaySelectedObjectSnapshot {
-  RenderSceneBindingKey scene_binding;
-  std::uint64_t scene_revision = 0;
-  std::uint64_t asset_revision = 0;
-  std::uint64_t selection_revision = 0;
-  std::uint64_t visibility_revision = 0;
-  std::uint64_t local_visibility_revision = 0;
-  std::uint64_t transform_revision = 0;
-  std::uint64_t mesh_binding_revision = 0;
+struct RenderOverlaySelectedObjectSnapshot : RenderSourceStamp {
   ViewportPersistentOverlayStyleSnapshot style;
   ViewportCameraClipPlanes clip_planes;
   bool visible = true;
@@ -176,23 +167,8 @@ struct RenderOverlaySelectedObjectSnapshot {
  * Captures persistent wireframe overlay inputs and the dirty revisions needed
  * by the cache.
  */
-struct RenderOverlaySceneWireframeSnapshot {
-  RenderSceneBindingKey scene_binding;
-  std::uint64_t scene_revision = 0;
-  std::uint64_t asset_revision = 0;
-  /// Asset revision domain that can change borrowed mesh geometry inputs.
-  std::uint64_t mesh_material_usage_revision = 0;
-  std::uint64_t selection_revision = 0;
-  std::uint64_t hierarchy_presentation_revision = 0;
-  std::uint64_t visibility_revision = 0;
-  std::uint64_t transform_revision = 0;
-  std::uint64_t mesh_binding_revision = 0;
-  std::uint64_t curve_binding_revision = 0;
-  std::uint64_t render_component_revision = 0;
-  std::uint64_t layer_revision = 0;
-  std::uint64_t local_visibility_revision = 0;
+struct RenderOverlaySceneWireframeSnapshot : RenderSourceStamp {
   ViewportPersistentOverlayStyleSnapshot style;
-  RenderInstanceEditScope instance_edit_scope;
   ViewportCameraClipPlanes clip_planes;
   std::uint8_t layer_mask = 0u;
   /** Whole-mesh selected wire is an Object-mode presentation only. */
@@ -204,20 +180,7 @@ struct RenderOverlaySceneWireframeSnapshot {
  * Captures transient scene/tool overlay records appended to the runtime overlay
  * frame before style resolution.
  */
-struct RenderOverlaySelectionSnapshot {
-  RenderSceneBindingKey scene_binding;
-  std::uint64_t scene_revision = 0;
-  std::uint64_t asset_revision = 0;
-  std::uint64_t mesh_material_usage_revision = 0;
-  std::uint64_t selection_revision = 0;
-  std::uint64_t hierarchy_presentation_revision = 0;
-  std::uint64_t visibility_revision = 0;
-  std::uint64_t local_visibility_revision = 0;
-  std::uint64_t transform_revision = 0;
-  std::uint64_t mesh_binding_revision = 0;
-  std::uint64_t curve_binding_revision = 0;
-  std::uint64_t render_component_revision = 0;
-  std::uint64_t layer_revision = 0;
+struct RenderOverlaySelectionSnapshot : RenderSourceStamp {
   std::vector<RenderOverlayMeshSnapshot> hierarchy_selection_wires;
   std::vector<RenderOverlayBoundsSnapshot> group_bounds;
   /// One tight world bound for each selected direct mesh or formal occurrence.
@@ -326,14 +289,15 @@ private:
       const SceneDocument &document, const AssetRegistry &assets,
       EntityId occurrence);
   [[nodiscard]] bool can_refresh_selection_transforms(
-      const SceneDocument &document, const AssetRegistry &assets) const;
+      const RenderSourceStamp &current) const;
   [[nodiscard]] bool refresh_selection_transforms(
-      const SceneDocument &document, const AssetRegistry &assets);
-  [[nodiscard]] bool can_refresh_selection_curves(
       const SceneDocument &document, const AssetRegistry &assets,
-      std::uint64_t local_visibility_revision) const;
+      const RenderSourceStamp &current);
+  [[nodiscard]] bool can_refresh_selection_curves(
+      const RenderSourceStamp &current) const;
   void refresh_selection_curves(
       const SceneDocument &document, const AssetRegistry &assets,
+      const RenderSourceStamp &current,
       const ViewportLocalVisibilitySnapshot *local_visibility);
 
   const SceneDocument *source_document_ = nullptr;

@@ -522,6 +522,56 @@ void MeshProjectionService::apply_mesh_texture_mapping(
   }
 }
 
+std::optional<MeshAsset> MeshProjectionService::mesh_asset_from_sdk_payload(
+    const quader::modeling::MeshPayload &payload,
+    const quader::modeling::PolygonDocument &authored_document) {
+  MeshAsset mesh;
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices.reserve(payload.vertices.size());
+  for (const quader::modeling::MeshVertexPayload &vertex : payload.vertices) {
+    geometry.vertices.push_back({
+        .position = {vertex.position.x, vertex.position.y, vertex.position.z},
+        .normal = {vertex.normal.x, vertex.normal.y, vertex.normal.z},
+        .uv = {vertex.uv0.x, vertex.uv0.y},
+        .rgba = vertex.color,
+        .source_vertex_id = vertex.source_vertex.index,
+        .uv_carrier = vertex.uv_carrier,
+        .uv_geometric_normal = {vertex.uv_geometric_normal.x,
+                                vertex.uv_geometric_normal.y,
+                                vertex.uv_geometric_normal.z},
+    });
+  }
+  geometry.indices = payload.indices;
+  geometry.primitives.reserve(payload.primitives.size());
+  for (const quader::modeling::MeshPrimitivePayload &primitive :
+       payload.primitives) {
+    if (primitive.index_offset > geometry.indices.size() ||
+        primitive.index_count >
+            geometry.indices.size() - primitive.index_offset) {
+      return std::nullopt;
+    }
+    geometry.primitives.push_back({
+        .index_offset = primitive.index_offset,
+        .index_count = primitive.index_count,
+        .material_slot = primitive.material.valid()
+                             ? primitive.material.index - 1U
+                             : 0U,
+    });
+  }
+  if (std::ranges::any_of(geometry.indices, [&](std::uint32_t index) {
+        return index >= geometry.vertices.size();
+      })) {
+    return std::nullopt;
+  }
+  mesh.has_stable_cpu_topology = true;
+  quader_poly::Document authored;
+  if (!sdk_document_authored_topology(authored_document, authored)) {
+    return std::nullopt;
+  }
+  mesh.replace_authored_polygon_document(std::move(authored));
+  return mesh;
+}
+
 bool MeshProjectionService::initialize_compiled_texture_mapping(MeshAsset &mesh) {
   if (mesh.has_authored_polygon_document || mesh.geometry().indices.empty()) {
     return true;

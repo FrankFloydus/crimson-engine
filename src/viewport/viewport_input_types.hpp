@@ -51,22 +51,25 @@ struct ViewportPointerButtonEdge {
   std::uint64_t sequence = 0u;
 };
 
-/// Describes one ordered semantic edge in the Curve point-conversion gesture.
-enum class ViewportCurveConversionEdgeKind {
+/// Describes one ordered semantic action that owns a physical pointer press.
+enum class ViewportSemanticPointerEdgeKind {
   ReservePress,
   Trigger,
 };
 
 /**
- * Couples Curve point-conversion intent to the exact raw pointer edge that
- * produced it. Keyboard bindings intentionally carry no pointer provenance.
+ * Couples semantic intent to the exact raw pointer edge that produced it.
+ * Keyboard bindings intentionally carry no pointer provenance.
  */
-struct ViewportCurveConversionEdge {
-  ViewportCurveConversionEdgeKind kind =
-      ViewportCurveConversionEdgeKind::Trigger;
+struct ViewportSemanticPointerEdge {
+  ViewportSemanticPointerEdgeKind kind =
+      ViewportSemanticPointerEdgeKind::Trigger;
   QuaderInputChord semantic_chord = {};
   std::optional<ViewportPointerButtonEdge> pointer_edge;
 };
+
+using ViewportCurveConversionEdgeKind = ViewportSemanticPointerEdgeKind;
+using ViewportCurveConversionEdge = ViewportSemanticPointerEdge;
 
 /**
  * Stores the Viewport Input Frame data contract used by the viewport input, layout, and camera layer.
@@ -103,9 +106,12 @@ struct ViewportInputFrame {
   bool apply_active_material_delay_for_double_click = false;
   bool apply_face_material_to_mesh_pressed = false;
   bool transfer_face_texture_pressed = false;
-  // Canonical left Click/DoubleClick counterparts and Qt's substituted second
+  // Canonical mouse Click/DoubleClick counterparts and Qt's substituted second
   // press reserve pointer ownership before selection can replace the source.
   bool transfer_face_texture_pointer_reserved = false;
+  // Retains the exact Settings-resolved button, gesture, and physical edge.
+  // The interaction owner uses this instead of assuming a left-button action.
+  std::vector<ViewportSemanticPointerEdge> transfer_face_texture_edges;
   // An unconsumed first left click can wait for any bound depth double-click.
   bool selection_click_delay_for_double_click = false;
   // Physical first-click modifiers, before they can change for the double-click.

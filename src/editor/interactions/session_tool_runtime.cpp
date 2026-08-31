@@ -385,7 +385,19 @@ CommandResult apply_editor_runtime_transform_drag_preview(
 		EditorRuntimeState& runtime,
 		const TransformDragPreviewInput& input)
 {
-	return quader_editor_core::apply_transform_drag_preview(session, runtime.transform_drag, input);
+	return quader_editor_core::apply_transform_drag_preview(
+			session.objects(), session.selection_mode(), runtime.transform_drag,
+			input);
+}
+
+CommandResult apply_editor_runtime_transform_drag_preview(
+		std::span<const PolygonObject> selection_objects,
+		SelectionMode selection_mode,
+		EditorRuntimeState& runtime,
+		const TransformDragPreviewInput& input)
+{
+	return quader_editor_core::apply_transform_drag_preview(
+			selection_objects, selection_mode, runtime.transform_drag, input);
 }
 
 void clear_editor_runtime_transform_drag_state(EditorRuntimeState& runtime)
@@ -922,6 +934,17 @@ CommandResult EditorRuntime::apply_transform_drag_preview(
 	return apply_editor_runtime_transform_drag_preview(session, state_, input);
 }
 
+CommandResult EditorRuntime::apply_transform_drag_preview(
+		std::span<const PolygonObject> selection_objects,
+		SelectionMode selection_mode,
+		const TransformDragPreviewInput& input)
+{
+	QDR_PROFILE_SCOPE(
+			"qdr_editor_core.EditorRuntime.apply_transform_drag_preview_projection");
+	return apply_editor_runtime_transform_drag_preview(
+			selection_objects, selection_mode, state_, input);
+}
+
 void EditorRuntime::clear_transform_drag_state()
 {
 	clear_editor_runtime_transform_drag_state(state_);
@@ -967,17 +990,26 @@ bool EditorRuntime::set_insert_edge_loop_preview_from_pick(
 		bool dragging,
 		int target_object_id)
 {
+	return set_insert_edge_loop_preview_from_pick(
+		session.objects(), ray, grid_size, vertex_radius, edge_radius,
+		snap_enabled, dragging, target_object_id);
+}
+
+bool EditorRuntime::set_insert_edge_loop_preview_from_pick(
+		const std::vector<PolygonObject>& objects,
+		const quader_poly::Ray& ray,
+		double grid_size,
+		double vertex_radius,
+		double edge_radius,
+		bool snap_enabled,
+		bool dragging,
+		int target_object_id)
+{
 	quader_poly::PickOptions pick_options =
 		selection_pick_options_from_radii(vertex_radius, edge_radius);
-	return session.set_insert_edge_loop_preview_from_pick(
-		state_.insert_edge_loop,
-		state_.hover,
-		ray,
-		grid_size,
-		pick_options,
-		snap_enabled,
-		dragging,
-		target_object_id);
+	return quader_editor_core::set_insert_edge_loop_preview_from_pick(
+		objects, state_.insert_edge_loop, state_.hover, ray, grid_size,
+		pick_options, snap_enabled, dragging, target_object_id);
 }
 
 bool EditorRuntime::update_insert_edge_loop_drag_factor(
@@ -986,11 +1018,18 @@ bool EditorRuntime::update_insert_edge_loop_drag_factor(
 		double grid_size,
 		bool snap_enabled)
 {
-	return session.update_insert_edge_loop_drag_factor(
-		state_.insert_edge_loop,
-		state_.hover,
-		ray,
-		grid_size,
+	return update_insert_edge_loop_drag_factor(
+		session.objects(), ray, grid_size, snap_enabled);
+}
+
+bool EditorRuntime::update_insert_edge_loop_drag_factor(
+		const std::vector<PolygonObject>& objects,
+		const quader_poly::Ray& ray,
+		double grid_size,
+		bool snap_enabled)
+{
+	return quader_editor_core::update_insert_edge_loop_drag_factor(
+		objects, state_.insert_edge_loop, state_.hover, ray, grid_size,
 		snap_enabled);
 }
 
@@ -1022,9 +1061,22 @@ bool EditorRuntime::update_knife_preview_from_pick(
 		bool constrain_axis,
 		int target_object_id)
 {
+	return update_knife_preview_from_pick(
+		session.objects(), ray, grid_size, snap_enabled, constrain_axis,
+		target_object_id);
+}
+
+bool EditorRuntime::update_knife_preview_from_pick(
+		const std::vector<PolygonObject>& objects,
+		const quader_poly::Ray& ray,
+		double grid_size,
+		bool snap_enabled,
+		bool constrain_axis,
+		int target_object_id)
+{
 	QDR_PROFILE_SCOPE("qdr_editor_core.EditorRuntime.update_knife_preview_from_pick");
 	return quader_editor_core::update_knife_preview_from_pick(
-		session,
+		objects,
 		state_.knife,
 		state_.hover,
 		ray,
@@ -1038,6 +1090,14 @@ bool EditorRuntime::update_insert_edge_loop_drag_factor_from_world(
 		EditorSession& session,
 		std::optional<float> resolved_factor)
 {
+	return update_insert_edge_loop_drag_factor_from_world(session.objects(),
+		resolved_factor);
+}
+
+bool EditorRuntime::update_insert_edge_loop_drag_factor_from_world(
+		const std::vector<PolygonObject>& objects,
+		std::optional<float> resolved_factor)
+{
 	if (!resolved_factor.has_value()) {
 		clear_insert_edge_loop_preview(
 			state_.insert_edge_loop, state_.hover,
@@ -1046,7 +1106,7 @@ bool EditorRuntime::update_insert_edge_loop_drag_factor_from_world(
 		return false;
 	}
 	return set_insert_edge_loop_preview(
-		state_.insert_edge_loop, session.objects(), state_.hover,
+		state_.insert_edge_loop, objects, state_.hover,
 		state_.insert_edge_loop.object_id, state_.insert_edge_loop.edge,
 		*resolved_factor, true);
 }
@@ -1058,9 +1118,20 @@ bool EditorRuntime::update_knife_preview_from_hit(
 		bool snap_enabled,
 		bool constrain_axis)
 {
+	return update_knife_preview_from_hit(
+		session.objects(), hit, grid_size, snap_enabled, constrain_axis);
+}
+
+bool EditorRuntime::update_knife_preview_from_hit(
+		const std::vector<PolygonObject>& objects,
+		const PickHitRecord& hit,
+		double grid_size,
+		bool snap_enabled,
+		bool constrain_axis)
+{
 	QDR_PROFILE_SCOPE("qdr_editor_core.EditorRuntime.update_knife_preview_from_hit");
 	return quader_editor_core::update_knife_preview_from_hit(
-		session, state_.knife, state_.hover, hit, grid_size,
+		objects, state_.knife, state_.hover, hit, grid_size,
 		snap_enabled, constrain_axis);
 }
 
@@ -1070,8 +1141,19 @@ bool EditorRuntime::set_insert_edge_loop_preview_from_hit(
 		std::optional<float> resolved_factor,
 		bool dragging)
 {
-	return session.set_insert_edge_loop_preview_from_hit(
-		state_.insert_edge_loop, state_.hover, hit, resolved_factor, dragging);
+	return set_insert_edge_loop_preview_from_hit(
+		session.objects(), hit, resolved_factor, dragging);
+}
+
+bool EditorRuntime::set_insert_edge_loop_preview_from_hit(
+		const std::vector<PolygonObject>& objects,
+		const PickHitRecord& hit,
+		std::optional<float> resolved_factor,
+		bool dragging)
+{
+	return quader_editor_core::set_insert_edge_loop_preview_from_hit(
+		objects, state_.insert_edge_loop, state_.hover, hit, resolved_factor,
+		dragging);
 }
 
 bool EditorRuntime::accept_knife_current_point(double grid_size)

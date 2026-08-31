@@ -156,10 +156,20 @@ DrawnPlaneToolResult DrawnPlaneToolLogic::begin_line_drag(
 	if (state.points.size() < 2U) {
 		return { false, false, message(label, " needs a placed line to drag.") };
 	}
+	const quader::QVec3 line = state.points[1] - state.points[0];
+	const double line_length_squared = vec3_dot(line, line);
+	if (line_length_squared <= kDrawnPlaneEpsilonSquared) {
+		return { false, false, message(label, " line is too short.") };
+	}
+	const double line_parameter = std::clamp(
+		vec3_dot(anchor - state.points[0], line) / line_length_squared,
+		0.0,
+		1.0);
 	state.dragging_point_index = -1;
 	state.dragging_new_point = false;
 	state.dragging_line = true;
-	state.drag_line_anchor = anchor;
+	state.drag_line_anchor =
+		state.points[0] + vec3_scale(line, line_parameter);
 	return { true, false };
 }
 

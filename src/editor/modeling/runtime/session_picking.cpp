@@ -10,6 +10,7 @@
 #include <editor/modeling/runtime/session.hpp>
 
 #include <quader/modeling/neutral/geometry/geometry.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_constants.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_picking_helpers.hpp>
 
 #include <algorithm>
@@ -1000,6 +1001,51 @@ PickHitRecord make_pick_hit_record(
   };
 }
 
+std::optional<quader_poly::PickResult> object_space_surface_cutoff(
+    const quader_poly::Ray &world_ray,
+    const PickObjectTransform *object_transform,
+    std::optional<double> maximum_world_ray_distance) {
+  if (!maximum_world_ray_distance.has_value() ||
+      *maximum_world_ray_distance >
+          static_cast<double>(std::numeric_limits<float>::max()) * 0.25) {
+    return std::nullopt;
+  }
+  const quader::QVec3 world_direction =
+      quader::normalize_or_zero(world_ray.direction);
+  if (quader::length_squared(world_direction) <=
+      quader_poly::document_internal::kEpsilon) {
+    return std::nullopt;
+  }
+  const quader::QVec3 world_cutoff =
+      world_ray.origin +
+      world_direction * static_cast<float>(*maximum_world_ray_distance);
+  const quader_poly::Ray local_ray =
+      object_space_pick_ray(world_ray, object_transform);
+  const quader::QVec3 local_cutoff =
+      object_transform == nullptr
+          ? world_cutoff
+          : affine_transform_point(object_transform->object_from_world,
+                                   world_cutoff);
+  const float local_cutoff_distance =
+      quader::dot(local_cutoff - local_ray.origin, local_ray.direction);
+  if (!std::isfinite(local_cutoff_distance)) {
+    return std::nullopt;
+  }
+
+  // DocumentPickFacts applies its component coplanarity tolerance after the
+  // supplied surface distance. Compensate here so the caller's inclusive
+  // world cutoff remains exact even under nonuniform occurrence transforms.
+  return quader_poly::PickResult{
+      .hit = true,
+      .kind = quader_poly::ElementKind::Face,
+      .face_id = quader_poly::kInvalidElementId,
+      .distance =
+          local_cutoff_distance -
+          quader_poly::document_internal::kComponentPickOcclusionTolerance,
+      .position = local_cutoff,
+  };
+}
+
 bool pick_hit_depth_less(const PickHitRecord &left,
                          const PickHitRecord &right) {
   if (std::abs(left.ray_distance - right.ray_distance) >
@@ -1626,6 +1672,51 @@ std::optional<PickHitRecord> pick_all_with_surface_into(
 	}
         std::sort(hits.begin(), hits.end(), pick_hit_depth_less);
         return surface_hit;
+}
+
+void pick_all_without_surface_into(
+    const std::vector<PolygonObject> &objects, const PickRequest &request,
+    std::span<const PickObjectBounds> object_bounds,
+    std::span<const PickObjectTransform> object_transforms,
+    std::optional<double> maximum_world_ray_distance,
+    PickAllWithSurfaceScratch &scratch) {
+  QDR_PROFILE_SCOPE("qdr_editor_core.pick_all.without_surface");
+  std::vector<PickHitRecord> &hits = scratch.hits;
+  hits.clear();
+  hits.reserve(objects.size());
+  scratch.local_surface_hits.clear();
+  if (maximum_world_ray_distance.has_value() &&
+      (!std::isfinite(*maximum_world_ray_distance) ||
+       *maximum_world_ray_distance < 0.0)) {
+    return;
+  }
+  for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
+    const PolygonObject &object = objects[static_cast<std::size_t>(index)];
+    if (request.target_object_id >= 0 &&
+        object.id != request.target_object_id) {
+      continue;
+    }
+    if (!ray_intersects_object_pick_bounds(
+            object, request.ray, request.options,
+            cached_bounds_for_object(object_bounds, index, object))) {
+      continue;
+    }
+    const PickObjectTransform *object_transform =
+        cached_transform_for_object(object_transforms, index, object);
+    const std::optional<quader_poly::PickResult> surface_cutoff =
+        object_space_surface_cutoff(request.ray, object_transform,
+                                    maximum_world_ray_distance);
+    const quader_poly::PickResult hit = pick_object_element(
+        object, index, request.ray, request.options, {}, object_transforms,
+        &surface_cutoff);
+    if (!hit.hit) {
+      continue;
+    }
+    hits.push_back(make_pick_hit_record(
+        object, index, request, hit,
+        object_transform));
+  }
+  std::sort(hits.begin(), hits.end(), pick_hit_depth_less);
 }
 
 PickAllWithSurfaceResult pick_all_with_surface(
@@ -2791,12 +2882,14 @@ bool pick_select_all_vertices(
 
 namespace {
 
-bool session_has_component_selection(const EditorSession& session, SelectionMode mode)
+bool has_component_selection(
+		std::span<const PolygonObject> objects,
+		SelectionMode mode)
 {
   if (mode == SelectionMode::Object) {
     return false;
   }
-        for (const PolygonObject& object : session.objects()) {
+	for (const PolygonObject& object : objects) {
 		if (!object.selected) {
 			continue;
 		}
@@ -2838,15 +2931,17 @@ bool pick_selection_request_hits_target(
 	return hovered.hover.object_id > 0;
 }
 
-bool apply_picked_selection_to_session(
-		EditorSession& session,
+bool apply_picked_selection_to_projection(
+		std::vector<PolygonObject>& selection_objects,
+		SelectionMode& selection_mode,
+		int& selection_active_object_id,
 		const std::vector<PolygonObject>& picking_objects,
 		SelectionMode mode,
 		int active_object_id)
 {
-	SessionState& state = session.state();
-	bool changed = state.selection_mode != mode || state.active_object_id != active_object_id;
-	for (PolygonObject& object : state.objects) {
+	bool changed = selection_mode != mode ||
+		selection_active_object_id != active_object_id;
+	for (PolygonObject& object : selection_objects) {
 		const auto picked = std::find_if(
 				picking_objects.begin(),
 				picking_objects.end(),
@@ -2870,24 +2965,29 @@ bool apply_picked_selection_to_session(
 	if (!changed) {
 		return false;
 	}
-	state.selection_mode = mode;
-	state.active_object_id = active_object_id;
-	normalize_active_object_id(state.objects, state.active_object_id);
-	state.selection_revision =
-		advance_session_revision(state.selection_revision);
+	selection_mode = mode;
+	selection_active_object_id = active_object_id;
+	normalize_active_object_id(selection_objects, selection_active_object_id);
 	return true;
 }
 
 } // namespace
 
-ApplyPickSelectionResult apply_pick_selection(
-		EditorSession& session,
+ApplyPickSelectionProjectionResult apply_pick_selection(
+		std::vector<PolygonObject> selection_objects,
+		SelectionMode selection_mode,
+		int active_object_id,
 		std::vector<PolygonObject> picking_objects,
 		const ApplyPickSelectionRequest& request)
 {
-	ApplyPickSelectionResult result;
-	SelectionMode mode = session.selection_mode();
-	int active_object_id = session.active_object_id();
+	ApplyPickSelectionProjectionResult projection{
+		.objects = std::move(selection_objects),
+		.selection_mode = selection_mode,
+		.active_object_id = active_object_id,
+	};
+	ApplyPickSelectionResult& result = projection.result;
+	SelectionMode mode = projection.selection_mode;
+	int resolved_active_object_id = projection.active_object_id;
 	SelectionEditOperation operation = request.operation;
 	const bool paint_stroke = request.click_count == 0;
 
@@ -2913,7 +3013,7 @@ ApplyPickSelectionResult apply_pick_selection(
           if (candidates.empty()) {
             reset_pick_cycle(cycle);
             result.applied = false;
-            return result;
+            return projection;
           }
 
           int ordinary_candidate = -1;
@@ -2933,11 +3033,13 @@ ApplyPickSelectionResult apply_pick_selection(
               ordinary_candidate);
           const PickHitRecord &hit = hits[candidates[step.index]];
           apply_object_pick_selection(picking_objects, hit.object_index,
-                                      operation, active_object_id);
+                                      operation, resolved_active_object_id);
           result.hit = true;
-          result.changed = apply_picked_selection_to_session(
-              session, picking_objects, mode, active_object_id);
-          return result;
+          result.changed = apply_picked_selection_to_projection(
+              projection.objects, projection.selection_mode,
+              projection.active_object_id, picking_objects, mode,
+              resolved_active_object_id);
+          return projection;
         }
 
 	if (paint_stroke) {
@@ -2947,13 +3049,16 @@ ApplyPickSelectionResult apply_pick_selection(
             }
             result.hit =
                 pick_select(picking_objects, mode, operation, request.ray,
-                            active_object_id, request.pick_options, false,
+                            resolved_active_object_id, request.pick_options,
+                            false,
                             request.object_bounds, request.face_geometry,
                             request.object_transforms);
-            result.changed = apply_picked_selection_to_session(
-                session, picking_objects, mode, active_object_id);
+            result.changed = apply_picked_selection_to_projection(
+                projection.objects, projection.selection_mode,
+                projection.active_object_id, picking_objects, mode,
+                resolved_active_object_id);
           }
-                return result;
+		return projection;
 	}
 
 	const bool edge_loop_select =
@@ -2963,14 +3068,14 @@ ApplyPickSelectionResult apply_pick_selection(
         if (request.preserve_existing_component_selection_on_hit &&
             operation == SelectionEditOperation::Replace &&
             single_component_pick &&
-            session_has_component_selection(session, mode) &&
+            has_component_selection(projection.objects, mode) &&
             pick_selection_request_hits_target(
                 picking_objects, mode, request.ray, request.pick_options,
                 request.object_bounds, request.face_geometry,
                 request.object_transforms)) {
           result.applied = false;
           result.hit = true;
-          return result;
+		  return projection;
         }
 
         if (request.preserve_selection_on_selected_hit &&
@@ -2995,37 +3100,62 @@ ApplyPickSelectionResult apply_pick_selection(
           if (hit_already_selected) {
             result.applied = false;
             result.hit = true;
-            return result;
+            return projection;
           }
         }
 
         if (multi_click && mode == SelectionMode::Face) {
           result.hit = pick_select_all_faces(
-              picking_objects, mode, operation, request.ray, active_object_id,
+              picking_objects, mode, operation, request.ray,
+              resolved_active_object_id,
               request.pick_options, request.object_bounds,
               request.face_geometry, request.object_transforms);
         } else if ((multi_click || edge_loop_select) &&
                    mode == SelectionMode::Edge) {
           result.hit = pick_select_edge_loop(
-              picking_objects, mode, operation, request.ray, active_object_id,
+              picking_objects, mode, operation, request.ray,
+              resolved_active_object_id,
               request.pick_options, request.object_bounds,
               request.face_geometry, request.object_transforms);
         } else if (multi_click && mode == SelectionMode::Vertex) {
           result.hit = pick_select_all_vertices(
-              picking_objects, mode, operation, request.ray, active_object_id,
+              picking_objects, mode, operation, request.ray,
+              resolved_active_object_id,
               request.pick_options, request.object_bounds,
               request.face_geometry, request.object_transforms);
         } else {
           result.hit =
               pick_select(picking_objects, mode, operation, request.ray,
-                          active_object_id, request.pick_options, true,
+                          resolved_active_object_id, request.pick_options, true,
                           request.object_bounds, request.face_geometry,
                           request.object_transforms);
         }
         if (result.hit || !request.preserve_selection_on_miss) {
-		result.changed = apply_picked_selection_to_session(session, picking_objects, mode, active_object_id);
+		result.changed = apply_picked_selection_to_projection(
+				projection.objects, projection.selection_mode,
+				projection.active_object_id, picking_objects, mode,
+				resolved_active_object_id);
 	}
-	return result;
+	return projection;
+}
+
+ApplyPickSelectionResult apply_pick_selection(
+		EditorSession& session,
+		std::vector<PolygonObject> picking_objects,
+		const ApplyPickSelectionRequest& request)
+{
+	SessionState& state = session.state();
+	ApplyPickSelectionProjectionResult projection = apply_pick_selection(
+			state.objects, state.selection_mode, state.active_object_id,
+			std::move(picking_objects), request);
+	if (projection.result.changed) {
+		state.objects = std::move(projection.objects);
+		state.selection_mode = projection.selection_mode;
+		state.active_object_id = projection.active_object_id;
+		state.selection_revision = advance_session_revision(
+				state.selection_revision);
+	}
+	return projection.result;
 }
 
 } // namespace quader_editor_core

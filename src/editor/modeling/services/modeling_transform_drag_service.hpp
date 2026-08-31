@@ -7,11 +7,15 @@
 #pragma once
 
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/selection/modeling_selection_projection_snapshot.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/modeling/runtime_state/transform_drag_controller.hpp"
+#include "editor/modeling/services/modeling_structural_duplicate.hpp"
 #include "editor/history/editor_history_service.hpp"
+#include "editor/selection/scene_selection_application.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "math/types.hpp"
+#include "scene/scene_document.hpp"
 
 #include <optional>
 #include <vector>
@@ -49,7 +53,9 @@ public:
   [[nodiscard]] virtual bool transient_transform_preview_active() const = 0;
   virtual ModelingCommandResult
   begin_portable_transform_preview(bool duplicate_selected,
-                                   bool topology_stable_transform) = 0;
+                                   bool topology_stable_transform,
+                                   std::span<const ModelingStructuralEntityClone>
+                                       structural_duplicates = {}) = 0;
   virtual ModelingCommandResult update_portable_transform_preview(
       const quader_editor_core::TransformDragState &drag,
       double grid_size) = 0;
@@ -70,6 +76,7 @@ public:
   transform_drag_bounds() const = 0;
   virtual void invalidate_selection_overlay_caches() const = 0;
   virtual void sync_scene_selection_from_modeling() = 0;
+  virtual void refresh_transform_drag_projection() = 0;
   [[nodiscard]] virtual ModelingSessionMemento
   capture_active_preview_history_memento() const = 0;
   [[nodiscard]] virtual ModelingSessionMemento
@@ -106,10 +113,12 @@ struct ModelingTransformDragServiceContext {
   SceneDocument &scene;
   AssetRegistry &assets;
   /// Drag-lifetime projection borrowed by retained native input helpers.
-  const quader_editor_core::EditorSession &session;
+  const ModelingSelectionProjectionSnapshot &session;
   quader_editor_core::EditorRuntime &runtime;
   ModelingTransformDragPort &port;
   DocumentCommandService *document_commands = nullptr;
+  const ModelingStructuralDuplicate *structural_duplicate =
+      nullptr;
   EditorHistoryService *history = nullptr;
 };
 
@@ -148,7 +157,10 @@ private:
   TransformDragController controller_;
   SceneTransformDragService scene_transform_drag_service_;
   std::optional<EditorTransaction> scene_duplicate_transaction_;
-  bool portable_scene_duplicate_active_ = false;
+  std::optional<SceneScalarCompensationCheckpoint>
+      structural_duplicate_scalar_checkpoint_;
+  std::optional<SceneSelectionState> structural_duplicate_selection_before_;
+  bool structural_duplicate_active_ = false;
 };
 
 } // namespace quader

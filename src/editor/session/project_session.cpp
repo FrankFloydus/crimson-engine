@@ -133,9 +133,6 @@ project_material_references(const QdrProjectWriteSnapshot &snapshot) {
       append_project_material_reference(material, ids);
     }
   }
-  for (const ProjectObjectRecord &record : snapshot.object_records) {
-    append_project_material_reference(record.material, ids);
-  }
   return ids;
 }
 

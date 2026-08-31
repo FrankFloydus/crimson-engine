@@ -12,6 +12,7 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_hierarchy_visibility.hpp"
 #include "scene/scene_transform.hpp"
 #include "viewport/viewport_local_visibility.hpp"
 
@@ -22,11 +23,11 @@ ViewportSceneProjection::point_light_pick_candidates(
     const SceneDocument &document,
     const ViewportLocalVisibilitySnapshot &local_visibility) {
   std::vector<ViewportSceneBillboardPickCandidate> candidates;
-  const SceneHierarchyProjectionSnapshot hierarchy =
-      document.hierarchy_projection_snapshot();
+  const std::shared_ptr<const SceneHierarchyProjectionSnapshot> hierarchy =
+      document.hierarchy_projection();
   for (const EntityId entity : document.entities()) {
     const LightComponent *light = document.light(entity);
-    const SceneHierarchyProjectionRecord *state = hierarchy.find(entity);
+    const SceneHierarchyProjectionRecord *state = hierarchy->find(entity);
     if (light == nullptr || light->type != LightType::Point ||
         state == nullptr || !state->effectively_visible ||
         !local_visibility.allows(
@@ -37,6 +38,10 @@ ViewportSceneProjection::point_light_pick_candidates(
         .entity = entity,
         .position = transform_point(state->world_transform, {}),
         .size_pixels = kOverlayPointLightGizmoSizePixels,
+        .selectable =
+            scene_hierarchy_segment_is_selectable_ignoring_visibility(
+                document, entity),
+        .effectively_locked = state->effectively_locked,
     });
   }
   return candidates;

@@ -32,6 +32,7 @@
 #include "editor/commands/document/ungroup_selection_command.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/commands/editor_command_service.hpp"
+#include "editor/commands/scene_structural_lifecycle_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
@@ -52,6 +53,8 @@
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "editor/viewport/viewport_scene_projection.hpp"
+#include "editor/viewport/viewport_scene_hit_policy.hpp"
+#include "editor/viewport/viewport_vertex_snap_aggregation.hpp"
 #include "platform/fatal_error_handler.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/light_renderable_cache.hpp"
@@ -86,7 +89,7 @@
 #include "ui/console_model.hpp"
 #include "ui/ui_settings.hpp"
 #include "ui/viewport_context_menu_policy.hpp"
-#include "ui/viewport_pane_overlay_cache.hpp"
+#include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/modeling_sdk_viewport_input_adapter.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
@@ -857,6 +860,26 @@ test_x_move_drag_update_request(float screen_x) {
       .vertex_snap_radius = 0.3,
       .grid_snap_enabled = true,
       .precision = false,
+  };
+}
+
+using SceneScalarRevisionFingerprint = std::array<std::uint64_t, 12>;
+
+[[nodiscard]] SceneScalarRevisionFingerprint
+scene_scalar_revision_fingerprint(const SceneDocument &scene) {
+  return {
+      scene.revision(),
+      scene.content_revision(),
+      scene.selection_revision(),
+      scene.hierarchy_presentation_revision(),
+      scene.visibility_revision(),
+      scene.transform_revision(),
+      scene.texture_mapping_revision(),
+      scene.mesh_binding_revision(),
+      scene.curve_binding_revision(),
+      scene.material_binding_revision(),
+      scene.render_component_revision(),
+      scene.layer_revision(),
   };
 }
 
@@ -3345,6 +3368,265 @@ TEST(ViewportPointPlacementServiceTests,
   expect_vec3_near(result.world_position, current_position);
 }
 
+TEST(ViewportVertexSnapAggregationTests,
+     ResolvesCrossDomainDepthAndPreservesTypedSource) {
+  const ViewportMeshVertexSnapTarget mesh{
+      .modeling_object_id = 7,
+      .vertex_id = 11u,
+      .world_position = {1.0f, 2.0f, 3.0f},
+      .ray_distance = 5.0,
+      .pick_distance = 0.1,
+  };
+  ViewportCurveAnchorSnapTarget curve;
+  curve.group = ViewportCurveAnchorSnapGroupIdentity::scene(42u);
+  curve.entity = 42u;
+  curve.world_position = {4.0f, 5.0f, 6.0f};
+  curve.ray_distance = 4.0;
+  curve.pick_distance = 0.2;
+
+  const auto curve_wins =
+      aggregate_viewport_vertex_snap_targets(mesh, curve);
+  ASSERT_TRUE(curve_wins.has_value());
+  EXPECT_EQ(curve_wins->domain, ViewportVertexSnapDomain::CurveAnchor);
+  EXPECT_TRUE(std::holds_alternative<ViewportCurveAnchorSnapTarget>(
+      curve_wins->source));
+  expect_vec3_near(curve_wins->world_position, curve.world_position);
+
+  curve.ray_distance = mesh.ray_distance;
+  curve.pick_distance = mesh.pick_distance;
+  const auto exact_tie =
+      aggregate_viewport_vertex_snap_targets(mesh, curve);
+  ASSERT_TRUE(exact_tie.has_value());
+  EXPECT_EQ(exact_tie->domain, ViewportVertexSnapDomain::Mesh);
+  EXPECT_TRUE(std::holds_alternative<ViewportMeshVertexSnapTarget>(
+      exact_tie->source));
+
+  curve.ray_distance = 4.0;
+  curve.pick_distance = 0.2;
+  const auto mesh_occluded = aggregate_viewport_vertex_snap_targets(
+      mesh, curve, 4.5);
+  ASSERT_TRUE(mesh_occluded.has_value());
+  EXPECT_EQ(mesh_occluded->domain,
+            ViewportVertexSnapDomain::CurveAnchor);
+
+  const auto both_occluded = aggregate_viewport_vertex_snap_targets(
+      mesh, curve, 3.0);
+  EXPECT_FALSE(both_occluded.has_value());
+}
+
+TEST(ViewportSceneHitPolicyTests,
+     DepthWinsAcrossProvidersAndExactTiesUseStableSemanticPriority) {
+  const ViewportSceneHitCandidate mesh{
+      .kind = ViewportSceneHitKind::MeshSurface,
+      .entity = 10u,
+      .world_position = {0.0f, 0.0f, 2.0f},
+      .ray_distance = 2.0,
+      .pick_distance_pixels = 0.0,
+      .source = ViewportSceneMeshHit{
+          .participant = {.display_entity = 10u,
+                          .geometry_entity = 10u},
+          .primitive_index = 3u,
+      },
+  };
+  const ViewportSceneHitCandidate billboard{
+      .kind = ViewportSceneHitKind::Billboard,
+      .entity = 20u,
+      .world_position = {0.0f, 0.0f, 3.0f},
+      .ray_distance = 3.0,
+      .pick_distance_pixels = 0.0,
+      .source = ViewportSceneBillboardHit{},
+  };
+  const std::array depth_candidates{billboard, mesh};
+  const auto depth_winner = resolve_viewport_scene_hit(depth_candidates);
+  ASSERT_TRUE(depth_winner.has_value());
+  EXPECT_EQ(depth_winner->kind, ViewportSceneHitKind::MeshSurface);
+  EXPECT_EQ(depth_winner->entity, mesh.entity);
+
+  ViewportSceneHitCandidate tied_control{
+      .kind = ViewportSceneHitKind::CurveControl,
+      .entity = 30u,
+      .world_position = mesh.world_position,
+      .ray_distance = mesh.ray_distance,
+      .pick_distance_pixels = 7.0,
+      .source = ViewportSceneCurveControlHit{
+          .control = {.point = modeling::make_id<modeling::CurvePointTag>(
+                          4u, 2u),
+                      .kind = CurveControlKind::Anchor},
+      },
+  };
+  const std::array tied_candidates{mesh, tied_control};
+  const auto tied_winner = resolve_viewport_scene_hit(tied_candidates);
+  ASSERT_TRUE(tied_winner.has_value());
+  EXPECT_EQ(tied_winner->kind, ViewportSceneHitKind::CurveControl);
+}
+
+TEST(ViewportSceneHitPolicyTests,
+     NearTieBucketsRemainStableAcrossEveryProviderPermutation) {
+  const ViewportSceneHitCandidate mesh{
+      .kind = ViewportSceneHitKind::MeshSurface,
+      .entity = 10u,
+      .world_position = {},
+      .ray_distance = 2.0,
+      .source = ViewportSceneMeshHit{
+          .participant = {.display_entity = 10u, .geometry_entity = 10u},
+      },
+  };
+  const ViewportSceneHitCandidate billboard{
+      .kind = ViewportSceneHitKind::Billboard,
+      .entity = 20u,
+      .world_position = {},
+      .ray_distance = 2.0 + 0.75e-6,
+      .source = ViewportSceneBillboardHit{},
+  };
+  const ViewportSceneHitCandidate control{
+      .kind = ViewportSceneHitKind::CurveControl,
+      .entity = 30u,
+      .world_position = {},
+      .ray_distance = 2.0 + 1.5e-6,
+      .source = ViewportSceneCurveControlHit{
+          .control = {.point = modeling::make_id<modeling::CurvePointTag>(
+                          4u, 2u),
+                      .kind = CurveControlKind::Anchor},
+      },
+  };
+  const std::array candidates{mesh, billboard, control};
+  std::array<std::size_t, 3> order{0u, 1u, 2u};
+  do {
+    const std::array permutation{candidates[order[0]], candidates[order[1]],
+                                 candidates[order[2]]};
+    const auto winner = resolve_viewport_scene_hit(permutation);
+    ASSERT_TRUE(winner.has_value());
+    EXPECT_EQ(winner->entity, billboard.entity);
+    const auto marquee = resolve_viewport_scene_marquee_hits(permutation);
+    ASSERT_EQ(marquee.size(), 3u);
+    EXPECT_EQ(marquee.front().entity, billboard.entity);
+  } while (std::next_permutation(order.begin(), order.end()));
+}
+
+TEST(ViewportSceneHitPolicyTests,
+     ModelingComponentsUseTheSameComparatorAndRoundTripTypedIdentity) {
+  const ResolvedSelectionHit resolved{
+      .target = {
+          .domain = ResolvedSelectionDomain::ModelingComponent,
+          .entity = 12u,
+          .modeling_object_id = 7,
+          .component_kind = ModelingActiveSelectionKind::Vertex,
+          .vertex = 3,
+      },
+      .ray_distance = 2.0,
+      .pick_distance_pixels = 4.0,
+      .stable_key = {1u, 12u, 7u, 3u},
+  };
+  const ViewportSceneHitCandidate component =
+      viewport_scene_hit_candidate(resolved);
+  EXPECT_EQ(component.kind, ViewportSceneHitKind::ModelingComponent);
+  EXPECT_EQ(resolved_selection_target(component),
+            std::optional<ResolvedSelectionTarget>{resolved.target});
+
+  const ViewportSceneHitCandidate surface{
+      .kind = ViewportSceneHitKind::MeshSurface,
+      .entity = 12u,
+      .world_position = {},
+      .ray_distance = 2.0,
+      .pick_distance_pixels = 0.0,
+      .source = ViewportSceneMeshHit{
+          .participant = {.display_entity = 12u, .geometry_entity = 12u},
+      },
+  };
+  const std::array tied{surface, component};
+  const auto winner = resolve_viewport_scene_hit(tied);
+  ASSERT_TRUE(winner.has_value());
+  EXPECT_EQ(winner->kind, ViewportSceneHitKind::ModelingComponent);
+}
+
+TEST(ViewportSceneHitPolicyTests,
+     MarqueeDeduplicatesRawSurfaceAndOwnerResolvedSceneIdentity) {
+  const ViewportSceneHitCandidate raw{
+      .kind = ViewportSceneHitKind::MeshSurface,
+      .entity = 18u,
+      .world_position = {},
+      .ray_distance = 3.0,
+      .source = ViewportSceneMeshHit{
+          .participant = {.display_entity = 18u, .geometry_entity = 18u},
+          .primitive_index = 2u,
+      },
+  };
+  const ViewportSceneHitCandidate resolved = viewport_scene_hit_candidate({
+      .target = {
+          .domain = ResolvedSelectionDomain::SceneEntity,
+          .entity = 18u,
+          .modeling_object_id = 4,
+          .component_kind = ModelingActiveSelectionKind::Object,
+      },
+      .ray_distance = 3.0,
+      .stable_key = {0u, 18u, 4u, 0u},
+  });
+  const std::array candidates{raw, resolved};
+  const auto hits = resolve_viewport_scene_marquee_hits(candidates);
+  ASSERT_EQ(hits.size(), 1u);
+  const auto target = resolved_selection_target(hits.front());
+  ASSERT_TRUE(target.has_value());
+  EXPECT_EQ(target->entity, 18u);
+}
+
+TEST(ViewportSceneHitPolicyTests,
+     MarqueeSortsByCanonicalPolicyAndDeduplicatesStableTargets) {
+  const ViewportSceneHitCandidate farther{
+      .kind = ViewportSceneHitKind::CurveEntity,
+      .entity = 5u,
+      .world_position = {0.0f, 0.0f, 5.0f},
+      .ray_distance = 5.0,
+      .pick_distance_pixels = 1.0,
+      .source = ViewportSceneCurveEntityHit{},
+  };
+  ViewportSceneHitCandidate nearer = farther;
+  nearer.entity = 3u;
+  nearer.world_position.z = 3.0f;
+  nearer.ray_distance = 3.0;
+  const std::array candidates{farther, nearer, farther};
+  const std::vector<ViewportSceneHitCandidate> resolved =
+      resolve_viewport_scene_marquee_hits(candidates);
+  ASSERT_EQ(resolved.size(), 2u);
+  EXPECT_EQ(resolved[0].entity, nearer.entity);
+  EXPECT_EQ(resolved[1].entity, farther.entity);
+}
+
+TEST(ViewportSceneHitPolicyTests,
+     MarqueeCollectsBillboardsAndCurveControlsThroughOneTypedPolicy) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(8.0f);
+  camera.set_view_direction({0.0f, 0.0f, -1.0f});
+  const std::array billboards{
+      ViewportSceneBillboardPickCandidate{
+          .entity = 7u,
+          .position = {},
+          .size_pixels = 18.0f,
+      },
+  };
+  const std::array points{
+      modeling::CurvePointSpec{.position = {}},
+  };
+  const CurveToolPreviewState controls{
+      .active = true,
+      .entity = 8u,
+      .document = modeling::CurveDocument::make_bezier(points).or_throw(),
+  };
+  const std::vector<ViewportSceneHitCandidate> hits =
+      collect_viewport_scene_marquee_hits({
+          .camera = camera,
+          .start = {390.0f, 290.0f},
+          .end = {410.0f, 310.0f},
+          .rule = ModelingBoxSelectionRule::Crossing,
+          .billboards = billboards,
+          .curve_controls = &controls,
+          .include_curve_controls = true,
+      });
+  ASSERT_EQ(hits.size(), 2u);
+  EXPECT_EQ(hits[0].kind, ViewportSceneHitKind::CurveControl);
+  EXPECT_EQ(hits[1].kind, ViewportSceneHitKind::Billboard);
+}
+
 TEST(RadialArrayLayoutTests,
      UsesTotalSweepRotatesOrientationAndOrdersAdditionalRings) {
   const QMat4 source_world = compose_transform(QTransform{
@@ -3721,52 +4003,6 @@ TEST(RadialArrayToolServiceTests,
   EXPECT_FALSE(session.radial_array().has_session());
 }
 
-
-
-
-
-TEST(ViewportPaneOverlayCacheTests,
-     SceneAssetAndLocalVisibilityRevisionsInvalidateSelectionOverlayFrame) {
-  ViewportPaneOverlayCache cache;
-  const ViewportPaneOverlayCacheKey key{
-      .content_revision = 1u,
-      .selection_revision = 2u,
-      .scene_revision = 3u,
-      .asset_revision = 4u,
-      .local_visibility_revision = 5u,
-      .overlay_signature = 6u,
-      .style_signature = 7u,
-      .selection_mode = ModelingSelectionMode::Object,
-  };
-  cache.update({}, key);
-
-  EXPECT_EQ(cache.refresh_reason(key),
-            ViewportPaneOverlayCacheRefreshReason::None);
-
-  ViewportPaneOverlayCacheKey scene_changed = key;
-  scene_changed.scene_revision = key.scene_revision + 1u;
-  EXPECT_EQ(cache.refresh_reason(scene_changed),
-            ViewportPaneOverlayCacheRefreshReason::SceneRevision);
-
-  ViewportPaneOverlayCacheKey asset_changed = key;
-  asset_changed.asset_revision = key.asset_revision + 1u;
-  EXPECT_EQ(cache.refresh_reason(asset_changed),
-            ViewportPaneOverlayCacheRefreshReason::AssetRevision);
-
-  ViewportPaneOverlayCacheKey local_visibility_changed = key;
-  ++local_visibility_changed.local_visibility_revision;
-  EXPECT_EQ(
-      cache.refresh_reason(local_visibility_changed),
-      ViewportPaneOverlayCacheRefreshReason::LocalVisibilityRevision);
-  EXPECT_TRUE(cache.needs_refresh(local_visibility_changed));
-  cache.update({}, local_visibility_changed);
-  EXPECT_FALSE(cache.needs_refresh(local_visibility_changed));
-
-  ViewportPaneOverlayCacheKey style_changed = local_visibility_changed;
-  ++style_changed.style_signature;
-  EXPECT_EQ(cache.refresh_reason(style_changed),
-            ViewportPaneOverlayCacheRefreshReason::StyleSignature);
-}
 
 
 
@@ -4333,17 +4569,897 @@ TEST(SceneDocumentTests, CurveBindingsPreserveKindAndTrackOwnerRevisions) {
   ASSERT_TRUE(scene.notify_curve_payload_changed(curve));
   EXPECT_EQ(scene.curve_binding_revision(), binding_revision + 1u);
   EXPECT_EQ(scene.render_component_revision(), render_revision + 1u);
-  const auto checkpoint = scene.capture_projection_checkpoint();
+  const std::array<EntityId, 1> participants{curve};
+  const auto checkpoint = scene.capture_modeling_projection_checkpoint(
+      participants,
+      SceneModelingProjectionDomain::CurveBindings |
+          SceneModelingProjectionDomain::Structure);
   const auto saved_revision = scene.curve_binding_revision();
   const EntityId temporary = scene.create_entity("Temporary Curve");
   ASSERT_TRUE(scene.set_curve(temporary, {.curve = 43u}));
-  ASSERT_TRUE(scene.restore_projection_checkpoint(checkpoint, {&temporary, 1u}));
+  const std::array<EntityId, 1> created{temporary};
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(checkpoint, created));
   EXPECT_FALSE(scene.exists(temporary));
   EXPECT_EQ(scene.curve_binding_revision(), saved_revision);
 
   ASSERT_TRUE(scene.clear_curve(curve));
   EXPECT_EQ(scene.curve(curve), nullptr);
   EXPECT_EQ(scene.kind(curve), EntityKind::Generic);
+}
+
+TEST(SceneDocumentTests,
+     BindingReferenceCountsTrackRebindClearSubtreeDestroyAndMove) {
+  SceneDocument scene;
+  const EntityId parent = scene.create_empty("Parent");
+  const EntityId first_mesh = scene.create_entity("First Mesh");
+  const EntityId second_mesh = scene.create_entity("Second Mesh");
+  const EntityId first_curve = scene.create_entity("First Curve");
+  const EntityId second_curve = scene.create_entity("Second Curve");
+  const EntityId retained_mesh = scene.create_entity("Retained Mesh");
+  ASSERT_TRUE(scene.set_parent(first_mesh, parent, false));
+  ASSERT_TRUE(scene.set_parent(second_mesh, parent, false));
+  ASSERT_TRUE(scene.set_parent(first_curve, parent, false));
+  ASSERT_TRUE(scene.set_parent(second_curve, parent, false));
+  ASSERT_TRUE(scene.set_mesh(first_mesh, {.mesh = 10u}));
+  ASSERT_TRUE(scene.set_mesh(second_mesh, {.mesh = 10u}));
+  ASSERT_TRUE(scene.set_curve(first_curve, {.curve = 20u}));
+  ASSERT_TRUE(scene.set_curve(second_curve, {.curve = 20u}));
+  ASSERT_TRUE(scene.set_mesh(retained_mesh, {.mesh = 99u}));
+
+  SceneBindingReferenceCountWork work;
+  EXPECT_EQ(scene.mesh_binding_reference_count(10u, &work), 2u);
+  EXPECT_EQ(work.owner_index_lookup_count, 1u);
+  EXPECT_EQ(scene.curve_binding_reference_count(20u, &work), 2u);
+  EXPECT_EQ(work.owner_index_lookup_count, 1u);
+
+  ASSERT_TRUE(scene.set_mesh(first_mesh, {.mesh = 11u}));
+  EXPECT_EQ(scene.mesh_binding_reference_count(10u), 1u);
+  EXPECT_EQ(scene.mesh_binding_reference_count(11u), 1u);
+  ASSERT_TRUE(scene.clear_mesh(first_mesh));
+  EXPECT_EQ(scene.mesh_binding_reference_count(11u), 0u);
+
+  ASSERT_TRUE(scene.set_curve(first_curve, {.curve = 21u}));
+  EXPECT_EQ(scene.curve_binding_reference_count(20u), 1u);
+  EXPECT_EQ(scene.curve_binding_reference_count(21u), 1u);
+  ASSERT_TRUE(scene.clear_curve(first_curve));
+  EXPECT_EQ(scene.curve_binding_reference_count(21u), 0u);
+
+  ASSERT_TRUE(scene.destroy_entity(parent));
+  EXPECT_EQ(scene.mesh_binding_reference_count(10u), 0u);
+  EXPECT_EQ(scene.curve_binding_reference_count(20u), 0u);
+  EXPECT_EQ(scene.mesh_binding_reference_count(99u), 1u);
+
+  SceneDocument moved = std::move(scene);
+  EXPECT_EQ(moved.mesh_binding_reference_count(99u, &work), 1u);
+  EXPECT_EQ(work.owner_index_lookup_count, 1u);
+  EXPECT_NE(moved.mesh(retained_mesh), nullptr);
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionMutationFenceTracksOnlyEnrolledDomainsWithBoundedWork) {
+  SceneDocument scene;
+  const EntityId participant =
+      scene.create_entity("Participant", EntityKind::Mesh);
+  const EntityId unrelated = scene.create_entity("Unrelated", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 10u}));
+  ASSERT_TRUE(scene.set_mesh(unrelated, {.mesh = 20u}));
+  for (std::size_t index = 0u; index < 512u; ++index) {
+    const EntityId entity = scene.create_entity("Unrelated Record");
+    ASSERT_NE(entity, kInvalidEntityId);
+    ASSERT_TRUE(scene.set_mesh(entity, {.mesh = 1000u + index}));
+  }
+
+  const std::array participants{participant, participant, kInvalidEntityId};
+  SceneModelingProjectionMutationFence fence =
+      scene.capture_modeling_projection_mutation_fence(
+          participants,
+          SceneModelingProjectionDomain::MeshBindings |
+              SceneModelingProjectionDomain::Selection);
+  ASSERT_TRUE(fence.valid());
+  EXPECT_EQ(fence.size(), 1u);
+  EXPECT_EQ(fence.work().input_reference_count, participants.size());
+  EXPECT_EQ(fence.work().participant_record_count, 1u);
+  EXPECT_EQ(fence.work().mutation_counter_lookup_count, 1u);
+
+  ASSERT_TRUE(scene.set_mesh(unrelated, {.mesh = 21u}));
+  SceneModelingProjectionMutationFenceWork work;
+  EXPECT_TRUE(fence.matches_current(scene, &work));
+  EXPECT_EQ(work.participant_record_count, 1u);
+  EXPECT_EQ(work.mutation_counter_lookup_count, 1u);
+
+  ASSERT_TRUE(scene.set_transform(
+      participant, TransformComponent{.position = {1.0f, 2.0f, 3.0f}}));
+  EXPECT_TRUE(fence.matches_current(scene));
+
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 11u}));
+  EXPECT_FALSE(fence.matches_current(scene));
+  ASSERT_TRUE(fence.acknowledge_current(scene, {}, &work));
+  EXPECT_EQ(work.participant_record_count, 1u);
+  EXPECT_EQ(work.mutation_counter_lookup_count, 1u);
+  EXPECT_EQ(fence.work().participant_record_count, 1u);
+  EXPECT_TRUE(fence.matches_current(scene));
+
+  ASSERT_TRUE(scene.set_selected(participant, true));
+  EXPECT_FALSE(fence.matches_current(scene));
+
+  SceneDocument foreign;
+  EXPECT_FALSE(fence.matches_current(foreign));
+  EXPECT_FALSE(fence.acknowledge_current(foreign));
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionMutationFenceEnrollsCreatedAndDetectsRecreatedIds) {
+  SceneDocument scene;
+  const EntityId baseline = scene.create_entity("Baseline");
+  const std::array participants{baseline};
+  SceneModelingProjectionMutationFence fence =
+      scene.capture_modeling_projection_mutation_fence(
+          participants, SceneModelingProjectionDomain::Structure);
+  ASSERT_TRUE(fence.valid());
+
+  const EntityId created = scene.create_entity("Created");
+  ASSERT_NE(created, kInvalidEntityId);
+  EXPECT_TRUE(fence.matches_current(scene));
+  const std::array created_participants{created};
+  SceneModelingProjectionMutationFenceWork work;
+  ASSERT_TRUE(
+      fence.acknowledge_current(scene, created_participants, &work));
+  EXPECT_EQ(fence.size(), 2u);
+  EXPECT_EQ(work.input_reference_count, created_participants.size());
+  EXPECT_EQ(work.participant_record_count, 2u);
+  EXPECT_EQ(work.mutation_counter_lookup_count, 2u);
+  EXPECT_TRUE(fence.matches_current(scene));
+
+  ASSERT_TRUE(scene.destroy_entity(created));
+  EXPECT_FALSE(fence.matches_current(scene));
+  ASSERT_TRUE(fence.acknowledge_current(scene));
+  EXPECT_TRUE(fence.matches_current(scene));
+  ASSERT_EQ(scene.create_entity_with_id(created, "Recreated"), created);
+  EXPECT_FALSE(fence.matches_current(scene));
+}
+
+TEST(SceneDocumentTests,
+     ScalarCompensationScopesRestoreAllRevisionsAndAllocatorsInLifoOrder) {
+  SceneDocument scene;
+  const EntityId baseline = scene.create_entity("Baseline");
+  const EditorObjectId baseline_editor = scene.editor_object_id(baseline);
+  const SceneLayerId baseline_layer = scene.create_layer("Baseline Layer");
+  ASSERT_NE(baseline, kInvalidEntityId);
+  ASSERT_NE(baseline_editor, kInvalidEditorObjectId);
+  ASSERT_NE(baseline_layer, kInvalidSceneLayerId);
+
+  const auto revisions = [&scene] {
+    return std::array{
+        scene.revision(),
+        scene.content_revision(),
+        scene.selection_revision(),
+        scene.hierarchy_presentation_revision(),
+        scene.visibility_revision(),
+        scene.transform_revision(),
+        scene.texture_mapping_revision(),
+        scene.mesh_binding_revision(),
+        scene.curve_binding_revision(),
+        scene.material_binding_revision(),
+        scene.render_component_revision(),
+        scene.layer_revision(),
+    };
+  };
+  const auto outer_revisions = revisions();
+  SceneScalarCompensationCheckpoint outer =
+      scene.capture_scalar_compensation_checkpoint();
+  ASSERT_TRUE(outer.valid());
+
+  const EntityId outer_mesh =
+      scene.create_entity("Outer Mesh", EntityKind::Mesh);
+  const EntityId outer_curve =
+      scene.create_entity("Outer Curve", EntityKind::Curve);
+  const EditorObjectId outer_mesh_editor =
+      scene.editor_object_id(outer_mesh);
+  const SceneLayerId outer_layer = scene.create_layer("Outer Layer");
+  ASSERT_TRUE(scene.set_mesh(outer_mesh, {.mesh = 10u}));
+  ASSERT_TRUE(scene.set_curve(outer_curve, {.curve = 20u}));
+  ASSERT_TRUE(scene.set_selected(outer_mesh, true));
+  ASSERT_TRUE(scene.set_visible(outer_mesh, false));
+  ASSERT_TRUE(scene.set_material(outer_mesh, {.material = 30u}));
+  ASSERT_TRUE(scene.set_texture_mapping(outer_mesh, TextureMappingComponent{}));
+  const auto inner_revisions = revisions();
+
+  SceneScalarCompensationCheckpoint inner =
+      scene.capture_scalar_compensation_checkpoint();
+  ASSERT_TRUE(inner.valid());
+  const EntityId inner_created = scene.create_entity("Inner");
+  ASSERT_NE(inner_created, kInvalidEntityId);
+  ASSERT_TRUE(scene.acknowledge_scalar_compensation_checkpoint(inner));
+  ASSERT_TRUE(scene.begin_scalar_compensation_restore(inner));
+  ASSERT_TRUE(scene.destroy_entity(inner_created));
+
+  EXPECT_FALSE(scene.restore_scalar_compensation_checkpoint(outer));
+  EXPECT_TRUE(outer.valid());
+  EXPECT_TRUE(inner.valid());
+  ASSERT_TRUE(scene.restore_scalar_compensation_checkpoint(inner));
+  EXPECT_FALSE(inner.valid());
+  EXPECT_EQ(revisions(), inner_revisions);
+
+  ASSERT_TRUE(scene.acknowledge_scalar_compensation_checkpoint(outer));
+  ASSERT_TRUE(scene.begin_scalar_compensation_restore(outer));
+  ASSERT_TRUE(scene.destroy_entity(outer_mesh));
+  ASSERT_TRUE(scene.destroy_entity(outer_curve));
+  ASSERT_TRUE(scene.delete_layer(outer_layer));
+  ASSERT_TRUE(scene.restore_scalar_compensation_checkpoint(outer));
+  EXPECT_FALSE(outer.valid());
+  EXPECT_EQ(revisions(), outer_revisions);
+
+  const EntityId reallocated = scene.create_entity("Reallocated");
+  EXPECT_EQ(reallocated, outer_mesh);
+  EXPECT_EQ(scene.editor_object_id(reallocated), outer_mesh_editor);
+  EXPECT_EQ(scene.create_layer("Reallocated Layer"), outer_layer);
+  EXPECT_EQ(outer_mesh, baseline + 1u);
+  EXPECT_EQ(outer_mesh_editor, baseline_editor + 1u);
+  EXPECT_EQ(outer_layer, baseline_layer + 1u);
+}
+
+TEST(SceneDocumentTests,
+     ScalarCompensationScopesRejectForeignAndOutOfOrderCapabilities) {
+  SceneDocument scene;
+  SceneDocument foreign;
+  SceneScalarCompensationCheckpoint outer =
+      scene.capture_scalar_compensation_checkpoint();
+  SceneScalarCompensationCheckpoint inner =
+      scene.capture_scalar_compensation_checkpoint();
+  ASSERT_TRUE(outer.valid());
+  ASSERT_TRUE(inner.valid());
+
+  EXPECT_FALSE(foreign.restore_scalar_compensation_checkpoint(inner));
+  EXPECT_FALSE(foreign.discard_scalar_compensation_checkpoint(inner));
+  EXPECT_FALSE(scene.discard_scalar_compensation_checkpoint(outer));
+  EXPECT_TRUE(outer.valid());
+  EXPECT_TRUE(inner.valid());
+  EXPECT_TRUE(scene.discard_scalar_compensation_checkpoint(inner));
+  EXPECT_FALSE(inner.valid());
+  EXPECT_TRUE(scene.discard_scalar_compensation_checkpoint(outer));
+  EXPECT_FALSE(outer.valid());
+  EXPECT_FALSE(scene.restore_scalar_compensation_checkpoint(outer));
+
+  {
+    SceneScalarCompensationCheckpoint discarded_by_destructor =
+        scene.capture_scalar_compensation_checkpoint();
+    EXPECT_TRUE(discarded_by_destructor.valid());
+  }
+  SceneScalarCompensationCheckpoint after_destructor =
+      scene.capture_scalar_compensation_checkpoint();
+  EXPECT_TRUE(after_destructor.valid());
+}
+
+TEST(SceneDocumentTests,
+     ScalarCompensationRejectsLivePostCaptureAllocationReceipts) {
+  SceneDocument scene;
+  const EntityId baseline = scene.create_entity("Baseline");
+  const EditorObjectId baseline_editor = scene.editor_object_id(baseline);
+  const SceneLayerId baseline_layer = scene.create_layer("Baseline Layer");
+  ASSERT_NE(baseline, kInvalidEntityId);
+  ASSERT_NE(baseline_editor, kInvalidEditorObjectId);
+  ASSERT_NE(baseline_layer, kInvalidSceneLayerId);
+
+  const std::uint64_t revision = scene.revision();
+  SceneScalarCompensationCheckpoint checkpoint =
+      scene.capture_scalar_compensation_checkpoint();
+  ASSERT_TRUE(checkpoint.valid());
+  const EntityId created = scene.create_entity("Created");
+  const EditorObjectId created_editor = scene.editor_object_id(created);
+  const SceneLayerId created_layer = scene.create_layer("Created Layer");
+  ASSERT_NE(created, kInvalidEntityId);
+  ASSERT_NE(created_editor, kInvalidEditorObjectId);
+  ASSERT_NE(created_layer, kInvalidSceneLayerId);
+
+  ASSERT_TRUE(scene.acknowledge_scalar_compensation_checkpoint(checkpoint));
+  ASSERT_TRUE(scene.begin_scalar_compensation_restore(checkpoint));
+  EXPECT_FALSE(scene.restore_scalar_compensation_checkpoint(checkpoint));
+  EXPECT_TRUE(checkpoint.valid());
+  EXPECT_TRUE(scene.exists(created));
+  EXPECT_NE(scene.layer(created_layer), nullptr);
+
+  ASSERT_TRUE(scene.destroy_entity(created));
+  ASSERT_TRUE(scene.delete_layer(created_layer));
+  ASSERT_TRUE(scene.restore_scalar_compensation_checkpoint(checkpoint));
+  EXPECT_FALSE(checkpoint.valid());
+  EXPECT_EQ(scene.revision(), revision);
+  const EntityId reallocated = scene.create_entity("Reallocated");
+  EXPECT_EQ(reallocated, created);
+  EXPECT_EQ(scene.editor_object_id(reallocated), created_editor);
+  EXPECT_EQ(scene.create_layer("Reallocated Layer"), created_layer);
+
+  const SceneModelingProjectionCheckpoint allocation_control =
+      scene.capture_modeling_projection_checkpoint(
+          {}, SceneModelingProjectionDomain::Structure);
+  const EntityId retry = scene.create_entity("Retry");
+  ASSERT_EQ(retry, created + 1u);
+  ASSERT_TRUE(scene.destroy_entity(retry));
+  ASSERT_TRUE(scene.can_restore_modeling_projection_checkpoint(
+      allocation_control, std::span<const EntityId>(&retry, 1u)));
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(
+      allocation_control, std::span<const EntityId>(&retry, 1u)));
+  EXPECT_EQ(scene.create_entity("Control"), retry);
+}
+
+TEST(SceneDocumentTests,
+     ScalarCompensationOwnsForwardUnscopedMutationAndGuardsBoundary) {
+  SceneDocument scene;
+  const std::uint64_t revision = scene.revision();
+  const std::uint64_t layer_revision = scene.layer_revision();
+  SceneScalarCompensationCheckpoint checkpoint =
+      scene.capture_scalar_compensation_checkpoint();
+  const SceneLayerId layer = scene.create_layer("Owned Forward Layer");
+  ASSERT_NE(layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(scene.acknowledge_scalar_compensation_checkpoint(checkpoint));
+  ASSERT_TRUE(scene.begin_scalar_compensation_restore(checkpoint));
+  ASSERT_TRUE(scene.delete_layer(layer));
+  ASSERT_TRUE(scene.restore_scalar_compensation_checkpoint(checkpoint));
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_EQ(scene.layer_revision(), layer_revision);
+  EXPECT_EQ(scene.layer(layer), nullptr);
+  EXPECT_EQ(scene.create_layer("Retry Layer"), layer);
+
+  SceneDocument boundary_scene;
+  SceneScalarCompensationCheckpoint boundary =
+      boundary_scene.capture_scalar_compensation_checkpoint();
+  ASSERT_TRUE(
+      boundary_scene.acknowledge_scalar_compensation_checkpoint(boundary));
+  ASSERT_NE(boundary_scene.create_layer("Post Acknowledge Layer"),
+            kInvalidSceneLayerId);
+  EXPECT_FALSE(boundary_scene.begin_scalar_compensation_restore(boundary));
+  EXPECT_TRUE(boundary.valid());
+  EXPECT_TRUE(
+      boundary_scene.discard_scalar_compensation_checkpoint(boundary));
+
+  SceneDocument inverse_scene;
+  SceneScalarCompensationCheckpoint inverse_callback =
+      inverse_scene.capture_scalar_compensation_checkpoint();
+  ASSERT_TRUE(inverse_scene.acknowledge_scalar_compensation_checkpoint(
+      inverse_callback));
+  ASSERT_TRUE(
+      inverse_scene.begin_scalar_compensation_restore(inverse_callback));
+  const SceneLayerId callback_layer =
+      inverse_scene.create_layer("Unrelated Inverse Callback Layer");
+  ASSERT_NE(callback_layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(inverse_scene.delete_layer(callback_layer));
+  EXPECT_FALSE(
+      inverse_scene.restore_scalar_compensation_checkpoint(inverse_callback));
+  EXPECT_TRUE(inverse_callback.valid());
+  EXPECT_TRUE(
+      inverse_scene.discard_scalar_compensation_checkpoint(inverse_callback));
+}
+
+TEST(SceneDocumentTests,
+     ScalarCompensationRestoresMutationFencesAndRejectsCallbackMutation) {
+  SceneDocument scene;
+  const EntityId participant = scene.create_entity("Participant");
+  const EntityId unrelated = scene.create_entity("Unrelated");
+  const std::array participants{participant};
+  SceneModelingProjectionMutationFence fence =
+      scene.capture_modeling_projection_mutation_fence(
+          participants,
+          SceneModelingProjectionDomain::Selection |
+              SceneModelingProjectionDomain::Structure);
+  ASSERT_TRUE(fence.valid());
+  const std::uint64_t revision = scene.revision();
+
+  SceneScalarCompensationCheckpoint checkpoint =
+      scene.capture_scalar_compensation_checkpoint();
+  ASSERT_TRUE(scene.set_selected(participant, true));
+  ASSERT_TRUE(scene.set_transform(
+      participant, TransformComponent{.position = {2.0f, 3.0f, 4.0f}}));
+  ASSERT_TRUE(scene.acknowledge_scalar_compensation_checkpoint(checkpoint));
+  ASSERT_TRUE(scene.begin_scalar_compensation_restore(checkpoint));
+  ASSERT_TRUE(scene.set_transform(participant, TransformComponent{}));
+  ASSERT_TRUE(scene.set_selected(participant, false));
+  ASSERT_TRUE(scene.restore_scalar_compensation_checkpoint(checkpoint));
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_TRUE(fence.matches_current(scene));
+
+  SceneScalarCompensationCheckpoint callback_scope =
+      scene.capture_scalar_compensation_checkpoint();
+  ASSERT_TRUE(scene.set_selected(participant, true));
+  ASSERT_TRUE(
+      scene.acknowledge_scalar_compensation_checkpoint(callback_scope));
+  ASSERT_TRUE(scene.set_transform(
+      unrelated, TransformComponent{.position = {7.0f, 8.0f, 9.0f}}));
+  EXPECT_FALSE(scene.begin_scalar_compensation_restore(callback_scope));
+  EXPECT_TRUE(callback_scope.valid());
+  EXPECT_TRUE(scene.discard_scalar_compensation_checkpoint(callback_scope));
+}
+
+TEST(SceneDocumentTests,
+     ScalarCompensationEnforcesPhasesAndCollapsesAbandonedAncestors) {
+  SceneDocument scene;
+  const EntityId participant = scene.create_entity("Participant");
+
+  SceneScalarCompensationCheckpoint phases =
+      scene.capture_scalar_compensation_checkpoint();
+  EXPECT_FALSE(scene.begin_scalar_compensation_restore(phases));
+  EXPECT_FALSE(scene.restore_scalar_compensation_checkpoint(phases));
+  ASSERT_TRUE(scene.set_selected(participant, true));
+  ASSERT_TRUE(scene.acknowledge_scalar_compensation_checkpoint(phases));
+  EXPECT_FALSE(scene.restore_scalar_compensation_checkpoint(phases));
+  ASSERT_TRUE(scene.begin_scalar_compensation_restore(phases));
+  EXPECT_FALSE(scene.begin_scalar_compensation_restore(phases));
+  ASSERT_TRUE(scene.set_selected(participant, false));
+  ASSERT_TRUE(scene.restore_scalar_compensation_checkpoint(phases));
+  EXPECT_FALSE(scene.restore_scalar_compensation_checkpoint(phases));
+
+  std::optional<SceneScalarCompensationCheckpoint> outer;
+  outer.emplace(scene.capture_scalar_compensation_checkpoint());
+  SceneScalarCompensationCheckpoint inner =
+      scene.capture_scalar_compensation_checkpoint();
+  outer.reset();
+  ASSERT_TRUE(inner.valid());
+  ASSERT_TRUE(scene.discard_scalar_compensation_checkpoint(inner));
+  SceneScalarCompensationCheckpoint after_destructor =
+      scene.capture_scalar_compensation_checkpoint();
+  ASSERT_TRUE(after_destructor.valid());
+  ASSERT_TRUE(
+      scene.discard_scalar_compensation_checkpoint(after_destructor));
+
+  SceneScalarCompensationCheckpoint moved_over =
+      scene.capture_scalar_compensation_checkpoint();
+  SceneScalarCompensationCheckpoint move_inner =
+      scene.capture_scalar_compensation_checkpoint();
+  moved_over = SceneScalarCompensationCheckpoint{};
+  ASSERT_TRUE(scene.discard_scalar_compensation_checkpoint(move_inner));
+  SceneScalarCompensationCheckpoint after_move_assignment =
+      scene.capture_scalar_compensation_checkpoint();
+  EXPECT_TRUE(after_move_assignment.valid());
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionCheckpointRestoresAllocatorHighWaterExactly) {
+  SceneDocument scene;
+  const EntityId baseline = scene.create_entity("Baseline");
+  ASSERT_NE(baseline, kInvalidEntityId);
+
+  const SceneModelingProjectionCheckpoint checkpoint =
+      scene.capture_modeling_projection_checkpoint(
+          {}, SceneModelingProjectionDomain::Structure |
+                  SceneModelingProjectionDomain::MeshBindings);
+  ASSERT_TRUE(checkpoint.valid());
+  const EntityId staged = scene.create_entity("Staged", EntityKind::Mesh);
+  ASSERT_NE(staged, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_mesh(staged, {.mesh = 88u}));
+  EXPECT_EQ(scene.mesh_binding_reference_count(88u), 1u);
+  const EditorObjectId staged_editor_object =
+      scene.editor_object_id(staged);
+  const std::uint64_t staged_revision = scene.revision();
+
+  EXPECT_TRUE(scene.can_restore_modeling_projection_checkpoint(
+      checkpoint, std::span<const EntityId>(&staged, 1u)));
+  EXPECT_TRUE(scene.exists(staged));
+  EXPECT_EQ(scene.revision(), staged_revision);
+
+  SceneModelingProjectionRestoreWork work;
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(
+      checkpoint, std::span<const EntityId>(&staged, 1u), &work));
+  EXPECT_FALSE(scene.exists(staged));
+  EXPECT_EQ(scene.mesh_binding_reference_count(88u), 0u);
+  EXPECT_EQ(work.created_entity_removal_count, 1u);
+  EXPECT_EQ(work.entity_lookup_count, 1u);
+
+  const EntityId replacement =
+      scene.create_entity("Replacement", EntityKind::Mesh);
+  EXPECT_EQ(replacement, staged);
+  EXPECT_EQ(scene.editor_object_id(replacement), staged_editor_object);
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionCheckpointRejectsUntrackedEntityAllocationAtomically) {
+  SceneDocument scene;
+  const SceneModelingProjectionCheckpoint checkpoint =
+      scene.capture_modeling_projection_checkpoint(
+          {}, SceneModelingProjectionDomain::Structure);
+  ASSERT_TRUE(checkpoint.valid());
+  const EntityId tracked = scene.create_entity("Tracked");
+  const EntityId unrelated = scene.create_entity("Unrelated");
+  ASSERT_NE(tracked, kInvalidEntityId);
+  ASSERT_NE(unrelated, kInvalidEntityId);
+  const std::uint64_t revision = scene.revision();
+
+  EXPECT_FALSE(scene.can_restore_modeling_projection_checkpoint(
+      checkpoint, std::span<const EntityId>(&tracked, 1u)));
+  EXPECT_TRUE(scene.exists(tracked));
+  EXPECT_TRUE(scene.exists(unrelated));
+  EXPECT_EQ(scene.revision(), revision);
+
+  SceneModelingProjectionRestoreWork work;
+  EXPECT_FALSE(scene.restore_modeling_projection_checkpoint(
+      checkpoint, std::span<const EntityId>(&tracked, 1u), &work));
+  EXPECT_TRUE(scene.exists(tracked));
+  EXPECT_TRUE(scene.exists(unrelated));
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_EQ(work.created_entity_removal_count, 0u);
+  EXPECT_EQ(work.structure_write_count, 0u);
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionCheckpointRejectsSubstitutedAllocationReceipt) {
+  SceneDocument scene;
+  const EntityId baseline = scene.create_entity("Baseline");
+  const EntityId anticipated = baseline + 1u;
+  const EntityId substituted = anticipated + 1u;
+  const std::array participants{anticipated, substituted};
+  const SceneModelingProjectionCheckpoint checkpoint =
+      scene.capture_modeling_projection_checkpoint(
+          participants, SceneModelingProjectionDomain::Structure);
+  ASSERT_TRUE(checkpoint.valid());
+
+  const EntityId staged = scene.create_entity("Staged");
+  ASSERT_EQ(staged, anticipated);
+  ASSERT_TRUE(scene.destroy_entity(staged));
+  const std::uint64_t revision = scene.revision();
+
+  EXPECT_FALSE(scene.can_restore_modeling_projection_checkpoint(
+      checkpoint, std::span<const EntityId>(&substituted, 1u)));
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_FALSE(scene.exists(staged));
+  EXPECT_FALSE(scene.restore_modeling_projection_checkpoint(
+      checkpoint, std::span<const EntityId>(&substituted, 1u)));
+  EXPECT_EQ(scene.revision(), revision);
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionCheckpointAcceptsDestroyedAllocationReceiptAndReuse) {
+  SceneDocument scene;
+  const EntityId baseline = scene.create_entity("Baseline");
+  const SceneModelingProjectionCheckpoint first_checkpoint =
+      scene.capture_modeling_projection_checkpoint(
+          {}, SceneModelingProjectionDomain::Structure);
+  const EntityId first_staged = scene.create_entity("First Staged");
+  ASSERT_TRUE(scene.destroy_entity(first_staged));
+  ASSERT_TRUE(scene.can_restore_modeling_projection_checkpoint(
+      first_checkpoint,
+      std::span<const EntityId>(&first_staged, 1u)));
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(
+      first_checkpoint,
+      std::span<const EntityId>(&first_staged, 1u)));
+
+  const SceneModelingProjectionCheckpoint second_checkpoint =
+      scene.capture_modeling_projection_checkpoint(
+          {}, SceneModelingProjectionDomain::Structure);
+  const EntityId reused = scene.create_entity("Reused");
+  EXPECT_EQ(reused, first_staged);
+  ASSERT_TRUE(scene.can_restore_modeling_projection_checkpoint(
+      second_checkpoint, std::span<const EntityId>(&reused, 1u)));
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(
+      second_checkpoint, std::span<const EntityId>(&reused, 1u)));
+  EXPECT_EQ(scene.create_entity("After Reuse"), baseline + 1u);
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionCheckpointRestoresExplicitIdGapAndFailedAttempt) {
+  SceneDocument scene;
+  const EntityId baseline = scene.create_entity("Baseline");
+  const EditorObjectId baseline_editor = scene.editor_object_id(baseline);
+  EXPECT_EQ(scene.create_entity_with_id(
+                500u, "Rejected", EntityKind::Generic, baseline_editor),
+            kInvalidEntityId);
+  const EntityId contiguous = scene.create_entity("Contiguous");
+  EXPECT_EQ(contiguous, baseline + 1u);
+
+  const SceneModelingProjectionCheckpoint checkpoint =
+      scene.capture_modeling_projection_checkpoint(
+          {}, SceneModelingProjectionDomain::Structure);
+  const EntityId explicit_id = 1000u;
+  ASSERT_EQ(scene.create_entity_with_id(explicit_id, "Explicit"), explicit_id);
+  const EditorObjectId explicit_editor = scene.editor_object_id(explicit_id);
+  ASSERT_TRUE(scene.can_restore_modeling_projection_checkpoint(
+      checkpoint, std::span<const EntityId>(&explicit_id, 1u)));
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(
+      checkpoint, std::span<const EntityId>(&explicit_id, 1u)));
+  EXPECT_FALSE(scene.exists(explicit_id));
+  const EntityId after_restore = scene.create_entity("After Explicit");
+  EXPECT_EQ(after_restore, contiguous + 1u);
+  EXPECT_EQ(scene.editor_object_id(after_restore), explicit_editor);
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionCheckpointRejectsUnrelatedDomainMutationAtomically) {
+  SceneDocument scene;
+  const EntityId participant =
+      scene.create_entity("Participant", EntityKind::Mesh);
+  const EntityId unrelated = scene.create_entity("Unrelated");
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 10u}));
+  const std::array participants{participant};
+  const SceneModelingProjectionCheckpoint checkpoint =
+      scene.capture_modeling_projection_checkpoint(
+          participants, SceneModelingProjectionDomain::MeshBindings);
+  ASSERT_TRUE(checkpoint.valid());
+
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 11u}));
+  TransformComponent unrelated_transform;
+  unrelated_transform.position = {3.0f, 4.0f, 5.0f};
+  ASSERT_TRUE(scene.set_transform(unrelated, unrelated_transform));
+  const std::uint64_t revision = scene.revision();
+  const std::uint64_t content_revision = scene.content_revision();
+  const std::uint64_t mesh_revision = scene.mesh_binding_revision();
+  const std::uint64_t transform_revision = scene.transform_revision();
+
+  EXPECT_FALSE(
+      scene.can_restore_modeling_projection_checkpoint(checkpoint, {}));
+  ASSERT_NE(scene.mesh(participant), nullptr);
+  EXPECT_EQ(scene.mesh(participant)->mesh, 11u);
+  ASSERT_NE(scene.transform(unrelated), nullptr);
+  EXPECT_FLOAT_EQ(scene.transform(unrelated)->position.x, 3.0f);
+  EXPECT_EQ(scene.revision(), revision);
+
+  SceneModelingProjectionRestoreWork work;
+  EXPECT_FALSE(scene.restore_modeling_projection_checkpoint(checkpoint, {},
+                                                             &work));
+  ASSERT_NE(scene.mesh(participant), nullptr);
+  EXPECT_EQ(scene.mesh(participant)->mesh, 11u);
+  ASSERT_NE(scene.transform(unrelated), nullptr);
+  EXPECT_FLOAT_EQ(scene.transform(unrelated)->position.x, 3.0f);
+  EXPECT_FLOAT_EQ(scene.transform(unrelated)->position.y, 4.0f);
+  EXPECT_FLOAT_EQ(scene.transform(unrelated)->position.z, 5.0f);
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_EQ(scene.content_revision(), content_revision);
+  EXPECT_EQ(scene.mesh_binding_revision(), mesh_revision);
+  EXPECT_EQ(scene.transform_revision(), transform_revision);
+  EXPECT_EQ(work.mesh_binding_write_count, 0u);
+  EXPECT_EQ(work.structure_write_count, 0u);
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionConcurrentRestorePreservesUnrelatedSceneProgress) {
+  SceneDocument scene;
+  const EntityId participant =
+      scene.create_entity("Participant", EntityKind::Mesh);
+  const EntityId unrelated = scene.create_entity("Unrelated");
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 10u}));
+  const std::array participants{participant};
+  constexpr SceneModelingProjectionDomain domains =
+      SceneModelingProjectionDomain::MeshBindings |
+      SceneModelingProjectionDomain::CurveBindings |
+      SceneModelingProjectionDomain::Selection |
+      SceneModelingProjectionDomain::Structure;
+  const SceneModelingProjectionCheckpoint checkpoint =
+      scene.capture_modeling_projection_checkpoint(participants, domains);
+  SceneModelingProjectionMutationFence fence =
+      scene.capture_modeling_projection_mutation_fence(participants, domains);
+  ASSERT_TRUE(checkpoint.valid());
+  ASSERT_TRUE(fence.valid());
+
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 11u}));
+  const EntityId staged =
+      scene.create_entity("Staged", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(staged, {.mesh = 30u}));
+  const std::array created{staged};
+  ASSERT_TRUE(fence.acknowledge_current(scene, created));
+
+  ASSERT_TRUE(scene.set_transform(
+      unrelated, TransformComponent{.position = {4.0f, 5.0f, 6.0f}}));
+  ASSERT_TRUE(scene.set_selected(unrelated, true));
+  ASSERT_TRUE(scene.set_active_selection(unrelated));
+  const EntityId unrelated_created = scene.create_entity("Unrelated Created");
+  ASSERT_NE(unrelated_created, kInvalidEntityId);
+  const EditorObjectId unrelated_editor =
+      scene.editor_object_id(unrelated_created);
+  const std::uint64_t revision_before_restore = scene.revision();
+  const std::uint64_t transform_revision_before_restore =
+      scene.transform_revision();
+  ASSERT_TRUE(fence.matches_current(scene));
+
+  EXPECT_FALSE(scene.can_restore_modeling_projection_checkpoint(checkpoint,
+                                                                 created));
+  ASSERT_TRUE(
+      scene
+          .can_restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+              checkpoint, fence, created));
+  EXPECT_TRUE(scene.exists(staged));
+  EXPECT_TRUE(scene.exists(unrelated_created));
+  EXPECT_EQ(scene.revision(), revision_before_restore);
+
+  SceneModelingProjectionRestoreWork work;
+  ASSERT_TRUE(
+      scene.restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+          checkpoint, fence, created, &work));
+  ASSERT_NE(scene.mesh(participant), nullptr);
+  EXPECT_EQ(scene.mesh(participant)->mesh, 10u);
+  EXPECT_FALSE(scene.exists(staged));
+  EXPECT_TRUE(scene.exists(unrelated_created));
+  ASSERT_NE(scene.transform(unrelated), nullptr);
+  EXPECT_FLOAT_EQ(scene.transform(unrelated)->position.x, 4.0f);
+  EXPECT_EQ(scene.primary_selection(), unrelated);
+  EXPECT_GT(scene.revision(), revision_before_restore);
+  EXPECT_GT(scene.transform_revision(), transform_revision_before_restore);
+  EXPECT_EQ(work.created_entity_removal_count, 1u);
+
+  const EntityId after_restore = scene.create_entity("After Restore");
+  EXPECT_EQ(after_restore, unrelated_created + 1u);
+  EXPECT_EQ(scene.editor_object_id(after_restore), unrelated_editor + 1u);
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionConcurrentRestoreRejectsParticipantDriftAtomically) {
+  SceneDocument scene;
+  const EntityId participant =
+      scene.create_entity("Participant", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 10u}));
+  const std::array participants{participant};
+  const SceneModelingProjectionCheckpoint checkpoint =
+      scene.capture_modeling_projection_checkpoint(
+          participants, SceneModelingProjectionDomain::MeshBindings);
+  SceneModelingProjectionMutationFence fence =
+      scene.capture_modeling_projection_mutation_fence(
+          participants, SceneModelingProjectionDomain::MeshBindings);
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 11u}));
+  ASSERT_TRUE(fence.acknowledge_current(scene));
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 12u}));
+  const std::uint64_t revision = scene.revision();
+
+  EXPECT_FALSE(
+      scene
+          .can_restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+              checkpoint, fence));
+  EXPECT_FALSE(
+      scene.restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+          checkpoint, fence));
+  ASSERT_NE(scene.mesh(participant), nullptr);
+  EXPECT_EQ(scene.mesh(participant)->mesh, 12u);
+  EXPECT_EQ(scene.revision(), revision);
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionCheckpointRestoresBoundedComponentAndRevisionState) {
+  SceneDocument scene;
+  for (std::size_t index = 0u; index < 512u; ++index) {
+    ASSERT_NE(scene.create_entity("Unrelated"), kInvalidEntityId);
+  }
+  const EntityId mesh = scene.create_entity("Mesh", EntityKind::Mesh);
+  const EntityId curve = scene.create_entity("Curve", EntityKind::Curve);
+  const EntityId introduced_mesh = scene.create_entity("Generic");
+  ASSERT_TRUE(scene.set_mesh(mesh, {.mesh = 10u}));
+  ASSERT_TRUE(scene.set_curve(curve, {.curve = 20u}));
+  ASSERT_TRUE(scene.set_selected(mesh, true));
+  ASSERT_TRUE(scene.set_active_selection(mesh));
+
+  const std::array participants{curve, mesh, introduced_mesh, mesh,
+                                kInvalidEntityId};
+  const SceneModelingProjectionCheckpoint checkpoint =
+      scene.capture_modeling_projection_checkpoint(
+          participants,
+          SceneModelingProjectionDomain::MeshBindings |
+              SceneModelingProjectionDomain::CurveBindings |
+              SceneModelingProjectionDomain::Selection);
+  ASSERT_TRUE(checkpoint.valid());
+  EXPECT_EQ(checkpoint.work().participant_reference_count,
+            participants.size());
+  EXPECT_EQ(checkpoint.work().participant_record_count, 3u);
+  EXPECT_EQ(checkpoint.work().live_entity_lookup_count, 3u);
+  EXPECT_EQ(checkpoint.work().live_entity_record_count, 3u);
+  EXPECT_EQ(checkpoint.work().mesh_binding_record_count, 3u);
+  EXPECT_EQ(checkpoint.work().curve_binding_record_count, 3u);
+  EXPECT_EQ(checkpoint.work().selection_record_count, 3u);
+  EXPECT_EQ(checkpoint.work().structure_record_count, 0u);
+
+  const std::uint64_t revision = scene.revision();
+  const std::uint64_t content_revision = scene.content_revision();
+  const std::uint64_t selection_revision = scene.selection_revision();
+  const std::uint64_t hierarchy_revision =
+      scene.hierarchy_presentation_revision();
+  const std::uint64_t visibility_revision = scene.visibility_revision();
+  const std::uint64_t transform_revision = scene.transform_revision();
+  const std::uint64_t texture_revision =
+      scene.texture_mapping_revision();
+  const std::uint64_t mesh_revision = scene.mesh_binding_revision();
+  const std::uint64_t curve_revision = scene.curve_binding_revision();
+  const std::uint64_t material_revision =
+      scene.material_binding_revision();
+  const std::uint64_t render_revision =
+      scene.render_component_revision();
+  const std::uint64_t layer_revision = scene.layer_revision();
+
+  ASSERT_TRUE(scene.set_mesh(mesh, {.mesh = 11u}));
+  ASSERT_TRUE(scene.set_curve(curve, {.curve = 21u}));
+  ASSERT_TRUE(scene.set_mesh(introduced_mesh, {.mesh = 12u}));
+  scene.clear_selection();
+  EXPECT_EQ(scene.mesh_binding_reference_count(10u), 0u);
+  EXPECT_EQ(scene.mesh_binding_reference_count(11u), 1u);
+  EXPECT_EQ(scene.mesh_binding_reference_count(12u), 1u);
+  EXPECT_EQ(scene.curve_binding_reference_count(20u), 0u);
+  EXPECT_EQ(scene.curve_binding_reference_count(21u), 1u);
+
+  SceneModelingProjectionRestoreWork work;
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(checkpoint, {},
+                                                            &work));
+  ASSERT_NE(scene.mesh(mesh), nullptr);
+  EXPECT_EQ(scene.mesh(mesh)->mesh, 10u);
+  ASSERT_NE(scene.curve(curve), nullptr);
+  EXPECT_EQ(scene.curve(curve)->curve, 20u);
+  EXPECT_EQ(scene.mesh(introduced_mesh), nullptr);
+  EXPECT_EQ(scene.mesh_binding_reference_count(10u), 1u);
+  EXPECT_EQ(scene.mesh_binding_reference_count(11u), 0u);
+  EXPECT_EQ(scene.mesh_binding_reference_count(12u), 0u);
+  EXPECT_EQ(scene.curve_binding_reference_count(20u), 1u);
+  EXPECT_EQ(scene.curve_binding_reference_count(21u), 0u);
+  SceneBindingReferenceCountWork reference_work;
+  EXPECT_EQ(scene.mesh_binding_reference_count(10u, &reference_work), 1u);
+  EXPECT_EQ(reference_work.owner_index_lookup_count, 1u);
+  EXPECT_EQ(scene.kind(introduced_mesh), EntityKind::Generic);
+  EXPECT_EQ(scene.selected_entities(), std::vector<EntityId>{mesh});
+  EXPECT_EQ(scene.primary_selection(), mesh);
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_EQ(scene.content_revision(), content_revision);
+  EXPECT_EQ(scene.selection_revision(), selection_revision);
+  EXPECT_EQ(scene.hierarchy_presentation_revision(), hierarchy_revision);
+  EXPECT_EQ(scene.visibility_revision(), visibility_revision);
+  EXPECT_EQ(scene.transform_revision(), transform_revision);
+  EXPECT_EQ(scene.texture_mapping_revision(), texture_revision);
+  EXPECT_EQ(scene.mesh_binding_revision(), mesh_revision);
+  EXPECT_EQ(scene.curve_binding_revision(), curve_revision);
+  EXPECT_EQ(scene.material_binding_revision(), material_revision);
+  EXPECT_EQ(scene.render_component_revision(), render_revision);
+  EXPECT_EQ(scene.layer_revision(), layer_revision);
+  EXPECT_EQ(work.participant_record_count, 3u);
+  EXPECT_EQ(work.entity_lookup_count, 3u);
+  EXPECT_EQ(work.mesh_binding_write_count, 3u);
+  EXPECT_EQ(work.curve_binding_write_count, 3u);
+  EXPECT_EQ(work.selection_write_count, 3u);
+  EXPECT_EQ(work.created_entity_removal_count, 0u);
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionStructuralDomainRecreatesParticipantClosureExactly) {
+  SceneDocument scene;
+  const EntityId parent = scene.create_empty("Parent");
+  const EntityId child = scene.create_entity("Child", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(child, {.mesh = 77u}));
+  ASSERT_TRUE(scene.set_parent(child, parent, false));
+  ASSERT_TRUE(scene.set_selected(child, true));
+  ASSERT_TRUE(scene.set_active_selection(child));
+  const std::string parent_uuid = scene.uuid(parent);
+  const std::string child_uuid = scene.uuid(child);
+  const EditorObjectId parent_editor_object =
+      scene.editor_object_id(parent);
+  const EditorObjectId child_editor_object = scene.editor_object_id(child);
+  const std::array participants{parent, child};
+  const SceneModelingProjectionCheckpoint checkpoint =
+      scene.capture_modeling_projection_checkpoint(
+          participants,
+          SceneModelingProjectionDomain::Structure |
+              SceneModelingProjectionDomain::MeshBindings |
+              SceneModelingProjectionDomain::Selection);
+  ASSERT_TRUE(checkpoint.valid());
+  const std::uint64_t revision = scene.revision();
+  const std::uint64_t content_revision = scene.content_revision();
+  const std::uint64_t selection_revision = scene.selection_revision();
+
+  ASSERT_TRUE(scene.destroy_entity(parent));
+  ASSERT_FALSE(scene.exists(parent));
+  ASSERT_FALSE(scene.exists(child));
+  EXPECT_EQ(scene.mesh_binding_reference_count(77u), 0u);
+
+  SceneModelingProjectionRestoreWork work;
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(checkpoint, {},
+                                                            &work));
+  EXPECT_TRUE(scene.exists(parent));
+  EXPECT_TRUE(scene.exists(child));
+  EXPECT_EQ(scene.uuid(parent), parent_uuid);
+  EXPECT_EQ(scene.uuid(child), child_uuid);
+  EXPECT_EQ(scene.editor_object_id(parent), parent_editor_object);
+  EXPECT_EQ(scene.editor_object_id(child), child_editor_object);
+  EXPECT_EQ(scene.parent(child), parent);
+  EXPECT_EQ(scene.children(parent), std::vector<EntityId>{child});
+  ASSERT_NE(scene.mesh(child), nullptr);
+  EXPECT_EQ(scene.mesh(child)->mesh, 77u);
+  EXPECT_EQ(scene.mesh_binding_reference_count(77u), 1u);
+  EXPECT_EQ(scene.selected_entities(), std::vector<EntityId>{child});
+  EXPECT_EQ(scene.primary_selection(), child);
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_EQ(scene.content_revision(), content_revision);
+  EXPECT_EQ(scene.selection_revision(), selection_revision);
+  EXPECT_EQ(work.recreated_entity_count, 2u);
+  EXPECT_EQ(work.structure_write_count, 2u);
+
+  const EntityId next = scene.create_entity("Next");
+  EXPECT_EQ(next, child + 1u);
+  EXPECT_EQ(scene.editor_object_id(next), child_editor_object + 1u);
 }
 
 TEST(SceneDocumentTests, CurveSubtreesCannotBecomePartialInstanceDefinitions) {
@@ -4679,8 +5795,10 @@ TEST(SceneDocumentTests,
   ASSERT_TRUE(scene.destroy_entity(mesh));
   EXPECT_GT(scene.material_binding_revision(), before_destroy);
 
-  const SceneProjectionCheckpoint checkpoint =
-      scene.capture_projection_checkpoint();
+  const SceneModelingProjectionCheckpoint checkpoint =
+      scene.capture_modeling_projection_checkpoint(
+          std::span<const EntityId>{},
+          SceneModelingProjectionDomain::Structure);
   const std::uint64_t checkpoint_revision =
       scene.material_binding_revision();
   const EntityId staged =
@@ -4688,7 +5806,7 @@ TEST(SceneDocumentTests,
   ASSERT_TRUE(scene.set_material(staged,
                                  MaterialComponent{.material = 12u}));
   ASSERT_GT(scene.material_binding_revision(), checkpoint_revision);
-  ASSERT_TRUE(scene.restore_projection_checkpoint(
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(
       checkpoint, std::span<const EntityId>(&staged, 1u)));
   EXPECT_EQ(scene.material_binding_revision(), checkpoint_revision);
   EXPECT_FALSE(scene.exists(staged));
@@ -8383,6 +9501,321 @@ TEST(ViewportInputRouterTests, ShiftRightMouseDoesNotStartFlyNavigation) {
   EXPECT_FALSE(router.navigating());
 }
 
+TEST(AssetRegistryTests,
+     ModelingProjectionCheckpointRejectsForeignOwnerWithoutMutation) {
+  AssetRegistry source;
+  AssetRegistry target;
+  const AssetId source_mesh =
+      source.add_mesh(make_test_triangle_mesh("Source"));
+  const AssetId target_mesh =
+      target.add_mesh(make_test_triangle_mesh("Target"));
+  ASSERT_EQ(source_mesh, target_mesh);
+  const std::array participants{source_mesh};
+  const ModelingAssetProjectionCheckpoint checkpoint =
+      source.capture_modeling_projection_checkpoint(participants);
+  ASSERT_TRUE(checkpoint.valid());
+  const std::uint64_t target_revision = target.revision();
+  const std::string target_name = target.mesh(target_mesh)->name;
+
+  EXPECT_FALSE(target.can_restore_modeling_projection_checkpoint(
+      checkpoint, std::span<const AssetId>{}));
+  EXPECT_FALSE(target.restore_modeling_projection_checkpoint(
+      checkpoint, std::span<const AssetId>{}));
+  EXPECT_EQ(target.revision(), target_revision);
+  ASSERT_NE(target.mesh(target_mesh), nullptr);
+  EXPECT_EQ(target.mesh(target_mesh)->name, target_name);
+}
+
+TEST(AssetRegistryTests,
+     ModelingProjectionCheckpointUsesExactAllocationReceiptsAcrossReuse) {
+  AssetRegistry assets;
+  const AssetId baseline =
+      assets.add_mesh(make_test_triangle_mesh("Baseline"));
+  ASSERT_NE(baseline, kInvalidAssetId);
+  const std::array participants{baseline};
+  const ModelingAssetProjectionCheckpoint checkpoint =
+      assets.capture_modeling_projection_checkpoint(participants);
+  ASSERT_TRUE(checkpoint.valid());
+
+  const AssetId staged =
+      assets.add_mesh(make_test_triangle_mesh("Transaction Created"));
+  ASSERT_NE(staged, kInvalidAssetId);
+  ASSERT_TRUE(assets.remove_mesh(staged));
+  ASSERT_EQ(assets.add_mesh(staged, make_test_triangle_mesh("Reused")),
+            staged);
+  const std::array created{staged};
+  const std::uint64_t revision_before_rejection = assets.revision();
+
+  EXPECT_FALSE(
+      assets.can_restore_modeling_projection_checkpoint(checkpoint, created));
+  EXPECT_FALSE(
+      assets.restore_modeling_projection_checkpoint(checkpoint, created));
+  EXPECT_EQ(assets.revision(), revision_before_rejection);
+  ASSERT_NE(assets.mesh(staged), nullptr);
+  EXPECT_EQ(assets.mesh(staged)->name, "Reused");
+}
+
+TEST(AssetRegistryTests,
+     ModelingProjectionCheckpointRejectsWrongCreatedAssetReceipt) {
+  AssetRegistry assets;
+  const AssetId baseline =
+      assets.add_mesh(make_test_triangle_mesh("Baseline"));
+  const AssetId preexisting =
+      assets.add_mesh(make_test_triangle_mesh("Preexisting"));
+  ASSERT_NE(baseline, kInvalidAssetId);
+  ASSERT_NE(preexisting, kInvalidAssetId);
+  const std::array participants{baseline};
+  const ModelingAssetProjectionCheckpoint checkpoint =
+      assets.capture_modeling_projection_checkpoint(participants);
+  ASSERT_TRUE(checkpoint.valid());
+
+  const AssetId staged =
+      assets.add_mesh(make_test_triangle_mesh("Transaction Created"));
+  ASSERT_NE(staged, kInvalidAssetId);
+  // Cardinality alone cannot authorize allocator rewind: this ID predates the
+  // checkpoint and therefore carries the wrong allocation receipt.
+  const std::array wrong_created{preexisting};
+  const std::uint64_t revision_before_rejection = assets.revision();
+
+  EXPECT_FALSE(assets.can_restore_modeling_projection_checkpoint(
+      checkpoint, wrong_created));
+  EXPECT_FALSE(assets.restore_modeling_projection_checkpoint(
+      checkpoint, wrong_created));
+  EXPECT_EQ(assets.revision(), revision_before_rejection);
+  ASSERT_NE(assets.mesh(staged), nullptr);
+  EXPECT_EQ(assets.mesh(staged)->name, "Transaction Created");
+  ASSERT_NE(assets.mesh(preexisting), nullptr);
+  EXPECT_EQ(assets.mesh(preexisting)->name, "Preexisting");
+}
+
+TEST(AssetRegistryTests,
+     ModelingProjectionCheckpointAcceptsDestroyedCreatedAssetReceipt) {
+  AssetRegistry assets;
+  const AssetId baseline =
+      assets.add_mesh(make_test_triangle_mesh("Baseline"));
+  ASSERT_NE(baseline, kInvalidAssetId);
+  const std::array participants{baseline};
+  const ModelingAssetProjectionCheckpoint checkpoint =
+      assets.capture_modeling_projection_checkpoint(participants);
+  ASSERT_TRUE(checkpoint.valid());
+  const std::uint64_t revision = assets.revision();
+
+  const AssetId staged =
+      assets.add_mesh(make_test_triangle_mesh("Staged"));
+  ASSERT_TRUE(assets.remove_mesh(staged));
+  const std::array created{staged};
+  ASSERT_TRUE(
+      assets.can_restore_modeling_projection_checkpoint(checkpoint, created));
+  ASSERT_TRUE(
+      assets.restore_modeling_projection_checkpoint(checkpoint, created));
+  EXPECT_EQ(assets.revision(), revision);
+  EXPECT_FALSE(assets.has_mesh(staged));
+  EXPECT_EQ(assets.add_mesh(make_test_triangle_mesh("Reallocated")), staged);
+}
+
+TEST(AssetRegistryTests,
+     ModelingProjectionCheckpointWorkIsIndependentOfUnrelatedCatalogSize) {
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_test_triangle_mesh("Participant"));
+  const AssetId curve = assets.add_curve(curve_owner_test_asset());
+  ASSERT_NE(mesh, kInvalidAssetId);
+  ASSERT_NE(curve, kInvalidAssetId);
+  for (std::size_t index = 0u; index < 512u; ++index) {
+    ASSERT_NE(assets.add_mesh(make_test_triangle_mesh("Unrelated")),
+              kInvalidAssetId);
+    ASSERT_NE(assets.add_curve(curve_owner_test_asset()), kInvalidAssetId);
+  }
+  const std::array participants{curve, mesh, curve, kInvalidAssetId};
+
+  const ModelingAssetProjectionCheckpoint checkpoint =
+      assets.capture_modeling_projection_checkpoint(participants);
+  ASSERT_TRUE(checkpoint.valid());
+  EXPECT_EQ(checkpoint.mesh_count(), 1u);
+  EXPECT_EQ(checkpoint.curve_count(), 1u);
+}
+
+TEST(AssetRegistryTests,
+     ModelingProjectionMutationFenceTracksOnlyAcknowledgedParticipants) {
+  AssetRegistry assets;
+  const AssetId participant =
+      assets.add_mesh(make_test_triangle_mesh("Participant"));
+  const AssetId unrelated =
+      assets.add_mesh(make_test_triangle_mesh("Unrelated"));
+  ASSERT_NE(participant, kInvalidAssetId);
+  ASSERT_NE(unrelated, kInvalidAssetId);
+  const std::array participants{participant, participant,
+                                kInvalidAssetId};
+  ModelingAssetProjectionMutationFence fence =
+      assets.capture_modeling_projection_mutation_fence(participants);
+  ASSERT_TRUE(fence.valid());
+  EXPECT_EQ(fence.work().participant_reference_count, participants.size());
+  EXPECT_EQ(fence.work().participant_record_count, 1u);
+  EXPECT_EQ(fence.work().mutation_counter_lookup_count, 1u);
+
+  ASSERT_TRUE(assets.update_mesh(unrelated, [](MeshAsset &asset) {
+    asset.name = "Unrelated Changed";
+  }));
+  ModelingAssetProjectionMutationFenceWork work;
+  EXPECT_TRUE(fence.matches_current(assets, &work));
+  EXPECT_EQ(work.participant_record_count, 1u);
+  EXPECT_EQ(work.mutation_counter_lookup_count, 1u);
+
+  ASSERT_TRUE(assets.update_mesh(participant, [](MeshAsset &asset) {
+    asset.name = "Preview Owned";
+  }));
+  EXPECT_FALSE(fence.matches_current(assets));
+  ASSERT_TRUE(fence.acknowledge_current(assets));
+  EXPECT_TRUE(fence.matches_current(assets));
+
+  const AssetId created =
+      assets.add_mesh(make_test_triangle_mesh("Created Participant"));
+  const std::array created_participants{created};
+  ASSERT_TRUE(fence.acknowledge_current(assets, created_participants));
+  EXPECT_EQ(fence.work().participant_record_count, 2u);
+  EXPECT_TRUE(fence.matches_current(assets));
+  ASSERT_TRUE(assets.update_mesh(created, [](MeshAsset &asset) {
+    asset.name = "External Same Participant";
+  }));
+  EXPECT_FALSE(fence.matches_current(assets));
+
+  AssetRegistry foreign;
+  EXPECT_FALSE(fence.matches_current(foreign));
+  EXPECT_FALSE(fence.acknowledge_current(foreign));
+}
+
+TEST(AssetRegistryTests,
+     ConcurrentModelingProjectionRestorePreservesUnrelatedAssetsAndAllocator) {
+  AssetRegistry assets;
+  const AssetId participant =
+      assets.add_mesh(make_test_triangle_mesh("Participant"));
+  const AssetId unrelated =
+      assets.add_mesh(make_test_triangle_mesh("Unrelated"));
+  ASSERT_NE(participant, kInvalidAssetId);
+  ASSERT_NE(unrelated, kInvalidAssetId);
+  const std::array participants{participant};
+  const ModelingAssetProjectionCheckpoint checkpoint =
+      assets.capture_modeling_projection_checkpoint(participants);
+  ModelingAssetProjectionMutationFence fence =
+      assets.capture_modeling_projection_mutation_fence(participants);
+  ASSERT_TRUE(checkpoint.valid());
+  ASSERT_TRUE(fence.valid());
+
+  ASSERT_TRUE(assets.update_mesh(participant, [](MeshAsset &asset) {
+    asset.name = "Preview Candidate";
+  }));
+  const AssetId provisional =
+      assets.add_mesh(make_test_triangle_mesh("Preview Provisional"));
+  ASSERT_NE(provisional, kInvalidAssetId);
+  const std::array created{provisional};
+  ASSERT_TRUE(fence.acknowledge_current(assets, created));
+
+  ASSERT_TRUE(assets.update_mesh(unrelated, [](MeshAsset &asset) {
+    asset.name = "Unrelated Authored Edit";
+  }));
+  const AssetId unrelated_created =
+      assets.add_mesh(make_test_triangle_mesh("Unrelated Created"));
+  ASSERT_NE(unrelated_created, kInvalidAssetId);
+  const std::uint64_t revision_before_restore = assets.revision();
+  const std::uint64_t unrelated_revision_before_restore =
+      assets.mesh_revision(unrelated).value;
+  ASSERT_TRUE(fence.matches_current(assets));
+  EXPECT_FALSE(
+      assets.can_restore_modeling_projection_checkpoint(checkpoint, created));
+  ASSERT_TRUE(assets
+                  .can_restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+                      checkpoint, fence, created));
+  ASSERT_TRUE(assets
+                  .restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+                      checkpoint, fence, created));
+
+  ASSERT_NE(assets.mesh(participant), nullptr);
+  EXPECT_EQ(assets.mesh(participant)->name, "Participant");
+  EXPECT_FALSE(assets.has_mesh(provisional));
+  ASSERT_NE(assets.mesh(unrelated), nullptr);
+  EXPECT_EQ(assets.mesh(unrelated)->name, "Unrelated Authored Edit");
+  EXPECT_EQ(assets.mesh_revision(unrelated).value,
+            unrelated_revision_before_restore);
+  ASSERT_NE(assets.mesh(unrelated_created), nullptr);
+  EXPECT_EQ(assets.mesh(unrelated_created)->name, "Unrelated Created");
+  EXPECT_GT(assets.revision(), revision_before_restore);
+  EXPECT_GT(assets.add_mesh(make_test_triangle_mesh("After Restore")),
+            unrelated_created);
+}
+
+TEST(AssetRegistryTests,
+     ConcurrentModelingProjectionRestorePublishesMonotonicRevisionsWithoutUnrelatedWork) {
+  AssetRegistry assets;
+  const AssetId participant =
+      assets.add_mesh(make_test_triangle_mesh("Participant"));
+  ASSERT_NE(participant, kInvalidAssetId);
+  const std::array participants{participant};
+  const ModelingAssetProjectionCheckpoint checkpoint =
+      assets.capture_modeling_projection_checkpoint(participants);
+  ModelingAssetProjectionMutationFence fence =
+      assets.capture_modeling_projection_mutation_fence(participants);
+  const std::uint64_t revision_before = assets.revision();
+  const std::uint64_t mesh_revision_before =
+      assets.mesh_revision(participant).value;
+  ASSERT_TRUE(assets.update_mesh(participant, [](MeshAsset &asset) {
+    asset.name = "Preview Candidate";
+  }));
+  ASSERT_TRUE(fence.acknowledge_current(assets));
+
+  ASSERT_TRUE(assets
+                  .restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+                      checkpoint, fence, std::span<const AssetId>{}));
+  EXPECT_GT(assets.revision(), revision_before);
+  EXPECT_GT(assets.mesh_revision(participant).value, mesh_revision_before);
+  ASSERT_NE(assets.mesh(participant), nullptr);
+  EXPECT_EQ(assets.mesh(participant)->name, "Participant");
+}
+
+TEST(AssetRegistryTests,
+     ConcurrentModelingProjectionRestoreRestoresMixedMeshAndCurveUnion) {
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_test_triangle_mesh("Mesh"));
+  const AssetId curve = assets.add_curve(curve_owner_test_asset());
+  ASSERT_NE(mesh, kInvalidAssetId);
+  ASSERT_NE(curve, kInvalidAssetId);
+  const std::size_t curve_point_count_before =
+      assets.curve(curve)->document->point_count();
+  const std::array participants{mesh, curve};
+  const ModelingAssetProjectionCheckpoint checkpoint =
+      assets.capture_modeling_projection_checkpoint(participants);
+  ModelingAssetProjectionMutationFence fence =
+      assets.capture_modeling_projection_mutation_fence(participants);
+  ASSERT_TRUE(checkpoint.valid());
+  ASSERT_TRUE(fence.valid());
+
+  ASSERT_TRUE(assets.update_mesh(mesh, [](MeshAsset &asset) {
+    asset.name = "Preview Mesh";
+  }));
+  CurveAsset preview_curve = curve_owner_test_asset();
+  modeling::CurveDocument preview_document = *preview_curve.document;
+  ASSERT_TRUE(preview_document
+                  .append_point({.position = {5.0f, 0.0f, 0.0f}})
+                  .ok());
+  preview_curve.document =
+      std::make_shared<const modeling::CurveDocument>(
+          std::move(preview_document));
+  ASSERT_TRUE(assets.replace_curve(curve, std::move(preview_curve)));
+  ASSERT_TRUE(fence.acknowledge_current(assets));
+  const AssetId unrelated =
+      assets.add_mesh(make_test_triangle_mesh("Unrelated"));
+  ASSERT_NE(unrelated, kInvalidAssetId);
+
+  ASSERT_TRUE(assets
+                  .restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+                      checkpoint, fence, std::span<const AssetId>{}));
+  ASSERT_NE(assets.mesh(mesh), nullptr);
+  EXPECT_EQ(assets.mesh(mesh)->name, "Mesh");
+  ASSERT_NE(assets.curve(curve), nullptr);
+  EXPECT_EQ(assets.curve(curve)->document->point_count(),
+            curve_point_count_before);
+  ASSERT_NE(assets.mesh(unrelated), nullptr);
+  EXPECT_EQ(assets.mesh(unrelated)->name, "Unrelated");
+}
+
 TEST(AssetRegistryTests, CurvePublicationPinsImmutableAuthoredState) {
   AssetRegistry assets;
   CurveAsset asset = curve_owner_test_asset();
@@ -8403,11 +9836,14 @@ TEST(AssetRegistryTests, CurvePublicationPinsImmutableAuthoredState) {
   EXPECT_GT(assets.curve_revision(id), revision);
   EXPECT_EQ(pinned->point_count(), 2u);
 
-  const auto checkpoint = assets.capture_projection_checkpoint();
+  const std::array participants{id};
+  const auto checkpoint =
+      assets.capture_modeling_projection_checkpoint(participants);
   const auto checkpoint_revision = assets.revision();
   ASSERT_TRUE(assets.remove_curve(id));
   EXPECT_FALSE(assets.has_curve(id));
-  ASSERT_TRUE(assets.restore_projection_checkpoint(checkpoint));
+  ASSERT_TRUE(assets.restore_modeling_projection_checkpoint(
+      checkpoint, std::span<const AssetId>{}));
   EXPECT_EQ(assets.revision(), checkpoint_revision);
   ASSERT_NE(assets.curve(id), nullptr);
   EXPECT_EQ(assets.curve(id)->document->point_count(), 3u);
@@ -8547,9 +9983,6 @@ TEST(AssetRegistryTests,
       registry.add_material(make_default_quader_material("Tracked"));
   ASSERT_NE(material, kInvalidAssetId);
   EXPECT_EQ(registry.material_catalog_revision(), 1u);
-  const AssetRegistryProjectionCheckpoint checkpoint =
-      registry.capture_projection_checkpoint();
-
   ASSERT_TRUE(registry.update_mesh(mesh, [](MeshAsset &asset) {
     asset.name = "Still Unrelated";
   }));
@@ -8568,17 +10001,12 @@ TEST(AssetRegistryTests,
   ASSERT_TRUE(registry.remove_material(material));
   EXPECT_EQ(registry.material_catalog_revision(), 3u);
 
-  ASSERT_TRUE(registry.restore_projection_checkpoint(checkpoint));
-  EXPECT_EQ(registry.material_catalog_revision(), 1u);
-  EXPECT_EQ(registry.mesh_material_usage_revision(), 1u);
-  ASSERT_NE(registry.material(material), nullptr);
-
   AssetRegistry copied = registry;
-  EXPECT_EQ(copied.material_catalog_revision(), 1u);
-  EXPECT_EQ(copied.mesh_material_usage_revision(), 1u);
+  EXPECT_EQ(copied.material_catalog_revision(), 3u);
+  EXPECT_EQ(copied.mesh_material_usage_revision(), 2u);
   AssetRegistry moved = std::move(copied);
-  EXPECT_EQ(moved.material_catalog_revision(), 1u);
-  EXPECT_EQ(moved.mesh_material_usage_revision(), 1u);
+  EXPECT_EQ(moved.material_catalog_revision(), 3u);
+  EXPECT_EQ(moved.mesh_material_usage_revision(), 2u);
   moved.advance_revision_for_replacement(100u);
   EXPECT_GT(moved.material_catalog_revision(), 100u);
   EXPECT_GT(moved.mesh_material_usage_revision(), 100u);
@@ -8625,8 +10053,6 @@ TEST(AssetRegistryTests,
     texture.height = 16u;
   }));
   EXPECT_EQ(registry.material_catalog_revision(), after_material + 2u);
-  const AssetRegistryProjectionCheckpoint checkpoint =
-      registry.capture_projection_checkpoint();
   ASSERT_TRUE(registry.remove_texture(referenced));
   EXPECT_EQ(registry.material_catalog_revision(), after_material + 3u);
   ASSERT_NE(registry.material(material), nullptr);
@@ -8637,11 +10063,6 @@ TEST(AssetRegistryTests,
   EXPECT_EQ(registry.add_texture(referenced, std::move(restored_texture)),
             referenced);
   EXPECT_EQ(registry.material_catalog_revision(), after_material + 4u);
-  ASSERT_NE(registry.material(material), nullptr);
-  EXPECT_TRUE(registry.validate_material(*registry.material(material)).ok);
-
-  ASSERT_TRUE(registry.restore_projection_checkpoint(checkpoint));
-  EXPECT_EQ(registry.material_catalog_revision(), after_material + 2u);
   ASSERT_NE(registry.material(material), nullptr);
   EXPECT_TRUE(registry.validate_material(*registry.material(material)).ok);
 }
@@ -9340,171 +10761,29 @@ TEST(SceneContentDocumentTests, CurveBindingsAreValidatedWithoutMeshRecords) {
   EXPECT_EQ(report.issues.front().asset, id);
 }
 
-TEST(SceneContentDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
+TEST(SceneContentDocumentTests, OwnsSceneAssetsAndStableEntityIdentity) {
   SceneContentDocument document(SceneContentDocumentRecord{
       .id = 17,
       .name = "Authored Project",
   });
 
-  MeshAsset mesh_asset = make_test_triangle_mesh("Authored Mesh");
-  const AssetId mesh = document.assets().add_mesh(std::move(mesh_asset));
-  const EntityId entity = document.scene().create_entity("Authored Mesh");
-  document.scene().set_mesh(entity, MeshComponent{.mesh = mesh});
+  const AssetId mesh =
+      document.assets().add_mesh(make_test_triangle_mesh("Authored Mesh"));
+  const EntityId entity =
+      document.scene().create_entity("Authored Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.scene().set_mesh(entity, MeshComponent{.mesh = mesh}));
 
-  const EditorObjectId object =
-      document.create_object_record(ProjectObjectRecord{
-          .scene_entity = entity,
-          .mesh = mesh,
-          .authored_name = "Authored Mesh",
-      });
-
+  const EditorObjectId object = document.scene().editor_object_id(entity);
   ASSERT_NE(object, kInvalidEditorObjectId);
+  EXPECT_EQ(document.scene().entity_for_editor_object_id(object), entity);
   EXPECT_EQ(document.id(), 17u);
   EXPECT_EQ(document.name(), "Authored Project");
-  EXPECT_EQ(document.revision(), 1u);
-  const std::optional<ProjectObjectRecord> record =
-      document.object_record(object);
-  ASSERT_TRUE(record.has_value());
-  EXPECT_EQ(record->id, object);
-  EXPECT_EQ(record->scene_entity, entity);
-  EXPECT_EQ(record->mesh, mesh);
-  EXPECT_EQ(record->authored_name, "Authored Mesh");
-  ASSERT_NE(document.scene().mesh(entity), nullptr);
-  EXPECT_EQ(document.scene().mesh(entity)->mesh, mesh);
-
-  EXPECT_EQ(document.upsert_object_record(ProjectObjectRecord{
-                .id = 42,
-                .scene_entity = entity,
-                .mesh = mesh,
-                .authored_name = "Imported Stable Record",
-            }),
-            42u);
-  EXPECT_EQ(document.object_id_for_entity(entity), 42u);
-  EXPECT_EQ(document.create_object_record(ProjectObjectRecord{}), 43u);
-  const EntityId scene_root = document.scene().scene_root();
-  const std::vector<ProjectObjectRecord> records = document.object_records();
-  ASSERT_EQ(records.size(), 3u);
-  EXPECT_EQ(records[0].scene_entity, scene_root);
-  EXPECT_EQ(records[0].authored_name, "scene");
-  EXPECT_EQ(records[1].id, 42u);
-  EXPECT_EQ(records[2].id, 43u);
+  EXPECT_EQ(document.revision(), 0u);
+  EXPECT_TRUE(document.validate_object_identity_invariants().ok());
 
   document.rename("Renamed Project");
   EXPECT_EQ(document.name(), "Renamed Project");
-  EXPECT_EQ(document.revision(), 4u);
-}
-
-TEST(SceneContentDocumentTests,
-     BulkUpsertsImportedObjectRecordsAfterOneSceneRecordSync) {
-  SceneContentDocument document(SceneContentDocumentRecord{
-      .id = 23,
-      .name = "Imported Batch Project",
-  });
-
-  MeshAsset mesh_asset = make_test_triangle_mesh("Imported Mesh");
-  const AssetId mesh = document.assets().add_mesh(std::move(mesh_asset));
-  const EntityId first =
-      document.scene().create_entity("First Imported Mesh", EntityKind::Mesh);
-  const EntityId second =
-      document.scene().create_entity("Second Imported Mesh", EntityKind::Mesh);
-  document.scene().set_mesh(first, MeshComponent{.mesh = mesh});
-  document.scene().set_mesh(second, MeshComponent{.mesh = mesh});
-
-  const EditorObjectId first_object = document.scene().editor_object_id(first);
-  const EditorObjectId second_object =
-      document.scene().editor_object_id(second);
-  ASSERT_NE(first_object, kInvalidEditorObjectId);
-  ASSERT_NE(second_object, kInvalidEditorObjectId);
-
-  const std::uint64_t revision_before_import = document.revision();
-  const std::vector<EditorObjectId> imported = document.upsert_object_records({
-      ProjectObjectRecord{
-          .id = first_object,
-          .scene_entity = first,
-          .mesh = mesh,
-          .authored_name = "Authored First",
-      },
-      ProjectObjectRecord{
-          .id = second_object,
-          .scene_entity = second,
-          .mesh = mesh,
-          .authored_name = "Authored Second",
-      },
-  });
-
-  ASSERT_EQ(imported.size(), 2u);
-  EXPECT_EQ(imported[0], first_object);
-  EXPECT_EQ(imported[1], second_object);
-  EXPECT_EQ(document.revision(), revision_before_import + 1u);
-  EXPECT_EQ(document.object_id_for_entity(first), first_object);
-  EXPECT_EQ(document.object_id_for_entity(second), second_object);
-
-  const std::optional<ProjectObjectRecord> first_record =
-      document.object_record(first_object);
-  const std::optional<ProjectObjectRecord> second_record =
-      document.object_record(second_object);
-  ASSERT_TRUE(first_record.has_value());
-  ASSERT_TRUE(second_record.has_value());
-  EXPECT_EQ(first_record->authored_name, "Authored First");
-  EXPECT_EQ(second_record->authored_name, "Authored Second");
-}
-
-TEST(SceneContentDocumentTests,
-     BulkUpsertConflictLeavesRecordsSceneRevisionsAndAllocatorUnchanged) {
-  SceneContentDocument document(SceneContentDocumentRecord{
-      .id = 24,
-      .name = "Atomic Imported Batch",
-  });
-  const EntityId first =
-      document.scene().create_entity("First", EntityKind::Mesh);
-  const EntityId second =
-      document.scene().create_entity("Second", EntityKind::Mesh);
-  ASSERT_NE(first, kInvalidEntityId);
-  ASSERT_NE(second, kInvalidEntityId);
-  const EditorObjectId first_id = document.scene().editor_object_id(first);
-  const EditorObjectId second_id = document.scene().editor_object_id(second);
-  ASSERT_NE(first_id, kInvalidEditorObjectId);
-  ASSERT_NE(second_id, kInvalidEditorObjectId);
-
-  const std::vector<ProjectObjectRecord> records_before =
-      document.object_records();
-  const std::uint64_t document_revision_before = document.revision();
-  const std::uint64_t scene_revision_before = document.scene().revision();
-  const std::uint64_t scene_content_revision_before =
-      document.scene().content_revision();
-
-  const std::vector<EditorObjectId> imported =
-      document.upsert_object_records({
-          ProjectObjectRecord{
-              .id = 100U,
-              .scene_entity = first,
-              .authored_name = "Would mutate first",
-          },
-          ProjectObjectRecord{
-              .id = 100U,
-              .scene_entity = second,
-              .authored_name = "Conflicts later",
-          },
-      });
-
-  EXPECT_TRUE(imported.empty());
-  EXPECT_EQ(document.object_records(), records_before);
-  EXPECT_EQ(document.object_id_for_entity(first), first_id);
-  EXPECT_EQ(document.object_id_for_entity(second), second_id);
-  EXPECT_EQ(document.scene().editor_object_id(first), first_id);
-  EXPECT_EQ(document.scene().editor_object_id(second), second_id);
-  EXPECT_EQ(document.revision(), document_revision_before);
-  EXPECT_EQ(document.scene().revision(), scene_revision_before);
-  EXPECT_EQ(document.scene().content_revision(),
-            scene_content_revision_before);
-  EXPECT_TRUE(document.validate_object_identity_invariants().ok());
-
-  EditorObjectId expected_next = 1U;
-  for (const ProjectObjectRecord &record : records_before) {
-    expected_next = std::max(expected_next, record.id + 1U);
-  }
-  EXPECT_EQ(document.create_object_record(ProjectObjectRecord{}),
-            expected_next);
+  EXPECT_EQ(document.revision(), 1u);
 }
 
 TEST(PublicApiContractTests, RejectsUnboundNativeFacadeConstruction) {
@@ -9527,207 +10806,58 @@ TEST(SceneContentDocumentTests, ValidatesAssetReferencesAtDocumentOwner) {
                                             .material_slots = {{2u, 406u}},
                                         });
 
-  const SceneContentDocumentAssetReferenceReport scene_report =
+  const SceneContentDocumentAssetReferenceReport report =
       document.validate_asset_references();
-  ASSERT_FALSE(scene_report.ok());
-  ASSERT_GE(scene_report.issues.size(), 3u);
-  EXPECT_NE(scene_report.issues[0].message.find("missing mesh asset"),
+  ASSERT_FALSE(report.ok());
+  ASSERT_GE(report.issues.size(), 3u);
+  EXPECT_NE(report.issues[0].message.find("missing mesh asset"),
             std::string::npos);
-  EXPECT_NE(scene_report.issues[1].message.find("missing material asset"),
+  EXPECT_NE(report.issues[1].message.find("missing material asset"),
             std::string::npos);
-
-  const SceneContentDocumentAssetReferenceReport record_report =
-      document.validate_asset_references(ProjectObjectRecord{
-          .id = 99u,
-          .scene_entity = kInvalidEntityId,
-          .mesh = 404u,
-          .material = 405u,
-      });
-  ASSERT_FALSE(record_report.ok());
-  EXPECT_NE(record_report.issues.front().message.find(
-                "object record points at a missing scene entity"),
-            std::string::npos);
+  EXPECT_EQ(report.issues[0].object_id,
+            document.scene().editor_object_id(entity));
 }
 
 TEST(SceneContentDocumentTests,
-     RejectsEditorObjectIdCollisionsBetweenSceneEntities) {
-  SceneContentDocument document(SceneContentDocumentRecord{
-      .id = 19,
-      .name = "Identity Collision Project",
-  });
-
-  const EntityId first =
-      document.scene().create_entity("First", EntityKind::Mesh);
-  const EntityId second =
-      document.scene().create_entity("Second", EntityKind::Mesh);
+     SceneDocumentRejectsEditorObjectIdCollisionsAtTheOwner) {
+  SceneContentDocument document;
+  const EntityId first = document.scene().create_entity("First");
+  const EntityId second = document.scene().create_entity("Second");
   const EditorObjectId first_object = document.scene().editor_object_id(first);
-  const EditorObjectId second_object =
-      document.scene().editor_object_id(second);
-  ASSERT_NE(first_object, kInvalidEditorObjectId);
-  ASSERT_NE(second_object, kInvalidEditorObjectId);
+  const EditorObjectId second_object = document.scene().editor_object_id(second);
   ASSERT_NE(first_object, second_object);
 
-  EXPECT_EQ(document.upsert_object_record(ProjectObjectRecord{
-                .id = first_object,
-                .scene_entity = second,
-                .authored_name = "Bad Collision",
-            }),
-            kInvalidEditorObjectId);
+  EXPECT_FALSE(
+      document.scene().set_editor_object_id(second, first_object));
   EXPECT_EQ(document.scene().editor_object_id(first), first_object);
   EXPECT_EQ(document.scene().editor_object_id(second), second_object);
-  EXPECT_EQ(document.entity_for_object_id(first_object), first);
-  EXPECT_EQ(document.entity_for_object_id(second_object), second);
-
-  const SceneContentDocumentIdentityReport report =
-      document.validate_object_identity_invariants();
-  EXPECT_TRUE(report.ok()) << (report.issues.empty()
-                                   ? std::string{}
-                                   : report.issues.front().message);
+  EXPECT_EQ(document.scene().entity_for_editor_object_id(first_object), first);
+  EXPECT_EQ(document.scene().entity_for_editor_object_id(second_object), second);
+  EXPECT_TRUE(document.validate_object_identity_invariants().ok());
 }
 
 TEST(SceneContentDocumentTests,
-     MirrorsEverySceneEntityIntoStableEditorObjectRecords) {
-  SceneContentDocument document(SceneContentDocumentRecord{
-      .id = 18,
-      .name = "Identity Project",
-  });
-
-  const EntityId mesh =
-      document.scene().create_entity("Mesh", EntityKind::Mesh);
-  const EntityId group = document.scene().create_empty("Group");
-  ASSERT_TRUE(document.scene().set_parent(mesh, group, false));
-
-  const EditorObjectId mesh_object = document.scene().editor_object_id(mesh);
-  const EditorObjectId group_object = document.scene().editor_object_id(group);
-  const EditorObjectId root_object =
-      document.scene().editor_object_id(document.scene().scene_root());
-  ASSERT_NE(root_object, kInvalidEditorObjectId);
-  ASSERT_NE(mesh_object, kInvalidEditorObjectId);
-  ASSERT_NE(group_object, kInvalidEditorObjectId);
-  EXPECT_NE(root_object, mesh_object);
-  EXPECT_NE(root_object, group_object);
-  EXPECT_NE(mesh_object, group_object);
-
-  const std::vector<ProjectObjectRecord> records = document.object_records();
-  ASSERT_EQ(records.size(), 3u);
-  EXPECT_EQ(document.object_id_for_entity(document.scene().scene_root()),
-            root_object);
-  EXPECT_EQ(document.object_id_for_entity(mesh), mesh_object);
-  EXPECT_EQ(document.object_id_for_entity(group), group_object);
-  EXPECT_EQ(document.entity_for_object_id(root_object),
-            document.scene().scene_root());
-  EXPECT_EQ(document.entity_for_object_id(mesh_object), mesh);
-  EXPECT_EQ(document.entity_for_object_id(group_object), group);
-  EXPECT_TRUE(document.object_record(mesh_object).has_value());
-  const std::optional<ProjectObjectRecord> group_record =
-      document.object_record(group_object);
-  ASSERT_TRUE(group_record.has_value());
-  EXPECT_EQ(group_record->modeling_object, kInvalidModelingObjectId);
-
-  const SceneContentDocumentIdentityReport report =
-      document.validate_object_identity_invariants();
-  EXPECT_TRUE(report.ok()) << (report.issues.empty()
-                                   ? std::string{}
-                                   : report.issues.front().message);
-}
-
-TEST(SceneContentDocumentTests,
-     SceneEntitiesReserveStableObjectIdsFromSceneContentDocumentAuthority) {
-  SceneContentDocument document(SceneContentDocumentRecord{
-      .id = 20,
-      .name = "Identity Authority Project",
-  });
-
-  const EntityId first =
-      document.scene().create_entity("First", EntityKind::Mesh);
+     SceneDocumentAllocatorOwnsImportedAndMovedEntityIdentity) {
+  SceneContentDocument document;
+  const EntityId first = document.scene().create_entity("First");
   ASSERT_NE(first, kInvalidEntityId);
   EXPECT_EQ(document.scene().editor_object_id(first), 2u);
-
-  const EditorObjectId detached =
-      document.create_object_record(ProjectObjectRecord{
-          .authored_name = "Detached Object Record",
-      });
-  EXPECT_EQ(detached, 3u);
-
-  const EntityId second =
-      document.scene().create_entity("Second", EntityKind::Mesh);
-  ASSERT_NE(second, kInvalidEntityId);
-  EXPECT_EQ(document.scene().editor_object_id(second), 4u);
 
   const EntityId imported = document.scene().create_entity_with_id(
       50u, "Imported", EntityKind::Mesh, 99u);
   ASSERT_NE(imported, kInvalidEntityId);
   EXPECT_EQ(document.scene().editor_object_id(imported), 99u);
 
-  const EditorObjectId after_imported =
-      document.create_object_record(ProjectObjectRecord{
-          .authored_name = "After Imported",
-      });
-  EXPECT_EQ(after_imported, 100u);
+  const EntityId after_import =
+      document.scene().create_entity("After Import", EntityKind::Mesh);
+  EXPECT_EQ(document.scene().editor_object_id(after_import), 100u);
 
   SceneContentDocument moved(std::move(document));
   const EntityId after_move =
       moved.scene().create_entity("After Move", EntityKind::Mesh);
   ASSERT_NE(after_move, kInvalidEntityId);
   EXPECT_EQ(moved.scene().editor_object_id(after_move), 101u);
-
-  const SceneContentDocumentIdentityReport report =
-      moved.validate_object_identity_invariants();
-  EXPECT_TRUE(report.ok()) << (report.issues.empty()
-                                   ? std::string{}
-                                   : report.issues.front().message);
-}
-
-TEST(SceneContentDocumentTests, ConstObjectRecordQueriesDoNotMutateProjectRevision) {
-  SceneContentDocument document(SceneContentDocumentRecord{
-      .id = 21,
-      .name = "Const Projection Project",
-  });
-  const EntityId entity =
-      document.scene().create_entity("Projected Mesh", EntityKind::Mesh);
-  const EditorObjectId object = document.scene().editor_object_id(entity);
-  ASSERT_NE(object, kInvalidEditorObjectId);
-  const std::uint64_t revision_before_queries = document.revision();
-
-  const std::vector<ProjectObjectRecord> records =
-      std::as_const(document).object_records();
-  ASSERT_EQ(records.size(), 2u);
-  EXPECT_EQ(records.front().scene_entity, document.scene().scene_root());
-  EXPECT_EQ(records.back().id, object);
-  const std::optional<ProjectObjectRecord> record =
-      std::as_const(document).object_record(object);
-  ASSERT_TRUE(record.has_value());
-  EXPECT_EQ(record->scene_entity, entity);
-  EXPECT_EQ(std::as_const(document).object_id_for_entity(entity), object);
-  EXPECT_EQ(std::as_const(document).entity_for_object_id(object), entity);
-  EXPECT_TRUE(
-      std::as_const(document).validate_object_identity_invariants().ok());
-  EXPECT_EQ(document.revision(), revision_before_queries);
-
-  EXPECT_TRUE(document.synchronize_object_records_with_scene());
-  EXPECT_EQ(document.revision(), revision_before_queries + 1u);
-  EXPECT_FALSE(document.synchronize_object_records_with_scene());
-  EXPECT_EQ(document.revision(), revision_before_queries + 1u);
-}
-
-TEST(SceneContentDocumentTests,
-     ExplicitObjectRecordSyncParticipatesInSceneSessionDirtyState) {
-  SceneSession session;
-  const EntityId entity =
-      session.scene().create_entity("Session Projected Mesh", EntityKind::Mesh);
-  ASSERT_NE(entity, kInvalidEntityId);
-  session.mark_clean();
-  EXPECT_FALSE(session.dirty());
-
-  EXPECT_EQ(std::as_const(session.document()).object_records().size(), 2u);
-  EXPECT_FALSE(session.dirty());
-
-  EXPECT_TRUE(session.document().synchronize_object_records_with_scene());
-  EXPECT_TRUE(session.dirty());
-  session.mark_clean();
-  EXPECT_FALSE(session.dirty());
-  EXPECT_FALSE(session.document().synchronize_object_records_with_scene());
-  EXPECT_FALSE(session.dirty());
+  EXPECT_TRUE(moved.validate_object_identity_invariants().ok());
 }
 
 TEST(SceneSessionTests,
@@ -10298,17 +11428,14 @@ TEST(SceneSessionTests,
   const EntityId authored_entity =
       existing.scene().create_entity("Authored Mesh");
   const EditorObjectId object =
-      existing.create_object_record(ProjectObjectRecord{
-          .scene_entity = authored_entity,
-          .authored_name = "Authored Mesh",
-      });
+      existing.scene().editor_object_id(authored_entity);
   std::unique_ptr<SceneSession> opened =
       service.open_session(std::move(existing));
   ASSERT_NE(opened, nullptr);
   EXPECT_EQ(opened->document().id(), 99u);
   EXPECT_EQ(opened->document().name(), "Opened Session");
-  EXPECT_TRUE(opened->document().object_record(object).has_value());
-  EXPECT_EQ(opened->document().entity_for_object_id(object), authored_entity);
+  EXPECT_EQ(opened->scene().entity_for_editor_object_id(object),
+            authored_entity);
 }
 
 TEST(SceneSessionTests, ReadViewExposesConstProjectSceneAndAssetState) {
@@ -10653,6 +11780,74 @@ TEST(DocumentCommandTests, CurveComponentsSurviveDuplicateAndDeleteUndoRedo) {
   ASSERT_NE(scene.curve(clone), nullptr);
   EXPECT_EQ(scene.curve(clone)->curve, 42u);
   EXPECT_EQ(scene.kind(clone), EntityKind::Curve);
+  ASSERT_TRUE(history.redo().ok);
+  EXPECT_FALSE(scene.exists(clone));
+}
+
+TEST(DocumentCommandTests,
+     RichEntityStateSurvivesDuplicateDeleteAndHistoryReplay) {
+  SceneDocument scene;
+  ASSERT_EQ(scene.create_layer_with_id(7u, "History Layer"), 7u);
+  const EntityId source =
+      scene.create_entity("Rich Source", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_transform(
+      source, TransformComponent{.position = {2.0f, 3.0f, 4.0f},
+                                 .rotation_euler = {0.1f, 0.2f, 0.3f},
+                                 .scale = {1.5f, 1.25f, 0.75f},
+                                 .custom_pivot = true}));
+  ASSERT_TRUE(scene.set_visible(source, false));
+  ASSERT_TRUE(scene.set_selectable(source, false));
+  ASSERT_TRUE(scene.set_locked(source, true));
+  const MeshComponent mesh{.mesh = 41u,
+                           .editor_only = true,
+                           .cast_shadows = false,
+                           .double_sided = true,
+                           .generate_collisions = false,
+                           .collision_type = MeshCollisionType::Mesh,
+                           .display_collision = true,
+                           .body_type = MeshPhysicsBodyType::RigidBody};
+  ASSERT_TRUE(scene.set_mesh(source, mesh));
+  const MaterialComponent material{
+      .material = MaterialReference(51u),
+      .material_slots = {{2u, MaterialReference(52u)}},
+  };
+  ASSERT_TRUE(scene.set_material(source, material));
+  TextureMappingComponent mapping;
+  mapping.sampling_from_local.values[12] = 6.0f;
+  ASSERT_TRUE(scene.set_texture_mapping(source, mapping));
+  ASSERT_TRUE(scene.set_entity_layer(source, 7u));
+
+  const auto expect_state = [&](EntityId entity) {
+    ASSERT_TRUE(scene.exists(entity));
+    EXPECT_EQ(*scene.mesh(entity), mesh);
+    EXPECT_EQ(*scene.material(entity), material);
+    EXPECT_EQ(*scene.texture_mapping(entity), mapping);
+    EXPECT_EQ(scene.entity_layer(entity), 7u);
+    EXPECT_FALSE(scene.visibility(entity)->visible);
+    EXPECT_FALSE(scene.visibility(entity)->selectable);
+    EXPECT_TRUE(scene.lock(entity)->locked);
+    expect_vec3_near(scene.transform(entity)->position,
+                     {2.0f, 3.0f, 4.0f});
+    EXPECT_TRUE(scene.transform(entity)->custom_pivot);
+  };
+
+  UndoRedoManager history;
+  auto duplicate = std::make_unique<DuplicateEntityCommand>(scene, source);
+  DuplicateEntityCommand *duplicate_command = duplicate.get();
+  ASSERT_TRUE(history.execute(std::move(duplicate)).ok);
+  const EntityId clone = duplicate_command->duplicate_entity();
+  expect_state(clone);
+
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_FALSE(scene.exists(clone));
+  ASSERT_TRUE(history.redo().ok);
+  expect_state(clone);
+
+  ASSERT_TRUE(
+      history.execute(std::make_unique<DestroyEntityCommand>(scene, clone)).ok);
+  EXPECT_FALSE(scene.exists(clone));
+  ASSERT_TRUE(history.undo().ok);
+  expect_state(clone);
   ASSERT_TRUE(history.redo().ok);
   EXPECT_FALSE(scene.exists(clone));
 }
@@ -13158,11 +14353,8 @@ TEST(DocumentCommandServiceTests,
 
   const EditorObjectId group_object = session.scene().editor_object_id(group);
   ASSERT_NE(group_object, kInvalidEditorObjectId);
-  const std::optional<ProjectObjectRecord> record =
-      session.document().object_record(group_object);
-  ASSERT_TRUE(record.has_value());
-  EXPECT_EQ(record->scene_entity, group);
-  EXPECT_EQ(record->modeling_object, kInvalidModelingObjectId);
+  EXPECT_EQ(session.scene().entity_for_editor_object_id(group_object), group);
+  EXPECT_EQ(session.scene().modeling_object(group), nullptr);
 
   const SceneContentDocumentIdentityReport report =
       session.document().validate_object_identity_invariants();
@@ -13510,6 +14702,65 @@ TEST(ModelingSessionServiceTests,
   EXPECT_FALSE(service.tool_settings_target().active);
   EXPECT_FALSE(service.operation_preview_active());
   EXPECT_GT(service.tool_settings_revision(), updated_settings_revision);
+}
+
+TEST(ModelingSessionServiceTests,
+     HalfCutPreviewSettingFailuresKeepThePreviouslyCommittedSettings) {
+  for (const bool rebuild_participants : {false, true}) {
+    SCOPED_TRACE(rebuild_participants ? "structural rebuild"
+                                      : "in-place update");
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    const ModelingCreateBoxResult box = service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Half-Cut Failed Settings Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    const ModelingCommandResult begun =
+        service.execute_context_action("half_cut");
+    ASSERT_TRUE(begun.ok) << begun.message;
+
+    const ModelingInteractionSettings previous =
+        service.interaction_settings();
+    const std::uint64_t previous_settings_revision =
+        service.tool_settings_revision();
+    const std::optional<MeshAsset> preview_before =
+        service.compile_object_mesh(box.object.modeling_object_id);
+    ASSERT_TRUE(preview_before.has_value());
+    ModelingInteractionSettings candidate = previous;
+    if (rebuild_participants) {
+      candidate.half_cut_separate_parts = true;
+    } else {
+      candidate.half_cut_axis = ModelingHalfCutAxis::Z;
+    }
+
+    service.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+    const ModelingCommandResult failed =
+        service.set_interaction_settings(candidate);
+    EXPECT_FALSE(failed.ok);
+    EXPECT_FALSE(failed.changed);
+    EXPECT_NE(failed.message.find(rebuild_participants
+                                      ? "Half-Cut preview rebuild failed."
+                                      : "Half-Cut preview publication failed."),
+              std::string::npos)
+        << failed.message;
+    EXPECT_EQ(service.interaction_settings(), previous);
+    EXPECT_EQ(service.tool_settings_revision(), previous_settings_revision);
+    EXPECT_TRUE(service.operation_preview_active());
+    const std::optional<MeshAsset> preview_after =
+        service.compile_object_mesh(box.object.modeling_object_id);
+    ASSERT_TRUE(preview_after.has_value());
+    EXPECT_EQ(mesh_position_fingerprint(*preview_after),
+              mesh_position_fingerprint(*preview_before));
+    service.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::None);
+    const ModelingCommandResult canceled =
+        service.cancel_active_operation_preview();
+    EXPECT_TRUE(canceled.ok) << canceled.message;
+  }
 }
 
 TEST(ModelingSessionServiceTests,
@@ -14368,6 +15619,8 @@ TEST(ModelingSessionServiceTests,
   EditorHistoryService history;
   DocumentCommandService document_commands(scene, history);
   ModelingSessionService service(scene, assets);
+  SceneStructuralLifecycleService structural_lifecycle(
+      scene, history, document_commands, service);
 
   const ModelingCreateBoxResult source = service.create_box_from_bounds({
       .bounds = {.min = {-1.0f, -1.0f, -1.0f},
@@ -14378,8 +15631,9 @@ TEST(ModelingSessionServiceTests,
   std::vector<EntityId> participants{source.object.entity};
   participants.reserve(200u);
   for (std::size_t index = 1u; index < 200u; ++index) {
-    const ModelingCommandResult duplicated =
-        service.duplicate_selected_entity_hierarchy(document_commands);
+    const SceneStructuralDuplicateResult duplicated =
+        structural_lifecycle.duplicate_selected_hierarchy(
+            ModelingSelectionMode::Object);
     ASSERT_TRUE(duplicated.ok) << duplicated.message;
     ASSERT_TRUE(duplicated.changed);
     const EntityId duplicate = scene.primary_selection();
@@ -16259,11 +17513,15 @@ TEST(ModelingSessionServiceTests,
 
   const ModelingSdkProjectionStats before_first_frame =
       service.modeling_sdk_projection_stats_for_tests();
+  const ModelingVolatileOverlayCacheStats cache_before_first_frame =
+      service.volatile_overlay_cache_stats();
   const ViewportOverlayFrame first_frame = service.volatile_overlay_frame();
   const ModelingSdkProjectionStats after_first_frame =
       service.modeling_sdk_projection_stats_for_tests();
   EXPECT_EQ(after_first_frame.mesh_compile_count,
             before_first_frame.mesh_compile_count + 2u);
+  EXPECT_EQ(service.volatile_overlay_cache_stats().build_count,
+            cache_before_first_frame.build_count + 1u);
   EXPECT_TRUE(std::any_of(
       first_frame.triangles.begin(), first_frame.triangles.end(),
       [](const ViewportOverlayTriangle &triangle) {
@@ -16281,6 +17539,7 @@ TEST(ModelingSessionServiceTests,
       service.modeling_sdk_projection_stats_for_tests();
   EXPECT_EQ(after_hover_motion.mesh_compile_count,
             after_first_frame.mesh_compile_count);
+  EXPECT_GE(service.volatile_overlay_cache_stats().reuse_count, 32u);
 
   command = service.set_cut_mode(ModelingCutMode::DiscardLeft);
   ASSERT_TRUE(command.ok) << command.message;
@@ -16294,6 +17553,10 @@ TEST(ModelingSessionServiceTests,
       service.modeling_sdk_projection_stats_for_tests();
   EXPECT_EQ(after_repeated_mode_frame.mesh_compile_count,
             after_mode_change.mesh_compile_count);
+  const ModelingVolatileOverlayCacheStats after_repeated_mode_cache =
+      service.volatile_overlay_cache_stats();
+  EXPECT_EQ(after_repeated_mode_cache.build_count,
+            cache_before_first_frame.build_count + 2u);
 
   ASSERT_TRUE(scene.set_transform(
       box.object.entity, TransformComponent{.position = {0.25f, 0.0f, 0.0f}}));
@@ -16302,6 +17565,33 @@ TEST(ModelingSessionServiceTests,
       service.modeling_sdk_projection_stats_for_tests();
   EXPECT_EQ(after_scene_change.mesh_compile_count,
             after_mode_change.mesh_compile_count + 2u);
+  EXPECT_EQ(service.volatile_overlay_cache_stats().build_count,
+            after_repeated_mode_cache.build_count + 1u);
+}
+
+TEST(ModelingSessionServiceTests,
+     VolatileOverlaySnapshotPinsImmutablePublicationAcrossMutation) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingVolatileOverlaySnapshot before =
+      service.volatile_overlay_snapshot();
+  ASSERT_NE(before.frame, nullptr);
+  const ModelingCommandResult activated =
+      service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(activated.ok) << activated.message;
+  ASSERT_TRUE(activated.changed);
+  const ModelingVolatileOverlaySnapshot after =
+      service.volatile_overlay_snapshot();
+  ASSERT_NE(after.frame, nullptr);
+
+  EXPECT_NE(before.frame.get(), after.frame.get());
+  EXPECT_EQ(before.source.source_identity, after.source.source_identity);
+  EXPECT_GT(after.source.publication_revision,
+            before.source.publication_revision);
+  EXPECT_TRUE(before.frame->lines.empty())
+      << "the prior immutable publication remains readable while pinned";
 }
 
 TEST(ModelingSessionServiceTests, CutToolDragEndAndFinalizeSplitMesh) {
@@ -17680,14 +18970,18 @@ TEST(ModelingSessionServiceTests,
                   .ok);
 
   const std::uint64_t scene_revision = scene.revision();
+  const std::uint64_t scene_selection_revision = scene.selection_revision();
   const ModelingSelectionSummary summary = service.selection_summary();
-  ASSERT_TRUE(editor_selection.selection
-                  .set_object_selection(
-                      std::span<const EntityId>(&box.object.entity, 1),
-                      box.object.entity)
-                  .ok);
+  editor_selection.history.clear();
+  const ModelingCommandResult repeated =
+      editor_selection.selection.set_object_selection(
+          std::span<const EntityId>(&box.object.entity, 1), box.object.entity);
+  ASSERT_TRUE(repeated.ok) << repeated.message;
 
+  EXPECT_FALSE(repeated.changed);
+  EXPECT_FALSE(editor_selection.history.can_undo());
   EXPECT_EQ(scene.revision(), scene_revision);
+  EXPECT_EQ(scene.selection_revision(), scene_selection_revision);
   EXPECT_EQ(service.selection_summary().content_revision,
             summary.content_revision);
   EXPECT_EQ(service.selection_summary().selection_revision,
@@ -18762,7 +20056,7 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     ObjectTransformDragRefreshesViewportOverlayCacheKeyDuringScenePreview) {
+     ObjectTransformDragAdvancesViewportOverlaySourceStampDuringScenePreview) {
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
@@ -18779,20 +20073,20 @@ TEST(ModelingSessionServiceTests,
   };
   auto make_viewport_overlay_key = [&]() {
     const ModelingSelectionSummary summary = service.selection_summary();
-    return ViewportPaneOverlayCacheKey{
+    return ViewportOverlaySelectionSourceStamp{
+        .source_identity = reinterpret_cast<std::uintptr_t>(&service),
         .content_revision = summary.content_revision,
         .selection_revision = summary.selection_revision,
         .scene_revision = scene.revision(),
         .asset_revision = assets.revision(),
         .overlay_signature =
             service.selection_overlay_signature(overlay_options),
-        .selection_mode = summary.mode,
+        .selection_context = ViewportOverlaySelectionContext::Object,
     };
   };
 
-  ViewportPaneOverlayCache cache;
-  const ViewportPaneOverlayCacheKey before_key = make_viewport_overlay_key();
-  cache.update(service.selection_overlay_frame(overlay_options), before_key);
+  const ViewportOverlaySelectionSourceStamp before_key =
+      make_viewport_overlay_key();
 
   ModelingTransformDragPreview begin =
       service.begin_transform_drag(test_x_move_drag_begin_request());
@@ -18806,9 +20100,9 @@ TEST(ModelingSessionServiceTests,
   ASSERT_NE(scene.transform(box.object.entity), nullptr);
   EXPECT_NEAR(scene.transform(box.object.entity)->position.x, 2.0f, 0.001f);
 
-  const ViewportPaneOverlayCacheKey preview_key = make_viewport_overlay_key();
-  EXPECT_EQ(cache.refresh_reason(preview_key),
-            ViewportPaneOverlayCacheRefreshReason::SceneRevision);
+  const ViewportOverlaySelectionSourceStamp preview_key =
+      make_viewport_overlay_key();
+  EXPECT_NE(preview_key.scene_revision, before_key.scene_revision);
 
   const ModelingCommandResult cancel = service.cancel_transform_drag();
   ASSERT_TRUE(cancel.ok) << cancel.message;
@@ -19031,110 +20325,41 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     TransformDragShiftDuplicateCommitsAtPreviewAndRemainsRepeatable) {
+     TransformDragShiftDuplicateRequiresStructuralLifecycle) {
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
 
   const ModelingCreateBoxResult box = service.create_box_from_bounds({
       .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-      .name = "Rotated Shift Duplicate Source",
+      .name = "Shift Duplicate Source",
   });
   ASSERT_TRUE(box.ok) << box.message;
-  TransformComponent source_transform;
-  source_transform.rotation_euler = {0.0f, 0.5f, 0.25f};
-  scene.set_transform(box.object.entity, source_transform);
-  const MeshComponent *source_mesh = scene.mesh(box.object.entity);
-  ASSERT_NE(source_mesh, nullptr);
-  MeshComponent source_mesh_settings = *source_mesh;
-  source_mesh_settings.double_sided = true;
-  scene.set_mesh(box.object.entity, source_mesh_settings);
+  const std::vector<EntityId> entities_before = scene.entities();
+  const std::vector<EntityId> selection_before = scene.selected_entities();
+  const std::size_t object_count_before = service.objects().size();
 
-  ModelingTransformDragPreview begin =
+  const ModelingTransformDragPreview begin =
       service.begin_transform_drag(test_x_move_drag_begin_request(
           {}, ModelingTransformOperation::Transform, true));
-  ASSERT_TRUE(begin.ok) << begin.message;
-  EXPECT_TRUE(begin.active);
-  EXPECT_FALSE(begin.preview_driven);
-  EXPECT_TRUE(begin.scene_transform);
-  EXPECT_TRUE(begin.has_scene_preview_transform);
-  ASSERT_EQ(scene.entities().size(), 2u);
-  ASSERT_EQ(scene.selected_entities().size(), 1u);
-  const EntityId duplicate_entity = scene.selected_entities().front();
-  EXPECT_NE(duplicate_entity, box.object.entity);
-  ASSERT_NE(scene.transform(duplicate_entity), nullptr);
-  expect_vec3_near(scene.transform(duplicate_entity)->rotation_euler,
-                   source_transform.rotation_euler);
-  ASSERT_NE(scene.mesh(duplicate_entity), nullptr);
-  EXPECT_TRUE(scene.mesh(duplicate_entity)->double_sided);
-
-  ModelingTransformDragPreview update =
-      service.update_transform_drag(test_x_move_drag_update_request(2.0f));
-  ASSERT_TRUE(update.ok) << update.message;
-  EXPECT_FALSE(update.preview_driven);
-  EXPECT_TRUE(update.scene_transform);
-  EXPECT_TRUE(update.has_scene_preview_transform);
-  EXPECT_NEAR(update.move_delta.x, 2.0f, 0.001f);
-  EXPECT_NEAR(update.scene_preview_transform.origin.x, 2.0f, 0.001f);
-
-  const std::optional<SceneBounds> preview_bounds =
-      selected_world_bounds(scene, assets);
-  ASSERT_TRUE(preview_bounds.has_value());
-  EXPECT_NEAR(bounds_center(*preview_bounds).x, 2.0f, 0.001f);
-
-  const ModelingTransformDragPreview commit = service.commit_transform_drag();
-  ASSERT_TRUE(commit.ok) << commit.message;
-  EXPECT_TRUE(commit.changed);
-  ASSERT_EQ(scene.entities().size(), 2u);
-  ASSERT_EQ(scene.selected_entities().size(), 1u);
-  EXPECT_EQ(scene.selected_entities().front(), duplicate_entity);
-
-  const std::optional<SceneBounds> committed_bounds =
-      selected_world_bounds(scene, assets);
-  ASSERT_TRUE(committed_bounds.has_value());
-  expect_vec3_near(committed_bounds->min, preview_bounds->min);
-  expect_vec3_near(committed_bounds->max, preview_bounds->max);
-
-  const MeshComponent *committed_duplicate_mesh =
-      scene.mesh(duplicate_entity);
-  ASSERT_NE(committed_duplicate_mesh, nullptr);
-  const MeshAsset *source_asset = assets.mesh(source_mesh_settings.mesh);
-  const MeshAsset *duplicate_asset =
-      assets.mesh(committed_duplicate_mesh->mesh);
-  ASSERT_NE(source_asset, nullptr);
-  ASSERT_NE(duplicate_asset, nullptr);
-  const std::optional<SceneBounds> source_local_bounds =
-      local_mesh_bounds(*source_asset);
-  const std::optional<SceneBounds> duplicate_local_bounds =
-      local_mesh_bounds(*duplicate_asset);
-  ASSERT_TRUE(source_local_bounds.has_value());
-  ASSERT_TRUE(duplicate_local_bounds.has_value());
-  expect_vec3_near(duplicate_local_bounds->min, source_local_bounds->min);
-  expect_vec3_near(duplicate_local_bounds->max, source_local_bounds->max);
-
-  ModelingCommandResult repeated = service.repeat_last_action();
-  ASSERT_TRUE(repeated.ok) << repeated.message;
-  EXPECT_TRUE(repeated.changed);
-  EXPECT_EQ(scene.entities().size(), 3u);
-  std::optional<SceneBounds> repeated_bounds =
-      selected_world_bounds(scene, assets);
-  ASSERT_TRUE(repeated_bounds.has_value());
-  EXPECT_NEAR(bounds_center(*repeated_bounds).x, 4.0f, 0.001f);
-
-  repeated = service.repeat_last_action();
-  ASSERT_TRUE(repeated.ok) << repeated.message;
-  EXPECT_TRUE(repeated.changed);
-  EXPECT_EQ(scene.entities().size(), 4u);
-  repeated_bounds = selected_world_bounds(scene, assets);
-  ASSERT_TRUE(repeated_bounds.has_value());
-  EXPECT_NEAR(bounds_center(*repeated_bounds).x, 6.0f, 0.001f);
+  EXPECT_FALSE(begin.ok);
+  EXPECT_FALSE(begin.active);
+  EXPECT_FALSE(begin.changed);
+  EXPECT_NE(begin.message.find("structural lifecycle"), std::string::npos);
+  EXPECT_EQ(scene.entities(), entities_before);
+  EXPECT_EQ(scene.selected_entities(), selection_before);
+  EXPECT_EQ(service.objects().size(), object_count_before);
 }
 
 TEST(ModelingSessionServiceTests,
-     TransformDragShiftDuplicateKeepsGroupedMeshInsideParent) {
+     TransformDragShiftDuplicateWithStructuralLifecycleKeepsGroupedMeshInsideParent) {
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
+  EditorHistoryService history;
+  DocumentCommandService document_commands(scene, history, &assets);
+  SceneStructuralLifecycleService structural_lifecycle(
+      scene, history, document_commands, service);
   EditorSelectionTestHarness editor_selection(scene, assets, service);
 
   const ModelingCreateBoxResult first = service.create_box_from_bounds({
@@ -19156,9 +20381,19 @@ TEST(ModelingSessionServiceTests,
                                     {first.object.entity}, first.object.entity)
                   .ok);
 
-  ModelingTransformDragPreview begin =
-      service.begin_transform_drag(test_x_move_drag_begin_request(
-          {}, ModelingTransformOperation::Transform, true));
+  const ModelingStructuralDuplicate structural_duplicate =
+      [&structural_lifecycle](EditorTransaction &transaction,
+                              ModelingSelectionMode mode,
+                              std::string_view label) {
+        return modeling_structural_duplicate_result(
+            structural_lifecycle.duplicate_hierarchy_in_transaction(
+                transaction, structural_lifecycle.selected_roots(), mode,
+                std::string(label)));
+      };
+  const ModelingTransformDragPreview begin = service.begin_transform_drag(
+      test_x_move_drag_begin_request(
+          {}, ModelingTransformOperation::Transform, true),
+      document_commands, structural_duplicate, history);
   ASSERT_TRUE(begin.ok) << begin.message;
   EXPECT_TRUE(begin.active);
   EXPECT_FALSE(begin.preview_driven);
@@ -19174,8 +20409,12 @@ TEST(ModelingSessionServiceTests,
 
   const ModelingCommandResult cancel = service.cancel_transform_drag();
   ASSERT_TRUE(cancel.ok) << cancel.message;
+  EXPECT_TRUE(cancel.changed);
   EXPECT_EQ(scene.entities().size(), 3u);
   EXPECT_EQ(scene.children(group).size(), 2u);
+  EXPECT_EQ(scene.selected_entities(),
+            std::vector<EntityId>{first.object.entity});
+  EXPECT_FALSE(history.can_undo());
 }
 
 TEST(ModelingSessionServiceTests,
@@ -19242,7 +20481,7 @@ TEST(ModelingSessionServiceTests,
 
 TEST(
     ModelingSessionServiceTests,
-    TransformPreviewDuplicateTranslateRefreshesMeshAndKeepsDuplicateSelectable) {
+    ObjectDuplicateTransformPreviewRequiresStructuralLifecycle) {
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
@@ -19252,87 +20491,313 @@ TEST(
       .name = "Shift Duplicate Source",
   });
   ASSERT_TRUE(box.ok) << box.message;
-  TransformComponent source_transform;
-  scene.set_transform(box.object.entity, source_transform);
-  const MeshComponent *source_mesh = scene.mesh(box.object.entity);
-  ASSERT_NE(source_mesh, nullptr);
-  MeshComponent source_mesh_settings = *source_mesh;
-  source_mesh_settings.double_sided = true;
-  scene.set_mesh(box.object.entity, source_mesh_settings);
   ASSERT_EQ(scene.entities().size(), 1u);
 
   const ModelingCommandResult begin = service.begin_transform_preview(true);
-  ASSERT_TRUE(begin.ok) << begin.message;
-  ASSERT_TRUE(begin.changed);
-  ASSERT_EQ(scene.entities().size(), 2u);
-  ASSERT_EQ(service.objects().size(), 2u);
+  EXPECT_FALSE(begin.ok);
+  EXPECT_FALSE(begin.changed);
+  EXPECT_NE(begin.message.find("structural entity lifecycle"),
+            std::string::npos);
+  EXPECT_EQ(scene.entities().size(), 1u);
+  EXPECT_EQ(service.objects().size(), 1u);
   ASSERT_EQ(scene.selected_entities().size(), 1u);
+  EXPECT_EQ(scene.selected_entities().front(), box.object.entity);
+}
 
-  const EntityId duplicate_entity = scene.selected_entities().front();
-  EXPECT_NE(duplicate_entity, box.object.entity);
-  ASSERT_NE(scene.transform(duplicate_entity), nullptr);
-  expect_vec3_near(scene.transform(duplicate_entity)->position,
-                   source_transform.position);
-  expect_vec3_near(scene.transform(duplicate_entity)->rotation_euler,
-                   source_transform.rotation_euler);
-  ASSERT_NE(scene.mesh(duplicate_entity), nullptr);
-  EXPECT_TRUE(scene.mesh(duplicate_entity)->double_sided);
-  const std::optional<int> duplicate_modeling_object_id =
-      service.modeling_object_for_entity(duplicate_entity);
-  ASSERT_TRUE(duplicate_modeling_object_id.has_value());
-  EXPECT_NE(*duplicate_modeling_object_id, box.object.modeling_object_id);
+TEST(SceneSessionTests,
+     StructuralDuplicateTransformPreviewPreservesCleanCheckpointOnCancel) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> box =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0F, -1.0F, -1.0F},
+                       .max = {1.0F, 1.0F, 1.0F}},
+          "Structural Preview Checkpoint");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  session.mark_clean();
+  ASSERT_FALSE(session.dirty());
 
-  const ModelingCommandResult first_move =
-      service.update_transform_translate_preview({1.0f, 0.0f, 0.0f});
-  ASSERT_TRUE(first_move.ok) << first_move.message;
-  ASSERT_TRUE(first_move.changed);
-  EXPECT_FALSE(expect_streamed_transform_delta(service, 1.0f).empty());
-  std::optional<SceneBounds> selected_bounds =
-      selected_world_bounds(scene, assets);
-  ASSERT_TRUE(selected_bounds.has_value());
-  EXPECT_NEAR(bounds_center(*selected_bounds).x, 0.0f, 0.001f);
+  const QuaderApiVoidResult begun =
+      editor.modeling().begin_transform_preview(true);
+  ASSERT_TRUE(begun.ok()) << begun.error_message();
+  ASSERT_TRUE(begun.changed());
+  EXPECT_FALSE(session.dirty());
+  ASSERT_TRUE(
+      editor.modeling().update_transform_translate({2.0F, 0.0F, 0.0F}).ok());
+  EXPECT_FALSE(session.dirty());
+  const QuaderApiVoidResult canceled =
+      editor.modeling().cancel_transform_preview();
+  ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+  ASSERT_TRUE(canceled.changed());
+  EXPECT_FALSE(session.dirty());
+  ASSERT_EQ(session.scene().selected_entities().size(), 1U);
+  EXPECT_EQ(session.scene().selected_entities().front(), box.value().entity);
 
-  const std::uint64_t revision_after_first_move = scene.revision();
-  const ModelingCommandResult second_move =
-      service.update_transform_translate_preview({3.0f, 0.0f, 0.0f});
-  ASSERT_TRUE(second_move.ok) << second_move.message;
-  ASSERT_TRUE(second_move.changed);
-  EXPECT_FALSE(expect_streamed_transform_delta(service, 3.0f).empty());
-  EXPECT_EQ(scene.revision(), revision_after_first_move);
-  selected_bounds = selected_world_bounds(scene, assets);
-  ASSERT_TRUE(selected_bounds.has_value());
-  EXPECT_NEAR(bounds_center(*selected_bounds).x, 0.0f, 0.001f);
-  ASSERT_NE(scene.transform(duplicate_entity), nullptr);
-  expect_vec3_near(scene.transform(duplicate_entity)->rotation_euler,
-                   source_transform.rotation_euler);
-  ASSERT_NE(scene.mesh(duplicate_entity), nullptr);
-  EXPECT_TRUE(scene.mesh(duplicate_entity)->double_sided);
+  ASSERT_TRUE(editor.modeling().begin_transform_preview(true).ok());
+  ASSERT_TRUE(
+      editor.modeling().update_transform_translate({1.0F, 0.0F, 0.0F}).ok());
+  const EntityId external =
+      session.scene().create_entity("External Preview Mutation");
+  ASSERT_NE(external, kInvalidEntityId);
+  ASSERT_TRUE(editor.modeling().cancel_transform_preview().ok());
+  EXPECT_TRUE(session.scene().exists(external));
+  EXPECT_TRUE(session.dirty());
 
-  const ModelingCommandResult commit = service.commit_transform_preview();
-  ASSERT_TRUE(commit.ok) << commit.message;
-  ASSERT_TRUE(commit.changed);
-  ASSERT_EQ(scene.selected_entities().size(), 1u);
-  EXPECT_EQ(scene.selected_entities().front(), duplicate_entity);
-  selected_bounds = selected_world_bounds(scene, assets);
-  ASSERT_TRUE(selected_bounds.has_value());
-  EXPECT_NEAR(bounds_center(*selected_bounds).x, 3.0f, 0.001f);
+  session.mark_clean();
+  ASSERT_TRUE(editor.modeling().begin_transform_preview(true).ok());
+  ASSERT_TRUE(
+      editor.modeling().update_transform_translate({2.0F, 0.0F, 0.0F}).ok());
+  const QuaderApiVoidResult committed =
+      editor.modeling().commit_transform_preview();
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  ASSERT_TRUE(committed.changed());
+  EXPECT_TRUE(session.dirty());
+}
 
-  ASSERT_TRUE(service.clear_selection().ok);
-  const ModelingSelectionSummary picked =
-      service.pick_select(ModelingPickSelectRequest{
-          .ray =
-              {
-                  .origin = {3.0f, 0.0f, 5.0f},
-                  .direction = {0.0f, 0.0f, -1.0f},
-              },
-          .click_count = 1,
+TEST(SceneSessionTests,
+     StructuralDuplicateTransformDragCancelRestoresExactSceneScalarsAndCommitPersistsThem) {
+  SceneSession session;
+  SceneSession control;
+  const ModelingCreateBoxResult box =
+      session.modeling().create_box_from_bounds({
+          .bounds = {.min = {-1.0F, -1.0F, -1.0F},
+                     .max = {1.0F, 1.0F, 1.0F}},
+          .name = "Structural Drag Checkpoint",
       });
-  EXPECT_EQ(picked.selected_object_count, 1u);
-  EXPECT_EQ(picked.active_object_id, *duplicate_modeling_object_id);
-  ASSERT_EQ(scene.selected_entities().size(), 1u);
-  EXPECT_EQ(
-      service.modeling_object_for_entity(scene.selected_entities().front()),
-      duplicate_modeling_object_id);
+  ASSERT_TRUE(box.ok) << box.message;
+  const ModelingCreateBoxResult control_box =
+      control.modeling().create_box_from_bounds({
+          .bounds = {.min = {-1.0F, -1.0F, -1.0F},
+                     .max = {1.0F, 1.0F, 1.0F}},
+          .name = "Structural Drag Checkpoint",
+      });
+  ASSERT_TRUE(control_box.ok) << control_box.message;
+  session.mark_clean();
+  ASSERT_FALSE(session.dirty());
+  const SceneScalarRevisionFingerprint scalar_revisions_before_cancel =
+      scene_scalar_revision_fingerprint(session.scene());
+
+  const ModelingStructuralDuplicate structural_duplicate =
+      [&session](EditorTransaction &transaction, ModelingSelectionMode mode,
+                 std::string_view label) {
+        return modeling_structural_duplicate_result(
+            session.structural_lifecycle().duplicate_hierarchy_in_transaction(
+                transaction, session.structural_lifecycle().selected_roots(),
+                mode, std::string(label)));
+      };
+  const ModelingTransformDragBeginRequest request =
+      test_x_move_drag_begin_request({}, ModelingTransformOperation::Transform,
+                                     true);
+  const ModelingTransformDragPreview begun =
+      session.modeling().begin_transform_drag(
+          request, session.document_commands(), structural_duplicate,
+          session.history());
+  ASSERT_TRUE(begun.ok) << begun.message;
+  ASSERT_TRUE(begun.active);
+  EXPECT_FALSE(session.dirty());
+  ASSERT_EQ(session.scene().selected_entities().size(), 1U);
+  const EntityId canceled_duplicate =
+      session.scene().selected_entities().front();
+  ASSERT_NE(canceled_duplicate, box.object.entity);
+  const EditorObjectId canceled_duplicate_editor_object =
+      session.scene().editor_object_id(canceled_duplicate);
+  ASSERT_NE(canceled_duplicate_editor_object, kInvalidEditorObjectId);
+  const ModelingTransformDragPreview updated =
+      session.modeling().update_transform_drag(
+          test_x_move_drag_update_request(2.0F));
+  ASSERT_TRUE(updated.ok) << updated.message;
+  EXPECT_FALSE(session.dirty());
+  const ModelingCommandResult canceled =
+      session.modeling().cancel_transform_drag();
+  ASSERT_TRUE(canceled.ok) << canceled.message;
+  ASSERT_TRUE(canceled.changed);
+  EXPECT_FALSE(session.dirty());
+  ASSERT_EQ(session.scene().selected_entities().size(), 1U);
+  EXPECT_EQ(session.scene().selected_entities().front(), box.object.entity);
+  EXPECT_EQ(scene_scalar_revision_fingerprint(session.scene()),
+            scalar_revisions_before_cancel)
+      << "Cancel must restore all twelve Scene scalar revisions exactly.";
+
+  const EntityId allocated_after_cancel =
+      session.scene().create_entity("Allocation After Canceled Drag");
+  const EntityId control_allocation =
+      control.scene().create_entity("Allocation After Canceled Drag");
+  ASSERT_NE(allocated_after_cancel, kInvalidEntityId);
+  ASSERT_NE(control_allocation, kInvalidEntityId);
+  EXPECT_EQ(allocated_after_cancel, control_allocation)
+      << "Canceled drag must restore the Scene entity allocation high-water.";
+  EXPECT_EQ(session.scene().editor_object_id(allocated_after_cancel),
+            control.scene().editor_object_id(control_allocation))
+      << "Canceled drag must restore the editor-object allocation high-water.";
+  EXPECT_EQ(allocated_after_cancel, canceled_duplicate);
+  EXPECT_EQ(session.scene().editor_object_id(allocated_after_cancel),
+            canceled_duplicate_editor_object);
+
+  session.mark_clean();
+  const SceneScalarRevisionFingerprint scalar_revisions_before_commit =
+      scene_scalar_revision_fingerprint(session.scene());
+  const ModelingTransformDragPreview committed_begin =
+      session.modeling().begin_transform_drag(
+          request, session.document_commands(), structural_duplicate,
+          session.history());
+  ASSERT_TRUE(committed_begin.ok) << committed_begin.message;
+  ASSERT_EQ(session.scene().selected_entities().size(), 1U);
+  const EntityId committed_duplicate =
+      session.scene().selected_entities().front();
+  ASSERT_NE(committed_duplicate, box.object.entity);
+  ASSERT_TRUE(session.modeling()
+                  .update_transform_drag(
+                      test_x_move_drag_update_request(2.0F))
+                  .ok);
+  const ModelingTransformDragPreview committed =
+      session.modeling().commit_transform_drag(session.history());
+  ASSERT_TRUE(committed.ok) << committed.message;
+  ASSERT_TRUE(committed.changed);
+  EXPECT_TRUE(session.dirty());
+  EXPECT_TRUE(session.scene().exists(committed_duplicate));
+  EXPECT_NE(scene_scalar_revision_fingerprint(session.scene()),
+            scalar_revisions_before_commit)
+      << "Commit must retain the structural drag scalar transitions.";
+
+  const EntityId allocated_after_commit =
+      session.scene().create_entity("Allocation After Committed Drag");
+  const EntityId control_after_commit =
+      control.scene().create_entity("Allocation After Committed Drag");
+  ASSERT_NE(allocated_after_commit, kInvalidEntityId);
+  ASSERT_NE(control_after_commit, kInvalidEntityId);
+  EXPECT_GT(allocated_after_commit, control_after_commit);
+  EXPECT_GT(session.scene().editor_object_id(allocated_after_commit),
+            control.scene().editor_object_id(control_after_commit));
+}
+
+TEST(SceneSessionTests,
+     StructuralDuplicateTransformDragRejectsLateSceneMutationAtCommitBoundary) {
+  SceneSession session;
+  const ModelingCreateBoxResult box =
+      session.modeling().create_box_from_bounds({
+          .bounds = {.min = {-1.0F, -1.0F, -1.0F},
+                     .max = {1.0F, 1.0F, 1.0F}},
+          .name = "Structural Drag Boundary Source",
+      });
+  ASSERT_TRUE(box.ok) << box.message;
+  const EntityId unrelated =
+      session.scene().create_entity("Late Unrelated Scene Mutation");
+  ASSERT_NE(unrelated, kInvalidEntityId);
+  ASSERT_TRUE(session.scene().set_selected(box.object.entity, true));
+  session.mark_clean();
+
+  const ModelingStructuralDuplicate structural_duplicate =
+      [&session](EditorTransaction &transaction, ModelingSelectionMode mode,
+                 std::string_view label) {
+        return modeling_structural_duplicate_result(
+            session.structural_lifecycle().duplicate_hierarchy_in_transaction(
+                transaction, session.structural_lifecycle().selected_roots(),
+                mode, std::string(label)));
+      };
+  const ModelingTransformDragPreview begun =
+      session.modeling().begin_transform_drag(
+          test_x_move_drag_begin_request(
+              {}, ModelingTransformOperation::Transform, true),
+          session.document_commands(), structural_duplicate,
+          session.history());
+  ASSERT_TRUE(begun.ok) << begun.message;
+  ASSERT_EQ(session.scene().selected_entities().size(), 1U);
+  const EntityId duplicate = session.scene().selected_entities().front();
+  ASSERT_NE(duplicate, box.object.entity);
+  ASSERT_TRUE(session.modeling()
+                  .update_transform_drag(
+                      test_x_move_drag_update_request(2.0F))
+                  .ok);
+
+  std::size_t history_observer_calls = 0U;
+  session.history().set_change_observer([&] {
+    ++history_observer_calls;
+    if (history_observer_calls == 2U) {
+      EXPECT_TRUE(session.scene().set_visible(unrelated, false));
+    }
+  });
+  const ModelingTransformDragPreview committed =
+      session.modeling().commit_transform_drag(session.history());
+  session.history().set_change_observer({});
+
+  EXPECT_FALSE(committed.ok);
+  EXPECT_TRUE(committed.changed);
+  EXPECT_NE(committed.message.find("scalar rollback was rejected"),
+            std::string::npos);
+  EXPECT_EQ(history_observer_calls, 2U);
+  EXPECT_TRUE(session.scene().exists(duplicate));
+  ASSERT_NE(session.scene().visibility(unrelated), nullptr);
+  EXPECT_FALSE(session.scene().visibility(unrelated)->visible);
+  EXPECT_TRUE(session.dirty());
+  EXPECT_TRUE(session.history().can_undo());
+}
+
+TEST(SceneSessionTests,
+     StructuralAndOperationPreviewsRejectOverlappingCheckpointOwnership) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> box =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0F, -1.0F, -1.0F},
+                       .max = {1.0F, 1.0F, 1.0F}},
+          "Preview Ownership Box");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  session.mark_clean();
+
+  ASSERT_TRUE(editor.modeling().begin_transform_preview(true).ok());
+  const QuaderApiVoidResult blocked_operation = editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("half_cut"));
+  EXPECT_FALSE(blocked_operation.ok());
+  ASSERT_TRUE(editor.modeling().cancel_transform_preview().ok());
+  EXPECT_FALSE(session.dirty());
+
+  const QuaderApiVoidResult operation = editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("half_cut"));
+  ASSERT_TRUE(operation.ok()) << operation.error_message();
+  const QuaderApiVoidResult blocked_structural =
+      editor.modeling().begin_transform_preview(true);
+  EXPECT_FALSE(blocked_structural.ok());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_FALSE(session.dirty());
+}
+
+TEST(SceneSessionTests,
+     StructuralDragFailureThatLeavesContentObservableDoesNotMarkItClean) {
+  SceneSession session;
+  const ModelingCreateBoxResult box =
+      session.modeling().create_box_from_bounds({
+          .bounds = {.min = {-1.0F, -1.0F, -1.0F},
+                     .max = {1.0F, 1.0F, 1.0F}},
+          .name = "Structural Failure Checkpoint",
+      });
+  ASSERT_TRUE(box.ok) << box.message;
+  session.mark_clean();
+
+  EntityId leaked = kInvalidEntityId;
+  const ModelingStructuralDuplicate failing_duplicate =
+      [&session, &leaked](EditorTransaction &, ModelingSelectionMode,
+                          std::string_view) {
+        leaked = session.scene().create_entity("Observable Failed Duplicate");
+        ModelingStructuralDuplicateResult result;
+        result.ok = false;
+        result.changed = true;
+        result.message = "Injected structural rollback failure.";
+        return result;
+      };
+  const ModelingTransformDragPreview failed =
+      session.modeling().begin_transform_drag(
+          test_x_move_drag_begin_request(
+              {}, ModelingTransformOperation::Transform, true),
+          session.document_commands(), failing_duplicate, session.history());
+  EXPECT_FALSE(failed.ok);
+  EXPECT_TRUE(failed.changed);
+  ASSERT_NE(leaked, kInvalidEntityId);
+  EXPECT_TRUE(session.scene().exists(leaked));
+  EXPECT_TRUE(session.dirty());
 }
 
 TEST(ModelingSessionServiceTests,
@@ -19586,6 +21051,182 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(scene.primary_selection(), group);
 }
 
+TEST(SceneStructuralLifecycleServiceTests,
+     NormalizesExplicitRootsIntoOneDeterministicHistoryItem) {
+  SceneSession session;
+  SceneDocument &scene = session.scene();
+  const EntityId parent = scene.create_empty("First Root");
+  const EntityId child = scene.create_entity("Covered Child");
+  ASSERT_TRUE(scene.set_parent(child, parent, false));
+  const EntityId later = scene.create_empty("Later Root");
+  const EntityId unrelated = scene.create_entity("Unrelated");
+  const std::array selected{unrelated};
+  ASSERT_TRUE(scene.replace_selection(selected, unrelated));
+
+  const std::array requested{later, child, parent, later};
+  const SceneStructuralDuplicateResult duplicated =
+      session.structural_lifecycle().duplicate_hierarchy(
+          requested, ModelingSelectionMode::Object,
+          "Normalized Structural Duplicate");
+  ASSERT_TRUE(duplicated.ok) << duplicated.message;
+  ASSERT_TRUE(duplicated.changed);
+  ASSERT_EQ(duplicated.clones.size(), 2U);
+
+  std::vector<EntityId> expected_sources;
+  for (const EntityId entity : scene.entity_tree_order()) {
+    if (entity == parent || entity == later) {
+      expected_sources.push_back(entity);
+    }
+  }
+  ASSERT_EQ(expected_sources.size(), 2U);
+  EXPECT_EQ(duplicated.clones[0].source, expected_sources[0]);
+  EXPECT_EQ(duplicated.clones[1].source, expected_sources[1]);
+  EXPECT_NE(duplicated.clones[0].duplicate, kInvalidEntityId);
+  EXPECT_NE(duplicated.clones[1].duplicate, kInvalidEntityId);
+  ASSERT_NE(session.history().undo_label(), nullptr);
+  EXPECT_EQ(*session.history().undo_label(),
+            "Normalized Structural Duplicate");
+
+  const EntityId first_duplicate = duplicated.clones[0].duplicate;
+  const EntityId second_duplicate = duplicated.clones[1].duplicate;
+  ASSERT_TRUE(session.history().undo().ok);
+  EXPECT_FALSE(scene.exists(first_duplicate));
+  EXPECT_FALSE(scene.exists(second_duplicate));
+  EXPECT_EQ(scene.selected_entities(), std::vector<EntityId>{unrelated});
+  EXPECT_FALSE(session.history().can_undo());
+
+  ASSERT_TRUE(session.history().redo().ok);
+  EXPECT_TRUE(scene.exists(first_duplicate));
+  EXPECT_TRUE(scene.exists(second_duplicate));
+  EXPECT_FALSE(session.history().can_redo());
+}
+
+TEST(SceneStructuralLifecycleServiceTests,
+     GenericDocumentCommandsRejectModeledDescendantsBeforeMutation) {
+  SceneSession session;
+  SceneDocument &scene = session.scene();
+  const EntityId parent = scene.create_empty("Generic Parent");
+  const EntityId modeled_child =
+      scene.create_entity("Modeled Descendant", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_parent(modeled_child, parent, false));
+  ASSERT_TRUE(scene.set_modeling_object(
+      modeled_child, ModelingObjectComponent{.object_id = 77}));
+  ASSERT_TRUE(scene.set_selected(parent, true));
+
+  const std::vector<EntityId> before_entities = scene.entities();
+  const std::vector<EntityId> before_selection = scene.selected_entities();
+
+  const DocumentDuplicateEntityResult direct_duplicate =
+      session.document_commands().duplicate_entity(parent);
+  EXPECT_FALSE(direct_duplicate.ok);
+  EXPECT_FALSE(direct_duplicate.changed);
+  EXPECT_EQ(scene.entities(), before_entities);
+  EXPECT_EQ(scene.selected_entities(), before_selection);
+
+  const DocumentDuplicateHierarchyResult selected_duplicate =
+      session.document_commands().duplicate_selected_hierarchy();
+  EXPECT_FALSE(selected_duplicate.ok);
+  EXPECT_FALSE(selected_duplicate.changed);
+  EXPECT_EQ(scene.entities(), before_entities);
+  EXPECT_EQ(scene.selected_entities(), before_selection);
+
+  const DocumentCommandResult destroyed =
+      session.document_commands().destroy_entity(parent);
+  EXPECT_FALSE(destroyed.ok);
+  EXPECT_FALSE(destroyed.changed);
+  EXPECT_EQ(scene.entities(), before_entities);
+  EXPECT_EQ(scene.selected_entities(), before_selection);
+  EXPECT_FALSE(session.history().can_undo());
+}
+
+TEST(SceneStructuralLifecycleServiceTests,
+     DeleteUndoRestoresExactSiblingOrder) {
+  SceneSession session;
+  SceneDocument &scene = session.scene();
+  const EntityId parent = scene.create_empty("Ordered Parent");
+  const EntityId first = scene.create_entity("A");
+  const EntityId middle = scene.create_entity("B");
+  const EntityId last = scene.create_entity("C");
+  ASSERT_TRUE(scene.set_parent(first, parent, false));
+  ASSERT_TRUE(scene.set_parent(middle, parent, false));
+  ASSERT_TRUE(scene.set_parent(last, parent, false));
+  ASSERT_EQ(scene.children(parent),
+            (std::vector<EntityId>{first, middle, last}));
+
+  const std::array roots{middle};
+  const CommandResult destroyed = session.structural_lifecycle().destroy_hierarchy(
+      roots, "Ordered Structural Delete");
+  ASSERT_TRUE(destroyed.ok) << destroyed.message;
+  ASSERT_TRUE(destroyed.changed);
+  EXPECT_EQ(scene.children(parent), (std::vector<EntityId>{first, last}));
+
+  const CommandResult undone = session.history().undo();
+  ASSERT_TRUE(undone.ok) << undone.message;
+  ASSERT_TRUE(undone.changed);
+  EXPECT_EQ(scene.children(parent),
+            (std::vector<EntityId>{first, middle, last}));
+
+  const CommandResult redone = session.history().redo();
+  ASSERT_TRUE(redone.ok) << redone.message;
+  EXPECT_EQ(scene.children(parent), (std::vector<EntityId>{first, last}));
+  ASSERT_TRUE(session.history().undo().ok);
+  EXPECT_EQ(scene.children(parent),
+            (std::vector<EntityId>{first, middle, last}));
+}
+
+TEST(SceneStructuralLifecycleServiceTests,
+     DuplicateRollsBackModelingWhenSceneCloneAllocationFails) {
+  SceneSession session;
+  SceneDocument &scene = session.scene();
+  const ModelingCreateBoxResult box = session.modeling().create_box_from_bounds({
+      .bounds = {.min = {-1.0F, -1.0F, -1.0F},
+                 .max = {1.0F, 1.0F, 1.0F}},
+      .name = "Rollback Box",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  const EntityId parent = scene.create_empty("Rollback Parent");
+  ASSERT_TRUE(scene.set_parent(box.object.entity, parent, false));
+  const EntityId unrelated = scene.create_entity("Unrelated");
+  const std::array selected{unrelated};
+  ASSERT_TRUE(scene.replace_selection(selected, unrelated));
+
+  const std::vector<EntityId> before_entities = scene.entities();
+  const std::vector<ModelingObjectRecord> before_objects =
+      session.modeling().objects();
+  ASSERT_EQ(before_objects.size(), 1U);
+
+  std::size_t allocations = 0U;
+  scene.set_editor_object_id_allocator(
+      [&allocations](EditorObjectId requested) {
+        ++allocations;
+        if (allocations == 1U) {
+          return requested != kInvalidEditorObjectId
+                     ? requested
+                     : EditorObjectId{900001U};
+        }
+        return kInvalidEditorObjectId;
+      });
+  const SceneStructuralDuplicateResult duplicated =
+      session.structural_lifecycle().duplicate_entity(parent);
+  scene.set_editor_object_id_allocator({});
+
+  EXPECT_FALSE(duplicated.ok);
+  EXPECT_FALSE(duplicated.changed)
+      << "structural duplicate status: " << duplicated.message;
+  EXPECT_GT(allocations, 1U);
+  EXPECT_EQ(scene.entities(), before_entities);
+  EXPECT_EQ(scene.selected_entities(), std::vector<EntityId>{unrelated});
+  const std::vector<ModelingObjectRecord> after_objects =
+      session.modeling().objects();
+  ASSERT_EQ(after_objects.size(), before_objects.size());
+  EXPECT_EQ(after_objects.front().modeling_object_id,
+            before_objects.front().modeling_object_id);
+  EXPECT_EQ(after_objects.front().entity, before_objects.front().entity);
+  EXPECT_EQ(after_objects.front().mesh, before_objects.front().mesh);
+  EXPECT_FALSE(session.history().can_undo());
+  EXPECT_FALSE(session.history().can_redo());
+}
+
 TEST(ModelingSessionServiceTests,
      GroupShiftDragDuplicateClonesHierarchyWithoutRootMeshStrays) {
   SceneDocument scene;
@@ -19639,15 +21280,21 @@ TEST(ModelingSessionServiceTests,
       *scene.transform(left.object.entity);
   const TransformComponent source_right_transform =
       *scene.transform(right.object.entity);
-  const ModelingCommandResult duplicate =
-      service.duplicate_selected_hierarchy_for_group_drag(commands);
+  SceneStructuralLifecycleService structural_lifecycle(scene, history,
+                                                        commands, service);
+  const std::array roots{group};
+  const SceneStructuralDuplicateResult duplicate =
+      structural_lifecycle.duplicate_hierarchy(
+          roots, ModelingSelectionMode::Group, "Duplicate Group Selection");
   ASSERT_TRUE(duplicate.ok) << duplicate.message;
   ASSERT_TRUE(duplicate.changed);
+  ASSERT_EQ(duplicate.clones.size(), 1u);
   EXPECT_EQ(service.selection_mode(), ModelingSelectionMode::Group);
   ASSERT_EQ(scene.entities().size(), 6u);
   ASSERT_EQ(service.objects().size(), 4u);
   ASSERT_EQ(scene.selected_entities().size(), 1u);
-  const EntityId duplicate_group = scene.selected_entities().front();
+  const EntityId duplicate_group = duplicate.clones.front().duplicate;
+  EXPECT_EQ(scene.selected_entities().front(), duplicate_group);
   ASSERT_NE(duplicate_group, group);
   EXPECT_EQ(scene.parent(duplicate_group), kInvalidEntityId);
   EXPECT_EQ(scene.modeling_object(duplicate_group), nullptr);

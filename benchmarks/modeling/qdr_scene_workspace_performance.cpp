@@ -488,7 +488,6 @@ FixtureCounts analyze_fixture(const quader::SceneContentDocument &document) {
 }
 
 void finish_fixture(quader::SceneContentDocument &document) {
-  (void)document.synchronize_object_records_with_scene();
   const quader::SceneContentDocumentIdentityReport identities =
       document.validate_object_identity_invariants();
   require(identities.ok(),

@@ -7,7 +7,6 @@
 #include "render/scene_render_bridge.hpp"
 
 #include "diagnostics/profile.hpp"
-#include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/scene_render_extraction.hpp"
 
@@ -66,6 +65,7 @@ void SceneRenderBridge::initialize(
 
 void SceneRenderBridge::shutdown() {
   ++tool_preview_submission_revision_;
+  overlay_submission_coordinator_.invalidate_all();
   if (engine_) {
     tool_preview_cache_.shutdown();
     sync_service_.shutdown();
@@ -123,6 +123,7 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   tool_preview_suppressed_entities_.clear();
   tool_preview_occurrence_suppressions_.clear();
   tool_preview_overlay_suppression_dirty_ = true;
+  overlay_submission_coordinator_.invalidate_all();
   // Preview and viewport-overlay proxies may own material instances that
   // still reference the outgoing scene's texture cache. Destroy them before
   // the scene sync service invalidates those textures.
@@ -316,6 +317,7 @@ void SceneRenderBridge::set_active_overlay_viewports(
     overlay_cache_.clear_slot(index);
     dynamic_overlay_cache_.clear_slot(index);
   }
+  overlay_submission_coordinator_.set_active_viewports(viewport_mask);
   active_overlay_viewport_mask_ = viewport_mask;
 }
 
@@ -399,22 +401,6 @@ void SceneRenderBridge::sync_scene_asset_overlays(
   tool_preview_overlay_suppression_dirty_ = false;
 }
 
-ViewportOverlayFrame SceneRenderBridge::build_scene_overlay_frame(
-    ViewportOverlayFrame base_frame,
-    const RenderOverlaySelectionSnapshot &snapshot,
-    const ViewportSceneOverlayFrameRequest &request) const {
-  QDR_PROFILE_FUNCTION();
-  ViewportOverlayFrame frame = ViewportSceneOverlayBuilder::build_selection_frame(
-      std::move(base_frame), snapshot, request.point_light_gizmos_visible,
-      request.selection_mode, request.include_tool_overlays,
-      request.selection_overlays_visible);
-  if (request.wireframe_pane) {
-    frame = ViewportSceneOverlayBuilder::strip_wireframe_selection_fills(
-        std::move(frame), request.selection_mode);
-  }
-  return frame;
-}
-
 ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_meshes(
     std::vector<RenderToolPreviewMeshRecord> meshes) {
   QDR_PROFILE_FUNCTION();
@@ -486,38 +472,36 @@ ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_meshes(
   return preview_result;
 }
 
-void SceneRenderBridge::set_overlay_frame(ViewportOverlayFrame frame,
-                                          ViewportOverlayCamera camera) {
-  QDR_PROFILE_FUNCTION();
-  (void)overlay_cache_.set_overlay_frame(std::move(frame), camera);
+ViewportOverlaySubmissionResult SceneRenderBridge::submit_viewport_overlay(
+    ViewportOverlaySubmissionRequest request,
+    const ViewportSettings &settings) {
+  return overlay_submission_coordinator_.submit(std::move(request), settings,
+                                                *this);
 }
 
-void SceneRenderBridge::set_overlay_frame(std::size_t viewport_index,
-                                          std::uint8_t layer_mask,
-                                          ViewportOverlayFrame frame,
-                                          ViewportOverlayCamera camera) {
-  QDR_PROFILE_FUNCTION();
+ViewportOverlayCameraUpdate SceneRenderBridge::update_overlay_cameras(
+    std::size_t viewport_index, std::uint8_t layer_mask,
+    ViewportOverlayCamera camera) {
+  return {
+      .persistent_available = overlay_cache_.update_overlay_camera(
+          viewport_index, layer_mask, camera),
+      .dynamic_available = dynamic_overlay_cache_.update_overlay_camera(
+          viewport_index, layer_mask, camera),
+  };
+}
+
+void SceneRenderBridge::submit_persistent_overlay(
+    std::size_t viewport_index, std::uint8_t layer_mask,
+    ViewportOverlayFrame frame, ViewportOverlayCamera camera) {
   (void)overlay_cache_.set_overlay_frame(viewport_index, layer_mask,
                                          std::move(frame), camera);
 }
 
-void SceneRenderBridge::set_dynamic_overlay_frame(
+void SceneRenderBridge::submit_dynamic_overlay(
     std::size_t viewport_index, std::uint8_t layer_mask,
     ViewportOverlayFrame frame, ViewportOverlayCamera camera) {
-  QDR_PROFILE_FUNCTION();
   (void)dynamic_overlay_cache_.set_overlay_frame(
       viewport_index, layer_mask, std::move(frame), camera);
-}
-
-bool SceneRenderBridge::update_overlay_camera(std::size_t viewport_index,
-                                              std::uint8_t layer_mask,
-                                              ViewportOverlayCamera camera) {
-  QDR_PROFILE_FUNCTION();
-  const bool persistent_updated = overlay_cache_.update_overlay_camera(
-      viewport_index, layer_mask, camera);
-  (void)dynamic_overlay_cache_.update_overlay_camera(viewport_index,
-                                                     layer_mask, camera);
-  return persistent_updated;
 }
 
 } // namespace quader

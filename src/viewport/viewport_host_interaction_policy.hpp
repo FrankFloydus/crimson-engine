@@ -287,8 +287,10 @@ inline void reconcile_bounded_wheel_remainder(bool at_minimum,
 }
 
 /**
- * Gives a pending multi-chord sequence ownership of its continuation before a
- * stateless single-chord action is considered.
+ * Routes every edge through the stateful keybinding dispatcher before an
+ * optional stateless fallback. A pending sequence owns even an unmatched
+ * continuation so the continuation cannot accidentally trigger a fresh
+ * single-chord action.
  */
 template <typename HasPendingChord, typename TryStatelessAction,
           typename DispatchBinding>
@@ -297,14 +299,14 @@ template <typename HasPendingChord, typename TryStatelessAction,
     HasPendingChord &&has_pending_chord,
     TryStatelessAction &&try_stateless_action,
     DispatchBinding &&dispatch_binding) {
-  if (has_pending_chord()) {
-    (void)dispatch_binding(chord, kind);
+  const bool pending_before = has_pending_chord();
+  if (dispatch_binding(chord, kind)) {
     return true;
   }
-  if (try_stateless_action(chord, kind)) {
+  if (pending_before) {
     return true;
   }
-  return dispatch_binding(chord, kind);
+  return try_stateless_action(chord, kind);
 }
 
 /// Shows an unlocked placement marker only in its interaction pane and a

@@ -265,6 +265,12 @@ enum class ModelingActiveSelectionKind {
   Light,
 };
 
+/** Identifies an editor-owned component selection projected with mesh selection. */
+enum class ModelingSubSelectionKind {
+  None,
+  CurveControl,
+};
+
 /**
  * Represents a Modeling Ray value used by the modeling domain.
  */
@@ -413,12 +419,28 @@ struct ModelingComponentSelectionRequest {
   int active_face = -1;
 };
 
+/** Applies full click policy to one component hit resolved by another owner. */
+struct ModelingResolvedComponentSelectionRequest {
+  int modeling_object_id = -1;
+  ModelingSelectionMode mode = ModelingSelectionMode::Vertex;
+  ModelingActiveSelectionKind kind = ModelingActiveSelectionKind::None;
+  int vertex = -1;
+  std::pair<int, int> edge = {-1, -1};
+  int face = -1;
+  ModelingSelectionEdit edit = ModelingSelectionEdit::Replace;
+  int click_count = 1;
+  bool edge_loop_select = false;
+  bool preserve_selection_on_selected_hit = false;
+  bool preserve_existing_component_selection_on_hit = false;
+};
+
 /**
  * Stores the Modeling Direct Hover Request data contract used by the modeling
  * domain.
  */
 struct ModelingDirectHoverRequest {
   int modeling_object_id = -1;
+  int candidate_object_id = -1;
   ModelingActiveSelectionKind kind = ModelingActiveSelectionKind::None;
   int vertex_id = -1;
   std::pair<int, int> edge = {-1, -1};
@@ -475,6 +497,37 @@ struct ModelingBoxSelectRequest {
   bool select_backfaces = true;
 };
 
+/** One actual projected geometry point that caused a rectangle hit. */
+struct ModelingSelectionVisibilityWitness {
+  QVec2 screen_position;
+  QVec3 world_position;
+
+  [[nodiscard]] bool operator==(
+      const ModelingSelectionVisibilityWitness &other) const noexcept {
+    return screen_position.x == other.screen_position.x &&
+           screen_position.y == other.screen_position.y &&
+           world_position.x == other.world_position.x &&
+           world_position.y == other.world_position.y &&
+           world_position.z == other.world_position.z;
+  }
+};
+
+/** One nonmutating polygon selection candidate with exact pick metrics. */
+struct ModelingSelectionHit {
+  EntityId entity = kInvalidEntityId;
+  int modeling_object_id = kInvalidModelingObjectId;
+  ModelingActiveSelectionKind kind = ModelingActiveSelectionKind::None;
+  int vertex_id = -1;
+  int edge_a = -1;
+  int edge_b = -1;
+  int face_id = -1;
+  double ray_distance = 0.0;
+  double pick_distance = 0.0;
+  std::optional<QVec3> world_position;
+  std::vector<ModelingSelectionVisibilityWitness> visibility_witnesses;
+  std::string signature;
+};
+
 /**
  * Stores the Modeling Hover Request data contract used by the modeling domain.
  */
@@ -506,6 +559,7 @@ struct ModelingHoverSummary {
   bool changed = false;
   ModelingHoverTarget target;
   bool target_selected = false;
+  int candidate_object_id = -1;
 };
 
 /**
@@ -524,6 +578,10 @@ struct ModelingSelectionSummary {
   std::uint32_t selected_vertex_count = 0;
   std::uint32_t selected_edge_count = 0;
   std::uint32_t selected_face_count = 0;
+  ModelingSubSelectionKind sub_selection_kind =
+      ModelingSubSelectionKind::None;
+  std::uint32_t selected_sub_element_count = 0;
+  std::uint64_t sub_selection_revision = 0;
   std::uint64_t content_revision = 0;
   std::uint64_t selection_revision = 0;
 };

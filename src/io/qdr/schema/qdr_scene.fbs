@@ -134,6 +134,9 @@ table ProjectMaterialSlotBinding {
 
 table GeometryPayload {
   kind:GeometryKind = CompiledMesh;
+  // Reader-only schema 1-3 authored-topology representation. Current writers
+  // leave the CSR fields through hard_normal_edges empty and use
+  // authored_payload instead.
   next_vertex_id:uint = 1;
   next_face_id:uint = 1;
   polygon_vertices:[PolygonVertex];
@@ -329,6 +332,8 @@ table ViewportCameraPose {
   up:Vec3;
 }
 
+// Legacy read-only compatibility record. New writers leave ScenePayload.objects
+// absent; Entity is the sole scene-object truth.
 table ObjectRecord {
   editor_object_id:ulong;
   scene_entity:ulong;

@@ -6,10 +6,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "api/quader_selection_api.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/selection/editor_selection_service.hpp"
+#include "editor/tools/viewport_curve_interaction_port.hpp"
 #include "editor/viewport/viewport_interaction_frame.hpp"
+#include "editor/viewport/viewport_scene_hit_policy.hpp"
 #include "viewport/curve_tool_preview.hpp"
+#include "viewport/viewport_pointer_gesture.hpp"
 
 #include <editor/interactions/selection_box.hpp>
 #include <editor/interactions/selection_edit.hpp>
@@ -20,7 +23,6 @@
 namespace quader {
 
 class QuaderEditorApi;
-class CurveToolService;
 class ViewportToolHoverPort;
 struct ViewportToolResult;
 
@@ -40,6 +42,12 @@ struct ViewportSelectionInteractionWorkStats {
   std::uint64_t paint_pick_count = 0;
 };
 
+/** Carries a checked native selection mutation and its restored/current view. */
+struct ViewportSelectionApplyResult {
+  ModelingCommandResult command;
+  QuaderSelectionSummary selection;
+};
+
 /**
  * Owns selection fallback, paint selection, and hover sequencing for viewport frames.
  */
@@ -56,27 +64,33 @@ public:
                       const ViewportToolResult &tool_result,
                       const ViewportBeforeToolInteractionResult &before_tool,
                       ViewportToolHoverPort *tool_hover,
-                      CurveToolService *curve = nullptr);
+                      ViewportCurveInteractionPort *curve = nullptr);
     [[nodiscard]] QuaderSelectionSummary
     pick_context_menu_target(QuaderEditorApi &editor,
                              const ViewportInteractionFrame &frame);
     [[nodiscard]] ViewportSelectionMarquee marquee() const;
-    /// Reports ownership of a pending click, marquee, or held paint gesture.
+    /// Reports ownership of a deferred click, marquee, or held paint gesture.
     [[nodiscard]] bool pointer_interaction_active() const {
-      return box_state_.active || paint_selection_active_;
+      return pending_first_pick_.has_value() || box_state_.active ||
+             box_pointer_.has_value() || paint_selection_active_ ||
+             box_release_suppression_.active();
     }
     [[nodiscard]] const ViewportSelectionInteractionWorkStats &
     work_stats() const {
       return work_stats_;
     }
+    [[nodiscard]] const ModelingCommandResult &
+    last_selection_command_result() const {
+      return last_selection_command_result_;
+    }
 
 private:
   /// Preserves the first click's selection while its native double is pending.
   struct DepthClickBaseline {
-    QuaderSelectionBoxBaseline selection;
+    ViewportPointerGesture pointer;
+    EditorSelectionBoxBaseline selection;
     const ViewportCameraController *camera = nullptr;
     QuaderRay ray;
-    QVec2 local = {};
     QVec2 viewport_size = {};
     SceneSessionId scene_session_id;
     ViewportToolId tool = ViewportToolId::Select;
@@ -87,8 +101,6 @@ private:
     std::uint64_t keybindings_revision = 0;
     bool double_click_pending = false;
     bool delay_single_click = false;
-    ViewportModifiers click_modifiers = {};
-    double deadline_seconds = 0.0;
 
     [[nodiscard]] bool matches_context(const ViewportInteractionFrame &frame,
                                        SceneSessionId current_scene) const;
@@ -98,36 +110,41 @@ private:
 
   /// Freezes a completed single pick until native double-click disambiguation.
   struct PendingFirstPick {
-    QuaderPickSelectRequest request;
-    std::optional<EntityId> billboard_entity;
-    std::optional<EntityId> curve_entity;
-    ViewportModifiers modifiers = {};
-    QVec2 local = {};
-    QuaderHoverTarget hovered_before_selection;
+    ViewportPointerGesture pointer;
+    ModelingPickSelectRequest request;
+    std::optional<ResolvedSelectionTarget> winner;
+    std::optional<ResolvedSelectionTarget> hovered_before_selection;
+    EditorSubSelectionKind miss_sub_selection_kind =
+        EditorSubSelectionKind::None;
   };
 
   /// Defers hover invalidation until the after-tool selection phase.
   struct PendingPickFeedback {
     QVec2 local = {};
-    QuaderHoverTarget hovered_before_selection;
+    std::optional<ResolvedSelectionTarget> hovered_before_selection;
   };
 
-  QuaderSelectionSummary commit_pending_pick(
+  ViewportSelectionApplyResult commit_pending_pick(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame);
   [[nodiscard]] bool pending_click_matches_context(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame) const;
-  std::optional<QuaderSelectionSummary> commit_pick_selection(
+  std::optional<ViewportSelectionApplyResult> commit_pick_selection(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
       QVec2 local_mouse, int click_count,
       bool preserve_selection_on_miss = false,
       bool preserve_selection_on_selected_hit = false,
       bool preserve_existing_component_selection_on_hit = false,
       bool cycle_depth = false, ViewportModifiers cycle_modifiers = {},
-      QuaderHoverTarget hovered_before_selection = {});
+      std::optional<ResolvedSelectionTarget> hovered_before_selection =
+          std::nullopt,
+      ViewportCurveInteractionPort *curve = nullptr,
+      bool curve_controls_only = false);
   void clear_curve_control_box();
 
   bool hover_clear_issued_ = false;
   quader_editor_core::SelectionBoxState box_state_;
+  std::optional<ViewportPointerGesture> box_pointer_;
+  ViewportPointerReleaseSuppression box_release_suppression_;
   quader_editor_core::SelectionEditOperation box_edit_ =
       quader_editor_core::SelectionEditOperation::Replace;
   bool box_cycle_depth_ = false;
@@ -135,16 +152,17 @@ private:
   std::optional<DepthClickBaseline> depth_click_baseline_;
   std::optional<PendingFirstPick> pending_first_pick_;
   std::optional<PendingPickFeedback> pending_pick_feedback_;
-  std::optional<QuaderHoverTarget> box_hovered_before_selection_;
-  std::optional<QuaderSelectionBoxBaseline> box_baseline_;
-  std::optional<CurveControlSelection> curve_box_baseline_;
+  std::optional<ResolvedSelectionTarget> box_hovered_before_selection_;
+  std::optional<EditorSelectionBoxBaseline> box_baseline_;
   bool curve_control_box_active_ = false;
   std::optional<ViewportSelectionMarquee> committed_marquee_;
-  std::optional<QuaderHoverTarget> hover_suppressed_target_;
+  std::optional<ResolvedSelectionTarget> hover_suppressed_target_;
   bool paint_selection_active_ = false;
   bool viewport_hover_state_initialized_ = false;
   bool viewport_hovered_last_frame_ = false;
   ViewportSelectionInteractionWorkStats work_stats_;
+  ModelingCommandResult last_selection_command_result_{.ok = true};
+  SceneSurfaceQueryScratch scene_surface_scratch_;
 };
 
 } // namespace quader

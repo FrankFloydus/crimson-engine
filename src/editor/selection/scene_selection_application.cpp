@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <list>
+#include <ranges>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -112,6 +113,30 @@ SceneSelectionState make_scene_selection(const SceneDocument &scene,
 bool same_scene_selection(const SceneSelectionState &left,
                           const SceneSelectionState &right) {
   return left.active == right.active && left.selected == right.selected;
+}
+
+SceneModelingProjectionCheckpoint capture_scene_selection_checkpoint(
+    const SceneDocument &scene, const SceneSelectionState &before,
+    const SceneSelectionState &after) {
+  std::vector<EntityId> participants = before.selected;
+  participants.insert(participants.end(), after.selected.begin(),
+                      after.selected.end());
+  participants.push_back(before.active);
+  participants.push_back(after.active);
+  std::ranges::sort(participants);
+  participants.erase(
+      std::remove(participants.begin(), participants.end(), kInvalidEntityId),
+      participants.end());
+  participants.erase(std::unique(participants.begin(), participants.end()),
+                     participants.end());
+  return scene.capture_modeling_projection_checkpoint(
+      participants, SceneModelingProjectionDomain::Selection);
+}
+
+bool restore_scene_selection_checkpoint(
+    SceneDocument &scene,
+    const SceneModelingProjectionCheckpoint &checkpoint) {
+  return scene.restore_modeling_projection_checkpoint(checkpoint);
 }
 
 bool scene_entity_selectable_for_user_selection(const SceneDocument &scene,

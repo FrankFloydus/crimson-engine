@@ -8,15 +8,12 @@
 
 #include "render/instance_batch_planner.hpp"
 #include "render/mesh_renderable_proxy.hpp"
+#include "render/overlay/instanced_wire_render_backend.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <unordered_map>
 #include <vector>
-
-#include <utils/Entity.h>
 
 namespace filament {
 class Engine;
@@ -105,8 +102,8 @@ public:
   bool sync(const RenderOverlaySelectedObjectSnapshot &snapshot);
 
   [[nodiscard]] bool initialized() const {
-    return engine_ != nullptr && scene_ != nullptr && mesh_factory_ != nullptr &&
-           fill_material_ != nullptr && line_material_ != nullptr;
+    return wire_backend_.initialized() && mesh_factory_ != nullptr &&
+           fill_material_ != nullptr;
   }
 
   [[nodiscard]] const InstanceSelectionOverlayCacheStats &stats() const {
@@ -115,42 +112,28 @@ public:
 
 private:
   struct PreparedPlans;
-  struct WireGeometryResource;
-  struct WireBatchProxy;
+  using WireBatchProxy = InstancedWireRenderBackend::BatchProxy;
 
   [[nodiscard]] PreparedPlans prepare(
       const RenderOverlaySelectedObjectSnapshot &snapshot) const;
   bool rebuild(const PreparedPlans &prepared,
                const RenderOverlaySelectedObjectSnapshot &snapshot);
   bool update_transforms(const PreparedPlans &prepared);
-  WireGeometryResource *acquire_wire_geometry(
-      const RenderOverlayInstanceSelectionWireRecord &record);
-  WireBatchProxy create_wire_batch(
-      const RenderOverlayInstanceSelectionWireRecord &record,
-      const RenderInstanceBatchChunk &chunk,
-      ViewportCameraClipPlanes clip_planes);
-  bool update_wire_batch(WireBatchProxy &proxy,
-                         const RenderInstanceBatchChunk &chunk);
-  void destroy_wire_batch(WireBatchProxy &proxy);
-  void destroy_wire_resources();
-  void prune_unused_wire_resources();
+  void refresh_wire_resource_stats();
   void update_wire_clip_planes(ViewportCameraClipPlanes clip_planes);
 
-  filament::Engine *engine_ = nullptr;
-  filament::Scene *scene_ = nullptr;
+  InstancedWireRenderBackend wire_backend_;
   MeshRenderableFactory *mesh_factory_ = nullptr;
   filament::Material *fill_material_ = nullptr;
-  filament::Material *line_material_ = nullptr;
   std::size_t max_instances_per_chunk_ = 1u;
   RenderInstanceBatchPlan fill_plan_;
   RenderInstanceBatchPlan wire_plan_;
   std::vector<MeshRenderableProxy> fill_proxies_;
   std::vector<WireBatchProxy> wire_proxies_;
-  std::unordered_map<std::uint64_t,
-                     std::vector<std::unique_ptr<WireGeometryResource>>>
-      wire_resources_;
   ViewportCameraClipPlanes clip_planes_;
-  std::uint64_t synced_local_visibility_revision_ = 0u;
+  RenderSourceStamp synced_source_stamp_;
+  std::uint64_t synced_wire_style_signature_ = 0u;
+  bool has_synced_ = false;
   InstanceSelectionOverlayCacheStats stats_;
 };
 

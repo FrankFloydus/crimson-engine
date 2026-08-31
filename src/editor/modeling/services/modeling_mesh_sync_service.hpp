@@ -18,30 +18,15 @@
 namespace quader {
 
 class AssetRegistry;
-class AssetRegistryProjectionCheckpoint;
 struct CurveAsset;
 struct MaterialComponent;
 struct MeshComponent;
 struct ModelingObjectComponent;
 struct ModelingObjectSceneIdentity;
 class SceneDocument;
-class SceneProjectionCheckpoint;
 struct SceneTransformAssignment;
-class SceneModelingSyncService;
 struct TransformComponent;
 struct TextureMappingComponent;
-
-/// Reports sharing and compilation work from the latest mesh projection pass.
-struct ModelingMeshSyncStats final {
-  std::uint64_t participant_count = 0u;
-  std::uint64_t unique_topology_count = 0u;
-  std::uint64_t unique_authored_topology_bytes = 0u;
-  std::uint64_t unique_compiled_payload_bytes = 0u;
-  std::uint64_t compiled_topology_count = 0u;
-  std::uint64_t reused_compilation_count = 0u;
-  std::uint64_t compile_time_microseconds = 0u;
-  bool skipped_unchanged = false;
-};
 
 /**
  * Owns the modeling runtime to SceneDocument / AssetRegistry synchronization boundary.
@@ -54,10 +39,6 @@ class ModelingMeshSyncService {
 public:
   [[nodiscard]] static bool should_force_refresh(bool preview_active,
                                                  bool preview_finished);
-
-  [[nodiscard]] const ModelingMeshSyncStats &last_sync_stats() const {
-    return last_sync_stats_;
-  }
 
   [[nodiscard]] std::optional<MeshAsset>
   compile_object_mesh(const quader_editor_core::PolygonObject &object) const;
@@ -117,7 +98,15 @@ public:
                                                    EntityId entity) const;
   [[nodiscard]] bool notify_projected_curve_changed(SceneDocument &scene,
                                                     EntityId entity) const;
-  void apply_scene_identity_to_entity(
+  [[nodiscard]] bool apply_scene_identity_to_entity(
+      SceneDocument &scene, EntityId entity,
+      const ModelingObjectSceneIdentity &identity,
+      bool include_selection = true,
+      bool include_hierarchy_placement = true) const;
+  [[nodiscard]] bool apply_scene_identity_parent(
+      SceneDocument &scene, EntityId entity,
+      const ModelingObjectSceneIdentity &identity) const;
+  [[nodiscard]] bool apply_scene_identity_sibling_ordinal(
       SceneDocument &scene, EntityId entity,
       const ModelingObjectSceneIdentity &identity) const;
   [[nodiscard]] bool set_entity_material(
@@ -135,38 +124,15 @@ public:
   void remove_unreferenced_history_curve_assets(
       const SceneDocument &scene, AssetRegistry &assets,
       std::span<const AssetId> curve_assets) const;
-  void apply_scene_identity_to_duplicate_entity(
+  [[nodiscard]] bool apply_scene_identity_to_duplicate_entity(
       SceneDocument &scene, EntityId entity,
       const ModelingObjectSceneIdentity &identity) const;
-  void apply_scene_transforms(
+  [[nodiscard]] bool apply_scene_transforms(
       SceneDocument &scene,
       std::span<const SceneTransformAssignment> transforms) const;
-  [[nodiscard]] bool restore_projected_asset_checkpoint(
-      AssetRegistry &assets,
-      const AssetRegistryProjectionCheckpoint &checkpoint) const;
-  [[nodiscard]] bool restore_projected_scene_checkpoint(
-      SceneDocument &scene, const SceneProjectionCheckpoint &checkpoint) const;
-  void establish_loaded_scene_sync_baseline(
-      const quader_editor_core::EditorSession &session,
-      SceneModelingSyncService &scene_sync) const;
-  [[nodiscard]] bool sync_scene_objects_from_modeling(
-      const quader_editor_core::EditorSession &session, SceneDocument &scene,
-      AssetRegistry &assets, SceneModelingSyncService &scene_sync,
-      bool force = false) const;
-  [[nodiscard]] ModelingCreateBoxResult create_scene_object_from_latest(
-      const quader_editor_core::EditorSession &session, SceneDocument &scene,
-      AssetRegistry &assets, SceneModelingSyncService &scene_sync,
-      const std::string &name, const std::string &message) const;
   [[nodiscard]] bool place_created_scene_object(
       SceneDocument &scene, EntityId entity, EntityId parent,
       const TransformComponent &local_transform) const;
-  void rollback_created_scene_object(
-      SceneDocument &scene, AssetRegistry &assets,
-      SceneModelingSyncService &scene_sync, int modeling_object_id,
-      EntityId entity, AssetId mesh) const;
-
-private:
-  mutable ModelingMeshSyncStats last_sync_stats_;
 };
 
 } // namespace quader

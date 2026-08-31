@@ -144,6 +144,40 @@ bool face_can_be_picked(const Face& face, const PickOptions& options)
     return !options.hides_material_slot(face.material_slot);
 }
 
+void append_face_pick_geometry(
+    const Document &document, const Face &face, const PickOptions &options,
+    std::vector<PickFaceTriangle> &result) {
+    if (!face_can_be_picked(face, options)) {
+        return;
+    }
+
+    const quader::QVec3 normal = face_normal(document, face);
+    const std::vector<Triangle> triangles =
+        triangulate_face_local_indices(document, face);
+    for (const Triangle &triangle : triangles) {
+        const Vertex *a = find_vertex(document, face.vertices[triangle.a]);
+        const Vertex *b = find_vertex(document, face.vertices[triangle.b]);
+        const Vertex *c = find_vertex(document, face.vertices[triangle.c]);
+        if (a == nullptr || b == nullptr || c == nullptr) {
+            continue;
+        }
+
+        const quader::QVec3 bounds_min =
+            min_vec(min_vec(a->position, b->position), c->position);
+        const quader::QVec3 bounds_max =
+            max_vec(max_vec(a->position, b->position), c->position);
+        result.push_back({
+            face.id,
+            a->position,
+            b->position,
+            c->position,
+            normal,
+            bounds_min,
+            bounds_max,
+        });
+    }
+}
+
 bool component_pick_is_better(
     float pick_distance,
     float ray_distance,
@@ -171,7 +205,9 @@ bool component_pick_is_better(
 
 bool component_depth_is_occluded(float component_distance, const std::optional<FaceRayHit>& surface_hit)
 {
-    return surface_hit.has_value() && component_distance > surface_hit->distance + 0.001F;
+    return surface_hit.has_value() &&
+        component_distance >
+            surface_hit->distance + kComponentPickOcclusionTolerance;
 }
 
 bool vertex_pick_is_occluded(const Document& document, ElementId vertex_id, float ray_distance, const std::optional<FaceRayHit>& surface_hit)
@@ -733,9 +769,92 @@ PickResult DocumentPickFacts::pick_element(
 
 } // namespace document_internal
 
+/** Owns the implementation-only pick fact cache behind the neutral facade. */
+class DocumentPickQuery::Impl final {
+public:
+    Impl(const Document &document, const PickOptions &options)
+        : facts(document, options) {}
+
+    document_internal::DocumentPickFacts facts;
+};
+
+DocumentPickQuery::DocumentPickQuery(
+    const Document &document, const PickOptions &options)
+    : impl_(std::make_unique<Impl>(document, options)) {}
+
+DocumentPickQuery::DocumentPickQuery(DocumentPickQuery &&) noexcept = default;
+
+DocumentPickQuery &
+DocumentPickQuery::operator=(DocumentPickQuery &&) noexcept = default;
+
+DocumentPickQuery::~DocumentPickQuery() = default;
+
+PickResult DocumentPickQuery::surface_hit(const Ray &local_ray) {
+    return impl_->facts.surface_hit(local_ray);
+}
+
+PickResult DocumentPickQuery::pick_element(
+    const Ray &local_ray,
+    const std::optional<PickResult> *precomputed_surface_hit) {
+    return impl_->facts.pick_element(local_ray, precomputed_surface_hit);
+}
+
+PickResult DocumentPickQuery::pick_element(
+    const Ray &local_ray, SelectionMode mode,
+    const std::optional<PickResult> *precomputed_surface_hit) {
+    return impl_->facts.pick_element(local_ray, mode, precomputed_surface_hit);
+}
+
+bool DocumentPickQuery::vertex_can_be_picked(ElementId vertex_id) const {
+    return impl_->facts.vertex_can_be_picked(vertex_id);
+}
+
+bool DocumentPickQuery::edge_can_be_picked(Edge edge) const {
+    return impl_->facts.edge_can_be_picked(edge);
+}
+
+bool DocumentPickQuery::vertex_has_incident_face(ElementId vertex_id) const {
+    return impl_->facts.vertex_has_incident_face(vertex_id);
+}
+
+bool DocumentPickQuery::edge_has_incident_face(Edge edge) const {
+    return impl_->facts.edge_has_incident_face(edge);
+}
+
+bool DocumentPickQuery::face_is_front_facing_pickable(
+    ElementId face_id, const Ray &ray) const {
+    return impl_->facts.face_is_front_facing_pickable(face_id, ray);
+}
+
+bool DocumentPickQuery::vertex_has_front_facing_pickable_face(
+    ElementId vertex_id, const Ray &ray) const {
+    return impl_->facts.vertex_has_front_facing_pickable_face(vertex_id, ray);
+}
+
+bool DocumentPickQuery::edge_has_front_facing_pickable_face(
+    Edge edge, const Ray &ray, bool include_edge_on) const {
+    return impl_->facts.edge_has_front_facing_pickable_face(
+        edge, ray, include_edge_on);
+}
+
+ElementId DocumentPickQuery::best_edge_context_face_id(
+    Edge edge, const Ray &ray) const {
+    return impl_->facts.best_edge_context_face_id(edge, ray);
+}
+
+ElementId DocumentPickQuery::edge_pick_context_face_id(
+    Edge edge, const Ray &ray,
+    const std::optional<PickResult> &surface_hit) const {
+    return impl_->facts.edge_pick_context_face_id(edge, ray, surface_hit);
+}
+
+std::span<const Edge> DocumentPickQuery::edges() const noexcept {
+    return impl_->facts.edges();
+}
+
 std::vector<PickFaceTriangle> build_face_pick_geometry(const Document& document)
 {
-    return build_face_pick_geometry(document, {});
+    return build_face_pick_geometry(document, PickOptions{});
 }
 
 std::vector<PickFaceTriangle> build_face_pick_geometry(const Document& document, const PickOptions& options)
@@ -744,32 +863,18 @@ std::vector<PickFaceTriangle> build_face_pick_geometry(const Document& document,
     std::vector<PickFaceTriangle> result;
     result.reserve(document.faces.size());
     for (const Face& face : document.faces) {
-        if (!face_can_be_picked(face, options)) {
-            continue;
-        }
+        append_face_pick_geometry(document, face, options, result);
+    }
+    return result;
+}
 
-        const quader::QVec3 normal = face_normal(document, face);
-        const std::vector<Triangle> triangles = triangulate_face_local_indices(document, face);
-        for (const Triangle& triangle : triangles) {
-            const Vertex* a = find_vertex(document, face.vertices[triangle.a]);
-            const Vertex* b = find_vertex(document, face.vertices[triangle.b]);
-            const Vertex* c = find_vertex(document, face.vertices[triangle.c]);
-            if (a == nullptr || b == nullptr || c == nullptr) {
-                continue;
-            }
-
-            const quader::QVec3 bounds_min = min_vec(min_vec(a->position, b->position), c->position);
-            const quader::QVec3 bounds_max = max_vec(max_vec(a->position, b->position), c->position);
-            result.push_back({
-                face.id,
-                a->position,
-                b->position,
-                c->position,
-                normal,
-                bounds_min,
-                bounds_max,
-            });
-        }
+std::vector<PickFaceTriangle> build_face_pick_geometry(
+    const Document &document, ElementId face_id, const PickOptions &options) {
+    QDR_PROFILE_SCOPE("qdr_document.build_single_face_pick_geometry");
+    std::vector<PickFaceTriangle> result;
+    const Face *face = find_face(document, face_id);
+    if (face != nullptr) {
+        append_face_pick_geometry(document, *face, options, result);
     }
     return result;
 }

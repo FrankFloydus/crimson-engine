@@ -8,10 +8,12 @@
 
 #include "core/types.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "math/types.hpp"
 
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -20,7 +22,6 @@
 
 namespace quader {
 
-class ModelingObjectRuntimeMap;
 class SceneDocument;
 
 /**
@@ -41,7 +42,7 @@ class PickingCacheProjection final {
 public:
   [[nodiscard]] static ModelingPickingProjection
   scene_transformed_objects_for_picking(
-      const std::vector<quader_editor_core::PolygonObject> &objects,
+      std::span<const quader_editor_core::PolygonObject> objects,
       const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
       ModelingInstanceEditScope instance_edit_scope,
       ModelingSelectionMode app_selection_mode,

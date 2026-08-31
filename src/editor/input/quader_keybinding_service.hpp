@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -749,10 +750,18 @@ inline std::string json_escape(std::string_view value) {
  */
 class QuaderKeybindingService final {
 public:
+  using Clock = std::chrono::steady_clock;
+  using TimePoint = Clock::time_point;
   using EligibilityPredicate = std::function<bool(std::string_view)>;
   using AtomicTextWriter =
       std::function<std::optional<std::string>(
           const std::filesystem::path &, std::string_view)>;
+
+  /** Maximum idle time accepted between consecutive sequence chords. */
+  [[nodiscard]] static constexpr std::chrono::milliseconds
+  pending_chord_timeout() noexcept {
+    return std::chrono::milliseconds{1000};
+  }
 
   void set_atomic_text_writer(AtomicTextWriter writer) {
     atomic_text_writer_ = std::move(writer);
@@ -772,7 +781,6 @@ public:
   void clear_user_keybindings() {
     user_rules_.clear();
     invalidate_effective_rule_cache();
-    pending_sequence_.clear();
   }
 
   void register_target(std::string target_id) {
@@ -886,7 +894,7 @@ public:
     }
 
     if (same_user_rules(user_rules_, normalized)) {
-      pending_sequence_.clear();
+      reset_pending_chord();
       return {.ok = true,
               .changed = false,
               .message = "Keybindings unchanged."};
@@ -901,7 +909,6 @@ public:
     user_rules_ = std::move(normalized);
     invalidate_effective_rule_cache();
     next_order_ = candidate_order;
-    pending_sequence_.clear();
     return {.ok = true, .changed = true, .message = "Keybindings updated."};
   }
 
@@ -934,7 +941,7 @@ public:
         keybinding_detail::same_shortcut(current->sequence,
                                          requested.sequence) &&
         current->when == requested.when) {
-      pending_sequence_.clear();
+      reset_pending_chord();
       return {.ok = true, .changed = false, .message = "Shortcut unchanged."};
     }
 
@@ -959,7 +966,7 @@ public:
     }
 
     if (!effective_rule_for_target(target_id)) {
-      pending_sequence_.clear();
+      reset_pending_chord();
       return {
           .ok = true, .changed = false, .message = "Shortcut already removed."};
     }
@@ -989,7 +996,7 @@ public:
       return {.ok = false, .message = "Unknown command id."};
     }
     if (!has_user_rule_for(target_id)) {
-      pending_sequence_.clear();
+      reset_pending_chord();
       return {.ok = true,
               .changed = false,
               .message = "Shortcut already at default."};
@@ -1105,28 +1112,53 @@ public:
             const QuaderInputChord& chord,
             const QuaderKeybindingContext& context,
             EligibilityPredicate eligible = {}) {
-        if (chord.empty()) {
-          pending_sequence_.clear();
-          return {};
-        }
-
-        std::vector<QuaderInputChord> sequence = pending_sequence_;
-        sequence.push_back(chord);
-        QuaderKeybindingDispatch result =
-            resolve_sequence(sequence, context, std::move(eligible));
-        if (result.kind == QuaderKeybindingDispatch::Kind::PendingChord) {
-          pending_sequence_ = std::move(sequence);
-          return result;
-        }
-
-        pending_sequence_.clear();
-        return result;
+      return dispatch_at(chord, context, Clock::now(), std::move(eligible));
     }
 
-    void reset_pending_chord() { pending_sequence_.clear(); }
+    /**
+     * Resolves one chord at an explicit semantic timestamp. This overload
+     * keeps sequence expiry deterministic for owner-level tests and callers
+     * that already own an input timestamp.
+     */
+    [[nodiscard]] QuaderKeybindingDispatch dispatch_at(
+        const QuaderInputChord &chord,
+        const QuaderKeybindingContext &context, TimePoint timestamp,
+        EligibilityPredicate eligible = {}) {
+      if (chord.empty()) {
+        reset_pending_chord();
+        return {};
+      }
+
+      if (!has_pending_chord_at(timestamp)) {
+        reset_pending_chord();
+      }
+
+      std::vector<QuaderInputChord> sequence = pending_sequence_;
+      sequence.push_back(chord);
+      QuaderKeybindingDispatch result =
+          resolve_sequence(sequence, context, std::move(eligible));
+      if (result.kind == QuaderKeybindingDispatch::Kind::PendingChord) {
+        pending_sequence_ = std::move(sequence);
+        pending_updated_at_ = timestamp;
+        return result;
+      }
+
+      reset_pending_chord();
+      return result;
+    }
+
+    void reset_pending_chord() {
+      pending_sequence_.clear();
+      pending_updated_at_.reset();
+    }
 
     [[nodiscard]] bool has_pending_chord() const {
-      return !pending_sequence_.empty();
+      return has_pending_chord_at(Clock::now());
+    }
+
+    [[nodiscard]] bool has_pending_chord_at(TimePoint timestamp) const {
+      return !pending_sequence_.empty() && pending_updated_at_.has_value() &&
+             timestamp - *pending_updated_at_ < pending_chord_timeout();
     }
 
     [[nodiscard]] std::optional<std::string> load_user_keybindings() {
@@ -1192,7 +1224,6 @@ public:
 
       user_rules_ = std::move(loaded);
       invalidate_effective_rule_cache();
-      pending_sequence_.clear();
       return std::nullopt;
     }
 
@@ -1358,6 +1389,7 @@ private:
     void invalidate_effective_rule_cache() {
       effective_rule_cache_valid_ = false;
       ++revision_;
+      reset_pending_chord();
     }
 
     void ensure_effective_rule_cache() const {
@@ -1425,6 +1457,7 @@ private:
     mutable bool effective_rule_cache_valid_ = false;
     std::uint64_t revision_ = 0;
     std::vector<QuaderInputChord> pending_sequence_;
+    std::optional<TimePoint> pending_updated_at_;
     std::size_t next_order_ = 1u;
 };
 

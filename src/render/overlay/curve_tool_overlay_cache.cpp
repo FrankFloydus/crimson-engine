@@ -13,43 +13,36 @@
 #include "render/viewport_overlay_policy.hpp"
 
 namespace quader {
-namespace {
-
-bool same_hover(const std::optional<QVec3> &left,
-                const std::optional<QVec3> &right) {
-  return left.has_value() == right.has_value() &&
-         (!left.has_value() || (left->x == right->x && left->y == right->y &&
-                                left->z == right->z));
+CurveToolOverlaySourceStamp CurveToolOverlayCache::source_stamp(
+    const CurveToolPreviewState &preview) noexcept {
+  return {
+      .preview_revision = preview.revision,
+      .document_identity = preview.document.has_value()
+                               ? preview.document->content_identity().value
+                               : 0u,
+      .document_revision = preview.document.has_value()
+                               ? preview.document->content_revision()
+                               : 0u,
+      .entity = preview.entity,
+      .modeling_object_id = preview.modeling_object_id,
+      .active = preview.active,
+      .drawing = preview.drawing,
+      .dragging = preview.dragging,
+      .document_available = preview.document.has_value(),
+  };
 }
-
-bool same_preview(const CurveToolPreviewState &left,
-                  const CurveToolPreviewState &right) {
-  if (left.revision != right.revision || left.active != right.active ||
-      left.drawing != right.drawing || left.dragging != right.dragging ||
-      left.entity != right.entity ||
-      left.modeling_object_id != right.modeling_object_id ||
-      left.world_transform.values != right.world_transform.values ||
-      left.control_selection != right.control_selection ||
-      !same_hover(left.hover_world, right.hover_world) ||
-      left.document.has_value() != right.document.has_value()) {
-    return false;
-  }
-  return !left.document.has_value() ||
-         (left.document->content_identity() == right.document->content_identity() &&
-          left.document->content_revision() == right.document->content_revision());
-}
-
-} // namespace
 
 const ViewportOverlayFrame &CurveToolOverlayCache::frame(
     const CurveToolPreviewState &preview) {
-  if (valid_ && same_preview(preview, previous_)) {
+  const CurveToolOverlaySourceStamp stamp = source_stamp(preview);
+  if (valid_ && stamp == previous_stamp_) {
     return frame_;
   }
   QDR_PROFILE_SCOPE("Curve tool rebuild overlay");
-  previous_ = preview;
+  previous_stamp_ = stamp;
   valid_ = true;
   ++build_count_;
+  ++publication_revision_;
   frame_.lines.clear();
   frame_.points.clear();
   if (!preview.active || !preview.document.has_value()) {
@@ -140,10 +133,10 @@ const ViewportOverlayFrame &CurveToolOverlayCache::frame(
 }
 
 void CurveToolOverlayCache::reset() {
+  ++publication_revision_;
   frame_ = {};
-  previous_ = {};
+  previous_stamp_ = {};
   samples_.reset();
-  build_count_ = 0;
   valid_ = false;
 }
 

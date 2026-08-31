@@ -17,6 +17,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -37,6 +38,26 @@
 using namespace quader;
 
 namespace {
+
+using SceneScalarFingerprint = std::array<std::uint64_t, 12>;
+
+[[nodiscard]] SceneScalarFingerprint
+scene_scalar_fingerprint(const SceneDocument &scene) {
+  return {
+      scene.revision(),
+      scene.content_revision(),
+      scene.selection_revision(),
+      scene.hierarchy_presentation_revision(),
+      scene.visibility_revision(),
+      scene.transform_revision(),
+      scene.texture_mapping_revision(),
+      scene.mesh_binding_revision(),
+      scene.curve_binding_revision(),
+      scene.material_binding_revision(),
+      scene.render_component_revision(),
+      scene.layer_revision(),
+  };
+}
 
 std::filesystem::path unique_project_test_directory(std::string_view label) {
   const auto tick = static_cast<std::uint64_t>(
@@ -1752,6 +1773,112 @@ TEST(ProjectSessionWorkspace,
 }
 
 TEST(ProjectSessionWorkspace,
+     LinkedInstancePastePublicationFailureRestoresOuterSceneAndAllocation) {
+  ScopedProjectSessionDirectory temporary("linked-instance-paste-failure");
+  ProjectSession project;
+  ProjectSession control_project;
+  ASSERT_TRUE(project
+                  .create(temporary.make_empty_child("Failure"))
+                  .ok);
+  ASSERT_TRUE(control_project
+                  .create(temporary.make_empty_child("Control"))
+                  .ok);
+  QuaderEditorApi editor(project);
+  QuaderEditorApi control_editor(control_project);
+
+  const auto prepare = [](ProjectSession &target_project,
+                          QuaderEditorApi &target_editor) {
+    const QuaderApiResult<QuaderModelingObjectRef> member =
+        target_editor.modeling().create_box(
+            QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                         .max = {1.0f, 1.0f, 1.0f}},
+            "Clipboard Member");
+    EXPECT_TRUE(member.ok()) << member.error_message();
+    EXPECT_TRUE(target_editor.modeling().create_instance().ok());
+    EXPECT_TRUE(target_editor.commands()
+                    .execute(quader_command::kCopySelection)
+                    .ok());
+    const QuaderApiResult<QuaderModelingObjectRef> projection_seed =
+        target_editor.modeling().create_box(
+            QuaderBounds{.min = {3.0f, -1.0f, -1.0f},
+                         .max = {5.0f, 1.0f, 1.0f}},
+            "Projection Seed");
+    EXPECT_TRUE(projection_seed.ok()) << projection_seed.error_message();
+    if (projection_seed.ok()) {
+      EXPECT_TRUE(target_editor.selection()
+                      .select_object(projection_seed.value())
+                      .ok());
+    }
+    OpenSceneSession *active = target_project.active_scene();
+    EXPECT_NE(active, nullptr);
+    if (active != nullptr && active->session != nullptr) {
+      active->session->history().clear();
+    }
+    return active;
+  };
+  OpenSceneSession *active = prepare(project, editor);
+  OpenSceneSession *control = prepare(control_project, control_editor);
+  ASSERT_NE(active, nullptr);
+  ASSERT_NE(active->session, nullptr);
+  ASSERT_NE(control, nullptr);
+  ASSERT_NE(control->session, nullptr);
+
+  SceneSession &session = *active->session;
+  const std::vector<EntityId> entities_before = session.scene().entities();
+  const std::vector<EntityId> selection_before =
+      session.scene().selected_entities();
+  const EntityId active_before = session.scene().primary_selection();
+  const SceneScalarFingerprint scalars_before =
+      scene_scalar_fingerprint(session.scene());
+  const ModelingSelectionSummary modeling_before =
+      session.modeling().selection_summary();
+  const QuaderHistorySnapshot history_before = editor.query().history();
+  ASSERT_EQ(selection_before.size(), 1u);
+  ASSERT_EQ(modeling_before.selected_object_count, 1u);
+  ASSERT_NE(modeling_before.active_object_id, -1);
+
+  session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+  const QuaderApiVoidResult failed =
+      editor.commands().execute(quader_command::kPasteSelection);
+  EXPECT_FALSE(failed.ok());
+  EXPECT_FALSE(failed.changed());
+  EXPECT_NE(failed.error_message().find("Injected failure"),
+            std::string::npos);
+  EXPECT_EQ(session.scene().entities(), entities_before);
+  EXPECT_EQ(session.scene().selected_entities(), selection_before);
+  EXPECT_EQ(session.scene().primary_selection(), active_before);
+  EXPECT_EQ(scene_scalar_fingerprint(session.scene()), scalars_before);
+  const ModelingSelectionSummary modeling_after =
+      session.modeling().selection_summary();
+  EXPECT_EQ(modeling_after.mode, modeling_before.mode);
+  EXPECT_EQ(modeling_after.active_object_id, modeling_before.active_object_id);
+  EXPECT_EQ(modeling_after.selected_object_count,
+            modeling_before.selected_object_count);
+  EXPECT_EQ(modeling_after.selection_revision,
+            modeling_before.selection_revision);
+  EXPECT_EQ(modeling_after.content_revision, modeling_before.content_revision);
+  const QuaderHistorySnapshot history_after = editor.query().history();
+  EXPECT_EQ(history_after.can_undo, history_before.can_undo);
+  EXPECT_EQ(history_after.can_redo, history_before.can_redo);
+  EXPECT_EQ(history_after.undo_label, history_before.undo_label);
+  EXPECT_EQ(history_after.redo_label, history_before.redo_label);
+
+  session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  const QuaderApiResult<QuaderEntityRef> created_after_failure =
+      editor.scene().create_entity({.name = "Allocator Probe"});
+  const QuaderApiResult<QuaderEntityRef> control_created =
+      control_editor.scene().create_entity({.name = "Allocator Probe"});
+  ASSERT_TRUE(created_after_failure.ok())
+      << created_after_failure.error_message();
+  ASSERT_TRUE(control_created.ok()) << control_created.error_message();
+  EXPECT_EQ(created_after_failure.value().id, control_created.value().id);
+  EXPECT_EQ(created_after_failure.value().editor_object_id,
+            control_created.value().editor_object_id);
+}
+
+TEST(ProjectSessionWorkspace,
      ProjectClipboardImportsIndependentCrossSceneDefinitionWithSharedPayload) {
   ScopedProjectSessionDirectory temporary("cross-scene-instance-clipboard");
   ProjectSession project;
@@ -1871,6 +1998,204 @@ TEST(ProjectSessionWorkspace,
                 .instance_occurrence(destination_occurrence)
                 ->definition,
             destination_definition);
+}
+
+TEST(ProjectSessionWorkspace,
+     ProjectClipboardRemapsMissingLayerIdByNameAcrossNestedInstanceContent) {
+  ScopedProjectSessionDirectory temporary("cross-scene-instance-layer-name");
+  ProjectSession project;
+  const ProjectSessionResult created = project.create(
+      temporary.make_empty_child("CrossSceneInstanceLayerName"));
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(created.scene_session_id.has_value());
+  const SceneSessionId source_scene_id = *created.scene_session_id;
+
+  QuaderEditorApi editor(project);
+  const QuaderApiResult<QuaderModelingObjectRef> first =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-3.0f, -1.0f, -1.0f},
+                       .max = {-1.0f, 1.0f, 1.0f}},
+          "Nested Clipboard Left");
+  const QuaderApiResult<QuaderModelingObjectRef> second =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {1.0f, -1.0f, -1.0f},
+                       .max = {3.0f, 1.0f, 1.0f}},
+          "Nested Clipboard Right");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({first.value().entity, second.value().entity},
+                                  first.value().entity)
+                  .ok());
+  const QuaderApiResult<QuaderEntityRef> group =
+      editor.scene().group_selection("Nested Clipboard Group");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(group.value().id).ok());
+  const QuaderApiResult<QuaderInstanceCreateResult> instance =
+      editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+
+  constexpr QVec3 kSourceColor = {0.8f, 0.2f, 0.1f};
+  const QuaderApiResult<QuaderLayerSnapshot> source_layer =
+      editor.layers().create("Shared Clipboard Layer", kSourceColor);
+  ASSERT_TRUE(source_layer.ok()) << source_layer.error_message();
+  ASSERT_TRUE(editor.layers().add_selection(source_layer.value().id).ok());
+  const EntityId source_occurrence = instance.value().occurrence.root.id;
+  OpenSceneSession *source_scene = project.find(source_scene_id);
+  ASSERT_NE(source_scene, nullptr);
+  ASSERT_EQ(source_scene->session->scene().entity_layer(source_occurrence),
+            source_layer.value().id);
+  ASSERT_TRUE(editor.modeling().copy_selection().ok());
+
+  const QuaderApiResult<SceneSessionId> destination_created =
+      editor.scene_documents().new_scene();
+  ASSERT_TRUE(destination_created.ok()) << destination_created.error_message();
+  OpenSceneSession *destination_scene =
+      project.find(destination_created.value());
+  ASSERT_NE(destination_scene, nullptr);
+  constexpr SceneLayerId kDestinationLayerId = 41u;
+  constexpr QVec3 kDestinationColor = {0.1f, 0.4f, 0.9f};
+  ASSERT_EQ(destination_scene->session->scene().create_layer_with_id(
+                kDestinationLayerId, "Shared Clipboard Layer", true,
+                kDestinationColor, false),
+            kDestinationLayerId);
+  ASSERT_NE(kDestinationLayerId, source_layer.value().id);
+  EXPECT_EQ(destination_scene->session->scene().layer(source_layer.value().id),
+            nullptr);
+
+  const QuaderApiVoidResult pasted = editor.modeling().paste_selection();
+  ASSERT_TRUE(pasted.ok()) << pasted.error_message();
+  ASSERT_TRUE(pasted.changed());
+  const std::vector<EntityId> pasted_selection =
+      destination_scene->session->scene().selected_entities();
+  ASSERT_EQ(pasted_selection.size(), 1u);
+  const EntityId destination_occurrence = pasted_selection.front();
+  EXPECT_EQ(destination_scene->session->scene().entity_layer(
+                destination_occurrence),
+            kDestinationLayerId);
+  const SceneLayerRecord *retained_layer =
+      destination_scene->session->scene().layer(kDestinationLayerId);
+  ASSERT_NE(retained_layer, nullptr);
+  expect_vec3_eq(retained_layer->wireframe_color, kDestinationColor);
+  EXPECT_EQ(destination_scene->session->scene().layers().size(), 1u);
+
+  const InstanceOccurrenceComponent *destination_component =
+      destination_scene->session->scene().instance_occurrence(
+          destination_occurrence);
+  ASSERT_NE(destination_component, nullptr);
+  const EntityId destination_definition = destination_component->definition;
+  const std::vector<EntityId> definition_children =
+      destination_scene->session->scene().children(destination_definition);
+  ASSERT_EQ(definition_children.size(), 1u);
+  const EntityId destination_group = definition_children.front();
+  const std::vector<EntityId> nested_members =
+      destination_scene->session->scene().children(destination_group);
+  ASSERT_EQ(nested_members.size(), 2u);
+  EXPECT_EQ(destination_scene->session->scene().entity_layer(
+                destination_definition),
+            kInvalidSceneLayerId);
+  EXPECT_EQ(destination_scene->session->scene().entity_layer(destination_group),
+            kInvalidSceneLayerId);
+  for (const EntityId member : nested_members) {
+    EXPECT_EQ(destination_scene->session->scene().entity_layer(member),
+              kInvalidSceneLayerId);
+  }
+}
+
+TEST(ProjectSessionWorkspace,
+     ProjectClipboardNeverAliasesCollidingNumericLayerIdentity) {
+  ScopedProjectSessionDirectory temporary("cross-scene-instance-layer-collision");
+  ProjectSession project;
+  const ProjectSessionResult created = project.create(
+      temporary.make_empty_child("CrossSceneInstanceLayerCollision"));
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(created.scene_session_id.has_value());
+
+  QuaderEditorApi editor(project);
+  const QuaderApiResult<QuaderModelingObjectRef> mesh =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Layer Collision Member");
+  ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+  const QuaderApiResult<QuaderInstanceCreateResult> instance =
+      editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+  constexpr QVec3 kSourceColor = {0.7f, 0.3f, 0.2f};
+  const QuaderApiResult<QuaderLayerSnapshot> source_layer =
+      editor.layers().create("Imported Clipboard Layer", kSourceColor);
+  ASSERT_TRUE(source_layer.ok()) << source_layer.error_message();
+  ASSERT_TRUE(editor.layers().add_selection(source_layer.value().id).ok());
+  ASSERT_TRUE(editor.modeling().copy_selection().ok());
+
+  const QuaderApiResult<SceneSessionId> destination_created =
+      editor.scene_documents().new_scene();
+  ASSERT_TRUE(destination_created.ok()) << destination_created.error_message();
+  OpenSceneSession *destination_scene =
+      project.find(destination_created.value());
+  ASSERT_NE(destination_scene, nullptr);
+  constexpr QVec3 kUnrelatedColor = {0.1f, 0.8f, 0.4f};
+  ASSERT_EQ(destination_scene->session->scene().create_layer_with_id(
+                source_layer.value().id, "Unrelated Destination Layer", true,
+                kUnrelatedColor, false),
+            source_layer.value().id);
+
+  const QuaderApiVoidResult pasted = editor.modeling().paste_selection();
+  ASSERT_TRUE(pasted.ok()) << pasted.error_message();
+  ASSERT_TRUE(pasted.changed());
+  const std::vector<EntityId> selected =
+      destination_scene->session->scene().selected_entities();
+  ASSERT_EQ(selected.size(), 1u);
+  const EntityId destination_occurrence = selected.front();
+  const InstanceOccurrenceComponent *destination_component =
+      destination_scene->session->scene().instance_occurrence(
+          destination_occurrence);
+  ASSERT_NE(destination_component, nullptr);
+  const EntityId destination_definition = destination_component->definition;
+
+  const std::vector<SceneLayerRecord> destination_layers =
+      destination_scene->session->scene().layers();
+  ASSERT_EQ(destination_layers.size(), 2u);
+  const auto imported = std::find_if(
+      destination_layers.begin(), destination_layers.end(),
+      [](const SceneLayerRecord &record) {
+        return record.name == "Imported Clipboard Layer";
+      });
+  ASSERT_NE(imported, destination_layers.end());
+  EXPECT_NE(imported->id, source_layer.value().id);
+  expect_vec3_eq(imported->wireframe_color, kSourceColor);
+  EXPECT_EQ(destination_scene->session->scene().entity_layer(
+                destination_occurrence),
+            imported->id);
+  EXPECT_TRUE(destination_scene->session->scene()
+                  .layer_members(source_layer.value().id)
+                  .empty());
+  const SceneLayerRecord *unrelated =
+      destination_scene->session->scene().layer(source_layer.value().id);
+  ASSERT_NE(unrelated, nullptr);
+  EXPECT_EQ(unrelated->name, "Unrelated Destination Layer");
+  expect_vec3_eq(unrelated->wireframe_color, kUnrelatedColor);
+
+  const SceneLayerId imported_id = imported->id;
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_FALSE(destination_scene->session->scene().exists(
+      destination_occurrence));
+  EXPECT_FALSE(destination_scene->session->scene().exists(
+      destination_definition));
+  EXPECT_EQ(destination_scene->session->scene().layer(imported_id), nullptr);
+  EXPECT_NE(destination_scene->session->scene().layer(source_layer.value().id),
+            nullptr);
+
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_TRUE(destination_scene->session->scene().exists(
+      destination_occurrence));
+  EXPECT_TRUE(destination_scene->session->scene().exists(
+      destination_definition));
+  ASSERT_NE(destination_scene->session->scene().layer(imported_id), nullptr);
+  EXPECT_EQ(destination_scene->session->scene().entity_layer(
+                destination_occurrence),
+            imported_id);
 }
 
 TEST(ProjectSessionWorkspace,

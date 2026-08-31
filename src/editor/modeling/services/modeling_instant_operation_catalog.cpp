@@ -57,6 +57,15 @@ object_selection(std::uint32_t minimum_objects = 1) {
 }
 
 [[nodiscard]] ModelingActionAvailabilityRule
+object_or_group_selection(std::uint32_t minimum_objects = 1) {
+  return {
+      .requirement =
+          ModelingActionSelectionRequirement::ObjectOrGroupSelection,
+      .minimum_selected_objects = minimum_objects,
+  };
+}
+
+[[nodiscard]] ModelingActionAvailabilityRule
 vertex_selection(std::uint32_t minimum_vertices = 1,
                  ModelingActiveSelectionKind required_active =
                      ModelingActiveSelectionKind::None) {
@@ -106,7 +115,7 @@ modeling_instant_operation_catalog() {
       runtime_entry(ModelingInstantOperationId::DuplicateMeshes,
                     "duplicate_meshes", "Duplicate Selected Meshes",
                     "Duplicate Selected Meshes",
-                    object_selection(), RuntimeId::DuplicateMeshes),
+                    object_or_group_selection(), RuntimeId::DuplicateMeshes),
       runtime_entry(ModelingInstantOperationId::CombineMeshes, "combine_meshes",
                     "Combine Selected Meshes", "Combine Selected Meshes",
                     object_selection(2),

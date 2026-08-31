@@ -9,8 +9,7 @@
 #include "core/types.hpp"
 #include "editor/commands/document/document_command_result.hpp"
 #include "editor/selection/scene_selection_application.hpp"
-#include "scene/components.hpp"
-#include "scene/scene_document.hpp"
+#include "scene/document/scene_entity_state.hpp"
 #include "scene/scene_entity_naming.hpp"
 
 #include <algorithm>
@@ -25,31 +24,7 @@ namespace quader {
 
 using DocumentSelectionState = SceneSelectionState;
 
-/**
- * Stores the Document Entity Snapshot data contract used by the editor document command layer.
- */
-struct DocumentEntitySnapshot {
-  EntityId original_id = kInvalidEntityId;
-  std::string uuid;
-  EditorObjectId editor_object_id = kInvalidEditorObjectId;
-  EntityId original_parent = kInvalidEntityId;
-  std::string name;
-  EntityKind kind = EntityKind::Generic;
-  TransformComponent transform;
-  VisibilityComponent visibility;
-  LockComponent lock;
-  SelectionComponent selection;
-  std::optional<ModelingObjectComponent> modeling_object;
-  bool instance_definition = false;
-  std::optional<InstanceOccurrenceComponent> instance_occurrence;
-  std::optional<MeshComponent> mesh;
-  std::optional<CurveComponent> curve;
-  std::optional<MaterialComponent> material;
-  std::optional<TextureMappingComponent> texture_mapping;
-  std::optional<LightComponent> light;
-  SceneLayerId layer_id = kInvalidSceneLayerId;
-  std::vector<DocumentEntitySnapshot> children;
-};
+using DocumentEntitySnapshot = SceneEntityStateTree;
 
 /**
  * Represents a Document Entity Placement value used by the editor document command layer.
@@ -129,149 +104,37 @@ inline DocumentSelectionState document_command_remap_selection(
 inline std::optional<DocumentEntitySnapshot>
 document_command_capture_entity_snapshot(const SceneDocument &scene,
                                          EntityId entity) {
-  if (entity == kInvalidEntityId || !scene.exists(entity)) {
-    return std::nullopt;
-  }
-
-  DocumentEntitySnapshot snapshot;
-  snapshot.original_id = entity;
-  snapshot.uuid = scene.uuid(entity);
-  snapshot.editor_object_id = scene.editor_object_id(entity);
-  snapshot.original_parent = scene.parent(entity);
-  snapshot.kind = scene.kind(entity);
-  if (const NameComponent *component = scene.name(entity)) {
-    snapshot.name = component->name;
-  }
-  if (const TransformComponent *component = scene.transform(entity)) {
-    snapshot.transform = *component;
-  }
-  if (const VisibilityComponent *component = scene.visibility(entity)) {
-    snapshot.visibility = *component;
-  }
-  if (const LockComponent *component = scene.lock(entity)) {
-    snapshot.lock = *component;
-  }
-  if (const SelectionComponent *component = scene.selection(entity)) {
-    snapshot.selection = *component;
-  }
-  if (const ModelingObjectComponent *component =
-          scene.modeling_object(entity)) {
-    snapshot.modeling_object = *component;
-  }
-  snapshot.instance_definition =
-      scene.instance_definition(entity) != nullptr;
-  if (const InstanceOccurrenceComponent *component =
-          scene.instance_occurrence(entity)) {
-    snapshot.instance_occurrence = *component;
-  }
-  if (const MeshComponent *component = scene.mesh(entity)) {
-    snapshot.mesh = *component;
-  }
-  if (const CurveComponent *component = scene.curve(entity)) {
-    snapshot.curve = *component;
-  }
-  if (const MaterialComponent *component = scene.material(entity)) {
-    snapshot.material = *component;
-  }
-  if (const TextureMappingComponent *component = scene.texture_mapping(entity)) {
-    snapshot.texture_mapping = *component;
-  }
-  if (const LightComponent *component = scene.light(entity)) {
-    snapshot.light = *component;
-  }
-  snapshot.layer_id = scene.entity_layer(entity);
-
-  const std::vector<EntityId> children = scene.children(entity);
-  snapshot.children.reserve(children.size());
-  for (const EntityId child : children) {
-    if (std::optional<DocumentEntitySnapshot> child_snapshot =
-            document_command_capture_entity_snapshot(scene, child)) {
-      snapshot.children.push_back(std::move(*child_snapshot));
-    }
-  }
-  return snapshot;
+  return capture_scene_entity_state_tree(scene, entity);
 }
 
 inline void document_command_apply_entity_snapshot_components(
     SceneDocument &scene, EntityId entity,
     const DocumentEntitySnapshot &snapshot, bool include_modeling_object) {
-  scene.set_transform(entity, snapshot.transform);
-  scene.set_visible(entity, snapshot.visibility.visible);
-  scene.set_selectable(entity, snapshot.visibility.selectable);
-  scene.set_locked(entity, snapshot.lock.locked);
-  if (snapshot.instance_definition) {
-    (void)scene.set_instance_definition(entity);
-  }
-  if (snapshot.instance_occurrence.has_value()) {
-    (void)scene.set_instance_occurrence(entity, *snapshot.instance_occurrence);
-  }
-  if (snapshot.mesh.has_value()) {
-    scene.set_mesh(entity, *snapshot.mesh);
-  }
-  if (snapshot.curve.has_value()) {
-    scene.set_curve(entity, *snapshot.curve);
-  }
-  if (snapshot.material.has_value()) {
-    scene.set_material(entity, *snapshot.material);
-  }
-  if (snapshot.light.has_value()) {
-    scene.set_light(entity, *snapshot.light);
-  }
-  if (include_modeling_object && snapshot.modeling_object.has_value()) {
-    scene.set_modeling_object(entity, *snapshot.modeling_object);
-  }
-  scene.set_entity_kind(entity, snapshot.kind);
-  if (snapshot.texture_mapping.has_value()) {
-    (void)scene.set_texture_mapping(entity, *snapshot.texture_mapping);
-  } else {
-    (void)scene.clear_texture_mapping(entity);
-  }
-  (void)scene.set_entity_layer(entity, snapshot.layer_id);
+  (void)apply_scene_entity_state(
+      scene, entity, snapshot,
+      SceneEntityStateApplyOptions{
+          .include_modeling_object = include_modeling_object,
+      });
 }
 
 inline void document_command_apply_entity_snapshot_common_state(
     SceneDocument &scene, EntityId entity,
     const DocumentEntitySnapshot &snapshot, std::string name) {
-  scene.rename_entity(entity, std::move(name));
-  scene.set_transform(entity, snapshot.transform);
-  scene.set_visible(entity, snapshot.visibility.visible);
-  scene.set_selectable(entity, snapshot.visibility.selectable);
-  scene.set_locked(entity, snapshot.lock.locked);
-  scene.set_entity_kind(entity, snapshot.kind);
-  if (snapshot.texture_mapping.has_value()) {
-    (void)scene.set_texture_mapping(entity, *snapshot.texture_mapping);
-  } else {
-    (void)scene.clear_texture_mapping(entity);
-  }
-  (void)scene.set_entity_layer(entity, snapshot.layer_id);
+  (void)apply_scene_entity_common_state(scene, entity, snapshot,
+                                        std::move(name));
 }
 
 inline EntityId document_command_create_entity_from_snapshot(
     SceneDocument &scene, const DocumentEntitySnapshot &snapshot,
     EntityId parent, std::string name, bool include_modeling_object,
     bool preserve_identity = false) {
-  EntityId entity =
-      preserve_identity
-          ? scene.create_entity_with_id(
-                snapshot.original_id,
-                name.empty() ? snapshot.name : std::move(name), snapshot.kind,
-                snapshot.editor_object_id)
-          : scene.create_entity(name.empty() ? snapshot.name : std::move(name),
-                                snapshot.kind);
-  if (entity == kInvalidEntityId) {
-    return kInvalidEntityId;
-  }
-  if (preserve_identity && !snapshot.uuid.empty() &&
-      !scene.set_entity_uuid(entity, snapshot.uuid)) {
-    scene.destroy_entity(entity);
-    return kInvalidEntityId;
-  }
-  if (parent != kInvalidEntityId && scene.exists(parent)) {
-    scene.set_parent(entity, parent, false);
-  }
-  document_command_apply_entity_snapshot_components(scene, entity, snapshot,
-                                                    include_modeling_object);
-  return entity;
+  return create_scene_entity_from_state(
+      scene, snapshot, parent, std::move(name),
+      preserve_identity ? SceneEntityStateIdentityMode::Preserve
+                        : SceneEntityStateIdentityMode::AllocateNew,
+      SceneEntityStateApplyOptions{
+          .include_modeling_object = include_modeling_object,
+      });
 }
 
 /**
@@ -297,7 +160,8 @@ inline void document_command_rollback_duplicate_snapshot_tree(
     if (!scene.exists(it->entity)) {
       continue;
     }
-    (void)scene.set_parent(it->entity, it->before.original_parent, false);
+    (void)apply_scene_entity_state_placement(scene, it->entity, it->before,
+                                             it->before.parent);
     document_command_apply_entity_snapshot_common_state(
         scene, it->entity, it->before, it->before.name);
   }
@@ -322,7 +186,7 @@ inline EntityId document_command_duplicate_entity_snapshot_tree_impl(
           ? name_allocator->next_name(snapshot.name)
           : SceneEntityNaming::next_name(scene, snapshot.name);
   if (existing_clones_by_source != nullptr) {
-    const auto existing = existing_clones_by_source->find(snapshot.original_id);
+    const auto existing = existing_clones_by_source->find(snapshot.id);
     if (existing != existing_clones_by_source->end()) {
       duplicate = existing->second;
       if (duplicate == kInvalidEntityId || !scene.exists(duplicate)) {
@@ -387,7 +251,7 @@ inline EntityId document_command_duplicate_entity_snapshot_tree(
 inline void document_command_erase_snapshot_remaps(
     const DocumentEntitySnapshot &snapshot,
     std::unordered_map<EntityId, EntityId> &remapped_entities) {
-  remapped_entities.erase(snapshot.original_id);
+  remapped_entities.erase(snapshot.id);
   for (const DocumentEntitySnapshot &child : snapshot.children) {
     document_command_erase_snapshot_remaps(child, remapped_entities);
   }
@@ -402,7 +266,7 @@ inline EntityId document_command_restore_entity_snapshot_tree(
   if (restored == kInvalidEntityId) {
     return kInvalidEntityId;
   }
-  remapped_entities[snapshot.original_id] = restored;
+  remapped_entities[snapshot.id] = restored;
   for (const DocumentEntitySnapshot &child : snapshot.children) {
     if (document_command_restore_entity_snapshot_tree(
             scene, child, restored, remapped_entities,

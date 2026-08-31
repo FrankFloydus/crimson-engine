@@ -120,6 +120,19 @@ resolve_move_vertex_snap_target(
     std::span<const PickObjectFaceGeometry> face_geometry = {},
     std::span<const PickObjectTransform> object_transforms = {},
     bool exclude_current_selection = true);
+/// Resolves a mesh-only candidate beneath an inclusive caller-owned
+/// render-surface cutoff without traversing authored mesh faces. This is the
+/// cross-domain viewport seam; ordinary modeling Move keeps using the complete
+/// `resolve_move_vertex_snap_target` policy above.
+[[nodiscard]] std::optional<MoveVertexSnapTarget>
+resolve_move_vertex_snap_candidate(
+    const std::vector<PolygonObject>& objects, SelectionMode selection_mode,
+    const quader_poly::Ray& ray, double vertex_radius,
+    std::span<const PickObjectBounds> object_bounds = {},
+    std::span<const PickObjectTransform> object_transforms = {},
+    bool exclude_current_selection = true,
+    std::optional<double> maximum_world_ray_distance = std::nullopt,
+    PickAllWithSurfaceScratch *picking_scratch = nullptr);
 [[nodiscard]] MoveVertexSnapQueryResult resolve_move_vertex_snap_query(
     const std::vector<PolygonObject>& objects, SelectionMode selection_mode,
     const quader_poly::Ray& ray, double vertex_radius,

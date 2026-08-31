@@ -37,8 +37,9 @@ Does not own:
 - viewport workspace state, native windows, swapchains, or physical input capture;
 - UI layout, runtime UI resources, localization, or panel behavior.
 
-`EditorSession` values in this package are disposable projections used by retained native picking,
-overlay, bounds, and input helpers. Production code must never retain one as a competing source of
-truth. Selection and hover behavior stays inspectable with headless modeling-domain tests. Real
-window, GPU, and pixel-output behavior belongs to render/UI smoke checks until render readback
-coverage exists.
+Production picking, overlay, bounds, and input helpers consume immutable polygon snapshots or
+narrow `EditorRuntimeSelectionView` values. `EditorSession` remains only as a local compatibility
+surface for runtime-owned mutating algorithms and tests; native services do not materialize or
+retain full sessions as selection projections. Selection and hover behavior stays inspectable with
+headless modeling-domain tests. Real window, GPU, and pixel-output behavior belongs to render/UI
+smoke checks until render readback coverage exists.

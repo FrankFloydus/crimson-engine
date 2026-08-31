@@ -183,9 +183,13 @@ void QtViewportDeletePopupPresenter::prewarm() {
 }
 
 QtViewportDeletePopupKind qt_viewport_delete_popup_kind(
-    ModelingSelectionMode mode, bool has_selected_scene_root) {
-  if (mode == ModelingSelectionMode::Object ||
-      mode == ModelingSelectionMode::Group || has_selected_scene_root) {
+    const ModelingSelectionSummary &summary, bool has_selected_scene_root) {
+  if (summary.selected_sub_element_count > 0u) {
+    return QtViewportDeletePopupKind::DirectDeleteCommand;
+  }
+  if (summary.mode == ModelingSelectionMode::Object ||
+      summary.mode == ModelingSelectionMode::Group ||
+      has_selected_scene_root) {
     return QtViewportDeletePopupKind::ObjectConfirmation;
   }
   return QtViewportDeletePopupKind::ComponentMenu;
@@ -242,15 +246,23 @@ bool QtViewportDeletePopupPresenter::show(
   const QtViewportDeletePopupKind kind = [&]() {
     QDR_PROFILE_SCOPE("Qt viewport delete popup query kind");
     return qt_viewport_delete_popup_kind(
-        summary.mode, modeling.has_selected_scene_aware_delete_root());
+        summary, modeling.has_selected_scene_aware_delete_root());
   }();
-  const bool changed = kind == QtViewportDeletePopupKind::ObjectConfirmation
-                           ? show_object_confirmation(
-                                 *object_confirmation_, editor, input_router,
-                                 localization)
-                           : show_component_menu(focus_parent, global_point,
-                                                 editor, input_router,
-                                                 localization);
+  const bool changed = [&]() {
+    switch (kind) {
+    case QtViewportDeletePopupKind::DirectDeleteCommand:
+      return execute_delete_popup_command(
+                 editor, input_router, quader_command::kDeleteSelection)
+          .changed();
+    case QtViewportDeletePopupKind::ObjectConfirmation:
+      return show_object_confirmation(*object_confirmation_, editor,
+                                      input_router, localization);
+    case QtViewportDeletePopupKind::ComponentMenu:
+      return show_component_menu(focus_parent, global_point, editor,
+                                 input_router, localization);
+    }
+    return false;
+  }();
   restore_viewport_focus(guarded_focus_parent);
   return changed;
 }

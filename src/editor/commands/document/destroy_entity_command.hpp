@@ -33,11 +33,11 @@ public:
         std::unordered_map<EntityId, EntityId> remapped_entities;
         if (orphan_definition_snapshot_.has_value()) {
           const EntityId definition_parent =
-              orphan_definition_snapshot_->original_parent !=
+              orphan_definition_snapshot_->parent !=
                           kInvalidEntityId &&
                       scene().exists(
-                          orphan_definition_snapshot_->original_parent)
-                  ? orphan_definition_snapshot_->original_parent
+                          orphan_definition_snapshot_->parent)
+                  ? orphan_definition_snapshot_->parent
                   : kInvalidEntityId;
           definition_ = document_command_restore_entity_snapshot_tree(
               scene(), *orphan_definition_snapshot_, definition_parent,
@@ -47,9 +47,9 @@ public:
           }
         }
         const EntityId parent =
-            snapshot_->original_parent != kInvalidEntityId &&
-                    scene().exists(snapshot_->original_parent)
-                ? snapshot_->original_parent
+            snapshot_->parent != kInvalidEntityId &&
+                    scene().exists(snapshot_->parent)
+                ? snapshot_->parent
                 : kInvalidEntityId;
         entity_ = document_command_restore_entity_snapshot_tree(
             scene(), *snapshot_, parent, remapped_entities);

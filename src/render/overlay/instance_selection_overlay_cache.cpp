@@ -6,77 +6,23 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/instance_selection_overlay_cache.hpp"
 
-#include "core/color_space.hpp"
 #include "diagnostics/profile.hpp"
-#include "math/glm_bridge.hpp"
-#include "render/filament_buffer_descriptor_factory.hpp"
-#include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_factory.hpp"
-#include "render/overlay/overlay_mesh_types.hpp"
 #include "render/render_layers.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/viewport_overlay_policy.hpp"
 
-#include <backend/DriverEnums.h>
-#include <filament/Box.h>
-#include <filament/Engine.h>
-#include <filament/IndexBuffer.h>
-#include <filament/InstanceBuffer.h>
-#include <filament/Material.h>
-#include <filament/MaterialInstance.h>
-#include <filament/RenderableManager.h>
-#include <filament/Scene.h>
-#include <filament/TransformManager.h>
-#include <filament/VertexBuffer.h>
-#include <math/mat4.h>
-#include <utils/EntityManager.h>
-
 #include <algorithm>
-#include <array>
 #include <bit>
-#include <limits>
 #include <span>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace quader {
 namespace {
 
-using AttributeType = filament::backend::ElementType;
-
 constexpr std::uint64_t kFillMaterialPayload = 0x6f7665726c617901ULL;
-
-/// Stores one shader-expanded semantic edge-ribbon vertex for instance wires.
-struct InstanceSelectionWireVertex final {
-  OverlayFloat4 position;
-  OverlayFloat4 start;
-  OverlayFloat4 end;
-  OverlayFloat4 control;
-  std::uint32_t color = 0u;
-};
-
-filament::math::mat4f make_transform(const QMat4 &transform) {
-  const glm::mat4 glm_transform = to_glm(transform);
-  filament::math::mat4f result;
-  for (int column = 0; column < 4; ++column) {
-    for (int row = 0; row < 4; ++row) {
-      result[column][row] = glm_transform[column][row];
-    }
-  }
-  return result;
-}
-
-filament::Box filament_bounds(const RenderInstanceBounds &bounds) {
-  if (!bounds.present) {
-    return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
-  }
-  filament::Box result;
-  result.set({bounds.min.x, bounds.min.y, bounds.min.z},
-             {bounds.max.x, bounds.max.y, bounds.max.z});
-  return result;
-}
 
 RenderInstanceBounds compute_local_bounds(
     std::span<const MeshVertex> vertices) {
@@ -259,26 +205,6 @@ InstanceSelectionOccurrencePreparation prepare_selection_occurrences(
   return prepared;
 }
 
-void append_line_quad(std::vector<InstanceSelectionWireVertex> &vertices,
-                      std::vector<std::uint32_t> &indices, QVec3 start,
-                      QVec3 end, std::uint32_t color) {
-  const std::uint32_t linear_color = rgba8_srgb_to_linear(color);
-  const std::uint32_t offset = static_cast<std::uint32_t>(vertices.size());
-  const OverlayFloat4 origin{0.0f, 0.0f, 0.0f, 1.0f};
-  const OverlayFloat4 a{start.x, start.y, start.z, 1.0f};
-  const OverlayFloat4 b{end.x, end.y, end.z, 1.0f};
-  vertices.push_back({origin, a, b, {-1.0f, -1.0f, 0.0f, 0.0f},
-                      linear_color});
-  vertices.push_back(
-      {origin, a, b, {-1.0f, 1.0f, 1.0f, 0.0f}, linear_color});
-  vertices.push_back(
-      {origin, a, b, {1.0f, 1.0f, 1.0f, 0.0f}, linear_color});
-  vertices.push_back(
-      {origin, a, b, {1.0f, -1.0f, 0.0f, 0.0f}, linear_color});
-  indices.insert(indices.end(), {offset, offset + 1u, offset + 2u, offset,
-                                 offset + 2u, offset + 3u});
-}
-
 RenderMeshAssetSnapshot fill_mesh_snapshot(
     const RenderOverlayInstanceSelectionFillRecord &record) {
   RenderMeshAssetSnapshot mesh{
@@ -338,6 +264,42 @@ InstanceSelectionBatchPreparation prepare_selection_batches(
   return prepared;
 }
 
+InstancedWireGeometryInput wire_geometry_input(
+    const RenderOverlayInstanceSelectionWireRecord &record) {
+  const std::uint64_t signature =
+      RenderSignatureBuilder{}
+          .add_value(record.wire_geometry_payload != nullptr
+                         ? record.wire_geometry_payload->content_id
+                         : 0u)
+          .add_value(record.wire_color)
+          .value();
+  return {
+      .signature = signature,
+      .wire_geometry = record.wire_geometry_payload,
+      .color = record.wire_color,
+      .segments = record.wire_segments,
+  };
+}
+
+InstancedWireBatchStyle wire_batch_style(
+    const RenderOverlayInstanceSelectionWireRecord &record,
+    ViewportCameraClipPlanes clip_planes) {
+  const std::uint16_t blend_order = static_cast<std::uint16_t>(
+      viewport_overlay_draw_order(ViewportOverlayLayer::SourceWire) * 64u);
+  return {
+      .render_state = OverlayRenderableBuilder::make_state(
+          ViewportOverlayLayer::SourceWire,
+          ViewportOverlayGeometryKind::Lines, blend_order),
+      // Selected-occurrence wires never receive the scene context effect.
+      .instance_edit_style = {},
+      .line_width_pixels = record.wire_width_pixels,
+      .near_plane = clip_planes.near_plane,
+      .instance_edit_dim = 0.0f,
+      .layer_mask = kViewportOverlayLayerMask,
+      .channel = kViewportDefaultRenderableChannel,
+  };
+}
+
 } // namespace
 
 /// Couples selected-instance batch plans with their source overlay records.
@@ -345,38 +307,6 @@ struct InstanceSelectionOverlayCache::PreparedPlans final {
   InstanceSelectionOverlayBatchPlans plans;
   std::vector<const RenderOverlayInstanceSelectionFillRecord *> fills;
   std::vector<const RenderOverlayInstanceSelectionWireRecord *> wires;
-};
-
-/// Owns one shared semantic-edge geometry resource for selected wires.
-struct InstanceSelectionOverlayCache::WireGeometryResource final {
-  std::uint64_t signature = 0u;
-  std::shared_ptr<const MeshWireGeometryPayload> wire_geometry;
-  std::uint32_t wire_color = 0u;
-  filament::VertexBuffer *vertex_buffer = nullptr;
-  filament::IndexBuffer *index_buffer = nullptr;
-  std::uint32_t index_count = 0u;
-  std::uint64_t vertex_bytes = 0u;
-  std::uint64_t index_bytes = 0u;
-};
-
-/// Owns one Filament renderable and instance buffer for a selected-wire chunk.
-struct InstanceSelectionOverlayCache::WireBatchProxy final {
-  WireBatchProxy() = default;
-  WireBatchProxy(const WireBatchProxy &) = delete;
-  WireBatchProxy &operator=(const WireBatchProxy &) = delete;
-  WireBatchProxy(WireBatchProxy &&other) noexcept
-      : entity(other.entity),
-        instance_buffer(std::exchange(other.instance_buffer, nullptr)),
-        material_instance(std::exchange(other.material_instance, nullptr)),
-        geometry(std::exchange(other.geometry, nullptr)) {
-    other.entity.clear();
-  }
-  WireBatchProxy &operator=(WireBatchProxy &&) = delete;
-
-  utils::Entity entity;
-  filament::InstanceBuffer *instance_buffer = nullptr;
-  filament::MaterialInstance *material_instance = nullptr;
-  WireGeometryResource *geometry = nullptr;
 };
 
 InstanceSelectionOverlayBatchPlans plan_instance_selection_overlay_batches(
@@ -407,25 +337,24 @@ void InstanceSelectionOverlayCache::initialize(
     filament::Material &line_material,
     std::size_t max_instances_per_chunk) {
   shutdown();
-  engine_ = &engine;
-  scene_ = &scene;
   mesh_factory_ = &mesh_factory;
   fill_material_ = &fill_material;
-  line_material_ = &line_material;
   max_instances_per_chunk_ =
       std::max<std::size_t>(1u, max_instances_per_chunk);
+  wire_backend_.initialize(engine, scene, line_material,
+                           max_instances_per_chunk_);
 }
 
 void InstanceSelectionOverlayCache::shutdown() {
   clear(true);
-  engine_ = nullptr;
-  scene_ = nullptr;
+  wire_backend_.shutdown();
   mesh_factory_ = nullptr;
   fill_material_ = nullptr;
-  line_material_ = nullptr;
   max_instances_per_chunk_ = 1u;
   clip_planes_ = {};
-  synced_local_visibility_revision_ = 0u;
+  synced_source_stamp_ = {};
+  synced_wire_style_signature_ = 0u;
+  has_synced_ = false;
   stats_ = {};
 }
 
@@ -435,18 +364,18 @@ void InstanceSelectionOverlayCache::clear(bool release_geometry_resources) {
       mesh_factory_->destroy(proxy);
     }
   }
-  for (WireBatchProxy &proxy : wire_proxies_) {
-    destroy_wire_batch(proxy);
-  }
+  wire_backend_.destroy_batches(wire_proxies_);
   fill_proxies_.clear();
   wire_proxies_.clear();
   fill_plan_ = {};
   wire_plan_ = {};
+  has_synced_ = false;
   stats_.fill_chunk_count = 0u;
   stats_.wire_chunk_count = 0u;
   stats_.selected_member_count = 0u;
   if (release_geometry_resources) {
-    destroy_wire_resources();
+    wire_backend_.destroy_geometry_resources();
+    refresh_wire_resource_stats();
   }
 }
 
@@ -471,28 +400,45 @@ bool InstanceSelectionOverlayCache::sync(
   if (!snapshot.visible || (snapshot.instance_selection_fills.empty() &&
                             snapshot.instance_selection_wires.empty())) {
     const bool changed = !fill_proxies_.empty() || !wire_proxies_.empty();
-    clear();
     const bool local_visibility_changed =
-        synced_local_visibility_revision_ !=
-        snapshot.local_visibility_revision;
-    synced_local_visibility_revision_ = snapshot.local_visibility_revision;
+        !render_source_dependencies_match(
+            synced_source_stamp_, snapshot,
+            RenderSourceDependency::LocalVisibilityRevision);
+    clear();
+    synced_source_stamp_ = snapshot;
+    synced_wire_style_signature_ = snapshot.style.wire_signature;
+    clip_planes_ = snapshot.clip_planes;
     return changed || local_visibility_changed;
   }
 
+  const bool clip_changed = clip_planes_ != snapshot.clip_planes;
+  const bool wire_style_changed =
+      !has_synced_ ||
+      synced_wire_style_signature_ != snapshot.style.wire_signature;
+  if (has_synced_ &&
+      render_source_dependencies_match(
+          synced_source_stamp_, snapshot,
+          kRenderOverlayInstanceSelectionCacheNoWorkDependencies) &&
+      !wire_style_changed && !clip_changed) {
+    return false;
+  }
+  const bool local_visibility_changed =
+      !render_source_dependencies_match(
+          synced_source_stamp_, snapshot,
+          RenderSourceDependency::LocalVisibilityRevision);
   const PreparedPlans prepared = prepare(snapshot);
   const RenderInstanceBatchUpdateKind fill_update =
       classify_instance_batch_update(fill_plan_, prepared.plans.fills);
   const RenderInstanceBatchUpdateKind wire_update =
       classify_instance_batch_update(wire_plan_, prepared.plans.wires);
-  const bool clip_changed = clip_planes_ != snapshot.clip_planes;
-  const bool local_visibility_changed =
-      synced_local_visibility_revision_ != snapshot.local_visibility_revision;
   if (fill_update == RenderInstanceBatchUpdateKind::Unchanged &&
       wire_update == RenderInstanceBatchUpdateKind::Unchanged) {
     if (clip_changed) {
       update_wire_clip_planes(snapshot.clip_planes);
     }
-    synced_local_visibility_revision_ = snapshot.local_visibility_revision;
+    synced_source_stamp_ = snapshot;
+    synced_wire_style_signature_ = snapshot.style.wire_signature;
+    has_synced_ = true;
     return clip_changed || local_visibility_changed;
   }
   if (fill_update != RenderInstanceBatchUpdateKind::Rebuild &&
@@ -504,7 +450,9 @@ bool InstanceSelectionOverlayCache::sync(
     if (clip_changed) {
       update_wire_clip_planes(snapshot.clip_planes);
     }
-    synced_local_visibility_revision_ = snapshot.local_visibility_revision;
+    synced_source_stamp_ = snapshot;
+    synced_wire_style_signature_ = snapshot.style.wire_signature;
+    has_synced_ = true;
     return true;
   }
   return rebuild(prepared, snapshot);
@@ -550,26 +498,25 @@ bool InstanceSelectionOverlayCache::rebuild(
     const RenderOverlayInstanceSelectionWireRecord *record =
         prepared.wires[index];
     if (record == nullptr) {
-      for (WireBatchProxy &proxy : new_wires) {
-        destroy_wire_batch(proxy);
-      }
+      wire_backend_.destroy_batches(new_wires);
       for (MeshRenderableProxy &proxy : new_fills) {
         mesh_factory_->destroy(proxy);
       }
-      prune_unused_wire_resources();
+      wire_backend_.prune_unused_geometry_resources(wire_proxies_);
+      refresh_wire_resource_stats();
       return false;
     }
-    WireBatchProxy proxy =
-        create_wire_batch(*record, chunk, snapshot.clip_planes);
-    if (!proxy.entity || proxy.instance_buffer == nullptr) {
-      destroy_wire_batch(proxy);
-      for (WireBatchProxy &created : new_wires) {
-        destroy_wire_batch(created);
-      }
+    WireBatchProxy proxy = wire_backend_.create_batch(
+        wire_geometry_input(*record), chunk,
+        wire_batch_style(*record, snapshot.clip_planes));
+    if (!wire_backend_.valid(proxy)) {
+      wire_backend_.destroy_batch(proxy);
+      wire_backend_.destroy_batches(new_wires);
       for (MeshRenderableProxy &fill : new_fills) {
         mesh_factory_->destroy(fill);
       }
-      prune_unused_wire_resources();
+      wire_backend_.prune_unused_geometry_resources(wire_proxies_);
+      refresh_wire_resource_stats();
       return false;
     }
     new_wires.push_back(std::move(proxy));
@@ -578,20 +525,21 @@ bool InstanceSelectionOverlayCache::rebuild(
   for (MeshRenderableProxy &proxy : fill_proxies_) {
     mesh_factory_->destroy(proxy);
   }
-  for (WireBatchProxy &proxy : wire_proxies_) {
-    destroy_wire_batch(proxy);
-  }
+  wire_backend_.destroy_batches(wire_proxies_);
   fill_proxies_.swap(new_fills);
   wire_proxies_.swap(new_wires);
   fill_plan_ = prepared.plans.fills;
   wire_plan_ = prepared.plans.wires;
   clip_planes_ = snapshot.clip_planes;
-  synced_local_visibility_revision_ = snapshot.local_visibility_revision;
+  synced_source_stamp_ = snapshot;
+  synced_wire_style_signature_ = snapshot.style.wire_signature;
+  has_synced_ = true;
   ++stats_.rebuild_count;
   stats_.fill_chunk_count = fill_proxies_.size();
   stats_.wire_chunk_count = wire_proxies_.size();
   stats_.selected_member_count = snapshot.instance_selection_fills.size();
-  prune_unused_wire_resources();
+  wire_backend_.prune_unused_geometry_resources(wire_proxies_);
+  refresh_wire_resource_stats();
   return true;
 }
 
@@ -610,282 +558,28 @@ bool InstanceSelectionOverlayCache::update_transforms(
     }
   }
   for (std::size_t index = 0u; index < wire_proxies_.size(); ++index) {
-    if (!update_wire_batch(wire_proxies_[index],
-                           prepared.plans.wires.chunks[index])) {
+    if (!wire_backend_.update_batch(
+            wire_proxies_[index], prepared.plans.wires.chunks[index])) {
       return false;
     }
   }
   return true;
 }
 
-InstanceSelectionOverlayCache::WireGeometryResource *
-InstanceSelectionOverlayCache::acquire_wire_geometry(
-    const RenderOverlayInstanceSelectionWireRecord &record) {
-  const std::uint64_t signature =
-      RenderSignatureBuilder{}
-          .add_value(record.wire_geometry_payload != nullptr
-                         ? record.wire_geometry_payload->content_id
-                         : 0u)
-          .add_value(record.wire_color)
-          .value();
-  auto &bucket = wire_resources_[signature];
-  for (const std::unique_ptr<WireGeometryResource> &resource : bucket) {
-    if (resource->wire_geometry != nullptr &&
-        record.wire_geometry_payload != nullptr &&
-        resource->wire_geometry->content_id ==
-            record.wire_geometry_payload->content_id &&
-        resource->wire_color == record.wire_color) {
-      ++stats_.wire_geometry_reuse_count;
-      return resource.get();
-    }
-  }
-
-  std::vector<InstanceSelectionWireVertex> vertices;
-  std::vector<std::uint32_t> indices;
-  for (const InstanceSelectionWireEdge &edge :
-       instance_selection_wire_edges(record)) {
-    append_line_quad(vertices, indices, edge.start, edge.end,
-                     record.wire_color);
-  }
-  if (vertices.empty() || indices.empty()) {
-    return nullptr;
-  }
-  auto resource = std::make_unique<WireGeometryResource>();
-  resource->signature = signature;
-  resource->wire_geometry = record.wire_geometry_payload;
-  resource->wire_color = record.wire_color;
-  resource->index_count = static_cast<std::uint32_t>(indices.size());
-  resource->vertex_bytes =
-      vertices.size() * sizeof(InstanceSelectionWireVertex);
-  resource->index_bytes = indices.size() * sizeof(std::uint32_t);
-  resource->vertex_buffer =
-      filament::VertexBuffer::Builder()
-          .vertexCount(static_cast<std::uint32_t>(vertices.size()))
-          .bufferCount(1u)
-          .attribute(filament::VertexAttribute::POSITION, 0u,
-                     AttributeType::FLOAT4,
-                     offsetof(InstanceSelectionWireVertex, position),
-                     sizeof(InstanceSelectionWireVertex))
-          .attribute(filament::VertexAttribute::CUSTOM0, 0u,
-                     AttributeType::FLOAT4,
-                     offsetof(InstanceSelectionWireVertex, start),
-                     sizeof(InstanceSelectionWireVertex))
-          .attribute(filament::VertexAttribute::CUSTOM1, 0u,
-                     AttributeType::FLOAT4,
-                     offsetof(InstanceSelectionWireVertex, end),
-                     sizeof(InstanceSelectionWireVertex))
-          .attribute(filament::VertexAttribute::CUSTOM2, 0u,
-                     AttributeType::FLOAT4,
-                     offsetof(InstanceSelectionWireVertex, control),
-                     sizeof(InstanceSelectionWireVertex))
-          .attribute(filament::VertexAttribute::COLOR, 0u,
-                     AttributeType::UBYTE4,
-                     offsetof(InstanceSelectionWireVertex, color),
-                     sizeof(InstanceSelectionWireVertex))
-          .normalized(filament::VertexAttribute::COLOR)
-          .build(*engine_);
-  resource->vertex_buffer->setBufferAt(
-      *engine_, 0u, FilamentBufferDescriptorFactory::vector(vertices));
-  resource->index_buffer =
-      filament::IndexBuffer::Builder()
-          .indexCount(resource->index_count)
-          .bufferType(filament::IndexBuffer::IndexType::UINT)
-          .build(*engine_);
-  resource->index_buffer->setBuffer(
-      *engine_, FilamentBufferDescriptorFactory::vector(indices));
-  WireGeometryResource *result = resource.get();
-  const std::uint64_t vertex_bytes = resource->vertex_bytes;
-  const std::uint64_t index_bytes = resource->index_bytes;
-  bucket.push_back(std::move(resource));
-  stats_.wire_derived_vertex_bytes += vertex_bytes;
-  stats_.wire_derived_index_bytes += index_bytes;
-  ++stats_.unique_wire_geometry_resource_count;
-  ++stats_.wire_geometry_upload_count;
-  return result;
-}
-
-InstanceSelectionOverlayCache::WireBatchProxy
-InstanceSelectionOverlayCache::create_wire_batch(
-    const RenderOverlayInstanceSelectionWireRecord &record,
-    const RenderInstanceBatchChunk &chunk,
-    ViewportCameraClipPlanes clip_planes) {
-  WireBatchProxy proxy;
-  proxy.geometry = acquire_wire_geometry(record);
-  if (proxy.geometry == nullptr || chunk.world_transforms.empty() ||
-      chunk.world_transforms.size() > max_instances_per_chunk_) {
-    return proxy;
-  }
-  proxy.entity = utils::EntityManager::get().create();
-  proxy.material_instance = line_material_->createInstance();
-  if (proxy.material_instance == nullptr) {
-    return proxy;
-  }
-  proxy.material_instance->setColorWrite(true);
-  proxy.material_instance->setDepthWrite(false);
-  proxy.material_instance->setDepthCulling(false);
-  proxy.material_instance->setDepthFunc(
-      filament::MaterialInstance::DepthFunc::A);
-  proxy.material_instance->setCullingMode(
-      filament::MaterialInstance::CullingMode::NONE);
-  proxy.material_instance->setParameter("lineWidth",
-                                        record.wire_width_pixels);
-  proxy.material_instance->setParameter("featherPixels",
-                                        kOverlayLineFeatherPixels);
-  proxy.material_instance->setParameter("nearPlane", clip_planes.near_plane);
-  // Selected-occurrence wires share the line material but never receive the
-  // scene context effect, even while instance editing is active.
-  proxy.material_instance->setParameter("instanceEditDim", 0.0f);
-  bind_instance_edit_context_style(*proxy.material_instance, {});
-
-  std::vector<filament::math::mat4f> transforms;
-  transforms.reserve(chunk.world_transforms.size());
-  for (const QMat4 &transform : chunk.world_transforms) {
-    transforms.push_back(make_transform(transform));
-  }
-  proxy.instance_buffer =
-      filament::InstanceBuffer::Builder(transforms.size())
-          .localTransforms(transforms.data())
-          .build(*engine_);
-  filament::RenderableManager::Builder(1u)
-      .geometry(0u, filament::RenderableManager::PrimitiveType::TRIANGLES,
-                proxy.geometry->vertex_buffer, proxy.geometry->index_buffer,
-                0u, proxy.geometry->index_count)
-      .material(0u, proxy.material_instance)
-      .instances(transforms.size(), proxy.instance_buffer)
-      .blendOrder(0u, static_cast<std::uint16_t>(
-                           viewport_overlay_draw_order(
-                               ViewportOverlayLayer::SourceWire) *
-                           64))
-      .globalBlendOrderEnabled(0u, true)
-      .boundingBox(filament_bounds(chunk.world_bounds))
-      .layerMask(kViewportAllLayerMask, kViewportOverlayLayerMask)
-      .channel(kViewportDefaultRenderableChannel)
-      .culling(false)
-      .castShadows(false)
-      .receiveShadows(false)
-      .build(*engine_, proxy.entity);
-  engine_->getTransformManager().create(proxy.entity);
-  scene_->addEntity(proxy.entity);
-  return proxy;
-}
-
-bool InstanceSelectionOverlayCache::update_wire_batch(
-    WireBatchProxy &proxy, const RenderInstanceBatchChunk &chunk) {
-  if (proxy.instance_buffer == nullptr || !proxy.entity ||
-      proxy.instance_buffer->getInstanceCount() !=
-          chunk.world_transforms.size()) {
-    return false;
-  }
-  std::vector<filament::math::mat4f> transforms;
-  transforms.reserve(chunk.world_transforms.size());
-  for (const QMat4 &transform : chunk.world_transforms) {
-    transforms.push_back(make_transform(transform));
-  }
-  proxy.instance_buffer->setLocalTransforms(transforms.data(),
-                                             transforms.size());
-  filament::RenderableManager &renderables = engine_->getRenderableManager();
-  const filament::RenderableManager::Instance instance =
-      renderables.getInstance(proxy.entity);
-  if (!instance) {
-    return false;
-  }
-  renderables.setAxisAlignedBoundingBox(instance,
-                                        filament_bounds(chunk.world_bounds));
-  return true;
-}
-
-void InstanceSelectionOverlayCache::destroy_wire_batch(
-    WireBatchProxy &proxy) {
-  if (engine_ == nullptr) {
-    return;
-  }
-  if (proxy.entity) {
-    if (scene_ != nullptr) {
-      scene_->remove(proxy.entity);
-    }
-    engine_->getRenderableManager().destroy(proxy.entity);
-    engine_->getTransformManager().destroy(proxy.entity);
-  }
-  if (proxy.instance_buffer != nullptr) {
-    engine_->destroy(proxy.instance_buffer);
-    proxy.instance_buffer = nullptr;
-  }
-  if (proxy.material_instance != nullptr) {
-    engine_->destroy(proxy.material_instance);
-    proxy.material_instance = nullptr;
-  }
-  if (proxy.entity) {
-    utils::EntityManager::get().destroy(proxy.entity);
-    proxy.entity.clear();
-  }
-  proxy.geometry = nullptr;
-}
-
-void InstanceSelectionOverlayCache::destroy_wire_resources() {
-  if (engine_ != nullptr) {
-    for (auto &[signature, resources] : wire_resources_) {
-      (void)signature;
-      for (const std::unique_ptr<WireGeometryResource> &resource : resources) {
-        if (resource->vertex_buffer != nullptr) {
-          engine_->destroy(resource->vertex_buffer);
-        }
-        if (resource->index_buffer != nullptr) {
-          engine_->destroy(resource->index_buffer);
-        }
-      }
-    }
-  }
-  wire_resources_.clear();
-  stats_.unique_wire_geometry_resource_count = 0u;
-  stats_.wire_derived_vertex_bytes = 0u;
-  stats_.wire_derived_index_bytes = 0u;
-}
-
-void InstanceSelectionOverlayCache::prune_unused_wire_resources() {
-  std::unordered_set<const WireGeometryResource *> live;
-  live.reserve(wire_proxies_.size());
-  for (const WireBatchProxy &proxy : wire_proxies_) {
-    if (proxy.geometry != nullptr) {
-      live.insert(proxy.geometry);
-    }
-  }
-  for (auto bucket_it = wire_resources_.begin();
-       bucket_it != wire_resources_.end();) {
-    auto &bucket = bucket_it->second;
-    for (auto it = bucket.begin(); it != bucket.end();) {
-      WireGeometryResource &resource = **it;
-      if (live.contains(&resource)) {
-        ++it;
-        continue;
-      }
-      if (resource.vertex_buffer != nullptr) {
-        engine_->destroy(resource.vertex_buffer);
-      }
-      if (resource.index_buffer != nullptr) {
-        engine_->destroy(resource.index_buffer);
-      }
-      stats_.wire_derived_vertex_bytes -= resource.vertex_bytes;
-      stats_.wire_derived_index_bytes -= resource.index_bytes;
-      --stats_.unique_wire_geometry_resource_count;
-      it = bucket.erase(it);
-    }
-    if (bucket.empty()) {
-      bucket_it = wire_resources_.erase(bucket_it);
-    } else {
-      ++bucket_it;
-    }
-  }
+void InstanceSelectionOverlayCache::refresh_wire_resource_stats() {
+  const InstancedWireRenderBackendStats &wire_stats = wire_backend_.stats();
+  stats_.unique_wire_geometry_resource_count =
+      wire_stats.unique_geometry_resource_count;
+  stats_.wire_derived_vertex_bytes = wire_stats.derived_vertex_bytes;
+  stats_.wire_derived_index_bytes = wire_stats.derived_index_bytes;
+  stats_.wire_geometry_upload_count = wire_stats.geometry_upload_count;
+  stats_.wire_geometry_reuse_count = wire_stats.geometry_reuse_count;
 }
 
 void InstanceSelectionOverlayCache::update_wire_clip_planes(
     ViewportCameraClipPlanes clip_planes) {
   clip_planes_ = clip_planes;
-  for (WireBatchProxy &proxy : wire_proxies_) {
-    if (proxy.material_instance != nullptr) {
-      proxy.material_instance->setParameter("nearPlane",
-                                            clip_planes.near_plane);
-    }
-  }
+  wire_backend_.update_clip_plane(wire_proxies_, clip_planes.near_plane);
 }
 
 } // namespace quader

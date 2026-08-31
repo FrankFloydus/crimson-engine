@@ -1966,6 +1966,7 @@ TEST(QtToolSettingsNumberSliderTests,
                                   "Focused Settings Box")
                   .ok);
   quader::QtToolSettingsPanel window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
   window.bind(editor);
   window.show();
   window.activateWindow();
@@ -2063,6 +2064,26 @@ TEST(QtToolSettingsNumberSliderTests,
   QCoreApplication::processEvents();
   send_key_event(*primitive_type, Qt::Key_Escape);
 
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_TRUE(editor.history().can_undo());
+
+  // The same focused-settings fallback is owned by the native lifecycle,
+  // rather than by Primitive-specific Qt policy.
+  active_tool = quader::ViewportToolId::LinearArray;
+  ASSERT_TRUE(editor.tools().activate(active_tool).ok());
+  window.refresh();
+  QCoreApplication::processEvents();
+  auto *linear_count = window.findChild<QSpinBox *>(
+      QStringLiteral("tool_settings.control.linear_array.count"));
+  ASSERT_NE(linear_count, nullptr);
+  QLineEdit *linear_count_editor = linear_count->findChild<QLineEdit *>();
+  ASSERT_NE(linear_count_editor, nullptr);
+  linear_count_editor->setText(QStringLiteral("3"));
+  linear_count_editor->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  send_key_event(*linear_count_editor, Qt::Key_Space);
+
+  EXPECT_EQ(linear_count->value(), 3);
   EXPECT_EQ(editor.tools().active_tool(), "select");
   EXPECT_TRUE(editor.history().can_undo());
 

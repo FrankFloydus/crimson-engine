@@ -8,7 +8,6 @@
 
 #include "core/types.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
-#include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/instance_renderable_cache.hpp"
 #include "render/mesh_renderable_cache.hpp"
@@ -23,6 +22,7 @@
 #include "render/overlay/instance_selection_overlay_cache.hpp"
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/selected_object_overlay_cache.hpp"
+#include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 
 #include <filament/Engine.h>
 #include <filament/Material.h>
@@ -39,19 +39,6 @@ namespace quader {
 class AssetRegistry;
 class SceneDocument;
 class ViewportSettings;
-
-/**
- * Stores the viewport-pane presentation data needed for render-owned scene
- * overlay extraction.
- */
-struct ViewportSceneOverlayFrameRequest {
-    RenderOverlaySelectionMode selection_mode =
-        RenderOverlaySelectionMode::Object;
-    bool selection_overlays_visible = true;
-    bool wireframe_pane = false;
-    bool point_light_gizmos_visible = false;
-    bool include_tool_overlays = true;
-};
 
 /// Aggregates render-resource sharing and explicit-batch diagnostic counters.
 struct SceneRenderResourceDiagnostics final {
@@ -76,7 +63,7 @@ struct SceneRenderResourceDiagnostics final {
 /**
  * Owns Scene Render Bridge behavior within the render extraction and Filament resource layer.
  */
-class SceneRenderBridge {
+class SceneRenderBridge : private ViewportOverlaySubmissionTarget {
 public:
     SceneRenderBridge() = default;
     SceneRenderBridge(const SceneRenderBridge&) = delete;
@@ -116,10 +103,6 @@ public:
     void sync_scene_asset_overlays(
         const RenderOverlaySelectedObjectSnapshot &selected_object_snapshot,
         const RenderOverlaySceneWireframeSnapshot &wireframe_snapshot);
-    [[nodiscard]] ViewportOverlayFrame build_scene_overlay_frame(
-        ViewportOverlayFrame base_frame,
-        const RenderOverlaySelectionSnapshot &snapshot,
-        const ViewportSceneOverlayFrameRequest &request) const;
     [[nodiscard]] ToolPreviewSubmissionResult
     set_tool_preview_meshes(std::vector<RenderToolPreviewMeshRecord> meshes);
     [[nodiscard]] std::uint64_t tool_preview_submission_revision() const {
@@ -134,26 +117,22 @@ public:
     /// Restricts transient overlay work to currently visible workspace panes;
     /// slots leaving the layout are released and lazily resubmitted if shown.
     void set_active_overlay_viewports(std::uint8_t viewport_mask);
-    void set_overlay_frame(ViewportOverlayFrame frame,
-                           ViewportOverlayCamera camera);
-    void set_overlay_frame(std::size_t viewport_index, std::uint8_t layer_mask,
-                           ViewportOverlayFrame frame,
-                           ViewportOverlayCamera camera);
-    /**
-     * Submits the small, frame-volatile tool overlay independently from the
-     * retained selection and scene overlay. Keeping these streams separate
-     * prevents gizmo, marquee, and pivot motion from copying and rebinding a
-     * large component-selection frame.
-     */
-    void set_dynamic_overlay_frame(std::size_t viewport_index,
-                                   std::uint8_t layer_mask,
-                                   ViewportOverlayFrame frame,
-                                   ViewportOverlayCamera camera);
-    [[nodiscard]] bool
-    update_overlay_camera(std::size_t viewport_index, std::uint8_t layer_mask,
-                          ViewportOverlayCamera camera);
+    [[nodiscard]] ViewportOverlaySubmissionResult submit_viewport_overlay(
+        ViewportOverlaySubmissionRequest request,
+        const ViewportSettings &settings);
 
   private:
+    [[nodiscard]] ViewportOverlayCameraUpdate
+    update_overlay_cameras(
+        std::size_t viewport_index, std::uint8_t layer_mask,
+        ViewportOverlayCamera camera) override;
+    void submit_persistent_overlay(
+        std::size_t viewport_index, std::uint8_t layer_mask,
+        ViewportOverlayFrame frame, ViewportOverlayCamera camera) override;
+    void submit_dynamic_overlay(
+        std::size_t viewport_index, std::uint8_t layer_mask,
+        ViewportOverlayFrame frame, ViewportOverlayCamera camera) override;
+
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
     TextureBindingService texture_binding_;
@@ -165,6 +144,7 @@ public:
     OverlayProxyFactory overlay_proxy_factory_;
     OverlayRenderableCache overlay_cache_;
     OverlayRenderableCache dynamic_overlay_cache_;
+    ViewportOverlaySubmissionCoordinator overlay_submission_coordinator_;
     InstanceSelectionOverlayCache instance_selection_overlay_cache_;
     SceneWireframeOverlayCache scene_wireframe_overlay_cache_;
     SelectedObjectOverlayCache selected_object_overlay_cache_;

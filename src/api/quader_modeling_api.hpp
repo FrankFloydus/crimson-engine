@@ -716,7 +716,6 @@ public:
                                           QVec3 pivot = {});
   [[nodiscard]] bool can_duplicate_selected_entity_hierarchy() const;
   QuaderApiVoidResult duplicate_selected_entity_hierarchy();
-  QuaderApiVoidResult duplicate_selected_hierarchy_for_group_drag();
   [[nodiscard]] bool can_create_instance() const;
   QuaderApiVoidResult create_instance();
   /** Public intent names used by UI, scripts, and automation. */

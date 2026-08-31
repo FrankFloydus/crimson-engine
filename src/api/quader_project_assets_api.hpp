@@ -8,6 +8,7 @@
 
 #include "api/quader_api_result.hpp"
 #include "api/quader_api_session.hpp"
+#include "api/quader_materials_api.hpp"
 #include "io/project/project_types.hpp"
 
 #include <array>
@@ -46,6 +47,45 @@ struct QuaderProjectMaterialPreview {
   std::uint64_t content_revision = 0u;
 };
 
+/// Identifies the semantic family presented by material catalog surfaces.
+enum class QuaderMaterialPresentationKind : std::uint8_t {
+  Embedded,
+  Standard,
+  Graph,
+};
+
+/// Cheap owner-derived stamp for the complete material presentation catalog.
+struct QuaderMaterialPresentationRevision {
+  std::uint64_t project_activation_generation = 0u;
+  std::uint64_t project_material_revision = 0u;
+  std::uint64_t active_scene_id = 0u;
+  std::uint64_t embedded_material_revision = 0u;
+
+  friend bool operator==(const QuaderMaterialPresentationRevision &,
+                         const QuaderMaterialPresentationRevision &) = default;
+};
+
+/// Renderer- and toolkit-neutral presentation of one available material.
+struct QuaderMaterialPresentationItem final {
+  QuaderMaterialReference reference;
+  QuaderMaterialPresentationKind kind =
+      QuaderMaterialPresentationKind::Embedded;
+  std::string name;
+  std::string project_relative_path;
+  std::uintmax_t qmat_size_bytes = 0u;
+  std::vector<std::byte> encoded_albedo;
+  std::array<float, 3> fallback_color{1.0f, 1.0f, 1.0f};
+  std::uint64_t content_revision = 0u;
+  bool available = true;
+  bool editable = false;
+};
+
+/// One immutable owner-derived catalog consumed by all retained UI surfaces.
+struct QuaderMaterialPresentationSnapshot {
+  QuaderMaterialPresentationRevision revision;
+  std::vector<QuaderMaterialPresentationItem> materials;
+};
+
 /// One project material created from an imported texture source.
 struct QuaderProjectMaterialImportSuccess {
   std::filesystem::path source_path;
@@ -76,6 +116,10 @@ public:
   QuaderApiVoidResult set_active_material(ProjectAssetId material_id);
   [[nodiscard]] QuaderApiResult<QuaderProjectMaterialPreview>
   material_preview(ProjectAssetId material_id) const;
+  [[nodiscard]] QuaderApiResult<QuaderMaterialPresentationRevision>
+  material_presentation_revision() const;
+  [[nodiscard]] QuaderApiResult<QuaderMaterialPresentationSnapshot>
+  material_presentations() const;
   /// Completes valid sources independently and reports per-file rejections.
   [[nodiscard]] QuaderApiResult<QuaderProjectMaterialImportReport>
   import_textures_as_materials(

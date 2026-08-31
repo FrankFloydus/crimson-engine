@@ -225,6 +225,12 @@ CommandResult EditorTransaction::record_executed_before_existing(
   return command_changed_result();
 }
 
+void EditorTransaction::set_label(std::string label) {
+  if (history_ != nullptr) {
+    label_ = std::move(label);
+  }
+}
+
 CommandResult EditorTransaction::commit() {
     if (history_ == nullptr) {
       return command_invalid_result("Editor transaction is not active");

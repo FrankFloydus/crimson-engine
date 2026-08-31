@@ -50,10 +50,10 @@ CommandResult missing_mirror_selection_result()
 	return { false, false, "Select one or more mesh objects to mirror." };
 }
 
-bool has_object_selection_for_drawn_plane_tool(const EditorSession& session)
+bool has_object_selection_for_drawn_plane_tool(const EditorRuntimeSelectionView& selection)
 {
-  return session.selection_mode() == SelectionMode::Object &&
-         !session.selected_object_ids().empty();
+  return selection.selection_mode() == SelectionMode::Object &&
+         !selection.selected_object_ids().empty();
 }
 
 CommandResult clear_hover(EditorRuntime& runtime)
@@ -63,13 +63,29 @@ CommandResult clear_hover(EditorRuntime& runtime)
 	return { true, was_hovering, "" };
 }
 
+EditorRuntimeToolActivationResult activate_tool_for_selection(
+		const EditorRuntimeSelectionView& selection,
+		EditorRuntime& runtime,
+		ViewportInteractionTool requested_tool)
+{
+	const std::size_t selected_object_count =
+		selection.selected_object_ids().size();
+	return runtime.activate_tool({
+		.requested_tool = requested_tool,
+		.selection_mode = selection.selection_mode(),
+		.selected_object_count = selected_object_count,
+		.selected_cut_target_object_count = selected_object_count,
+	});
+}
+
 CommandResult set_active_tool(
-		const EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		SetActiveToolRuntimeCommandSettings settings)
 {
 	const ViewportInteractionTool active_tool_before = runtime.active_tool();
-	const EditorRuntimeToolActivationResult activation = runtime.set_active_tool(session, settings.tool);
+	const EditorRuntimeToolActivationResult activation =
+		activate_tool_for_selection(selection, runtime, settings.tool);
 	if (activation.plan.activation_blocked) {
 		return blocked_tool_activation_result(activation, settings.tool);
 	}
@@ -86,7 +102,7 @@ bool box_runtime_status_changed(const EditorRuntimeStatus& before, const EditorR
 }
 
 std::optional<PickHitRecord> resolved_or_runtime_surface_hit(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		const quader_poly::Ray& ray,
 		const std::optional<PickHitRecord>& resolved_surface_hit,
 		bool surface_hit_resolved)
@@ -96,16 +112,16 @@ std::optional<PickHitRecord> resolved_or_runtime_surface_hit(
 	}
 	quader_poly::PickOptions options;
 	options.mode = quader_poly::SelectionMode::Face;
-	return session.pick_nearest({ ray, options });
+	return pick_nearest(selection.objects(), {ray, options});
 }
 
 BoxToolStateResult set_box_construction_plane_from_ray(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		const BoxRayRuntimeCommandSettings& settings)
 {
 	const std::optional<PickHitRecord> hit = resolved_or_runtime_surface_hit(
-		session, settings.ray, settings.resolved_surface_hit,
+		selection, settings.ray, settings.resolved_surface_hit,
 		settings.surface_hit_resolved);
 	if (hit.has_value() && quader::length_squared(hit->local_normal) > 0.000001F) {
 		return runtime.set_box_construction_plane(hit->local_position, hit->local_normal);
@@ -125,17 +141,19 @@ CommandResult box_state_result_to_command(
 	return { true, true, "" };
 }
 
-void clear_selection_for_box_placement(EditorSession& session, EditorRuntime& runtime)
+bool clear_selection_for_box_placement(
+		const EditorRuntimeSelectionView& selection,
+		EditorRuntime& runtime)
 {
-	if (!session.has_selection()) {
-		return;
+	if (!selection.has_selection()) {
+		return false;
 	}
-	session.clear_selection();
 	runtime.clear_selection_presentation_state();
+	return true;
 }
 
 CommandResult update_box_hover(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		BoxRayRuntimeCommandSettings settings)
 {
@@ -147,7 +165,7 @@ CommandResult update_box_hover(
 
 	runtime.set_box_grid_size(settings.grid_size);
 	const BoxToolStateResult plane_result =
-		set_box_construction_plane_from_ray(session, runtime, settings);
+		set_box_construction_plane_from_ray(selection, runtime, settings);
 	if (!plane_result.ok) {
 		return box_state_result_to_command(before, runtime, plane_result, "Box hover failed.");
 	}
@@ -163,15 +181,15 @@ CommandResult update_box_hover(
 }
 
 CommandResult begin_box_footprint(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
-		BoxRayRuntimeCommandSettings settings)
+		BoxRayRuntimeCommandSettings settings,
+		bool& clear_selection_requested)
 {
 	const EditorRuntimeStatus before = runtime.status();
-	const std::uint64_t selection_revision_before = session.state().selection_revision;
 	runtime.set_box_grid_size(settings.grid_size);
 	const BoxToolStateResult plane_result =
-		set_box_construction_plane_from_ray(session, runtime, settings);
+		set_box_construction_plane_from_ray(selection, runtime, settings);
 	if (!plane_result.ok) {
 		return box_state_result_to_command(before, runtime, plane_result, "Box footprint failed.");
 	}
@@ -185,16 +203,17 @@ CommandResult begin_box_footprint(
 	if (!result.ok) {
 		return box_state_result_to_command(before, runtime, result, "Box footprint failed.");
 	}
-	clear_selection_for_box_placement(session, runtime);
+	clear_selection_requested =
+		clear_selection_for_box_placement(selection, runtime);
 	return {
 		true,
 		box_runtime_status_changed(before, runtime.status()) ||
-			session.state().selection_revision != selection_revision_before,
+			clear_selection_requested,
 		"" };
 }
 
 CommandResult update_box_footprint(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		BoxRayRuntimeCommandSettings settings)
 {
@@ -239,13 +258,13 @@ CommandResult cancel_box(EditorRuntime& runtime)
 	return { true, box_runtime_status_changed(before, runtime.status()), "" };
 }
 
-RectangleSelectionState rectangle_selection_for_cut(const EditorSession& session)
+RectangleSelectionState rectangle_selection_for_cut(const EditorRuntimeSelectionView& selection)
 {
-	RectangleSelectionState selection;
-	selection.mode = session.selection_mode();
-	selection.active_object_id = session.active_object_id();
-	selection.selected_object_ids = session.selected_object_ids();
-	return selection;
+	RectangleSelectionState state;
+	state.mode = selection.selection_mode();
+	state.active_object_id = selection.active_object();
+	state.selected_object_ids = selection.selected_object_ids();
+	return state;
 }
 
 bool cut_runtime_status_changed(const EditorRuntimeStatus& before, const EditorRuntimeStatus& after)
@@ -261,39 +280,41 @@ bool cut_runtime_status_changed(const EditorRuntimeStatus& before, const EditorR
 }
 
 CommandResult update_insert_edge_loop_hover(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		InsertEdgeLoopPickRuntimeCommandSettings settings)
 {
   const EditorRuntimeToolActivationResult activation =
-      runtime.set_active_tool(session, ViewportInteractionTool::InsertEdgeLoop);
+      activate_tool_for_selection(selection, runtime, ViewportInteractionTool::InsertEdgeLoop);
   if (runtime.insert_edge_loop_state().dragging) {
     return {true, activation.applied || activation.transform_preview_cancelled,
             ""};
   }
 	const bool preview_changed = settings.resolved_hit.has_value()
 		? runtime.set_insert_edge_loop_preview_from_hit(
-			session, *settings.resolved_hit, settings.resolved_factor, false)
+			selection.objects(), *settings.resolved_hit, settings.resolved_factor, false)
 		: runtime.set_insert_edge_loop_preview_from_pick(
-			session, settings.ray, settings.grid_size, settings.vertex_radius,
+			selection.objects(), settings.ray, settings.grid_size, settings.vertex_radius,
 			settings.edge_radius, settings.snap_enabled, false,
 			settings.target_object_id);
 	return { true, activation.applied || activation.transform_preview_cancelled || preview_changed, "" };
 }
 
 CommandResult begin_insert_edge_loop_drag(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		InsertEdgeLoopPickRuntimeCommandSettings settings)
 {
   const EditorRuntimeToolActivationResult activation =
-      runtime.set_active_tool(session, ViewportInteractionTool::InsertEdgeLoop);
+      activate_tool_for_selection(selection, runtime, ViewportInteractionTool::InsertEdgeLoop);
   const bool valid = settings.resolved_hit.has_value()
       ? runtime.set_insert_edge_loop_preview_from_hit(
-            session, *settings.resolved_hit, settings.resolved_factor, true)
+            selection.objects(), *settings.resolved_hit, settings.resolved_factor,
+            true)
       : runtime.set_insert_edge_loop_preview_from_pick(
-            session, settings.ray, settings.grid_size, settings.vertex_radius,
-            settings.edge_radius, settings.snap_enabled, true,
+            selection.objects(), settings.ray, settings.grid_size,
+            settings.vertex_radius, settings.edge_radius,
+            settings.snap_enabled, true,
             settings.target_object_id);
   const bool dragging_before = runtime.status().insert_edge_loop_dragging;
   runtime.set_insert_edge_loop_dragging(valid);
@@ -307,7 +328,7 @@ CommandResult begin_insert_edge_loop_drag(
 }
 
 CommandResult update_insert_edge_loop_drag(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		InsertEdgeLoopPickRuntimeCommandSettings settings)
 {
@@ -316,9 +337,9 @@ CommandResult update_insert_edge_loop_drag(
 	}
 	const bool changed = settings.resolved_factor_from_world
 		? runtime.update_insert_edge_loop_drag_factor_from_world(
-			session, settings.resolved_factor)
+			selection.objects(), settings.resolved_factor)
 		: runtime.update_insert_edge_loop_drag_factor(
-			session, settings.ray, settings.grid_size,
+			selection.objects(), settings.ray, settings.grid_size,
 			settings.snap_enabled);
 	return { true, changed, "" };
 }
@@ -335,9 +356,9 @@ CommandResult cancel_insert_edge_loop(EditorRuntime& runtime)
 	return { true, changed, "" };
 }
 
-CommandResult activate_cut(EditorSession& session, EditorRuntime& runtime)
+CommandResult activate_cut(const EditorRuntimeSelectionView& selection, EditorRuntime& runtime)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_cut_selection_result();
 	}
 
@@ -348,12 +369,12 @@ CommandResult activate_cut(EditorSession& session, EditorRuntime& runtime)
 	runtime.reset_mirror_state();
 	runtime.reset_poly_state();
         const EditorRuntimeToolActivationResult activation =
-            runtime.set_active_tool(session, ViewportInteractionTool::Cut);
+            activate_tool_for_selection(selection, runtime, ViewportInteractionTool::Cut);
         runtime.clear_hover();
 	runtime.clear_gizmo_hover();
 	runtime.clear_transform_drag_state();
 	const CutToolResult refresh =
-		runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(session), session.objects());
+		runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection), selection.objects());
 	if (!refresh.ok) {
 		return { false, false, refresh.message.empty() ? "Could not activate cut." : refresh.message };
 	}
@@ -367,21 +388,21 @@ CommandResult activate_cut(EditorSession& session, EditorRuntime& runtime)
 		"" };
 }
 
-CommandResult update_cut_preview(EditorSession& session, EditorRuntime& runtime)
+CommandResult update_cut_preview(const EditorRuntimeSelectionView& selection, EditorRuntime& runtime)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_cut_selection_result();
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
         const EditorRuntimeToolActivationResult activation =
-            runtime.set_active_tool(session, ViewportInteractionTool::Cut);
+            activate_tool_for_selection(selection, runtime, ViewportInteractionTool::Cut);
         runtime.reset_insert_edge_loop_state();
 	runtime.reset_knife_state();
 	runtime.reset_mirror_state();
 	runtime.reset_poly_state();
 	const CutToolResult refresh =
-		runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(session), session.objects());
+		runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection), selection.objects());
 	if (!refresh.ok) {
 		return { false, false, refresh.message.empty() ? "Could not update cut preview." : refresh.message };
 	}
@@ -395,20 +416,20 @@ CommandResult update_cut_preview(EditorSession& session, EditorRuntime& runtime)
 		"" };
 }
 
-CommandResult set_cut_mode(EditorSession& session, EditorRuntime& runtime, SetCutModeRuntimeCommandSettings settings)
+CommandResult set_cut_mode(const EditorRuntimeSelectionView& selection, EditorRuntime& runtime, SetCutModeRuntimeCommandSettings settings)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_cut_selection_result();
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
         const EditorRuntimeToolActivationResult activation =
-            runtime.set_active_tool(session, ViewportInteractionTool::Cut);
+            activate_tool_for_selection(selection, runtime, ViewportInteractionTool::Cut);
         runtime.reset_poly_state();
 	runtime.reset_mirror_state();
 	const CutToolResult mode_result = runtime.set_cut_mode(cut_mode_from_id(settings.mode));
 	const CutToolResult refresh =
-		runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(session), session.objects());
+		runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection), selection.objects());
 	if (!mode_result.ok) {
 		return { false, false, mode_result.message.empty() ? "Could not set cut mode." : mode_result.message };
 	}
@@ -426,12 +447,12 @@ CommandResult set_cut_mode(EditorSession& session, EditorRuntime& runtime, SetCu
 		"" };
 }
 
-CommandResult cancel_cut(EditorSession& session, EditorRuntime& runtime)
+CommandResult cancel_cut(const EditorRuntimeSelectionView& selection, EditorRuntime& runtime)
 {
 	const EditorRuntimeStatus before = runtime.status();
 	runtime.reset_cut_state();
         const EditorRuntimeToolActivationResult activation =
-            runtime.set_active_tool(session, ViewportInteractionTool::Select);
+            activate_tool_for_selection(selection, runtime, ViewportInteractionTool::Select);
         runtime.clear_hover();
 	const EditorRuntimeStatus after = runtime.status();
 	return {
@@ -453,11 +474,11 @@ CutRayUpdateInput cut_ray_input(CutRayRuntimeCommandSettings settings)
 }
 
 EditorRuntimeToolActivationResult activate_cut_interaction(
-		const EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime)
 {
   const EditorRuntimeToolActivationResult activation =
-      runtime.set_active_tool(session, ViewportInteractionTool::Cut);
+      activate_tool_for_selection(selection, runtime, ViewportInteractionTool::Cut);
   if (activation.plan.activation_blocked) {
     return activation;
   }
@@ -469,24 +490,24 @@ EditorRuntimeToolActivationResult activate_cut_interaction(
 }
 
 CommandResult update_cut_hover(
-		const EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		CutRayRuntimeCommandSettings settings)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_cut_selection_result();
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
-	const EditorRuntimeToolActivationResult activation = activate_cut_interaction(session, runtime);
+	const EditorRuntimeToolActivationResult activation = activate_cut_interaction(selection, runtime);
 	if (activation.plan.activation_blocked) {
           return blocked_tool_activation_result(activation,
                                                 ViewportInteractionTool::Cut);
         }
 	const CutToolResult result =
 		runtime.update_cut_hover_from_ray(
-			rectangle_selection_for_cut(session),
-			session.objects(),
+			rectangle_selection_for_cut(selection),
+			selection.objects(),
 			cut_ray_input(settings));
 	if (!result.ok) {
 		return { false, false, result.message.empty() ? "Cut hover was rejected." : result.message };
@@ -502,16 +523,16 @@ CommandResult update_cut_hover(
 }
 
 CommandResult click_cut(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		CutRayRuntimeCommandSettings settings)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_cut_selection_result();
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
-	const EditorRuntimeToolActivationResult activation = activate_cut_interaction(session, runtime);
+	const EditorRuntimeToolActivationResult activation = activate_cut_interaction(selection, runtime);
 	if (activation.plan.activation_blocked) {
           return blocked_tool_activation_result(activation,
                                                 ViewportInteractionTool::Cut);
@@ -520,8 +541,8 @@ CommandResult click_cut(
 	input.dragging = false;
 	const CutToolResult result =
 		runtime.click_cut_from_ray(
-			rectangle_selection_for_cut(session),
-			session.objects(),
+			rectangle_selection_for_cut(selection),
+			selection.objects(),
 			input);
 	if (!result.ok) {
 		return { false, false, result.message.empty() ? "Cut point was rejected." : result.message };
@@ -537,16 +558,16 @@ CommandResult click_cut(
 }
 
 CommandResult begin_cut_point_drag(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		CutPointDragRuntimeCommandSettings settings)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_cut_selection_result();
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
-	const EditorRuntimeToolActivationResult activation = activate_cut_interaction(session, runtime);
+	const EditorRuntimeToolActivationResult activation = activate_cut_interaction(selection, runtime);
 	if (activation.plan.activation_blocked) {
           return blocked_tool_activation_result(activation,
                                                 ViewportInteractionTool::Cut);
@@ -555,7 +576,7 @@ CommandResult begin_cut_point_drag(
 	if (!result.ok) {
 		return { false, false, result.message.empty() ? "Cut point drag was rejected." : result.message };
 	}
-	(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(session), session.objects());
+	(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection), selection.objects());
 	const EditorRuntimeStatus after = runtime.status();
 	return {
 		true,
@@ -567,16 +588,16 @@ CommandResult begin_cut_point_drag(
 }
 
 CommandResult begin_cut_line_drag(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		CutRayRuntimeCommandSettings settings)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_cut_selection_result();
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
-	const EditorRuntimeToolActivationResult activation = activate_cut_interaction(session, runtime);
+	const EditorRuntimeToolActivationResult activation = activate_cut_interaction(selection, runtime);
 	if (activation.plan.activation_blocked) {
           return blocked_tool_activation_result(activation,
                                                 ViewportInteractionTool::Cut);
@@ -587,7 +608,7 @@ CommandResult begin_cut_line_drag(
 	if (!result.ok) {
 		return { false, false, result.message.empty() ? "Cut line drag was rejected." : result.message };
 	}
-	(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(session), session.objects());
+	(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection), selection.objects());
 	const EditorRuntimeStatus after = runtime.status();
 	return {
 		true,
@@ -598,22 +619,22 @@ CommandResult begin_cut_line_drag(
 		"" };
 }
 
-CommandResult end_cut_drag(EditorSession& session, EditorRuntime& runtime)
+CommandResult end_cut_drag(const EditorRuntimeSelectionView& selection, EditorRuntime& runtime)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_cut_selection_result();
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
         const EditorRuntimeToolActivationResult activation =
-            runtime.set_active_tool(session, ViewportInteractionTool::Cut);
+            activate_tool_for_selection(selection, runtime, ViewportInteractionTool::Cut);
         if (activation.plan.activation_blocked) {
           return blocked_tool_activation_result(activation,
                                                 ViewportInteractionTool::Cut);
         }
 	runtime.reset_poly_state();
 	const CutToolResult result = runtime.end_cut_drag();
-	(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(session), session.objects());
+	(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection), selection.objects());
 	const EditorRuntimeStatus after = runtime.status();
 	return {
 		result.ok,
@@ -624,13 +645,13 @@ CommandResult end_cut_drag(EditorSession& session, EditorRuntime& runtime)
 		result.message };
 }
 
-RectangleSelectionState rectangle_selection_for_mirror(const EditorSession& session)
+RectangleSelectionState rectangle_selection_for_mirror(const EditorRuntimeSelectionView& selection)
 {
-	RectangleSelectionState selection;
-	selection.mode = session.selection_mode();
-	selection.active_object_id = session.active_object_id();
-	selection.selected_object_ids = session.selected_object_ids();
-	return selection;
+	RectangleSelectionState state;
+	state.mode = selection.selection_mode();
+	state.active_object_id = selection.active_object();
+	state.selected_object_ids = selection.selected_object_ids();
+	return state;
 }
 
 bool mirror_runtime_status_changed(const EditorRuntimeStatus& before, const EditorRuntimeStatus& after)
@@ -655,10 +676,10 @@ MirrorRayUpdateInput mirror_ray_input(MirrorRayRuntimeCommandSettings settings)
 	};
 }
 
-EditorRuntimeToolActivationResult activate_mirror_interaction(EditorSession& session, EditorRuntime& runtime)
+EditorRuntimeToolActivationResult activate_mirror_interaction(const EditorRuntimeSelectionView& selection, EditorRuntime& runtime)
 {
   const EditorRuntimeToolActivationResult activation =
-      runtime.set_active_tool(session, ViewportInteractionTool::Mirror);
+      activate_tool_for_selection(selection, runtime, ViewportInteractionTool::Mirror);
   if (activation.plan.activation_blocked) {
     return activation;
   }
@@ -669,9 +690,9 @@ EditorRuntimeToolActivationResult activate_mirror_interaction(EditorSession& ses
 	return activation;
 }
 
-CommandResult activate_mirror(EditorSession& session, EditorRuntime& runtime)
+CommandResult activate_mirror(const EditorRuntimeSelectionView& selection, EditorRuntime& runtime)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_mirror_selection_result();
 	}
 
@@ -682,12 +703,12 @@ CommandResult activate_mirror(EditorSession& session, EditorRuntime& runtime)
 	runtime.reset_mirror_state();
 	runtime.reset_poly_state();
         const EditorRuntimeToolActivationResult activation =
-            runtime.set_active_tool(session, ViewportInteractionTool::Mirror);
+            activate_tool_for_selection(selection, runtime, ViewportInteractionTool::Mirror);
         runtime.clear_hover();
 	runtime.clear_gizmo_hover();
 	runtime.clear_transform_drag_state();
 	const MirrorToolResult refresh =
-		runtime.refresh_mirror_preview_from_selection(rectangle_selection_for_mirror(session), session.objects());
+		runtime.refresh_mirror_preview_from_selection(rectangle_selection_for_mirror(selection), selection.objects());
 	if (!refresh.ok) {
 		return { false, false, refresh.message.empty() ? "Could not activate mirror." : refresh.message };
 	}
@@ -701,21 +722,21 @@ CommandResult activate_mirror(EditorSession& session, EditorRuntime& runtime)
 		"" };
 }
 
-CommandResult update_mirror_preview(EditorSession& session, EditorRuntime& runtime)
+CommandResult update_mirror_preview(const EditorRuntimeSelectionView& selection, EditorRuntime& runtime)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_mirror_selection_result();
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
         const EditorRuntimeToolActivationResult activation =
-            runtime.set_active_tool(session, ViewportInteractionTool::Mirror);
+            activate_tool_for_selection(selection, runtime, ViewportInteractionTool::Mirror);
         runtime.reset_insert_edge_loop_state();
 	runtime.reset_knife_state();
 	runtime.reset_cut_state();
 	runtime.reset_poly_state();
 	const MirrorToolResult refresh =
-		runtime.refresh_mirror_preview_from_selection(rectangle_selection_for_mirror(session), session.objects());
+		runtime.refresh_mirror_preview_from_selection(rectangle_selection_for_mirror(selection), selection.objects());
 	if (!refresh.ok) {
 		return { false, false, refresh.message.empty() ? "Could not update mirror preview." : refresh.message };
 	}
@@ -729,12 +750,12 @@ CommandResult update_mirror_preview(EditorSession& session, EditorRuntime& runti
 		"" };
 }
 
-CommandResult cancel_mirror(EditorSession& session, EditorRuntime& runtime)
+CommandResult cancel_mirror(const EditorRuntimeSelectionView& selection, EditorRuntime& runtime)
 {
 	const EditorRuntimeStatus before = runtime.status();
 	runtime.reset_mirror_state();
         const EditorRuntimeToolActivationResult activation =
-            runtime.set_active_tool(session, ViewportInteractionTool::Select);
+            activate_tool_for_selection(selection, runtime, ViewportInteractionTool::Select);
         runtime.clear_hover();
 	const EditorRuntimeStatus after = runtime.status();
 	return {
@@ -746,24 +767,24 @@ CommandResult cancel_mirror(EditorSession& session, EditorRuntime& runtime)
 }
 
 CommandResult update_mirror_hover(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		MirrorRayRuntimeCommandSettings settings)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_mirror_selection_result();
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
-	const EditorRuntimeToolActivationResult activation = activate_mirror_interaction(session, runtime);
+	const EditorRuntimeToolActivationResult activation = activate_mirror_interaction(selection, runtime);
 	if (activation.plan.activation_blocked) {
           return blocked_tool_activation_result(
               activation, ViewportInteractionTool::Mirror);
         }
 	const MirrorToolResult result =
 		runtime.update_mirror_hover_from_ray(
-			rectangle_selection_for_mirror(session),
-			session.objects(),
+			rectangle_selection_for_mirror(selection),
+			selection.objects(),
 			mirror_ray_input(settings));
 	if (!result.ok) {
 		return { false, false, result.message.empty() ? "Mirror hover was rejected." : result.message };
@@ -779,16 +800,16 @@ CommandResult update_mirror_hover(
 }
 
 CommandResult click_mirror(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		MirrorRayRuntimeCommandSettings settings)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_mirror_selection_result();
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
-	const EditorRuntimeToolActivationResult activation = activate_mirror_interaction(session, runtime);
+	const EditorRuntimeToolActivationResult activation = activate_mirror_interaction(selection, runtime);
 	if (activation.plan.activation_blocked) {
           return blocked_tool_activation_result(
               activation, ViewportInteractionTool::Mirror);
@@ -797,8 +818,8 @@ CommandResult click_mirror(
 	input.dragging = false;
 	const MirrorToolResult result =
 		runtime.click_mirror_from_ray(
-			rectangle_selection_for_mirror(session),
-			session.objects(),
+			rectangle_selection_for_mirror(selection),
+			selection.objects(),
 			input);
 	if (!result.ok) {
 		return { false, false, result.message.empty() ? "Mirror point was rejected." : result.message };
@@ -814,16 +835,16 @@ CommandResult click_mirror(
 }
 
 CommandResult begin_mirror_point_drag(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		MirrorPointDragRuntimeCommandSettings settings)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_mirror_selection_result();
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
-	const EditorRuntimeToolActivationResult activation = activate_mirror_interaction(session, runtime);
+	const EditorRuntimeToolActivationResult activation = activate_mirror_interaction(selection, runtime);
 	if (activation.plan.activation_blocked) {
           return blocked_tool_activation_result(
               activation, ViewportInteractionTool::Mirror);
@@ -832,7 +853,7 @@ CommandResult begin_mirror_point_drag(
 	if (!result.ok) {
 		return { false, false, result.message.empty() ? "Mirror point drag was rejected." : result.message };
 	}
-	(void)runtime.refresh_mirror_preview_from_selection(rectangle_selection_for_mirror(session), session.objects());
+	(void)runtime.refresh_mirror_preview_from_selection(rectangle_selection_for_mirror(selection), selection.objects());
 	const EditorRuntimeStatus after = runtime.status();
 	return {
 		true,
@@ -844,16 +865,16 @@ CommandResult begin_mirror_point_drag(
 }
 
 CommandResult begin_mirror_line_drag(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		MirrorRayRuntimeCommandSettings settings)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_mirror_selection_result();
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
-	const EditorRuntimeToolActivationResult activation = activate_mirror_interaction(session, runtime);
+	const EditorRuntimeToolActivationResult activation = activate_mirror_interaction(selection, runtime);
 	if (activation.plan.activation_blocked) {
           return blocked_tool_activation_result(
               activation, ViewportInteractionTool::Mirror);
@@ -864,7 +885,7 @@ CommandResult begin_mirror_line_drag(
 	if (!result.ok) {
 		return { false, false, result.message.empty() ? "Mirror line drag was rejected." : result.message };
 	}
-	(void)runtime.refresh_mirror_preview_from_selection(rectangle_selection_for_mirror(session), session.objects());
+	(void)runtime.refresh_mirror_preview_from_selection(rectangle_selection_for_mirror(selection), selection.objects());
 	const EditorRuntimeStatus after = runtime.status();
 	return {
 		true,
@@ -875,15 +896,15 @@ CommandResult begin_mirror_line_drag(
 		"" };
 }
 
-CommandResult end_mirror_drag(EditorSession& session, EditorRuntime& runtime)
+CommandResult end_mirror_drag(const EditorRuntimeSelectionView& selection, EditorRuntime& runtime)
 {
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
+	if (!has_object_selection_for_drawn_plane_tool(selection)) {
 		return missing_mirror_selection_result();
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
         const EditorRuntimeToolActivationResult activation =
-            runtime.set_active_tool(session, ViewportInteractionTool::Mirror);
+            activate_tool_for_selection(selection, runtime, ViewportInteractionTool::Mirror);
         if (activation.plan.activation_blocked) {
           return blocked_tool_activation_result(
               activation, ViewportInteractionTool::Mirror);
@@ -891,7 +912,7 @@ CommandResult end_mirror_drag(EditorSession& session, EditorRuntime& runtime)
 	runtime.reset_cut_state();
 	runtime.reset_poly_state();
 	const MirrorToolResult result = runtime.end_mirror_drag();
-	(void)runtime.refresh_mirror_preview_from_selection(rectangle_selection_for_mirror(session), session.objects());
+	(void)runtime.refresh_mirror_preview_from_selection(rectangle_selection_for_mirror(selection), selection.objects());
 	const EditorRuntimeStatus after = runtime.status();
 	return {
 		result.ok,
@@ -903,7 +924,7 @@ CommandResult end_mirror_drag(EditorSession& session, EditorRuntime& runtime)
 }
 
 CommandResult update_poly_hover(
-    EditorSession &session, EditorRuntime &runtime,
+    const EditorRuntimeSelectionView &selection, EditorRuntime &runtime,
     PolyHoverRuntimeCommandSettings settings) {
   quader::QVec3 position;
   quader::QVec3 plane_normal;
@@ -924,7 +945,7 @@ CommandResult update_poly_hover(
   } else {
     const std::optional<PickHitRecord> surface_hit =
         resolved_or_runtime_surface_hit(
-            session, settings.ray, settings.resolved_surface_hit,
+            selection, settings.ray, settings.resolved_surface_hit,
             settings.surface_hit_resolved);
     if (surface_hit.has_value() &&
         quader::length_squared(surface_hit->local_normal) > 0.000001F) {
@@ -970,10 +991,28 @@ EditorRuntimeCommandResult runtime_command_result(EditorRuntime& runtime, Comman
 	return { std::move(command), runtime.status() };
 }
 
+EditorRuntimeSelectionView selection_view_from_session(
+    const EditorSession &session) {
+  return {
+      .object_records = &session.objects(),
+      .mode = session.selection_mode(),
+      .active_object_id = session.active_object_id(),
+  };
+}
+
 } // namespace
 
 EditorRuntimeCommandResult execute_cut_hover_runtime_command(
 		const EditorSession& session,
+		EditorRuntime& runtime,
+		const EditorRuntimeCommand& command)
+{
+  return execute_cut_hover_runtime_command(selection_view_from_session(session),
+                                           runtime, command);
+}
+
+EditorRuntimeCommandResult execute_cut_hover_runtime_command(
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		const EditorRuntimeCommand& command)
 {
@@ -987,11 +1026,11 @@ EditorRuntimeCommandResult execute_cut_hover_runtime_command(
 		return runtime_command_result(runtime, settings_mismatch_result());
 	}
 	return runtime_command_result(
-		runtime, update_cut_hover(session, runtime, *settings));
+		runtime, update_cut_hover(selection, runtime, *settings));
 }
 
 EditorRuntimeCommandResult execute_runtime_command(
-		EditorSession& session,
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		const EditorRuntimeCommand& command)
 {
@@ -1009,7 +1048,7 @@ EditorRuntimeCommandResult execute_runtime_command(
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(
-              runtime, set_active_tool(session, runtime, *settings));
+              runtime, set_active_tool(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::UpdateInsertEdgeLoopHover: {
           const auto *settings =
@@ -1020,7 +1059,7 @@ EditorRuntimeCommandResult execute_runtime_command(
           }
           return runtime_command_result(
               runtime,
-              update_insert_edge_loop_hover(session, runtime, *settings));
+              update_insert_edge_loop_hover(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::BeginInsertEdgeLoopDrag: {
           const auto *settings =
@@ -1031,7 +1070,7 @@ EditorRuntimeCommandResult execute_runtime_command(
           }
           return runtime_command_result(
               runtime,
-              begin_insert_edge_loop_drag(session, runtime, *settings));
+              begin_insert_edge_loop_drag(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::UpdateInsertEdgeLoopDrag: {
           const auto *settings =
@@ -1042,7 +1081,7 @@ EditorRuntimeCommandResult execute_runtime_command(
           }
           return runtime_command_result(
               runtime,
-              update_insert_edge_loop_drag(session, runtime, *settings));
+              update_insert_edge_loop_drag(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::CancelInsertEdgeLoop:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
@@ -1055,13 +1094,13 @@ EditorRuntimeCommandResult execute_runtime_command(
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(runtime,
-                                        activate_cut(session, runtime));
+                                        activate_cut(selection, runtime));
         case EditorRuntimeCommandId::UpdateCutPreview:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(runtime,
-                                        update_cut_preview(session, runtime));
+                                        update_cut_preview(selection, runtime));
         case EditorRuntimeCommandId::SetCutMode: {
           const auto *settings =
               std::get_if<SetCutModeRuntimeCommandSettings>(&command.settings);
@@ -1069,15 +1108,15 @@ EditorRuntimeCommandResult execute_runtime_command(
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(
-              runtime, set_cut_mode(session, runtime, *settings));
+              runtime, set_cut_mode(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::CancelCut:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
             return runtime_command_result(runtime, settings_mismatch_result());
           }
-          return runtime_command_result(runtime, cancel_cut(session, runtime));
+          return runtime_command_result(runtime, cancel_cut(selection, runtime));
         case EditorRuntimeCommandId::UpdateCutHover: {
-          return execute_cut_hover_runtime_command(session, runtime, command);
+          return execute_cut_hover_runtime_command(selection, runtime, command);
         }
         case EditorRuntimeCommandId::ClickCut: {
           const auto *settings =
@@ -1086,7 +1125,7 @@ EditorRuntimeCommandResult execute_runtime_command(
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(runtime,
-                                        click_cut(session, runtime, *settings));
+                                        click_cut(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::BeginCutPointDrag: {
           const auto *settings =
@@ -1096,7 +1135,7 @@ EditorRuntimeCommandResult execute_runtime_command(
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(
-              runtime, begin_cut_point_drag(session, runtime, *settings));
+              runtime, begin_cut_point_drag(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::BeginCutLineDrag: {
           const auto *settings =
@@ -1105,32 +1144,32 @@ EditorRuntimeCommandResult execute_runtime_command(
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(
-              runtime, begin_cut_line_drag(session, runtime, *settings));
+              runtime, begin_cut_line_drag(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::EndCutDrag:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(runtime,
-                                        end_cut_drag(session, runtime));
+                                        end_cut_drag(selection, runtime));
         case EditorRuntimeCommandId::ActivateMirror:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(runtime,
-                                        activate_mirror(session, runtime));
+                                        activate_mirror(selection, runtime));
         case EditorRuntimeCommandId::UpdateMirrorPreview:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(
-              runtime, update_mirror_preview(session, runtime));
+              runtime, update_mirror_preview(selection, runtime));
         case EditorRuntimeCommandId::CancelMirror:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(runtime,
-                                        cancel_mirror(session, runtime));
+                                        cancel_mirror(selection, runtime));
         case EditorRuntimeCommandId::UpdateMirrorHover: {
           const auto *settings =
               std::get_if<MirrorRayRuntimeCommandSettings>(&command.settings);
@@ -1138,7 +1177,7 @@ EditorRuntimeCommandResult execute_runtime_command(
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(
-              runtime, update_mirror_hover(session, runtime, *settings));
+              runtime, update_mirror_hover(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::ClickMirror: {
           const auto *settings =
@@ -1147,7 +1186,7 @@ EditorRuntimeCommandResult execute_runtime_command(
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(
-              runtime, click_mirror(session, runtime, *settings));
+              runtime, click_mirror(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::BeginMirrorPointDrag: {
           const auto *settings =
@@ -1157,7 +1196,7 @@ EditorRuntimeCommandResult execute_runtime_command(
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(
-              runtime, begin_mirror_point_drag(session, runtime, *settings));
+              runtime, begin_mirror_point_drag(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::BeginMirrorLineDrag: {
           const auto *settings =
@@ -1166,14 +1205,14 @@ EditorRuntimeCommandResult execute_runtime_command(
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(
-              runtime, begin_mirror_line_drag(session, runtime, *settings));
+              runtime, begin_mirror_line_drag(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::EndMirrorDrag:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(runtime,
-                                        end_mirror_drag(session, runtime));
+                                        end_mirror_drag(selection, runtime));
         case EditorRuntimeCommandId::UpdatePolyHover: {
           const auto *settings =
               std::get_if<PolyHoverRuntimeCommandSettings>(&command.settings);
@@ -1181,7 +1220,7 @@ EditorRuntimeCommandResult execute_runtime_command(
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(
-              runtime, update_poly_hover(session, runtime, *settings));
+              runtime, update_poly_hover(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::AcceptPolyPoint:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
@@ -1200,7 +1239,7 @@ EditorRuntimeCommandResult execute_runtime_command(
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(
-              runtime, update_box_hover(session, runtime, *settings));
+              runtime, update_box_hover(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::BeginBoxFootprint: {
           const auto *settings =
@@ -1208,8 +1247,12 @@ EditorRuntimeCommandResult execute_runtime_command(
           if (settings == nullptr) {
             return runtime_command_result(runtime, settings_mismatch_result());
           }
-          return runtime_command_result(
-              runtime, begin_box_footprint(session, runtime, *settings));
+          bool clear_selection_requested = false;
+          EditorRuntimeCommandResult result = runtime_command_result(
+              runtime, begin_box_footprint(selection, runtime, *settings,
+                                           clear_selection_requested));
+          result.clear_selection_requested = clear_selection_requested;
+          return result;
         }
         case EditorRuntimeCommandId::UpdateBoxFootprint: {
           const auto *settings =
@@ -1218,7 +1261,7 @@ EditorRuntimeCommandResult execute_runtime_command(
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(
-              runtime, update_box_footprint(session, runtime, *settings));
+              runtime, update_box_footprint(selection, runtime, *settings));
         }
         case EditorRuntimeCommandId::BeginBoxHeight: {
           const auto *settings =
@@ -1246,6 +1289,15 @@ EditorRuntimeCommandResult execute_runtime_command(
 	}
 
 	return runtime_command_result(runtime, { false, false, "Unknown runtime command." });
+}
+
+EditorRuntimeCommandResult execute_runtime_command(
+		EditorSession& session,
+		EditorRuntime& runtime,
+		const EditorRuntimeCommand& command)
+{
+  return execute_runtime_command(selection_view_from_session(session), runtime,
+                                 command);
 }
 
 } // namespace quader_editor_core

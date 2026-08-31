@@ -1758,6 +1758,15 @@ TEST(ProgrammaticBehaviorScenarioTests,
 
   s.when().begin_transform_preview(true).translate_preview({1.0f, 0.0f, 0.0f});
 
+  const auto duplicate = s.object("source.copy");
+  ASSERT_NE(duplicate.entity, quader::kInvalidEntityId);
+  ASSERT_NE(duplicate.modeling_object_id,
+            quader::kInvalidQuaderModelingObjectId);
+  const auto duplicate_at_begin = s.api().query().entity(duplicate.entity);
+  ASSERT_TRUE(duplicate_at_begin.has_value());
+  EXPECT_EQ(duplicate_at_begin->modeling_object_id,
+            duplicate.modeling_object_id);
+
   const quader::test::BehaviorSnapshot first_move = s.snapshot("first move");
 
   s.when().translate_preview({3.0f, 0.0f, 0.0f}).commit_transform_preview();
@@ -1769,12 +1778,78 @@ TEST(ProgrammaticBehaviorScenarioTests,
       .selected_alias_is("source.copy")
       .selected_bounds_center_near({3.0f, 0.0f, 0.0f});
 
-  // The renderer-owned position stream moves the visible duplicate; behavior
-  // snapshots intentionally continue to expose the durable scene until commit.
-  s.then().snapshot(first_move).selected_bounds_center_near({0.0f, 0.0f, 0.0f});
+  // Object and Group structural previews use the scene transform owner, so
+  // the complete duplicated hierarchy exposes the current absolute preview
+  // delta while the enclosing editor transaction remains cancelable.
+  s.then().snapshot(first_move).selected_bounds_center_near({1.0f, 0.0f, 0.0f});
+
+  const auto duplicate_at_commit = s.api().query().entity(duplicate.entity);
+  ASSERT_TRUE(duplicate_at_commit.has_value());
+  EXPECT_EQ(s.api().history().snapshot().undo_label,
+            "Commit Transform Preview");
+  EXPECT_EQ(duplicate_at_commit->uuid, duplicate_at_begin->uuid);
+  EXPECT_EQ(duplicate_at_commit->editor_object_id,
+            duplicate_at_begin->editor_object_id);
+  EXPECT_EQ(duplicate_at_commit->modeling_object_id,
+            duplicate.modeling_object_id);
+
+  ASSERT_TRUE(s.api().history().undo().ok());
+  EXPECT_EQ(s.api().history().snapshot().undo_label, "Create Box");
+  EXPECT_FALSE(s.api().query().entity(duplicate.entity).has_value());
+  EXPECT_FALSE(s.api()
+                   .query()
+                   .modeling_object_for_id(duplicate.modeling_object_id)
+                   .has_value());
+  ASSERT_TRUE(s.api().history().redo().ok());
+  const auto duplicate_after_redo = s.api().query().entity(duplicate.entity);
+  ASSERT_TRUE(duplicate_after_redo.has_value());
+  EXPECT_EQ(duplicate_after_redo->uuid, duplicate_at_begin->uuid);
+  EXPECT_EQ(duplicate_after_redo->editor_object_id,
+            duplicate_at_begin->editor_object_id);
+  EXPECT_EQ(duplicate_after_redo->modeling_object_id,
+            duplicate.modeling_object_id);
+  const auto modeling_after_redo =
+      s.api().query().modeling_object_for_id(duplicate.modeling_object_id);
+  ASSERT_TRUE(modeling_after_redo.has_value());
+  EXPECT_EQ(modeling_after_redo->entity, duplicate.entity);
 
   s.when().pick({3.0f, 0.0f, 5.0f});
   s.then().selection().object_count(1).active_alias("source.copy");
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     ShiftDuplicatePreviewCancelRestoresSourceAndRemovesExactDuplicateIdentity) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  s.given().unit_box("source", "Shift Duplicate Source").selected("source");
+  const auto source = s.object("source");
+
+  s.when().begin_transform_preview(true);
+  s.then().command().ok_changed();
+  const auto duplicate = s.object("source.copy");
+  ASSERT_NE(duplicate.entity, quader::kInvalidEntityId);
+  ASSERT_NE(duplicate.modeling_object_id,
+            quader::kInvalidQuaderModelingObjectId);
+  ASSERT_TRUE(s.api().query().entity(duplicate.entity).has_value());
+  ASSERT_TRUE(s.api()
+                  .query()
+                  .modeling_object_for_id(duplicate.modeling_object_id)
+                  .has_value());
+
+  s.when().cancel_transform_preview();
+  s.then().command().ok_changed();
+  EXPECT_EQ(s.api().history().snapshot().undo_label, "Create Box");
+  EXPECT_FALSE(s.api().query().entity(duplicate.entity).has_value());
+  EXPECT_FALSE(s.api()
+                   .query()
+                   .modeling_object_for_id(duplicate.modeling_object_id)
+                   .has_value());
+  const auto source_after_cancel =
+      s.api().query().modeling_object_for_entity(source.entity);
+  ASSERT_TRUE(source_after_cancel.has_value());
+  EXPECT_EQ(source_after_cancel->modeling_object_id,
+            source.modeling_object_id);
+  EXPECT_EQ(s.api().selection().summary().active_object_id,
+            source.modeling_object_id);
 }
 
 TEST(ProgrammaticBehaviorScenarioTests, ComponentGizmoMoveRotateScaleKeepComponentSelectionsAndMutateMesh) {

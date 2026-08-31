@@ -697,7 +697,7 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                Fixture::ObjectSelection, kToolDomains,
                Outcome::SuccessRequired, UndoRepeat::None),
       contract(quader_command::kToolsActivateCurve,
-               Fixture::Viewport, kToolDomains,
+               Fixture::Viewport, kToolDomains | Domain::Selection,
                Outcome::SuccessRequired, UndoRepeat::None),
   };
 

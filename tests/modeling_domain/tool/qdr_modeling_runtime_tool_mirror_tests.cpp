@@ -172,3 +172,38 @@ TEST(QdrModelingRuntimeToolMirrorTests, MirrorLineDragMovesTheWholePlacedPlane) 
 	EXPECT_TRUE(quader_editor_core::end_mirror_line_drag(state).ok);
 	EXPECT_FALSE(quader_editor_core::mirror_is_dragging(state));
 }
+
+TEST(QdrModelingRuntimeToolMirrorTests, MirrorLineDragNormalizesEachAnchorToTheCurrentLine) {
+	quader_editor_core::MirrorToolState state;
+	state.plane.points = {
+		{ 0.0F, 2.0F, 0.0F },
+		{ 1.0F, 2.0F, 0.0F },
+	};
+	state.plane.face_normal = { 0.0F, 1.0F, 0.0F };
+	state.target_object_ids = { 1 };
+	state.preview_valid = true;
+
+	ASSERT_TRUE(quader_editor_core::begin_mirror_line_drag(
+		state, { 0.5F, 4.0F, 0.0F }).ok);
+	EXPECT_FLOAT_EQ(state.plane.drag_line_anchor.x, 0.5F);
+	EXPECT_FLOAT_EQ(state.plane.drag_line_anchor.y, 2.0F);
+	ASSERT_TRUE(quader_editor_core::update_dragged_mirror_line(
+		state, { 1.5F, 4.0F, 0.0F }).ok);
+	ASSERT_TRUE(quader_editor_core::end_mirror_line_drag(state).ok);
+	EXPECT_FLOAT_EQ(state.plane.points[0].x, 1.0F);
+	EXPECT_FLOAT_EQ(state.plane.points[0].y, 4.0F);
+	EXPECT_FLOAT_EQ(state.plane.points[1].x, 2.0F);
+	EXPECT_FLOAT_EQ(state.plane.points[1].y, 4.0F);
+
+	ASSERT_TRUE(quader_editor_core::begin_mirror_line_drag(
+		state, { 1.5F, 6.0F, 0.0F }).ok);
+	EXPECT_FLOAT_EQ(state.plane.drag_line_anchor.x, 1.5F);
+	EXPECT_FLOAT_EQ(state.plane.drag_line_anchor.y, 4.0F);
+	ASSERT_TRUE(quader_editor_core::update_dragged_mirror_line(
+		state, { 2.5F, 6.0F, 0.0F }).ok);
+	ASSERT_TRUE(quader_editor_core::end_mirror_line_drag(state).ok);
+	EXPECT_FLOAT_EQ(state.plane.points[0].x, 2.0F);
+	EXPECT_FLOAT_EQ(state.plane.points[0].y, 6.0F);
+	EXPECT_FLOAT_EQ(state.plane.points[1].x, 3.0F);
+	EXPECT_FLOAT_EQ(state.plane.points[1].y, 6.0F);
+}

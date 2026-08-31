@@ -53,6 +53,8 @@ public:
     QuaderApiVoidResult commit_active_tool_preview();
     QuaderApiVoidResult cancel_active_tool_preview();
     QuaderApiVoidResult cancel_modal_tool();
+    [[nodiscard]] bool
+    active_native_tool_lifecycle(ViewportToolId tool) const;
 
     [[nodiscard]] std::string active_tool() const;
 

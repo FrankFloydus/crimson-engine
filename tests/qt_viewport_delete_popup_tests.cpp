@@ -50,21 +50,44 @@ const QtViewportDeletePopupAction &find_action(
 
 TEST(QtViewportDeletePopupTests,
      ObjectGroupAndSelectedSceneRootUseConfirmation) {
-  EXPECT_EQ(qt_viewport_delete_popup_kind(ModelingSelectionMode::Object,
-                                          false),
+  EXPECT_EQ(qt_viewport_delete_popup_kind(
+                {.mode = ModelingSelectionMode::Object}, false),
             QtViewportDeletePopupKind::ObjectConfirmation);
-  EXPECT_EQ(qt_viewport_delete_popup_kind(ModelingSelectionMode::Group, false),
+  EXPECT_EQ(qt_viewport_delete_popup_kind(
+                {.mode = ModelingSelectionMode::Group}, false),
             QtViewportDeletePopupKind::ObjectConfirmation);
-  EXPECT_EQ(qt_viewport_delete_popup_kind(ModelingSelectionMode::Vertex, true),
+  EXPECT_EQ(qt_viewport_delete_popup_kind(
+                {.mode = ModelingSelectionMode::Vertex}, true),
             QtViewportDeletePopupKind::ObjectConfirmation);
 
-  EXPECT_EQ(qt_viewport_delete_popup_kind(ModelingSelectionMode::Vertex,
-                                          false),
+  EXPECT_EQ(qt_viewport_delete_popup_kind(
+                {.mode = ModelingSelectionMode::Vertex}, false),
             QtViewportDeletePopupKind::ComponentMenu);
-  EXPECT_EQ(qt_viewport_delete_popup_kind(ModelingSelectionMode::Edge, false),
+  EXPECT_EQ(qt_viewport_delete_popup_kind(
+                {.mode = ModelingSelectionMode::Edge}, false),
             QtViewportDeletePopupKind::ComponentMenu);
-  EXPECT_EQ(qt_viewport_delete_popup_kind(ModelingSelectionMode::Face, false),
+  EXPECT_EQ(qt_viewport_delete_popup_kind(
+                {.mode = ModelingSelectionMode::Face}, false),
             QtViewportDeletePopupKind::ComponentMenu);
+}
+
+TEST(QtViewportDeletePopupTests,
+     SubSelectionRoutesDirectlyToCanonicalDeleteCommand) {
+  const ModelingSelectionSummary curve_controls{
+      .mode = ModelingSelectionMode::Object,
+      .has_selection = true,
+      .selected_object_count = 1u,
+      .sub_selection_kind =
+          quader::ModelingSubSelectionKind::CurveControl,
+      .selected_sub_element_count = 2u,
+      .sub_selection_revision = 7u,
+  };
+
+  EXPECT_EQ(qt_viewport_delete_popup_kind(curve_controls, false),
+            QtViewportDeletePopupKind::DirectDeleteCommand);
+  EXPECT_EQ(qt_viewport_delete_popup_kind(curve_controls, true),
+            QtViewportDeletePopupKind::DirectDeleteCommand)
+      << "the selected Curve owner must not override its active controls";
 }
 
 TEST(QtViewportDeletePopupTests,

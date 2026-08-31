@@ -12,8 +12,7 @@
 #include "math/glm_bridge.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
-#include "scene/scene_hierarchy_visibility.hpp"
-#include "scene/scene_transform.hpp"
+#include "scene/scene_mesh_occurrence_projection.hpp"
 
 #include <algorithm>
 #include <array>
@@ -220,119 +219,66 @@ ViewportInfoSceneSnapshot build_viewport_info_scene_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
     const ViewportLocalVisibilitySnapshot *local_visibility) {
   ViewportInfoSceneSnapshot snapshot;
-  const std::vector<EntityId> entities = document.entities();
-  snapshot.renderables.reserve(entities.size());
+  const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      projection = document.mesh_occurrence_projection();
+  snapshot.renderables.reserve(projection->records().size());
   std::unordered_map<const MeshAsset *, ViewportInfoMeshStats>
       mesh_stats_cache;
-  mesh_stats_cache.reserve(entities.size());
-  for (const EntityId entity_id : entities) {
-    if (!document.is_effectively_visible(entity_id) ||
-        !viewport_info_local_visibility_allows(local_visibility, entity_id) ||
-        document.is_instance_definition_entity(entity_id) ||
-        document.is_instance_definition_member(entity_id) ||
-        document.instance_occurrence(entity_id) != nullptr) {
-      continue;
+  mesh_stats_cache.reserve(projection->records().size());
+  const auto append_projected = [&](std::size_t index) {
+    const SceneMeshOccurrenceProjectionRecord *placement =
+        projection->record(index);
+    if (placement == nullptr ||
+        !viewport_info_local_visibility_allows(
+            local_visibility, placement->display_entity)) {
+      return;
     }
-
-    const MeshComponent *mesh_component = document.mesh(entity_id);
-    if (mesh_component == nullptr) {
-      continue;
+    const MeshComponent *mesh_component =
+        document.mesh(placement->geometry_entity);
+    const MeshAsset *mesh = mesh_component != nullptr
+                                ? assets.mesh(mesh_component->mesh)
+                                : nullptr;
+    if (mesh == nullptr) {
+      return;
     }
-
-    const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
-    if (mesh != nullptr) {
-      append_viewport_info_mesh_stats(
-          snapshot, *mesh, document.world_transform_matrix(entity_id),
-          entity_id, kInvalidEntityId, kInvalidEntityId,
-          mesh_stats_cache);
-    }
+    append_viewport_info_mesh_stats(
+        snapshot, *mesh, placement->world_from_geometry,
+        placement->geometry_entity, placement->definition_entity,
+        placement->formal_instance() ? placement->display_entity
+                                     : kInvalidEntityId,
+        mesh_stats_cache);
+  };
+  for (const std::size_t index : projection->ordinary_placement_indices()) {
+    append_projected(index);
   }
-
-  for (const EntityId definition : entities) {
-    if (!document.is_instance_definition_entity(definition)) {
-      continue;
-    }
-    const std::optional<QMat4> definition_inverse =
-        try_scene_matrix_inverse(document.world_transform_matrix(definition));
-    if (!definition_inverse.has_value()) {
-      continue;
-    }
-    for (const EntityId occurrence :
-         document.instance_occurrences_for_definition(definition)) {
-      if (!document.is_effectively_visible(occurrence) ||
-          !viewport_info_local_visibility_allows(local_visibility,
-                                                 occurrence)) {
-        continue;
-      }
-      const QMat4 occurrence_world =
-          document.world_transform_matrix(occurrence);
-      for (const EntityId member : document.descendants(definition, false)) {
-        if (document.containing_instance_definition(member) != definition ||
-            !scene_hierarchy_segment_is_visible(document, member,
-                                                definition)) {
-          continue;
-        }
-        const MeshComponent *mesh_component = document.mesh(member);
-        if (mesh_component == nullptr) {
-          continue;
-        }
-        const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
-        if (mesh == nullptr) {
-          continue;
-        }
-        const QMat4 member_from_definition = scene_transform_multiply(
-            *definition_inverse, document.world_transform_matrix(member));
-        append_viewport_info_mesh_stats(
-            snapshot, *mesh,
-            scene_transform_multiply(occurrence_world,
-                                     member_from_definition),
-            member, definition, occurrence,
-            mesh_stats_cache);
-      }
-    }
+  for (const std::size_t index : projection->formal_placement_indices()) {
+    append_projected(index);
   }
   return snapshot;
 }
 
 bool try_refresh_viewport_info_scene_snapshot_transforms(
     ViewportInfoSceneSnapshot &snapshot, const SceneDocument &document) {
-  std::unordered_map<EntityId, QMat4> definition_inverse_cache;
+  const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      projection = document.mesh_occurrence_projection();
   for (ViewportInfoRenderableStats &renderable : snapshot.renderables) {
     if (renderable.source_entity == kInvalidEntityId ||
         !document.exists(renderable.source_entity)) {
       return false;
     }
-
-    QMat4 world_from_local =
-        document.world_transform_matrix(renderable.source_entity);
-    if (renderable.instance_occurrence != kInvalidEntityId) {
-      if (renderable.instance_definition == kInvalidEntityId ||
-          !document.exists(renderable.instance_definition) ||
-          !document.exists(renderable.instance_occurrence)) {
-        return false;
-      }
-      auto definition_inverse =
-          definition_inverse_cache.find(renderable.instance_definition);
-      if (definition_inverse == definition_inverse_cache.end()) {
-        const std::optional<QMat4> inverse = try_scene_matrix_inverse(
-            document.world_transform_matrix(renderable.instance_definition));
-        if (!inverse.has_value()) {
-          return false;
-        }
-        definition_inverse =
-            definition_inverse_cache
-                .emplace(renderable.instance_definition, *inverse)
-                .first;
-      }
-      const QMat4 member_from_definition = scene_transform_multiply(
-          definition_inverse->second, world_from_local);
-      world_from_local = scene_transform_multiply(
-          document.world_transform_matrix(renderable.instance_occurrence),
-          member_from_definition);
+    const SceneMeshOccurrenceProjectionRecord *placement = projection->find({
+        .display_entity = renderable.instance_occurrence != kInvalidEntityId
+                              ? renderable.instance_occurrence
+                              : renderable.source_entity,
+        .definition_entity = renderable.instance_definition,
+        .geometry_entity = renderable.source_entity,
+    });
+    if (placement == nullptr) {
+      return false;
     }
 
     const std::optional<SceneBounds> world_bounds = viewport_info_world_bounds(
-        world_from_local, renderable.local_bounds);
+        placement->world_from_geometry, renderable.local_bounds);
     if (!world_bounds.has_value()) {
       return false;
     }

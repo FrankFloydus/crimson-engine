@@ -16,6 +16,7 @@
 namespace quader {
 
 class EditorSelectionService;
+class SceneStructuralLifecycleService;
 
 /**
  * Coordinates Modeling Command Execution Service responsibilities for the editor coordination layer.
@@ -26,7 +27,9 @@ public:
                                 ModelingSessionService &modeling,
                                 EditorSelectionService &selection,
                                 std::string_view tool_id,
-                                MaterialReference active_material = {});
+                                MaterialReference active_material = {},
+                                SceneStructuralLifecycleService *
+                                    structural_lifecycle = nullptr);
 
   ModelingCommandResult
   execute_untracked(ModelingSessionService &modeling, std::string_view tool_id,
@@ -35,7 +38,9 @@ public:
   ModelingCommandResult begin_preview(EditorHistoryService &history,
                                       ModelingSessionService &modeling,
                                       EditorSelectionService &selection,
-                                      std::string_view action_id);
+                                      std::string_view action_id,
+                                      SceneStructuralLifecycleService *
+                                          structural_lifecycle = nullptr);
 
   ModelingCommandResult
   begin_preview_untracked(ModelingSessionService &modeling,
@@ -50,7 +55,9 @@ public:
   [[nodiscard]] ModelingCommandAvailability
   availability(ModelingSessionService &modeling, std::string_view tool_id,
                EditorSelectionService *selection = nullptr,
-               MaterialReference active_material = {}) const;
+               MaterialReference active_material = {},
+               SceneStructuralLifecycleService *structural_lifecycle =
+                   nullptr) const;
 
   [[nodiscard]] ModelingCommandHistoryPolicy
   history_policy(std::string_view tool_id) const;

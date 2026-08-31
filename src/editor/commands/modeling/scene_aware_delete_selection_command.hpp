@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace quader {
@@ -25,13 +26,17 @@ struct SceneAwareDeleteRuntime {
   std::function<ModelingSessionMemento()> capture_modeling_memento;
   std::function<ModelingCommandResult(const ModelingSessionMemento &)>
       restore_modeling_memento;
+  std::function<ModelingCommandResult(const ModelingSessionMemento &)>
+      restore_modeling_memento_exact;
   std::function<ModelingSelectionMode()> app_selection_mode;
   std::function<void(ModelingSelectionMode)> set_app_selection_mode;
   std::function<ModelingCommandResult(const std::vector<int> &)>
       delete_modeling_objects;
+  std::function<bool(const std::vector<EntityId> &)> destroy_scene_entities;
   std::function<std::optional<EntityId>(int)> entity_for_modeling_object;
-  std::function<void(bool)> sync_object_selection_from_scene;
-  std::function<void()> clear_runtime_object_selection_for_group_mode;
+  std::function<ModelingCommandResult(bool)> sync_object_selection_from_scene;
+  std::function<ModelingCommandResult()>
+      clear_runtime_object_selection_for_group_mode;
   std::function<void()> invalidate_selection_overlay_caches;
 };
 
@@ -45,6 +50,10 @@ scene_aware_delete_handles_selection(ModelingSelectionSummary summary,
 
 std::unique_ptr<IUndoableCommand>
 create_scene_aware_delete_selection_command(SceneDocument &scene,
-                                            SceneAwareDeleteRuntime runtime);
+                                             SceneAwareDeleteRuntime runtime);
+
+std::unique_ptr<IUndoableCommand> create_scene_aware_destroy_entities_command(
+    SceneDocument &scene, SceneAwareDeleteRuntime runtime,
+    std::vector<EntityId> roots, std::string label = "Destroy Entities");
 
 } // namespace quader

@@ -14,7 +14,7 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
-#include "editor/viewport/viewport_native_tool_interaction.hpp"
+#include "editor/tools/viewport_native_tool_interaction.hpp"
 #include "math/glm_bridge.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_viewport_panel.hpp"
@@ -541,15 +541,14 @@ TEST(QtViewportSurfaceInputTests,
     quader::ViewportInputResult input_result;
     const auto dispatch = [&](const quader::QtViewportInputFrame &sample) {
       const auto native = interaction.handle_native_tools(
-          editor, session.scene(), session.assets(), nullptr, nullptr, nullptr,
+          editor, session.scene(), session.assets(), session.native_tools(),
           &session.point_placement(), camera,
           {.input = sample.input,
            .input_result = input_result,
            .left_pressed = sample.left_pressed,
            .left_down = sample.left_down,
            .left_released = sample.left_released,
-           .left_click_local = sample.left_click_local},
-          &curve);
+           .left_click_local = sample.left_click_local});
       interaction.handle_after_active_tool(
           editor,
           {
@@ -570,7 +569,7 @@ TEST(QtViewportSurfaceInputTests,
                       .asset_revision = session.assets().revision(),
                   },
           },
-          {}, {}, nullptr, &curve);
+          {}, {}, session.native_tools(), nullptr);
       return native;
     };
     const quader::QVec2 press_pixels = drawing
@@ -650,7 +649,7 @@ TEST(QtViewportSurfaceInputTests,
     EXPECT_TRUE(lost_focus.input.pointer_interaction_canceled);
     EXPECT_TRUE(lost_focus.pointer_activity());
     EXPECT_TRUE(dispatch(lost_focus).curve_consumed);
-    EXPECT_FALSE(interaction.native_tool_dragging());
+    EXPECT_FALSE(session.native_tools().pointer_dragging());
     EXPECT_FALSE(curve.dragging());
     EXPECT_TRUE(curve.preview_state().document->has_same_geometry(before));
     if (drawing) {
@@ -830,8 +829,7 @@ TEST(QtViewportSurfaceInputTests,
   const auto process_input = [&]() {
     panel.process_input(
         editor, session.scene(), session.assets(), session.modeling(), {},
-        &session.pivot(), &session.linear_array(), &session.radial_array(),
-        &session.point_placement(), 1.0 / 60.0);
+        session.native_tools(), &session.point_placement(), 1.0 / 60.0);
   };
   const auto send_mouse = [&](QEvent::Type type, Qt::MouseButtons buttons) {
     QMouseEvent event(type, local, global, Qt::LeftButton, buttons,
@@ -935,8 +933,7 @@ TEST(QtViewportSurfaceInputTests,
       const auto process_input = [&]() {
         panel.process_input(
             editor, session.scene(), session.assets(), session.modeling(), {},
-            &session.pivot(), &session.linear_array(), &session.radial_array(),
-            &session.point_placement(), 1.0 / 60.0);
+            session.native_tools(), &session.point_placement(), 1.0 / 60.0);
       };
       const auto send_mouse = [&](QEvent::Type type, Qt::MouseButtons buttons) {
         QMouseEvent event(type, local, global, Qt::LeftButton, buttons,
@@ -1034,8 +1031,7 @@ TEST(QtViewportSurfaceInputTests,
       const auto process_input = [&]() {
         panel.process_input(
             editor, session.scene(), session.assets(), session.modeling(), {},
-            &session.pivot(), &session.linear_array(), &session.radial_array(),
-            &session.point_placement(), 1.0 / 60.0);
+            session.native_tools(), &session.point_placement(), 1.0 / 60.0);
       };
       const auto double_click = [&](Qt::KeyboardModifiers modifiers,
                                     bool selection_changes = true) {
@@ -1153,8 +1149,7 @@ TEST(QtViewportSurfaceInputTests,
   const auto process_input = [&]() {
     panel.process_input(
         editor, session.scene(), session.assets(), session.modeling(), {},
-        &session.pivot(), &session.linear_array(), &session.radial_array(),
-        &session.point_placement(), 1.0 / 60.0);
+        session.native_tools(), &session.point_placement(), 1.0 / 60.0);
   };
   const QPointF local{24.0, 32.0};
   const QPointF global{124.0, 232.0};

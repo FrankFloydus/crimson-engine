@@ -478,6 +478,28 @@ to_modeling_active_selection_kind(QuaderActiveSelectionKind kind) {
   return ModelingActiveSelectionKind::None;
 }
 
+inline QuaderSubSelectionKind
+to_api_sub_selection_kind(ModelingSubSelectionKind kind) {
+  switch (kind) {
+  case ModelingSubSelectionKind::None:
+    return QuaderSubSelectionKind::None;
+  case ModelingSubSelectionKind::CurveControl:
+    return QuaderSubSelectionKind::CurveControl;
+  }
+  return QuaderSubSelectionKind::None;
+}
+
+inline ModelingSubSelectionKind
+to_modeling_sub_selection_kind(QuaderSubSelectionKind kind) {
+  switch (kind) {
+  case QuaderSubSelectionKind::None:
+    return ModelingSubSelectionKind::None;
+  case QuaderSubSelectionKind::CurveControl:
+    return ModelingSubSelectionKind::CurveControl;
+  }
+  return ModelingSubSelectionKind::None;
+}
+
 inline QuaderSelectionSummary
 to_api_selection_summary(const ModelingSelectionSummary &summary) {
   return {
@@ -493,6 +515,10 @@ to_api_selection_summary(const ModelingSelectionSummary &summary) {
       .selected_vertex_count = summary.selected_vertex_count,
       .selected_edge_count = summary.selected_edge_count,
       .selected_face_count = summary.selected_face_count,
+      .sub_selection_kind =
+          to_api_sub_selection_kind(summary.sub_selection_kind),
+      .selected_sub_element_count = summary.selected_sub_element_count,
+      .sub_selection_revision = summary.sub_selection_revision,
       .content_revision = summary.content_revision,
       .selection_revision = summary.selection_revision,
   };
@@ -513,6 +539,10 @@ to_modeling_selection_summary(const QuaderSelectionSummary &summary) {
       .selected_vertex_count = summary.selected_vertex_count,
       .selected_edge_count = summary.selected_edge_count,
       .selected_face_count = summary.selected_face_count,
+      .sub_selection_kind =
+          to_modeling_sub_selection_kind(summary.sub_selection_kind),
+      .selected_sub_element_count = summary.selected_sub_element_count,
+      .sub_selection_revision = summary.sub_selection_revision,
       .content_revision = summary.content_revision,
       .selection_revision = summary.selection_revision,
   };

@@ -15,11 +15,12 @@
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/commands/modeling/commit_box_preview_command.hpp"
-#include "editor/history/modeling_memento_command.hpp"
+#include "editor/commands/scene_structural_lifecycle_service.hpp"
 #include "editor/history/curve_history_commands.hpp"
 #include "editor/history/face_texture_settings_history_command.hpp"
 #include "editor/history/face_texture_action_history_command.hpp"
 #include "editor/history/face_texture_transfer_history_command.hpp"
+#include "editor/history/modeling_memento_command.hpp"
 #include "editor/history/uv_peel_history_command.hpp"
 #include "editor/placement/snap_vertices_to_floor_history_command.hpp"
 #include "editor/instances/project_clipboard_service.hpp"
@@ -44,6 +45,8 @@
 #include <iterator>
 #include <memory>
 #include <span>
+#include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 
@@ -52,6 +55,17 @@ namespace {
 
 SceneSession &scene_session(QuaderApiSession session) {
   return QuaderApiSessionInternalAccess::scene_session(session);
+}
+
+ModelingStructuralDuplicate
+structural_duplicate_for_transform(SceneSession &session) {
+  return [&session](EditorTransaction &transaction, ModelingSelectionMode mode,
+                    std::string_view label) {
+    return modeling_structural_duplicate_result(
+        session.structural_lifecycle().duplicate_hierarchy_in_transaction(
+            transaction, session.structural_lifecycle().selected_roots(), mode,
+            std::string(label)));
+  };
 }
 
 std::optional<ModelingUvPeelOptions>
@@ -1785,6 +1799,9 @@ QuaderApiVoidResult QuaderModelingApi::execute_tool(std::string_view tool_id) {
   if (tool_id == "paste_selection") {
     return paste_selection();
   }
+  if (tool_id == "repeat_last_action") {
+    return repeat_last_action();
+  }
   return mutations_.run_tracked_modeling_tool(tool_id);
 }
 
@@ -2064,9 +2081,12 @@ QuaderModelingApi::begin_transform_preview(bool duplicate_selected) {
     return mutations_.modeling_content_blocked_status(
         "starting a transform preview.");
   }
+  SceneSession &session = scene_session(session_);
+  const ModelingStructuralDuplicate structural_duplicate =
+      structural_duplicate_for_transform(session);
   return mutations_.run_modeling_result(
-      scene_session(session_).modeling().begin_transform_preview(
-          duplicate_selected),
+      session.modeling().begin_transform_preview(
+          duplicate_selected, structural_duplicate, session.history()),
       "Begin Transform Preview");
 }
 
@@ -2106,10 +2126,18 @@ QuaderModelingApi::update_transform_inset(const QuaderTransform3 &transform,
 
 QuaderApiVoidResult
 QuaderModelingApi::commit_transform_preview(std::string label) {
+  SceneSession &session = scene_session(session_);
+  const std::string history_label =
+      label.empty() ? "Commit Transform Preview" : std::move(label);
+  if (session.modeling().structural_transform_preview_active()) {
+    return mutations_.run_modeling_result(
+        session.modeling().commit_structural_transform_preview(history_label),
+        history_label);
+  }
   return mutations_.run_modeling_command(
       std::make_unique<CommitTransformPreviewHistoryCommand>(
-          scene_session(session_).modeling()),
-      label.empty() ? "Commit Transform Preview" : label);
+          session.modeling()),
+      history_label);
 }
 
 QuaderApiVoidResult QuaderModelingApi::cancel_transform_preview() {
@@ -2128,10 +2156,13 @@ QuaderModelingApi::begin_transform_drag(
             "starting a transform drag."));
   }
   SceneSession &session = scene_session(session_);
+  const ModelingStructuralDuplicate structural_duplicate =
+      structural_duplicate_for_transform(session);
   return result_from_transform_drag_preview(
       session, session.modeling().begin_transform_drag(
                    to_modeling_transform_drag_begin_request(request),
-                   session.document_commands(), session.history()));
+                   session.document_commands(),
+                   structural_duplicate, session.history()));
 }
 
 QuaderApiResult<QuaderTransformDragPreview>
@@ -2228,155 +2259,10 @@ QuaderApiVoidResult QuaderModelingApi::duplicate_selected_entity_hierarchy() {
         "duplicating modeling content.");
   }
   SceneSession &session = scene_session(session_);
-  EditorTransaction transaction =
-      mutations_.begin_transaction("Duplicate Selection");
-  if (!transaction.active()) {
-    return mutations_.run_document_command(
-        command_invalid_result("Cannot duplicate selection while another "
-                               "editor transaction is active."),
-        "Duplicate Selection");
-  }
-  const ModelingSessionMemento before_modeling =
-      session.modeling().capture_history_memento();
-  const ModelingCommandResult duplicate = [&]() {
-    QDR_PROFILE_SCOPE("Duplicate selected entity hierarchy owner");
-    return session.modeling().duplicate_selected_entity_hierarchy(
-        session.document_commands());
-  }();
-  if (!duplicate.ok) {
-    const CommandResult cancel = transaction.cancel();
-    const ModelingCommandResult restore =
-        session.modeling().restore_history_memento(before_modeling);
-    if (!cancel.ok) {
-      return mutations_.run_document_command(cancel, "Duplicate Selection");
-    }
-    if (!restore.ok) {
-      return mutations_.run_modeling_result(restore, "Duplicate Selection");
-    }
-    return mutations_.run_modeling_result(duplicate, "Duplicate Selection");
-  }
-  if (!duplicate.changed) {
-    const CommandResult cancel = transaction.cancel();
-    const ModelingCommandResult restore =
-        session.modeling().restore_history_memento(before_modeling);
-    if (!cancel.ok) {
-      return mutations_.run_document_command(cancel, "Duplicate Selection");
-    }
-    if (!restore.ok) {
-      return mutations_.run_modeling_result(restore, "Duplicate Selection");
-    }
-    return mutations_.run_modeling_result(duplicate, "Duplicate Selection");
-  }
-
-  const CommandResult recorded_modeling =
-      transaction.record_executed_before_existing(
-          std::make_unique<RecordedModelingMementoCommand>(
-              session.modeling(), "Duplicate Selection", before_modeling,
-              session.modeling().capture_history_memento(), true));
-  if (!recorded_modeling.ok) {
-    const CommandResult cancel = transaction.cancel();
-    const ModelingCommandResult restore =
-        session.modeling().restore_history_memento(before_modeling);
-    if (!cancel.ok) {
-      return mutations_.run_document_command(cancel, "Duplicate Selection");
-    }
-    if (!restore.ok) {
-      return mutations_.run_modeling_result(restore, "Duplicate Selection");
-    }
-    return mutations_.run_document_command(recorded_modeling,
-                                           "Duplicate Selection");
-  }
-
-  {
-    QDR_PROFILE_SCOPE("Duplicate selection commit transaction");
-    return mutations_.run_document_command(transaction.commit(),
-                                           "Duplicate Selection");
-  }
-}
-
-QuaderApiVoidResult
-QuaderModelingApi::duplicate_selected_hierarchy_for_group_drag() {
-  QDR_PROFILE_FUNCTION();
-  if (!mutations_.can_mutate_modeling_content()) {
-    return mutations_.modeling_content_blocked_status(
-        "duplicating modeling content.");
-  }
-  SceneSession &session = scene_session(session_);
-  EditorTransaction transaction =
-      mutations_.begin_transaction("Duplicate Group Selection");
-  if (!transaction.active()) {
-    return mutations_.run_document_command(
-        command_invalid_result("Cannot duplicate selection while another "
-                               "editor transaction is active."),
-        "Duplicate Group Selection");
-  }
-
-  const ModelingSessionMemento before_modeling =
-      session.modeling().capture_history_memento();
-
-  const ModelingCommandResult duplicate = [&]() {
-    QDR_PROFILE_SCOPE("Duplicate group hierarchy owner");
-    return session.modeling().duplicate_selected_hierarchy_for_group_drag(
-        session.document_commands());
-  }();
-  if (!duplicate.ok) {
-    const CommandResult cancel = transaction.cancel();
-    const ModelingCommandResult restore =
-        session.modeling().restore_history_memento(before_modeling);
-    if (!cancel.ok) {
-      return mutations_.run_document_command(cancel,
-                                             "Duplicate Group Selection");
-    }
-    if (!restore.ok) {
-      return mutations_.run_modeling_result(restore,
-                                            "Duplicate Group Selection");
-    }
-    return mutations_.run_modeling_result(duplicate,
-                                          "Duplicate Group Selection");
-  }
-  if (!duplicate.changed) {
-    const CommandResult cancel = transaction.cancel();
-    const ModelingCommandResult restore =
-        session.modeling().restore_history_memento(before_modeling);
-    if (!cancel.ok) {
-      return mutations_.run_document_command(cancel,
-                                             "Duplicate Group Selection");
-    }
-    if (!restore.ok) {
-      return mutations_.run_modeling_result(restore,
-                                            "Duplicate Group Selection");
-    }
-    return mutations_.run_modeling_result(duplicate,
-                                          "Duplicate Group Selection");
-  }
-
-  const CommandResult recorded_modeling =
-      transaction.record_executed_before_existing(
-          std::make_unique<RecordedModelingMementoCommand>(
-              session.modeling(), "Duplicate Group Selection",
-              before_modeling, session.modeling().capture_history_memento(),
-              true));
-  if (!recorded_modeling.ok) {
-    const CommandResult cancel = transaction.cancel();
-    const ModelingCommandResult restore =
-        session.modeling().restore_history_memento(before_modeling);
-    if (!cancel.ok) {
-      return mutations_.run_document_command(cancel,
-                                             "Duplicate Group Selection");
-    }
-    if (!restore.ok) {
-      return mutations_.run_modeling_result(restore,
-                                            "Duplicate Group Selection");
-    }
-    return mutations_.run_document_command(recorded_modeling,
-                                           "Duplicate Group Selection");
-  }
-
-  {
-    QDR_PROFILE_SCOPE("Duplicate group commit transaction");
-    return mutations_.run_document_command(transaction.commit(),
-                                           "Duplicate Group Selection");
-  }
+  return mutations_.run_document_command(
+      session.structural_lifecycle().duplicate_selected_hierarchy(
+          session.modeling().selection_mode()),
+      "Duplicate Selection");
 }
 
 bool QuaderModelingApi::can_create_instance() const {

@@ -572,6 +572,36 @@ TEST(ProgrammaticApiGuardrailTests, PublicRenderApiDoesNotExposeRenderBridge) {
             std::string::npos);
 }
 
+TEST(ProgrammaticApiGuardrailTests,
+     SelectionRuntimeAccessRemainsNativeEditorOnly) {
+  const std::string public_header =
+      read_file(source_root() / "src/api/quader_selection_api.hpp");
+  const std::string runtime_header = read_file(
+      source_root() /
+      "src/editor/selection/quader_selection_api_runtime_access.hpp");
+
+  EXPECT_NE(public_header.find("friend class QuaderSelectionApiRuntimeAccess"),
+            std::string::npos);
+  EXPECT_EQ(public_header.find("EditorSelectionService"), std::string::npos);
+  EXPECT_EQ(public_header.find("ResolvedSelection"), std::string::npos);
+  EXPECT_NE(runtime_header.find("EditorSelectionService &"),
+            std::string::npos);
+  EXPECT_EQ(runtime_header.find("ResolvedSelection"), std::string::npos);
+  EXPECT_EQ(runtime_header.find("apply_resolved_"), std::string::npos);
+
+  for (const std::filesystem::path &file :
+       source_files_under(source_root() / "src/ui")) {
+    const std::string source = read_file(file);
+    EXPECT_EQ(source.find("QuaderSelectionApiRuntimeAccess"),
+              std::string::npos)
+        << normalized_relative(file);
+    EXPECT_EQ(source.find(
+                  "editor/selection/quader_selection_api_runtime_access.hpp"),
+              std::string::npos)
+        << normalized_relative(file);
+  }
+}
+
 TEST(ProgrammaticApiGuardrailTests, ApiLayerUsesSharedResultStatusConversion) {
   for (const std::filesystem::path &file :
        source_files_under(source_root() / "src/api")) {
@@ -940,6 +970,48 @@ TEST(ProgrammaticApiGuardrailTests,
             std::string::npos);
 }
 
+TEST(ProgrammaticApiGuardrailTests,
+     CurveSubSelectionSnapshotKeepsCanonicalSummaryPollingAllocationFree) {
+  const std::string source = read_file(
+      source_root() / "src/editor/curve/curve_tool_service.cpp");
+  const std::string snapshot = source_slice(
+      source,
+      "EditorSubSelectionSnapshot CurveToolService::sub_selection_snapshot() const",
+      "CurveToolService::capture_sub_selection_baseline() const");
+
+  EXPECT_EQ(snapshot.find("selected_entities()"), std::string::npos);
+  EXPECT_EQ(snapshot.find("curve_document("), std::string::npos);
+  EXPECT_EQ(snapshot.find("preview_state()"), std::string::npos);
+  EXPECT_EQ(snapshot.find("valid_control_selection("), std::string::npos);
+  EXPECT_NE(snapshot.find("observed_selection_revision_"),
+            std::string::npos);
+  EXPECT_NE(snapshot.find("observed_modeling_selection_revision_"),
+            std::string::npos);
+
+  const std::string execution = read_file(
+      source_root() /
+      "src/editor/commands/modeling_command_execution_service.cpp");
+  const std::string execute = source_slice(
+      execution,
+      "ModelingCommandResult ModelingCommandExecutionService::execute(",
+      "ModelingCommandResult "
+      "ModelingCommandExecutionService::execute_untracked(");
+  const std::size_t sub_selection =
+      execute.find("selection.try_delete_sub_selection()");
+  const std::size_t scene_selection =
+      execute.find("scene_aware_delete_handles_selection(");
+  ASSERT_NE(sub_selection, std::string::npos);
+  ASSERT_NE(scene_selection, std::string::npos);
+  EXPECT_LT(sub_selection, scene_selection);
+  const std::string execute_untracked = source_slice(
+      execution,
+      "ModelingCommandResult "
+      "ModelingCommandExecutionService::execute_untracked(",
+      "ModelingCommandResult ModelingCommandExecutionService::begin_preview(");
+  EXPECT_NE(execute_untracked.find("selection->try_delete_sub_selection()"),
+            std::string::npos);
+}
+
 TEST(ProgrammaticApiGuardrailTests, PublicSelectionApiDelegatesEntityEditPolicyToEditorSelectionService) {
   const std::string api_header =
       read_file(source_root() / "src/api/quader_selection_api.hpp");
@@ -988,7 +1060,9 @@ TEST(ProgrammaticApiGuardrailTests, ObjectAndGroupSelectionCommandsUseSceneDocum
             std::string::npos);
   EXPECT_NE(modeling_api.find("selection_mode_uses_scene_document("),
             std::string::npos);
-  EXPECT_NE(mutation_runner.find("selection_mode_uses_scene_document("),
+  EXPECT_NE(mutation_runner.find("session.selection().set_mode(mode)"),
+            std::string::npos);
+  EXPECT_EQ(mutation_runner.find("selection_mode_uses_scene_document("),
             std::string::npos);
   EXPECT_EQ(service_source.find("sceneDocumentOwnsSelectionMode"),
             std::string::npos);
@@ -1046,15 +1120,20 @@ TEST(ProgrammaticApiGuardrailTests, SceneSelectionApplicationOwnerCoversCommandS
             std::string::npos);
   EXPECT_NE(command.find("SceneSelectionApplicationMode::UndoableCommand"),
             std::string::npos);
-  EXPECT_NE(command.find("apply_scene_selection(scene(), before_, mode_)"),
+  EXPECT_NE(command.find(
+                "DocumentCommandResult undo() override { return apply(before_); }"),
             std::string::npos);
-  EXPECT_NE(command.find("apply_scene_selection(scene(), after_, mode_)"),
+  EXPECT_NE(command.find(
+                "DocumentCommandResult redo() override { return apply(after_); }"),
+            std::string::npos);
+  EXPECT_NE(command.find("apply_scene_selection(scene(), selection, mode_)"),
             std::string::npos);
 
   EXPECT_NE(document_service.find("SceneSelectionApplicationMode mode"),
             std::string::npos);
-  EXPECT_NE(document_service.find("scene_, std::move(entities), active,\n"
-                                  "                                      mode"),
+  EXPECT_NE(document_service.find("std::make_unique<SelectEntitiesCommand>("),
+            std::string::npos);
+  EXPECT_NE(document_service.find("scene_, std::move(entities), active,"),
             std::string::npos);
 
   EXPECT_NE(editor_selection.find(
@@ -1115,7 +1194,11 @@ TEST(ProgrammaticApiGuardrailTests, GroupSelectionPickingUsesModelingSelectionSe
             std::string::npos);
   EXPECT_NE(modeling_session_source.find("selection_service_.box_pick_object_ids("),
             std::string::npos);
-  EXPECT_NE(editor_selection_source.find("modeling_.pick_object_entity(request)"),
+  EXPECT_EQ(editor_selection_source.find("modeling_.pick_object_entity(request)"),
+            std::string::npos);
+  EXPECT_NE(editor_selection_source.find("query_modeling_hit("),
+            std::string::npos);
+  EXPECT_NE(editor_selection_source.find("apply_resolved_click("),
             std::string::npos);
   EXPECT_NE(
       editor_selection_source.find("modeling_.box_pick_object_entities(request)"),
@@ -1517,30 +1600,49 @@ TEST(ProgrammaticApiGuardrailTests,
       read_file(source_root() / "src/ui/qt_viewport_panel.cpp");
   const std::string prepare = source_slice(
       panel, "void QtViewportPanel::prepare_viewports(",
-      "void QtViewportPanel::refresh_cached_selection_overlay_frame(");
-  const auto raw_hover = prepare.find("modeling.volatile_overlay_frame()");
-  const auto fresh_frame = prepare.find("ViewportOverlayFrame dynamic_overlay_frame;");
+      "QtViewportPanel::render_viewports(");
+  const auto raw_hover = prepare.find("modeling.volatile_overlay_snapshot()");
+  const auto semantic_source =
+      prepare.find("ViewportToolOverlaySource dynamic_tool_frame_provider");
+  const auto coordinator_call =
+      prepare.find("render_bridge.submit_viewport_overlay(");
   const auto hud_call = prepare.find("pane_state.edge_length_hud->present(");
-  const auto style_mutation = prepare.find("ViewportOverlayStyleResolver::apply(");
   ASSERT_NE(raw_hover, std::string::npos);
-  ASSERT_NE(fresh_frame, std::string::npos);
+  ASSERT_NE(semantic_source, std::string::npos);
+  ASSERT_NE(coordinator_call, std::string::npos);
   ASSERT_NE(hud_call, std::string::npos);
-  ASSERT_NE(style_mutation, std::string::npos);
-  EXPECT_LT(raw_hover, fresh_frame);
-  EXPECT_LT(fresh_frame, hud_call);
-  EXPECT_LT(hud_call, style_mutation);
-  EXPECT_NE(prepare.find("dynamic_submission_key.frame_signature"),
+  EXPECT_EQ(prepare.find("modeling.volatile_overlay_frame()"),
+            std::string::npos);
+  EXPECT_LT(raw_hover, semantic_source);
+  EXPECT_LT(semantic_source, coordinator_call);
+  EXPECT_LT(coordinator_call, hud_call);
+  EXPECT_NE(prepare.find("overlay_submission.dynamic_source_signature"),
+            std::string::npos);
+  EXPECT_NE(prepare.find("overlay_submission.edge_hud_frame"),
             std::string::npos);
   EXPECT_NE(prepare.find("cached_overlay_mode == ModelingSelectionMode::Edge"),
             std::string::npos);
   EXPECT_NE(prepare.find("edge_length_hud_enabled_ && overlays_visible"),
             std::string::npos);
+  EXPECT_EQ(prepare.find("ViewportOverlayStyleResolver::apply("),
+            std::string::npos);
+  EXPECT_EQ(prepare.find("ViewportOverlayFrame dynamic_overlay_frame"),
+            std::string::npos);
+  EXPECT_EQ(prepare.find("ViewportToolOverlayProjection::append_box("),
+            std::string::npos);
   // Backface toggles restyle a fresh semantic stream, never a previously
   // filtered render frame whose hover triangles have already been removed.
-  const std::string dynamic_key = source_slice(
-      prepare, "const PaneDynamicOverlaySubmissionKey dynamic_submission_key{",
-      "pane_state.edge_length_hud->present(");
-  EXPECT_NE(dynamic_key.find(".style_signature = overlay_style_signature"),
+  const std::string coordinator = read_file(
+      source_root() /
+      "src/render/overlay/viewport_overlay_submission_coordinator.cpp");
+  const std::size_t style_signature = coordinator.find(
+      "ViewportOverlayStyleResolver::style_signature(settings)");
+  const std::size_t dynamic_gate =
+      coordinator.find("if (dynamic_changed)", style_signature);
+  ASSERT_NE(style_signature, std::string::npos);
+  ASSERT_NE(dynamic_gate, std::string::npos);
+  EXPECT_LT(style_signature, dynamic_gate);
+  EXPECT_NE(coordinator.find(".style_signature = style_signature"),
             std::string::npos);
 }
 
@@ -2297,10 +2399,18 @@ TEST(ProgrammaticApiGuardrailTests,
             std::string::npos);
   EXPECT_NE(project_assets_api.find("material_preview("),
             std::string::npos);
+  EXPECT_NE(project_assets_api.find("material_presentation_revision() const"),
+            std::string::npos);
+  EXPECT_NE(project_assets_api.find("material_presentations() const"),
+            std::string::npos);
   EXPECT_NE(project_assets_api.find("import_textures_as_materials("),
             std::string::npos);
 
-  EXPECT_NE(ui_system.find("editor_->project_assets().materials()"),
+  EXPECT_NE(
+      ui_system.find("editor_->project_assets().material_presentations()"),
+      std::string::npos);
+  EXPECT_NE(ui_system.find(
+                "editor_->project_assets().material_presentation_revision()"),
             std::string::npos);
   EXPECT_NE(ui_system.find("editor_->project_assets().active_material()"),
             std::string::npos);

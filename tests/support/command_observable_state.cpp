@@ -1050,6 +1050,12 @@ std::string capture_selection(const CaptureData &data) {
               std::to_string(selection.selected_edge_count));
   writer.line("selection.face_count",
               std::to_string(selection.selected_face_count));
+  writer.line("selection.sub_selection_kind",
+              enum_text(selection.sub_selection_kind));
+  writer.line("selection.sub_element_count",
+              std::to_string(selection.selected_sub_element_count));
+  writer.line("selection.sub_selection_revision",
+              std::to_string(selection.sub_selection_revision));
 
   std::vector<std::string> selected_entities;
   std::vector<std::string> active_entities;

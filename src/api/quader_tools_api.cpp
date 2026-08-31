@@ -1156,21 +1156,14 @@ std::string QuaderToolsApi::active_primitive_default_name() const {
 
 QuaderApiVoidResult QuaderToolsApi::commit_active_tool_preview() {
   SceneSession &session = scene_session(session_);
-  if (session.native_tools().has_pending_tool()) {
-    const bool linear_array = session.linear_array().has_session();
-    const bool radial_array = session.radial_array().has_session();
-    const bool primitive = session.primitive_creation().active();
-    const bool curve = session.curve().has_session();
-    const bool modeling_tool = linear_array || radial_array || primitive || curve;
+  if (const std::optional<ViewportNativeToolCommitMetadata> metadata =
+          session.native_tools().active_commit_metadata()) {
     return api_status_from_command(
         session, session.native_tools().commit_active(),
-        modeling_tool ? QuaderMutationKind::Modeling
-                      : QuaderMutationKind::Document,
-        radial_array ? "Apply Radial Array"
-        : linear_array ? "Apply Linear Array"
-        : primitive    ? "Apply Primitive Tool"
-        : curve        ? "Apply Curve"
-                       : "Apply Pivot");
+        metadata->domain == ViewportNativeToolCommitDomain::Modeling
+            ? QuaderMutationKind::Modeling
+            : QuaderMutationKind::Document,
+        metadata->label);
   }
   if (hooks_.commit_active_tool_preview) {
     return hooks_.commit_active_tool_preview();
@@ -1206,6 +1199,14 @@ QuaderApiVoidResult QuaderToolsApi::cancel_modal_tool() {
                                 result.changed, std::move(result.message),
                                 QuaderMutationKind::Modeling,
                                 "Cancel Modal Tool");
+}
+
+bool QuaderToolsApi::active_native_tool_lifecycle(
+    ViewportToolId tool) const {
+  return scene_session(session_)
+      .native_tools()
+      .runtime()
+      .native_lifecycle_active(viewport_tool_id(tool));
 }
 
 std::string QuaderToolsApi::active_tool() const {

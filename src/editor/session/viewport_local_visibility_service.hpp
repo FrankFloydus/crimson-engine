@@ -9,6 +9,7 @@
 #include "viewport/viewport_local_visibility.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace quader {
@@ -35,11 +36,14 @@ struct ViewportLocalVisibilityMutation final {
  */
 class ViewportLocalVisibilityService final {
 public:
+  using ResolvedHoverClearer = std::function<void()>;
+
   ViewportLocalVisibilityService(
       SceneDocument &scene, AssetRegistry &assets,
       ModelingSessionService &modeling, SceneInstanceService &instances,
       NativeViewportToolCoordinator &native_tools,
-      ViewportWorkspaceService &workspace);
+      ViewportWorkspaceService &workspace,
+      ResolvedHoverClearer clear_resolved_hover);
 
   [[nodiscard]] bool active() const;
   [[nodiscard]] bool can_enter() const;
@@ -66,6 +70,7 @@ private:
   SceneInstanceService &instances_;
   NativeViewportToolCoordinator &native_tools_;
   ViewportWorkspaceService &workspace_;
+  ResolvedHoverClearer clear_resolved_hover_;
   mutable std::uint64_t last_reconciled_scene_content_revision_ = 0u;
   mutable std::uint64_t last_reconciled_workspace_revision_ = 0u;
   mutable bool lifecycle_reconcile_valid_ = false;

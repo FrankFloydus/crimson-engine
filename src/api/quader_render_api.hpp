@@ -20,13 +20,6 @@ class QuaderApi;
 class QuaderRenderApiRuntimeAccess;
 
 /**
- * Stores the result of submitting editor-owned viewport overlay payloads to the render bridge.
- */
-struct QuaderRenderOverlaySubmission {
-    bool visible = false;
-};
-
-/**
  * Exposes Quader Render API operations through the public Quader API surface.
  */
 class QuaderRenderApi final {
@@ -45,6 +38,19 @@ public:
   private:
     friend class QuaderRenderApiRuntimeAccess;
 
+    /** Captures the owner revisions that invalidate the generated tool preview snapshot. */
+    struct GeneratedToolPreviewSourceStamp final {
+      std::uint64_t runtime_revision = 0;
+      std::uint64_t content_revision = 0;
+      std::uint64_t object_map_revision = 0;
+      std::uint64_t scene_transform_revision = 0;
+      std::uint64_t hierarchy_presentation_revision = 0;
+      std::uint64_t instance_edit_revision = 0;
+
+      friend bool operator==(const GeneratedToolPreviewSourceStamp &,
+                             const GeneratedToolPreviewSourceStamp &) = default;
+    };
+
     [[nodiscard]] QuaderApiVoidResult
     runtime_status(std::string message = {}) const;
 
@@ -56,16 +62,21 @@ public:
     std::uint64_t native_array_preview_asset_revision_ = 0;
     std::uint64_t native_array_preview_local_visibility_revision_ = 0;
     std::uint8_t native_array_preview_kind_ = 0;
+    bool native_array_preview_attempt_failed_ = false;
     const void *transform_preview_sync_bridge_ = nullptr;
     std::uint64_t transform_preview_bridge_submission_revision_ = 0;
     std::uint64_t transform_preview_revision_ = 0;
     std::uint64_t transform_preview_asset_revision_ = 0;
     std::uint64_t transform_preview_local_visibility_revision_ = 0;
+    bool transform_preview_attempt_failed_ = false;
     const void *generated_tool_preview_sync_bridge_ = nullptr;
     std::uint64_t generated_tool_preview_bridge_submission_revision_ = 0;
+    GeneratedToolPreviewSourceStamp generated_tool_preview_source_;
+    bool generated_tool_preview_source_valid_ = false;
     std::uint64_t generated_tool_preview_signature_ = 0;
     std::uint64_t generated_tool_preview_asset_revision_ = 0;
     std::uint64_t generated_tool_preview_local_visibility_revision_ = 0;
+    bool generated_tool_preview_attempt_failed_ = false;
     std::uint64_t scene_session_id_ = 1u;
     std::uint64_t activation_generation_ = 1u;
     std::uint64_t scene_binding_revision_ = 1;

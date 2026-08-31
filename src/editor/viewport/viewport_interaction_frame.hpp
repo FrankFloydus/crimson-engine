@@ -22,6 +22,7 @@
 namespace quader {
 
 class ViewportCameraController;
+class SceneSurfaceQuerySnapshot;
 struct ViewportRay;
 
 /**
@@ -31,6 +32,8 @@ struct ViewportSceneBillboardPickCandidate {
   EntityId entity = kInvalidEntityId;
   QVec3 position = {};
   float size_pixels = 1.0f;
+  bool selectable = true;
+  bool effectively_locked = false;
 };
 
 /// Carries one depth-ranked stationary mesh vertex into viewport interaction.
@@ -45,7 +48,6 @@ struct ViewportMeshVertexSnapTarget {
 /// Carries one prepared mesh Move snap query into viewport interaction.
 struct ViewportMeshSnapQueryResult {
   std::optional<ViewportMeshVertexSnapTarget> vertex_target;
-  std::optional<double> nearest_surface_ray_distance;
 };
 
 /**
@@ -79,19 +81,24 @@ struct ViewportInteractionFrame {
   bool right_pressed = false;
   bool right_down = false;
   bool right_released = false;
+  float pointer_drag_threshold_pixels = 4.0f;
+  /// True when native pointer capture recenters the cursor this frame.
+  bool pointer_capture_recentered = false;
   double double_click_interval_seconds = 0.5;
   double monotonic_time_seconds = 0.0;
   bool active_tool_allows_selection_fallback = false;
   std::span<const ViewportSceneBillboardPickCandidate>
       scene_billboard_pick_candidates;
   std::span<const ViewportSceneCurvePickCandidate> scene_curve_pick_candidates;
-  /// Existing mesh-surface owner supplies depth only after a curve is hit.
-  std::function<std::optional<double>(const ViewportRay &)>
-      scene_mesh_surface_distance;
+  /// One frozen render-visible surface index shared by every Curve hit in the
+  /// frame. The host owns its lifetime until frame dispatch returns.
+  const SceneSurfaceQuerySnapshot *scene_surfaces = nullptr;
   /// The modeling owner retains mesh picking, occlusion depth, and
   /// moving-selection exclusion in one prepared query.
   std::function<ViewportMeshSnapQueryResult(const ViewportRay &,
-                                            double vertex_radius)>
+                                            double vertex_radius,
+                                            std::optional<double>
+                                                maximum_ray_distance)>
       scene_mesh_snap_query;
   ViewportInteractionSelectionState selection_state;
 };
@@ -107,6 +114,8 @@ struct ViewportBeforeToolInteractionResult {
   bool transfer_face_texture_consumed = false;
   /// Only an eligible semantic action may dispatch; cancelled releases cannot.
   bool transfer_face_texture_requested = false;
+  /// Exact initiating press or matching release position for the transfer.
+  QVec2 transfer_face_texture_local = {};
   bool selection_click_requested = false;
   QVec2 selection_click_local = {};
   int selection_click_count = 1;

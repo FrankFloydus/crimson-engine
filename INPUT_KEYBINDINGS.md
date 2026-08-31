@@ -101,6 +101,8 @@ Canonical input supports:
 
 - keyboard keys and modifiers;
 - mouse-button presses such as `LeftMouse`, `MiddleMouse`, `RightMouse`, `Mouse4`, and `Mouse5`;
+  explicit aliases such as `RightMousePress` are accepted on input and normalize to the bare
+  canonical button name;
 - stationary clicks such as `MiddleMouseClick` and double-clicks such as
   `MiddleMouseDoubleClick`;
 - drag gestures such as `MiddleMouseDrag` and `RightMouseDrag`;
@@ -129,6 +131,27 @@ or external capture theft releases fly navigation, clears pending motion, and re
 pre-capture cursor position. External capture theft cancels the drag chord without synthesizing an
 RMB click. Never expose Win32 messages or duplicate relative-pointer state below the UI/platform
 boundary.
+
+## Pointer Gesture Lifecycle
+
+`ViewportPointerGesture` is the toolkit-neutral press record shared by deferred clicks, drag
+thresholds, Curve conversion, gizmo starts, and canceled-release suppression. Interaction owners
+keep their own scene, document, selection, or control identity beside that record, but they do not
+reimplement press/release sequence matching or drag-distance rules. A canceled pointer owner keeps
+the originating release reserved until the physical button is up, so that release cannot become a
+selection click or start another tool. Deferred selection clicks and selection boxes retain the
+accepted left-press edge; an older or unrelated release cannot commit a newer gesture. Curve
+control, whole-Curve, and transform-gizmo hit tests share the frame's frozen render-visible
+`SceneSurfaceQuerySnapshot`; production interaction frames do not carry a parallel mesh-depth
+callback.
+
+`ViewportInteractionController::handle_tool_pointer_lifecycle()` owns frame precedence for editor
+tools: a selected Curve control gizmo gets its established prepass, semantic Curve conversion keeps
+its ordered edge priority, native tools run next, and the ordinary transform gizmo receives the
+remaining input. `QtViewportPanel` samples host coordinates and pointer capture, then submits that
+frame; it does not enumerate concrete native tools or reconstruct editor precedence. Native tool
+activation, commit, cancel, reset, mutation blocking, and active presentation are registered once
+through the viewport tool descriptor lifecycle contract.
 
 ## Viewport Navigation Rules
 
@@ -216,6 +239,17 @@ The UI should not store private UI-only shortcut state. It should call public/ed
 route to `QuaderKeybindingService`, and must never duplicate parsing, formatting, conflict
 detection, or target canonicalization.
 
+Commands, router shortcuts, and semantic viewport actions all enter the same stateful sequence
+dispatcher. The dispatcher owns prefix/pending state, context matching, precedence, and target
+availability fallthrough before the viewport resolver applies the returned semantic action to its
+input frame. For example, `W` dispatches Activate Move while navigation is idle and Fly Forward
+while fly navigation is active; the navigation context excludes the tool rule rather than allowing
+both targets to fire. Stateless semantic lookup is reserved for held/released-state probes and deferred
+mouse-gesture ownership; it must not preempt pressed or wheel dispatch. This keeps a mapping such
+as `Ctrl+K F` executable for a viewport action while preserving existing single-chord behavior.
+Each pending prefix expires after one second without a continuation; every accepted intermediate
+chord refreshes that deadline, and the chord arriving at or after expiry resolves as a fresh input.
+
 Keybinding labels are complete action names, not reused menu leaves. Keep labels unique in each
 locale and include the subject, operation, axis, or mode needed to recognize the command (for
 example, `Align X Center`, `Activate Move Tool`, and `Bridge Selected Edges`).
@@ -289,9 +323,13 @@ mesh. The portable owner rotates the effective UV chart onto the target plane wh
 texture continuity along the planes' intersection, matching TrenchBroom's Valve 220 rotation
 transfer. The selected source remains selected, and each changed click is one undo item.
 The default is a press action, not drag painting; held/release frames must not start selection or a
-transform gizmo. A rebound left click or double-click also reserves its constituent press, so
-selection cannot replace the source before transfer fires. A lone click in a rebound double-click
-mapping leaves selection unchanged. Focus, text input, navigation, modal tools, transform drags, and operation
+transform gizmo. Rebound left, middle, or modified-right press/click/double-click mappings retain
+their exact Settings-resolved button and constituent press, so selection, navigation, and the
+right-button context menu cannot replace the source before transfer fires. Bare right-button
+material mappings remain rejected by the keybinding owner because that gesture is reserved for
+viewport navigation and context menus. Drag and wheel mappings are rejected there too because
+they do not carry one exact owned mouse-button edge. A lone click in a rebound double-click mapping leaves
+selection unchanged. Focus, text input, navigation, modal tools, transform drags, and operation
 previews use the same exclusions as other material gestures. Rebinding and unassignment go
 through the canonical action catalog; no private Alt/LMB check may bypass it.
 

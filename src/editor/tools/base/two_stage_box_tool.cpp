@@ -79,6 +79,11 @@ ViewportToolResult TwoStageBoxTool::handle_event(
       if (context.modal_state == nullptr) {
         return ModalViewportTool::handle_event(context, event);
       }
+      if (context.modal_state->primary_pointer_gesture) {
+        context.modal_state->primary_release_suppression.begin(
+            QuaderMouseButton::Left, true);
+        context.modal_state->primary_pointer_gesture.reset();
+      }
       if ((context.box == nullptr || !context.box->cancel_session) &&
           context.ports.cancel == nullptr) {
         return ModalViewportTool::handle_event(context, event);
@@ -110,7 +115,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
 
     if (event.kind != ViewportToolEventKind::Frame ||
         event.tool != viewport_tool() || context.modal_state == nullptr ||
-        context.box == nullptr || !context.box->make_event ||
+        context.box == nullptr || !context.box->make_event_at ||
         !context.box->accept_preview ||
         context.ports.preview == nullptr) {
       return ModalViewportTool::handle_event(context, event);
@@ -119,12 +124,73 @@ ViewportToolResult TwoStageBoxTool::handle_event(
     ViewportBoxToolContext &box_context = *context.box;
     ViewportToolPreviewPort &preview_port = *context.ports.preview;
     const ViewportPointerToolEvent& pointer = event.pointer;
-    const ModelingBoxToolEvent box_event = box_context.make_event();
-    ModelingBoxPreview preview = preview_port.box_preview(box_event.snap_enabled);
+    ViewportModalToolState &modal_state = *context.modal_state;
+    const bool canceled_release_reserved =
+        modal_state.primary_release_suppression.consume(
+            QuaderMouseButton::Left, pointer.left_clicked, pointer.left_down,
+            pointer.left_released);
+    if (canceled_release_reserved) {
+      return {
+          .handled = true,
+          .consumed = true,
+          .modal_state_changed = true,
+      };
+    }
+
+    const auto make_box_event = [&](QVec2 local) {
+      return box_context.make_event_at(local);
+    };
+    ModelingBoxToolEvent box_event = make_box_event(pointer.mouse_local);
+    ModelingBoxPreview preview =
+        preview_port.box_preview(box_event.snap_enabled);
     bool action_consumed = false;
     bool active_tool_sync_requested = false;
 
+    const auto cancel_pointer_gesture = [&]() {
+      if (!modal_state.primary_pointer_gesture) {
+        return true;
+      }
+      ModelingCommandResult canceled =
+          context.ports.cancel != nullptr
+              ? context.ports.cancel->cancel_box()
+              : ModelingCommandResult{
+                    .ok = false,
+                    .message = "Box cancel command is not available.",
+                };
+      if (!canceled.ok) {
+        LOG_ERROR("Primitive pointer cancel failed: {}", canceled.message);
+        return false;
+      }
+      modal_state.primary_release_suppression.begin(
+          QuaderMouseButton::Left, pointer.left_down);
+      modal_state.primary_pointer_gesture.reset();
+      invalidate(context);
+      return true;
+    };
+
+    const bool pointer_interrupted =
+        modal_state.primary_pointer_gesture &&
+        (pointer.pointer_interaction_canceled || !pointer.viewport_focused ||
+         pointer.navigation_active || pointer.gizmo_consumed ||
+         pointer.text_input_active);
+    const bool pointer_abandoned =
+        modal_state.primary_pointer_gesture && !pointer.left_down &&
+        !pointer.left_released;
+    if (pointer_interrupted || pointer_abandoned) {
+      const bool canceled = cancel_pointer_gesture();
+      return {
+          .handled = true,
+          .consumed = true,
+          .modal_state_changed = canceled,
+      };
+    }
+
     if (!preview.ok) {
+      if (modal_state.primary_pointer_gesture) {
+        modal_state.primary_release_suppression.begin(
+            QuaderMouseButton::Left, pointer.left_down);
+      }
+      modal_state.primary_pointer_gesture.reset();
       active_tool_sync_requested = rollback_failed_preview(
           box_context, "Box preview query", preview);
       invalidate(context);
@@ -138,6 +204,11 @@ ViewportToolResult TwoStageBoxTool::handle_event(
     }
 
     if (pointer.finalize_pressed && box_context.apply_session) {
+      if (modal_state.primary_pointer_gesture) {
+        modal_state.primary_release_suppression.begin(
+            QuaderMouseButton::Left, pointer.left_down);
+        modal_state.primary_pointer_gesture.reset();
+      }
       const ModelingCommandResult applied = box_context.apply_session();
       if (!applied.ok) {
         LOG_ERROR("Primitive apply failed: {}", applied.message);
@@ -151,14 +222,14 @@ ViewportToolResult TwoStageBoxTool::handle_event(
       action_consumed = true;
     }
 
-    auto finish_footprint_and_accept = [&]() {
-      preview = preview_port.update_box_footprint(box_event);
+    auto finish_footprint_and_accept = [&](const ModelingBoxToolEvent &finish) {
+      preview = preview_port.update_box_footprint(finish);
       if (rollback_failed_preview(box_context,
                                   "Box footprint finalize update", preview)) {
         active_tool_sync_requested = true;
       }
       if (preview.ok) {
-        preview = preview_port.begin_box_height(box_event);
+        preview = preview_port.begin_box_height(finish);
         if (rollback_failed_preview(box_context, "Box height begin",
                                     preview)) {
           active_tool_sync_requested = true;
@@ -169,7 +240,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
                                      ? box_context.next_mesh_name()
                                      : std::string{"Mesh"};
         const bool accepted =
-            accept_preview(box_context, name, box_event.snap_enabled);
+            accept_preview(box_context, name, finish.snap_enabled);
         if (!accepted && box_context.session_active &&
             !box_context.session_active()) {
           active_tool_sync_requested = true;
@@ -181,6 +252,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
     };
 
     if (!action_consumed && pointer.hovered && !pointer.left_down &&
+        !modal_state.primary_pointer_gesture &&
         !pointer.suppress_hover_work &&
         preview.drag_state == ModelingBoxDragState::Idle &&
         (context.ports.hover == nullptr ||
@@ -196,31 +268,64 @@ ViewportToolResult TwoStageBoxTool::handle_event(
       }
     }
 
-    if (!action_consumed && pointer.left_clicked && !pointer.gizmo_consumed &&
-        !pointer.navigation_active) {
-      if (preview.drag_state == ModelingBoxDragState::Footprint) {
-        finish_footprint_and_accept();
+    if (!action_consumed && !modal_state.primary_pointer_gesture &&
+        pointer.left_clicked && !pointer.gizmo_consumed &&
+        !pointer.navigation_active && pointer.viewport_focused &&
+        !pointer.pointer_interaction_canceled) {
+      modal_state.primary_pointer_gesture =
+          viewport_pointer_gesture_from_latest_edge(
+              pointer.pointer_pressed_edges, QuaderMouseButton::Left,
+              pointer.left_click_local, pointer.mouse_screen, pointer.modifiers,
+              pointer.pointer_drag_threshold_pixels);
+      box_event =
+          make_box_event(modal_state.primary_pointer_gesture->press.local);
+      preview = preview_port.begin_box_footprint(box_event);
+      if (rollback_failed_preview(box_context, "Box footprint begin",
+                                  preview)) {
+        active_tool_sync_requested = true;
+        modal_state.primary_release_suppression.begin(
+            QuaderMouseButton::Left, true);
+        modal_state.primary_pointer_gesture.reset();
+      }
+      invalidate(context);
+      action_consumed = true;
+    }
+
+    const ViewportPointerButtonEdge *release =
+        modal_state.primary_pointer_gesture
+            ? viewport_pointer_edge_after(
+                  pointer.pointer_released_edges,
+                  modal_state.primary_pointer_gesture->press)
+            : nullptr;
+    const bool matching_release =
+        modal_state.primary_pointer_gesture && pointer.left_released &&
+        (release != nullptr ||
+         (modal_state.primary_pointer_gesture->press.sequence == 0u &&
+          pointer.pointer_released_edges.empty()));
+    if (!action_consumed && matching_release &&
+        preview.drag_state == ModelingBoxDragState::Footprint &&
+        !pointer.gizmo_consumed && !pointer.navigation_active) {
+      const QVec2 release_local =
+          release != nullptr ? release->local : pointer.mouse_local;
+      if (viewport_pointer_drag_threshold_reached(
+              *modal_state.primary_pointer_gesture, release_local)) {
+        box_event = make_box_event(release_local);
+        modal_state.primary_pointer_gesture.reset();
+        finish_footprint_and_accept(box_event);
       } else {
-        preview = preview_port.begin_box_footprint(box_event);
-        if (rollback_failed_preview(box_context, "Box footprint begin",
-                                    preview)) {
-          active_tool_sync_requested = true;
-        }
-        invalidate(context);
+        (void)cancel_pointer_gesture();
         action_consumed = true;
       }
     }
 
-    if (!action_consumed && pointer.left_released &&
-        preview.drag_state == ModelingBoxDragState::Footprint &&
-        !pointer.gizmo_consumed && !pointer.navigation_active) {
-      finish_footprint_and_accept();
-    }
-
     if (!action_consumed &&
+        modal_state.primary_pointer_gesture && pointer.left_down &&
         preview.drag_state == ModelingBoxDragState::Footprint &&
         pointer.hovered && !pointer.suppress_hover_work &&
-        !pointer.navigation_active) {
+        !pointer.navigation_active &&
+        viewport_pointer_drag_threshold_reached(
+            *modal_state.primary_pointer_gesture, pointer.mouse_local)) {
+      box_event = make_box_event(pointer.mouse_local);
       preview = preview_port.update_box_footprint(box_event);
       if (rollback_failed_preview(box_context, "Box footprint update",
                                   preview)) {

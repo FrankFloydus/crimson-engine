@@ -356,6 +356,27 @@ QuaderMeshSnapQueryResult QuaderQueryApi::mesh_snap_query(
   return result;
 }
 
+std::optional<QuaderMeshVertexSnapTarget>
+QuaderQueryApi::mesh_vertex_snap_target(
+    const QuaderRay &ray, double vertex_radius,
+    bool exclude_current_selection,
+    std::optional<double> maximum_ray_distance) const {
+  const std::optional<ModelingMeshVertexSnapTarget> target =
+      read_scene_session(session_).modeling().pick_mesh_vertex_snap_target(
+          to_modeling_ray(ray), vertex_radius, exclude_current_selection,
+          maximum_ray_distance);
+  if (!target.has_value()) {
+    return std::nullopt;
+  }
+  return QuaderMeshVertexSnapTarget{
+      .modeling_object_id = target->modeling_object_id,
+      .vertex_id = static_cast<QuaderElementId>(target->vertex_id),
+      .world_position = target->world_position,
+      .ray_distance = target->ray_distance,
+      .pick_distance = target->pick_distance,
+  };
+}
+
 std::optional<QVec3> QuaderQueryApi::selection_center() const {
   const SceneSession &session = read_scene_session(session_);
   if (session.instances().instance_edit_state().active) {

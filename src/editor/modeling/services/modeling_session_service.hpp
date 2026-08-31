@@ -8,8 +8,10 @@
 
 #include "editor/modeling/modeling_selection_box_baseline.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/modeling/services/modeling_hierarchy_duplicate_service.hpp"
 #include "editor/modeling/services/modeling_action_catalog.hpp"
 #include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
+#include "editor/modeling/services/modeling_structural_duplicate.hpp"
 #include "render/viewport_overlay_frame.hpp"
 #include "scene/scene_bounds.hpp"
 
@@ -27,9 +29,11 @@ namespace quader {
 class AssetRegistry;
 class DocumentCommandService;
 class EditorHistoryService;
+class EditorTransaction;
 class IUndoableCommand;
 class SceneDocument;
 struct TextureLockSettings;
+struct ViewportSceneCurvePickCandidate;
 
 /**
  * Reports operation-preview projection boundaries to the project checkpoint
@@ -65,6 +69,37 @@ struct ModelingMeshVertexSnapTarget final {
 struct ModelingMeshSnapQueryResult final {
   std::optional<ModelingMeshVertexSnapTarget> vertex_target;
   std::optional<double> nearest_surface_ray_distance;
+};
+
+/** Identifies one immutable volatile-overlay publication from this service. */
+struct ModelingVolatileOverlaySourceStamp final {
+  std::uintptr_t source_identity = 0u;
+  std::uint64_t publication_revision = 0u;
+
+  friend bool operator==(const ModelingVolatileOverlaySourceStamp &,
+                         const ModelingVolatileOverlaySourceStamp &) = default;
+};
+
+/**
+ * Pins one immutable volatile-overlay frame across all viewport submissions in
+ * the current presentation pass. Copying this snapshot is O(1); the frame stays
+ * alive until the last snapshot copy is released.
+ */
+struct ModelingVolatileOverlaySnapshot final {
+  std::shared_ptr<const ViewportOverlayFrame> frame;
+  ModelingVolatileOverlaySourceStamp source;
+};
+
+/// Testable retained-publication work counters; values are monotonic.
+struct ModelingVolatileOverlayCacheStats final {
+  std::uint64_t build_count = 0u;
+  std::uint64_t reuse_count = 0u;
+};
+
+/// Monotonic counters for generated-preview signature and mesh work.
+struct ModelingToolPreviewWorkStats final {
+  std::uint64_t signature_enumeration_count = 0u;
+  std::uint64_t mesh_extraction_count = 0u;
 };
 
 /**
@@ -122,6 +157,11 @@ public:
   compile_object_mesh(int modeling_object_id) const;
   [[nodiscard]] std::optional<EntityId>
   pick_object_entity(const ModelingPickSelectRequest &request) const;
+  [[nodiscard]] std::optional<ModelingSelectionHit>
+  query_selection_hit(const ModelingPickSelectRequest &request) const;
+  /** Returns the ordered mesh depth stack used by provider-neutral cycling. */
+  [[nodiscard]] std::vector<ModelingSelectionHit>
+  query_selection_depth_hits(const ModelingPickSelectRequest &request) const;
   /// Reuses mesh surface picking for non-mesh hit-depth arbitration.
   [[nodiscard]] std::optional<double>
   pick_mesh_surface_distance(const ModelingRay &ray) const;
@@ -133,9 +173,18 @@ public:
   /// Move tool's stationary-landmark policy.
   [[nodiscard]] std::optional<ModelingMeshVertexSnapTarget>
   pick_mesh_vertex_snap_target(const ModelingRay &ray, double vertex_radius,
-                               bool exclude_current_selection = true) const;
+                               bool exclude_current_selection = true,
+                               std::optional<double> maximum_ray_distance =
+                                   std::nullopt) const;
   [[nodiscard]] std::vector<EntityId>
   box_pick_object_entities(const ModelingBoxSelectRequest &request) const;
+  [[nodiscard]] std::vector<ModelingSelectionHit>
+  query_selection_marquee_hits(
+      const ModelingBoxSelectRequest &request) const;
+  /// Borrows the retained whole-Curve candidates used by typed viewport/API
+  /// hit arbitration until the next scene, asset, or Local Visibility change.
+  [[nodiscard]] std::span<const ViewportSceneCurvePickCandidate>
+  scene_curve_pick_candidates() const;
   [[nodiscard]] std::optional<QVec3> selection_center() const;
   [[nodiscard]] std::optional<ModelingTransform3>
   selection_transform_orientation() const;
@@ -181,11 +230,22 @@ public:
       ModelingSelectionOverlayOptions options = {}) const;
   [[nodiscard]] ViewportOverlayFrame
   selection_overlay_frame(ModelingSelectionOverlayOptions options = {}) const;
+  [[nodiscard]] ModelingVolatileOverlaySnapshot
+  volatile_overlay_snapshot() const;
+  /// Compatibility copy for non-frame-loop consumers and focused tests.
   [[nodiscard]] ViewportOverlayFrame volatile_overlay_frame() const;
+  [[nodiscard]] ModelingVolatileOverlayCacheStats
+  volatile_overlay_cache_stats() const;
+  /**
+   * O(1) source revision for generated preview state. Changed runtime commands
+   * and overlay invalidations advance it before the next render sync.
+   */
+  [[nodiscard]] std::uint64_t tool_preview_source_revision() const;
   /// Cheap generated-preview state; never materializes SDK or render meshes.
   [[nodiscard]] std::uint64_t tool_preview_signature() const;
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
   tool_preview_meshes() const;
+  [[nodiscard]] ModelingToolPreviewWorkStats tool_preview_work_stats() const;
   [[nodiscard]] bool transient_transform_preview_active() const;
   [[nodiscard]] std::uint64_t transient_transform_preview_revision() const;
   [[nodiscard]] std::uint64_t
@@ -218,6 +278,15 @@ public:
   restore_history_memento(const ModelingSessionMemento &memento);
   ModelingCommandResult restore_history_memento_preserving_scene_selection(
       const ModelingSessionMemento &memento);
+  /**
+   * Exactly rewinds modeling publication revisions after a failed outer
+   * transaction while leaving Scene selection to that outer transaction.
+   * This compensation-only path must not be used for normal undo/redo, whose
+   * successful history transitions remain monotonic.
+   */
+  ModelingCommandResult
+  restore_history_memento_exact_for_failure_compensation(
+      const ModelingSessionMemento &memento);
   void clear_transient_state_for_document_replacement();
   void reset_from_scene();
   [[nodiscard]] ModelingCommandResult
@@ -229,13 +298,14 @@ public:
       std::function<std::uint64_t()> revision_provider,
       std::function<bool()> active_provider);
 
-  ModelingCommandResult duplicate_selected_hierarchy_for_group_drag(
-      DocumentCommandService &document_commands);
-  ModelingCommandResult duplicate_selected_entity_hierarchy(
-      DocumentCommandService &document_commands);
   ModelingCommandResult
   duplicate_selected_entity_hierarchy_with_independent_meshes(
       DocumentCommandService &document_commands);
+  ModelingHierarchyDuplicateResult duplicate_entity_hierarchy(
+      std::span<const EntityId> roots,
+      DocumentCommandService &document_commands,
+      ModelingSelectionMode result_selection_mode,
+      bool independent_mesh_assets = false);
   ModelingCommandResult set_selection_mode(ModelingSelectionMode mode);
   ModelingCommandResult select_all();
   ModelingCommandResult invert_selection();
@@ -248,11 +318,19 @@ public:
       std::span<const EntityId> candidates,
       std::span<const EntityId> references) const;
   std::unique_ptr<IUndoableCommand> create_delete_selection_command();
+  std::unique_ptr<IUndoableCommand>
+  create_destroy_entities_command(std::vector<EntityId> roots,
+                                  std::string label = "Destroy Entities");
   [[nodiscard]] bool has_selected_scene_aware_delete_root() const;
   ModelingCommandResult delete_component_selection();
   ModelingCommandResult copy_selection();
   ModelingCommandResult paste_selection();
   ModelingCommandResult repeat_last_action();
+  void record_repeatable_structural_duplicate();
+  [[nodiscard]] bool repeat_last_action_uses_structural_duplicate() const;
+  ModelingCommandResult repeat_last_structural_transform(
+      EditorTransaction &transaction, EditorHistoryService &history,
+      const ModelingStructuralDuplicate &structural_duplicate);
   [[nodiscard]] bool has_face_texture_repeat() const;
   ModelingCommandResult mirror_selection(ModelingMirrorAxis axis);
   ModelingCommandResult flip_selection(ModelingFlipOrientation orientation);
@@ -298,6 +376,13 @@ public:
   ModelingCommandResult
   execute_instant_operation(ModelingInstantOperationId operation);
   ModelingCommandResult begin_transform_preview(bool duplicate_selected);
+  ModelingCommandResult begin_transform_preview(
+      bool duplicate_selected,
+      const ModelingStructuralDuplicate &structural_duplicate,
+      EditorHistoryService &history);
+  [[nodiscard]] bool structural_transform_preview_active() const;
+  ModelingCommandResult
+  commit_structural_transform_preview(std::string label = {});
   ModelingCommandResult update_transform_translate_preview(QVec3 delta);
   ModelingCommandResult
   update_transform_matrix_preview(const ModelingTransform3 &transform,
@@ -317,6 +402,7 @@ public:
   ModelingTransformDragPreview begin_transform_drag(
       const ModelingTransformDragBeginRequest &request,
       DocumentCommandService &document_commands,
+      const ModelingStructuralDuplicate &structural_duplicate,
       EditorHistoryService &history);
   ModelingTransformDragPreview
   update_transform_drag(const ModelingTransformDragUpdateRequest &request);
@@ -403,13 +489,23 @@ public:
   create_linear_array(const ModelingLinearArrayRequest &request);
   ModelingRadialArrayResult
   create_radial_array(const ModelingRadialArrayRequest &request);
-  void project_object_selection_from_scene(bool force_object_mode = false);
-  void clear_runtime_object_selection_for_scene_owned_selection();
+  [[nodiscard]] ModelingCommandResult
+  project_object_selection_from_scene(bool force_object_mode = false);
+  [[nodiscard]] ModelingCommandResult
+  clear_runtime_object_selection_for_scene_owned_selection();
   ModelingCommandResult
   set_object_selection(std::span<const EntityId> entities,
                        EntityId active = kInvalidEntityId);
   ModelingCommandResult
   set_component_selection(const ModelingComponentSelectionRequest &request);
+  ModelingCommandResult apply_resolved_component_selection(
+      const ModelingResolvedComponentSelectionRequest &request);
+  ModelingCommandResult set_component_selections(
+      std::span<const ModelingComponentSelectionRequest> requests);
+  ModelingCommandResult apply_resolved_component_selections(
+      std::span<const ModelingComponentSelectionRequest> requests,
+      ModelingSelectionEdit edit,
+      const ModelingSelectionBoxBaseline &baseline);
   ModelingCommandResult move_selection(QVec3 delta);
   ModelingCommandResult transform_selection(const ModelingTransform3 &transform,
                                             QVec3 pivot);

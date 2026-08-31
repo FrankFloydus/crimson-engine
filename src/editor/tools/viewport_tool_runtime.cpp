@@ -7,8 +7,11 @@
 #include "editor/tools/viewport_tool_runtime.hpp"
 
 #include "editor/modeling/services/modeling_session_service.hpp"
-#include "viewport/host_viewport_contract_adapter.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
+
+#include <algorithm>
+#include <utility>
 
 namespace quader {
 
@@ -133,6 +136,13 @@ bool ViewportToolRuntime::tool_allows_selection_fallback(
   return item != nullptr && host_.allows_selection_fallback(*item);
 }
 
+bool ViewportToolRuntime::tool_uses_editor_native_lifecycle(
+    ViewportToolId tool) const {
+  const ViewportTool *item = registry_.find(tool);
+  return item != nullptr &&
+         item->descriptor().editor_owned_native_lifecycle;
+}
+
 ModelingTransformTool
 ViewportToolRuntime::transform_tool(ViewportToolId tool) const {
   const ViewportTool *item = registry_.find(tool);
@@ -163,7 +173,17 @@ ViewportToolRuntime::box_preview(const ViewportToolPreviewPort &preview,
   return preview.box_preview(snap_enabled);
 }
 
-void ViewportToolRuntime::clear_modal_tool_state() { modal_state_ = {}; }
+void ViewportToolRuntime::clear_modal_tool_state() {
+  ViewportPointerReleaseSuppression release_suppression =
+      modal_state_.primary_release_suppression;
+  if (modal_state_.primary_pointer_gesture) {
+    // Tool/lifecycle changes can precede the physical button-up edge. Retain
+    // that edge at the runtime boundary even after the old tool is gone.
+    release_suppression.begin(QuaderMouseButton::Left, true);
+  }
+  modal_state_ = {};
+  modal_state_.primary_release_suppression = release_suppression;
+}
 
 void ViewportToolRuntime::clear_modal_drag_state() {
   modal_state_.insert_edge_loop_drag_active = false;
@@ -253,8 +273,8 @@ bool ViewportToolRuntime::handle_shortcut(const ViewportShortcut &shortcut,
 
 ViewportToolResult
 ViewportToolRuntime::handle_active_tool_event(ViewportToolState &state,
-                                              ViewportToolContext &context,
-                                              const ViewportToolEvent &event) {
+                                               ViewportToolContext &context,
+                                               const ViewportToolEvent &event) {
   if (active_tool_ == nullptr) {
     sync_active_tool(state.active_tool);
   }
@@ -262,6 +282,17 @@ ViewportToolRuntime::handle_active_tool_event(ViewportToolState &state,
     return {};
   }
   context.modal_state = &modal_state_;
+  if (event.kind == ViewportToolEventKind::Frame &&
+      active_tool_->viewport_tool() != ViewportToolId::CreatePrimitive &&
+      modal_state_.primary_release_suppression.consume(
+          QuaderMouseButton::Left, event.pointer.left_clicked,
+          event.pointer.left_down, event.pointer.left_released)) {
+    return {
+        .handled = true,
+        .consumed = true,
+        .modal_state_changed = true,
+    };
+  }
   ViewportToolResult result = active_tool_->handle_event(context, event);
   if (result.sync_active_tool_from_modeling) {
     if (context.ports.preview == nullptr) {
@@ -288,6 +319,208 @@ ModelingCommandResult ViewportToolRuntime::activate_active_tool(
     };
   }
   return host_.activate_tool(*active_tool_, modeling);
+}
+
+bool ViewportToolRuntime::register_native_lifecycle(
+    ViewportNativeToolLifecycleAdapter adapter) {
+  const ViewportTool *tool = registry_.find(adapter.tool);
+  if (tool == nullptr || !tool->descriptor().editor_owned_native_lifecycle ||
+      native_lifecycle_registered(adapter.tool) || adapter.commit_label.empty() ||
+      !adapter.can_activate ||
+      !adapter.active || !adapter.pending ||
+      !adapter.pending_history_preview || !adapter.activate ||
+      !adapter.commit || !adapter.cancel || !adapter.reset) {
+    return false;
+  }
+  native_lifecycles_.push_back(std::move(adapter));
+  return true;
+}
+
+bool ViewportToolRuntime::native_lifecycle_registered(
+    ViewportToolId tool) const {
+  return find_native_lifecycle(tool) != nullptr;
+}
+
+bool ViewportToolRuntime::native_lifecycle_catalog_complete() const {
+  const auto tools = registry_.tools();
+  const auto declared_count =
+      std::ranges::count_if(tools, [](const ViewportTool *tool) {
+        return tool != nullptr &&
+               tool->descriptor().editor_owned_native_lifecycle;
+      });
+  return native_lifecycles_.size() ==
+             static_cast<std::size_t>(declared_count) &&
+         std::ranges::all_of(tools, [&](const ViewportTool *tool) {
+           return tool == nullptr ||
+                  !tool->descriptor().editor_owned_native_lifecycle ||
+                  native_lifecycle_registered(tool->viewport_tool());
+         });
+}
+
+bool ViewportToolRuntime::handles_native_lifecycle(
+    std::string_view tool_id) const {
+  return find_native_lifecycle(tool_id) != nullptr;
+}
+
+bool ViewportToolRuntime::native_lifecycle_active(
+    std::string_view tool_id) const {
+  const ViewportNativeToolLifecycleAdapter *adapter =
+      find_native_lifecycle(tool_id);
+  return adapter != nullptr && adapter->active();
+}
+
+bool ViewportToolRuntime::native_lifecycle_pending(
+    std::string_view tool_id) const {
+  const ViewportNativeToolLifecycleAdapter *adapter =
+      find_native_lifecycle(tool_id);
+  return adapter != nullptr && adapter->pending();
+}
+
+bool ViewportToolRuntime::can_activate_native_lifecycle(
+    std::string_view tool_id) const {
+  const ViewportNativeToolLifecycleAdapter *adapter =
+      find_native_lifecycle(tool_id);
+  return adapter != nullptr && adapter->can_activate();
+}
+
+bool ViewportToolRuntime::has_pending_native_lifecycle() const {
+  return std::ranges::any_of(native_lifecycles_, [](const auto &adapter) {
+    return adapter.pending();
+  });
+}
+
+bool ViewportToolRuntime::has_pending_native_history_preview() const {
+  return std::ranges::any_of(native_lifecycles_, [](const auto &adapter) {
+    return adapter.pending_history_preview();
+  });
+}
+
+bool ViewportToolRuntime::native_lifecycle_blocks_modeling_content_mutation()
+    const {
+  return std::ranges::any_of(native_lifecycles_, [](const auto &adapter) {
+    return adapter.blocks_modeling_content_mutation &&
+           adapter.blocks_modeling_content_mutation();
+  });
+}
+
+bool ViewportToolRuntime::native_lifecycle_blocks_document_mutation(
+    EntityId entity) const {
+  return std::ranges::any_of(native_lifecycles_, [&](const auto &adapter) {
+    return adapter.blocks_document_mutation &&
+           adapter.blocks_document_mutation(entity);
+  });
+}
+
+std::string_view ViewportToolRuntime::active_native_lifecycle_id() const {
+  const ViewportNativeToolLifecycleAdapter *active = nullptr;
+  for (const ViewportNativeToolLifecycleAdapter &adapter : native_lifecycles_) {
+    if (adapter.active() &&
+        (active == nullptr ||
+         adapter.active_priority < active->active_priority)) {
+      active = &adapter;
+    }
+  }
+  if (active == nullptr) {
+    return {};
+  }
+  const ViewportTool *tool = registry_.find(active->tool);
+  return tool != nullptr ? tool->id() : std::string_view{};
+}
+
+std::optional<ViewportNativeToolCommitMetadata>
+ViewportToolRuntime::active_native_lifecycle_commit_metadata() const {
+  const auto found =
+      std::ranges::find_if(native_lifecycles_, [](const auto &adapter) {
+        return adapter.pending();
+      });
+  if (found == native_lifecycles_.end()) {
+    return std::nullopt;
+  }
+  return ViewportNativeToolCommitMetadata{
+      .label = found->commit_label,
+      .domain = found->commit_domain,
+  };
+}
+
+CommandResult ViewportToolRuntime::activate_native_lifecycle(
+    std::string_view tool_id, double grid_world_size,
+    const std::function<CommandResult()> &cancel_competing_state) {
+  ViewportNativeToolLifecycleAdapter *adapter =
+      find_native_lifecycle(tool_id);
+  if (adapter == nullptr) {
+    return command_invalid_result("Unknown native viewport tool.");
+  }
+  if (adapter->active()) {
+    return command_unchanged_result();
+  }
+  if (!adapter->can_activate()) {
+    return command_invalid_result(adapter->unavailable_message.empty()
+                                      ? "Native viewport tool is unavailable."
+                                      : adapter->unavailable_message);
+  }
+
+  const CommandResult canceled = cancel_competing_state();
+  if (!canceled.ok) {
+    return canceled;
+  }
+  CommandResult activated = adapter->activate(grid_world_size);
+  activated.changed = activated.changed || canceled.changed;
+  return activated;
+}
+
+CommandResult ViewportToolRuntime::commit_active_native_lifecycle() {
+  const auto found =
+      std::ranges::find_if(native_lifecycles_, [](const auto &adapter) {
+        return adapter.pending();
+      });
+  return found != native_lifecycles_.end()
+             ? found->commit()
+             : command_invalid_result("No active native tool preview.");
+}
+
+CommandResult ViewportToolRuntime::cancel_native_lifecycles() {
+  bool changed = false;
+  for (ViewportNativeToolLifecycleAdapter &adapter : native_lifecycles_) {
+    CommandResult canceled = adapter.cancel();
+    changed = changed || canceled.changed;
+    if (!canceled.ok) {
+      canceled.changed = changed;
+      return canceled;
+    }
+  }
+  return {.ok = true, .changed = changed};
+}
+
+void ViewportToolRuntime::reset_native_lifecycles() {
+  for (ViewportNativeToolLifecycleAdapter &adapter : native_lifecycles_) {
+    adapter.reset();
+  }
+}
+
+ViewportNativeToolLifecycleAdapter *
+ViewportToolRuntime::find_native_lifecycle(std::string_view tool_id) {
+  const ViewportTool *tool = registry_.find(tool_id);
+  if (tool == nullptr) {
+    return nullptr;
+  }
+  const auto found =
+      std::ranges::find(native_lifecycles_, tool->viewport_tool(),
+                        &ViewportNativeToolLifecycleAdapter::tool);
+  return found == native_lifecycles_.end() ? nullptr : &(*found);
+}
+
+const ViewportNativeToolLifecycleAdapter *
+ViewportToolRuntime::find_native_lifecycle(std::string_view tool_id) const {
+  const ViewportTool *tool = registry_.find(tool_id);
+  return tool != nullptr ? find_native_lifecycle(tool->viewport_tool()) : nullptr;
+}
+
+const ViewportNativeToolLifecycleAdapter *
+ViewportToolRuntime::find_native_lifecycle(ViewportToolId tool) const {
+  const auto found =
+      std::ranges::find(native_lifecycles_, tool,
+                        &ViewportNativeToolLifecycleAdapter::tool);
+  return found == native_lifecycles_.end() ? nullptr : &(*found);
 }
 
 } // namespace quader

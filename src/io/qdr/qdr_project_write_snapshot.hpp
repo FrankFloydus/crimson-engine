@@ -14,6 +14,7 @@
 #include "io/project/project_types.hpp"
 #include "io/qdr/qdr_scene_viewport_camera.hpp"
 #include "scene/document/scene_content_document.hpp"
+#include "scene/document/scene_entity_state.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -73,31 +74,7 @@ struct QdrProjectSceneLayerWriteSnapshot final {
   bool locked = false;
 };
 
-/**
- * Captures one scene entity for QDR project export.
- */
-struct QdrProjectEntityWriteSnapshot final {
-  EntityId id = kInvalidEntityId;
-  std::string uuid;
-  EditorObjectId editor_object_id = kInvalidEditorObjectId;
-  std::string name;
-  EntityKind kind = EntityKind::Generic;
-  EntityId parent = kInvalidEntityId;
-  std::optional<TransformComponent> transform;
-  std::optional<VisibilityComponent> visibility;
-  std::optional<LockComponent> lock;
-  std::optional<ModelingObjectComponent> modeling_object;
-  std::optional<MeshComponent> mesh;
-  std::optional<CurveComponent> curve;
-  std::optional<MaterialComponent> material;
-  std::optional<LightComponent> light;
-  bool scene_root = false;
-  std::optional<SceneSettingsComponent> scene_settings;
-  std::optional<InstanceDefinitionComponent> instance_definition;
-  std::optional<InstanceOccurrenceComponent> instance_occurrence;
-  std::uint64_t layer_id = 0;
-  std::optional<TextureMappingComponent> texture_mapping;
-};
+using QdrProjectEntityWriteSnapshot = SceneEntityState;
 
 /**
  * Owns the immutable-by-contract data consumed by QDR project serialization and
@@ -111,7 +88,6 @@ struct QdrProjectWriteSnapshot final {
   std::vector<QdrProjectMaterialAssetWriteSnapshot> materials;
   std::vector<QdrProjectTextureAssetWriteSnapshot> textures;
   std::vector<QdrProjectEntityWriteSnapshot> entities;
-  std::vector<ProjectObjectRecord> object_records;
   std::vector<ProjectAssetReference> project_asset_dependencies;
   std::vector<QdrProjectSceneLayerWriteSnapshot> layers;
   std::optional<QdrSceneViewportCameraPose> viewport_camera_pose;

@@ -8,6 +8,7 @@
 
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset.hpp"
+#include "editor/modeling/services/modeling_host_publication_transaction.hpp"
 #include "editor/modeling/services/modeling_mesh_sync_service.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
 #include "math/glm_bridge.hpp"
@@ -62,7 +63,6 @@ struct LegacyCubeFrame final {
 
 struct LegacyTransformEdit final {
   EntityId entity = kInvalidEntityId;
-  TransformComponent before;
   TransformComponent after;
   QMat4 expected_local_after;
 };
@@ -70,13 +70,105 @@ struct LegacyTransformEdit final {
 struct LegacyUpgradePlan final {
   LegacyPlanStatus status = LegacyPlanStatus::Ineligible;
   EntityId entity = kInvalidEntityId;
-  ModelingObjectComponent modeling_before;
   ModelingObjectComponent modeling_after;
   MeshComponent mesh_before;
   MeshAsset mesh_after;
   std::vector<LegacyTransformEdit> transforms;
   bool clone_on_write = false;
 };
+
+/**
+ * Lazily seeds touched assets from SceneDocument's O(1) owner count and keeps
+ * only the sequential rebinds committed by this upgrade pass.
+ */
+class MeshBindingReferenceOverlay final {
+public:
+  explicit MeshBindingReferenceOverlay(const SceneDocument &scene)
+      : scene_(scene) {}
+
+  [[nodiscard]] std::size_t reference_count(AssetId mesh) {
+    const auto found = reference_counts_.find(mesh);
+    if (found != reference_counts_.end()) {
+      return found->second;
+    }
+    return reference_counts_
+        .emplace(mesh, scene_.mesh_binding_reference_count(mesh))
+        .first->second;
+  }
+
+  void record_published_rebind(AssetId before, AssetId after) {
+    const auto before_found = reference_counts_.find(before);
+    if (before_found != reference_counts_.end()) {
+      if (before_found->second > 0u) {
+        --before_found->second;
+      }
+    } else {
+      // The owner count already includes this committed rebind.
+      reference_counts_.emplace(
+          before, scene_.mesh_binding_reference_count(before));
+    }
+    reference_counts_.insert_or_assign(
+        after, scene_.mesh_binding_reference_count(after));
+  }
+
+private:
+  const SceneDocument &scene_;
+  std::unordered_map<AssetId, std::size_t> reference_counts_;
+};
+
+thread_local ModelingLegacyLocalFrameUpgradeFailurePoint
+    legacy_upgrade_failure_point =
+        ModelingLegacyLocalFrameUpgradeFailurePoint::None;
+
+[[nodiscard]] bool fail_at(
+    ModelingLegacyLocalFrameUpgradeFailurePoint point) noexcept {
+  return legacy_upgrade_failure_point == point;
+}
+
+[[nodiscard]] bool rollback_failed_publication(
+    ModelingHostPublicationTransaction &publication) noexcept {
+  if (publication.rollback()) {
+    return false;
+  }
+  // This startup compatibility pass has no structured result channel for a
+  // failed compensation. Never report a clean no-op while partial owner state
+  // remains published.
+  std::terminate();
+}
+
+[[nodiscard]] bool commit_publication(
+    ModelingHostPublicationTransaction &publication) noexcept {
+  if (publication.commit()) {
+    return true;
+  }
+  return rollback_failed_publication(publication);
+}
+
+[[nodiscard]] ModelingHostPublicationTransactionOptions
+publication_options(std::span<const EntityId> affected_entities,
+                    bool capture_assets,
+                    std::span<const AssetId> affected_assets = {}) {
+  return {
+      .sdk_rollback = ModelingSdkRollbackPolicy::None,
+      .checkpoint_scope =
+          ModelingHostPublicationCheckpointScope::ModelingProjection,
+      .asset_checkpoint_scope =
+          ModelingHostPublicationCheckpointScope::MeshProjection,
+      .scene_checkpoint_scope =
+          ModelingHostPublicationCheckpointScope::ModelingProjection,
+      .capture_assets = capture_assets,
+      .capture_scene = true,
+      .capture_scene_entities = true,
+      .capture_bindings = false,
+      // Transform and ModelingObjectComponent mutations belong to the Scene
+      // Structure domain. Enroll the exact affected subtree so its component
+      // and placement closure remains bounded and restorable.
+      .capture_hierarchy = true,
+      .capture_scene_selection = true,
+      .affected_scene_entities = affected_entities,
+      .affected_asset_ids = affected_assets,
+  };
+}
 
 bool finite_vector(QVec3 value) {
   return std::isfinite(value.x) && std::isfinite(value.y) &&
@@ -303,7 +395,7 @@ MeshAsset canonicalized_mesh_asset(const MeshAsset &source,
 
 LegacyUpgradePlan make_upgrade_plan(
     const SceneDocument &scene, const AssetRegistry &assets, EntityId entity,
-    const std::unordered_map<AssetId, std::size_t> &mesh_reference_counts) {
+    MeshBindingReferenceOverlay &mesh_reference_counts) {
   LegacyUpgradePlan plan;
   plan.entity = entity;
 
@@ -313,7 +405,6 @@ LegacyUpgradePlan make_upgrade_plan(
           kLegacyUnknownModelingObjectLocalFrameVersion) {
     return plan;
   }
-  plan.modeling_before = *modeling;
   plan.modeling_after = *modeling;
   plan.modeling_after.local_frame_version =
       kCanonicalModelingObjectLocalFrameVersion;
@@ -361,7 +452,6 @@ LegacyUpgradePlan make_upgrade_plan(
   }
   plan.transforms.push_back(LegacyTransformEdit{
       .entity = entity,
-      .before = *target_transform,
       .after = *target_after,
       .expected_local_after = target_local_after,
   });
@@ -411,7 +501,6 @@ LegacyUpgradePlan make_upgrade_plan(
     }
     plan.transforms.push_back(LegacyTransformEdit{
         .entity = child,
-        .before = *child_before,
         .after = *child_after,
         .expected_local_after = child_local_after,
     });
@@ -424,9 +513,8 @@ LegacyUpgradePlan make_upgrade_plan(
     plan.status = LegacyPlanStatus::Unrepresentable;
     return plan;
   }
-  const auto references = mesh_reference_counts.find(mesh_component->mesh);
   plan.clone_on_write =
-      references != mesh_reference_counts.end() && references->second > 1u;
+      mesh_reference_counts.reference_count(mesh_component->mesh) > 1u;
   plan.status = LegacyPlanStatus::Ready;
   return plan;
 }
@@ -441,53 +529,52 @@ bool transforms_match_plan(const SceneDocument &scene,
                              });
 }
 
-void rollback_plan(SceneDocument &scene, AssetRegistry &assets,
-                   ModelingMeshSyncService &mesh_sync,
-                   const SceneProjectionCheckpoint &scene_checkpoint,
-                   const AssetRegistryProjectionCheckpoint &asset_checkpoint,
-                   const LegacyUpgradePlan &plan) {
-  static_cast<void>(
-      mesh_sync.restore_projected_asset_checkpoint(assets, asset_checkpoint));
-  static_cast<void>(mesh_sync.set_projected_mesh_component(
-      scene, plan.entity, plan.mesh_before));
-  std::vector<SceneTransformAssignment> assignments;
-  assignments.reserve(plan.transforms.size());
-  for (const LegacyTransformEdit &edit : plan.transforms) {
-    assignments.push_back(SceneTransformAssignment{
-        .entity = edit.entity,
-        .transform = edit.before,
-    });
-  }
-  mesh_sync.apply_scene_transforms(scene, assignments);
-  static_cast<void>(mesh_sync.set_projected_modeling_object_component(
-      scene, plan.entity, plan.modeling_before));
-  static_cast<void>(
-      mesh_sync.restore_projected_scene_checkpoint(scene, scene_checkpoint));
-}
-
 bool apply_marker_only_plan(SceneDocument &scene,
+                            AssetRegistry &assets,
                             ModelingMeshSyncService &mesh_sync,
                             const LegacyUpgradePlan &plan) {
-  return mesh_sync.set_projected_modeling_object_component(
-             scene, plan.entity, plan.modeling_after) &&
-         scene.modeling_object(plan.entity) != nullptr &&
-         scene.modeling_object(plan.entity)->local_frame_version ==
-             kCanonicalModelingObjectLocalFrameVersion;
+  const std::vector<EntityId> affected_entities =
+      scene.descendants(plan.entity, true);
+  ModelingHostPublicationTransaction publication(
+      scene, assets, {}, publication_options(affected_entities, false));
+  if (!publication.ready()) {
+    return false;
+  }
+  const bool marker_published =
+      mesh_sync.set_projected_modeling_object_component(
+          scene, plan.entity, plan.modeling_after);
+  const ModelingObjectComponent *published_modeling =
+      scene.modeling_object(plan.entity);
+  if (!marker_published ||
+      fail_at(ModelingLegacyLocalFrameUpgradeFailurePoint::
+                  AfterModelingMarkerPublication) ||
+      published_modeling == nullptr ||
+      published_modeling->local_frame_version !=
+          kCanonicalModelingObjectLocalFrameVersion) {
+    return rollback_failed_publication(publication);
+  }
+  return commit_publication(publication);
 }
 
 bool apply_upgrade_plan(SceneDocument &scene, AssetRegistry &assets,
                         ModelingMeshSyncService &mesh_sync,
                         LegacyUpgradePlan &plan) {
-  const SceneProjectionCheckpoint scene_checkpoint =
-      scene.capture_projection_checkpoint();
-  const AssetRegistryProjectionCheckpoint asset_checkpoint =
-      assets.capture_projection_checkpoint();
+  const std::vector<EntityId> affected_entities =
+      scene.descendants(plan.entity, true);
+  const std::array affected_assets{plan.mesh_before.mesh};
+  ModelingHostPublicationTransaction publication(
+      scene, assets, {},
+      publication_options(affected_entities, true, affected_assets));
+  if (!publication.ready()) {
+    return false;
+  }
 
   MeshComponent mesh_after = plan.mesh_before;
   bool mesh_published = false;
   if (plan.clone_on_write) {
     mesh_after.mesh =
         mesh_sync.install_projected_mesh(assets, plan.mesh_after);
+    publication.track_created_asset(mesh_after.mesh);
     mesh_published = mesh_after.mesh != kInvalidAssetId &&
                      mesh_sync.set_projected_mesh_component(
                          scene, plan.entity, mesh_after);
@@ -496,6 +583,11 @@ bool apply_upgrade_plan(SceneDocument &scene, AssetRegistry &assets,
                          assets, plan.mesh_before.mesh, plan.mesh_after) &&
                      mesh_sync.notify_projected_mesh_changed(scene,
                                                              plan.entity);
+  }
+  if (!mesh_published ||
+      fail_at(ModelingLegacyLocalFrameUpgradeFailurePoint::
+                  AfterMeshPublication)) {
+    return rollback_failed_publication(publication);
   }
 
   std::vector<SceneTransformAssignment> assignments;
@@ -506,41 +598,31 @@ bool apply_upgrade_plan(SceneDocument &scene, AssetRegistry &assets,
         .transform = edit.after,
     });
   }
-  if (mesh_published) {
-    mesh_sync.apply_scene_transforms(scene, assignments);
+  if (!mesh_sync.apply_scene_transforms(scene, assignments) ||
+      fail_at(ModelingLegacyLocalFrameUpgradeFailurePoint::
+                  AfterTransformPublication)) {
+    return rollback_failed_publication(publication);
   }
   const bool marker_published =
-      mesh_published &&
       mesh_sync.set_projected_modeling_object_component(
           scene, plan.entity, plan.modeling_after);
   const ModelingObjectComponent *published_modeling =
       scene.modeling_object(plan.entity);
   const MeshComponent *published_mesh = scene.mesh(plan.entity);
   const bool published =
-      marker_published && transforms_match_plan(scene, plan) &&
+      marker_published &&
+      !fail_at(ModelingLegacyLocalFrameUpgradeFailurePoint::
+                   AfterModelingMarkerPublication) &&
+      transforms_match_plan(scene, plan) &&
       published_modeling != nullptr &&
       published_modeling->local_frame_version ==
           kCanonicalModelingObjectLocalFrameVersion &&
       published_mesh != nullptr &&
       published_mesh->mesh == mesh_after.mesh;
   if (!published) {
-    rollback_plan(scene, assets, mesh_sync, scene_checkpoint, asset_checkpoint,
-                  plan);
-    return false;
+    return rollback_failed_publication(publication);
   }
-  return true;
-}
-
-std::unordered_map<AssetId, std::size_t>
-mesh_reference_counts(const SceneDocument &scene) {
-  std::unordered_map<AssetId, std::size_t> result;
-  result.reserve(scene.entities().size());
-  for (const EntityId entity : scene.entities()) {
-    if (const MeshComponent *mesh = scene.mesh(entity); mesh != nullptr) {
-      ++result[mesh->mesh];
-    }
-  }
-  return result;
+  return commit_publication(publication);
 }
 
 } // namespace
@@ -550,8 +632,7 @@ ModelingLegacyLocalFrameUpgradeService::upgrade_scene(SceneDocument &scene,
                                                        AssetRegistry &assets,
                                                        ModelingMeshSyncService &mesh_sync) {
   ModelingLegacyLocalFrameUpgradeStats stats;
-  std::unordered_map<AssetId, std::size_t> reference_counts =
-      mesh_reference_counts(scene);
+  MeshBindingReferenceOverlay reference_counts(scene);
   const std::vector<EntityId> entities = scene.entities();
   stats.scanned_entity_count = entities.size();
 
@@ -585,36 +666,51 @@ ModelingLegacyLocalFrameUpgradeService::upgrade_scene(SceneDocument &scene,
     case LegacyPlanStatus::Unrepresentable:
       ++stats.unrepresentable_object_count;
       continue;
-    case LegacyPlanStatus::MarkerOnly:
-      if (apply_marker_only_plan(scene, mesh_sync, plan)) {
+    case LegacyPlanStatus::MarkerOnly: {
+      bool applied = false;
+      try {
+        applied = apply_marker_only_plan(scene, assets, mesh_sync, plan);
+      } catch (...) {
+        applied = false;
+      }
+      if (applied) {
         ++stats.upgraded_object_count;
         ++stats.marker_only_object_count;
       } else {
         ++stats.failed_object_count;
       }
       continue;
+    }
     case LegacyPlanStatus::Ready:
       break;
     }
 
-    if (!apply_upgrade_plan(scene, assets, mesh_sync, plan)) {
+    bool applied = false;
+    try {
+      applied = apply_upgrade_plan(scene, assets, mesh_sync, plan);
+    } catch (...) {
+      applied = false;
+    }
+    if (!applied) {
       ++stats.failed_object_count;
       continue;
     }
     ++stats.upgraded_object_count;
     if (plan.clone_on_write) {
       ++stats.cloned_mesh_asset_count;
-      auto before = reference_counts.find(plan.mesh_before.mesh);
-      if (before != reference_counts.end() && before->second > 0u) {
-        --before->second;
-      }
       const MeshComponent *after = scene.mesh(entity);
       if (after != nullptr) {
-        ++reference_counts[after->mesh];
+        reference_counts.record_published_rebind(plan.mesh_before.mesh,
+                                                  after->mesh);
       }
     }
   }
   return stats;
+}
+
+void ModelingLegacyLocalFrameUpgradeService::set_failure_point_for_tests(
+    ModelingLegacyLocalFrameUpgradeFailurePoint point) noexcept {
+  legacy_upgrade_failure_point = point;
 }
 
 } // namespace quader

@@ -12,18 +12,20 @@
 #include "editor/session/viewport_local_visibility_service.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_document.hpp"
-#include "scene/scene_hierarchy_visibility.hpp"
+#include "scene/scene_mesh_occurrence_projection.hpp"
 #include "scene/scene_transform.hpp"
 #include "viewport/viewport_local_visibility.hpp"
 
 #include <quader/modeling/neutral/geometry/bvh.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <memory>
 #include <numeric>
 #include <ranges>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -77,6 +79,35 @@ constexpr std::size_t kGeometryCacheCapacity = 64u;
   return found != exclusions.end() && *found == id;
 }
 
+[[nodiscard]] bool participant_is_eligible(
+    const SceneSurfaceParticipant &participant,
+    SceneSurfaceEligibility eligibility) {
+  switch (eligibility) {
+  case SceneSurfaceEligibility::RenderVisible:
+    return true;
+  case SceneSurfaceEligibility::Selectable:
+    return participant.selectable;
+  case SceneSurfaceEligibility::SelectableUnlocked:
+    return participant.selectable && !participant.effectively_locked;
+  }
+  return false;
+}
+
+[[nodiscard]] std::uint64_t surface_edge_key(std::uint32_t left,
+                                             std::uint32_t right) {
+  const std::uint32_t low = std::min(left, right);
+  const std::uint32_t high = std::max(left, right);
+  return (static_cast<std::uint64_t>(low) << 32u) |
+         static_cast<std::uint64_t>(high);
+}
+
+struct SurfaceEdgeAccumulator final {
+  std::uint32_t left = 0u;
+  std::uint32_t right = 0u;
+  QVec3 normal_sum{};
+  std::uint64_t key = 0u;
+};
+
 [[nodiscard]] std::optional<SceneBounds> transformed_payload_bounds(
     const MeshGeometryPayload &geometry, const QMat4 &world_from_local) {
   if (geometry.vertices.empty() || !scene_matrix_is_finite(world_from_local)) {
@@ -119,8 +150,11 @@ struct FrozenSurfaceParticipant final {
 struct SurfaceSnapshotFingerprint final {
   const SceneDocument *scene = nullptr;
   const AssetRegistry *assets = nullptr;
-  std::uint64_t scene_content_revision = 0u;
-  std::uint64_t asset_revision = 0u;
+  std::uint64_t hierarchy_revision = 0u;
+  std::uint64_t visibility_revision = 0u;
+  std::uint64_t transform_revision = 0u;
+  std::uint64_t mesh_binding_revision = 0u;
+  std::uint64_t mesh_asset_revision = 0u;
   std::uint64_t local_visibility_revision = 0u;
 
   [[nodiscard]] bool
@@ -145,7 +179,9 @@ public:
 
 /// Owns the immutable participant records and world-space hierarchy.
 struct SceneSurfaceQuerySnapshot::Data final {
+  std::uint64_t revision = 0u;
   std::vector<SceneSurfaceParticipant> public_participants;
+  std::vector<SceneSurfaceLandmark> public_landmarks;
   std::vector<FrozenSurfaceParticipant> participants;
   BoundsBvh tlas;
 };
@@ -155,17 +191,37 @@ class SceneSurfaceQuery::Impl final {
 public:
   Impl(const SceneDocument &scene, const AssetRegistry &assets,
        const ViewportLocalVisibilityService &local_visibility)
-      : scene_(scene), assets_(assets), local_visibility_(local_visibility) {}
+      : scene_(scene), assets_(assets),
+        local_visibility_(&local_visibility) {}
+
+  Impl(const SceneDocument &scene, const AssetRegistry &assets,
+       std::function<bool(EntityId)> local_visibility_filter,
+       std::function<std::uint64_t()> local_visibility_revision_provider)
+      : scene_(scene), assets_(assets),
+        local_visibility_filter_(std::move(local_visibility_filter)),
+        local_visibility_revision_provider_(
+            std::move(local_visibility_revision_provider)) {}
 
   [[nodiscard]] SceneSurfaceQuerySnapshot snapshot() const {
-    const ViewportLocalVisibilitySnapshot local_snapshot =
-        local_visibility_.snapshot();
+    std::optional<ViewportLocalVisibilitySnapshot> local_snapshot;
+    if (local_visibility_ != nullptr) {
+      local_snapshot = local_visibility_->snapshot();
+    }
+    const std::uint64_t local_visibility_revision =
+        local_snapshot.has_value()
+            ? local_snapshot->revision()
+            : (local_visibility_revision_provider_
+                   ? local_visibility_revision_provider_()
+                   : 0u);
     const SurfaceSnapshotFingerprint fingerprint{
         .scene = &scene_,
         .assets = &assets_,
-        .scene_content_revision = scene_.content_revision(),
-        .asset_revision = assets_.revision(),
-        .local_visibility_revision = local_snapshot.revision(),
+        .hierarchy_revision = scene_.hierarchy_presentation_revision(),
+        .visibility_revision = scene_.visibility_revision(),
+        .transform_revision = scene_.transform_revision(),
+        .mesh_binding_revision = scene_.mesh_binding_revision(),
+        .mesh_asset_revision = assets_.mesh_material_usage_revision(),
+        .local_visibility_revision = local_visibility_revision,
     };
     if (snapshot_ && fingerprint_valid_ && fingerprint == fingerprint_) {
       return SceneSurfaceQuery::snapshot_from_data(snapshot_);
@@ -174,7 +230,14 @@ public:
     QDR_PROFILE_SCOPE("Scene surface query build snapshot");
     std::shared_ptr<SceneSurfaceQuerySnapshot::Data> next =
         std::make_shared<SceneSurfaceQuerySnapshot::Data>();
-    build_participants(local_snapshot, *next);
+    next->revision = ++snapshot_revision_;
+    const auto local_allows = [&](EntityId entity) {
+      if (local_snapshot.has_value()) {
+        return local_snapshot->allows(entity);
+      }
+      return !local_visibility_filter_ || local_visibility_filter_(entity);
+    };
+    build_participants(local_allows, *next);
     build_tlas(*next);
     snapshot_ = std::move(next);
     fingerprint_ = fingerprint;
@@ -182,6 +245,7 @@ public:
     ++stats_.snapshot_build_count;
     ++stats_.tlas_build_count;
     stats_.participant_count = snapshot_->participants.size();
+    stats_.landmark_count = snapshot_->public_landmarks.size();
     stats_.triangle_count = 0u;
     std::unordered_set<const CachedSurfaceGeometry *> unique_geometries;
     unique_geometries.reserve(snapshot_->participants.size());
@@ -204,6 +268,7 @@ public:
     fingerprint_valid_ = false;
     stats_.participant_count = 0u;
     stats_.triangle_count = 0u;
+    stats_.landmark_count = 0u;
     stats_.unique_geometry_count = 0u;
   }
 
@@ -263,7 +328,8 @@ private:
   void append_participant(
       SceneSurfaceQuerySnapshot::Data &target,
       SceneSurfaceParticipantId id, const QMat4 &world_from_local,
-      const MeshAsset &mesh) const {
+      const MeshAsset &mesh, bool selectable,
+      bool effectively_locked) const {
     const std::optional<QMat4> local_from_world =
         try_scene_matrix_inverse(world_from_local);
     std::shared_ptr<const MeshGeometryPayload> payload =
@@ -278,11 +344,16 @@ private:
     }
     std::shared_ptr<const CachedSurfaceGeometry> geometry =
         geometry_for(payload);
+    const SceneSurfaceParticipant public_record{
+        .id = id,
+        .world_bounds = *bounds,
+        .triangle_count = geometry->bvh.primitive_count(),
+        .selectable = selectable,
+        .effectively_locked = effectively_locked,
+    };
+    append_landmarks(target, public_record, *payload, world_from_local);
     target.participants.push_back({
-        .public_record =
-            {.id = id,
-             .world_bounds = *bounds,
-             .triangle_count = geometry->bvh.primitive_count()},
+        .public_record = public_record,
         .world_from_local = world_from_local,
         .local_from_world = *local_from_world,
         .pinned_payload = std::move(payload),
@@ -290,19 +361,111 @@ private:
     });
   }
 
-  void build_participants(
-      const ViewportLocalVisibilitySnapshot &local_snapshot,
-      SceneSurfaceQuerySnapshot::Data &target) const {
-    QDR_PROFILE_SCOPE("Scene surface query collect participants");
-    for (const EntityId entity : scene_.entities()) {
-      if (!scene_.is_effectively_visible(entity) ||
-          !local_snapshot.allows(entity) ||
-          scene_.is_instance_definition_entity(entity) ||
-          scene_.is_instance_definition_member(entity) ||
-          scene_.instance_occurrence(entity) != nullptr) {
+  void append_landmarks(SceneSurfaceQuerySnapshot::Data &target,
+                        const SceneSurfaceParticipant &participant,
+                        const MeshGeometryPayload &geometry,
+                        const QMat4 &world_from_local) const {
+    std::vector<QVec3> world_vertices;
+    world_vertices.reserve(geometry.vertices.size());
+    for (const MeshVertex &vertex : geometry.vertices) {
+      const QVec3 world = transform_point(world_from_local, vertex.position);
+      if (!finite_vector(world)) {
+        return;
+      }
+      world_vertices.push_back(world);
+    }
+
+    std::vector<QVec3> vertex_normal_sums(world_vertices.size());
+    std::vector<SurfaceEdgeAccumulator> edges;
+    std::unordered_map<std::uint64_t, std::size_t> edge_slots;
+    edge_slots.reserve(geometry.indices.size());
+    for (std::size_t offset = 0u; offset + 2u < geometry.indices.size();
+         offset += 3u) {
+      const std::uint32_t first = geometry.indices[offset];
+      const std::uint32_t second = geometry.indices[offset + 1u];
+      const std::uint32_t third = geometry.indices[offset + 2u];
+      if (first >= world_vertices.size() || second >= world_vertices.size() ||
+          third >= world_vertices.size()) {
         continue;
       }
-      const MeshComponent *component = scene_.mesh(entity);
+      const QVec3 a = world_vertices[first];
+      const QVec3 b = world_vertices[second];
+      const QVec3 c = world_vertices[third];
+      const QVec3 area_normal = cross(b - a, c - a);
+      if (!finite_vector(area_normal) ||
+          length_squared(area_normal) <= kRayEpsilon * kRayEpsilon) {
+        continue;
+      }
+      const QVec3 normal = normalize_or_zero(area_normal);
+      target.public_landmarks.push_back({
+          .participant = participant.id,
+          .world_position = (a + b + c) / 3.0f,
+          .world_normal = normal,
+          .kind = SceneSurfaceLandmarkKind::FaceCenter,
+          .element_key = offset / 3u,
+          .selectable = participant.selectable,
+          .effectively_locked = participant.effectively_locked,
+      });
+      vertex_normal_sums[first] += area_normal;
+      vertex_normal_sums[second] += area_normal;
+      vertex_normal_sums[third] += area_normal;
+
+      const std::array<std::pair<std::uint32_t, std::uint32_t>, 3u>
+          triangle_edges{{{first, second}, {second, third}, {third, first}}};
+      for (const auto &[left, right] : triangle_edges) {
+        const std::uint64_t key = surface_edge_key(left, right);
+        const auto found = edge_slots.find(key);
+        if (found == edge_slots.end()) {
+          edge_slots.emplace(key, edges.size());
+          edges.push_back({
+              .left = left,
+              .right = right,
+              .normal_sum = area_normal,
+              .key = key,
+          });
+        } else {
+          edges[found->second].normal_sum += area_normal;
+        }
+      }
+    }
+
+    for (std::size_t index = 0u; index < world_vertices.size(); ++index) {
+      target.public_landmarks.push_back({
+          .participant = participant.id,
+          .world_position = world_vertices[index],
+          .world_normal = normalize_or_zero(vertex_normal_sums[index]),
+          .kind = SceneSurfaceLandmarkKind::Vertex,
+          .element_key = index,
+          .selectable = participant.selectable,
+          .effectively_locked = participant.effectively_locked,
+      });
+    }
+    for (const SurfaceEdgeAccumulator &edge : edges) {
+      target.public_landmarks.push_back({
+          .participant = participant.id,
+          .world_position =
+              (world_vertices[edge.left] + world_vertices[edge.right]) * 0.5f,
+          .world_normal = normalize_or_zero(edge.normal_sum),
+          .kind = SceneSurfaceLandmarkKind::EdgeMidpoint,
+          .element_key = edge.key,
+          .selectable = participant.selectable,
+          .effectively_locked = participant.effectively_locked,
+      });
+    }
+  }
+
+  void build_participants(
+      const std::function<bool(EntityId)> &local_allows,
+      SceneSurfaceQuerySnapshot::Data &target) const {
+    QDR_PROFILE_SCOPE("Scene surface query collect participants");
+    const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+        occurrences = scene_.mesh_occurrence_projection();
+    for (const SceneMeshOccurrenceProjectionRecord &occurrence :
+         occurrences->records()) {
+      if (local_allows && !local_allows(occurrence.display_entity)) {
+        continue;
+      }
+      const MeshComponent *component = scene_.mesh(occurrence.geometry_entity);
       const MeshAsset *mesh =
           component != nullptr ? assets_.mesh(component->mesh) : nullptr;
       if (mesh == nullptr) {
@@ -310,57 +473,11 @@ private:
       }
       append_participant(
           target,
-          {.display_entity = entity,
-           .geometry_entity = entity,
-           .definition_entity = kInvalidEntityId},
-          scene_.world_transform_matrix(entity), *mesh);
-    }
-
-    for (const EntityId definition : scene_.entities()) {
-      if (!scene_.is_instance_definition_entity(definition)) {
-        continue;
-      }
-      const std::optional<QMat4> definition_inverse =
-          try_scene_matrix_inverse(scene_.world_transform_matrix(definition));
-      if (!definition_inverse.has_value()) {
-        continue;
-      }
-      std::vector<EntityId> visible_occurrences;
-      for (const EntityId occurrence :
-           scene_.instance_occurrences_for_definition(definition)) {
-        if (scene_.is_effectively_visible(occurrence) &&
-            local_snapshot.allows(occurrence)) {
-          visible_occurrences.push_back(occurrence);
-        }
-      }
-      if (visible_occurrences.empty()) {
-        continue;
-      }
-      for (const EntityId member : scene_.descendants(definition, false)) {
-        if (scene_.containing_instance_definition(member) != definition ||
-            !scene_hierarchy_segment_is_visible(scene_, member, definition)) {
-          continue;
-        }
-        const MeshComponent *component = scene_.mesh(member);
-        const MeshAsset *mesh =
-            component != nullptr ? assets_.mesh(component->mesh) : nullptr;
-        if (mesh == nullptr) {
-          continue;
-        }
-        const QMat4 member_from_definition = scene_transform_multiply(
-            *definition_inverse, scene_.world_transform_matrix(member));
-        for (const EntityId occurrence : visible_occurrences) {
-          append_participant(
-              target,
-              {.display_entity = occurrence,
-               .geometry_entity = member,
-               .definition_entity = definition},
-              scene_transform_multiply(
-                  scene_.world_transform_matrix(occurrence),
-                  member_from_definition),
-              *mesh);
-        }
-      }
+          {.display_entity = occurrence.display_entity,
+           .geometry_entity = occurrence.geometry_entity,
+           .definition_entity = occurrence.definition_entity},
+          occurrence.world_from_geometry, *mesh, occurrence.selectable,
+          occurrence.effectively_locked);
     }
 
     std::ranges::sort(
@@ -374,6 +491,19 @@ private:
     for (const FrozenSurfaceParticipant &participant : target.participants) {
       target.public_participants.push_back(participant.public_record);
     }
+    std::ranges::sort(
+        target.public_landmarks,
+        [](const SceneSurfaceLandmark &left,
+           const SceneSurfaceLandmark &right) {
+          if (left.participant != right.participant) {
+            return scene_surface_participant_id_less(left.participant,
+                                                     right.participant);
+          }
+          if (left.kind != right.kind) {
+            return left.kind < right.kind;
+          }
+          return left.element_key < right.element_key;
+        });
   }
 
   void build_tlas(SceneSurfaceQuerySnapshot::Data &target) const {
@@ -408,9 +538,12 @@ private:
 
   const SceneDocument &scene_;
   const AssetRegistry &assets_;
-  const ViewportLocalVisibilityService &local_visibility_;
+  const ViewportLocalVisibilityService *local_visibility_ = nullptr;
+  std::function<bool(EntityId)> local_visibility_filter_;
+  std::function<std::uint64_t()> local_visibility_revision_provider_;
   mutable std::vector<GeometryCacheEntry> geometry_cache_;
   mutable std::uint64_t geometry_use_sequence_ = 0u;
+  mutable std::uint64_t snapshot_revision_ = 0u;
   mutable std::shared_ptr<const SceneSurfaceQuerySnapshot::Data> snapshot_;
   mutable SurfaceSnapshotFingerprint fingerprint_;
   mutable bool fingerprint_valid_ = false;
@@ -439,6 +572,16 @@ SceneSurfaceQuerySnapshot::participants() const noexcept {
   return data_ ? std::span<const SceneSurfaceParticipant>(
                      data_->public_participants)
                : std::span<const SceneSurfaceParticipant>{};
+}
+
+std::span<const SceneSurfaceLandmark>
+SceneSurfaceQuerySnapshot::landmarks() const noexcept {
+  return data_ ? std::span<const SceneSurfaceLandmark>(data_->public_landmarks)
+               : std::span<const SceneSurfaceLandmark>{};
+}
+
+std::uint64_t SceneSurfaceQuerySnapshot::revision() const noexcept {
+  return data_ ? data_->revision : 0u;
 }
 
 std::optional<SceneSurfaceHit> SceneSurfaceQuerySnapshot::nearest_hit(
@@ -482,6 +625,8 @@ std::optional<SceneSurfaceHit> SceneSurfaceQuerySnapshot::nearest_hit(
             data_->participants[participant_index];
         if (excluded_participant(participant.public_record.id,
                                  request.excluded_participants) ||
+            !participant_is_eligible(participant.public_record,
+                                     request.eligibility) ||
             participant.geometry->bvh.empty()) {
           return true;
         }
@@ -502,7 +647,28 @@ std::optional<SceneSurfaceHit> SceneSurfaceQuerySnapshot::nearest_hit(
             participant.geometry->bvh.nearest_hit(
                 NeutralRay{neutral_vector(local_origin),
                            neutral_vector(local_direction)},
-                options, scratch.impl_->blas);
+                options, scratch.impl_->blas,
+                [&request, &participant, &world_direction](
+                    std::size_t, const NeutralTriangle &triangle) {
+                  if (request.include_backfaces) {
+                    return true;
+                  }
+                  const QVec3 world_a = transform_point(
+                      participant.world_from_local,
+                      {triangle.a.x, triangle.a.y, triangle.a.z});
+                  const QVec3 world_b = transform_point(
+                      participant.world_from_local,
+                      {triangle.b.x, triangle.b.y, triangle.b.z});
+                  const QVec3 world_c = transform_point(
+                      participant.world_from_local,
+                      {triangle.c.x, triangle.c.y, triangle.c.z});
+                  const QVec3 area_normal =
+                      cross(world_b - world_a, world_c - world_a);
+                  return finite_vector(area_normal) &&
+                         length_squared(area_normal) >
+                             kRayEpsilon * kRayEpsilon &&
+                         dot(area_normal, world_direction) < 0.0f;
+                });
         if (!local_hit.hit ||
             local_hit.triangle_index >= participant.geometry->triangles.size()) {
           return true;
@@ -558,6 +724,14 @@ SceneSurfaceQuery::SceneSurfaceQuery(
     const SceneDocument &scene, const AssetRegistry &assets,
     const ViewportLocalVisibilityService &local_visibility)
     : impl_(std::make_unique<Impl>(scene, assets, local_visibility)) {}
+
+SceneSurfaceQuery::SceneSurfaceQuery(
+    const SceneDocument &scene, const AssetRegistry &assets,
+    std::function<bool(EntityId)> local_visibility_filter,
+    std::function<std::uint64_t()> local_visibility_revision_provider)
+    : impl_(std::make_unique<Impl>(
+          scene, assets, std::move(local_visibility_filter),
+          std::move(local_visibility_revision_provider))) {}
 
 SceneSurfaceQuery::~SceneSurfaceQuery() = default;
 SceneSurfaceQuery::SceneSurfaceQuery(SceneSurfaceQuery &&) noexcept = default;

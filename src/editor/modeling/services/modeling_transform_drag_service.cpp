@@ -22,6 +22,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <editor/interactions/move_tool.hpp>
@@ -43,11 +44,15 @@ bool selected_scene_targets_are_instance_occurrences(
          });
 }
 
-bool scene_selection_contains_instance_occurrence(const SceneDocument &scene) {
+bool selected_scene_targets_support_structural_duplicate(
+    const SceneDocument &scene) {
   const std::vector<EntityId> selected = scene.selected_entities();
-  return std::any_of(selected.begin(), selected.end(), [&](EntityId entity) {
-    return scene.instance_occurrence(entity) != nullptr;
-  });
+  return !selected.empty() &&
+         std::all_of(selected.begin(), selected.end(), [&](EntityId entity) {
+           return scene.exists(entity) && !scene.is_scene_root(entity) &&
+                  scene.transform(entity) != nullptr &&
+                  !scene.is_effectively_locked(entity);
+         });
 }
 
 bool selected_scene_targets_are_sdk_modeling_objects(
@@ -268,7 +273,7 @@ bool transform_drag_can_use_vertex_snap(
 }
 
 bool transform_drag_has_stationary_vertex_snap_target(
-    const quader_editor_core::EditorSession &session) {
+    const ModelingSelectionProjectionSnapshot &session) {
   if (session.selection_mode() !=
       quader_editor_core::SelectionMode::Object) {
     return true;
@@ -353,11 +358,41 @@ ModelingTransformDragService::begin_transform_drag(
   QDR_PROFILE_FUNCTION();
   if (context.runtime.transform_drag_active() ||
       context.port.portable_modeling_preview_active() ||
-      scene_duplicate_transaction_.has_value()) {
+      scene_duplicate_transaction_.has_value() ||
+      structural_duplicate_scalar_checkpoint_.has_value()) {
     QDR_PROFILE_SCOPE("Modeling transform drag cancel active preview");
-    (void)cancel_transform_drag(context);
+    const ModelingCommandResult canceled = cancel_transform_drag(context);
+    if (!canceled.ok) {
+      return {
+          .ok = false,
+          .active = false,
+          .changed = canceled.changed,
+          .message = canceled.message.empty()
+                         ? "Could not cancel the preceding transform drag."
+                         : canceled.message,
+      };
+    }
   }
-  const bool portable_modeling_selection =
+  const auto fail_after_cancel =
+      [this, &context](std::string message,
+                       bool prior_changed = false)
+      -> ModelingTransformDragPreview {
+    const bool was_preview_driven = controller_.preview_driven();
+    const ModelingCommandResult canceled = cancel_transform_drag(context);
+    if (!canceled.ok) {
+      message += "; rollback failed: ";
+      message += canceled.message.empty() ? "unknown transform rollback failure"
+                                          : canceled.message;
+    }
+    return {
+        .ok = false,
+        .active = false,
+        .changed = prior_changed || !canceled.ok,
+        .preview_driven = was_preview_driven,
+        .message = std::move(message),
+    };
+  };
+  bool portable_modeling_selection =
       context.port.has_portable_modeling_selection();
   if ((!portable_modeling_selection &&
        !context.port.has_scene_transform_selection()) ||
@@ -368,20 +403,17 @@ ModelingTransformDragService::begin_transform_drag(
   const bool runtime_has_selection = portable_modeling_selection;
   const bool scene_transform_selection =
       !runtime_has_selection && context.port.has_scene_transform_selection();
-  const bool duplicate_scene_occurrences =
-      request.duplicate_selected && scene_transform_selection &&
-      selected_scene_targets_are_instance_occurrences(context.scene);
-  const bool duplicate_portable_scene_objects =
-      request.duplicate_selected && scene_transform_selection &&
-      selected_scene_targets_are_sdk_modeling_objects(context.scene);
-  if (request.duplicate_selected && !duplicate_scene_occurrences &&
-      !duplicate_portable_scene_objects &&
-      (scene_transform_selection ||
-       scene_selection_contains_instance_occurrence(context.scene))) {
+  const ModelingSelectionMode selection_mode =
+      context.port.portable_modeling_selection_mode();
+  const bool duplicate_structural_selection =
+      request.duplicate_selected &&
+      (selection_mode == ModelingSelectionMode::Object ||
+       selection_mode == ModelingSelectionMode::Group);
+  if (duplicate_structural_selection &&
+      !selected_scene_targets_support_structural_duplicate(context.scene)) {
     return {
         .ok = false,
-        .message =
-            "This scene selection does not support linked drag duplication.",
+        .message = "This scene selection does not support drag duplication.",
     };
   }
   const quader_editor_core::SelectionMode drag_selection_mode =
@@ -409,74 +441,68 @@ ModelingTransformDragService::begin_transform_drag(
     preview_routing.scene_transform_preview_eligible = false;
   }
 
-  if (duplicate_scene_occurrences) {
-    if (context.document_commands == nullptr || context.history == nullptr) {
+  std::vector<ModelingStructuralEntityClone> structural_modeling_clones;
+  if (duplicate_structural_selection) {
+    if (context.structural_duplicate == nullptr || context.history == nullptr) {
       return {
           .ok = false,
-          .message = "Linked instance drag duplication requires editor "
-                     "history ownership.",
+          .message = "Scene drag duplication requires structural lifecycle "
+                     "and history ownership.",
       };
     }
+    const bool duplicate_instances =
+        selected_scene_targets_are_instance_occurrences(context.scene);
+    const std::string duplicate_label =
+        duplicate_instances ? "Duplicate Instance" : "Duplicate Selection";
     scene_duplicate_transaction_.emplace(
-        context.history->begin_transaction("Duplicate Instance"));
+        context.history->begin_transaction(duplicate_label));
     if (!scene_duplicate_transaction_->active()) {
       scene_duplicate_transaction_.reset();
       return {
           .ok = false,
-          .message = "Could not start linked instance drag duplication while "
+          .message = "Could not start scene drag duplication while "
                      "another editor transaction is active.",
       };
     }
 
-    const DocumentDuplicateHierarchyResult duplicated =
-        context.document_commands->duplicate_selected_hierarchy();
-    if (!duplicated.ok || !duplicated.changed ||
-        duplicated.duplicate_roots.empty()) {
+    structural_duplicate_scalar_checkpoint_.emplace(
+        context.scene.capture_scalar_compensation_checkpoint());
+    if (!structural_duplicate_scalar_checkpoint_->valid()) {
       const CommandResult canceled = scene_duplicate_transaction_->cancel();
       scene_duplicate_transaction_.reset();
+      structural_duplicate_scalar_checkpoint_.reset();
       return {
           .ok = false,
-          .message = !canceled.ok
-                         ? canceled.message
-                         : (duplicated.message.empty()
-                                ? "Could not duplicate the selected instance."
-                                : duplicated.message),
+          .changed = !canceled.ok,
+          .message = canceled.ok
+                         ? "Scene scalar compensation is unavailable for "
+                           "drag duplication."
+                         : "Scene scalar compensation is unavailable for "
+                           "drag duplication; empty transaction cleanup "
+                           "failed: " +
+                               canceled.message,
       };
     }
-    context.port.invalidate_selection_overlay_caches();
-  }
+    structural_duplicate_selection_before_.emplace(
+        capture_scene_selection(context.scene));
 
-  if (duplicate_portable_scene_objects) {
-    if (context.history != nullptr) {
-      scene_duplicate_transaction_.emplace(
-          context.history->begin_transaction("Duplicate Selection"));
-      if (!scene_duplicate_transaction_->active()) {
-        scene_duplicate_transaction_.reset();
-        return {
-            .ok = false,
-            .message = "Could not start object drag duplication while "
-                       "another editor transaction is active.",
-        };
-      }
+    ModelingStructuralDuplicateResult duplicated =
+        (*context.structural_duplicate)(
+            *scene_duplicate_transaction_,
+            context.port.portable_modeling_selection_mode(), duplicate_label);
+    if (!duplicated.ok || !duplicated.changed) {
+      return fail_after_cancel(
+          duplicated.message.empty()
+              ? "Could not duplicate the scene selection."
+              : std::move(duplicated.message),
+          duplicated.changed);
     }
-    const ModelingCommandResult duplicated =
-        context.port.begin_portable_transform_preview(true, false);
-    if (!duplicated.ok) {
-      if (scene_duplicate_transaction_.has_value()) {
-        (void)scene_duplicate_transaction_->cancel();
-        scene_duplicate_transaction_.reset();
-      }
-      return {
-          .ok = false,
-          .changed = duplicated.changed,
-          .message = duplicated.message.empty()
-                         ? "Could not duplicate the selected objects."
-                         : duplicated.message,
-      };
-    }
-    portable_scene_duplicate_active_ = true;
+    structural_modeling_clones = std::move(duplicated.modeling_objects);
+    structural_duplicate_active_ = true;
+    context.port.refresh_transform_drag_projection();
+    portable_modeling_selection =
+        context.port.has_portable_modeling_selection();
     context.port.invalidate_selection_overlay_caches();
-    context.port.sync_scene_selection_from_modeling();
   }
 
   {
@@ -502,29 +528,42 @@ ModelingTransformDragService::begin_transform_drag(
   if (preview_routing.needs_runtime_preview_transaction) {
     QDR_PROFILE_SCOPE("Modeling transform drag runtime preview transaction");
     if (!portable_modeling_selection) {
-      clear_runtime_state(context);
+      const ModelingCommandResult canceled = cancel_transform_drag(context);
       return {.ok = false,
-              .message = "Modeling transform preview requires an SDK "
-                         "selection."};
+              .changed = !canceled.ok,
+              .message = !canceled.ok
+                             ? "Modeling transform preview requires an SDK "
+                               "selection; rollback failed: " +
+                                   canceled.message
+                             : "Modeling transform preview requires an SDK "
+                               "selection."};
     }
     const ModelingCommandResult portable_begin =
         context.port.begin_portable_transform_preview(
-            request.duplicate_selected,
+            request.duplicate_selected && !duplicate_structural_selection,
             operation ==
                     quader_editor_core::TransformDragOperation::Transform &&
-                !request.duplicate_selected);
+                !request.duplicate_selected,
+            structural_modeling_clones);
     const quader_editor_core::CommandResult begin_preview{
         .ok = portable_begin.ok,
         .changed = portable_begin.changed,
         .message = portable_begin.message,
     };
     if (!begin_preview.ok) {
-      clear_runtime_state(context);
+      const ModelingCommandResult canceled = cancel_transform_drag(context);
       return {
           .ok = false,
+          .changed = !canceled.ok,
           .message = begin_preview.message.empty()
-                         ? "Could not start transform preview."
-                         : begin_preview.message,
+                         ? (!canceled.ok
+                                ? "Could not start transform preview; "
+                                  "rollback failed: " + canceled.message
+                                : "Could not start transform preview.")
+                         : (!canceled.ok
+                                ? begin_preview.message +
+                                      "; rollback failed: " + canceled.message
+                                : begin_preview.message),
       };
     }
     // A topology-stable transform does not change semantic selection. Its
@@ -556,11 +595,7 @@ ModelingTransformDragService::begin_transform_drag(
                 ? context.document_commands->texture_lock_settings()
                 : TextureLockSettings{});
       }())) {
-    (void)cancel_transform_drag(context);
-    return {
-        .ok = false,
-        .message = "Could not start scene transform preview.",
-    };
+    return fail_after_cancel("Could not start scene transform preview.");
   }
 
   const quader_editor_core::ViewportCameraState camera =
@@ -591,11 +626,9 @@ ModelingTransformDragService::begin_transform_drag(
       return quader_editor_core::begin_move_drag(begin);
     }();
     if (!begin_result.ok) {
-      (void)cancel_transform_drag(context);
-      return {.ok = false,
-              .message = begin_result.message.empty()
-                             ? "Move drag failed."
-                             : begin_result.message};
+      return fail_after_cancel(begin_result.message.empty()
+                                   ? "Move drag failed."
+                                   : begin_result.message);
     }
     context.runtime.set_transform_drag_move_state(begin_result.state);
   } else if (tool == quader_editor_core::ViewportInteractionTool::Rotate) {
@@ -622,11 +655,9 @@ ModelingTransformDragService::begin_transform_drag(
       return quader_editor_core::begin_rotate_drag(begin);
     }();
     if (!begin_result.ok) {
-      (void)cancel_transform_drag(context);
-      return {.ok = false,
-              .message = begin_result.message.empty()
-                             ? "Rotate drag failed."
-                             : begin_result.message};
+      return fail_after_cancel(begin_result.message.empty()
+                                   ? "Rotate drag failed."
+                                   : begin_result.message);
     }
     context.runtime.set_transform_drag_rotate_state(begin_result.state);
   } else if (tool == quader_editor_core::ViewportInteractionTool::Scale) {
@@ -654,17 +685,14 @@ ModelingTransformDragService::begin_transform_drag(
       return quader_editor_core::begin_scale_drag(begin);
     }();
     if (!begin_result.ok) {
-      (void)cancel_transform_drag(context);
-      return {.ok = false,
-              .message = begin_result.message.empty()
-                             ? "Scale drag failed."
-                             : begin_result.message};
+      return fail_after_cancel(begin_result.message.empty()
+                                   ? "Scale drag failed."
+                                   : begin_result.message);
     }
     context.runtime.set_transform_drag_scale_state(begin_result.state);
   } else {
-    (void)cancel_transform_drag(context);
-    return {.ok = false,
-            .message = "Transform drag only supports move, rotate, or scale."};
+    return fail_after_cancel(
+        "Transform drag only supports move, rotate, or scale.");
   }
 
   {
@@ -690,8 +718,21 @@ ModelingTransformDragService::update_transform_drag(
     const ModelingTransformDragUpdateRequest &request) {
   QDR_PROFILE_FUNCTION();
   if (!context.runtime.transform_drag_active()) {
-    if (context.port.portable_modeling_preview_active()) {
-      (void)cancel_transform_drag(context);
+    if (context.port.portable_modeling_preview_active() ||
+        scene_transform_drag_service_.preview_active() ||
+        scene_duplicate_transaction_.has_value() ||
+        structural_duplicate_scalar_checkpoint_.has_value()) {
+      const ModelingCommandResult canceled = cancel_transform_drag(context);
+      return {
+          .ok = false,
+          .active = false,
+          .changed = !canceled.ok,
+          .message = canceled.ok
+                         ? "Transform drag state ended before its preview."
+                         : "Transform drag state ended before its preview; "
+                           "rollback failed: " +
+                               canceled.message,
+      };
     }
     return transform_drag_preview(context, false);
   }
@@ -719,7 +760,7 @@ ModelingTransformDragService::commit_transform_drag(
     };
   }
   const bool finish_preview_transaction =
-      was_preview_driven || portable_scene_duplicate_active_ ||
+      was_preview_driven ||
       (controller_.duplicate_selected() &&
        !scene_duplicate_transaction_active);
   const quader_editor_core::TransformDragState repeat_drag =
@@ -745,23 +786,37 @@ ModelingTransformDragService::commit_transform_drag(
     const bool portable_preview =
         context.port.portable_modeling_preview_active();
     if (!portable_preview) {
-      clear_runtime_state(context);
+      const ModelingCommandResult rollback = cancel_transform_drag(context);
       return {
           .ok = false,
+          .changed = !rollback.ok,
           .preview_driven = was_preview_driven,
-          .message = "Portable transform preview is no longer active.",
+          .message = rollback.ok
+                         ? "Portable transform preview is no longer active."
+                         : "Portable transform preview is no longer active; "
+                           "rollback failed: " +
+                               rollback.message,
       };
     }
     const ModelingCommandResult committed =
         context.port.commit_portable_translate_preview();
     if (!committed.ok) {
-      clear_runtime_state(context);
+      const ModelingCommandResult rollback = cancel_transform_drag(context);
       return {
           .ok = false,
+          .changed = !rollback.ok,
           .preview_driven = was_preview_driven,
-          .message = committed.message.empty()
-                         ? "Could not commit portable transform preview."
-                         : committed.message,
+          .message = !rollback.ok
+                         ? (committed.message.empty()
+                                ? "Could not commit portable transform "
+                                  "preview; rollback failed: " +
+                                      rollback.message
+                                : committed.message + "; rollback failed: " +
+                                      rollback.message)
+                         : (committed.message.empty()
+                                ? "Could not commit portable transform "
+                                  "preview."
+                                : committed.message),
       };
     }
     changed = committed.changed;
@@ -824,25 +879,42 @@ ModelingTransformDragService::commit_transform_drag(
               transform_drag_history_label(repeat_drag.tool),
               preview_before, preview_after));
       if (!recorded.ok) {
-        const ModelingCommandResult restored =
-            context.port.restore_history_memento(rollback_before);
-        if (scene_duplicate_transaction_.has_value()) {
-          (void)scene_duplicate_transaction_->cancel();
-          scene_duplicate_transaction_.reset();
+        ModelingCommandResult restored{
+            .ok = true,
+            .changed = false,
+        };
+        ModelingCommandResult structural_rollback{
+            .ok = true,
+            .changed = false,
+        };
+        if (structural_duplicate_scalar_checkpoint_.has_value()) {
+          structural_rollback = cancel_transform_drag(context);
+        } else {
+          restored = context.port.restore_history_memento(rollback_before);
+          structural_rollback = cancel_transform_drag(context);
         }
-        clear_runtime_state(context);
         return {
             .ok = false,
-            .changed = !restored.ok,
+            .changed = !restored.ok || !structural_rollback.ok,
             .preview_driven = was_preview_driven,
-            .message = !restored.ok
-                           ? (restored.message.empty()
-                                  ? "Could not roll back a transform drag "
-                                    "after history recording failed."
-                                  : restored.message)
-                           : (recorded.message.empty()
-                                  ? "Could not record transform drag history."
-                                  : recorded.message),
+            .message = !structural_rollback.ok
+                           ? (recorded.message.empty()
+                                  ? "Could not record transform drag history; "
+                                    "structural rollback failed: " +
+                                        structural_rollback.message
+                                  : recorded.message +
+                                        "; structural rollback failed: " +
+                                        structural_rollback.message)
+                           : (!restored.ok
+                                  ? (restored.message.empty()
+                                         ? "Could not roll back a transform "
+                                           "drag after history recording "
+                                           "failed."
+                                         : restored.message)
+                                  : (recorded.message.empty()
+                                         ? "Could not record transform drag "
+                                           "history."
+                                         : recorded.message)),
         };
       }
     }
@@ -856,17 +928,21 @@ ModelingTransformDragService::commit_transform_drag(
                                 : scene_transform_drag_service_.accept();
     }();
     if (!scene_commit.ok) {
-      if (scene_duplicate_transaction_.has_value()) {
-        (void)scene_duplicate_transaction_->cancel();
-        scene_duplicate_transaction_.reset();
-      }
-      clear_runtime_state(context);
+      const ModelingCommandResult rollback = cancel_transform_drag(context);
       return {
           .ok = false,
+          .changed = !rollback.ok,
           .preview_driven = was_preview_driven,
-          .message = scene_commit.message.empty()
-                         ? "Could not commit scene transform preview."
-                         : scene_commit.message,
+          .message = !rollback.ok
+                         ? (scene_commit.message.empty()
+                                ? "Could not commit scene transform preview; "
+                                  "rollback failed: " +
+                                      rollback.message
+                                : scene_commit.message + "; rollback failed: " +
+                                      rollback.message)
+                         : (scene_commit.message.empty()
+                                ? "Could not commit scene transform preview."
+                                : scene_commit.message),
       };
     }
     changed = changed || scene_commit.changed;
@@ -876,13 +952,89 @@ ModelingTransformDragService::commit_transform_drag(
   }
 
   if (scene_duplicate_transaction_.has_value()) {
+    if (!structural_duplicate_scalar_checkpoint_.has_value() ||
+        !structural_duplicate_scalar_checkpoint_->valid() ||
+        !structural_duplicate_selection_before_.has_value()) {
+      const CommandResult transaction_commit =
+          scene_duplicate_transaction_->commit();
+      scene_duplicate_transaction_.reset();
+      if (structural_duplicate_scalar_checkpoint_.has_value()) {
+        (void)context.scene.discard_scalar_compensation_checkpoint(
+            *structural_duplicate_scalar_checkpoint_);
+      }
+      structural_duplicate_scalar_checkpoint_.reset();
+      structural_duplicate_selection_before_.reset();
+      clear_runtime_state(context);
+      return {
+          .ok = false,
+          .changed = true,
+          .preview_driven = was_preview_driven,
+          .message = transaction_commit.ok
+                         ? "Structural drag scalar compensation state is "
+                           "unavailable."
+                         : "Structural drag scalar compensation state is "
+                           "unavailable; applied duplicate state could not "
+                           "be retained in history: " +
+                               transaction_commit.message,
+      };
+    }
+
+    if (!context.scene.acknowledge_scalar_compensation_checkpoint(
+            *structural_duplicate_scalar_checkpoint_)) {
+      const CommandResult transaction_commit =
+          scene_duplicate_transaction_->commit();
+      scene_duplicate_transaction_.reset();
+      (void)context.scene.discard_scalar_compensation_checkpoint(
+          *structural_duplicate_scalar_checkpoint_);
+      structural_duplicate_scalar_checkpoint_.reset();
+      structural_duplicate_selection_before_.reset();
+      clear_runtime_state(context);
+      return {
+          .ok = false,
+          .changed = true,
+          .preview_driven = was_preview_driven,
+          .message = transaction_commit.ok
+                         ? "Structural drag scalar compensation boundary "
+                           "could not be acknowledged."
+                         : "Structural drag scalar compensation boundary "
+                           "could not be acknowledged; applied duplicate "
+                           "state could not be retained in history: " +
+                               transaction_commit.message,
+      };
+    }
+
     const CommandResult transaction_commit =
         scene_duplicate_transaction_->commit();
     scene_duplicate_transaction_.reset();
+    const bool scalar_boundary_valid =
+        context.scene.begin_scalar_compensation_restore(
+            *structural_duplicate_scalar_checkpoint_);
+    const bool scalar_scope_released =
+        context.scene.discard_scalar_compensation_checkpoint(
+            *structural_duplicate_scalar_checkpoint_);
+    structural_duplicate_scalar_checkpoint_.reset();
+    structural_duplicate_selection_before_.reset();
+    if (!scalar_boundary_valid || !scalar_scope_released) {
+      clear_runtime_state(context);
+      return {
+          .ok = false,
+          .changed = true,
+          .preview_driven = was_preview_driven,
+          .message = !scalar_boundary_valid
+                         ? "Scene changed while the structural drag duplicate "
+                           "was committed; scalar rollback was rejected."
+                         : "Structural drag scalar compensation scope could "
+                           "not be released.",
+      };
+    }
     if (!transaction_commit.ok) {
       clear_runtime_state(context);
       return {
           .ok = false,
+          // The editor transaction has already detached its commands. Until
+          // an explicit rollback can prove otherwise, the centrally created
+          // hierarchy remains observable and must keep the project dirty.
+          .changed = true,
           .preview_driven = was_preview_driven,
           .message = transaction_commit.message.empty()
                          ? "Could not record linked instance drag history."
@@ -896,7 +1048,7 @@ ModelingTransformDragService::commit_transform_drag(
   // transaction has committed. Component transforms are preview-driven;
   // direct SDK modeling-object transforms are scene-driven. Other scene-only
   // targets, such as lights, do not have a portable replay contract.
-  if ((was_preview_driven || portable_scene_duplicate_active_ ||
+  if ((was_preview_driven || structural_duplicate_active_ ||
        repeatable_scene_modeling_transform) &&
       changed && repeat_drag.active) {
     context.port.record_portable_transform(
@@ -913,66 +1065,178 @@ ModelingTransformDragService::commit_transform_drag(
 ModelingCommandResult ModelingTransformDragService::cancel_transform_drag(
     ModelingTransformDragServiceContext context) {
   QDR_PROFILE_FUNCTION();
-  const bool active_before =
-      context.runtime.transform_drag_active() ||
-      context.port.portable_modeling_preview_active();
-  const bool was_scene_preview_active =
-      scene_transform_drag_service_.preview_active();
-  if (was_scene_preview_active) {
-    const DocumentCommandResult scene_cancel =
-        scene_transform_drag_service_.cancel();
-    if (!scene_cancel.ok) {
+  std::string message;
+  const auto append_failure = [&message](std::string_view prefix,
+                                         const std::string &detail = {}) {
+    if (!message.empty()) {
+      message += "; ";
+    }
+    message.append(prefix);
+    if (!detail.empty()) {
+      message += detail;
+    }
+  };
+
+  const bool structural_scope_required =
+      scene_duplicate_transaction_.has_value() || structural_duplicate_active_ ||
+      structural_duplicate_scalar_checkpoint_.has_value();
+  bool scalar_inverse_started = false;
+  if (structural_scope_required) {
+    if (!structural_duplicate_scalar_checkpoint_.has_value() ||
+        !structural_duplicate_scalar_checkpoint_->valid() ||
+        !structural_duplicate_selection_before_.has_value()) {
+      append_failure(
+          "structural drag scalar compensation state is unavailable");
+    } else if (!context.scene.acknowledge_scalar_compensation_checkpoint(
+                   *structural_duplicate_scalar_checkpoint_)) {
+      append_failure(
+          "structural drag scalar compensation boundary could not be "
+          "acknowledged");
+    } else if (!context.scene.begin_scalar_compensation_restore(
+                   *structural_duplicate_scalar_checkpoint_)) {
+      append_failure(
+          "Scene changed outside the structural drag compensation boundary; "
+          "rollback was rejected");
+    } else {
+      scalar_inverse_started = true;
+    }
+
+    if (!scalar_inverse_started) {
+      if (structural_duplicate_scalar_checkpoint_.has_value()) {
+        if (!context.scene.discard_scalar_compensation_checkpoint(
+                *structural_duplicate_scalar_checkpoint_)) {
+          append_failure(
+              "structural drag scalar compensation scope could not be "
+              "released");
+        }
+      }
+      structural_duplicate_scalar_checkpoint_.reset();
+      structural_duplicate_selection_before_.reset();
+
+      if (context.port.portable_modeling_preview_active()) {
+        const ModelingCommandResult preserved =
+            context.port.commit_portable_translate_preview();
+        if (!preserved.ok) {
+          append_failure("SDK preview preservation failed: ",
+                         preserved.message);
+        }
+      }
+      if (scene_transform_drag_service_.preview_active()) {
+        const DocumentCommandResult preserved =
+            scene_transform_drag_service_.accept();
+        if (!preserved.ok) {
+          append_failure("scene preview preservation failed: ",
+                         preserved.message);
+        }
+      }
       if (scene_duplicate_transaction_.has_value()) {
-        (void)scene_duplicate_transaction_->cancel();
+        const CommandResult preserved =
+            scene_duplicate_transaction_->active()
+                ? scene_duplicate_transaction_->commit()
+                : command_unchanged_result();
         scene_duplicate_transaction_.reset();
+        if (!preserved.ok) {
+          append_failure("structural transaction preservation failed: ",
+                         preserved.message);
+        }
       }
       clear_runtime_state(context);
       return {
           .ok = false,
-          .changed = false,
-          .message = scene_cancel.message,
+          .changed = true,
+          .message = std::move(message),
       };
     }
+  }
+
+  const bool was_scene_preview_active =
+      scene_transform_drag_service_.preview_active();
+  DocumentCommandResult scene_cancel = document_command_unchanged_result();
+  if (was_scene_preview_active) {
+    scene_cancel = scene_transform_drag_service_.cancel();
     if (scene_cancel.changed) {
       context.port.invalidate_selection_overlay_caches();
     }
   }
-  bool preview_restored = false;
+
+  ModelingCommandResult preview_cancel{
+      .ok = true,
+      .changed = false,
+  };
   if (context.port.portable_modeling_preview_active()) {
-    const ModelingCommandResult canceled =
-        context.port.cancel_portable_translate_preview();
-    if (!canceled.ok) {
-      clear_runtime_state(context);
-      return canceled;
-    }
-    preview_restored = canceled.changed;
-    context.port.invalidate_selection_overlay_caches();
-  }
-  bool duplicate_canceled = false;
-  if (scene_duplicate_transaction_.has_value()) {
-    const CommandResult transaction_cancel =
-        scene_duplicate_transaction_->cancel();
-    scene_duplicate_transaction_.reset();
-    if (!transaction_cancel.ok) {
-      clear_runtime_state(context);
-      return {
-          .ok = false,
-          .changed = false,
-          .message = transaction_cancel.message.empty()
-                         ? "Could not cancel linked instance drag duplication."
-                         : transaction_cancel.message,
-      };
-    }
-    duplicate_canceled = transaction_cancel.changed;
-    if (duplicate_canceled) {
+    preview_cancel = context.port.cancel_portable_translate_preview();
+    if (preview_cancel.changed) {
       context.port.invalidate_selection_overlay_caches();
     }
   }
+
+  CommandResult transaction_cancel = command_unchanged_result();
+  if (scene_duplicate_transaction_.has_value()) {
+    if (scene_duplicate_transaction_->active()) {
+      transaction_cancel = scene_duplicate_transaction_->cancel();
+    }
+    scene_duplicate_transaction_.reset();
+    if (transaction_cancel.changed) {
+      context.port.invalidate_selection_overlay_caches();
+    }
+  }
+
+  if (!scene_cancel.ok) {
+    append_failure("scene preview cancellation failed: ",
+                   scene_cancel.message.empty() ? "unknown failure"
+                                                : scene_cancel.message);
+  }
+  if (!preview_cancel.ok) {
+    append_failure("SDK preview cancellation failed: ",
+                   preview_cancel.message.empty() ? "unknown failure"
+                                                  : preview_cancel.message);
+  }
+  if (!transaction_cancel.ok) {
+    append_failure("structural transaction cancellation failed: ",
+                   transaction_cancel.message.empty()
+                       ? "unknown failure"
+                       : transaction_cancel.message);
+  }
+
+  bool selection_restored = true;
+  bool scalar_restored = true;
+  if (scalar_inverse_started) {
+    selection_restored = structural_duplicate_selection_before_.has_value() &&
+                         same_scene_selection(
+                             *structural_duplicate_selection_before_,
+                             capture_scene_selection(context.scene));
+    if (!selection_restored) {
+      append_failure(
+          "structural drag rollback did not restore the exact scene selection");
+    }
+
+    if (scene_cancel.ok && preview_cancel.ok && transaction_cancel.ok &&
+        selection_restored) {
+      scalar_restored =
+          context.scene.restore_scalar_compensation_checkpoint(
+              *structural_duplicate_scalar_checkpoint_);
+      if (!scalar_restored) {
+        append_failure("structural drag scalar compensation failed");
+      }
+    } else {
+      scalar_restored = false;
+      (void)context.scene.discard_scalar_compensation_checkpoint(
+          *structural_duplicate_scalar_checkpoint_);
+    }
+    structural_duplicate_scalar_checkpoint_.reset();
+    structural_duplicate_selection_before_.reset();
+  }
+
   clear_runtime_state(context);
   return {
-      .ok = true,
-      .changed = (active_before && preview_restored) ||
-                 was_scene_preview_active || duplicate_canceled,
+      .ok = scene_cancel.ok && preview_cancel.ok && transaction_cancel.ok &&
+            selection_restored && scalar_restored,
+      .changed = scene_cancel.changed || preview_cancel.changed ||
+                 transaction_cancel.changed ||
+                 !scene_cancel.ok || !preview_cancel.ok ||
+                 !transaction_cancel.ok || !selection_restored ||
+                 !scalar_restored,
+      .message = std::move(message),
   };
 }
 
@@ -990,11 +1254,17 @@ bool ModelingTransformDragService::scene_preview_active() const {
 
 void ModelingTransformDragService::clear_runtime_state(
     ModelingTransformDragServiceContext context) {
+  if (structural_duplicate_scalar_checkpoint_.has_value()) {
+    (void)context.scene.discard_scalar_compensation_checkpoint(
+        *structural_duplicate_scalar_checkpoint_);
+    structural_duplicate_scalar_checkpoint_.reset();
+  }
+  structural_duplicate_selection_before_.reset();
   context.runtime.clear_transform_drag_state();
   context.runtime.clear_gizmo_hover();
   controller_.clear();
   scene_transform_drag_service_.reset();
-  portable_scene_duplicate_active_ = false;
+  structural_duplicate_active_ = false;
 }
 
 ModelingTransformDragPreview
@@ -1076,6 +1346,24 @@ ModelingTransformDragService::apply_transform_drag_preview(
     ModelingTransformDragServiceContext context,
     const ModelingTransformDragUpdateRequest &request) {
   QDR_PROFILE_FUNCTION();
+  const auto fail_after_cancel =
+      [this, &context](std::string message)
+      -> ModelingTransformDragPreview {
+    const bool was_preview_driven = controller_.preview_driven();
+    const ModelingCommandResult canceled = cancel_transform_drag(context);
+    if (!canceled.ok) {
+      message += "; rollback failed: ";
+      message += canceled.message.empty() ? "unknown transform rollback failure"
+                                          : canceled.message;
+    }
+    return {
+        .ok = false,
+        .active = false,
+        .changed = !canceled.ok,
+        .preview_driven = was_preview_driven,
+        .message = std::move(message),
+    };
+  };
   const quader_editor_core::TransformDragState drag_before_update =
       context.runtime.transform_drag_state();
   quader_editor_core::TransformDragPreviewInput input;
@@ -1104,18 +1392,13 @@ ModelingTransformDragService::apply_transform_drag_preview(
 
   const quader_editor_core::CommandResult result = [&]() {
     QDR_PROFILE_SCOPE("Modeling transform drag apply runtime preview");
-    return context.runtime.apply_transform_drag_preview(context.session, input);
+    return context.runtime.apply_transform_drag_preview(
+        context.session.objects(), context.session.selection_mode(), input);
   }();
   if (!result.ok) {
-    const bool was_preview_driven = controller_.preview_driven();
-    (void)cancel_transform_drag(context);
-    return {
-        .ok = false,
-        .preview_driven = was_preview_driven,
-        .message = result.message.empty()
-                       ? "Could not update transform drag preview."
-                       : result.message,
-    };
+    return fail_after_cancel(
+        result.message.empty() ? "Could not update transform drag preview."
+                               : result.message);
   }
 
   bool changed = result.changed;
@@ -1127,15 +1410,10 @@ ModelingTransformDragService::apply_transform_drag_preview(
           context.runtime.transform_drag_state(), input.grid_size);
     }();
     if (!portable_result.ok) {
-      const bool was_preview_driven = controller_.preview_driven();
-      (void)cancel_transform_drag(context);
-      return {
-          .ok = false,
-          .preview_driven = was_preview_driven,
-          .message = portable_result.message.empty()
-                         ? "Could not update portable transform preview."
-                         : portable_result.message,
-      };
+      return fail_after_cancel(
+          portable_result.message.empty()
+              ? "Could not update portable transform preview."
+              : portable_result.message);
     }
     changed = changed || portable_result.changed;
   }
@@ -1178,15 +1456,10 @@ ModelingTransformDragService::apply_transform_drag_preview(
     }();
     if (scene_preview.has_value()) {
       if (!scene_preview->ok) {
-        const bool was_preview_driven = controller_.preview_driven();
-        (void)cancel_transform_drag(context);
-        return {
-            .ok = false,
-            .preview_driven = was_preview_driven,
-            .message = scene_preview->message.empty()
-                           ? "Could not update scene transform preview."
-                           : scene_preview->message,
-        };
+        return fail_after_cancel(
+            scene_preview->message.empty()
+                ? "Could not update scene transform preview."
+                : scene_preview->message);
       }
       changed = changed || scene_preview->changed;
     }

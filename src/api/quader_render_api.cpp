@@ -42,24 +42,6 @@ RenderInstanceEditScope instance_edit_render_scope(const SceneSession &session) 
              : RenderInstanceEditScope{};
 }
 
-bool viewport_overlay_frame_visible(const ViewportOverlayFrame &frame) {
-  return !frame.lines.empty() || !frame.triangles.empty() ||
-         !frame.points.empty() || !frame.icons.empty();
-}
-
-void append_overlay_frame(ViewportOverlayFrame &frame,
-                          const ViewportOverlayFrame &appended_frame) {
-  frame.lines.insert(frame.lines.end(), appended_frame.lines.begin(),
-                     appended_frame.lines.end());
-  frame.triangles.insert(frame.triangles.end(),
-                         appended_frame.triangles.begin(),
-                         appended_frame.triangles.end());
-  frame.points.insert(frame.points.end(), appended_frame.points.begin(),
-                      appended_frame.points.end());
-  frame.icons.insert(frame.icons.end(), appended_frame.icons.begin(),
-                     appended_frame.icons.end());
-}
-
 void append_linear_array_preview(
     const SceneSession &session,
     const LinearArrayPreviewState &preview,
@@ -146,16 +128,21 @@ void QuaderRenderApi::rebind_session(QuaderApiSession session,
   native_array_preview_asset_revision_ = 0;
   native_array_preview_local_visibility_revision_ = 0;
   native_array_preview_kind_ = 0;
+  native_array_preview_attempt_failed_ = false;
   transform_preview_sync_bridge_ = nullptr;
   transform_preview_bridge_submission_revision_ = 0;
   transform_preview_revision_ = 0;
   transform_preview_asset_revision_ = 0;
   transform_preview_local_visibility_revision_ = 0;
+  transform_preview_attempt_failed_ = false;
   generated_tool_preview_sync_bridge_ = nullptr;
   generated_tool_preview_bridge_submission_revision_ = 0;
+  generated_tool_preview_source_ = {};
+  generated_tool_preview_source_valid_ = false;
   generated_tool_preview_signature_ = 0;
   generated_tool_preview_asset_revision_ = 0;
   generated_tool_preview_local_visibility_revision_ = 0;
+  generated_tool_preview_attempt_failed_ = false;
 }
 
 RenderSceneBindingKey QuaderRenderApiRuntimeAccess::scene_binding(
@@ -214,6 +201,12 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
     native_array_revision = linear_preview.active ? linear_preview.revision
                                                   : radial_preview.revision;
   }
+  const auto cached_publication_failure = [&]() {
+    return quader_api_failure_status(
+        project,
+        "Render tool preview candidate could not be published; waiting for "
+        "a preview source change.");
+  };
   if (native_array_kind != 0u &&
       api.native_array_preview_sync_bridge_ == &bridge &&
       api.native_array_preview_bridge_submission_revision_ ==
@@ -224,6 +217,9 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
           native_array_asset_revision &&
       api.native_array_preview_local_visibility_revision_ ==
           local_visibility_revision) {
+    if (api.native_array_preview_attempt_failed_) {
+      return cached_publication_failure();
+    }
     return api.runtime_status("Render tool previews unchanged.");
   }
 
@@ -231,21 +227,54 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
       project.modeling().transient_transform_preview_active();
   const std::uint64_t transform_preview_revision =
       project.modeling().transient_transform_preview_revision();
+  const bool generated_tool_preview_active =
+      native_array_kind == 0u && !transform_preview_active;
+  QuaderRenderApi::GeneratedToolPreviewSourceStamp
+      generated_tool_preview_source;
+  if (generated_tool_preview_active) {
+    generated_tool_preview_source = {
+        .runtime_revision =
+            project.modeling().tool_preview_source_revision(),
+        .content_revision = project.modeling().content_revision(),
+        .object_map_revision =
+            project.modeling().modeling_object_map_revision(),
+        .scene_transform_revision = project.scene().transform_revision(),
+        .hierarchy_presentation_revision =
+            project.scene().hierarchy_presentation_revision(),
+        .instance_edit_revision =
+            project.instances().instance_edit_revision(),
+    };
+  }
+  if (generated_tool_preview_active &&
+      api.generated_tool_preview_sync_bridge_ == &bridge &&
+      api.generated_tool_preview_bridge_submission_revision_ ==
+          bridge.tool_preview_submission_revision() &&
+      api.generated_tool_preview_source_valid_ &&
+      api.generated_tool_preview_source_ == generated_tool_preview_source &&
+      api.generated_tool_preview_asset_revision_ == native_array_asset_revision &&
+      api.generated_tool_preview_local_visibility_revision_ ==
+          local_visibility_revision) {
+    if (api.generated_tool_preview_attempt_failed_) {
+      return cached_publication_failure();
+    }
+    return api.runtime_status("Render generated tool previews unchanged.");
+  }
+
   std::uint64_t generated_tool_preview_signature = 0;
-  if (native_array_kind == 0u && !transform_preview_active) {
-    const std::uint64_t instance_edit_revision =
-        project.instances().instance_edit_revision();
+  if (generated_tool_preview_active) {
     generated_tool_preview_signature =
         RenderSignatureBuilder{}
             .add_value(project.modeling().tool_preview_signature())
-            .add_value(project.modeling().content_revision())
-            .add_value(project.modeling().modeling_object_map_revision())
-            .add_value(project.scene().transform_revision())
-            .add_value(project.scene().hierarchy_presentation_revision())
-            .add_value(instance_edit_revision)
+            .add_value(generated_tool_preview_source.content_revision)
+            .add_value(generated_tool_preview_source.object_map_revision)
+            .add_value(generated_tool_preview_source.scene_transform_revision)
+            .add_value(
+                generated_tool_preview_source.hierarchy_presentation_revision)
+            .add_value(generated_tool_preview_source.instance_edit_revision)
             .value();
   }
-  if (native_array_kind == 0u && !transform_preview_active &&
+  if (generated_tool_preview_active &&
+      !api.generated_tool_preview_attempt_failed_ &&
       api.generated_tool_preview_sync_bridge_ == &bridge &&
       api.generated_tool_preview_bridge_submission_revision_ ==
           bridge.tool_preview_submission_revision() &&
@@ -253,6 +282,8 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
       api.generated_tool_preview_asset_revision_ == native_array_asset_revision &&
       api.generated_tool_preview_local_visibility_revision_ ==
           local_visibility_revision) {
+    api.generated_tool_preview_source_ = generated_tool_preview_source;
+    api.generated_tool_preview_source_valid_ = true;
     return api.runtime_status("Render generated tool previews unchanged.");
   }
   if (native_array_kind == 0u && transform_preview_active &&
@@ -263,6 +294,9 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
       api.transform_preview_asset_revision_ == native_array_asset_revision &&
       api.transform_preview_local_visibility_revision_ ==
           local_visibility_revision) {
+    if (api.transform_preview_attempt_failed_) {
+      return cached_publication_failure();
+    }
     return api.runtime_status("Render transform preview unchanged.");
   }
 
@@ -310,25 +344,28 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
   const ToolPreviewSubmissionResult preview_result =
       publish ? publish(std::move(preview_snapshot))
               : bridge.set_tool_preview_meshes(std::move(preview_snapshot));
-  if (preview_result == ToolPreviewSubmissionResult::Failed) {
-    return quader_api_failure_status(
-        project,
-        "Render tool preview candidate could not be published; retrying.");
-  }
-  if (native_array_kind == 0u && !transform_preview_active) {
+  const bool publication_failed =
+      preview_result == ToolPreviewSubmissionResult::Failed;
+  if (generated_tool_preview_active) {
     api.generated_tool_preview_sync_bridge_ = &bridge;
     api.generated_tool_preview_bridge_submission_revision_ =
         bridge.tool_preview_submission_revision();
+    api.generated_tool_preview_source_ = generated_tool_preview_source;
+    api.generated_tool_preview_source_valid_ = true;
     api.generated_tool_preview_signature_ = generated_tool_preview_signature;
     api.generated_tool_preview_asset_revision_ = native_array_asset_revision;
     api.generated_tool_preview_local_visibility_revision_ =
         local_visibility_revision;
+    api.generated_tool_preview_attempt_failed_ = publication_failed;
   } else {
     api.generated_tool_preview_sync_bridge_ = nullptr;
     api.generated_tool_preview_bridge_submission_revision_ = 0;
+    api.generated_tool_preview_source_ = {};
+    api.generated_tool_preview_source_valid_ = false;
     api.generated_tool_preview_signature_ = 0;
     api.generated_tool_preview_asset_revision_ = 0;
     api.generated_tool_preview_local_visibility_revision_ = 0;
+    api.generated_tool_preview_attempt_failed_ = false;
   }
   if (native_array_kind != 0u) {
     api.native_array_preview_sync_bridge_ = &bridge;
@@ -339,6 +376,7 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
     api.native_array_preview_local_visibility_revision_ =
         local_visibility_revision;
     api.native_array_preview_kind_ = native_array_kind;
+    api.native_array_preview_attempt_failed_ = publication_failed;
   } else {
     api.native_array_preview_sync_bridge_ = nullptr;
     api.native_array_preview_bridge_submission_revision_ = 0;
@@ -346,6 +384,7 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
     api.native_array_preview_asset_revision_ = 0;
     api.native_array_preview_local_visibility_revision_ = 0;
     api.native_array_preview_kind_ = 0;
+    api.native_array_preview_attempt_failed_ = false;
   }
   if (transform_preview_active) {
     api.transform_preview_sync_bridge_ = &bridge;
@@ -355,12 +394,17 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
     api.transform_preview_asset_revision_ = native_array_asset_revision;
     api.transform_preview_local_visibility_revision_ =
         local_visibility_revision;
+    api.transform_preview_attempt_failed_ = publication_failed;
   } else {
     api.transform_preview_sync_bridge_ = nullptr;
     api.transform_preview_bridge_submission_revision_ = 0;
     api.transform_preview_revision_ = 0;
     api.transform_preview_asset_revision_ = 0;
     api.transform_preview_local_visibility_revision_ = 0;
+    api.transform_preview_attempt_failed_ = false;
+  }
+  if (publication_failed) {
+    return cached_publication_failure();
   }
   return api.runtime_status("Render tool previews synchronized.");
 }
@@ -399,43 +443,6 @@ QuaderRenderApiRuntimeAccess::build_scene_overlay_snapshot(
   return snapshot_cache.selection_snapshot(session.scene, session.assets,
                                            scene_binding(api),
                                            &local_visibility);
-}
-
-ViewportOverlayFrame QuaderRenderApiRuntimeAccess::build_scene_overlay_frame(
-    SceneRenderBridge &bridge, ViewportOverlayFrame base_frame,
-    const RenderOverlaySelectionSnapshot &snapshot,
-    const ViewportSceneOverlayFrameRequest &request) {
-  return bridge.build_scene_overlay_frame(
-      std::move(base_frame), snapshot, request);
-}
-
-QuaderApiResult<QuaderRenderOverlaySubmission>
-QuaderRenderApiRuntimeAccess::sync_selection_overlay(
-    QuaderRenderApi &api, SceneRenderBridge &bridge, std::size_t viewport_index,
-    std::uint8_t layer_mask, ViewportOverlayCamera camera,
-    const ViewportOverlayFrame *tool_overlay_frame) {
-  bridge.bind_scene(scene_binding(api));
-  ViewportOverlayFrame frame =
-      read_scene_session(api.session_).modeling().selection_overlay_frame();
-  if (tool_overlay_frame != nullptr) {
-    append_overlay_frame(frame, *tool_overlay_frame);
-  }
-  const bool visible = viewport_overlay_frame_visible(frame);
-  bridge.set_overlay_frame(viewport_index, layer_mask, std::move(frame),
-                           camera);
-
-  const QuaderApiVoidResult status =
-      api.runtime_status("Render selection overlay synchronized.");
-  return quader_api_result_from_status(
-      status, QuaderRenderOverlaySubmission{.visible = visible});
-}
-
-QuaderApiVoidResult QuaderRenderApiRuntimeAccess::set_selection_overlay(
-    QuaderRenderApi &api, SceneRenderBridge &bridge, std::size_t viewport_index,
-    std::uint8_t layer_mask, ViewportOverlayCamera camera) {
-  const QuaderApiResult<QuaderRenderOverlaySubmission> result =
-      sync_selection_overlay(api, bridge, viewport_index, layer_mask, camera);
-  return quader_api_status_from_result(result);
 }
 
 QuaderOverlayFrame QuaderRenderApi::selection_overlay_frame() const {

@@ -1270,10 +1270,10 @@ TEST(UiLayoutGuardrailTests,
   const std::string frame = source_slice(
       ui, "    const QuaderUvPeelRevision peel_revision =",
       "    QDR_PROFILE_SCOPE(\"UI synchronize status bar\")");
-  EXPECT_LT(frame.find("*uv_peel_settings_revision_ != peel_revision"),
+  EXPECT_LT(frame.find("uv_peel_presenter_.needs_refresh(peel_stamp)"),
             frame.find("tool_settings_panel_->refresh_uv_peel_settings()"));
-  expect_contains(frame,
-                  "uv_peel_keybindings_revision_ != keybindings_revision");
+  expect_contains(frame, ".keybindings_revision = keybindings_revision");
+  expect_contains(frame, "uv_peel_presenter_.mark_presented(peel_stamp)");
   expect_missing(frame, "numeric_interaction_active");
   expect_missing(frame, "modeling().uv_peel_settings()");
   expect_missing(frame, "show_panel(");
@@ -1737,7 +1737,7 @@ TEST(UiLayoutGuardrailTests,
                   "tool_toolbar_->synchronize(*editor_, selection,");
   expect_contains(ui_system, "owner_state_changed);");
   expect_contains(ui_system,
-                  "toolbar_owner_available_ != owner_available");
+                  "toolbar_owner_presenter_.needs_refresh(owner_stamp)");
   expect_contains(toolbar, "editor.tools().active_tool()");
   expect_contains(toolbar, "editor.viewports().transform_space_revision()");
   expect_contains(toolbar,
@@ -2010,20 +2010,23 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui, "mix_toolbar(texture_toolbar_)");
   expect_contains(menu, "QStringLiteral(\"toolbar_texture\")");
 
+  const std::size_t face_stamp = ui.find(
+      "const FaceTexturePresentationStamp texture_stamp{");
   const std::size_t face_gate = ui.find(
-      "if (!face_texture_settings_revision_.has_value() ||");
+      "if (face_texture_presenter_.needs_refresh(texture_stamp))");
   const std::size_t face_refresh = ui.find(
       "tool_settings_panel_->refresh_texture_settings()");
+  ASSERT_NE(face_stamp, std::string::npos);
   ASSERT_NE(face_gate, std::string::npos);
   ASSERT_NE(face_refresh, std::string::npos);
+  EXPECT_LT(face_stamp, face_gate);
   EXPECT_LT(face_gate, face_refresh);
-  const std::string face_sync = ui.substr(face_gate, face_refresh - face_gate);
+  const std::string face_sync = ui.substr(face_stamp, face_refresh - face_stamp);
   expect_missing(face_sync, "numeric_interaction_active");
   expect_missing(face_sync, "active_settings()");
   expect_missing(face_sync, "dock->raise()");
-  expect_contains(face_sync,
-                  "face_texture_keybindings_revision_ != keybindings_revision");
-  expect_contains(face_sync, "face_texture_rotation_step_ != rotation_step");
+  expect_contains(face_sync, ".keybindings_revision = keybindings_revision");
+  expect_contains(face_sync, ".rotation_step = rotation_step");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -2060,8 +2063,10 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(revision_gate, selection_summary);
   EXPECT_LT(active_tool_revision, active_tool_revision_gate);
   EXPECT_LT(transform_space_revision, active_tool_revision_gate);
-  expect_contains(refresh, "toolbar_active_tool_revision_ !=");
-  expect_contains(refresh, "toolbar_transform_space_revision_ !=");
+  expect_contains(refresh,
+                  "toolbar_tool_presenter_.needs_refresh(tool_stamp)");
+  expect_contains(refresh,
+                  "toolbar_transform_presenter_.needs_refresh(transform_stamp)");
   expect_missing(refresh, "editor_->tools().active_tool()");
   expect_contains(refresh, "modeling_->content_revision()");
   expect_contains(refresh, "modeling_->selection_revision()");
@@ -2080,14 +2085,15 @@ TEST(UiLayoutGuardrailTests,
   const std::string settings = read_source_file("src/api/quader_tools_api.cpp");
   const std::string ui = read_source_file("src/ui/ui_system.cpp");
 
-  const std::size_t overlay_gate = overlay.find("if (valid_ && same_preview(");
+  const std::size_t overlay_gate =
+      overlay.find("if (valid_ && stamp == previous_stamp_)");
   const std::size_t sample = overlay.find("curve_sample_payload(");
   ASSERT_NE(overlay_gate, std::string::npos);
   ASSERT_NE(sample, std::string::npos);
   EXPECT_LT(overlay_gate, sample);
 
   const std::size_t pick_gate = picking.find("if (valid_ && document_");
-  const std::size_t hierarchy = picking.find("hierarchy_projection_snapshot()");
+  const std::size_t hierarchy = picking.find("hierarchy_projection()");
   const std::size_t reserve = picking.find("candidates_.reserve(");
   ASSERT_NE(pick_gate, std::string::npos);
   ASSERT_NE(hierarchy, std::string::npos);
@@ -2100,7 +2106,7 @@ TEST(UiLayoutGuardrailTests,
   const std::size_t geometry_gate =
       placement.find("if (geometry_candidates_enabled) {");
   const std::size_t cache_refresh =
-      placement.find("refresh_cache(document, assets);", geometry_gate);
+      placement.find("surface_snapshot(document, assets);", geometry_gate);
   ASSERT_NE(geometry_gate, std::string::npos);
   ASSERT_NE(cache_refresh, std::string::npos);
   EXPECT_LT(geometry_gate, cache_refresh);
@@ -2113,11 +2119,14 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(landmark_loop, std::string::npos);
   EXPECT_LT(landmark_gate, landmark_loop);
 
-  expect_contains(viewport, "curve_tool_overlay_cache_.frame(curve_preview)");
+  expect_missing(viewport, "CurveToolOverlayCache");
+  expect_missing(viewport, "curve_tool_overlay_cache_");
+  expect_contains(viewport,
+                  ".curve_preview = native_presentation.curve_preview");
   const std::size_t selection_fallback_gate = viewport.find(
       "(interaction_frame.active_tool_allows_selection_fallback ||");
   const std::size_t curve_drag_gate =
-      viewport.find("(curve == nullptr || !curve->dragging())",
+      viewport.find("!native_presentation.curve_dragging",
                     selection_fallback_gate);
   const std::size_t curve_candidates =
       viewport.find("curve_pick_cache_.candidates(", selection_fallback_gate);
@@ -2138,7 +2147,8 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(settings, ".revision = curve.tool_settings_revision()");
 
   const std::size_t refresh = ui.find("void UISystem::refresh(");
-  const std::size_t drag_query = ui.find("curve_->dragging()", refresh);
+  const std::size_t drag_query = ui.find(
+      "native_tools_->presentation_snapshot().curve_dragging", refresh);
   const std::size_t toolbar_gate =
       ui.find("if (!edit_drag_active && !numeric_interaction_active)", refresh);
   const std::size_t selection_summary =
@@ -2600,7 +2610,7 @@ TEST(UiLayoutGuardrailTests,
   const std::size_t prepare_definition =
       panel.find("void QtViewportPanel::prepare_viewports(");
   const std::size_t next_definition = panel.find(
-      "void QtViewportPanel::refresh_cached_selection_overlay_frame(",
+      "QtViewportPanel::render_viewports(",
       prepare_definition);
   ASSERT_NE(prepare_definition, std::string::npos);
   ASSERT_NE(next_definition, std::string::npos);
@@ -2667,25 +2677,32 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     CurveControlPreviewResetAlwaysCarriesTheBoundCurveOwnerInQt) {
+     NativeToolPreviewResetAlwaysCarriesTheBoundCoordinatorInQt) {
   const std::string panel_header =
       read_source_file("src/ui/qt_viewport_panel.hpp");
   const std::string panel =
       read_source_file("src/ui/qt_viewport_panel.cpp");
-  expect_contains(panel_header, "CurveToolService *interaction_curve_");
+  expect_contains(panel_header,
+                  "NativeViewportToolCoordinator *interaction_native_tools_");
   expect_contains(panel_header, "Non-owning runtime pair");
-  expect_missing(panel,
-                 "interaction_controller_.reset(interaction_editor_);");
+  for (const std::string_view concrete : {
+           "CurveToolService", "PivotToolService", "LinearArrayToolService",
+           "RadialArrayToolService"}) {
+    expect_missing(panel_header, concrete);
+    expect_missing(panel, concrete);
+  }
 
   const std::string shutdown = source_slice(
       panel, "void QtViewportPanel::shutdown()",
       "void QtViewportPanel::reset_interactions(");
   expect_contains(
       shutdown,
-      "interaction_controller_.reset(interaction_editor_, interaction_curve_)");
-  expect_contains(shutdown, "interaction_curve_ = nullptr");
+      "interaction_controller_.reset(interaction_editor_,\n"
+      "                                  *interaction_native_tools_)");
+  expect_contains(shutdown, "interaction_native_tools_ = nullptr");
   const std::size_t owner_reset = shutdown.find(
-      "interaction_controller_.reset(interaction_editor_, interaction_curve_)");
+      "interaction_controller_.reset(interaction_editor_,\n"
+      "                                  *interaction_native_tools_)");
   const std::size_t render_gate =
       shutdown.find("if (render_system_ == nullptr)");
   ASSERT_NE(owner_reset, std::string::npos);
@@ -2698,20 +2715,21 @@ TEST(UiLayoutGuardrailTests,
       panel, "void QtViewportPanel::reset_interactions(",
       "void QtViewportPanel::attach_workspace(");
   expect_contains(explicit_reset,
-                  "interaction_controller_.reset(editor, curve)");
-  expect_contains(explicit_reset, "interaction_curve_ = nullptr");
+                  "interaction_controller_.reset(editor, *native_tools)");
+  expect_contains(explicit_reset, "interaction_native_tools_ = nullptr");
 
   const std::string attach = source_slice(
       panel, "void QtViewportPanel::attach_workspace(",
       "void QtViewportPanel::set_viewport_settings(");
   expect_contains(
       attach,
-      "interaction_controller_.reset(interaction_editor_, interaction_curve_)");
+      "interaction_controller_.reset(interaction_editor_,\n"
+      "                                    *interaction_native_tools_)");
 
   const std::string input = source_slice(
       panel, "void QtViewportPanel::process_viewport_input(",
       "bool QtViewportPanel::sync_active_tool_from_editor(");
-  expect_contains(input, "interaction_curve_ = curve");
+  expect_contains(input, "interaction_native_tools_ = &native_tools");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -2725,12 +2743,19 @@ TEST(UiLayoutGuardrailTests,
   const std::string presenter =
       read_source_file("src/ui/qt_viewport_context_menu.cpp");
   const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+  const std::string interaction = read_source_file(
+      "src/editor/viewport/viewport_interaction_controller.cpp");
 
   expect_contains(panel_header, "QtViewportContextMenuPresenter "
                                 "context_menu_presenter_");
-  expect_contains(panel, "!input.modifiers.primary");
-  expect_contains(panel, "!input.modifiers.shift");
-  expect_contains(panel, "!input.modifiers.alt");
+  expect_contains(interaction, "!frame.input.modifiers.primary");
+  expect_contains(interaction, "!frame.input.modifiers.shift");
+  expect_contains(interaction, "!frame.input.modifiers.alt");
+  expect_contains(panel,
+                  "interaction_controller_.handle_context_menu_pointer(");
+  expect_contains(interaction, "viewport_pointer_gesture_from_latest_edge(");
+  expect_contains(interaction, "exact_pointer_release_after(");
+  expect_contains(interaction, "context_menu_release_suppression_.consume(");
   expect_contains(panel, "is_viewport_context_menu_click_gesture(");
   expect_contains(
       panel,
@@ -2880,6 +2905,8 @@ TEST(UiLayoutGuardrailTests,
       commands,
       "keybindings_.dispatch(chord, context, target_available)");
   expect_contains(commands, "keybindings_.resolve_sequence(");
+  expect_contains(commands, "ViewportInputAction");
+  expect_contains(commands, "viewport_input_action_for_target_id(");
   expect_contains(commands, "{chord}, context, [](");
   expect_contains(commands, "dispatch_viewport_input_binding(");
   expect_contains(commands,
@@ -2934,7 +2961,7 @@ TEST(UiLayoutGuardrailTests,
   const std::string input_resolver = read_source_file(
       "src/editor/input/viewport_keybinding_resolver.cpp");
   const std::string native_tools = read_source_file(
-      "src/editor/viewport/viewport_native_tool_interaction.cpp");
+      "src/editor/tools/viewport_native_tool_interaction.cpp");
   const std::string input_policy =
       read_source_file("src/viewport/viewport_host_interaction_policy.hpp");
 
@@ -3197,7 +3224,9 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel,
                   "should_cancel_modal_tool_for_external_pointer({");
   expect_contains(panel, "should_dispatch_viewport_tool_activation({");
-  expect_contains(panel, "ViewportToolId::LinearArray");
+  expect_contains(
+      panel,
+      "interaction_controller_.active_tool_uses_editor_native_lifecycle(");
   expect_contains(panel, "current_tool_status.insert_edge_loop_dragging");
   expect_contains(panel,
                   "should_enable_viewport_overlay_pass({");
@@ -3268,20 +3297,24 @@ TEST(UiLayoutGuardrailTests,
   const std::string refresh = source.substr(begin, end - begin);
 
   const std::size_t revision = refresh.find("current_revision()");
-  const std::size_t unchanged =
-      refresh.find("standard_material_editor_draft_revision_ ==");
+  const std::size_t unchanged = refresh.find(
+      "if (!standard_material_editor_presenter_.needs_refresh(stamp))");
   const std::size_t snapshot = refresh.find(".current()");
   const std::size_t preview = refresh.find(".preview()");
   const std::size_t setter = refresh.find("->set_document(");
+  const std::size_t publish =
+      refresh.find("standard_material_editor_presenter_.mark_presented(stamp)");
   ASSERT_NE(revision, std::string::npos);
   ASSERT_NE(unchanged, std::string::npos);
   ASSERT_NE(snapshot, std::string::npos);
   ASSERT_NE(preview, std::string::npos);
   ASSERT_NE(setter, std::string::npos);
+  ASSERT_NE(publish, std::string::npos);
   EXPECT_LT(revision, unchanged);
   EXPECT_LT(unchanged, snapshot);
   EXPECT_LT(snapshot, preview);
   EXPECT_LT(preview, setter);
+  EXPECT_LT(setter, publish);
 
   const std::size_t scalar_begin =
       source.find("void UISystem::handle_standard_material_scalar(");
@@ -3345,18 +3378,24 @@ TEST(UiLayoutGuardrailTests,
       ui, "void UISystem::refresh_active_material_panel(",
       "void UISystem::invalidate_material_presentation_cache()");
   const auto visible_gate = refresh.find("!panel_presented(");
-  const auto revision_gate = refresh.find("active_material_panel_refresh_valid_");
+  const auto revision_gate = refresh.find(
+      "if (!active_material_panel_presenter_.needs_refresh(stamp))");
   const auto presentation = refresh.find("material_presentation_for(");
   const auto setter = refresh.find("->set_presentation(");
+  const auto publish =
+      refresh.find("active_material_panel_presenter_.mark_presented(stamp)");
   ASSERT_NE(visible_gate, std::string::npos);
   ASSERT_NE(revision_gate, std::string::npos);
   ASSERT_NE(presentation, std::string::npos);
   ASSERT_NE(setter, std::string::npos);
+  ASSERT_NE(publish, std::string::npos);
   EXPECT_LT(visible_gate, revision_gate);
   EXPECT_LT(revision_gate, presentation);
   EXPECT_LT(revision_gate, setter);
-  expect_contains(refresh, "active_material_panel_reference_ == active_reference");
+  EXPECT_LT(setter, publish);
+  expect_contains(refresh, ".reference = active_reference");
   expect_contains(refresh, "material_presentation_catalog_revision_");
+  expect_missing(refresh, "active_material_panel_refresh_valid_");
   expect_missing(refresh, ".material_preview(");
   expect_missing(refresh, "make_qt_material_thumbnail(");
 
@@ -3376,7 +3415,6 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(cache,
                   "if (editor_ == nullptr || !editor_->project().has_project())");
   expect_contains(cache, "const bool scene_available = active_scene_id != 0u");
-  expect_contains(cache, "if (scene_available) {");
   expect_contains(cache, "scene_available ? assets_ : nullptr");
   expect_contains(cache, "scene_available ? document_ : nullptr");
   expect_contains(cache, "scene_available ? modeling_ : nullptr");
@@ -3384,44 +3422,47 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     CurveRefreshKeepsTheNativePointerWhileTheDraftIsStillDragging) {
+     NativeCoordinatorRefreshKeepsCurvePointerWhileDraftIsStillDragging) {
   const std::string panel = read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string coordinator = read_source_file(
+      "src/editor/tools/native_viewport_tool_coordinator.cpp");
   const std::string process = source_slice(
       panel, "void QtViewportPanel::process_viewport_input(",
-      "sync_active_tool_from_editor(editor, modeling, curve);");
-  const std::size_t curve_refresh = process.find("if (curve != nullptr) {");
-  ASSERT_NE(curve_refresh, std::string::npos);
-  const std::string refresh = process.substr(curve_refresh);
-  expect_contains(refresh, "const CommandResult refresh = curve->refresh();");
-  expect_contains(refresh, "if (refresh.changed) {");
-  const std::size_t not_dragging = refresh.find("if (!curve->dragging()) {");
-  const std::size_t clear_drag =
-      refresh.find("interaction_controller_.clear_native_tool_drag_state();");
-  ASSERT_NE(not_dragging, std::string::npos);
-  ASSERT_NE(clear_drag, std::string::npos);
-  EXPECT_LT(not_dragging, clear_drag);
-  EXPECT_LT(clear_drag, refresh.find('}', not_dragging));
-  EXPECT_EQ(count_occurrences(
-      refresh, "interaction_controller_.clear_native_tool_drag_state();"), 1u);
+      "bool QtViewportPanel::sync_active_tool_from_editor(");
+  expect_contains(process, "if (native_tools.refresh().changed)");
+  expect_missing(process, "curve_.refresh()");
+  expect_missing(process, "CurveToolService");
+
+  const std::string refresh = source_slice(
+      coordinator, "CommandResult NativeViewportToolCoordinator::refresh()",
+      "NativeViewportToolPresentationSnapshot");
+  expect_contains(refresh, "const CommandResult curve = curve_.refresh();");
+  expect_contains(refresh,
+                  "linear.changed || (curve.changed && !curve_.dragging())");
+  expect_contains(refresh, "interaction_.clear_drag_state()");
 }
 
 TEST(UiLayoutGuardrailTests,
      Phase4ViewportRowsKeepPrecedenceDecisionsInNamedOwners) {
   const std::string panel = read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string tool_projection = read_source_file(
+      "src/editor/viewport/viewport_tool_overlay_projection.cpp");
   const std::string host_policy = read_source_file(
       "src/viewport/viewport_host_interaction_policy.hpp");
   const std::string interaction = read_source_file(
       "src/editor/viewport/viewport_interaction_controller.cpp");
   const std::string native_tools = read_source_file(
-      "src/editor/viewport/viewport_native_tool_interaction.cpp");
+      "src/editor/tools/viewport_native_tool_interaction.cpp");
   const std::string scene_projection = read_source_file(
       "src/editor/viewport/viewport_scene_projection.cpp");
 
   expect_contains(panel, "ViewportKeybindingResolver::resolve(");
   expect_contains(panel, "resolve_viewport_input_pane({");
   expect_contains(panel, "interaction_controller_.handle_after_active_tool(");
-  expect_contains(panel, "interaction_controller_.handle_before_active_tool(");
-  expect_contains(panel, "interaction_controller_.handle_native_tools(");
+  expect_contains(
+      panel, "interaction_controller_.handle_tool_pointer_lifecycle(");
+  expect_missing(panel, "interaction_controller_.handle_before_active_tool(");
+  expect_missing(panel, "interaction_controller_.handle_native_tools(");
   expect_contains(panel,
                   "ViewportSceneProjection::point_light_pick_candidates(");
   const std::size_t suppress_hover = panel.find("const bool suppress_hover_work");
@@ -3437,7 +3478,11 @@ TEST(UiLayoutGuardrailTests,
                   "point_light_pick_cached_local_visibility_revision_");
   expect_contains(panel,
                   "Viewport rebuild point light pick candidates");
-  expect_contains(panel, "ViewportToolOverlayProjection::append_box(");
+  expect_missing(panel, "ViewportToolOverlayProjection::append_box(");
+  expect_contains(tool_projection,
+                  "ViewportToolOverlayProjection::append_box(");
+  expect_contains(tool_projection,
+                  "build_dynamic_tool_overlay_frame() const");
   expect_contains(panel, ".focus_optional_bounds(");
   expect_contains(panel, "qt_submit_viewport_render_frames(");
 

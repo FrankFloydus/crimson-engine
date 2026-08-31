@@ -9,10 +9,13 @@
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "editor/commands/document/scene_command.hpp"
 #include "editor/commands/document_command_service.hpp"
+#include "editor/commands/scene_structural_lifecycle_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/instances/instance_edit_context.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
+#include "editor/selection/checked_selection_publication_command.hpp"
+#include "editor/selection/editor_selection_service.hpp"
 #include "editor/selection/scene_selection_application.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_entity_naming.hpp"
@@ -20,6 +23,7 @@
 #include "scene/scene_texture_mapping.hpp"
 
 #include <algorithm>
+#include <array>
 #include <exception>
 #include <memory>
 #include <optional>
@@ -105,9 +109,9 @@ root_only_snapshot(const SceneDocument &scene, EntityId entity) {
 inline EntityId restore_root(SceneDocument &scene,
                              const DocumentEntitySnapshot &snapshot) {
   const EntityId parent =
-      snapshot.original_parent != kInvalidEntityId &&
-              scene.exists(snapshot.original_parent)
-          ? snapshot.original_parent
+      snapshot.parent != kInvalidEntityId &&
+              scene.exists(snapshot.parent)
+          ? snapshot.parent
           : kInvalidEntityId;
   return document_command_create_entity_from_snapshot(
       scene, snapshot, parent, snapshot.name, true, true);
@@ -392,10 +396,13 @@ public:
                        DocumentCommandService &document_commands,
                        EditorHistoryService &history,
                        ModelingSessionService &modeling,
+                       EditorSelectionService &selection,
+                       SceneStructuralLifecycleService &structural_lifecycle,
                        InstanceEditContext &edit_context,
                        const std::string &scene_name)
       : scene_(scene), assets_(assets), document_commands_(document_commands),
-        history_(history), modeling_(modeling), edit_context_(edit_context),
+        history_(history), modeling_(modeling), selection_(selection),
+        structural_lifecycle_(structural_lifecycle), edit_context_(edit_context),
         scene_name_(scene_name) {}
 
   [[nodiscard]] bool can_create_instance() const {
@@ -463,11 +470,13 @@ public:
             plan->occurrence_parent, plan->occurrence_transform,
             plan->members);
     auto *created = command.get();
-    const CommandResult status = history_.execute(std::move(command));
+    const CommandResult status = history_.execute(
+        with_checked_selection_publication(
+            scene_, std::move(command),
+            [this]() { return selection_.publish_scene_selection(); }));
     if (!status.ok || !status.changed) {
       return from_status(status);
     }
-    modeling_.project_object_selection_from_scene(true);
     return {
         .ok = true,
         .changed = true,
@@ -489,38 +498,28 @@ public:
                      "with no active preview or instance edit scope.");
     }
 
-    EditorTransaction transaction =
-        history_.begin_transaction("Flatten Instance");
-    if (!transaction.active()) {
-      return invalid("Cannot flatten while another editor transaction is active.");
-    }
-    const ModelingSessionMemento before_modeling =
-        modeling_.capture_history_memento();
-    const auto rollback = [&](CommandResult failure) {
-      const CommandResult canceled = transaction.cancel();
-      const ModelingCommandResult restored =
-          modeling_.restore_history_memento(before_modeling);
-      if (!canceled.ok) {
-        return from_status(canceled);
-      }
-      if (!restored.ok) {
-        return invalid(restored.message.empty()
-                           ? "Modeling state could not be restored."
-                           : restored.message);
-      }
-      return from_status(failure);
+    /** Captures the identities and authored state needed to flatten one instance occurrence. */
+    struct FlattenPlan final {
+      EntityId occurrence = kInvalidEntityId;
+      EntityId definition = kInvalidEntityId;
+      std::optional<std::string> occurrence_name;
+      std::vector<EntityId> members;
+      std::vector<scene_instance_detail::FlattenTextureMapping>
+          texture_mappings;
+      bool adopts_canonical_members = false;
+      std::size_t duplicate_batch = 0u;
     };
 
-    bool changed_modeling = false;
     bool definitions_are_common = true;
     EntityId common_definition = kInvalidEntityId;
-    std::vector<EntityId> flattened_entities;
+    std::vector<FlattenPlan> plans;
+    std::vector<SceneStructuralDuplicateBatch> duplicate_batches;
+    plans.reserve(selected->size());
     for (const EntityId occurrence : *selected) {
       const InstanceOccurrenceComponent *component =
           scene_.instance_occurrence(occurrence);
       if (component == nullptr) {
-        return rollback(command_invalid_result(
-            "Selected entity is no longer an instance occurrence."));
+        return invalid("Selected entity is no longer an instance occurrence.");
       }
       const EntityId definition = component->definition;
       std::optional<std::string> occurrence_name;
@@ -533,39 +532,161 @@ public:
         definitions_are_common = false;
       }
 
-      const std::vector<EntityId> remaining =
-          scene_.instance_occurrences_for_definition(definition);
       const auto texture_mappings =
           capture_flatten_texture_mappings(occurrence, definition);
       if (!texture_mappings.has_value()) {
-        return rollback(command_invalid_result(
-            "Instance texture mapping could not be resolved."));
+        return invalid("Instance texture mapping could not be resolved.");
       }
-      const bool adopts_canonical_members = remaining.size() == 1u;
+      const std::vector<EntityId> members = scene_.children(definition);
+      if (members.empty()) {
+        return invalid("Instance definition has no members.");
+      }
+      const std::size_t prior_selected = static_cast<std::size_t>(
+          std::ranges::count(plans, definition, &FlattenPlan::definition));
+      const std::size_t occurrence_count =
+          scene_.instance_occurrences_for_definition(definition).size();
+      const bool adopts_canonical_members =
+          occurrence_count == prior_selected + 1u;
+      FlattenPlan plan{
+          .occurrence = occurrence,
+          .definition = definition,
+          .occurrence_name = std::move(occurrence_name),
+          .members = members,
+          .texture_mappings = *texture_mappings,
+          .adopts_canonical_members = adopts_canonical_members,
+      };
+      if (!adopts_canonical_members) {
+        plan.duplicate_batch = duplicate_batches.size();
+        duplicate_batches.push_back({.roots = members});
+      }
+      plans.push_back(std::move(plan));
+    }
+
+    SceneStructuralCompensationScope compensation_scope =
+        structural_lifecycle_.begin_compensation_scope();
+    if (!compensation_scope.valid()) {
+      return invalid("Scene scalar compensation scope is unavailable.");
+    }
+    const DocumentSelectionState selection_before =
+        document_command_capture_selection(scene_);
+    EditorTransaction transaction =
+        history_.begin_transaction("Flatten Instance");
+    if (!transaction.active()) {
+      (void)compensation_scope.release();
+      return invalid("Cannot flatten while another editor transaction is active.");
+    }
+    const ModelingSessionMemento before_modeling =
+        modeling_.capture_history_memento();
+    const auto rollback = [&](CommandResult failure,
+                              bool boundary_acknowledged = false) {
+      if ((!boundary_acknowledged &&
+           !compensation_scope.seal_forward()) ||
+          !compensation_scope.open_inverse()) {
+        (void)compensation_scope.release();
+        const CommandResult preserved =
+            transaction.active() ? transaction.commit()
+                                 : command_unchanged_result();
+        failure.ok = false;
+        failure.changed = true;
+        if (!failure.message.empty()) {
+          failure.message += "; ";
+        }
+        failure.message +=
+            "Flatten rollback was rejected because the Scene changed outside "
+            "the compensation scope.";
+        if (!preserved.ok) {
+          failure.message += "; applied state could not be retained in history: ";
+          failure.message += preserved.message;
+        }
+        return from_status(failure);
+      }
+
+      const CommandResult canceled =
+          transaction.active() ? transaction.cancel()
+                               : command_unchanged_result();
+      const ModelingCommandResult restored =
+          before_modeling.valid()
+              ? modeling_.restore_history_memento(before_modeling)
+              : ModelingCommandResult{
+                    .ok = false,
+                    .message = "Modeling rollback state is invalid.",
+                };
+      document_command_apply_selection(scene_, selection_before);
+      const bool selection_restored = document_command_same_selection(
+          selection_before, document_command_capture_selection(scene_));
+      const bool inverse_ok = canceled.ok && restored.ok && selection_restored;
+      const bool scalar_restored =
+          inverse_ok ? compensation_scope.restore()
+                     : (static_cast<void>(compensation_scope.release()), false);
+      if (!inverse_ok || !scalar_restored) {
+        failure.ok = false;
+        failure.changed = true;
+        if (!failure.message.empty()) {
+          failure.message += "; ";
+        }
+        failure.message +=
+            !canceled.ok
+                ? "flatten document rollback failed: " + canceled.message
+                : (!restored.ok
+                       ? "flatten modeling rollback failed: " + restored.message
+                       : (!selection_restored
+                              ? "flatten selection rollback was inexact"
+                              : "flatten scalar compensation failed"));
+      } else {
+        failure.ok = false;
+        failure.changed = false;
+      }
+      return from_status(failure);
+    };
+
+    SceneStructuralDuplicateBatchResult duplicated;
+    if (!duplicate_batches.empty()) {
+      duplicated = structural_lifecycle_.duplicate_hierarchy_batches_in_transaction(
+          transaction, duplicate_batches, ModelingSelectionMode::Object,
+          "Flatten Instance", true);
+      if (!duplicated.ok || !duplicated.changed ||
+          duplicated.batches.size() != duplicate_batches.size()) {
+        return rollback(CommandResult{
+            .ok = duplicated.ok,
+            .changed = duplicated.changed,
+            .message = duplicated.message.empty()
+                           ? "Flatten duplicate batches were incomplete."
+                           : duplicated.message,
+        });
+      }
+    }
+    const ModelingSessionMemento after_duplicates =
+        modeling_.capture_history_memento();
+
+    bool baked_modeling = false;
+    std::vector<EntityId> flattened_entities;
+    for (const FlattenPlan &plan : plans) {
       SceneInstanceMutationResult flattened =
-          adopts_canonical_members
-              ? flatten_last_occurrence(occurrence, definition)
-              : flatten_linked_occurrence_in_transaction(occurrence,
-                                                         definition);
+          plan.adopts_canonical_members
+              ? flatten_last_occurrence(plan.occurrence, plan.definition)
+              : finalize_linked_occurrence_in_transaction(
+                    plan.occurrence, plan.definition, plan.members,
+                    duplicated.batches[plan.duplicate_batch]);
       if (!flattened.ok || !flattened.changed) {
         return rollback(CommandResult{.ok = flattened.ok,
                                       .changed = flattened.changed,
                                       .message = flattened.message});
       }
       const ModelingCommandResult baked =
-          bake_flatten_texture_mappings(flattened.entities, *texture_mappings);
+          bake_flatten_texture_mappings(flattened.entities,
+                                        plan.texture_mappings);
       if (!baked.ok) {
         return rollback(modeling_memento_command_result(baked));
       }
-      if (occurrence_name.has_value() && flattened.entities.size() == 1u) {
+      if (plan.occurrence_name.has_value() &&
+          flattened.entities.size() == 1u) {
         const CommandResult renamed = document_commands_.rename_entity(
-            flattened.entities.front(), *occurrence_name);
+            flattened.entities.front(), *plan.occurrence_name);
         if (!renamed.ok) {
           return rollback(renamed);
         }
       }
-      changed_modeling = changed_modeling || !adopts_canonical_members ||
-                         baked.changed;
+      baked_modeling = baked_modeling || baked.changed;
       flattened_entities.insert(flattened_entities.end(),
                                  flattened.entities.begin(),
                                 flattened.entities.end());
@@ -575,28 +696,47 @@ public:
       return rollback(command_invalid_result(
           "Flatten did not produce any ordinary scene entities."));
     }
-    const CommandResult selected_outputs = document_commands_.select_entities(
-        flattened_entities, flattened_entities.front(),
-        SceneSelectionApplicationMode::UndoableCommand);
+    const CommandResult selected_outputs =
+        selection_.set_inspection_scene_selection(flattened_entities,
+                                                  flattened_entities.front());
     if (!selected_outputs.ok) {
       return rollback(selected_outputs);
     }
-    modeling_.project_object_selection_from_scene(true);
-
-    if (changed_modeling) {
+    if (baked_modeling) {
       const CommandResult recorded =
-          transaction.record_executed_before_existing(
+          transaction.record_executed(
               std::make_unique<RecordedModelingMementoCommand>(
-                  modeling_, "Flatten Instance", before_modeling,
+                  modeling_, "Flatten Instance", after_duplicates,
                   modeling_.capture_history_memento(), true));
       if (!recorded.ok) {
         return rollback(recorded);
       }
     }
 
+    if (!compensation_scope.seal_forward()) {
+      return rollback(command_invalid_result(
+          "Flatten scalar compensation boundary could not be acknowledged."));
+    }
     const CommandResult committed = transaction.commit();
     if (!committed.ok || !committed.changed) {
-      return from_status(committed);
+      return rollback(committed.ok
+                          ? command_invalid_result(
+                                "Flatten could not be committed to history.")
+                          : committed,
+                      true);
+    }
+    if (!compensation_scope.open_inverse()) {
+      (void)compensation_scope.release();
+      CommandResult failure = command_invalid_result(
+          "Scene changed while flatten history was committed.");
+      failure.changed = true;
+      return from_status(failure);
+    }
+    if (!compensation_scope.release()) {
+      CommandResult failure = command_invalid_result(
+          "Flatten scalar compensation scope could not be released.");
+      failure.changed = true;
+      return from_status(failure);
     }
     return {
         .ok = true,
@@ -618,9 +758,17 @@ public:
     const InstanceOccurrenceComponent *component =
         scene_.instance_occurrence(occurrence);
     edit_context_.set(occurrence, component->definition);
-    (void)apply_scene_selection(
-        scene_, SceneSelectionState{}, SceneSelectionApplicationMode::RuntimeSync);
-    modeling_.project_object_selection_from_scene(true);
+    const DocumentCommandResult projected =
+        selection_.synchronize_scene_selection({});
+    if (!projected.ok) {
+      edit_context_.clear();
+      std::string message = projected.message.empty()
+                                ? "Instance edit selection could not be cleared."
+                                : projected.message;
+      return {.ok = false,
+              .changed = projected.changed,
+              .message = std::move(message)};
+    }
     return {
         .ok = true,
         .changed = true,
@@ -635,6 +783,8 @@ public:
     if (!edit_context_.active()) {
       return invalid("No instance edit scope is active.");
     }
+    const ModelingSessionMemento modeling_before =
+        modeling_.capture_history_memento();
     const ModelingCommandResult cleared = modeling_.clear_selection();
     if (!cleared.ok) {
       return invalid(cleared.message.empty()
@@ -651,12 +801,25 @@ public:
     const EntityId occurrence = edit_context_.occurrence();
     const EntityId definition = edit_context_.definition();
     edit_context_.clear();
-    (void)apply_scene_selection(
-        scene_, make_scene_selection(scene_, std::span<const EntityId>{&occurrence,
-                                                                       1u},
-                                     occurrence),
-        SceneSelectionApplicationMode::RuntimeSync);
-    modeling_.project_object_selection_from_scene(true);
+    const std::array occurrence_selection{occurrence};
+    const DocumentCommandResult projected =
+        selection_.synchronize_scene_selection(occurrence_selection,
+                                               occurrence);
+    if (!projected.ok) {
+      const ModelingCommandResult modeling_restored =
+          modeling_.restore_history_memento(modeling_before);
+      edit_context_.set(occurrence, definition);
+      std::string message = projected.message.empty()
+                                ? "Instance edit selection could not be restored."
+                                : projected.message;
+      if (!modeling_restored.ok) {
+        message += " Modeling selection rollback failed: " +
+                   modeling_restored.message;
+      }
+      return {.ok = false,
+              .changed = projected.changed || !modeling_restored.ok,
+              .message = std::move(message)};
+    }
     return {
         .ok = true,
         .changed = true,
@@ -988,21 +1151,23 @@ private:
     // exit contract instead of merely dropping the IDs and leaving component
     // mode or a modal preview active.
     sanitizing_edit_context_ = true;
+    const ModelingSessionMemento modeling_before =
+        modeling_.capture_history_memento();
     edit_context_.clear();
     modeling_.clear_transient_state_for_document_replacement();
     (void)modeling_.clear_selection();
     (void)modeling_.set_selection_mode(ModelingSelectionMode::Object);
+    DocumentCommandResult synchronized;
     if (valid_occurrence(occurrence_id)) {
-      (void)apply_scene_selection(
-          scene_, make_scene_selection(
-                      scene_, std::span<const EntityId>{&occurrence_id, 1u},
-                      occurrence_id),
-          SceneSelectionApplicationMode::RuntimeSync);
+      const std::array occurrence_selection{occurrence_id};
+      synchronized = selection_.synchronize_scene_selection(
+          occurrence_selection, occurrence_id);
     } else {
-      (void)apply_scene_selection(scene_, SceneSelectionState{},
-                                  SceneSelectionApplicationMode::RuntimeSync);
+      synchronized = selection_.synchronize_scene_selection({});
     }
-    modeling_.project_object_selection_from_scene(true);
+    if (!synchronized.ok) {
+      (void)modeling_.restore_history_memento(modeling_before);
+    }
     sanitizing_edit_context_ = false;
   }
 
@@ -1156,11 +1321,13 @@ private:
     auto command = std::make_unique<
         scene_instance_detail::FlattenLastSceneInstanceCommand>(
         scene_, occurrence, definition, placements);
-    const CommandResult status = history_.execute(std::move(command));
+    const CommandResult status = history_.execute(
+        with_checked_selection_publication(
+            scene_, std::move(command),
+            [this]() { return selection_.publish_scene_selection(); }));
     if (!status.ok || !status.changed) {
       return from_status(status);
     }
-    modeling_.project_object_selection_from_scene(true);
     return {
         .ok = true,
         .changed = true,
@@ -1170,34 +1337,25 @@ private:
     };
   }
 
-  SceneInstanceMutationResult flatten_linked_occurrence_in_transaction(
-      EntityId occurrence, EntityId definition) {
-    const std::vector<EntityId> members = scene_.children(definition);
-    if (members.empty()) {
-      return invalid("Instance definition has no members.");
+  SceneInstanceMutationResult finalize_linked_occurrence_in_transaction(
+      EntityId occurrence, EntityId definition,
+      std::span<const EntityId> members,
+      const SceneStructuralDuplicateResult &duplicated) {
+    std::vector<EntityId> duplicates;
+    duplicates.reserve(members.size());
+    for (const EntityId member : members) {
+      const auto clone = std::ranges::find(duplicated.clones, member,
+                                           &SceneStructuralClone::source);
+      if (clone == duplicated.clones.end() ||
+          clone->duplicate == kInvalidEntityId ||
+          !scene_.exists(clone->duplicate)) {
+        return invalid(
+            "Flatten did not create one editable hierarchy for every member.");
+      }
+      duplicates.push_back(clone->duplicate);
     }
-
-    CommandResult selected = document_commands_.select_entities(
-        members, members.front(), SceneSelectionApplicationMode::UndoableCommand);
-    if (!selected.ok) {
-      return from_status(selected);
-    }
-    modeling_.project_object_selection_from_scene(true);
-    const ModelingCommandResult duplicated =
-        modeling_.duplicate_selected_entity_hierarchy_with_independent_meshes(
-            document_commands_);
-    if (!duplicated.ok || !duplicated.changed) {
-      return {
-          .ok = duplicated.ok,
-          .changed = duplicated.changed,
-          .message = duplicated.message,
-      };
-    }
-
-    const std::vector<EntityId> duplicates = scene_.selected_entities();
-    if (duplicates.size() != members.size()) {
-      return invalid(
-          "Flatten did not create one editable mesh for every member.");
+    if (duplicates.size() != duplicated.clones.size()) {
+      return invalid("Flatten duplicate root mapping was not exact.");
     }
     std::vector<scene_instance_detail::MemberPlacement> placements;
     placements.reserve(duplicates.size());
@@ -1213,7 +1371,10 @@ private:
     auto finalize = std::make_unique<
         scene_instance_detail::FinalizeFlattenSceneInstanceCommand>(
         scene_, occurrence, placements);
-    const CommandResult finalized = history_.execute(std::move(finalize));
+    const CommandResult finalized = history_.execute(
+        with_checked_selection_publication(
+            scene_, std::move(finalize),
+            [this]() { return selection_.publish_scene_selection(); }));
     if (!finalized.ok || !finalized.changed) {
       return from_status(finalized);
     }
@@ -1248,6 +1409,8 @@ private:
   DocumentCommandService &document_commands_;
   EditorHistoryService &history_;
   ModelingSessionService &modeling_;
+  EditorSelectionService &selection_;
+  SceneStructuralLifecycleService &structural_lifecycle_;
   InstanceEditContext &edit_context_;
   const std::string &scene_name_;
   mutable bool sanitizing_edit_context_ = false;

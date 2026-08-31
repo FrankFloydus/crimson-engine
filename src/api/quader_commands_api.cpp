@@ -245,6 +245,23 @@ bool material_assignment_uses_reserved_bare_right_mouse(
              sequence, is_reserved_bare_right_mouse_material_chord);
 }
 
+bool face_texture_transfer_assignment_uses_unsupported_pointer_gesture(
+    const QuaderKeybindingActionKey &action,
+    const std::vector<QuaderInputChord> &sequence) {
+  if (action.action_id != "viewport.material.transfer_face_texture") {
+    return false;
+  }
+  return std::ranges::any_of(sequence, [](const QuaderInputChord &chord) {
+    return chord.device == QuaderInputDevice::Mouse &&
+           (chord.gesture == QuaderInputGesture::Drag ||
+            chord.gesture == QuaderInputGesture::Wheel ||
+            chord.gesture == QuaderInputGesture::WheelUp ||
+            chord.gesture == QuaderInputGesture::WheelDown ||
+            chord.gesture == QuaderInputGesture::WheelLeft ||
+            chord.gesture == QuaderInputGesture::WheelRight);
+  });
+}
+
 bool command_semantically_requires_viewport(std::string_view command_id) {
   if (command_id == quader_command::kViewportSpawnWindow.string()) {
     return false;
@@ -430,6 +447,8 @@ std::uint32_t selection_mode_mask(
     return selection_mode_mask(availability.mode);
   case ModelingActionSelectionRequirement::ComponentSelection:
     return kSelectionModeComponent;
+  case ModelingActionSelectionRequirement::ObjectOrGroupSelection:
+    return kSelectionModeObject | kSelectionModeGroup;
   case ModelingActionSelectionRequirement::ObjectOrFaceSelection:
     return kSelectionModeObject | kSelectionModeFace;
   case ModelingActionSelectionRequirement::EdgeOrFaceSelection:
@@ -851,6 +870,11 @@ public:
         const QuaderInputChord &chord, const ViewportToolState &state,
         bool viewport_focused, bool text_input_active,
         QuaderViewportKeybindingContext input_context = {});
+    [[nodiscard]] QuaderNativeToolSettingsDispatch
+    dispatch_native_tool_settings_input_binding(
+        const QuaderInputChord &chord, const ViewportToolState &state);
+    QuaderApiVoidResult execute_native_tool_settings_intent(
+        QuaderNativeToolSettingsIntent intent);
     void reset_pending_keybinding_chord();
     [[nodiscard]] bool has_pending_keybinding_chord() const;
     QuaderApiVoidResult set_shortcut(std::string_view command_id,
@@ -1282,10 +1306,18 @@ QuaderCommandsApi::Impl::analyze_shortcut_assignment(
     return analysis;
   }
   if (material_assignment_uses_reserved_bare_right_mouse(action,
-                                                          *proposed)) {
+                                                           *proposed)) {
     analysis.message =
         "Unmodified right mouse gestures are reserved for viewport "
         "navigation and context menus.";
+    return analysis;
+  }
+  if (face_texture_transfer_assignment_uses_unsupported_pointer_gesture(
+          action, *proposed)) {
+    analysis.message =
+        "Continue Texture requires a mouse button press, click, or "
+        "double-click; drag and wheel gestures do not identify one exact "
+        "owned pointer edge.";
     return analysis;
   }
 
@@ -1635,6 +1667,10 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
     if (registered && !registry_.enabled(target_id)) {
       return false;
     }
+    ViewportInputActionKind action = ViewportInputActionKind::None;
+    if (viewport_input_action_for_target_id(target_id, action)) {
+      return true;
+    }
     if (registered && !viewport_target_requires_router_dispatch(target_id)) {
       return true;
     }
@@ -1654,6 +1690,14 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
   }
   if (dispatch.kind != QuaderKeybindingDispatch::Kind::ExactMatch) {
     return {};
+  }
+
+  ViewportInputActionKind action = ViewportInputActionKind::None;
+  if (viewport_input_action_for_target_id(dispatch.target_id, action)) {
+    return {
+        .kind = QuaderViewportKeybindingDispatch::Kind::ViewportInputAction,
+        .action = action,
+    };
   }
 
   if (registry_.contains(dispatch.target_id) &&
@@ -1681,6 +1725,66 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
   }
 
   return {};
+}
+
+QuaderNativeToolSettingsDispatch
+QuaderCommandsApi::Impl::dispatch_native_tool_settings_input_binding(
+    const QuaderInputChord &chord, const ViewportToolState &state) {
+  if (!tools_.active_native_tool_lifecycle(state.active_tool)) {
+    return {};
+  }
+
+  const QuaderViewportKeybindingDispatch dispatch =
+      dispatch_viewport_input_binding(
+          chord, state, true, false,
+          {.modal_tool_active = true, .active_tool_owns_viewport = true});
+  if (dispatch.kind == QuaderViewportKeybindingDispatch::Kind::PendingChord) {
+    return {.kind =
+                QuaderNativeToolSettingsDispatch::Kind::PendingChord};
+  }
+
+  QuaderNativeToolSettingsIntent intent =
+      QuaderNativeToolSettingsIntent::None;
+  if (dispatch.kind ==
+          QuaderViewportKeybindingDispatch::Kind::ViewportInputAction &&
+      dispatch.action == ViewportInputActionKind::ModalToolFinalize) {
+    intent = QuaderNativeToolSettingsIntent::Apply;
+  } else if (dispatch.kind ==
+                 QuaderViewportKeybindingDispatch::Kind::ViewportShortcut &&
+             dispatch.shortcut.kind ==
+                 ViewportShortcutKind::CancelActiveTool) {
+    intent = QuaderNativeToolSettingsIntent::Cancel;
+  } else if (dispatch.kind ==
+             QuaderViewportKeybindingDispatch::Kind::Command) {
+    const QuaderKeybindingTargetMetadata *metadata =
+        keybinding_target_metadata(dispatch.command_id);
+    if (metadata != nullptr && metadata->action_id == "tools.finalize") {
+      intent = QuaderNativeToolSettingsIntent::Apply;
+    } else if (metadata != nullptr && metadata->action_id == "tools.cancel") {
+      intent = QuaderNativeToolSettingsIntent::Cancel;
+    }
+  }
+
+  return intent != QuaderNativeToolSettingsIntent::None
+             ? QuaderNativeToolSettingsDispatch{
+                   .kind = QuaderNativeToolSettingsDispatch::Kind::Intent,
+                   .intent = intent,
+               }
+             : QuaderNativeToolSettingsDispatch{};
+}
+
+QuaderApiVoidResult
+QuaderCommandsApi::Impl::execute_native_tool_settings_intent(
+    QuaderNativeToolSettingsIntent intent) {
+  switch (intent) {
+  case QuaderNativeToolSettingsIntent::Apply:
+    return tools_.commit_active_tool_preview();
+  case QuaderNativeToolSettingsIntent::Cancel:
+    return tools_.cancel_active_tool_preview();
+  case QuaderNativeToolSettingsIntent::None:
+    break;
+  }
+  return failure("No native Tool Settings lifecycle intent was provided.");
 }
 
 void QuaderCommandsApi::Impl::reset_pending_keybinding_chord() {
@@ -2996,6 +3100,17 @@ QuaderCommandsApi::dispatch_viewport_input_binding(
     QuaderViewportKeybindingContext input_context) {
   return impl_->dispatch_viewport_input_binding(
       chord, state, viewport_focused, text_input_active, input_context);
+}
+
+QuaderNativeToolSettingsDispatch
+QuaderCommandsApi::dispatch_native_tool_settings_input_binding(
+    const QuaderInputChord &chord, const ViewportToolState &state) {
+  return impl_->dispatch_native_tool_settings_input_binding(chord, state);
+}
+
+QuaderApiVoidResult QuaderCommandsApi::execute_native_tool_settings_intent(
+    QuaderNativeToolSettingsIntent intent) {
+  return impl_->execute_native_tool_settings_intent(intent);
 }
 
 void QuaderCommandsApi::reset_pending_keybinding_chord() {

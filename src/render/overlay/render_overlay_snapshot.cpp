@@ -15,8 +15,7 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
-#include "scene/scene_hierarchy_visibility.hpp"
-#include "scene/scene_transform.hpp"
+#include "scene/scene_mesh_occurrence_projection.hpp"
 
 #include <optional>
 #include <utility>
@@ -28,11 +27,6 @@ bool local_visibility_allows(
     const ViewportLocalVisibilitySnapshot *local_visibility,
     EntityId entity) {
   return local_visibility == nullptr || local_visibility->allows(entity);
-}
-
-std::uint64_t local_visibility_revision(
-    const ViewportLocalVisibilitySnapshot *local_visibility) {
-  return local_visibility != nullptr ? local_visibility->revision() : 0u;
 }
 
 const ViewportPersistentOverlayStyleSnapshot &
@@ -68,16 +62,21 @@ std::span<const MeshWireSegment> mesh_wire_segments(
   return {payload->segments.data(), payload->segments.size()};
 }
 
+std::uint64_t instance_overlay_participant_token(EntityId occurrence,
+                                                 EntityId member);
+
 std::optional<RenderOverlayMeshSnapshot>
-mesh_snapshot_for_entity(const SceneDocument &document,
-                         const AssetRegistry &assets, EntityId entity,
-                         const ViewportLocalVisibilitySnapshot *
-                             local_visibility) {
-  if (!document.is_effectively_visible(entity) ||
-      !local_visibility_allows(local_visibility, entity)) {
+mesh_snapshot_for_placement(
+    const SceneDocument &document, const AssetRegistry &assets,
+    const SceneMeshOccurrenceProjectionRecord &placement,
+    const ViewportLocalVisibilitySnapshot *local_visibility,
+    std::optional<bool> selected_override = std::nullopt) {
+  if (!local_visibility_allows(local_visibility,
+                               placement.display_entity)) {
     return std::nullopt;
   }
-  const MeshComponent *scene_mesh = document.mesh(entity);
+  const MeshComponent *scene_mesh =
+      document.mesh(placement.geometry_entity);
   if (scene_mesh == nullptr ||
       scene_mesh->mesh == kInvalidAssetId) {
     return std::nullopt;
@@ -87,22 +86,36 @@ mesh_snapshot_for_entity(const SceneDocument &document,
       asset->geometry().indices.size() < 3u) {
     return std::nullopt;
   }
-  const SelectionComponent *selection = document.selection(entity);
+  const SelectionComponent *selection =
+      document.selection(placement.display_entity);
   const std::shared_ptr<const MeshGeometryPayload> geometry_payload =
       asset->geometry_payload();
   const std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload =
       build_mesh_wire_geometry_payload(*asset);
   return RenderOverlayMeshSnapshot{
-      .entity = entity,
-      .participant_token = entity,
+      .entity = placement.display_entity,
+      .occurrence = placement.formal_instance()
+                        ? placement.display_entity
+                        : kInvalidEntityId,
+      .definition = placement.definition_entity,
+      .member = placement.formal_instance()
+                    ? placement.geometry_entity
+                    : kInvalidEntityId,
+      .participant_token =
+          placement.formal_instance()
+              ? instance_overlay_participant_token(
+                    placement.display_entity, placement.geometry_entity)
+              : placement.display_entity,
       .mesh_id = scene_mesh->mesh,
       .mesh_revision = asset->revision.value,
       .geometry_payload = geometry_payload,
       .geometry_content_id = asset->geometry_content_id(),
       .wire_geometry_payload = wire_geometry_payload,
-      .world_transform = document.world_transform_matrix(entity),
-      .selected = selection != nullptr && selection->selected,
-      .wireframe_tint = resolved_scene_wireframe_tint(document, entity),
+      .world_transform = placement.world_from_geometry,
+      .selected = selected_override.value_or(
+          selection != nullptr && selection->selected),
+      .wireframe_tint = resolved_scene_wireframe_tint(
+          document, placement.display_entity),
       .vertices = mesh_vertices(*asset),
       .indices = mesh_indices(*asset),
       .wire_segments = mesh_wire_segments(wire_geometry_payload),
@@ -164,177 +177,76 @@ std::uint64_t instance_overlay_participant_token(EntityId occurrence,
       .value();
 }
 
-QMat4 compose_instance_member_world_transform(
-    const QMat4 &occurrence_world, const QMat4 &definition_inverse,
-    const QMat4 &member_world) {
-  return scene_transform_multiply(
-      occurrence_world,
-      scene_transform_multiply(definition_inverse, member_world));
-}
-
-std::optional<QMat4> instance_member_world_transform(
-    const SceneDocument &document, EntityId occurrence, EntityId definition,
-    EntityId member) {
-  const InstanceOccurrenceComponent *instance =
-      document.instance_occurrence(occurrence);
-  if (instance == nullptr || instance->definition != definition ||
-      document.containing_instance_definition(member) != definition) {
-    return std::nullopt;
-  }
-  const std::optional<QMat4> definition_inverse =
-      try_scene_matrix_inverse(document.world_transform_matrix(definition));
-  if (!definition_inverse.has_value()) {
-    return std::nullopt;
-  }
-  return compose_instance_member_world_transform(
-      document.world_transform_matrix(occurrence), *definition_inverse,
-      document.world_transform_matrix(member));
-}
-
 std::optional<std::uint64_t> build_instance_bounds_dependency_signature(
     const SceneDocument &document, const AssetRegistry &assets,
     EntityId definition) {
   if (!document.is_instance_definition_entity(definition)) {
     return std::nullopt;
   }
-  const std::optional<QMat4> definition_inverse = try_scene_matrix_inverse(
-      document.world_transform_matrix(definition));
-  if (!definition_inverse) {
-    return std::nullopt;
-  }
+  const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      projection = document.mesh_occurrence_projection();
 
   RenderSignatureBuilder signature;
   signature.add_value(0x626f756e64696e73ULL)
       .add_value(definition);
   std::size_t mesh_count = 0u;
-  for (const EntityId member : document.descendants(definition, false)) {
-    if (document.containing_instance_definition(member) != definition ||
-        !scene_hierarchy_segment_is_visible(document, member, definition)) {
+  for (const SceneMeshOccurrenceGeometryGroup &group :
+       projection->formal_geometry_groups()) {
+    if (group.definition_entity != definition) {
       continue;
     }
-    const MeshComponent *mesh_component = document.mesh(member);
+    const MeshComponent *mesh_component =
+        document.mesh(group.geometry_entity);
     const MeshAsset *mesh = mesh_component != nullptr
                                 ? assets.mesh(mesh_component->mesh)
                                 : nullptr;
     if (mesh == nullptr) {
       continue;
     }
-    signature.add_value(member)
+    signature.add_value(group.geometry_entity)
         .add_value(mesh_component->mesh)
         .add_value(mesh->revision.value)
-        .add_mat4(scene_transform_multiply(
-            *definition_inverse, document.world_transform_matrix(member)));
+        .add_mat4(group.definition_from_geometry);
     ++mesh_count;
   }
   signature.add_size(mesh_count);
   return signature.value();
 }
 
-void append_instance_wire_meshes(
+void append_display_wire_meshes(
     std::vector<RenderOverlayMeshSnapshot> &meshes,
     const SceneDocument &document, const AssetRegistry &assets,
-    EntityId occurrence,
-    const ViewportLocalVisibilitySnapshot *local_visibility, bool selected,
-    QVec3 wireframe_tint) {
-  const InstanceOccurrenceComponent *instance =
-      document.instance_occurrence(occurrence);
-  if (instance == nullptr || !document.is_effectively_visible(occurrence) ||
-      !local_visibility_allows(local_visibility, occurrence) ||
-      !document.is_instance_definition_entity(instance->definition)) {
-    return;
-  }
-  const std::optional<QMat4> definition_inverse = try_scene_matrix_inverse(
-      document.world_transform_matrix(instance->definition));
-  if (!definition_inverse.has_value()) {
-    return;
-  }
-  const QMat4 occurrence_world = document.world_transform_matrix(occurrence);
-  for (const EntityId member :
-       document.descendants(instance->definition, false)) {
-    if (document.containing_instance_definition(member) !=
-            instance->definition ||
-        !scene_hierarchy_segment_is_visible(document, member,
-                                            instance->definition)) {
-      continue;
+    const SceneMeshOccurrenceProjectionSnapshot &projection,
+    EntityId display_entity,
+    const ViewportLocalVisibilitySnapshot *local_visibility,
+    std::optional<bool> selected_override = std::nullopt) {
+  for (const SceneMeshOccurrenceProjectionRecord &placement :
+       projection.records_for_display(display_entity)) {
+    if (std::optional<RenderOverlayMeshSnapshot> mesh =
+            mesh_snapshot_for_placement(document, assets, placement,
+                                        local_visibility,
+                                        selected_override)) {
+      meshes.push_back(std::move(*mesh));
     }
-    const MeshComponent *mesh_component = document.mesh(member);
-    if (mesh_component == nullptr) {
-      continue;
-    }
-    const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
-    if (mesh == nullptr || mesh->geometry().vertices.empty() ||
-        mesh->geometry().indices.size() < 3u) {
-      continue;
-    }
-    const std::shared_ptr<const MeshGeometryPayload> geometry_payload =
-        mesh->geometry_payload();
-    const std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload =
-        build_mesh_wire_geometry_payload(*mesh);
-    meshes.push_back({
-        .entity = occurrence,
-        .occurrence = occurrence,
-        .definition = instance->definition,
-        .member = member,
-        .participant_token =
-            instance_overlay_participant_token(occurrence, member),
-        .mesh_id = mesh_component->mesh,
-        .mesh_revision = mesh->revision.value,
-        .geometry_payload = geometry_payload,
-        .geometry_content_id = mesh->geometry_content_id(),
-        .wire_geometry_payload = wire_geometry_payload,
-        .world_transform = compose_instance_member_world_transform(
-            occurrence_world, *definition_inverse,
-            document.world_transform_matrix(member)),
-        .selected = selected,
-        .wireframe_tint = wireframe_tint,
-        .vertices = mesh_vertices(*mesh),
-        .indices = mesh_indices(*mesh),
-        .wire_segments = mesh_wire_segments(wire_geometry_payload),
-    });
   }
-}
-
-void append_instance_wireframe_meshes(
-    RenderOverlaySceneWireframeSnapshot &snapshot,
-    const SceneDocument &document, const AssetRegistry &assets,
-    EntityId occurrence,
-    const ViewportLocalVisibilitySnapshot *local_visibility) {
-  const SelectionComponent *selection = document.selection(occurrence);
-  const bool selected = selection != nullptr && selection->selected;
-  append_instance_wire_meshes(
-      snapshot.meshes, document, assets, occurrence, local_visibility,
-      selected,
-      resolved_scene_wireframe_tint(document, occurrence));
 }
 
 void append_instance_selection_fills(
     RenderOverlaySelectedObjectSnapshot &snapshot,
     const SceneDocument &document, const AssetRegistry &assets,
+    const SceneMeshOccurrenceProjectionSnapshot &projection,
     EntityId occurrence,
     const ViewportLocalVisibilitySnapshot *local_visibility) {
-  const InstanceOccurrenceComponent *instance =
-      document.instance_occurrence(occurrence);
-  if (instance == nullptr || !document.is_effectively_visible(occurrence) ||
-      !local_visibility_allows(local_visibility, occurrence) ||
-      !document.is_instance_definition_entity(instance->definition)) {
+  if (!local_visibility_allows(local_visibility, occurrence)) {
     return;
   }
-  const std::optional<QMat4> definition_inverse = try_scene_matrix_inverse(
-      document.world_transform_matrix(instance->definition));
-  if (!definition_inverse.has_value()) {
-    return;
-  }
-  const QMat4 occurrence_world =
-      document.world_transform_matrix(occurrence);
-  for (const EntityId member :
-       document.descendants(instance->definition, false)) {
-    if (document.containing_instance_definition(member) !=
-            instance->definition ||
-        !scene_hierarchy_segment_is_visible(document, member,
-                                            instance->definition)) {
+  for (const SceneMeshOccurrenceProjectionRecord &placement :
+       projection.records_for_display(occurrence)) {
+    if (!placement.formal_instance()) {
       continue;
     }
-    const MeshComponent *mesh_component = document.mesh(member);
+    const MeshComponent *mesh_component =
+        document.mesh(placement.geometry_entity);
     if (mesh_component == nullptr) {
       continue;
     }
@@ -347,31 +259,28 @@ void append_instance_selection_fills(
         mesh->geometry_payload();
     const std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload =
         build_mesh_wire_geometry_payload(*mesh);
-    const QMat4 world_transform = compose_instance_member_world_transform(
-        occurrence_world, *definition_inverse,
-        document.world_transform_matrix(member));
     snapshot.instance_selection_fills.push_back({
         .occurrence = occurrence,
-        .definition = instance->definition,
-        .member = member,
+        .definition = placement.definition_entity,
+        .member = placement.geometry_entity,
         .mesh_id = mesh_component->mesh,
         .mesh_revision = mesh->revision.value,
         .geometry_payload = geometry_payload,
         .geometry_content_id = mesh->geometry_content_id(),
-        .world_transform = world_transform,
+        .world_transform = placement.world_from_geometry,
         .vertices = mesh_vertices(*mesh),
         .indices = mesh_indices(*mesh),
     });
     snapshot.instance_selection_wires.push_back({
         .occurrence = occurrence,
-        .definition = instance->definition,
-        .member = member,
+        .definition = placement.definition_entity,
+        .member = placement.geometry_entity,
         .mesh_id = mesh_component->mesh,
         .mesh_revision = mesh->revision.value,
         .geometry_payload = geometry_payload,
         .geometry_content_id = mesh->geometry_content_id(),
         .wire_geometry_payload = wire_geometry_payload,
-        .world_transform = world_transform,
+        .world_transform = placement.world_from_geometry,
         .wire_color = snapshot.style.selection_wire_color,
         .wire_width_pixels =
             snapshot.style.selection_edge_line_width_pixels,
@@ -411,36 +320,30 @@ build_render_overlay_selected_object_snapshot(
     RenderSceneBindingKey scene_binding,
     const ViewportLocalVisibilitySnapshot *local_visibility) {
   QDR_PROFILE_FUNCTION();
-  RenderOverlaySelectedObjectSnapshot snapshot{
-      .scene_binding = scene_binding,
-      .scene_revision = document.revision(),
-      .asset_revision = assets.revision(),
-      .selection_revision = document.selection_revision(),
-      .visibility_revision = document.visibility_revision(),
-      .local_visibility_revision =
-          local_visibility_revision(local_visibility),
-      .transform_revision = document.transform_revision(),
-      .mesh_binding_revision = document.mesh_binding_revision(),
-      .style = style,
-      .clip_planes = scene_camera_clip_planes(document),
-      .visible = visible,
-  };
+  RenderOverlaySelectedObjectSnapshot snapshot;
+  static_cast<RenderSourceStamp &>(snapshot) = capture_render_source_stamp(
+      document, assets,
+      {.scene_binding = scene_binding, .local_visibility = local_visibility});
+  snapshot.style = style;
+  snapshot.clip_planes = scene_camera_clip_planes(document);
+  snapshot.visible = visible;
   if (!visible) {
     return snapshot;
   }
   const std::vector<EntityId> selected = document.selected_entities();
+  const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      mesh_projection = document.mesh_occurrence_projection();
   snapshot.meshes.reserve(selected.size());
   for (const EntityId entity : selected) {
-    if (document.instance_occurrence(entity) != nullptr) {
-      append_instance_selection_fills(snapshot, document, assets, entity,
+    const auto placements = mesh_projection->records_for_display(entity);
+    if (!placements.empty() && placements.front().formal_instance()) {
+      append_instance_selection_fills(snapshot, document, assets,
+                                      *mesh_projection, entity,
                                       local_visibility);
       continue;
     }
-    if (std::optional<RenderOverlayMeshSnapshot> mesh =
-            mesh_snapshot_for_entity(document, assets, entity,
-                                     local_visibility)) {
-      snapshot.meshes.push_back(*mesh);
-    }
+    append_display_wire_meshes(snapshot.meshes, document, assets,
+                                *mesh_projection, entity, local_visibility);
   }
   return snapshot;
 }
@@ -469,43 +372,30 @@ build_render_overlay_scene_wireframe_snapshot(
     bool selected_mesh_wire_visible,
     RenderInstanceEditScope instance_edit_scope) {
   QDR_PROFILE_FUNCTION();
-  RenderOverlaySceneWireframeSnapshot snapshot{
-      .scene_binding = scene_binding,
-      .scene_revision = document.revision(),
-      .asset_revision = assets.revision(),
-      .mesh_material_usage_revision = assets.mesh_material_usage_revision(),
-      .selection_revision = document.selection_revision(),
-      .hierarchy_presentation_revision =
-          document.hierarchy_presentation_revision(),
-      .visibility_revision = document.visibility_revision(),
-      .transform_revision = document.transform_revision(),
-      .mesh_binding_revision = document.mesh_binding_revision(),
-      .curve_binding_revision = document.curve_binding_revision(),
-      .render_component_revision = document.render_component_revision(),
-      .layer_revision = document.layer_revision(),
-      .local_visibility_revision =
-          local_visibility_revision(local_visibility),
-      .style = style,
-      .instance_edit_scope = instance_edit_scope,
-      .clip_planes = scene_camera_clip_planes(document),
-      .layer_mask = layer_mask,
-      .selected_mesh_wire_visible = selected_mesh_wire_visible,
-  };
+  RenderOverlaySceneWireframeSnapshot snapshot;
+  static_cast<RenderSourceStamp &>(snapshot) = capture_render_source_stamp(
+      document, assets,
+      {
+          .scene_binding = scene_binding,
+          .local_visibility = local_visibility,
+          .instance_edit_scope = instance_edit_scope,
+      });
+  snapshot.style = style;
+  snapshot.clip_planes = scene_camera_clip_planes(document);
+  snapshot.layer_mask = layer_mask;
+  snapshot.selected_mesh_wire_visible = selected_mesh_wire_visible;
   if (layer_mask == 0u) {
     return snapshot;
   }
-  const std::vector<EntityId> entities = document.entities();
-  snapshot.meshes.reserve(entities.size());
-  for (const EntityId entity : entities) {
-    if (document.instance_occurrence(entity) != nullptr) {
-      append_instance_wireframe_meshes(snapshot, document, assets, entity,
-                                       local_visibility);
-      continue;
-    }
+  const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      mesh_projection = document.mesh_occurrence_projection();
+  snapshot.meshes.reserve(mesh_projection->records().size());
+  for (const SceneMeshOccurrenceProjectionRecord &placement :
+       mesh_projection->records()) {
     if (std::optional<RenderOverlayMeshSnapshot> mesh =
-            mesh_snapshot_for_entity(document, assets, entity,
-                                     local_visibility)) {
-      snapshot.meshes.push_back(*mesh);
+            mesh_snapshot_for_placement(document, assets, placement,
+                                        local_visibility)) {
+      snapshot.meshes.push_back(std::move(*mesh));
     }
   }
   if (!selected_mesh_wire_visible) {
@@ -562,24 +452,11 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
     std::vector<EntityId> *selected_mesh_entities = nullptr,
     std::vector<EntityId> *group_entities = nullptr) {
   QDR_PROFILE_FUNCTION();
-  RenderOverlaySelectionSnapshot snapshot{
-      .scene_binding = scene_binding,
-      .scene_revision = document.revision(),
-      .asset_revision = assets.revision(),
-      .mesh_material_usage_revision = assets.mesh_material_usage_revision(),
-      .selection_revision = document.selection_revision(),
-      .hierarchy_presentation_revision =
-          document.hierarchy_presentation_revision(),
-      .visibility_revision = document.visibility_revision(),
-      .local_visibility_revision =
-          local_visibility_revision(local_visibility),
-      .transform_revision = document.transform_revision(),
-      .mesh_binding_revision = document.mesh_binding_revision(),
-      .curve_binding_revision = document.curve_binding_revision(),
-      .render_component_revision = document.render_component_revision(),
-      .layer_revision = document.layer_revision(),
-      .tool_overlays = std::move(tool_overlays),
-  };
+  RenderOverlaySelectionSnapshot snapshot;
+  static_cast<RenderSourceStamp &>(snapshot) = capture_render_source_stamp(
+      document, assets,
+      {.scene_binding = scene_binding, .local_visibility = local_visibility});
+  snapshot.tool_overlays = std::move(tool_overlays);
 
   if (selected_mesh_entities != nullptr) {
     selected_mesh_entities->clear();
@@ -590,6 +467,8 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
 
   const std::vector<EntityId> selected = document.selected_entities();
   const std::vector<EntityId> entities = document.entities();
+  const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      mesh_projection = document.mesh_occurrence_projection();
   snapshot.hierarchy_selection_wires.reserve(selected.size());
   snapshot.group_bounds.reserve(selected.size());
   snapshot.selected_mesh_bounds.reserve(selected.size());
@@ -636,18 +515,9 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
         if (selection != nullptr && selection->selected) {
           continue;
         }
-        if (document.instance_occurrence(descendant) != nullptr) {
-          append_instance_wire_meshes(
-              snapshot.hierarchy_selection_wires, document, assets,
-              descendant, local_visibility, false,
-              resolved_scene_wireframe_tint(document, descendant));
-          continue;
-        }
-        if (std::optional<RenderOverlayMeshSnapshot> mesh =
-                mesh_snapshot_for_entity(document, assets, descendant,
-                                         local_visibility)) {
-          snapshot.hierarchy_selection_wires.push_back(*mesh);
-        }
+        append_display_wire_meshes(snapshot.hierarchy_selection_wires,
+                                   document, assets, *mesh_projection,
+                                   descendant, local_visibility, false);
       }
     }
 
@@ -707,8 +577,13 @@ RenderOverlaySnapshotCache::update_persistent(
     RenderInstanceEditScope instance_edit_scope) {
   QDR_PROFILE_FUNCTION();
   bind_sources(document, assets, scene_binding);
-  const std::uint64_t current_local_visibility_revision =
-      local_visibility_revision(local_visibility);
+  const RenderSourceStamp current = capture_render_source_stamp(
+      document, assets,
+      {
+          .scene_binding = scene_binding,
+          .local_visibility = local_visibility,
+          .instance_edit_scope = instance_edit_scope,
+      });
   const ViewportCameraClipPlanes current_clip_planes =
       scene_camera_clip_planes(document);
 
@@ -720,20 +595,15 @@ RenderOverlaySnapshotCache::update_persistent(
        !selected_object_snapshot_.instance_selection_wires.empty());
   const bool selected_transform_matches =
       !selected_transform_is_relevant ||
-      selected_object_snapshot_.transform_revision ==
-          document.transform_revision();
+      render_source_dependencies_match(
+          selected_object_snapshot_, current,
+          RenderSourceDependency::TransformRevision);
   const bool selected_snapshot_matches =
       has_selected_object_snapshot_ &&
-      selected_object_snapshot_.asset_revision == assets.revision() &&
-      selected_object_snapshot_.selection_revision ==
-          document.selection_revision() &&
-      selected_object_snapshot_.visibility_revision ==
-          document.visibility_revision() &&
-      selected_object_snapshot_.local_visibility_revision ==
-          current_local_visibility_revision &&
+      render_source_dependencies_match(
+          selected_object_snapshot_, current,
+          kRenderOverlaySelectedObjectSourceDependencies) &&
       selected_transform_matches &&
-      selected_object_snapshot_.mesh_binding_revision ==
-          document.mesh_binding_revision() &&
       selected_object_snapshot_.visible == selected_object_overlay_visible &&
       selected_object_snapshot_.style.face_signature ==
           style.face_signature &&
@@ -748,10 +618,9 @@ RenderOverlaySnapshotCache::update_persistent(
     has_selected_object_snapshot_ = true;
     ++stats_.selected_object_build_count;
   } else {
-    selected_object_snapshot_.scene_revision = document.revision();
+    static_cast<RenderSourceStamp &>(selected_object_snapshot_) = current;
     selected_object_snapshot_.style = style;
-    selected_object_snapshot_.clip_planes =
-        scene_camera_clip_planes(document);
+    selected_object_snapshot_.clip_planes = current_clip_planes;
   }
 
   const bool wireframe_sources_are_relevant =
@@ -761,43 +630,31 @@ RenderOverlaySnapshotCache::update_persistent(
       scene_wireframe_snapshot_.layer_mask == scene_wireframe_layer_mask &&
       scene_wireframe_snapshot_.selected_mesh_wire_visible ==
           selected_mesh_wire_visible &&
-      scene_wireframe_snapshot_.local_visibility_revision ==
-          current_local_visibility_revision &&
+      render_source_dependencies_match(
+          scene_wireframe_snapshot_, current,
+          RenderSourceDependencyMask::from({
+              RenderSourceDependency::SceneBinding,
+              RenderSourceDependency::LocalVisibilityRevision,
+          })) &&
       (!wireframe_sources_are_relevant ||
-       (scene_wireframe_snapshot_.mesh_material_usage_revision ==
-            assets.mesh_material_usage_revision() &&
-        scene_wireframe_snapshot_.selection_revision ==
-            document.selection_revision() &&
-        scene_wireframe_snapshot_.hierarchy_presentation_revision ==
-            document.hierarchy_presentation_revision() &&
-        scene_wireframe_snapshot_.visibility_revision ==
-            document.visibility_revision() &&
-        scene_wireframe_snapshot_.transform_revision ==
-            document.transform_revision() &&
-        scene_wireframe_snapshot_.mesh_binding_revision ==
-            document.mesh_binding_revision() &&
-        scene_wireframe_snapshot_.layer_revision == document.layer_revision() &&
+       (render_source_dependencies_match(
+            scene_wireframe_snapshot_, current,
+            kRenderOverlaySceneWireframeSourceDependencies) &&
         scene_wireframe_snapshot_.style.wire_signature ==
             style.wire_signature));
   const bool wireframe_context_changed =
       !has_scene_wireframe_snapshot_ ||
-      scene_wireframe_snapshot_.instance_edit_scope != instance_edit_scope ||
+      !render_source_dependencies_match(
+          scene_wireframe_snapshot_, current,
+          RenderSourceDependency::InstanceEditScope) ||
       scene_wireframe_snapshot_.style.instance_edit_context_signature !=
           style.instance_edit_context_signature ||
       scene_wireframe_snapshot_.clip_planes != current_clip_planes;
   const bool curve_publication_reused =
       wireframe_sources_are_relevant && wireframe_snapshot_matches &&
-      document.revision() > scene_wireframe_snapshot_.scene_revision &&
-      document.curve_binding_revision() >
-          scene_wireframe_snapshot_.curve_binding_revision &&
-      document.render_component_revision() >
-          scene_wireframe_snapshot_.render_component_revision &&
-      document.revision() - scene_wireframe_snapshot_.scene_revision ==
-          document.curve_binding_revision() -
-              scene_wireframe_snapshot_.curve_binding_revision &&
-      document.revision() - scene_wireframe_snapshot_.scene_revision ==
-          document.render_component_revision() -
-              scene_wireframe_snapshot_.render_component_revision;
+      render_source_dependencies_advanced_together(
+          scene_wireframe_snapshot_, current,
+          kRenderOverlaySelectionCurveAdvanceDependencies);
   const bool scene_wireframe_changed =
       !wireframe_snapshot_matches || wireframe_context_changed;
   if (!wireframe_snapshot_matches) {
@@ -809,27 +666,8 @@ RenderOverlaySnapshotCache::update_persistent(
   } else {
     // Context appearance and edit scope are metadata: topology, authored color,
     // and borrowed mesh spans stay intact until the source revisions change.
-    scene_wireframe_snapshot_.scene_revision = document.revision();
-    scene_wireframe_snapshot_.asset_revision = assets.revision();
-    scene_wireframe_snapshot_.mesh_material_usage_revision =
-        assets.mesh_material_usage_revision();
-    scene_wireframe_snapshot_.selection_revision =
-        document.selection_revision();
-    scene_wireframe_snapshot_.hierarchy_presentation_revision =
-        document.hierarchy_presentation_revision();
-    scene_wireframe_snapshot_.visibility_revision =
-        document.visibility_revision();
-    scene_wireframe_snapshot_.transform_revision =
-        document.transform_revision();
-    scene_wireframe_snapshot_.mesh_binding_revision =
-        document.mesh_binding_revision();
-    scene_wireframe_snapshot_.curve_binding_revision =
-        document.curve_binding_revision();
-    scene_wireframe_snapshot_.render_component_revision =
-        document.render_component_revision();
-    scene_wireframe_snapshot_.layer_revision = document.layer_revision();
+    static_cast<RenderSourceStamp &>(scene_wireframe_snapshot_) = current;
     scene_wireframe_snapshot_.style = style;
-    scene_wireframe_snapshot_.instance_edit_scope = instance_edit_scope;
     scene_wireframe_snapshot_.clip_planes = current_clip_planes;
     if (curve_publication_reused) {
       ++stats_.scene_wireframe_curve_publication_reuse_count;
@@ -851,28 +689,27 @@ RenderOverlaySnapshotCache::selection_snapshot(
     const ViewportLocalVisibilitySnapshot *local_visibility) {
   QDR_PROFILE_FUNCTION();
   bind_sources(document, assets, scene_binding);
-  const std::uint64_t current_local_visibility_revision =
-      local_visibility_revision(local_visibility);
+  const RenderSourceStamp current = capture_render_source_stamp(
+      document, assets,
+      {.scene_binding = scene_binding, .local_visibility = local_visibility});
   const bool snapshot_matches =
       has_selection_snapshot_ &&
-      selection_snapshot_.scene_revision == document.revision() &&
-      selection_snapshot_.asset_revision == assets.revision() &&
-      selection_snapshot_.local_visibility_revision ==
-          current_local_visibility_revision;
-  if (!snapshot_matches && can_refresh_selection_curves(
-                               document, assets,
-                               current_local_visibility_revision)) {
-    refresh_selection_curves(document, assets, local_visibility);
+      render_source_dependencies_match(
+          selection_snapshot_, current,
+          kRenderOverlaySelectionSourceDependencies);
+  if (!snapshot_matches && can_refresh_selection_curves(current)) {
+    refresh_selection_curves(document, assets, current, local_visibility);
     return selection_snapshot_;
   }
   if (!snapshot_matches) {
     selection_instance_dependency_signatures_.clear();
   }
   if (!snapshot_matches &&
-      (selection_snapshot_.local_visibility_revision !=
-           current_local_visibility_revision ||
-       !can_refresh_selection_transforms(document, assets) ||
-       !refresh_selection_transforms(document, assets))) {
+      (!render_source_dependencies_match(
+           selection_snapshot_, current,
+           RenderSourceDependency::LocalVisibilityRevision) ||
+       !can_refresh_selection_transforms(current) ||
+       !refresh_selection_transforms(document, assets, current))) {
     selection_snapshot_ = build_render_overlay_selection_snapshot_impl(
         document, assets, {}, scene_binding, local_visibility,
         [&](EntityId entity) {
@@ -1171,37 +1008,22 @@ RenderOverlaySnapshotCache::selected_instance_bounds_dependency_signature(
 }
 
 bool RenderOverlaySnapshotCache::can_refresh_selection_transforms(
-    const SceneDocument &document, const AssetRegistry &assets) const {
-  if (!has_selection_snapshot_ ||
-      selection_snapshot_.asset_revision != assets.revision() ||
-      selection_snapshot_.selection_revision !=
-          document.selection_revision() ||
-      selection_snapshot_.hierarchy_presentation_revision !=
-          document.hierarchy_presentation_revision() ||
-      selection_snapshot_.visibility_revision !=
-          document.visibility_revision() ||
-      selection_snapshot_.mesh_binding_revision !=
-          document.mesh_binding_revision() ||
-      selection_snapshot_.curve_binding_revision !=
-          document.curve_binding_revision() ||
-      selection_snapshot_.render_component_revision !=
-          document.render_component_revision() ||
-      selection_snapshot_.layer_revision != document.layer_revision() ||
-      document.revision() <= selection_snapshot_.scene_revision ||
-      document.transform_revision() <=
-          selection_snapshot_.transform_revision) {
-    return false;
-  }
-
-  const std::uint64_t scene_delta =
-      document.revision() - selection_snapshot_.scene_revision;
-  const std::uint64_t transform_delta =
-      document.transform_revision() - selection_snapshot_.transform_revision;
-  return scene_delta == transform_delta;
+    const RenderSourceStamp &current) const {
+  return has_selection_snapshot_ &&
+         render_source_dependencies_match(
+             selection_snapshot_, current,
+             kRenderOverlaySelectionTransformStableDependencies) &&
+         render_source_dependencies_advanced_together(
+             selection_snapshot_, current,
+             RenderSourceDependencyMask::from({
+                 RenderSourceDependency::SceneRevision,
+                 RenderSourceDependency::TransformRevision,
+             }));
 }
 
 bool RenderOverlaySnapshotCache::refresh_selection_transforms(
-    const SceneDocument &document, const AssetRegistry &assets) {
+    const SceneDocument &document, const AssetRegistry &assets,
+    const RenderSourceStamp &current) {
   if (selection_snapshot_.selected_mesh_bounds.size() !=
           selection_selected_mesh_entities_.size() ||
       selection_snapshot_.group_bounds.size() !=
@@ -1233,19 +1055,22 @@ bool RenderOverlaySnapshotCache::refresh_selection_transforms(
 
   selection_snapshot_.selected_mesh_bounds = std::move(selected_mesh_bounds);
   selection_snapshot_.group_bounds = std::move(group_bounds);
+  const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      mesh_projection = document.mesh_occurrence_projection();
   for (RenderOverlayMeshSnapshot &mesh :
        selection_snapshot_.hierarchy_selection_wires) {
-    if (mesh.occurrence != kInvalidEntityId) {
-      const std::optional<QMat4> world_transform =
-          instance_member_world_transform(document, mesh.occurrence,
-                                          mesh.definition, mesh.member);
-      if (!world_transform.has_value()) {
-        return false;
-      }
-      mesh.world_transform = *world_transform;
-    } else {
-      mesh.world_transform = document.world_transform_matrix(mesh.entity);
+    const SceneMeshOccurrenceProjectionRecord *placement =
+        mesh_projection->find({
+            .display_entity = mesh.entity,
+            .definition_entity = mesh.definition,
+            .geometry_entity = mesh.occurrence != kInvalidEntityId
+                                   ? mesh.member
+                                   : mesh.entity,
+        });
+    if (placement == nullptr) {
+      return false;
     }
+    mesh.world_transform = placement->world_from_geometry;
   }
   for (RenderOverlayLightMarkerSnapshot &light :
        selection_snapshot_.selected_lights) {
@@ -1259,62 +1084,25 @@ bool RenderOverlaySnapshotCache::refresh_selection_transforms(
     curve.world_transform = document.world_transform_matrix(curve.entity);
   }
 
-  selection_snapshot_.scene_revision = document.revision();
-  selection_snapshot_.asset_revision = assets.revision();
-  selection_snapshot_.mesh_material_usage_revision =
-      assets.mesh_material_usage_revision();
-  selection_snapshot_.selection_revision = document.selection_revision();
-  selection_snapshot_.hierarchy_presentation_revision =
-      document.hierarchy_presentation_revision();
-  selection_snapshot_.visibility_revision = document.visibility_revision();
-  selection_snapshot_.transform_revision = document.transform_revision();
-  selection_snapshot_.mesh_binding_revision =
-      document.mesh_binding_revision();
-  selection_snapshot_.curve_binding_revision =
-      document.curve_binding_revision();
-  selection_snapshot_.render_component_revision =
-      document.render_component_revision();
-  selection_snapshot_.layer_revision = document.layer_revision();
+  static_cast<RenderSourceStamp &>(selection_snapshot_) = current;
   ++stats_.selection_transform_refresh_count;
   return true;
 }
 
 bool RenderOverlaySnapshotCache::can_refresh_selection_curves(
-    const SceneDocument &document, const AssetRegistry &assets,
-    std::uint64_t current_local_visibility_revision) const {
-  if (!has_selection_snapshot_ ||
-      selection_snapshot_.local_visibility_revision !=
-          current_local_visibility_revision ||
-      selection_snapshot_.mesh_material_usage_revision !=
-          assets.mesh_material_usage_revision() ||
-      selection_snapshot_.selection_revision !=
-          document.selection_revision() ||
-      selection_snapshot_.hierarchy_presentation_revision !=
-          document.hierarchy_presentation_revision() ||
-      selection_snapshot_.visibility_revision !=
-          document.visibility_revision() ||
-      selection_snapshot_.transform_revision !=
-          document.transform_revision() ||
-      selection_snapshot_.mesh_binding_revision !=
-          document.mesh_binding_revision() ||
-      selection_snapshot_.layer_revision != document.layer_revision() ||
-      document.revision() <= selection_snapshot_.scene_revision ||
-      document.curve_binding_revision() <=
-          selection_snapshot_.curve_binding_revision ||
-      document.render_component_revision() <=
-          selection_snapshot_.render_component_revision) {
-    return false;
-  }
-  const std::uint64_t scene_delta =
-      document.revision() - selection_snapshot_.scene_revision;
-  return scene_delta == document.curve_binding_revision() -
-                            selection_snapshot_.curve_binding_revision &&
-         scene_delta == document.render_component_revision() -
-                            selection_snapshot_.render_component_revision;
+    const RenderSourceStamp &current) const {
+  return has_selection_snapshot_ &&
+         render_source_dependencies_match(
+             selection_snapshot_, current,
+             kRenderOverlaySelectionCurveStableDependencies) &&
+         render_source_dependencies_advanced_together(
+             selection_snapshot_, current,
+             kRenderOverlaySelectionCurveAdvanceDependencies);
 }
 
 void RenderOverlaySnapshotCache::refresh_selection_curves(
     const SceneDocument &document, const AssetRegistry &assets,
+    const RenderSourceStamp &current,
     const ViewportLocalVisibilitySnapshot *local_visibility) {
   const std::vector<EntityId> curve_entities = document.curve_entities();
   std::vector<RenderOverlayCurveSnapshot> curves;
@@ -1328,24 +1116,7 @@ void RenderOverlaySnapshotCache::refresh_selection_curves(
   }
   stats_.selection_curve_entity_visit_count += curve_entities.size();
   selection_snapshot_.curves = std::move(curves);
-  selection_snapshot_.scene_revision = document.revision();
-  selection_snapshot_.asset_revision = assets.revision();
-  selection_snapshot_.mesh_material_usage_revision =
-      assets.mesh_material_usage_revision();
-  selection_snapshot_.selection_revision = document.selection_revision();
-  selection_snapshot_.hierarchy_presentation_revision =
-      document.hierarchy_presentation_revision();
-  selection_snapshot_.visibility_revision = document.visibility_revision();
-  selection_snapshot_.local_visibility_revision =
-      local_visibility_revision(local_visibility);
-  selection_snapshot_.transform_revision = document.transform_revision();
-  selection_snapshot_.mesh_binding_revision =
-      document.mesh_binding_revision();
-  selection_snapshot_.curve_binding_revision =
-      document.curve_binding_revision();
-  selection_snapshot_.render_component_revision =
-      document.render_component_revision();
-  selection_snapshot_.layer_revision = document.layer_revision();
+  static_cast<RenderSourceStamp &>(selection_snapshot_) = current;
   ++stats_.selection_curve_refresh_count;
 }
 

@@ -431,9 +431,10 @@ TEST(ModelingSessionServiceTests,
       source, "sdk_projection_adapter_.pick_select(request, selection_service_)"));
   EXPECT_NE(sdk_adapter.find("selection.apply_pick_selection("),
             std::string::npos);
-  EXPECT_NE(sdk_adapter.find(
-                "projected, scene_, object_map_, effective_request"),
-            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      sdk_adapter,
+      "selection.apply_pick_selection(projected, scene_, object_map_, "
+      "effective_request)"));
   EXPECT_NE(split_source.find(
                 "cached_pick_object_bounds(session, scene, object_registry)"),
             std::string::npos);
@@ -537,9 +538,8 @@ TEST(AppStartupTests, DelegatesDefaultAssetsAndUsesSessionReadView) {
   EXPECT_TRUE(source_contains_compact(
       app_source,
       "ui_.install_runtime_hooks(*editor_, scene.scene(), scene.assets(), "
-      "scene.modeling(), scene.selection(), scene.pivot(), "
-      "scene.linear_array(), scene.radial_array(), "
-      "scene.point_placement(), default_material_, &scene.curve())"));
+      "scene.modeling(), scene.selection(), scene.native_tools(), "
+      "scene.point_placement(), default_material_)"));
   EXPECT_NE(app_source.find("ui_.prepare_viewports(render_bridge_, "
                             "render_overlay_snapshot_cache_)"),
             std::string::npos);
@@ -801,15 +801,12 @@ TEST(AssetProjectArchitectureTests,
   EXPECT_NE(
       registry_source.find("const TextureAsset *texture(AssetId id) const"),
       std::string::npos);
-  EXPECT_NE(project_document_source.find(
-                "bool synchronize_object_records_with_scene()"),
+  EXPECT_EQ(project_document_source.find("ProjectObjectRecord"),
             std::string::npos);
-  EXPECT_NE(
-      project_document_source.find("bool sync_object_records_with_scene()"),
-      std::string::npos);
-  EXPECT_EQ(
-      project_document_source.find("sync_object_records_with_scene() const"),
-      std::string::npos);
+  EXPECT_EQ(project_document_source.find("object_records_"),
+            std::string::npos);
+  EXPECT_EQ(project_document_source.find("object_by_entity_"),
+            std::string::npos);
   EXPECT_EQ(project_document_source.find("mutable std::unordered_map"),
             std::string::npos);
   EXPECT_NE(project_document_source.find("class SceneContentDocument"),
@@ -1049,7 +1046,7 @@ TEST(SceneContentDocumentTests,
             std::string::npos);
   EXPECT_NE(qdr_codec_source.find("document.validate_asset_references()"),
             std::string::npos);
-  EXPECT_NE(
+  EXPECT_EQ(
       qdr_codec_source.find("document.validate_asset_references(record)"),
       std::string::npos);
   EXPECT_EQ(qdr_codec_source.find("document.assets().mesh(mesh->mesh)"),

@@ -9,6 +9,7 @@
 #include "polygon_document_native.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <diagnostics/profile.hpp>
 #include <iterator>
 #include <limits>
@@ -30,7 +31,7 @@ namespace {
 constexpr const char *kTranslateSelectionOperationId =
     "modeling.translate_selection";
 
-using SessionDocument = std::variant<PolygonDocument, CurveDocument>;
+using SessionDocument = SessionPreviewDocument;
 using SessionContentIdentity =
     std::variant<PolygonContentIdentity, CurveContentIdentity>;
 
@@ -64,6 +65,26 @@ using SessionContentIdentity =
 [[nodiscard]] Error wrong_document_kind_error() {
   return make_error(ErrorCode::UnsupportedOperation,
                     "The operation requires a different document kind.");
+}
+
+[[nodiscard]] Error active_mutation_checkpoint_structural_error() {
+  return make_error(
+      ErrorCode::InvalidArgument,
+      "Commit or restore the active mutation checkpoint before changing "
+      "object inventory, history cursors, preview, or batch lifecycle.");
+}
+
+[[nodiscard]] Error orphaned_mutation_checkpoint_error() {
+  return make_error(
+      ErrorCode::InvalidArgument,
+      "The active mutation checkpoint token was dropped; call "
+      "abort_active_mutation_checkpoint() before another mutation.");
+}
+
+[[nodiscard]] Error unenrolled_mutation_checkpoint_object_error() {
+  return make_error(
+      ErrorCode::InvalidArgument,
+      "The active mutation checkpoint does not enroll every changed object.");
 }
 
 /**
@@ -103,6 +124,11 @@ struct SessionState {
   std::vector<SessionObject> objects;
   ObjectId active_object{};
 };
+
+[[nodiscard]] constexpr std::uint64_t object_id_key(ObjectId id) noexcept {
+  return (static_cast<std::uint64_t>(id.generation) << 32U) |
+         static_cast<std::uint64_t>(id.index);
+}
 
 /**
  * Stores the reversible portion of one component-selection publication.
@@ -179,26 +205,84 @@ struct ClipboardObject {
   SessionDocument document;
 };
 
-/**
- * Stores the active copy-on-write SDK preview transaction.
- */
-struct PreviewTransaction {
-  PreviewId id{};
-  bool active = false;
+/** Stores one object in the active copy-on-write preview transaction. */
+struct PreviewTransactionObject {
   ObjectId object_id{};
-  std::string operation_id;
-  Vec3 delta{};
+  SessionPreviewAction action = SessionPreviewAction::ReplaceExisting;
+  std::size_t participant_index = 0;
+  bool has_base_document = true;
   SessionDocument base_document;
   SessionContentIdentity base_content_identity{};
   std::uint64_t base_content_revision = 0;
-  std::uint64_t base_session_revision = 0;
   SessionDocument preview_document;
   OperationResult receipt;
+  std::string name;
+  std::uint32_t material_slot = 0;
+  bool selected = false;
   ToolPreviewPayload payload;
   bool payload_valid = false;
   DirtyFlags dirty;
   std::uint64_t payload_revision = 0;
 };
+
+/**
+ * Stores one ordered atomic copy-on-write SDK preview transaction.
+ */
+struct PreviewTransaction {
+  PreviewId id{};
+  bool active = false;
+  std::string operation_id;
+  Vec3 delta{};
+  std::uint64_t base_session_revision = 0;
+  bool structural = false;
+  bool replace_object_selection = false;
+  std::optional<ObjectId> requested_active_object;
+  bool compatibility_single_object_selection = false;
+  std::vector<PreviewTransactionObject> objects;
+  std::unordered_map<std::uint64_t, std::size_t> object_index;
+  PreviewTransactionObjectSummaryList object_summaries;
+};
+
+void rebuild_preview_object_index(PreviewTransaction &preview) {
+  preview.object_index.clear();
+  preview.object_index.reserve(preview.objects.size());
+  for (std::size_t index = 0; index < preview.objects.size(); ++index) {
+    preview.object_index.emplace(object_id_key(preview.objects[index].object_id),
+                                 index);
+  }
+}
+
+[[nodiscard]] PreviewTransactionObject *
+find_preview_object(PreviewTransaction &preview, ObjectId object_id) {
+  const auto found = preview.object_index.find(object_id_key(object_id));
+  if (found == preview.object_index.end() ||
+      found->second >= preview.objects.size() ||
+      preview.objects[found->second].object_id != object_id) {
+    return nullptr;
+  }
+  return &preview.objects[found->second];
+}
+
+[[nodiscard]] const PreviewTransactionObject *
+find_preview_object(const PreviewTransaction &preview, ObjectId object_id) {
+  const auto found = preview.object_index.find(object_id_key(object_id));
+  if (found == preview.object_index.end() ||
+      found->second >= preview.objects.size() ||
+      preview.objects[found->second].object_id != object_id) {
+    return nullptr;
+  }
+  return &preview.objects[found->second];
+}
+
+[[nodiscard]] PreviewTransactionObject *
+primary_preview_object(PreviewTransaction &preview) {
+  return preview.objects.empty() ? nullptr : &preview.objects.front();
+}
+
+[[nodiscard]] const PreviewTransactionObject *
+primary_preview_object(const PreviewTransaction &preview) {
+  return preview.objects.empty() ? nullptr : &preview.objects.front();
+}
 
 /// Separates rollback tokens from copies and replacements of a session.
 struct PreviewCheckpointOrigin {};
@@ -267,10 +351,62 @@ struct TopologyIdentityHighWater {
   CurveIdentityHighWater curve{};
 };
 
-[[nodiscard]] constexpr std::uint64_t object_id_key(ObjectId id) noexcept {
-  return (static_cast<std::uint64_t>(id.generation) << 32U) |
-         static_cast<std::uint64_t>(id.index);
-}
+/// Separates mutation checkpoint handles from copies of a session.
+struct MutationCheckpointOrigin {};
+
+/** Stores one enrolled object's exact participant-scoped rollback state. */
+struct MutationCheckpointParticipant {
+  ObjectId id{};
+  std::size_t state_index = 0U;
+  SessionObject object;
+  std::optional<std::size_t> change_record_index;
+  std::optional<SessionObjectChangeRecord> change_record;
+};
+
+/** Owns the synchronous rollback data retained by one session. */
+struct ActiveMutationCheckpoint {
+  std::uint64_t serial = 0U;
+  std::shared_ptr<SessionMutationCheckpointImpl> handle;
+  std::vector<MutationCheckpointParticipant> participants;
+  std::unordered_set<std::uint64_t> participant_keys;
+  std::size_t object_count = 0U;
+  ObjectId active_object{};
+  std::uint32_t next_object_index = 1U;
+  std::uint64_t content_revision = 0U;
+  std::uint64_t selection_revision = 0U;
+  std::size_t object_changes_size = 0U;
+  std::size_t undo_depth = 0U;
+  std::vector<SessionHistoryEntry> detached_redo;
+  bool unenrolled_transition_observed = false;
+};
+
+/**
+ * Keeps a single active rollback scope out of copied session snapshots.
+ * Moving ModelingSession transfers the registry and preserves handle identity.
+ */
+struct MutationCheckpointRegistry {
+  std::shared_ptr<const MutationCheckpointOrigin> origin =
+      std::make_shared<const MutationCheckpointOrigin>();
+  std::unique_ptr<ActiveMutationCheckpoint> active;
+  std::uint64_t next_serial = 1U;
+
+  MutationCheckpointRegistry() = default;
+  MutationCheckpointRegistry(const MutationCheckpointRegistry &other)
+      : origin(std::make_shared<const MutationCheckpointOrigin>()),
+        next_serial(other.next_serial) {}
+  MutationCheckpointRegistry &
+  operator=(const MutationCheckpointRegistry &other) {
+    if (this != &other) {
+      origin = std::make_shared<const MutationCheckpointOrigin>();
+      active.reset();
+      next_serial = other.next_serial;
+    }
+    return *this;
+  }
+  MutationCheckpointRegistry(MutationCheckpointRegistry &&) noexcept = default;
+  MutationCheckpointRegistry &
+  operator=(MutationCheckpointRegistry &&) noexcept = default;
+};
 
 [[nodiscard]] constexpr std::uint64_t vertex_id_key(VertexId id) noexcept {
   return (static_cast<std::uint64_t>(id.generation) << 32U) |
@@ -384,6 +520,134 @@ selection_mode_for_kind(SelectionKind kind) {
   }
   return left_polygon->shares_selection_with(*right_polygon) ||
          same_polygon_selection(*left_polygon, *right_polygon);
+}
+
+[[nodiscard]] bool same_preview_candidate(const SessionDocument &left,
+                                          const SessionDocument &right) {
+  if (left.index() != right.index()) {
+    return false;
+  }
+  if (const auto *left_curve = std::get_if<CurveDocument>(&left)) {
+    return left_curve->has_same_geometry(std::get<CurveDocument>(right));
+  }
+  const auto &left_polygon = std::get<PolygonDocument>(left);
+  const auto &right_polygon = std::get<PolygonDocument>(right);
+  return left_polygon.content_identity() == right_polygon.content_identity() &&
+         left_polygon.content_revision() == right_polygon.content_revision() &&
+         same_polygon_selection(left_polygon, right_polygon);
+}
+
+[[nodiscard]] bool preview_object_changed(
+    const PreviewTransactionObject &object) {
+  if (object.action != SessionPreviewAction::ReplaceExisting) {
+    return true;
+  }
+  return object.receipt.changed &&
+         !same_preview_candidate(object.base_document,
+                                 object.preview_document);
+}
+
+void merge_dirty(DirtyFlags &destination, const DirtyFlags &source) {
+  destination.topology = destination.topology || source.topology;
+  destination.geometry = destination.geometry || source.geometry;
+  destination.selection = destination.selection || source.selection;
+  destination.materials = destination.materials || source.materials;
+  destination.overlays = destination.overlays || source.overlays;
+}
+
+void append_delta(ElementDelta &destination, const ElementDelta &source) {
+  destination.vertices.insert(destination.vertices.end(), source.vertices.begin(),
+                              source.vertices.end());
+  destination.edges.insert(destination.edges.end(), source.edges.begin(),
+                           source.edges.end());
+  destination.faces.insert(destination.faces.end(), source.faces.begin(),
+                           source.faces.end());
+}
+
+void merge_receipt(OperationResult &destination, const OperationResult &source,
+                   bool changed) {
+  destination.success = destination.success && source.success;
+  destination.changed = destination.changed || changed;
+  if (!source.message.empty()) {
+    destination.message = source.message;
+  }
+  if (changed) {
+    merge_dirty(destination.dirty, source.dirty);
+  }
+  destination.diagnostics.insert(destination.diagnostics.end(),
+                                 source.diagnostics.begin(),
+                                 source.diagnostics.end());
+  append_delta(destination.created, source.created);
+  append_delta(destination.deleted, source.deleted);
+  append_delta(destination.affected, source.affected);
+  append_delta(destination.modified, source.modified);
+  append_delta(destination.selection_remap.source,
+               source.selection_remap.source);
+  append_delta(destination.selection_remap.destination,
+               source.selection_remap.destination);
+}
+
+void refresh_preview_object_summaries(PreviewTransaction &preview) {
+  std::vector<PreviewTransactionObjectSummary> summaries;
+  summaries.reserve(preview.objects.size());
+  for (const PreviewTransactionObject &object : preview.objects) {
+    summaries.push_back({
+        .object_id = object.object_id,
+        .action = object.action,
+        .kind = document_kind(object.preview_document),
+        .base_content_revision = object.base_content_revision,
+        .content_revision = object.payload_revision,
+        .dirty = object.dirty,
+        .changed = preview_object_changed(object),
+        .material_slot = object.material_slot,
+        .selected = object.selected,
+    });
+  }
+  preview.object_summaries =
+      PreviewTransactionObjectSummaryList(std::move(summaries));
+}
+
+/**
+ * Pins checkpoint state without copying compiled mesh payload buffers. Authored
+ * documents already use immutable shared storage; payloads are rebuilt lazily
+ * only if this checkpoint is later restored and published.
+ */
+[[nodiscard]] PreviewTransaction
+make_preview_checkpoint_snapshot(const PreviewTransaction &source) {
+  PreviewTransaction snapshot;
+  snapshot.id = source.id;
+  snapshot.active = source.active;
+  snapshot.operation_id = source.operation_id;
+  snapshot.delta = source.delta;
+  snapshot.base_session_revision = source.base_session_revision;
+  snapshot.structural = source.structural;
+  snapshot.replace_object_selection = source.replace_object_selection;
+  snapshot.requested_active_object = source.requested_active_object;
+  snapshot.compatibility_single_object_selection =
+      source.compatibility_single_object_selection;
+  snapshot.object_index = source.object_index;
+  snapshot.object_summaries = source.object_summaries;
+  snapshot.objects.reserve(source.objects.size());
+  for (const PreviewTransactionObject &source_object : source.objects) {
+    PreviewTransactionObject object;
+    object.object_id = source_object.object_id;
+    object.action = source_object.action;
+    object.participant_index = source_object.participant_index;
+    object.has_base_document = source_object.has_base_document;
+    object.base_document = source_object.base_document;
+    object.base_content_identity = source_object.base_content_identity;
+    object.base_content_revision = source_object.base_content_revision;
+    object.preview_document = source_object.preview_document;
+    object.receipt = source_object.receipt;
+    object.name = source_object.name;
+    object.material_slot = source_object.material_slot;
+    object.selected = source_object.selected;
+    object.payload_valid = false;
+    object.dirty = source_object.dirty;
+    object.payload_revision = source_object.payload_revision;
+    snapshot.objects.push_back(std::move(object));
+  }
+  return snapshot;
 }
 
 [[nodiscard]] Result<OperationResult> translate_document(
@@ -564,6 +828,166 @@ void append_native_delta(ElementDelta &target,
               transform.x_axis.z * transform.y_axis.y);
 }
 
+[[nodiscard]] Result<SessionBridgePreviewCandidate> prepare_bridge_candidate(
+    PolygonDocument survivor, const PolygonDocument &source,
+    Transform3 survivor_from_source, SelectionKind selection_kind, int steps) {
+  const quader_poly::Selection survivor_selection =
+      PolygonDocumentNativeAccess::selection(survivor);
+  const quader_poly::Selection source_selection =
+      PolygonDocumentNativeAccess::selection(source);
+  const bool face_bridge = selection_kind == SelectionKind::Face;
+  if ((face_bridge && (survivor_selection.faces.empty() ||
+                       source_selection.faces.empty())) ||
+      (!face_bridge && (survivor_selection.edges.empty() ||
+                        source_selection.edges.empty()))) {
+    return Result<SessionBridgePreviewCandidate>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        face_bridge ? "Bridge Faces needs selected faces on both objects."
+                    : "Bridge needs selected edges on both objects."));
+  }
+  if (!face_bridge &&
+      survivor_selection.edges.size() != source_selection.edges.size()) {
+    return Result<SessionBridgePreviewCandidate>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Bridge needs equal selected open-edge counts on both objects."));
+  }
+
+  quader_poly::Document survivor_document =
+      PolygonDocumentNativeAccess::document(survivor);
+  quader_poly::Document source_document =
+      PolygonDocumentNativeAccess::document(source);
+  for (quader_poly::Vertex &vertex : source_document.vertices) {
+    vertex.position = transform_point(survivor_from_source, vertex.position);
+  }
+  if (determinant(survivor_from_source) < 0.0F) {
+    for (quader_poly::Face &face : source_document.faces) {
+      std::ranges::reverse(face.vertices);
+      if (face.uvs.size() == face.vertices.size()) {
+        std::ranges::reverse(face.uvs);
+      } else {
+        face.uvs.clear();
+      }
+    }
+  }
+
+  Result<AppendedDocument> appended =
+      append_document_with_remapped_ids(survivor_document, source_document);
+  if (!appended.ok()) {
+    return Result<SessionBridgePreviewCandidate>::failure(appended.error());
+  }
+
+  quader_poly::Selection bridge_selection;
+  if (face_bridge) {
+    bridge_selection.mode = quader_poly::SelectionMode::Face;
+    bridge_selection.faces = survivor_selection.faces;
+    for (quader_poly::ElementId id : source_selection.faces) {
+      const auto mapped = appended.value().face_ids.find(id);
+      if (mapped == appended.value().face_ids.end()) {
+        return Result<SessionBridgePreviewCandidate>::failure(make_error(
+            ErrorCode::InternalError,
+            "Bridge Faces could not remap a source face."));
+      }
+      bridge_selection.faces.push_back(mapped->second);
+    }
+    if (survivor_selection.has_active &&
+        survivor_selection.active_kind == quader_poly::ElementKind::Face) {
+      bridge_selection.has_active = true;
+      bridge_selection.active_kind = quader_poly::ElementKind::Face;
+      bridge_selection.active_face = survivor_selection.active_face;
+    } else if (source_selection.has_active &&
+               source_selection.active_kind == quader_poly::ElementKind::Face) {
+      const auto mapped =
+          appended.value().face_ids.find(source_selection.active_face);
+      if (mapped != appended.value().face_ids.end()) {
+        bridge_selection.has_active = true;
+        bridge_selection.active_kind = quader_poly::ElementKind::Face;
+        bridge_selection.active_face = mapped->second;
+      }
+    }
+    if (!bridge_selection.has_active && !bridge_selection.faces.empty()) {
+      bridge_selection.has_active = true;
+      bridge_selection.active_kind = quader_poly::ElementKind::Face;
+      bridge_selection.active_face = bridge_selection.faces.front();
+    }
+  } else {
+    bridge_selection.mode = quader_poly::SelectionMode::Edge;
+    bridge_selection.edges = survivor_selection.edges;
+    for (quader_poly::Edge edge : source_selection.edges) {
+      const auto a = appended.value().vertex_ids.find(edge.a);
+      const auto b = appended.value().vertex_ids.find(edge.b);
+      if (a == appended.value().vertex_ids.end() ||
+          b == appended.value().vertex_ids.end()) {
+        return Result<SessionBridgePreviewCandidate>::failure(make_error(
+            ErrorCode::InternalError,
+            "Bridge could not remap a source edge."));
+      }
+      bridge_selection.edges.push_back(
+          quader_poly::make_edge(a->second, b->second));
+    }
+    if (survivor_selection.has_active &&
+        survivor_selection.active_kind == quader_poly::ElementKind::Edge) {
+      bridge_selection.has_active = true;
+      bridge_selection.active_kind = quader_poly::ElementKind::Edge;
+      bridge_selection.active_edge = survivor_selection.active_edge;
+    } else if (source_selection.has_active &&
+               source_selection.active_kind == quader_poly::ElementKind::Edge) {
+      const auto a =
+          appended.value().vertex_ids.find(source_selection.active_edge.a);
+      const auto b =
+          appended.value().vertex_ids.find(source_selection.active_edge.b);
+      if (a != appended.value().vertex_ids.end() &&
+          b != appended.value().vertex_ids.end()) {
+        bridge_selection.has_active = true;
+        bridge_selection.active_kind = quader_poly::ElementKind::Edge;
+        bridge_selection.active_edge =
+            quader_poly::make_edge(a->second, b->second);
+      }
+    }
+    if (!bridge_selection.has_active && !bridge_selection.edges.empty()) {
+      bridge_selection.has_active = true;
+      bridge_selection.active_kind = quader_poly::ElementKind::Edge;
+      bridge_selection.active_edge = bridge_selection.edges.front();
+    }
+  }
+
+  const quader_poly::OperationResult native_result =
+      face_bridge
+          ? quader_poly::bridge_selected_faces(survivor_document,
+                                               bridge_selection, steps)
+          : quader_poly::bridge_selected_edges(survivor_document,
+                                               bridge_selection, steps);
+  if (!native_result.changed) {
+    OperationResult unchanged;
+    unchanged.message = native_result.message;
+    return Result<SessionBridgePreviewCandidate>::success({
+        .survivor_document = std::move(survivor),
+        .receipt = std::move(unchanged),
+    });
+  }
+
+  OperationResult receipt = session_result(
+      true, face_bridge ? "Faces bridged." : "Edges bridged.");
+  receipt.dirty.topology = true;
+  receipt.created = appended.value().created;
+  append_native_delta(receipt.created, native_result.created);
+  append_native_delta(receipt.deleted, native_result.deleted);
+  append_native_delta(receipt.affected, native_result.affected);
+  receipt.modified = receipt.affected;
+
+  PolygonDocumentNativeAccess::replace_document(survivor,
+                                                std::move(survivor_document));
+  PolygonDocumentNativeAccess::replace_selection(
+      survivor, std::move(bridge_selection));
+  PolygonDocumentImpl &survivor_impl =
+      PolygonDocumentNativeAccess::impl(survivor);
+  ++survivor_impl.content_revision;
+  ++survivor_impl.selection_revision;
+  return Result<SessionBridgePreviewCandidate>::success({
+      .survivor_document = std::move(survivor),
+      .receipt = std::move(receipt),
+  });
+}
+
 [[nodiscard]] auto find_object(SessionState &state, ObjectId object_id) {
   return std::ranges::find_if(state.objects, [&](const auto &object) {
     return object.id == object_id;
@@ -675,7 +1099,7 @@ build_preview_payload(const PolygonDocument &document) {
 }
 
 [[nodiscard]] Result<ToolPreviewPayload>
-materialize_preview_payload(PreviewTransaction &preview) {
+materialize_preview_payload(PreviewTransactionObject &preview) {
   const auto *document =
       std::get_if<PolygonDocument>(&preview.preview_document);
   if (document == nullptr) {
@@ -694,26 +1118,6 @@ materialize_preview_payload(PreviewTransaction &preview) {
   return Result<ToolPreviewPayload>::success(preview.payload);
 }
 
-[[nodiscard]] Result<OperationResult>
-apply_preview_delta(PreviewTransaction &preview,
-                    const SessionDocument &base_document, Vec3 delta) {
-  SessionDocument candidate = base_document;
-  Result<OperationResult> operation =
-      translate_document(candidate, delta);
-  if (!operation.ok()) {
-    return operation;
-  }
-
-  preview.preview_document = std::move(candidate);
-  preview.delta = delta;
-  preview.payload = {};
-  preview.payload_valid = false;
-  preview.dirty = operation.value().dirty;
-  preview.dirty.overlays = true;
-  operation.value().dirty.overlays = true;
-  return operation;
-}
-
 } // namespace
 
 /// Retains only a preview candidate and the origin allowed to restore it.
@@ -722,14 +1126,44 @@ struct SessionPreviewCheckpointImpl {
   PreviewTransaction preview;
 };
 
+/** Identifies one active session-owned mutation checkpoint without exposing it. */
+struct SessionMutationCheckpointImpl {
+  std::shared_ptr<const MutationCheckpointOrigin> origin;
+  std::uint64_t serial = 0U;
+  mutable std::atomic_bool orphaned = false;
+};
+
+SessionMutationCheckpoint::~SessionMutationCheckpoint() {
+  if (impl_ != nullptr) {
+    impl_->orphaned.store(true, std::memory_order_release);
+  }
+}
+
+SessionMutationCheckpoint::SessionMutationCheckpoint(
+    SessionMutationCheckpoint &&other) noexcept
+    : impl_(std::move(other.impl_)) {}
+
+SessionMutationCheckpoint &SessionMutationCheckpoint::operator=(
+    SessionMutationCheckpoint &&other) noexcept {
+  if (this != &other) {
+    if (impl_ != nullptr) {
+      impl_->orphaned.store(true, std::memory_order_release);
+    }
+    impl_ = std::move(other.impl_);
+  }
+  return *this;
+}
+
 /**
  * Stores mutable SDK session implementation details.
  */
 struct ModelingSessionImpl {
   SessionState state;
+  std::unordered_map<std::uint64_t, std::size_t> live_object_index;
   std::vector<ClipboardObject> clipboard;
   PreviewTransaction preview;
   PreviewCheckpointOwnership preview_checkpoint_ownership;
+  MutationCheckpointRegistry mutation_checkpoint_registry;
   std::vector<SessionHistoryEntry> undo_stack;
   std::vector<SessionHistoryEntry> redo_stack;
   std::vector<SessionObjectChangeRecord> object_changes;
@@ -737,6 +1171,8 @@ struct ModelingSessionImpl {
   std::uint64_t content_revision = 0;
   std::uint64_t selection_revision = 0;
   std::uint64_t preview_payload_revision = 0;
+  mutable SessionPreviewWorkStats preview_work_stats;
+  SessionMutationCheckpointWorkStats mutation_checkpoint_work_stats;
   std::uint32_t next_preview_index = 1U;
   std::unordered_map<std::uint32_t, TopologyIdentityHighWater>
       topology_identity_high_water;
@@ -749,6 +1185,151 @@ struct ModelingSessionImpl {
   // Rewinding this counter would let a stale handle alias a replacement object
   // created after branching from undo history.
   std::uint32_t next_object_index = 1;
+
+  void rebuild_live_object_index() {
+    live_object_index.clear();
+    live_object_index.reserve(state.objects.size());
+    for (std::size_t index = 0; index < state.objects.size(); ++index) {
+      live_object_index.emplace(object_id_key(state.objects[index].id), index);
+    }
+  }
+
+  [[nodiscard]] SessionObject *live_object(ObjectId object_id) {
+    ++preview_work_stats.live_object_lookup_count;
+    const auto found = live_object_index.find(object_id_key(object_id));
+    if (found == live_object_index.end() || found->second >= state.objects.size() ||
+        state.objects[found->second].id != object_id) {
+      return nullptr;
+    }
+    return &state.objects[found->second];
+  }
+
+  [[nodiscard]] const SessionObject *live_object(ObjectId object_id) const {
+    ++preview_work_stats.live_object_lookup_count;
+    const auto found = live_object_index.find(object_id_key(object_id));
+    if (found == live_object_index.end() || found->second >= state.objects.size() ||
+        state.objects[found->second].id != object_id) {
+      return nullptr;
+    }
+    return &state.objects[found->second];
+  }
+
+  [[nodiscard]] PreviewTransactionObject *
+  preview_object(ObjectId object_id) {
+    ++preview_work_stats.preview_object_lookup_count;
+    return find_preview_object(preview, object_id);
+  }
+
+  [[nodiscard]] const PreviewTransactionObject *
+  preview_object(ObjectId object_id) const {
+    ++preview_work_stats.preview_object_lookup_count;
+    return find_preview_object(preview, object_id);
+  }
+
+  [[nodiscard]] bool mutation_checkpoint_active() const noexcept {
+    return mutation_checkpoint_registry.active != nullptr;
+  }
+
+  [[nodiscard]] bool mutation_checkpoint_orphaned() const noexcept {
+    return mutation_checkpoint_registry.active != nullptr &&
+           mutation_checkpoint_registry.active->handle != nullptr &&
+           mutation_checkpoint_registry.active->handle->orphaned.load(
+               std::memory_order_acquire);
+  }
+
+  [[nodiscard]] bool
+  mutation_checkpoint_enrolls(ObjectId object_id) const noexcept {
+    return mutation_checkpoint_registry.active == nullptr ||
+           mutation_checkpoint_registry.active->participant_keys.contains(
+               object_id_key(object_id));
+  }
+
+  [[nodiscard]] std::optional<Error>
+  validate_mutation_checkpoint_object(ObjectId object_id) const {
+    if (mutation_checkpoint_orphaned()) {
+      return orphaned_mutation_checkpoint_error();
+    }
+    if (!mutation_checkpoint_enrolls(object_id)) {
+      return unenrolled_mutation_checkpoint_object_error();
+    }
+    return std::nullopt;
+  }
+
+  [[nodiscard]] std::optional<Error> validate_mutation_checkpoint_scope(
+      const ActiveMutationCheckpoint &checkpoint) const {
+    if (preview.active || batch_transaction_active) {
+      return make_error(
+          ErrorCode::InvalidArgument,
+          "Finish the active preview or batch before finalizing a mutation "
+          "checkpoint.");
+    }
+    if (checkpoint.unenrolled_transition_observed ||
+        state.objects.size() != checkpoint.object_count ||
+        next_object_index != checkpoint.next_object_index) {
+      return make_error(
+          ErrorCode::StaleId,
+          "Mutation checkpoint scope changed unenrolled objects or inventory.");
+    }
+    if (undo_stack.size() < checkpoint.undo_depth || !redo_stack.empty() ||
+        object_changes.size() < checkpoint.object_changes_size) {
+      return make_error(
+          ErrorCode::StaleId,
+          "Mutation checkpoint history or transition cursors changed "
+          "unexpectedly.");
+    }
+    for (const MutationCheckpointParticipant &participant :
+         checkpoint.participants) {
+      if (participant.state_index >= state.objects.size() ||
+          state.objects[participant.state_index].id != participant.id ||
+          state.objects[participant.state_index].kind() !=
+              participant.object.kind()) {
+        return make_error(
+            ErrorCode::StaleId,
+            "A mutation checkpoint participant changed identity or kind.");
+      }
+      const auto live_index =
+          live_object_index.find(object_id_key(participant.id));
+      if (live_index == live_object_index.end() ||
+          live_index->second != participant.state_index) {
+        return make_error(ErrorCode::InternalError,
+                          "The session object index is inconsistent.");
+      }
+      if (participant.change_record_index.has_value() &&
+          (*participant.change_record_index >=
+               checkpoint.object_changes_size ||
+           *participant.change_record_index >= object_changes.size() ||
+           object_changes[*participant.change_record_index].id !=
+               participant.id)) {
+        return make_error(
+            ErrorCode::StaleId,
+            "A mutation checkpoint transition record changed identity.");
+      }
+      if (participant.change_record_index.has_value()) {
+        const auto mapped =
+            object_change_index.find(object_id_key(participant.id));
+        if (mapped == object_change_index.end() ||
+            mapped->second != *participant.change_record_index) {
+          return make_error(ErrorCode::InternalError,
+                            "The session change index is inconsistent.");
+        }
+      }
+    }
+    for (std::size_t index = checkpoint.object_changes_size;
+         index < object_changes.size(); ++index) {
+      const SessionObjectChangeRecord &record = object_changes[index];
+      if (!checkpoint.participant_keys.contains(object_id_key(record.id))) {
+        return make_error(
+            ErrorCode::StaleId,
+            "A mutation checkpoint observed an unenrolled transition record.");
+      }
+      const auto mapped = object_change_index.find(object_id_key(record.id));
+      if (mapped == object_change_index.end() || mapped->second != index) {
+        return make_error(ErrorCode::InternalError,
+                          "The session change index is inconsistent.");
+      }
+    }
+    return std::nullopt;
+  }
 
   [[nodiscard]] Result<ObjectId> allocate_object_id() {
     if (next_object_index == 0U) {
@@ -805,16 +1386,23 @@ struct ModelingSessionImpl {
   }
 
   [[nodiscard]] bool preview_matches_base() const {
-    if (!preview.active) {
+    if (!preview.active || preview.objects.empty() ||
+        content_revision != preview.base_session_revision) {
       return false;
     }
-    const auto object = find_object(state, preview.object_id);
-    return object != state.objects.end() &&
-           document_content_identity(object->document) ==
-               preview.base_content_identity &&
-           document_content_revision(object->document) ==
-               preview.base_content_revision &&
-           content_revision == preview.base_session_revision;
+    return std::ranges::all_of(
+        preview.objects, [&](const PreviewTransactionObject &preview_object) {
+          const SessionObject *object = live_object(preview_object.object_id);
+          if (preview_object.action == SessionPreviewAction::AddProvisional) {
+            return object == nullptr;
+          }
+          return object != nullptr && document_kind(object->document) ==
+                     document_kind(preview_object.base_document) &&
+                 document_content_identity(object->document) ==
+                     preview_object.base_content_identity &&
+                 document_content_revision(object->document) ==
+                     preview_object.base_content_revision;
+        });
   }
 
   void record_topology_identity(ObjectId object_id,
@@ -937,33 +1525,58 @@ struct ModelingSessionImpl {
     // A stale copy can advance its cursor while still allocating an already
     // retired ID. Only live or currently previewed IDs below the high-water
     // mark may survive a normal edit; history restoration is handled separately.
-    const auto live = find_object(state, object_id);
-    if (live == state.objects.end() || live->kind() != SessionObjectKind::Curve) {
+    const PreviewTransactionObject *preview_object =
+        preview.active ? this->preview_object(object_id) : nullptr;
+    const CurveDocument *preview_document =
+        preview_object != nullptr
+            ? std::get_if<CurveDocument>(&preview_object->preview_document)
+            : nullptr;
+    const SessionObject *live = live_object(object_id);
+    const CurveDocument *live_document =
+        live != nullptr && live->kind() == SessionObjectKind::Curve
+            ? &live->curve_document()
+            : nullptr;
+    if (live_document == nullptr &&
+        (preview_object == nullptr ||
+         preview_object->action != SessionPreviewAction::AddProvisional ||
+         preview_document == nullptr)) {
       return Result<OperationResult>::failure(wrong_document_kind_error());
     }
-    const CurveDocument &live_document = live->curve_document();
-    const CurveDocument *preview_document =
-        preview.active && preview.object_id == object_id
-            ? std::get_if<CurveDocument>(&preview.preview_document)
-            : nullptr;
-    const auto has_point = [](const CurveDocument &source, CurvePointId id) {
-      return std::ranges::any_of(source.points(),
-                                [id](const auto &point) { return point.id == id; });
+    const auto component_key = [](auto id) {
+      return (static_cast<std::uint64_t>(id.generation) << 32U) |
+             static_cast<std::uint64_t>(id.index);
     };
-    const auto has_segment = [](const CurveDocument &source, CurveSegmentId id) {
-      return std::ranges::find(source.segments(), id) != source.segments().end();
+    std::unordered_set<std::uint64_t> retained_points;
+    std::unordered_set<std::uint64_t> retained_segments;
+    retained_points.reserve(
+        (live_document == nullptr ? 0U : live_document->point_count()) +
+        (preview_document == nullptr ? 0U : preview_document->point_count()));
+    retained_segments.reserve(
+        (live_document == nullptr ? 0U : live_document->segment_count()) +
+        (preview_document == nullptr ? 0U
+                                     : preview_document->segment_count()));
+    const auto retain_document = [&](const CurveDocument *source) {
+      if (source == nullptr) {
+        return;
+      }
+      for (const CurveControlPoint &point : source->points()) {
+        retained_points.emplace(component_key(point.id));
+      }
+      for (const CurveSegmentId segment : source->segments()) {
+        retained_segments.emplace(component_key(segment));
+      }
     };
+    retain_document(live_document);
+    retain_document(preview_document);
     for (const CurveControlPoint &point : document.points()) {
       if (point.id.index < high_water.next_point_index &&
-          !has_point(live_document, point.id) &&
-          (preview_document == nullptr || !has_point(*preview_document, point.id))) {
+          !retained_points.contains(component_key(point.id))) {
         return stale();
       }
     }
     for (const CurveSegmentId segment : document.segments()) {
       if (segment.index < high_water.next_segment_index &&
-          !has_segment(live_document, segment) &&
-          (preview_document == nullptr || !has_segment(*preview_document, segment))) {
+          !retained_segments.contains(component_key(segment))) {
         return stale();
       }
     }
@@ -993,6 +1606,16 @@ struct ModelingSessionImpl {
       std::span<const PendingSessionObjectChange> pending) {
     if (pending.empty()) {
       return;
+    }
+
+    if (mutation_checkpoint_registry.active != nullptr) {
+      ActiveMutationCheckpoint &checkpoint =
+          *mutation_checkpoint_registry.active;
+      for (const PendingSessionObjectChange &change : pending) {
+        if (!checkpoint.participant_keys.contains(object_id_key(change.id))) {
+          checkpoint.unenrolled_transition_observed = true;
+        }
+      }
     }
 
     ++content_revision;
@@ -1228,8 +1851,16 @@ struct ModelingSessionImpl {
     }
 
     publish_pending_changes(pending);
+    rebuild_live_object_index();
   }
 };
+
+[[nodiscard]] Error mutation_checkpoint_lifecycle_error(
+    const ModelingSessionImpl &impl) {
+  return impl.mutation_checkpoint_orphaned()
+             ? orphaned_mutation_checkpoint_error()
+             : active_mutation_checkpoint_structural_error();
+}
 
 ModelingSession::ModelingSession()
     : impl_(std::make_unique<ModelingSessionImpl>()) {}
@@ -1242,13 +1873,24 @@ ModelingSession::ModelingSession(ModelingSession &&other) noexcept = default;
 ModelingSession &
 ModelingSession::operator=(const ModelingSession &other) {
   if (this != &other) {
+    if (impl_ != nullptr && impl_->mutation_checkpoint_active()) {
+      return *this;
+    }
     impl_ = std::make_unique<ModelingSessionImpl>(*other.impl_);
   }
   return *this;
 }
 
 ModelingSession &
-ModelingSession::operator=(ModelingSession &&other) noexcept = default;
+ModelingSession::operator=(ModelingSession &&other) noexcept {
+  if (this != &other) {
+    if (impl_ != nullptr && impl_->mutation_checkpoint_active()) {
+      return *this;
+    }
+    impl_ = std::move(other.impl_);
+  }
+  return *this;
+}
 
 ModelingSession::~ModelingSession() = default;
 
@@ -1257,6 +1899,7 @@ ModelingSession ModelingSession::current_workspace_checkpoint() const {
   // Assign durable fields directly: copying ModelingSessionImpl and clearing
   // its stacks afterward would already have paid the accumulated-history cost.
   checkpoint.impl_->state = impl_->state;
+  checkpoint.impl_->rebuild_live_object_index();
   checkpoint.impl_->clipboard = impl_->clipboard;
   checkpoint.impl_->object_changes = impl_->object_changes;
   checkpoint.impl_->object_change_index = impl_->object_change_index;
@@ -1273,6 +1916,10 @@ ModelingSession ModelingSession::current_workspace_checkpoint() const {
 
 Result<ObjectId> ModelingSession::add_document(PolygonDocument document,
                                                std::string name) {
+  if (impl_->mutation_checkpoint_active()) {
+    return Result<ObjectId>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
   if (!impl_->allow_batch_creation()) {
     return Result<ObjectId>::failure(make_error(
         ErrorCode::InvalidArgument,
@@ -1306,6 +1953,10 @@ Result<ObjectId> ModelingSession::add_document(PolygonDocument document,
 
 Result<ObjectId> ModelingSession::add_curve_document(CurveDocument document,
                                                      std::string name) {
+  if (impl_->mutation_checkpoint_active()) {
+    return Result<ObjectId>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
   if (!impl_->allow_batch_creation()) {
     return Result<ObjectId>::failure(make_error(
         ErrorCode::InvalidArgument,
@@ -1341,6 +1992,10 @@ Result<ObjectId> ModelingSession::add_curve_document(CurveDocument document,
 
 Result<OperationResult> ModelingSession::apply_object_selection(
     std::span<const ObjectId> objects, SelectionEdit edit) {
+  if (impl_->mutation_checkpoint_orphaned()) {
+    return Result<OperationResult>::failure(
+        orphaned_mutation_checkpoint_error());
+  }
   if (!impl_->allow_batch_objects(objects)) {
     return Result<OperationResult>::failure(make_error(
         ErrorCode::InvalidArgument,
@@ -1398,6 +2053,41 @@ Result<OperationResult> ModelingSession::apply_object_selection(
   }
   changed = changed || next_active != impl_->state.active_object;
 
+  if (changed && impl_->mutation_checkpoint_active()) {
+    for (const SessionObject &object : impl_->state.objects) {
+      const bool matched = requested.contains(object_id_key(object.id));
+      bool selected = object.selected;
+      switch (edit) {
+      case SelectionEdit::Replace:
+        selected = matched;
+        break;
+      case SelectionEdit::Add:
+        selected = selected || matched;
+        break;
+      case SelectionEdit::Remove:
+        selected = selected && !matched;
+        break;
+      case SelectionEdit::Toggle:
+        selected = matched ? !selected : selected;
+        break;
+      }
+      if (selected != object.selected &&
+          !impl_->mutation_checkpoint_enrolls(object.id)) {
+        return Result<OperationResult>::failure(
+            unenrolled_mutation_checkpoint_object_error());
+      }
+    }
+    if (next_active != impl_->state.active_object &&
+        ((impl_->state.active_object.valid() &&
+          !impl_->mutation_checkpoint_enrolls(
+              impl_->state.active_object)) ||
+         (next_active.valid() &&
+          !impl_->mutation_checkpoint_enrolls(next_active)))) {
+      return Result<OperationResult>::failure(
+          unenrolled_mutation_checkpoint_object_error());
+    }
+  }
+
   if (changed) {
     SessionState before = impl_->state;
     for (SessionObject &object : impl_->state.objects) {
@@ -1430,6 +2120,10 @@ Result<OperationResult> ModelingSession::commit_component_selection_batch(
     std::span<const SessionComponentSelectionUpdate> updates,
     std::span<const ObjectId> selected_objects, ObjectId active_object) {
   QDR_PROFILE_FUNCTION();
+  if (impl_->mutation_checkpoint_orphaned()) {
+    return Result<OperationResult>::failure(
+        orphaned_mutation_checkpoint_error());
+  }
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
     return Result<OperationResult>::failure(make_error(
@@ -1550,6 +2244,33 @@ Result<OperationResult> ModelingSession::commit_component_selection_batch(
       return Result<OperationResult>::failure(make_error(
           ErrorCode::InvalidArgument,
           "A non-empty component selection batch requires an active object."));
+    }
+
+    if (impl_->mutation_checkpoint_active()) {
+      for (const SessionComponentSelectionUpdate &update : updates) {
+        if (!impl_->mutation_checkpoint_enrolls(update.object)) {
+          return Result<OperationResult>::failure(
+              unenrolled_mutation_checkpoint_object_error());
+        }
+      }
+      for (std::size_t index = 0; index < impl_->state.objects.size();
+           ++index) {
+        if (impl_->state.objects[index].selected != selected_by_index[index] &&
+            !impl_->mutation_checkpoint_enrolls(
+                impl_->state.objects[index].id)) {
+          return Result<OperationResult>::failure(
+              unenrolled_mutation_checkpoint_object_error());
+        }
+      }
+      if (active_object != impl_->state.active_object &&
+          ((impl_->state.active_object.valid() &&
+            !impl_->mutation_checkpoint_enrolls(
+                impl_->state.active_object)) ||
+           (active_object.valid() &&
+            !impl_->mutation_checkpoint_enrolls(active_object)))) {
+        return Result<OperationResult>::failure(
+            unenrolled_mutation_checkpoint_object_error());
+      }
     }
   }
 
@@ -1734,6 +2455,10 @@ Result<OperationResult> ModelingSession::commit_component_selection_batch(
 Result<OperationResult> ModelingSession::commit_documents_batch(
     std::vector<SessionDocumentUpdate> updates,
     bool preserve_object_selection) {
+  if (impl_->mutation_checkpoint_orphaned()) {
+    return Result<OperationResult>::failure(
+        orphaned_mutation_checkpoint_error());
+  }
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
     return Result<OperationResult>::failure(make_error(
@@ -1753,6 +2478,7 @@ Result<OperationResult> ModelingSession::commit_documents_batch(
 
   std::unordered_set<std::uint64_t> updated_ids;
   updated_ids.reserve(updates.size());
+  ObjectId next_active = impl_->state.active_object;
   for (const SessionDocumentUpdate &update : updates) {
     const std::uint64_t key = object_id_key(update.object);
     if (!update.object.valid() || !object_index.contains(key)) {
@@ -1763,6 +2489,11 @@ Result<OperationResult> ModelingSession::commit_documents_batch(
       return Result<OperationResult>::failure(make_error(
           ErrorCode::InvalidArgument,
           "A document batch contains a duplicate object."));
+    }
+    if (impl_->mutation_checkpoint_active() &&
+        !impl_->mutation_checkpoint_enrolls(update.object)) {
+      return Result<OperationResult>::failure(
+          unenrolled_mutation_checkpoint_object_error());
     }
     if (impl_->state.objects[object_index.at(key)].kind() != SessionObjectKind::Mesh) {
       return Result<OperationResult>::failure(wrong_document_kind_error());
@@ -1781,7 +2512,17 @@ Result<OperationResult> ModelingSession::commit_documents_batch(
       if (!identity.ok()) {
         return identity;
       }
+      if (!preserve_object_selection) {
+        next_active = update.object;
+      }
     }
+  }
+  if (impl_->mutation_checkpoint_active() && !preserve_object_selection &&
+      next_active != impl_->state.active_object &&
+      impl_->state.active_object.valid() &&
+      !impl_->mutation_checkpoint_enrolls(impl_->state.active_object)) {
+    return Result<OperationResult>::failure(
+        unenrolled_mutation_checkpoint_object_error());
   }
 
   OperationResult result;
@@ -1870,6 +2611,10 @@ Result<OperationResult> ModelingSession::select_object(ObjectId object_id) {
 
 Result<OperationResult> ModelingSession::rename_object(ObjectId object_id,
                                                        std::string name) {
+  if (std::optional<Error> invalid =
+          impl_->validate_mutation_checkpoint_object(object_id)) {
+    return Result<OperationResult>::failure(std::move(*invalid));
+  }
   if (!impl_->allow_batch_object(object_id)) {
     return Result<OperationResult>::failure(make_error(
         ErrorCode::InvalidArgument,
@@ -1898,6 +2643,10 @@ Result<OperationResult> ModelingSession::rename_object(ObjectId object_id,
 }
 
 Result<OperationResult> ModelingSession::remove_object(ObjectId object_id) {
+  if (impl_->mutation_checkpoint_active()) {
+    return Result<OperationResult>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
   if (!impl_->allow_batch_object(object_id)) {
     return Result<OperationResult>::failure(make_error(
         ErrorCode::InvalidArgument,
@@ -1929,6 +2678,10 @@ Result<OperationResult> ModelingSession::remove_object(ObjectId object_id) {
 Result<ObjectId> ModelingSession::duplicate_object(ObjectId object_id,
                                                    Vec3 offset,
                                                    std::string name) {
+  if (impl_->mutation_checkpoint_active()) {
+    return Result<ObjectId>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
     return Result<ObjectId>::failure(make_error(
@@ -1940,8 +2693,8 @@ Result<ObjectId> ModelingSession::duplicate_object(ObjectId object_id,
         ErrorCode::InvalidArgument,
         "Commit or cancel the active preview before duplicating an object."));
   }
-  const auto object = find_object(impl_->state, object_id);
-  if (object == impl_->state.objects.end()) {
+  const SessionObject *object = impl_->live_object(object_id);
+  if (object == nullptr) {
     return Result<ObjectId>::failure(
         make_error(ErrorCode::InvalidId, "Object ID is not live."));
   }
@@ -1982,6 +2735,10 @@ Result<ObjectId> ModelingSession::duplicate_object(ObjectId object_id,
 Result<std::vector<ObjectId>> ModelingSession::duplicate_objects(
     std::span<const ObjectId> object_ids, Vec3 offset, std::string name) {
   QDR_PROFILE_FUNCTION();
+  if (impl_->mutation_checkpoint_active()) {
+    return Result<std::vector<ObjectId>>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
     return Result<std::vector<ObjectId>>::failure(make_error(
@@ -2071,6 +2828,10 @@ Result<std::vector<ObjectId>> ModelingSession::duplicate_objects(
 }
 
 Result<OperationResult> ModelingSession::copy_selection_to_clipboard() {
+  if (impl_->mutation_checkpoint_active()) {
+    return Result<OperationResult>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
   if (impl_->preview.active) {
     return active_preview_error();
   }
@@ -2100,6 +2861,10 @@ Result<OperationResult> ModelingSession::copy_selection_to_clipboard() {
 }
 
 Result<ClipboardPasteResult> ModelingSession::paste_clipboard(Vec3 offset) {
+  if (impl_->mutation_checkpoint_active()) {
+    return Result<ClipboardPasteResult>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
     return Result<ClipboardPasteResult>::failure(make_error(
@@ -2179,6 +2944,9 @@ std::size_t ModelingSession::clipboard_object_count() const {
 }
 
 void ModelingSession::reset_workspace_preserving_clipboard() {
+  if (impl_->mutation_checkpoint_active()) {
+    return;
+  }
   std::vector<ClipboardObject> clipboard = std::move(impl_->clipboard);
   impl_ = std::make_unique<ModelingSessionImpl>();
   impl_->clipboard = std::move(clipboard);
@@ -2187,6 +2955,10 @@ void ModelingSession::reset_workspace_preserving_clipboard() {
 Result<std::vector<ObjectId>>
 ModelingSession::replace_workspace_preserving_clipboard(
     std::vector<SessionWorkspaceDocument> documents) {
+  if (impl_->mutation_checkpoint_active()) {
+    return Result<std::vector<ObjectId>>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
   auto replacement = std::make_unique<ModelingSessionImpl>();
   replacement->state.objects.reserve(documents.size());
 
@@ -2227,6 +2999,10 @@ ModelingSession::replace_workspace_preserving_clipboard(
 Result<OperationResult>
 ModelingSession::restore_documents_as_history_transition(
     std::vector<SessionDocumentHistoryRestore> documents) {
+  if (impl_->mutation_checkpoint_active()) {
+    return Result<OperationResult>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
     return Result<OperationResult>::failure(make_error(
@@ -2323,6 +3099,10 @@ ModelingSession::restore_documents_as_history_transition(
 Result<OperationResult>
 ModelingSession::combine_objects(std::span<const ObjectId> object_ids,
                                  std::string name) {
+  if (impl_->mutation_checkpoint_active()) {
+    return Result<OperationResult>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
     return Result<OperationResult>::failure(make_error(
@@ -2445,10 +3225,46 @@ ModelingSession::combine_objects(std::span<const ObjectId> object_ids,
   return Result<OperationResult>::success(std::move(result));
 }
 
+Result<SessionBridgePreviewCandidate>
+ModelingSession::prepare_bridge_documents(
+    ObjectId survivor_id, ObjectId source_id,
+    Transform3 survivor_from_source, SelectionKind selection_kind,
+    int steps) const {
+  if (survivor_id == source_id ||
+      (selection_kind != SelectionKind::Edge &&
+       selection_kind != SelectionKind::Face)) {
+    return Result<SessionBridgePreviewCandidate>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Bridge needs two distinct objects with edge or face selections."));
+  }
+
+  const SessionObject *survivor = impl_->live_object(survivor_id);
+  const SessionObject *source = impl_->live_object(source_id);
+  if (survivor == nullptr || source == nullptr) {
+    return Result<SessionBridgePreviewCandidate>::failure(
+        make_error(ErrorCode::InvalidId, "Bridge source object is not live."));
+  }
+  if (survivor->kind() != SessionObjectKind::Mesh ||
+      source->kind() != SessionObjectKind::Mesh) {
+    return Result<SessionBridgePreviewCandidate>::failure(
+        wrong_document_kind_error());
+  }
+
+  PolygonDocument survivor_working = survivor->polygon_document();
+  impl_->reconcile_topology_identity(survivor_id, survivor_working);
+  return prepare_bridge_candidate(
+      std::move(survivor_working), source->polygon_document(),
+      survivor_from_source, selection_kind, steps);
+}
+
 Result<OperationResult>
 ModelingSession::bridge_objects(ObjectId survivor_id, ObjectId source_id,
                                 Transform3 survivor_from_source,
                                 SelectionKind selection_kind, int steps) {
+  if (impl_->mutation_checkpoint_active()) {
+    return Result<OperationResult>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
     return Result<OperationResult>::failure(make_error(
@@ -2458,177 +3274,26 @@ ModelingSession::bridge_objects(ObjectId survivor_id, ObjectId source_id,
   if (impl_->preview.active) {
     return active_preview_error();
   }
-  if (survivor_id == source_id ||
-      (selection_kind != SelectionKind::Edge &&
-       selection_kind != SelectionKind::Face)) {
-    return Result<OperationResult>::failure(make_error(
-        ErrorCode::InvalidArgument,
-        "Bridge needs two distinct objects with edge or face selections."));
+
+  Result<SessionBridgePreviewCandidate> prepared = prepare_bridge_documents(
+      survivor_id, source_id, survivor_from_source, selection_kind, steps);
+  if (!prepared.ok()) {
+    return Result<OperationResult>::failure(prepared.error());
+  }
+  SessionBridgePreviewCandidate bridge = std::move(prepared).value();
+  OperationResult result = std::move(bridge.receipt);
+  if (!result.changed) {
+    return Result<OperationResult>::success(std::move(result));
   }
 
   SessionState candidate = impl_->state;
   auto survivor = find_object(candidate, survivor_id);
-  const auto source = find_object(candidate, source_id);
-  if (survivor == candidate.objects.end() || source == candidate.objects.end()) {
-    return Result<OperationResult>::failure(
-        make_error(ErrorCode::InvalidId, "Bridge source object is not live."));
-  }
-  if (survivor->kind() != SessionObjectKind::Mesh ||
-      source->kind() != SessionObjectKind::Mesh) {
-    return Result<OperationResult>::failure(wrong_document_kind_error());
-  }
-
-  const quader_poly::Selection survivor_selection =
-      PolygonDocumentNativeAccess::selection(survivor->polygon_document());
-  const quader_poly::Selection source_selection =
-      PolygonDocumentNativeAccess::selection(source->polygon_document());
-  const bool face_bridge = selection_kind == SelectionKind::Face;
-  if ((face_bridge && (survivor_selection.faces.empty() ||
-                       source_selection.faces.empty())) ||
-      (!face_bridge && (survivor_selection.edges.empty() ||
-                        source_selection.edges.empty()))) {
+  if (survivor == candidate.objects.end()) {
     return Result<OperationResult>::failure(make_error(
-        ErrorCode::InvalidArgument,
-        face_bridge ? "Bridge Faces needs selected faces on both objects."
-                    : "Bridge needs selected edges on both objects."));
+        ErrorCode::InternalError,
+        "Bridge survivor disappeared while publishing its candidate."));
   }
-  if (!face_bridge &&
-      survivor_selection.edges.size() != source_selection.edges.size()) {
-    return Result<OperationResult>::failure(make_error(
-        ErrorCode::InvalidArgument,
-        "Bridge needs equal selected open-edge counts on both objects."));
-  }
-
-  PolygonDocument survivor_working = survivor->polygon_document();
-  impl_->reconcile_topology_identity(survivor_id, survivor_working);
-  quader_poly::Document survivor_document =
-      PolygonDocumentNativeAccess::document(survivor_working);
-  quader_poly::Document source_document =
-      PolygonDocumentNativeAccess::document(source->polygon_document());
-  for (quader_poly::Vertex &vertex : source_document.vertices) {
-    vertex.position = transform_point(survivor_from_source, vertex.position);
-  }
-  if (determinant(survivor_from_source) < 0.0F) {
-    for (quader_poly::Face &face : source_document.faces) {
-      std::ranges::reverse(face.vertices);
-      if (face.uvs.size() == face.vertices.size()) {
-        std::ranges::reverse(face.uvs);
-      } else {
-        face.uvs.clear();
-      }
-    }
-  }
-
-  Result<AppendedDocument> appended =
-      append_document_with_remapped_ids(survivor_document, source_document);
-  if (!appended.ok()) {
-    return Result<OperationResult>::failure(appended.error());
-  }
-
-  quader_poly::Selection bridge_selection;
-  if (face_bridge) {
-    bridge_selection.mode = quader_poly::SelectionMode::Face;
-    bridge_selection.faces = survivor_selection.faces;
-    for (quader_poly::ElementId id : source_selection.faces) {
-      const auto mapped = appended.value().face_ids.find(id);
-      if (mapped == appended.value().face_ids.end()) {
-        return Result<OperationResult>::failure(make_error(
-            ErrorCode::InternalError,
-            "Bridge Faces could not remap a source face."));
-      }
-      bridge_selection.faces.push_back(mapped->second);
-    }
-    if (survivor_selection.has_active &&
-        survivor_selection.active_kind == quader_poly::ElementKind::Face) {
-      bridge_selection.has_active = true;
-      bridge_selection.active_kind = quader_poly::ElementKind::Face;
-      bridge_selection.active_face = survivor_selection.active_face;
-    } else if (source_selection.has_active &&
-               source_selection.active_kind == quader_poly::ElementKind::Face) {
-      const auto mapped =
-          appended.value().face_ids.find(source_selection.active_face);
-      if (mapped != appended.value().face_ids.end()) {
-        bridge_selection.has_active = true;
-        bridge_selection.active_kind = quader_poly::ElementKind::Face;
-        bridge_selection.active_face = mapped->second;
-      }
-    }
-    if (!bridge_selection.has_active && !bridge_selection.faces.empty()) {
-      bridge_selection.has_active = true;
-      bridge_selection.active_kind = quader_poly::ElementKind::Face;
-      bridge_selection.active_face = bridge_selection.faces.front();
-    }
-  } else {
-    bridge_selection.mode = quader_poly::SelectionMode::Edge;
-    bridge_selection.edges = survivor_selection.edges;
-    for (quader_poly::Edge edge : source_selection.edges) {
-      const auto a = appended.value().vertex_ids.find(edge.a);
-      const auto b = appended.value().vertex_ids.find(edge.b);
-      if (a == appended.value().vertex_ids.end() ||
-          b == appended.value().vertex_ids.end()) {
-        return Result<OperationResult>::failure(make_error(
-            ErrorCode::InternalError,
-            "Bridge could not remap a source edge."));
-      }
-      bridge_selection.edges.push_back(
-          quader_poly::make_edge(a->second, b->second));
-    }
-    if (survivor_selection.has_active &&
-        survivor_selection.active_kind == quader_poly::ElementKind::Edge) {
-      bridge_selection.has_active = true;
-      bridge_selection.active_kind = quader_poly::ElementKind::Edge;
-      bridge_selection.active_edge = survivor_selection.active_edge;
-    } else if (source_selection.has_active &&
-               source_selection.active_kind == quader_poly::ElementKind::Edge) {
-      const auto a =
-          appended.value().vertex_ids.find(source_selection.active_edge.a);
-      const auto b =
-          appended.value().vertex_ids.find(source_selection.active_edge.b);
-      if (a != appended.value().vertex_ids.end() &&
-          b != appended.value().vertex_ids.end()) {
-        bridge_selection.has_active = true;
-        bridge_selection.active_kind = quader_poly::ElementKind::Edge;
-        bridge_selection.active_edge =
-            quader_poly::make_edge(a->second, b->second);
-      }
-    }
-    if (!bridge_selection.has_active && !bridge_selection.edges.empty()) {
-      bridge_selection.has_active = true;
-      bridge_selection.active_kind = quader_poly::ElementKind::Edge;
-      bridge_selection.active_edge = bridge_selection.edges.front();
-    }
-  }
-
-  const quader_poly::OperationResult native_result =
-      face_bridge
-          ? quader_poly::bridge_selected_faces(survivor_document,
-                                               bridge_selection, steps)
-          : quader_poly::bridge_selected_edges(survivor_document,
-                                               bridge_selection, steps);
-  if (!native_result.changed) {
-    OperationResult unchanged;
-    unchanged.message = native_result.message;
-    return Result<OperationResult>::success(std::move(unchanged));
-  }
-
-  OperationResult result = session_result(
-      true, face_bridge ? "Faces bridged." : "Edges bridged.");
-  result.dirty.topology = true;
-  result.created = appended.value().created;
-  append_native_delta(result.created, native_result.created);
-  append_native_delta(result.deleted, native_result.deleted);
-  append_native_delta(result.affected, native_result.affected);
-  result.modified = result.affected;
-
-  PolygonDocumentNativeAccess::replace_document(
-      survivor->polygon_document(), std::move(survivor_document));
-  PolygonDocumentNativeAccess::replace_selection(
-      survivor->polygon_document(), std::move(bridge_selection));
-  PolygonDocumentImpl &survivor_impl =
-      PolygonDocumentNativeAccess::impl(survivor->polygon_document());
-  ++survivor_impl.content_revision;
-  ++survivor_impl.selection_revision;
-
+  survivor->document = std::move(bridge.survivor_document);
   candidate.objects.erase(
       std::remove_if(candidate.objects.begin(), candidate.objects.end(),
                      [source_id](const SessionObject &object) {
@@ -2657,6 +3322,17 @@ ModelingSession::bridge_objects(ObjectId survivor_id, ObjectId source_id,
 
 Result<OperationResult> ModelingSession::select_face(ObjectId object_id,
                                                      FaceId face_id) {
+  if (std::optional<Error> invalid =
+          impl_->validate_mutation_checkpoint_object(object_id)) {
+    return Result<OperationResult>::failure(std::move(*invalid));
+  }
+  if (impl_->mutation_checkpoint_active() &&
+      impl_->state.active_object.valid() &&
+      impl_->state.active_object != object_id &&
+      !impl_->mutation_checkpoint_enrolls(impl_->state.active_object)) {
+    return Result<OperationResult>::failure(
+        unenrolled_mutation_checkpoint_object_error());
+  }
   if (!impl_->allow_batch_object(object_id)) {
     return Result<OperationResult>::failure(make_error(
         ErrorCode::InvalidArgument,
@@ -2693,6 +3369,10 @@ Result<OperationResult> ModelingSession::select_face(ObjectId object_id,
 }
 
 Result<OperationResult> ModelingSession::translate_selection(Vec3 delta) {
+  if (impl_->mutation_checkpoint_orphaned()) {
+    return Result<OperationResult>::failure(
+        orphaned_mutation_checkpoint_error());
+  }
   if (impl_->batch_transaction_active &&
       !impl_->allow_batch_object(impl_->state.active_object)) {
     return Result<OperationResult>::failure(make_error(
@@ -2711,6 +3391,10 @@ Result<OperationResult> ModelingSession::translate_selection(Vec3 delta) {
   if (found == candidate.objects.end()) {
     return Result<OperationResult>::failure(
         make_error(ErrorCode::InvalidId, "No active selected object."));
+  }
+  if (!impl_->mutation_checkpoint_enrolls(found->id)) {
+    return Result<OperationResult>::failure(
+        unenrolled_mutation_checkpoint_object_error());
   }
 
   Result<OperationResult> result = translate_document(found->document, delta);
@@ -2733,45 +3417,43 @@ Result<OperationResult>
 ModelingSession::begin_translate_preview(ObjectId object_id, Vec3 delta) {
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
-    return Result<OperationResult>::failure(make_error(
-        ErrorCode::InvalidArgument,
-        "Batch callback cannot start a preview transaction."));
+    return Result<OperationResult>::failure(
+        make_error(ErrorCode::InvalidArgument,
+                   "Batch callback cannot start a preview transaction."));
   }
   if (impl_->preview.active) {
     return active_preview_error();
   }
-
-  auto object = find_object(impl_->state, object_id);
-  if (object == impl_->state.objects.end()) {
+  const SessionObject *object = impl_->live_object(object_id);
+  if (object == nullptr) {
     return Result<OperationResult>::failure(
-        make_error(ErrorCode::InvalidId, "Object ID is not live."));
+        make_error(ErrorCode::InvalidId, "Preview object ID is not live."));
   }
 
-  PreviewTransaction preview;
-  Result<PreviewId> preview_id = impl_->allocate_preview_id();
-  if (!preview_id.ok()) {
-    return Result<OperationResult>::failure(preview_id.error());
+  SessionDocument candidate = object->document;
+  impl_->reconcile_topology_identity(object_id, candidate);
+  Result<OperationResult> operation = translate_document(candidate, delta);
+  if (!operation.ok()) {
+    return operation;
   }
-  preview.id = preview_id.value();
-  preview.active = true;
-  preview.object_id = object_id;
-  preview.operation_id = kTranslateSelectionOperationId;
-  preview.base_document = object->document;
-  preview.base_content_identity = document_content_identity(object->document);
-  preview.base_content_revision = document_content_revision(object->document);
-  preview.base_session_revision = impl_->content_revision;
-  Result<OperationResult> result =
-      apply_preview_delta(preview, object->document, delta);
-  if (!result.ok()) {
-    return result;
+  const OperationResult receipt = operation.value();
+  std::vector<SessionPreviewDocumentUpdate> updates;
+  updates.push_back({
+      .object = object_id,
+      .document = std::move(candidate),
+      .receipt = operation.value(),
+  });
+  Result<PreviewId> begun = begin_preview_transaction(
+      kTranslateSelectionOperationId, std::move(updates));
+  if (!begun.ok()) {
+    return Result<OperationResult>::failure(begun.error());
   }
+  impl_->preview.delta = delta;
 
-  preview.payload_revision = impl_->advance_preview_payload_revision(
-      document_content_revision(preview.preview_document));
-  preview.receipt = result.value();
-  impl_->preview = std::move(preview);
-  result.value().message = "Translate preview started.";
-  return result;
+  OperationResult result = receipt;
+  result.dirty.overlays = true;
+  result.message = "Translate preview started.";
+  return Result<OperationResult>::success(std::move(result));
 }
 
 Result<OperationResult> ModelingSession::update_translate_preview(Vec3 delta) {
@@ -2779,232 +3461,563 @@ Result<OperationResult> ModelingSession::update_translate_preview(Vec3 delta) {
     return missing_preview_error();
   }
   if (impl_->preview.operation_id != kTranslateSelectionOperationId) {
+    return Result<OperationResult>::failure(
+        make_error(ErrorCode::UnsupportedOperation,
+                   "Active preview transaction is not a translate operation."));
+  }
+  const PreviewTransactionObject *primary =
+      primary_preview_object(impl_->preview);
+  if (primary == nullptr || impl_->preview.objects.size() != 1U) {
     return Result<OperationResult>::failure(make_error(
         ErrorCode::UnsupportedOperation,
-        "Active preview transaction is not a translate operation."));
+        "Translate preview compatibility requires one preview object."));
   }
 
-  Result<OperationResult> result =
-      apply_preview_delta(impl_->preview, impl_->preview.base_document, delta);
-  if (result.ok()) {
-    impl_->preview.payload_revision = impl_->advance_preview_payload_revision(
-        document_content_revision(impl_->preview.preview_document));
-    impl_->preview.receipt = result.value();
-    result.value().message = "Translate preview updated.";
+  SessionDocument candidate = primary->base_document;
+  impl_->reconcile_topology_identity(primary->object_id, candidate);
+  Result<OperationResult> operation = translate_document(candidate, delta);
+  if (!operation.ok()) {
+    return operation;
   }
-  return result;
+  std::vector<SessionPreviewDocumentUpdate> updates;
+  updates.push_back({
+      .object = primary->object_id,
+      .document = std::move(candidate),
+      .receipt = operation.value(),
+  });
+  Result<OperationResult> updated =
+      update_preview_transaction(impl_->preview.id, std::move(updates));
+  if (updated.ok()) {
+    impl_->preview.delta = delta;
+    updated.value().message = "Translate preview updated.";
+  }
+  return updated;
 }
 
 Result<PreviewId> ModelingSession::begin_document_preview(
     ObjectId object_id, std::string operation_id,
     PolygonDocument preview_document, OperationResult receipt) {
-  if (impl_->batch_transaction_active) {
-    impl_->batch_transaction_violated = true;
-    return Result<PreviewId>::failure(make_error(
-        ErrorCode::InvalidArgument,
-        "Batch callback cannot start a preview transaction."));
-  }
-  if (impl_->preview.active) {
-    return Result<PreviewId>::failure(make_error(
-        ErrorCode::InvalidArgument,
-        "Commit or cancel the active preview before starting another preview."));
-  }
-  auto object = find_object(impl_->state, object_id);
-  if (object == impl_->state.objects.end()) {
-    return Result<PreviewId>::failure(
-        make_error(ErrorCode::InvalidId, "Preview object ID is not live."));
-  }
-  if (object->kind() != SessionObjectKind::Mesh) {
-    return Result<PreviewId>::failure(wrong_document_kind_error());
-  }
-  Result<OperationResult> identity =
-      impl_->validate_commit_identity(object_id, preview_document);
-  if (!identity.ok()) {
-    return Result<PreviewId>::failure(identity.error());
-  }
-  if (!receipt.success) {
-    return Result<PreviewId>::failure(make_error(
-        receipt.error_code == ErrorCode::Ok ? ErrorCode::ValidationFailed
-                                            : receipt.error_code,
-        receipt.message.empty() ? "Preview operation failed." : receipt.message));
-  }
-  Result<ToolPreviewPayload> payload = build_preview_payload(preview_document);
-  if (!payload.ok()) {
-    return Result<PreviewId>::failure(payload.error());
-  }
-  Result<PreviewId> allocated = impl_->allocate_preview_id();
-  if (!allocated.ok()) {
-    return allocated;
-  }
-
-  PreviewTransaction preview;
-  preview.id = allocated.value();
-  preview.active = true;
-  preview.object_id = object_id;
-  preview.operation_id = std::move(operation_id);
-  preview.base_document = object->document;
-  preview.base_content_identity = document_content_identity(object->document);
-  preview.base_content_revision = document_content_revision(object->document);
-  preview.base_session_revision = impl_->content_revision;
-  preview.preview_document = std::move(preview_document);
-  preview.receipt = std::move(receipt);
-  preview.receipt.dirty.overlays = true;
-  preview.dirty = preview.receipt.dirty;
-  preview.payload = std::move(payload).value();
-  preview.payload_valid = true;
-  preview.payload_revision = impl_->advance_preview_payload_revision(
-      document_content_revision(preview.preview_document));
-  preview.payload.mesh.content_revision = preview.payload_revision;
-  impl_->preview = std::move(preview);
-  return allocated;
+  std::vector<SessionPreviewDocumentUpdate> updates;
+  updates.push_back({
+      .object = object_id,
+      .document = std::move(preview_document),
+      .receipt = std::move(receipt),
+  });
+  return begin_preview_transaction(std::move(operation_id),
+                                   std::move(updates));
 }
 
-Result<OperationResult> ModelingSession::update_document_preview(
-    PreviewId preview_id, PolygonDocument preview_document,
-    OperationResult receipt) {
+Result<OperationResult>
+ModelingSession::update_document_preview(PreviewId preview_id,
+                                         PolygonDocument preview_document,
+                                         OperationResult receipt) {
   if (!impl_->preview.active || impl_->preview.id != preview_id) {
     return Result<OperationResult>::failure(
         make_error(ErrorCode::StaleId, "Preview ID is not active."));
   }
-  if (document_kind(impl_->preview.preview_document) != SessionObjectKind::Mesh) {
+  const PreviewTransactionObject *primary =
+      primary_preview_object(impl_->preview);
+  if (primary == nullptr || impl_->preview.objects.size() != 1U ||
+      document_kind(primary->preview_document) != SessionObjectKind::Mesh) {
     return Result<OperationResult>::failure(wrong_document_kind_error());
   }
-  if (!impl_->preview_matches_base()) {
-    return Result<OperationResult>::failure(make_error(
-        ErrorCode::StaleId,
-        "Preview base changed before the preview could be updated."));
-  }
-  Result<OperationResult> identity = impl_->validate_commit_identity(
-      impl_->preview.object_id, preview_document);
-  if (!identity.ok()) {
-    return identity;
-  }
-  if (!receipt.success) {
-    return Result<OperationResult>::failure(make_error(
-        receipt.error_code == ErrorCode::Ok ? ErrorCode::ValidationFailed
-                                            : receipt.error_code,
-        receipt.message.empty() ? "Preview operation failed." : receipt.message));
-  }
-  Result<ToolPreviewPayload> payload = build_preview_payload(preview_document);
-  if (!payload.ok()) {
-    return Result<OperationResult>::failure(payload.error());
-  }
-  receipt.dirty.overlays = true;
-  impl_->preview.preview_document = std::move(preview_document);
-  impl_->preview.receipt = receipt;
-  impl_->preview.dirty = receipt.dirty;
-  impl_->preview.payload = std::move(payload).value();
-  impl_->preview.payload_valid = true;
-  impl_->preview.payload_revision = impl_->advance_preview_payload_revision(
-      document_content_revision(impl_->preview.preview_document));
-  impl_->preview.payload.mesh.content_revision =
-      impl_->preview.payload_revision;
-  return Result<OperationResult>::success(std::move(receipt));
+
+  std::vector<SessionPreviewDocumentUpdate> updates;
+  updates.push_back({
+      .object = primary->object_id,
+      .document = std::move(preview_document),
+      .receipt = std::move(receipt),
+  });
+  return update_preview_transaction(preview_id, std::move(updates));
 }
 
 Result<PreviewId> ModelingSession::begin_curve_document_preview(
     ObjectId object_id, std::string operation_id,
     CurveDocument preview_document, OperationResult receipt) {
-  if (impl_->batch_transaction_active) {
-    impl_->batch_transaction_violated = true;
-    return Result<PreviewId>::failure(make_error(
-        ErrorCode::InvalidArgument,
-        "Batch callback cannot start a preview transaction."));
-  }
-  if (impl_->preview.active) {
-    return Result<PreviewId>::failure(make_error(
-        ErrorCode::InvalidArgument,
-        "Commit or cancel the active preview before starting another preview."));
-  }
-  const auto object = find_object(impl_->state, object_id);
-  if (object == impl_->state.objects.end()) {
-    return Result<PreviewId>::failure(
-        make_error(ErrorCode::InvalidId, "Preview object ID is not live."));
-  }
-  if (object->kind() != SessionObjectKind::Curve) {
-    return Result<PreviewId>::failure(wrong_document_kind_error());
-  }
-  if (!receipt.success) {
-    return Result<PreviewId>::failure(make_error(
-        receipt.error_code == ErrorCode::Ok ? ErrorCode::ValidationFailed
-                                            : receipt.error_code,
-        receipt.message.empty() ? "Preview operation failed." : receipt.message));
-  }
-  Result<OperationResult> identity =
-      impl_->validate_commit_identity(object_id, preview_document);
-  if (!identity.ok()) {
-    return Result<PreviewId>::failure(identity.error());
-  }
-  Result<PreviewId> allocated = impl_->allocate_preview_id();
-  if (!allocated.ok()) {
-    return allocated;
-  }
-
-  PreviewTransaction preview;
-  preview.id = allocated.value();
-  preview.active = true;
-  preview.object_id = object_id;
-  preview.operation_id = std::move(operation_id);
-  preview.base_document = object->document;
-  preview.base_content_identity = document_content_identity(object->document);
-  preview.base_content_revision = document_content_revision(object->document);
-  preview.base_session_revision = impl_->content_revision;
-  receipt.changed = !object->curve_document().has_same_geometry(preview_document);
-  receipt.dirty.overlays = true;
-  preview.preview_document = std::move(preview_document);
-  preview.receipt = std::move(receipt);
-  preview.dirty = preview.receipt.dirty;
-  preview.payload_revision = impl_->advance_preview_payload_revision(
-      document_content_revision(preview.preview_document));
-  impl_->record_topology_identity(object_id, preview.preview_document);
-  impl_->preview = std::move(preview);
-  return allocated;
+  std::vector<SessionPreviewDocumentUpdate> updates;
+  updates.push_back({
+      .object = object_id,
+      .document = std::move(preview_document),
+      .receipt = std::move(receipt),
+  });
+  return begin_preview_transaction(std::move(operation_id), std::move(updates));
 }
 
-Result<OperationResult> ModelingSession::update_curve_document_preview(
-    PreviewId preview_id, CurveDocument preview_document,
-    OperationResult receipt) {
+Result<OperationResult>
+ModelingSession::update_curve_document_preview(PreviewId preview_id,
+                                               CurveDocument preview_document,
+                                               OperationResult receipt) {
   if (!impl_->preview.active || impl_->preview.id != preview_id) {
     return Result<OperationResult>::failure(
         make_error(ErrorCode::StaleId, "Preview ID is not active."));
   }
-  if (document_kind(impl_->preview.preview_document) != SessionObjectKind::Curve) {
+  const PreviewTransactionObject *primary =
+      primary_preview_object(impl_->preview);
+  if (primary == nullptr || impl_->preview.objects.size() != 1U ||
+      document_kind(primary->preview_document) != SessionObjectKind::Curve) {
     return Result<OperationResult>::failure(wrong_document_kind_error());
+  }
+
+  std::vector<SessionPreviewDocumentUpdate> updates;
+  updates.push_back({
+      .object = primary->object_id,
+      .document = std::move(preview_document),
+      .receipt = std::move(receipt),
+  });
+  Result<OperationResult> updated =
+      update_preview_transaction(preview_id, std::move(updates));
+  if (updated.ok() && !updated.value().changed) {
+    updated.value().message = "Curve preview unchanged.";
+  }
+  return updated;
+}
+
+Result<PreviewId> ModelingSession::begin_preview_transaction(
+    std::string operation_id,
+    std::vector<SessionPreviewDocumentUpdate> updates) {
+  SessionPreviewTransactionRequest request;
+  request.participants.reserve(updates.size());
+  for (SessionPreviewDocumentUpdate &update : updates) {
+    request.participants.push_back({
+        .action = SessionPreviewAction::ReplaceExisting,
+        .object = update.object,
+        .document = std::move(update.document),
+        .receipt = std::move(update.receipt),
+    });
+  }
+  Result<SessionPreviewBeginResult> begun =
+      begin_preview_transaction(std::move(operation_id), std::move(request));
+  if (!begun.ok()) {
+    return Result<PreviewId>::failure(begun.error());
+  }
+  impl_->preview.compatibility_single_object_selection =
+      impl_->preview.objects.size() == 1U;
+  return Result<PreviewId>::success(begun.value().preview_id);
+}
+
+Result<SessionPreviewBeginResult> ModelingSession::begin_preview_transaction(
+    std::string operation_id, SessionPreviewTransactionRequest request) {
+  if (impl_->mutation_checkpoint_active()) {
+    return Result<SessionPreviewBeginResult>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
+  if (impl_->batch_transaction_active) {
+    impl_->batch_transaction_violated = true;
+    return Result<SessionPreviewBeginResult>::failure(
+        make_error(ErrorCode::InvalidArgument,
+                   "Batch callback cannot start a preview transaction."));
+  }
+  if (impl_->preview.active) {
+    return Result<SessionPreviewBeginResult>::failure(make_error(
+        ErrorCode::InvalidArgument, "Commit or cancel the active preview "
+                                    "before starting another preview."));
+  }
+  if (request.participants.empty()) {
+    return Result<SessionPreviewBeginResult>::failure(
+        make_error(ErrorCode::InvalidArgument,
+                   "A preview transaction requires at least one object."));
+  }
+  if (request.active_participant_index.has_value() &&
+      *request.active_participant_index >= request.participants.size()) {
+    return Result<SessionPreviewBeginResult>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "The requested active preview participant is out of range."));
+  }
+
+  PreviewTransaction prepared;
+  prepared.active = true;
+  prepared.operation_id = std::move(operation_id);
+  prepared.base_session_revision = impl_->content_revision;
+  prepared.structural = true;
+  prepared.replace_object_selection = request.replace_object_selection;
+  prepared.objects.reserve(request.participants.size());
+
+  std::unordered_set<std::uint64_t> object_ids;
+  object_ids.reserve(request.participants.size());
+  std::size_t provisional_count = 0U;
+  for (std::size_t participant_index = 0;
+       participant_index < request.participants.size(); ++participant_index) {
+    SessionPreviewParticipant &participant =
+        request.participants[participant_index];
+    const bool adds =
+        participant.action == SessionPreviewAction::AddProvisional;
+    const bool removes =
+        participant.action == SessionPreviewAction::RemoveExisting;
+    const SessionObject *live = adds ? nullptr : impl_->live_object(participant.object);
+
+    if (adds) {
+      if (participant.object.valid()) {
+        return Result<SessionPreviewBeginResult>::failure(make_error(
+            ErrorCode::InvalidArgument,
+            "An AddProvisional participant cannot provide an object ID."));
+      }
+      if (!participant.document.has_value()) {
+        return Result<SessionPreviewBeginResult>::failure(make_error(
+            ErrorCode::InvalidArgument,
+            "An AddProvisional participant requires a document."));
+      }
+      ++provisional_count;
+    } else {
+      if (!participant.object.valid() || live == nullptr) {
+        return Result<SessionPreviewBeginResult>::failure(make_error(
+            ErrorCode::InvalidId, "Preview object ID is not live."));
+      }
+      if (!object_ids.emplace(object_id_key(participant.object)).second) {
+        return Result<SessionPreviewBeginResult>::failure(make_error(
+            ErrorCode::InvalidArgument,
+            "A preview transaction contains duplicate actions for an object."));
+      }
+      if (removes && participant.document.has_value()) {
+        return Result<SessionPreviewBeginResult>::failure(make_error(
+            ErrorCode::InvalidArgument,
+            "A RemoveExisting participant cannot provide a document."));
+      }
+      if (!removes && !participant.document.has_value()) {
+        return Result<SessionPreviewBeginResult>::failure(make_error(
+            ErrorCode::InvalidArgument,
+            "A ReplaceExisting participant requires a document."));
+      }
+    }
+
+    if (!participant.receipt.success) {
+      return Result<SessionPreviewBeginResult>::failure(make_error(
+          participant.receipt.error_code == ErrorCode::Ok
+              ? ErrorCode::ValidationFailed
+              : participant.receipt.error_code,
+          participant.receipt.message.empty() ? "Preview operation failed."
+                                              : participant.receipt.message));
+    }
+
+    if (!removes) {
+      const SessionDocument &document = *participant.document;
+      if (!adds && live->kind() != document_kind(document)) {
+        return Result<SessionPreviewBeginResult>::failure(
+            wrong_document_kind_error());
+      }
+      Result<OperationResult> valid =
+          adds ? std::visit([](const auto &candidate) {
+                   return candidate.validate();
+                 }, document)
+               : impl_->validate_commit_identity(participant.object, document);
+      if (!valid.ok()) {
+        return Result<SessionPreviewBeginResult>::failure(valid.error());
+      }
+    }
+
+    PreviewTransactionObject object;
+    object.object_id = participant.object;
+    object.action = participant.action;
+    object.participant_index = participant_index;
+    object.has_base_document = !adds;
+    object.receipt = std::move(participant.receipt);
+    object.material_slot = participant.material_slot;
+    object.selected = adds || request.replace_object_selection
+                          ? participant.selected
+                          : live->selected;
+    if (adds) {
+      object.preview_document = std::move(*participant.document);
+      object.base_document = object.preview_document;
+      object.name = participant.name.empty()
+                        ? (document_kind(object.preview_document) ==
+                                   SessionObjectKind::Curve
+                               ? "Curve"
+                               : "Mesh")
+                        : std::move(participant.name);
+    } else {
+      object.base_document = live->document;
+      object.base_content_identity =
+          document_content_identity(live->document);
+      object.base_content_revision =
+          document_content_revision(live->document);
+      object.preview_document = removes
+                                    ? live->document
+                                    : std::move(*participant.document);
+      object.name = live->name;
+    }
+    if (adds || removes) {
+      object.receipt.changed = true;
+      object.receipt.dirty.topology = true;
+      object.receipt.dirty.geometry = true;
+      object.receipt.dirty.selection = true;
+      object.receipt.dirty.materials = true;
+    } else {
+      const bool differs_from_base = !same_preview_candidate(
+          object.base_document, object.preview_document);
+      if (document_kind(object.preview_document) == SessionObjectKind::Curve) {
+        object.receipt.changed = differs_from_base;
+      } else {
+        object.receipt.changed = object.receipt.changed && differs_from_base;
+      }
+    }
+    object.receipt.dirty.overlays = true;
+    object.dirty = object.receipt.dirty;
+    prepared.objects.push_back(std::move(object));
+  }
+
+  if (request.active_participant_index.has_value()) {
+    const SessionPreviewParticipant &active =
+        request.participants[*request.active_participant_index];
+    const auto prepared_active = std::ranges::find_if(
+        prepared.objects, [&](const PreviewTransactionObject &object) {
+          return object.participant_index == *request.active_participant_index;
+        });
+    if (active.action == SessionPreviewAction::RemoveExisting ||
+        prepared_active == prepared.objects.end() ||
+        !prepared_active->selected) {
+      return Result<SessionPreviewBeginResult>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "The active preview participant must survive and be selected."));
+    }
+  }
+
+  for (PreviewTransactionObject &object : prepared.objects) {
+    if (object.action == SessionPreviewAction::RemoveExisting) {
+      continue;
+    }
+    const auto *polygon =
+        std::get_if<PolygonDocument>(&object.preview_document);
+    if (polygon == nullptr) {
+      continue;
+    }
+    Result<ToolPreviewPayload> payload = build_preview_payload(*polygon);
+    ++impl_->preview_work_stats.mesh_payload_build_count;
+    if (!payload.ok()) {
+      return Result<SessionPreviewBeginResult>::failure(payload.error());
+    }
+    object.payload = std::move(payload).value();
+    object.payload_valid = true;
+  }
+
+  const std::uint64_t available_object_ids =
+      impl_->next_object_index == 0U
+          ? 0U
+          : static_cast<std::uint64_t>(
+                (std::numeric_limits<std::uint32_t>::max)()) -
+                    impl_->next_object_index +
+                1U;
+  if (provisional_count > available_object_ids) {
+    return Result<SessionPreviewBeginResult>::failure(make_error(
+        ErrorCode::InternalError, "The session exhausted object identities."));
+  }
+  if (impl_->next_preview_index == 0U) {
+    return Result<SessionPreviewBeginResult>::failure(make_error(
+        ErrorCode::InternalError, "The session exhausted preview identities."));
+  }
+
+  std::uint32_t next_object_index = impl_->next_object_index;
+  for (PreviewTransactionObject &object : prepared.objects) {
+    if (object.action == SessionPreviewAction::AddProvisional) {
+      object.object_id = make_id<ObjectTag>(next_object_index++);
+    }
+  }
+  prepared.id = make_id<PreviewTag>(impl_->next_preview_index);
+  if (request.active_participant_index.has_value()) {
+    const auto active = std::ranges::find_if(
+        prepared.objects, [&](const PreviewTransactionObject &object) {
+          return object.participant_index == *request.active_participant_index;
+        });
+    if (active == prepared.objects.end()) {
+      return Result<SessionPreviewBeginResult>::failure(make_error(
+          ErrorCode::InternalError,
+          "The active preview participant could not be resolved."));
+    }
+    prepared.requested_active_object = active->object_id;
+  }
+
+  SessionPreviewBeginResult result;
+  result.preview_id = prepared.id;
+  result.participants.reserve(prepared.objects.size());
+  for (const PreviewTransactionObject &object : prepared.objects) {
+    result.participants.push_back({
+        .participant_index = object.participant_index,
+        .action = object.action,
+        .object_id = object.object_id,
+    });
+  }
+  std::ranges::sort(result.participants, {},
+                    &SessionPreviewParticipantIdentity::participant_index);
+  std::ranges::sort(prepared.objects, {},
+                    &PreviewTransactionObject::object_id);
+  rebuild_preview_object_index(prepared);
+
+  for (PreviewTransactionObject &object : prepared.objects) {
+    object.payload_revision = impl_->advance_preview_payload_revision(
+        document_content_revision(object.preview_document));
+    if (object.payload_valid) {
+      object.payload.mesh.content_revision = object.payload_revision;
+    }
+  }
+  refresh_preview_object_summaries(prepared);
+  for (const PreviewTransactionObject &object : prepared.objects) {
+    impl_->record_topology_identity(object.object_id, object.preview_document);
+  }
+  impl_->next_object_index = next_object_index;
+  ++impl_->next_preview_index;
+  impl_->preview = std::move(prepared);
+  return Result<SessionPreviewBeginResult>::success(std::move(result));
+}
+
+Result<OperationResult> ModelingSession::update_preview_transaction(
+    PreviewId preview_id, std::vector<SessionPreviewDocumentUpdate> updates) {
+  if (!impl_->preview.active || impl_->preview.id != preview_id) {
+    return Result<OperationResult>::failure(
+        make_error(ErrorCode::StaleId, "Preview ID is not active."));
   }
   if (!impl_->preview_matches_base()) {
     return Result<OperationResult>::failure(make_error(
         ErrorCode::StaleId,
         "Preview base changed before the preview could be updated."));
   }
-  if (!receipt.success) {
+  const std::size_t document_participant_count =
+      static_cast<std::size_t>(std::ranges::count_if(
+          impl_->preview.objects, [](const PreviewTransactionObject &object) {
+            return object.action != SessionPreviewAction::RemoveExisting;
+          }));
+  if (updates.size() != document_participant_count) {
     return Result<OperationResult>::failure(make_error(
-        receipt.error_code == ErrorCode::Ok ? ErrorCode::ValidationFailed
-                                            : receipt.error_code,
-        receipt.message.empty() ? "Preview operation failed." : receipt.message));
+        ErrorCode::InvalidArgument, "A preview update must contain every "
+                                    "document participant exactly once."));
   }
-  Result<OperationResult> identity = impl_->validate_commit_identity(
-      impl_->preview.object_id, preview_document);
-  if (!identity.ok()) {
-    return identity;
+
+  std::unordered_map<std::uint64_t, std::size_t> update_indices;
+  update_indices.reserve(updates.size());
+  for (std::size_t index = 0; index < updates.size(); ++index) {
+    const SessionPreviewDocumentUpdate &update = updates[index];
+    const PreviewTransactionObject *participant =
+        impl_->preview_object(update.object);
+    if (!update.object.valid() || participant == nullptr ||
+        participant->action == SessionPreviewAction::RemoveExisting) {
+      return Result<OperationResult>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "A preview update contains an object outside the transaction."));
+    }
+    if (!update_indices.emplace(object_id_key(update.object), index).second) {
+      return Result<OperationResult>::failure(
+          make_error(ErrorCode::InvalidArgument,
+                     "A preview update contains a duplicate object."));
+    }
   }
-  const auto &current =
-      std::get<CurveDocument>(impl_->preview.preview_document);
-  if (current.has_same_geometry(preview_document)) {
+
+  struct StagedPreviewUpdate {
+    std::optional<SessionDocument> document;
+    OperationResult receipt;
+    ToolPreviewPayload payload;
+    bool payload_valid = false;
+    bool publication_changed = false;
+  };
+  std::vector<StagedPreviewUpdate> staged;
+  staged.reserve(impl_->preview.objects.size());
+  for (const PreviewTransactionObject &current : impl_->preview.objects) {
+    if (current.action == SessionPreviewAction::RemoveExisting) {
+      staged.push_back({});
+      continue;
+    }
+    SessionPreviewDocumentUpdate &update =
+        updates[update_indices.at(object_id_key(current.object_id))];
+    if (document_kind(update.document) !=
+        document_kind(current.preview_document)) {
+      return Result<OperationResult>::failure(wrong_document_kind_error());
+    }
+    if (!update.receipt.success) {
+      return Result<OperationResult>::failure(make_error(
+          update.receipt.error_code == ErrorCode::Ok
+              ? ErrorCode::ValidationFailed
+              : update.receipt.error_code,
+          update.receipt.message.empty() ? "Preview operation failed."
+                                         : update.receipt.message));
+    }
+    Result<OperationResult> identity =
+        impl_->validate_commit_identity(update.object, update.document);
+    if (!identity.ok()) {
+      return identity;
+    }
+    const bool candidate_changed =
+        !same_preview_candidate(current.preview_document, update.document);
+    if (!candidate_changed) {
+      staged.push_back({});
+      continue;
+    }
+
+    StagedPreviewUpdate next;
+    next.document.emplace(std::move(update.document));
+    next.receipt = std::move(update.receipt);
+    next.publication_changed = true;
+    if (current.action == SessionPreviewAction::AddProvisional) {
+      next.receipt.changed = true;
+      next.receipt.dirty.topology = true;
+      next.receipt.dirty.geometry = true;
+      next.receipt.dirty.selection = true;
+      next.receipt.dirty.materials = true;
+    } else {
+      const bool differs_from_base =
+          !same_preview_candidate(current.base_document, *next.document);
+      if (document_kind(*next.document) == SessionObjectKind::Curve) {
+        next.receipt.changed = differs_from_base;
+      } else {
+        next.receipt.changed = next.receipt.changed && differs_from_base;
+      }
+    }
+    next.receipt.dirty.overlays = true;
+    staged.push_back(std::move(next));
+  }
+
+  for (StagedPreviewUpdate &update : staged) {
+    if (!update.publication_changed) {
+      continue;
+    }
+    const auto *polygon = std::get_if<PolygonDocument>(&*update.document);
+    if (polygon == nullptr) {
+      continue;
+    }
+    Result<ToolPreviewPayload> payload = build_preview_payload(*polygon);
+    ++impl_->preview_work_stats.mesh_payload_build_count;
+    if (!payload.ok()) {
+      return Result<OperationResult>::failure(payload.error());
+    }
+    update.payload = std::move(payload).value();
+    update.payload_valid = true;
+  }
+
+  if (std::ranges::none_of(staged, [](const StagedPreviewUpdate &update) {
+        return update.publication_changed;
+      })) {
     OperationResult unchanged;
-    unchanged.message = "Curve preview unchanged.";
+    unchanged.message = "Preview unchanged.";
     return Result<OperationResult>::success(std::move(unchanged));
   }
-  const auto &base = std::get<CurveDocument>(impl_->preview.base_document);
-  receipt.changed = !base.has_same_geometry(preview_document);
-  receipt.dirty.overlays = true;
-  impl_->preview.preview_document = std::move(preview_document);
-  impl_->preview.receipt = receipt;
-  impl_->preview.dirty = receipt.dirty;
-  impl_->preview.payload_revision = impl_->advance_preview_payload_revision(
-      document_content_revision(impl_->preview.preview_document));
-  impl_->record_topology_identity(impl_->preview.object_id,
-                                   impl_->preview.preview_document);
-  return Result<OperationResult>::success(std::move(receipt));
+
+  for (std::size_t index = 0; index < staged.size(); ++index) {
+    StagedPreviewUpdate &update = staged[index];
+    if (!update.publication_changed) {
+      continue;
+    }
+    PreviewTransactionObject &object = impl_->preview.objects[index];
+    object.preview_document = std::move(*update.document);
+    object.receipt = std::move(update.receipt);
+    object.dirty = object.receipt.dirty;
+    object.payload = std::move(update.payload);
+    object.payload_valid = update.payload_valid;
+    object.payload_revision = impl_->advance_preview_payload_revision(
+        document_content_revision(object.preview_document));
+    if (object.payload_valid) {
+      object.payload.mesh.content_revision = object.payload_revision;
+    }
+  }
+  refresh_preview_object_summaries(impl_->preview);
+  for (std::size_t index = 0; index < staged.size(); ++index) {
+    if (staged[index].publication_changed) {
+      const PreviewTransactionObject &object = impl_->preview.objects[index];
+      impl_->record_topology_identity(object.object_id,
+                                      object.preview_document);
+    }
+  }
+
+  OperationResult result;
+  for (const PreviewTransactionObject &object : impl_->preview.objects) {
+    merge_receipt(result, object.receipt, preview_object_changed(object));
+  }
+  result.message = "Preview updated.";
+  return Result<OperationResult>::success(std::move(result));
 }
 
 Result<SessionPreviewCheckpoint>
@@ -3014,120 +4027,576 @@ ModelingSession::capture_preview_checkpoint(PreviewId preview_id) const {
     return Result<SessionPreviewCheckpoint>::failure(make_error(
         ErrorCode::StaleId, "Preview ID or its base is no longer active."));
   }
+  ++impl_->preview_work_stats.checkpoint_count;
+  impl_->preview_work_stats.checkpoint_participant_reference_count +=
+      impl_->preview.objects.size();
   SessionPreviewCheckpoint checkpoint;
   checkpoint.impl_ = std::make_shared<const SessionPreviewCheckpointImpl>(
       SessionPreviewCheckpointImpl{
           .origin = impl_->preview_checkpoint_ownership.origin,
-          .preview = impl_->preview});
+          .preview = make_preview_checkpoint_snapshot(impl_->preview)});
   return Result<SessionPreviewCheckpoint>::success(std::move(checkpoint));
 }
 
-Result<OperationResult> ModelingSession::restore_preview_checkpoint(
-    const SessionPreviewCheckpoint &checkpoint) {
+Result<OperationResult> ModelingSession::preflight_preview_checkpoint(
+    const SessionPreviewCheckpoint &checkpoint) const {
   if (!checkpoint.valid()) {
-    return Result<OperationResult>::failure(make_error(
-        ErrorCode::InvalidArgument, "Preview checkpoint is empty."));
+    return Result<OperationResult>::failure(
+        make_error(ErrorCode::InvalidArgument, "Preview checkpoint is empty."));
   }
   const PreviewTransaction &saved = checkpoint.impl_->preview;
   const PreviewTransaction &current = impl_->preview;
+  bool same_base =
+      current.active && current.id == saved.id &&
+      current.base_session_revision == saved.base_session_revision &&
+      current.structural == saved.structural &&
+      current.replace_object_selection == saved.replace_object_selection &&
+      current.requested_active_object == saved.requested_active_object &&
+      current.compatibility_single_object_selection ==
+          saved.compatibility_single_object_selection &&
+      current.objects.size() == saved.objects.size();
+  for (std::size_t index = 0; same_base && index < current.objects.size();
+       ++index) {
+    const PreviewTransactionObject &current_object = current.objects[index];
+    const PreviewTransactionObject &saved_object = saved.objects[index];
+    same_base = current_object.object_id == saved_object.object_id &&
+                current_object.action == saved_object.action &&
+                current_object.participant_index ==
+                    saved_object.participant_index &&
+                current_object.has_base_document ==
+                    saved_object.has_base_document &&
+                current_object.base_content_identity ==
+                    saved_object.base_content_identity &&
+                current_object.base_content_revision ==
+                    saved_object.base_content_revision &&
+                current_object.name == saved_object.name &&
+                current_object.material_slot == saved_object.material_slot &&
+                current_object.selected == saved_object.selected;
+  }
   if (checkpoint.impl_->origin != impl_->preview_checkpoint_ownership.origin ||
-      !current.active || current.id != saved.id ||
-      current.object_id != saved.object_id ||
-      current.base_content_identity != saved.base_content_identity ||
-      current.base_content_revision != saved.base_content_revision ||
-      current.base_session_revision != saved.base_session_revision ||
-      !impl_->preview_matches_base()) {
+      !same_base || !impl_->preview_matches_base()) {
     return Result<OperationResult>::failure(make_error(
         ErrorCode::StaleId,
         "Preview checkpoint does not belong to this active session preview."));
   }
-  OperationResult restored;
-  // payload_revision is the authored preview publication identity. Restoring
-  // allocator high-water can replace only a polygon backing allocation while
-  // retaining that publication, so content_identity is not a no-op criterion.
-  if (current.payload_revision == saved.payload_revision &&
-      current.payload_valid == saved.payload_valid &&
-      document_selection_revision(current.preview_document) ==
-          document_selection_revision(saved.preview_document)) {
-    restored.message = "Preview checkpoint unchanged.";
-    return Result<OperationResult>::success(std::move(restored));
+
+  OperationResult ready;
+  ready.message = "Preview checkpoint preflight passed.";
+  return Result<OperationResult>::success(std::move(ready));
+}
+
+Result<OperationResult> ModelingSession::restore_preview_checkpoint(
+    const SessionPreviewCheckpoint &checkpoint) {
+  Result<OperationResult> ready = preflight_preview_checkpoint(checkpoint);
+  if (!ready.ok()) {
+    return ready;
+  }
+  const PreviewTransaction &saved = checkpoint.impl_->preview;
+  const PreviewTransaction &current = impl_->preview;
+
+  bool unchanged = true;
+  for (std::size_t index = 0; unchanged && index < current.objects.size();
+       ++index) {
+    const PreviewTransactionObject &current_object = current.objects[index];
+    const PreviewTransactionObject &saved_object = saved.objects[index];
+    unchanged =
+        current_object.payload_revision == saved_object.payload_revision &&
+        document_selection_revision(current_object.preview_document) ==
+            document_selection_revision(saved_object.preview_document);
+  }
+  if (unchanged) {
+    OperationResult result;
+    result.message = "Preview checkpoint unchanged.";
+    return Result<OperationResult>::success(std::move(result));
   }
 
-  // The candidate may use identities retired by a later failed publication.
-  // Restore it directly, leaving the session's allocator high-water intact.
   impl_->preview = saved;
-  impl_->reconcile_topology_identity(saved.object_id,
-                                      impl_->preview.preview_document);
+  OperationResult restored;
   restored.changed = true;
-  restored.dirty = saved.dirty;
+  for (PreviewTransactionObject &object : impl_->preview.objects) {
+    impl_->reconcile_topology_identity(object.object_id,
+                                       object.preview_document);
+    merge_dirty(restored.dirty, object.dirty);
+  }
   restored.message = "Preview checkpoint restored.";
   return Result<OperationResult>::success(std::move(restored));
+}
+
+Result<SessionMutationCheckpoint>
+ModelingSession::capture_mutation_checkpoint(
+    std::span<const ObjectId> participants) {
+  if (impl_->preview.active || impl_->batch_transaction_active) {
+    return Result<SessionMutationCheckpoint>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "A mutation checkpoint requires an idle preview and batch lifecycle."));
+  }
+  if (impl_->mutation_checkpoint_registry.active != nullptr) {
+    return Result<SessionMutationCheckpoint>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
+  if (participants.empty()) {
+    return Result<SessionMutationCheckpoint>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "A mutation checkpoint requires at least one participant."));
+  }
+  if (impl_->mutation_checkpoint_registry.next_serial == 0U) {
+    return Result<SessionMutationCheckpoint>::failure(make_error(
+        ErrorCode::InternalError,
+        "The session exhausted mutation checkpoint identities."));
+  }
+
+  std::vector<ObjectId> ordered(participants.begin(), participants.end());
+  std::ranges::sort(ordered);
+  if (std::ranges::adjacent_find(ordered) != ordered.end()) {
+    return Result<SessionMutationCheckpoint>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "A mutation checkpoint contains a duplicate participant."));
+  }
+
+  auto prepared = std::make_unique<ActiveMutationCheckpoint>();
+  prepared->serial = impl_->mutation_checkpoint_registry.next_serial;
+  prepared->object_count = impl_->state.objects.size();
+  prepared->active_object = impl_->state.active_object;
+  prepared->next_object_index = impl_->next_object_index;
+  prepared->content_revision = impl_->content_revision;
+  prepared->selection_revision = impl_->selection_revision;
+  prepared->object_changes_size = impl_->object_changes.size();
+  prepared->undo_depth = impl_->undo_stack.size();
+  prepared->participants.reserve(ordered.size());
+  prepared->participant_keys.reserve(ordered.size());
+
+  for (const ObjectId object_id : ordered) {
+    if (!object_id.valid()) {
+      return Result<SessionMutationCheckpoint>::failure(
+          make_error(ErrorCode::InvalidId,
+                     "Mutation checkpoint participant ID is invalid."));
+    }
+    const auto indexed =
+        impl_->live_object_index.find(object_id_key(object_id));
+    ++impl_->mutation_checkpoint_work_stats.participant_lookup_count;
+    if (indexed == impl_->live_object_index.end() ||
+        indexed->second >= impl_->state.objects.size() ||
+        impl_->state.objects[indexed->second].id != object_id) {
+      return Result<SessionMutationCheckpoint>::failure(make_error(
+          ErrorCode::InvalidId,
+          "Mutation checkpoints can enroll existing objects only."));
+    }
+
+    MutationCheckpointParticipant participant;
+    participant.id = object_id;
+    participant.state_index = indexed->second;
+    participant.object = impl_->state.objects[indexed->second];
+    const auto change_record =
+        impl_->object_change_index.find(object_id_key(object_id));
+    if (change_record != impl_->object_change_index.end()) {
+      if (change_record->second >= impl_->object_changes.size() ||
+          impl_->object_changes[change_record->second].id != object_id) {
+        return Result<SessionMutationCheckpoint>::failure(make_error(
+            ErrorCode::InternalError,
+            "The session change index is inconsistent."));
+      }
+      participant.change_record_index = change_record->second;
+      participant.change_record = impl_->object_changes[change_record->second];
+    }
+    prepared->participant_keys.emplace(object_id_key(object_id));
+    prepared->participants.push_back(std::move(participant));
+  }
+
+  auto handle = std::make_shared<SessionMutationCheckpointImpl>();
+  handle->origin = impl_->mutation_checkpoint_registry.origin;
+  handle->serial = prepared->serial;
+  prepared->handle = handle;
+  prepared->detached_redo = std::exchange(
+      impl_->redo_stack, std::vector<SessionHistoryEntry>{});
+  impl_->mutation_checkpoint_registry.active = std::move(prepared);
+  ++impl_->mutation_checkpoint_registry.next_serial;
+  ++impl_->mutation_checkpoint_work_stats.capture_count;
+  impl_->mutation_checkpoint_work_stats.participant_snapshot_count +=
+      ordered.size();
+  impl_->mutation_checkpoint_work_stats.transition_record_snapshot_count +=
+      static_cast<std::uint64_t>(std::ranges::count_if(
+          impl_->mutation_checkpoint_registry.active->participants,
+          [](const MutationCheckpointParticipant &participant) {
+            return participant.change_record.has_value();
+          }));
+
+  SessionMutationCheckpoint checkpoint;
+  checkpoint.impl_ = std::move(handle);
+  return Result<SessionMutationCheckpoint>::success(std::move(checkpoint));
+}
+
+Result<OperationResult> ModelingSession::preflight_mutation_checkpoint(
+    const SessionMutationCheckpoint &checkpoint) const {
+  if (!checkpoint.valid()) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument, "Mutation checkpoint is empty."));
+  }
+  ActiveMutationCheckpoint *saved =
+      impl_->mutation_checkpoint_registry.active.get();
+  if (saved == nullptr ||
+      checkpoint.impl_->origin != impl_->mutation_checkpoint_registry.origin ||
+      checkpoint.impl_->serial != saved->serial) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::StaleId,
+        "Mutation checkpoint does not belong to this active session scope."));
+  }
+  if (std::optional<Error> invalid =
+          impl_->validate_mutation_checkpoint_scope(*saved)) {
+    return Result<OperationResult>::failure(std::move(*invalid));
+  }
+
+  OperationResult ready;
+  ready.message = "Mutation checkpoint preflight passed.";
+  return Result<OperationResult>::success(std::move(ready));
+}
+
+Result<OperationResult> ModelingSession::restore_mutation_checkpoint(
+    SessionMutationCheckpoint &&checkpoint) {
+  Result<OperationResult> ready = preflight_mutation_checkpoint(checkpoint);
+  if (!ready.ok()) {
+    return ready;
+  }
+  ActiveMutationCheckpoint *saved =
+      impl_->mutation_checkpoint_registry.active.get();
+
+  const bool changed = impl_->content_revision != saved->content_revision ||
+                       impl_->selection_revision != saved->selection_revision ||
+                       impl_->undo_stack.size() != saved->undo_depth;
+  for (MutationCheckpointParticipant &participant : saved->participants) {
+    std::swap(impl_->state.objects[participant.state_index],
+              participant.object);
+    if (participant.change_record_index.has_value()) {
+      std::swap(impl_->object_changes[*participant.change_record_index],
+                *participant.change_record);
+    }
+  }
+  for (std::size_t index = saved->object_changes_size;
+       index < impl_->object_changes.size(); ++index) {
+    impl_->object_change_index.erase(
+        object_id_key(impl_->object_changes[index].id));
+  }
+  impl_->object_changes.resize(saved->object_changes_size);
+  impl_->state.active_object = saved->active_object;
+  impl_->next_object_index = saved->next_object_index;
+  impl_->content_revision = saved->content_revision;
+  impl_->selection_revision = saved->selection_revision;
+  const std::size_t history_suffix =
+      impl_->undo_stack.size() - saved->undo_depth;
+  impl_->undo_stack.erase(impl_->undo_stack.begin() +
+                              static_cast<std::ptrdiff_t>(saved->undo_depth),
+                          impl_->undo_stack.end());
+  impl_->redo_stack = std::move(saved->detached_redo);
+
+  ++impl_->mutation_checkpoint_work_stats.restore_count;
+  impl_->mutation_checkpoint_work_stats.participant_restore_count +=
+      saved->participants.size();
+  impl_->mutation_checkpoint_work_stats.history_suffix_record_count +=
+      history_suffix;
+  impl_->mutation_checkpoint_registry.active.reset();
+  checkpoint.impl_.reset();
+
+  OperationResult restored;
+  restored.changed = changed;
+  restored.message = "Mutation checkpoint restored.";
+  return Result<OperationResult>::success(std::move(restored));
+}
+
+Result<OperationResult> ModelingSession::commit_mutation_checkpoint(
+    SessionMutationCheckpoint &&checkpoint) {
+  Result<OperationResult> ready = preflight_mutation_checkpoint(checkpoint);
+  if (!ready.ok()) {
+    return ready;
+  }
+
+  ActiveMutationCheckpoint *saved =
+      impl_->mutation_checkpoint_registry.active.get();
+  const bool changed = impl_->content_revision != saved->content_revision ||
+                       impl_->selection_revision != saved->selection_revision ||
+                       impl_->undo_stack.size() != saved->undo_depth;
+  if (!changed) {
+    // Entering a checkpoint is not itself a branch. Preserve the exact redo
+    // cursor when every enrolled operation resolved to a modeled no-op.
+    impl_->redo_stack = std::move(saved->detached_redo);
+  }
+
+  ++impl_->mutation_checkpoint_work_stats.commit_count;
+  impl_->mutation_checkpoint_registry.active.reset();
+  checkpoint.impl_.reset();
+  OperationResult committed;
+  committed.changed = changed;
+  committed.message = "Mutation checkpoint committed.";
+  return Result<OperationResult>::success(std::move(committed));
+}
+
+Result<OperationResult> ModelingSession::discard_mutation_checkpoint(
+    SessionMutationCheckpoint &&checkpoint) {
+  if (!checkpoint.valid()) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument, "Mutation checkpoint is empty."));
+  }
+  const ActiveMutationCheckpoint *saved =
+      impl_->mutation_checkpoint_registry.active.get();
+  if (saved == nullptr ||
+      checkpoint.impl_->origin != impl_->mutation_checkpoint_registry.origin ||
+      checkpoint.impl_->serial != saved->serial) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::StaleId,
+        "Mutation checkpoint does not belong to this active session scope."));
+  }
+
+  // Deliberately skip scope preflight. This is the checked escape hatch for a
+  // host aggregate whose other owner refused publication or rollback. Keep the
+  // current SDK branch exactly as it stands and retire the detached old redo.
+  impl_->mutation_checkpoint_registry.active.reset();
+  checkpoint.impl_.reset();
+  OperationResult discarded;
+  discarded.changed = true;
+  discarded.message = "Mutation checkpoint discarded on the current branch.";
+  return Result<OperationResult>::success(std::move(discarded));
+}
+
+Result<OperationResult> ModelingSession::abort_active_mutation_checkpoint() {
+  ActiveMutationCheckpoint *saved =
+      impl_->mutation_checkpoint_registry.active.get();
+  if (saved == nullptr) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument, "No active mutation checkpoint exists."));
+  }
+  if (saved->handle == nullptr ||
+      !saved->handle->orphaned.load(std::memory_order_acquire)) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "The active mutation checkpoint still has an owning token; consume "
+        "that token explicitly."));
+  }
+  SessionMutationCheckpoint recovery;
+  recovery.impl_ = saved->handle;
+  return restore_mutation_checkpoint(std::move(recovery));
+}
+
+bool ModelingSession::mutation_checkpoint_active() const {
+  return impl_->mutation_checkpoint_active();
 }
 
 Result<OperationResult> ModelingSession::commit_preview() {
   if (!impl_->preview.active) {
     return missing_preview_error();
   }
-
-  auto object = find_object(impl_->state, impl_->preview.object_id);
-  if (object == impl_->state.objects.end()) {
-    impl_->preview = PreviewTransaction{};
-    return Result<OperationResult>::failure(
-        make_error(ErrorCode::InvalidId, "Preview object ID is not live."));
+  Result<SessionPreviewCommitResult> committed =
+      commit_preview_transaction(impl_->preview.id);
+  if (!committed.ok()) {
+    return Result<OperationResult>::failure(committed.error());
   }
+  return Result<OperationResult>::success(
+      std::move(committed).value().operation);
+}
 
+Result<OperationResult> ModelingSession::commit_preview(PreviewId preview_id) {
+  Result<SessionPreviewCommitResult> committed =
+      commit_preview_transaction(preview_id);
+  if (!committed.ok()) {
+    return Result<OperationResult>::failure(committed.error());
+  }
+  return Result<OperationResult>::success(
+      std::move(committed).value().operation);
+}
+
+Result<SessionPreviewCommitResult>
+ModelingSession::commit_preview_transaction(PreviewId preview_id) {
+  if (!impl_->preview.active || impl_->preview.id != preview_id) {
+    return Result<SessionPreviewCommitResult>::failure(
+        make_error(ErrorCode::StaleId, "Preview ID is not active."));
+  }
   if (!impl_->preview_matches_base()) {
-    return Result<OperationResult>::failure(make_error(
+    return Result<SessionPreviewCommitResult>::failure(make_error(
         ErrorCode::StaleId,
         "Preview base changed before the preview could be committed."));
   }
-  Result<OperationResult> identity = impl_->validate_commit_identity(
-      impl_->preview.object_id, impl_->preview.preview_document);
-  if (!identity.ok()) {
-    return identity;
+
+  for (const PreviewTransactionObject &preview_object :
+       impl_->preview.objects) {
+    const SessionObject *object =
+        impl_->live_object(preview_object.object_id);
+    if (preview_object.action == SessionPreviewAction::AddProvisional) {
+      if (object != nullptr) {
+        return Result<SessionPreviewCommitResult>::failure(make_error(
+            ErrorCode::StaleId,
+            "A provisional preview object became live before commit."));
+      }
+    } else {
+      if (object == nullptr) {
+        return Result<SessionPreviewCommitResult>::failure(
+            make_error(ErrorCode::InvalidId, "Preview object ID is not live."));
+      }
+      if (object->kind() != document_kind(preview_object.base_document)) {
+        return Result<SessionPreviewCommitResult>::failure(
+            wrong_document_kind_error());
+      }
+    }
+    if (preview_object.action == SessionPreviewAction::RemoveExisting) {
+      continue;
+    }
+    Result<OperationResult> identity = impl_->validate_commit_identity(
+        preview_object.object_id, preview_object.preview_document);
+    if (!identity.ok()) {
+      return Result<SessionPreviewCommitResult>::failure(identity.error());
+    }
   }
 
-  OperationResult result = impl_->preview.receipt;
-  if (object->kind() == SessionObjectKind::Curve &&
-      object->curve_document().has_same_geometry(
-          std::get<CurveDocument>(impl_->preview.preview_document))) {
-    result.changed = false;
-    result.dirty = {};
+  SessionPreviewCommitResult committed;
+  OperationResult &result = committed.operation;
+  std::vector<bool> changed_objects;
+  changed_objects.reserve(impl_->preview.objects.size());
+  for (const PreviewTransactionObject &object : impl_->preview.objects) {
+    const bool changed = preview_object_changed(object);
+    changed_objects.push_back(changed);
+    merge_receipt(result, object.receipt, changed);
+    committed.objects.push_back({
+        .action = object.action,
+        .preview_object_id = object.object_id,
+        .committed_object_id =
+            object.action == SessionPreviewAction::RemoveExisting
+                ? ObjectId{}
+                : object.object_id,
+        .material_slot = object.material_slot,
+    });
   }
   result.dirty.overlays = true;
+
+  SessionState candidate = impl_->state;
+  for (std::size_t index = 0; index < impl_->preview.objects.size(); ++index) {
+    const PreviewTransactionObject &preview_object =
+        impl_->preview.objects[index];
+    if (preview_object.action == SessionPreviewAction::ReplaceExisting) {
+      if (changed_objects[index]) {
+        find_object(candidate, preview_object.object_id)->document =
+            preview_object.preview_document;
+      }
+      continue;
+    }
+    if (preview_object.action == SessionPreviewAction::AddProvisional) {
+      candidate.objects.push_back({
+          .id = preview_object.object_id,
+          .name = preview_object.name,
+          .document = preview_object.preview_document,
+          .selected = preview_object.selected,
+      });
+      continue;
+    }
+    std::erase_if(candidate.objects,
+                  [&](const SessionObject &object) {
+                    return object.id == preview_object.object_id;
+                  });
+  }
+
+  if (impl_->preview.replace_object_selection) {
+    for (SessionObject &object : candidate.objects) {
+      object.selected = false;
+    }
+    for (const PreviewTransactionObject &preview_object :
+         impl_->preview.objects) {
+      if (preview_object.action == SessionPreviewAction::RemoveExisting) {
+        continue;
+      }
+      const auto object = find_object(candidate, preview_object.object_id);
+      if (object != candidate.objects.end()) {
+        object->selected = preview_object.selected;
+      }
+    }
+  }
+
+  if (impl_->preview.compatibility_single_object_selection &&
+      impl_->preview.objects.size() == 1U && changed_objects.front()) {
+    const PreviewTransactionObject &preview_object =
+        impl_->preview.objects.front();
+    const auto object = find_object(candidate, preview_object.object_id);
+    if (object != candidate.objects.end() &&
+        object->kind() == SessionObjectKind::Mesh) {
+      object->selected = true;
+      candidate.active_object = object->id;
+    }
+  } else if (impl_->preview.requested_active_object.has_value()) {
+    const auto active =
+        find_object(candidate, *impl_->preview.requested_active_object);
+    if (active == candidate.objects.end()) {
+      return Result<SessionPreviewCommitResult>::failure(make_error(
+          ErrorCode::StaleId,
+          "The requested active preview object did not survive commit."));
+    }
+    active->selected = true;
+    candidate.active_object = active->id;
+  } else {
+    const auto active = find_object(candidate, candidate.active_object);
+    if (active == candidate.objects.end() || !active->selected) {
+      const auto first_selected = std::ranges::find_if(
+          candidate.objects,
+          [](const SessionObject &object) { return object.selected; });
+      candidate.active_object = first_selected == candidate.objects.end()
+                                    ? ObjectId{}
+                                    : first_selected->id;
+    }
+  }
+
+  bool selection_changed =
+      candidate.active_object != impl_->state.active_object ||
+      candidate.objects.size() != impl_->state.objects.size();
+  for (const SessionObject &object : candidate.objects) {
+    if (selection_changed) {
+      break;
+    }
+    const SessionObject *before = impl_->live_object(object.id);
+    selection_changed =
+        before == nullptr || before->selected != object.selected;
+  }
+  if (selection_changed) {
+    result.changed = true;
+    result.dirty.selection = true;
+    result.dirty.overlays = true;
+  }
+  for (const SessionObject &object : candidate.objects) {
+    if (object.selected) {
+      committed.selected_objects.push_back(object.id);
+    }
+  }
+  committed.active_object = candidate.active_object;
+
   if (!result.changed) {
     impl_->preview = PreviewTransaction{};
     result.message = "Preview completed without changes.";
-    return Result<OperationResult>::success(std::move(result));
+    return Result<SessionPreviewCommitResult>::success(std::move(committed));
   }
 
   impl_->undo_stack.push_back(impl_->state);
   impl_->redo_stack.clear();
-  const ObjectId preview_object = object->id;
-  const DirtyFlags preview_dirty = impl_->preview.dirty;
-  object->document = impl_->preview.preview_document;
-  impl_->record_topology_identity(object->id, object->document);
-  if (object->kind() == SessionObjectKind::Mesh) {
-    object->selected = true;
-    impl_->state.active_object = object->id;
+  std::vector<SessionObjectDirtyOverride> dirty_overrides;
+  dirty_overrides.reserve(impl_->preview.objects.size());
+  for (std::size_t index = 0; index < impl_->preview.objects.size(); ++index) {
+    if (!changed_objects[index]) {
+      continue;
+    }
+    const PreviewTransactionObject &preview_object =
+        impl_->preview.objects[index];
+    if (preview_object.action != SessionPreviewAction::RemoveExisting) {
+      dirty_overrides.push_back(
+          {.id = preview_object.object_id, .dirty = preview_object.dirty});
+    }
+  }
+  impl_->state = std::move(candidate);
+  for (const PreviewTransactionObject &preview_object :
+       impl_->preview.objects) {
+    if (preview_object.action == SessionPreviewAction::RemoveExisting) {
+      continue;
+    }
+    const auto object = find_object(impl_->state, preview_object.object_id);
+    if (object != impl_->state.objects.end()) {
+      impl_->record_topology_identity(object->id, object->document);
+    }
   }
   impl_->preview = PreviewTransaction{};
-  const SessionObjectDirtyOverride dirty_overrides[] = {
-      {.id = preview_object, .dirty = preview_dirty},
-  };
   impl_->publish_state_transition(impl_->undo_stack.back(), dirty_overrides);
 
   result.message = "Preview committed.";
-  result.dirty = preview_dirty;
-  return Result<OperationResult>::success(std::move(result));
-}
-
-Result<OperationResult> ModelingSession::commit_preview(PreviewId preview_id) {
-  if (!impl_->preview.active || impl_->preview.id != preview_id) {
-    return Result<OperationResult>::failure(
-        make_error(ErrorCode::StaleId, "Preview ID is not active."));
-  }
-  return commit_preview();
+  return Result<SessionPreviewCommitResult>::success(std::move(committed));
 }
 
 Result<OperationResult> ModelingSession::cancel_preview() {
@@ -3149,8 +4618,11 @@ Result<OperationResult> ModelingSession::cancel_preview(PreviewId preview_id) {
   }
   return cancel_preview();
 }
-
 Result<OperationResult> ModelingSession::undo() {
+  if (impl_->mutation_checkpoint_active()) {
+    return Result<OperationResult>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
     return Result<OperationResult>::failure(make_error(
@@ -3190,6 +4662,10 @@ Result<OperationResult> ModelingSession::undo() {
 }
 
 Result<OperationResult> ModelingSession::redo() {
+  if (impl_->mutation_checkpoint_active()) {
+    return Result<OperationResult>::failure(
+        mutation_checkpoint_lifecycle_error(*impl_));
+  }
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
     return Result<OperationResult>::failure(make_error(
@@ -3241,6 +4717,9 @@ std::size_t ModelingSession::undo_depth() const {
 }
 
 void ModelingSession::squash_undo_since(std::size_t mark) {
+  if (impl_->mutation_checkpoint_active()) {
+    return;
+  }
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
     return;
@@ -3264,6 +4743,9 @@ void ModelingSession::squash_undo_since(std::size_t mark) {
 }
 
 void ModelingSession::discard_undo_since(std::size_t mark) {
+  if (impl_->mutation_checkpoint_active()) {
+    return;
+  }
   if (mark >= impl_->undo_stack.size()) {
     return;
   }
@@ -3273,6 +4755,9 @@ void ModelingSession::discard_undo_since(std::size_t mark) {
 }
 
 bool ModelingSession::rollback_undo_since(std::size_t mark) {
+  if (impl_->mutation_checkpoint_active()) {
+    return false;
+  }
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
     return false;
@@ -3303,6 +4788,9 @@ bool ModelingSession::preview_active() const {
 
 void ModelingSession::restore_snapshot_preserving_identity_high_water(
     const ModelingSession &snapshot) {
+  if (impl_->mutation_checkpoint_active()) {
+    return;
+  }
   if (this == &snapshot) {
     return;
   }
@@ -3339,6 +4827,9 @@ void ModelingSession::restore_snapshot_preserving_identity_high_water(
 
 void ModelingSession::restore_snapshot_as_history_transition(
     const ModelingSession &snapshot) {
+  if (impl_->mutation_checkpoint_active()) {
+    return;
+  }
   if (this == &snapshot) {
     return;
   }
@@ -3387,6 +4878,9 @@ void ModelingSession::restore_snapshot_as_history_transition(
 }
 
 void ModelingSession::clear_history() {
+  if (impl_->mutation_checkpoint_active()) {
+    return;
+  }
   impl_->undo_stack.clear();
   impl_->redo_stack.clear();
 }
@@ -3537,6 +5031,17 @@ ModelingSession::document_copies(std::span<const ObjectId> object_ids) const {
 Result<OperationResult>
 ModelingSession::commit_document(ObjectId object_id, PolygonDocument document,
                                   OperationResult receipt) {
+  if (std::optional<Error> invalid =
+          impl_->validate_mutation_checkpoint_object(object_id)) {
+    return Result<OperationResult>::failure(std::move(*invalid));
+  }
+  if (impl_->mutation_checkpoint_active() &&
+      impl_->state.active_object.valid() &&
+      impl_->state.active_object != object_id &&
+      !impl_->mutation_checkpoint_enrolls(impl_->state.active_object)) {
+    return Result<OperationResult>::failure(
+        unenrolled_mutation_checkpoint_object_error());
+  }
   if (!impl_->allow_batch_object(object_id)) {
     return Result<OperationResult>::failure(make_error(
         ErrorCode::InvalidArgument,
@@ -3578,6 +5083,10 @@ ModelingSession::commit_document(ObjectId object_id, PolygonDocument document,
 
 Result<OperationResult> ModelingSession::commit_curve_document(
     ObjectId object_id, CurveDocument document, OperationResult receipt) {
+  if (std::optional<Error> invalid =
+          impl_->validate_mutation_checkpoint_object(object_id)) {
+    return Result<OperationResult>::failure(std::move(*invalid));
+  }
   if (!impl_->allow_batch_object(object_id)) {
     return Result<OperationResult>::failure(make_error(
         ErrorCode::InvalidArgument,
@@ -3603,6 +5112,10 @@ Result<OperationResult> ModelingSession::commit_curve_document(
     return identity;
   }
   if (found->curve_document().has_same_geometry(document)) {
+    // A no-op candidate may still have allocated and then removed components.
+    // Retire those observed identities even though no authored publication or
+    // history entry is required.
+    impl_->record_topology_identity(object_id, document);
     receipt.changed = false;
     receipt.dirty = {};
     receipt.message = "Curve unchanged.";
@@ -3622,10 +5135,19 @@ Result<OperationResult> ModelingSession::commit_curve_document(
 
 Result<ToolPreviewPayload> ModelingSession::preview_payload() const {
   if (!impl_->preview.active) {
-    return Result<ToolPreviewPayload>::failure(
-        make_error(ErrorCode::InvalidArgument, "No active preview transaction."));
+    return Result<ToolPreviewPayload>::failure(make_error(
+        ErrorCode::InvalidArgument, "No active preview transaction."));
   }
-  return materialize_preview_payload(impl_->preview);
+  PreviewTransactionObject *primary = primary_preview_object(impl_->preview);
+  if (primary == nullptr) {
+    return Result<ToolPreviewPayload>::failure(
+        make_error(ErrorCode::InternalError,
+                   "Active preview transaction has no objects."));
+  }
+  if (!primary->payload_valid) {
+    ++impl_->preview_work_stats.mesh_payload_build_count;
+  }
+  return materialize_preview_payload(*primary);
 }
 
 Result<ToolPreviewPayload>
@@ -3634,7 +5156,70 @@ ModelingSession::preview_payload(PreviewId preview_id) const {
     return Result<ToolPreviewPayload>::failure(
         make_error(ErrorCode::StaleId, "Preview ID is not active."));
   }
-  return materialize_preview_payload(impl_->preview);
+  PreviewTransactionObject *primary = primary_preview_object(impl_->preview);
+  if (primary == nullptr) {
+    return Result<ToolPreviewPayload>::failure(
+        make_error(ErrorCode::InternalError,
+                   "Active preview transaction has no objects."));
+  }
+  if (!primary->payload_valid) {
+    ++impl_->preview_work_stats.mesh_payload_build_count;
+  }
+  return materialize_preview_payload(*primary);
+}
+
+Result<SessionPreviewPayload>
+ModelingSession::preview_transaction_payload() const {
+  if (!impl_->preview.active) {
+    return Result<SessionPreviewPayload>::failure(make_error(
+        ErrorCode::InvalidArgument, "No active preview transaction."));
+  }
+  return preview_transaction_payload(impl_->preview.id);
+}
+
+Result<SessionPreviewPayload>
+ModelingSession::preview_transaction_payload(PreviewId preview_id) const {
+  if (!impl_->preview.active || impl_->preview.id != preview_id) {
+    return Result<SessionPreviewPayload>::failure(
+        make_error(ErrorCode::StaleId, "Preview ID is not active."));
+  }
+
+  SessionPreviewPayload payload;
+  payload.id = impl_->preview.id;
+  payload.operation_id = impl_->preview.operation_id;
+  payload.objects.reserve(impl_->preview.objects.size());
+  for (PreviewTransactionObject &object : impl_->preview.objects) {
+    SessionPreviewObjectPayload publication;
+    publication.object_id = object.object_id;
+    publication.action = object.action;
+    publication.kind = document_kind(object.preview_document);
+    publication.content_revision = object.payload_revision;
+    publication.dirty = object.dirty;
+    publication.changed = preview_object_changed(object);
+    publication.material_slot = object.material_slot;
+    publication.selected = object.selected;
+    if (object.action == SessionPreviewAction::RemoveExisting) {
+      publication.payload = std::monostate{};
+    } else if (publication.kind == SessionObjectKind::Mesh) {
+      if (!object.payload_valid) {
+        ++impl_->preview_work_stats.mesh_payload_build_count;
+      }
+      Result<ToolPreviewPayload> mesh = materialize_preview_payload(object);
+      if (!mesh.ok()) {
+        return Result<SessionPreviewPayload>::failure(mesh.error());
+      }
+      publication.payload = std::move(mesh).value();
+    } else {
+      CurveDocument curve = std::get<CurveDocument>(object.preview_document);
+      impl_->reconcile_topology_identity(object.object_id, curve);
+      publication.payload = std::move(curve);
+    }
+    payload.content_revision =
+        std::max(payload.content_revision, publication.content_revision);
+    merge_dirty(payload.dirty, publication.dirty);
+    payload.objects.push_back(std::move(publication));
+  }
+  return Result<SessionPreviewPayload>::success(std::move(payload));
 }
 
 Result<PolygonDocument>
@@ -3643,12 +5228,42 @@ ModelingSession::preview_document_copy(PreviewId preview_id) const {
     return Result<PolygonDocument>::failure(
         make_error(ErrorCode::StaleId, "Preview ID is not active."));
   }
+  const PreviewTransactionObject *primary =
+      primary_preview_object(impl_->preview);
+  if (primary == nullptr) {
+    return Result<PolygonDocument>::failure(
+        make_error(ErrorCode::InternalError,
+                   "Active preview transaction has no objects."));
+  }
+  return preview_document_copy(preview_id, primary->object_id);
+}
+
+Result<PolygonDocument>
+ModelingSession::preview_document_copy(PreviewId preview_id,
+                                       ObjectId object_id) const {
+  if (!impl_->preview.active || impl_->preview.id != preview_id) {
+    return Result<PolygonDocument>::failure(
+        make_error(ErrorCode::StaleId, "Preview ID is not active."));
+  }
+  const PreviewTransactionObject *object = impl_->preview_object(object_id);
+  if (object == nullptr) {
+    return Result<PolygonDocument>::failure(
+        make_error(ErrorCode::InvalidId,
+                   "Object ID does not participate in the active preview."));
+  }
+  if (object->action == SessionPreviewAction::RemoveExisting) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidId,
+        "A removed preview participant has no current document."));
+  }
   const auto *document =
-      std::get_if<PolygonDocument>(&impl_->preview.preview_document);
+      std::get_if<PolygonDocument>(&object->preview_document);
   if (document == nullptr) {
     return Result<PolygonDocument>::failure(wrong_document_kind_error());
   }
-  return Result<PolygonDocument>::success(*document);
+  PolygonDocument copy = *document;
+  impl_->reconcile_topology_identity(object_id, copy);
+  return Result<PolygonDocument>::success(std::move(copy));
 }
 
 Result<CurveDocument>
@@ -3657,13 +5272,94 @@ ModelingSession::preview_curve_document_copy(PreviewId preview_id) const {
     return Result<CurveDocument>::failure(
         make_error(ErrorCode::StaleId, "Preview ID is not active."));
   }
-  const auto *document =
-      std::get_if<CurveDocument>(&impl_->preview.preview_document);
+  const PreviewTransactionObject *primary =
+      primary_preview_object(impl_->preview);
+  if (primary == nullptr) {
+    return Result<CurveDocument>::failure(
+        make_error(ErrorCode::InternalError,
+                   "Active preview transaction has no objects."));
+  }
+  return preview_curve_document_copy(preview_id, primary->object_id);
+}
+
+Result<CurveDocument>
+ModelingSession::preview_curve_document_copy(PreviewId preview_id,
+                                             ObjectId object_id) const {
+  if (!impl_->preview.active || impl_->preview.id != preview_id) {
+    return Result<CurveDocument>::failure(
+        make_error(ErrorCode::StaleId, "Preview ID is not active."));
+  }
+  const PreviewTransactionObject *object = impl_->preview_object(object_id);
+  if (object == nullptr) {
+    return Result<CurveDocument>::failure(
+        make_error(ErrorCode::InvalidId,
+                   "Object ID does not participate in the active preview."));
+  }
+  if (object->action == SessionPreviewAction::RemoveExisting) {
+    return Result<CurveDocument>::failure(make_error(
+        ErrorCode::InvalidId,
+        "A removed preview participant has no current document."));
+  }
+  const auto *document = std::get_if<CurveDocument>(&object->preview_document);
   if (document == nullptr) {
     return Result<CurveDocument>::failure(wrong_document_kind_error());
   }
   CurveDocument copy = *document;
-  impl_->reconcile_topology_identity(impl_->preview.object_id, copy);
+  impl_->reconcile_topology_identity(object_id, copy);
+  return Result<CurveDocument>::success(std::move(copy));
+}
+
+Result<PolygonDocument>
+ModelingSession::preview_base_document_copy(PreviewId preview_id,
+                                            ObjectId object_id) const {
+  if (!impl_->preview.active || impl_->preview.id != preview_id) {
+    return Result<PolygonDocument>::failure(
+        make_error(ErrorCode::StaleId, "Preview ID is not active."));
+  }
+  const PreviewTransactionObject *object = impl_->preview_object(object_id);
+  if (object == nullptr) {
+    return Result<PolygonDocument>::failure(
+        make_error(ErrorCode::InvalidId,
+                   "Object ID does not participate in the active preview."));
+  }
+  if (!object->has_base_document) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "A provisional preview object has no base document."));
+  }
+  const auto *document = std::get_if<PolygonDocument>(&object->base_document);
+  if (document == nullptr) {
+    return Result<PolygonDocument>::failure(wrong_document_kind_error());
+  }
+  PolygonDocument copy = *document;
+  impl_->reconcile_topology_identity(object_id, copy);
+  return Result<PolygonDocument>::success(std::move(copy));
+}
+
+Result<CurveDocument>
+ModelingSession::preview_base_curve_document_copy(PreviewId preview_id,
+                                                  ObjectId object_id) const {
+  if (!impl_->preview.active || impl_->preview.id != preview_id) {
+    return Result<CurveDocument>::failure(
+        make_error(ErrorCode::StaleId, "Preview ID is not active."));
+  }
+  const PreviewTransactionObject *object = impl_->preview_object(object_id);
+  if (object == nullptr) {
+    return Result<CurveDocument>::failure(
+        make_error(ErrorCode::InvalidId,
+                   "Object ID does not participate in the active preview."));
+  }
+  if (!object->has_base_document) {
+    return Result<CurveDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "A provisional preview object has no base document."));
+  }
+  const auto *document = std::get_if<CurveDocument>(&object->base_document);
+  if (document == nullptr) {
+    return Result<CurveDocument>::failure(wrong_document_kind_error());
+  }
+  CurveDocument copy = *document;
+  impl_->reconcile_topology_identity(object_id, copy);
   return Result<CurveDocument>::success(std::move(copy));
 }
 
@@ -3671,22 +5367,39 @@ PreviewTransactionSummary ModelingSession::preview_summary() const {
   if (!impl_->preview.active) {
     return {};
   }
-  return {
+  const PreviewTransactionObject *primary =
+      primary_preview_object(impl_->preview);
+  if (primary == nullptr) {
+    return {};
+  }
+
+  PreviewTransactionSummary summary{
       .id = impl_->preview.id,
       .active = true,
-      .object_id = impl_->preview.object_id,
+      .object_id = primary->object_id,
       .operation_id = impl_->preview.operation_id,
       .delta = impl_->preview.delta,
-      .content_revision = impl_->preview.payload_revision,
-      .dirty = impl_->preview.dirty,
-      .kind = document_kind(impl_->preview.preview_document),
+      .content_revision = primary->payload_revision,
+      .dirty = primary->dirty,
+      .kind = document_kind(primary->preview_document),
+      .objects = impl_->preview.object_summaries,
   };
+  return summary;
+}
+
+SessionPreviewWorkStats ModelingSession::preview_work_stats() const {
+  return impl_->preview_work_stats;
+}
+
+SessionMutationCheckpointWorkStats
+ModelingSession::mutation_checkpoint_work_stats() const {
+  return impl_->mutation_checkpoint_work_stats;
 }
 
 Result<SemanticOverlayPayload>
 ModelingSession::semantic_overlay(ObjectId object_id) const {
-  const auto object = find_object(impl_->state, object_id);
-  if (object == impl_->state.objects.end()) {
+  const SessionObject *object = impl_->live_object(object_id);
+  if (object == nullptr) {
     return Result<SemanticOverlayPayload>::failure(
         make_error(ErrorCode::InvalidId, "Object ID is not live."));
   }
@@ -3697,6 +5410,9 @@ ModelingSession::semantic_overlay(ObjectId object_id) const {
 }
 
 bool ModelingSession::begin_batch_transaction() {
+  if (impl_->mutation_checkpoint_active()) {
+    return false;
+  }
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
     return false;

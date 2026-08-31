@@ -496,7 +496,8 @@ FixtureCounts analyze_fixture(const quader::SceneContentDocument &document) {
   const quader::AssetRegistry &assets = document.assets();
   const std::vector<quader::EntityId> entities = scene.entities();
   counts.entities = entities.size();
-  counts.objects = document.object_records().size();
+  // Stable editor-object identity is owned one-to-one by SceneDocument.
+  counts.objects = entities.size();
   counts.material_assets = assets.material_count();
   counts.texture_assets = assets.texture_count();
   counts.initial_selection = sorted_entities(scene.selected_entities());

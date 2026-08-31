@@ -7,8 +7,7 @@
 #include "scene/scene_bounds.hpp"
 
 #include "math/glm_bridge.hpp"
-#include "scene/scene_hierarchy_visibility.hpp"
-#include "scene/scene_transform.hpp"
+#include "scene/scene_mesh_occurrence_projection.hpp"
 
 #include <quader/modeling/curves/curve_document.hpp>
 
@@ -97,34 +96,97 @@ std::optional<SceneBounds> transformed_mesh_geometry_bounds(
 
 std::optional<SceneBounds> instance_occurrence_world_bounds(
     const SceneDocument &document, const AssetRegistry &assets,
-    EntityId occurrence, EntityId definition) {
-  const std::optional<QMat4> definition_from_world =
-      try_scene_matrix_inverse(document.world_transform_matrix(definition));
-  if (!definition_from_world.has_value()) {
-    return std::nullopt;
-  }
-
-  const QMat4 occurrence_world = document.world_transform_matrix(occurrence);
+    const SceneMeshOccurrenceProjectionSnapshot &mesh_projection,
+    EntityId occurrence) {
   std::optional<SceneBounds> result;
-  for (const EntityId member : document.descendants(definition, false)) {
-    if (document.containing_instance_definition(member) != definition ||
-        !scene_hierarchy_segment_is_visible(document, member, definition)) {
+  for (const SceneMeshOccurrenceProjectionRecord &placement :
+       mesh_projection.records_for_display(occurrence)) {
+    if (!placement.formal_instance()) {
       continue;
     }
-    const MeshComponent *component = document.mesh(member);
+    const MeshComponent *component = document.mesh(placement.geometry_entity);
     const MeshAsset *mesh =
         component != nullptr ? assets.mesh(component->mesh) : nullptr;
     if (mesh == nullptr) {
       continue;
     }
-    const QMat4 member_from_definition = scene_transform_multiply(
-        *definition_from_world, document.world_transform_matrix(member));
     const std::optional<SceneBounds> member_bounds = mesh_world_bounds(
-        *mesh,
-        scene_transform_multiply(occurrence_world, member_from_definition));
+        *mesh, placement.world_from_geometry);
     if (member_bounds.has_value()) {
       include_bounds(result, *member_bounds);
     }
+  }
+  return result;
+}
+
+std::optional<SceneBounds> entity_world_bounds_with_projection(
+    const SceneDocument &document, const AssetRegistry &assets,
+    const SceneMeshOccurrenceProjectionSnapshot &mesh_projection,
+    EntityId entity) {
+  if (!document.is_effectively_visible(entity) ||
+      document.transform(entity) == nullptr) {
+    return std::nullopt;
+  }
+
+  if (document.instance_occurrence(entity) != nullptr) {
+    if (const std::optional<SceneBounds> instance_bounds =
+            instance_occurrence_world_bounds(document, assets,
+                                             mesh_projection, entity)) {
+      return instance_bounds;
+    }
+  }
+
+  const MeshComponent *mesh_component = document.mesh(entity);
+  if (mesh_component != nullptr) {
+    if (const MeshAsset *mesh = assets.mesh(mesh_component->mesh)) {
+      if (const std::optional<SceneBounds> bounds = mesh_world_bounds(
+              *mesh, document.world_transform_matrix(entity))) {
+        return bounds;
+      }
+    }
+  }
+
+  if (const CurveComponent *component = document.curve(entity)) {
+    if (const CurveAsset *curve = assets.curve(component->curve)) {
+      if (const std::optional<SceneBounds> bounds = curve_world_bounds(
+              *curve, document.world_transform_matrix(entity))) {
+        return bounds;
+      }
+    }
+  }
+
+  const QVec3 world_position =
+      transform_point(document.world_transform_matrix(entity), {});
+  return SceneBounds{.min = world_position, .max = world_position};
+}
+
+std::optional<SceneBounds> entity_hierarchy_world_bounds_with_projection(
+    const SceneDocument &document, const AssetRegistry &assets,
+    const SceneMeshOccurrenceProjectionSnapshot &mesh_projection,
+    EntityId entity) {
+  if (!document.exists(entity) || !document.is_effectively_visible(entity)) {
+    return std::nullopt;
+  }
+
+  std::optional<SceneBounds> result;
+  for (const EntityId descendant : document.descendants(entity, true)) {
+    if (descendant != entity && !document.is_effectively_visible(descendant)) {
+      continue;
+    }
+    if (document.mesh(descendant) != nullptr ||
+        document.curve(descendant) != nullptr ||
+        document.instance_occurrence(descendant) != nullptr) {
+      if (const std::optional<SceneBounds> bounds =
+              entity_world_bounds_with_projection(
+                  document, assets, mesh_projection, descendant)) {
+        include_bounds(result, *bounds);
+      }
+    }
+  }
+
+  if (!result) {
+    return entity_world_bounds_with_projection(document, assets,
+                                               mesh_projection, entity);
   }
   return result;
 }
@@ -223,46 +285,10 @@ QVec3 bounds_center(const SceneBounds &bounds) {
 std::optional<SceneBounds> entity_world_bounds(const SceneDocument &document,
                                                const AssetRegistry &assets,
                                                EntityId entity) {
-  if (!document.is_effectively_visible(entity)) {
-    return std::nullopt;
-  }
-
-  const TransformComponent *transform = document.transform(entity);
-  if (!transform) {
-    return std::nullopt;
-  }
-
-  if (const InstanceOccurrenceComponent *occurrence =
-          document.instance_occurrence(entity)) {
-    if (const std::optional<SceneBounds> instance_bounds =
-            instance_occurrence_world_bounds(document, assets, entity,
-                                             occurrence->definition)) {
-      return instance_bounds;
-    }
-  }
-
-  const MeshComponent *mesh_component = document.mesh(entity);
-  if (mesh_component) {
-    if (const MeshAsset *mesh = assets.mesh(mesh_component->mesh)) {
-      if (const std::optional<SceneBounds> bounds = mesh_world_bounds(
-              *mesh, document.world_transform_matrix(entity))) {
-        return bounds;
-      }
-    }
-  }
-
-  if (const CurveComponent *component = document.curve(entity)) {
-    if (const CurveAsset *curve = assets.curve(component->curve)) {
-      if (const std::optional<SceneBounds> bounds = curve_world_bounds(
-              *curve, document.world_transform_matrix(entity))) {
-        return bounds;
-      }
-    }
-  }
-
-  const QVec3 world_position =
-      transform_point(document.world_transform_matrix(entity), {});
-  return SceneBounds{.min = world_position, .max = world_position};
+  const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      mesh_projection = document.mesh_occurrence_projection();
+  return entity_world_bounds_with_projection(document, assets,
+                                             *mesh_projection, entity);
 }
 
 std::optional<SceneBounds> entity_world_bounds_from_local_mesh_bounds(
@@ -279,29 +305,10 @@ std::optional<SceneBounds> entity_world_bounds_from_local_mesh_bounds(
 std::optional<SceneBounds>
 entity_hierarchy_world_bounds(const SceneDocument &document,
                               const AssetRegistry &assets, EntityId entity) {
-  if (!document.exists(entity) || !document.is_effectively_visible(entity)) {
-    return std::nullopt;
-  }
-
-  std::optional<SceneBounds> result;
-  for (const EntityId descendant : document.descendants(entity, true)) {
-    if (descendant != entity && !document.is_effectively_visible(descendant)) {
-      continue;
-    }
-    if (document.mesh(descendant) != nullptr ||
-        document.curve(descendant) != nullptr ||
-        document.instance_occurrence(descendant) != nullptr) {
-      if (const std::optional<SceneBounds> bounds =
-              entity_world_bounds(document, assets, descendant)) {
-        include_bounds(result, *bounds);
-      }
-    }
-  }
-
-  if (!result) {
-    return entity_world_bounds(document, assets, entity);
-  }
-  return result;
+  const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      mesh_projection = document.mesh_occurrence_projection();
+  return entity_hierarchy_world_bounds_with_projection(
+      document, assets, *mesh_projection, entity);
 }
 
 std::optional<SceneBounds> document_world_bounds(const SceneDocument &document,
@@ -312,13 +319,16 @@ std::optional<SceneBounds> document_world_bounds(const SceneDocument &document,
 std::optional<SceneBounds> document_world_bounds(
     const SceneDocument &document, const AssetRegistry &assets,
     const std::function<bool(EntityId)> &entity_visible) {
+  const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      mesh_projection = document.mesh_occurrence_projection();
   std::optional<SceneBounds> result;
   for (const EntityId entity : document.entities()) {
     if (entity_visible && !entity_visible(entity)) {
       continue;
     }
     if (const std::optional<SceneBounds> bounds =
-            entity_world_bounds(document, assets, entity)) {
+            entity_world_bounds_with_projection(document, assets,
+                                                *mesh_projection, entity)) {
       include_bounds(result, *bounds);
     }
   }
@@ -327,10 +337,13 @@ std::optional<SceneBounds> document_world_bounds(
 
 std::optional<SceneBounds> selected_world_bounds(const SceneDocument &document,
                                                  const AssetRegistry &assets) {
+  const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      mesh_projection = document.mesh_occurrence_projection();
   std::optional<SceneBounds> result;
   for (const EntityId entity : document.selected_entities()) {
     if (const std::optional<SceneBounds> bounds =
-            entity_world_bounds(document, assets, entity)) {
+            entity_world_bounds_with_projection(document, assets,
+                                                *mesh_projection, entity)) {
       include_bounds(result, *bounds);
     }
   }
@@ -340,12 +353,16 @@ std::optional<SceneBounds> selected_world_bounds(const SceneDocument &document,
 std::optional<SceneBounds>
 selected_transform_world_bounds(const SceneDocument &document,
                                 const AssetRegistry &assets) {
+  const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      mesh_projection = document.mesh_occurrence_projection();
   std::optional<SceneBounds> result;
   for (const EntityId entity : document.selected_entities()) {
     const std::optional<SceneBounds> bounds =
         document.has_children(entity)
-            ? entity_hierarchy_world_bounds(document, assets, entity)
-            : entity_world_bounds(document, assets, entity);
+            ? entity_hierarchy_world_bounds_with_projection(
+                  document, assets, *mesh_projection, entity)
+            : entity_world_bounds_with_projection(document, assets,
+                                                  *mesh_projection, entity);
     if (bounds) {
       include_bounds(result, *bounds);
     }

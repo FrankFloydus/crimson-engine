@@ -11,10 +11,8 @@
 #include "scene/scene_document.hpp"
 
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace quader {
@@ -33,25 +31,6 @@ struct SceneContentDocumentRecord {
 enum class SceneContentDocumentRootPolicy {
     EnsureSceneRoot,
     DeferSceneRoot,
-};
-
-/**
- * Stores the Project Object Record data contract used by the editor document ownership layer.
- * For records bound to a live scene entity, component-backed fields are a
- * projection from SceneDocument and are rehydrated before indexing or
- * serialization.
- */
-struct ProjectObjectRecord {
-  EditorObjectId id = kInvalidEditorObjectId;
-  EntityId scene_entity = kInvalidEntityId;
-  AssetId mesh = kInvalidAssetId;
-  MaterialReference material;
-  ModelingObjectId modeling_object = kInvalidModelingObjectId;
-  std::string authored_name;
-  bool visible = true;
-  std::uint32_t material_slot = 0;
-
-  [[nodiscard]] bool operator==(const ProjectObjectRecord &) const = default;
 };
 
 /**
@@ -117,50 +96,19 @@ public:
   AssetRegistry &assets() { return assets_; }
   const AssetRegistry &assets() const { return assets_; }
 
-  bool synchronize_object_records_with_scene();
-  EditorObjectId create_object_record(ProjectObjectRecord record);
-  EditorObjectId upsert_object_record(ProjectObjectRecord record);
-  std::vector<EditorObjectId>
-  upsert_object_records(std::vector<ProjectObjectRecord> records);
-  std::optional<ProjectObjectRecord>
-  object_record(EditorObjectId object_id) const;
-  EditorObjectId object_id_for_entity(EntityId entity) const;
-  EntityId entity_for_object_id(EditorObjectId object_id) const;
-  void forget_object_record(EditorObjectId object_id);
-  void forget_entity(EntityId entity);
-  std::vector<ProjectObjectRecord> object_records() const;
   SceneContentDocumentIdentityReport validate_object_identity_invariants() const;
   SceneContentDocumentAssetReferenceReport validate_asset_references() const;
-  SceneContentDocumentAssetReferenceReport
-  validate_asset_references(ProjectObjectRecord record) const;
   EntityId ensure_scene_root();
 
   std::uint64_t revision() const;
 
 private:
   void mark_dirty();
-  void bind_scene_object_identity_allocator();
-  bool sync_object_records_with_scene();
-  EditorObjectId upsert_object_record_after_sync(ProjectObjectRecord record);
-  bool can_assign_object_id(EditorObjectId object_id, EntityId entity) const;
-  std::optional<ProjectObjectRecord>
-  stored_object_record(EditorObjectId object_id) const;
-  ProjectObjectRecord record_for_scene_entity(EntityId entity,
-                                              EditorObjectId object_id) const;
-  ProjectObjectRecord
-  merged_scene_object_record(ProjectObjectRecord record) const;
-  void hydrate_record_from_scene(ProjectObjectRecord &record) const;
-  void index_record(ProjectObjectRecord &record);
-  EditorObjectId allocate_object_id(EditorObjectId requested);
 
   SceneContentDocumentRecord record_;
-  std::shared_ptr<EditorObjectId> next_object_id_ =
-      std::make_shared<EditorObjectId>(1);
   std::uint64_t revision_ = 0;
   SceneDocument scene_;
   AssetRegistry assets_;
-  std::unordered_map<EditorObjectId, ProjectObjectRecord> objects_;
-  std::unordered_map<EntityId, EditorObjectId> object_by_entity_;
 };
 
 } // namespace quader

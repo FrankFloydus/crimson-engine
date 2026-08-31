@@ -29,68 +29,108 @@ namespace quader {
 
 class AssetRegistry;
 
-/**
- * Owns an exact AssetRegistry restore point for one staged host projection.
- *
- * The checkpoint is intentionally owner-specific: editor adapters may use it
- * to make a cross-owner publication atomic, but they cannot inspect or mutate
- * registry internals through it.
- */
-class AssetRegistryProjectionCheckpoint final {
-public:
-  AssetRegistryProjectionCheckpoint() = default;
-  ~AssetRegistryProjectionCheckpoint() = default;
-  AssetRegistryProjectionCheckpoint(
-      const AssetRegistryProjectionCheckpoint &) noexcept = default;
-  AssetRegistryProjectionCheckpoint &
-  operator=(const AssetRegistryProjectionCheckpoint &) noexcept = default;
-  AssetRegistryProjectionCheckpoint(
-      AssetRegistryProjectionCheckpoint &&) noexcept = default;
-  AssetRegistryProjectionCheckpoint &
-  operator=(AssetRegistryProjectionCheckpoint &&) noexcept = default;
-
-  [[nodiscard]] bool valid() const noexcept {
-    return static_cast<bool>(snapshot_);
-  }
-
-private:
-  friend class AssetRegistry;
-
-  explicit AssetRegistryProjectionCheckpoint(
-      std::shared_ptr<const AssetRegistry> snapshot)
-      : snapshot_(std::move(snapshot)) {}
-
-  std::shared_ptr<const AssetRegistry> snapshot_;
-};
-
 using MeshAssetStore = TypedAssetStore<MeshAsset, MeshAssetRevision>;
 using CurveAssetStore = TypedAssetStore<CurveAsset, CurveAssetRevision>;
 using MaterialAssetStore = TypedAssetStore<MaterialDocument, MaterialAssetRevision>;
 using TextureAssetStore = TypedAssetStore<TextureAsset, TextureAssetRevision>;
 
 /**
- * Owns the exact curve-store state needed to compensate one curve publication.
+ * Owns one bounded, allocator-exact checkpoint for mixed modeling assets.
  *
- * Unlike AssetRegistryProjectionCheckpoint, this checkpoint never copies mesh,
- * material, texture, deferred-loader, or payload-interning state. It is valid
- * only for a synchronous curve-only publication whose other owner mutations
- * are compensated separately.
+ * Mesh and Curve stores share AssetRegistry's ID allocator and owner revision,
+ * so a mixed publication must restore both stores before rewinding those shared
+ * scalars exactly once.
  */
-class CurveAssetProjectionCheckpoint final {
+class ModelingAssetProjectionCheckpoint final {
 public:
-  CurveAssetProjectionCheckpoint() = default;
+  ModelingAssetProjectionCheckpoint() = default;
   [[nodiscard]] bool valid() const noexcept { return valid_; }
+  [[nodiscard]] std::size_t mesh_count() const noexcept {
+    std::size_t count = 0u;
+    for (const auto &[id, document] : meshes_.documents) {
+      (void)id;
+      count += document.has_value() ? 1u : 0u;
+    }
+    return count;
+  }
   [[nodiscard]] std::size_t curve_count() const noexcept {
-    return curves_.size();
+    std::size_t count = 0u;
+    for (const auto &[id, document] : curves_.documents) {
+      (void)id;
+      count += document.has_value() ? 1u : 0u;
+    }
+    return count;
+  }
+  [[nodiscard]] std::size_t participant_count() const noexcept {
+    return mutation_count_by_asset_.size();
   }
 
 private:
   friend class AssetRegistry;
 
   bool valid_ = false;
+  const AssetRegistry *origin_ = nullptr;
   AssetId next_id_ = 1;
   std::uint64_t revision_ = 0;
-  CurveAssetStore curves_;
+  std::uint64_t mesh_material_usage_revision_ = 0;
+  std::uint64_t modeling_mutation_count_ = 0;
+  std::uint64_t unscoped_mutation_count_ = 0;
+  std::uint64_t allocation_serial_ = 0;
+  std::unordered_map<AssetId, std::uint64_t> mutation_count_by_asset_;
+  MeshAssetStore::TargetedCheckpoint meshes_;
+  CurveAssetStore::TargetedCheckpoint curves_;
+};
+
+/** Bounded counter-only fence for long-lived modeling preview participants. */
+struct ModelingAssetProjectionMutationFenceWork final {
+  std::size_t participant_reference_count = 0u;
+  std::size_t participant_record_count = 0u;
+  std::size_t mutation_counter_lookup_count = 0u;
+};
+
+/**
+ * Tracks acknowledged per-asset modeling mutations without copying payloads.
+ *
+ * The retained host projection checkpoint remains the sole rollback payload.
+ * Preview owners compare this fence before each sample and acknowledge only
+ * mutations they just published on the owner thread.
+ */
+class ModelingAssetProjectionMutationFence final {
+public:
+  ModelingAssetProjectionMutationFence() = default;
+  ModelingAssetProjectionMutationFence(
+      const ModelingAssetProjectionMutationFence &) = delete;
+  ModelingAssetProjectionMutationFence &
+  operator=(const ModelingAssetProjectionMutationFence &) = delete;
+  ModelingAssetProjectionMutationFence(
+      ModelingAssetProjectionMutationFence &&other) noexcept;
+  ModelingAssetProjectionMutationFence &
+  operator=(ModelingAssetProjectionMutationFence &&other) noexcept;
+
+  [[nodiscard]] bool valid() const noexcept { return origin_ != nullptr; }
+  [[nodiscard]] const ModelingAssetProjectionMutationFenceWork &
+  work() const noexcept {
+    return work_;
+  }
+  [[nodiscard]] bool matches_current(
+      const AssetRegistry &assets,
+      ModelingAssetProjectionMutationFenceWork *work = nullptr) const;
+  [[nodiscard]] bool acknowledge_current(
+      const AssetRegistry &assets,
+      std::span<const AssetId> newly_created = {},
+      ModelingAssetProjectionMutationFenceWork *work = nullptr);
+
+private:
+  friend class AssetRegistry;
+  /** Captures one enrolled asset's mutation count for participant-fence validation. */
+  struct Record final {
+    AssetId asset = kInvalidAssetId;
+    std::uint64_t mutation_count = 0u;
+  };
+
+  const AssetRegistry *origin_ = nullptr;
+  std::vector<Record> records_;
+  ModelingAssetProjectionMutationFenceWork work_;
 };
 
 /**
@@ -242,22 +282,75 @@ public:
   }
   void advance_revision_for_replacement(std::uint64_t previous_revision);
 
-  /** Captures all asset state before one staged editor projection. */
-  [[nodiscard]] AssetRegistryProjectionCheckpoint
-  capture_projection_checkpoint() const;
-  /** Restores a staged editor projection without leaving revision or ID gaps. */
-  [[nodiscard]] bool restore_projection_checkpoint(
-      const AssetRegistryProjectionCheckpoint &checkpoint);
-  /** Captures only curve assets plus the shared ID and registry revisions. */
-  [[nodiscard]] CurveAssetProjectionCheckpoint
-  capture_curve_projection_checkpoint() const;
-  /** Restores one failed curve-only publication without touching mesh state. */
-  [[nodiscard]] bool restore_curve_projection_checkpoint(
-      const CurveAssetProjectionCheckpoint &checkpoint);
+  /** Captures named mesh and Curve assets against one shared allocator state. */
+  [[nodiscard]] ModelingAssetProjectionCheckpoint
+  capture_modeling_projection_checkpoint(
+      std::span<const AssetId> modeling_asset_ids) const;
+  /** Captures counter-only participant state for an acknowledged preview. */
+  [[nodiscard]] ModelingAssetProjectionMutationFence
+  capture_modeling_projection_mutation_fence(
+      std::span<const AssetId> modeling_asset_ids) const;
+  /** Validates an explicit exclusive allocation lease without mutation. */
+  [[nodiscard]] bool can_restore_modeling_projection_checkpoint(
+      const ModelingAssetProjectionCheckpoint &checkpoint,
+      std::span<const AssetId> created_modeling_asset_ids) const;
+  /** Restores only explicitly enrolled assets created during a long preview. */
+  [[nodiscard]] bool restore_modeling_projection_checkpoint(
+      const ModelingAssetProjectionCheckpoint &checkpoint,
+      std::span<const AssetId> created_modeling_asset_ids);
+  /**
+   * Long-preview preflight that requires an acknowledged participant fence
+   * and permits unrelated asset publications to survive the rollback.
+   */
+  [[nodiscard]] bool
+  can_restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+      const ModelingAssetProjectionCheckpoint &checkpoint,
+      const ModelingAssetProjectionMutationFence &acknowledged_fence,
+      std::span<const AssetId> created_modeling_asset_ids) const;
+  /**
+   * Restores enrolled payloads only. Exact scalar rewind is retained when no
+   * unrelated work occurred; otherwise owner revisions remain monotonic.
+   */
+  [[nodiscard]] bool
+  restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+      const ModelingAssetProjectionCheckpoint &checkpoint,
+      const ModelingAssetProjectionMutationFence &acknowledged_fence,
+      std::span<const AssetId> created_modeling_asset_ids);
   /** Asset mutation/materialization is confined to this owning thread. */
   [[nodiscard]] bool on_owner_thread() const noexcept;
 
 private:
+  friend class ModelingAssetProjectionMutationFence;
+  /** Lists asset identities affected by an exact modeling-projection rollback. */
+  struct ModelingAssetProjectionRestorePlan final {
+    std::vector<AssetId> created_asset_ids;
+    std::vector<AssetId> created_mesh_ids;
+    std::vector<AssetId> created_curve_ids;
+    std::vector<AssetId> enrolled_asset_ids;
+  };
+  /** Partitions participant assets for rollback while preserving unrelated mutations. */
+  struct ConcurrentModelingAssetProjectionRestorePlan final {
+    std::vector<AssetId> created_mesh_ids;
+    std::vector<AssetId> created_curve_ids;
+    std::vector<AssetId> restore_asset_ids;
+    std::vector<AssetId> changed_asset_ids;
+    bool mesh_material_usage_dirty = false;
+  };
+  [[nodiscard]] std::optional<ModelingAssetProjectionRestorePlan>
+  prepare_modeling_projection_restore(
+      const ModelingAssetProjectionCheckpoint &checkpoint,
+      std::span<const AssetId> created_modeling_asset_ids) const;
+  void apply_modeling_projection_restore(
+      const ModelingAssetProjectionCheckpoint &checkpoint,
+      const ModelingAssetProjectionRestorePlan &plan);
+  [[nodiscard]] std::optional<ConcurrentModelingAssetProjectionRestorePlan>
+  prepare_modeling_projection_restore_preserving_concurrent_changes(
+      const ModelingAssetProjectionCheckpoint &checkpoint,
+      const ModelingAssetProjectionMutationFence &acknowledged_fence,
+      std::span<const AssetId> created_modeling_asset_ids) const;
+  void apply_modeling_projection_restore_preserving_concurrent_changes(
+      const ModelingAssetProjectionCheckpoint &checkpoint,
+      const ConcurrentModelingAssetProjectionRestorePlan &plan);
   /**
    * Owns the immutable metadata and one-shot loader for a mesh whose geometry
    * has not been requested yet.
@@ -275,10 +368,23 @@ private:
   void mark_dirty();
   void mark_material_dirty();
   void mark_mesh_material_usage_dirty();
+  void mark_modeling_assets_dirty(std::span<const AssetId> asset_ids,
+                                  bool mesh_material_usage_dirty);
+  void note_asset_allocation(AssetId asset_id);
   [[nodiscard]] bool material_references_texture(AssetId texture) const;
 
   AssetId next_id_ = 1;
   std::uint64_t revision_ = 0;
+  std::uint64_t modeling_mutation_count_ = 0;
+  std::uint64_t unscoped_mutation_count_ = 0;
+  std::unordered_map<AssetId, std::uint64_t> mutation_count_by_asset_;
+  // Successful allocations receive a monotonic receipt. This serial and the
+  // retained per-ID receipts deliberately never rewind during bounded
+  // rollback; together they distinguish a transaction-created asset from a
+  // later explicit reuse of the same numeric ID.
+  std::uint64_t asset_allocation_serial_ = 0;
+  std::unordered_map<AssetId, std::uint64_t>
+      last_asset_allocation_serial_;
   std::uint64_t material_catalog_revision_ = 0;
   std::uint64_t mesh_material_usage_revision_ = 0;
   mutable MeshAssetStore meshes_;

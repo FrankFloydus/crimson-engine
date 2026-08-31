@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -51,6 +52,36 @@ struct SceneSurfaceParticipant final {
   SceneSurfaceParticipantId id;
   SceneBounds world_bounds{};
   std::size_t triangle_count = 0u;
+  /// Selectability excludes visibility and lock state, which are represented
+  /// independently so rendered occluders are never removed from the index.
+  bool selectable = false;
+  bool effectively_locked = false;
+};
+
+/// Selects participants without changing the render-visible snapshot itself.
+enum class SceneSurfaceEligibility : std::uint8_t {
+  RenderVisible,
+  Selectable,
+  SelectableUnlocked,
+};
+
+/// Identifies one stable mesh landmark class in a frozen surface snapshot.
+enum class SceneSurfaceLandmarkKind : std::uint8_t {
+  Vertex,
+  EdgeMidpoint,
+  FaceCenter,
+};
+
+/// Stores one world-space snap landmark derived from a surface participant.
+struct SceneSurfaceLandmark final {
+  SceneSurfaceParticipantId participant;
+  QVec3 world_position{};
+  QVec3 world_normal{};
+  SceneSurfaceLandmarkKind kind = SceneSurfaceLandmarkKind::Vertex;
+  /// Stable within the source mesh payload and landmark kind.
+  std::uint64_t element_key = 0u;
+  bool selectable = false;
+  bool effectively_locked = false;
 };
 
 /// Carries one downward or arbitrary world-space surface query.
@@ -59,6 +90,11 @@ struct SceneSurfaceRaycastRequest final {
   QVec3 world_direction{0.0f, -1.0f, 0.0f};
   float min_distance = 0.0f;
   float max_distance = std::numeric_limits<float>::infinity();
+  /// When false, triangle winding is evaluated after the participant's world
+  /// transform so reflected occurrences retain the renderer's face policy.
+  bool include_backfaces = true;
+  SceneSurfaceEligibility eligibility =
+      SceneSurfaceEligibility::RenderVisible;
   // Must be sorted by scene_surface_participant_id_less and contain no
   // duplicates. The query uses binary search and does not revalidate the span
   // on every ray.
@@ -81,6 +117,7 @@ struct SceneSurfaceQueryStats final {
   std::uint64_t blas_build_count = 0u;
   std::size_t participant_count = 0u;
   std::size_t triangle_count = 0u;
+  std::size_t landmark_count = 0u;
   std::size_t unique_geometry_count = 0u;
 };
 
@@ -121,6 +158,10 @@ public:
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] std::span<const SceneSurfaceParticipant>
   participants() const noexcept;
+  [[nodiscard]] std::span<const SceneSurfaceLandmark>
+  landmarks() const noexcept;
+  /// Changes only when the owner publishes a different frozen snapshot.
+  [[nodiscard]] std::uint64_t revision() const noexcept;
   [[nodiscard]] std::optional<SceneSurfaceHit>
   nearest_hit(const SceneSurfaceRaycastRequest &request,
               SceneSurfaceQueryScratch &scratch) const;
@@ -145,6 +186,15 @@ class SceneSurfaceQuery final {
 public:
   SceneSurfaceQuery(const SceneDocument &scene, const AssetRegistry &assets,
                     const ViewportLocalVisibilityService &local_visibility);
+  /**
+   * Creates the same render-visible query for a standalone editor service.
+   * The callbacks represent Local Visibility only; ordinary scene visibility
+   * remains owned and evaluated by SceneSurfaceQuery.
+   */
+  SceneSurfaceQuery(
+      const SceneDocument &scene, const AssetRegistry &assets,
+      std::function<bool(EntityId)> local_visibility_filter,
+      std::function<std::uint64_t()> local_visibility_revision_provider);
   ~SceneSurfaceQuery();
 
   SceneSurfaceQuery(const SceneSurfaceQuery &) = delete;

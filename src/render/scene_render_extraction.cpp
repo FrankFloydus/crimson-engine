@@ -12,8 +12,7 @@
 #include "render/render_signature_builder.hpp"
 #include "render/tool_preview_renderable_cache.hpp"
 #include "scene/scene_document.hpp"
-#include "scene/scene_hierarchy_visibility.hpp"
-#include "scene/scene_transform.hpp"
+#include "scene/scene_mesh_occurrence_projection.hpp"
 #include "scene/scene_texture_mapping.hpp"
 
 #include <algorithm>
@@ -32,11 +31,6 @@ bool local_visibility_allows(
     const ViewportLocalVisibilitySnapshot *local_visibility,
     EntityId entity) {
   return local_visibility == nullptr || local_visibility->allows(entity);
-}
-
-std::uint64_t local_visibility_revision(
-    const ViewportLocalVisibilitySnapshot *local_visibility) {
-  return local_visibility != nullptr ? local_visibility->revision() : 0u;
 }
 
 RenderMaterialAssetSnapshot build_render_material_asset_snapshot(
@@ -132,29 +126,35 @@ bool same_mesh_component(const MeshComponent &left,
 RenderSceneSnapshotDirtyState scene_snapshot_dirty_state(
     const RenderSceneSnapshot &snapshot, const RenderSceneSnapshot *previous) {
   if (previous == nullptr ||
-      previous->scene_binding != snapshot.scene_binding) {
+      !render_source_dependencies_match(
+          *previous, snapshot, RenderSourceDependency::SceneBinding)) {
     return {};
   }
 
+  const RenderSourceDependencyMask changed =
+      render_source_changed_dependencies(
+          *previous, snapshot, kRenderSourceAllDependencies);
   return {
-      .scene_changed = previous->scene_revision != snapshot.scene_revision,
+      .scene_changed =
+          changed.contains(RenderSourceDependency::SceneRevision),
       .selection_changed =
-          previous->selection_revision != snapshot.selection_revision,
+          changed.contains(RenderSourceDependency::SelectionRevision),
       .visibility_changed =
-          previous->visibility_revision != snapshot.visibility_revision,
-      .local_visibility_changed = previous->local_visibility_revision !=
-                                  snapshot.local_visibility_revision,
+          changed.contains(RenderSourceDependency::VisibilityRevision),
+      .local_visibility_changed =
+          changed.contains(RenderSourceDependency::LocalVisibilityRevision),
       .transforms_changed =
-          previous->transform_revision != snapshot.transform_revision,
-      .texture_mappings_changed = previous->texture_mapping_revision !=
-                                  snapshot.texture_mapping_revision,
+          changed.contains(RenderSourceDependency::TransformRevision),
+      .texture_mappings_changed =
+          changed.contains(RenderSourceDependency::TextureMappingRevision),
       .mesh_bindings_changed =
-          previous->mesh_binding_revision != snapshot.mesh_binding_revision,
-      .render_components_changed = previous->render_component_revision !=
-                                   snapshot.render_component_revision,
-      .assets_changed = previous->asset_revision != snapshot.asset_revision,
-      .project_materials_changed = previous->project_material_revision !=
-                                   snapshot.project_material_revision,
+          changed.contains(RenderSourceDependency::MeshBindingRevision),
+      .render_components_changed =
+          changed.contains(RenderSourceDependency::RenderComponentRevision),
+      .assets_changed =
+          changed.contains(RenderSourceDependency::AssetRevision),
+      .project_materials_changed =
+          changed.contains(RenderSourceDependency::ProjectMaterialRevision),
   };
 }
 
@@ -216,30 +216,9 @@ void mark_light_dirty(RenderSceneLightRecord &record,
 
 [[nodiscard]] bool can_reuse_previous_render_records(
     const RenderSceneSnapshot &snapshot, const RenderSceneSnapshot *previous) {
-  return previous != nullptr &&
-         previous->scene_binding == snapshot.scene_binding &&
-         previous->scene_revision == snapshot.scene_revision &&
-         previous->selection_revision == snapshot.selection_revision &&
-         previous->visibility_revision == snapshot.visibility_revision &&
-         previous->local_visibility_revision ==
-             snapshot.local_visibility_revision &&
-         previous->transform_revision == snapshot.transform_revision &&
-         previous->texture_mapping_revision ==
-             snapshot.texture_mapping_revision &&
-         previous->mesh_binding_revision == snapshot.mesh_binding_revision &&
-         previous->curve_binding_revision ==
-             snapshot.curve_binding_revision &&
-         previous->material_binding_revision ==
-             snapshot.material_binding_revision &&
-         previous->render_component_revision ==
-             snapshot.render_component_revision &&
-         previous->asset_revision == snapshot.asset_revision &&
-         previous->mesh_asset_revision == snapshot.mesh_asset_revision &&
-         previous->material_asset_revision ==
-             snapshot.material_asset_revision &&
-         previous->project_material_revision ==
-             snapshot.project_material_revision &&
-         previous->instance_edit_scope == snapshot.instance_edit_scope;
+  return previous != nullptr && render_source_dependencies_match(
+                                    *previous, snapshot,
+                                    kRenderSceneSnapshotSourceDependencies);
 }
 
 void reuse_previous_render_records(RenderSceneSnapshot &snapshot,
@@ -701,31 +680,25 @@ RenderSceneSnapshot build_render_scene_snapshot(
   QDR_PROFILE_FUNCTION();
   RenderSceneSnapshot snapshot;
   snapshot.frame_index = options.frame_index;
-  snapshot.scene_binding = options.scene_binding;
-  snapshot.scene_revision = document.revision();
-  snapshot.selection_revision = document.selection_revision();
-  snapshot.visibility_revision = document.visibility_revision();
-  snapshot.local_visibility_revision =
-      local_visibility_revision(options.local_visibility);
-  snapshot.transform_revision = document.transform_revision();
-  snapshot.texture_mapping_revision = document.texture_mapping_revision();
-  snapshot.mesh_binding_revision = document.mesh_binding_revision();
-  snapshot.curve_binding_revision = document.curve_binding_revision();
-  snapshot.material_binding_revision = document.material_binding_revision();
-  snapshot.render_component_revision = document.render_component_revision();
-  snapshot.asset_revision = assets.revision();
-  snapshot.mesh_asset_revision = assets.mesh_material_usage_revision();
-  snapshot.material_asset_revision = assets.material_catalog_revision();
-  snapshot.project_material_revision =
+  const std::uint64_t project_material_revision =
       options.project_material_revision != 0u
           ? options.project_material_revision
           : options.project_material_resolver != nullptr
                 ? options.project_material_resolver->revision()
                 : 0u;
-  snapshot.instance_edit_scope = options.instance_edit_scope;
+  static_cast<RenderSourceStamp &>(snapshot) = capture_render_source_stamp(
+      document, assets,
+      {
+          .scene_binding = options.scene_binding,
+          .local_visibility = options.local_visibility,
+          .project_material_revision = project_material_revision,
+          .instance_edit_scope = options.instance_edit_scope,
+      });
   const RenderSceneSnapshot *const previous =
       options.previous != nullptr &&
-              options.previous->scene_binding == snapshot.scene_binding
+              render_source_dependencies_match(
+                  *options.previous, snapshot,
+                  RenderSourceDependency::SceneBinding)
           ? options.previous
           : nullptr;
   snapshot.dirty = scene_snapshot_dirty_state(snapshot, previous);
@@ -734,7 +707,29 @@ RenderSceneSnapshot build_render_scene_snapshot(
     return snapshot;
   }
 
+  const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      mesh_projection = document.mesh_occurrence_projection();
   std::vector<RenderSceneMeshRecord> ordinary_meshes;
+  ordinary_meshes.reserve(
+      mesh_projection->ordinary_placement_indices().size());
+  for (const std::size_t index :
+       mesh_projection->ordinary_placement_indices()) {
+    const SceneMeshOccurrenceProjectionRecord *placement =
+        mesh_projection->record(index);
+    if (placement == nullptr ||
+        !local_visibility_allows(options.local_visibility,
+                                 placement->display_entity)) {
+      continue;
+    }
+    const MeshComponent *component =
+        document.mesh(placement->geometry_entity);
+    if (component != nullptr) {
+      ordinary_meshes.push_back(make_render_scene_mesh_record(
+          document, assets, placement->geometry_entity, *component,
+          options.project_material_resolver, previous));
+    }
+  }
+
   for (const EntityId entity_id : document.entities()) {
     QDR_PROFILE_SCOPE("Scene render extract entity");
     if (!document.is_effectively_visible(entity_id) ||
@@ -742,21 +737,14 @@ RenderSceneSnapshot build_render_scene_snapshot(
       continue;
     }
 
-    // Definition roots/members are internal canonical data, and occurrence
-    // leaves are rendered only through the explicit instance plan below.
+    // Definition storage and occurrence leaves contribute meshes only through
+    // the canonical placement projection; they do not publish direct lights.
     if (document.is_instance_definition_entity(entity_id) ||
         document.is_instance_definition_member(entity_id) ||
         document.instance_occurrence(entity_id) != nullptr) {
       continue;
     }
-
     const QMat4 world_transform = document.world_transform_matrix(entity_id);
-
-    if (const MeshComponent *component = document.mesh(entity_id)) {
-      ordinary_meshes.push_back(make_render_scene_mesh_record(
-          document, assets, entity_id, *component,
-          options.project_material_resolver, previous));
-    }
 
     if (const LightComponent *component = document.light(entity_id)) {
       snapshot.live_light_entities.insert(entity_id);
@@ -824,64 +812,47 @@ RenderSceneSnapshot build_render_scene_snapshot(
         occurrences);
   }
 
-  // Expand every visible occurrence from its hidden canonical definition.
-  // The canonical member-to-definition transform is shared by all placements;
-  // per-frame occurrence transforms remain the only mutable GPU payload.
-  for (const EntityId definition : document.entities()) {
-    if (!document.is_instance_definition_entity(definition)) {
+  // Geometry groups and participant transforms come from the scene-owned
+  // occurrence projection. Material and texture sampling remain render facts.
+  for (const SceneMeshOccurrenceGeometryGroup &group :
+       mesh_projection->formal_geometry_groups()) {
+    const MeshComponent *component = document.mesh(group.geometry_entity);
+    if (component == nullptr) {
       continue;
     }
-    const std::optional<QMat4> definition_inverse =
-        try_scene_matrix_inverse(document.world_transform_matrix(definition));
-    if (!definition_inverse.has_value()) {
-      continue;
-    }
-    std::vector<EntityId> visible_occurrences;
-    for (const EntityId occurrence :
-         document.instance_occurrences_for_definition(definition)) {
-      if (document.is_effectively_visible(occurrence) &&
-          local_visibility_allows(options.local_visibility, occurrence)) {
-        visible_occurrences.push_back(occurrence);
-      }
-    }
-    if (visible_occurrences.empty()) {
-      continue;
-    }
-    for (const EntityId member : document.descendants(definition, false)) {
-      if (document.containing_instance_definition(member) != definition ||
-          !scene_hierarchy_segment_is_visible(document, member, definition)) {
+    RenderSceneMeshRecord source = make_render_scene_mesh_record(
+        document, assets, group.geometry_entity, *component,
+        options.project_material_resolver, nullptr);
+    std::vector<RenderSceneInstanceOccurrenceRecord> occurrences;
+    occurrences.reserve(group.participant_indices.size());
+    for (const std::size_t index : group.participant_indices) {
+      const SceneMeshOccurrenceProjectionRecord *placement =
+          mesh_projection->record(index);
+      if (placement == nullptr ||
+          !local_visibility_allows(options.local_visibility,
+                                   placement->display_entity)) {
         continue;
       }
-      const MeshComponent *component = document.mesh(member);
-      if (component == nullptr) {
-        continue;
-      }
-      RenderSceneMeshRecord source = make_render_scene_mesh_record(
-          document, assets, member, *component,
-          options.project_material_resolver, nullptr);
-      const QMat4 member_from_definition = scene_transform_multiply(
-          *definition_inverse, document.world_transform_matrix(member));
-      std::vector<RenderSceneInstanceOccurrenceRecord> occurrences;
-      occurrences.reserve(visible_occurrences.size());
-      for (const EntityId occurrence : visible_occurrences) {
-        occurrences.push_back({
-            .entity_id = occurrence,
-            .occurrence =
-                instance_occurrence_token(definition, member, occurrence),
-            .world_transform = scene_transform_multiply(
-                document.world_transform_matrix(occurrence),
-                member_from_definition),
-            .sampling_from_local = effective_texture_sampling_from_local(
-                                       document, member, occurrence)
-                                       .value_or(QMat4{}),
-            .selected = selected(document, occurrence),
-            .dimmed = options.instance_edit_scope.active() &&
-                       occurrence != options.instance_edit_scope.occurrence,
-        });
-      }
+      occurrences.push_back({
+          .entity_id = placement->display_entity,
+          .occurrence = instance_occurrence_token(
+              group.definition_entity, group.geometry_entity,
+              placement->display_entity),
+          .world_transform = placement->world_from_geometry,
+          .sampling_from_local =
+              effective_texture_sampling_from_local(
+                  document, group.geometry_entity, placement->display_entity)
+                  .value_or(QMat4{}),
+          .selected = selected(document, placement->display_entity),
+          .dimmed = options.instance_edit_scope.active() &&
+                    placement->display_entity !=
+                        options.instance_edit_scope.occurrence,
+      });
+    }
+    if (!occurrences.empty()) {
       append_instance_primitive_records(
-          snapshot, source, definition, member, member_from_definition,
-          occurrences);
+          snapshot, source, group.definition_entity, group.geometry_entity,
+          group.definition_from_geometry, occurrences);
     }
   }
 
@@ -1159,38 +1130,27 @@ bool try_refresh_render_scene_snapshot_curve_publication(
     std::uint64_t project_material_revision,
     RenderInstanceEditScope instance_edit_scope,
     const ViewportLocalVisibilitySnapshot *local_visibility) {
-  const std::uint64_t curve_revision = document.curve_binding_revision();
-  const std::uint64_t render_revision = document.render_component_revision();
-  if (snapshot.scene_binding != scene_binding ||
-      snapshot.local_visibility_revision !=
-          local_visibility_revision(local_visibility) ||
-      snapshot.instance_edit_scope != instance_edit_scope ||
-      snapshot.selection_revision != document.selection_revision() ||
-      snapshot.visibility_revision != document.visibility_revision() ||
-      snapshot.transform_revision != document.transform_revision() ||
-      snapshot.texture_mapping_revision !=
-          document.texture_mapping_revision() ||
-      snapshot.mesh_binding_revision != document.mesh_binding_revision() ||
-      snapshot.material_binding_revision !=
-          document.material_binding_revision() ||
-      snapshot.mesh_asset_revision !=
-          assets.mesh_material_usage_revision() ||
-      snapshot.material_asset_revision != assets.material_catalog_revision() ||
-      snapshot.project_material_revision != project_material_revision ||
-      curve_revision <= snapshot.curve_binding_revision ||
-      render_revision <= snapshot.render_component_revision ||
-      curve_revision - snapshot.curve_binding_revision !=
-          render_revision - snapshot.render_component_revision) {
+  const RenderSourceStamp current = capture_render_source_stamp(
+      document, assets,
+      {
+          .scene_binding = scene_binding,
+          .local_visibility = local_visibility,
+          .project_material_revision = project_material_revision,
+          .instance_edit_scope = instance_edit_scope,
+      });
+  if (!render_source_dependencies_match(
+          snapshot, current,
+          kRenderSceneCurveRefreshStableDependencies) ||
+      !render_source_dependencies_advanced_together(
+          snapshot, current,
+          kRenderSceneCurveRefreshAdvanceDependencies)) {
     return false;
   }
 
   QDR_PROFILE_SCOPE("Render scene curve-only snapshot refresh");
   const std::uint64_t previous_scene_revision = snapshot.scene_revision;
   snapshot.frame_index = frame_index;
-  snapshot.scene_revision = document.revision();
-  snapshot.curve_binding_revision = curve_revision;
-  snapshot.render_component_revision = render_revision;
-  snapshot.asset_revision = assets.revision();
+  static_cast<RenderSourceStamp &>(snapshot) = current;
   snapshot.dirty = {
       .scene_changed = previous_scene_revision != snapshot.scene_revision,
       .selection_changed = false,
@@ -1220,20 +1180,19 @@ bool try_refresh_render_scene_snapshot_selection(
     std::uint64_t project_material_revision,
     RenderInstanceEditScope instance_edit_scope,
     const ViewportLocalVisibilitySnapshot *local_visibility) {
-  if (snapshot.scene_binding != scene_binding ||
-      snapshot.asset_revision != assets.revision() ||
-      snapshot.project_material_revision != project_material_revision ||
-      snapshot.local_visibility_revision !=
-          local_visibility_revision(local_visibility) ||
-      snapshot.instance_edit_scope != instance_edit_scope ||
-      snapshot.visibility_revision != document.visibility_revision() ||
-      snapshot.transform_revision != document.transform_revision() ||
-      snapshot.texture_mapping_revision !=
-          document.texture_mapping_revision() ||
-      snapshot.mesh_binding_revision != document.mesh_binding_revision() ||
-      snapshot.render_component_revision !=
-          document.render_component_revision() ||
-      snapshot.selection_revision == document.selection_revision()) {
+  const RenderSourceStamp current = capture_render_source_stamp(
+      document, assets,
+      {
+          .scene_binding = scene_binding,
+          .local_visibility = local_visibility,
+          .project_material_revision = project_material_revision,
+          .instance_edit_scope = instance_edit_scope,
+      });
+  if (!render_source_dependencies_match(
+          snapshot, current,
+          kRenderSceneSelectionRefreshStableDependencies) ||
+      render_source_dependencies_match(
+          snapshot, current, RenderSourceDependency::SelectionRevision)) {
     return false;
   }
 
@@ -1243,8 +1202,7 @@ bool try_refresh_render_scene_snapshot_selection(
       snapshot.selection_revision;
 
   snapshot.frame_index = frame_index;
-  snapshot.scene_revision = document.revision();
-  snapshot.selection_revision = document.selection_revision();
+  static_cast<RenderSourceStamp &>(snapshot) = current;
   snapshot.dirty = {
       .scene_changed = previous_scene_revision != snapshot.scene_revision,
       .selection_changed =
@@ -1289,20 +1247,23 @@ bool try_refresh_render_scene_snapshot_transforms(
     RenderInstanceEditScope instance_edit_scope,
     const ViewportLocalVisibilitySnapshot *local_visibility) {
   QDR_PROFILE_FUNCTION();
-  if (snapshot.scene_binding != scene_binding ||
-      snapshot.asset_revision != assets.revision() ||
-      snapshot.project_material_revision != project_material_revision ||
-      snapshot.local_visibility_revision !=
-          local_visibility_revision(local_visibility) ||
-      snapshot.instance_edit_scope != instance_edit_scope ||
-      snapshot.selection_revision != document.selection_revision() ||
-      snapshot.visibility_revision != document.visibility_revision() ||
-      snapshot.mesh_binding_revision != document.mesh_binding_revision() ||
-      snapshot.render_component_revision !=
-          document.render_component_revision() ||
-      (snapshot.transform_revision == document.transform_revision() &&
-       snapshot.texture_mapping_revision ==
-           document.texture_mapping_revision())) {
+  const RenderSourceStamp current = capture_render_source_stamp(
+      document, assets,
+      {
+          .scene_binding = scene_binding,
+          .local_visibility = local_visibility,
+          .project_material_revision = project_material_revision,
+          .instance_edit_scope = instance_edit_scope,
+      });
+  if (!render_source_dependencies_match(
+          snapshot, current,
+          kRenderSceneTransformRefreshStableDependencies) ||
+      render_source_dependencies_match(
+          snapshot, current,
+          RenderSourceDependencyMask::from({
+              RenderSourceDependency::TransformRevision,
+              RenderSourceDependency::TextureMappingRevision,
+          }))) {
     return false;
   }
 
@@ -1324,18 +1285,7 @@ bool try_refresh_render_scene_snapshot_transforms(
       snapshot.project_material_revision;
 
   snapshot.frame_index = frame_index;
-  snapshot.scene_revision = document.revision();
-  snapshot.selection_revision = document.selection_revision();
-  snapshot.visibility_revision = document.visibility_revision();
-  snapshot.local_visibility_revision =
-      local_visibility_revision(local_visibility);
-  snapshot.transform_revision = document.transform_revision();
-  snapshot.texture_mapping_revision = document.texture_mapping_revision();
-  snapshot.mesh_binding_revision = document.mesh_binding_revision();
-  snapshot.render_component_revision = document.render_component_revision();
-  snapshot.asset_revision = assets.revision();
-  snapshot.project_material_revision = project_material_revision;
-  snapshot.instance_edit_scope = instance_edit_scope;
+  static_cast<RenderSourceStamp &>(snapshot) = current;
   snapshot.dirty = {
       .scene_changed = previous_scene_revision != snapshot.scene_revision,
       .selection_changed =
@@ -1358,9 +1308,18 @@ bool try_refresh_render_scene_snapshot_transforms(
   };
   snapshot.reused_previous_records = false;
 
+  const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      mesh_projection = document.mesh_occurrence_projection();
   for (RenderSceneMeshRecord &record : snapshot.meshes) {
-    const QMat4 world_transform =
-        document.world_transform_matrix(record.entity_id);
+    const SceneMeshOccurrenceProjectionRecord *placement =
+        mesh_projection->find({
+            .display_entity = record.entity_id,
+            .geometry_entity = record.entity_id,
+        });
+    if (placement == nullptr) {
+      return false;
+    }
+    const QMat4 &world_transform = placement->world_from_geometry;
     const std::uint64_t transform_revision =
         RenderSignatureBuilder::light_transform_signature(world_transform);
     record.mesh_dirty = false;
@@ -1379,23 +1338,33 @@ bool try_refresh_render_scene_snapshot_transforms(
   for (RenderSceneInstancePrimitiveRecord &record :
        snapshot.instance_primitives) {
     if (record.definition_entity != kInvalidEntityId) {
-      const std::optional<QMat4> definition_inverse = try_scene_matrix_inverse(
-          document.world_transform_matrix(record.definition_entity));
-      if (!definition_inverse.has_value()) {
+      const auto group = std::ranges::find_if(
+          mesh_projection->formal_geometry_groups(),
+          [&](const SceneMeshOccurrenceGeometryGroup &candidate) {
+            return candidate.definition_entity == record.definition_entity &&
+                   candidate.geometry_entity == record.member_entity;
+          });
+      if (group == mesh_projection->formal_geometry_groups().end()) {
         return false;
       }
-      record.member_from_definition = scene_transform_multiply(
-          *definition_inverse,
-          document.world_transform_matrix(record.member_entity));
+      record.member_from_definition = group->definition_from_geometry;
     }
     for (RenderSceneInstanceOccurrenceRecord &occurrence :
          record.occurrences) {
-      occurrence.world_transform =
+      const EntityId geometry_entity =
           record.definition_entity != kInvalidEntityId
-              ? scene_transform_multiply(
-                    document.world_transform_matrix(occurrence.entity_id),
-                    record.member_from_definition)
-              : document.world_transform_matrix(occurrence.entity_id);
+              ? record.member_entity
+              : occurrence.entity_id;
+      const SceneMeshOccurrenceProjectionRecord *placement =
+          mesh_projection->find({
+              .display_entity = occurrence.entity_id,
+              .definition_entity = record.definition_entity,
+              .geometry_entity = geometry_entity,
+          });
+      if (placement == nullptr) {
+        return false;
+      }
+      occurrence.world_transform = placement->world_from_geometry;
       occurrence.sampling_from_local =
           record.definition_entity != kInvalidEntityId
               ? effective_texture_sampling_from_local(
@@ -1425,29 +1394,16 @@ bool render_scene_snapshot_matches_sources(
     std::uint64_t project_material_revision,
     RenderInstanceEditScope instance_edit_scope,
     const ViewportLocalVisibilitySnapshot *local_visibility) {
-  return snapshot.scene_binding == scene_binding &&
-         snapshot.scene_revision == document.revision() &&
-         snapshot.selection_revision == document.selection_revision() &&
-         snapshot.visibility_revision == document.visibility_revision() &&
-         snapshot.local_visibility_revision ==
-             local_visibility_revision(local_visibility) &&
-         snapshot.transform_revision == document.transform_revision() &&
-         snapshot.texture_mapping_revision ==
-             document.texture_mapping_revision() &&
-         snapshot.mesh_binding_revision == document.mesh_binding_revision() &&
-         snapshot.curve_binding_revision ==
-             document.curve_binding_revision() &&
-         snapshot.material_binding_revision ==
-             document.material_binding_revision() &&
-         snapshot.render_component_revision ==
-             document.render_component_revision() &&
-         snapshot.asset_revision == assets.revision() &&
-         snapshot.mesh_asset_revision ==
-             assets.mesh_material_usage_revision() &&
-         snapshot.material_asset_revision ==
-             assets.material_catalog_revision() &&
-         snapshot.project_material_revision == project_material_revision &&
-         snapshot.instance_edit_scope == instance_edit_scope;
+  const RenderSourceStamp current = capture_render_source_stamp(
+      document, assets,
+      {
+          .scene_binding = scene_binding,
+          .local_visibility = local_visibility,
+          .project_material_revision = project_material_revision,
+          .instance_edit_scope = instance_edit_scope,
+      });
+  return render_source_dependencies_match(
+      snapshot, current, kRenderSceneSnapshotSourceDependencies);
 }
 
 SceneRenderExtractionPlan build_scene_render_extraction_plan(

@@ -1347,9 +1347,67 @@ TEST(ModelingSdkConsumerTests,
       session.select_face(second.value(), second_copy.value().face_ids().front())
           .ok());
 
+  const std::uint64_t before_preview = session.content_revision();
+  const std::size_t history_before_preview = session.undo_depth();
+  const Transform3 survivor_from_source{.origin = {4.0F, 0.0F, 0.0F}};
+  Result<SessionBridgePreviewCandidate> preview_candidate =
+      session.prepare_bridge_documents(first.value(), second.value(),
+                                       survivor_from_source,
+                                       SelectionKind::Face, 3);
+  ASSERT_TRUE(preview_candidate.ok()) << preview_candidate.error_message();
+  ASSERT_TRUE(preview_candidate.value().receipt.changed);
+  EXPECT_EQ(session.objects().size(), 2U);
+  EXPECT_EQ(session.content_revision(), before_preview);
+  EXPECT_EQ(session.undo_depth(), history_before_preview);
+
+  SessionPreviewTransactionRequest request;
+  request.replace_object_selection = true;
+  request.active_participant_index = 0U;
+  request.participants.push_back({
+      .action = SessionPreviewAction::ReplaceExisting,
+      .object = first.value(),
+      .document = preview_candidate.value().survivor_document,
+      .receipt = preview_candidate.value().receipt,
+      .selected = true,
+  });
+  request.participants.push_back({
+      .action = SessionPreviewAction::RemoveExisting,
+      .object = second.value(),
+  });
+  const SessionPreviewBeginResult begun =
+      session
+          .begin_preview_transaction("modeling.bridge.preview",
+                                     std::move(request))
+          .or_throw();
+  Result<SessionBridgePreviewCandidate> repeated_candidate =
+      session.prepare_bridge_documents(first.value(), second.value(),
+                                       survivor_from_source,
+                                       SelectionKind::Face, 3);
+  ASSERT_TRUE(repeated_candidate.ok()) << repeated_candidate.error_message();
+  std::vector<SessionPreviewDocumentUpdate> updates;
+  updates.push_back({
+      .object = first.value(),
+      .document = repeated_candidate.value().survivor_document,
+      .receipt = repeated_candidate.value().receipt,
+  });
+  ASSERT_TRUE(session
+                  .update_preview_transaction(begun.preview_id,
+                                              std::move(updates))
+                  .ok());
+  const SessionPreviewCommitResult preview_commit =
+      session.commit_preview_transaction(begun.preview_id).or_throw();
+  EXPECT_EQ(preview_commit.active_object, first.value());
+  ASSERT_EQ(preview_commit.selected_objects.size(), 1U);
+  EXPECT_EQ(preview_commit.selected_objects.front(), first.value());
+  EXPECT_EQ(session.objects().size(), 1U);
+  EXPECT_EQ(session.undo_depth(), history_before_preview + 1U);
+  ASSERT_TRUE(session.undo().ok());
+  EXPECT_EQ(session.objects().size(), 2U);
+  EXPECT_EQ(session.undo_depth(), history_before_preview);
+
   Result<OperationResult> bridged = session.bridge_objects(
-      first.value(), second.value(), Transform3{.origin = {4.0F, 0.0F, 0.0F}},
-      SelectionKind::Face, 3);
+      first.value(), second.value(), survivor_from_source, SelectionKind::Face,
+      3);
   ASSERT_TRUE(bridged.ok()) << bridged.error_message();
   ASSERT_TRUE(bridged.value().success) << bridged.value().message;
   EXPECT_TRUE(bridged.value().changed);

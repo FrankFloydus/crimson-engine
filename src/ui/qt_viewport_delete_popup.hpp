@@ -29,6 +29,7 @@ class ViewportInputRouter;
  * shortcut without duplicating input or modeling command policy in Qt.
  */
 enum class QtViewportDeletePopupKind {
+  DirectDeleteCommand,
   ObjectConfirmation,
   ComponentMenu,
 };
@@ -47,7 +48,7 @@ struct QtViewportDeletePopupAction {
 };
 
 [[nodiscard]] QtViewportDeletePopupKind qt_viewport_delete_popup_kind(
-    ModelingSelectionMode mode, bool has_selected_scene_root);
+    const ModelingSelectionSummary &summary, bool has_selected_scene_root);
 
 [[nodiscard]] std::array<QtViewportDeletePopupAction, 5>
 qt_viewport_delete_popup_actions(const ModelingSelectionSummary &summary);

@@ -11,6 +11,7 @@
 #include <editor/modeling/runtime/runtime_command.hpp>
 #include <editor/modeling/runtime/session.hpp>
 #include <editor/interactions/transform_drag.hpp>
+#include <editor/selection/modeling_selection_projection_snapshot.hpp>
 
 namespace quader {
 
@@ -25,7 +26,7 @@ public:
   void
   record_operation(const quader_editor_core::EditorOperationCommand &command,
                    const quader_editor_core::CommandResult &result);
-  void record_transform(const quader_editor_core::EditorSession &session,
+  void record_transform(const ModelingSelectionProjectionSnapshot &selection,
                         const quader_editor_core::TransformDragState &drag,
                         bool duplicate_selected);
 

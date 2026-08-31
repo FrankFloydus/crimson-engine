@@ -6,7 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_command_event_filter.hpp"
 
-#include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
@@ -32,7 +31,6 @@
 #include <QWindow>
 
 #include <optional>
-#include <string>
 #include <utility>
 
 namespace quader {
@@ -59,10 +57,6 @@ bool is_viewport_surface_container(const QWidget *widget) {
   return false;
 }
 
-bool is_primitive_tool(ViewportToolId tool) {
-  return tool == ViewportToolId::CreatePrimitive;
-}
-
 QAbstractSpinBox *focused_spin_box(QWidget *widget) {
   for (QWidget *current = widget; current != nullptr;
        current = current->parentWidget()) {
@@ -81,13 +75,6 @@ QComboBox *focused_combo_box(QWidget *widget) {
     }
   }
   return nullptr;
-}
-
-bool is_primitive_finalize_command(const std::string &command_id) {
-  return command_id ==
-             quader_command::kToolsApplyPrimitiveCreation.string() ||
-         command_id ==
-             quader_command::kToolsCancelPrimitiveCreation.string();
 }
 
 const QAbstractItemView *focused_item_view(const QWidget *focus_widget) {
@@ -331,8 +318,7 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     const ViewportToolState state = qt_command_dispatch_tool_state(
         tool_state_provider_, editor_->viewports().grid_preset());
     const bool text_input_active = text_input_has_focus();
-    const bool primitive_tool_settings_editor_active =
-        is_primitive_tool(state.active_tool) &&
+    const bool native_tool_settings_editor_focused =
         qt_object_belongs_to_tool_settings_panel(focus_widget) &&
         (text_input_active || focused_combo_box(focus_widget) != nullptr);
     QuaderViewportKeybindingDispatch dispatch = [&]() {
@@ -340,51 +326,44 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       return editor_->commands().dispatch_viewport_input_binding(
           *chord, state, false, text_input_active);
     }();
-    bool explicit_tool_settings_dispatch =
-        primitive_tool_settings_editor_active &&
-        dispatch.kind == QuaderViewportKeybindingDispatch::Kind::Command &&
-        is_primitive_finalize_command(dispatch.command_id);
     if (dispatch.kind ==
             QuaderViewportKeybindingDispatch::Kind::NoMatch &&
-        primitive_tool_settings_editor_active) {
-      QuaderViewportKeybindingDispatch tool_settings_dispatch = [&]() {
+        native_tool_settings_editor_focused) {
+      const QuaderNativeToolSettingsDispatch tool_settings_dispatch = [&]() {
         QDR_PROFILE_SCOPE("Qt command resolve tool-settings keybinding");
-        return editor_->commands().dispatch_viewport_input_binding(
-            *chord, state, true, false);
+        return editor_->commands()
+            .dispatch_native_tool_settings_input_binding(*chord, state);
       }();
       if (tool_settings_dispatch.kind ==
-              QuaderViewportKeybindingDispatch::Kind::Command &&
-          is_primitive_finalize_command(
-              tool_settings_dispatch.command_id)) {
-        if (QAbstractSpinBox *spin =
-                focused_spin_box(focus_widget)) {
-          // Commit the visible text before Apply consumes Enter so the live
-          // selected primitive and the persistent setting match the field.
-          spin->interpretText();
+          QuaderNativeToolSettingsDispatch::Kind::Intent) {
+        if (tool_settings_dispatch.intent ==
+            QuaderNativeToolSettingsIntent::Apply) {
+          if (QAbstractSpinBox *spin = focused_spin_box(focus_widget)) {
+            // Commit the visible text before Apply consumes Enter so the live
+            // native-tool preview and its persistent setting match the field.
+            spin->interpretText();
+          }
         }
-        dispatch = std::move(tool_settings_dispatch);
-        explicit_tool_settings_dispatch = true;
+        const QuaderApiVoidResult result = [&]() {
+          QDR_PROFILE_SCOPE("Qt command execute tool-settings lifecycle");
+          return editor_->commands().execute_native_tool_settings_intent(
+              tool_settings_dispatch.intent);
+        }();
+        if (!result.ok) {
+          LOG_ERROR("Qt Tool Settings lifecycle failed: {}",
+                    result.message.empty() ? "Command failed."
+                                           : result.message);
+        }
+        event->accept();
+        return true;
       } else if (tool_settings_dispatch.kind ==
-                     QuaderViewportKeybindingDispatch::Kind::ViewportShortcut &&
-                 tool_settings_dispatch.shortcut.kind ==
-                     ViewportShortcutKind::CancelActiveTool) {
-        // The grouped Cancel Tool action uses the viewport alias on viewport
-        // surfaces. Inside primitive settings, route that same configurable
-        // mapping through the primitive command so the retained editor closes.
-        dispatch = {
-            .kind = QuaderViewportKeybindingDispatch::Kind::Command,
-            .command_id = std::string(
-                quader_command::kToolsCancelPrimitiveCreation.string()),
-        };
-        explicit_tool_settings_dispatch = true;
-      } else if (tool_settings_dispatch.kind ==
-                 QuaderViewportKeybindingDispatch::Kind::PendingChord) {
-        editor_->commands().reset_pending_keybinding_chord();
+                 QuaderNativeToolSettingsDispatch::Kind::PendingChord) {
+        event->accept();
+        return true;
       }
     }
 
-    if (!explicit_tool_settings_dispatch &&
-        focused_widget_owns_key_press(
+    if (focused_widget_owns_key_press(
             focus_widget, *static_cast<QKeyEvent *>(event))) {
       // Preserve the documented key behavior of the focused Qt control,
       // including item-view Ctrl+A, range navigation, activation, and
@@ -409,6 +388,7 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       return true;
     }
     case QuaderViewportKeybindingDispatch::Kind::ViewportShortcut:
+    case QuaderViewportKeybindingDispatch::Kind::ViewportInputAction:
     case QuaderViewportKeybindingDispatch::Kind::NoMatch:
       break;
     }

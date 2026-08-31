@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <unordered_map>
 #include <utility>
@@ -54,6 +55,86 @@ const modeling::CurveControlPoint *find_point(
                                     return point.id == id;
                                   });
   return found == points.end() ? nullptr : &*found;
+}
+
+std::vector<CurveControlTarget> visible_curve_controls(
+    const modeling::CurveDocument &document, bool drawing) {
+  std::vector<CurveControlTarget> controls;
+  controls.reserve(document.point_count() * 3u);
+  for (std::size_t point_index = 0; point_index < document.point_count();
+       ++point_index) {
+    const modeling::CurvePointId point = document.points()[point_index].id;
+    for (const CurveControlKind kind : {
+             CurveControlKind::Anchor, CurveControlKind::IncomingHandle,
+             CurveControlKind::OutgoingHandle}) {
+      if (curve_control_is_visible(document, drawing, point_index, kind)) {
+        controls.push_back({.point = point, .kind = kind});
+      }
+    }
+  }
+  return controls;
+}
+
+EditorSubSelectionElementRole sub_selection_role(CurveControlKind kind) {
+  switch (kind) {
+  case CurveControlKind::Anchor:
+    return EditorSubSelectionElementRole::Primary;
+  case CurveControlKind::IncomingHandle:
+    return EditorSubSelectionElementRole::SecondaryA;
+  case CurveControlKind::OutgoingHandle:
+    return EditorSubSelectionElementRole::SecondaryB;
+  }
+  return EditorSubSelectionElementRole::Primary;
+}
+
+CurveControlKind curve_control_kind(EditorSubSelectionElementRole role) {
+  switch (role) {
+  case EditorSubSelectionElementRole::Primary:
+    return CurveControlKind::Anchor;
+  case EditorSubSelectionElementRole::SecondaryA:
+    return CurveControlKind::IncomingHandle;
+  case EditorSubSelectionElementRole::SecondaryB:
+    return CurveControlKind::OutgoingHandle;
+  }
+  return CurveControlKind::Anchor;
+}
+
+CurveControlTarget curve_control_target(EditorSubSelectionTarget target) {
+  return {
+      .point = {.index = target.index, .generation = target.generation},
+      .kind = curve_control_kind(target.role),
+  };
+}
+
+EditorSubSelectionTarget sub_selection_target(CurveControlTarget target) {
+  return {
+      .index = target.point.index,
+      .generation = target.point.generation,
+      .role = sub_selection_role(target.kind),
+  };
+}
+
+quader_editor_core::SelectionEditOperation
+selection_edit_operation(EditorSubSelectionEdit edit) {
+  switch (edit) {
+  case EditorSubSelectionEdit::Replace:
+    return quader_editor_core::SelectionEditOperation::Replace;
+  case EditorSubSelectionEdit::Add:
+    return quader_editor_core::SelectionEditOperation::Add;
+  case EditorSubSelectionEdit::Remove:
+    return quader_editor_core::SelectionEditOperation::Remove;
+  case EditorSubSelectionEdit::Toggle:
+    return quader_editor_core::SelectionEditOperation::Toggle;
+  }
+  return quader_editor_core::SelectionEditOperation::Replace;
+}
+
+ModelingCommandResult modeling_result(CommandResult result) {
+  return {
+      .ok = result.ok,
+      .changed = result.changed,
+      .message = std::move(result.message),
+  };
 }
 
 } // namespace
@@ -101,6 +182,12 @@ const CurveToolPreviewState &CurveToolService::preview_state() const {
     return cached_preview_;
   }
 
+  rebuild_preview_cache(++preview_revision_);
+  return cached_preview_;
+}
+
+void CurveToolService::rebuild_preview_cache(
+    std::uint64_t presentation_revision) const {
   const bool source_editable =
       !drawing_ && editable_source(entity_) &&
       scene_.uuid(entity_) == source_uuid_;
@@ -113,7 +200,7 @@ const CurveToolPreviewState &CurveToolService::preview_state() const {
       .modeling_object_id = modeling_object_id_,
       .control_selection = control_selection_,
       .hover_world = hover_world_,
-      .revision = ++preview_revision_,
+      .revision = presentation_revision,
   };
   if (active_ && drawing_) {
     preview.document = draft_;
@@ -123,10 +210,9 @@ const CurveToolPreviewState &CurveToolService::preview_state() const {
   }
   cached_preview_ = std::move(preview);
   cached_tool_revision_ = revision_;
-  cached_scene_revision_ = scene_revision;
-  cached_modeling_revision_ = modeling_revision;
-  cached_asset_revision_ = asset_revision;
-  return cached_preview_;
+  cached_scene_revision_ = scene_.revision();
+  cached_modeling_revision_ = modeling_.content_revision();
+  cached_asset_revision_ = assets_.revision();
 }
 
 bool CurveToolService::editable_source(EntityId entity) const {
@@ -283,10 +369,14 @@ CommandResult CurveToolService::refresh() {
   if (!drawing_) {
     const bool source_valid = editable_source(entity_) &&
                               scene_.uuid(entity_) == source_uuid_ &&
-                              scene_.modeling_object(entity_)->object_id ==
-                                  modeling_object_id_ &&
-                              modeling_.curve_document(modeling_object_id_,
-                                                       false).has_value();
+                               scene_.modeling_object(entity_)->object_id ==
+                                   modeling_object_id_ &&
+                               modeling_.curve_document(modeling_object_id_,
+                                                        false).has_value();
+    const std::vector<EntityId> selected = scene_.selected_entities();
+    const bool source_still_selected =
+        modeling_.selection_mode() == ModelingSelectionMode::Object &&
+        std::find(selected.begin(), selected.end(), entity_) != selected.end();
     // Our own publications observe all stamps immediately. Reaching this path
     // during a drag therefore means another owner changed the scene, assets, or
     // portable history. Cancel before an old control snapshot can overwrite it.
@@ -296,7 +386,7 @@ CommandResult CurveToolService::refresh() {
         return canceled;
       }
     }
-    if (!source_valid || selection_changed) {
+    if (!source_valid || (selection_changed && !source_still_selected)) {
       detach_source();
       if (const auto entity = selected_curve()) {
         attach_source(*entity);
@@ -494,13 +584,36 @@ bool CurveToolService::edit_control_selection(
     quader_editor_core::SelectionEditOperation operation,
     const CurveControlSelection *baseline,
     std::optional<CurveControlTarget> direct_hit) {
+  const ModelingCommandResult result = edit_control_selection_checked(
+      hits, operation, baseline, direct_hit);
+  return result.ok && result.changed;
+}
+
+ModelingCommandResult CurveToolService::edit_control_selection_checked(
+    std::span<const CurveControlTarget> hits,
+    quader_editor_core::SelectionEditOperation operation,
+    const CurveControlSelection *baseline,
+    std::optional<CurveControlTarget> direct_hit) {
   const CommandResult refreshed = refresh();
-  if (!refreshed.ok || !controls_editable() || dragging()) {
-    return false;
+  if (!refreshed.ok) {
+    return modeling_result(refreshed);
+  }
+  if (dragging()) {
+    return {.ok = false,
+            .changed = refreshed.changed,
+            .message =
+                "Finish the active Curve drag before editing controls."};
+  }
+  if (!controls_editable()) {
+    return {.ok = false,
+            .changed = refreshed.changed,
+            .message = "Curve controls are not editable."};
   }
   const auto &preview = preview_state();
   if (!preview.document) {
-    return false;
+    return {.ok = false,
+            .changed = refreshed.changed,
+            .message = "The Curve control owner is unavailable."};
   }
 
   const CurveControlSelection valid_baseline = valid_control_selection(
@@ -525,7 +638,461 @@ bool CurveToolService::edit_control_selection(
   if (selection_changed || hover_changed) {
     invalidate();
   }
-  return selection_changed || hover_changed;
+  return {.ok = true,
+          .changed = refreshed.changed || selection_changed || hover_changed};
+}
+
+EditorSubSelectionSnapshot CurveToolService::sub_selection_snapshot() const {
+  EntityId owner = kInvalidEntityId;
+  int owner_object_id = kInvalidModelingObjectId;
+  if (active_ && drawing_) {
+    // An uncommitted Curve draft has no scene identity, but its controls still
+    // participate in the same editor selection commands.
+  } else {
+    // Keep summary polling allocation-free. refresh() owns the expensive
+    // selection/source validation and pins these stamps; a changed owner stamp
+    // makes this snapshot empty until that synchronization runs.
+    if (drawing_ || entity_ == kInvalidEntityId ||
+        observed_scene_revision_ != scene_.revision() ||
+        observed_modeling_revision_ != modeling_.content_revision() ||
+        observed_asset_revision_ != assets_.revision() ||
+        observed_selection_revision_ != scene_.selection_revision() ||
+        observed_modeling_selection_revision_ !=
+            modeling_.selection_revision() ||
+        modeling_.selection_mode() != ModelingSelectionMode::Object) {
+      return {};
+    }
+    const SelectionComponent *selection = scene_.selection(entity_);
+    const ModelingObjectComponent *object = scene_.modeling_object(entity_);
+    if (selection == nullptr || !selection->selected || object == nullptr ||
+        object->object_id != modeling_object_id_) {
+      return {};
+    }
+    owner = entity_;
+    owner_object_id = modeling_object_id_;
+  }
+
+  EditorSubSelectionSnapshot snapshot{
+      .kind = EditorSubSelectionKind::CurveControl,
+      .participates_in_bulk_selection = !dragging(),
+      .entity = owner,
+      .modeling_object_id = owner_object_id,
+      .selected_count =
+          static_cast<std::uint32_t>(control_selection_.controls.size()),
+      .revision = control_selection_revision_,
+  };
+  if (control_selection_.active.has_value()) {
+    snapshot.active = EditorSubSelectionTarget{
+        .index = control_selection_.active->point.index,
+        .generation = control_selection_.active->point.generation,
+        .role = sub_selection_role(control_selection_.active->kind),
+    };
+  }
+  return snapshot;
+}
+
+EditorSubSelectionBaseline
+CurveToolService::capture_sub_selection_baseline() const {
+  const EditorSubSelectionSnapshot snapshot = sub_selection_snapshot();
+  if (snapshot.kind == EditorSubSelectionKind::None) {
+    return {};
+  }
+  const std::uint64_t presentation_revision = preview_state().revision;
+  EditorSubSelectionBaseline baseline{
+      .kind = snapshot.kind,
+      .entity = snapshot.entity,
+      .modeling_object_id = snapshot.modeling_object_id,
+      .active = snapshot.active,
+      .hover = sub_element_hover_,
+      .revision = snapshot.revision,
+      .owner_revision = revision_,
+      .presentation_revision = presentation_revision,
+  };
+  baseline.selected.reserve(control_selection_.controls.size());
+  for (const CurveControlTarget control : control_selection_.controls) {
+    baseline.selected.push_back(sub_selection_target(control));
+  }
+  return baseline;
+}
+
+void CurveToolService::synchronize_sub_selection_scope() {
+  (void)refresh();
+  if (sub_selection_snapshot().kind == EditorSubSelectionKind::None) {
+    sub_element_hover_.reset();
+  }
+}
+
+ModelingCommandResult CurveToolService::edit_sub_elements(
+    std::span<const EditorSubSelectionTarget> hits,
+    EditorSubSelectionEdit edit,
+    const EditorSubSelectionBaseline *baseline,
+    std::optional<EditorSubSelectionTarget> direct_hit) {
+  const CommandResult refreshed = refresh();
+  if (!refreshed.ok) {
+    return modeling_result(refreshed);
+  }
+  if (dragging()) {
+    return {.ok = false,
+            .changed = refreshed.changed,
+            .message =
+                "Finish the active Curve drag before editing controls."};
+  }
+  if (!controls_editable()) {
+    return {.ok = false,
+            .changed = refreshed.changed,
+            .message = "Curve controls are not editable."};
+  }
+  const EditorSubSelectionSnapshot snapshot = sub_selection_snapshot();
+  if (snapshot.kind != EditorSubSelectionKind::CurveControl) {
+    return {.ok = false,
+            .changed = refreshed.changed,
+            .message = "The Curve control owner is stale."};
+  }
+  const auto &preview = preview_state();
+  if (!preview.document) {
+    return {.ok = false,
+            .changed = refreshed.changed,
+            .message = "The Curve control owner is unavailable."};
+  }
+
+  std::vector<CurveControlTarget> curve_hits;
+  curve_hits.reserve(hits.size());
+  for (const EditorSubSelectionTarget target : hits) {
+    curve_hits.push_back(curve_control_target(target));
+  }
+  std::vector<CurveControlTarget> canonical_hits = curve_hits;
+  std::sort(canonical_hits.begin(), canonical_hits.end());
+  canonical_hits.erase(
+      std::unique(canonical_hits.begin(), canonical_hits.end()),
+      canonical_hits.end());
+  CurveControlSelection requested_hits{.controls = canonical_hits};
+  if (direct_hit.has_value()) {
+    requested_hits.active = curve_control_target(*direct_hit);
+  }
+  const CurveControlSelection valid_hits =
+      valid_control_selection(requested_hits, *preview.document);
+  if (valid_hits.controls != canonical_hits ||
+      (requested_hits.active.has_value() &&
+       valid_hits.active != requested_hits.active)) {
+    return {.ok = false,
+            .changed = refreshed.changed,
+            .message = "Curve control selection target is stale."};
+  }
+
+  CurveControlSelection curve_baseline;
+  const CurveControlSelection *curve_baseline_pointer = nullptr;
+  if (baseline != nullptr) {
+    if (baseline->kind != snapshot.kind || baseline->entity != snapshot.entity ||
+        baseline->modeling_object_id != snapshot.modeling_object_id) {
+      return {.ok = false,
+              .changed = refreshed.changed,
+              .message = "Curve control selection baseline owner is stale."};
+    }
+    curve_baseline.controls.reserve(baseline->selected.size());
+    for (const EditorSubSelectionTarget target : baseline->selected) {
+      curve_baseline.controls.push_back(curve_control_target(target));
+    }
+    if (baseline->active.has_value()) {
+      curve_baseline.active = curve_control_target(*baseline->active);
+    }
+    std::sort(curve_baseline.controls.begin(), curve_baseline.controls.end());
+    curve_baseline.controls.erase(
+        std::unique(curve_baseline.controls.begin(),
+                    curve_baseline.controls.end()),
+        curve_baseline.controls.end());
+    const CurveControlSelection valid_baseline =
+        valid_control_selection(curve_baseline, *preview.document);
+    if (valid_baseline != curve_baseline) {
+      return {.ok = false,
+              .changed = refreshed.changed,
+              .message = "Curve control selection baseline is stale."};
+    }
+    curve_baseline_pointer = &curve_baseline;
+  }
+
+  ModelingCommandResult result = edit_control_selection_checked(
+      curve_hits, selection_edit_operation(edit), curve_baseline_pointer,
+      direct_hit.has_value()
+          ? std::optional<CurveControlTarget>(
+                curve_control_target(*direct_hit))
+          : std::nullopt);
+  if (!result.ok) {
+    result.changed = result.changed || refreshed.changed;
+    return result;
+  }
+  const bool hover_changed = sub_element_hover_.has_value();
+  sub_element_hover_.reset();
+  result.changed = result.changed || hover_changed || refreshed.changed;
+  return result;
+}
+
+ModelingCommandResult CurveToolService::restore_sub_selection_baseline(
+    const EditorSubSelectionBaseline &baseline) {
+  const CommandResult refreshed = refresh();
+  if (!refreshed.ok) {
+    return {.ok = false,
+            .changed = true,
+            .message = refreshed.message.empty()
+                           ? "Curve selection rollback could not refresh its owner."
+                           : refreshed.message};
+  }
+  const EditorSubSelectionSnapshot snapshot = sub_selection_snapshot();
+  if (baseline.kind != EditorSubSelectionKind::CurveControl ||
+      snapshot.kind != baseline.kind || snapshot.entity != baseline.entity ||
+      snapshot.modeling_object_id != baseline.modeling_object_id) {
+    return {.ok = false,
+            .changed = true,
+            .message = "Curve selection rollback owner is no longer current."};
+  }
+  const std::optional<modeling::CurveDocument> document =
+      drawing_ ? std::optional<modeling::CurveDocument>{draft_}
+               : modeling_.curve_document(modeling_object_id_, false);
+  if (!document.has_value()) {
+    return {.ok = false,
+            .changed = true,
+            .message = "Curve selection rollback document is unavailable."};
+  }
+
+  CurveControlSelection restored;
+  restored.controls.reserve(baseline.selected.size());
+  for (const EditorSubSelectionTarget target : baseline.selected) {
+    restored.controls.push_back(curve_control_target(target));
+  }
+  if (baseline.active.has_value()) {
+    restored.active = curve_control_target(*baseline.active);
+  }
+  const CurveControlSelection validated =
+      valid_control_selection(restored, *document);
+  if (validated != restored) {
+    return {.ok = false,
+            .changed = true,
+            .message = "Curve selection rollback contains stale controls."};
+  }
+
+  if (baseline.hover.has_value()) {
+    CurveControlSelection hovered{
+        .controls = {curve_control_target(*baseline.hover)},
+        .active = curve_control_target(*baseline.hover),
+    };
+    if (valid_control_selection(hovered, *document) != hovered) {
+      return {.ok = false,
+              .changed = true,
+              .message = "Curve selection rollback hover is stale."};
+    }
+  }
+
+  const bool changed = control_selection_ != restored ||
+                       control_selection_revision_ != baseline.revision ||
+                       sub_element_hover_ != baseline.hover ||
+                       revision_ != baseline.owner_revision ||
+                       preview_revision_ != baseline.presentation_revision;
+  control_selection_ = std::move(restored);
+  control_selection_revision_ = baseline.revision;
+  sub_element_hover_ = baseline.hover;
+  revision_ = baseline.owner_revision;
+  preview_revision_ = baseline.presentation_revision;
+  cached_control_preview_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
+  cached_control_selection_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
+  cached_controls_world_pivot_.reset();
+  rebuild_preview_cache(baseline.presentation_revision);
+  return {.ok = true, .changed = changed};
+}
+
+ModelingCommandResult CurveToolService::preview_sub_element_hover(
+    std::optional<EditorSubSelectionTarget> target) {
+  const CommandResult refreshed = refresh();
+  if (!refreshed.ok) {
+    return modeling_result(refreshed);
+  }
+  if (target.has_value()) {
+    if (dragging()) {
+      return {.ok = false,
+              .changed = refreshed.changed,
+              .message =
+                  "Finish the active Curve drag before previewing controls."};
+    }
+    if (!controls_editable() ||
+        sub_selection_snapshot().kind !=
+            EditorSubSelectionKind::CurveControl) {
+      return {.ok = false,
+              .changed = refreshed.changed,
+              .message = "The Curve control hover owner is stale."};
+    }
+    const auto &preview = preview_state();
+    if (!preview.document) {
+      return {.ok = false,
+              .changed = refreshed.changed,
+              .message = "The Curve control hover owner is unavailable."};
+    }
+    CurveControlSelection candidate{
+        .controls = {curve_control_target(*target)},
+        .active = curve_control_target(*target),
+    };
+    if (valid_control_selection(candidate, *preview.document) != candidate) {
+      return {.ok = false,
+              .changed = refreshed.changed,
+              .message = "Curve control hover target is stale."};
+    }
+  }
+  if (sub_element_hover_ == target) {
+    return {.ok = true, .changed = refreshed.changed};
+  }
+  sub_element_hover_ = target;
+  return {.ok = true, .changed = true};
+}
+
+ModelingCommandResult CurveToolService::select_all_sub_elements() {
+  const CommandResult refreshed = refresh();
+  if (!refreshed.ok) {
+    return modeling_result(refreshed);
+  }
+  const EditorSubSelectionSnapshot snapshot = sub_selection_snapshot();
+  const auto &preview = preview_state();
+  if (!snapshot.participates_in_bulk_selection || !preview.document) {
+    return {.ok = false,
+            .changed = false,
+            .message = "Curve controls are not editable."};
+  }
+  std::vector<CurveControlTarget> controls =
+      visible_curve_controls(*preview.document, preview.drawing);
+  const std::optional<CurveControlTarget> active =
+      controls.empty() ? std::nullopt
+                       : std::optional<CurveControlTarget>(controls.back());
+  const bool changed = set_control_selection(
+      CurveControlSelection{.controls = std::move(controls), .active = active});
+  if (changed) {
+    invalidate();
+  }
+  return {.ok = true, .changed = changed};
+}
+
+ModelingCommandResult CurveToolService::invert_sub_elements() {
+  const CommandResult refreshed = refresh();
+  if (!refreshed.ok) {
+    return modeling_result(refreshed);
+  }
+  const auto &preview = preview_state();
+  if (!sub_selection_snapshot().participates_in_bulk_selection ||
+      !preview.document) {
+    return {.ok = false,
+            .changed = false,
+            .message = "Curve controls are not editable."};
+  }
+  const std::vector<CurveControlTarget> controls =
+      visible_curve_controls(*preview.document, preview.drawing);
+  const bool changed = edit_control_selection(
+      controls, quader_editor_core::SelectionEditOperation::Toggle);
+  return {.ok = true, .changed = changed};
+}
+
+ModelingCommandResult CurveToolService::clear_sub_elements() {
+  const CommandResult refreshed = refresh();
+  if (!refreshed.ok) {
+    return modeling_result(refreshed);
+  }
+  if (sub_selection_snapshot().kind == EditorSubSelectionKind::None) {
+    return {.ok = false,
+            .changed = false,
+            .message = "Curve controls are not editable."};
+  }
+  const bool changed = set_control_selection({});
+  if (changed) {
+    hover_world_.reset();
+    invalidate();
+  }
+  return {.ok = true, .changed = changed};
+}
+
+ModelingCommandResult CurveToolService::delete_selected_sub_elements() {
+  const CommandResult refreshed = refresh();
+  if (!refreshed.ok) {
+    return modeling_result(refreshed);
+  }
+  if (dragging()) {
+    return {.ok = false,
+            .changed = false,
+            .message = "Finish the active Curve drag before deleting controls."};
+  }
+  const auto &preview = preview_state();
+  if (!preview.document) {
+    return {.ok = false,
+            .changed = false,
+            .message = "The Curve control owner is unavailable."};
+  }
+  const CurveControlSelection selected =
+      valid_control_selection(control_selection_, *preview.document);
+  if (selected.empty()) {
+    return {.ok = false,
+            .changed = false,
+            .message = "No Curve controls are selected."};
+  }
+
+  modeling::CurveDocument candidate = *preview.document;
+  std::vector<modeling::CurvePointEdit> handle_edits;
+  std::vector<modeling::CurvePointId> removed_anchors;
+  handle_edits.reserve(selected.controls.size());
+  removed_anchors.reserve(selected.controls.size());
+  for (const modeling::CurveControlPoint &point : candidate.points()) {
+    const CurveControlTarget anchor{.point = point.id,
+                                    .kind = CurveControlKind::Anchor};
+    if (selected.contains(anchor)) {
+      removed_anchors.push_back(point.id);
+      continue;
+    }
+    const bool incoming = selected.contains(
+        {.point = point.id, .kind = CurveControlKind::IncomingHandle});
+    const bool outgoing = selected.contains(
+        {.point = point.id, .kind = CurveControlKind::OutgoingHandle});
+    if (!incoming && !outgoing) {
+      continue;
+    }
+    modeling::CurvePointSpec replacement{
+        .position = point.position,
+        .incoming_handle = incoming ? modeling::Vec3{}
+                                    : point.incoming_handle,
+        .outgoing_handle = outgoing ? modeling::Vec3{}
+                                    : point.outgoing_handle,
+    };
+    handle_edits.push_back({.id = point.id, .point = replacement});
+  }
+  if (!handle_edits.empty()) {
+    const auto edited = candidate.set_points(handle_edits);
+    if (!edited.ok()) {
+      return {.ok = false,
+              .changed = false,
+              .message = edited.error_message()};
+    }
+  }
+  for (const modeling::CurvePointId point : removed_anchors) {
+    const auto removed = candidate.remove_point(point);
+    if (!removed.ok()) {
+      return {.ok = false,
+              .changed = false,
+              .message = removed.error_message()};
+    }
+  }
+
+  CurveControlSelection next_selection =
+      valid_control_selection(selected, candidate);
+  const bool next_closed = candidate.closed();
+  if (drawing_) {
+    draft_ = std::move(candidate);
+  } else {
+    const CommandResult result = history_.execute(
+        std::make_unique<ReplaceCurveHistoryCommand>(
+            modeling_, modeling_object_id_, std::move(candidate)));
+    if (!result.ok || !result.changed) {
+      return modeling_result(result);
+    }
+    preferred_closed_ = next_closed;
+    observe_owner_revisions();
+  }
+  (void)set_control_selection(std::move(next_selection));
+  hover_world_.reset();
+  invalidate(true);
+  return {.ok = true, .changed = true};
 }
 
 std::optional<QVec3> CurveToolService::selected_controls_world_pivot() const {

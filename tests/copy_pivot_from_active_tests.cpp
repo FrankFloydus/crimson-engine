@@ -7,6 +7,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "assets/mesh_asset_payload.hpp"
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -18,6 +19,7 @@
 #include "quader/modeling/neutral/polygon/document_texture.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_transform.hpp"
+#include "support/command_observable_state.hpp"
 
 #include <gtest/gtest.h>
 
@@ -306,6 +308,134 @@ quader::AssetId mesh_id(const CopyPivotHarness &harness,
   const quader::MeshComponent *mesh = harness.session.scene().mesh(entity);
   EXPECT_NE(mesh, nullptr);
   return mesh == nullptr ? quader::kInvalidAssetId : mesh->mesh;
+}
+
+struct PivotRollbackState {
+  quader::AssetId mesh = quader::kInvalidAssetId;
+  quader::MeshAsset mesh_asset;
+  quader::TransformComponent transform;
+  std::optional<quader::TextureMappingComponent> texture_mapping;
+  std::vector<quader::QVec3> world_vertices;
+  std::vector<quader::AssetId> mesh_ids;
+  std::vector<quader::EntityId> entities;
+  std::vector<quader::EntityId> selected_entities;
+  quader::EntityId primary_selection = quader::kInvalidEntityId;
+  std::uint64_t scene_revision = 0u;
+  std::uint64_t scene_content_revision = 0u;
+  std::uint64_t scene_selection_revision = 0u;
+  std::uint64_t scene_transform_revision = 0u;
+  std::uint64_t scene_texture_mapping_revision = 0u;
+  std::uint64_t scene_mesh_binding_revision = 0u;
+  std::uint64_t scene_render_component_revision = 0u;
+  std::uint64_t asset_revision = 0u;
+  std::uint64_t modeling_content_revision = 0u;
+  std::uint64_t modeling_selection_revision = 0u;
+  quader::QuaderHistorySnapshot history;
+  quader::ModelingSdkProjectionStats projection;
+};
+
+PivotRollbackState capture_pivot_rollback_state(
+    const CopyPivotHarness &harness, quader::EntityId target) {
+  PivotRollbackState state;
+  state.mesh = mesh_id(harness, target);
+  if (const quader::MeshAsset *asset = harness.session.assets().mesh(state.mesh)) {
+    state.mesh_asset = quader::clone_mesh_asset_payload(*asset);
+  }
+  if (const quader::TransformComponent *transform =
+          harness.session.scene().transform(target)) {
+    state.transform = *transform;
+  }
+  if (const quader::TextureMappingComponent *mapping =
+          harness.session.scene().texture_mapping(target)) {
+    state.texture_mapping = *mapping;
+  }
+  state.world_vertices = world_vertices(harness, target);
+  state.mesh_ids = harness.session.assets().mesh_ids();
+  state.entities = harness.session.scene().entities();
+  state.selected_entities = harness.session.scene().selected_entities();
+  state.primary_selection = harness.session.scene().primary_selection();
+  state.scene_revision = harness.session.scene().revision();
+  state.scene_content_revision = harness.session.scene().content_revision();
+  state.scene_selection_revision = harness.session.scene().selection_revision();
+  state.scene_transform_revision = harness.session.scene().transform_revision();
+  state.scene_texture_mapping_revision =
+      harness.session.scene().texture_mapping_revision();
+  state.scene_mesh_binding_revision =
+      harness.session.scene().mesh_binding_revision();
+  state.scene_render_component_revision =
+      harness.session.scene().render_component_revision();
+  state.asset_revision = harness.session.assets().revision();
+  state.modeling_content_revision = harness.session.modeling().content_revision();
+  state.modeling_selection_revision =
+      harness.session.modeling().selection_revision();
+  state.history = harness.editor.query().history();
+  state.projection =
+      harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+  return state;
+}
+
+void expect_pivot_rollback_state(const CopyPivotHarness &harness,
+                                 quader::EntityId target,
+                                 const PivotRollbackState &expected) {
+  EXPECT_EQ(mesh_id(harness, target), expected.mesh);
+  const quader::MeshAsset *asset =
+      harness.session.assets().mesh(expected.mesh);
+  ASSERT_NE(asset, nullptr);
+  EXPECT_TRUE(quader::mesh_asset_payload_equal(*asset, expected.mesh_asset));
+  const quader::TransformComponent *transform =
+      harness.session.scene().transform(target);
+  ASSERT_NE(transform, nullptr);
+  expect_transform_near(*transform, expected.transform);
+  const quader::TextureMappingComponent *mapping =
+      harness.session.scene().texture_mapping(target);
+  if (expected.texture_mapping.has_value()) {
+    ASSERT_NE(mapping, nullptr);
+    EXPECT_EQ(*mapping, *expected.texture_mapping);
+  } else {
+    EXPECT_EQ(mapping, nullptr);
+  }
+  expect_vertices_near(world_vertices(harness, target),
+                       expected.world_vertices);
+  EXPECT_EQ(harness.session.assets().mesh_ids(), expected.mesh_ids);
+  EXPECT_EQ(harness.session.scene().entities(), expected.entities);
+  EXPECT_EQ(harness.session.scene().selected_entities(),
+            expected.selected_entities);
+  EXPECT_EQ(harness.session.scene().primary_selection(),
+            expected.primary_selection);
+  EXPECT_EQ(harness.session.scene().revision(), expected.scene_revision);
+  EXPECT_EQ(harness.session.scene().content_revision(),
+            expected.scene_content_revision);
+  EXPECT_EQ(harness.session.scene().selection_revision(),
+            expected.scene_selection_revision);
+  EXPECT_EQ(harness.session.scene().transform_revision(),
+            expected.scene_transform_revision);
+  EXPECT_EQ(harness.session.scene().texture_mapping_revision(),
+            expected.scene_texture_mapping_revision);
+  EXPECT_EQ(harness.session.scene().mesh_binding_revision(),
+            expected.scene_mesh_binding_revision);
+  EXPECT_EQ(harness.session.scene().render_component_revision(),
+            expected.scene_render_component_revision);
+  EXPECT_EQ(harness.session.assets().revision(), expected.asset_revision);
+  EXPECT_EQ(harness.session.modeling().content_revision(),
+            expected.modeling_content_revision);
+  EXPECT_EQ(harness.session.modeling().selection_revision(),
+            expected.modeling_selection_revision);
+  const quader::QuaderHistorySnapshot history =
+      harness.editor.query().history();
+  EXPECT_EQ(history.can_undo, expected.history.can_undo);
+  EXPECT_EQ(history.can_redo, expected.history.can_redo);
+  EXPECT_EQ(history.undo_label, expected.history.undo_label);
+  EXPECT_EQ(history.redo_label, expected.history.redo_label);
+  const quader::ModelingSdkProjectionStats projection =
+      harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(projection.full_scene_reset_count,
+            expected.projection.full_scene_reset_count);
+  EXPECT_EQ(projection.scene_import_document_count,
+            expected.projection.scene_import_document_count);
+  EXPECT_EQ(projection.targeted_scene_sync_count,
+            expected.projection.targeted_scene_sync_count);
+  EXPECT_EQ(projection.targeted_scene_sync_document_count,
+            expected.projection.targeted_scene_sync_document_count);
 }
 
 std::vector<quader::QVec2>
@@ -1669,6 +1799,228 @@ TEST(CopyPivotFromActiveTests,
 }
 
 TEST(CopyPivotFromActiveTests,
+     ActivePreviewRestoreFailureRollsBackDirectCopyWithoutHistory) {
+  CopyPivotHarness harness;
+  const quader::QuaderModelingObjectRef source =
+      create_asymmetric_mesh(harness, "Rollback Source");
+  const quader::QuaderModelingObjectRef target =
+      create_box(harness, "Rollback Target");
+  const quader::QuaderModelingObjectRef unselected_sharer =
+      create_box(harness, "Rollback Unselected Sharer");
+  set_transform(harness, source.entity,
+                {.position = {5.0f, 3.0f, -2.0f},
+                 .rotation_euler = {0.2f, 0.3f, -0.4f},
+                 .scale = {1.2f, 0.8f, 1.5f},
+                 .custom_pivot = true});
+  set_transform(harness, target.entity,
+                {.position = {-4.0f, 2.0f, 1.0f},
+                 .rotation_euler = {-0.1f, 0.25f, 0.2f},
+                 .scale = {0.75f, 1.4f, 0.9f}});
+  const quader::AssetId shared_mesh = mesh_id(harness, target.entity);
+  quader::MeshComponent shared_component =
+      *harness.session.scene().mesh(unselected_sharer.entity);
+  shared_component.mesh = shared_mesh;
+  ASSERT_TRUE(harness.session.scene().set_mesh(unselected_sharer.entity,
+                                               shared_component));
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_objects({source.entity, target.entity}, source.entity)
+                  .ok());
+  harness.session.history().clear();
+
+  const std::string preview_command =
+      harness.editor.commands().command_id_for_modeling_action("half_cut");
+  ASSERT_FALSE(preview_command.empty());
+  const quader::QuaderApiVoidResult preview =
+      harness.editor.commands().execute(preview_command);
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  const PivotRollbackState before =
+      capture_pivot_rollback_state(harness, target.entity);
+  const quader::test::CommandObservableState observable_before =
+      quader::test::capture_command_observable_state(harness.editor);
+
+  const quader::CommandResult copied =
+      harness.session.pivot().copy_pivot_from_active(
+          harness.session.selection());
+
+  EXPECT_FALSE(copied.ok);
+  EXPECT_FALSE(copied.changed);
+  EXPECT_EQ(copied.message, "Commit or cancel the active preview first.");
+  expect_pivot_rollback_state(harness, target.entity, before);
+  const quader::test::CommandObservableStateDiff observable_difference =
+      quader::test::diff_command_observable_state(
+          observable_before,
+          quader::test::capture_command_observable_state(harness.editor));
+  EXPECT_TRUE(observable_difference.empty())
+      << observable_difference.summary;
+  EXPECT_EQ(mesh_id(harness, unselected_sharer.entity), shared_mesh);
+  const quader::QuaderToolSettingsTarget settings =
+      harness.editor.tools().active_settings();
+  EXPECT_TRUE(settings.active);
+  EXPECT_TRUE(settings.preview_active);
+  EXPECT_EQ(settings.tool_id, "half_cut");
+
+  ASSERT_TRUE(harness.editor.tools().cancel_active_tool_preview().ok());
+}
+
+TEST(CopyPivotFromActiveTests,
+     ActivePreviewRestoreFailureRollsBackUndoAndKeepsUndoRetryable) {
+  CopyPivotHarness harness;
+  const quader::QuaderModelingObjectRef source =
+      create_asymmetric_mesh(harness, "Undo Rollback Source");
+  const quader::QuaderModelingObjectRef target =
+      create_box(harness, "Undo Rollback Target");
+  const quader::QuaderModelingObjectRef unselected_sharer =
+      create_box(harness, "Undo Rollback Unselected Sharer");
+  set_transform(harness, source.entity,
+                {.position = {5.0f, 3.0f, -2.0f},
+                 .rotation_euler = {0.2f, 0.3f, -0.4f},
+                 .scale = {1.2f, 0.8f, 1.5f},
+                 .custom_pivot = true});
+  const quader::AssetId shared_mesh = mesh_id(harness, target.entity);
+  quader::MeshComponent shared_component =
+      *harness.session.scene().mesh(unselected_sharer.entity);
+  shared_component.mesh = shared_mesh;
+  ASSERT_TRUE(harness.session.scene().set_mesh(unselected_sharer.entity,
+                                               shared_component));
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_objects({source.entity, target.entity}, source.entity)
+                  .ok());
+  harness.session.history().clear();
+  const quader::QuaderApiVoidResult copied =
+      harness.editor.modeling().copy_pivot_from_active();
+  ASSERT_TRUE(copied.ok()) << copied.error_message();
+  ASSERT_TRUE(copied.changed());
+  const quader::AssetId cloned_mesh = mesh_id(harness, target.entity);
+  ASSERT_NE(cloned_mesh, shared_mesh);
+
+  const std::string preview_command =
+      harness.editor.commands().command_id_for_modeling_action("half_cut");
+  ASSERT_FALSE(preview_command.empty());
+  const quader::QuaderApiVoidResult preview =
+      harness.editor.commands().execute(preview_command);
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  const PivotRollbackState before =
+      capture_pivot_rollback_state(harness, target.entity);
+  const quader::test::CommandObservableState observable_before =
+      quader::test::capture_command_observable_state(harness.editor);
+
+  const quader::CommandResult undone = harness.session.history().undo();
+
+  EXPECT_FALSE(undone.ok);
+  EXPECT_FALSE(undone.changed);
+  EXPECT_EQ(undone.message, "Commit or cancel the active preview first.");
+  expect_pivot_rollback_state(harness, target.entity, before);
+  const quader::test::CommandObservableStateDiff observable_difference =
+      quader::test::diff_command_observable_state(
+          observable_before,
+          quader::test::capture_command_observable_state(harness.editor));
+  EXPECT_TRUE(observable_difference.empty())
+      << observable_difference.summary;
+  EXPECT_EQ(mesh_id(harness, target.entity), before.mesh);
+  EXPECT_EQ(mesh_id(harness, unselected_sharer.entity), shared_mesh);
+  EXPECT_TRUE(harness.session.history().can_undo());
+  EXPECT_FALSE(harness.session.history().can_redo());
+  ASSERT_NE(harness.session.history().undo_label(), nullptr);
+  EXPECT_EQ(*harness.session.history().undo_label(),
+            "Copy Pivot From Active");
+  const quader::QuaderToolSettingsTarget settings =
+      harness.editor.tools().active_settings();
+  EXPECT_TRUE(settings.active);
+  EXPECT_TRUE(settings.preview_active);
+  EXPECT_EQ(settings.tool_id, "half_cut");
+
+  ASSERT_TRUE(harness.editor.tools().cancel_active_tool_preview().ok());
+  const quader::CommandResult retried = harness.session.history().undo();
+  ASSERT_TRUE(retried.ok) << retried.message;
+  ASSERT_TRUE(retried.changed);
+  EXPECT_EQ(mesh_id(harness, target.entity), shared_mesh);
+  EXPECT_EQ(mesh_id(harness, unselected_sharer.entity), shared_mesh);
+  EXPECT_FALSE(harness.session.history().can_undo());
+  EXPECT_TRUE(harness.session.history().can_redo());
+}
+
+TEST(CopyPivotFromActiveTests,
+     ActivePreviewRestoreFailureRollsBackRedoAndKeepsRedoRetryable) {
+  CopyPivotHarness harness;
+  const quader::QuaderModelingObjectRef source =
+      create_asymmetric_mesh(harness, "Redo Rollback Source");
+  const quader::QuaderModelingObjectRef target =
+      create_box(harness, "Redo Rollback Target");
+  const quader::QuaderModelingObjectRef unselected_sharer =
+      create_box(harness, "Redo Rollback Unselected Sharer");
+  set_transform(harness, source.entity,
+                {.position = {5.0f, 3.0f, -2.0f},
+                 .rotation_euler = {0.2f, 0.3f, -0.4f},
+                 .scale = {1.2f, 0.8f, 1.5f},
+                 .custom_pivot = true});
+  const quader::AssetId shared_mesh = mesh_id(harness, target.entity);
+  quader::MeshComponent shared_component =
+      *harness.session.scene().mesh(unselected_sharer.entity);
+  shared_component.mesh = shared_mesh;
+  ASSERT_TRUE(harness.session.scene().set_mesh(unselected_sharer.entity,
+                                               shared_component));
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_objects({source.entity, target.entity}, source.entity)
+                  .ok());
+  harness.session.history().clear();
+  const quader::QuaderApiVoidResult copied =
+      harness.editor.modeling().copy_pivot_from_active();
+  ASSERT_TRUE(copied.ok()) << copied.error_message();
+  ASSERT_TRUE(copied.changed());
+  const quader::AssetId cloned_mesh = mesh_id(harness, target.entity);
+  ASSERT_NE(cloned_mesh, shared_mesh);
+  const quader::CommandResult undone = harness.session.history().undo();
+  ASSERT_TRUE(undone.ok) << undone.message;
+  ASSERT_TRUE(undone.changed);
+  ASSERT_EQ(mesh_id(harness, target.entity), shared_mesh);
+
+  const std::string preview_command =
+      harness.editor.commands().command_id_for_modeling_action("half_cut");
+  ASSERT_FALSE(preview_command.empty());
+  const quader::QuaderApiVoidResult preview =
+      harness.editor.commands().execute(preview_command);
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  const PivotRollbackState before =
+      capture_pivot_rollback_state(harness, target.entity);
+  const quader::test::CommandObservableState observable_before =
+      quader::test::capture_command_observable_state(harness.editor);
+
+  const quader::CommandResult redone = harness.session.history().redo();
+
+  EXPECT_FALSE(redone.ok);
+  EXPECT_FALSE(redone.changed);
+  EXPECT_EQ(redone.message, "Commit or cancel the active preview first.");
+  expect_pivot_rollback_state(harness, target.entity, before);
+  const quader::test::CommandObservableStateDiff observable_difference =
+      quader::test::diff_command_observable_state(
+          observable_before,
+          quader::test::capture_command_observable_state(harness.editor));
+  EXPECT_TRUE(observable_difference.empty())
+      << observable_difference.summary;
+  EXPECT_EQ(mesh_id(harness, target.entity), before.mesh);
+  EXPECT_EQ(mesh_id(harness, unselected_sharer.entity), shared_mesh);
+  EXPECT_FALSE(harness.session.history().can_undo());
+  EXPECT_TRUE(harness.session.history().can_redo());
+  ASSERT_NE(harness.session.history().redo_label(), nullptr);
+  EXPECT_EQ(*harness.session.history().redo_label(),
+            "Copy Pivot From Active");
+  const quader::QuaderToolSettingsTarget settings =
+      harness.editor.tools().active_settings();
+  EXPECT_TRUE(settings.active);
+  EXPECT_TRUE(settings.preview_active);
+  EXPECT_EQ(settings.tool_id, "half_cut");
+
+  ASSERT_TRUE(harness.editor.tools().cancel_active_tool_preview().ok());
+  const quader::CommandResult retried = harness.session.history().redo();
+  ASSERT_TRUE(retried.ok) << retried.message;
+  ASSERT_TRUE(retried.changed);
+  EXPECT_EQ(mesh_id(harness, target.entity), cloned_mesh);
+  EXPECT_EQ(mesh_id(harness, unselected_sharer.entity), shared_mesh);
+  EXPECT_TRUE(harness.session.history().can_undo());
+  EXPECT_FALSE(harness.session.history().can_redo());
+}
+
+TEST(CopyPivotFromActiveTests,
      TypedCommandAndNativeActionsExposeExactAvailabilityAndOrdering) {
   CopyPivotHarness harness;
   const quader::QuaderModelingObjectRef source =
@@ -1765,7 +2117,7 @@ TEST(CopyPivotFromActiveTests,
 }
 
 TEST(PivotPerformanceTests,
-     CopyBatchBuildsOneHierarchyAndMeshReferenceIndex) {
+     CopyBatchBuildsOneHierarchyAndUsesSceneMeshReferenceIndex) {
   constexpr std::size_t kTargetCount = 24u;
   CopyPivotHarness harness;
   const quader::QuaderModelingObjectRef source =
@@ -1842,9 +2194,9 @@ TEST(PivotPerformanceTests,
   EXPECT_EQ(planning_after.hierarchy_depth_resolution_count,
             planning_before.hierarchy_depth_resolution_count + kTargetCount);
   EXPECT_EQ(planning_after.mesh_reference_index_build_count,
-            planning_before.mesh_reference_index_build_count + 1u);
+            planning_before.mesh_reference_index_build_count);
   EXPECT_EQ(planning_after.mesh_reference_entity_visit_count,
-            planning_before.mesh_reference_entity_visit_count + entity_count);
+            planning_before.mesh_reference_entity_visit_count);
   EXPECT_EQ(planning_after.mesh_reference_lookup_count,
             planning_before.mesh_reference_lookup_count + kTargetCount);
 
@@ -1905,6 +2257,47 @@ TEST(PivotPerformanceTests,
                          vertices_before[index]);
   }
   EXPECT_EQ(harness.session.scene().selected_entities(), selection_before);
+}
+
+TEST(PivotPerformanceTests,
+     MeshReferenceLookupSkipsSixThousandUnrelatedEntities) {
+  constexpr std::size_t kUnrelatedEntityCount = 6'001u;
+  CopyPivotHarness harness;
+  const quader::QuaderModelingObjectRef source =
+      create_asymmetric_mesh(harness, "Indexed Source", 2.0f);
+  set_transform(harness, source.entity,
+                {.position = {7.0f, 2.0f, -4.0f},
+                 .custom_pivot = true});
+  const quader::QuaderModelingObjectRef target =
+      create_box(harness, "Indexed Target");
+  for (std::size_t index = 0u; index < kUnrelatedEntityCount; ++index) {
+    ASSERT_NE(harness.session.scene().create_entity(
+                  "Unrelated " + std::to_string(index),
+                  quader::EntityKind::Generic),
+              quader::kInvalidEntityId);
+  }
+  const std::size_t entity_count_before =
+      harness.session.scene().entities().size();
+  const std::array selected = {source.entity, target.entity};
+  ASSERT_TRUE(
+      harness.editor.selection().select_objects(selected, source.entity).ok());
+  const quader::PivotPlanningStats before =
+      harness.session.pivot().planning_stats_for_tests();
+
+  const quader::QuaderApiVoidResult copied =
+      harness.editor.modeling().copy_pivot_from_active();
+  ASSERT_TRUE(copied.ok()) << copied.error_message();
+  ASSERT_TRUE(copied.changed());
+
+  const quader::PivotPlanningStats after =
+      harness.session.pivot().planning_stats_for_tests();
+  EXPECT_EQ(after.mesh_reference_index_build_count,
+            before.mesh_reference_index_build_count);
+  EXPECT_EQ(after.mesh_reference_entity_visit_count,
+            before.mesh_reference_entity_visit_count);
+  EXPECT_EQ(after.mesh_reference_lookup_count,
+            before.mesh_reference_lookup_count + 1u);
+  EXPECT_EQ(harness.session.scene().entities().size(), entity_count_before);
 }
 
 TEST(PivotPerformanceTests,

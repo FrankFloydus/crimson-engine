@@ -518,15 +518,20 @@ TEST(LinearArrayToolServiceTests,
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::LinearArray).ok());
 
   SceneRenderBridge bridge;
-  ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(),
-                                                               bridge)
-                  .ok());
-  const std::uint64_t initial_submission =
-      bridge.tool_preview_submission_revision();
-  ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(),
-                                                               bridge)
-                  .ok());
-  EXPECT_EQ(bridge.tool_preview_submission_revision(), initial_submission);
+  std::size_t submission_count = 0u;
+  const QuaderRenderApiRuntimeAccess::ToolPreviewPublisher publisher =
+      [&submission_count](std::vector<RenderToolPreviewMeshRecord>) {
+        ++submission_count;
+        return ToolPreviewSubmissionResult::Published;
+      };
+  const auto sync_preview = [&]() {
+    return QuaderRenderApiRuntimeAccess::sync_tool_previews(
+        editor.render(), bridge, publisher);
+  };
+  ASSERT_TRUE(sync_preview().ok());
+  const std::size_t initial_submission = submission_count;
+  ASSERT_TRUE(sync_preview().ok());
+  EXPECT_EQ(submission_count, initial_submission);
 
   TextureAsset texture;
   texture.name = "Array Preview Asset Revision";
@@ -535,26 +540,18 @@ TEST(LinearArrayToolServiceTests,
   texture.generated = true;
   ASSERT_NE(session.assets().add_texture(std::move(texture)),
             kInvalidAssetId);
-  ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(),
-                                                               bridge)
-                  .ok());
-  EXPECT_GT(bridge.tool_preview_submission_revision(), initial_submission);
-  const std::uint64_t asset_submission =
-      bridge.tool_preview_submission_revision();
+  ASSERT_TRUE(sync_preview().ok());
+  EXPECT_GT(submission_count, initial_submission);
+  const std::size_t asset_submission = submission_count;
 
   ASSERT_TRUE(session.linear_array().set_count(5u).ok);
-  ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(),
-                                                               bridge)
-                  .ok());
-  EXPECT_GT(bridge.tool_preview_submission_revision(), asset_submission);
-  const std::uint64_t changed_submission =
-      bridge.tool_preview_submission_revision();
+  ASSERT_TRUE(sync_preview().ok());
+  EXPECT_GT(submission_count, asset_submission);
+  const std::size_t changed_submission = submission_count;
 
   ASSERT_TRUE(session.linear_array().cancel().ok);
-  ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(),
-                                                               bridge)
-                  .ok());
-  EXPECT_GT(bridge.tool_preview_submission_revision(), changed_submission);
+  ASSERT_TRUE(sync_preview().ok());
+  EXPECT_GT(submission_count, changed_submission);
 }
 
 TEST(LinearArrayToolServiceTests,
@@ -581,11 +578,18 @@ TEST(LinearArrayToolServiceTests,
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::LinearArray).ok());
   LinearArrayToolService &tool = session.linear_array();
   SceneRenderBridge bridge;
-  ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(),
-                                                               bridge)
-                  .ok());
-  const std::uint64_t first_submission =
-      bridge.tool_preview_submission_revision();
+  std::size_t submission_count = 0u;
+  const QuaderRenderApiRuntimeAccess::ToolPreviewPublisher publisher =
+      [&submission_count](std::vector<RenderToolPreviewMeshRecord>) {
+        ++submission_count;
+        return ToolPreviewSubmissionResult::Published;
+      };
+  const auto sync_preview = [&]() {
+    return QuaderRenderApiRuntimeAccess::sync_tool_previews(
+        editor.render(), bridge, publisher);
+  };
+  ASSERT_TRUE(sync_preview().ok());
+  const std::size_t first_submission = submission_count;
 
   ASSERT_TRUE(tool.cancel().ok);
   ASSERT_TRUE(editor.selection()
@@ -593,10 +597,8 @@ TEST(LinearArrayToolServiceTests,
                                   second.value().entity)
                   .ok());
   ASSERT_TRUE(tool.activate(1.0).ok);
-  ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(),
-                                                               bridge)
-                  .ok());
-  EXPECT_GT(bridge.tool_preview_submission_revision(), first_submission);
+  ASSERT_TRUE(sync_preview().ok());
+  EXPECT_GT(submission_count, first_submission);
   const LinearArrayPreviewState &preview = tool.preview_state();
   ASSERT_EQ(preview.sources.size(), 1u);
   EXPECT_EQ(preview.sources.front().source_entity, second.value().entity);

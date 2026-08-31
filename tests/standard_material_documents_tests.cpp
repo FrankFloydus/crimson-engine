@@ -6,11 +6,14 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
 #include "assets/default_material_catalog.hpp"
+#include "editor/render/standard_material_render_snapshot_adapter.hpp"
 #include "editor/session/project_session.hpp"
 #include "io/project/qmat_codec.hpp"
+#include "ui/standard_material_preview_render_snapshot_adapter.hpp"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -693,6 +696,255 @@ TEST(StandardMaterialDocumentsTests,
             opened_default.value().session_id);
   EXPECT_EQ(lifecycle[2].name, quader_event::kStandardMaterialOpened);
   EXPECT_NE(lifecycle[2].project_asset_id, *default_id);
+}
+
+TEST(StandardMaterialDocumentsTests,
+     PreviewRenderAdapterProjectsOneCanonicalMaterialPayload) {
+  QuaderStandardMaterialDocumentInfo document;
+  document.session_id = MaterialEditSessionId::from_generation(7u);
+  document.id = ProjectAssetId::generate();
+  document.draft_revision = 19u;
+  document.material.base_color = {0.15f, 0.35f, 0.55f};
+  document.material.roughness = 0.25f;
+  document.material.metallic = 0.75f;
+  document.material.normal_strength = -2.5f;
+  document.material.normal_convention = QuaderNormalMapConvention::DirectX;
+  document.material.texture_transform.center = {0.2f, 0.8f};
+  document.material.texture_transform.scale = {2.0f, -3.0f};
+  document.material.texture_transform.offset = {-0.5f, 1.5f};
+  document.material.texture_transform.rotation_degrees = 47.0f;
+
+  QuaderStandardMaterialPreviewInfo preview;
+  preview.session_id = document.session_id;
+  preview.id = document.id;
+  preview.draft_revision = document.draft_revision;
+  preview.material = document.material;
+  const ProjectAssetId texture_id = ProjectAssetId::generate();
+  auto pixels = std::make_shared<std::vector<std::byte>>(16u, std::byte{0x7f});
+  preview.textures[2] = QuaderStandardMaterialPreviewTexture{
+      .id = texture_id,
+      .color_space = QuaderProjectTextureColorSpace::Linear,
+      .content_revision = 23u,
+      .rgba8 = pixels,
+      .width = 2u,
+      .height = 2u,
+  };
+
+  const RenderMaterialEvaluationSnapshot rendered =
+      standard_material_preview_render_snapshot(document, &preview);
+  const RenderStandardMaterialEvaluationSnapshot *standard =
+      rendered.standard_material();
+  ASSERT_NE(standard, nullptr);
+  EXPECT_EQ(rendered.project_material_id, document.id);
+  EXPECT_EQ(rendered.content_revision, document.draft_revision);
+  EXPECT_FLOAT_EQ(standard->base_color.x, 0.15f);
+  EXPECT_FLOAT_EQ(standard->base_color.y, 0.35f);
+  EXPECT_FLOAT_EQ(standard->base_color.z, 0.55f);
+  EXPECT_FLOAT_EQ(standard->roughness, 0.25f);
+  EXPECT_FLOAT_EQ(standard->metallic, 0.75f);
+  EXPECT_FLOAT_EQ(standard->normal_strength, -2.5f);
+  EXPECT_TRUE(standard->directx_normal);
+  EXPECT_FLOAT_EQ(standard->texture_transform.center.x, 0.2f);
+  EXPECT_FLOAT_EQ(standard->texture_transform.center.y, 0.8f);
+  EXPECT_FLOAT_EQ(standard->texture_transform.scale.x, 2.0f);
+  EXPECT_FLOAT_EQ(standard->texture_transform.scale.y, -3.0f);
+  EXPECT_FLOAT_EQ(standard->texture_transform.offset.x, -0.5f);
+  EXPECT_FLOAT_EQ(standard->texture_transform.offset.y, 1.5f);
+  EXPECT_FLOAT_EQ(standard->texture_transform.rotation_degrees, 47.0f);
+  const RenderMaterialTextureEvaluationSnapshot &texture =
+      standard->texture(RenderStandardMaterialTextureSlot::Metallic);
+  EXPECT_EQ(texture.project_texture_id, texture_id);
+  EXPECT_EQ(texture.content_revision, 23u);
+  EXPECT_EQ(texture.color_space, TextureColorSpace::Linear);
+  EXPECT_EQ(texture.decoded_rgba8, pixels);
+  EXPECT_TRUE(texture.decoded_present());
+}
+
+TEST(StandardMaterialDocumentsTests,
+     PreviewRenderAdapterRejectsMismatchedPayloadAtomically) {
+  QuaderStandardMaterialDocumentInfo document;
+  document.session_id = MaterialEditSessionId::from_generation(4u);
+  document.id = ProjectAssetId::generate();
+  document.draft_revision = 11u;
+  document.material.roughness = 0.4f;
+
+  QuaderStandardMaterialPreviewInfo stale;
+  stale.session_id = document.session_id;
+  stale.id = document.id;
+  stale.draft_revision = document.draft_revision - 1u;
+  stale.material.roughness = 0.9f;
+  stale.textures[0] = QuaderStandardMaterialPreviewTexture{
+      .id = ProjectAssetId::generate(),
+      .content_revision = 8u,
+      .rgba8 = std::make_shared<std::vector<std::byte>>(4u),
+      .width = 1u,
+      .height = 1u,
+  };
+
+  const auto expect_rejected =
+      [&document](const QuaderStandardMaterialPreviewInfo &candidate) {
+    const RenderMaterialEvaluationSnapshot rendered =
+        standard_material_preview_render_snapshot(document, &candidate);
+    const RenderStandardMaterialEvaluationSnapshot *standard =
+        rendered.standard_material();
+    ASSERT_NE(standard, nullptr);
+    EXPECT_FLOAT_EQ(standard->roughness, 0.4f);
+    EXPECT_FALSE(standard->texture(RenderStandardMaterialTextureSlot::Albedo)
+                     .present());
+  };
+
+  expect_rejected(stale);
+  stale.draft_revision = document.draft_revision;
+  stale.session_id = MaterialEditSessionId::from_generation(5u);
+  expect_rejected(stale);
+  stale.session_id = document.session_id;
+  stale.id = ProjectAssetId::generate();
+  expect_rejected(stale);
+}
+
+TEST(StandardMaterialDocumentsTests,
+     DraftAndPersistedAdaptersProjectIdenticalCanonicalMaterialValues) {
+  StandardMaterialDocumentsHarness harness("render-adapter-parity");
+  ASSERT_TRUE(
+      harness.editor().standard_material_documents().new_material().ok());
+  ASSERT_TRUE(harness.editor()
+                  .standard_material_documents()
+                  .set_base_color({0.12f, 0.34f, 0.56f})
+                  .ok());
+  ASSERT_TRUE(harness.editor()
+                  .standard_material_documents()
+                  .set_roughness(0.27f)
+                  .ok());
+  ASSERT_TRUE(harness.editor()
+                  .standard_material_documents()
+                  .set_metallic(0.81f)
+                  .ok());
+  ASSERT_TRUE(harness.editor()
+                  .standard_material_documents()
+                  .set_normal_strength(-3.5f)
+                  .ok());
+  ASSERT_TRUE(harness.editor()
+                  .standard_material_documents()
+                  .set_normal_convention(
+                      QuaderNormalMapConvention::DirectX)
+                  .ok());
+  ASSERT_TRUE(
+      harness.editor()
+          .standard_material_documents()
+          .set_texture_transform({
+              .center = {0.25f, 0.75f},
+              .scale = {2.0f, -3.0f},
+              .offset = {-0.5f, 1.25f},
+              .rotation_degrees = 47.0f,
+          })
+          .ok());
+
+  const auto draft_document =
+      harness.editor().standard_material_documents().current();
+  ASSERT_TRUE(draft_document.ok()) << draft_document.error_message();
+  const RenderMaterialEvaluationSnapshot draft =
+      standard_material_preview_render_snapshot(draft_document.value());
+  const RenderStandardMaterialEvaluationSnapshot *draft_standard =
+      draft.standard_material();
+  ASSERT_NE(draft_standard, nullptr);
+
+  const QuaderApiVoidResult saved =
+      harness.editor().standard_material_documents().save_as(
+          project_path("Materials/render_adapter_parity.qmat"));
+  ASSERT_TRUE(saved.ok()) << saved.error_message();
+  const auto persisted_document =
+      harness.editor().standard_material_documents().current();
+  ASSERT_TRUE(persisted_document.ok())
+      << persisted_document.error_message();
+  EXPECT_NE(persisted_document.value().id, draft_document.value().id)
+      << "Save As owns allocation of the persisted project asset identity";
+  ProjectSessionRenderMaterialResolver resolver(harness.project());
+  const std::optional<RenderProjectMaterialSnapshot> persisted =
+      resolver.resolve(persisted_document.value().id);
+  ASSERT_TRUE(persisted.has_value());
+  const RenderStandardMaterialEvaluationSnapshot *persisted_standard =
+      persisted->evaluation.standard_material();
+  ASSERT_NE(persisted_standard, nullptr);
+
+  EXPECT_EQ(persisted->evaluation.project_material_id,
+            persisted_document.value().id);
+  EXPECT_EQ(*persisted_standard, *draft_standard);
+}
+
+TEST(StandardMaterialDocumentsTests,
+     ProjectResolverUsesTheSameCanonicalMaterialProjection) {
+  StandardMaterialDocumentsHarness harness("render-resolver");
+  const std::optional<ProjectAssetId> default_id =
+      ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  const ProjectMaterialCatalogEntry *entry =
+      harness.project().material_catalog().find(*default_id);
+  ASSERT_NE(entry, nullptr);
+  const ProjectStandardMaterialDefinition *source =
+      entry->material.standard_material();
+  ASSERT_NE(source, nullptr);
+
+  ProjectSessionRenderMaterialResolver resolver(harness.project());
+  const std::optional<RenderProjectMaterialSnapshot> rendered =
+      resolver.resolve(*default_id);
+  ASSERT_TRUE(rendered.has_value());
+  const RenderStandardMaterialEvaluationSnapshot *standard =
+      rendered->evaluation.standard_material();
+  ASSERT_NE(standard, nullptr);
+  EXPECT_EQ(rendered->catalog_revision, resolver.revision());
+  EXPECT_EQ(rendered->evaluation.content_revision, entry->content_revision);
+  EXPECT_FLOAT_EQ(standard->base_color.x, source->base_color[0]);
+  EXPECT_FLOAT_EQ(standard->base_color.y, source->base_color[1]);
+  EXPECT_FLOAT_EQ(standard->base_color.z, source->base_color[2]);
+  EXPECT_FLOAT_EQ(standard->roughness, source->roughness);
+  EXPECT_FLOAT_EQ(standard->metallic, source->metallic);
+  EXPECT_FLOAT_EQ(standard->normal_strength, source->normal_strength);
+  EXPECT_EQ(standard->directx_normal,
+            source->normal_convention == NormalMapConvention::DirectX);
+}
+
+TEST(StandardMaterialDocumentsTests,
+     MaterialPresentationSnapshotCombinesProjectAndActiveSceneOwners) {
+  StandardMaterialDocumentsHarness harness("presentation-snapshot");
+  const auto revision =
+      harness.editor().project_assets().material_presentation_revision();
+  const auto snapshot =
+      harness.editor().project_assets().material_presentations();
+  const auto project_materials = harness.editor().project_assets().materials();
+  ASSERT_TRUE(revision.ok()) << revision.error_message();
+  ASSERT_TRUE(snapshot.ok()) << snapshot.error_message();
+  ASSERT_TRUE(project_materials.ok()) << project_materials.error_message();
+  EXPECT_EQ(snapshot.value().revision, revision.value());
+
+  const std::size_t project_count = static_cast<std::size_t>(std::ranges::count_if(
+      snapshot.value().materials,
+      [](const QuaderMaterialPresentationItem &item) {
+        return item.reference.project_owned();
+      }));
+  const std::size_t embedded_count =
+      static_cast<std::size_t>(std::ranges::count_if(
+          snapshot.value().materials,
+          [](const QuaderMaterialPresentationItem &item) {
+            return item.reference.embedded();
+          }));
+  EXPECT_EQ(project_count, project_materials.value().size());
+  ASSERT_NE(harness.project().active_scene(), nullptr);
+  EXPECT_EQ(embedded_count,
+            harness.project().active_scene()->session->assets().material_count());
+  for (const QuaderMaterialPresentationItem &item :
+       snapshot.value().materials) {
+    EXPECT_TRUE(item.reference.valid());
+    EXPECT_FALSE(item.name.empty());
+    EXPECT_TRUE(item.available);
+    if (item.reference.project_owned()) {
+      EXPECT_FALSE(item.project_relative_path.empty());
+      EXPECT_EQ(item.editable,
+                item.kind == QuaderMaterialPresentationKind::Standard);
+    } else {
+      EXPECT_EQ(item.kind, QuaderMaterialPresentationKind::Embedded);
+      EXPECT_FALSE(item.editable);
+    }
+  }
 }
 
 } // namespace

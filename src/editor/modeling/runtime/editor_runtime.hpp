@@ -287,6 +287,10 @@ public:
 	[[nodiscard]] CommandResult apply_transform_drag_preview(
 		const EditorSession& session,
 		const TransformDragPreviewInput& input);
+	[[nodiscard]] CommandResult apply_transform_drag_preview(
+		std::span<const PolygonObject> selection_objects,
+		SelectionMode selection_mode,
+		const TransformDragPreviewInput& input);
 	void clear_transform_drag_state();
 	EditorRuntimeToolActivationResult activate_tool(const EditorRuntimeToolActivationRequest& request);
 	EditorRuntimeToolActivationResult set_active_tool(const EditorSession& session, ViewportInteractionTool requested_tool);
@@ -303,8 +307,22 @@ public:
 			bool snap_enabled,
 			bool dragging,
 			int target_object_id = -1);
+	[[nodiscard]] bool set_insert_edge_loop_preview_from_pick(
+			const std::vector<PolygonObject>& objects,
+			const quader_poly::Ray& ray,
+			double grid_size,
+			double vertex_radius,
+			double edge_radius,
+			bool snap_enabled,
+			bool dragging,
+			int target_object_id = -1);
 	[[nodiscard]] bool set_insert_edge_loop_preview_from_hit(
 			EditorSession& session,
+			const PickHitRecord& hit,
+			std::optional<float> resolved_factor,
+			bool dragging);
+	[[nodiscard]] bool set_insert_edge_loop_preview_from_hit(
+			const std::vector<PolygonObject>& objects,
 			const PickHitRecord& hit,
 			std::optional<float> resolved_factor,
 			bool dragging);
@@ -313,8 +331,16 @@ public:
 			const quader_poly::Ray& ray,
 			double grid_size,
 			bool snap_enabled);
+	[[nodiscard]] bool update_insert_edge_loop_drag_factor(
+			const std::vector<PolygonObject>& objects,
+			const quader_poly::Ray& ray,
+			double grid_size,
+			bool snap_enabled);
 	[[nodiscard]] bool update_insert_edge_loop_drag_factor_from_world(
 			EditorSession& session,
+			std::optional<float> resolved_factor);
+	[[nodiscard]] bool update_insert_edge_loop_drag_factor_from_world(
+			const std::vector<PolygonObject>& objects,
 			std::optional<float> resolved_factor);
 	void reset_knife_state(bool keep_active_when_current_tool_is_knife = false);
 	void set_knife_state(KnifeToolState state);
@@ -327,8 +353,21 @@ public:
 			bool snap_enabled,
 			bool constrain_axis,
 			int target_object_id = -1);
+	[[nodiscard]] bool update_knife_preview_from_pick(
+			const std::vector<PolygonObject>& objects,
+			const quader_poly::Ray& ray,
+			double grid_size,
+			bool snap_enabled,
+			bool constrain_axis,
+			int target_object_id = -1);
 	[[nodiscard]] bool update_knife_preview_from_hit(
 			EditorSession& session,
+			const PickHitRecord& hit,
+			double grid_size,
+			bool snap_enabled,
+			bool constrain_axis);
+	[[nodiscard]] bool update_knife_preview_from_hit(
+			const std::vector<PolygonObject>& objects,
 			const PickHitRecord& hit,
 			double grid_size,
 			bool snap_enabled,

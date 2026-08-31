@@ -18,6 +18,7 @@
 namespace quader {
 
 class QuaderApiMutationRunner;
+class QuaderSelectionApiRuntimeAccess;
 
 /**
  * Stores an opaque press-time selection baseline for a deferred viewport box
@@ -120,6 +121,12 @@ public:
     QuaderApiResult<QuaderSelectionSummary>
     box_select(const QuaderBoxSelectRequest &request,
                const QuaderSelectionBoxBaseline &baseline);
+    /**
+     * Commits a polygon modeling-element hover resolved from a world-space ray.
+     * The request intentionally has no viewport projection facts, so Curves,
+     * billboards, lights, and other screen-space scene hits are not invented.
+     * Other retained hover providers are cleared through the editor authority.
+     */
     QuaderApiResult<QuaderHoverSummary> hover(const QuaderHoverRequest& request);
     QuaderApiResult<QuaderHoverSummary>
     hover_vertex(QuaderModelingObjectRef object, QuaderElementId vertex);
@@ -132,13 +139,21 @@ public:
 
     [[nodiscard]] QuaderSelectionSummary summary() const;
     [[nodiscard]] QuaderHoverSummary hover_summary() const;
+    /**
+     * Queries the polygon modeling-element target that hover() would publish,
+     * without changing the resolved target or any provider hover state.
+     */
     [[nodiscard]] QuaderHoverSummary
     preview_hover(const QuaderHoverRequest &request) const;
 
   private:
+    friend class QuaderSelectionApiRuntimeAccess;
     QuaderApiResult<QuaderSelectionSummary>
     pick_select(const QuaderPickSelectRequest &request,
                 const QuaderSelectionBoxBaseline *baseline);
+    QuaderApiResult<QuaderSelectionSummary>
+    box_select(const QuaderBoxSelectRequest &request,
+               const QuaderSelectionBoxBaseline *baseline);
     [[nodiscard]] QuaderApiResult<QuaderHoverSummary>
     direct_hover(QuaderModelingObjectRef object, QuaderActiveSelectionKind kind,
                  QuaderElementId vertex, QuaderElementId edge_a,

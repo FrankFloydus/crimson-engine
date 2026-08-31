@@ -159,6 +159,8 @@ TEST(LocalizationServiceTests, LoadsFallbackCatalogAndSwitchesLocaleImmediately)
 
   LocalizationService localization;
   ASSERT_TRUE(localization.load(root, "it-IT"));
+  const std::uint64_t loaded_revision = localization.revision();
+  EXPECT_GT(loaded_revision, 0u);
 
   EXPECT_EQ(localization.current_locale(), "it-IT");
   EXPECT_TRUE(localization.has_locale("en-US"));
@@ -169,9 +171,14 @@ TEST(LocalizationServiceTests, LoadsFallbackCatalogAndSwitchesLocaleImmediately)
   EXPECT_EQ(localization.text("blank.value", "Fallback"), "Fallback");
 
   ASSERT_TRUE(localization.select_locale("en-US"));
+  EXPECT_GT(localization.revision(), loaded_revision);
+  const std::uint64_t english_revision = localization.revision();
+  ASSERT_TRUE(localization.select_locale("en-US"));
+  EXPECT_EQ(localization.revision(), english_revision);
   EXPECT_EQ(localization.current_locale(), "en-US");
   EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "Edit");
   EXPECT_FALSE(localization.select_locale("missing"));
+  EXPECT_EQ(localization.revision(), english_revision);
   EXPECT_EQ(localization.current_locale(), "en-US");
 
   std::filesystem::remove_all(root);
@@ -190,6 +197,31 @@ TEST(LocalizationServiceTests, MissingSelectedLocaleFallsBackToEnglish) {
   EXPECT_EQ(localization.text("ui.menu.file", "Fallback"), "File");
 
   std::filesystem::remove_all(root);
+}
+
+TEST(LocalizationServiceTests,
+     ReloadPublishesCatalogChangesWithoutChangingLocaleId) {
+  const std::filesystem::path root =
+      temp_locale_root("quader_localization_reload_revision_test");
+  write_text_file(root / "en-US.lang", "locale.name=English\n"
+                                       "ui.menu.file=File\n");
+
+  LocalizationService localization;
+  ASSERT_TRUE(localization.load(root, "en-US"));
+  const std::uint64_t initial_revision = localization.revision();
+
+  write_text_file(root / "en-US.lang", "locale.name=English\n"
+                                       "ui.menu.file=Reloaded File\n");
+  ASSERT_TRUE(localization.load(root, "en-US"));
+  EXPECT_EQ(localization.current_locale(), "en-US");
+  EXPECT_GT(localization.revision(), initial_revision);
+  EXPECT_EQ(localization.text("ui.menu.file", "Fallback"), "Reloaded File");
+
+  const std::uint64_t reloaded_revision = localization.revision();
+  std::filesystem::remove_all(root);
+  EXPECT_FALSE(localization.load(root, "en-US"));
+  EXPECT_GT(localization.revision(), reloaded_revision);
+  EXPECT_EQ(localization.text("ui.menu.file", "Fallback"), "Fallback");
 }
 
 TEST(LocalizationServiceTests, FormatterReplacesRepeatedTokensAndLeavesUnknownTokens) {

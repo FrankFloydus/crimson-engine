@@ -217,7 +217,8 @@ bool snap_targets_match(const TransformSnapTarget& left, const TransformSnapTarg
 }
 
 std::optional<TransformSnapTarget> resolve_transform_vertex_snap_target(
-		const EditorSession& session,
+		std::span<const PolygonObject> selection_objects,
+		SelectionMode selection_mode,
 		const TransformDragState& state,
 		const TransformDragPreviewInput& input)
 {
@@ -226,13 +227,19 @@ std::optional<TransformSnapTarget> resolve_transform_vertex_snap_target(
 		return std::nullopt;
 	}
 
-	const std::vector<PolygonObject>& snap_objects = input.snap_objects == nullptr
-		? session.objects()
-		: *input.snap_objects;
-	const auto target = resolve_move_vertex_snap_target(
-		snap_objects, session.selection_mode(), input.ray,
-		input.vertex_snap_radius, input.snap_object_bounds,
-		input.snap_face_geometry, input.snap_object_transforms);
+        std::optional<MoveVertexSnapTarget> target;
+        if (input.snap_objects != nullptr) {
+          target = resolve_move_vertex_snap_target(
+              *input.snap_objects, selection_mode, input.ray,
+              input.vertex_snap_radius, input.snap_object_bounds,
+              input.snap_face_geometry, input.snap_object_transforms);
+        } else {
+          const std::vector<PolygonObject> fallback_snap_objects(
+              selection_objects.begin(), selection_objects.end());
+          target = resolve_move_vertex_snap_target(
+              fallback_snap_objects, selection_mode, input.ray,
+              input.vertex_snap_radius);
+        }
 	if (!target.has_value()) {
 		return std::nullopt;
 	}
@@ -498,7 +505,8 @@ public:
 	}
 
 	[[nodiscard]] CommandResult apply_transform_drag_preview(
-			const EditorSession& session,
+			std::span<const PolygonObject> selection_objects,
+			SelectionMode selection_mode,
 			TransformDragState& state,
 			const TransformDragPreviewInput& input) const
 	{
@@ -515,8 +523,9 @@ public:
                   state.snap_target = {};
                   MovePreviewResult preview;
                   if (const std::optional<TransformSnapTarget> snap_target =
-                          resolve_transform_vertex_snap_target(session, state,
-                                                               input)) {
+                          resolve_transform_vertex_snap_target(
+                              selection_objects, selection_mode, state,
+                              input)) {
                     state.snap_target = *snap_target;
                     preview = preview_move_to_axis_snap_target(
                         state.move, snap_target->position);
@@ -684,6 +693,51 @@ std::optional<MoveVertexSnapTarget> resolve_move_vertex_snap_target(
       .vertex_target;
 }
 
+std::optional<MoveVertexSnapTarget> resolve_move_vertex_snap_candidate(
+    const std::vector<PolygonObject>& objects, SelectionMode selection_mode,
+    const quader_poly::Ray& ray, double vertex_radius,
+    std::span<const PickObjectBounds> object_bounds,
+    std::span<const PickObjectTransform> object_transforms,
+    bool exclude_current_selection,
+    std::optional<double> maximum_world_ray_distance,
+    PickAllWithSurfaceScratch *picking_scratch)
+{
+  if (!std::isfinite(vertex_radius) || vertex_radius <= 0.0 ||
+      (maximum_world_ray_distance.has_value() &&
+       (!std::isfinite(*maximum_world_ray_distance) ||
+        *maximum_world_ray_distance < 0.0))) {
+    return std::nullopt;
+  }
+  const quader_poly::PickOptions options =
+      move_vertex_snap_pick_options(vertex_radius);
+  PickAllWithSurfaceScratch local_scratch;
+  PickAllWithSurfaceScratch &scratch =
+      picking_scratch != nullptr ? *picking_scratch : local_scratch;
+  pick_all_without_surface_into(
+      objects, {.ray = ray, .options = options}, object_bounds,
+      object_transforms, maximum_world_ray_distance, scratch);
+  for (const PickHitRecord &hit : scratch.hits) {
+    if (!hit.hit || hit.kind != quader_poly::ElementKind::Vertex ||
+        hit.vertex_id == quader_poly::kInvalidElementId) {
+      continue;
+    }
+    const PolygonObject *object = object_for_hit(objects, hit);
+    if (exclude_current_selection && object != nullptr &&
+        move_selection_contains_vertex(*object, selection_mode,
+                                       hit.vertex_id)) {
+      continue;
+    }
+    return MoveVertexSnapTarget{
+        .object_id = hit.object_id,
+        .vertex_id = hit.vertex_id,
+        .position = hit.local_position,
+        .ray_distance = hit.ray_distance,
+        .pick_distance = hit.pick_distance,
+    };
+  }
+  return std::nullopt;
+}
+
 const EditorTool& move_tool()
 {
 	return move_tool_impl();
@@ -755,7 +809,19 @@ void reset_transform_drag(TransformDragState& state)
 CommandResult apply_transform_drag_preview(const EditorSession& session, TransformDragState& state, const TransformDragPreviewInput& input)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.apply_transform_drag_preview");
-	return move_tool_impl().apply_transform_drag_preview(session, state, input);
+	return apply_transform_drag_preview(
+			session.objects(), session.selection_mode(), state, input);
+}
+
+CommandResult apply_transform_drag_preview(
+		std::span<const PolygonObject> selection_objects,
+		SelectionMode selection_mode,
+		TransformDragState& state,
+		const TransformDragPreviewInput& input)
+{
+	QDR_PROFILE_SCOPE("qdr_editor_core.apply_transform_drag_preview_projection");
+	return move_tool_impl().apply_transform_drag_preview(
+			selection_objects, selection_mode, state, input);
 }
 
 std::vector<SelectionOverlayPoint> transform_drag_snap_overlay_points(

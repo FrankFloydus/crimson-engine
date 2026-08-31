@@ -11,7 +11,7 @@
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
-#include "editor/material/project_material_texture_snapshot.hpp"
+#include "editor/render/standard_material_render_snapshot_adapter.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "platform/platform_file_dialog.hpp"
@@ -29,7 +29,6 @@
 #include <QWindow>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -158,133 +157,6 @@ constexpr int kIdleFrameIntervalMs = 16;
 constexpr double kFallbackDisplayRefreshRateHz = 60.0;
 constexpr double kMinimumDisplayRefreshRateHz = 30.0;
 constexpr double kMaximumDisplayRefreshRateHz = 240.0;
-
-/// Adapts validated project material snapshots to the renderer boundary.
-class ProjectSessionRenderMaterialResolver final
-    : public RenderProjectMaterialResolver {
-public:
-  explicit ProjectSessionRenderMaterialResolver(ProjectSession &project)
-      : project_(&project) {}
-
-  [[nodiscard]] std::uint64_t revision() const noexcept override {
-    if (project_ == nullptr || !project_->has_project() ||
-        project_->manifest() == nullptr) {
-      return 0u;
-    }
-    return project_->material_texture_revision();
-  }
-
-  [[nodiscard]] std::optional<RenderProjectMaterialSnapshot>
-  resolve(ProjectAssetId id) const override {
-    if (project_ == nullptr || !project_->has_project()) {
-      return std::nullopt;
-    }
-    const ProjectMaterialCatalogEntry *entry =
-        project_->material_catalog().find(id);
-    if (entry == nullptr) {
-      return std::nullopt;
-    }
-
-    const ProjectStandardMaterialDefinition *standard =
-        entry->material.standard_material();
-    if (standard == nullptr) {
-      return std::nullopt;
-    }
-
-    RenderProjectMaterialSnapshot result{
-        .evaluation =
-            RenderMaterialEvaluationSnapshot{
-                .project_material_id = id,
-                .kind = RenderMaterialEvaluationKind::Standard,
-                .identity_revision = revision() ^
-                                     render_project_asset_identity_revision(id),
-                .content_revision = entry->content_revision,
-                .payload = RenderStandardMaterialEvaluationSnapshot{
-                    .base_color = {standard->base_color[0],
-                                   standard->base_color[1],
-                                   standard->base_color[2]},
-                    .roughness = standard->roughness,
-                    .metallic = standard->metallic,
-                    .normal_strength = standard->normal_strength,
-                    .directx_normal =
-                        standard->normal_convention ==
-                        NormalMapConvention::DirectX,
-                    .texture_transform =
-                        RenderStandardMaterialTextureTransformSnapshot{
-                            .center =
-                                {standard->texture_transform.center[0],
-                                 standard->texture_transform.center[1]},
-                            .scale =
-                                {standard->texture_transform.scale[0],
-                                 standard->texture_transform.scale[1]},
-                            .offset =
-                                {standard->texture_transform.offset[0],
-                                 standard->texture_transform.offset[1]},
-                            .rotation_degrees = standard->texture_transform
-                                                    .rotation_degrees,
-                        },
-                },
-            },
-        .catalog_revision = revision(),
-    };
-    RenderStandardMaterialEvaluationSnapshot *render_standard =
-        result.evaluation.standard_material();
-    if (render_standard == nullptr) {
-      return std::nullopt;
-    }
-
-    /// Maps one typed Standard Material dependency to its render sampler.
-    struct SlotBinding final {
-      StandardMaterialTextureSlot slot;
-      const std::optional<ProjectMaterialTextureSlot> *texture;
-      RenderStandardMaterialTextureSlot render_slot;
-    };
-    const std::array<SlotBinding, 4> bindings{
-        SlotBinding{StandardMaterialTextureSlot::Albedo,
-                    &standard->base_color_texture,
-                    RenderStandardMaterialTextureSlot::Albedo},
-        SlotBinding{StandardMaterialTextureSlot::Roughness,
-                    &standard->roughness_texture,
-                    RenderStandardMaterialTextureSlot::Roughness},
-        SlotBinding{StandardMaterialTextureSlot::Metallic,
-                    &standard->metallic_texture,
-                    RenderStandardMaterialTextureSlot::Metallic},
-        SlotBinding{StandardMaterialTextureSlot::Normal,
-                    &standard->normal_texture,
-                    RenderStandardMaterialTextureSlot::Normal},
-    };
-    for (const SlotBinding &binding : bindings) {
-      if (!binding.texture->has_value()) {
-        continue;
-      }
-      const ProjectMaterialTextureSlot &definition = **binding.texture;
-      const auto cached = project_->material_texture_image(id, binding.slot);
-      if (cached == nullptr) {
-        continue;
-      }
-      render_standard->textures[static_cast<std::size_t>(
-          binding.render_slot)] = RenderMaterialTextureEvaluationSnapshot{
-          .project_texture_id = definition.id,
-          .identity_revision =
-              revision() ^
-              render_project_asset_identity_revision(definition.id),
-          .content_revision = cached->content_revision,
-          .color_space = definition.color_space ==
-                                 ProjectTextureColorSpace::Srgb
-                             ? TextureColorSpace::Srgb
-                             : TextureColorSpace::Linear,
-          .encoded_file_bytes = cached->encoded,
-          .decoded_rgba8 = cached->decoded,
-          .width = cached->width,
-          .height = cached->height,
-      };
-    }
-    return result;
-  }
-
-private:
-  ProjectSession *project_ = nullptr;
-};
 
 int presentation_frame_interval_ms(const QMainWindow *window) {
   const QScreen *screen =
@@ -545,9 +417,8 @@ void App::bind_active_scene(SceneSession &scene) {
   if (editor_ != nullptr) {
     ui_.install_runtime_hooks(
         *editor_, scene.scene(), scene.assets(), scene.modeling(),
-        scene.selection(), scene.pivot(), scene.linear_array(),
-        scene.radial_array(), scene.point_placement(), default_material_,
-        &scene.curve());
+        scene.selection(), scene.native_tools(), scene.point_placement(),
+        default_material_);
   }
 }
 

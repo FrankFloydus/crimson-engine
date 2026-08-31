@@ -7,6 +7,8 @@
 #pragma once
 
 #include "core/types.hpp"
+#include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/selection/modeling_selection_projection_snapshot.hpp"
 #include "math/types.hpp"
 #include "scene/scene_bounds.hpp"
 
@@ -17,18 +19,17 @@
 namespace quader {
 
 class AssetRegistry;
-class ModelingObjectRuntimeMap;
 class SceneDocument;
 
 } // namespace quader
 
-namespace quader_editor_core {
-
-class EditorSession;
-
-} // namespace quader_editor_core
-
 namespace quader {
+
+/** One immutable native selection edit derived by projection policy. */
+struct SelectionProjectionEditResult {
+  bool changed = false;
+  ModelingSelectionProjectionSnapshot selection;
+};
 
 /**
  * Stores the outcome of projecting scene object selection into the modeling runtime.
@@ -37,6 +38,7 @@ struct RuntimeObjectSelectionProjectionResult {
     bool ok = true;
     bool changed = false;
     bool has_modeling_objects = false;
+    ModelingSelectionProjectionSnapshot selection;
 };
 
 /**
@@ -59,26 +61,30 @@ struct SelectionBoundsWorkStats {
 class SelectionProjectionService final {
 public:
   [[nodiscard]] bool should_project_object_selection_from_scene(
-      const quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &selection,
       bool force_object_mode) const;
 
-  bool project_object_selection_from_scene(
-      quader_editor_core::EditorSession &session, const SceneDocument &scene,
+  [[nodiscard]] SelectionProjectionEditResult
+  project_object_selection_from_scene(
+      const ModelingSelectionProjectionSnapshot &selection,
+      const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_registry,
       bool force_object_mode = false) const;
 
-  RuntimeObjectSelectionProjectionResult
+  [[nodiscard]] RuntimeObjectSelectionProjectionResult
   project_object_selection_for_scene_entities(
-      quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &selection,
       std::span<const EntityId> entities, EntityId active,
       const ModelingObjectRuntimeMap &object_registry) const;
 
-  bool promote_object_selection_for_tool(
-      quader_editor_core::EditorSession &session, const SceneDocument &scene,
+  [[nodiscard]] SelectionProjectionEditResult promote_object_selection_for_tool(
+      const ModelingSelectionProjectionSnapshot &selection,
+      const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_registry) const;
 
   bool project_scene_selection_from_modeling(
-      const quader_editor_core::EditorSession &session, SceneDocument &scene,
+      const ModelingSelectionProjectionSnapshot &selection,
+      SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_registry) const;
 
   bool restore_scene_selection(SceneDocument &scene,
@@ -90,13 +96,15 @@ public:
                            EntityId active = kInvalidEntityId) const;
 
   [[nodiscard]] std::optional<QVec3>
-  world_selection_center(const quader_editor_core::EditorSession &session,
+  world_selection_center(
+                         const ModelingSelectionProjectionSnapshot &selection,
                          const SceneDocument &scene,
                          const AssetRegistry &assets,
                          const ModelingObjectRuntimeMap &object_registry) const;
 
   [[nodiscard]] std::optional<SceneBounds>
-  world_selection_bounds(const quader_editor_core::EditorSession &session,
+  world_selection_bounds(
+                         const ModelingSelectionProjectionSnapshot &selection,
                          const SceneDocument &scene,
                          const AssetRegistry &assets,
                          const ModelingObjectRuntimeMap &object_registry,

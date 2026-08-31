@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -1641,28 +1642,58 @@ TEST(EditorApiTests, PublicAssetApiEditsAreUndoableThroughHistory) {
     EXPECT_EQ(editor.query().mesh(mesh.value().id)->vertex_count, 4u);
 }
 
-TEST(EditorApiTests, SceneCommandsRejectModelingOwnedEntityStructuralAndMeshMutations) {
+TEST(EditorApiTests,
+     SceneStructuralCommandsOwnModelingEntitiesWithoutSelectionWorkarounds) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
 
     const quader::QuaderModelingObjectRef box =
         create_selected_box(editor, "Modeling Owned Guard");
+    const quader::QuaderModelingObjectRef unrelated =
+        create_selected_box(editor, "Unrelated Selection");
+    ASSERT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{unrelated.entity});
     const quader::QuaderApiResult<quader::QuaderAssetRef> replacement_mesh =
         editor.assets().add_standalone_mesh(
             triangle_mesh("Standalone Replacement"));
     ASSERT_TRUE(replacement_mesh.ok()) << replacement_mesh.error_message();
 
-    const quader::QuaderApiVoidResult destroyed = editor.scene().destroy(box.entity);
-    EXPECT_FALSE(destroyed.ok());
-    EXPECT_NE(destroyed.error_message().find("modeling object"),
-              std::string::npos);
-    EXPECT_TRUE(editor.query().entity(box.entity).has_value());
-    EXPECT_TRUE(editor.object(box).valid());
+    const quader::QuaderApiResult<quader::QuaderEntityRef> duplicated =
+        editor.object(box).duplicate();
+    ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
+    ASSERT_TRUE(duplicated.changed());
+    const auto duplicate_object =
+        editor.query().modeling_object_for_entity(duplicated.value().id);
+    ASSERT_TRUE(duplicate_object.has_value());
+    EXPECT_NE(duplicate_object->modeling_object_id, box.modeling_object_id);
+    EXPECT_TRUE(editor.object(*duplicate_object).valid());
+    EXPECT_EQ(editor.query().history().undo_label, "Duplicate Entity");
 
-    const quader::QuaderApiResult<quader::QuaderEntityRef> duplicated = editor.object(box).duplicate();
-    EXPECT_FALSE(duplicated.ok());
-    EXPECT_NE(duplicated.error_message().find("modeling object"),
-              std::string::npos);
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_FALSE(editor.query().entity(duplicated.value().id).has_value());
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{unrelated.entity});
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_TRUE(editor.query().entity(duplicated.value().id).has_value());
+    ASSERT_TRUE(editor.history().undo().ok());
+
+    const quader::QuaderApiVoidResult destroyed =
+        editor.object(box).destroy();
+    ASSERT_TRUE(destroyed.ok()) << destroyed.error_message();
+    EXPECT_TRUE(destroyed.changed());
+    EXPECT_FALSE(editor.query().entity(box.entity).has_value());
+    EXPECT_FALSE(editor.object(box).valid());
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{unrelated.entity});
+    EXPECT_EQ(editor.query().history().undo_label, "Destroy Entity");
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_TRUE(editor.object(box).valid());
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{unrelated.entity});
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_FALSE(editor.query().entity(box.entity).has_value());
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_TRUE(editor.object(box).valid());
 
     const quader::QuaderApiVoidResult replaced =
         editor.scene().set_mesh_component(
@@ -2239,6 +2270,63 @@ TEST(EditorApiTests, CurveToolUsesUnassignedActivationAndSharedFinalizeBinding) 
   EXPECT_EQ(editor.tools().active_tool(), "select");
   EXPECT_FALSE(editor.history().can_undo());
   std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests,
+     NativeToolSettingsLifecycleDispatchIsGenericAcrossOwners) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  (void)create_selected_box(editor, "Native Settings Dispatch Source");
+
+  quader::ViewportToolState state;
+  EXPECT_EQ(editor.commands()
+                .dispatch_native_tool_settings_input_binding(
+                    single_input_chord("Space"), state)
+                .kind,
+            quader::QuaderNativeToolSettingsDispatch::Kind::NoMatch);
+
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  state.active_tool = quader::ViewportToolId::CreatePrimitive;
+  const quader::QuaderNativeToolSettingsDispatch primitive_apply =
+      editor.commands().dispatch_native_tool_settings_input_binding(
+          single_input_chord("Space"), state);
+  EXPECT_EQ(primitive_apply.kind,
+            quader::QuaderNativeToolSettingsDispatch::Kind::Intent);
+  EXPECT_EQ(primitive_apply.intent,
+            quader::QuaderNativeToolSettingsIntent::Apply);
+
+  const quader::QuaderNativeToolSettingsDispatch primitive_cancel =
+      editor.commands().dispatch_native_tool_settings_input_binding(
+          single_input_chord("Escape"), state);
+  ASSERT_EQ(primitive_cancel.kind,
+            quader::QuaderNativeToolSettingsDispatch::Kind::Intent);
+  ASSERT_EQ(primitive_cancel.intent,
+            quader::QuaderNativeToolSettingsIntent::Cancel);
+  ASSERT_TRUE(editor.commands()
+                  .execute_native_tool_settings_intent(
+                      primitive_cancel.intent)
+                  .ok());
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
+  state.active_tool = quader::ViewportToolId::LinearArray;
+  const quader::QuaderNativeToolSettingsDispatch linear_apply =
+      editor.commands().dispatch_native_tool_settings_input_binding(
+          single_input_chord("Space"), state);
+  ASSERT_EQ(linear_apply.kind,
+            quader::QuaderNativeToolSettingsDispatch::Kind::Intent);
+  ASSERT_EQ(linear_apply.intent,
+            quader::QuaderNativeToolSettingsIntent::Apply);
+  const quader::QuaderApiVoidResult applied =
+      editor.commands().execute_native_tool_settings_intent(
+          linear_apply.intent);
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  EXPECT_TRUE(applied.changed());
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_EQ(editor.query().modeling_objects().size(), 4u);
 }
 
 TEST(EditorApiTests, UvPeelCommandUsesTypedEdgeScopeAndUnassignedDefault) {
@@ -2960,6 +3048,98 @@ TEST(EditorApiTests, KeybindingConflictsUseSemanticWhenOverlap) {
         service.conflicts_for("G", "activeTool.move");
     ASSERT_EQ(move_conflicts.size(), 1u);
     EXPECT_EQ(move_conflicts.front().target_id, "tool.move");
+}
+
+TEST(EditorApiTests,
+     PendingKeybindingChordExpiresBeforeDispatchingTheNextShortcut) {
+  quader::QuaderKeybindingService service;
+  ASSERT_TRUE(service.add_default_keybinding(
+      "sequence", "Ctrl+K D F", "sequenceMode"));
+  ASSERT_TRUE(
+      service.add_default_keybinding("single", "D", "singleMode"));
+
+  quader::QuaderKeybindingContext sequence_context;
+  sequence_context.set("sequenceMode", true);
+  quader::QuaderKeybindingContext single_context;
+  single_context.set("singleMode", true);
+
+  const quader::QuaderKeybindingService::TimePoint started{};
+  const auto prefix = service.dispatch_at(
+      single_input_chord("Ctrl+K"), sequence_context, started);
+  ASSERT_EQ(prefix.kind,
+            quader::QuaderKeybindingDispatch::Kind::PendingChord);
+  EXPECT_TRUE(service.has_pending_chord_at(
+      started + quader::QuaderKeybindingService::pending_chord_timeout() -
+      std::chrono::milliseconds{1}));
+
+  const auto deadline =
+      started + quader::QuaderKeybindingService::pending_chord_timeout();
+  EXPECT_FALSE(service.has_pending_chord_at(deadline));
+  const auto later = service.dispatch_at(single_input_chord("D"),
+                                         single_context, deadline);
+  ASSERT_EQ(later.kind, quader::QuaderKeybindingDispatch::Kind::ExactMatch);
+  EXPECT_EQ(later.target_id, "single");
+  EXPECT_FALSE(service.has_pending_chord_at(deadline));
+}
+
+TEST(EditorApiTests,
+     PendingKeybindingChordContinuesBeforeDeadlineAndResetsOnRebind) {
+  quader::QuaderKeybindingService service;
+  ASSERT_TRUE(service.add_default_keybinding(
+      "sequence", "Ctrl+K D F", "sequenceMode"));
+  ASSERT_TRUE(service.add_default_keybinding("single", "D", "sequenceMode"));
+
+  quader::QuaderKeybindingContext context;
+  context.set("sequenceMode", true);
+  const quader::QuaderKeybindingService::TimePoint started{};
+  ASSERT_EQ(service
+                .dispatch_at(single_input_chord("Ctrl+K"), context, started)
+                .kind,
+            quader::QuaderKeybindingDispatch::Kind::PendingChord);
+
+  const auto before_deadline =
+      started + quader::QuaderKeybindingService::pending_chord_timeout() -
+      std::chrono::milliseconds{1};
+  const auto intermediate = service.dispatch_at(
+      single_input_chord("D"), context, before_deadline);
+  ASSERT_EQ(intermediate.kind,
+            quader::QuaderKeybindingDispatch::Kind::PendingChord);
+  EXPECT_TRUE(service.has_pending_chord_at(before_deadline));
+
+  const auto final_chord =
+      before_deadline +
+      quader::QuaderKeybindingService::pending_chord_timeout() -
+      std::chrono::milliseconds{1};
+  const auto continuation =
+      service.dispatch_at(single_input_chord("F"), context, final_chord);
+  ASSERT_EQ(continuation.kind,
+            quader::QuaderKeybindingDispatch::Kind::ExactMatch);
+  EXPECT_EQ(continuation.target_id, "sequence");
+  EXPECT_FALSE(service.has_pending_chord_at(final_chord));
+
+  const auto restarted = final_chord + std::chrono::milliseconds{1};
+  ASSERT_EQ(service
+                .dispatch_at(single_input_chord("Ctrl+K"), context, restarted)
+                .kind,
+            quader::QuaderKeybindingDispatch::Kind::PendingChord);
+  service.reset_pending_chord();
+  EXPECT_FALSE(service.has_pending_chord_at(restarted));
+  EXPECT_EQ(service.dispatch_at(single_input_chord("D"), context, restarted)
+                .target_id,
+            "single");
+
+  ASSERT_EQ(service
+                .dispatch_at(single_input_chord("Ctrl+K"), context, restarted)
+                .kind,
+            quader::QuaderKeybindingDispatch::Kind::PendingChord);
+  const quader::QuaderKeybindingMutationResult rebound =
+      service.set_user_shortcut("sequence", "Ctrl+K F", "sequenceMode");
+  ASSERT_TRUE(rebound.ok) << rebound.message;
+  ASSERT_TRUE(rebound.changed);
+  EXPECT_FALSE(service.has_pending_chord_at(restarted));
+  EXPECT_EQ(service.dispatch_at(single_input_chord("D"), context, restarted)
+                .target_id,
+            "single");
 }
 
 TEST(EditorApiTests, PersistedKeybindingsRejectUnknownTargets) {
@@ -3980,6 +4160,54 @@ TEST(EditorApiTests,
   EXPECT_EQ(continuation.command_id,
             quader::quader_command::kEditUndo.string());
   EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+}
+
+TEST(EditorApiTests,
+     StatefulViewportDispatchResolvesSemanticMultiChordActions) {
+  const std::filesystem::path path =
+      keybinding_test_path("semantic-viewport-action-sequence");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut("viewport.quick_pivot", "Ctrl+K D")
+                  .ok());
+
+  quader::ViewportToolState state;
+  const auto prefix = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("Ctrl+K"), state, true, false);
+  EXPECT_EQ(prefix.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  EXPECT_TRUE(editor.commands().has_pending_keybinding_chord());
+
+  const auto action = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("D"), state, true, false);
+  EXPECT_EQ(action.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportInputAction);
+  EXPECT_EQ(action.action, quader::ViewportInputActionKind::QuickPivot);
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(single_input_chord("Ctrl+K"),
+                                                 state, true, false)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  const auto blocked = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("D"), state, true, false,
+      {.modal_tool_active = true});
+  EXPECT_EQ(blocked.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut("viewport.quick_pivot", "D")
+                  .ok());
+  const auto single = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("D"), state, true, false);
+  EXPECT_EQ(single.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportInputAction);
+  EXPECT_EQ(single.action, quader::ViewportInputActionKind::QuickPivot);
+  std::filesystem::remove(path);
 }
 
 TEST(EditorApiTests, ViewportNavigationActionsUseMouseInputBindings) {
@@ -5298,6 +5526,27 @@ TEST(EditorApiTests,
                   .set_action_shortcut(actions[2],
                                        "Alt+LeftMouseDoubleClick")
                   .ok());
+
+  for (const std::string_view supported : {
+           "Alt+LeftMouseClick", "Shift+Alt+MiddleMouseDoubleClick",
+           "Alt+RightMousePress"}) {
+    const auto analysis = editor.commands().analyze_shortcut_assignment(
+        actions[3], supported);
+    EXPECT_TRUE(analysis.ok) << supported << ": " << analysis.message;
+    if (supported == "Alt+RightMousePress") {
+      EXPECT_EQ(analysis.canonical_shortcut, "Alt+RightMouse");
+    }
+  }
+  for (const std::string_view unsupported : {
+           "Alt+RightMouseDrag", "Wheel", "Alt+WheelUp",
+           "Shift+WheelDown"}) {
+    const auto analysis = editor.commands().analyze_shortcut_assignment(
+        actions[3], unsupported);
+    EXPECT_FALSE(analysis.ok) << unsupported;
+    EXPECT_TRUE(analysis.message.find("drag") != std::string::npos ||
+                analysis.message.find("wheel") != std::string::npos)
+        << unsupported;
+  }
 }
 
 TEST(EditorApiTests, MaterialMouseActionResolverMarksOnlyOneShotFlags) {
@@ -5564,8 +5813,21 @@ TEST(EditorApiTests, FaceTextureTransferResolverIsOneShotAndHonorsContext) {
   quader::ViewportInputFrame input;
   input.viewport_focused = true;
   input.pressed_input_chords.push_back(single_input_chord("Alt+LeftMouse"));
+  input.pointer_pressed_edges = {{
+      .button = quader::QuaderMouseButton::Left,
+      .local = {11.0f, 13.0f},
+      .sequence = 10u,
+  }};
   resolve(input);
   EXPECT_TRUE(input.transfer_face_texture_pressed);
+  ASSERT_EQ(input.transfer_face_texture_edges.size(), 1u);
+  EXPECT_EQ(input.transfer_face_texture_edges.front().kind,
+            quader::ViewportSemanticPointerEdgeKind::Trigger);
+  EXPECT_EQ(input.transfer_face_texture_edges.front().semantic_chord.mouse_button,
+            quader::QuaderMouseButton::Left);
+  ASSERT_TRUE(input.transfer_face_texture_edges.front().pointer_edge.has_value());
+  EXPECT_EQ(input.transfer_face_texture_edges.front().pointer_edge->sequence,
+            10u);
   EXPECT_FALSE(input.sample_face_material_pressed);
   EXPECT_FALSE(input.apply_active_material_to_selection_pressed);
   EXPECT_FALSE(input.apply_face_material_to_mesh_pressed);
@@ -5582,6 +5844,11 @@ TEST(EditorApiTests, FaceTextureTransferResolverIsOneShotAndHonorsContext) {
   input.released_input_chords.clear();
   input.pressed_input_chords = {
       single_input_chord("Alt+LeftMouseDoubleClick")};
+  input.pointer_pressed_edges = {{
+      .button = quader::QuaderMouseButton::Left,
+      .local = {17.0f, 19.0f},
+      .sequence = 12u,
+  }};
   resolve(input);
   EXPECT_TRUE(input.transfer_face_texture_pressed)
       << "Qt emits DoubleClick, not a second Press, for a rapid second click";
@@ -5603,27 +5870,88 @@ TEST(EditorApiTests, FaceTextureTransferResolverIsOneShotAndHonorsContext) {
   const auto *entry = find_keybinding_catalog_entry(
       catalog, "viewport.material.transfer_face_texture");
   ASSERT_NE(entry, nullptr);
-  for (const std::string_view mapping : {"Alt+LeftMouseClick",
-                                         "Alt+LeftMouseDoubleClick"}) {
-    SCOPED_TRACE(mapping);
+  struct DeferredTransferMapping final {
+    std::string_view mapping;
+    std::string_view press;
+  };
+  for (const DeferredTransferMapping deferred : {
+           DeferredTransferMapping{"Alt+LeftMouseClick", "Alt+LeftMouse"},
+           DeferredTransferMapping{"Shift+Alt+MiddleMouseClick",
+                                   "Shift+Alt+MiddleMouse"},
+           DeferredTransferMapping{"Alt+RightMouseDoubleClick",
+                                   "Alt+RightMouse"},
+       }) {
+    SCOPED_TRACE(deferred.mapping);
     ASSERT_TRUE(editor.preferences()
-                    .set_action_shortcut(entry->key, std::string(mapping))
+                    .set_action_shortcut(entry->key,
+                                         std::string(deferred.mapping))
                     .ok());
+    suppressed_chords.clear();
     input = {};
     input.viewport_focused = true;
-    input.pressed_input_chords = {single_input_chord("Alt+LeftMouse")};
+    const quader::QuaderInputChord press =
+        single_input_chord(deferred.press);
+    input.pressed_input_chords = {press};
+    input.pointer_pressed_edges = {{
+        .button = press.mouse_button,
+        .local = {23.0f, 29.0f},
+        .sequence = 20u,
+    }};
     resolve(input);
     EXPECT_FALSE(input.transfer_face_texture_pressed);
     EXPECT_TRUE(input.transfer_face_texture_pointer_reserved)
         << "the constituent press must not change the selected source";
+    ASSERT_EQ(input.transfer_face_texture_edges.size(), 1u);
+    EXPECT_EQ(input.transfer_face_texture_edges.front().kind,
+              quader::ViewportSemanticPointerEdgeKind::ReservePress);
+    EXPECT_EQ(input.transfer_face_texture_edges.front().semantic_chord.mouse_button,
+              press.mouse_button);
+    ASSERT_TRUE(input.transfer_face_texture_edges.front().pointer_edge.has_value());
+    EXPECT_EQ(input.transfer_face_texture_edges.front().pointer_edge->sequence,
+              20u);
+    if (press.mouse_button == quader::QuaderMouseButton::Middle ||
+        press.mouse_button == quader::QuaderMouseButton::Right) {
+      quader::QuaderInputChord competing_drag = press;
+      competing_drag.gesture = quader::QuaderInputGesture::Drag;
+      EXPECT_NE(std::find(suppressed_chords.begin(), suppressed_chords.end(),
+                          competing_drag),
+                suppressed_chords.end());
+      EXPECT_FALSE(input.navigation_bindings.pan_pressed);
+      EXPECT_FALSE(input.navigation_bindings.fly_pressed);
+      EXPECT_FALSE(input.navigation_bindings.orbit_pressed);
+    }
     input.pressed_input_chords.clear();
-    input.active_input_chords = {single_input_chord("Alt+LeftMouse")};
+    input.pointer_pressed_edges.clear();
+    input.active_input_chords = {press};
     resolve(input);
     EXPECT_FALSE(input.transfer_face_texture_pressed);
     input.active_input_chords.clear();
-    input.pressed_input_chords = {single_input_chord(mapping)};
+    const quader::QuaderInputChord trigger =
+        single_input_chord(deferred.mapping);
+    input.pressed_input_chords = {trigger};
+    if (trigger.gesture == quader::QuaderInputGesture::Click) {
+      input.pointer_released_edges = {{
+          .button = trigger.mouse_button,
+          .local = {31.0f, 37.0f},
+          .sequence = 21u,
+      }};
+    } else {
+      input.pointer_pressed_edges = {{
+          .button = trigger.mouse_button,
+          .local = {31.0f, 37.0f},
+          .sequence = 22u,
+      }};
+    }
     resolve(input);
     EXPECT_TRUE(input.transfer_face_texture_pressed);
+    ASSERT_EQ(input.transfer_face_texture_edges.size(), 1u);
+    EXPECT_EQ(input.transfer_face_texture_edges.front().kind,
+              quader::ViewportSemanticPointerEdgeKind::Trigger);
+    EXPECT_EQ(input.transfer_face_texture_edges.front().semantic_chord,
+              trigger);
+    ASSERT_TRUE(input.transfer_face_texture_edges.front().pointer_edge.has_value());
+    EXPECT_EQ(input.transfer_face_texture_edges.front().pointer_edge->button,
+              trigger.mouse_button);
   }
   ASSERT_TRUE(editor.preferences().remove_action_shortcut(entry->key).ok());
   input = {};
@@ -6045,6 +6373,71 @@ TEST(EditorApiTests, ViewportModalToolGesturesUseKeybindingTargets) {
   EXPECT_EQ(action, quader::ViewportInputActionKind::ModalToolModeCycle);
 }
 
+TEST(EditorApiTests,
+     ViewportResolverExecutesSemanticMultiChordActionsStatefully) {
+  const std::filesystem::path path =
+      keybinding_test_path("semantic-viewport-resolver-sequence");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut("viewport.modal_tool.mode_cycle", "Ctrl+K F")
+                  .ok());
+
+  quader::ViewportToolState state;
+  state.active_tool = quader::ViewportToolId::Cut;
+  std::vector<quader::QuaderInputChord> suppressed_chords;
+  double linear_array_wheel_remainder = 0.0;
+  double radial_array_wheel_remainder = 0.0;
+  const auto resolve = [&](quader::ViewportInputFrame &input) {
+    quader::ViewportKeybindingResolver::resolve(
+        editor, state, input, suppressed_chords,
+        linear_array_wheel_remainder, radial_array_wheel_remainder);
+  };
+
+  quader::ViewportInputFrame prefix;
+  prefix.viewport_focused = true;
+  prefix.modal_tool_active = true;
+  prefix.pressed_input_chords = {single_input_chord("Ctrl+K")};
+  resolve(prefix);
+  EXPECT_TRUE(prefix.keybinding_input_consumed);
+  EXPECT_FALSE(prefix.modal_tool_mode_cycle_pressed);
+  EXPECT_TRUE(editor.commands().has_pending_keybinding_chord());
+
+  quader::ViewportInputFrame continuation;
+  continuation.viewport_focused = true;
+  continuation.modal_tool_active = true;
+  continuation.pressed_input_chords = {single_input_chord("F")};
+  resolve(continuation);
+  EXPECT_TRUE(continuation.keybinding_input_consumed);
+  EXPECT_TRUE(continuation.modal_tool_mode_cycle_pressed);
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+
+  suppressed_chords.clear();
+  prefix.keybinding_input_consumed = false;
+  resolve(prefix);
+  ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+  state.active_tool = quader::ViewportToolId::Select;
+  continuation.keybinding_input_consumed = false;
+  continuation.modal_tool_mode_cycle_pressed = false;
+  resolve(continuation);
+  EXPECT_TRUE(continuation.keybinding_input_consumed);
+  EXPECT_FALSE(continuation.modal_tool_mode_cycle_pressed);
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut("viewport.modal_tool.mode_cycle", "F")
+                  .ok());
+  suppressed_chords.clear();
+  state.active_tool = quader::ViewportToolId::Cut;
+  continuation.keybinding_input_consumed = false;
+  continuation.modal_tool_mode_cycle_pressed = false;
+  resolve(continuation);
+  EXPECT_FALSE(continuation.keybinding_input_consumed);
+  EXPECT_TRUE(continuation.modal_tool_mode_cycle_pressed);
+  std::filesystem::remove(path);
+}
+
 TEST(EditorApiTests, ViewportKeybindingContextsSeparateNavigationFromToolShortcuts) {
   const std::filesystem::path path =
       keybinding_test_path("navigation-contexts");
@@ -6070,7 +6463,10 @@ TEST(EditorApiTests, ViewportKeybindingContextsSeparateNavigationFromToolShortcu
               .fly_navigation_active = true,
           });
   EXPECT_EQ(navigation_dispatch.kind,
-            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+            quader::QuaderViewportKeybindingDispatch::Kind::
+                ViewportInputAction);
+  EXPECT_EQ(navigation_dispatch.action,
+            quader::ViewportInputActionKind::FlyForward);
 
   quader::ViewportInputActionKind action =
       quader::ViewportInputActionKind::None;
@@ -6877,6 +7273,24 @@ TEST(EditorApiTests, ActivePreviewCommandsApplyAndCancelSliceQuadWithoutUi) {
         EXPECT_GT(preview_mesh->vertex_count, before->vertex_count);
         EXPECT_GT(preview_mesh->primitive_count, before->primitive_count);
 
+        quader::QuaderPickSelectRequest preview_side_pick;
+        preview_side_pick.ray = {
+            .origin = {5.0f, 0.0f, 0.0f},
+            .direction = {-1.0f, 0.0f, 0.0f},
+        };
+        const quader::QuaderApiResult<quader::QuaderSelectionSummary>
+            preview_hit =
+                harness.editor.selection().pick_select(preview_side_pick);
+        ASSERT_TRUE(preview_hit.ok()) << preview_hit.error_message();
+        ASSERT_GT(preview_hit.value().selected_face_count, 0u);
+        ASSERT_GT(preview_hit.value().active_face_id, 0);
+        const std::size_t preview_selected_face_count =
+            preview_hit.value().selected_face_count;
+        const int preview_active_face = preview_hit.value().active_face_id;
+        const std::optional<quader::QuaderMeshSnapshot>
+            preview_mesh_after_hit = harness.editor.query().mesh(box.mesh);
+        ASSERT_TRUE(preview_mesh_after_hit.has_value());
+
         quader::QuaderPickSelectRequest miss_pick;
         miss_pick.ray = {
             .origin = {100.0f, 100.0f, 100.0f},
@@ -6885,13 +7299,16 @@ TEST(EditorApiTests, ActivePreviewCommandsApplyAndCancelSliceQuadWithoutUi) {
         const quader::QuaderApiResult<quader::QuaderSelectionSummary> missed =
             harness.editor.selection().pick_select(miss_pick);
         ASSERT_TRUE(missed.ok()) << missed.error_message();
-        EXPECT_EQ(missed.value().selected_face_count, 4u);
+        EXPECT_EQ(missed.value().selected_face_count,
+                  preview_selected_face_count);
+        EXPECT_EQ(missed.value().active_face_id, preview_active_face);
         const std::optional<quader::QuaderMeshSnapshot> preview_after_miss =
             harness.editor.query().mesh(box.mesh);
         ASSERT_TRUE(preview_after_miss.has_value());
-        EXPECT_EQ(preview_after_miss->vertex_count, preview_mesh->vertex_count);
+        EXPECT_EQ(preview_after_miss->vertex_count,
+                  preview_mesh_after_hit->vertex_count);
         EXPECT_EQ(preview_after_miss->primitive_count,
-                  preview_mesh->primitive_count);
+                  preview_mesh_after_hit->primitive_count);
 
         const quader::QuaderApiVoidResult apply =
             harness.editor.commands().execute(
@@ -6902,8 +7319,10 @@ TEST(EditorApiTests, ActivePreviewCommandsApplyAndCancelSliceQuadWithoutUi) {
                   "Apply Tool Preview");
         const std::optional<quader::QuaderMeshSnapshot> committed = harness.editor.query().mesh(box.mesh);
         ASSERT_TRUE(committed.has_value());
-        EXPECT_EQ(committed->vertex_count, preview_mesh->vertex_count);
-        EXPECT_EQ(committed->primitive_count, preview_mesh->primitive_count);
+        EXPECT_EQ(committed->vertex_count,
+                  preview_mesh_after_hit->vertex_count);
+        EXPECT_EQ(committed->primitive_count,
+                  preview_mesh_after_hit->primitive_count);
         EXPECT_FALSE(
             harness.editor.commands()
                 .execute(quader::quader_command::kModelingApplyActivePreview)
@@ -8667,14 +9086,67 @@ TEST(EditorApiTests,
   EXPECT_NEAR(*included.nearest_surface_ray_distance,
               *excluded.nearest_surface_ray_distance, 1.0e-6);
 
+  EXPECT_FALSE(editor.query().mesh_vertex_snap_target(ray, 0.25).has_value());
+  const std::optional<quader::QuaderMeshVertexSnapTarget> vertex_only =
+      editor.query().mesh_vertex_snap_target(ray, 0.25, false);
+  ASSERT_TRUE(vertex_only.has_value());
+  EXPECT_EQ(vertex_only->modeling_object_id,
+            box.value().modeling_object_id);
+  EXPECT_EQ(vertex_only->vertex_id, included.vertex_target->vertex_id);
+  EXPECT_NEAR(vertex_only->world_position.x,
+              included.vertex_target->world_position.x, 1.0e-6);
+  EXPECT_NEAR(vertex_only->world_position.y,
+              included.vertex_target->world_position.y, 1.0e-6);
+  EXPECT_NEAR(vertex_only->world_position.z,
+              included.vertex_target->world_position.z, 1.0e-6);
+
   const quader::QuaderMeshSnapQueryResult invalid =
       editor.query().mesh_snap_query(ray, 0.0);
   EXPECT_FALSE(invalid.vertex_target.has_value());
   EXPECT_FALSE(invalid.nearest_surface_ray_distance.has_value());
+  EXPECT_FALSE(
+      editor.query().mesh_vertex_snap_target(ray, 0.0).has_value());
 
   const auto difference = quader::test::diff_command_observable_state(
       before, quader::test::capture_command_observable_state(editor));
   EXPECT_TRUE(difference.empty()) << difference.summary;
+}
+
+TEST(EditorApiTests,
+     MeshVertexSnapTargetExpandsFormalOccurrenceWorldTransforms) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto source = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}});
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  const auto instance = editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+  const quader::EntityId occurrence = instance.value().occurrence.root.id;
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(occurrence,
+                                 {.position = {4.0F, 0.0F, 0.0F}})
+                  .ok());
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+
+  const std::optional<quader::QuaderMeshVertexSnapTarget> target =
+      editor.query().mesh_vertex_snap_target(
+          {.origin = {3.0F, -1.0F, -5.0F},
+           .direction = {0.0F, 0.0F, 1.0F}},
+          0.25, false);
+  ASSERT_TRUE(target.has_value());
+  EXPECT_NEAR(target->world_position.x, 3.0, 1.0e-6);
+  EXPECT_NEAR(target->world_position.y, -1.0, 1.0e-6);
+  EXPECT_NEAR(target->world_position.z, -1.0, 1.0e-6);
+
+  ASSERT_TRUE(editor.scene().set_locked(occurrence, true).ok());
+  EXPECT_FALSE(editor.query()
+                   .mesh_vertex_snap_target(
+                       {.origin = {3.0F, -1.0F, -5.0F},
+                        .direction = {0.0F, 0.0F, 1.0F}},
+                       0.25, false)
+                   .has_value());
 }
 
 TEST(EditorApiTests, NativeCurvePicksReuseModifiersPreservationAndHistory) {
@@ -9029,6 +9501,22 @@ TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicA
             "Handle Box");
     ASSERT_TRUE(created.ok()) << created.error_message();
 
+    const auto first_vertex = editor.query().mesh_vertex_snap_target(
+        {.origin = {-1.0F, -1.0F, -5.0F},
+         .direction = {0.0F, 0.0F, 1.0F}},
+        0.25, false);
+    const auto second_vertex = editor.query().mesh_vertex_snap_target(
+        {.origin = {1.0F, -1.0F, -5.0F},
+         .direction = {0.0F, 0.0F, 1.0F}},
+        0.25, false);
+    ASSERT_TRUE(first_vertex.has_value());
+    ASSERT_TRUE(second_vertex.has_value());
+    ASSERT_EQ(first_vertex->modeling_object_id,
+              created.value().modeling_object_id);
+    ASSERT_EQ(second_vertex->modeling_object_id,
+              created.value().modeling_object_id);
+    ASSERT_NE(first_vertex->vertex_id, second_vertex->vertex_id);
+
     quader::QuaderObjectHandle box = editor.object(created.value());
     EXPECT_TRUE(box.rename("Public Handle Box").ok());
     EXPECT_TRUE(box.set_visible(false).ok());
@@ -9039,13 +9527,29 @@ TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicA
                     .select_objects({created.value()},
                                     quader::QuaderSelectionEdit::Replace)
                     .ok());
-    EXPECT_TRUE(
-        editor.selection().select_vertices(created.value(), {0, 1}).ok());
+    EXPECT_TRUE(editor.selection()
+                    .select_vertices(created.value(),
+                                     {first_vertex->vertex_id,
+                                      second_vertex->vertex_id})
+                    .ok());
 
-    const quader::QuaderApiResult<quader::QuaderEntityRef> duplicate = box.duplicate();
-    EXPECT_FALSE(duplicate.ok());
-    EXPECT_NE(duplicate.error_message().find("modeling object"),
-              std::string::npos);
+    const quader::QuaderApiResult<quader::QuaderEntityRef> duplicate =
+        box.duplicate();
+    ASSERT_TRUE(duplicate.ok()) << duplicate.error_message();
+    EXPECT_TRUE(duplicate.changed());
+    EXPECT_TRUE(editor.query().modeling_object_for_entity(duplicate.value().id)
+                    .has_value());
+    EXPECT_EQ(editor.selection().summary().mode,
+              quader::QuaderSelectionMode::Object);
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_FALSE(editor.query().entity(duplicate.value().id).has_value());
+    EXPECT_EQ(editor.selection().summary().mode,
+              quader::QuaderSelectionMode::Vertex);
+    EXPECT_EQ(editor.selection().summary().selected_vertex_count, 2U);
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_TRUE(editor.query().entity(duplicate.value().id).has_value());
+    EXPECT_EQ(editor.selection().summary().mode,
+              quader::QuaderSelectionMode::Object);
 
     quader::QuaderCreateEntityArgs first_args;
     first_args.name = "First";
@@ -10344,9 +10848,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(linked_created.ok()) << linked_created.error_message();
   const quader::EntityId first_linked =
       linked_created.value().occurrence.root.id;
-  ASSERT_TRUE(editor.commands()
-                  .execute(quader::quader_command::kDuplicateSelection)
-                  .ok());
+  ASSERT_TRUE(editor.modeling().duplicate_meshes().ok());
   ASSERT_EQ(selected_entities(editor).size(), 1u);
   const quader::EntityId second_linked = selected_entities(editor).front();
 
@@ -11573,17 +12075,16 @@ TEST(EditorApiTests, HalfCutPreviewExposesLiveAxisAndPartSettings) {
     EXPECT_FALSE(separate->bool_value);
     EXPECT_TRUE(fill->bool_value);
 
-    ASSERT_TRUE(editor.tools()
-                    .set_setting("half_cut", "operation.half_cut.axis", 2.0)
-                    .ok());
-    ASSERT_TRUE(editor.tools()
-                    .set_setting("half_cut",
-                                 "operation.half_cut.separate_parts", true)
-                    .ok());
-    ASSERT_TRUE(editor.tools()
-                    .set_setting("half_cut", "operation.half_cut.fill_parts",
-                                 false)
-                    .ok());
+    const quader::QuaderApiVoidResult axis_update = editor.tools().set_setting(
+        "half_cut", "operation.half_cut.axis", 2.0);
+    ASSERT_TRUE(axis_update.ok()) << axis_update.error_message();
+    const quader::QuaderApiVoidResult separate_update =
+        editor.tools().set_setting(
+            "half_cut", "operation.half_cut.separate_parts", true);
+    ASSERT_TRUE(separate_update.ok()) << separate_update.error_message();
+    const quader::QuaderApiVoidResult fill_update = editor.tools().set_setting(
+        "half_cut", "operation.half_cut.fill_parts", false);
+    ASSERT_TRUE(fill_update.ok()) << fill_update.error_message();
 
     settings = editor.tools().active_settings();
     axis = find_tool_setting_control(settings, "operation.half_cut.axis");
@@ -11652,6 +12153,15 @@ TEST(EditorApiTests,
                     .execute(editor.commands().command_id_for_modeling_action(
                         "half_cut"))
                     .ok());
+    const quader::QuaderHistorySnapshot history_before_settings =
+        editor.query().history();
+    const auto expect_settings_kept_history = [&]() {
+      const quader::QuaderHistorySnapshot current = editor.query().history();
+      EXPECT_EQ(current.can_undo, history_before_settings.can_undo);
+      EXPECT_EQ(current.can_redo, history_before_settings.can_redo);
+      EXPECT_EQ(current.undo_label, history_before_settings.undo_label);
+      EXPECT_EQ(current.redo_label, history_before_settings.redo_label);
+    };
 
     const auto separated_part = [&]()
         -> std::optional<quader::QuaderEntitySnapshot> {
@@ -11664,10 +12174,12 @@ TEST(EditorApiTests,
       return std::nullopt;
     };
 
-    ASSERT_TRUE(editor.tools()
-                    .set_setting("half_cut",
-                                 "operation.half_cut.separate_parts", true)
-                    .ok());
+    const quader::QuaderApiVoidResult first_separate_update =
+        editor.tools().set_setting(
+            "half_cut", "operation.half_cut.separate_parts", true);
+    ASSERT_TRUE(first_separate_update.ok())
+        << first_separate_update.error_message();
+    expect_settings_kept_history();
     std::optional<quader::QuaderEntitySnapshot> part = separated_part();
     ASSERT_TRUE(part.has_value());
     EXPECT_EQ(part->parent, parent.value().id);
@@ -11679,16 +12191,19 @@ TEST(EditorApiTests,
     EXPECT_TRUE(part->has_material);
     EXPECT_EQ(part->material, material.value().id);
 
-    ASSERT_TRUE(editor.tools()
-                    .set_setting("half_cut",
-                                 "operation.half_cut.separate_parts", false)
-                    .ok());
+    const quader::QuaderApiVoidResult joined_update =
+        editor.tools().set_setting(
+            "half_cut", "operation.half_cut.separate_parts", false);
+    ASSERT_TRUE(joined_update.ok()) << joined_update.error_message();
+    expect_settings_kept_history();
     EXPECT_FALSE(separated_part().has_value());
 
-    ASSERT_TRUE(editor.tools()
-                    .set_setting("half_cut",
-                                 "operation.half_cut.separate_parts", true)
-                    .ok());
+    const quader::QuaderApiVoidResult second_separate_update =
+        editor.tools().set_setting(
+            "half_cut", "operation.half_cut.separate_parts", true);
+    ASSERT_TRUE(second_separate_update.ok())
+        << second_separate_update.error_message();
+    expect_settings_kept_history();
     part = separated_part();
     ASSERT_TRUE(part.has_value());
     EXPECT_EQ(part->parent, parent.value().id);
@@ -11766,10 +12281,10 @@ TEST(EditorApiTests,
                     .execute(editor.commands().command_id_for_modeling_action(
                         "half_cut"))
                     .ok());
-    ASSERT_TRUE(editor.tools()
-                    .set_setting("half_cut",
-                                 "operation.half_cut.separate_parts", true)
-                    .ok());
+    const quader::QuaderApiVoidResult separate_update =
+        editor.tools().set_setting(
+            "half_cut", "operation.half_cut.separate_parts", true);
+    ASSERT_TRUE(separate_update.ok()) << separate_update.error_message();
 
     std::vector<quader::QuaderEntitySnapshot> separated_parts;
     for (const quader::QuaderEntitySnapshot &candidate :

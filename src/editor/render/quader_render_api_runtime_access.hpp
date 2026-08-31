@@ -10,9 +10,7 @@
 #include "api/quader_render_api.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/overlay/viewport_persistent_overlay_style.hpp"
-#include "render/viewport_overlay_frame.hpp"
 
-#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <vector>
@@ -22,7 +20,6 @@ namespace quader {
 class SceneRenderBridge;
 enum class ToolPreviewSubmissionResult : std::uint8_t;
 struct RenderToolPreviewMeshRecord;
-struct ViewportSceneOverlayFrameRequest;
 
 /**
  * Stores viewport presentation state needed to synchronize persistent
@@ -57,19 +54,6 @@ public:
   [[nodiscard]] static const RenderOverlaySelectionSnapshot &
   build_scene_overlay_snapshot(QuaderRenderApi &api,
                                RenderOverlaySnapshotCache &snapshot_cache);
-  [[nodiscard]] static ViewportOverlayFrame build_scene_overlay_frame(
-      SceneRenderBridge &bridge, ViewportOverlayFrame base_frame,
-      const RenderOverlaySelectionSnapshot &snapshot,
-      const ViewportSceneOverlayFrameRequest &request);
-  static QuaderApiResult<QuaderRenderOverlaySubmission> sync_selection_overlay(
-      QuaderRenderApi &api, SceneRenderBridge &bridge,
-      std::size_t viewport_index, std::uint8_t layer_mask,
-      ViewportOverlayCamera camera,
-      const ViewportOverlayFrame *tool_overlay_frame = nullptr);
-  static QuaderApiVoidResult
-  set_selection_overlay(QuaderRenderApi &api, SceneRenderBridge &bridge,
-                        std::size_t viewport_index, std::uint8_t layer_mask,
-                        ViewportOverlayCamera camera);
 
 private:
   [[nodiscard]] static RenderSceneBindingKey

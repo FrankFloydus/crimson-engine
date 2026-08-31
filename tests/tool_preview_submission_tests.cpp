@@ -203,15 +203,23 @@ TEST(ToolPreviewSubmissionTests,
       modeling.modeling_sdk_projection_stats_for_tests().mesh_compile_count;
   ASSERT_TRUE(
       modeling.update_mirror_hover(mirror_plane_event(20.0f, 8.0f)).ok);
+  ASSERT_TRUE(harness.sync().ok());
+  const quader::ModelingToolPreviewWorkStats unchanged_work =
+      modeling.tool_preview_work_stats();
   for (int frame = 0; frame < 4; ++frame) {
     ASSERT_TRUE(harness.sync().ok());
   }
   EXPECT_EQ(harness.publication_attempts, published_attempts);
   EXPECT_EQ(modeling.modeling_sdk_projection_stats_for_tests().mesh_compile_count,
             published_compiles);
+  EXPECT_EQ(modeling.tool_preview_work_stats().signature_enumeration_count,
+            unchanged_work.signature_enumeration_count);
+  EXPECT_EQ(modeling.tool_preview_work_stats().mesh_extraction_count,
+            unchanged_work.mesh_extraction_count);
 
   // Move the already placed plane while scene/assets stay unchanged. A failed
-  // publication retains the old mesh and must not cache the new plane as done.
+  // publication retains the old mesh and caches the failed attempt until a
+  // source revision changes.
   ASSERT_TRUE(
       modeling.begin_mirror_line_drag(mirror_plane_event(0.5f)).ok);
   ASSERT_TRUE(
@@ -224,12 +232,34 @@ TEST(ToolPreviewSubmissionTests,
                      {.min = {2.0f, 1.0f, -6.0f},
                       .max = {4.0f, 3.0f, -4.0f}});
   const std::size_t failed_attempts = harness.publication_attempts;
+  const quader::ModelingToolPreviewWorkStats failed_work =
+      modeling.tool_preview_work_stats();
+  for (int frame = 0; frame < 4; ++frame) {
+    EXPECT_FALSE(harness.sync().ok());
+  }
+  EXPECT_EQ(harness.publication_attempts, failed_attempts);
+  EXPECT_EQ(modeling.tool_preview_work_stats().signature_enumeration_count,
+            failed_work.signature_enumeration_count);
+  EXPECT_EQ(modeling.tool_preview_work_stats().mesh_extraction_count,
+            failed_work.mesh_extraction_count);
+
+  const std::uint64_t failed_source_revision =
+      modeling.tool_preview_source_revision();
+  ASSERT_TRUE(modeling.begin_mirror_line_drag(mirror_plane_event(0.5f)).ok);
+  ASSERT_TRUE(
+      modeling.update_mirror_hover(mirror_plane_event(0.5f, 4.0f, true)).ok);
+  ASSERT_TRUE(modeling.end_mirror_drag().ok);
+  EXPECT_GT(modeling.tool_preview_source_revision(), failed_source_revision);
   ASSERT_TRUE(harness.sync().ok());
   EXPECT_EQ(harness.publication_attempts, failed_attempts + 1u);
+  EXPECT_GT(modeling.tool_preview_work_stats().signature_enumeration_count,
+            failed_work.signature_enumeration_count);
+  EXPECT_GT(modeling.tool_preview_work_stats().mesh_extraction_count,
+            failed_work.mesh_extraction_count);
   ASSERT_EQ(harness.published.size(), 1u);
   expect_bounds_near(preview_world_bounds(harness.published.front()),
-                     {.min = {2.0f, 1.0f, -2.0f},
-                      .max = {4.0f, 3.0f, 0.0f}});
+                     {.min = {2.0f, 1.0f, 2.0f},
+                      .max = {4.0f, 3.0f, 4.0f}});
 
   const std::size_t moved_attempts = harness.publication_attempts;
   const std::uint64_t moved_compiles =
@@ -442,6 +472,8 @@ TEST(ToolPreviewSubmissionTests,
   const std::size_t published_attempts = harness.publication_attempts;
   const std::uint64_t published_compiles =
       modeling.modeling_sdk_projection_stats_for_tests().mesh_compile_count;
+  const quader::ModelingToolPreviewWorkStats published_work =
+      modeling.tool_preview_work_stats();
   constexpr int kUnchangedFrames = 50000;
   const auto sync_begin = std::chrono::steady_clock::now();
   for (int frame = 0; frame < kUnchangedFrames; ++frame) {
@@ -456,6 +488,10 @@ TEST(ToolPreviewSubmissionTests,
   EXPECT_EQ(harness.publication_attempts, published_attempts);
   EXPECT_EQ(modeling.modeling_sdk_projection_stats_for_tests().mesh_compile_count,
             published_compiles);
+  EXPECT_EQ(modeling.tool_preview_work_stats().signature_enumeration_count,
+            published_work.signature_enumeration_count);
+  EXPECT_EQ(modeling.tool_preview_work_stats().mesh_extraction_count,
+            published_work.mesh_extraction_count);
 
   // Drawn-plane tools finalize through the viewport commit port; the public
   // operation-preview Apply route does not own Mirror's modal interaction.

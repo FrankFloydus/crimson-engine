@@ -8,7 +8,9 @@
 
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/modeling/runtime/editor_runtime.hpp"
+#include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/modeling/runtime/selection_types.hpp"
+#include "editor/selection/modeling_selection_projection_snapshot.hpp"
 #include "render/viewport_overlay_frame.hpp"
 
 #include <cstdint>
@@ -17,13 +19,8 @@
 #include <editor/interactions/selection_edit.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
 
-namespace quader_editor_core {
-class EditorSession;
-}
-
 namespace quader {
 
-class ModelingObjectRuntimeMap;
 class ModelingSdkProjectionAdapter;
 class ModelingSelectionService;
 class SceneDocument;
@@ -103,16 +100,16 @@ public:
       const quader_editor_core::SelectionHoverState &hover) const;
   [[nodiscard]] const quader_editor_core::SelectionOverlayFrame &
   selection_overlay_base_frame(
-      const quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &selection,
       ModelingSelectionOverlayOptions options = {}) const;
   [[nodiscard]] quader_editor_core::SelectionOverlayFrame
   selection_overlay_current_frame(
-      const quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &selection,
       const quader_editor_core::EditorRuntime &runtime,
       const quader_editor_core::SelectionHoverState &hover,
       ModelingSelectionOverlayOptions options = {}) const;
   [[nodiscard]] ViewportOverlayFrame selection_overlay_frame(
-      const quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &selection,
       const quader_editor_core::EditorRuntime &runtime,
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_registry,
@@ -120,7 +117,7 @@ public:
       const ModelingSdkProjectionAdapter &sdk_projection,
       ModelingSelectionOverlayOptions options = {}) const;
   [[nodiscard]] ViewportOverlayFrame volatile_overlay_frame(
-      const quader_editor_core::EditorSession &session,
+      const ModelingSelectionProjectionSnapshot &selection,
       const quader_editor_core::EditorRuntime &runtime,
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_registry,

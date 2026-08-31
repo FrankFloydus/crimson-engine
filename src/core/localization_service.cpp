@@ -108,6 +108,7 @@ LocalizationService::parse_lang_text(std::string_view text) {
 bool LocalizationService::load(const std::filesystem::path &locales_directory,
                                std::string selected_locale,
                                std::string fallback_locale) {
+  const std::uint64_t revision_before_load = revision_;
   if (fallback_locale.empty()) {
     fallback_locale = std::string(kDefaultLocale);
   }
@@ -182,6 +183,13 @@ bool LocalizationService::load(const std::filesystem::path &locales_directory,
                   }),
       available_locales_.end());
 
+  // A load publishes a complete replacement catalog, including an empty
+  // result. Retained consumers must observe that publication even when the
+  // selected locale identifier did not change or loading failed.
+  if (revision_ == revision_before_load) {
+    ++revision_;
+  }
+
   return !fallback_catalog_.empty();
 }
 
@@ -196,15 +204,25 @@ bool LocalizationService::select_locale(std::string_view locale) {
   const auto found = locale_catalogs_.find(locale_id);
   if (found == locale_catalogs_.end() || found->second.empty()) {
     if (locale_id == fallback_locale_ && !fallback_catalog_.empty()) {
+      const bool changed = current_locale_ != fallback_locale_ ||
+                           active_catalog_ != fallback_catalog_;
       active_catalog_ = fallback_catalog_;
       current_locale_ = fallback_locale_;
+      if (changed) {
+        ++revision_;
+      }
       return true;
     }
     return false;
   }
 
+  const bool changed = current_locale_ != locale_id ||
+                       active_catalog_ != found->second;
   active_catalog_ = found->second;
   current_locale_ = locale_id;
+  if (changed) {
+    ++revision_;
+  }
   return true;
 }
 

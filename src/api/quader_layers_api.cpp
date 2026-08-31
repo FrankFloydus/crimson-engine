@@ -9,6 +9,7 @@
 #include "api/quader_api_mutation_runner.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_api_status_internal.hpp"
+#include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/scene_session.hpp"
 
 #include <algorithm>
@@ -41,15 +42,6 @@ QuaderLayerSnapshot layer_snapshot(const SceneDocument &scene,
 QuaderApiVoidResult inactive_scene_status(QuaderApiSession session) {
   return quader_api_failure_status(read_scene_session(session),
                                    "No scene is active.");
-}
-
-QuaderApiVoidResult run_result_and_project_selection(
-    QuaderApiMutationRunner &mutations, SceneSession &session,
-    DocumentCommandResult result, std::string_view label) {
-  if (result.ok && result.changed) {
-    session.modeling().project_object_selection_from_scene(true);
-  }
-  return mutations.run_document_result(std::move(result), label);
 }
 
 } // namespace
@@ -226,8 +218,7 @@ QuaderApiVoidResult QuaderLayersApi::set_locked(QuaderLayerId id,
     return inactive_scene_status(session_);
   }
   SceneSession &session = scene_session(session_);
-  return run_result_and_project_selection(
-      mutations_, session,
+  return mutations_.run_document_result(
       session.document_commands().set_layer_locked(id, locked),
       "Set Layer Lock");
 }
@@ -237,8 +228,7 @@ QuaderApiVoidResult QuaderLayersApi::add_selection(QuaderLayerId id) {
     return inactive_scene_status(session_);
   }
   SceneSession &session = scene_session(session_);
-  return run_result_and_project_selection(
-      mutations_, session,
+  return mutations_.run_document_result(
       session.document_commands().add_selection_to_layer(id),
       "Add Selection to Layer");
 }

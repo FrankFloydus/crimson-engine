@@ -2482,6 +2482,7 @@ TEST(CurveToolOverlayCacheTests,
   EXPECT_EQ(cache.frame(preview).lines.data(), lines);
   EXPECT_EQ(cache.build_count(), 1u);
   preview.world_transform.values[12] = 8.0f;
+  ++preview.revision;
   EXPECT_FLOAT_EQ(cache.frame(preview).points.front().position.x, 8.0f);
   EXPECT_EQ(cache.build_count(), 2u);
   preview.control_selection.controls = {
@@ -2491,6 +2492,7 @@ TEST(CurveToolOverlayCacheTests,
                          CurveControlKind::IncomingHandle},
   };
   preview.control_selection.active = preview.control_selection.controls.back();
+  ++preview.revision;
   EXPECT_EQ(cache.frame(preview).points[1].color, kOverlaySelectedVertexColor);
   EXPECT_EQ(cache.frame(preview).points[3].color, kOverlaySelectedVertexColor);
   EXPECT_NE(cache.frame(preview).points[0].color, kOverlaySelectedVertexColor);
@@ -2503,6 +2505,7 @@ TEST(CurveToolOverlayCacheTests,
   EXPECT_EQ(cache.build_count(), 4u);
 
   preview.active = false;
+  ++preview.revision;
   const auto &inactive = cache.frame(preview);
   EXPECT_TRUE(inactive.lines.empty());
   EXPECT_TRUE(inactive.points.empty());
@@ -2567,24 +2570,30 @@ TEST(CurveToolOverlayCacheTests,
 
   // Navigation, leaving the pane and canceled placement clear the neutral hover.
   preview.hover_world.reset();
+  ++preview.revision;
   EXPECT_TRUE(cache.frame(preview).points.empty());
   EXPECT_TRUE(cache.frame(preview).lines.empty());
   EXPECT_EQ(cache.build_count(), 2u);
   preview.hover_world = QVec3{5.0f, 4.0f, -2.0f};
+  ++preview.revision;
   ASSERT_EQ(cache.frame(preview).points.size(), 1u);
   EXPECT_FLOAT_EQ(cache.frame(preview).points.front().position.x, 5.0f);
 
   // A stale hover must not leak into a drag, existing-curve edit or inactive tool.
   preview.dragging = true;
+  ++preview.revision;
   EXPECT_TRUE(cache.frame(preview).points.empty());
   preview.dragging = false;
   preview.drawing = false;
+  ++preview.revision;
   EXPECT_TRUE(cache.frame(preview).points.empty());
   preview.drawing = true;
   preview.active = false;
+  ++preview.revision;
   EXPECT_TRUE(cache.frame(preview).points.empty());
 
   preview.active = true;
+  ++preview.revision;
   ASSERT_TRUE(preview.document->append_point({.position = {1.0f, 0.0f, 0.0f}}).ok());
   const auto &next_point = cache.frame(preview);
   ASSERT_EQ(next_point.points.size(), 2u);
@@ -2623,6 +2632,7 @@ TEST(CurveToolOverlayCacheTests,
   EXPECT_FLOAT_EQ(draft.lines.back().end.y, 1.0f);
 
   preview.dragging = true;
+  ++preview.revision;
   const auto &dragging = cache.frame(preview);
   EXPECT_EQ(point_count_for(dragging, ViewportOverlayLayer::HoverVertex), 0u);
   EXPECT_EQ(line_count_for(dragging, ViewportOverlayLayer::ToolPlaneLine), 0u);

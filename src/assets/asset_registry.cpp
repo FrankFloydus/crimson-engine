@@ -11,10 +11,12 @@
 #include <quader/modeling/curves/curve_document.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <exception>
 #include <optional>
+#include <ranges>
 #include <unordered_set>
 #include <utility>
 
@@ -24,6 +26,11 @@ AssetRegistry::AssetRegistry() : owner_thread_(std::this_thread::get_id()) {}
 
 AssetRegistry::AssetRegistry(const AssetRegistry &other)
     : next_id_(other.next_id_), revision_(other.revision_),
+      modeling_mutation_count_(other.modeling_mutation_count_),
+      unscoped_mutation_count_(other.unscoped_mutation_count_),
+      mutation_count_by_asset_(other.mutation_count_by_asset_),
+      asset_allocation_serial_(other.asset_allocation_serial_),
+      last_asset_allocation_serial_(other.last_asset_allocation_serial_),
       material_catalog_revision_(other.material_catalog_revision_),
       mesh_material_usage_revision_(other.mesh_material_usage_revision_),
       meshes_(other.meshes_), deferred_meshes_(other.deferred_meshes_),
@@ -40,6 +47,11 @@ AssetRegistry &AssetRegistry::operator=(const AssetRegistry &other) {
   assert_owner_thread();
   next_id_ = other.next_id_;
   revision_ = other.revision_;
+  modeling_mutation_count_ = other.modeling_mutation_count_;
+  unscoped_mutation_count_ = other.unscoped_mutation_count_;
+  mutation_count_by_asset_ = other.mutation_count_by_asset_;
+  asset_allocation_serial_ = other.asset_allocation_serial_;
+  last_asset_allocation_serial_ = other.last_asset_allocation_serial_;
   material_catalog_revision_ = other.material_catalog_revision_;
   mesh_material_usage_revision_ = other.mesh_material_usage_revision_;
   meshes_ = other.meshes_;
@@ -55,6 +67,12 @@ AssetRegistry &AssetRegistry::operator=(const AssetRegistry &other) {
 
 AssetRegistry::AssetRegistry(AssetRegistry &&other) noexcept
     : next_id_(other.next_id_), revision_(other.revision_),
+      modeling_mutation_count_(other.modeling_mutation_count_),
+      unscoped_mutation_count_(other.unscoped_mutation_count_),
+      mutation_count_by_asset_(std::move(other.mutation_count_by_asset_)),
+      asset_allocation_serial_(other.asset_allocation_serial_),
+      last_asset_allocation_serial_(
+          std::move(other.last_asset_allocation_serial_)),
       material_catalog_revision_(other.material_catalog_revision_),
       mesh_material_usage_revision_(other.mesh_material_usage_revision_),
       meshes_(std::move(other.meshes_)),
@@ -72,6 +90,12 @@ AssetRegistry &AssetRegistry::operator=(AssetRegistry &&other) noexcept {
   }
   next_id_ = other.next_id_;
   revision_ = other.revision_;
+  modeling_mutation_count_ = other.modeling_mutation_count_;
+  unscoped_mutation_count_ = other.unscoped_mutation_count_;
+  mutation_count_by_asset_ = std::move(other.mutation_count_by_asset_);
+  asset_allocation_serial_ = other.asset_allocation_serial_;
+  last_asset_allocation_serial_ =
+      std::move(other.last_asset_allocation_serial_);
   material_catalog_revision_ = other.material_catalog_revision_;
   mesh_material_usage_revision_ = other.mesh_material_usage_revision_;
   meshes_ = std::move(other.meshes_);
@@ -94,44 +118,467 @@ void AssetRegistry::assert_owner_thread() const {
          "AssetRegistry mutation/materialization must run on its owner thread");
 }
 
-AssetRegistryProjectionCheckpoint
-AssetRegistry::capture_projection_checkpoint() const {
+ModelingAssetProjectionCheckpoint
+AssetRegistry::capture_modeling_projection_checkpoint(
+    std::span<const AssetId> modeling_asset_ids) const {
   assert_owner_thread();
-  return AssetRegistryProjectionCheckpoint(
-      std::make_shared<const AssetRegistry>(*this));
-}
-
-bool AssetRegistry::restore_projection_checkpoint(
-    const AssetRegistryProjectionCheckpoint &checkpoint) {
-  assert_owner_thread();
-  if (!checkpoint.valid()) {
-    return false;
+  ModelingAssetProjectionCheckpoint checkpoint;
+  for (const AssetId id : modeling_asset_ids) {
+    if (id != kInvalidAssetId && deferred_meshes_.contains(id)) {
+      return checkpoint;
+    }
   }
-  *this = *checkpoint.snapshot_;
-  return true;
-}
-
-CurveAssetProjectionCheckpoint
-AssetRegistry::capture_curve_projection_checkpoint() const {
-  assert_owner_thread();
-  CurveAssetProjectionCheckpoint checkpoint;
   checkpoint.valid_ = true;
+  checkpoint.origin_ = this;
   checkpoint.next_id_ = next_id_;
   checkpoint.revision_ = revision_;
-  checkpoint.curves_ = curves_;
+  checkpoint.mesh_material_usage_revision_ = mesh_material_usage_revision_;
+  checkpoint.modeling_mutation_count_ = modeling_mutation_count_;
+  checkpoint.unscoped_mutation_count_ = unscoped_mutation_count_;
+  checkpoint.allocation_serial_ = asset_allocation_serial_;
+  for (const AssetId id : modeling_asset_ids) {
+    if (id == kInvalidAssetId ||
+        checkpoint.mutation_count_by_asset_.contains(id)) {
+      continue;
+    }
+    const auto mutation = mutation_count_by_asset_.find(id);
+    checkpoint.mutation_count_by_asset_.emplace(
+        id, mutation != mutation_count_by_asset_.end() ? mutation->second : 0u);
+  }
+  checkpoint.meshes_ = meshes_.capture_targeted(modeling_asset_ids);
+  checkpoint.curves_ = curves_.capture_targeted(modeling_asset_ids);
   return checkpoint;
 }
 
-bool AssetRegistry::restore_curve_projection_checkpoint(
-    const CurveAssetProjectionCheckpoint &checkpoint) {
+ModelingAssetProjectionMutationFence::ModelingAssetProjectionMutationFence(
+    ModelingAssetProjectionMutationFence &&other) noexcept
+    : origin_(std::exchange(other.origin_, nullptr)),
+      records_(std::move(other.records_)),
+      work_(std::exchange(
+          other.work_, ModelingAssetProjectionMutationFenceWork{})) {}
+
+ModelingAssetProjectionMutationFence &
+ModelingAssetProjectionMutationFence::operator=(
+    ModelingAssetProjectionMutationFence &&other) noexcept {
+  if (this == &other) {
+    return *this;
+  }
+  origin_ = std::exchange(other.origin_, nullptr);
+  records_ = std::move(other.records_);
+  work_ = std::exchange(other.work_,
+                        ModelingAssetProjectionMutationFenceWork{});
+  return *this;
+}
+
+bool ModelingAssetProjectionMutationFence::matches_current(
+    const AssetRegistry &assets,
+    ModelingAssetProjectionMutationFenceWork *reported_work) const {
+  ModelingAssetProjectionMutationFenceWork current_work{
+      .participant_reference_count = records_.size(),
+      .participant_record_count = records_.size(),
+  };
+  const auto report = [&](bool matches) {
+    if (reported_work != nullptr) {
+      *reported_work = current_work;
+    }
+    return matches;
+  };
+  if (!valid() || origin_ != &assets) {
+    return report(false);
+  }
+  assets.assert_owner_thread();
+  for (const Record &record : records_) {
+    ++current_work.mutation_counter_lookup_count;
+    const auto mutation = assets.mutation_count_by_asset_.find(record.asset);
+    const std::uint64_t count =
+        mutation != assets.mutation_count_by_asset_.end()
+            ? mutation->second
+            : 0u;
+    if (count != record.mutation_count) {
+      return report(false);
+    }
+  }
+  return report(true);
+}
+
+bool ModelingAssetProjectionMutationFence::acknowledge_current(
+    const AssetRegistry &assets, std::span<const AssetId> newly_created,
+    ModelingAssetProjectionMutationFenceWork *reported_work) {
+  ModelingAssetProjectionMutationFenceWork current_work{
+      .participant_reference_count = records_.size() + newly_created.size(),
+  };
+  const auto report = [&](bool acknowledged) {
+    if (reported_work != nullptr) {
+      *reported_work = current_work;
+    }
+    return acknowledged;
+  };
+  if (!valid() || origin_ != &assets) {
+    return report(false);
+  }
+  assets.assert_owner_thread();
+  std::vector<AssetId> participants;
+  participants.reserve(records_.size() + newly_created.size());
+  for (const Record &record : records_) {
+    participants.push_back(record.asset);
+  }
+  participants.insert(participants.end(), newly_created.begin(),
+                      newly_created.end());
+  std::erase(participants, kInvalidAssetId);
+  std::ranges::sort(participants);
+  participants.erase(
+      std::unique(participants.begin(), participants.end()),
+      participants.end());
+
+  std::vector<Record> acknowledged;
+  acknowledged.reserve(participants.size());
+  for (const AssetId asset : participants) {
+    ++current_work.mutation_counter_lookup_count;
+    const auto mutation = assets.mutation_count_by_asset_.find(asset);
+    acknowledged.push_back({
+        .asset = asset,
+        .mutation_count =
+            mutation != assets.mutation_count_by_asset_.end()
+                ? mutation->second
+                : 0u,
+    });
+  }
+  current_work.participant_record_count = acknowledged.size();
+  records_ = std::move(acknowledged);
+  work_ = current_work;
+  return report(true);
+}
+
+ModelingAssetProjectionMutationFence
+AssetRegistry::capture_modeling_projection_mutation_fence(
+    std::span<const AssetId> modeling_asset_ids) const {
   assert_owner_thread();
-  if (!checkpoint.valid()) {
+  ModelingAssetProjectionMutationFence fence;
+  fence.origin_ = this;
+  fence.work_.participant_reference_count = modeling_asset_ids.size();
+  std::vector<AssetId> participants(modeling_asset_ids.begin(),
+                                    modeling_asset_ids.end());
+  std::erase(participants, kInvalidAssetId);
+  std::ranges::sort(participants);
+  participants.erase(
+      std::unique(participants.begin(), participants.end()),
+      participants.end());
+  fence.records_.reserve(participants.size());
+  for (const AssetId asset : participants) {
+    ++fence.work_.mutation_counter_lookup_count;
+    const auto mutation = mutation_count_by_asset_.find(asset);
+    fence.records_.push_back({
+        .asset = asset,
+        .mutation_count = mutation != mutation_count_by_asset_.end()
+                              ? mutation->second
+                              : 0u,
+    });
+  }
+  fence.work_.participant_record_count = fence.records_.size();
+  return fence;
+}
+
+std::optional<AssetRegistry::ModelingAssetProjectionRestorePlan>
+AssetRegistry::prepare_modeling_projection_restore(
+    const ModelingAssetProjectionCheckpoint &checkpoint,
+    std::span<const AssetId> created_modeling_asset_ids) const {
+  assert_owner_thread();
+  if (!checkpoint.valid() || checkpoint.origin_ != this) {
+    return std::nullopt;
+  }
+  if (next_id_ < checkpoint.next_id_ ||
+      revision_ < checkpoint.revision_ ||
+      modeling_mutation_count_ < checkpoint.modeling_mutation_count_ ||
+      asset_allocation_serial_ < checkpoint.allocation_serial_ ||
+      unscoped_mutation_count_ != checkpoint.unscoped_mutation_count_) {
+    return std::nullopt;
+  }
+
+  ModelingAssetProjectionRestorePlan plan;
+  plan.created_asset_ids.assign(created_modeling_asset_ids.begin(),
+                                created_modeling_asset_ids.end());
+  std::erase(plan.created_asset_ids, kInvalidAssetId);
+  std::ranges::sort(plan.created_asset_ids);
+  plan.created_asset_ids.erase(
+      std::unique(plan.created_asset_ids.begin(),
+                  plan.created_asset_ids.end()),
+      plan.created_asset_ids.end());
+
+  const std::uint64_t allocation_delta =
+      asset_allocation_serial_ - checkpoint.allocation_serial_;
+  if (plan.created_asset_ids.size() != allocation_delta) {
+    return std::nullopt;
+  }
+  for (const AssetId id : plan.created_asset_ids) {
+    const auto allocation = last_asset_allocation_serial_.find(id);
+    if (allocation == last_asset_allocation_serial_.end() ||
+        allocation->second <= checkpoint.allocation_serial_ ||
+        allocation->second > asset_allocation_serial_) {
+      return std::nullopt;
+    }
+    if (meshes_.contains(id)) {
+      plan.created_mesh_ids.push_back(id);
+    }
+    if (curves_.contains(id)) {
+      plan.created_curve_ids.push_back(id);
+    }
+  }
+
+  std::unordered_set<AssetId> enrolled_assets;
+  enrolled_assets.reserve(checkpoint.mutation_count_by_asset_.size() +
+                          plan.created_asset_ids.size());
+  for (const auto &[id, count] : checkpoint.mutation_count_by_asset_) {
+    (void)count;
+    enrolled_assets.insert(id);
+  }
+  enrolled_assets.insert(plan.created_asset_ids.begin(),
+                         plan.created_asset_ids.end());
+  plan.enrolled_asset_ids.assign(enrolled_assets.begin(),
+                                 enrolled_assets.end());
+  std::ranges::sort(plan.enrolled_asset_ids);
+  const std::uint64_t owner_delta =
+      modeling_mutation_count_ - checkpoint.modeling_mutation_count_;
+  std::uint64_t enrolled_delta = 0u;
+  for (const AssetId id : plan.enrolled_asset_ids) {
+    const auto captured = checkpoint.mutation_count_by_asset_.find(id);
+    const std::uint64_t captured_count =
+        captured != checkpoint.mutation_count_by_asset_.end()
+            ? captured->second
+            : 0u;
+    const auto current = mutation_count_by_asset_.find(id);
+    const std::uint64_t current_count =
+        current != mutation_count_by_asset_.end() ? current->second : 0u;
+    if (current_count < captured_count) {
+      return std::nullopt;
+    }
+    const std::uint64_t delta = current_count - captured_count;
+    if (enrolled_delta > owner_delta ||
+        delta > owner_delta - enrolled_delta) {
+      return std::nullopt;
+    }
+    enrolled_delta += delta;
+  }
+  if (enrolled_delta != owner_delta) {
+    return std::nullopt;
+  }
+  return plan;
+}
+
+bool AssetRegistry::can_restore_modeling_projection_checkpoint(
+    const ModelingAssetProjectionCheckpoint &checkpoint,
+    std::span<const AssetId> created_modeling_asset_ids) const {
+  return prepare_modeling_projection_restore(checkpoint,
+                                              created_modeling_asset_ids)
+      .has_value();
+}
+
+bool AssetRegistry::restore_modeling_projection_checkpoint(
+    const ModelingAssetProjectionCheckpoint &checkpoint,
+    std::span<const AssetId> created_modeling_asset_ids) {
+  std::optional<ModelingAssetProjectionRestorePlan> plan =
+      prepare_modeling_projection_restore(checkpoint,
+                                          created_modeling_asset_ids);
+  if (!plan.has_value()) {
     return false;
+  }
+  apply_modeling_projection_restore(checkpoint, *plan);
+  return true;
+}
+
+std::optional<AssetRegistry::ConcurrentModelingAssetProjectionRestorePlan>
+AssetRegistry::
+    prepare_modeling_projection_restore_preserving_concurrent_changes(
+        const ModelingAssetProjectionCheckpoint &checkpoint,
+        const ModelingAssetProjectionMutationFence &acknowledged_fence,
+        std::span<const AssetId> created_modeling_asset_ids) const {
+  assert_owner_thread();
+  if (!checkpoint.valid() || checkpoint.origin_ != this ||
+      !acknowledged_fence.valid() || acknowledged_fence.origin_ != this ||
+      !acknowledged_fence.matches_current(*this) ||
+      next_id_ < checkpoint.next_id_ || revision_ < checkpoint.revision_ ||
+      modeling_mutation_count_ < checkpoint.modeling_mutation_count_ ||
+      unscoped_mutation_count_ < checkpoint.unscoped_mutation_count_ ||
+      asset_allocation_serial_ < checkpoint.allocation_serial_) {
+    return std::nullopt;
+  }
+
+  std::vector<AssetId> created(created_modeling_asset_ids.begin(),
+                               created_modeling_asset_ids.end());
+  std::erase(created, kInvalidAssetId);
+  std::ranges::sort(created);
+  created.erase(std::unique(created.begin(), created.end()), created.end());
+
+  // The fence must cover the complete payload checkpoint plus every explicit
+  // provisional allocation. This prevents a permissive restore from being
+  // used with a partial acknowledgement set.
+  std::vector<AssetId> expected_fence_participants;
+  expected_fence_participants.reserve(
+      checkpoint.mutation_count_by_asset_.size() + created.size());
+  for (const auto &[asset, mutation_count] :
+       checkpoint.mutation_count_by_asset_) {
+    (void)mutation_count;
+    expected_fence_participants.push_back(asset);
+  }
+  expected_fence_participants.insert(expected_fence_participants.end(),
+                                     created.begin(), created.end());
+  std::ranges::sort(expected_fence_participants);
+  expected_fence_participants.erase(
+      std::unique(expected_fence_participants.begin(),
+                  expected_fence_participants.end()),
+      expected_fence_participants.end());
+  std::vector<AssetId> acknowledged_participants;
+  acknowledged_participants.reserve(acknowledged_fence.records_.size());
+  for (const ModelingAssetProjectionMutationFence::Record &record :
+       acknowledged_fence.records_) {
+    acknowledged_participants.push_back(record.asset);
+  }
+  if (acknowledged_participants != expected_fence_participants) {
+    return std::nullopt;
+  }
+
+  ConcurrentModelingAssetProjectionRestorePlan plan;
+  for (const AssetId asset : created) {
+    const auto allocation = last_asset_allocation_serial_.find(asset);
+    if (allocation == last_asset_allocation_serial_.end() ||
+        allocation->second <= checkpoint.allocation_serial_ ||
+        allocation->second > asset_allocation_serial_) {
+      return std::nullopt;
+    }
+    const auto captured_mesh = checkpoint.meshes_.documents.find(asset);
+    const auto captured_curve = checkpoint.curves_.documents.find(asset);
+    if ((captured_mesh != checkpoint.meshes_.documents.end() &&
+         captured_mesh->second.has_value()) ||
+        (captured_curve != checkpoint.curves_.documents.end() &&
+         captured_curve->second.has_value()) ||
+        materials_.contains(asset) || textures_.contains(asset)) {
+      return std::nullopt;
+    }
+    const bool mesh_exists = meshes_.contains(asset);
+    const bool curve_exists = curves_.contains(asset);
+    if (mesh_exists && curve_exists) {
+      return std::nullopt;
+    }
+    if (mesh_exists) {
+      plan.created_mesh_ids.push_back(asset);
+      plan.mesh_material_usage_dirty = true;
+    }
+    if (curve_exists) {
+      plan.created_curve_ids.push_back(asset);
+    }
+  }
+
+  plan.restore_asset_ids.reserve(checkpoint.mutation_count_by_asset_.size());
+  for (const auto &[asset, captured_count] :
+       checkpoint.mutation_count_by_asset_) {
+    const auto current = mutation_count_by_asset_.find(asset);
+    const std::uint64_t current_count =
+        current != mutation_count_by_asset_.end() ? current->second : 0u;
+    if (current_count < captured_count) {
+      return std::nullopt;
+    }
+    if (current_count == captured_count) {
+      continue;
+    }
+    plan.restore_asset_ids.push_back(asset);
+    const auto captured_mesh = checkpoint.meshes_.documents.find(asset);
+    if ((captured_mesh != checkpoint.meshes_.documents.end() &&
+         captured_mesh->second.has_value()) ||
+        meshes_.contains(asset)) {
+      plan.mesh_material_usage_dirty = true;
+    }
+  }
+  plan.changed_asset_ids = plan.restore_asset_ids;
+  plan.changed_asset_ids.insert(plan.changed_asset_ids.end(), created.begin(),
+                                created.end());
+  std::ranges::sort(plan.changed_asset_ids);
+  plan.changed_asset_ids.erase(
+      std::unique(plan.changed_asset_ids.begin(),
+                  plan.changed_asset_ids.end()),
+      plan.changed_asset_ids.end());
+  return plan;
+}
+
+bool AssetRegistry::
+    can_restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+        const ModelingAssetProjectionCheckpoint &checkpoint,
+        const ModelingAssetProjectionMutationFence &acknowledged_fence,
+        std::span<const AssetId> created_modeling_asset_ids) const {
+  return prepare_modeling_projection_restore_preserving_concurrent_changes(
+             checkpoint, acknowledged_fence, created_modeling_asset_ids)
+      .has_value();
+}
+
+bool AssetRegistry::
+    restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+        const ModelingAssetProjectionCheckpoint &checkpoint,
+        const ModelingAssetProjectionMutationFence &acknowledged_fence,
+        std::span<const AssetId> created_modeling_asset_ids) {
+  std::optional<ConcurrentModelingAssetProjectionRestorePlan> concurrent =
+      prepare_modeling_projection_restore_preserving_concurrent_changes(
+          checkpoint, acknowledged_fence, created_modeling_asset_ids);
+  if (!concurrent.has_value()) {
+    return false;
+  }
+  apply_modeling_projection_restore_preserving_concurrent_changes(
+      checkpoint, *concurrent);
+  return true;
+}
+
+void AssetRegistry::apply_modeling_projection_restore(
+    const ModelingAssetProjectionCheckpoint &checkpoint,
+    const ModelingAssetProjectionRestorePlan &plan) {
+  const bool meshes_restored =
+      meshes_.restore_targeted(checkpoint.meshes_, plan.created_mesh_ids);
+  const bool curves_restored =
+      curves_.restore_targeted(checkpoint.curves_, plan.created_curve_ids);
+  assert(meshes_restored && curves_restored);
+  (void)meshes_restored;
+  (void)curves_restored;
+  for (const AssetId id : plan.created_mesh_ids) {
+    deferred_meshes_.erase(id);
+  }
+  for (const auto &[id, mesh] : checkpoint.meshes_.documents) {
+    (void)mesh;
+    deferred_meshes_.erase(id);
+  }
+  for (const AssetId id : plan.enrolled_asset_ids) {
+    const auto captured = checkpoint.mutation_count_by_asset_.find(id);
+    if (captured == checkpoint.mutation_count_by_asset_.end() ||
+        captured->second == 0u) {
+      mutation_count_by_asset_.erase(id);
+    } else {
+      const auto current = mutation_count_by_asset_.find(id);
+      assert(current != mutation_count_by_asset_.end());
+      current->second = captured->second;
+    }
   }
   next_id_ = checkpoint.next_id_;
   revision_ = checkpoint.revision_;
-  curves_ = checkpoint.curves_;
-  return true;
+  mesh_material_usage_revision_ = checkpoint.mesh_material_usage_revision_;
+  modeling_mutation_count_ = checkpoint.modeling_mutation_count_;
+}
+
+void AssetRegistry::
+    apply_modeling_projection_restore_preserving_concurrent_changes(
+        const ModelingAssetProjectionCheckpoint &checkpoint,
+        const ConcurrentModelingAssetProjectionRestorePlan &plan) {
+  const bool meshes_restored = meshes_.restore_targeted_preserving_revision(
+      checkpoint.meshes_, plan.restore_asset_ids, plan.created_mesh_ids);
+  const bool curves_restored = curves_.restore_targeted_preserving_revision(
+      checkpoint.curves_, plan.restore_asset_ids, plan.created_curve_ids);
+  assert(meshes_restored && curves_restored);
+  (void)meshes_restored;
+  (void)curves_restored;
+  for (const AssetId asset : plan.created_mesh_ids) {
+    deferred_meshes_.erase(asset);
+  }
+  for (const AssetId asset : plan.restore_asset_ids) {
+    deferred_meshes_.erase(asset);
+  }
+  if (!plan.changed_asset_ids.empty()) {
+    mark_modeling_assets_dirty(plan.changed_asset_ids,
+                               plan.mesh_material_usage_dirty);
+  }
 }
 
 quader_poly::Document &MeshAsset::edit_authored_polygon_document() {
@@ -162,7 +609,9 @@ AssetId AssetRegistry::add_mesh(MeshAsset mesh) {
   mesh = isolate_mesh_asset_payload(std::move(mesh));
   intern_mesh_payload(mesh);
   meshes_.add(id, std::move(mesh));
-  mark_mesh_material_usage_dirty();
+  note_asset_allocation(id);
+  const std::array<AssetId, 1> changed{id};
+  mark_modeling_assets_dirty(changed, true);
   return id;
 }
 
@@ -178,7 +627,9 @@ AssetId AssetRegistry::add_mesh(AssetId id, MeshAsset mesh) {
   mesh = isolate_mesh_asset_payload(std::move(mesh));
   intern_mesh_payload(mesh);
   meshes_.add(id, std::move(mesh));
-  mark_mesh_material_usage_dirty();
+  note_asset_allocation(id);
+  const std::array<AssetId, 1> changed{id};
+  mark_modeling_assets_dirty(changed, true);
   return id;
 }
 
@@ -206,8 +657,10 @@ AssetId AssetRegistry::add_curve(AssetId id, CurveAsset curve) {
   if (curves_.add(id, std::move(curve)) == kInvalidAssetId) {
     return kInvalidAssetId;
   }
+  note_asset_allocation(id);
   next_id_ = std::max(next_id_, id + 1u);
-  mark_dirty();
+  const std::array<AssetId, 1> changed{id};
+  mark_modeling_assets_dirty(changed, false);
   return id;
 }
 
@@ -216,7 +669,8 @@ bool AssetRegistry::remove_curve(AssetId id) {
   if (!curves_.remove(id)) {
     return false;
   }
-  mark_dirty();
+  const std::array<AssetId, 1> changed{id};
+  mark_modeling_assets_dirty(changed, false);
   return true;
 }
 
@@ -230,7 +684,8 @@ bool AssetRegistry::replace_curve(AssetId id, CurveAsset curve) {
   if (!curves_.replace(id, std::move(curve))) {
     return false;
   }
-  mark_dirty();
+  const std::array<AssetId, 1> changed{id};
+  mark_modeling_assets_dirty(changed, false);
   return true;
 }
 
@@ -278,8 +733,10 @@ AssetId AssetRegistry::add_mesh_payload_alias(
   if (meshes_.add(id, std::move(alias)) == kInvalidAssetId) {
     return kInvalidAssetId;
   }
+  note_asset_allocation(id);
   next_id_ = std::max(next_id_, id + 1u);
-  mark_mesh_material_usage_dirty();
+  const std::array<AssetId, 1> changed{id};
+  mark_modeling_assets_dirty(changed, true);
   return id;
 }
 
@@ -306,8 +763,10 @@ AssetId AssetRegistry::add_deferred_mesh(
               .loader = std::move(loader),
               .encoded_geometry_loader = std::move(encoded_geometry_loader),
           });
+  note_asset_allocation(id);
   next_id_ = std::max(next_id_, id + 1u);
-  mark_mesh_material_usage_dirty();
+  const std::array<AssetId, 1> changed{id};
+  mark_modeling_assets_dirty(changed, true);
   return id;
 }
 
@@ -319,6 +778,7 @@ AssetId AssetRegistry::add_material(MaterialDocument material) {
   const AssetId id = next_id_++;
   normalize_material_texture_slots(material);
   materials_.add(id, std::move(material));
+  note_asset_allocation(id);
   mark_material_dirty();
   return id;
 }
@@ -334,6 +794,7 @@ AssetId AssetRegistry::add_material(AssetId id, MaterialDocument material) {
   next_id_ = std::max(next_id_, id + 1u);
   normalize_material_texture_slots(material);
   materials_.add(id, std::move(material));
+  note_asset_allocation(id);
   mark_material_dirty();
   return id;
 }
@@ -345,6 +806,7 @@ AssetId AssetRegistry::add_texture(TextureAsset texture) {
   }
   const AssetId id = next_id_++;
   textures_.add(id, std::move(texture));
+  note_asset_allocation(id);
   mark_dirty();
   return id;
 }
@@ -360,6 +822,7 @@ AssetId AssetRegistry::add_texture(AssetId id, TextureAsset texture) {
   const bool restores_material = material_references_texture(id);
   next_id_ = std::max(next_id_, id + 1u);
   textures_.add(id, std::move(texture));
+  note_asset_allocation(id);
   if (restores_material) {
     mark_material_dirty();
   } else {
@@ -374,7 +837,8 @@ bool AssetRegistry::remove_mesh(AssetId id) {
     return false;
   }
   deferred_meshes_.erase(id);
-  mark_mesh_material_usage_dirty();
+  const std::array<AssetId, 1> changed{id};
+  mark_modeling_assets_dirty(changed, true);
   return true;
 }
 
@@ -442,7 +906,12 @@ bool AssetRegistry::replace_meshes(
     }
     deferred_meshes_.erase(replacement.id);
   }
-  mark_mesh_material_usage_dirty();
+  std::vector<AssetId> changed_ids;
+  changed_ids.reserve(replacements.size());
+  for (const MeshAssetReplacement &replacement : replacements) {
+    changed_ids.push_back(replacement.id);
+  }
+  mark_modeling_assets_dirty(changed_ids, true);
   return true;
 }
 
@@ -490,7 +959,8 @@ bool AssetRegistry::update_mesh(
   if (!meshes_.replace(id, std::move(updated))) {
     return false;
   }
-  mark_mesh_material_usage_dirty();
+  const std::array<AssetId, 1> changed{id};
+  mark_modeling_assets_dirty(changed, true);
   return true;
 }
 
@@ -877,6 +1347,7 @@ void AssetRegistry::intern_mesh_payload(MeshAsset &mesh) const {
 void AssetRegistry::advance_revision_for_replacement(
     std::uint64_t previous_revision) {
   assert_owner_thread();
+  ++unscoped_mutation_count_;
   meshes_.restamp_after(MeshAssetRevision{previous_revision});
   curves_.restamp_after(CurveAssetRevision{previous_revision});
   materials_.restamp_after(MaterialAssetRevision{previous_revision});
@@ -890,6 +1361,7 @@ void AssetRegistry::advance_revision_for_replacement(
 
 void AssetRegistry::mark_dirty() {
   assert_owner_thread();
+  ++unscoped_mutation_count_;
   ++revision_;
 }
 
@@ -903,6 +1375,31 @@ void AssetRegistry::mark_mesh_material_usage_dirty() {
   assert_owner_thread();
   ++mesh_material_usage_revision_;
   mark_dirty();
+}
+
+void AssetRegistry::note_asset_allocation(AssetId asset_id) {
+  assert_owner_thread();
+  assert(asset_id != kInvalidAssetId);
+  last_asset_allocation_serial_[asset_id] = ++asset_allocation_serial_;
+}
+
+void AssetRegistry::mark_modeling_assets_dirty(
+    std::span<const AssetId> asset_ids,
+    bool mesh_material_usage_dirty) {
+  assert_owner_thread();
+  std::unordered_set<AssetId> unique_ids;
+  unique_ids.reserve(asset_ids.size());
+  for (const AssetId id : asset_ids) {
+    if (id == kInvalidAssetId || !unique_ids.insert(id).second) {
+      continue;
+    }
+    ++mutation_count_by_asset_[id];
+    ++modeling_mutation_count_;
+  }
+  if (mesh_material_usage_dirty) {
+    ++mesh_material_usage_revision_;
+  }
+  ++revision_;
 }
 
 bool AssetRegistry::material_references_texture(AssetId texture) const {

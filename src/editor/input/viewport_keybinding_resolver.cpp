@@ -304,12 +304,33 @@ void record_curve_conversion_trigger(ViewportInputFrame &input,
   }
 }
 
-void suppress_curve_navigation_drag(
+void record_face_texture_transfer_trigger(
+    ViewportInputFrame &input, ViewportInputActionKind action,
+    const QuaderInputChord &chord,
+    std::optional<ViewportPointerButtonEdge> pointer_edge) {
+  if (action == ViewportInputActionKind::TransferFaceTexture &&
+      chord.device == QuaderInputDevice::Mouse &&
+      chord.mouse_button != QuaderMouseButton::None) {
+    input.transfer_face_texture_edges.push_back({
+        .kind = ViewportSemanticPointerEdgeKind::Trigger,
+        .semantic_chord = chord,
+        .pointer_edge = pointer_edge,
+    });
+  }
+}
+
+bool owns_deferred_pointer(ViewportInputActionKind action) {
+  return action == ViewportInputActionKind::TransferFaceTexture ||
+         action == ViewportInputActionKind::ToggleCurvePointSmoothness;
+}
+
+void suppress_owned_pointer_navigation_drag(
     ViewportInputActionKind action, const QuaderInputChord &chord,
     std::vector<QuaderInputChord> &suppressed_chords) {
-  if (action != ViewportInputActionKind::ToggleCurvePointSmoothness ||
+  if (!owns_deferred_pointer(action) ||
       chord.device != QuaderInputDevice::Mouse ||
-      chord.gesture != QuaderInputGesture::Press ||
+      (chord.gesture != QuaderInputGesture::Press &&
+       chord.gesture != QuaderInputGesture::DoubleClick) ||
       (chord.mouse_button != QuaderMouseButton::Middle &&
        chord.mouse_button != QuaderMouseButton::Right)) {
     return;
@@ -326,10 +347,16 @@ bool reserve_action_pointer(ViewportInputFrame &input,
                                 pointer_edge) {
   switch (action) {
   case ViewportInputActionKind::TransferFaceTexture:
-    if (chord.mouse_button != QuaderMouseButton::Left) {
+    if (chord.device != QuaderInputDevice::Mouse ||
+        chord.mouse_button == QuaderMouseButton::None) {
       return false;
     }
     input.transfer_face_texture_pointer_reserved = true;
+    input.transfer_face_texture_edges.push_back({
+        .kind = ViewportSemanticPointerEdgeKind::ReservePress,
+        .semantic_chord = chord,
+        .pointer_edge = pointer_edge,
+    });
     return true;
   case ViewportInputActionKind::ToggleCurvePointSmoothness:
     input.curve_conversion_edges.push_back({
@@ -367,9 +394,13 @@ void reserve_deferred_action_pointer(
         continue;
       }
       if (gesture == QuaderInputGesture::Press &&
-          action == ViewportInputActionKind::ToggleCurvePointSmoothness) {
+          owns_deferred_pointer(action)) {
         record_curve_conversion_trigger(input, action, candidate,
                                         pointer_edge);
+        record_face_texture_transfer_trigger(input, action, candidate,
+                                             pointer_edge);
+        suppress_owned_pointer_navigation_drag(action, candidate,
+                                               suppressed_chords);
         mark_action_pressed(input, action);
         return;
       }
@@ -390,8 +421,10 @@ void reserve_deferred_action_pointer(
     if (resolve_action(editor, state, input, candidate, action) &&
         reserve_action_pointer(input, action, candidate, pointer_edge)) {
       // Middle/Right emit their navigation Drag beside this physical Press.
-      // A deferred Curve action owns that press through the matching release.
-      suppress_curve_navigation_drag(action, chord, suppressed_chords);
+      // A deferred semantic action owns that press through the matching
+      // release.
+      suppress_owned_pointer_navigation_drag(action, chord,
+                                             suppressed_chords);
       return;
     }
   }
@@ -567,6 +600,11 @@ bool apply_keybinding_dispatch(QuaderEditorApi &editor,
   case QuaderViewportKeybindingDispatch::Kind::PendingChord:
     input.keybinding_input_consumed = true;
     return true;
+  case QuaderViewportKeybindingDispatch::Kind::ViewportInputAction:
+    // Semantic actions need edge provenance and wheel magnitude, so the
+    // ordered-edge caller applies this result after the shared dispatcher has
+    // selected it.
+    return false;
   case QuaderViewportKeybindingDispatch::Kind::ViewportShortcut:
     input.resolved_shortcuts.push_back(dispatch.shortcut);
     return true;
@@ -625,6 +663,7 @@ void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
   input.apply_face_material_to_mesh_pressed = false;
   input.transfer_face_texture_pressed = false;
   input.transfer_face_texture_pointer_reserved = false;
+  input.transfer_face_texture_edges.clear();
   input.curve_conversion_edges.clear();
   input.selection_click_delay_for_double_click = false;
   input.selection_click_modifiers = {};
@@ -669,15 +708,11 @@ void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
         const bool pending_before =
             editor.commands().has_pending_keybinding_chord();
         bool stateful_dispatch_handled = false;
-        const bool handled = dispatch_viewport_input_edge(
-            chord, kind,
-            [&]() { return pending_before; },
+        bool stateful_dispatch_suppresses_chord = false;
+        const auto apply_semantic_action =
             [&](const QuaderInputChord &candidate,
-                ViewportInputEdgeKind edge_kind) {
-              ViewportInputActionKind action = ViewportInputActionKind::None;
-              if (!resolve_action(editor, state, input, candidate, action)) {
-                return false;
-              }
+                ViewportInputEdgeKind edge_kind,
+                ViewportInputActionKind action) {
               if (edge_kind == ViewportInputEdgeKind::Wheel) {
                 const bool linear_increase =
                     action ==
@@ -720,21 +755,43 @@ void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
               } else {
                 record_material_action_provenance(editor, state, input,
                                                   candidate, action);
+                record_face_texture_transfer_trigger(input, action, candidate,
+                                                     pointer_edge);
                 record_curve_conversion_trigger(input, action, candidate,
                                                 pointer_edge);
-                suppress_curve_navigation_drag(action, candidate,
-                                               suppressed_chords);
+                suppress_owned_pointer_navigation_drag(action, candidate,
+                                                       suppressed_chords);
                 mark_action_pressed(input, action);
               }
               return true;
+            };
+        const bool handled = dispatch_viewport_input_edge(
+            chord, kind,
+            [&]() { return pending_before; },
+            [](const QuaderInputChord &, ViewportInputEdgeKind) {
+              // Pressed and wheel edges have one resolver: the stateful
+              // keybinding dispatcher below. Stateless semantic lookup is
+              // intentionally limited to deferred gesture probes and
+              // active/released chords.
+              return false;
             },
-            [&](const QuaderInputChord &candidate, ViewportInputEdgeKind) {
-              stateful_dispatch_handled = apply_keybinding_dispatch(
-                  editor,
+            [&](const QuaderInputChord &candidate,
+                ViewportInputEdgeKind edge_kind) {
+              const QuaderViewportKeybindingDispatch dispatch =
                   editor.commands().dispatch_viewport_input_binding(
                       candidate, state, input.viewport_focused,
-                      input.text_input_active, keybinding_context(input)),
-                  input);
+                      input.text_input_active, keybinding_context(input));
+              if (dispatch.kind == QuaderViewportKeybindingDispatch::Kind::
+                                       ViewportInputAction) {
+                stateful_dispatch_handled =
+                    apply_semantic_action(candidate, edge_kind,
+                                          dispatch.action);
+                return stateful_dispatch_handled;
+              }
+              stateful_dispatch_handled =
+                  apply_keybinding_dispatch(editor, dispatch, input);
+              stateful_dispatch_suppresses_chord =
+                  stateful_dispatch_handled;
               return stateful_dispatch_handled;
             });
         if (pending_before) {
@@ -747,7 +804,7 @@ void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
                                             handled);
         }
         if (kind == ViewportInputEdgeKind::Pressed &&
-            (pending_before || stateful_dispatch_handled)) {
+            (pending_before || stateful_dispatch_suppresses_chord)) {
           suppress_input_chord(suppressed_chords, chord);
         }
         return handled;

@@ -95,9 +95,9 @@ std::optional<SceneTextureMappingPlan> SceneTextureMappingPlan::capture(
   SceneTextureMappingPlan plan;
   plan.settings_ = settings;
   const std::unordered_set<EntityId> selected(targets.begin(), targets.end());
-  const SceneHierarchyProjectionSnapshot hierarchy =
-      scene.hierarchy_projection_snapshot();
-  for (const SceneHierarchyProjectionRecord &record : hierarchy.records()) {
+  const std::shared_ptr<const SceneHierarchyProjectionSnapshot> hierarchy =
+      scene.hierarchy_projection();
+  for (const SceneHierarchyProjectionRecord &record : hierarchy->records()) {
     const auto parent = plan.node_by_entity_.find(record.parent);
     if (!selected.contains(record.entity) && parent == plan.node_by_entity_.end()) {
       continue;
@@ -106,7 +106,8 @@ std::optional<SceneTextureMappingPlan> SceneTextureMappingPlan::capture(
     if (transform == nullptr || !scene_transform_is_finite(*transform)) {
       return std::nullopt;
     }
-    const SceneHierarchyProjectionRecord *parent_record = hierarchy.find(record.parent);
+    const SceneHierarchyProjectionRecord *parent_record =
+        hierarchy->find(record.parent);
     const QMat4 parent_world = parent_record != nullptr
                                   ? parent_record->world_transform : QMat4{};
     const std::optional<QMat4> world_inverse =

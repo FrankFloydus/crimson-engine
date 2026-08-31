@@ -4,18 +4,15 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor/viewport/viewport_native_tool_interaction.hpp"
+#include "editor/tools/viewport_native_tool_interaction.hpp"
 
-#include "api/quader_editor_api.hpp"
 #include "assets/asset_registry.hpp"
 #include "core/logger.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/curve/curve_tool_service.hpp"
-#include "editor/interactions/selection_box.hpp"
 #include "editor/interactions/tool_drag_math.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
-#include "editor/viewport/viewport_curve_picking.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_document.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
@@ -27,6 +24,7 @@
 #include <array>
 #include <cmath>
 #include <string_view>
+#include <utility>
 
 namespace quader {
 namespace {
@@ -61,23 +59,50 @@ std::optional<QVec3> intersect_ray_plane(const ViewportRay &ray,
                           : std::nullopt;
 }
 
-const ViewportPointerButtonEdge *pointer_button_edge_after(
-    const std::vector<ViewportPointerButtonEdge> &edges,
-    QuaderMouseButton button, std::uint64_t sequence) {
-  const auto found = std::find_if(
-      edges.rbegin(), edges.rend(), [button, sequence](const auto &edge) {
-        return edge.button == button &&
-               (sequence == 0u || edge.sequence == 0u ||
-                edge.sequence > sequence);
-      });
-  return found == edges.rend() ? nullptr : &*found;
+bool native_pointer_interrupted(
+    const ViewportNativeToolInteractionFrame &frame) {
+  return frame.input.pointer_interaction_canceled ||
+         !frame.input.viewport_focused || frame.input.text_input_active ||
+         frame.input_result.cancel_requested ||
+         frame.input_result.navigation_active ||
+         frame.input_result.camera_changed || frame.input_result.view_changed ||
+         frame.navigation_gizmo_consumed;
+}
+
+const ViewportPointerButtonEdge *matching_left_release(
+    const ViewportNativeToolInteractionFrame &frame,
+    const ViewportPointerGesture &gesture) {
+  if (!frame.left_released ||
+      gesture.press.button != QuaderMouseButton::Left) {
+    return nullptr;
+  }
+  return viewport_pointer_edge_after(frame.input.pointer_released_edges,
+                                     gesture.press);
+}
+
+bool synthetic_left_release_matches(
+    const ViewportNativeToolInteractionFrame &frame,
+    const ViewportPointerGesture &gesture) {
+  return frame.left_released && gesture.press.sequence == 0u &&
+         frame.input.pointer_released_edges.empty();
+}
+
+std::optional<CurveControlTarget> curve_control_hit(
+    const ViewportNativeToolInteractionFrame &frame,
+    const CurveToolPreviewState &preview, QVec2 mouse_local,
+    bool anchors_only) {
+  return frame.curve_control_picker != nullptr
+             ? frame.curve_control_picker->pick(preview, mouse_local,
+                                                anchors_only)
+             : std::nullopt;
 }
 
 } // namespace
 
 ViewportNativeToolInteractionResult
 ViewportNativeToolInteraction::handle_frame(
-    QuaderEditorApi &editor, SceneDocument &document, AssetRegistry &assets,
+    ViewportNativeToolLifecyclePort &lifecycle, SceneDocument &document,
+    AssetRegistry &assets,
     PivotToolService *pivot, LinearArrayToolService *linear_array,
     RadialArrayToolService *radial_array,
     ViewportPointPlacementService *point_placement,
@@ -87,6 +112,13 @@ ViewportNativeToolInteraction::handle_frame(
   ViewportNativeToolInteractionResult output;
   const ViewportInputFrame &input = frame.input;
   const ViewportInputResult &input_result = frame.input_result;
+  const bool canceled_left_release = left_release_suppression_.consume(
+      QuaderMouseButton::Left, frame.left_pressed, frame.left_down,
+      frame.left_released);
+  if (canceled_left_release) {
+    output.consumed = true;
+    output.blocks_transform_gizmo = true;
+  }
   const auto record_change = [&](const CommandResult &result) {
     if (result.changed) {
       output.invalidate_hover = true;
@@ -97,7 +129,7 @@ ViewportNativeToolInteraction::handle_frame(
     }
   };
   const auto record_commit = [&](std::string_view label,
-                                 const QuaderApiVoidResult &result) {
+                                 const CommandResult &result) {
     if (!result.ok) {
       LOG_ERROR("{} failed: {}", label,
                 result.message.empty() ? "Command failed." : result.message);
@@ -111,21 +143,35 @@ ViewportNativeToolInteraction::handle_frame(
       curve != nullptr && curve->controls_editable() &&
       (curve->active() || frame.transform_gizmo_consumed || curve->dragging() ||
        !input.curve_conversion_edges.empty() ||
-       curve_conversion_press_.has_value());
+       curve_conversion_press_.has_value() ||
+       curve_point_construction_press_.has_value());
   if (curve_interaction_requested) {
     output.curve_consumed = true;
+    output.consumed = true;
+    output.blocks_transform_gizmo = true;
     record_change(curve->refresh());
     if (!curve->point_construction_dragging()) {
-      curve_point_construction_dragging_ = false;
-      curve_point_construction_plane_.reset();
+      if (curve_point_construction_press_) {
+        left_release_suppression_.begin(QuaderMouseButton::Left,
+                                        frame.left_down);
+      }
+      curve_point_construction_press_.reset();
     }
     if (frame.transform_gizmo_consumed) {
       // TransformGizmoInteraction owns any selected-control transaction. This
       // native path must not reinterpret it as a free pointer-plane drag.
+      if (curve_point_construction_press_ &&
+          curve->point_construction_dragging()) {
+        record_change(curve->cancel_drag());
+        left_release_suppression_.begin(QuaderMouseButton::Left,
+                                        frame.left_down);
+        curve_point_construction_press_.reset();
+      }
       if (curve_conversion_press_) {
-        const bool released = pointer_button_edge_after(
-            input.pointer_released_edges, curve_conversion_press_->button,
-            curve_conversion_press_->press_sequence) != nullptr;
+        const bool released =
+            viewport_pointer_edge_after(input.pointer_released_edges,
+                                        curve_conversion_press_->gesture.press) !=
+            nullptr;
         if (released || input.pointer_interaction_canceled) {
           curve_conversion_press_.reset();
         }
@@ -133,27 +179,24 @@ ViewportNativeToolInteraction::handle_frame(
       record_change(curve->set_hover(std::nullopt));
       return output;
     }
-    const bool camera_invalidated_drag =
-        (curve->point_construction_dragging() || curve_conversion_press_) &&
-        (input_result.camera_changed || input_result.view_changed);
-    const bool blocked = input.pointer_interaction_canceled ||
-                         camera_invalidated_drag ||
-                         input_result.navigation_active ||
-                         frame.navigation_gizmo_consumed ||
-                         input.text_input_active;
+    const bool blocked = native_pointer_interrupted(frame);
     if (blocked) {
       if (curve->point_construction_dragging()) {
         record_change(curve->cancel_drag());
-        curve_point_construction_dragging_ = false;
-        curve_point_construction_plane_.reset();
+        if (curve_point_construction_press_) {
+          left_release_suppression_.begin(QuaderMouseButton::Left,
+                                          frame.left_down);
+        }
+        curve_point_construction_press_.reset();
       }
       if (curve_conversion_press_) {
-        const bool released = pointer_button_edge_after(
-            input.pointer_released_edges,
-            curve_conversion_press_->button,
-            curve_conversion_press_->press_sequence) != nullptr;
+        const bool released =
+            viewport_pointer_edge_after(input.pointer_released_edges,
+                                        curve_conversion_press_->gesture.press) !=
+            nullptr;
         curve_conversion_press_->target.reset();
-        if (released || input.pointer_interaction_canceled) {
+        if (released || input.pointer_interaction_canceled ||
+            input_result.cancel_requested) {
           curve_conversion_press_.reset();
         }
       }
@@ -179,16 +222,14 @@ ViewportNativeToolInteraction::handle_frame(
               continue;
             }
             const auto pressed_hit = curve_control_hit(
-                camera, preview, event.pointer_edge->local, true,
-                frame.scene_mesh_surface_distance);
+                frame, preview, event.pointer_edge->local, true);
             curve_conversion_press_ = CurveConversionPress{
-                .button = event.pointer_edge->button,
+                .gesture = {.press = *event.pointer_edge},
                 .target = pressed_hit,
                 .content = preview.document
                                ? preview.document->content_identity()
                                : modeling::CurveContentIdentity{},
                 .entity = preview.entity,
-                .press_sequence = event.pointer_edge->sequence,
             };
             output.claim_interaction_pane =
                 output.claim_interaction_pane || pressed_hit.has_value();
@@ -199,9 +240,8 @@ ViewportNativeToolInteraction::handle_frame(
             if (curve_conversion_press_) {
               continue;
             }
-            const auto action_hit = curve_control_hit(
-                camera, preview, input.mouse_local, true,
-                frame.scene_mesh_surface_distance);
+            const auto action_hit =
+                curve_control_hit(frame, preview, input.mouse_local, true);
             if (action_hit) {
               record_change(
                   curve->toggle_point_smoothness(action_hit->point));
@@ -215,21 +255,20 @@ ViewportNativeToolInteraction::handle_frame(
 
           const QuaderMouseButton button = event.pointer_edge->button;
           const auto action_hit = curve_control_hit(
-              camera, preview, event.pointer_edge->local, true,
-              frame.scene_mesh_surface_distance);
+              frame, preview, event.pointer_edge->local, true);
           if (trigger.gesture == QuaderInputGesture::Click) {
             const bool valid_press =
                 curve_conversion_press_ &&
-                curve_conversion_press_->button == button &&
+                curve_conversion_press_->gesture.press.button == button &&
                 curve_conversion_press_->target == action_hit &&
                 preview.document &&
                 curve_conversion_press_->content ==
                     preview.document->content_identity() &&
                 curve_conversion_press_->entity == preview.entity &&
-                (curve_conversion_press_->press_sequence == 0u ||
+                (curve_conversion_press_->gesture.press.sequence == 0u ||
                  event.pointer_edge->sequence == 0u ||
                  event.pointer_edge->sequence >
-                     curve_conversion_press_->press_sequence);
+                     curve_conversion_press_->gesture.press.sequence);
             if (action_hit && valid_press) {
               record_change(
                   curve->toggle_point_smoothness(action_hit->point));
@@ -242,13 +281,12 @@ ViewportNativeToolInteraction::handle_frame(
           // exact originating press. Only ReservePress persists across frames
           // while awaiting a deferred Click.
           const CurveConversionPress immediate_press{
-              .button = button,
+              .gesture = {.press = *event.pointer_edge},
               .target = action_hit,
               .content = preview.document
                              ? preview.document->content_identity()
                              : modeling::CurveContentIdentity{},
               .entity = preview.entity,
-              .press_sequence = event.pointer_edge->sequence,
           };
           curve_conversion_press_.reset();
           output.claim_interaction_pane =
@@ -265,10 +303,10 @@ ViewportNativeToolInteraction::handle_frame(
           }
         }
       }
-      if (curve_conversion_press_ && pointer_button_edge_after(
+      if (curve_conversion_press_ &&
+          viewport_pointer_edge_after(
               input.pointer_released_edges,
-              curve_conversion_press_->button,
-              curve_conversion_press_->press_sequence) != nullptr) {
+              curve_conversion_press_->gesture.press) != nullptr) {
         curve_conversion_press_.reset();
       }
       record_change(curve->set_hover(std::nullopt));
@@ -277,7 +315,7 @@ ViewportNativeToolInteraction::handle_frame(
     }
 
     if (input.modal_tool_finalize_pressed && curve->can_apply()) {
-      record_commit("Curve apply", editor.tools().commit_active_tool_preview());
+      record_commit("Curve apply", lifecycle.commit_active());
       return output;
     }
 
@@ -309,10 +347,9 @@ ViewportNativeToolInteraction::handle_frame(
         !frame.suppress_hover_work) {
       const ViewportPointPlacementPlane construction_plane =
           viewport_active_grid_placement_plane(camera);
-      if (frame.left_pressed) {
-        const auto hit = curve_control_hit(camera, curve->preview_state(),
-                                           frame.left_click_local, false,
-                                           frame.scene_mesh_surface_distance);
+      if (frame.left_pressed && !canceled_left_release) {
+        const auto hit = curve_control_hit(
+            frame, curve->preview_state(), frame.left_click_local, false);
         const bool plain_construction_gesture =
             !input.modifiers.primary && !input.modifiers.shift &&
             !input.modifiers.alt;
@@ -325,14 +362,18 @@ ViewportNativeToolInteraction::handle_frame(
             record_change(begun);
             if (begun.ok && curve->point_construction_dragging()) {
               const QVec3 origin = *curve->drag_origin_world();
-              curve_point_construction_dragging_ = true;
-              curve_point_construction_moved_ = false;
-              curve_point_construction_mouse_origin_ = frame.left_click_local;
-              curve_point_construction_pointer_offset_ =
-                  camera.project_world_point(origin).position -
-                  frame.left_click_local;
-              curve_point_construction_plane_ = construction_plane;
-              curve_point_construction_plane_->origin = origin;
+              CurvePointConstructionPress construction_press{
+                  .gesture = viewport_pointer_gesture_from_latest_edge(
+                      input.pointer_pressed_edges, QuaderMouseButton::Left,
+                       frame.left_click_local, input.mouse_screen,
+                       input.modifiers, frame.pointer_drag_threshold_pixels),
+                  .pointer_offset = camera.project_world_point(origin).position -
+                                    frame.left_click_local,
+                  .plane = construction_plane,
+              };
+              construction_press.plane.origin = origin;
+              curve_point_construction_press_ =
+                  std::move(construction_press);
               output.claim_interaction_pane = true;
             }
           }
@@ -348,44 +389,52 @@ ViewportNativeToolInteraction::handle_frame(
       record_change(curve->set_hover(std::nullopt));
     }
 
-    if (curve_point_construction_dragging_ &&
+    if (curve_point_construction_press_ &&
         curve->point_construction_dragging()) {
-      constexpr float kConstructionDragThreshold =
-          quader_editor_core::kSelectionBoxDefaultDragThreshold;
-      if (screen_distance_squared(input.mouse_local,
-                                  curve_point_construction_mouse_origin_) >=
-          kConstructionDragThreshold * kConstructionDragThreshold) {
-        curve_point_construction_moved_ = true;
-      }
-      if (curve_point_construction_moved_ &&
-          curve_point_construction_plane_ &&
-          (frame.left_down || frame.left_released)) {
+      const ViewportPointerButtonEdge *release = matching_left_release(
+          frame, curve_point_construction_press_->gesture);
+      const bool matching_release =
+          release != nullptr || synthetic_left_release_matches(
+                                    frame,
+                                    curve_point_construction_press_->gesture);
+      const QVec2 drag_local =
+          release != nullptr ? release->local : input.mouse_local;
+      const bool moved = viewport_pointer_drag_threshold_reached(
+          curve_point_construction_press_->gesture, drag_local);
+      if (moved && (frame.left_down || matching_release)) {
         const auto placement = resolve_position(
-            input.mouse_local + curve_point_construction_pointer_offset_,
-            *curve_point_construction_plane_);
+            drag_local +
+                curve_point_construction_press_->pointer_offset,
+            curve_point_construction_press_->plane);
         if (placement.valid) {
           record_change(curve->update_drag(placement.world_position));
         }
       }
-      if (frame.left_released) {
+      if (matching_release && !canceled_left_release) {
         record_change(curve->commit_drag());
-        curve_point_construction_dragging_ = false;
-        curve_point_construction_plane_.reset();
-      } else if (!frame.left_down) {
+        curve_point_construction_press_.reset();
+      } else if (!frame.left_down && !frame.left_released) {
         // Capture/focus loss without a real release must never create history.
         record_change(curve->cancel_drag());
-        curve_point_construction_dragging_ = false;
-        curve_point_construction_plane_.reset();
+        left_release_suppression_.begin(QuaderMouseButton::Left, false);
+        curve_point_construction_press_.reset();
       }
     }
     return output;
   }
-  curve_point_construction_dragging_ = false;
-  curve_point_construction_plane_.reset();
+  if (curve_point_construction_press_) {
+    if (curve != nullptr && curve->point_construction_dragging()) {
+      (void)curve->cancel_drag();
+    }
+    left_release_suppression_.begin(QuaderMouseButton::Left, frame.left_down);
+  }
+  curve_point_construction_press_.reset();
   curve_conversion_press_.reset();
 
   if (radial_array != nullptr && radial_array->active()) {
     output.radial_array_consumed = true;
+    output.consumed = true;
+    output.blocks_transform_gizmo = true;
     if (input.radial_array_copy_delta != 0) {
       record_change(radial_array->adjust_copies(input.radial_array_copy_delta));
     }
@@ -398,7 +447,7 @@ ViewportNativeToolInteraction::handle_frame(
 
     if (input.modal_tool_finalize_pressed && radial_array->center_locked()) {
       record_commit("Radial Array apply",
-                    editor.tools().commit_active_tool_preview());
+                    lifecycle.commit_active());
     } else if (!radial_array->center_locked()) {
       const bool can_place = point_placement != nullptr &&
                              input.viewport_hovered &&
@@ -453,6 +502,8 @@ ViewportNativeToolInteraction::handle_frame(
 
   if (linear_array != nullptr && linear_array->active()) {
     output.linear_array_consumed = true;
+    output.consumed = true;
+    output.blocks_transform_gizmo = true;
     if (input.linear_array_copy_delta != 0) {
       record_change(linear_array->adjust_count(input.linear_array_copy_delta));
     }
@@ -473,23 +524,52 @@ ViewportNativeToolInteraction::handle_frame(
     }
     if (input.modal_tool_finalize_pressed) {
       record_commit("Linear Array apply",
-                    editor.tools().commit_active_tool_preview());
-      linear_array_handle_dragging_ = false;
+                    lifecycle.commit_active());
+      if (linear_array_handle_press_) {
+        left_release_suppression_.begin(QuaderMouseButton::Left,
+                                        frame.left_down);
+      }
+      linear_array_handle_press_.reset();
     } else {
       const LinearArrayHandleState handle = linear_array->handle_state();
       const bool can_interact = handle.visible && input.viewport_hovered &&
-                                !input_result.navigation_active &&
-                                !frame.navigation_gizmo_consumed &&
-                                !input.text_input_active;
-      if (can_interact && frame.left_pressed &&
+                                 !input_result.navigation_active &&
+                                 !frame.navigation_gizmo_consumed &&
+                                 !input.text_input_active;
+      if (can_interact && frame.left_pressed && !canceled_left_release &&
+          !linear_array_handle_press_ &&
           linear_array_handle_hit(camera, handle, frame.left_click_local)) {
-        linear_array_handle_dragging_ = true;
+        linear_array_handle_press_ = LinearArrayHandlePress{
+            .gesture = viewport_pointer_gesture_from_latest_edge(
+                input.pointer_pressed_edges, QuaderMouseButton::Left,
+                frame.left_click_local, input.mouse_screen, input.modifiers),
+            .endpoint_before = handle.endpoint_world,
+        };
         linear_array->begin_endpoint_drag();
         output.claim_interaction_pane = true;
       }
-      if (linear_array_handle_dragging_) {
+      if (linear_array_handle_press_) {
         const LinearArrayHandleState drag_handle = linear_array->handle_state();
-        if (frame.left_down && drag_handle.visible) {
+        const ViewportPointerButtonEdge *release = matching_left_release(
+            frame, linear_array_handle_press_->gesture);
+        const bool matching_release =
+            release != nullptr || synthetic_left_release_matches(
+                                      frame,
+                                      linear_array_handle_press_->gesture);
+        const bool interrupted = native_pointer_interrupted(frame) ||
+                                 !drag_handle.visible;
+        const bool abandoned = !frame.left_down && !frame.left_released;
+        if (interrupted || abandoned) {
+          (void)linear_array->set_endpoint(
+              linear_array_handle_press_->endpoint_before, false,
+              viewport_grid_world_size_for_preset(input.grid_preset));
+          linear_array->end_endpoint_drag();
+          left_release_suppression_.begin(QuaderMouseButton::Left,
+                                          frame.left_down);
+          linear_array_handle_press_.reset();
+          output.invalidate_hover = true;
+          output.mark_overlay_dirty = true;
+        } else if (frame.left_down && drag_handle.visible) {
           (void)linear_array->set_endpoint(
               linear_array_drag_point(camera, input.mouse_local, drag_handle),
               frame.grid_snap_enabled,
@@ -497,9 +577,10 @@ ViewportNativeToolInteraction::handle_frame(
           output.invalidate_hover = true;
           output.mark_overlay_dirty = true;
         }
-        if (frame.left_released || !frame.left_down || !drag_handle.visible) {
+        if (linear_array_handle_press_ && matching_release &&
+            !canceled_left_release) {
           linear_array->end_endpoint_drag();
-          linear_array_handle_dragging_ = false;
+          linear_array_handle_press_.reset();
         }
       }
     }
@@ -511,26 +592,38 @@ ViewportNativeToolInteraction::handle_frame(
                                        frame.navigation_gizmo_consumed;
     if (input.quick_pivot_released) {
       pivot->end_quick_edit();
-      pivot_handle_dragging_ = false;
+      if (pivot_handle_press_) {
+        left_release_suppression_.begin(QuaderMouseButton::Left,
+                                        frame.left_down);
+      }
+      pivot_handle_press_.reset();
       output.pivot_consumed = true;
     }
     if (blocked_by_navigation && pivot->quick_edit_active()) {
       pivot->clear_quick_override();
-      pivot_handle_dragging_ = false;
+      if (pivot_handle_press_) {
+        left_release_suppression_.begin(QuaderMouseButton::Left,
+                                        frame.left_down);
+      }
+      pivot_handle_press_.reset();
       output.pivot_consumed = true;
     }
     if (!blocked_by_navigation && input.quick_pivot_down &&
         !pivot->quick_edit_active()) {
-      if (const std::optional<QVec3> initial =
-              editor.query().selection_transform_pivot()) {
-        pivot->begin_quick(*initial);
+      if (frame.selection_transform_pivot.has_value()) {
+        const QVec3 initial = *frame.selection_transform_pivot;
+        pivot->begin_quick(initial);
         output.pivot_consumed = true;
       }
     }
     if (pivot->persistent_active() && input.modal_tool_finalize_pressed) {
       record_commit("Pivot apply",
-                    editor.tools().commit_active_tool_preview());
-      pivot_handle_dragging_ = false;
+                    lifecycle.commit_active());
+      if (pivot_handle_press_) {
+        left_release_suppression_.begin(QuaderMouseButton::Left,
+                                        frame.left_down);
+      }
+      pivot_handle_press_.reset();
       output.pivot_consumed = true;
     }
 
@@ -539,15 +632,43 @@ ViewportNativeToolInteraction::handle_frame(
                               !input_result.navigation_active &&
                               !frame.navigation_gizmo_consumed &&
                               !input.text_input_active;
-    if (can_interact && frame.left_pressed &&
+    if (can_interact && frame.left_pressed && !canceled_left_release &&
+        !pivot_handle_press_ &&
         pivot_handle_hit(camera, handle, frame.left_click_local)) {
-      pivot_handle_dragging_ = true;
+      pivot_handle_press_ = PivotHandlePress{
+          .gesture = viewport_pointer_gesture_from_latest_edge(
+              input.pointer_pressed_edges, QuaderMouseButton::Left,
+              frame.left_click_local, input.mouse_screen, input.modifiers),
+          .position_before = handle.world_position,
+          .persistent = handle.persistent,
+      };
       output.claim_interaction_pane = true;
       output.pivot_consumed = true;
     }
-    if (pivot_handle_dragging_) {
+    if (pivot_handle_press_) {
       output.pivot_consumed = true;
-      if (frame.left_down && handle.visible && point_placement != nullptr) {
+      const ViewportPointerButtonEdge *release =
+          matching_left_release(frame, pivot_handle_press_->gesture);
+      const bool matching_release =
+          release != nullptr || synthetic_left_release_matches(
+                                    frame, pivot_handle_press_->gesture);
+      const bool interrupted = native_pointer_interrupted(frame) ||
+                               !handle.visible;
+      const bool abandoned = !frame.left_down && !frame.left_released;
+      if (interrupted || abandoned) {
+        if (pivot_handle_press_->persistent) {
+          pivot->set_persistent_preview_position(
+              pivot_handle_press_->position_before);
+        } else {
+          pivot->set_quick_preview_position(pivot_handle_press_->position_before);
+        }
+        left_release_suppression_.begin(QuaderMouseButton::Left,
+                                        frame.left_down);
+        pivot_handle_press_.reset();
+        output.invalidate_hover = true;
+        output.mark_overlay_dirty = true;
+      } else if (frame.left_down && handle.visible &&
+                 point_placement != nullptr) {
         const PivotSnapSettings snap_settings =
             handle.persistent ? pivot->snap_settings()
                               : PivotSnapSettings{.vertex = true,
@@ -566,43 +687,40 @@ ViewportNativeToolInteraction::handle_frame(
         output.invalidate_hover = true;
         output.mark_overlay_dirty = true;
       }
-      if (frame.left_released || !frame.left_down || !handle.visible) {
-        pivot_handle_dragging_ = false;
+      if (pivot_handle_press_ && matching_release &&
+          !canceled_left_release) {
+        pivot_handle_press_.reset();
       }
     }
 
     const PivotHandleState after = pivot->handle_state();
     output.pivot_blocks_gizmo = after.visible && after.editing;
+    output.consumed = output.consumed || output.pivot_consumed;
+    output.blocks_transform_gizmo =
+        output.blocks_transform_gizmo || output.pivot_consumed ||
+        output.pivot_blocks_gizmo;
   }
   return output;
 }
 
 void ViewportNativeToolInteraction::clear_drag_state() {
-  pivot_handle_dragging_ = false;
-  linear_array_handle_dragging_ = false;
-  curve_point_construction_dragging_ = false;
-  curve_point_construction_moved_ = false;
-  curve_point_construction_plane_.reset();
+  if (pivot_handle_press_ || linear_array_handle_press_ ||
+      curve_point_construction_press_) {
+    // Lifecycle cancellation can run before the next sampled frame. Keep the
+    // originating left release reserved so it cannot become a selection click.
+    left_release_suppression_.begin(QuaderMouseButton::Left, true);
+  }
+  pivot_handle_press_.reset();
+  linear_array_handle_press_.reset();
+  curve_point_construction_press_.reset();
   curve_conversion_press_.reset();
 }
 
 bool ViewportNativeToolInteraction::dragging() const {
-  return pivot_handle_dragging_ || linear_array_handle_dragging_ ||
-         curve_point_construction_dragging_ ||
+  return pivot_handle_press_.has_value() ||
+         linear_array_handle_press_.has_value() ||
+         curve_point_construction_press_.has_value() ||
          curve_conversion_press_.has_value();
-}
-
-std::optional<CurveControlTarget>
-ViewportNativeToolInteraction::curve_control_hit(
-    const ViewportCameraController &camera,
-    const CurveToolPreviewState &preview, QVec2 mouse_local, bool anchors_only,
-    const std::function<std::optional<double>(const ViewportRay &)>
-        &mesh_surface_distance) {
-  const auto hit = pick_unoccluded_viewport_curve_control(
-      camera, preview, mouse_local, mesh_surface_distance, anchors_only);
-  return hit.has_value()
-             ? std::optional<CurveControlTarget>{hit->target}
-             : std::nullopt;
 }
 
 std::optional<int> ViewportNativeToolInteraction::hit_drawn_plane_captured_point(
@@ -638,16 +756,16 @@ bool ViewportNativeToolInteraction::hit_drawn_plane_line(
 }
 
 ModelingBoxToolEvent ViewportNativeToolInteraction::modeling_box_event(
-    const ViewportCameraController &camera, const ViewportInputFrame &input,
-    float grid_size, bool snap_enabled) {
-  const ViewportRay ray = camera.ray_from_viewport_point(input.mouse_local);
+    const ViewportCameraController &camera, QVec2 viewport_size,
+    QVec2 mouse_local, float grid_size, bool snap_enabled) {
+  const ViewportRay ray = camera.ray_from_viewport_point(mouse_local);
   return {
-      .screen_position = input.mouse_local,
+      .screen_position = mouse_local,
       .ray = {.origin = ray.origin, .direction = ray.direction},
       .grid_size = grid_size,
       .has_camera = true,
       .camera =
-          ViewportCameraAdapter::modeling_camera(camera, input.viewport_size),
+          ViewportCameraAdapter::modeling_camera(camera, viewport_size),
       .snap_enabled = snap_enabled,
   };
 }

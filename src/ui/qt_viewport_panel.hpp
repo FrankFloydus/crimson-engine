@@ -10,7 +10,6 @@
 #include "api/quader_viewport_layout_types.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
 #include "editor/viewport/viewport_curve_picking.hpp"
-#include "render/overlay/curve_tool_overlay_cache.hpp"
 #include "render/render_system.hpp"
 #include "render/viewport_info_stats.hpp"
 #include "ui/qt_navigation_gizmo.hpp"
@@ -20,7 +19,6 @@
 #include "ui/qt_viewport_surface.hpp"
 #include "viewport/viewport_host_interaction_policy.hpp"
 #include "ui/viewport_hover_controller.hpp"
-#include "ui/viewport_pane_overlay_cache.hpp"
 #include "ui/viewport_shortcut_controller.hpp"
 #include "viewport/viewport_input_router.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -32,6 +30,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <vector>
 
 class QAction;
@@ -45,12 +44,9 @@ class QPushButton;
 namespace quader {
 
 class AssetRegistry;
-class LinearArrayToolService;
-class CurveToolService;
 class ModelingSessionService;
 class LocalizationService;
-class PivotToolService;
-class RadialArrayToolService;
+class NativeViewportToolCoordinator;
 class QuaderEditorApi;
 class RenderOverlaySnapshotCache;
 class QtViewportEdgeLengthHud;
@@ -86,7 +82,7 @@ public:
   void shutdown();
 
   void reset_interactions(QuaderEditorApi *editor,
-                          CurveToolService *curve);
+                          NativeViewportToolCoordinator *native_tools);
 
   void attach_workspace(ViewportWorkspaceService &workspace);
   void set_viewport_settings(const ViewportSettings &settings);
@@ -103,20 +99,16 @@ public:
   void refresh_workspace_layout();
   void process_input(QuaderEditorApi &editor, SceneDocument &document,
                      AssetRegistry &assets, ModelingSessionService &modeling,
-                     AssetId default_material, PivotToolService *pivot,
-                     LinearArrayToolService *linear_array,
-                     RadialArrayToolService *radial_array,
+                     AssetId default_material,
+                     NativeViewportToolCoordinator &native_tools,
                      ViewportPointPlacementService *point_placement,
-                     double delta_seconds, CurveToolService *curve = nullptr);
+                     double delta_seconds);
   void prepare_viewports(QuaderEditorApi &editor,
                          SceneRenderBridge &render_bridge,
                          RenderOverlaySnapshotCache &snapshot_cache,
                          SceneDocument &document, AssetRegistry &assets,
                          ModelingSessionService &modeling,
-                         PivotToolService *pivot,
-                         LinearArrayToolService *linear_array,
-                         RadialArrayToolService *radial_array,
-                         CurveToolService *curve = nullptr);
+                         NativeViewportToolCoordinator &native_tools);
   [[nodiscard]] QuaderApiVoidResult frame_all(const SceneDocument &document,
                                               const AssetRegistry &assets,
                                               ViewportPaneId pane_id);
@@ -139,42 +131,6 @@ protected:
   void resizeEvent(QResizeEvent *event) override;
 
 private:
-  /// Keys one pane's retained semantic overlay independently of camera pose.
-  struct PaneOverlaySubmissionKey {
-    std::uint64_t selection_overlay_revision = 0;
-    std::uint64_t scene_revision = 0;
-    std::uint64_t asset_revision = 0;
-    std::uint64_t selection_revision = 0;
-    std::uint64_t visibility_revision = 0;
-    std::uint64_t local_visibility_revision = 0;
-    std::uint64_t transform_revision = 0;
-    std::uint64_t mesh_binding_revision = 0;
-    std::uint64_t render_component_revision = 0;
-    std::uint64_t style_signature = 0;
-    ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
-    ViewportOverlayProjection projection = ViewportOverlayProjection::Perspective;
-    bool selection_overlay_visible = false;
-    bool scene_overlay_requested = false;
-    bool wireframe_pane = false;
-    bool point_light_gizmos_visible = false;
-
-    friend bool operator==(const PaneOverlaySubmissionKey &,
-                           const PaneOverlaySubmissionKey &) = default;
-  };
-
-  /// Keys the small frame-volatile tool overlay separately from retained
-  /// component selection and scene overlays.
-  struct PaneDynamicOverlaySubmissionKey {
-    std::uint64_t frame_signature = 0;
-    std::uint64_t curve_overlay_revision = 0;
-    std::uint64_t style_signature = 0;
-    ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
-    ViewportOverlayProjection projection = ViewportOverlayProjection::Perspective;
-
-    friend bool operator==(const PaneDynamicOverlaySubmissionKey &,
-                           const PaneDynamicOverlaySubmissionKey &) = default;
-  };
-
   /// Owns the retained Qt presentation objects for one workspace pane.
   struct Pane {
     ViewportPaneId id = ViewportPaneId::Perspective;
@@ -193,10 +149,6 @@ private:
     QtViewportFlyNavigationHud *fly_navigation_hud = nullptr;
     QtViewportSurface *surface = nullptr;
     QWidget *surface_container = nullptr;
-    PaneOverlaySubmissionKey overlay_submission_key;
-    bool overlay_submission_valid = false;
-    PaneDynamicOverlaySubmissionKey dynamic_overlay_submission_key;
-    bool dynamic_overlay_submission_valid = false;
     ViewportView presented_view = ViewportView::Perspective;
     ViewportShadingMode presented_shading = ViewportShadingMode::Shaded;
     bool control_selection_valid = false;
@@ -233,19 +185,14 @@ private:
   void process_viewport_input(QuaderEditorApi &editor, SceneDocument &document,
                               AssetRegistry &assets,
                               ModelingSessionService &modeling,
-                              AssetId default_material, PivotToolService *pivot,
-                              LinearArrayToolService *linear_array,
-                              RadialArrayToolService *radial_array,
+                              AssetId default_material,
+                              NativeViewportToolCoordinator &native_tools,
                               ViewportPointPlacementService *point_placement,
-                              double delta_seconds, CurveToolService *curve);
+                              double delta_seconds);
   void observe_persisted_camera_change(QuaderEditorApi &editor);
-  void refresh_cached_selection_overlay_frame(ModelingSessionService &modeling,
-                                               const SceneDocument &document,
-                                               const AssetRegistry &assets,
-                                               const ViewportSettings &settings);
   bool sync_active_tool_from_editor(QuaderEditorApi &editor,
                                     ModelingSessionService &modeling,
-                                    CurveToolService *curve = nullptr);
+                                    NativeViewportToolCoordinator &native_tools);
   [[nodiscard]] const ViewportSettings &active_viewport_settings() const;
   [[nodiscard]] Pane &pane(ViewportPaneId pane_id);
   [[nodiscard]] const Pane &pane(ViewportPaneId pane_id) const;
@@ -275,7 +222,6 @@ private:
   ViewportInteractionController interaction_controller_;
   QtViewportContextMenuPresenter context_menu_presenter_;
   QtViewportDeletePopupPresenter delete_popup_presenter_;
-  ViewportPaneOverlayCache selection_overlay_cache_;
   const SceneDocument *point_light_pick_cached_document_ = nullptr;
   std::uint64_t point_light_pick_cached_scene_revision_ = 0u;
   std::uint64_t point_light_pick_cached_local_visibility_revision_ = 0u;
@@ -283,11 +229,6 @@ private:
       point_light_pick_cached_candidates_;
   bool point_light_pick_cache_valid_ = false;
   ViewportPaneId interaction_pane_id_ = ViewportPaneId::Perspective;
-  ViewportPaneId context_menu_pane_id_ = ViewportPaneId::Perspective;
-  QVec2 context_menu_right_press_screen_ = {};
-  QVec2 context_menu_right_press_local_ = {};
-  QVec2 context_menu_right_drag_delta_ = {};
-  bool context_menu_right_press_active_ = false;
   std::array<SplitHandleHost, 2> split_handles_;
   ViewportSplitHandleId active_split_handle_ =
       ViewportSplitHandleId::TwoHorizontal;
@@ -297,7 +238,7 @@ private:
   // replacing or destroying the scene services; Qt-owned workspace and
   // shutdown resets may use it only while that binding remains installed.
   QuaderEditorApi *interaction_editor_ = nullptr;
-  CurveToolService *interaction_curve_ = nullptr;
+  NativeViewportToolCoordinator *interaction_native_tools_ = nullptr;
   std::uint64_t active_tool_revision_ = 0;
   ModelingBoxPreview active_box_preview_ = {};
   bool modal_tool_dragging_ = false;
@@ -310,7 +251,6 @@ private:
   double linear_array_wheel_remainder_ = 0.0;
   double radial_array_wheel_remainder_ = 0.0;
   ViewportCurvePickCache curve_pick_cache_;
-  CurveToolOverlayCache curve_tool_overlay_cache_;
   bool last_fly_navigation_active_ = false;
   bool edge_length_hud_enabled_ = false;
   const SceneDocument *viewport_info_cached_document_ = nullptr;

@@ -11,17 +11,15 @@
 #include "core/logger.hpp"
 #include "core/scene_environment_catalog.hpp"
 #include "diagnostics/profile.hpp"
-#include "editor/array/linear_array_tool_service.hpp"
-#include "editor/array/radial_array_tool_service.hpp"
-#include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
-#include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "platform/platform_file_dialog.hpp"
 #include "platform/platform_shell.hpp"
 #include "platform/window_placement.hpp"
 #include "quader_app_version.hpp"
+#include "ui/standard_material_preview_render_snapshot_adapter.hpp"
 #include "scene/scene_document.hpp"
 #include "ui/console_panel.hpp"
 #include "ui/inspector_panel.hpp"
@@ -267,6 +265,7 @@ bool UISystem::initialize(RenderSystem &render_system,
     settings_.set_locale(localization_.current_locale());
   }
   localized_locale_ = localization_.current_locale();
+  localized_revision_ = localization_.revision();
   viewport_settings_ =
       ViewportSettings::load(settings_paths_.viewport_settings_file);
 
@@ -496,7 +495,7 @@ bool UISystem::initialize(RenderSystem &render_system,
           return false;
         }
         invalidate_material_presentation_cache();
-        inspector_refresh_valid_ = false;
+        inspector_presenter_.invalidate();
         project_workspace_refresh_signal_->store(
             true, std::memory_order_relaxed);
         return true;
@@ -665,35 +664,33 @@ bool UISystem::initialize(RenderSystem &render_system,
 void UISystem::install_runtime_hooks(
     QuaderEditorApi &editor, SceneDocument &document, AssetRegistry &assets,
     ModelingSessionService &modeling, EditorSelectionService &selection,
-    PivotToolService &pivot, LinearArrayToolService &linear_array,
-    RadialArrayToolService &radial_array,
-    ViewportPointPlacementService &point_placement, AssetId default_material,
-    CurveToolService *curve) {
+    NativeViewportToolCoordinator &native_tools,
+    ViewportPointPlacementService &point_placement, AssetId default_material) {
   if (viewport_panel_ != nullptr) {
-    viewport_panel_->reset_interactions(editor_, curve_);
+    viewport_panel_->reset_interactions(editor_, native_tools_);
   }
   editor_ = &editor;
   document_ = &document;
   assets_ = &assets;
   modeling_ = &modeling;
   selection_ = &selection;
-  pivot_ = &pivot;
-  linear_array_ = &linear_array;
-  radial_array_ = &radial_array;
-  curve_ = curve;
+  native_tools_ = &native_tools;
   point_placement_ = &point_placement;
   default_material_ = default_material;
   invalidate_material_presentation_cache();
-  outliner_refresh_valid_ = false;
-  layers_refresh_valid_ = false;
-  inspector_refresh_valid_ = false;
-  inspector_material_query_valid_ = false;
-  toolbar_refresh_valid_ = false;
-  tool_settings_refresh_valid_ = false;
-  active_material_panel_refresh_valid_ = false;
-  face_texture_settings_revision_.reset();
-  uv_peel_settings_revision_.reset();
-  status_refresh_valid_ = false;
+  outliner_presenter_.invalidate();
+  layers_presenter_.invalidate();
+  inspector_presenter_.invalidate();
+  inspector_material_query_presenter_.invalidate();
+  toolbar_owner_presenter_.invalidate();
+  toolbar_tool_presenter_.invalidate();
+  toolbar_transform_presenter_.invalidate();
+  tool_settings_presenter_.invalidate();
+  active_material_panel_presenter_.invalidate();
+  face_texture_presenter_.invalidate();
+  uv_peel_presenter_.invalidate();
+  standard_material_editor_presenter_.invalidate();
+  status_presenter_.invalidate();
   project_workspace_instance_edit_revision_ = 0;
   project_workspace_instance_edit_revision_valid_ = false;
   bind_project_workspace_events(editor);
@@ -1349,25 +1346,23 @@ void UISystem::refresh_active_material_panel(
       !panel_presented(UIPanelId::ActiveMaterial)) {
     return;
   }
-  if (active_material_panel_refresh_valid_ &&
-      active_material_panel_catalog_revision_ ==
-          material_presentation_catalog_revision_ &&
-      active_material_panel_reference_ == active_reference) {
+  const ActiveMaterialPanelPresentationStamp stamp{
+      .catalog_revision = material_presentation_catalog_revision_,
+      .reference = active_reference,
+  };
+  if (!active_material_panel_presenter_.needs_refresh(stamp)) {
     return;
   }
   active_material_panel_->set_presentation(
       material_presentation_for(active_reference, false),
       material_browser_window_ != nullptr);
-  active_material_panel_catalog_revision_ =
-      material_presentation_catalog_revision_;
-  active_material_panel_reference_ = active_reference;
-  active_material_panel_refresh_valid_ = true;
+  active_material_panel_presenter_.mark_presented(stamp);
 }
 
 void UISystem::invalidate_material_presentation_cache() {
   ++material_presentation_invalidation_generation_;
   material_presentation_cache_valid_ = false;
-  inspector_material_query_valid_ = false;
+  inspector_material_query_presenter_.invalidate();
 }
 
 void UISystem::observe_material_presentation_events() {
@@ -1379,7 +1374,7 @@ void UISystem::observe_material_presentation_events() {
   }
   material_presentation_observed_event_generation_ = generation;
   material_presentation_cache_valid_ = false;
-  inspector_material_query_valid_ = false;
+  inspector_material_query_presenter_.invalidate();
 }
 
 void UISystem::refresh_material_presentation_cache() {
@@ -1407,8 +1402,8 @@ void UISystem::refresh_material_presentation_cache() {
     if (presentation_changed) {
       ++material_presentation_catalog_revision_;
       ++material_presentation_revision_;
-      inspector_refresh_valid_ = false;
-      inspector_material_query_valid_ = false;
+      inspector_presenter_.invalidate();
+      inspector_material_query_presenter_.invalidate();
       synchronize_material_presentation_consumers();
     }
     return;
@@ -1442,25 +1437,28 @@ void UISystem::refresh_material_presentation_cache() {
       *material_presentation_context_observation_ != context_stamp;
   material_presentation_context_observation_ = context_stamp;
 
+  const QuaderApiResult<QuaderMaterialPresentationRevision> owner_revision =
+      editor_->project_assets().material_presentation_revision();
+  if (!owner_revision.succeeded()) {
+    material_presentation_cache_valid_ = false;
+    material_presentation_catalog_attempt_.reset();
+    return;
+  }
   const MaterialPresentationCatalogStamp catalog_stamp{
       .editor = editor_,
-      .document = scene_available ? document_ : nullptr,
-      .assets = scene_available ? assets_ : nullptr,
-      .active_scene_id = scene_available ? active_scene_id : 0u,
-      .material_catalog_revision =
-          scene_available ? assets_->material_catalog_revision() : 0u,
+      .owner_revision = owner_revision.value(),
       .event_generation =
           material_presentation_observed_event_generation_,
       .invalidation_generation =
           material_presentation_invalidation_generation_,
-      .locale = localization_.current_locale(),
+      .localization_revision = localization_.revision(),
   };
   if (material_presentation_catalog_attempt_.has_value() &&
       *material_presentation_catalog_attempt_ == catalog_stamp) {
     if (context_changed) {
       ++material_presentation_revision_;
-      inspector_refresh_valid_ = false;
-      inspector_material_query_valid_ = false;
+      inspector_presenter_.invalidate();
+      inspector_material_query_presenter_.invalidate();
       synchronize_material_presentation_consumers();
     }
     return;
@@ -1469,8 +1467,8 @@ void UISystem::refresh_material_presentation_cache() {
   // Record the attempted owner/event inputs before querying. A failed project
   // catalog read therefore stays gated until a real owner or event changes.
   material_presentation_catalog_attempt_ = catalog_stamp;
-  const QuaderApiResult<std::vector<QuaderProjectMaterialInfo>> materials =
-      editor_->project_assets().materials();
+  QuaderApiResult<QuaderMaterialPresentationSnapshot> materials =
+      editor_->project_assets().material_presentations();
   if (!materials.succeeded()) {
     const bool presentation_changed =
         material_presentation_cache_valid_ ||
@@ -1483,18 +1481,12 @@ void UISystem::refresh_material_presentation_cache() {
     }
     if (presentation_changed || context_changed) {
       ++material_presentation_revision_;
-      inspector_refresh_valid_ = false;
-      inspector_material_query_valid_ = false;
+      inspector_presenter_.invalidate();
+      inspector_material_query_presenter_.invalidate();
       synchronize_material_presentation_consumers();
     }
     return;
   }
-
-  std::vector<AssetId> embedded_material_ids;
-  if (scene_available) {
-    embedded_material_ids = assets_->material_ids();
-  }
-  std::ranges::sort(embedded_material_ids);
 
   const auto reuse_or_make_thumbnail =
       [this](QtMaterialPresentationItem &item) {
@@ -1515,68 +1507,45 @@ void UISystem::refresh_material_presentation_cache() {
       };
 
   std::vector<QtMaterialPresentationItem> next;
-  next.reserve(materials.value().size() + embedded_material_ids.size());
-  for (const QuaderProjectMaterialInfo &material : materials.value()) {
-    const QuaderMaterialReference reference =
-        QuaderMaterialReference::project(material.id);
-    QByteArray preview_bytes;
-    std::uint64_t preview_revision = material.content_revision;
-    const QuaderApiResult<QuaderProjectMaterialPreview> preview =
-        editor_->project_assets().material_preview(material.id);
-    if (preview.succeeded() && !preview.value().encoded_bytes.empty()) {
-      preview_revision = preview.value().content_revision;
-      preview_bytes = QByteArray(
-          reinterpret_cast<const char *>(
-              preview.value().encoded_bytes.data()),
-          static_cast<qsizetype>(preview.value().encoded_bytes.size()));
-    }
+  next.reserve(materials.value().materials.size());
+  for (const QuaderMaterialPresentationItem &material :
+       materials.value().materials) {
+    const QuaderMaterialReference reference = material.reference;
+    const std::string_view type_key = [&material]() -> std::string_view {
+      switch (material.kind) {
+      case QuaderMaterialPresentationKind::Embedded:
+        return "ui.material_browser.embedded_material_type";
+      case QuaderMaterialPresentationKind::Standard:
+        return "ui.material_browser.standard_material_type";
+      case QuaderMaterialPresentationKind::Graph:
+        return "ui.material_browser.graph_material_type";
+      }
+      return "ui.material_browser.embedded_material_type";
+    }();
+    const std::string_view type_fallback =
+        material.kind == QuaderMaterialPresentationKind::Embedded
+            ? "Embedded Material"
+            : material.kind == QuaderMaterialPresentationKind::Standard
+                  ? "Standard Material"
+                  : "Graph Material";
     QtMaterialPresentationItem item{
         .reference = reference,
         .stable_id = qt_material_reference_stable_id(reference),
         .name = QString::fromStdString(material.name),
         .project_relative_path =
             QString::fromStdString(material.project_relative_path),
-        .type_display_name = QString::fromStdString(localization_.text(
-            material.kind == QuaderProjectMaterialKind::Standard
-                ? "ui.material_browser.standard_material_type"
-                : "ui.material_browser.graph_material_type",
-            material.kind == QuaderProjectMaterialKind::Standard
-                ? "Standard Material"
-                : "Graph Material")),
+        .type_display_name =
+            QString::fromStdString(localization_.text(type_key, type_fallback)),
         .qmat_size_bytes = static_cast<qint64>(material.qmat_size_bytes),
-        .encoded_albedo = std::move(preview_bytes),
+        .encoded_albedo = QByteArray(
+            reinterpret_cast<const char *>(material.encoded_albedo.data()),
+            static_cast<qsizetype>(material.encoded_albedo.size())),
         .fallback_color = QColor::fromRgbF(
-            material.base_color[0], material.base_color[1],
-            material.base_color[2]),
-        .content_revision = preview_revision,
-        .available = true,
-        .editable = material.kind ==
-                    QuaderProjectMaterialKind::Standard,
-    };
-    reuse_or_make_thumbnail(item);
-    next.push_back(std::move(item));
-  }
-
-  for (const AssetId id : embedded_material_ids) {
-    const MaterialDocument *embedded = assets_->material(id);
-    if (embedded == nullptr || !assets_->validate_material(*embedded).ok) {
-      continue;
-    }
-    const QuaderMaterialReference reference =
-        QuaderMaterialReference::embedded(id);
-    QtMaterialPresentationItem item{
-        .reference = reference,
-        .stable_id = qt_material_reference_stable_id(reference),
-        .name = QString::fromStdString(embedded->name),
-        .type_display_name = QString::fromStdString(localization_.text(
-            "ui.material_browser.embedded_material_type",
-            "Embedded Material")),
-        .fallback_color = QColor::fromRgbF(embedded->base_color.x,
-                                           embedded->base_color.y,
-                                           embedded->base_color.z),
-        .content_revision = embedded->revision.value,
-        .available = true,
-        .editable = false,
+            material.fallback_color[0], material.fallback_color[1],
+            material.fallback_color[2]),
+        .content_revision = material.content_revision,
+        .available = material.available,
+        .editable = material.editable,
     };
     reuse_or_make_thumbnail(item);
     next.push_back(std::move(item));
@@ -1595,7 +1564,7 @@ void UISystem::refresh_material_presentation_cache() {
   const QuaderProjectMetadata project = editor_->project().metadata();
   mix_text(project.uuid);
   mix_text(editor_->project().manifest_path().generic_string());
-  mix_text(catalog_stamp.locale);
+  mix_text(localization_.current_locale());
   for (const QtMaterialPresentationItem &item : next) {
     const QByteArray stable_id = item.stable_id.toUtf8();
     const QByteArray name = item.name.toUtf8();
@@ -1616,8 +1585,8 @@ void UISystem::refresh_material_presentation_cache() {
     material_presentation_cache_valid_ = true;
     if (context_changed) {
       ++material_presentation_revision_;
-      inspector_refresh_valid_ = false;
-      inspector_material_query_valid_ = false;
+      inspector_presenter_.invalidate();
+      inspector_material_query_presenter_.invalidate();
       synchronize_material_presentation_consumers();
     }
     return;
@@ -1628,8 +1597,8 @@ void UISystem::refresh_material_presentation_cache() {
   material_presentation_signature_ = signature;
   ++material_presentation_catalog_revision_;
   ++material_presentation_revision_;
-  inspector_refresh_valid_ = false;
-  inspector_material_query_valid_ = false;
+  inspector_presenter_.invalidate();
+  inspector_material_query_presenter_.invalidate();
   synchronize_material_presentation_consumers();
 }
 
@@ -1756,40 +1725,20 @@ void UISystem::refresh_inspector_material_presentation() {
     return;
   }
   refresh_material_presentation_cache();
-  const std::uint64_t scene_selection_revision =
-      document_->selection_revision();
-  const std::uint64_t hierarchy_revision =
-      document_->hierarchy_presentation_revision();
-  const std::uint64_t material_binding_revision =
-      document_->material_binding_revision();
-  const std::uint64_t mesh_binding_revision =
-      document_->mesh_binding_revision();
-  const std::uint64_t mesh_material_usage_revision =
-      assets_->mesh_material_usage_revision();
-  const std::uint64_t modeling_content_revision =
-      modeling_->content_revision();
-  const std::uint64_t modeling_selection_revision =
-      modeling_->selection_revision();
-  const std::uint64_t modeling_object_map_revision =
-      modeling_->modeling_object_map_revision();
-  if (inspector_material_query_valid_ &&
-      inspector_material_query_presentation_revision_ ==
-          material_presentation_revision_ &&
-      inspector_material_query_scene_selection_revision_ ==
-          scene_selection_revision &&
-      inspector_material_query_hierarchy_revision_ == hierarchy_revision &&
-      inspector_material_query_material_binding_revision_ ==
-          material_binding_revision &&
-      inspector_material_query_mesh_binding_revision_ ==
-          mesh_binding_revision &&
-      inspector_material_query_mesh_material_usage_revision_ ==
-          mesh_material_usage_revision &&
-      inspector_material_query_modeling_content_revision_ ==
-          modeling_content_revision &&
-      inspector_material_query_modeling_selection_revision_ ==
-          modeling_selection_revision &&
-      inspector_material_query_modeling_object_map_revision_ ==
-          modeling_object_map_revision) {
+  const InspectorMaterialQueryStamp stamp{
+      .presentation_revision = material_presentation_revision_,
+      .scene_selection_revision = document_->selection_revision(),
+      .hierarchy_revision = document_->hierarchy_presentation_revision(),
+      .material_binding_revision = document_->material_binding_revision(),
+      .mesh_binding_revision = document_->mesh_binding_revision(),
+      .mesh_material_usage_revision =
+          assets_->mesh_material_usage_revision(),
+      .modeling_content_revision = modeling_->content_revision(),
+      .modeling_selection_revision = modeling_->selection_revision(),
+      .modeling_object_map_revision =
+          modeling_->modeling_object_map_revision(),
+  };
+  if (!inspector_material_query_presenter_.needs_refresh(stamp)) {
     return;
   }
 
@@ -1813,14 +1762,14 @@ void UISystem::refresh_inspector_material_presentation() {
     revision *= 1099511628211ull;
   };
   mix(material_presentation_revision_);
-  mix(scene_selection_revision);
-  mix(hierarchy_revision);
-  mix(material_binding_revision);
-  mix(mesh_binding_revision);
-  mix(mesh_material_usage_revision);
-  mix(modeling_content_revision);
-  mix(modeling_selection_revision);
-  mix(modeling_object_map_revision);
+  mix(stamp.scene_selection_revision);
+  mix(stamp.hierarchy_revision);
+  mix(stamp.material_binding_revision);
+  mix(stamp.mesh_binding_revision);
+  mix(stamp.mesh_material_usage_revision);
+  mix(stamp.modeling_content_revision);
+  mix(stamp.modeling_selection_revision);
+  mix(stamp.modeling_object_map_revision);
   inspector_panel_->set_material_presentation(
       InspectorMaterialPresentationSnapshot{
           .revision = revision,
@@ -1839,23 +1788,7 @@ void UISystem::refresh_inspector_material_presentation() {
                 show_material_find_replace(reference);
               },
       });
-  inspector_material_query_presentation_revision_ =
-      material_presentation_revision_;
-  inspector_material_query_scene_selection_revision_ =
-      scene_selection_revision;
-  inspector_material_query_hierarchy_revision_ = hierarchy_revision;
-  inspector_material_query_material_binding_revision_ =
-      material_binding_revision;
-  inspector_material_query_mesh_binding_revision_ = mesh_binding_revision;
-  inspector_material_query_mesh_material_usage_revision_ =
-      mesh_material_usage_revision;
-  inspector_material_query_modeling_content_revision_ =
-      modeling_content_revision;
-  inspector_material_query_modeling_selection_revision_ =
-      modeling_selection_revision;
-  inspector_material_query_modeling_object_map_revision_ =
-      modeling_object_map_revision;
-  inspector_material_query_valid_ = true;
+  inspector_material_query_presenter_.mark_presented(stamp);
 }
 
 void UISystem::show_home() {
@@ -1878,7 +1811,7 @@ void UISystem::show_home() {
     if (active_material_panel_ != nullptr) {
       active_material_panel_->set_presentation(std::nullopt, false);
     }
-    active_material_panel_refresh_valid_ = false;
+    active_material_panel_presenter_.invalidate();
     material_presentation_items_.clear();
     material_presentation_signature_ = 0;
     material_presentation_catalog_attempt_.reset();
@@ -1890,6 +1823,7 @@ void UISystem::show_home() {
   if (standard_material_editor_window_ != nullptr) {
     standard_material_editor_window_->hide();
     standard_material_editor_window_->clear_document();
+    standard_material_editor_presenter_.invalidate();
   }
   if (central_stack_ != nullptr && project_home_page_ != nullptr) {
     central_stack_->setCurrentWidget(project_home_page_);
@@ -2139,7 +2073,7 @@ void UISystem::shutdown() {
     tool_settings_panel_->unbind();
   }
   if (viewport_panel_ != nullptr) {
-    viewport_panel_->reset_interactions(editor_, curve_);
+    viewport_panel_->reset_interactions(editor_, native_tools_);
     viewport_panel_->shutdown();
   }
   if (material_preview_surface_ != nullptr) {
@@ -2188,10 +2122,7 @@ void UISystem::shutdown() {
   assets_ = nullptr;
   modeling_ = nullptr;
   selection_ = nullptr;
-  pivot_ = nullptr;
-  linear_array_ = nullptr;
-  radial_array_ = nullptr;
-  curve_ = nullptr;
+  native_tools_ = nullptr;
   point_placement_ = nullptr;
   initialized_ = false;
   retained_message_box_prewarm_scheduled_ = false;
@@ -2204,9 +2135,7 @@ void UISystem::shutdown() {
   material_presentation_signature_ = 0;
   material_presentation_revision_ = 0;
   material_presentation_catalog_revision_ = 0;
-  active_material_panel_catalog_revision_ = 0;
-  active_material_panel_reference_ = {};
-  active_material_panel_refresh_valid_ = false;
+  active_material_panel_presenter_.invalidate();
   material_presentation_catalog_attempt_.reset();
   material_presentation_context_observation_.reset();
   material_presentation_cache_valid_ = false;
@@ -2214,7 +2143,7 @@ void UISystem::shutdown() {
   material_presentation_invalidation_generation_ = 1;
   material_presentation_event_generation_signal_->store(
       1u, std::memory_order_relaxed);
-  inspector_material_query_valid_ = false;
+  inspector_material_query_presenter_.invalidate();
   material_browser_catalog_signature_ = 0;
   material_browser_active_reference_ = {};
   material_find_replace_project_identity_.clear();
@@ -2224,15 +2153,11 @@ void UISystem::shutdown() {
   material_find_replace_modeling_object_map_revision_ = 0;
   material_find_replace_presentation_revision_ = 0;
   material_picker_presentation_revision_ = 0;
-  tool_settings_revision_ = 0;
-  tool_settings_refresh_valid_ = false;
-  face_texture_settings_revision_.reset();
-  uv_peel_settings_revision_.reset();
-  status_command_revision_ = 0;
-  status_live_count_ = 0;
-  status_live_kind_ = 0;
-  status_locale_.clear();
-  status_refresh_valid_ = false;
+  tool_settings_presenter_.invalidate();
+  face_texture_presenter_.invalidate();
+  uv_peel_presenter_.invalidate();
+  standard_material_editor_presenter_.invalidate();
+  status_presenter_.invalidate();
 }
 
 void UISystem::refresh(const FrameTiming &frame_timing,
@@ -2245,7 +2170,8 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   // their final revisions are presented once the gesture ends.
   const bool edit_drag_active =
       (modeling_ != nullptr && modeling_->transform_drag_active()) ||
-      (curve_ != nullptr && curve_->dragging());
+      (native_tools_ != nullptr &&
+       native_tools_->presentation_snapshot().curve_dragging);
   const bool numeric_interaction_active =
       tool_settings_panel_ != nullptr &&
       tool_settings_panel_->numeric_interaction_active();
@@ -2276,25 +2202,31 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       QDR_PROFILE_SCOPE("UI refresh retained toolbars");
       const bool owner_available =
           document_ != nullptr && modeling_ != nullptr;
-      const bool owner_state_changed = [&]() {
+      const ToolbarOwnerPresentationStamp owner_stamp = [&]() {
         QDR_PROFILE_SCOPE("UI toolbar query owner revisions");
-        return !toolbar_refresh_valid_ ||
-               toolbar_owner_available_ != owner_available ||
-               (owner_available &&
-                (toolbar_scene_revision_ != document_->revision() ||
-                 toolbar_scene_selection_revision_ !=
-                     document_->selection_revision() ||
-                 toolbar_modeling_content_revision_ !=
-                     modeling_->content_revision() ||
-                 toolbar_modeling_selection_revision_ !=
-                     modeling_->selection_revision()));
+        return ToolbarOwnerPresentationStamp{
+            .owner_available = owner_available,
+            .scene_revision = owner_available ? document_->revision() : 0u,
+            .scene_selection_revision =
+                owner_available ? document_->selection_revision() : 0u,
+            .modeling_content_revision =
+                owner_available ? modeling_->content_revision() : 0u,
+            .modeling_selection_revision =
+                owner_available ? modeling_->selection_revision() : 0u,
+        };
       }();
+      const ToolbarToolPresentationStamp tool_stamp{
+          .active_tool_revision = frame_active_tool_revision,
+      };
+      const ToolbarTransformPresentationStamp transform_stamp{
+          .transform_space_revision = frame_transform_space_revision,
+      };
+      const bool owner_state_changed =
+          toolbar_owner_presenter_.needs_refresh(owner_stamp);
       const bool active_tool_revision_changed =
-          !toolbar_refresh_valid_ ||
-          toolbar_active_tool_revision_ != frame_active_tool_revision;
+          toolbar_tool_presenter_.needs_refresh(tool_stamp);
       const bool transform_space_revision_changed =
-          !toolbar_refresh_valid_ || toolbar_transform_space_revision_ !=
-                                         frame_transform_space_revision;
+          toolbar_transform_presenter_.needs_refresh(transform_stamp);
       if (owner_state_changed || active_tool_revision_changed ||
           transform_space_revision_changed) {
         const QuaderSelectionSummary selection = [&]() {
@@ -2310,22 +2242,9 @@ void UISystem::refresh(const FrameTiming &frame_timing,
           tool_toolbar_->synchronize(*editor_, selection,
                                      owner_state_changed);
         }
-        if (owner_available) {
-          toolbar_scene_revision_ = document_->revision();
-          toolbar_scene_selection_revision_ =
-              document_->selection_revision();
-          toolbar_modeling_content_revision_ = modeling_->content_revision();
-          toolbar_modeling_selection_revision_ =
-              modeling_->selection_revision();
-        }
-        toolbar_owner_available_ = owner_available;
-        toolbar_refresh_valid_ = true;
-      }
-      if (active_tool_revision_changed) {
-        toolbar_active_tool_revision_ = frame_active_tool_revision;
-      }
-      if (transform_space_revision_changed) {
-        toolbar_transform_space_revision_ = frame_transform_space_revision;
+        toolbar_owner_presenter_.mark_presented(owner_stamp);
+        toolbar_tool_presenter_.mark_presented(tool_stamp);
+        toolbar_transform_presenter_.mark_presented(transform_stamp);
       }
     }
     if (snapping_toolbar_ != nullptr) {
@@ -2375,66 +2294,49 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   };
   {
     QDR_PROFILE_SCOPE("UI refresh dock panels");
-    const std::string &current_locale = localization_.current_locale();
+    const std::uint64_t localization_revision = localization_.revision();
     if (!edit_drag_active && panel_presented(UIPanelId::Outliner)) {
-      const std::uint64_t hierarchy_presentation_revision =
-          document_->hierarchy_presentation_revision();
-      const std::uint64_t scene_selection_revision =
-          document_->selection_revision();
-      const std::uint64_t instance_edit_revision =
-          editor_->modeling().instance_edit_revision();
-      if (!outliner_refresh_valid_ ||
-          outliner_scene_revision_ != hierarchy_presentation_revision ||
-          outliner_scene_selection_revision_ != scene_selection_revision ||
-          outliner_instance_edit_revision_ != instance_edit_revision ||
-          outliner_locale_ != current_locale) {
+      const OutlinerPresentationStamp stamp{
+          .hierarchy_revision =
+              document_->hierarchy_presentation_revision(),
+          .selection_revision = document_->selection_revision(),
+          .instance_edit_revision =
+              editor_->modeling().instance_edit_revision(),
+          .localization_revision = localization_revision,
+      };
+      if (outliner_presenter_.needs_refresh(stamp)) {
         QDR_PROFILE_SCOPE("UI refresh outliner panel");
         outliner_panel_->refresh(context);
-        outliner_scene_revision_ = hierarchy_presentation_revision;
-        outliner_scene_selection_revision_ = scene_selection_revision;
-        outliner_instance_edit_revision_ = instance_edit_revision;
-        outliner_locale_ = current_locale;
-        outliner_refresh_valid_ = true;
+        outliner_presenter_.mark_presented(stamp);
       }
     }
-    if (!edit_drag_active && panel_presented(UIPanelId::Layers) &&
-        (!layers_refresh_valid_ ||
-         layers_scene_revision_ != document_->layer_revision() ||
-         layers_scene_selection_revision_ != document_->selection_revision() ||
-         layers_locale_ != current_locale)) {
-      QDR_PROFILE_SCOPE("UI refresh layers panel");
-      layer_panel_->refresh(context);
-      layers_scene_revision_ = document_->layer_revision();
-      layers_scene_selection_revision_ = document_->selection_revision();
-      layers_locale_ = current_locale;
-      layers_refresh_valid_ = true;
+    if (!edit_drag_active && panel_presented(UIPanelId::Layers)) {
+      const LayersPresentationStamp stamp{
+          .layer_revision = document_->layer_revision(),
+          .selection_revision = document_->selection_revision(),
+          .localization_revision = localization_revision,
+      };
+      if (layers_presenter_.needs_refresh(stamp)) {
+        QDR_PROFILE_SCOPE("UI refresh layers panel");
+        layer_panel_->refresh(context);
+        layers_presenter_.mark_presented(stamp);
+      }
     }
     if (!edit_drag_active && !numeric_interaction_active &&
         panel_presented(UIPanelId::Inspector)) {
       refresh_material_presentation_cache();
-      const std::uint64_t modeling_content_revision =
-          modeling_->content_revision();
-      const std::uint64_t modeling_selection_revision =
-          modeling_->selection_revision();
-      if (!inspector_refresh_valid_ ||
-          inspector_scene_revision_ != document_->revision() ||
-          inspector_modeling_content_revision_ !=
-              modeling_content_revision ||
-          inspector_modeling_selection_revision_ !=
-              modeling_selection_revision ||
-          inspector_material_presentation_revision_ !=
-              material_presentation_revision_ ||
-          inspector_locale_ != current_locale) {
+      const InspectorPresentationStamp stamp{
+          .scene_revision = document_->revision(),
+          .modeling_content_revision = modeling_->content_revision(),
+          .modeling_selection_revision = modeling_->selection_revision(),
+          .material_presentation_revision = material_presentation_revision_,
+          .localization_revision = localization_revision,
+      };
+      if (inspector_presenter_.needs_refresh(stamp)) {
         QDR_PROFILE_SCOPE("UI refresh inspector panel");
         refresh_inspector_material_presentation();
         inspector_panel_->refresh(context);
-        inspector_scene_revision_ = document_->revision();
-        inspector_modeling_content_revision_ = modeling_content_revision;
-        inspector_modeling_selection_revision_ = modeling_selection_revision;
-        inspector_material_presentation_revision_ =
-            material_presentation_revision_;
-        inspector_locale_ = current_locale;
-        inspector_refresh_valid_ = true;
+        inspector_presenter_.mark_presented(stamp);
       }
     }
     if (panel_presented(UIPanelId::Console)) {
@@ -2442,20 +2344,22 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       console_panel_->refresh(context);
     }
   }
-  if (panel_visible(UIPanelId::ToolSettings) &&
-      (!tool_settings_refresh_valid_ ||
-       tool_settings_revision_ != frame_tool_settings_revision)) {
-    QDR_PROFILE_SCOPE("UI refresh tool settings presentation");
-    const bool was_active = tool_settings_panel_->has_active_target();
-    tool_settings_panel_->refresh();
-    if (!was_active && tool_settings_panel_->has_active_target() &&
-        panel_visible(UIPanelId::ToolSettings)) {
-      if (QDockWidget *dock = panels_.dock(UIPanelId::ToolSettings)) {
-        dock->raise();
+  if (panel_visible(UIPanelId::ToolSettings)) {
+    const ToolSettingsPresentationStamp stamp{
+        .active_settings_revision = frame_tool_settings_revision,
+    };
+    if (tool_settings_presenter_.needs_refresh(stamp)) {
+      QDR_PROFILE_SCOPE("UI refresh tool settings presentation");
+      const bool was_active = tool_settings_panel_->has_active_target();
+      tool_settings_panel_->refresh();
+      if (!was_active && tool_settings_panel_->has_active_target() &&
+          panel_visible(UIPanelId::ToolSettings)) {
+        if (QDockWidget *dock = panels_.dock(UIPanelId::ToolSettings)) {
+          dock->raise();
+        }
       }
+      tool_settings_presenter_.mark_presented(stamp);
     }
-    tool_settings_revision_ = frame_tool_settings_revision;
-    tool_settings_refresh_valid_ = true;
   }
   if (panel_visible(UIPanelId::ToolSettings)) {
     const QuaderFaceTextureRevision revision =
@@ -2463,27 +2367,28 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     const std::uint64_t keybindings_revision =
         editor_->preferences().keybindings_revision();
     const double rotation_step = editor_->preferences().rotation_snap_degrees();
-    if (!face_texture_settings_revision_.has_value() ||
-        *face_texture_settings_revision_ != revision ||
-        face_texture_keybindings_revision_ != keybindings_revision ||
-        face_texture_rotation_step_ != rotation_step) {
+    const FaceTexturePresentationStamp texture_stamp{
+        .settings = revision,
+        .keybindings_revision = keybindings_revision,
+        .rotation_step = rotation_step,
+    };
+    if (face_texture_presenter_.needs_refresh(texture_stamp)) {
       QDR_PROFILE_SCOPE("UI refresh face texture settings presentation");
       // Selection/scene changes must invalidate stale text even while a numeric
       // control owns focus. The panel preserves edits for unchanged targets.
       tool_settings_panel_->refresh_texture_settings();
-      face_texture_settings_revision_ = revision;
-      face_texture_keybindings_revision_ = keybindings_revision;
-      face_texture_rotation_step_ = rotation_step;
+      face_texture_presenter_.mark_presented(texture_stamp);
     }
     const QuaderUvPeelRevision peel_revision =
         editor_->modeling().uv_peel_settings_revision();
-    if (!uv_peel_settings_revision_.has_value() ||
-        *uv_peel_settings_revision_ != peel_revision ||
-        uv_peel_keybindings_revision_ != keybindings_revision) {
+    const UvPeelPresentationStamp peel_stamp{
+        .settings = peel_revision,
+        .keybindings_revision = keybindings_revision,
+    };
+    if (uv_peel_presenter_.needs_refresh(peel_stamp)) {
       QDR_PROFILE_SCOPE("UI refresh UV Peel settings presentation");
       tool_settings_panel_->refresh_uv_peel_settings();
-      uv_peel_settings_revision_ = peel_revision;
-      uv_peel_keybindings_revision_ = keybindings_revision;
+      uv_peel_presenter_.mark_presented(peel_stamp);
     }
   }
   {
@@ -2491,11 +2396,13 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     refresh_status_bar();
   }
 
-  if (localized_locale_ != localization_.current_locale()) {
+  if (localized_locale_ != localization_.current_locale() ||
+      localized_revision_ != localization_.revision()) {
     QDR_PROFILE_SCOPE("UI synchronize localized presentation");
     localized_locale_ = localization_.current_locale();
+    localized_revision_ = localization_.revision();
     project_workspace_refresh_signal_->store(true, std::memory_order_relaxed);
-    status_refresh_valid_ = false;
+    status_presenter_.invalidate();
     refresh_localized_chrome();
     main_menu_->rebuild();
     viewport_panel_->set_localization(localization_);
@@ -2509,25 +2416,25 @@ void UISystem::refresh(const FrameTiming &frame_timing,
 
 void UISystem::process_viewport_input() {
   if (home_visible_ || !initialized_ || viewport_panel_ == nullptr || editor_ == nullptr ||
-      document_ == nullptr || assets_ == nullptr || modeling_ == nullptr) {
+      document_ == nullptr || assets_ == nullptr || modeling_ == nullptr ||
+      native_tools_ == nullptr) {
     return;
   }
   viewport_panel_->process_input(*editor_, *document_, *assets_, *modeling_,
-                                 default_material_, pivot_, linear_array_,
-                                 radial_array_, point_placement_,
-                                 frame_timing_.delta_seconds, curve_);
+                                 default_material_, *native_tools_,
+                                 point_placement_, frame_timing_.delta_seconds);
 }
 
 void UISystem::prepare_viewports(
     SceneRenderBridge &render_bridge,
     RenderOverlaySnapshotCache &snapshot_cache) {
   if (home_visible_ || !initialized_ || editor_ == nullptr || document_ == nullptr ||
-      assets_ == nullptr || modeling_ == nullptr) {
+      assets_ == nullptr || modeling_ == nullptr || native_tools_ == nullptr) {
     return;
   }
   viewport_panel_->prepare_viewports(*editor_, render_bridge, snapshot_cache,
-                                     *document_, *assets_, *modeling_, pivot_,
-                                     linear_array_, radial_array_, curve_);
+                                     *document_, *assets_, *modeling_,
+                                     *native_tools_);
 }
 
 std::size_t UISystem::render_viewports() {
@@ -3087,10 +2994,13 @@ void UISystem::refresh_status_bar() {
   }();
   const std::uint8_t live_kind =
       static_cast<std::uint8_t>(live_status.kind);
-  const std::string &locale = localization_.current_locale();
-  if (status_refresh_valid_ && status_command_revision_ == command_revision &&
-      status_live_kind_ == live_kind &&
-      status_live_count_ == live_status.count && status_locale_ == locale) {
+  const StatusPresentationStamp stamp{
+      .command_revision = command_revision,
+      .live_count = live_status.count,
+      .live_kind = live_kind,
+      .localization_revision = localization_.revision(),
+  };
+  if (!status_presenter_.needs_refresh(stamp)) {
     return;
   }
 
@@ -3102,18 +3012,14 @@ void UISystem::refresh_status_bar() {
       status_message_->setText(message);
     }
   }
-  status_command_revision_ = command_revision;
-  status_live_kind_ = live_kind;
-  status_live_count_ = live_status.count;
-  status_locale_ = locale;
-  status_refresh_valid_ = true;
+  status_presenter_.mark_presented(stamp);
 }
 
 void UISystem::present_lifecycle_result(const QuaderApiStatus &result) {
   QDR_PROFILE_SCOPE("UI present lifecycle result");
   if (status_message_ != nullptr && !result.message.empty()) {
     status_message_->setText(QString::fromStdString(result.message));
-    status_refresh_valid_ = false;
+    status_presenter_.invalidate();
   }
 
   const bool restored_scene_warning =
@@ -3192,29 +3098,22 @@ void UISystem::refresh_standard_material_editor() {
   if (standard_material_editor_window_ == nullptr) {
     return;
   }
+  const StandardMaterialEditorPresentationStamp empty_stamp{};
   if (editor_ == nullptr || !editor_->project().has_project()) {
-    if (standard_material_editor_refresh_valid_ &&
-        !standard_material_editor_has_document_) {
+    if (!standard_material_editor_presenter_.needs_refresh(empty_stamp)) {
       return;
     }
     standard_material_preview_image_cache_.clear();
     standard_material_editor_window_->clear_document();
     standard_material_editor_window_->hide();
-    standard_material_editor_refresh_valid_ = true;
-    standard_material_editor_has_document_ = false;
-    standard_material_editor_session_id_ = {};
-    standard_material_editor_asset_id_ = {};
-    standard_material_editor_draft_revision_ = 0u;
-    standard_material_editor_clean_revision_ = 0u;
-    standard_material_editor_dirty_ = false;
+    standard_material_editor_presenter_.mark_presented(empty_stamp);
     return;
   }
 
   const QuaderApiResult<QuaderStandardMaterialDocumentRevision> revision =
       editor_->standard_material_documents().current_revision();
   if (!revision.ok) {
-    if (standard_material_editor_refresh_valid_ &&
-        !standard_material_editor_has_document_) {
+    if (!standard_material_editor_presenter_.needs_refresh(empty_stamp)) {
       return;
     }
     standard_material_preview_image_cache_.clear();
@@ -3222,27 +3121,21 @@ void UISystem::refresh_standard_material_editor() {
       standard_material_editor_window_->clear_document();
       standard_material_editor_window_->hide();
     }
-    standard_material_editor_refresh_valid_ = true;
-    standard_material_editor_has_document_ = false;
-    standard_material_editor_session_id_ = {};
-    standard_material_editor_asset_id_ = {};
-    standard_material_editor_draft_revision_ = 0u;
-    standard_material_editor_clean_revision_ = 0u;
-    standard_material_editor_dirty_ = false;
+    standard_material_editor_presenter_.mark_presented(empty_stamp);
     return;
   }
 
   const QuaderStandardMaterialDocumentRevision &source_revision =
       revision.value();
-  if (standard_material_editor_refresh_valid_ &&
-      standard_material_editor_has_document_ &&
-      standard_material_editor_session_id_ == source_revision.session_id &&
-      standard_material_editor_asset_id_ == source_revision.id &&
-      standard_material_editor_draft_revision_ ==
-          source_revision.draft_revision &&
-      standard_material_editor_clean_revision_ ==
-          source_revision.clean_revision &&
-      standard_material_editor_dirty_ == source_revision.dirty) {
+  const StandardMaterialEditorPresentationStamp stamp{
+      .session_id = source_revision.session_id,
+      .asset_id = source_revision.id,
+      .draft_revision = source_revision.draft_revision,
+      .clean_revision = source_revision.clean_revision,
+      .dirty = source_revision.dirty,
+      .has_document = true,
+  };
+  if (!standard_material_editor_presenter_.needs_refresh(stamp)) {
     return;
   }
   const QuaderApiResult<QuaderStandardMaterialDocumentInfo> current =
@@ -3300,42 +3193,9 @@ void UISystem::refresh_standard_material_editor() {
   const QuaderApiResult<QuaderStandardMaterialPreviewInfo> preview =
       editor_->standard_material_documents().preview();
   std::optional<StandardMaterialPreviewSnapshot> render_snapshot;
-  RenderStandardMaterialEvaluationSnapshot *render_standard = nullptr;
   if (material_preview_surface_ != nullptr) {
-    render_snapshot.emplace(StandardMaterialPreviewSnapshot{
-        .project_material_id = source.id,
-        .kind = RenderMaterialEvaluationKind::Standard,
-        .identity_revision =
-            render_project_asset_identity_revision(source.id) ^
-            (static_cast<std::uint64_t>(source.session_id.generation()) <<
-             32u),
-        .content_revision = source.draft_revision,
-        .payload = RenderStandardMaterialEvaluationSnapshot{
-            .base_color = {source.material.base_color[0],
-                           source.material.base_color[1],
-                           source.material.base_color[2]},
-            .roughness = source.material.roughness,
-            .metallic = source.material.metallic,
-            .normal_strength = source.material.normal_strength,
-            .directx_normal = source.material.normal_convention ==
-                              QuaderNormalMapConvention::DirectX,
-            .texture_transform =
-                RenderStandardMaterialTextureTransformSnapshot{
-                    .center =
-                        {source.material.texture_transform.center[0],
-                         source.material.texture_transform.center[1]},
-                    .scale =
-                        {source.material.texture_transform.scale[0],
-                         source.material.texture_transform.scale[1]},
-                    .offset =
-                        {source.material.texture_transform.offset[0],
-                         source.material.texture_transform.offset[1]},
-                    .rotation_degrees =
-                        source.material.texture_transform.rotation_degrees,
-                },
-        },
-    });
-    render_standard = render_snapshot->standard_material();
+    render_snapshot = standard_material_preview_render_snapshot(
+        source, preview.ok() ? &preview.value() : nullptr);
   }
 
   if (!preview.ok()) {
@@ -3387,37 +3247,13 @@ void UISystem::refresh_standard_material_editor() {
           texture.content_revision, texture.rgba8, texture.width,
           texture.height);
 
-      if (render_standard != nullptr) {
-        render_standard->textures[index] = MaterialPreviewTextureSnapshot{
-            .project_texture_id = texture.id.value_or(ProjectAssetId{}),
-            .identity_revision =
-                texture.id.has_value()
-                    ? render_project_asset_identity_revision(*texture.id)
-                    : render_snapshot->identity_revision ^
-                          (0x9e3779b97f4a7c15ull + index),
-            .content_revision = texture.content_revision,
-            .color_space = texture.color_space ==
-                                   QuaderProjectTextureColorSpace::Srgb
-                               ? TextureColorSpace::Srgb
-                               : TextureColorSpace::Linear,
-            .decoded_rgba8 = texture.rgba8,
-            .width = texture.width,
-            .height = texture.height,
-        };
-      }
     }
   }
   if (material_preview_surface_ != nullptr && render_snapshot.has_value()) {
     material_preview_surface_->set_material(std::move(*render_snapshot));
   }
   standard_material_editor_window_->set_document(std::move(document));
-  standard_material_editor_refresh_valid_ = true;
-  standard_material_editor_has_document_ = true;
-  standard_material_editor_session_id_ = source.session_id;
-  standard_material_editor_asset_id_ = source.id;
-  standard_material_editor_draft_revision_ = source.draft_revision;
-  standard_material_editor_clean_revision_ = source.clean_revision;
-  standard_material_editor_dirty_ = source.dirty;
+  standard_material_editor_presenter_.mark_presented(stamp);
 }
 
 void UISystem::open_standard_material(std::string_view stable_id) {
@@ -3733,7 +3569,9 @@ void UISystem::handle_standard_material_texture_transform(
 
 void UISystem::refresh_localized_chrome() {
   QDR_PROFILE_SCOPE("UI refresh localized chrome");
-  toolbar_refresh_valid_ = false;
+  toolbar_owner_presenter_.invalidate();
+  toolbar_tool_presenter_.invalidate();
+  toolbar_transform_presenter_.invalidate();
   const auto text = [this](std::string_view key, std::string_view fallback) {
     return QString::fromStdString(localization_.text(key, fallback));
   };
@@ -4060,7 +3898,9 @@ void UISystem::apply_viewport_settings_to_workspace() {
 
 void UISystem::synchronize_settings_surfaces(bool refresh_dialog) {
   QDR_PROFILE_SCOPE("UI synchronize settings surfaces");
-  toolbar_refresh_valid_ = false;
+  toolbar_owner_presenter_.invalidate();
+  toolbar_tool_presenter_.invalidate();
+  toolbar_transform_presenter_.invalidate();
   if (snapping_toolbar_ != nullptr && editor_ != nullptr) {
     snapping_toolbar_->synchronize(*editor_, true);
   }

@@ -44,6 +44,13 @@ public:
     [[nodiscard]] QuaderMeshSnapQueryResult
     mesh_snap_query(const QuaderRay &ray, double vertex_radius,
                     bool exclude_current_selection = true) const;
+    /// Resolves only the mesh vertex candidate. Viewport callers combine this
+    /// with the session-owned render-surface query for canonical occlusion.
+    [[nodiscard]] std::optional<QuaderMeshVertexSnapTarget>
+    mesh_vertex_snap_target(const QuaderRay &ray, double vertex_radius,
+                            bool exclude_current_selection = true,
+                            std::optional<double> maximum_ray_distance =
+                                std::nullopt) const;
     [[nodiscard]] std::optional<QVec3> selection_center() const;
     [[nodiscard]] std::optional<QVec3> selection_transform_pivot() const;
     [[nodiscard]] std::optional<QuaderTransform3>

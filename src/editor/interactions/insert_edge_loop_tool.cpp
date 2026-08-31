@@ -228,6 +228,95 @@ bool update_insert_edge_loop_locked_seed(
 	return update_locked_seed(state, objects, hover, ray, grid_size, snap_enabled, dragging);
 }
 
+bool set_insert_edge_loop_preview_from_pick(
+		const std::vector<PolygonObject>& objects,
+		InsertEdgeLoopToolState& state,
+		SelectionHoverState& hover,
+		const quader_poly::Ray& ray,
+		double grid_size,
+		quader_poly::PickOptions pick_options,
+		bool snap_enabled,
+		bool dragging,
+		int target_object_id)
+{
+  pick_options.mode = quader_poly::SelectionMode::Edge;
+  const std::optional<PickHitRecord> hit =
+      pick_nearest(objects, {ray, pick_options, target_object_id});
+  if (!hit.has_value() || hit->kind != quader_poly::ElementKind::Edge) {
+    if (update_insert_edge_loop_locked_seed(state, objects, hover, ray,
+                                            grid_size, snap_enabled,
+                                            dragging)) {
+      return true;
+    }
+    state.active = true;
+    return false;
+  }
+	const int object_index = object_index_by_id(objects, hit->object_id);
+	const std::optional<float> raw_factor = object_index < 0
+		? std::optional<float>{}
+		: quader_poly::edge_factor_from_position(
+			objects[object_index].document, hit->edge,
+			hit->local_position);
+	const std::optional<float> resolved_factor = object_index < 0
+		? std::optional<float>{}
+		: snap_insert_edge_loop_preview_factor(
+			objects[object_index].document, hit->edge,
+			raw_factor.value_or(0.5F), grid_size, snap_enabled);
+	return set_insert_edge_loop_preview_from_hit(objects, state, hover, *hit,
+		resolved_factor, dragging);
+}
+
+bool set_insert_edge_loop_preview_from_hit(
+		const std::vector<PolygonObject>& objects,
+		InsertEdgeLoopToolState& state,
+		SelectionHoverState& hover,
+		const PickHitRecord& hit,
+		std::optional<float> resolved_factor,
+		bool dragging)
+{
+	if (!hit.hit || hit.kind != quader_poly::ElementKind::Edge) {
+		return false;
+	}
+	const int object_index = object_index_by_id(objects, hit.object_id);
+	const std::optional<float> raw_factor = object_index < 0 ?
+		std::optional<float> {} :
+		quader_poly::edge_factor_from_position(objects[object_index].document, hit.edge, hit.local_position);
+	if (object_index < 0 || !resolved_factor.has_value()) {
+		clear_insert_edge_loop_preview(state, hover, hit.object_id, hit.edge, raw_factor.value_or(0.5F), dragging);
+		return false;
+	}
+	return set_insert_edge_loop_preview(state, objects, hover,
+		hit.object_id, hit.edge, *resolved_factor, dragging);
+}
+
+bool update_insert_edge_loop_drag_factor(
+		const std::vector<PolygonObject>& objects,
+		InsertEdgeLoopToolState& state,
+		SelectionHoverState& hover,
+		const quader_poly::Ray& ray,
+		double grid_size,
+		bool snap_enabled)
+{
+	const int object_index = object_index_by_id(objects, state.object_id);
+	if (object_index < 0) {
+		state.preview_lines.clear();
+		return false;
+	}
+
+	const std::optional<float> factor = quader_poly::edge_factor_from_ray(objects[object_index].document, state.edge, ray);
+	const std::optional<float> snapped_factor = snap_insert_edge_loop_preview_factor(
+		objects[object_index].document,
+		state.edge,
+		factor.value_or(state.factor),
+		grid_size,
+		snap_enabled);
+	if (!snapped_factor.has_value()) {
+		clear_insert_edge_loop_preview(state, hover, state.object_id, state.edge, factor.value_or(state.factor), true);
+		return false;
+	}
+	return set_insert_edge_loop_preview(state, objects, hover, state.object_id, state.edge, *snapped_factor, true);
+}
+
 bool EditorSession::set_insert_edge_loop_preview_from_pick(
 		InsertEdgeLoopToolState& state,
 		SelectionHoverState& hover,
@@ -238,31 +327,9 @@ bool EditorSession::set_insert_edge_loop_preview_from_pick(
 		bool dragging,
 		int target_object_id) const
 {
-  pick_options.mode = quader_poly::SelectionMode::Edge;
-  const std::optional<PickHitRecord> hit =
-      pick_nearest({ray, pick_options, target_object_id});
-  if (!hit.has_value() || hit->kind != quader_poly::ElementKind::Edge) {
-    if (update_insert_edge_loop_locked_seed(state, state_.objects, hover, ray,
-                                            grid_size, snap_enabled,
-                                            dragging)) {
-      return true;
-    }
-    state.active = true;
-    return false;
-  }
-	const int object_index = object_index_by_id(state_.objects, hit->object_id);
-	const std::optional<float> raw_factor = object_index < 0
-		? std::optional<float>{}
-		: quader_poly::edge_factor_from_position(
-			state_.objects[object_index].document, hit->edge,
-			hit->local_position);
-	const std::optional<float> resolved_factor = object_index < 0
-		? std::optional<float>{}
-		: snap_insert_edge_loop_preview_factor(
-			state_.objects[object_index].document, hit->edge,
-			raw_factor.value_or(0.5F), grid_size, snap_enabled);
-	return set_insert_edge_loop_preview_from_hit(
-		state, hover, *hit, resolved_factor, dragging);
+	return quader_editor_core::set_insert_edge_loop_preview_from_pick(
+		state_.objects, state, hover, ray, grid_size, pick_options, snap_enabled,
+		dragging, target_object_id);
 }
 
 bool EditorSession::set_insert_edge_loop_preview_from_hit(
@@ -272,19 +339,8 @@ bool EditorSession::set_insert_edge_loop_preview_from_hit(
 		std::optional<float> resolved_factor,
 		bool dragging) const
 {
-	if (!hit.hit || hit.kind != quader_poly::ElementKind::Edge) {
-		return false;
-	}
-	const int object_index = object_index_by_id(state_.objects, hit.object_id);
-	const std::optional<float> raw_factor = object_index < 0 ?
-		std::optional<float> {} :
-		quader_poly::edge_factor_from_position(state_.objects[object_index].document, hit.edge, hit.local_position);
-	if (object_index < 0 || !resolved_factor.has_value()) {
-		clear_insert_edge_loop_preview(state, hover, hit.object_id, hit.edge, raw_factor.value_or(0.5F), dragging);
-		return false;
-	}
-	return set_insert_edge_loop_preview(state, state_.objects, hover,
-		hit.object_id, hit.edge, *resolved_factor, dragging);
+	return quader_editor_core::set_insert_edge_loop_preview_from_hit(
+		state_.objects, state, hover, hit, resolved_factor, dragging);
 }
 
 bool EditorSession::update_insert_edge_loop_drag_factor(
@@ -294,24 +350,8 @@ bool EditorSession::update_insert_edge_loop_drag_factor(
 		double grid_size,
 		bool snap_enabled) const
 {
-	const int object_index = object_index_by_id(state_.objects, state.object_id);
-	if (object_index < 0) {
-		state.preview_lines.clear();
-		return false;
-	}
-
-	const std::optional<float> factor = quader_poly::edge_factor_from_ray(state_.objects[object_index].document, state.edge, ray);
-	const std::optional<float> snapped_factor = snap_insert_edge_loop_preview_factor(
-		state_.objects[object_index].document,
-		state.edge,
-		factor.value_or(state.factor),
-		grid_size,
-		snap_enabled);
-	if (!snapped_factor.has_value()) {
-		clear_insert_edge_loop_preview(state, hover, state.object_id, state.edge, factor.value_or(state.factor), true);
-		return false;
-	}
-	return set_insert_edge_loop_preview(state, state_.objects, hover, state.object_id, state.edge, *snapped_factor, true);
+	return quader_editor_core::update_insert_edge_loop_drag_factor(
+		state_.objects, state, hover, ray, grid_size, snap_enabled);
 }
 
 } // namespace quader_editor_core

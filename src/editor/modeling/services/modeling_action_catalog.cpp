@@ -7,6 +7,7 @@
 #include "editor/modeling/services/modeling_action_catalog.hpp"
 
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 
 #include <algorithm>
@@ -90,20 +91,22 @@ void append_edit_actions(std::vector<ModelingActionItem> &actions,
                       : "modeling.action.disabled.delete_selection"),
       query);
 
-  const bool object_mode = summary.mode == ModelingSelectionMode::Object;
-  append_if_visible(
-      actions,
-      edit_action("duplicate_meshes", "duplicate_meshes",
-                  "Duplicate Selected Meshes",
-                  object_mode ? (summary.selected_object_count > 0U
-                                     ? ModelingActionVisibility::Enabled
-                                     : ModelingActionVisibility::Disabled)
-                              : ModelingActionVisibility::Hidden,
-                  summary.selected_object_count > 0U
-                      ? std::string{}
-                      : "modeling.action.disabled.minimum_object",
-                  1),
-      query);
+  const ModelingInstantOperationCatalogEntry *duplicate =
+      find_modeling_instant_operation_catalog_entry(
+          ModelingInstantOperationId::DuplicateMeshes);
+  if (duplicate != nullptr) {
+    const ModelingActionAvailabilityResult availability =
+        ModelingActionCatalog::evaluate_operation_availability(
+            summary, duplicate->operation_id, duplicate->availability);
+    append_if_visible(
+        actions,
+        edit_action(std::string(duplicate->id),
+                    std::string(duplicate->operation_id),
+                    std::string(duplicate->command_label),
+                    availability.visibility, availability.disabled_reason_key,
+                    availability.disabled_reason_count),
+        query);
+  }
 }
 
 ModelingActiveSelectionKind
@@ -155,6 +158,9 @@ bool selection_requirement_satisfied(
            (summary.mode == ModelingSelectionMode::Vertex ||
             summary.mode == ModelingSelectionMode::Edge ||
             summary.mode == ModelingSelectionMode::Face);
+  case ModelingActionSelectionRequirement::ObjectOrGroupSelection:
+    return summary.mode == ModelingSelectionMode::Object ||
+           summary.mode == ModelingSelectionMode::Group;
   case ModelingActionSelectionRequirement::ObjectOrFaceSelection:
     return (summary.mode == ModelingSelectionMode::Object &&
             summary.has_selection) ||
@@ -191,10 +197,12 @@ evaluate_availability_rule(const ModelingSelectionSummary &summary,
                            const ModelingActionAvailabilityRule &rule) {
   ModelingActionAvailabilityResult result;
   if (!selection_requirement_satisfied(summary, rule)) {
-    result.visibility =
-        rule.requirement == ModelingActionSelectionRequirement::SelectionMode
-            ? ModelingActionVisibility::Hidden
-            : ModelingActionVisibility::Disabled;
+    const bool mode_scoped =
+        rule.requirement == ModelingActionSelectionRequirement::SelectionMode ||
+        rule.requirement ==
+            ModelingActionSelectionRequirement::ObjectOrGroupSelection;
+    result.visibility = mode_scoped ? ModelingActionVisibility::Hidden
+                                    : ModelingActionVisibility::Disabled;
     if (result.visibility == ModelingActionVisibility::Disabled) {
       result.disabled_reason_key = "modeling.action.disabled.any_selection";
     }

@@ -333,7 +333,8 @@ std::vector<std::filesystem::path> guardrail_source_files() {
 }
 
 bool contains_git_commit_literal(const std::string &source) {
-  static const std::regex kCommitLiteral(R"([0-9a-fA-F]{40})");
+  static const std::regex kCommitLiteral(
+      R"((^|[^0-9a-fA-F])[0-9a-fA-F]{40}([^0-9a-fA-F]|$))");
   return std::regex_search(source, kCommitLiteral);
 }
 
@@ -1194,7 +1195,7 @@ TEST(BuildGuardrailTests,
                   "            \"$<$<CONFIG:Debug>:/INCREMENTAL:NO>\")");
   expect_missing(msvc_options, "CONFIG:Release");
   expect_missing(msvc_options, "CONFIG:RelWithDebInfo");
-  EXPECT_EQ(count_occurrences(root_c_make, "/INCREMENTAL:NO"), 1U);
+  EXPECT_EQ(count_occurrences(msvc_options, "/INCREMENTAL:NO"), 1U);
 }
 
 TEST(BuildGuardrailTests,
@@ -1631,6 +1632,12 @@ TEST(BuildGuardrailTests,
     expect_contains(modeling_c_make, "EXPORT_NAME " + export_name);
   }
   expect_contains(external_consumer, "quader::modeling_sdk");
+  expect_contains(external_consumer,
+                  "MSVC_RUNTIME_LIBRARY \"MultiThreadedDLL\"");
+  expect_contains(external_consumer, "$<$<CONFIG:Debug>:NDEBUG>");
+  expect_contains(
+      external_consumer,
+      "$<$<CONFIG:Debug>:_ITERATOR_DEBUG_LEVEL=0>");
   expect_contains(sdk_only_check, "--install");
   expect_contains(sdk_only_check, "tests/sdk_consumer");
   expect_contains(sdk_only_check,
@@ -3118,7 +3125,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
       "} // namespace quader");
   const std::string workspace_refresh = source_slice(
       ui_system_source, "void UISystem::refresh_project_workspace(",
-      "void UISystem::show_home()");
+      "void UISystem::refresh_active_material_panel(");
   const std::string show_home = source_slice(
       ui_system_source, "void UISystem::show_home()",
       "void UISystem::show_workspace()");
@@ -3134,21 +3141,25 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   expect_contains(frame_refresh, "inspector_panel_->refresh(context)");
   expect_contains(frame_refresh, "console_panel_->refresh(context)");
   expect_contains(frame_refresh, "modeling_->transform_drag_active()");
-  expect_contains(frame_refresh, "curve_->dragging()");
+  expect_contains(
+      frame_refresh,
+      "native_tools_->presentation_snapshot().curve_dragging");
   expect_contains(frame_refresh,
                   "!edit_drag_active && "
                   "panel_presented(UIPanelId::Outliner)");
   expect_contains(frame_refresh,
                   "document_->hierarchy_presentation_revision()");
   expect_contains(frame_refresh,
-                  "outliner_scene_selection_revision_ !=");
+                  "const OutlinerPresentationStamp stamp");
   expect_contains(frame_refresh,
-                  "outliner_instance_edit_revision_ !=");
+                  "outliner_presenter_.needs_refresh(stamp)");
   expect_contains(frame_refresh,
                   "!edit_drag_active && "
                   "panel_presented(UIPanelId::Layers)");
   expect_contains(frame_refresh,
-                  "layers_scene_revision_ != document_->layer_revision()");
+                  "const LayersPresentationStamp stamp");
+  expect_contains(frame_refresh,
+                  "layers_presenter_.needs_refresh(stamp)");
   expect_missing(frame_refresh, "editor_->revisions()");
   expect_contains(frame_refresh,
                   "!edit_drag_active && !numeric_interaction_active &&");
@@ -3170,7 +3181,8 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   expect_missing(frame_refresh, "panel_visible(UIPanelId::Console)");
   for (const std::string &broad_workspace_query :
        {"recent_projects()", "open_scenes()", ".materials()",
-        ".active_material()", ".metadata()", ".material_preview("}) {
+        ".active_material()", ".metadata()", ".material_preview(",
+        ".material_presentations()"}) {
     expect_missing(frame_refresh, broad_workspace_query);
   }
 
@@ -3208,22 +3220,21 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   EXPECT_LT(instance_edit_revision, workspace_gate);
   EXPECT_LT(workspace_gate, standard_material_refresh);
   for (std::string_view broad_workspace_query :
-       {"recent_projects()", "open_scenes()", ".materials()",
-        ".active_material()", ".metadata()", ".material_preview("}) {
+       {"recent_projects()", "open_scenes()", ".active_material()"}) {
     const std::size_t query = workspace_refresh.find(broad_workspace_query);
     ASSERT_NE(query, std::string::npos) << broad_workspace_query;
     EXPECT_LT(workspace_gate, query) << broad_workspace_query;
   }
   const std::size_t material_browser_visibility = workspace_refresh.find(
       "material_browser_window_->isVisible()");
-  const std::size_t material_catalog = workspace_refresh.find(".materials()");
-  const std::size_t material_preview =
-      workspace_refresh.find(".material_preview(");
+  const std::size_t material_catalog = workspace_refresh.find(
+      "refresh_material_presentation_cache()");
   ASSERT_NE(material_browser_visibility, std::string::npos);
   ASSERT_NE(material_catalog, std::string::npos);
-  ASSERT_NE(material_preview, std::string::npos);
   EXPECT_LT(material_browser_visibility, material_catalog);
-  EXPECT_LT(material_browser_visibility, material_preview);
+  expect_missing(workspace_refresh, ".materials()");
+  expect_missing(workspace_refresh, ".material_preview(");
+  expect_missing(workspace_refresh, ".material_presentations()");
   const std::string show_material_browser = source_slice(
       ui_system_source, "void UISystem::show_material_browser()",
       "bool UISystem::panel_visible(");
@@ -3277,7 +3288,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   const std::size_t status_revision =
       status_refresh.find("last_status_revision()");
   const std::size_t status_gate =
-      status_refresh.find("if (status_refresh_valid_");
+      status_refresh.find("if (!status_presenter_.needs_refresh(stamp))");
   const std::size_t status_copy = status_refresh.find("last_status()", 1u);
   const std::size_t status_setter = status_refresh.find("setText(message)");
   ASSERT_NE(status_revision, std::string::npos);
@@ -3329,13 +3340,19 @@ TEST(BuildGuardrailTests,
       read_source_file("src/ui/qt_material_browser_window.hpp");
   const std::string presentation_header =
       read_source_file("src/ui/qt_material_presentation.hpp");
+  const std::string project_assets_api =
+      read_source_file("src/api/quader_project_assets_api.cpp");
+  const std::string material_presentation_service = read_source_file(
+      "src/editor/material/material_presentation_service.cpp");
+  const std::string retained_presenter =
+      read_source_file("src/ui/retained_ui_presenter.hpp");
 
   const std::string cache_refresh = source_slice(
       ui_system, "void UISystem::refresh_material_presentation_cache(",
       "void UISystem::revalidate_material_find_replace_presentations()");
   ASSERT_FALSE(cache_refresh.empty());
   const std::size_t material_catalog_revision =
-      cache_refresh.find("assets_->material_catalog_revision()");
+      cache_refresh.find("material_presentation_revision()");
   const std::size_t material_binding_revision =
       cache_refresh.find("document_->material_binding_revision()");
   const std::size_t mesh_binding_revision =
@@ -3351,11 +3368,7 @@ TEST(BuildGuardrailTests,
   const std::size_t record_attempt = cache_refresh.find(
       "material_presentation_catalog_attempt_ = catalog_stamp");
   const std::size_t catalog_query =
-      cache_refresh.find("editor_->project_assets().materials()");
-  const std::size_t embedded_catalog_query =
-      cache_refresh.find("assets_->material_ids()");
-  const std::size_t preview_query = cache_refresh.find(
-      "editor_->project_assets().material_preview(");
+      cache_refresh.find("editor_->project_assets().material_presentations()");
   const std::size_t thumbnail_decode =
       cache_refresh.find("make_qt_material_thumbnail(");
   ASSERT_NE(material_catalog_revision, std::string::npos);
@@ -3367,8 +3380,6 @@ TEST(BuildGuardrailTests,
   ASSERT_NE(unchanged_gate, std::string::npos);
   ASSERT_NE(record_attempt, std::string::npos);
   ASSERT_NE(catalog_query, std::string::npos);
-  ASSERT_NE(embedded_catalog_query, std::string::npos);
-  ASSERT_NE(preview_query, std::string::npos);
   ASSERT_NE(thumbnail_decode, std::string::npos);
   EXPECT_LT(material_catalog_revision, unchanged_gate);
   EXPECT_LT(material_binding_revision, unchanged_gate);
@@ -3379,13 +3390,14 @@ TEST(BuildGuardrailTests,
   EXPECT_LT(unchanged_gate, catalog_query);
   EXPECT_LT(record_attempt, catalog_query)
       << "failed catalog reads must retain the attempted input stamp";
-  EXPECT_LT(catalog_query, embedded_catalog_query);
-  EXPECT_LT(unchanged_gate, preview_query);
   EXPECT_LT(unchanged_gate, thumbnail_decode);
   expect_missing(cache_refresh, "assets_->revision()");
   expect_missing(cache_refresh, "document_->revision()");
   expect_missing(cache_refresh,
                  "editor_->materials().used_materials(");
+  expect_missing(cache_refresh, "assets_->material_ids()");
+  expect_missing(cache_refresh, ".material_preview(");
+  expect_missing(cache_refresh, "project_assets().materials()");
   expect_contains(cache_refresh,
                   "material_presentation_signature_");
   expect_contains(cache_refresh,
@@ -3393,6 +3405,30 @@ TEST(BuildGuardrailTests,
   expect_contains(cache_refresh, "++material_presentation_revision_");
   expect_contains(cache_refresh,
                   "synchronize_material_presentation_consumers()");
+  expect_contains(project_assets_api,
+                  "QuaderProjectAssetsApi::material_presentations()");
+  expect_contains(project_assets_api,
+                  "MaterialPresentationService::snapshot(");
+  expect_contains(project_assets_api,
+                  "MaterialPresentationService::revision(");
+  expect_contains(material_presentation_service,
+                  "scene->assets().material_ids()");
+  expect_contains(material_presentation_service,
+                  "material_catalog().entries()");
+  expect_missing(project_assets_api, "scene->assets().material_ids()");
+  expect_contains(retained_presenter, "class RetainedUiPresenter final");
+  expect_contains(ui_system_header,
+                  "RetainedUiPresenter<OutlinerPresentationStamp>");
+  expect_contains(ui_system_header,
+                  "RetainedUiPresenter<InspectorPresentationStamp>");
+  expect_contains(ui_system_header,
+                  "RetainedUiPresenter<InspectorMaterialQueryStamp>");
+  expect_contains(
+      ui_system_header,
+      "RetainedUiPresenter<StandardMaterialEditorPresentationStamp>");
+  expect_missing(ui_system_header, "inspector_material_query_valid_");
+  expect_missing(ui_system_header,
+                 "standard_material_editor_refresh_valid_");
 
   for (std::string_view cache_field : {
            "material_presentation_items_",
@@ -3435,10 +3471,16 @@ TEST(BuildGuardrailTests,
            std::pair{"bool AssetRegistry::update_mesh(",
                      "bool AssetRegistry::update_material("},
        }) {
-    expect_contains(source_slice(asset_registry, mesh_mutator.first,
-                                 mesh_mutator.second),
-                    "mark_mesh_material_usage_dirty()");
+    const std::string mutation = source_slice(
+        asset_registry, mesh_mutator.first, mesh_mutator.second);
+    expect_contains(mutation, "mark_modeling_assets_dirty(");
+    expect_contains(mutation, "true);");
   }
+  const std::string modeling_asset_dirty = source_slice(
+      asset_registry, "void AssetRegistry::mark_modeling_assets_dirty(",
+      "bool AssetRegistry::material_references_texture(");
+  expect_contains(modeling_asset_dirty, "if (mesh_material_usage_dirty)");
+  expect_contains(modeling_asset_dirty, "++mesh_material_usage_revision_");
   for (const std::pair<std::string_view, std::string_view> texture_mutator : {
            std::pair{"bool AssetRegistry::remove_texture(",
                      "bool AssetRegistry::replace_mesh("},
@@ -3505,7 +3547,7 @@ TEST(BuildGuardrailTests,
   const std::size_t inspector_presented = frame_refresh.find(
       "panel_presented(UIPanelId::Inspector)");
   const std::size_t outer_material_gate = frame_refresh.find(
-      "inspector_material_presentation_revision_ !=",
+      "inspector_presenter_.needs_refresh(stamp)",
       inspector_presented);
   const std::size_t outer_inspector_refresh =
       frame_refresh.find("inspector_panel_->refresh(context)",
@@ -3516,7 +3558,10 @@ TEST(BuildGuardrailTests,
   EXPECT_LT(inspector_presented, outer_material_gate);
   EXPECT_LT(outer_material_gate, outer_inspector_refresh);
   expect_contains(frame_refresh,
-                  "inspector_material_presentation_revision_ =");
+                  ".material_presentation_revision = "
+                  "material_presentation_revision_");
+  expect_contains(frame_refresh,
+                  "inspector_presenter_.mark_presented(stamp)");
   expect_missing(frame_refresh, "project_assets().materials()");
   expect_missing(frame_refresh, ".material_preview(");
 
@@ -3524,7 +3569,8 @@ TEST(BuildGuardrailTests,
       ui_system, "void UISystem::refresh_inspector_material_presentation()",
       "void UISystem::show_home()");
   const std::size_t inspector_material_gate =
-      inspector_material_refresh.find("if (inspector_material_query_valid_");
+      inspector_material_refresh.find(
+          "if (!inspector_material_query_presenter_.needs_refresh(stamp))");
   const std::size_t selection_usage_query = inspector_material_refresh.find(
       "editor_->materials().used_materials(");
   ASSERT_NE(inspector_material_gate, std::string::npos);
@@ -3540,6 +3586,8 @@ TEST(BuildGuardrailTests,
                   "assets_->mesh_material_usage_revision()");
   expect_contains(inspector_material_refresh,
                   "modeling_->modeling_object_map_revision()");
+  expect_contains(inspector_material_refresh,
+                  "inspector_material_query_presenter_.mark_presented(stamp)");
 
   const std::string inspector_refresh = source_slice(
       inspector, "void refresh(UIContext &context)", "private:");
@@ -3552,6 +3600,86 @@ TEST(BuildGuardrailTests,
   expect_contains(inspector,
                   "built_material_presentation_revision_ = "
                   "material_presentation_.revision");
+}
+
+TEST(BuildGuardrailTests,
+     StandardMaterialRenderAdaptersRespectApiAndUiOwnership) {
+  const std::string editor_header = read_source_file(
+      "src/editor/render/standard_material_render_snapshot_adapter.hpp");
+  const std::string editor_source = read_source_file(
+      "src/editor/render/standard_material_render_snapshot_adapter.cpp");
+  const std::string ui_header = read_source_file(
+      "src/ui/standard_material_preview_render_snapshot_adapter.hpp");
+  const std::string ui_source = read_source_file(
+      "src/ui/standard_material_preview_render_snapshot_adapter.cpp");
+  const std::string cmake = read_source_file("CMakeLists.txt");
+  const std::string editor_api_target = source_slice(
+      cmake, "add_library(quader_editor_api STATIC",
+      "quader_enable_common_pch(quader_editor_api)");
+  const std::string project_session_target = source_slice(
+      cmake, "add_library(quader_project_session STATIC",
+      "quader_configure_core_module(quader_project_session)");
+  const std::string ui_target = source_slice(
+      cmake, "add_library(quader_ui STATIC",
+      "quader_enable_common_pch(quader_ui)");
+
+  expect_missing(editor_header, "#include \"api/");
+  expect_missing(editor_source, "#include \"api/");
+  expect_missing(editor_header, "QuaderStandardMaterial");
+  expect_missing(editor_source, "QuaderStandardMaterial");
+  expect_contains(editor_header, "StandardMaterialRenderValues");
+  expect_contains(editor_source,
+                  "make_standard_material_render_evaluation(");
+  expect_contains(ui_header,
+                  "standard_material_preview_render_snapshot(");
+  expect_contains(
+      ui_source,
+      "#include \"api/quader_standard_material_documents_api.hpp\"");
+  expect_contains(ui_source,
+                  "make_standard_material_render_evaluation(");
+  expect_contains(ui_source, "preview.session_id == document.session_id");
+  expect_contains(ui_source, "preview.id == document.id");
+  expect_contains(ui_source,
+                  "preview.draft_revision == document.draft_revision");
+  expect_contains(
+      project_session_target,
+      "src/editor/render/standard_material_render_snapshot_adapter.cpp");
+  expect_missing(
+      editor_api_target,
+      "src/editor/render/standard_material_render_snapshot_adapter.cpp");
+  expect_missing(editor_api_target,
+                 "standard_material_preview_render_snapshot_adapter.cpp");
+  expect_contains(
+      ui_target,
+      "src/ui/standard_material_preview_render_snapshot_adapter.cpp");
+}
+
+TEST(BuildGuardrailTests,
+     LocalizedChromeObservesCatalogRevisionAsWellAsLocaleId) {
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+  const std::string ui_system_header =
+      read_source_file("src/ui/ui_system.hpp");
+  const std::string outliner = read_source_file("src/ui/outliner_panel.cpp");
+  const std::string console = read_source_file("src/ui/console_panel.cpp");
+  const std::string frame_refresh = source_slice(
+      ui_system, "void UISystem::refresh(", "void UISystem::prepare_viewports(");
+  const std::string localized_refresh = source_slice(
+      frame_refresh, "if (localized_locale_ !=",
+      "refresh_localized_chrome();");
+
+  expect_contains(ui_system_header, "std::uint64_t localized_revision_");
+  expect_contains(localized_refresh,
+                  "localized_revision_ != localization_.revision()");
+  expect_contains(localized_refresh,
+                  "localized_revision_ = localization_.revision()");
+  expect_contains(outliner,
+                  "localized_revision_ != context.localization.revision()");
+  expect_contains(outliner,
+                  "localized_revision_ = localization_->revision()");
+  expect_contains(console,
+                  "localized_revision_ != context.localization.revision()");
+  expect_contains(console,
+                  "localized_revision_ = localization_->revision()");
 }
 
 TEST(BuildGuardrailTests,
@@ -3741,7 +3869,6 @@ TEST(BuildGuardrailTests,
            "src/ui/ui_continuous_edit_tracker.hpp",
            "src/ui/ui_panel.hpp",
            "src/ui/viewport_hover_controller.hpp",
-           "src/ui/viewport_pane_overlay_cache.hpp",
            "src/ui/viewport_shortcut_controller.hpp",
        }) {
     expect_missing(read_source_file(std::filesystem::path(active_header)),
@@ -3982,8 +4109,8 @@ TEST(BuildGuardrailTests, AppVersionMetadataUsesRootVersionSource) {
   expect_contains(agents, "explicitly asks for `fast iteration mode`");
   expect_contains(agents, "skip automated");
   expect_contains(agents, "tests and affected-check runs");
-  expect_contains(agents, "build the native `quader`");
-  expect_contains(agents, "applies only to the request that names the mode");
+  expect_contains(agents, "build both canonical native");
+  expect_contains(agents, "exception applies only to the request that names the");
 }
 
 TEST(BuildGuardrailTests, EditorAggregateHasDedicatedApiTarget) {
@@ -4429,8 +4556,19 @@ TEST(BuildGuardrailTests, NativeSourcesDoNotIncludePrivateModelingSdkHeaders) {
 
   const std::string codec = read_source_file(
       {"src", "io", "qdr", "qdr_scene_binary_codec.cpp"});
-  expect_contains(codec, "PolygonDocument::from_authored_topology(");
-  expect_contains(codec, ".authored_topology()");
+  const std::string projection = read_source_file(
+      {"src", "editor", "projection", "mesh_projection_service.cpp"});
+  expect_contains(
+      codec,
+      "MeshProjectionService::sdk_document_from_polygon_document(");
+  expect_contains(codec,
+                  "MeshProjectionService::compile_sdk_document_mesh(");
+  expect_contains(codec,
+                  "MeshProjectionService::compile_polygon_document_mesh(");
+  expect_missing(codec, "PolygonDocument::from_authored_topology(");
+  expect_missing(codec, ".authored_topology()");
+  expect_contains(projection, "PolygonDocument::from_authored_topology(");
+  expect_contains(projection, ".authored_topology()");
 }
 
 TEST(BuildGuardrailTests,
@@ -4496,11 +4634,15 @@ TEST(BuildGuardrailTests, SceneSelectableMutationStaysSceneOwned) {
       read_source_file({"src", "scene", "scene_document.cpp"});
   const std::string qdr_codec = read_source_file(
       {"src", "io", "qdr", "qdr_scene_binary_codec.cpp"});
+  const std::string entity_state = read_source_file(
+      {"src", "scene", "document", "scene_entity_state.cpp"});
 
   expect_contains(scene_header,
                   "bool set_selectable(EntityId id, bool selectable);");
   expect_contains(scene_source, "bool SceneDocument::set_selectable");
-  expect_contains(qdr_codec, "document.scene().set_selectable(");
+  expect_contains(qdr_codec, "apply_scene_entity_state(");
+  expect_contains(entity_state, "scene.set_selectable(");
+  expect_missing(qdr_codec, "document.scene().set_selectable(");
   expect_missing(qdr_codec, "->selectable =");
 
   for (const std::filesystem::path &file :
@@ -4542,18 +4684,22 @@ TEST(BuildGuardrailTests, ProjectionIsReadOnlyAndModelingOwnsSceneSync) {
       {"src", "editor", "modeling", "services",
        "modeling_mesh_sync_service.cpp"});
   for (const std::string_view required : {
-           "bool reconcile_modeling_object_scene_nodes",
-           "bool project_modeling_meshes_to_scene",
-           "scene.create_entity",
-           "scene.destroy_entity",
-           "assets.add_mesh",
-           "assets.replace_mesh",
-           "build_projected_mesh_plans",
-           "install_projected_mesh_assets",
-           "rollback_projected_mesh_installs",
-           "remember_projected_mesh_signature",
+           "install_projected_mesh",
+           "replace_projected_mesh",
+           "create_projected_mesh_entity",
+           "destroy_projected_entity",
+           "bind_projected_object",
        }) {
     expect_contains(mesh_sync, std::string(required));
+  }
+  for (const std::string_view removed_legacy_path : {
+           "sync_scene_objects_from_modeling",
+           "reconcile_modeling_object_scene_nodes",
+           "project_modeling_meshes_to_scene",
+           "build_projected_mesh_plans",
+           "remember_projected_mesh_signature",
+       }) {
+    expect_missing(mesh_sync, std::string(removed_legacy_path));
   }
 
   const std::array<std::string_view, 15> forbidden_projection_mutations = {
@@ -4615,6 +4761,8 @@ TEST(BuildGuardrailTests, KeepsRenderHashPolicyInSingleOwner) {
 TEST(BuildGuardrailTests, MeshAndLightRecordsAreValueSnapshotInputs) {
   const std::string snapshot_header =
       read_source_file("src/render/render_scene_snapshot.hpp");
+  const std::string source_stamp_header =
+      read_source_file("src/render/render_source_stamp.hpp");
   const std::string extraction_header =
       read_source_file("src/render/scene_render_extraction.hpp");
   const std::string extraction_source =
@@ -4632,13 +4780,15 @@ TEST(BuildGuardrailTests, MeshAndLightRecordsAreValueSnapshotInputs) {
            "RenderSceneLightRecord",
            "std::vector<RenderSceneMeshRecord>",
            "std::vector<RenderSceneLightRecord>",
-           "scene_revision",
-           "asset_revision",
            "mesh_revision",
            "material_revision",
        }) {
     expect_contains(snapshot_header, std::string(required));
   }
+  expect_contains(snapshot_header,
+                  "struct RenderSceneSnapshot : RenderSourceStamp");
+  expect_contains(source_stamp_header, "scene_revision");
+  expect_contains(source_stamp_header, "asset_revision");
   expect_missing(mesh_record, "const MeshAsset *");
   expect_missing(mesh_record, "const MeshComponent *");
   expect_missing(mesh_record, "const MaterialComponent *");
@@ -4656,8 +4806,20 @@ TEST(BuildGuardrailTests, OverlayRecordsStayBehindRenderBoundary) {
       read_source_file("src/render/render_scene_snapshot.hpp");
   const std::string render_bridge_source =
       read_source_file("src/render/scene_render_bridge.cpp");
+  const std::string render_bridge_header =
+      read_source_file("src/render/scene_render_bridge.hpp");
+  const std::string render_api_source =
+      read_source_file("src/api/quader_render_api.cpp");
+  const std::string render_api_header =
+      read_source_file("src/api/quader_render_api.hpp");
+  const std::string render_runtime_access = read_source_file(
+      "src/editor/render/quader_render_api_runtime_access.hpp");
   const std::string viewport_panel_source =
       read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string viewport_panel_header =
+      read_source_file("src/ui/qt_viewport_panel.hpp");
+  const std::string submission_coordinator = read_source_file(
+      "src/render/overlay/viewport_overlay_submission_coordinator.cpp");
 
   for (const std::string_view token : {
            "SelectedObject",
@@ -4674,6 +4836,41 @@ TEST(BuildGuardrailTests, OverlayRecordsStayBehindRenderBoundary) {
   expect_missing(viewport_panel_source, "build_render_overlay_");
   expect_missing(viewport_panel_source, "sync_selected_object_overlay(");
   expect_missing(viewport_panel_source, "sync_scene_wireframe_overlay(");
+  expect_missing(viewport_panel_source, "build_scene_overlay_frame(");
+  expect_missing(viewport_panel_source, "render_bridge.set_overlay_frame(");
+  expect_missing(viewport_panel_source,
+                 "render_bridge.set_dynamic_overlay_frame(");
+  expect_missing(viewport_panel_source,
+                 "render_bridge.update_overlay_camera(");
+  for (const std::string_view retired_direct_route : {
+           "sync_selection_overlay(", "set_selection_overlay("}) {
+    expect_missing(render_runtime_access, std::string(retired_direct_route));
+    expect_missing(render_api_source, std::string(retired_direct_route));
+  }
+  expect_missing(render_api_header, "QuaderRenderOverlaySubmission");
+  for (const std::string_view retired_bridge_setter : {
+           "void set_overlay_frame(", "set_dynamic_overlay_frame(",
+           "update_overlay_camera("}) {
+    expect_missing(render_bridge_header, std::string(retired_bridge_setter));
+  }
+  expect_missing(render_api_source, "append_overlay_frame(");
+  expect_missing(viewport_panel_header, "PaneOverlaySubmissionKey");
+  expect_missing(viewport_panel_header, "PaneDynamicOverlaySubmissionKey");
+  expect_missing(viewport_panel_source, "selection_overlay_cache_");
+  EXPECT_FALSE(std::filesystem::exists(
+      source_path("src/ui/viewport_pane_overlay_cache.hpp")));
+  EXPECT_FALSE(std::filesystem::exists(
+      source_path("src/ui/viewport_pane_overlay_cache.cpp")));
+  expect_contains(viewport_panel_source,
+                  "render_bridge.submit_viewport_overlay(");
+  expect_contains(submission_coordinator,
+                  "ViewportSceneOverlayBuilder::build_selection_frame(");
+  expect_contains(submission_coordinator,
+                  "ViewportOverlayStyleResolver::apply_from(");
+  expect_contains(submission_coordinator,
+                  "target.submit_persistent_overlay(");
+  expect_contains(submission_coordinator,
+                  "target.submit_dynamic_overlay(");
 }
 
 TEST(BuildGuardrailTests,
@@ -4768,10 +4965,18 @@ TEST(BuildGuardrailTests,
   expect_contains(binding_header, "scene_session_id");
   expect_contains(binding_header, "activation_generation");
   expect_contains(binding_header, "binding_revision");
-  expect_contains(extraction_source,
-                  "previous->scene_binding == snapshot.scene_binding");
-  expect_contains(sync_source,
-                  "synced_scene_binding_ != snapshot.scene_binding");
+  for (const std::string *source : {&extraction_source, &sync_source,
+                                    &selected_cache_source,
+                                    &wireframe_cache_source}) {
+    expect_contains(*source, "render_source_dependencies_match(");
+  }
+  expect_contains(extraction_source, "RenderSourceDependency::SceneBinding");
+  expect_contains(sync_source, "kRenderSceneSyncDocumentDependencies");
+  expect_contains(selected_cache_source,
+                  "RenderSourceDependency::SceneBinding");
+  expect_contains(wireframe_cache_source,
+                  "RenderSourceDependency::SceneBinding");
+  expect_missing(sync_source, "synced_scene_binding_");
   const std::size_t retire_scene_meshes =
       sync_source.find("mesh_cache_->remove_except(no_scene_entities)");
   const std::size_t destroy_retired_materials = sync_source.find(
@@ -4801,10 +5006,8 @@ TEST(BuildGuardrailTests,
       << "Preview and overlay material instances must be destroyed before "
          "the outgoing scene texture cache is invalidated.";
   expect_contains(bridge_source, "bind_scene(snapshot.scene_binding)");
-  expect_contains(selected_cache_source,
-                  "synced_scene_binding_ != snapshot.scene_binding");
-  expect_contains(wireframe_cache_source,
-                  "synced_scene_binding_ != snapshot.scene_binding");
+  expect_missing(selected_cache_source, "synced_scene_binding_");
+  expect_missing(wireframe_cache_source, "synced_scene_binding_");
   expect_contains(texture_cache_source, "texture_cache_.clear()");
   expect_missing(texture_cache_source, "evict_obsolete_texture_revisions");
   expect_contains(render_api_source, ".scene_session_id =");
@@ -4893,15 +5096,15 @@ TEST(BuildGuardrailTests,
      UsesInstancedDeviceDomainEndpointExpansionMaterial) {
   const std::string material =
       read_source_file("resources/materials/quader_selected_object_line.mat");
-  const std::string cache = read_source_file(
-      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
+  const std::string backend = read_source_file(
+      "src/render/overlay/instanced_wire_render_backend.cpp");
 
   expect_contains(material, "instanced : true");
   expect_contains(material, "getWorldFromModelMatrix");
   expect_contains(material, "getResolution");
-  expect_contains(cache, "filament::InstanceBuffer::Builder");
-  expect_contains(cache,
-                  ".instances(transforms.size(), proxy.instance_buffer)");
+  expect_contains(backend, "filament::InstanceBuffer::Builder");
+  expect_contains(backend,
+                  ".instances(transforms.size(), proxy.instance_buffer_)");
 }
 
 TEST(BuildGuardrailTests,

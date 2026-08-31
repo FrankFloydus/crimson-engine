@@ -53,10 +53,11 @@ bool edge_exists(const quader_poly::Document& document, quader_poly::Edge edge)
 	return std::find(edges.begin(), edges.end(), edge) != edges.end();
 }
 
-std::optional<quader::QVec3> selected_edge_forward_direction(const EditorSession& session)
+std::optional<quader::QVec3> selected_edge_forward_direction(
+		std::span<const PolygonObject> objects)
 {
 	quader::QVec3 direction;
-	for (const PolygonObject& object : session.objects()) {
+	for (const PolygonObject& object : objects) {
 		if (!object.selected) {
 			continue;
 		}
@@ -92,10 +93,11 @@ std::optional<quader::QVec3> selected_edge_forward_direction(const EditorSession
 	return quader::normalize_or_zero(direction);
 }
 
-std::optional<quader::QVec3> selected_face_forward_direction(const EditorSession& session)
+std::optional<quader::QVec3> selected_face_forward_direction(
+		std::span<const PolygonObject> objects)
 {
 	quader::QVec3 direction;
-	for (const PolygonObject& object : session.objects()) {
+	for (const PolygonObject& object : objects) {
 		if (!object.selected) {
 			continue;
 		}
@@ -116,13 +118,15 @@ std::optional<quader::QVec3> selected_face_forward_direction(const EditorSession
 	return quader::normalize_or_zero(direction);
 }
 
-std::optional<quader::QVec3> selected_component_forward_direction(const EditorSession& session)
+std::optional<quader::QVec3> selected_component_forward_direction(
+		std::span<const PolygonObject> objects,
+		SelectionMode selection_mode)
 {
-  if (session.selection_mode() == SelectionMode::Edge) {
-    return selected_edge_forward_direction(session);
+  if (selection_mode == SelectionMode::Edge) {
+    return selected_edge_forward_direction(objects);
   }
-  if (session.selection_mode() == SelectionMode::Face) {
-    return selected_face_forward_direction(session);
+  if (selection_mode == SelectionMode::Face) {
+    return selected_face_forward_direction(objects);
   }
         return std::nullopt;
 }
@@ -185,6 +189,17 @@ void record_repeatable_transform(
 		const TransformDragState& drag,
 		bool duplicate_selected)
 {
+	record_repeatable_transform(state, session.objects(),
+			session.selection_mode(), drag, duplicate_selected);
+}
+
+void record_repeatable_transform(
+		RepeatLastActionState& state,
+		std::span<const PolygonObject> selection_objects,
+		SelectionMode selection_mode,
+		const TransformDragState& drag,
+		bool duplicate_selected)
+{
 	if (!drag.active) {
 		return;
 	}
@@ -205,7 +220,8 @@ void record_repeatable_transform(
             drag.operation == TransformDragOperation::Extrude &&
             quader::length_squared(drag.move.preview_delta) > 0.000001F) {
           if (const std::optional<quader::QVec3> forward =
-                  selected_component_forward_direction(session)) {
+                  selected_component_forward_direction(selection_objects,
+                                                       selection_mode)) {
             const quader::QVec3 normalized_delta =
                 quader::normalize_or_zero(drag.move.preview_delta);
             const float alignment = quader::dot(normalized_delta, *forward);

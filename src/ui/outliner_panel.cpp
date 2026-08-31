@@ -468,7 +468,8 @@ struct OutlinerPanel::Impl {
     document_ = &context.scene.document;
     const bool localization_changed =
         localization_ != &context.localization ||
-        localized_locale_ != context.localization.current_locale();
+        localized_locale_ != context.localization.current_locale() ||
+        localized_revision_ != context.localization.revision();
     localization_ = &context.localization;
     const QuaderInstanceEditState instance_edit =
         editor_->modeling().instance_edit_state();
@@ -477,6 +478,7 @@ struct OutlinerPanel::Impl {
 
     if (localization_changed) {
       localized_locale_ = localization_->current_locale();
+      localized_revision_ = localization_->revision();
       panel_.setWindowTitle(qt_text(
           localization_->text(ui_panel_localization_key(UIPanelId::Outliner),
                               ui_panel_key(UIPanelId::Outliner))));
@@ -1054,6 +1056,7 @@ private:
   const SceneDocument *document_ = nullptr;
   LocalizationService *localization_ = nullptr;
   std::string localized_locale_;
+  std::uint64_t localized_revision_ = 0u;
   TreeCache cache_;
   std::unordered_map<EntityId, QStandardItem *> item_by_entity_;
   std::unordered_set<EntityId> collapsed_entities_;

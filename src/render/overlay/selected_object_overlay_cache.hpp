@@ -127,14 +127,7 @@ private:
     filament::Material *face_fill_material_ = nullptr;
     std::unordered_map<EntityId, Entry> entries_;
     std::vector<SelectedEntityState> synced_states_;
-    RenderSceneBindingKey synced_scene_binding_;
-    std::uint64_t synced_scene_revision_ = 0;
-    std::uint64_t synced_asset_revision_ = 0;
-    std::uint64_t synced_selection_revision_ = 0;
-    std::uint64_t synced_visibility_revision_ = 0;
-    std::uint64_t synced_local_visibility_revision_ = 0;
-    std::uint64_t synced_transform_revision_ = 0;
-    std::uint64_t synced_mesh_binding_revision_ = 0;
+    RenderSourceStamp synced_source_stamp_;
     std::uint64_t synced_face_style_signature_ = 0;
     bool synced_face_fills_enabled_ = false;
     bool has_synced_ = false;

@@ -13,12 +13,15 @@
 #include "editor/history/editor_history_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/material/material_reference_service.hpp"
+#include "editor/modeling/runtime/modeling_object_binding_registry.hpp"
+#include "editor/modeling/services/modeling_host_publication_transaction.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/modeling_viewport_camera_adapter.hpp"
 #include "editor/modeling/services/modeling_session_services.hpp"
 #include "editor/selection/scene_selection_application.hpp"
+#include "editor/selection/modeling_selection_projection_snapshot.hpp"
 #include "editor/selection/selection_projection_service.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "scene/scene_document.hpp"
@@ -32,6 +35,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <variant>
@@ -72,6 +76,15 @@ void expect_vec3_eq(QVec3 actual, QVec3 expected) {
   EXPECT_FLOAT_EQ(actual.x, expected.x);
   EXPECT_FLOAT_EQ(actual.y, expected.y);
   EXPECT_FLOAT_EQ(actual.z, expected.z);
+}
+
+ModelingSelectionProjectionSnapshot selection_snapshot_from_session(
+    const quader_editor_core::EditorSession &session) {
+  return ModelingSelectionProjectionSnapshot(
+      std::vector<quader_editor_core::PolygonObject>(session.objects().begin(),
+                                                     session.objects().end()),
+      session.selection_mode(), session.active_object_id(),
+      session.state().content_revision, session.state().selection_revision);
 }
 
 quader_poly::Document service_uv_peel_strip_document() {
@@ -197,8 +210,8 @@ TEST(ModelingSessionServiceSplitTests,
   scene.set_mesh(first, MeshComponent{.mesh = 7});
 
   ModelingObjectRuntimeMap object_map;
-  object_map.bind(200, second);
-  object_map.bind(100, first);
+  ASSERT_TRUE(object_map.bind(200, second));
+  ASSERT_TRUE(object_map.bind(100, first));
 
   EXPECT_EQ(object_map.size(), 2U);
   EXPECT_EQ(object_map.entity_for_modeling_object(100), first);
@@ -221,24 +234,1365 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     ObjectRuntimeMapRebindClearsStaleReverseMappings) {
+     ObjectRuntimeMapRebindRejectsForeignEndpointTheft) {
   SceneDocument scene;
   const EntityId first = scene.create_entity("First", EntityKind::Mesh);
   const EntityId second = scene.create_entity("Second", EntityKind::Mesh);
 
   ModelingObjectRuntimeMap object_map;
-  object_map.bind(100, first);
-  object_map.bind(100, second);
+  ASSERT_TRUE(object_map.bind(100, first));
+  ASSERT_TRUE(object_map.bind(100, second));
 
   EXPECT_EQ(object_map.entity_for_modeling_object(100), second);
   EXPECT_EQ(object_map.modeling_object_for_entity(first), std::nullopt);
   EXPECT_EQ(object_map.modeling_object_for_entity(second), 100);
 
-  object_map.bind(200, second);
+  EXPECT_FALSE(object_map.bind(200, second));
 
-  EXPECT_EQ(object_map.entity_for_modeling_object(100), std::nullopt);
-  EXPECT_EQ(object_map.entity_for_modeling_object(200), second);
-  EXPECT_EQ(object_map.modeling_object_for_entity(second), 200);
+  EXPECT_EQ(object_map.entity_for_modeling_object(100), second);
+  EXPECT_EQ(object_map.entity_for_modeling_object(200), std::nullopt);
+  EXPECT_EQ(object_map.modeling_object_for_entity(second), 100);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     ObjectBindingRegistryOwnsSceneSdkAndTombstoneIdentityEdges) {
+  SceneDocument scene;
+  const EntityId first = scene.create_entity("First", EntityKind::Mesh);
+  const EntityId second = scene.create_entity("Second", EntityKind::Mesh);
+  ASSERT_NE(first, kInvalidEntityId);
+  ASSERT_NE(second, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_mesh(first, MeshComponent{.mesh = 11U}));
+  ASSERT_TRUE(scene.set_mesh(second, MeshComponent{.mesh = 22U}));
+
+  ModelingObjectBindingRegistry bindings;
+  const modeling::ObjectId first_sdk =
+      modeling::make_id<modeling::ObjectTag>(1U);
+  const modeling::ObjectId second_sdk =
+      modeling::make_id<modeling::ObjectTag>(2U);
+  ASSERT_TRUE(bindings.bind(100, first));
+  ASSERT_TRUE(bindings.bind_sdk_object(100, first_sdk));
+  bindings.remember_scene_entity(100, scene, first);
+  const std::uint64_t stable_revision = bindings.revision();
+
+  EXPECT_EQ(bindings.entity_for_modeling_object(100), first);
+  EXPECT_EQ(bindings.modeling_object_for_entity(first), 100);
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(100), first_sdk);
+  EXPECT_EQ(bindings.modeling_object_for_sdk_object(first_sdk), 100);
+  EXPECT_TRUE(bindings.bind(100, first));
+  EXPECT_TRUE(bindings.bind_sdk_object(100, first_sdk));
+  EXPECT_EQ(bindings.revision(), stable_revision);
+
+  ASSERT_TRUE(bindings.bind_sdk_object(100, second_sdk));
+  EXPECT_EQ(bindings.modeling_object_for_sdk_object(first_sdk), std::nullopt);
+  EXPECT_EQ(bindings.modeling_object_for_sdk_object(second_sdk), 100);
+  EXPECT_FALSE(bindings.bind_sdk_object(200, second_sdk));
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(100), second_sdk);
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(200), std::nullopt);
+
+  bindings.unbind_object(100);
+  bindings.unbind_sdk_object(100);
+  EXPECT_TRUE(bindings.scene_identity_for_modeling_object(100).has_value());
+
+  ASSERT_TRUE(bindings.restore_sdk_object_bindings(
+      {{300, first_sdk}, {400, second_sdk}}));
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(300), first_sdk);
+  EXPECT_EQ(bindings.modeling_object_for_sdk_object(second_sdk), 400);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     ObjectBindingRegistryRejectsEntityAndSdkEndpointCollisionsAtomically) {
+  ModelingObjectBindingRegistry bindings;
+  const EntityId first_entity = 11u;
+  const EntityId second_entity = 22u;
+  const modeling::ObjectId first_sdk =
+      modeling::make_id<modeling::ObjectTag>(7u, 1u);
+  const modeling::ObjectId second_sdk =
+      modeling::make_id<modeling::ObjectTag>(7u, 2u);
+  ASSERT_TRUE(bindings.bind(100, first_entity));
+  ASSERT_TRUE(bindings.bind(200, second_entity));
+  ASSERT_TRUE(bindings.bind_sdk_object(100, first_sdk));
+  ASSERT_TRUE(bindings.bind_sdk_object(200, second_sdk));
+  const std::uint64_t revision = bindings.revision();
+
+  EXPECT_FALSE(bindings.bind(100, second_entity));
+  EXPECT_FALSE(bindings.bind_sdk_object(100, second_sdk));
+  EXPECT_EQ(bindings.revision(), revision);
+  EXPECT_EQ(bindings.entity_for_modeling_object(100), first_entity);
+  EXPECT_EQ(bindings.entity_for_modeling_object(200), second_entity);
+  EXPECT_EQ(bindings.modeling_object_for_entity(first_entity), 100);
+  EXPECT_EQ(bindings.modeling_object_for_entity(second_entity), 200);
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(100), first_sdk);
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(200), second_sdk);
+  EXPECT_EQ(bindings.modeling_object_for_sdk_object(first_sdk), 100);
+  EXPECT_EQ(bindings.modeling_object_for_sdk_object(second_sdk), 200);
+
+  EXPECT_FALSE(bindings.restore_sdk_object_bindings(
+      {{300, first_sdk}, {400, first_sdk}}));
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(100), first_sdk);
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(200), second_sdk);
+  EXPECT_EQ(bindings.revision(), revision);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     ObjectBindingMutationFenceTracksAbsentAndLiveIdsWithBoundedWork) {
+  ModelingObjectBindingRegistry bindings;
+  const modeling::ObjectId first_sdk =
+      modeling::make_id<modeling::ObjectTag>(7u, 1u);
+  ASSERT_TRUE(bindings.bind(100, 10u));
+  ASSERT_TRUE(bindings.bind_sdk_object(100, first_sdk));
+  for (int index = 0; index < 512; ++index) {
+    ASSERT_TRUE(bindings.bind(1000 + index,
+                              static_cast<EntityId>(10000 + index)));
+  }
+
+  const std::array participants{100, 100, kInvalidModelingObjectId, 300};
+  ModelingObjectBindingMutationFence fence =
+      bindings.capture_mutation_fence(participants);
+  ASSERT_TRUE(fence.valid());
+  EXPECT_EQ(fence.size(), 2u);
+  EXPECT_EQ(fence.work().input_reference_count, participants.size());
+  EXPECT_EQ(fence.work().participant_record_count, 2u);
+  EXPECT_EQ(fence.work().mutation_counter_lookup_count, 2u);
+
+  ASSERT_TRUE(bindings.bind(1000, 20000u));
+  ModelingObjectBindingMutationFenceWork work;
+  EXPECT_TRUE(fence.matches_current(bindings, &work));
+  EXPECT_EQ(work.participant_record_count, 2u);
+  EXPECT_EQ(work.mutation_counter_lookup_count, 2u);
+
+  bindings.unbind_sdk_object(100);
+  EXPECT_FALSE(fence.matches_current(bindings));
+  ASSERT_TRUE(fence.acknowledge_current(bindings, {}, &work));
+  EXPECT_EQ(work.participant_record_count, 2u);
+  EXPECT_EQ(work.mutation_counter_lookup_count, 2u);
+  EXPECT_TRUE(fence.matches_current(bindings));
+
+  ASSERT_TRUE(bindings.bind(300, 30u));
+  EXPECT_FALSE(fence.matches_current(bindings));
+
+  ModelingObjectBindingRegistry foreign;
+  EXPECT_FALSE(fence.matches_current(foreign));
+  EXPECT_FALSE(fence.acknowledge_current(foreign));
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     ObjectBindingMutationFenceAcknowledgesAndEnrollsNewNativeIds) {
+  ModelingObjectBindingRegistry bindings;
+  const std::array participants{100};
+  ModelingObjectBindingMutationFence fence =
+      bindings.capture_mutation_fence(participants);
+  ASSERT_TRUE(fence.valid());
+  EXPECT_TRUE(fence.matches_current(bindings));
+
+  ASSERT_TRUE(bindings.bind(200, 20u));
+  EXPECT_TRUE(fence.matches_current(bindings));
+  const std::array created{200};
+  ModelingObjectBindingMutationFenceWork work;
+  ASSERT_TRUE(fence.acknowledge_current(bindings, created, &work));
+  EXPECT_EQ(fence.size(), 2u);
+  EXPECT_EQ(work.input_reference_count, created.size());
+  EXPECT_EQ(work.participant_record_count, 2u);
+  EXPECT_EQ(work.mutation_counter_lookup_count, 2u);
+  EXPECT_TRUE(fence.matches_current(bindings));
+
+  bindings.unbind_object(200);
+  EXPECT_FALSE(fence.matches_current(bindings));
+  ASSERT_TRUE(fence.acknowledge_current(bindings));
+  EXPECT_TRUE(fence.matches_current(bindings));
+  ASSERT_TRUE(bindings.bind(200, 21u));
+  EXPECT_FALSE(fence.matches_current(bindings));
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     ObjectBindingCheckpointRestoresSdkOnlyTombstoneAndAbsentRecordsExactly) {
+  SceneDocument scene;
+  const EntityId first = scene.create_entity("First", EntityKind::Mesh);
+  const EntityId replacement =
+      scene.create_entity("Replacement", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(first, {.mesh = 11u}));
+  ASSERT_TRUE(scene.set_mesh(replacement, {.mesh = 22u}));
+
+  ModelingObjectBindingRegistry bindings;
+  const modeling::ObjectId first_sdk =
+      modeling::make_id<modeling::ObjectTag>(9u, 1u);
+  const modeling::ObjectId stale_generation =
+      modeling::make_id<modeling::ObjectTag>(9u, 2u);
+  const modeling::ObjectId replacement_sdk =
+      modeling::make_id<modeling::ObjectTag>(10u, 1u);
+  ASSERT_TRUE(bindings.bind(100, first));
+  ASSERT_TRUE(bindings.bind_sdk_object(100, first_sdk));
+  bindings.remember_scene_entity(100, scene, first);
+  ASSERT_TRUE(bindings.bind_sdk_object(200, stale_generation));
+  bindings.remember_scene_entity(300, scene, replacement);
+
+  for (int index = 0; index < 512; ++index) {
+    const int native_id = 1000 + index;
+    ASSERT_TRUE(bindings.bind(native_id,
+                              static_cast<EntityId>(10000 + index)));
+  }
+
+  const std::array participants{300, 100, 200, 100,
+                                kInvalidModelingObjectId, 400};
+  const ModelingObjectBindingProjectionCheckpoint checkpoint =
+      bindings.capture_projection_checkpoint(participants);
+  ASSERT_TRUE(checkpoint.valid());
+  EXPECT_EQ(checkpoint.size(), 4u);
+  EXPECT_EQ(checkpoint.work().participant_reference_count,
+            participants.size());
+  EXPECT_EQ(checkpoint.work().record_count, 4u);
+  EXPECT_EQ(checkpoint.work().native_state_lookup_count, 16u);
+  EXPECT_EQ(checkpoint.work().entity_edge_record_count, 1u);
+  EXPECT_EQ(checkpoint.work().sdk_edge_record_count, 2u);
+  EXPECT_EQ(checkpoint.work().tombstone_record_count, 2u);
+  const std::uint64_t checkpoint_revision = bindings.revision();
+
+  bindings.unbind_object(100);
+  bindings.unbind_sdk_object(100);
+  ASSERT_TRUE(bindings.bind(100, replacement));
+  ASSERT_TRUE(bindings.bind_sdk_object(100, replacement_sdk));
+  bindings.remember_scene_entity(100, scene, replacement);
+  bindings.unbind_sdk_object(200);
+  ASSERT_TRUE(bindings.bind(200, replacement + 100u));
+  bindings.remember_scene_entity(300, scene, first);
+  ASSERT_TRUE(bindings.bind(400, replacement + 200u));
+
+  const std::uint64_t before_preflight = bindings.revision();
+  ASSERT_TRUE(bindings.can_restore_projection_checkpoint(checkpoint));
+  EXPECT_EQ(bindings.revision(), before_preflight);
+  EXPECT_EQ(bindings.entity_for_modeling_object(100), replacement);
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(100), replacement_sdk);
+
+  ASSERT_TRUE(bindings.restore_projection_checkpoint(checkpoint));
+  EXPECT_EQ(bindings.revision(), checkpoint_revision);
+  EXPECT_EQ(bindings.entity_for_modeling_object(100), first);
+  EXPECT_EQ(bindings.modeling_object_for_entity(first), 100);
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(100), first_sdk);
+  EXPECT_EQ(bindings.modeling_object_for_sdk_object(first_sdk), 100);
+  EXPECT_EQ(bindings.entity_for_modeling_object(200), std::nullopt);
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(200), stale_generation);
+  EXPECT_EQ(bindings.entity_for_modeling_object(300), std::nullopt);
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(300), std::nullopt);
+  EXPECT_EQ(bindings.entity_for_modeling_object(400), std::nullopt);
+  EXPECT_EQ(bindings.scene_identity_for_modeling_object(400), std::nullopt);
+  const auto first_identity =
+      bindings.scene_identity_for_modeling_object(100);
+  const auto tombstone = bindings.scene_identity_for_modeling_object(300);
+  ASSERT_TRUE(first_identity.has_value());
+  ASSERT_TRUE(tombstone.has_value());
+  EXPECT_EQ(first_identity->id, first);
+  EXPECT_EQ(first_identity->name, "First");
+  EXPECT_EQ(tombstone->id, replacement);
+  EXPECT_EQ(tombstone->name, "Replacement");
+  EXPECT_EQ(bindings.entity_for_modeling_object(1000), EntityId{10000});
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     ObjectBindingCheckpointRejectsOutOfScopeMutationWithoutPartialRestore) {
+  ModelingObjectBindingRegistry bindings;
+  const modeling::ObjectId first_sdk =
+      modeling::make_id<modeling::ObjectTag>(41u, 1u);
+  const modeling::ObjectId changed_sdk =
+      modeling::make_id<modeling::ObjectTag>(42u, 1u);
+  ASSERT_TRUE(bindings.bind(100, 10u));
+  ASSERT_TRUE(bindings.bind_sdk_object(100, first_sdk));
+  ASSERT_TRUE(bindings.bind(200, 20u));
+  const std::array participant{100};
+  const auto checkpoint =
+      bindings.capture_projection_checkpoint(participant);
+
+  bindings.unbind_sdk_object(100);
+  ASSERT_TRUE(bindings.bind_sdk_object(100, changed_sdk));
+  ASSERT_TRUE(bindings.bind(200, 21u));
+  const std::uint64_t before_failed_restore = bindings.revision();
+
+  EXPECT_FALSE(bindings.can_restore_projection_checkpoint(checkpoint));
+  EXPECT_EQ(bindings.revision(), before_failed_restore);
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(100), changed_sdk);
+  EXPECT_EQ(bindings.entity_for_modeling_object(200), EntityId{21u});
+
+  EXPECT_FALSE(bindings.restore_projection_checkpoint(checkpoint));
+  EXPECT_EQ(bindings.revision(), before_failed_restore);
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(100), changed_sdk);
+  EXPECT_EQ(bindings.modeling_object_for_sdk_object(changed_sdk), 100);
+  EXPECT_EQ(bindings.entity_for_modeling_object(200), EntityId{21u});
+  EXPECT_EQ(bindings.modeling_object_for_entity(21u), 200);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     ObjectBindingConcurrentRestorePreservesUnrelatedRegistryProgress) {
+  ModelingObjectBindingRegistry bindings;
+  const modeling::ObjectId baseline_sdk =
+      modeling::make_id<modeling::ObjectTag>(41u, 1u);
+  const modeling::ObjectId preview_sdk =
+      modeling::make_id<modeling::ObjectTag>(42u, 1u);
+  const modeling::ObjectId unrelated_sdk =
+      modeling::make_id<modeling::ObjectTag>(43u, 1u);
+  ASSERT_TRUE(bindings.bind(100, 10u));
+  ASSERT_TRUE(bindings.bind_sdk_object(100, baseline_sdk));
+  const std::array participants{100};
+  const ModelingObjectBindingProjectionCheckpoint checkpoint =
+      bindings.capture_projection_checkpoint(participants);
+  ModelingObjectBindingMutationFence fence =
+      bindings.capture_mutation_fence(participants);
+
+  ASSERT_TRUE(bindings.bind(100, 11u));
+  ASSERT_TRUE(bindings.bind_sdk_object(100, preview_sdk));
+  ASSERT_TRUE(fence.acknowledge_current(bindings));
+  ASSERT_TRUE(bindings.bind(200, 20u));
+  ASSERT_TRUE(bindings.bind_sdk_object(200, unrelated_sdk));
+  const std::uint64_t revision_before_restore = bindings.revision();
+  ASSERT_TRUE(fence.matches_current(bindings));
+
+  EXPECT_FALSE(bindings.can_restore_projection_checkpoint(checkpoint));
+  ASSERT_TRUE(
+      bindings.can_restore_projection_checkpoint_preserving_concurrent_changes(
+          checkpoint, fence));
+  EXPECT_EQ(bindings.revision(), revision_before_restore);
+  EXPECT_EQ(bindings.entity_for_modeling_object(100), EntityId{11u});
+
+  ASSERT_TRUE(
+      bindings.restore_projection_checkpoint_preserving_concurrent_changes(
+          checkpoint, fence));
+  EXPECT_EQ(bindings.entity_for_modeling_object(100), EntityId{10u});
+  EXPECT_EQ(bindings.modeling_object_for_entity(10u), 100);
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(100), baseline_sdk);
+  EXPECT_EQ(bindings.modeling_object_for_sdk_object(baseline_sdk), 100);
+  EXPECT_EQ(bindings.entity_for_modeling_object(200), EntityId{20u});
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(200), unrelated_sdk);
+  EXPECT_GT(bindings.revision(), revision_before_restore);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     ObjectBindingConcurrentRestoreRejectsParticipantDriftAtomically) {
+  ModelingObjectBindingRegistry bindings;
+  const modeling::ObjectId baseline_sdk =
+      modeling::make_id<modeling::ObjectTag>(51u, 1u);
+  const modeling::ObjectId preview_sdk =
+      modeling::make_id<modeling::ObjectTag>(52u, 1u);
+  ASSERT_TRUE(bindings.bind(100, 10u));
+  ASSERT_TRUE(bindings.bind_sdk_object(100, baseline_sdk));
+  const std::array participants{100};
+  const ModelingObjectBindingProjectionCheckpoint checkpoint =
+      bindings.capture_projection_checkpoint(participants);
+  ModelingObjectBindingMutationFence fence =
+      bindings.capture_mutation_fence(participants);
+  ASSERT_TRUE(bindings.bind(100, 11u));
+  ASSERT_TRUE(fence.acknowledge_current(bindings));
+  ASSERT_TRUE(bindings.bind_sdk_object(100, preview_sdk));
+  const std::uint64_t revision = bindings.revision();
+
+  EXPECT_FALSE(
+      bindings.can_restore_projection_checkpoint_preserving_concurrent_changes(
+          checkpoint, fence));
+  EXPECT_FALSE(
+      bindings.restore_projection_checkpoint_preserving_concurrent_changes(
+          checkpoint, fence));
+  EXPECT_EQ(bindings.entity_for_modeling_object(100), EntityId{11u});
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(100), preview_sdk);
+  EXPECT_EQ(bindings.revision(), revision);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HostProjectionCheckpointIsASingleUseRollbackCapability) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  const EntityId entity = scene.create_entity("Participant", EntityKind::Mesh);
+  ASSERT_NE(entity, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_mesh(entity, {.mesh = 11u}));
+  const std::array participants{entity};
+
+  ModelingHostProjectionCheckpoint checkpoint(
+      scene, assets, nullptr,
+      {.capture_assets = false,
+       .capture_scene = true,
+       .capture_bindings = false,
+       .scene_domains = SceneModelingProjectionDomain::MeshBindings,
+       .scene_entities = participants});
+  ASSERT_TRUE(checkpoint.valid());
+  ASSERT_TRUE(scene.set_mesh(entity, {.mesh = 22u}));
+
+  ASSERT_TRUE(checkpoint.restore());
+  EXPECT_FALSE(checkpoint.valid());
+  ASSERT_NE(scene.mesh(entity), nullptr);
+  EXPECT_EQ(scene.mesh(entity)->mesh, 11u);
+
+  ASSERT_TRUE(scene.set_mesh(entity, {.mesh = 33u}));
+  EXPECT_FALSE(checkpoint.restore());
+  ASSERT_NE(scene.mesh(entity), nullptr);
+  EXPECT_EQ(scene.mesh(entity)->mesh, 33u);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HostProjectionCheckpointMoveInvalidatesTheSourceCapability) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  const EntityId entity = scene.create_entity("Participant", EntityKind::Mesh);
+  ASSERT_NE(entity, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_mesh(entity, {.mesh = 11u}));
+  const std::array participants{entity};
+  ModelingHostProjectionCheckpoint source(
+      scene, assets, nullptr,
+      {.capture_assets = false,
+       .capture_scene = true,
+       .capture_bindings = false,
+       .scene_domains = SceneModelingProjectionDomain::MeshBindings,
+       .scene_entities = participants});
+  ASSERT_TRUE(source.valid());
+
+  ModelingHostProjectionCheckpoint destination(std::move(source));
+  EXPECT_FALSE(source.valid());
+  EXPECT_FALSE(source.can_restore());
+  EXPECT_FALSE(source.restore());
+  ASSERT_TRUE(destination.valid());
+  ASSERT_TRUE(scene.set_mesh(entity, {.mesh = 22u}));
+  ASSERT_TRUE(destination.restore());
+  ASSERT_NE(scene.mesh(entity), nullptr);
+  EXPECT_EQ(scene.mesh(entity)->mesh, 11u);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HostProjectionConcurrentRestoreRequiresAcknowledgedFence) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  const EntityId entity = scene.create_entity("Participant", EntityKind::Mesh);
+  ASSERT_NE(entity, kInvalidEntityId);
+  const std::array participants{entity};
+  ModelingHostProjectionCheckpoint checkpoint(
+      scene, assets, nullptr,
+      {.capture_assets = false,
+       .capture_scene = true,
+       .capture_bindings = false,
+       .preserve_concurrent_owner_changes = true,
+       .scene_domains = SceneModelingProjectionDomain::Structure,
+       .scene_entities = participants});
+  EXPECT_FALSE(checkpoint.valid());
+  EXPECT_FALSE(checkpoint.can_restore());
+  EXPECT_FALSE(checkpoint.restore());
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HostProjectionMutationFenceIgnoresUnrelatedAndDetectsParticipantDrift) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectBindingRegistry bindings;
+  const auto named_mesh = [](std::string name) {
+    MeshAsset mesh;
+    mesh.name = std::move(name);
+    return mesh;
+  };
+  const AssetId participant_asset =
+      assets.add_mesh(named_mesh("Participant"));
+  const AssetId replacement_asset =
+      assets.add_mesh(named_mesh("Replacement"));
+  const AssetId unrelated_asset = assets.add_mesh(named_mesh("Unrelated"));
+  ASSERT_NE(participant_asset, kInvalidAssetId);
+  ASSERT_NE(replacement_asset, kInvalidAssetId);
+  ASSERT_NE(unrelated_asset, kInvalidAssetId);
+
+  const EntityId participant =
+      scene.create_entity("Participant", EntityKind::Mesh);
+  const EntityId rebound = scene.create_entity("Rebound", EntityKind::Mesh);
+  const EntityId unrelated =
+      scene.create_entity("Unrelated", EntityKind::Mesh);
+  const EntityId unrelated_rebound =
+      scene.create_entity("Unrelated Rebound", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = participant_asset}));
+  ASSERT_TRUE(scene.set_mesh(rebound, {.mesh = replacement_asset}));
+  ASSERT_TRUE(scene.set_mesh(unrelated, {.mesh = unrelated_asset}));
+  ASSERT_TRUE(bindings.bind(100, participant));
+  ASSERT_TRUE(bindings.bind(900, unrelated));
+
+  const std::array scene_participants{participant};
+  const std::array asset_participants{participant_asset};
+  const std::array binding_participants{100};
+  ModelingHostProjectionCheckpoint checkpoint(
+      scene, assets, &bindings,
+      {.capture_assets = true,
+       .capture_scene = true,
+       .capture_bindings = true,
+       .capture_mutation_fence = true,
+       .scene_domains = SceneModelingProjectionDomain::MeshBindings |
+                        SceneModelingProjectionDomain::Structure,
+       .scene_entities = scene_participants,
+       .asset_ids = asset_participants,
+       .modeling_object_ids = binding_participants});
+  ASSERT_TRUE(checkpoint.valid());
+  EXPECT_TRUE(checkpoint.mutations_match_acknowledged_fence());
+
+  ASSERT_TRUE(assets.update_mesh(unrelated_asset, [](MeshAsset &asset) {
+    asset.name = "Unrelated Changed";
+  }));
+  ASSERT_TRUE(scene.set_mesh(unrelated, {.mesh = replacement_asset}));
+  ASSERT_TRUE(bindings.bind(900, unrelated_rebound));
+  EXPECT_TRUE(checkpoint.mutations_match_acknowledged_fence());
+
+  ASSERT_TRUE(assets.update_mesh(participant_asset, [](MeshAsset &asset) {
+    asset.name = "Participant Changed";
+  }));
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = replacement_asset}));
+  ASSERT_TRUE(bindings.bind(100, rebound));
+  EXPECT_FALSE(checkpoint.mutations_match_acknowledged_fence());
+  EXPECT_FALSE(checkpoint.can_restore());
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HostProjectionMutationFenceAcknowledgesAndRestoresCreatedParticipants) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectBindingRegistry bindings;
+  const auto named_mesh = [](std::string name) {
+    MeshAsset mesh;
+    mesh.name = std::move(name);
+    return mesh;
+  };
+  const AssetId participant_asset =
+      assets.add_mesh(named_mesh("Participant"));
+  const AssetId replacement_asset =
+      assets.add_mesh(named_mesh("Replacement"));
+  ASSERT_NE(participant_asset, kInvalidAssetId);
+  ASSERT_NE(replacement_asset, kInvalidAssetId);
+  const EntityId participant =
+      scene.create_entity("Participant", EntityKind::Mesh);
+  const EntityId rebound = scene.create_entity("Rebound", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = participant_asset}));
+  ASSERT_TRUE(scene.set_mesh(rebound, {.mesh = replacement_asset}));
+  ASSERT_TRUE(bindings.bind(100, participant));
+
+  const std::array scene_participants{participant};
+  const std::array asset_participants{participant_asset};
+  const std::array binding_participants{100, 200};
+  ModelingHostProjectionCheckpoint checkpoint(
+      scene, assets, &bindings,
+      {.capture_assets = true,
+       .capture_scene = true,
+       .capture_bindings = true,
+       .capture_mutation_fence = true,
+       .scene_domains = SceneModelingProjectionDomain::MeshBindings |
+                        SceneModelingProjectionDomain::Structure,
+       .scene_entities = scene_participants,
+       .asset_ids = asset_participants,
+       .modeling_object_ids = binding_participants});
+  ASSERT_TRUE(checkpoint.valid());
+
+  ASSERT_TRUE(assets.update_mesh(participant_asset, [](MeshAsset &asset) {
+    asset.name = "Participant Changed";
+  }));
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = replacement_asset}));
+  ASSERT_TRUE(bindings.bind(100, rebound));
+  EXPECT_FALSE(checkpoint.mutations_match_acknowledged_fence());
+  ASSERT_TRUE(checkpoint.acknowledge_current_mutations());
+  EXPECT_TRUE(checkpoint.mutations_match_acknowledged_fence());
+
+  const AssetId created_asset = assets.add_mesh(named_mesh("Created"));
+  const EntityId created_entity =
+      scene.create_entity("Created", EntityKind::Mesh);
+  ASSERT_NE(created_asset, kInvalidAssetId);
+  ASSERT_NE(created_entity, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_mesh(created_entity, {.mesh = created_asset}));
+  ASSERT_TRUE(bindings.bind(200, created_entity));
+  const std::array created_entities{created_entity};
+  const std::array created_assets{created_asset};
+  const std::array created_modeling_ids{200};
+  ASSERT_TRUE(checkpoint.acknowledge_current_mutations(
+      created_entities, created_assets, created_modeling_ids));
+  EXPECT_TRUE(checkpoint.mutations_match_acknowledged_fence());
+  ASSERT_TRUE(checkpoint.can_restore(created_entities, created_assets));
+  ASSERT_TRUE(checkpoint.restore(created_entities, created_assets));
+
+  EXPECT_FALSE(scene.exists(created_entity));
+  EXPECT_FALSE(assets.has_mesh(created_asset));
+  EXPECT_FALSE(bindings.entity_for_modeling_object(200).has_value());
+  ASSERT_NE(scene.mesh(participant), nullptr);
+  EXPECT_EQ(scene.mesh(participant)->mesh, participant_asset);
+  ASSERT_NE(assets.mesh(participant_asset), nullptr);
+  EXPECT_EQ(assets.mesh(participant_asset)->name, "Participant");
+  EXPECT_EQ(bindings.entity_for_modeling_object(100), participant);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HostProjectionConcurrentRestorePreservesUnrelatedOwnerPublications) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectBindingRegistry bindings;
+  const auto named_mesh = [](std::string name) {
+    MeshAsset mesh;
+    mesh.name = std::move(name);
+    return mesh;
+  };
+  const AssetId participant_asset =
+      assets.add_mesh(named_mesh("Participant"));
+  const AssetId replacement_asset =
+      assets.add_mesh(named_mesh("Replacement"));
+  const AssetId unrelated_asset = assets.add_mesh(named_mesh("Unrelated"));
+  const EntityId participant =
+      scene.create_entity("Participant", EntityKind::Mesh);
+  const EntityId rebound = scene.create_entity("Rebound", EntityKind::Mesh);
+  const EntityId unrelated =
+      scene.create_entity("Unrelated", EntityKind::Mesh);
+  const EntityId unrelated_rebound =
+      scene.create_entity("Unrelated Rebound", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = participant_asset}));
+  ASSERT_TRUE(scene.set_mesh(rebound, {.mesh = replacement_asset}));
+  ASSERT_TRUE(scene.set_mesh(unrelated, {.mesh = unrelated_asset}));
+  ASSERT_TRUE(bindings.bind(100, participant));
+  ASSERT_TRUE(bindings.bind(900, unrelated));
+  const std::array scene_participants{participant};
+  const std::array asset_participants{participant_asset};
+  const std::array binding_participants{100, 200};
+  ModelingHostProjectionCheckpoint checkpoint(
+      scene, assets, &bindings,
+      {.capture_assets = true,
+       .capture_scene = true,
+       .capture_bindings = true,
+       .capture_mutation_fence = true,
+       .preserve_concurrent_owner_changes = true,
+       .scene_domains = SceneModelingProjectionDomain::MeshBindings |
+                        SceneModelingProjectionDomain::Structure,
+       .scene_entities = scene_participants,
+       .asset_ids = asset_participants,
+       .modeling_object_ids = binding_participants});
+  ASSERT_TRUE(checkpoint.valid());
+
+  ASSERT_TRUE(assets.update_mesh(participant_asset, [](MeshAsset &asset) {
+    asset.name = "Preview Candidate";
+  }));
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = replacement_asset}));
+  ASSERT_TRUE(bindings.bind(100, rebound));
+  const AssetId provisional_asset =
+      assets.add_mesh(named_mesh("Preview Provisional"));
+  const EntityId provisional_entity =
+      scene.create_entity("Preview Provisional", EntityKind::Mesh);
+  ASSERT_NE(provisional_asset, kInvalidAssetId);
+  ASSERT_NE(provisional_entity, kInvalidEntityId);
+  ASSERT_TRUE(
+      scene.set_mesh(provisional_entity, {.mesh = provisional_asset}));
+  ASSERT_TRUE(bindings.bind(200, provisional_entity));
+  const std::array created_entities{provisional_entity};
+  const std::array created_assets{provisional_asset};
+  const std::array created_modeling_ids{200};
+  ASSERT_TRUE(checkpoint.acknowledge_current_mutations(
+      created_entities, created_assets, created_modeling_ids));
+
+  ASSERT_TRUE(assets.update_mesh(unrelated_asset, [](MeshAsset &asset) {
+    asset.name = "Unrelated Authored Edit";
+  }));
+  ASSERT_TRUE(scene.set_mesh(unrelated, {.mesh = replacement_asset}));
+  ASSERT_TRUE(bindings.bind(900, unrelated_rebound));
+  const AssetId unrelated_created_asset =
+      assets.add_mesh(named_mesh("Unrelated Created"));
+  const EntityId unrelated_created_entity =
+      scene.create_entity("Unrelated Created", EntityKind::Mesh);
+  ASSERT_NE(unrelated_created_asset, kInvalidAssetId);
+  ASSERT_NE(unrelated_created_entity, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_mesh(
+      unrelated_created_entity, {.mesh = unrelated_created_asset}));
+  const std::uint64_t scene_revision_before_restore = scene.revision();
+  const std::uint64_t asset_revision_before_restore = assets.revision();
+  const std::uint64_t binding_revision_before_restore = bindings.revision();
+
+  ASSERT_TRUE(checkpoint.mutations_match_acknowledged_fence());
+  ASSERT_TRUE(checkpoint.can_restore(created_entities, created_assets));
+  ASSERT_TRUE(checkpoint.restore(created_entities, created_assets));
+
+  EXPECT_FALSE(scene.exists(provisional_entity));
+  EXPECT_FALSE(assets.has_mesh(provisional_asset));
+  EXPECT_FALSE(bindings.entity_for_modeling_object(200).has_value());
+  ASSERT_NE(scene.mesh(participant), nullptr);
+  EXPECT_EQ(scene.mesh(participant)->mesh, participant_asset);
+  ASSERT_NE(assets.mesh(participant_asset), nullptr);
+  EXPECT_EQ(assets.mesh(participant_asset)->name, "Participant");
+  EXPECT_EQ(bindings.entity_for_modeling_object(100), participant);
+
+  ASSERT_TRUE(scene.exists(unrelated_created_entity));
+  ASSERT_NE(scene.mesh(unrelated), nullptr);
+  EXPECT_EQ(scene.mesh(unrelated)->mesh, replacement_asset);
+  ASSERT_NE(assets.mesh(unrelated_asset), nullptr);
+  EXPECT_EQ(assets.mesh(unrelated_asset)->name, "Unrelated Authored Edit");
+  ASSERT_NE(assets.mesh(unrelated_created_asset), nullptr);
+  EXPECT_EQ(bindings.entity_for_modeling_object(900), unrelated_rebound);
+  EXPECT_GT(scene.revision(), scene_revision_before_restore);
+  EXPECT_GT(assets.revision(), asset_revision_before_restore);
+  EXPECT_GT(bindings.revision(), binding_revision_before_restore);
+  EXPECT_GT(assets.add_mesh(named_mesh("After Restore")),
+            unrelated_created_asset);
+  EXPECT_GT(scene.create_entity("After Restore"), unrelated_created_entity);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HostProjectionPreselectsMixedExactAndConcurrentOwnerBranches) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectBindingRegistry bindings;
+  const auto named_mesh = [](std::string name) {
+    MeshAsset mesh;
+    mesh.name = std::move(name);
+    return mesh;
+  };
+  const AssetId participant_asset =
+      assets.add_mesh(named_mesh("Participant"));
+  const AssetId replacement_asset =
+      assets.add_mesh(named_mesh("Replacement"));
+  const AssetId unrelated_asset = assets.add_mesh(named_mesh("Unrelated"));
+  const EntityId participant =
+      scene.create_entity("Participant", EntityKind::Mesh);
+  const EntityId rebound = scene.create_entity("Rebound", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = participant_asset}));
+  ASSERT_TRUE(scene.set_mesh(rebound, {.mesh = replacement_asset}));
+  ASSERT_TRUE(bindings.bind(100, participant));
+  const std::uint64_t scene_revision_before = scene.revision();
+  const std::uint64_t asset_revision_before = assets.revision();
+  const std::uint64_t binding_revision_before = bindings.revision();
+  const std::array scene_participants{participant};
+  const std::array asset_participants{participant_asset};
+  const std::array binding_participants{100};
+  ModelingHostProjectionCheckpoint checkpoint(
+      scene, assets, &bindings,
+      {.capture_assets = true,
+       .capture_scene = true,
+       .capture_bindings = true,
+       .capture_mutation_fence = true,
+       .preserve_concurrent_owner_changes = true,
+       .scene_domains = SceneModelingProjectionDomain::MeshBindings,
+       .scene_entities = scene_participants,
+       .asset_ids = asset_participants,
+       .modeling_object_ids = binding_participants});
+  ASSERT_TRUE(checkpoint.valid());
+
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = replacement_asset}));
+  ASSERT_TRUE(assets.update_mesh(participant_asset, [](MeshAsset &asset) {
+    asset.name = "Preview Candidate";
+  }));
+  ASSERT_TRUE(bindings.bind(100, rebound));
+  ASSERT_TRUE(checkpoint.acknowledge_current_mutations());
+
+  // Only AssetRegistry has unrelated work, so Scene and bindings can take
+  // their exact branches while AssetRegistry must preserve concurrent work.
+  ASSERT_TRUE(assets.update_mesh(unrelated_asset, [](MeshAsset &asset) {
+    asset.name = "Unrelated Authored Edit";
+  }));
+  const std::uint64_t asset_revision_before_restore = assets.revision();
+  ASSERT_TRUE(checkpoint.can_restore());
+  ASSERT_TRUE(checkpoint.restore());
+
+  ASSERT_NE(scene.mesh(participant), nullptr);
+  EXPECT_EQ(scene.mesh(participant)->mesh, participant_asset);
+  EXPECT_EQ(scene.revision(), scene_revision_before);
+  ASSERT_NE(assets.mesh(participant_asset), nullptr);
+  EXPECT_EQ(assets.mesh(participant_asset)->name, "Participant");
+  ASSERT_NE(assets.mesh(unrelated_asset), nullptr);
+  EXPECT_EQ(assets.mesh(unrelated_asset)->name,
+            "Unrelated Authored Edit");
+  EXPECT_GT(assets.revision(), asset_revision_before_restore);
+  EXPECT_GT(assets.revision(), asset_revision_before);
+  EXPECT_EQ(bindings.entity_for_modeling_object(100), participant);
+  EXPECT_EQ(bindings.revision(), binding_revision_before);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HostProjectionMutationFenceRejectsExternalParticipantDrift) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectBindingRegistry bindings;
+  const AssetId asset = assets.add_mesh(MeshAsset{});
+  const AssetId replacement_asset = assets.add_mesh(MeshAsset{});
+  const EntityId entity = scene.create_entity("Participant", EntityKind::Mesh);
+  const EntityId rebound = scene.create_entity("Rebound", EntityKind::Mesh);
+  ASSERT_NE(asset, kInvalidAssetId);
+  ASSERT_NE(entity, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_mesh(entity, {.mesh = asset}));
+  ASSERT_TRUE(bindings.bind(100, entity));
+  const std::array scene_participants{entity};
+  const std::array asset_participants{asset};
+  const std::array binding_participants{100};
+  ModelingHostProjectionCheckpoint checkpoint(
+      scene, assets, &bindings,
+      {.capture_assets = true,
+       .capture_scene = true,
+       .capture_bindings = true,
+       .capture_mutation_fence = true,
+       .preserve_concurrent_owner_changes = true,
+       .scene_domains = SceneModelingProjectionDomain::MeshBindings,
+       .scene_entities = scene_participants,
+       .asset_ids = asset_participants,
+       .modeling_object_ids = binding_participants});
+  ASSERT_TRUE(checkpoint.valid());
+  ASSERT_TRUE(checkpoint.mutations_match_acknowledged_fence());
+
+  ASSERT_TRUE(scene.set_mesh(entity, {.mesh = replacement_asset}));
+  ASSERT_TRUE(bindings.bind(100, rebound));
+  ASSERT_TRUE(checkpoint.acknowledge_current_mutations());
+  ASSERT_TRUE(assets.update_mesh(asset, [](MeshAsset &mesh) {
+    mesh.name = "External Edit";
+  }));
+  EXPECT_FALSE(checkpoint.mutations_match_acknowledged_fence());
+  EXPECT_FALSE(checkpoint.can_restore());
+  EXPECT_FALSE(checkpoint.restore());
+  ASSERT_NE(assets.mesh(asset), nullptr);
+  EXPECT_EQ(assets.mesh(asset)->name, "External Edit");
+  ASSERT_NE(scene.mesh(entity), nullptr);
+  EXPECT_EQ(scene.mesh(entity)->mesh, replacement_asset);
+  EXPECT_EQ(bindings.entity_for_modeling_object(100), rebound);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HostProjectionAggregatePreflightLeavesEveryOwnerOnCurrentBranch) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectBindingRegistry bindings;
+  const auto named_mesh = [](std::string name) {
+    MeshAsset mesh;
+    mesh.name = std::move(name);
+    return mesh;
+  };
+  const AssetId participant_asset =
+      assets.add_mesh(named_mesh("Participant"));
+  const AssetId replacement_asset =
+      assets.add_mesh(named_mesh("Replacement"));
+  const AssetId unrelated_asset =
+      assets.add_mesh(named_mesh("Unrelated"));
+  ASSERT_NE(participant_asset, kInvalidAssetId);
+  ASSERT_NE(replacement_asset, kInvalidAssetId);
+  ASSERT_NE(unrelated_asset, kInvalidAssetId);
+  const EntityId participant =
+      scene.create_entity("Participant", EntityKind::Mesh);
+  const EntityId rebound = scene.create_entity("Rebound", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = participant_asset}));
+  ASSERT_TRUE(scene.set_mesh(rebound, {.mesh = replacement_asset}));
+  ASSERT_TRUE(bindings.bind(100, participant));
+  const std::array scene_participants{participant};
+  const std::array asset_participants{participant_asset};
+  const std::array binding_participants{100};
+  ModelingHostProjectionCheckpoint checkpoint(
+      scene, assets, &bindings,
+      {.capture_assets = true,
+       .capture_scene = true,
+       .capture_bindings = true,
+       .scene_domains = SceneModelingProjectionDomain::MeshBindings,
+       .scene_entities = scene_participants,
+       .asset_ids = asset_participants,
+       .modeling_object_ids = binding_participants});
+  ASSERT_TRUE(checkpoint.valid());
+
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = replacement_asset}));
+  ASSERT_TRUE(assets.update_mesh(participant_asset, [](MeshAsset &asset) {
+    asset.name = "Participant Changed";
+  }));
+  ASSERT_TRUE(assets.update_mesh(unrelated_asset, [](MeshAsset &asset) {
+    asset.name = "Unrelated Changed";
+  }));
+  ASSERT_TRUE(bindings.bind(100, rebound));
+  const std::uint64_t scene_revision = scene.revision();
+  const std::uint64_t asset_revision = assets.revision();
+  const std::uint64_t binding_revision = bindings.revision();
+
+  EXPECT_FALSE(checkpoint.can_restore());
+  EXPECT_FALSE(checkpoint.restore());
+  EXPECT_EQ(scene.revision(), scene_revision);
+  ASSERT_NE(scene.mesh(participant), nullptr);
+  EXPECT_EQ(scene.mesh(participant)->mesh, replacement_asset);
+  EXPECT_EQ(assets.revision(), asset_revision);
+  ASSERT_NE(assets.mesh(participant_asset), nullptr);
+  EXPECT_EQ(assets.mesh(participant_asset)->name, "Participant Changed");
+  ASSERT_NE(assets.mesh(unrelated_asset), nullptr);
+  EXPECT_EQ(assets.mesh(unrelated_asset)->name, "Unrelated Changed");
+  EXPECT_EQ(bindings.revision(), binding_revision);
+  EXPECT_EQ(bindings.entity_for_modeling_object(100), rebound);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HostPublicationNestingGuardCoversEverySharedOwnerIdentity) {
+  SceneDocument first_scene;
+  SceneDocument second_scene;
+  AssetRegistry first_assets;
+  AssetRegistry second_assets;
+  ModelingObjectBindingRegistry first_bindings;
+  ModelingObjectBindingRegistry second_bindings;
+  modeling::ModelingSession first_session;
+  modeling::ModelingSession second_session;
+  const ModelingHostPublicationTransactionOptions options{
+      .sdk_rollback = ModelingSdkRollbackPolicy::None,
+      .checkpoint_scope =
+          ModelingHostPublicationCheckpointScope::ModelingProjection,
+      .capture_assets = false,
+      .capture_scene = false,
+      .capture_bindings = false,
+      .capture_hierarchy = false,
+  };
+  ModelingHostPublicationTransaction outer(
+      first_scene, first_assets, first_bindings, first_session, {}, options);
+  ASSERT_TRUE(outer.ready());
+
+  ModelingHostPublicationTransaction same_scene(
+      first_scene, second_assets, second_bindings, second_session, {},
+      options);
+  EXPECT_FALSE(same_scene.ready());
+  ModelingHostPublicationTransaction same_assets(
+      second_scene, first_assets, second_bindings, second_session, {},
+      options);
+  EXPECT_FALSE(same_assets.ready());
+  ModelingHostPublicationTransaction same_bindings(
+      second_scene, second_assets, first_bindings, second_session, {},
+      options);
+  EXPECT_FALSE(same_bindings.ready());
+  ModelingHostPublicationTransaction same_session(
+      second_scene, second_assets, second_bindings, first_session, {},
+      options);
+  EXPECT_FALSE(same_session.ready());
+
+  ASSERT_TRUE(outer.commit());
+  ModelingHostPublicationTransaction released(
+      first_scene, first_assets, first_bindings, first_session, {}, options);
+  EXPECT_TRUE(released.ready());
+  EXPECT_TRUE(released.commit());
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HostPublicationWorkRemainsBoundedWithThousandsOfUnrelatedRecords) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectBindingRegistry bindings;
+  modeling::ModelingSession session;
+  auto document = modeling::PolygonDocument::make_box({});
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  auto object = session.add_document(std::move(document).value(), "Participant");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  const AssetId asset = assets.add_mesh(MeshAsset{});
+  const EntityId entity = scene.create_entity("Participant", EntityKind::Mesh);
+  ASSERT_NE(asset, kInvalidAssetId);
+  ASSERT_NE(entity, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_mesh(entity, {.mesh = asset}));
+  ASSERT_TRUE(scene.set_modeling_object(
+      entity, {.object_id = 100, .sdk_owned = true}));
+  ASSERT_TRUE(bindings.bind(100, entity));
+  ASSERT_TRUE(bindings.bind_sdk_object(100, object.value()));
+
+  constexpr std::size_t kUnrelatedCount = 6000u;
+  for (std::size_t index = 0u; index < kUnrelatedCount; ++index) {
+    const AssetId unrelated_asset = assets.add_mesh(MeshAsset{});
+    const EntityId unrelated_entity =
+        scene.create_entity("Unrelated", EntityKind::Mesh);
+    ASSERT_NE(unrelated_asset, kInvalidAssetId);
+    ASSERT_NE(unrelated_entity, kInvalidEntityId);
+    ASSERT_TRUE(scene.set_mesh(unrelated_entity, {.mesh = unrelated_asset}));
+    ASSERT_TRUE(bindings.bind(static_cast<int>(1000u + index),
+                              unrelated_entity));
+  }
+
+  const std::array sdk_participants{object.value()};
+  const std::array scene_participants{entity};
+  const std::array asset_participants{asset};
+  const std::array binding_participants{100};
+  ModelingHostPublicationTransaction publication(
+      scene, assets, bindings, session, {},
+      {.sdk_rollback = ModelingSdkRollbackPolicy::MutationCheckpoint,
+       .checkpoint_scope =
+           ModelingHostPublicationCheckpointScope::ModelingProjection,
+       .capture_hierarchy = false,
+       .affected_scene_entities = scene_participants,
+       .affected_asset_ids = asset_participants,
+       .affected_modeling_object_ids = binding_participants,
+       .affected_sdk_object_ids = sdk_participants});
+  ASSERT_TRUE(publication.ready());
+  EXPECT_EQ(publication.work().sdk_participant_records, 1u);
+  EXPECT_EQ(publication.work().asset_records, 1u);
+  EXPECT_EQ(publication.work().scene_entity_records, 1u);
+  EXPECT_EQ(publication.work().hierarchy_records, 0u);
+  EXPECT_EQ(publication.work().binding_records, 1u);
+  EXPECT_FALSE(publication.work().full_sdk_snapshot);
+  EXPECT_TRUE(publication.commit());
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     SnapshotPublicationRejectsAnExternalMutationCheckpoint) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectBindingRegistry bindings;
+  modeling::ModelingSession session;
+  auto document = modeling::PolygonDocument::make_box({});
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  auto object = session.add_document(std::move(document).value(), "Object");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  const std::array participants{object.value()};
+  auto checkpoint = session.capture_mutation_checkpoint(participants);
+  ASSERT_TRUE(checkpoint.ok()) << checkpoint.error_message();
+  ASSERT_TRUE(session.mutation_checkpoint_active());
+
+  ModelingHostPublicationTransaction publication(
+      scene, assets, bindings, session, {},
+      {.sdk_rollback = ModelingSdkRollbackPolicy::Snapshot,
+       .checkpoint_scope =
+           ModelingHostPublicationCheckpointScope::ModelingProjection,
+       .capture_assets = false,
+       .capture_scene = false,
+       .capture_bindings = false,
+       .capture_hierarchy = false});
+  EXPECT_FALSE(publication.ready());
+  ASSERT_TRUE(session.restore_mutation_checkpoint(
+                         std::move(checkpoint).value())
+                  .ok());
+  EXPECT_FALSE(session.mutation_checkpoint_active());
+  EXPECT_TRUE(session.rename_object(object.value(), "Usable").ok());
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     FailedNativePreflightConsumesSdkCheckpointAndLeavesSessionUsable) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectBindingRegistry bindings;
+  modeling::ModelingSession session;
+  auto document = modeling::PolygonDocument::make_box({});
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  auto object = session.add_document(std::move(document).value(), "Before");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  const EntityId participant =
+      scene.create_entity("Participant", EntityKind::Mesh);
+  const EntityId unrelated = scene.create_entity("Unrelated");
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 11u}));
+  const std::array sdk_participants{object.value()};
+  const std::array scene_participants{participant};
+  ModelingHostPublicationTransaction publication(
+      scene, assets, bindings, session, {},
+      {.sdk_rollback = ModelingSdkRollbackPolicy::MutationCheckpoint,
+       .checkpoint_scope =
+           ModelingHostPublicationCheckpointScope::ModelingProjection,
+       .capture_assets = false,
+       .capture_scene = true,
+       .capture_bindings = false,
+       .capture_hierarchy = false,
+       .affected_scene_entities = scene_participants,
+       .affected_sdk_object_ids = sdk_participants});
+  ASSERT_TRUE(publication.ready());
+  ASSERT_TRUE(session.rename_object(object.value(), "Current Branch").ok());
+  ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 12u}));
+  TransformComponent moved;
+  moved.position = {3.0f, 2.0f, 1.0f};
+  ASSERT_TRUE(scene.set_transform(unrelated, moved));
+
+  EXPECT_FALSE(publication.rollback());
+  EXPECT_FALSE(session.mutation_checkpoint_active());
+  ASSERT_EQ(session.objects().size(), 1u);
+  EXPECT_EQ(session.objects().front().name, "Current Branch");
+  EXPECT_TRUE(session.rename_object(object.value(), "Still Usable").ok());
+  ASSERT_NE(scene.mesh(participant), nullptr);
+  EXPECT_EQ(scene.mesh(participant)->mesh, 12u);
+  ASSERT_NE(scene.transform(unrelated), nullptr);
+  EXPECT_FLOAT_EQ(scene.transform(unrelated)->position.x, 3.0f);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HostPublicationTransactionRollbackRestoresEveryPublicationDomain) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectBindingRegistry bindings;
+  modeling::ModelingSession session;
+
+  modeling::Result<modeling::PolygonDocument> first_document =
+      modeling::PolygonDocument::make_box({});
+  ASSERT_TRUE(first_document.ok()) << first_document.error_message();
+  modeling::Result<modeling::ObjectId> first_object =
+      session.add_document(std::move(first_document).value(), "First");
+  ASSERT_TRUE(first_object.ok()) << first_object.error_message();
+  const AssetId first_mesh = assets.add_mesh(MeshAsset{});
+  ASSERT_NE(first_mesh, kInvalidAssetId);
+  const EntityId first_entity =
+      scene.create_entity("First", EntityKind::Mesh);
+  ASSERT_NE(first_entity, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_mesh(first_entity, MeshComponent{.mesh = first_mesh}));
+  ASSERT_TRUE(scene.set_modeling_object(
+      first_entity,
+      {.object_id = 100, .material_slot = 0U, .sdk_owned = true}));
+  ASSERT_TRUE(scene.replace_selection(
+      std::span<const EntityId>(&first_entity, 1U), first_entity));
+  ASSERT_TRUE(bindings.bind(100, first_entity));
+  ASSERT_TRUE(bindings.bind_sdk_object(100, first_object.value()));
+  bindings.remember_scene_entity(100, scene, first_entity);
+
+  modeling::Result<modeling::PolygonDocument> other_document =
+      modeling::PolygonDocument::make_box({});
+  ASSERT_TRUE(other_document.ok()) << other_document.error_message();
+  modeling::Result<modeling::ObjectId> other_object =
+      session.add_document(std::move(other_document).value(), "Other");
+  ASSERT_TRUE(other_object.ok()) << other_object.error_message();
+  const AssetId other_mesh = assets.add_mesh(MeshAsset{});
+  ASSERT_NE(other_mesh, kInvalidAssetId);
+  const EntityId other_entity =
+      scene.create_entity("Other", EntityKind::Mesh);
+  ASSERT_NE(other_entity, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_mesh(other_entity, MeshComponent{.mesh = other_mesh}));
+  ASSERT_TRUE(scene.set_modeling_object(
+      other_entity,
+      {.object_id = 101, .material_slot = 0U, .sdk_owned = true}));
+  ASSERT_TRUE(bindings.bind(101, other_entity));
+  ASSERT_TRUE(bindings.bind_sdk_object(101, other_object.value()));
+  bindings.remember_scene_entity(101, scene, other_entity);
+
+  const std::size_t sdk_object_count = session.objects().size();
+  const std::size_t sdk_undo_depth = session.undo_depth();
+  const std::uint64_t sdk_content_revision = session.content_revision();
+  const std::vector<AssetId> asset_ids = assets.mesh_ids();
+  const std::uint64_t asset_revision = assets.revision();
+  const std::vector<EntityId> scene_entities = scene.entities();
+  const std::uint64_t scene_revision = scene.revision();
+  const std::uint64_t scene_content_revision = scene.content_revision();
+  const std::uint64_t scene_selection_revision = scene.selection_revision();
+  const std::uint64_t scene_mesh_revision = scene.mesh_binding_revision();
+  const std::uint64_t binding_revision = bindings.revision();
+  const auto sdk_bindings =
+      bindings.sdk_object_bindings_by_modeling_object();
+  int adapter_state = 7;
+  int restore_count = 0;
+  const std::array affected_entities{first_entity, other_entity};
+  const std::array affected_assets{first_mesh, other_mesh};
+  const std::array affected_modeling_ids{100, 101, 200};
+
+  {
+    ModelingHostPublicationTransaction publication(
+        scene, assets, bindings, session,
+        [&]() noexcept {
+          adapter_state = 7;
+          ++restore_count;
+        },
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_hierarchy = true,
+         .capture_scene_selection = true,
+         .affected_scene_entities = affected_entities,
+         .affected_asset_ids = affected_assets,
+         .affected_modeling_object_ids = affected_modeling_ids});
+    ASSERT_TRUE(publication.ready());
+    modeling::Result<modeling::PolygonDocument> second_document =
+        modeling::PolygonDocument::make_box({});
+    ASSERT_TRUE(second_document.ok()) << second_document.error_message();
+    modeling::Result<modeling::ObjectId> second_object =
+        session.add_document(std::move(second_document).value(), "Second");
+    ASSERT_TRUE(second_object.ok()) << second_object.error_message();
+    const AssetId second_mesh = assets.add_mesh(MeshAsset{});
+    ASSERT_NE(second_mesh, kInvalidAssetId);
+    publication.track_created_asset(second_mesh);
+    const EntityId second_entity =
+        scene.create_entity("Second", EntityKind::Mesh);
+    ASSERT_NE(second_entity, kInvalidEntityId);
+    publication.track_created_entity(second_entity);
+    ASSERT_TRUE(
+        scene.set_mesh(second_entity, MeshComponent{.mesh = second_mesh}));
+    ASSERT_TRUE(scene.set_modeling_object(
+        second_entity,
+        {.object_id = 200, .material_slot = 0U, .sdk_owned = true}));
+    ASSERT_TRUE(scene.replace_selection(
+        std::span<const EntityId>(&second_entity, 1U), second_entity));
+    ASSERT_TRUE(bindings.bind(200, second_entity));
+    ASSERT_TRUE(bindings.bind_sdk_object(200, second_object.value()));
+    ASSERT_TRUE(scene.destroy_entity(first_entity));
+    bindings.unbind_object(100);
+    ASSERT_TRUE(scene.clear_mesh(other_entity));
+    ASSERT_TRUE(scene.set_curve(other_entity, CurveComponent{.curve = 999U}));
+    adapter_state = 99;
+  }
+
+  EXPECT_EQ(restore_count, 1);
+  EXPECT_EQ(adapter_state, 7);
+  EXPECT_EQ(session.objects().size(), sdk_object_count);
+  EXPECT_EQ(session.undo_depth(), sdk_undo_depth);
+  EXPECT_EQ(session.content_revision(), sdk_content_revision);
+  EXPECT_EQ(assets.mesh_ids(), asset_ids);
+  EXPECT_EQ(assets.revision(), asset_revision);
+  EXPECT_EQ(scene.entities(), scene_entities);
+  EXPECT_EQ(scene.revision(), scene_revision);
+  EXPECT_EQ(scene.content_revision(), scene_content_revision);
+  EXPECT_EQ(scene.selection_revision(), scene_selection_revision);
+  EXPECT_EQ(scene.mesh_binding_revision(), scene_mesh_revision);
+  ASSERT_TRUE(scene.exists(first_entity));
+  ASSERT_NE(scene.mesh(first_entity), nullptr);
+  EXPECT_EQ(scene.mesh(first_entity)->mesh, first_mesh);
+  ASSERT_NE(scene.mesh(other_entity), nullptr);
+  EXPECT_EQ(scene.mesh(other_entity)->mesh, other_mesh);
+  EXPECT_EQ(scene.curve(other_entity), nullptr);
+  EXPECT_EQ(scene.primary_selection(), first_entity);
+  EXPECT_EQ(bindings.revision(), binding_revision);
+  EXPECT_EQ(bindings.sdk_object_bindings_by_modeling_object(), sdk_bindings);
+  EXPECT_EQ(bindings.entity_for_modeling_object(100), first_entity);
+  EXPECT_TRUE(bindings.scene_identity_for_modeling_object(100).has_value());
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HostPublicationTransactionCommitAndRollbackPoliciesAreExplicit) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectBindingRegistry bindings;
+  modeling::ModelingSession session;
+  int restore_count = 0;
+
+  {
+    ModelingHostPublicationTransaction publication(
+        scene, assets, bindings, session,
+        [&]() noexcept { ++restore_count; },
+        {.checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_assets = false,
+         .capture_scene = false,
+         .capture_bindings = false});
+    modeling::Result<modeling::PolygonDocument> document =
+        modeling::PolygonDocument::make_box({});
+    ASSERT_TRUE(document.ok()) << document.error_message();
+    ASSERT_TRUE(session.add_document(std::move(document).value(), "Committed")
+                    .ok());
+    ASSERT_TRUE(publication.commit());
+    EXPECT_FALSE(publication.active());
+  }
+  EXPECT_EQ(restore_count, 0);
+  ASSERT_EQ(session.objects().size(), 1U);
+  const std::array committed_participants{session.objects().front().id};
+
+  {
+    ModelingHostPublicationTransaction publication(
+        scene, assets, bindings, session,
+        [&]() noexcept { ++restore_count; },
+        {.sdk_rollback = ModelingSdkRollbackPolicy::MutationCheckpoint,
+         .checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_assets = false,
+         .capture_scene = false,
+         .capture_bindings = false,
+         .affected_sdk_object_ids = committed_participants});
+    ASSERT_TRUE(publication.ready());
+    ASSERT_TRUE(
+        session.rename_object(committed_participants.front(), "Explicit")
+            .ok());
+    EXPECT_TRUE(publication.rollback());
+    EXPECT_FALSE(publication.active());
+  }
+  EXPECT_EQ(restore_count, 1);
+  ASSERT_EQ(session.objects().size(), 1U);
+  EXPECT_EQ(session.objects().front().name, "Committed");
+
+  {
+    ModelingHostPublicationTransaction publication(
+        scene, assets, bindings, session,
+        [&]() noexcept { ++restore_count; },
+        {.sdk_rollback = ModelingSdkRollbackPolicy::MutationCheckpoint,
+         .checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_assets = false,
+         .capture_scene = false,
+         .capture_bindings = false,
+         .affected_sdk_object_ids = committed_participants});
+    ASSERT_TRUE(publication.ready());
+    ASSERT_TRUE(
+        session.rename_object(committed_participants.front(), "Destructor")
+            .ok());
+  }
+  EXPECT_EQ(restore_count, 2);
+  ASSERT_EQ(session.objects().size(), 1U);
+  EXPECT_EQ(session.objects().front().name, "Committed");
+
+  const modeling::ObjectId retained_sdk =
+      modeling::make_id<modeling::ObjectTag>(77U);
+  {
+    const std::array affected_modeling_ids{500};
+    ModelingHostPublicationTransactionOptions options{
+        .sdk_rollback = ModelingSdkRollbackPolicy::None,
+        .checkpoint_scope =
+            ModelingHostPublicationCheckpointScope::ModelingProjection,
+        .capture_assets = false,
+        .capture_scene = false,
+        .capture_bindings = true,
+        .capture_hierarchy = false,
+        .affected_modeling_object_ids = affected_modeling_ids,
+    };
+    ModelingHostPublicationTransaction publication(
+        scene, assets, bindings, session,
+        [&]() noexcept { ++restore_count; }, options);
+    ASSERT_TRUE(publication.ready());
+    modeling::Result<modeling::PolygonDocument> document =
+        modeling::PolygonDocument::make_box({});
+    ASSERT_TRUE(document.ok()) << document.error_message();
+    ASSERT_TRUE(session.add_document(std::move(document).value(), "Retained")
+                    .ok());
+    ASSERT_TRUE(bindings.bind_sdk_object(500, retained_sdk));
+  }
+  EXPECT_EQ(restore_count, 3);
+  EXPECT_EQ(session.objects().size(), 2U);
+  EXPECT_EQ(bindings.sdk_object_for_modeling_object(500), std::nullopt);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HostPublicationRollbackPreservesLiveFormalInstanceGraphExactly) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectBindingRegistry bindings;
+  modeling::ModelingSession session;
+
+  const EntityId definition =
+      scene.create_entity("Definition", EntityKind::Empty);
+  const EntityId member = scene.create_entity("Member", EntityKind::Mesh);
+  const EntityId occurrence =
+      scene.create_entity("Occurrence", EntityKind::Generic);
+  const EntityId target = scene.create_entity("Target", EntityKind::Mesh);
+  ASSERT_NE(definition, kInvalidEntityId);
+  ASSERT_NE(member, kInvalidEntityId);
+  ASSERT_NE(occurrence, kInvalidEntityId);
+  ASSERT_NE(target, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_mesh(member, {.mesh = 10u}));
+  ASSERT_TRUE(scene.set_modeling_object(
+      member, {.object_id = 10, .sdk_owned = true}));
+  ASSERT_TRUE(scene.set_parent(member, definition, false));
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  ASSERT_TRUE(scene.set_instance_occurrence(
+      occurrence, {.definition = definition}));
+  ASSERT_TRUE(scene.set_mesh(target, {.mesh = 20u}));
+  ASSERT_TRUE(scene.set_modeling_object(
+      target, {.object_id = 20, .sdk_owned = true}));
+  ASSERT_TRUE(bindings.bind(10, member));
+  ASSERT_TRUE(bindings.bind(20, target));
+  bindings.remember_scene_entity(10, scene, member);
+  bindings.remember_scene_entity(20, scene, target);
+
+  const std::vector<EntityId> hierarchy_before = scene.entity_tree_order();
+  const std::uint64_t revision_before = scene.revision();
+  const std::uint64_t content_revision_before = scene.content_revision();
+  const std::uint64_t hierarchy_revision_before =
+      scene.hierarchy_presentation_revision();
+  const std::uint64_t mesh_revision_before = scene.mesh_binding_revision();
+  const std::uint64_t curve_revision_before = scene.curve_binding_revision();
+  const std::uint64_t render_revision_before =
+      scene.render_component_revision();
+
+  {
+    const std::array affected_entities{target};
+    ModelingHostPublicationTransaction publication(
+        scene, assets, bindings, session, {},
+        {.sdk_rollback = ModelingSdkRollbackPolicy::None,
+         .checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_assets = false,
+         .capture_scene = true,
+         .capture_bindings = false,
+         .capture_hierarchy = true,
+         .affected_scene_entities = affected_entities});
+    ASSERT_TRUE(publication.ready());
+    ASSERT_TRUE(scene.clear_mesh(target));
+    ASSERT_TRUE(scene.set_curve(target, {.curve = 99u}));
+    ASSERT_TRUE(scene.set_material(target, {.material = 88u}));
+  }
+
+  EXPECT_EQ(scene.entity_tree_order(), hierarchy_before);
+  EXPECT_EQ(scene.revision(), revision_before);
+  EXPECT_EQ(scene.content_revision(), content_revision_before);
+  EXPECT_EQ(scene.hierarchy_presentation_revision(),
+            hierarchy_revision_before);
+  EXPECT_EQ(scene.mesh_binding_revision(), mesh_revision_before);
+  EXPECT_EQ(scene.curve_binding_revision(), curve_revision_before);
+  EXPECT_EQ(scene.render_component_revision(), render_revision_before);
+  ASSERT_NE(scene.instance_definition(definition), nullptr);
+  ASSERT_NE(scene.instance_occurrence(occurrence), nullptr);
+  EXPECT_EQ(scene.instance_occurrence(occurrence)->definition, definition);
+  EXPECT_EQ(scene.parent(member), definition);
+  ASSERT_NE(scene.mesh(member), nullptr);
+  EXPECT_EQ(scene.mesh(member)->mesh, 10u);
+  ASSERT_NE(scene.mesh(target), nullptr);
+  EXPECT_EQ(scene.mesh(target)->mesh, 20u);
+  EXPECT_EQ(scene.curve(target), nullptr);
+  EXPECT_EQ(scene.material(target), nullptr);
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -260,13 +1614,13 @@ TEST(ModelingSessionServiceSplitTests,
   const EditorObjectId editor_object_id = scene.editor_object_id(entity);
 
   ModelingObjectRuntimeMap object_map;
-  object_map.bind(300, entity);
+  ASSERT_TRUE(object_map.bind(300, entity));
   object_map.remember_scene_entity(300, scene, entity);
 
   const std::optional<ModelingObjectSceneIdentity> identity =
       object_map.scene_identity_for_modeling_object(300);
   ASSERT_TRUE(identity.has_value());
-  EXPECT_EQ(identity->entity, entity);
+  EXPECT_EQ(identity->id, entity);
   EXPECT_EQ(identity->editor_object_id, editor_object_id);
   EXPECT_EQ(identity->name, "Redo Source");
   EXPECT_EQ(identity->parent, parent);
@@ -284,7 +1638,7 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(object_map.entity_for_modeling_object(300), std::nullopt);
   EXPECT_TRUE(object_map.records(scene).empty());
   ASSERT_TRUE(object_map.scene_identity_for_modeling_object(300).has_value());
-  EXPECT_EQ(object_map.scene_identity_for_modeling_object(300)->entity, entity);
+  EXPECT_EQ(object_map.scene_identity_for_modeling_object(300)->id, entity);
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -300,8 +1654,8 @@ TEST(ModelingSessionServiceSplitTests,
   scene.set_transform(second, second_transform);
 
   ModelingObjectRuntimeMap object_map;
-  object_map.bind(100, first);
-  object_map.bind(200, second);
+  ASSERT_TRUE(object_map.bind(100, first));
+  ASSERT_TRUE(object_map.bind(200, second));
 
   const std::array<int, 2> requested{200, 100};
   const std::vector<ModelingObjectSceneIdentity> identities =
@@ -309,9 +1663,9 @@ TEST(ModelingSessionServiceSplitTests,
                                                                requested);
 
   ASSERT_EQ(identities.size(), 2U);
-  EXPECT_EQ(identities[0].entity, second);
+  EXPECT_EQ(identities[0].id, second);
   EXPECT_EQ(identities[0].transform.position.x, second_transform.position.x);
-  EXPECT_EQ(identities[1].entity, first);
+  EXPECT_EQ(identities[1].id, first);
   EXPECT_EQ(identities[1].transform.position.x, first_transform.position.x);
 }
 
@@ -332,12 +1686,13 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_TRUE(scene.set_mesh(source, MeshComponent{.mesh = 11u}));
 
   ModelingObjectRuntimeMap object_map;
-  object_map.bind(100, source);
+  ASSERT_TRUE(object_map.bind(100, source));
   object_map.remember_scene_entity(100, scene, source);
   const std::optional<ModelingObjectSceneIdentity> identity =
       object_map.scene_identity_for_modeling_object(100);
   ASSERT_TRUE(identity.has_value());
-  EXPECT_EQ(identity->local_frame_version,
+  ASSERT_TRUE(identity->modeling_object.has_value());
+  EXPECT_EQ(identity->modeling_object->local_frame_version,
             kCanonicalModelingObjectLocalFrameVersion);
 
   ASSERT_TRUE(scene.destroy_entity(source));
@@ -346,9 +1701,11 @@ TEST(ModelingSessionServiceSplitTests,
   const EntityId restored =
       mesh_sync.restore_projected_mesh_entity(scene, *identity);
   ASSERT_EQ(restored, source);
+  ASSERT_TRUE(identity->mesh.has_value());
   ASSERT_TRUE(mesh_sync.bind_projected_object(
-      scene, restored, 100, identity->material_slot, true, 11u,
-      identity->local_frame_version));
+      scene, restored, 100, identity->modeling_object->material_slot,
+      identity->modeling_object->sdk_owned, identity->mesh->mesh,
+      identity->modeling_object->local_frame_version));
   const ModelingObjectComponent *component = scene.modeling_object(restored);
   ASSERT_NE(component, nullptr);
   EXPECT_EQ(component->local_frame_version,
@@ -386,7 +1743,7 @@ TEST(ModelingSessionServiceSplitTests,
   scene.set_material(duplicate, MaterialComponent{.material = 55});
 
   ModelingObjectRuntimeMap object_map;
-  object_map.bind(100, source);
+  ASSERT_TRUE(object_map.bind(100, source));
   const std::array<int, 1> requested{100};
   const std::vector<ModelingObjectSceneIdentity> identities =
       object_map.capture_scene_identities_for_modeling_objects(scene,
@@ -394,8 +1751,8 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_EQ(identities.size(), 1U);
 
   ModelingMeshSyncService mesh_sync;
-  mesh_sync.apply_scene_identity_to_duplicate_entity(scene, duplicate,
-                                                     identities.front());
+  ASSERT_TRUE(mesh_sync.apply_scene_identity_to_duplicate_entity(
+      scene, duplicate, identities.front()));
 
   const TransformComponent *duplicate_transform = scene.transform(duplicate);
   ASSERT_NE(duplicate_transform, nullptr);
@@ -434,371 +1791,6 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_FALSE(mesh_sync.set_entity_material(scene, entity, material));
   EXPECT_FALSE(
       mesh_sync.set_entity_material(scene, kInvalidEntityId, material));
-}
-
-TEST(ModelingSessionServiceSplitTests,
-     MeshSyncPreservesPerEntityPrimaryMaterialsForSharedModelingSlots) {
-  SceneDocument scene;
-  AssetRegistry assets;
-  ModelingObjectRuntimeMap object_map;
-  SceneModelingSyncService scene_sync(object_map);
-  ModelingMeshSyncService mesh_sync;
-
-  const EntityId first = scene.create_entity("First", EntityKind::Mesh);
-  const EntityId second = scene.create_entity("Second", EntityKind::Mesh);
-  scene.set_modeling_object(
-      first, ModelingObjectComponent{.object_id = 100, .material_slot = 0});
-  scene.set_modeling_object(
-      second, ModelingObjectComponent{.object_id = 200, .material_slot = 0});
-  scene.set_material(first, MaterialComponent{.material = 11});
-  scene.set_material(second, MaterialComponent{.material = 22});
-  object_map.bind(100, first);
-  object_map.bind(200, second);
-
-  quader_editor_core::EditorSession session({
-      quader_editor_core::PolygonObject{.id = 100, .material_id = 0},
-      quader_editor_core::PolygonObject{.id = 200, .material_id = 0},
-  });
-
-  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
-      session, scene, assets, scene_sync, true));
-
-  const MaterialComponent *first_material = scene.material(first);
-  const MaterialComponent *second_material = scene.material(second);
-  ASSERT_NE(first_material, nullptr);
-  ASSERT_NE(second_material, nullptr);
-  EXPECT_EQ(first_material->material.embedded_asset(), AssetId{11u});
-  EXPECT_EQ(second_material->material.embedded_asset(), AssetId{22u});
-  EXPECT_FALSE(first_material->material_slots.contains(0u));
-  EXPECT_FALSE(second_material->material_slots.contains(0u));
-  EXPECT_EQ(first_material->material_for_slot(0u).embedded_asset(),
-            AssetId{11u});
-  EXPECT_EQ(second_material->material_for_slot(0u).embedded_asset(),
-            AssetId{22u});
-}
-
-TEST(ModelingSessionServiceSplitTests,
-     MeshSyncCompilesTwoHundredSharedTopologyDuplicatesOnlyOnce) {
-  SceneDocument scene;
-  AssetRegistry assets;
-  ModelingObjectRuntimeMap object_map;
-  SceneModelingSyncService scene_sync(object_map);
-  ModelingMeshSyncService mesh_sync;
-
-  quader_editor_core::PolygonObject prototype;
-  prototype.id = 1;
-  prototype.document = quader_poly::make_cube({});
-  std::vector<quader_editor_core::PolygonObject> objects;
-  objects.reserve(200u);
-  for (int id = 1; id <= 200; ++id) {
-    quader_editor_core::PolygonObject duplicate = prototype;
-    duplicate.id = id;
-    objects.push_back(std::move(duplicate));
-  }
-  quader_editor_core::EditorSession session(objects);
-
-  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
-      session, scene, assets, scene_sync, true));
-  const ModelingMeshSyncStats first = mesh_sync.last_sync_stats();
-  EXPECT_EQ(first.participant_count, 200u);
-  EXPECT_EQ(first.unique_topology_count, 1u);
-  EXPECT_GT(first.unique_authored_topology_bytes, 0u);
-  EXPECT_GT(first.unique_compiled_payload_bytes, 0u);
-  EXPECT_EQ(first.compiled_topology_count, 1u);
-  EXPECT_EQ(first.reused_compilation_count, 199u);
-  ASSERT_EQ(assets.mesh_count(), 200u);
-
-  std::unordered_set<std::uintptr_t> geometry_tokens;
-  std::unordered_set<const quader_poly::Document *> authored_tokens;
-  for (const AssetId mesh_id : assets.mesh_ids()) {
-    const MeshAsset *mesh = assets.mesh(mesh_id);
-    ASSERT_NE(mesh, nullptr);
-    geometry_tokens.insert(mesh->geometry_token());
-    authored_tokens.insert(mesh->authored_polygon_document.get());
-  }
-  EXPECT_EQ(geometry_tokens.size(), 1u);
-  EXPECT_EQ(authored_tokens.size(), 1u);
-
-  // Rehydrate from the scene/asset boundary. Logical assets remain distinct,
-  // but every runtime object must adopt the same interned authored topology
-  // instead of allocating one native document per entity.
-  {
-    ModelingSessionService hydrated(scene, assets);
-    hydrated.reset_from_scene();
-    ASSERT_EQ(hydrated.objects().size(), 200u);
-    authored_tokens.clear();
-    for (const ModelingObjectRecord &record : hydrated.objects()) {
-      const std::optional<MeshAsset> projected =
-          hydrated.compile_object_mesh(record.modeling_object_id);
-      ASSERT_TRUE(projected.has_value());
-      ASSERT_TRUE(projected->authored_polygon_document);
-      authored_tokens.insert(projected->authored_polygon_document.get());
-    }
-    EXPECT_EQ(authored_tokens.size(), 1u);
-  }
-
-  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
-      session, scene, assets, scene_sync, false));
-  const ModelingMeshSyncStats unchanged = mesh_sync.last_sync_stats();
-  EXPECT_TRUE(unchanged.skipped_unchanged);
-  EXPECT_EQ(unchanged.unique_topology_count, 1u);
-  EXPECT_EQ(unchanged.unique_authored_topology_bytes,
-            first.unique_authored_topology_bytes);
-  EXPECT_EQ(unchanged.unique_compiled_payload_bytes,
-            first.unique_compiled_payload_bytes);
-  EXPECT_EQ(unchanged.compiled_topology_count, 0u);
-
-  objects = session.objects();
-  objects.front().document.edit().vertices.front().position.x += 0.25f;
-  session.objects() = std::move(objects);
-  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
-      session, scene, assets, scene_sync, true));
-  const ModelingMeshSyncStats edited = mesh_sync.last_sync_stats();
-  EXPECT_EQ(edited.participant_count, 200u);
-  EXPECT_EQ(edited.unique_topology_count, 2u);
-  EXPECT_EQ(edited.unique_authored_topology_bytes,
-            first.unique_authored_topology_bytes * 2u);
-  EXPECT_EQ(edited.unique_compiled_payload_bytes,
-            first.unique_compiled_payload_bytes * 2u);
-  EXPECT_EQ(edited.compiled_topology_count, 1u);
-  EXPECT_EQ(edited.reused_compilation_count, 0u);
-
-  geometry_tokens.clear();
-  authored_tokens.clear();
-  for (const AssetId mesh_id : assets.mesh_ids()) {
-    const MeshAsset *mesh = assets.mesh(mesh_id);
-    ASSERT_NE(mesh, nullptr);
-    geometry_tokens.insert(mesh->geometry_token());
-    authored_tokens.insert(mesh->authored_polygon_document.get());
-  }
-  EXPECT_EQ(geometry_tokens.size(), 2u);
-  EXPECT_EQ(authored_tokens.size(), 2u);
-}
-
-TEST(ModelingSessionServiceSplitTests,
-     MeshSyncClonesBeforeUpdatingAnAssetSharedWithAnotherSceneEntity) {
-  SceneDocument scene;
-  AssetRegistry assets;
-  ModelingObjectRuntimeMap object_map;
-  SceneModelingSyncService scene_sync(object_map);
-  ModelingMeshSyncService mesh_sync;
-
-  quader_editor_core::PolygonObject object;
-  object.id = 100;
-  object.document = quader_poly::make_cube({});
-  quader_editor_core::EditorSession session({object});
-
-  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
-      session, scene, assets, scene_sync, true));
-  const std::optional<EntityId> projected =
-      object_map.entity_for_modeling_object(100);
-  ASSERT_TRUE(projected.has_value());
-  ASSERT_NE(scene.mesh(*projected), nullptr);
-  const AssetId shared_mesh = scene.mesh(*projected)->mesh;
-  ASSERT_NE(shared_mesh, kInvalidAssetId);
-  ASSERT_NE(assets.mesh(shared_mesh), nullptr);
-  const QVec3 original_first_vertex =
-      assets.mesh(shared_mesh)->geometry().vertices.front().position;
-
-  const EntityId observer = scene.create_entity("Observer", EntityKind::Mesh);
-  scene.set_mesh(observer, MeshComponent{.mesh = shared_mesh});
-
-  quader_editor_core::PolygonObject changed = object;
-  ASSERT_FALSE(changed.document.vertices.empty());
-  changed.document.edit().vertices.front().position.x += 3.0f;
-  session.objects() = {std::move(changed)};
-  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
-      session, scene, assets, scene_sync, false));
-
-  ASSERT_NE(scene.mesh(*projected), nullptr);
-  ASSERT_NE(scene.mesh(observer), nullptr);
-  const AssetId projected_mesh = scene.mesh(*projected)->mesh;
-  EXPECT_NE(projected_mesh, shared_mesh);
-  EXPECT_EQ(scene.mesh(observer)->mesh, shared_mesh);
-  EXPECT_EQ(assets.mesh_count(), 2u);
-  ASSERT_NE(assets.mesh(shared_mesh), nullptr);
-  ASSERT_NE(assets.mesh(projected_mesh), nullptr);
-  EXPECT_FLOAT_EQ(
-      assets.mesh(shared_mesh)->geometry().vertices.front().position.x,
-      original_first_vertex.x);
-  EXPECT_NE(assets.mesh(projected_mesh)->geometry().vertices.front().position.x,
-            original_first_vertex.x);
-}
-
-TEST(ModelingSessionServiceSplitTests,
-     SyncValidityRequiresExactComponentSignatureAndInstalledMeshAsset) {
-  SceneDocument scene;
-  AssetRegistry assets;
-  ModelingObjectRuntimeMap object_map;
-  SceneModelingSyncService scene_sync(object_map);
-  ModelingMeshSyncService mesh_sync;
-
-  quader_editor_core::PolygonObject object;
-  object.id = 100;
-  object.material_id = 7;
-  object.document = quader_poly::make_cube({});
-  quader_editor_core::EditorSession session({object});
-  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
-      session, scene, assets, scene_sync, true));
-  const std::optional<EntityId> entity =
-      object_map.entity_for_modeling_object(object.id);
-  ASSERT_TRUE(entity.has_value());
-  ASSERT_NE(scene.mesh(*entity), nullptr);
-  const AssetId projected_mesh = scene.mesh(*entity)->mesh;
-
-  EXPECT_TRUE(scene_sync.scene_objects_synced_for_current_modeling_content(
-      session, scene, assets));
-  ASSERT_TRUE(scene.set_entity_kind(*entity, EntityKind::Generic));
-  EXPECT_FALSE(scene_sync.scene_objects_synced_for_current_modeling_content(
-      session, scene, assets));
-  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
-      session, scene, assets, scene_sync, false));
-  EXPECT_EQ(scene.kind(*entity), EntityKind::Mesh);
-  EXPECT_TRUE(scene_sync.scene_objects_synced_for_current_modeling_content(
-      session, scene, assets));
-
-  scene.set_modeling_object(
-      *entity,
-      ModelingObjectComponent{.object_id = object.id, .material_slot = 9});
-  EXPECT_FALSE(scene_sync.scene_objects_synced_for_current_modeling_content(
-      session, scene, assets));
-  scene.set_modeling_object(
-      *entity,
-      ModelingObjectComponent{.object_id = object.id, .material_slot = 7});
-  EXPECT_TRUE(scene_sync.scene_objects_synced_for_current_modeling_content(
-      session, scene, assets));
-
-  scene_sync.forget_projected_mesh_signature(object.id);
-  EXPECT_FALSE(scene_sync.scene_objects_synced_for_current_modeling_content(
-      session, scene, assets));
-  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
-      session, scene, assets, scene_sync, true));
-  ASSERT_TRUE(assets.remove_mesh(projected_mesh));
-  EXPECT_FALSE(scene_sync.scene_objects_synced_for_current_modeling_content(
-      session, scene, assets));
-}
-
-TEST(ModelingSessionServiceSplitTests,
-     MeshSyncInvalidSecondObjectPublishesNothingFromTheValidFirstObject) {
-  SceneDocument scene;
-  AssetRegistry assets;
-  ModelingObjectRuntimeMap object_map;
-  SceneModelingSyncService scene_sync(object_map);
-  ModelingMeshSyncService mesh_sync;
-
-  const EntityId sentinel = scene.create_entity("Sentinel", EntityKind::Mesh);
-  ASSERT_TRUE(scene.set_selected(sentinel, true));
-  const std::vector<EntityId> entities_before = scene.entities();
-  const std::vector<EntityId> selected_before = scene.selected_entities();
-  const EntityId active_before = scene.primary_selection();
-  const std::size_t mesh_count_before = assets.mesh_count();
-
-  quader_editor_core::PolygonObject valid;
-  valid.id = 100;
-  valid.document = quader_poly::make_cube({});
-  quader_editor_core::PolygonObject invalid;
-  invalid.id = 200;
-  invalid.document = quader_poly::make_cube({});
-  ASSERT_FALSE(invalid.document.vertices.empty());
-  invalid.document.edit().vertices.front().position.x =
-      std::numeric_limits<float>::quiet_NaN();
-  quader_editor_core::EditorSession session({valid, invalid});
-
-  EXPECT_FALSE(mesh_sync.sync_scene_objects_from_modeling(
-      session, scene, assets, scene_sync, true));
-  EXPECT_EQ(scene.entities(), entities_before);
-  EXPECT_EQ(scene.selected_entities(), selected_before);
-  EXPECT_EQ(scene.primary_selection(), active_before);
-  EXPECT_EQ(assets.mesh_count(), mesh_count_before);
-  EXPECT_FALSE(object_map.entity_for_modeling_object(valid.id).has_value());
-  EXPECT_FALSE(object_map.entity_for_modeling_object(invalid.id).has_value());
-  EXPECT_FALSE(scene_sync.projected_mesh_signature_known(valid.id));
-  EXPECT_FALSE(scene_sync.projected_mesh_signature_known(invalid.id));
-  EXPECT_FALSE(scene_sync.scene_objects_sync_valid());
-}
-
-TEST(ModelingSessionServiceSplitTests,
-     MeshSyncPrevalidatesEveryBoundTargetBeforeRebindingSharedAssets) {
-  SceneDocument scene;
-  AssetRegistry assets;
-  ModelingObjectRuntimeMap object_map;
-  SceneModelingSyncService scene_sync(object_map);
-  ModelingMeshSyncService mesh_sync;
-
-  quader_editor_core::PolygonObject first;
-  first.id = 100;
-  first.document = quader_poly::make_cube({});
-  quader_editor_core::PolygonObject second;
-  second.id = 200;
-  second.document = quader_poly::make_cube({});
-  quader_editor_core::EditorSession session({first, second});
-  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
-      session, scene, assets, scene_sync, true));
-
-  const std::optional<EntityId> first_entity =
-      object_map.entity_for_modeling_object(first.id);
-  ASSERT_TRUE(first_entity.has_value());
-  ASSERT_NE(scene.mesh(*first_entity), nullptr);
-  const AssetId first_mesh = scene.mesh(*first_entity)->mesh;
-  ASSERT_NE(first_mesh, kInvalidAssetId);
-  const EntityId observer = scene.create_entity("Shared Observer");
-  ASSERT_TRUE(scene.set_mesh(observer, MeshComponent{.mesh = first_mesh}));
-
-  const EntityId invalid_target = scene.create_empty("Protected Definition");
-  ASSERT_TRUE(scene.set_instance_definition(invalid_target));
-  object_map.bind(second.id, invalid_target);
-
-  std::vector<quader_editor_core::PolygonObject> changed = session.objects();
-  ASSERT_EQ(changed.size(), 2U);
-  changed[0].document.edit().vertices.front().position.x += 1.0f;
-  changed[1].document.edit().vertices.front().position.y += 1.0f;
-  session.objects() = std::move(changed);
-  const std::size_t mesh_count_before = assets.mesh_count();
-
-  EXPECT_FALSE(mesh_sync.sync_scene_objects_from_modeling(
-      session, scene, assets, scene_sync, true));
-  ASSERT_NE(scene.mesh(*first_entity), nullptr);
-  EXPECT_EQ(scene.mesh(*first_entity)->mesh, first_mesh);
-  EXPECT_EQ(scene.mesh(observer)->mesh, first_mesh);
-  EXPECT_NE(assets.mesh(first_mesh), nullptr);
-  EXPECT_EQ(assets.mesh_count(), mesh_count_before);
-}
-
-TEST(ModelingSessionServiceSplitTests,
-     CreateLatestRejectsInvalidProjectionBeforeSceneAssetOrSelectionMutation) {
-  SceneDocument scene;
-  AssetRegistry assets;
-  ModelingObjectRuntimeMap object_map;
-  SceneModelingSyncService scene_sync(object_map);
-  ModelingMeshSyncService mesh_sync;
-
-  const EntityId sentinel = scene.create_entity("Sentinel", EntityKind::Mesh);
-  ASSERT_TRUE(scene.set_selected(sentinel, true));
-  const std::vector<EntityId> entities_before = scene.entities();
-  const std::vector<EntityId> selected_before = scene.selected_entities();
-  const EntityId active_before = scene.primary_selection();
-  const std::size_t mesh_count_before = assets.mesh_count();
-
-  quader_editor_core::PolygonObject invalid;
-  invalid.id = 300;
-  invalid.document = quader_poly::make_cube({});
-  ASSERT_FALSE(invalid.document.vertices.empty());
-  invalid.document.edit().vertices.front().position.z =
-      std::numeric_limits<float>::infinity();
-  quader_editor_core::EditorSession session({invalid});
-
-  const ModelingCreateBoxResult result =
-      mesh_sync.create_scene_object_from_latest(
-          session, scene, assets, scene_sync, "Invalid", "Created");
-  EXPECT_FALSE(result.ok);
-  EXPECT_FALSE(result.changed);
-  EXPECT_EQ(scene.entities(), entities_before);
-  EXPECT_EQ(scene.selected_entities(), selected_before);
-  EXPECT_EQ(scene.primary_selection(), active_before);
-  EXPECT_EQ(assets.mesh_count(), mesh_count_before);
-  EXPECT_FALSE(object_map.entity_for_modeling_object(invalid.id).has_value());
-  EXPECT_FALSE(scene_sync.projected_mesh_signature_known(invalid.id));
-  EXPECT_FALSE(scene_sync.scene_objects_sync_valid());
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -1336,8 +2328,8 @@ TEST(ModelingSessionServiceSplitTests,
   const EntityId second = scene.create_entity("Second", EntityKind::Mesh);
 
   ModelingObjectRuntimeMap object_map;
-  object_map.bind(100, first);
-  object_map.bind(200, second);
+  ASSERT_TRUE(object_map.bind(100, first));
+  ASSERT_TRUE(object_map.bind(200, second));
 
   quader_editor_core::EditorSession session({
       quader_editor_core::PolygonObject{.id = 100},
@@ -1350,13 +2342,16 @@ TEST(ModelingSessionServiceSplitTests,
   scene.set_active_selection(second);
 
   const SelectionProjectionService projection;
-  EXPECT_TRUE(projection.project_object_selection_from_scene(session, scene,
-                                                             object_map));
+  const SelectionProjectionEditResult projected =
+      projection.project_object_selection_from_scene(
+          selection_snapshot_from_session(session), scene, object_map);
+  EXPECT_TRUE(projected.changed);
 
-  std::vector<int> selected_object_ids = session.selected_object_ids();
+  std::vector<int> selected_object_ids =
+      projected.selection.selected_object_ids();
   std::sort(selected_object_ids.begin(), selected_object_ids.end());
   EXPECT_EQ(selected_object_ids, (std::vector<int>{100, 200}));
-  EXPECT_EQ(session.active_object_id(), 200);
+  EXPECT_EQ(projected.selection.active_object_id(), 200);
 
   std::vector<EntityId> selected_entities = scene.selected_entities();
   std::sort(selected_entities.begin(), selected_entities.end());
@@ -1376,7 +2371,7 @@ TEST(ModelingSessionServiceSplitTests,
     EXPECT_TRUE(scene.set_transform(entity, transform));
 
     ModelingObjectRuntimeMap object_map;
-    object_map.bind(100, entity);
+    EXPECT_TRUE(object_map.bind(100, entity));
 
     quader_poly::Document document;
     document.vertices.reserve(vertex_count);
@@ -1402,11 +2397,16 @@ TEST(ModelingSessionServiceSplitTests,
         100, std::move(selection),
         quader_editor_core::SelectionMode::Vertex);
 
+    const ModelingSelectionProjectionSnapshot selection_snapshot(
+        std::vector<quader_editor_core::PolygonObject>(
+            session.objects().begin(), session.objects().end()),
+        session.selection_mode(), session.active_object_id(),
+        session.state().content_revision, session.state().selection_revision);
     const SelectionProjectionService projection;
     SelectionBoundsWorkStats work;
     const std::optional<SceneBounds> bounds =
-        projection.world_selection_bounds(session, scene, assets, object_map,
-                                          &work);
+        projection.world_selection_bounds(selection_snapshot, scene, assets,
+                                          object_map, &work);
     EXPECT_TRUE(bounds.has_value());
     if (bounds.has_value()) {
       EXPECT_FLOAT_EQ(bounds->min.x, 10.0f);
@@ -1484,6 +2484,44 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
+     ComponentBatchModeOnlyChangeAdvancesSelectionRevision) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Component Revision Box",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+  const ModelingComponentSelectionRequest face_selection{
+      .modeling_object_id = box.object.modeling_object_id,
+      .mode = ModelingSelectionMode::Face,
+      .faces = {1},
+      .edit = ModelingSelectionEdit::Replace,
+      .active_kind = ModelingActiveSelectionKind::Face,
+      .active_face = 1,
+  };
+  ASSERT_TRUE(service.set_component_selection(face_selection).ok);
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Object).ok);
+  ASSERT_EQ(service.selection_summary().mode, ModelingSelectionMode::Object);
+  const std::uint64_t selection_revision_before =
+      service.selection_revision();
+
+  const ModelingCommandResult republished =
+      service.set_component_selection(face_selection);
+  ASSERT_TRUE(republished.ok) << republished.message;
+  EXPECT_TRUE(republished.changed);
+  const ModelingSelectionSummary after = service.selection_summary();
+  EXPECT_EQ(after.mode, ModelingSelectionMode::Face);
+  EXPECT_EQ(after.active_face_id, 1);
+  EXPECT_EQ(after.selected_face_count, 1U);
+  EXPECT_GT(service.selection_revision(), selection_revision_before);
+}
+
+TEST(ModelingSessionServiceSplitTests,
      SelectionProjectionServiceProjectsModelingSelectionIntoScene) {
   SceneDocument scene;
   const EntityId group = scene.create_entity("Group", EntityKind::Empty);
@@ -1491,8 +2529,8 @@ TEST(ModelingSessionServiceSplitTests,
   const EntityId second = scene.create_entity("Second", EntityKind::Mesh);
 
   ModelingObjectRuntimeMap object_map;
-  object_map.bind(100, first);
-  object_map.bind(200, second);
+  ASSERT_TRUE(object_map.bind(100, first));
+  ASSERT_TRUE(object_map.bind(200, second));
 
   quader_editor_core::EditorSession session({
       quader_editor_core::PolygonObject{.id = 100},
@@ -1502,8 +2540,8 @@ TEST(ModelingSessionServiceSplitTests,
   scene.set_selected(group, true);
 
   const SelectionProjectionService projection;
-  EXPECT_TRUE(projection.project_scene_selection_from_modeling(session, scene,
-                                                               object_map));
+  EXPECT_TRUE(projection.project_scene_selection_from_modeling(
+      selection_snapshot_from_session(session), scene, object_map));
 
   std::vector<EntityId> selected_entities = scene.selected_entities();
   std::sort(selected_entities.begin(), selected_entities.end());
@@ -1518,8 +2556,8 @@ TEST(ModelingSessionServiceSplitTests,
   const EntityId second = scene.create_entity("Second", EntityKind::Mesh);
 
   ModelingObjectRuntimeMap object_map;
-  object_map.bind(100, first);
-  object_map.bind(200, second);
+  ASSERT_TRUE(object_map.bind(100, first));
+  ASSERT_TRUE(object_map.bind(200, second));
 
   quader_editor_core::EditorSession session({
       quader_editor_core::PolygonObject{.id = 100},
@@ -1530,14 +2568,15 @@ TEST(ModelingSessionServiceSplitTests,
   const std::array<EntityId, 2> scene_selection{first, second};
   RuntimeObjectSelectionProjectionResult result =
       projection.project_object_selection_for_scene_entities(
-          session, scene_selection, kInvalidEntityId, object_map);
+          selection_snapshot_from_session(session), scene_selection,
+          kInvalidEntityId, object_map);
   EXPECT_TRUE(result.ok);
   EXPECT_TRUE(result.changed);
-  EXPECT_EQ(session.active_object_id(), 200);
+  EXPECT_EQ(result.selection.active_object_id(), 200);
 
   session.set_selected_object_ids({100, 200}, -1);
-  EXPECT_TRUE(projection.project_scene_selection_from_modeling(session, scene,
-                                                               object_map));
+  EXPECT_TRUE(projection.project_scene_selection_from_modeling(
+      selection_snapshot_from_session(session), scene, object_map));
   EXPECT_EQ(scene.primary_selection(), second);
 }
 
@@ -1549,8 +2588,8 @@ TEST(ModelingSessionServiceSplitTests,
   const EntityId second = scene.create_entity("Second", EntityKind::Mesh);
 
   ModelingObjectRuntimeMap object_map;
-  object_map.bind(100, first);
-  object_map.bind(200, second);
+  ASSERT_TRUE(object_map.bind(100, first));
+  ASSERT_TRUE(object_map.bind(200, second));
 
   quader_editor_core::EditorSession session({
       quader_editor_core::PolygonObject{.id = 100},
@@ -1559,38 +2598,44 @@ TEST(ModelingSessionServiceSplitTests,
 
   const SelectionProjectionService projection;
   const std::array<EntityId, 2> selected{first, second};
+  ModelingSelectionProjectionSnapshot selection =
+      selection_snapshot_from_session(session);
   RuntimeObjectSelectionProjectionResult result =
       projection.project_object_selection_for_scene_entities(
-          session, selected, kInvalidEntityId, object_map);
+          selection, selected, kInvalidEntityId, object_map);
   EXPECT_TRUE(result.ok);
   EXPECT_TRUE(result.changed);
   EXPECT_TRUE(result.has_modeling_objects);
+  selection = result.selection;
 
-  std::vector<int> selected_object_ids = session.selected_object_ids();
+  std::vector<int> selected_object_ids = selection.selected_object_ids();
   std::sort(selected_object_ids.begin(), selected_object_ids.end());
   EXPECT_EQ(selected_object_ids, (std::vector<int>{100, 200}));
-  EXPECT_EQ(session.active_object_id(), 200);
+  EXPECT_EQ(selection.active_object_id(), 200);
 
   result = projection.project_object_selection_for_scene_entities(
-      session, selected, second, object_map);
+      selection, selected, second, object_map);
   EXPECT_TRUE(result.ok);
   EXPECT_FALSE(result.changed);
   EXPECT_TRUE(result.has_modeling_objects);
+  selection = result.selection;
 
   result = projection.project_object_selection_for_scene_entities(
-      session, selected, first, object_map);
+      selection, selected, first, object_map);
   EXPECT_TRUE(result.ok);
   EXPECT_TRUE(result.changed);
-  EXPECT_EQ(session.active_object_id(), 100);
+  selection = result.selection;
+  EXPECT_EQ(selection.active_object_id(), 100);
 
   const std::array<EntityId, 1> non_modeling{group};
   result = projection.project_object_selection_for_scene_entities(
-      session, non_modeling, group, object_map);
+      selection, non_modeling, group, object_map);
   EXPECT_TRUE(result.ok);
   EXPECT_TRUE(result.changed);
   EXPECT_FALSE(result.has_modeling_objects);
-  EXPECT_TRUE(session.selected_object_ids().empty());
-  EXPECT_EQ(session.active_object_id(), -1);
+  selection = result.selection;
+  EXPECT_TRUE(selection.selected_object_ids().empty());
+  EXPECT_EQ(selection.active_object_id(), -1);
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -1601,8 +2646,8 @@ TEST(ModelingSessionServiceSplitTests,
   const EntityId second = scene.create_entity("Second", EntityKind::Mesh);
 
   ModelingObjectRuntimeMap object_map;
-  object_map.bind(100, first);
-  object_map.bind(200, second);
+  ASSERT_TRUE(object_map.bind(100, first));
+  ASSERT_TRUE(object_map.bind(200, second));
 
   quader_editor_core::EditorSession session({
       quader_editor_core::PolygonObject{.id = 100},
@@ -1615,13 +2660,16 @@ TEST(ModelingSessionServiceSplitTests,
   scene.set_active_selection(second);
 
   const SelectionProjectionService projection;
-  EXPECT_TRUE(
-      projection.promote_object_selection_for_tool(session, scene, object_map));
+  const SelectionProjectionEditResult promoted =
+      projection.promote_object_selection_for_tool(
+          selection_snapshot_from_session(session), scene, object_map);
+  EXPECT_TRUE(promoted.changed);
 
-  std::vector<int> selected_object_ids = session.selected_object_ids();
+  std::vector<int> selected_object_ids =
+      promoted.selection.selected_object_ids();
   std::sort(selected_object_ids.begin(), selected_object_ids.end());
   EXPECT_EQ(selected_object_ids, (std::vector<int>{100, 200}));
-  EXPECT_EQ(session.active_object_id(), 200);
+  EXPECT_EQ(promoted.selection.active_object_id(), 200);
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -1632,8 +2680,8 @@ TEST(ModelingSessionServiceSplitTests,
   const EntityId second = scene.create_entity("Second", EntityKind::Mesh);
 
   ModelingObjectRuntimeMap object_map;
-  object_map.bind(100, first);
-  object_map.bind(200, second);
+  ASSERT_TRUE(object_map.bind(100, first));
+  ASSERT_TRUE(object_map.bind(200, second));
 
   quader_editor_core::EditorSession session({
       quader_editor_core::PolygonObject{.id = 100},
@@ -1644,12 +2692,14 @@ TEST(ModelingSessionServiceSplitTests,
   scene.set_active_selection(group);
 
   const SelectionProjectionService projection;
-  EXPECT_TRUE(
-      projection.promote_object_selection_for_tool(session, scene, object_map));
+  const SelectionProjectionEditResult promoted =
+      projection.promote_object_selection_for_tool(
+          selection_snapshot_from_session(session), scene, object_map);
+  EXPECT_TRUE(promoted.changed);
 
-  EXPECT_TRUE(session.selected_object_ids().empty());
-  EXPECT_EQ(session.active_object_id(), -1);
-  EXPECT_EQ(session.selection_mode(),
+  EXPECT_TRUE(promoted.selection.selected_object_ids().empty());
+  EXPECT_EQ(promoted.selection.active_object_id(), -1);
+  EXPECT_EQ(promoted.selection.selection_mode(),
             quader_editor_core::SelectionMode::Object);
 }
 
@@ -1922,8 +2972,9 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     SdkPreviewPublicationFailuresRemainRetryableAndAtomic) {
-  constexpr std::array<ModelingSdkProjectionFailurePoint, 2> kFailures = {
+     SdkPreviewPublicationFailuresRestoreOriginalAndEndPreview) {
+  constexpr std::array<ModelingSdkProjectionFailurePoint, 3> kFailures = {
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation,
       ModelingSdkProjectionFailurePoint::PreviewAssetReplace,
       ModelingSdkProjectionFailurePoint::PreviewSceneNotify,
   };
@@ -1961,13 +3012,14 @@ TEST(ModelingSessionServiceSplitTests,
         service.update_transform_extrude_preview({0.0f, 0.0f, 1.0f}, 1.0f);
     EXPECT_FALSE(failed.ok);
     EXPECT_FALSE(failed.changed);
-    EXPECT_TRUE(service.can_cancel_active_preview_for_undo());
+    EXPECT_FALSE(service.can_cancel_active_preview_for_undo());
     EXPECT_EQ(assets.revision(), asset_revision_before);
     EXPECT_EQ(scene.revision(), scene_revision_before);
     EXPECT_EQ(assets.mesh(mesh)->geometry().content_id(), content_before);
 
     service.set_modeling_sdk_projection_failure_for_tests(
         ModelingSdkProjectionFailurePoint::None);
+    ASSERT_TRUE(service.begin_transform_preview(false).ok);
     ASSERT_TRUE(
         service.update_transform_extrude_preview({0.0f, 0.0f, 1.0f}, 1.0f)
             .ok);
@@ -2190,7 +3242,7 @@ TEST(ModelingSessionServiceSplitTests,
       selected, ModelingObjectComponent{.object_id = modeling_object_id});
   ASSERT_TRUE(scene.set_selected(selected, true));
   ASSERT_TRUE(scene.set_active_selection(selected));
-  object_map.bind(modeling_object_id, selected);
+  ASSERT_TRUE(object_map.bind(modeling_object_id, selected));
 
   std::unique_ptr<IUndoableCommand> command =
       create_scene_aware_delete_selection_command(
@@ -2205,7 +3257,7 @@ TEST(ModelingSessionServiceSplitTests,
                     scene.set_modeling_object(
                         restored, ModelingObjectComponent{
                                       .object_id = modeling_object_id});
-                    object_map.bind(modeling_object_id, restored);
+                    EXPECT_TRUE(object_map.bind(modeling_object_id, restored));
                     return ModelingCommandResult{.ok = true, .changed = true};
                   },
               .app_selection_mode =
@@ -2221,8 +3273,12 @@ TEST(ModelingSessionServiceSplitTests,
                   [&](int object_id) {
                     return object_map.entity_for_modeling_object(object_id);
                   },
-              .sync_object_selection_from_scene = [](bool) {},
-              .clear_runtime_object_selection_for_group_mode = [] {},
+              .sync_object_selection_from_scene = [](bool) {
+                return ModelingCommandResult{.ok = true};
+              },
+              .clear_runtime_object_selection_for_group_mode = [] {
+                return ModelingCommandResult{.ok = true};
+              },
               .invalidate_selection_overlay_caches = [] {},
           });
 
@@ -2243,6 +3299,186 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(scene.name(*restored_entity)->name, "Selected Runtime");
   ASSERT_NE(scene.name(stale), nullptr);
   EXPECT_EQ(scene.name(stale)->name, "Stale Duplicate");
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     SceneAwareDeleteUndoSelectionPublicationFailureRestoresDeletedState) {
+  SceneDocument scene;
+  const EntityId selected =
+      scene.create_entity("Selected Scene Object", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_selected(selected, true));
+  ASSERT_TRUE(scene.set_active_selection(selected));
+
+  bool fail_selection_publication = false;
+  std::unique_ptr<IUndoableCommand> command =
+      create_scene_aware_delete_selection_command(
+          scene,
+          SceneAwareDeleteRuntime{
+              .capture_modeling_memento =
+                  [] { return ModelingSessionMemento{}; },
+              .restore_modeling_memento =
+                  [](const ModelingSessionMemento &) {
+                    return ModelingCommandResult{.ok = true};
+                  },
+              .app_selection_mode =
+                  [] { return ModelingSelectionMode::Object; },
+              .set_app_selection_mode = [](ModelingSelectionMode) {},
+              .sync_object_selection_from_scene =
+                  [&](bool) {
+                    return fail_selection_publication
+                               ? ModelingCommandResult{
+                                     .ok = false,
+                                     .message =
+                                         "Injected selection publication failure.",
+                                 }
+                               : ModelingCommandResult{.ok = true};
+                  },
+              .clear_runtime_object_selection_for_group_mode = [] {
+                return ModelingCommandResult{.ok = true};
+              },
+              .invalidate_selection_overlay_caches = [] {},
+          });
+
+  const CommandResult deleted = command->redo();
+  ASSERT_TRUE(deleted.ok) << deleted.message;
+  EXPECT_TRUE(deleted.changed);
+  EXPECT_FALSE(scene.exists(selected));
+  const std::uint64_t deleted_revision = scene.revision();
+  const std::uint64_t deleted_selection_revision = scene.selection_revision();
+
+  fail_selection_publication = true;
+  const CommandResult restored = command->undo();
+  EXPECT_FALSE(restored.ok) << restored.message;
+  EXPECT_FALSE(restored.changed) << restored.message;
+  EXPECT_NE(restored.message.find("Injected selection publication failure"),
+            std::string::npos);
+  EXPECT_FALSE(scene.exists(selected));
+  EXPECT_TRUE(scene.selected_entities().empty());
+  EXPECT_EQ(scene.revision(), deleted_revision);
+  EXPECT_EQ(scene.selection_revision(), deleted_selection_revision);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     SceneAwareDeleteInitialDestroyFailureRestoresNestedSceneExactly) {
+  SceneDocument scene;
+  const EntityId group = scene.create_entity("Group", EntityKind::Empty);
+  const EntityId generic = scene.create_empty("Generic Child");
+  const EntityId curve = scene.create_entity("Curve Child", EntityKind::Curve);
+  ASSERT_TRUE(scene.set_parent(generic, group));
+  ASSERT_TRUE(scene.set_parent(curve, group));
+  scene.set_curve(curve, CurveComponent{77});
+  ASSERT_TRUE(scene.set_selected(group, true));
+  ASSERT_TRUE(scene.set_active_selection(group));
+  const std::uint64_t revision_before = scene.revision();
+  const std::uint64_t selection_revision_before = scene.selection_revision();
+
+  std::unique_ptr<IUndoableCommand> command =
+      create_scene_aware_delete_selection_command(
+          scene,
+          SceneAwareDeleteRuntime{
+              .capture_modeling_memento =
+                  [] { return ModelingSessionMemento{}; },
+              .restore_modeling_memento =
+                  [](const ModelingSessionMemento &) {
+                    return ModelingCommandResult{.ok = true};
+                  },
+              .app_selection_mode =
+                  [] { return ModelingSelectionMode::Group; },
+              .set_app_selection_mode = [](ModelingSelectionMode) {},
+              .destroy_scene_entities =
+                  [&](const std::vector<EntityId> &entities) {
+                    EXPECT_EQ(entities, std::vector<EntityId>{group});
+                    EXPECT_TRUE(scene.destroy_entities(entities));
+                    return false;
+                  },
+              .sync_object_selection_from_scene = [](bool) {
+                return ModelingCommandResult{.ok = true};
+              },
+              .clear_runtime_object_selection_for_group_mode = [] {
+                return ModelingCommandResult{.ok = true};
+              },
+              .invalidate_selection_overlay_caches = [] {},
+          });
+
+  const CommandResult failed = command->redo();
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  ASSERT_TRUE(scene.exists(group));
+  ASSERT_TRUE(scene.exists(generic));
+  ASSERT_TRUE(scene.exists(curve));
+  EXPECT_EQ(scene.parent(generic), group);
+  EXPECT_EQ(scene.parent(curve), group);
+  ASSERT_NE(scene.curve(curve), nullptr);
+  EXPECT_EQ(scene.curve(curve)->curve, 77u);
+  EXPECT_EQ(scene.selected_entities(), std::vector<EntityId>{group});
+  EXPECT_EQ(scene.primary_selection(), group);
+  EXPECT_EQ(scene.revision(), revision_before);
+  EXPECT_EQ(scene.selection_revision(), selection_revision_before);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     SceneAwareDeleteUndoRestoreFailurePreservesDeletedStateExactly) {
+  SceneDocument scene;
+  constexpr int kObjectId = 81;
+  const EntityId selected =
+      scene.create_entity("Selected Modeled Object", EntityKind::Mesh);
+  scene.set_modeling_object(selected,
+                            ModelingObjectComponent{.object_id = kObjectId});
+  ASSERT_TRUE(scene.set_selected(selected, true));
+  ASSERT_TRUE(scene.set_active_selection(selected));
+
+  bool fail_restore = false;
+  std::unique_ptr<IUndoableCommand> command =
+      create_scene_aware_delete_selection_command(
+          scene,
+          SceneAwareDeleteRuntime{
+              .capture_modeling_memento =
+                  [] { return ModelingSessionMemento{}; },
+              .restore_modeling_memento =
+                  [&](const ModelingSessionMemento &) {
+                    return fail_restore
+                               ? ModelingCommandResult{
+                                     .ok = false,
+                                     .changed = false,
+                                     .message =
+                                         "Injected modeling restore failure.",
+                                 }
+                               : ModelingCommandResult{.ok = true,
+                                                       .changed = true};
+                  },
+              .app_selection_mode =
+                  [] { return ModelingSelectionMode::Object; },
+              .set_app_selection_mode = [](ModelingSelectionMode) {},
+              .delete_modeling_objects =
+                  [](const std::vector<int> &objects) {
+                    EXPECT_EQ(objects, std::vector<int>{kObjectId});
+                    return ModelingCommandResult{.ok = true, .changed = true};
+                  },
+              .sync_object_selection_from_scene = [](bool) {
+                return ModelingCommandResult{.ok = true};
+              },
+              .clear_runtime_object_selection_for_group_mode = [] {
+                return ModelingCommandResult{.ok = true};
+              },
+              .invalidate_selection_overlay_caches = [] {},
+          });
+
+  const CommandResult deleted = command->redo();
+  ASSERT_TRUE(deleted.ok) << deleted.message;
+  ASSERT_FALSE(scene.exists(selected));
+  const std::uint64_t deleted_revision = scene.revision();
+  const std::uint64_t deleted_selection_revision = scene.selection_revision();
+
+  fail_restore = true;
+  const CommandResult failed = command->undo();
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  EXPECT_NE(failed.message.find("Injected modeling restore failure"),
+            std::string::npos);
+  EXPECT_FALSE(scene.exists(selected));
+  EXPECT_TRUE(scene.selected_entities().empty());
+  EXPECT_EQ(scene.revision(), deleted_revision);
+  EXPECT_EQ(scene.selection_revision(), deleted_selection_revision);
 }
 
 TEST(ModelingSessionServiceSplitTests, ServicesOwnIndependentModelingState) {
@@ -2585,6 +3821,77 @@ TEST(ModelingSessionServiceSplitTests,
       service.resolve_executable_action(summary, "delete_selection", false);
   EXPECT_TRUE(enabled_result.ok);
   EXPECT_EQ(enabled_result.action.action_id, "delete_selection");
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     DuplicateMeshesSharesObjectOrGroupPolicyAcrossActionSetAndAvailability) {
+  const ModelingInstantOperationCatalogEntry *duplicate =
+      find_modeling_instant_operation_catalog_entry(
+          ModelingInstantOperationId::DuplicateMeshes);
+  ASSERT_NE(duplicate, nullptr);
+  EXPECT_EQ(duplicate->availability.requirement,
+            ModelingActionSelectionRequirement::ObjectOrGroupSelection);
+  EXPECT_EQ(duplicate->availability.minimum_selected_objects, 1U);
+
+  ModelingContextActionService actions;
+  const ModelingActionQuery query{
+      .surface = ModelingActionSurface::ViewportContextMenu,
+      .include_disabled = true,
+  };
+  for (const ModelingSelectionMode mode : {ModelingSelectionMode::Object,
+                                           ModelingSelectionMode::Group}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    const ModelingSelectionSummary selected{
+        .mode = mode,
+        .has_selection = true,
+        .active_kind = ModelingActiveSelectionKind::Object,
+        .selected_object_count = 1,
+    };
+
+    EXPECT_TRUE(modeling_instant_operation_enabled(*duplicate, selected));
+    EXPECT_TRUE(ModelingActionCatalog::action_available(selected,
+                                                        duplicate->id));
+    const ModelingActionSet action_set =
+        actions.action_set(selected, query, false);
+    ASSERT_EQ(action_set.panels.size(), 1U);
+    const auto item = std::find_if(
+        action_set.panels.front().actions.begin(),
+        action_set.panels.front().actions.end(),
+        [&](const ModelingActionItem &candidate) {
+          return candidate.action_id == duplicate->id;
+        });
+    ASSERT_NE(item, action_set.panels.front().actions.end());
+    EXPECT_EQ(item->visibility, ModelingActionVisibility::Enabled);
+    EXPECT_TRUE(actions.resolve_executable_action(selected, duplicate->id,
+                                                  false)
+                    .ok);
+  }
+
+  const ModelingSelectionSummary empty_group{
+      .mode = ModelingSelectionMode::Group,
+  };
+  EXPECT_FALSE(modeling_instant_operation_enabled(*duplicate, empty_group));
+  const std::optional<ModelingActionItem> disabled =
+      ModelingActionCatalog::action_for(empty_group, duplicate->id);
+  ASSERT_TRUE(disabled.has_value());
+  EXPECT_EQ(disabled->visibility, ModelingActionVisibility::Disabled);
+  EXPECT_EQ(disabled->disabled_reason_key,
+            "modeling.action.disabled.minimum_object");
+  EXPECT_EQ(disabled->disabled_reason_count, 1U);
+
+  const ModelingSelectionSummary vertex_selection{
+      .mode = ModelingSelectionMode::Vertex,
+      .has_selection = true,
+      .active_kind = ModelingActiveSelectionKind::Vertex,
+      .selected_object_count = 1,
+      .selected_vertex_count = 1,
+  };
+  EXPECT_FALSE(
+      modeling_instant_operation_enabled(*duplicate, vertex_selection));
+  const std::optional<ModelingActionItem> hidden =
+      ModelingActionCatalog::action_for(vertex_selection, duplicate->id);
+  ASSERT_TRUE(hidden.has_value());
+  EXPECT_EQ(hidden->visibility, ModelingActionVisibility::Hidden);
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -3511,7 +4818,7 @@ protected:
 };
 
 TEST_F(CurveModelingProjectionTests,
-       CancelPreviewRestoresExactProjectionRevisionsAndKeepsRedo) {
+       CancelPreviewRestoresPayloadAndExactOwnerRevisionsAndKeepsRedo) {
   const auto curve = create_curve(editor_);
   const auto original = read_curve(editor_, curve);
   const auto edited = with_middle_height(original, 3.0F);
@@ -3531,6 +4838,50 @@ TEST_F(CurveModelingProjectionTests,
   ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
   expect_curve(editor_, curve, original);
   EXPECT_EQ(read_curve(editor_, curve).content_identity(), publication);
+  EXPECT_EQ(session_.assets().curve_revision(identity->curve), asset_revision);
+  expect_same_revisions(editor_.revisions(), revisions);
+  expect_same_history(editor_.query().history(), history);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  expect_curve(editor_, curve, edited);
+}
+
+TEST_F(CurveModelingProjectionTests,
+       NoOpCurvePreviewUpdateDoesNotPublishAndKeepsRedo) {
+  const auto curve = create_curve(editor_);
+  const auto original = read_curve(editor_, curve);
+  const auto edited = with_middle_height(original, 3.0F);
+  ASSERT_TRUE(editor_.modeling().replace_curve(curve, edited).ok());
+  ASSERT_TRUE(editor_.history().undo().ok());
+  const auto revisions = editor_.revisions();
+  const auto history = editor_.query().history();
+  ASSERT_TRUE(history.can_redo);
+  const auto identity = editor_.query().entity(curve.entity);
+  ASSERT_TRUE(identity.has_value());
+  const auto asset_revision = session_.assets().curve_revision(identity->curve);
+
+  ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
+  const ModelingSdkProjectionStats before_update =
+      session_.modeling().modeling_sdk_projection_stats_for_tests();
+  const auto unchanged = editor_.modeling().update_curve_preview(original);
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.changed());
+  const ModelingSdkProjectionStats after_update =
+      session_.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_update.curve_preview_checkpoint_capture_count,
+            before_update.curve_preview_checkpoint_capture_count);
+  EXPECT_EQ(after_update.curve_preview_checkpoint_curve_asset_count,
+            before_update.curve_preview_checkpoint_curve_asset_count);
+  EXPECT_EQ(after_update.preview_publication_count,
+            before_update.preview_publication_count);
+  EXPECT_EQ(after_update.asset_publication_count,
+            before_update.asset_publication_count);
+  EXPECT_EQ(after_update.scene_publication_count,
+            before_update.scene_publication_count);
+
+  const auto committed = editor_.modeling().commit_curve_preview();
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_FALSE(committed.changed());
+  expect_curve(editor_, curve, original);
   EXPECT_EQ(session_.assets().curve_revision(identity->curve), asset_revision);
   expect_same_revisions(editor_.revisions(), revisions);
   expect_same_history(editor_.query().history(), history);
@@ -3622,7 +4973,7 @@ TEST_F(CurveModelingProjectionTests,
 }
 
 TEST_F(CurveModelingProjectionTests,
-       PreviewBeginAndUpdateFailuresRemainAtomicAndRetryable) {
+       PreviewBeginAndUpdateFailuresRestoreOriginalAndEndPreview) {
   const auto curve = create_curve(editor_);
   const auto original = read_curve(editor_, curve);
   const auto first = with_middle_height(original, 2.0F);
@@ -3632,31 +4983,107 @@ TEST_F(CurveModelingProjectionTests,
   EXPECT_FALSE(editor_.modeling().begin_curve_preview(curve).ok());
   inject(ModelingSdkProjectionFailurePoint::None);
   expect_same_revisions(editor_.revisions(), original_revisions);
-  ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
-  ASSERT_TRUE(editor_.modeling().update_curve_preview(first).ok());
-  const auto revisions = editor_.revisions();
-  const auto history = editor_.query().history();
+  const auto original_history = editor_.query().history();
   constexpr std::array failures{
       ModelingSdkProjectionFailurePoint::AfterSdkMutation,
       ModelingSdkProjectionFailurePoint::PreviewAssetReplace,
       ModelingSdkProjectionFailurePoint::PreviewSceneNotify};
   for (const auto point : failures) {
     SCOPED_TRACE(static_cast<int>(point));
+    ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
+    ASSERT_TRUE(editor_.modeling().update_curve_preview(first).ok());
     inject(point);
     const auto failed = editor_.modeling().update_curve_preview(second);
     EXPECT_FALSE(failed.ok());
     EXPECT_FALSE(failed.changed());
     inject(ModelingSdkProjectionFailurePoint::None);
-    expect_curve(editor_, curve, first);
+    expect_curve(editor_, curve, original);
     expect_curve(editor_, curve, original, false);
-    expect_same_revisions(editor_.revisions(), revisions);
-    expect_same_history(editor_.query().history(), history);
+    expect_same_revisions(editor_.revisions(), original_revisions);
+    expect_same_history(editor_.query().history(), original_history);
+    const auto inactive_cancel = editor_.modeling().cancel_curve_preview();
+    EXPECT_TRUE(inactive_cancel.ok());
+    EXPECT_FALSE(inactive_cancel.changed());
+    EXPECT_FALSE(session_.modeling().curve_document_preview_active());
   }
+  ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
   ASSERT_TRUE(editor_.modeling().update_curve_preview(second).ok());
   expect_curve(editor_, curve, second);
   ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
   expect_curve(editor_, curve, original);
   expect_same_revisions(editor_.revisions(), original_revisions);
+}
+
+TEST_F(CurveModelingProjectionTests,
+       ParticipantAssetMutationRejectsNoOpUpdateAndCancelWithoutRewind) {
+  const auto curve = create_curve(editor_);
+  const auto original = read_curve(editor_, curve);
+  const auto edited = with_middle_height(original, 4.0F);
+  ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
+  ASSERT_TRUE(editor_.modeling().update_curve_preview(edited).ok());
+  const auto identity = editor_.query().entity(curve.entity);
+  ASSERT_TRUE(identity.has_value());
+  const CurveAsset *published = session_.assets().curve(identity->curve);
+  ASSERT_NE(published, nullptr);
+  CurveAsset external = *published;
+  external.name = "Externally Mutated Preview Asset";
+  ASSERT_TRUE(
+      session_.assets().replace_curve(identity->curve, std::move(external)));
+  const auto external_revision =
+      session_.assets().curve_revision(identity->curve);
+  const auto revisions = editor_.revisions();
+  const auto history = editor_.query().history();
+
+  const auto no_op = editor_.modeling().update_curve_preview(edited);
+  EXPECT_FALSE(no_op.ok());
+  EXPECT_FALSE(no_op.changed());
+  EXPECT_EQ(no_op.error_message(),
+            "Curve preview participants changed outside this preview.");
+  const auto canceled = editor_.modeling().cancel_curve_preview();
+  EXPECT_FALSE(canceled.ok());
+  EXPECT_FALSE(canceled.changed());
+  ASSERT_TRUE(session_.modeling().curve_document_preview_active());
+  const CurveAsset *retained = session_.assets().curve(identity->curve);
+  ASSERT_NE(retained, nullptr);
+  EXPECT_EQ(retained->name, "Externally Mutated Preview Asset");
+  EXPECT_EQ(session_.assets().curve_revision(identity->curve),
+            external_revision);
+  expect_curve(editor_, curve, edited);
+  expect_curve(editor_, curve, original, false);
+  expect_same_revisions(editor_.revisions(), revisions);
+  expect_same_history(editor_.query().history(), history);
+  session_.modeling().reset_from_scene();
+}
+
+TEST_F(CurveModelingProjectionTests,
+       ParticipantCurveBindingMutationRejectsCancelWithoutRewind) {
+  const auto source = create_curve(editor_);
+  const auto peer = create_curve(editor_);
+  const auto original = read_curve(editor_, source);
+  ASSERT_TRUE(editor_.modeling().begin_curve_preview(source).ok());
+  ASSERT_TRUE(editor_.modeling().update_curve_preview(
+      with_middle_height(original, 4.0F)).ok());
+  const auto peer_identity = editor_.query().entity(peer.entity);
+  ASSERT_TRUE(peer_identity.has_value());
+  ASSERT_TRUE(session_.scene().set_curve(
+      source.entity, CurveComponent{.curve = peer_identity->curve}));
+  const auto binding_revision = session_.scene().curve_binding_revision();
+  const auto revisions = editor_.revisions();
+  const auto history = editor_.query().history();
+
+  const auto canceled = editor_.modeling().cancel_curve_preview();
+  EXPECT_FALSE(canceled.ok());
+  EXPECT_FALSE(canceled.changed());
+  EXPECT_EQ(canceled.error_message(),
+            "Curve preview participants changed outside this preview.");
+  ASSERT_TRUE(session_.modeling().curve_document_preview_active());
+  const CurveComponent *retained = session_.scene().curve(source.entity);
+  ASSERT_NE(retained, nullptr);
+  EXPECT_EQ(retained->curve, peer_identity->curve);
+  EXPECT_EQ(session_.scene().curve_binding_revision(), binding_revision);
+  expect_same_revisions(editor_.revisions(), revisions);
+  expect_same_history(editor_.query().history(), history);
+  session_.modeling().reset_from_scene();
 }
 
 TEST_F(CurveModelingProjectionTests,
@@ -3668,10 +5095,31 @@ TEST_F(CurveModelingProjectionTests,
   const MeshAsset *mesh_asset = session_.assets().mesh(mesh_identity->mesh);
   ASSERT_NE(mesh_asset, nullptr);
   const MeshAsset shared_payload = *mesh_asset;
-  constexpr std::size_t kUnrelatedMeshCount = 512U;
-  for (std::size_t index = 0; index < kUnrelatedMeshCount; ++index) {
-    ASSERT_NE(session_.assets().add_mesh(shared_payload), kInvalidAssetId);
-    ASSERT_NE(session_.scene().create_empty("Unrelated"), kInvalidEntityId);
+  const auto curve_identity = editor_.query().entity(curve.entity);
+  ASSERT_TRUE(curve_identity.has_value());
+  const CurveAsset *curve_asset =
+      session_.assets().curve(curve_identity->curve);
+  ASSERT_NE(curve_asset, nullptr);
+  const CurveAsset shared_curve_payload = *curve_asset;
+  constexpr std::size_t kUnrelatedObjectCount = 128U;
+  for (std::size_t index = 0; index < kUnrelatedObjectCount; ++index) {
+    const AssetId unrelated_mesh =
+        session_.assets().add_mesh(shared_payload);
+    ASSERT_NE(unrelated_mesh, kInvalidAssetId);
+    const EntityId mesh_entity =
+        session_.scene().create_empty("Unrelated Mesh");
+    ASSERT_NE(mesh_entity, kInvalidEntityId);
+    ASSERT_TRUE(session_.scene().set_mesh(
+        mesh_entity, MeshComponent{.mesh = unrelated_mesh}));
+
+    const AssetId unrelated_curve =
+        session_.assets().add_curve(shared_curve_payload);
+    ASSERT_NE(unrelated_curve, kInvalidAssetId);
+    const EntityId curve_entity =
+        session_.scene().create_empty("Unrelated Curve");
+    ASSERT_NE(curve_entity, kInvalidEntityId);
+    ASSERT_TRUE(session_.scene().set_curve(
+        curve_entity, CurveComponent{.curve = unrelated_curve}));
   }
 
   const auto original = read_curve(editor_, curve);
@@ -3708,8 +5156,7 @@ TEST_F(CurveModelingProjectionTests,
   EXPECT_EQ(after_first.curve_preview_checkpoint_capture_count,
             before.curve_preview_checkpoint_capture_count + 1U);
   EXPECT_EQ(after_first.curve_preview_checkpoint_curve_asset_count,
-            before.curve_preview_checkpoint_curve_asset_count +
-                session_.assets().curve_count());
+            before.curve_preview_checkpoint_curve_asset_count + 1U);
   EXPECT_EQ(after_first.curve_preview_shared_binding_scan_count,
             before.curve_preview_shared_binding_scan_count);
   EXPECT_EQ(after_first.curve_preview_shared_binding_entity_visit_count,
@@ -3737,8 +5184,7 @@ TEST_F(CurveModelingProjectionTests,
   EXPECT_EQ(after_second.curve_preview_checkpoint_capture_count,
             after_first.curve_preview_checkpoint_capture_count + 1U);
   EXPECT_EQ(after_second.curve_preview_checkpoint_curve_asset_count,
-            after_first.curve_preview_checkpoint_curve_asset_count +
-                session_.assets().curve_count());
+            after_first.curve_preview_checkpoint_curve_asset_count + 1U);
   EXPECT_EQ(after_second.native_selection_projection_build_count,
             after_first.native_selection_projection_build_count);
   EXPECT_EQ(session_.modeling().transformed_picking_projection_build_count(),
@@ -3759,6 +5205,10 @@ TEST_F(CurveModelingProjectionTests,
   EXPECT_EQ(after_mesh.native_selection_projection_build_count,
             after_second.native_selection_projection_build_count + 1U);
   ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
+  expect_curve(editor_, curve, original);
+  ASSERT_NE(session_.assets().mesh(mesh_identity->mesh), nullptr);
+  EXPECT_EQ(session_.assets().mesh(mesh_identity->mesh)->name,
+            "Externally Updated Mesh");
 
   const auto before_selection =
       session_.modeling().modeling_sdk_projection_stats_for_tests();
@@ -3791,9 +5241,6 @@ TEST_F(CurveModelingProjectionTests,
       overlay_frame_fingerprint(baseline);
   const std::uint64_t baseline_signature =
       session_.modeling().selection_overlay_signature();
-  const auto baseline_stats =
-      session_.modeling().modeling_sdk_projection_stats_for_tests();
-
   for (const float height : {2.0F, 3.0F, 4.0F}) {
     ASSERT_TRUE(editor_.modeling().update_curve_preview(
         with_middle_height(original, height)).ok());
@@ -3802,10 +5249,6 @@ TEST_F(CurveModelingProjectionTests,
     EXPECT_EQ(overlay_frame_fingerprint(after_preview), baseline_fingerprint);
     EXPECT_EQ(session_.modeling().selection_overlay_signature(),
               baseline_signature);
-    EXPECT_EQ(session_.modeling()
-                  .modeling_sdk_projection_stats_for_tests()
-                  .native_selection_projection_build_count,
-              baseline_stats.native_selection_projection_build_count);
   }
 
   ASSERT_TRUE(
@@ -3813,10 +5256,6 @@ TEST_F(CurveModelingProjectionTests,
   const ViewportOverlayFrame after_selection =
       session_.modeling().selection_overlay_frame();
   EXPECT_NE(overlay_frame_fingerprint(after_selection), baseline_fingerprint);
-  EXPECT_GT(session_.modeling()
-                .modeling_sdk_projection_stats_for_tests()
-                .native_selection_projection_build_count,
-            baseline_stats.native_selection_projection_build_count);
   ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
 }
 
@@ -3833,6 +5272,7 @@ TEST_F(CurveModelingProjectionTests,
   const auto failed = editor_.modeling().commit_curve_preview();
   EXPECT_FALSE(failed.ok());
   EXPECT_FALSE(failed.changed());
+  EXPECT_TRUE(session_.modeling().curve_document_preview_active());
   inject(ModelingSdkProjectionFailurePoint::None);
   expect_curve(editor_, curve, edited);
   expect_curve(editor_, curve, original, false);
@@ -3875,7 +5315,9 @@ TEST_F(CurveModelingProjectionTests,
 }
 
 TEST_F(CurveModelingProjectionTests,
-       ExternalCancelAndSceneRehydrateNeverReusePreviewPointIds) {
+       UnrelatedSceneEditSurvivesCancelAndPointIdsRemainMonotonic) {
+  const auto companion = create_box(editor_);
+  const auto peer = create_curve(editor_);
   const auto curve = create_curve(editor_);
   const auto original = read_curve(editor_, curve, false);
   ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
@@ -3886,19 +5328,39 @@ TEST_F(CurveModelingProjectionTests,
   const auto canceled_point = preview.value().document.points().back().id;
   ASSERT_TRUE(editor_.modeling().update_curve_preview(preview.value().document).ok());
 
-  // Inject another scene owner's transform publication while the curve preview
-  // remains active, forcing cancellation to preserve that external scene edit.
-  const auto *current_transform = session_.scene().transform(curve.entity);
+  // An unrelated scene participant may publish while the curve preview is
+  // active. Cancel restores only the enrolled curve projection.
+  const auto *current_transform = session_.scene().transform(companion.entity);
   ASSERT_NE(current_transform, nullptr);
   auto moved = *current_transform;
   moved.position = {3.0F, 2.0F, 1.0F};
-  ASSERT_TRUE(session_.scene().set_transform(curve.entity, moved));
+  ASSERT_TRUE(session_.scene().set_transform(companion.entity, moved));
+  const auto peer_identity = editor_.query().entity(peer.entity);
+  ASSERT_TRUE(peer_identity.has_value());
+  const CurveAsset *peer_asset =
+      session_.assets().curve(peer_identity->curve);
+  ASSERT_NE(peer_asset, nullptr);
+  CurveAsset concurrent_curve = *peer_asset;
+  concurrent_curve.name = "Concurrent Unrelated Curve";
+  const AssetId concurrent_curve_id =
+      session_.assets().add_curve(std::move(concurrent_curve));
+  ASSERT_NE(concurrent_curve_id, kInvalidAssetId);
+  ASSERT_TRUE(session_.scene().set_curve(
+      peer.entity, CurveComponent{.curve = concurrent_curve_id}));
   ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
   const auto canceled = read_curve(editor_, curve, false);
   EXPECT_TRUE(canceled.has_same_geometry(original));
   EXPECT_GT(canceled.identity_high_water().next_point_index, canceled_point.index);
 
   session_.modeling().reset_from_scene();
+
+  const auto retained_peer = editor_.query().entity(peer.entity);
+  ASSERT_TRUE(retained_peer.has_value());
+  EXPECT_EQ(retained_peer->curve, concurrent_curve_id);
+  const CurveAsset *retained_concurrent =
+      session_.assets().curve(concurrent_curve_id);
+  ASSERT_NE(retained_concurrent, nullptr);
+  EXPECT_EQ(retained_concurrent->name, "Concurrent Unrelated Curve");
 
   auto next = editor_.modeling().curve_snapshot(curve, false);
   ASSERT_TRUE(next.ok()) << next.error_message();
@@ -3911,7 +5373,7 @@ TEST_F(CurveModelingProjectionTests,
   ASSERT_TRUE(replaced.ok()) << replaced.error_message();
   EXPECT_TRUE(replaced.changed());
   expect_curve(editor_, curve, next.value().document, false);
-  const auto entity = editor_.query().entity(curve.entity);
+  const auto entity = editor_.query().entity(companion.entity);
   ASSERT_TRUE(entity.has_value());
   EXPECT_FLOAT_EQ(entity->transform.position.x, 3.0F);
   EXPECT_FLOAT_EQ(entity->transform.position.y, 2.0F);
@@ -3919,20 +5381,23 @@ TEST_F(CurveModelingProjectionTests,
 }
 
 TEST_F(CurveModelingProjectionTests,
-       CancelAfterExternalDeletionDoesNotResurrectTheCurve) {
+       ParticipantDeletionRejectsCancelWithoutResurrectingTheCurve) {
   const auto mesh = create_box(editor_);
   const auto curve = create_curve(editor_);
   const auto original = read_curve(editor_, curve);
   ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
   ASSERT_TRUE(editor_.modeling().update_curve_preview(
       with_middle_height(original, 4.0F)).ok());
-  // Simulate a different scene owner removing the preview source. Cancellation
-  // must not replay its captured scene checkpoint and resurrect that entity.
+  // A structural edit to an enrolled participant invalidates the retained
+  // fence. Cancellation must reject it without replaying the baseline.
   ASSERT_TRUE(session_.scene().destroy_entity(curve.entity));
-  ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
+  const auto canceled = editor_.modeling().cancel_curve_preview();
+  EXPECT_FALSE(canceled.ok());
+  EXPECT_FALSE(canceled.changed());
   EXPECT_FALSE(editor_.query().entity(curve.entity).has_value());
   EXPECT_FALSE(editor_.modeling().curve_snapshot(curve).ok());
   EXPECT_TRUE(editor_.query().entity(mesh.entity).has_value());
+  session_.modeling().reset_from_scene();
   EXPECT_EQ(editor_.query().modeling_objects().size(), 1U);
 }
 
@@ -3964,6 +5429,7 @@ TEST_F(CurveModelingProjectionTests,
   EXPECT_FALSE(failed.changed());
   EXPECT_EQ(failed.error_message(), "Curve preview projection could not be published.");
   inject(ModelingSdkProjectionFailurePoint::None);
+  EXPECT_FALSE(session_.modeling().curve_document_preview_active());
 
   for (const auto object : {source, peer}) {
     const auto entity = editor_.query().entity(object.entity);

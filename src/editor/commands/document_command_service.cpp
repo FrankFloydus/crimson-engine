@@ -28,6 +28,7 @@
 #include "editor/commands/document/set_scene_settings_command.hpp"
 #include "editor/commands/document/set_visibility_command.hpp"
 #include "editor/commands/document/ungroup_selection_command.hpp"
+#include "editor/selection/checked_selection_publication_command.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_transform.hpp"
 
@@ -74,6 +75,18 @@ bool document_command_entity_is_modeling_owned(const SceneDocument &scene,
   return scene.modeling_object(entity) != nullptr;
 }
 
+bool document_command_hierarchy_contains_modeling_owned_entity(
+    const SceneDocument &scene, EntityId root) {
+  if (root == kInvalidEntityId || !scene.exists(root)) {
+    return false;
+  }
+  return std::ranges::any_of(scene.descendants(root, true),
+                             [&scene](EntityId entity) {
+                               return document_command_entity_is_modeling_owned(
+                                   scene, entity);
+                             });
+}
+
 DocumentCommandResult document_command_modeling_owned_entity_result() {
   return document_command_invalid_request_result(
       "Entity is owned by a modeling object; use modeling commands");
@@ -102,7 +115,8 @@ bool document_command_selection_includes_scene_root(
 bool document_command_selected_root_contains_modeling_owned_entity(
     const SceneDocument &scene) {
   for (const EntityId root : document_command_selected_root_entities(scene)) {
-    if (document_command_entity_is_modeling_owned(scene, root)) {
+    if (document_command_hierarchy_contains_modeling_owned_entity(scene,
+                                                                  root)) {
       return true;
     }
   }
@@ -240,7 +254,8 @@ void append_selection_cleanup_after_lock_edits(
   }
 
   commands.push_back(std::make_unique<SelectEntitiesCommand>(
-      scene, after.selected, after.active));
+      scene, after.selected, after.active,
+      SceneSelectionApplicationMode::UndoableCommand));
 }
 
 /**
@@ -267,6 +282,11 @@ DocumentCommandService::DocumentCommandService(
 void DocumentCommandService::set_entity_mutation_blocker(
     EntityMutationBlocker blocker) {
   entity_mutation_blocker_ = std::move(blocker);
+}
+
+void DocumentCommandService::set_selection_publication(
+    CheckedSelectionPublication publication) {
+  selection_publication_ = std::move(publication);
 }
 
 void DocumentCommandService::set_texture_lock_settings_provider(
@@ -339,11 +359,14 @@ DocumentCommandResult DocumentCommandService::destroy_entity(EntityId entity) {
   if (scene_.is_scene_root(entity)) {
     return document_command_scene_root_protected_result();
   }
-  if (document_command_entity_is_modeling_owned(scene_, entity)) {
+  if (document_command_hierarchy_contains_modeling_owned_entity(scene_,
+                                                                entity)) {
     return document_command_modeling_owned_entity_result();
   }
   return execute_document_command(
-      history_, std::make_unique<DestroyEntityCommand>(scene_, entity));
+      history_, with_checked_selection_publication(
+                    scene_, std::make_unique<DestroyEntityCommand>(scene_, entity),
+                    selection_publication_));
 }
 
 DocumentCommandResult
@@ -374,30 +397,62 @@ DocumentCommandService::reparent_entity(EntityId entity, EntityId parent,
 DocumentGroupSelectionResult
 DocumentCommandService::group_selection(std::string group_name,
                                         TransformComponent group_transform) {
-  if (selected_mutation_blocked()) {
+  PreparedDocumentCommand prepared = prepare_group_selection_command(
+      std::move(group_name), group_transform);
+  if (!prepared.command) {
     DocumentGroupSelectionResult result;
-    assign_document_command_status(
-        result, document_command_active_tool_entity_result());
+    assign_document_command_status(result, std::move(prepared.status));
     return result;
   }
-  auto command = std::make_unique<GroupSelectionCommand>(
-      scene_, std::move(group_name), group_transform);
-  GroupSelectionCommand *group_command = command.get();
   DocumentGroupSelectionResult result;
   assign_document_command_status(
-      result, execute_document_command(history_, std::move(command)));
+      result,
+      execute_document_command(history_, std::move(prepared.command)));
   if (result.ok && result.changed) {
-    result.group_entity = group_command->group_entity();
+    result.group_entity = scene_.primary_selection();
   }
   return result;
 }
 
 DocumentCommandResult DocumentCommandService::ungroup_selection() {
-  if (selected_mutation_blocked()) {
-    return document_command_active_tool_entity_result();
+  PreparedDocumentCommand prepared = prepare_ungroup_selection_command();
+  if (!prepared.command) {
+    return std::move(prepared.status);
   }
-  return execute_document_command(
-      history_, std::make_unique<UngroupSelectionCommand>(scene_));
+  return execute_document_command(history_, std::move(prepared.command));
+}
+
+PreparedDocumentCommand
+DocumentCommandService::prepare_group_selection_command(
+    std::string group_name, TransformComponent group_transform) {
+  if (selected_mutation_blocked()) {
+    return {
+        .status = document_command_active_tool_entity_result(),
+    };
+  }
+  return {
+      .status = document_command_unchanged_result(),
+      .command = with_checked_selection_publication(
+          scene_,
+          std::make_unique<GroupSelectionCommand>(
+              scene_, std::move(group_name), group_transform),
+          selection_publication_),
+  };
+}
+
+PreparedDocumentCommand
+DocumentCommandService::prepare_ungroup_selection_command() {
+  if (selected_mutation_blocked()) {
+    return {
+        .status = document_command_active_tool_entity_result(),
+    };
+  }
+  return {
+      .status = document_command_unchanged_result(),
+      .command = with_checked_selection_publication(
+          scene_, std::make_unique<UngroupSelectionCommand>(scene_),
+          selection_publication_),
+  };
 }
 
 DocumentDuplicateEntityResult
@@ -414,7 +469,8 @@ DocumentCommandService::duplicate_entity(EntityId entity) {
         result, document_command_scene_root_protected_result());
     return result;
   }
-  if (document_command_entity_is_modeling_owned(scene_, entity)) {
+  if (document_command_hierarchy_contains_modeling_owned_entity(scene_,
+                                                                entity)) {
     DocumentDuplicateEntityResult result;
     assign_document_command_status(
         result, document_command_modeling_owned_entity_result());
@@ -425,7 +481,9 @@ DocumentCommandService::duplicate_entity(EntityId entity) {
   DuplicateEntityCommand *duplicate_command = command.get();
   DocumentDuplicateEntityResult result;
   assign_document_command_status(
-      result, execute_document_command(history_, std::move(command)));
+      result, execute_document_command(
+                  history_, with_checked_selection_publication(
+                                scene_, std::move(command), selection_publication_)));
   if (result.ok && result.changed) {
     result.duplicate_entity = duplicate_command->duplicate_entity();
   }
@@ -454,7 +512,9 @@ DocumentCommandService::duplicate_selected_hierarchy() {
   {
     QDR_PROFILE_SCOPE("Duplicate execute selected hierarchy command");
     assign_document_command_status(
-        result, execute_document_command(history_, std::move(command)));
+        result, execute_document_command(
+                    history_, with_checked_selection_publication(
+                                  scene_, std::move(command), selection_publication_)));
   }
   if (result.ok && result.changed) {
     result.duplicate_roots = duplicate_command->duplicate_roots();
@@ -491,6 +551,24 @@ DocumentCommandService::duplicate_hierarchy_with_existing_clones(
     return result;
   }
 
+  for (const EntityId root : roots) {
+    for (const EntityId entity : scene_.descendants(root, true)) {
+      if (!document_command_entity_is_modeling_owned(scene_, entity)) {
+        continue;
+      }
+      const auto clone = existing_clones_by_source.find(entity);
+      if (clone == existing_clones_by_source.end() ||
+          clone->second == kInvalidEntityId ||
+          !scene_.exists(clone->second)) {
+        DocumentDuplicateHierarchyResult result;
+        assign_document_command_status(
+            result, document_command_invalid_request_result(
+                        "Modeling hierarchy clone mapping is incomplete"));
+        return result;
+      }
+    }
+  }
+
   std::vector<DocumentEntitySnapshot> source_snapshots;
   source_snapshots.reserve(roots.size());
   {
@@ -514,7 +592,9 @@ DocumentCommandService::duplicate_hierarchy_with_existing_clones(
   DuplicateSelectedHierarchyCommand *duplicate_command = command.get();
   DocumentDuplicateHierarchyResult result;
   assign_document_command_status(
-      result, execute_document_command(history_, std::move(command)));
+      result, execute_document_command(
+                  history_, with_checked_selection_publication(
+                                scene_, std::move(command), selection_publication_)));
   if (result.ok && result.changed) {
     result.duplicate_roots = duplicate_command->duplicate_roots();
   }
@@ -549,7 +629,12 @@ DocumentCreateEntityResult DocumentCommandService::create_point_light(
   {
     QDR_PROFILE_SCOPE("Duplicate execute hierarchy command");
     assign_document_command_status(
-        result, execute_document_command(history_, std::move(command)));
+        result, execute_document_command(
+                    history_, with_checked_selection_publication(
+                                  scene_, std::move(command),
+                                  select_created
+                                      ? selection_publication_
+                                      : CheckedSelectionPublication{})));
   }
   if (result.ok && result.changed) {
     result.entity = created_command->entity();
@@ -583,7 +668,12 @@ DocumentCreateEntityResult DocumentCommandService::create_directional_light(
   CreateLightCommand *created_command = command.get();
   DocumentCreateEntityResult result;
   assign_document_command_status(
-      result, execute_document_command(history_, std::move(command)));
+      result, execute_document_command(
+                  history_, with_checked_selection_publication(
+                                scene_, std::move(command),
+                                select_created
+                                    ? selection_publication_
+                                    : CheckedSelectionPublication{})));
   if (result.ok && result.changed) {
     result.entity = created_command->entity();
   }
@@ -592,12 +682,20 @@ DocumentCreateEntityResult DocumentCommandService::create_directional_light(
 
 DocumentCommandResult
 DocumentCommandService::select_entities(std::vector<EntityId> entities,
-                                        EntityId active,
-                                        SceneSelectionApplicationMode mode) {
+                                         EntityId active,
+                                         SceneSelectionApplicationMode mode,
+                                         CheckedSelectionPublication
+                                             publication) {
+  if (!publication) {
+    publication = selection_publication_;
+  }
   return execute_document_command(history_,
-                                  std::make_unique<SelectEntitiesCommand>(
-                                      scene_, std::move(entities), active,
-                                      mode));
+                                  with_checked_selection_publication(
+                                      scene_,
+                                      std::make_unique<SelectEntitiesCommand>(
+                                          scene_, std::move(entities), active,
+                                          mode),
+                                      std::move(publication)));
 }
 
 DocumentCommandResult
@@ -721,8 +819,10 @@ DocumentCommandService::set_locks(std::vector<DocumentLockEdit> edits) {
   append_selection_cleanup_after_lock_edits(scene_, edits, commands);
 
   return execute_document_command(
-      history_,
-      std::make_unique<BatchDocumentCommand>("Set Lock", std::move(commands)));
+      history_, with_checked_selection_publication(
+                    scene_, std::make_unique<BatchDocumentCommand>(
+                                "Set Lock", std::move(commands)),
+                    selection_publication_));
 }
 
 DocumentCommandResult DocumentCommandService::set_material(EntityId entity,
@@ -951,11 +1051,13 @@ DocumentCreateLayerResult DocumentCommandService::create_layer(
 
   assign_document_command_status(
       result, execute_document_command(
-                  history_, std::make_unique<SetSceneLayerStateCommand>(
-                                scene_, add_selection
-                                            ? "Create Layer From Selection"
-                                            : "Create Layer",
-                                std::move(before), std::move(after))));
+                  history_, with_checked_selection_publication(
+                                scene_, std::make_unique<SetSceneLayerStateCommand>(
+                                    scene_, add_selection
+                                                ? "Create Layer From Selection"
+                                                : "Create Layer",
+                                    std::move(before), std::move(after)),
+                                selection_publication_)));
   if (result.ok && result.changed) {
     result.layer_id = layer_id;
   }
@@ -980,9 +1082,11 @@ DocumentCommandResult DocumentCommandService::rename_layer(
     }
   }
   return execute_document_command(
-      history_, std::make_unique<SetSceneLayerStateCommand>(
-                    scene_, "Rename Layer", std::move(before),
-                    std::move(after)));
+      history_, with_checked_selection_publication(
+                    scene_, std::make_unique<SetSceneLayerStateCommand>(
+                        scene_, "Rename Layer", std::move(before),
+                        std::move(after)),
+                    selection_publication_));
 }
 
 DocumentCommandResult DocumentCommandService::set_layer_visible(
@@ -1007,9 +1111,11 @@ DocumentCommandResult DocumentCommandService::set_layer_visible(
     }
   }
   return execute_document_command(
-      history_, std::make_unique<SetSceneLayerStateCommand>(
-                    scene_, "Set Layer Visibility", std::move(before),
-                    std::move(after)));
+      history_, with_checked_selection_publication(
+                    scene_, std::make_unique<SetSceneLayerStateCommand>(
+                        scene_, "Set Layer Visibility", std::move(before),
+                        std::move(after)),
+                    selection_publication_));
 }
 
 DocumentCommandResult DocumentCommandService::set_layer_wireframe_color(
@@ -1036,9 +1142,11 @@ DocumentCommandResult DocumentCommandService::set_layer_wireframe_color(
     }
   }
   return execute_document_command(
-      history_, std::make_unique<SetSceneLayerStateCommand>(
-                    scene_, "Set Layer Color", std::move(before),
-                    std::move(after)));
+      history_, with_checked_selection_publication(
+                    scene_, std::make_unique<SetSceneLayerStateCommand>(
+                        scene_, "Set Layer Color", std::move(before),
+                        std::move(after)),
+                    selection_publication_));
 }
 
 DocumentCommandResult DocumentCommandService::set_layer_locked(
@@ -1063,9 +1171,11 @@ DocumentCommandResult DocumentCommandService::set_layer_locked(
     }
   }
   return execute_document_command(
-      history_, std::make_unique<SetSceneLayerStateCommand>(
-                    scene_, "Set Layer Lock", std::move(before),
-                    std::move(after)));
+      history_, with_checked_selection_publication(
+                    scene_, std::make_unique<SetSceneLayerStateCommand>(
+                        scene_, "Set Layer Lock", std::move(before),
+                        std::move(after)),
+                    selection_publication_));
 }
 
 DocumentCommandResult DocumentCommandService::add_selection_to_layer(
@@ -1097,9 +1207,11 @@ DocumentCommandResult DocumentCommandService::add_selection_to_layer(
     return document_command_unchanged_result();
   }
   return execute_document_command(
-      history_, std::make_unique<SetSceneLayerStateCommand>(
-                    scene_, "Add Selection to Layer", std::move(before),
-                    std::move(after)));
+      history_, with_checked_selection_publication(
+                    scene_, std::make_unique<SetSceneLayerStateCommand>(
+                        scene_, "Add Selection to Layer", std::move(before),
+                        std::move(after)),
+                    selection_publication_));
 }
 
 DocumentCommandResult DocumentCommandService::remove_selection_from_layer(
@@ -1124,9 +1236,11 @@ DocumentCommandResult DocumentCommandService::remove_selection_from_layer(
     return document_command_unchanged_result();
   }
   return execute_document_command(
-      history_, std::make_unique<SetSceneLayerStateCommand>(
-                    scene_, "Remove Selection From Layer", std::move(before),
-                    std::move(after)));
+      history_, with_checked_selection_publication(
+                    scene_, std::make_unique<SetSceneLayerStateCommand>(
+                        scene_, "Remove Selection From Layer",
+                        std::move(before), std::move(after)),
+                    selection_publication_));
 }
 
 DocumentCommandResult
@@ -1147,9 +1261,11 @@ DocumentCommandService::remove_selection_from_all_layers() {
     return document_command_unchanged_result();
   }
   return execute_document_command(
-      history_, std::make_unique<SetSceneLayerStateCommand>(
-                    scene_, "Remove Selection From Layers",
-                    std::move(before), std::move(after)));
+      history_, with_checked_selection_publication(
+                    scene_, std::make_unique<SetSceneLayerStateCommand>(
+                        scene_, "Remove Selection From Layers",
+                        std::move(before), std::move(after)),
+                    selection_publication_));
 }
 
 DocumentCommandResult
@@ -1171,9 +1287,11 @@ DocumentCommandService::empty_layer(SceneLayerId layer_id) {
     return document_command_unchanged_result();
   }
   return execute_document_command(
-      history_, std::make_unique<SetSceneLayerStateCommand>(
-                    scene_, "Empty Layer", std::move(before),
-                    std::move(after)));
+      history_, with_checked_selection_publication(
+                    scene_, std::make_unique<SetSceneLayerStateCommand>(
+                        scene_, "Empty Layer", std::move(before),
+                        std::move(after)),
+                    selection_publication_));
 }
 
 DocumentCommandResult
@@ -1212,10 +1330,12 @@ DocumentCommandService::delete_layers(std::vector<SceneLayerId> layer_ids) {
                   return removed.contains(entry.layer_id);
                 });
   return execute_document_command(
-      history_, std::make_unique<SetSceneLayerStateCommand>(
-                    scene_, layer_ids.size() == 1u ? "Delete Layer"
-                                                  : "Delete Layers",
-                    std::move(before), std::move(after)));
+      history_, with_checked_selection_publication(
+                    scene_, std::make_unique<SetSceneLayerStateCommand>(
+                        scene_, layer_ids.size() == 1u ? "Delete Layer"
+                                                      : "Delete Layers",
+                        std::move(before), std::move(after)),
+                    selection_publication_));
 }
 
 DocumentCommandResult DocumentCommandService::apply_scene_batch(
@@ -1420,8 +1540,10 @@ DocumentCommandResult DocumentCommandService::apply_scene_batch(
   }
 
   return execute_document_command(
-      history_, std::make_unique<BatchDocumentCommand>(std::move(label),
-                                                       std::move(commands)));
+      history_, with_checked_selection_publication(
+                    scene_, std::make_unique<BatchDocumentCommand>(
+                                std::move(label), std::move(commands)),
+                    selection_publication_));
 }
 
 } // namespace quader

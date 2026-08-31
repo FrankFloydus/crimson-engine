@@ -11,6 +11,8 @@
 #include <quader/modeling/neutral/polygon/document_selection.hpp>
 
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -60,9 +62,57 @@ struct PickFaceTriangle {
   quader::QVec3 bounds_max;
 };
 
+/**
+ * Caches immutable topology and facing facts for a batch of polygon picks.
+ * Native host projections use this source-only neutral query instead of
+ * reaching into the modeling core's implementation headers.
+ */
+class DocumentPickQuery final {
+public:
+  explicit DocumentPickQuery(const Document &document,
+                             const PickOptions &options = {});
+  DocumentPickQuery(const DocumentPickQuery &) = delete;
+  DocumentPickQuery &operator=(const DocumentPickQuery &) = delete;
+  DocumentPickQuery(DocumentPickQuery &&) noexcept;
+  DocumentPickQuery &operator=(DocumentPickQuery &&) noexcept;
+  ~DocumentPickQuery();
+
+  [[nodiscard]] PickResult surface_hit(const Ray &local_ray);
+  [[nodiscard]] PickResult pick_element(
+      const Ray &local_ray,
+      const std::optional<PickResult> *precomputed_surface_hit = nullptr);
+  [[nodiscard]] PickResult pick_element(
+      const Ray &local_ray, SelectionMode mode,
+      const std::optional<PickResult> *precomputed_surface_hit = nullptr);
+
+  [[nodiscard]] bool vertex_can_be_picked(ElementId vertex_id) const;
+  [[nodiscard]] bool edge_can_be_picked(Edge edge) const;
+  [[nodiscard]] bool vertex_has_incident_face(ElementId vertex_id) const;
+  [[nodiscard]] bool edge_has_incident_face(Edge edge) const;
+  [[nodiscard]] bool face_is_front_facing_pickable(ElementId face_id,
+                                                    const Ray &ray) const;
+  [[nodiscard]] bool vertex_has_front_facing_pickable_face(
+      ElementId vertex_id, const Ray &ray) const;
+  [[nodiscard]] bool edge_has_front_facing_pickable_face(
+      Edge edge, const Ray &ray, bool include_edge_on = false) const;
+  [[nodiscard]] ElementId best_edge_context_face_id(Edge edge,
+                                                    const Ray &ray) const;
+  [[nodiscard]] ElementId edge_pick_context_face_id(
+      Edge edge, const Ray &ray,
+      const std::optional<PickResult> &surface_hit) const;
+  [[nodiscard]] std::span<const Edge> edges() const noexcept;
+
+private:
+  class Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
 [[nodiscard]] PickResult pick_element(const Document& document, const Ray& local_ray, const PickOptions& options);
 [[nodiscard]] std::vector<PickFaceTriangle> build_face_pick_geometry(const Document& document);
 [[nodiscard]] std::vector<PickFaceTriangle> build_face_pick_geometry(const Document& document, const PickOptions& options);
+[[nodiscard]] std::vector<PickFaceTriangle> build_face_pick_geometry(
+    const Document &document, ElementId face_id,
+    const PickOptions &options = {});
 [[nodiscard]] PickResult pick_face_geometry(std::span<const PickFaceTriangle> triangles, const Ray& local_ray, const PickOptions& options = {});
 
 } // namespace quader_poly

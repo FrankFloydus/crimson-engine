@@ -7,13 +7,12 @@
 #pragma once
 
 #include "render/instance_batch_planner.hpp"
+#include "render/overlay/instanced_wire_render_backend.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <span>
-#include <unordered_map>
 #include <vector>
 
 namespace filament {
@@ -98,8 +97,7 @@ public:
   void sync(const RenderOverlaySceneWireframeSnapshot &snapshot);
 
   [[nodiscard]] bool initialized() const {
-    return engine_ != nullptr && scene_ != nullptr &&
-           line_material_ != nullptr;
+    return wire_backend_.initialized();
   }
 
   [[nodiscard]] const SceneWireframeOverlayCacheStats &stats() const {
@@ -112,49 +110,27 @@ public:
 
 private:
   struct PreparedPlan;
-  struct WireGeometryResource;
-  struct WireBatchProxy;
+  using WireBatchProxy = InstancedWireRenderBackend::BatchProxy;
 
   [[nodiscard]] PreparedPlan prepare(
       const RenderOverlaySceneWireframeSnapshot &snapshot) const;
   bool rebuild(const PreparedPlan &prepared,
                const RenderOverlaySceneWireframeSnapshot &snapshot);
   bool update_transforms(const PreparedPlan &prepared);
-  WireGeometryResource *acquire_geometry(
-      const RenderOverlayMeshSnapshot &mesh,
-      const ViewportPersistentOverlayStyleSnapshot &style);
-  WireBatchProxy create_batch(
-      const RenderOverlayMeshSnapshot &mesh,
-      const RenderInstanceBatchChunk &chunk,
-      const ViewportPersistentOverlayStyleSnapshot &style,
-      ViewportCameraClipPlanes clip_planes);
-  bool update_batch(WireBatchProxy &proxy,
-                    const RenderInstanceBatchChunk &chunk);
-  void destroy_batch(WireBatchProxy &proxy);
-  void destroy_geometry_resources();
-  void prune_unused_geometry_resources();
+  void refresh_wire_resource_stats();
   void update_clip_planes(ViewportCameraClipPlanes clip_planes);
   void update_instance_edit_style(const InstanceEditStyle &style);
   void set_layer_mask(std::uint8_t layer_mask);
 
-  filament::Engine *engine_ = nullptr;
-  filament::Scene *scene_ = nullptr;
-  filament::Material *line_material_ = nullptr;
+  InstancedWireRenderBackend wire_backend_;
   std::size_t max_instances_per_chunk_ = 1u;
   RenderInstanceBatchPlan plan_;
   /// Pins the exact authored inputs from the last successful synchronization.
   std::vector<RenderOverlayMeshSnapshot> synced_meshes_;
   std::vector<WireBatchProxy> proxies_;
-  std::unordered_map<std::uint64_t,
-                     std::vector<std::unique_ptr<WireGeometryResource>>>
-      geometry_resources_;
-  RenderSceneBindingKey synced_scene_binding_;
-  std::uint64_t synced_scene_revision_ = 0u;
-  std::uint64_t synced_asset_revision_ = 0u;
-  std::uint64_t synced_local_visibility_revision_ = 0u;
+  RenderSourceStamp synced_source_stamp_;
   std::uint64_t synced_wire_style_signature_ = 0u;
   std::uint64_t synced_instance_edit_context_signature_ = 0u;
-  RenderInstanceEditScope synced_instance_edit_scope_;
   bool synced_selected_mesh_wire_visible_ = true;
   ViewportCameraClipPlanes synced_clip_planes_;
   std::uint8_t layer_mask_ = 0u;

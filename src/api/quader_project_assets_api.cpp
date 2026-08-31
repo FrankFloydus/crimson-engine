@@ -10,9 +10,12 @@
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_events_api.hpp"
 #include "api/quader_events_api_internal_access.hpp"
+#include "editor/material/material_presentation_service.hpp"
 #include "editor/material/project_material_import_service.hpp"
 #include "editor/session/project_session.hpp"
 
+#include <algorithm>
+#include <array>
 #include <utility>
 
 namespace quader {
@@ -51,6 +54,60 @@ to_public_info(const ProjectMaterialCatalogEntry &entry) {
                         : std::array<float, 3>{1.0f, 1.0f, 1.0f},
       .content_revision = entry.content_revision,
   };
+}
+
+QuaderMaterialPresentationKind
+to_public_kind(MaterialPresentationKind kind) {
+  switch (kind) {
+  case MaterialPresentationKind::Embedded:
+    return QuaderMaterialPresentationKind::Embedded;
+  case MaterialPresentationKind::Standard:
+    return QuaderMaterialPresentationKind::Standard;
+  case MaterialPresentationKind::Graph:
+    return QuaderMaterialPresentationKind::Graph;
+  }
+  return QuaderMaterialPresentationKind::Embedded;
+}
+
+QuaderMaterialReference to_public_reference(
+    const MaterialReference &reference) {
+  return reference.project_owned()
+             ? QuaderMaterialReference::project(reference.project_asset())
+             : QuaderMaterialReference::embedded(reference.embedded_asset());
+}
+
+QuaderMaterialPresentationRevision to_public_revision(
+    const MaterialPresentationRevision &revision) {
+  return {
+      .project_activation_generation =
+          revision.project_activation_generation,
+      .project_material_revision = revision.project_material_revision,
+      .active_scene_id = revision.active_scene_id,
+      .embedded_material_revision = revision.embedded_material_revision,
+  };
+}
+
+QuaderMaterialPresentationSnapshot to_public_snapshot(
+    MaterialPresentationSnapshot snapshot) {
+  QuaderMaterialPresentationSnapshot result{
+      .revision = to_public_revision(snapshot.revision),
+  };
+  result.materials.reserve(snapshot.materials.size());
+  for (MaterialPresentationItem &item : snapshot.materials) {
+    result.materials.push_back(QuaderMaterialPresentationItem{
+        .reference = to_public_reference(item.reference),
+        .kind = to_public_kind(item.kind),
+        .name = std::move(item.name),
+        .project_relative_path = std::move(item.project_relative_path),
+        .qmat_size_bytes = item.qmat_size_bytes,
+        .encoded_albedo = std::move(item.encoded_albedo),
+        .fallback_color = item.fallback_color,
+        .content_revision = item.content_revision,
+        .available = item.available,
+        .editable = item.editable,
+    });
+  }
+  return result;
 }
 
 } // namespace
@@ -146,6 +203,41 @@ QuaderProjectAssetsApi::material_preview(ProjectAssetId material_id) const {
           .encoded_bytes = std::move(value.encoded_bytes),
           .content_revision = value.content_revision,
       });
+}
+
+QuaderApiResult<QuaderMaterialPresentationRevision>
+QuaderProjectAssetsApi::material_presentation_revision() const {
+  ProjectSession *project =
+      QuaderApiSessionInternalAccess::project_session(session_);
+  if (project == nullptr || !project->has_project()) {
+    return quader_api_result_from_status<QuaderMaterialPresentationRevision>(
+        status(session_, false, false,
+               "Material presentations are unavailable without an open "
+               "project."));
+  }
+  return quader_api_result_from_status(
+      status(session_, true, false),
+      to_public_revision(MaterialPresentationService::revision(
+          *project,
+          QuaderApiSessionInternalAccess::active_scene_session(session_))));
+}
+
+QuaderApiResult<QuaderMaterialPresentationSnapshot>
+QuaderProjectAssetsApi::material_presentations() const {
+  ProjectSession *project =
+      QuaderApiSessionInternalAccess::project_session(session_);
+  if (project == nullptr || !project->has_project()) {
+    return quader_api_result_from_status<QuaderMaterialPresentationSnapshot>(
+        status(session_, false, false,
+               "Material presentations are unavailable without an open "
+               "project."));
+  }
+  SceneSession *scene =
+      QuaderApiSessionInternalAccess::active_scene_session(session_);
+  return quader_api_result_from_status(status(session_, true, false),
+                                       to_public_snapshot(
+                                           MaterialPresentationService::snapshot(
+                                               *project, scene)));
 }
 
 QuaderApiResult<QuaderProjectMaterialImportReport>

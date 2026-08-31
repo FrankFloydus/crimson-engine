@@ -193,10 +193,12 @@ struct ConsolePanel::Impl {
   void refresh(UIContext &context) {
     const bool localization_changed =
         localization_ != &context.localization ||
-        localized_locale_ != context.localization.current_locale();
+        localized_locale_ != context.localization.current_locale() ||
+        localized_revision_ != context.localization.revision();
     localization_ = &context.localization;
     if (localization_changed) {
       localized_locale_ = localization_->current_locale();
+      localized_revision_ = localization_->revision();
       update_localization();
     }
 
@@ -373,6 +375,7 @@ private:
   QStandardItemModel *entries_model_ = nullptr;
   LocalizationService *localization_ = nullptr;
   std::string localized_locale_;
+  std::uint64_t localized_revision_ = 0u;
   ConsoleFilter filter_;
   std::string pending_search_text_;
   std::string normalized_search_;

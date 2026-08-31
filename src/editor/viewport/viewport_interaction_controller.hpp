@@ -6,10 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
 #include "editor/viewport/transform_gizmo_interaction.hpp"
-#include "editor/viewport/viewport_native_tool_interaction.hpp"
 #include "editor/viewport/viewport_selection_interaction.hpp"
+#include "viewport/viewport_pointer_gesture.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -19,6 +20,36 @@ namespace quader {
 
 class QuaderEditorApi;
 class ViewportToolHoverPort;
+
+/**
+ * Carries the host facts needed to resolve Curve-control gizmo priority,
+ * native-tool pointer handling, and ordinary transform-gizmo fallback as one
+ * editor-owned lifecycle decision.
+ */
+struct ViewportToolPointerLifecycleFrame final {
+  const ViewportInteractionFrame &interaction;
+  const ViewportNativeToolInteractionFrame &native_tool;
+  bool cancel_consumed = false;
+};
+
+/** Reports every policy decision made during one native tool pointer frame. */
+struct ViewportToolPointerLifecycleResult final {
+  ViewportBeforeToolInteractionResult before_tool;
+  ViewportNativeToolInteractionResult native_tool;
+  ViewportInteractionSelectionState interaction_selection;
+  bool curve_gizmo_prepass = false;
+};
+
+/** Completed toolkit-neutral right-button gesture owned by the controller. */
+struct ViewportContextMenuPointerResult final {
+  bool completed = false;
+  bool release_inside_viewport = false;
+  QVec2 press_screen = {};
+  QVec2 release_screen = {};
+  QVec2 release_local = {};
+  QVec2 accumulated_drag_delta = {};
+  float drag_threshold_pixels = 4.0f;
+};
 
 /**
  * Coordinates editor-owned viewport interactions around active viewport tools.
@@ -36,32 +67,50 @@ public:
 
   [[nodiscard]] ViewportBeforeToolInteractionResult
   handle_before_active_tool(QuaderEditorApi &editor,
+                            const ViewportInteractionFrame &frame);
+  [[nodiscard]] ViewportBeforeToolInteractionResult
+  handle_before_active_tool(QuaderEditorApi &editor,
                             const ViewportInteractionFrame &frame,
-                            CurveToolService *curve = nullptr);
+                            NativeViewportToolCoordinator &native_tools);
   void handle_after_active_tool(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
       const ViewportToolResult &tool_result,
       const ViewportBeforeToolInteractionResult &before_tool,
-      ViewportToolHoverPort *tool_hover = nullptr,
-      CurveToolService *curve = nullptr);
+      ViewportToolHoverPort *tool_hover = nullptr);
+  void handle_after_active_tool(
+      QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+      const ViewportToolResult &tool_result,
+      const ViewportBeforeToolInteractionResult &before_tool,
+      NativeViewportToolCoordinator &native_tools,
+      ViewportToolHoverPort *tool_hover = nullptr);
   [[nodiscard]] QuaderSelectionSummary
   pick_context_menu_target(QuaderEditorApi &editor,
                            const ViewportInteractionFrame &frame);
   [[nodiscard]] std::optional<QuaderHoverTarget>
   pick_material_face_target(QuaderEditorApi &editor,
                             const ViewportInteractionFrame &frame);
-  [[nodiscard]] bool cancel_active_drag(QuaderEditorApi &editor,
-                                        CurveToolService *curve = nullptr);
+  [[nodiscard]] bool cancel_active_drag(QuaderEditorApi &editor);
+  [[nodiscard]] bool
+  cancel_active_drag(QuaderEditorApi &editor,
+                     NativeViewportToolCoordinator &native_tools);
   [[nodiscard]] bool dragging() const;
   [[nodiscard]] bool transform_gizmo_pointer_active() const;
   /// Keeps a texture-transfer press and its release in the initiating pane.
   [[nodiscard]] bool texture_transfer_pointer_active() const {
     return transfer_face_texture_pointer_.has_value();
   }
+  [[nodiscard]] ViewportContextMenuPointerResult
+  handle_context_menu_pointer(const ViewportInteractionFrame &frame,
+                              bool modal_tool_owns_viewport);
+  [[nodiscard]] bool context_menu_pointer_active() const {
+    return context_menu_pointer_.has_value();
+  }
+  void cancel_context_menu_pointer();
   void cancel_pending_material_interaction();
   void cancel_pending_selection_click();
   void reset(QuaderEditorApi *editor = nullptr);
-  void reset(QuaderEditorApi *editor, CurveToolService *curve);
+  void reset(QuaderEditorApi *editor,
+             NativeViewportToolCoordinator &native_tools);
 
   [[nodiscard]] const quader_editor_core::TransformGizmoFrame *
   transform_gizmo_frame() const;
@@ -79,6 +128,8 @@ public:
   [[nodiscard]] bool active_tool_allows_selection_fallback(
       ViewportToolId tool) const;
   [[nodiscard]] bool
+  active_tool_uses_editor_native_lifecycle(ViewportToolId tool) const;
+  [[nodiscard]] bool
   has_active_modal_preview(const ViewportToolPreviewPort &preview,
                            bool snap_enabled = true) const;
   [[nodiscard]] ModelingBoxPreview
@@ -94,19 +145,22 @@ public:
                                               const ViewportToolEvent &event);
   [[nodiscard]] ViewportNativeToolInteractionResult handle_native_tools(
       QuaderEditorApi &editor, SceneDocument &document, AssetRegistry &assets,
-      PivotToolService *pivot, LinearArrayToolService *linear_array,
-      RadialArrayToolService *radial_array,
+      NativeViewportToolCoordinator &native_tools,
       ViewportPointPlacementService *point_placement,
       ViewportCameraController &camera,
-      const ViewportNativeToolInteractionFrame &frame,
-      CurveToolService *curve = nullptr);
-  void clear_native_tool_drag_state();
-  [[nodiscard]] bool native_tool_dragging() const;
+      const ViewportNativeToolInteractionFrame &frame);
+  [[nodiscard]] ViewportToolPointerLifecycleResult
+  handle_tool_pointer_lifecycle(
+      QuaderEditorApi &editor, SceneDocument &document, AssetRegistry &assets,
+      NativeViewportToolCoordinator &native_tools,
+      ViewportPointPlacementService *point_placement,
+      ViewportCameraController &camera,
+      const ViewportToolPointerLifecycleFrame &frame);
 
 private:
   /// User intent retained only while disambiguating click from double-click.
   struct PendingApplyActiveMaterial final {
-    double deadline_seconds = 0.0;
+    ViewportPointerGesture pointer;
     std::uint64_t scene_session_id = 0;
     ViewportSelectionMode selection_mode = ViewportSelectionMode::Object;
     int modeling_object_id = -1;
@@ -116,9 +170,23 @@ private:
 
   /// Keeps the original scene and selected source for a reserved mouse gesture.
   struct FaceTextureTransferPointer final {
+    ViewportPointerGesture pointer;
+    QuaderInputChord semantic_chord;
     SceneSessionId scene_session_id;
     std::uint64_t selection_revision = 0;
   };
+
+  [[nodiscard]] ViewportBeforeToolInteractionResult
+  handle_before_active_tool_impl(
+      QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+      ViewportCurveInteractionPort *curve,
+      NativeViewportToolCoordinator *native_tools);
+  void handle_after_active_tool_impl(
+      QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+      const ViewportToolResult &tool_result,
+      const ViewportBeforeToolInteractionResult &before_tool,
+      ViewportToolHoverPort *tool_hover,
+      ViewportCurveInteractionPort *curve);
 
   void handle_material_interactions(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
@@ -126,22 +194,25 @@ private:
       const ViewportBeforeToolInteractionResult &before_tool);
   [[nodiscard]] std::optional<ViewportBeforeToolInteractionResult>
   reserve_face_texture_transfer(
-      QuaderEditorApi &editor, const ViewportInteractionFrame &frame);
+      QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+      NativeViewportToolCoordinator *native_tools);
   [[nodiscard]] std::optional<QuaderHoverTarget> pick_material_face_target(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
       QVec2 local_mouse);
   void sync_tool_runtime(ViewportToolId tool);
 
   ViewportToolRuntime tool_runtime_;
-  ViewportNativeToolInteraction native_tools_;
   TransformGizmoInteraction transform_gizmo_;
   ViewportSelectionInteraction selection_;
   std::optional<PendingApplyActiveMaterial> pending_apply_active_material_;
-  // Ownership only: transfer happens on the semantic press, never while held.
+  // Ownership only: transfer happens on the semantic trigger, never while held.
   std::optional<FaceTextureTransferPointer> transfer_face_texture_pointer_;
   // A reset drops pane ownership, but the old release must not become a click
-  // in the new scene. A fresh press starts a new gesture and clears this bit.
-  bool discard_transfer_pointer_release_ = false;
+  // in the new scene. The shared pointer primitive retires it on release or a
+  // fresh press.
+  ViewportPointerReleaseSuppression transfer_release_suppression_;
+  std::optional<ViewportPointerGesture> context_menu_pointer_;
+  ViewportPointerReleaseSuppression context_menu_release_suppression_;
   MaterialInteractionWorkStats material_interaction_work_stats_;
 };
 

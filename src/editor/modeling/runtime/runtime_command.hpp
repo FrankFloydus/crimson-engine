@@ -14,6 +14,32 @@
 namespace quader_editor_core {
 
 /**
+ * Immutable selection facts consumed by retained runtime tool commands.
+ * Native hosts can provide this view from an SDK-derived selection snapshot
+ * without materializing a mutable EditorSession.
+ */
+struct EditorRuntimeSelectionView {
+  const std::vector<PolygonObject> *object_records = nullptr;
+  SelectionMode mode = SelectionMode::Object;
+  int active_object_id = -1;
+
+  [[nodiscard]] const std::vector<PolygonObject> &objects() const noexcept {
+    static const std::vector<PolygonObject> empty;
+    return object_records != nullptr ? *object_records : empty;
+  }
+
+  [[nodiscard]] SelectionMode selection_mode() const noexcept { return mode; }
+  [[nodiscard]] int active_object() const noexcept { return active_object_id; }
+  [[nodiscard]] std::vector<int> selected_object_ids() const {
+    return quader_editor_core::selected_object_ids(objects());
+  }
+  [[nodiscard]] bool has_selection() const {
+    return quader_editor_core::has_selection(objects(), mode,
+                                             active_object_id);
+  }
+};
+
+/**
  * Enumerates EditorRuntimeCommandId values used by the modeling layer.
  */
 enum class EditorRuntimeCommandId {
@@ -182,6 +208,7 @@ struct EditorRuntimeCommand {
 struct EditorRuntimeCommandResult {
 	CommandResult command;
 	EditorRuntimeStatus runtime;
+	bool clear_selection_requested = false;
 };
 
 /**
@@ -195,9 +222,17 @@ struct EditorRuntimeCommandResult {
 		const EditorSession& session,
 		EditorRuntime& runtime,
 		const EditorRuntimeCommand& command);
+[[nodiscard]] EditorRuntimeCommandResult execute_cut_hover_runtime_command(
+		const EditorRuntimeSelectionView& selection,
+		EditorRuntime& runtime,
+		const EditorRuntimeCommand& command);
 
 [[nodiscard]] EditorRuntimeCommandResult execute_runtime_command(
 		EditorSession& session,
+		EditorRuntime& runtime,
+		const EditorRuntimeCommand& command);
+[[nodiscard]] EditorRuntimeCommandResult execute_runtime_command(
+		const EditorRuntimeSelectionView& selection,
 		EditorRuntime& runtime,
 		const EditorRuntimeCommand& command);
 

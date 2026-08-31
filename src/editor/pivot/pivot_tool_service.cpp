@@ -11,6 +11,7 @@
 #include "core/i_undoable_command.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/modeling/services/modeling_host_publication_transaction.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
@@ -31,9 +32,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -137,6 +140,7 @@ struct PivotMeshEdit {
  * Collects all transform and mesh edits that make one pivot apply undoable.
  */
 struct PivotRebasePlan {
+    EntityId target = kInvalidEntityId;
     std::vector<PivotTransformEdit> transforms;
     PivotMeshEdit mesh;
 };
@@ -225,50 +229,50 @@ public:
       : scene_(scene), planning_stats_(planning_stats) {}
 
   [[nodiscard]] std::size_t reference_count(AssetId mesh) {
-    ensure_index();
     if (planning_stats_ != nullptr) {
       ++planning_stats_->mesh_reference_lookup_count;
     }
-    const auto found = reference_counts_.find(mesh);
-    return found == reference_counts_.end() ? 0u : found->second;
+    const auto [base, inserted] = owner_reference_counts_.try_emplace(mesh);
+    if (inserted) {
+      base->second = scene_.mesh_binding_reference_count(mesh);
+    }
+    const auto delta = planned_reference_deltas_.find(mesh);
+    if (delta == planned_reference_deltas_.end() || delta->second == 0) {
+      return base->second;
+    }
+    if (delta->second < 0) {
+      const std::size_t decrement =
+          static_cast<std::size_t>(-(delta->second + 1)) + 1u;
+      return decrement >= base->second ? 0u : base->second - decrement;
+    }
+    const std::size_t increment =
+        static_cast<std::size_t>(delta->second);
+    return increment >
+                   (std::numeric_limits<std::size_t>::max)() - base->second
+               ? (std::numeric_limits<std::size_t>::max)()
+               : base->second + increment;
   }
 
   void record_rebind(AssetId before_mesh, AssetId after_mesh) {
     if (before_mesh == after_mesh) {
       return;
     }
-    ensure_index();
-    const auto before = reference_counts_.find(before_mesh);
-    if (before != reference_counts_.end() && before->second > 0u) {
-      --before->second;
+    // Plans are applied before they are recorded. Adjust cached owner counts
+    // only: an asset first queried later will already see the live rebind in
+    // SceneDocument's authoritative index.
+    if (owner_reference_counts_.contains(before_mesh)) {
+      --planned_reference_deltas_[before_mesh];
     }
-    ++reference_counts_[after_mesh];
+    if (owner_reference_counts_.contains(after_mesh)) {
+      ++planned_reference_deltas_[after_mesh];
+    }
   }
 
 private:
-  void ensure_index() {
-    if (initialized_) {
-      return;
-    }
-    initialized_ = true;
-    const std::vector<EntityId> entities = scene_.entities();
-    reference_counts_.reserve(entities.size());
-    for (const EntityId entity : entities) {
-      const MeshComponent *component = scene_.mesh(entity);
-      if (component != nullptr) {
-        ++reference_counts_[component->mesh];
-      }
-    }
-    if (planning_stats_ != nullptr) {
-      ++planning_stats_->mesh_reference_index_build_count;
-      planning_stats_->mesh_reference_entity_visit_count += entities.size();
-    }
-  }
-
   const SceneDocument &scene_;
   PivotPlanningStats *planning_stats_ = nullptr;
-  std::unordered_map<AssetId, std::size_t> reference_counts_;
-  bool initialized_ = false;
+  std::unordered_map<AssetId, std::size_t> owner_reference_counts_;
+  std::unordered_map<AssetId, std::int64_t> planned_reference_deltas_;
 };
 
 std::optional<std::string>
@@ -349,7 +353,7 @@ make_rebase_plan(const SceneDocument &scene, const AssetRegistry &assets,
     error_message = "Pivot target world transform is not invertible.";
     return std::nullopt;
   }
-  PivotRebasePlan plan;
+  PivotRebasePlan plan{.target = target};
 
   const EntityId parent = scene.parent(target);
   const QMat4 parent_world = parent == kInvalidEntityId
@@ -466,9 +470,12 @@ bool apply_mesh_before(SceneDocument &scene, AssetRegistry &assets,
     return true;
   }
   if (plan.mesh.clone_on_write) {
-    scene.set_mesh(plan.mesh.entity, plan.mesh.before_component);
-    if (plan.mesh.after_mesh != kInvalidAssetId) {
-      (void)assets.remove_mesh(plan.mesh.after_mesh);
+    if (!scene.set_mesh(plan.mesh.entity, plan.mesh.before_component)) {
+      return false;
+    }
+    if (plan.mesh.after_mesh != kInvalidAssetId &&
+        !assets.remove_mesh(plan.mesh.after_mesh)) {
+      return false;
     }
     return true;
   }
@@ -501,8 +508,7 @@ bool apply_mesh_after(SceneDocument &scene, AssetRegistry &assets,
 
   MeshComponent after_component = plan.mesh.before_component;
   after_component.mesh = plan.mesh.after_mesh;
-  scene.set_mesh(plan.mesh.entity, after_component);
-  return true;
+  return scene.set_mesh(plan.mesh.entity, after_component);
 }
 
 bool apply_plan_before(SceneDocument &scene, AssetRegistry &assets,
@@ -510,11 +516,7 @@ bool apply_plan_before(SceneDocument &scene, AssetRegistry &assets,
   if (!apply_mesh_before(scene, assets, plan)) {
     return false;
   }
-  if (!apply_transforms_before(scene, plan)) {
-    (void)apply_mesh_after(scene, assets, plan);
-    return false;
-  }
-  return true;
+  return apply_transforms_before(scene, plan);
 }
 
 bool apply_plan_after(SceneDocument &scene, AssetRegistry &assets,
@@ -522,11 +524,98 @@ bool apply_plan_after(SceneDocument &scene, AssetRegistry &assets,
   if (!apply_mesh_after(scene, assets, plan)) {
     return false;
   }
-  if (!apply_transforms_after(scene, plan)) {
-    (void)apply_mesh_before(scene, assets, plan);
-    return false;
+  return apply_transforms_after(scene, plan);
+}
+
+std::vector<EntityId>
+pivot_publication_participants(const SceneDocument &scene,
+                               std::span<const EntityId> roots) {
+  std::vector<EntityId> participants;
+  for (const EntityId root : roots) {
+    std::vector<EntityId> subtree = scene.descendants(root, true);
+    participants.insert(participants.end(), subtree.begin(), subtree.end());
   }
-  return true;
+  std::ranges::sort(participants);
+  participants.erase(
+      std::unique(participants.begin(), participants.end()),
+      participants.end());
+  return participants;
+}
+
+std::vector<AssetId>
+pivot_initial_asset_participants(const SceneDocument &scene,
+                                 std::span<const EntityId> roots) {
+  std::vector<AssetId> assets;
+  assets.reserve(roots.size());
+  for (const EntityId root : roots) {
+    if (const MeshComponent *mesh = scene.mesh(root)) {
+      assets.push_back(mesh->mesh);
+    }
+  }
+  std::ranges::sort(assets);
+  assets.erase(std::unique(assets.begin(), assets.end()), assets.end());
+  return assets;
+}
+
+std::vector<EntityId>
+pivot_plan_roots(std::span<const PivotRebasePlan> plans) {
+  std::vector<EntityId> roots;
+  roots.reserve(plans.size());
+  for (const PivotRebasePlan &plan : plans) {
+    roots.push_back(plan.target);
+  }
+  return roots;
+}
+
+std::vector<AssetId>
+pivot_plan_asset_participants(std::span<const PivotRebasePlan> plans) {
+  std::vector<AssetId> assets;
+  assets.reserve(plans.size() * 2u);
+  for (const PivotRebasePlan &plan : plans) {
+    if (!plan.mesh.active) {
+      continue;
+    }
+    assets.push_back(plan.mesh.before_mesh);
+    if (plan.mesh.after_mesh != kInvalidAssetId) {
+      assets.push_back(plan.mesh.after_mesh);
+    }
+  }
+  std::ranges::sort(assets);
+  assets.erase(std::unique(assets.begin(), assets.end()), assets.end());
+  return assets;
+}
+
+ModelingHostPublicationTransactionOptions pivot_publication_options(
+    std::span<const EntityId> participants,
+    std::span<const AssetId> assets) {
+  return {
+      .sdk_rollback = ModelingSdkRollbackPolicy::None,
+      .checkpoint_scope =
+          ModelingHostPublicationCheckpointScope::MeshProjection,
+      .capture_assets = true,
+      .capture_scene = true,
+      .capture_scene_entities = true,
+      .capture_bindings = false,
+      .capture_hierarchy = true,
+      .capture_scene_selection = true,
+      .affected_scene_entities = participants,
+      .affected_asset_ids = assets,
+  };
+}
+
+CommandResult rollback_pivot_publication(
+    ModelingHostPublicationTransaction &publication,
+    std::string message) {
+  CommandResult failure = command_invalid_result(std::move(message));
+  if (publication.rollback()) {
+    return failure;
+  }
+  failure.changed = true;
+  if (!failure.message.empty()) {
+    failure.message += "; ";
+  }
+  failure.message += "Host publication rollback failed.";
+  return failure;
 }
 
 /**
@@ -546,35 +635,43 @@ public:
   const std::string &label() const override { return label_; }
 
   CommandResult undo() override {
-    std::vector<std::size_t> undone;
-    undone.reserve(plans_.size());
-    for (std::size_t index = plans_.size(); index > 0u; --index) {
-      const std::size_t plan_index = index - 1u;
-      if (!apply_plan_before(scene_, assets_, plans_[plan_index])) {
-        for (auto rollback = undone.rbegin(); rollback != undone.rend();
-             ++rollback) {
-          if (!apply_plan_after(scene_, assets_, plans_[*rollback])) {
-            modeling_.reset_from_scene();
-            return command_invalid_result(
-                "Unable to restore pivot mesh asset; rollback failed.");
-          }
-        }
-        restore_modeling_documents();
-        return command_invalid_result("Unable to restore pivot mesh asset.");
-      }
-      undone.push_back(plan_index);
-    }
-    restore_modeling_documents();
-    return plans_.empty() ? command_unchanged_result()
-                          : command_changed_result();
+    return apply_resolved_plans(false, "Unable to restore pivot mesh asset.");
   }
 
   CommandResult redo() override {
-    return initialized_ ? redo_resolved_plans() : resolve_and_apply_plans();
+    return initialized_
+               ? apply_resolved_plans(true,
+                                      "Unable to apply pivot mesh asset.")
+               : resolve_and_apply_plans();
   }
 
 private:
   CommandResult resolve_and_apply_plans() {
+    // A retained SDK preview owns host mutation fences that a separate Pivot
+    // checkpoint cannot safely advance and rewind. Reject before touching the
+    // preview-published host branch, matching the targeted restore contract.
+    if (modeling_.operation_preview_active()) {
+      return command_invalid_result(
+          "Commit or cancel the active preview first.");
+    }
+    std::vector<EntityId> roots;
+    roots.reserve(requests_.size());
+    for (const PivotRebaseRequest &request : requests_) {
+      roots.push_back(request.target);
+    }
+    const std::vector<EntityId> participants =
+        pivot_publication_participants(scene_, roots);
+    const std::vector<AssetId> affected_assets =
+        pivot_initial_asset_participants(scene_, roots);
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_,
+        ModelingHostPublicationTransaction::RestoreHostState{},
+        pivot_publication_options(participants, affected_assets));
+    if (!publication.ready()) {
+      return command_invalid_result(
+          "Pivot host publication checkpoint could not be captured.");
+    }
+
     plans_.clear();
     plans_.reserve(requests_.size());
     MeshReferenceTracker mesh_references(scene_, planning_stats_);
@@ -587,10 +684,16 @@ private:
         if (error_message.empty()) {
           continue;
         }
-        return rollback_initial_apply(std::move(error_message));
+        CommandResult failure = rollback_pivot_publication(
+            publication, std::move(error_message));
+        plans_.clear();
+        return failure;
       }
-      if (!apply_plan_after(scene_, assets_, *plan)) {
-        return rollback_initial_apply("Unable to apply pivot mesh asset.");
+      if (!apply_plan(*plan, true, publication)) {
+        CommandResult failure = rollback_pivot_publication(
+            publication, "Unable to apply pivot mesh asset.");
+        plans_.clear();
+        return failure;
       }
       if (plan->mesh.active && plan->mesh.clone_on_write) {
         mesh_references.record_rebind(plan->mesh.before_mesh,
@@ -599,50 +702,107 @@ private:
       plans_.push_back(std::move(*plan));
     }
 
+    const ModelingCommandResult restored = restore_modeling_documents();
+    if (!restored.ok) {
+      CommandResult failure = rollback_pivot_publication(
+          publication,
+          restored.message.empty()
+              ? "Pivot modeling documents could not be restored."
+              : restored.message);
+      plans_.clear();
+      return failure;
+    }
+    // This host-only publication has no pending SDK finalize step. If its
+    // checked owner ever refuses finalization, keep the fully applied host/SDK
+    // branch and report that observable change instead of claiming rollback.
+    if (!publication.commit()) {
+      return {
+          .ok = false,
+          .changed = !plans_.empty(),
+          .message = "Pivot host publication could not be finalized.",
+      };
+    }
     initialized_ = true;
-    restore_modeling_documents();
     return plans_.empty() ? command_unchanged_result()
                           : command_changed_result();
   }
 
-  CommandResult rollback_initial_apply(std::string error_message) {
-    for (std::size_t index = plans_.size(); index > 0u; --index) {
-      if (!apply_plan_before(scene_, assets_, plans_[index - 1u])) {
-        plans_.clear();
-        modeling_.reset_from_scene();
-        return command_invalid_result(std::move(error_message) +
-                                      "; rollback failed.");
-      }
+  bool apply_plan(PivotRebasePlan &plan, bool apply_after,
+                  ModelingHostPublicationTransaction &publication) {
+    const bool creates_clone =
+        apply_after && plan.mesh.active && plan.mesh.clone_on_write &&
+        (plan.mesh.after_mesh == kInvalidAssetId ||
+         assets_.mesh(plan.mesh.after_mesh) == nullptr);
+    const bool applied = apply_after
+                             ? apply_plan_after(scene_, assets_, plan)
+                             : apply_plan_before(scene_, assets_, plan);
+    if (creates_clone && plan.mesh.after_mesh != kInvalidAssetId &&
+        assets_.mesh(plan.mesh.after_mesh) != nullptr) {
+      publication.track_created_asset(plan.mesh.after_mesh);
     }
-    restore_modeling_documents();
-    plans_.clear();
-    return command_invalid_result(std::move(error_message));
+    return applied;
   }
 
-  CommandResult redo_resolved_plans() {
-    std::vector<std::size_t> redone;
-    redone.reserve(plans_.size());
-    for (std::size_t index = 0u; index < plans_.size(); ++index) {
-      if (!apply_plan_after(scene_, assets_, plans_[index])) {
-        for (auto rollback = redone.rbegin(); rollback != redone.rend();
-             ++rollback) {
-          if (!apply_plan_before(scene_, assets_, plans_[*rollback])) {
-            modeling_.reset_from_scene();
-            return command_invalid_result(
-                "Unable to apply pivot mesh asset; rollback failed.");
-          }
+  CommandResult apply_resolved_plans(bool apply_after,
+                                     std::string failure_message) {
+    if (plans_.empty()) {
+      return command_unchanged_result();
+    }
+    if (modeling_.operation_preview_active()) {
+      return command_invalid_result(
+          "Commit or cancel the active preview first.");
+    }
+    const std::vector<EntityId> roots = pivot_plan_roots(plans_);
+    const std::vector<EntityId> participants =
+        pivot_publication_participants(scene_, roots);
+    const std::vector<AssetId> affected_assets =
+        pivot_plan_asset_participants(plans_);
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_,
+        ModelingHostPublicationTransaction::RestoreHostState{},
+        pivot_publication_options(participants, affected_assets));
+    if (!publication.ready()) {
+      return command_invalid_result(
+          "Pivot host publication checkpoint could not be captured.");
+    }
+
+    if (apply_after) {
+      for (PivotRebasePlan &plan : plans_) {
+        if (!apply_plan(plan, true, publication)) {
+          return rollback_pivot_publication(publication,
+                                            std::move(failure_message));
         }
-        restore_modeling_documents();
-        return command_invalid_result("Unable to apply pivot mesh asset.");
       }
-      redone.push_back(index);
+    } else {
+      for (std::size_t index = plans_.size(); index > 0u; --index) {
+        if (!apply_plan(plans_[index - 1u], false, publication)) {
+          return rollback_pivot_publication(publication,
+                                            std::move(failure_message));
+        }
+      }
     }
-    restore_modeling_documents();
-    return plans_.empty() ? command_unchanged_result()
-                          : command_changed_result();
+
+    const ModelingCommandResult restored = restore_modeling_documents();
+    if (!restored.ok) {
+      return rollback_pivot_publication(
+          publication,
+          restored.message.empty()
+              ? "Pivot modeling documents could not be restored."
+              : restored.message);
+    }
+    // Targeted restore has already published the complete SDK branch here.
+    // A finalization refusal must therefore retain it and report changed=true.
+    if (!publication.commit()) {
+      return {
+          .ok = false,
+          .changed = true,
+          .message = "Pivot host publication could not be finalized.",
+      };
+    }
+    return command_changed_result();
   }
 
-  void restore_modeling_documents() {
+  ModelingCommandResult restore_modeling_documents() {
     std::vector<EntityId> entities;
     entities.reserve(plans_.size());
     for (const PivotRebasePlan &plan : plans_) {
@@ -650,16 +810,22 @@ private:
         entities.push_back(plan.mesh.entity);
       }
     }
+    std::ranges::sort(entities);
+    entities.erase(std::unique(entities.begin(), entities.end()),
+                   entities.end());
     if (entities.empty()) {
-      return;
+      return {
+          .ok = true,
+          .changed = false,
+          .message = "No pivot modeling documents changed.",
+      };
     }
-    const ModelingCommandResult restored =
-        modeling_.restore_mesh_documents_from_scene(entities);
-    if (!restored.ok) {
-      // The targeted path is expected for normal pivot history. Keep a full
-      // rebuild only as a correctness fallback for stale/corrupt mappings.
-      modeling_.reset_from_scene();
-    }
+    // The adapter validates the complete participant batch and delegates to
+    // one SDK restore_documents_as_history_transition call. That SDK owner
+    // prepares and validates every document before publishing any of them, so
+    // a failed result leaves the SDK branch unchanged while the bounded host
+    // checkpoint restores this command's matching native participants.
+    return modeling_.restore_mesh_documents_from_scene(entities);
   }
 
   SceneDocument &scene_;
@@ -1145,13 +1311,16 @@ PivotToolService::activate_persistent(EditorSelectionService &selection) {
   const std::vector<EntityId> selected = scene_.selected_entities();
   if (selected.size() != 1u || selected.front() != *target ||
       scene_.primary_selection() != *target) {
-    apply_scene_selection(scene_,
-                          SceneSelectionState{
-                              .selected = {*target},
-                              .active = *target,
-                          },
-                          SceneSelectionApplicationMode::RuntimeSync);
-    modeling_.project_object_selection_from_scene(true);
+    const std::array target_selection{*target};
+    DocumentCommandResult synchronized = selection.synchronize_scene_selection(
+        target_selection, *target);
+    if (!synchronized.ok) {
+      if (synchronized.message.empty()) {
+        synchronized.message =
+            "Pivot target selection could not be projected.";
+      }
+      return synchronized;
+    }
   }
   persistent_ = PersistentSession{
       .target = *target,

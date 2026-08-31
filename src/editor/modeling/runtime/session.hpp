@@ -292,6 +292,17 @@ struct ApplyPickSelectionResult {
 };
 
 /**
+ * Selection-only result for native hosts that project SDK-owned objects into
+ * the runtime picking policy without constructing a mutable EditorSession.
+ */
+struct ApplyPickSelectionProjectionResult {
+  ApplyPickSelectionResult result;
+  std::vector<PolygonObject> objects;
+  SelectionMode selection_mode = SelectionMode::Object;
+  int active_object_id = -1;
+};
+
+/**
  * Stores the Pick Hit Record data contract used by the modeling runtime domain.
  */
 struct PickHitRecord {
@@ -971,6 +982,17 @@ pick_all(const std::vector<PolygonObject> &objects, const PickRequest &request,
     std::span<const PickObjectFaceGeometry> face_geometry,
     std::span<const PickObjectTransform> object_transforms,
     PickAllWithSurfaceScratch &scratch);
+/// Fills retained scratch with ordered component candidates without performing
+/// a mesh-surface traversal. When supplied, `maximum_world_ray_distance` is an
+/// inclusive caller-owned visibility cutoff. Each transformed occurrence
+/// receives the equivalent object-space cutoff before component enumeration so
+/// an occluded raw winner cannot mask another visible component on that object.
+void pick_all_without_surface_into(
+    const std::vector<PolygonObject> &objects, const PickRequest &request,
+    std::span<const PickObjectBounds> object_bounds,
+    std::span<const PickObjectTransform> object_transforms,
+    std::optional<double> maximum_world_ray_distance,
+    PickAllWithSurfaceScratch &scratch);
 /// Collects one surface or authored boundary hit per mesh without occlusion
 /// by other meshes. Component picking keeps its ordinary facing/depth policy.
 std::vector<PickHitRecord> pick_mesh_depth_hits(
@@ -1212,6 +1234,11 @@ ApplyPickSelectionResult
 apply_pick_selection(EditorSession &session,
                      std::vector<PolygonObject> picking_objects,
                      const ApplyPickSelectionRequest &request);
+ApplyPickSelectionProjectionResult apply_pick_selection(
+    std::vector<PolygonObject> selection_objects,
+    SelectionMode selection_mode, int active_object_id,
+    std::vector<PolygonObject> picking_objects,
+    const ApplyPickSelectionRequest &request);
 bool pick_select_face(
     std::vector<PolygonObject> &objects, SelectionMode &mode,
     SelectionEditOperation operation, const quader_poly::Ray &ray,
@@ -1265,6 +1292,19 @@ bool update_insert_edge_loop_locked_seed(
     InsertEdgeLoopToolState &state, const std::vector<PolygonObject> &objects,
     SelectionHoverState &hover, const quader_poly::Ray &ray, double grid_size,
     bool snap_enabled, bool dragging);
+bool set_insert_edge_loop_preview_from_pick(
+    const std::vector<PolygonObject> &objects, InsertEdgeLoopToolState &state,
+    SelectionHoverState &hover, const quader_poly::Ray &ray, double grid_size,
+    quader_poly::PickOptions pick_options, bool snap_enabled, bool dragging,
+    int target_object_id = -1);
+bool set_insert_edge_loop_preview_from_hit(
+    const std::vector<PolygonObject> &objects, InsertEdgeLoopToolState &state,
+    SelectionHoverState &hover, const PickHitRecord &hit,
+    std::optional<float> resolved_factor, bool dragging);
+bool update_insert_edge_loop_drag_factor(
+    const std::vector<PolygonObject> &objects, InsertEdgeLoopToolState &state,
+    SelectionHoverState &hover, const quader_poly::Ray &ray, double grid_size,
+    bool snap_enabled);
 KnifeToolPreview knife_tool_preview(const KnifeToolState &state);
 void reset_knife_tool(KnifeToolState &state);
 void clear_knife_hover(KnifeToolState &state, SelectionHoverState &hover);
@@ -1274,10 +1314,19 @@ bool update_knife_preview_from_pick(
     const quader_poly::Ray &ray, double grid_size, bool snap_enabled,
     bool constrain_axis,
     int target_object_id = -1);
+bool update_knife_preview_from_pick(
+    const std::vector<PolygonObject> &objects, KnifeToolState &state,
+    SelectionHoverState &hover, const quader_poly::Ray &ray,
+    double grid_size, bool snap_enabled, bool constrain_axis,
+    int target_object_id = -1);
 bool update_knife_preview_from_hit(
     EditorSession &session, KnifeToolState &state, SelectionHoverState &hover,
     const PickHitRecord &hit, double grid_size, bool snap_enabled,
     bool constrain_axis);
+bool update_knife_preview_from_hit(
+    const std::vector<PolygonObject> &objects, KnifeToolState &state,
+    SelectionHoverState &hover, const PickHitRecord &hit, double grid_size,
+    bool snap_enabled, bool constrain_axis);
 bool accept_knife_current_point(KnifeToolState &state, double grid_size);
 KnifeSegmentPreview
 build_knife_segment_preview(const std::vector<PolygonObject> &objects,

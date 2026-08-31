@@ -50,9 +50,10 @@ assets, command palette routing, viewport panels, and platform windows.
 
 Use `architecture-review.md` for the fixed migration direction and completed ownership decisions.
 The linked root `REFACTORING_PLAN.md` is the only executable refactoring tracker and sole execution
-record for the completed Phase 0-6 refactor; new implementation work requires an explicitly
-approved follow-up task or successor plan. Do not treat historical phase numbers or closed audit
-ledgers as current task authority.
+record for the completed Phase 0-6 refactor. The user-approved active successor program is
+`ARCHITECTURE_CONSOLIDATION_PLAN.md`; it is the executable tracker for its six explicitly scoped
+owner consolidations. Do not treat historical phase numbers or closed audit ledgers as current task
+authority.
 
 ## Domain Ownership
 

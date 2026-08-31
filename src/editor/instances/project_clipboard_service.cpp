@@ -9,9 +9,12 @@
 #include "assets/mesh_asset_payload.hpp"
 #include "editor/commands/asset_command_service.hpp"
 #include "editor/commands/document/duplicate_selected_hierarchy_command.hpp"
+#include "editor/commands/document/set_scene_layer_state_command.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/selection/editor_selection_service.hpp"
+#include "editor/selection/scene_selection_application.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
@@ -19,10 +22,12 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -54,8 +59,16 @@ struct InstanceClipboardPayload final {
   SceneSessionId source_scene;
   std::vector<ClipboardDefinition> definitions;
   std::vector<ClipboardOccurrence> occurrences;
+  std::unordered_map<SceneLayerId, SceneLayerRecord> layers;
   std::unordered_map<AssetId, MaterialDocument> materials;
   std::unordered_map<AssetId, TextureAsset> textures;
+};
+
+/// Plans one deterministic source-layer-name to destination-layer-id import.
+struct ClipboardLayerImportPlan final {
+  SceneLayerState before;
+  SceneLayerState after;
+  std::unordered_map<SceneLayerId, SceneLayerId> remap;
 };
 
 CommandResult clipboard_failure(std::string message) {
@@ -135,7 +148,7 @@ bool collect_snapshot_assets(const DocumentEntitySnapshot &snapshot,
       error = "Instance mesh has no portable authored topology.";
       return false;
     }
-    definition.meshes.emplace(snapshot.original_id,
+    definition.meshes.emplace(snapshot.id,
                               clone_mesh_asset_payload(*mesh));
   }
   if (snapshot.material.has_value()) {
@@ -153,6 +166,31 @@ bool collect_snapshot_assets(const DocumentEntitySnapshot &snapshot,
   }
   for (const DocumentEntitySnapshot &child : snapshot.children) {
     if (!collect_snapshot_assets(child, assets, definition, payload, error)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool collect_snapshot_layers(const DocumentEntitySnapshot &snapshot,
+                             const SceneDocument &scene,
+                             InstanceClipboardPayload &payload,
+                             std::string &error) {
+  if (snapshot.layer_id != kInvalidSceneLayerId) {
+    const SceneLayerRecord *record = scene.layer(snapshot.layer_id);
+    if (record == nullptr) {
+      error = "Instance references a missing scene layer.";
+      return false;
+    }
+    const auto [existing, inserted] =
+        payload.layers.emplace(snapshot.layer_id, *record);
+    if (!inserted && !(existing->second == *record)) {
+      error = "Instance scene layer payload is inconsistent.";
+      return false;
+    }
+  }
+  for (const DocumentEntitySnapshot &child : snapshot.children) {
+    if (!collect_snapshot_layers(child, scene, payload, error)) {
       return false;
     }
   }
@@ -208,11 +246,85 @@ void collect_mesh_snapshots(
     DocumentEntitySnapshot &snapshot,
     std::unordered_map<EntityId, DocumentEntitySnapshot *> &by_source) {
   if (snapshot.mesh.has_value()) {
-    by_source.emplace(snapshot.original_id, &snapshot);
+    by_source.emplace(snapshot.id, &snapshot);
   }
   for (DocumentEntitySnapshot &child : snapshot.children) {
     collect_mesh_snapshots(child, by_source);
   }
+}
+
+std::optional<ClipboardLayerImportPlan>
+build_layer_import_plan(const InstanceClipboardPayload &payload,
+                        const SceneDocument &destination,
+                        std::string &error) {
+  ClipboardLayerImportPlan plan;
+  plan.before = destination.layer_state();
+  plan.after = plan.before;
+
+  std::unordered_map<std::string, SceneLayerId> destination_by_name;
+  std::unordered_set<SceneLayerId> destination_ids;
+  destination_by_name.reserve(plan.before.layers.size() +
+                              payload.layers.size());
+  destination_ids.reserve(plan.before.layers.size() + payload.layers.size());
+  for (const SceneLayerRecord &record : plan.before.layers) {
+    destination_by_name.emplace(record.name, record.id);
+    destination_ids.emplace(record.id);
+  }
+
+  std::vector<SceneLayerId> source_ids;
+  source_ids.reserve(payload.layers.size());
+  for (const auto &[source_id, record] : payload.layers) {
+    (void)record;
+    source_ids.push_back(source_id);
+  }
+  std::sort(source_ids.begin(), source_ids.end());
+
+  SceneLayerId next_id = destination.next_layer_id();
+  for (const SceneLayerId source_id : source_ids) {
+    const SceneLayerRecord &source = payload.layers.at(source_id);
+    const auto same_name = destination_by_name.find(source.name);
+    if (same_name != destination_by_name.end()) {
+      plan.remap.emplace(source_id, same_name->second);
+      continue;
+    }
+
+    while (next_id != std::numeric_limits<SceneLayerId>::max() &&
+           (next_id == kInvalidSceneLayerId ||
+            destination_ids.contains(next_id))) {
+      ++next_id;
+    }
+    if (next_id == std::numeric_limits<SceneLayerId>::max()) {
+      error = "Destination scene has no available layer identity.";
+      return std::nullopt;
+    }
+
+    SceneLayerRecord imported = source;
+    imported.id = next_id;
+    plan.after.layers.push_back(imported);
+    destination_by_name.emplace(imported.name, imported.id);
+    destination_ids.emplace(imported.id);
+    plan.remap.emplace(source_id, imported.id);
+    ++next_id;
+  }
+  return plan;
+}
+
+bool normalize_imported_snapshot_layers(
+    DocumentEntitySnapshot &snapshot,
+    const std::unordered_map<SceneLayerId, SceneLayerId> &layer_remap) {
+  if (snapshot.layer_id != kInvalidSceneLayerId) {
+    const auto remapped = layer_remap.find(snapshot.layer_id);
+    if (remapped == layer_remap.end()) {
+      return false;
+    }
+    snapshot.layer_id = remapped->second;
+  }
+  for (DocumentEntitySnapshot &child : snapshot.children) {
+    if (!normalize_imported_snapshot_layers(child, layer_remap)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool destination_accepts_instance_paste(const SceneSession &session) {
@@ -305,6 +417,10 @@ public:
                                      definition, captured, error)) {
           return clipboard_failure(std::move(error));
         }
+        if (!collect_snapshot_layers(definition.snapshot, scene, captured,
+                                     error)) {
+          return clipboard_failure(std::move(error));
+        }
         definition_index = captured.definitions.size();
         definition_indices.emplace(occurrence->definition, definition_index);
         captured.definitions.push_back(std::move(definition));
@@ -316,6 +432,11 @@ public:
         return clipboard_failure("Instance occurrence could not be captured.");
       }
       occurrence_snapshot->children.clear();
+      std::string error;
+      if (!collect_snapshot_layers(*occurrence_snapshot, scene, captured,
+                                   error)) {
+        return clipboard_failure(std::move(error));
+      }
       captured.occurrences.push_back(ClipboardOccurrence{
           .snapshot = std::move(*occurrence_snapshot),
           .world_transform = scene.world_transform_matrix(occurrence_entity),
@@ -355,7 +476,7 @@ public:
     }
     const SceneDocument &scene = active->session->scene();
     for (const ClipboardDefinition &definition : payload_.definitions) {
-      const EntityId entity = definition.snapshot.original_id;
+      const EntityId entity = definition.snapshot.id;
       if (!scene.is_instance_definition_entity(entity) ||
           scene.uuid(entity) != definition.snapshot.uuid) {
         return false;
@@ -412,23 +533,128 @@ private:
       occurrences.push_back(occurrence.snapshot);
     }
 
+    const SceneSelectionState selection_before =
+        capture_scene_selection(session.scene());
+    SceneScalarCompensationCheckpoint scalar_checkpoint =
+        session.scene().capture_scalar_compensation_checkpoint();
+    if (!scalar_checkpoint.valid()) {
+      return clipboard_failure(
+          "Scene scalar compensation scope is unavailable.");
+    }
     EditorTransaction transaction =
         session.history().begin_transaction("Paste Instances");
     if (!transaction.active()) {
       return clipboard_failure(
           "Cannot paste while another editor transaction is active.");
     }
+    const auto preserve_after_scope_failure =
+        [&](CommandResult failure, std::string message) {
+          (void)session.scene().discard_scalar_compensation_checkpoint(
+              scalar_checkpoint);
+          const CommandResult preserved =
+              transaction.active() ? transaction.commit()
+                                   : command_unchanged_result();
+          failure.ok = false;
+          failure.changed = true;
+          if (!failure.message.empty()) {
+            failure.message += "; ";
+          }
+          failure.message += std::move(message);
+          if (!preserved.ok) {
+            failure.message +=
+                "; applied paste could not be retained in history: ";
+            failure.message += preserved.message;
+          }
+          return failure;
+        };
+    const auto rollback = [&](CommandResult failure,
+                              bool restore_started = false) {
+      if (!restore_started &&
+          (!session.scene().acknowledge_scalar_compensation_checkpoint(
+               scalar_checkpoint) ||
+           !session.scene().begin_scalar_compensation_restore(
+               scalar_checkpoint))) {
+        return preserve_after_scope_failure(
+            std::move(failure),
+            "Paste rollback was rejected because the Scene changed outside "
+            "the compensation scope.");
+      }
+      const CommandResult canceled =
+          transaction.active() ? transaction.cancel()
+                               : command_unchanged_result();
+      const bool selection_restored = same_scene_selection(
+          selection_before, capture_scene_selection(session.scene()));
+      if (!canceled.ok || !selection_restored) {
+        (void)session.scene().discard_scalar_compensation_checkpoint(
+            scalar_checkpoint);
+        failure.ok = false;
+        failure.changed = true;
+        if (!failure.message.empty()) {
+          failure.message += "; ";
+        }
+        failure.message += !canceled.ok
+                               ? "paste transaction rollback failed: " +
+                                     canceled.message
+                               : "paste rollback did not restore the exact "
+                                 "scene selection";
+        return failure;
+      }
+      if (!session.scene().restore_scalar_compensation_checkpoint(
+              scalar_checkpoint)) {
+        failure.ok = false;
+        failure.changed = true;
+        if (!failure.message.empty()) {
+          failure.message += "; ";
+        }
+        failure.message += "paste scalar compensation failed";
+        return failure;
+      }
+      failure.changed = false;
+      return failure;
+    };
     auto command = std::make_unique<DuplicateSelectedHierarchyCommand>(
         session.scene(), std::move(occurrences),
         std::unordered_map<EntityId, EntityId>{});
     const CommandResult duplicated = transaction.execute(std::move(command));
     if (!duplicated.ok || !duplicated.changed) {
-      (void)transaction.cancel();
-      return duplicated;
+      return rollback(duplicated);
+    }
+    if (!session.scene().acknowledge_scalar_compensation_checkpoint(
+            scalar_checkpoint)) {
+      return preserve_after_scope_failure(
+          duplicated,
+          "Paste scalar compensation boundary could not be acknowledged.");
+    }
+    const DocumentCommandResult projected =
+        session.selection().publish_scene_selection();
+    if (!session.scene().begin_scalar_compensation_restore(
+            scalar_checkpoint)) {
+      return preserve_after_scope_failure(
+          CommandResult{.ok = projected.ok,
+                        .changed = projected.changed,
+                        .message = projected.message},
+          "Scene changed during pasted-selection publication; rollback was "
+          "rejected.");
+    }
+    if (!projected.ok) {
+      return rollback(
+          {
+              .ok = false,
+              .changed = projected.changed,
+              .message = projected.message.empty()
+                             ? "Pasted instance selection could not be "
+                               "projected."
+                             : projected.message,
+          },
+          true);
     }
     const CommandResult committed = transaction.commit();
-    if (committed.ok && committed.changed) {
-      session.modeling().project_object_selection_from_scene(true);
+    if (!session.scene().discard_scalar_compensation_checkpoint(
+            scalar_checkpoint)) {
+      return {.ok = false,
+              .changed = true,
+              .message = "Paste scalar compensation scope could not be "
+                         "released."};
     }
     return committed.ok
                ? CommandResult{
@@ -442,6 +668,21 @@ private:
   }
 
   CommandResult paste_imported(SceneSession &session) {
+    std::string layer_error;
+    std::optional<ClipboardLayerImportPlan> layer_plan =
+        build_layer_import_plan(payload_, session.scene(), layer_error);
+    if (!layer_plan.has_value()) {
+      return clipboard_failure(std::move(layer_error));
+    }
+
+    const SceneSelectionState selection_before =
+        capture_scene_selection(session.scene());
+    SceneScalarCompensationCheckpoint scalar_checkpoint =
+        session.scene().capture_scalar_compensation_checkpoint();
+    if (!scalar_checkpoint.valid()) {
+      return clipboard_failure(
+          "Scene scalar compensation scope is unavailable.");
+    }
     EditorTransaction transaction =
         session.history().begin_transaction("Paste Instances");
     if (!transaction.active()) {
@@ -450,20 +691,91 @@ private:
     }
     const ModelingSessionMemento before_modeling =
         session.modeling().capture_history_memento();
-    const auto rollback = [&](CommandResult failure) {
-      const CommandResult canceled = transaction.cancel();
+    const auto preserve_after_scope_failure =
+        [&](CommandResult failure, std::string message) {
+          (void)session.scene().discard_scalar_compensation_checkpoint(
+              scalar_checkpoint);
+          const CommandResult preserved =
+              transaction.active() ? transaction.commit()
+                                   : command_unchanged_result();
+          failure.ok = false;
+          failure.changed = true;
+          if (!failure.message.empty()) {
+            failure.message += "; ";
+          }
+          failure.message += std::move(message);
+          if (!preserved.ok) {
+            failure.message +=
+                "; applied paste could not be retained in history: ";
+            failure.message += preserved.message;
+          }
+          return failure;
+        };
+    const auto rollback = [&](CommandResult failure,
+                              bool restore_started = false) {
+      if (!restore_started &&
+          (!session.scene().acknowledge_scalar_compensation_checkpoint(
+               scalar_checkpoint) ||
+           !session.scene().begin_scalar_compensation_restore(
+               scalar_checkpoint))) {
+        return preserve_after_scope_failure(
+            std::move(failure),
+            "Paste rollback was rejected because the Scene changed outside "
+            "the compensation scope.");
+      }
+      const CommandResult canceled =
+          transaction.active() ? transaction.cancel()
+                               : command_unchanged_result();
       const ModelingCommandResult restored =
           session.modeling().restore_history_memento(before_modeling);
-      if (!canceled.ok) {
-        return canceled;
+      const bool selection_restored = same_scene_selection(
+          selection_before, capture_scene_selection(session.scene()));
+      if (!canceled.ok || !restored.ok || !selection_restored) {
+        (void)session.scene().discard_scalar_compensation_checkpoint(
+            scalar_checkpoint);
+        failure.ok = false;
+        failure.changed = true;
+        if (!failure.message.empty()) {
+          failure.message += "; ";
+        }
+        if (!canceled.ok) {
+          failure.message += "paste transaction rollback failed: ";
+          failure.message += canceled.message;
+        } else if (!restored.ok) {
+          failure.message += "paste modeling rollback failed: ";
+          failure.message += restored.message;
+        } else {
+          failure.message +=
+              "paste rollback did not restore the exact scene selection";
+        }
+        return failure;
       }
-      if (!restored.ok) {
-        return clipboard_failure(restored.message.empty()
-                                     ? "Paste rollback failed."
-                                     : restored.message);
+      if (!session.scene().restore_scalar_compensation_checkpoint(
+              scalar_checkpoint)) {
+        failure.ok = false;
+        failure.changed = true;
+        if (!failure.message.empty()) {
+          failure.message += "; ";
+        }
+        failure.message += "paste scalar compensation failed";
+        return failure;
       }
+      failure.changed = false;
       return failure;
     };
+
+    if (!(layer_plan->before == layer_plan->after)) {
+      const CommandResult layers_imported = transaction.execute(
+          std::make_unique<SetSceneLayerStateCommand>(
+              session.scene(), "Import Instance Layers", layer_plan->before,
+              layer_plan->after));
+      if (!layers_imported.ok || !layers_imported.changed) {
+        return rollback(layers_imported.ok
+                            ? clipboard_failure(
+                                  "Instance scene layers could not be imported.")
+                            : layers_imported);
+      }
+    }
 
     std::unordered_map<AssetId, AssetId> texture_remap;
     for (const AssetId source_id : sorted_asset_ids(payload_.textures)) {
@@ -507,7 +819,12 @@ private:
     for (const ClipboardDefinition &source_definition :
          payload_.definitions) {
       DocumentEntitySnapshot definition = source_definition.snapshot;
-      definition.original_parent = session.scene().scene_root();
+      definition.parent = session.scene().scene_root();
+      if (!normalize_imported_snapshot_layers(definition,
+                                               layer_plan->remap)) {
+        return rollback(clipboard_failure(
+            "Instance definition layer remap is incomplete."));
+      }
       remap_snapshot_materials(definition, material_remap);
 
       std::unordered_map<EntityId, DocumentEntitySnapshot *> mesh_snapshots;
@@ -598,7 +915,12 @@ private:
             clipboard_failure("Occurrence definition remap is invalid."));
       }
       DocumentEntitySnapshot occurrence = source.snapshot;
-      occurrence.original_parent = destination_parent;
+      occurrence.parent = destination_parent;
+      if (!normalize_imported_snapshot_layers(occurrence,
+                                               layer_plan->remap)) {
+        return rollback(clipboard_failure(
+            "Instance occurrence layer remap is incomplete."));
+      }
       occurrence.instance_occurrence = InstanceOccurrenceComponent{
           .definition = imported_definitions[source.definition_index],
       };
@@ -630,11 +952,47 @@ private:
     if (!recorded.ok) {
       return rollback(recorded);
     }
+    if (!session.scene().acknowledge_scalar_compensation_checkpoint(
+            scalar_checkpoint)) {
+      return preserve_after_scope_failure(
+          recorded,
+          "Paste scalar compensation boundary could not be acknowledged.");
+    }
+    const DocumentCommandResult projected =
+        session.selection().publish_scene_selection();
+    if (!session.scene().begin_scalar_compensation_restore(
+            scalar_checkpoint)) {
+      return preserve_after_scope_failure(
+          CommandResult{.ok = projected.ok,
+                        .changed = projected.changed,
+                        .message = projected.message},
+          "Scene changed during imported-selection publication; rollback was "
+          "rejected.");
+    }
+    if (!projected.ok) {
+      return rollback(
+          {
+              .ok = false,
+              .changed = projected.changed,
+              .message = projected.message.empty()
+                             ? "Imported instance selection could not be "
+                               "projected."
+                             : projected.message,
+          },
+          true);
+    }
     const CommandResult committed = transaction.commit();
+    if (!session.scene().discard_scalar_compensation_checkpoint(
+            scalar_checkpoint)) {
+      return {
+          .ok = false,
+          .changed = true,
+          .message = "Paste scalar compensation scope could not be released.",
+      };
+    }
     if (!committed.ok || !committed.changed) {
       return committed;
     }
-    session.modeling().project_object_selection_from_scene(true);
     return {
         .ok = true,
         .changed = true,

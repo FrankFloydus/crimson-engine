@@ -10,14 +10,18 @@
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/interactions/transform_gizmo.hpp"
 #include "editor/pivot/pivot_types.hpp"
+#include "editor/projection/selection_overlay_projection.hpp"
 #include "editor/viewport/viewport_selection_interaction.hpp"
 #include "render/overlay/viewport_box_overlay_builder.hpp"
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
 #include "render/overlay/viewport_transform_gizmo_overlay_builder.hpp"
+#include "render/render_signature_builder.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <cassert>
 #include <cmath>
 #include <optional>
 
@@ -206,7 +210,262 @@ std::uint32_t linear_array_axis_color(LinearArrayAxisConstraint constraint) {
   return kOverlayToolAxisMixedColor;
 }
 
+void add_double(RenderSignatureBuilder &signature, double value) {
+  signature.add_value(std::bit_cast<std::uint64_t>(value));
+}
+
+void add_camera(RenderSignatureBuilder &signature,
+                const ViewportOverlayCamera *camera) {
+  signature.add_bool(camera != nullptr);
+  if (camera == nullptr) {
+    return;
+  }
+  signature.add_vec3(camera->eye)
+      .add_vec3(camera->forward)
+      .add_vec3(camera->right)
+      .add_vec3(camera->up)
+      .add_vec2(camera->viewport_size)
+      .add_value(static_cast<std::uint64_t>(camera->projection))
+      .add_float(camera->orthographic_size)
+      .add_float(camera->fov_degrees)
+      .add_float(camera->near_plane)
+      .add_float(camera->far_plane);
+}
+
+void add_box_preview(RenderSignatureBuilder &signature,
+                     const ModelingBoxPreview *preview) {
+  signature.add_bool(preview != nullptr);
+  if (preview == nullptr) {
+    return;
+  }
+  signature.add_bool(preview->valid)
+      .add_value(static_cast<std::uint64_t>(preview->drag_state))
+      .add_size(preview->footprint_count);
+  for (const QVec3 point : preview->footprint) {
+    signature.add_vec3(point);
+  }
+}
+
+void add_gizmo_info(
+    RenderSignatureBuilder &signature,
+    const quader_editor_core::TransformGizmoFrame *gizmo) {
+  signature.add_bool(gizmo != nullptr);
+  if (gizmo == nullptr) {
+    return;
+  }
+  const quader_editor_core::TransformGizmoFrameInfo &info = gizmo->info;
+  signature.add_bool(info.ok)
+      .add_value(static_cast<std::uint64_t>(info.tool))
+      .add_value(static_cast<std::uint64_t>(info.hover_axis))
+      .add_value(static_cast<std::uint64_t>(info.active_axis))
+      .add_vec3(info.pivot)
+      .add_vec2(info.screen_pivot);
+  add_double(signature, info.gizmo_scale);
+  signature.add_bool(info.rotate_indicator.active)
+      .add_value(static_cast<std::uint64_t>(info.rotate_indicator.axis))
+      .add_vec3(info.rotate_indicator.world_axis)
+      .add_vec3(info.rotate_indicator.start_direction)
+      .add_bool(info.rotate_indicator.has_mouse_position)
+      .add_vec3(info.rotate_indicator.mouse_position);
+  add_double(signature, info.rotate_indicator.angle_degrees);
+  // Geometry is deterministically derived from the fixed owner revisions,
+  // camera and info above. Sizes protect structural changes without scanning
+  // the generated gizmo vectors before the coordinator's unchanged gate.
+  signature.add_size(gizmo->axes.size())
+      .add_size(gizmo->planes.size())
+      .add_size(gizmo->ring_segments.size())
+      .add_size(gizmo->trackball_segments.size());
+}
+
+void add_snap_points(
+    RenderSignatureBuilder &signature,
+    const std::vector<quader_editor_core::SelectionOverlayPoint> *points) {
+  signature.add_bool(points != nullptr);
+  if (points == nullptr) {
+    return;
+  }
+  assert(points->size() <= 2u &&
+         "Transform gizmo snap overlay must remain a fixed hover/target pair");
+  signature.add_size(points->size());
+  // TransformGizmoInteraction publishes either no snap marker or the fixed
+  // hover/target pair. Read those two bounded records directly; never hash a
+  // dynamically sized overlay stream on an unchanged frame.
+  const auto add_point = [&signature](
+                             const quader_editor_core::SelectionOverlayPoint
+                                 &point) {
+    signature.add_value(static_cast<std::uint64_t>(point.layer))
+        .add_vec3(point.position)
+        .add_value(point.color_abgr)
+        .add_float(point.size_pixels)
+        .add_value(static_cast<std::uint64_t>(point.object_id))
+        .add_value(static_cast<std::uint64_t>(point.vertex_id));
+  };
+  if (!points->empty()) {
+    add_point((*points)[0]);
+  }
+  if (points->size() > 1u) {
+    add_point((*points)[1]);
+  }
+}
+
+void add_selection_marquee(RenderSignatureBuilder &signature,
+                           const ViewportSelectionMarquee *marquee) {
+  signature.add_bool(marquee != nullptr);
+  if (marquee == nullptr) {
+    return;
+  }
+  signature.add_bool(marquee->active)
+      .add_vec2(marquee->start)
+      .add_vec2(marquee->end)
+      .add_value(static_cast<std::uint64_t>(marquee->rule));
+}
+
+void add_pivot_handle(RenderSignatureBuilder &signature,
+                      const PivotHandleState *handle) {
+  signature.add_bool(handle != nullptr);
+  if (handle == nullptr) {
+    return;
+  }
+  signature.add_bool(handle->visible)
+      .add_bool(handle->editing)
+      .add_bool(handle->persistent)
+      .add_value(handle->target)
+      .add_vec3(handle->world_position);
+}
+
+void add_linear_array_handle(RenderSignatureBuilder &signature,
+                             const LinearArrayHandleState *handle) {
+  signature.add_bool(handle != nullptr);
+  if (handle == nullptr) {
+    return;
+  }
+  signature.add_bool(handle->visible)
+      .add_bool(handle->dragging)
+      .add_vec3(handle->source_world)
+      .add_vec3(handle->endpoint_world)
+      .add_value(static_cast<std::uint64_t>(handle->constraint))
+      .add_value(handle->revision);
+}
+
+void add_radial_array_center(RenderSignatureBuilder &signature,
+                             const RadialArrayCenterState *center) {
+  signature.add_bool(center != nullptr);
+  if (center == nullptr) {
+    return;
+  }
+  signature.add_bool(center->visible)
+      .add_bool(center->locked)
+      .add_vec3(center->world_position)
+      .add_vec3(center->world_normal)
+      .add_value(center->revision);
+}
+
+std::uint64_t tool_overlay_publication_revision(
+    const ViewportToolOverlaySourceInputs &inputs) {
+  RenderSignatureBuilder signature;
+  const ViewportToolOverlaySourceRevisions &revisions = inputs.revisions;
+  signature.add_bool(inputs.interaction_pane)
+      .add_bool(inputs.tool_overlay_visible)
+      .add_bool(inputs.gizmos_visible)
+      .add_bool(inputs.pivot_handle_editing)
+      .add_bool(inputs.overlays_visible)
+      .add_bool(inputs.radial_array_center_visible);
+  const bool transform_gizmo_visible =
+      inputs.interaction_pane && inputs.gizmos_visible &&
+      !inputs.pivot_handle_editing && inputs.transform_gizmo != nullptr;
+  const bool marquee_visible =
+      inputs.interaction_pane && inputs.overlays_visible &&
+      inputs.selection_marquee != nullptr && inputs.selection_marquee->active;
+  const bool pivot_visible =
+      inputs.pivot_handle != nullptr && inputs.pivot_handle->visible;
+  const bool camera_affects_frame =
+      (inputs.interaction_pane && inputs.tool_overlay_visible) ||
+      transform_gizmo_visible || marquee_visible || pivot_visible;
+  signature.add_bool(camera_affects_frame);
+  if (camera_affects_frame) {
+    add_camera(signature, inputs.overlay_camera);
+  }
+  if (inputs.interaction_pane) {
+    signature.add_value(revisions.active_tool);
+    if (inputs.tool_overlay_visible) {
+      add_box_preview(signature, inputs.box_preview);
+    }
+    if (transform_gizmo_visible) {
+      signature.add_value(revisions.modeling_content)
+          .add_value(revisions.modeling_selection)
+          .add_value(revisions.modeling_transform_preview)
+          .add_value(revisions.scene_transform)
+          .add_value(revisions.scene_selection)
+          .add_value(revisions.transform_space)
+          .add_value(revisions.selection_pivot)
+          .add_value(revisions.curve_preview);
+      add_gizmo_info(signature, inputs.transform_gizmo);
+    }
+    if (inputs.overlays_visible) {
+      add_snap_points(signature, inputs.transform_snap_points);
+      add_selection_marquee(signature, inputs.selection_marquee);
+    }
+  }
+  add_pivot_handle(signature, inputs.pivot_handle);
+  add_linear_array_handle(signature, inputs.linear_array_handle);
+  if (inputs.radial_array_center_visible) {
+    add_radial_array_center(signature, inputs.radial_array_center);
+  }
+  return signature.value();
+}
+
 } // namespace
+
+ViewportToolOverlaySource::ViewportToolOverlaySource(
+    ViewportToolOverlaySourceInputs inputs)
+    : inputs_(inputs),
+      source_stamp_{
+          .source_identity = inputs.source_identity,
+          .publication_revision = tool_overlay_publication_revision(inputs),
+      } {}
+
+ViewportOverlayFrame
+ViewportToolOverlaySource::build_dynamic_tool_overlay_frame() const {
+  ViewportOverlayFrame frame;
+  if (inputs_.overlay_camera == nullptr) {
+    return frame;
+  }
+  if (inputs_.interaction_pane) {
+    if (inputs_.tool_overlay_visible && inputs_.box_preview != nullptr) {
+      ViewportToolOverlayProjection::append_box(
+          frame, *inputs_.overlay_camera, *inputs_.box_preview);
+    }
+    if (inputs_.gizmos_visible && !inputs_.pivot_handle_editing &&
+        inputs_.transform_gizmo != nullptr) {
+      ViewportToolOverlayProjection::append_transform_gizmo(
+          frame, *inputs_.overlay_camera, *inputs_.transform_gizmo);
+    }
+    if (inputs_.overlays_visible) {
+      if (inputs_.transform_snap_points != nullptr) {
+        SelectionOverlayProjection::append_world_space_overlay_points(
+            frame, *inputs_.transform_snap_points);
+      }
+      if (inputs_.selection_marquee != nullptr) {
+        ViewportToolOverlayProjection::append_selection_marquee(
+            frame, *inputs_.overlay_camera, *inputs_.selection_marquee);
+      }
+    }
+  }
+  if (inputs_.viewport_camera != nullptr && inputs_.pivot_handle != nullptr) {
+    ViewportToolOverlayProjection::append_pivot_handle(
+        frame, *inputs_.viewport_camera, *inputs_.pivot_handle);
+  }
+  if (inputs_.linear_array_handle != nullptr) {
+    ViewportToolOverlayProjection::append_linear_array_handle(
+        frame, *inputs_.linear_array_handle);
+  }
+  if (inputs_.radial_array_center_visible &&
+      inputs_.radial_array_center != nullptr) {
+    ViewportToolOverlayProjection::append_radial_array_center(
+        frame, *inputs_.radial_array_center);
+  }
+  return frame;
+}
 
 void ViewportToolOverlayProjection::append_box(
     ViewportOverlayFrame &frame, const ViewportOverlayCamera &camera,

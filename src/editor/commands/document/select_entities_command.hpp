@@ -27,24 +27,21 @@ public:
         before_(capture_scene_selection(scene)),
         after_(make_scene_selection(scene, entities, active)), mode_(mode) {}
 
-  DocumentCommandResult undo() override {
-    apply_scene_selection(scene(), before_, mode_);
-    return document_command_changed_result();
-  }
+  DocumentCommandResult undo() override { return apply(before_); }
 
-    DocumentCommandResult redo() override {
-      if (same_scene_selection(before_, after_)) {
-        return document_command_unchanged_result();
-      }
-      apply_scene_selection(scene(), after_, mode_);
-      return document_command_changed_result();
-    }
+  DocumentCommandResult redo() override { return apply(after_); }
 
 private:
-    SceneSelectionState before_;
-    SceneSelectionState after_;
-    SceneSelectionApplicationMode mode_ =
-        SceneSelectionApplicationMode::UndoableCommand;
+  DocumentCommandResult apply(const SceneSelectionState &selection) {
+    const bool changed = apply_scene_selection(scene(), selection, mode_);
+    return changed ? document_command_changed_result()
+                   : document_command_unchanged_result();
+  }
+
+  SceneSelectionState before_;
+  SceneSelectionState after_;
+  SceneSelectionApplicationMode mode_ =
+      SceneSelectionApplicationMode::UndoableCommand;
 };
 
 } // namespace quader

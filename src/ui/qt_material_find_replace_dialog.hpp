@@ -21,11 +21,13 @@ class QPushButton;
 
 namespace quader {
 
+/** Identifies the source or replacement side of the material dialog. */
 enum class QtMaterialFindReplaceColumn : std::uint8_t {
   Find,
   Replace,
 };
 
+/** Carries localizable text for the material find-and-replace dialog. */
 struct QtMaterialFindReplaceLabels final {
   QString window_title = QStringLiteral("Find/Replace Materials");
   QString find = QStringLiteral("Find");
@@ -78,6 +80,7 @@ public:
   void set_replace_materials_callback(ReplaceMaterialsCallback callback);
 
 private:
+  /** Groups widgets belonging to one material-reference column. */
   struct ColumnWidgets final {
     QLabel *heading = nullptr;
     QLabel *preview = nullptr;

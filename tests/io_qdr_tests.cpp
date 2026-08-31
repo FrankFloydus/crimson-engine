@@ -10,6 +10,7 @@
 #include "io/qdr/qdr_document_writer.hpp"
 #include "io/qdr/qdr_project_write_snapshot.hpp"
 #include "scene/document/scene_content_document.hpp"
+#include "scene/document/scene_entity_state.hpp"
 #include "support/guardrail_file_scan.hpp"
 
 #include <gtest/gtest.h>
@@ -149,60 +150,129 @@ contains_temp_qdr_files(const std::filesystem::path &directory) {
 } // namespace
 
 TEST(SceneContentDocumentTests,
-     SceneObjectRecordComponentFieldsStaySceneCanonical) {
+     SceneEntityStateCapturesTheCanonicalComponentInventory) {
   SceneContentDocument document(SceneContentDocumentRecord{
       .id = 92u,
-      .name = "Canonical Object Records",
+      .name = "Canonical Entity State",
   });
-  const AssetId stale_mesh =
-      document.assets().add_mesh(12u, make_triangle_mesh("Stale Mesh"));
-  const AssetId canonical_mesh =
+  const AssetId mesh =
       document.assets().add_mesh(13u, make_triangle_mesh("Canonical Mesh"));
-  const AssetId stale_material = document.assets().add_material(
-      22u, make_default_quader_material("Stale Material"));
-  const AssetId canonical_material = document.assets().add_material(
+  const AssetId material = document.assets().add_material(
       23u, make_default_quader_material("Canonical Material"));
-  ASSERT_NE(stale_mesh, kInvalidAssetId);
-  ASSERT_NE(canonical_mesh, kInvalidAssetId);
-  ASSERT_NE(stale_material, kInvalidAssetId);
-  ASSERT_NE(canonical_material, kInvalidAssetId);
+  ASSERT_NE(mesh, kInvalidAssetId);
+  ASSERT_NE(material, kInvalidAssetId);
 
   const EntityId entity = document.scene().create_entity_with_id(
-      200u, "Canonical Mesh", EntityKind::Mesh);
+      200u, "Canonical Mesh", EntityKind::Mesh, 77u);
   ASSERT_NE(entity, kInvalidEntityId);
-  const EditorObjectId object_id = document.scene().editor_object_id(entity);
-  ASSERT_NE(object_id, kInvalidEditorObjectId);
-  document.scene().set_visible(entity, false);
-  document.scene().set_modeling_object(
-      entity, ModelingObjectComponent{.object_id = 42, .material_slot = 2u});
-  document.scene().set_mesh(entity, MeshComponent{.mesh = canonical_mesh});
-  document.scene().set_material(
-      entity, MaterialComponent{.material = canonical_material});
+  ASSERT_TRUE(document.scene().set_transform(
+      entity, TransformComponent{.position = {1.0f, 2.0f, 3.0f}}));
+  ASSERT_TRUE(document.scene().set_visible(entity, false));
+  ASSERT_TRUE(document.scene().set_locked(entity, true));
+  ASSERT_TRUE(document.scene().set_modeling_object(
+      entity, ModelingObjectComponent{.object_id = 42,
+                                      .material_slot = 2u,
+                                      .sdk_owned = true}));
+  ASSERT_TRUE(document.scene().set_mesh(entity, MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.scene().set_material(
+      entity, MaterialComponent{.material = material}));
 
-  EXPECT_EQ(document.upsert_object_record(ProjectObjectRecord{
-                .id = object_id,
-                .scene_entity = entity,
-                .mesh = stale_mesh,
-                .material = stale_material,
-                .modeling_object = 99,
-                .authored_name = "Imported Authored Name",
-                .visible = true,
-                .material_slot = 7u,
-            }),
-            object_id);
+  const std::optional<SceneEntityState> state =
+      capture_scene_entity_state(document.scene(), entity);
+  ASSERT_TRUE(state.has_value());
+  EXPECT_EQ(state->id, entity);
+  EXPECT_EQ(state->editor_object_id, 77u);
+  EXPECT_EQ(state->name, "Canonical Mesh");
+  EXPECT_EQ(state->mesh->mesh, mesh);
+  EXPECT_EQ(state->material->material, material);
+  EXPECT_EQ(state->modeling_object->object_id, 42);
+  EXPECT_FLOAT_EQ(state->transform.position.x, 1.0f);
+  EXPECT_FLOAT_EQ(state->transform.position.y, 2.0f);
+  EXPECT_FLOAT_EQ(state->transform.position.z, 3.0f);
+  EXPECT_FALSE(state->visibility.visible);
+  EXPECT_TRUE(state->lock.locked);
 
-  const std::optional<ProjectObjectRecord> record =
-      document.object_record(object_id);
-  ASSERT_TRUE(record.has_value());
-  EXPECT_EQ(record->mesh, canonical_mesh);
-  EXPECT_EQ(record->material, canonical_material);
-  EXPECT_EQ(record->modeling_object, 42);
-  EXPECT_FALSE(record->visible);
-  EXPECT_EQ(record->material_slot, 2u);
+  TextureMappingComponent later_mapping;
+  later_mapping.sampling_from_local.values[12] = 5.0f;
+  ASSERT_TRUE(document.scene().set_texture_mapping(entity, later_mapping));
+  ASSERT_TRUE(apply_scene_entity_state(document.scene(), entity, *state));
+  EXPECT_EQ(document.scene().texture_mapping(entity), nullptr)
+      << "applying a captured state must restore an absent mapping";
+}
 
-  const std::uint64_t revision_after_upsert = document.revision();
-  EXPECT_FALSE(document.synchronize_object_records_with_scene());
-  EXPECT_EQ(document.revision(), revision_after_upsert);
+TEST(SceneContentDocumentTests,
+     SceneEntityStateApplyReplacesExistingOptionalInventoryExactly) {
+  SceneDocument scene;
+  const EntityId entity =
+      scene.create_entity("Exact Replacement", EntityKind::Generic);
+  ASSERT_NE(entity, kInvalidEntityId);
+  const std::optional<SceneEntityState> empty_state =
+      capture_scene_entity_state(scene, entity);
+  ASSERT_TRUE(empty_state.has_value());
+
+  ASSERT_TRUE(scene.set_modeling_object(
+      entity, {.object_id = 12, .material_slot = 3u, .sdk_owned = true}));
+  ASSERT_TRUE(scene.set_mesh(entity, {.mesh = 41u}));
+  ASSERT_TRUE(scene.set_material(entity, {.material = 42u}));
+  TextureMappingComponent mapping;
+  mapping.sampling_from_local.values[12] = 7.0f;
+  ASSERT_TRUE(scene.set_texture_mapping(entity, mapping));
+  ASSERT_TRUE(scene.set_light(entity, {.type = LightType::Point}));
+  ASSERT_TRUE(apply_scene_entity_state(scene, entity, *empty_state));
+  EXPECT_EQ(scene.modeling_object(entity), nullptr);
+  EXPECT_EQ(scene.mesh(entity), nullptr);
+  EXPECT_EQ(scene.material(entity), nullptr);
+  EXPECT_EQ(scene.texture_mapping(entity), nullptr);
+  EXPECT_EQ(scene.light(entity), nullptr);
+  EXPECT_EQ(scene.kind(entity), EntityKind::Generic);
+
+  ASSERT_TRUE(scene.set_curve(entity, {.curve = 43u}));
+  ASSERT_TRUE(apply_scene_entity_state(scene, entity, *empty_state));
+  EXPECT_EQ(scene.curve(entity), nullptr);
+
+  ASSERT_TRUE(scene.set_scene_settings(entity, {}));
+  ASSERT_TRUE(apply_scene_entity_state(scene, entity, *empty_state));
+  EXPECT_EQ(scene.scene_settings(entity), nullptr);
+  EXPECT_FALSE(scene.is_scene_root(entity));
+
+  ASSERT_TRUE(scene.set_instance_definition(entity));
+  ASSERT_TRUE(apply_scene_entity_state(scene, entity, *empty_state));
+  EXPECT_EQ(scene.instance_definition(entity), nullptr);
+
+  const EntityId definition =
+      scene.create_entity("Definition", EntityKind::Empty);
+  ASSERT_NE(definition, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  ASSERT_TRUE(scene.set_instance_occurrence(
+      entity, {.definition = definition}));
+  ASSERT_TRUE(apply_scene_entity_state(scene, entity, *empty_state));
+  EXPECT_EQ(scene.instance_occurrence(entity), nullptr);
+  EXPECT_EQ(scene.kind(entity), EntityKind::Generic);
+
+  ASSERT_TRUE(scene.set_modeling_object(
+      entity, {.object_id = 99, .material_slot = 5u, .sdk_owned = true}));
+  ASSERT_TRUE(scene.set_mesh(entity, {.mesh = 51u}));
+  ASSERT_TRUE(scene.set_material(entity, {.material = 52u}));
+  ASSERT_TRUE(scene.set_texture_mapping(entity, mapping));
+  const std::optional<SceneEntityState> mesh_state =
+      capture_scene_entity_state(scene, entity);
+  ASSERT_TRUE(mesh_state.has_value());
+  ASSERT_TRUE(scene.clear_texture_mapping(entity));
+  ASSERT_TRUE(scene.clear_material(entity));
+  ASSERT_TRUE(scene.clear_mesh(entity));
+  ASSERT_TRUE(scene.clear_modeling_object(entity));
+  ASSERT_TRUE(scene.set_curve(entity, {.curve = 53u}));
+
+  ASSERT_TRUE(apply_scene_entity_state(scene, entity, *mesh_state));
+  EXPECT_EQ(scene.curve(entity), nullptr);
+  ASSERT_NE(scene.modeling_object(entity), nullptr);
+  EXPECT_EQ(scene.modeling_object(entity)->object_id, 99);
+  ASSERT_NE(scene.mesh(entity), nullptr);
+  EXPECT_EQ(scene.mesh(entity)->mesh, 51u);
+  ASSERT_NE(scene.material(entity), nullptr);
+  EXPECT_EQ(scene.material(entity)->material.embedded_asset(), AssetId{52u});
+  ASSERT_NE(scene.texture_mapping(entity), nullptr);
+  EXPECT_EQ(scene.kind(entity), EntityKind::Mesh);
 }
 
 TEST(QdrDocumentIoTests,

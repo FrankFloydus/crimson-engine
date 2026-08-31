@@ -14,8 +14,7 @@
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/project_material_resolver.hpp"
 #include "render/instance_batch_planner.hpp"
-#include "render/render_instance_edit_scope.hpp"
-#include "render/render_scene_binding.hpp"
+#include "render/render_source_stamp.hpp"
 #include "scene/components.hpp"
 #include "viewport/viewport_local_visibility.hpp"
 
@@ -216,28 +215,8 @@ using OverlaySnapshot = RenderOverlaySelectionSnapshot;
 /**
  * Snapshot consumed by render sync/cache invalidation and rebuild.
  */
-struct RenderSceneSnapshot {
+struct RenderSceneSnapshot : RenderSourceStamp {
   std::uint64_t frame_index = 0;
-  RenderSceneBindingKey scene_binding;
-  std::uint64_t scene_revision = 0;
-  std::uint64_t selection_revision = 0;
-  std::uint64_t visibility_revision = 0;
-  std::uint64_t local_visibility_revision = 0;
-  std::uint64_t transform_revision = 0;
-  std::uint64_t texture_mapping_revision = 0;
-  std::uint64_t mesh_binding_revision = 0;
-  std::uint64_t curve_binding_revision = 0;
-  std::uint64_t material_binding_revision = 0;
-  std::uint64_t render_component_revision = 0;
-  std::uint64_t asset_revision = 0;
-  // Main-scene extraction consumes meshes plus their material/texture
-  // dependencies. These narrow owner revisions let curve-only asset
-  // publications advance the public asset stamp without invalidating those
-  // retained records.
-  std::uint64_t mesh_asset_revision = 0;
-  std::uint64_t material_asset_revision = 0;
-  std::uint64_t project_material_revision = 0;
-  RenderInstanceEditScope instance_edit_scope;
   RenderSceneSnapshotDirtyState dirty;
   bool reused_previous_records = false;
   std::vector<RenderSceneMeshRecord> meshes;

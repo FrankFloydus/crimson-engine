@@ -8,17 +8,20 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "assets/asset_registry.hpp"
+#include "editor/curve/curve_tool_service.hpp"
 #include "editor/interactions/tool_identity.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/metadata/host_contract.hpp"
 #include "scene/scene_document.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
 #include "support/viewport_overlay_test_helpers.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
+#include "viewport/viewport_host_interaction_policy.hpp"
 #include "viewport/viewport_input_router.hpp"
 
 #include <gtest/gtest.h>
@@ -135,6 +138,84 @@ public:
     return {.ok = true};
   }
   ModelingCommandResult cycle_cut_mode() override { return {.ok = true}; }
+};
+
+/// Drives the real persistent primitive owner through deterministic rays.
+class PrimitivePointerHarness final {
+public:
+  PrimitivePointerHarness()
+      : editor(QuaderApiSessionInternalAccess::from_scene_session(session)),
+        tool_ports(session.modeling()),
+        context{
+            .state = state,
+            .camera = camera,
+            .ports = tool_ports.ports(),
+            .document = &session.scene(),
+            .modal_state = &modal_state,
+            .box = &box_context,
+        } {
+    state.active_tool = ViewportToolId::CreatePrimitive;
+    tool = find_viewport_tool(ViewportToolId::CreatePrimitive);
+    activated = editor.tools().activate(ViewportToolId::CreatePrimitive).ok();
+    box_context.make_event_at = [](QVec2 local) {
+      return ModelingBoxToolEvent{
+          .screen_position = local,
+          .ray = {.origin = {2.0f + local.x * 0.1f, 4.0f,
+                             2.0f + local.y * 0.1f},
+                  .direction = {0.0f, -1.0f, 0.0f}},
+          .grid_size = 1.0,
+      };
+    };
+    box_context.accept_preview =
+        [&](std::string name, AssetId material, bool snap_enabled) {
+          ++accept_count;
+          const QuaderApiVoidResult result =
+              editor.tools().accept_active_primitive(
+                  std::move(name), material, snap_enabled);
+          return ModelingCommandResult{
+              .ok = result.ok,
+              .changed = result.changed,
+              .message = result.message,
+          };
+        };
+    box_context.cancel_session = [&]() {
+      const QuaderApiVoidResult result =
+          editor.tools().cancel_active_tool_preview();
+      return ModelingCommandResult{
+          .ok = result.ok,
+          .changed = result.changed,
+          .message = result.message,
+      };
+    };
+    box_context.session_active = [&]() {
+      return editor.tools().has_active_primitive_creation();
+    };
+    box_context.next_mesh_name = [] {
+      return std::string{"Pointer Gesture Primitive"};
+    };
+  }
+
+  [[nodiscard]] ViewportToolResult
+  dispatch_direct(ViewportPointerToolEvent pointer) {
+    return tool->handle_event(
+        context, ViewportToolEvent{
+                     .kind = ViewportToolEventKind::Frame,
+                     .tool = ViewportToolId::CreatePrimitive,
+                     .pointer = pointer,
+                 });
+  }
+
+  SceneSession session;
+  QuaderEditorApi editor;
+  ViewportToolState state;
+  ViewportCameraController camera;
+  ViewportModalToolState modal_state;
+  ViewportBoxToolContext box_context;
+  ViewportModelingToolPortAdapter tool_ports;
+  ViewportToolContext context;
+  const ViewportTool *tool = nullptr;
+  bool activated = false;
+  int accept_count = 0;
 };
 
 void expect_point_tool_click_uses_queued_press_coordinate(
@@ -392,8 +473,375 @@ TEST(ViewportToolRuntimeTests, RuntimeDispatchesShortcutStateChanges) {
 }
 
 TEST(ViewportToolRuntimeTests,
+     NativeCoordinatorRegistersEveryCatalogDeclaredLifecycleExactlyOnce) {
+  SceneSession session;
+  const ViewportToolRuntime &runtime = session.native_tools().runtime();
+  const std::size_t declared = static_cast<std::size_t>(std::ranges::count_if(
+      viewport_tool_descriptors(), [](const ToolDescriptor &descriptor) {
+        return descriptor.editor_owned_native_lifecycle;
+      }));
+
+  EXPECT_TRUE(runtime.native_lifecycle_catalog_complete());
+  EXPECT_EQ(runtime.native_lifecycle_count(), declared);
+  for (const ToolDescriptor &descriptor : viewport_tool_descriptors()) {
+    EXPECT_EQ(runtime.native_lifecycle_registered(descriptor.tool),
+              descriptor.editor_owned_native_lifecycle)
+        << descriptor.id;
+    EXPECT_EQ(session.native_tools().handles(descriptor.id),
+              descriptor.editor_owned_native_lifecycle)
+        << descriptor.id;
+    EXPECT_FALSE(session.native_tools().active(descriptor.id))
+        << descriptor.id;
+    EXPECT_FALSE(session.native_tools().pending(descriptor.id))
+        << descriptor.id;
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
+     NativeCoordinatorActivatesAndCancelsEveryCatalogDeclaredLifecycle) {
+  for (const ToolDescriptor &descriptor : viewport_tool_descriptors()) {
+    if (!descriptor.editor_owned_native_lifecycle) {
+      continue;
+    }
+    SCOPED_TRACE(std::string(descriptor.id));
+
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    const QuaderApiResult<QuaderModelingObjectRef> created =
+        editor.modeling().create_box(
+            QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                         .max = {1.0f, 1.0f, 1.0f}},
+            "Native lifecycle matrix box");
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+
+    NativeViewportToolCoordinator &coordinator = session.native_tools();
+    ASSERT_TRUE(coordinator.handles(descriptor.id));
+    EXPECT_TRUE(coordinator.can_activate(descriptor.id));
+    EXPECT_FALSE(coordinator.has_pending_tool());
+
+    const QuaderApiVoidResult activated =
+        editor.tools().activate(descriptor.tool);
+    ASSERT_TRUE(activated.ok()) << activated.error_message();
+    EXPECT_TRUE(activated.changed());
+    EXPECT_EQ(coordinator.active_tool_id(), descriptor.id);
+    EXPECT_TRUE(coordinator.has_pending_tool());
+    EXPECT_EQ(coordinator.has_pending_history_preview(),
+              descriptor.tool != ViewportToolId::Curve);
+
+    for (const ToolDescriptor &candidate : viewport_tool_descriptors()) {
+      if (!candidate.editor_owned_native_lifecycle) {
+        continue;
+      }
+      const bool expected = candidate.tool == descriptor.tool;
+      EXPECT_EQ(coordinator.active(candidate.id), expected) << candidate.id;
+      EXPECT_EQ(coordinator.pending(candidate.id), expected) << candidate.id;
+    }
+
+    const auto metadata = coordinator.active_commit_metadata();
+    ASSERT_TRUE(metadata.has_value());
+    EXPECT_FALSE(metadata->label.empty());
+    EXPECT_EQ(metadata->domain,
+              descriptor.tool == ViewportToolId::Pivot
+                  ? ViewportNativeToolCommitDomain::Document
+                  : ViewportNativeToolCommitDomain::Modeling);
+
+    const QuaderApiVoidResult repeated =
+        editor.tools().activate(descriptor.tool);
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.changed());
+
+    const QuaderApiVoidResult canceled =
+        editor.tools().cancel_active_tool_preview();
+    ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+    EXPECT_TRUE(canceled.changed());
+    EXPECT_FALSE(coordinator.has_pending_tool());
+    EXPECT_TRUE(coordinator.active_tool_id().empty());
+    EXPECT_FALSE(coordinator.active_commit_metadata().has_value());
+    for (const ToolDescriptor &candidate : viewport_tool_descriptors()) {
+      if (!candidate.editor_owned_native_lifecycle) {
+        continue;
+      }
+      EXPECT_FALSE(coordinator.active(candidate.id)) << candidate.id;
+      EXPECT_FALSE(coordinator.pending(candidate.id)) << candidate.id;
+    }
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
+     NativeLifecycleInterruptionMatrixPreservesPersistentStateExceptEscape) {
+  enum class Interruption {
+    FocusLoss,
+    CaptureLoss,
+    Navigation,
+    Escape,
+    OutsidePointer,
+  };
+  struct InterruptionCase final {
+    Interruption interruption;
+    std::string_view label;
+    bool cancels_lifecycle = false;
+  };
+  const std::array cases{
+      InterruptionCase{Interruption::FocusLoss, "focus loss"},
+      InterruptionCase{Interruption::CaptureLoss, "capture loss"},
+      InterruptionCase{Interruption::Navigation, "navigation"},
+      InterruptionCase{Interruption::Escape, "Escape", true},
+      InterruptionCase{Interruption::OutsidePointer, "outside pointer"},
+  };
+
+  for (const ToolDescriptor &descriptor : viewport_tool_descriptors()) {
+    if (!descriptor.editor_owned_native_lifecycle) {
+      continue;
+    }
+    for (const InterruptionCase &scenario : cases) {
+      SCOPED_TRACE(std::string(descriptor.id));
+      SCOPED_TRACE(std::string(scenario.label));
+
+      SceneSession session;
+      QuaderEditorApi editor(
+          QuaderApiSessionInternalAccess::from_scene_session(session));
+      const QuaderApiResult<QuaderModelingObjectRef> created =
+          editor.modeling().create_box(
+              QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                           .max = {1.0f, 1.0f, 1.0f}},
+              "Native interruption matrix box");
+      ASSERT_TRUE(created.ok()) << created.error_message();
+      ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+      ASSERT_TRUE(editor.tools().activate(descriptor.tool).ok());
+
+      NativeViewportToolCoordinator &coordinator = session.native_tools();
+      ASSERT_TRUE(coordinator.active(descriptor.id));
+      ViewportInputFrame input;
+      input.viewport_hovered = true;
+      input.viewport_focused = true;
+      input.viewport_size = {800.0f, 600.0f};
+      input.mouse_local = {400.0f, 300.0f};
+      input.mouse_screen = input.mouse_local;
+      ViewportInputResult input_result;
+      ViewportCameraController camera;
+      camera.set_viewport_size(800.0f, 600.0f);
+      camera.focus_origin(8.0f);
+
+      const bool exercises_pointer_gesture =
+          scenario.interruption != Interruption::OutsidePointer &&
+          (descriptor.tool == ViewportToolId::Curve ||
+           descriptor.tool == ViewportToolId::LinearArray ||
+           descriptor.tool == ViewportToolId::Pivot);
+      QVec2 gesture_local = input.mouse_local;
+      std::optional<QVec3> handle_position_before;
+      std::optional<std::size_t> curve_point_count_before;
+      if (exercises_pointer_gesture) {
+        const NativeViewportToolPresentationSnapshot before =
+            coordinator.presentation_snapshot();
+        if (descriptor.tool == ViewportToolId::LinearArray) {
+          ASSERT_TRUE(before.linear_array_handle.visible);
+          handle_position_before = before.linear_array_handle.endpoint_world;
+          const ViewportScreenPoint screen = camera.project_world_point(
+              before.linear_array_handle.endpoint_world);
+          ASSERT_TRUE(screen.visible);
+          gesture_local = screen.position;
+        } else if (descriptor.tool == ViewportToolId::Pivot) {
+          ASSERT_TRUE(before.pivot_handle.visible);
+          handle_position_before = before.pivot_handle.world_position;
+          const ViewportScreenPoint screen =
+              camera.project_world_point(before.pivot_handle.world_position);
+          ASSERT_TRUE(screen.visible);
+          gesture_local = screen.position;
+        } else {
+          ASSERT_NE(before.curve_preview, nullptr);
+          ASSERT_TRUE(before.curve_preview->document.has_value());
+          curve_point_count_before =
+              before.curve_preview->document->point_count();
+        }
+
+        constexpr std::uint64_t kPressSequence = 200u;
+        input.mouse_local = gesture_local;
+        input.mouse_screen = gesture_local;
+        input.pointer_pressed_edges = {{
+            .button = QuaderMouseButton::Left,
+            .local = gesture_local,
+            .sequence = kPressSequence,
+        }};
+        const ViewportNativeToolInteractionResult press =
+            coordinator.handle_pointer_frame(
+                session.scene(), session.assets(),
+                &session.point_placement(), camera,
+                {.input = input,
+                 .input_result = input_result,
+                 .left_pressed = true,
+                 .left_down = true,
+                 .left_click_local = gesture_local,
+                 .pointer_drag_threshold_pixels = 4.0f});
+        EXPECT_TRUE(press.consumed);
+        ASSERT_TRUE(coordinator.pointer_dragging());
+
+        gesture_local.x += 32.0f;
+        input.mouse_local = gesture_local;
+        input.mouse_screen = gesture_local;
+        input.pointer_pressed_edges.clear();
+        (void)coordinator.handle_pointer_frame(
+            session.scene(), session.assets(),
+            &session.point_placement(), camera,
+            {.input = input,
+             .input_result = input_result,
+             .left_down = true,
+             .pointer_drag_threshold_pixels = 4.0f});
+
+        // An older release may be coalesced beside a newer press. It belongs
+        // to the older gesture and must neither commit nor clear this one.
+        input.pointer_released_edges = {{
+            .button = QuaderMouseButton::Left,
+            .local = gesture_local,
+            .sequence = kPressSequence - 1u,
+        }};
+        (void)coordinator.handle_pointer_frame(
+            session.scene(), session.assets(),
+            &session.point_placement(), camera,
+            {.input = input,
+             .input_result = input_result,
+             .left_down = true,
+             .left_released = true,
+             .pointer_drag_threshold_pixels = 4.0f});
+        EXPECT_TRUE(coordinator.pointer_dragging());
+        input.pointer_released_edges.clear();
+      }
+
+      switch (scenario.interruption) {
+      case Interruption::FocusLoss:
+        input.viewport_focused = false;
+        input.pointer_interaction_canceled = true;
+        break;
+      case Interruption::CaptureLoss:
+        input.pointer_interaction_canceled = true;
+        break;
+      case Interruption::Navigation:
+        input.navigation_active = true;
+        input_result.navigation_active = true;
+        break;
+      case Interruption::Escape:
+        input_result.cancel_requested = true;
+        break;
+      case Interruption::OutsidePointer: {
+        const bool cancel = should_cancel_modal_tool_for_external_pointer({
+            .external_pointer_event = true,
+            .modal_tool_owns_viewport = true,
+            .persistent_native_tool_active = true,
+        });
+        EXPECT_FALSE(cancel);
+        break;
+      }
+      }
+
+      if (scenario.interruption != Interruption::OutsidePointer) {
+        (void)coordinator.handle_pointer_frame(
+            session.scene(), session.assets(),
+            &session.point_placement(), camera,
+            {.input = input,
+             .input_result = input_result,
+             .left_down = exercises_pointer_gesture,
+             .pointer_drag_threshold_pixels = 4.0f});
+      }
+      if (scenario.interruption == Interruption::Escape) {
+        const QuaderApiVoidResult canceled =
+            editor.tools().cancel_active_tool_preview();
+        ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+        EXPECT_TRUE(canceled.changed());
+      }
+
+      EXPECT_EQ(coordinator.active(descriptor.id),
+                !scenario.cancels_lifecycle);
+      EXPECT_EQ(coordinator.pending(descriptor.id),
+                !scenario.cancels_lifecycle);
+      EXPECT_EQ(coordinator.has_pending_tool(),
+                !scenario.cancels_lifecycle);
+      EXPECT_FALSE(coordinator.pointer_dragging());
+
+      if (exercises_pointer_gesture && !scenario.cancels_lifecycle) {
+        const NativeViewportToolPresentationSnapshot after =
+            coordinator.presentation_snapshot();
+        if (descriptor.tool == ViewportToolId::LinearArray) {
+          ASSERT_TRUE(handle_position_before.has_value());
+          EXPECT_FLOAT_EQ(after.linear_array_handle.endpoint_world.x,
+                          handle_position_before->x);
+          EXPECT_FLOAT_EQ(after.linear_array_handle.endpoint_world.y,
+                          handle_position_before->y);
+          EXPECT_FLOAT_EQ(after.linear_array_handle.endpoint_world.z,
+                          handle_position_before->z);
+        } else if (descriptor.tool == ViewportToolId::Pivot) {
+          ASSERT_TRUE(handle_position_before.has_value());
+          EXPECT_FLOAT_EQ(after.pivot_handle.world_position.x,
+                          handle_position_before->x);
+          EXPECT_FLOAT_EQ(after.pivot_handle.world_position.y,
+                          handle_position_before->y);
+          EXPECT_FLOAT_EQ(after.pivot_handle.world_position.z,
+                          handle_position_before->z);
+        } else {
+          ASSERT_NE(after.curve_preview, nullptr);
+          ASSERT_TRUE(after.curve_preview->document.has_value());
+          ASSERT_TRUE(curve_point_count_before.has_value());
+          EXPECT_EQ(after.curve_preview->document->point_count(),
+                    *curve_point_count_before);
+        }
+      }
+
+      if (exercises_pointer_gesture) {
+        input.viewport_focused = true;
+        input.pointer_interaction_canceled = false;
+        input.navigation_active = false;
+        input_result = {};
+        input.pointer_released_edges = {{
+            .button = QuaderMouseButton::Left,
+            .local = gesture_local,
+            .sequence = 201u,
+        }};
+        const ViewportNativeToolInteractionResult canceled_release =
+            coordinator.handle_pointer_frame(
+                session.scene(), session.assets(),
+                &session.point_placement(), camera,
+                {.input = input,
+                 .input_result = input_result,
+                 .left_released = true,
+                 .pointer_drag_threshold_pixels = 4.0f});
+        EXPECT_TRUE(canceled_release.consumed);
+        EXPECT_FALSE(coordinator.pointer_dragging());
+      }
+    }
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
+     NativeLifecyclePreflightsBeforeCancelingTheActiveTool) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Curve).ok());
+  ASSERT_TRUE(session.curve().active());
+  EXPECT_TRUE(session.native_tools().active("curve"));
+  EXPECT_TRUE(session.native_tools().pending("curve"));
+  EXPECT_FALSE(session.native_tools().active("create_primitive"));
+  EXPECT_EQ(session.native_tools().active_tool_id(), std::string_view{"curve"});
+
+  const auto metadata = session.native_tools().active_commit_metadata();
+  ASSERT_TRUE(metadata.has_value());
+  EXPECT_EQ(metadata->label, "Apply Curve");
+  EXPECT_EQ(metadata->domain, ViewportNativeToolCommitDomain::Modeling);
+
+  const QuaderApiVoidResult rejected =
+      editor.tools().activate(ViewportToolId::LinearArray);
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_TRUE(session.curve().active());
+  EXPECT_EQ(session.native_tools().active_tool_id(), std::string_view{"curve"});
+
+  EXPECT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_FALSE(session.native_tools().has_pending_tool());
+}
+
+TEST(ViewportToolRuntimeTests,
      KnifeShortcutPreservesSelectionModeInRuntimeAndInputRouter) {
-  constexpr std::array kModes{
+  const std::array kModes{
       ViewportSelectionMode::Vertex,
       ViewportSelectionMode::Edge,
       ViewportSelectionMode::Face,
@@ -733,7 +1181,7 @@ TEST(ViewportToolRuntimeTests, BoxToolAcceptUsesCommandOwnedTransaction) {
     ViewportBoxToolContext box_context{
         .default_material = material.value.id,
     };
-    box_context.make_event = [&]() { return current_event; };
+    box_context.make_event_at = [&](QVec2) { return current_event; };
     box_context.accept_preview = [&](std::string name,
                                      AssetId default_material,
                                      bool snap_enabled) {
@@ -785,6 +1233,9 @@ TEST(ViewportToolRuntimeTests, BoxToolAcceptUsesCommandOwnedTransaction) {
     ViewportToolResult result = dispatch_frame(ViewportPointerToolEvent{
         .hovered = true,
         .left_clicked = true,
+        .left_down = true,
+        .mouse_local = {400.0f, 300.0f},
+        .left_click_local = {400.0f, 300.0f},
     });
     ASSERT_TRUE(result.handled);
     ASSERT_EQ(session.modeling().box_preview().drag_state,
@@ -793,6 +1244,8 @@ TEST(ViewportToolRuntimeTests, BoxToolAcceptUsesCommandOwnedTransaction) {
     current_event = footprint_end;
     result = dispatch_frame(ViewportPointerToolEvent{
         .hovered = true,
+        .left_down = true,
+        .mouse_local = {420.0f, 300.0f},
     });
     ASSERT_TRUE(result.handled);
     ASSERT_TRUE(session.modeling().box_preview().valid);
@@ -804,6 +1257,7 @@ TEST(ViewportToolRuntimeTests, BoxToolAcceptUsesCommandOwnedTransaction) {
     result = dispatch_frame(ViewportPointerToolEvent{
         .hovered = true,
         .left_released = true,
+        .mouse_local = {420.0f, 300.0f},
     });
     ASSERT_TRUE(result.handled);
     EXPECT_FALSE(result.active_tool_changed);
@@ -842,6 +1296,218 @@ TEST(ViewportToolRuntimeTests, BoxToolAcceptUsesCommandOwnedTransaction) {
 }
 
 TEST(ViewportToolRuntimeTests,
+     PrimitivePointerGestureRejectsStaleReleaseAndCommitsMatchingRelease) {
+  PrimitivePointerHarness harness;
+  ASSERT_NE(harness.tool, nullptr);
+  ASSERT_TRUE(harness.activated);
+
+  constexpr QVec2 kPressLocal{20.0f, 20.0f};
+  constexpr QVec2 kReleaseLocal{48.0f, 48.0f};
+  const std::array press_edges{ViewportPointerButtonEdge{
+      .button = QuaderMouseButton::Left,
+      .local = kPressLocal,
+      .sequence = 100u,
+  }};
+  ASSERT_TRUE(harness.dispatch_direct({
+      .hovered = true,
+      .left_clicked = true,
+      .left_down = true,
+      .viewport_focused = true,
+      .mouse_local = kPressLocal,
+      .mouse_screen = kPressLocal,
+      .left_click_local = kPressLocal,
+      .pointer_pressed_edges = press_edges,
+  }).consumed);
+  ASSERT_TRUE(harness.modal_state.primary_pointer_gesture.has_value());
+
+  ASSERT_TRUE(harness.dispatch_direct({
+      .hovered = true,
+      .left_down = true,
+      .viewport_focused = true,
+      .mouse_local = kReleaseLocal,
+      .mouse_screen = kReleaseLocal,
+  }).handled);
+  ASSERT_EQ(harness.session.modeling().box_preview().drag_state,
+            ModelingBoxDragState::Footprint);
+
+  const std::array stale_release{ViewportPointerButtonEdge{
+      .button = QuaderMouseButton::Left,
+      .local = kReleaseLocal,
+      .sequence = 99u,
+  }};
+  (void)harness.dispatch_direct({
+      .hovered = true,
+      .left_down = true,
+      .left_released = true,
+      .viewport_focused = true,
+      .mouse_local = kReleaseLocal,
+      .mouse_screen = kReleaseLocal,
+      .pointer_released_edges = stale_release,
+  });
+  EXPECT_TRUE(harness.modal_state.primary_pointer_gesture.has_value());
+  EXPECT_EQ(harness.accept_count, 0);
+
+  const std::array matching_release{ViewportPointerButtonEdge{
+      .button = QuaderMouseButton::Left,
+      .local = kReleaseLocal,
+      .sequence = 101u,
+  }};
+  const ViewportToolResult committed = harness.dispatch_direct({
+      .hovered = true,
+      .left_released = true,
+      .viewport_focused = true,
+      .mouse_local = kReleaseLocal,
+      .mouse_screen = kReleaseLocal,
+      .pointer_released_edges = matching_release,
+  });
+  EXPECT_TRUE(committed.consumed);
+  EXPECT_FALSE(harness.modal_state.primary_pointer_gesture.has_value());
+  EXPECT_EQ(harness.accept_count, 1);
+  EXPECT_EQ(harness.session.primitive_creation().shape_count(), 1u);
+}
+
+TEST(ViewportToolRuntimeTests,
+     PrimitivePointerInterruptionRollsBackAndSuppressesRelease) {
+  enum class Interruption { FocusLoss, CaptureLoss, Navigation };
+  for (const Interruption interruption :
+       {Interruption::FocusLoss, Interruption::CaptureLoss,
+        Interruption::Navigation}) {
+    PrimitivePointerHarness harness;
+    ASSERT_NE(harness.tool, nullptr);
+    ASSERT_TRUE(harness.activated);
+    constexpr QVec2 kPressLocal{20.0f, 20.0f};
+    constexpr QVec2 kDragLocal{48.0f, 48.0f};
+    const std::array press_edges{ViewportPointerButtonEdge{
+        .button = QuaderMouseButton::Left,
+        .local = kPressLocal,
+        .sequence = 300u,
+    }};
+    ASSERT_TRUE(harness.dispatch_direct({
+        .hovered = true,
+        .left_clicked = true,
+        .left_down = true,
+        .viewport_focused = true,
+        .mouse_local = kPressLocal,
+        .mouse_screen = kPressLocal,
+        .left_click_local = kPressLocal,
+        .pointer_pressed_edges = press_edges,
+    }).consumed);
+    (void)harness.dispatch_direct({
+        .hovered = true,
+        .left_down = true,
+        .viewport_focused = true,
+        .mouse_local = kDragLocal,
+        .mouse_screen = kDragLocal,
+    });
+    ASSERT_TRUE(harness.modal_state.primary_pointer_gesture.has_value());
+
+    ViewportPointerToolEvent canceled{
+        .hovered = true,
+        .left_down = true,
+        .viewport_focused = interruption != Interruption::FocusLoss,
+        .pointer_interaction_canceled =
+            interruption == Interruption::CaptureLoss,
+        .mouse_local = kDragLocal,
+        .mouse_screen = kDragLocal,
+    };
+    canceled.navigation_active = interruption == Interruption::Navigation;
+    const ViewportToolResult cancellation =
+        harness.dispatch_direct(canceled);
+    EXPECT_TRUE(cancellation.consumed);
+    EXPECT_FALSE(harness.modal_state.primary_pointer_gesture.has_value());
+    EXPECT_TRUE(harness.modal_state.primary_release_suppression.active());
+    EXPECT_EQ(harness.session.modeling().box_preview().drag_state,
+              ModelingBoxDragState::Idle);
+    EXPECT_TRUE(harness.session.primitive_creation().active());
+    EXPECT_EQ(harness.accept_count, 0);
+
+    const std::array release_edges{ViewportPointerButtonEdge{
+        .button = QuaderMouseButton::Left,
+        .local = kDragLocal,
+        .sequence = 301u,
+    }};
+    const ViewportToolResult release = harness.dispatch_direct({
+        .hovered = true,
+        .left_released = true,
+        .viewport_focused = true,
+        .mouse_local = kDragLocal,
+        .mouse_screen = kDragLocal,
+        .pointer_released_edges = release_edges,
+    });
+    EXPECT_TRUE(release.consumed);
+    EXPECT_FALSE(harness.modal_state.primary_release_suppression.active());
+    EXPECT_EQ(harness.accept_count, 0);
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
+     PrimitiveEscapeAndToolSwitchRetainReleaseSuppression) {
+  for (const bool escape : {true, false}) {
+    SCOPED_TRACE(escape ? "Escape" : "tool switch");
+    PrimitivePointerHarness harness;
+    ASSERT_NE(harness.tool, nullptr);
+    ASSERT_TRUE(harness.activated);
+    ViewportToolRuntime runtime;
+    runtime.sync_active_tool(ViewportToolId::CreatePrimitive);
+    constexpr QVec2 kPressLocal{20.0f, 20.0f};
+    const std::array press_edges{ViewportPointerButtonEdge{
+        .button = QuaderMouseButton::Left,
+        .local = kPressLocal,
+        .sequence = 400u,
+    }};
+    ASSERT_TRUE(runtime.handle_active_tool_event(
+        harness.state, harness.context,
+        ViewportToolEvent{
+            .kind = ViewportToolEventKind::Frame,
+            .tool = ViewportToolId::CreatePrimitive,
+            .pointer = {.hovered = true,
+                        .left_clicked = true,
+                        .left_down = true,
+                        .viewport_focused = true,
+                        .mouse_local = kPressLocal,
+                        .mouse_screen = kPressLocal,
+                        .left_click_local = kPressLocal,
+                        .pointer_pressed_edges = press_edges},
+        }).consumed);
+
+    if (escape) {
+      const ViewportToolResult canceled = runtime.handle_active_tool_event(
+          harness.state, harness.context,
+          ViewportToolEvent{.kind = ViewportToolEventKind::Cancel,
+                            .tool = ViewportToolId::CreatePrimitive,
+                            .exit_active_modal_tool = true});
+      EXPECT_TRUE(canceled.consumed);
+    } else {
+      ASSERT_TRUE(harness.editor.tools().cancel_active_tool_preview().ok());
+      runtime.clear_modal_tool_state();
+    }
+    harness.state.active_tool = ViewportToolId::Select;
+    runtime.sync_active_tool(ViewportToolId::Select);
+
+    const std::array release_edges{ViewportPointerButtonEdge{
+        .button = QuaderMouseButton::Left,
+        .local = kPressLocal,
+        .sequence = 401u,
+    }};
+    const ViewportToolResult release = runtime.handle_active_tool_event(
+        harness.state, harness.context,
+        ViewportToolEvent{
+            .kind = ViewportToolEventKind::Frame,
+            .tool = ViewportToolId::Select,
+            .pointer = {.hovered = true,
+                        .left_released = true,
+                        .viewport_focused = true,
+                        .mouse_local = kPressLocal,
+                        .mouse_screen = kPressLocal,
+                        .pointer_released_edges = release_edges},
+        });
+    EXPECT_TRUE(release.handled);
+    EXPECT_TRUE(release.consumed);
+    EXPECT_EQ(harness.accept_count, 0);
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
      PersistentPrimitivePreservesSnapModeAndRollsBackAfterPreviewFailure) {
   SceneSession session;
   QuaderEditorApi editor(
@@ -865,7 +1531,7 @@ TEST(ViewportToolRuntimeTests,
   };
   bool accepted_snap_enabled = true;
   ViewportBoxToolContext box_context;
-  box_context.make_event = [&]() { return current_event; };
+  box_context.make_event_at = [&](QVec2) { return current_event; };
   box_context.accept_preview = [&](std::string name, AssetId material,
                                    bool snap_enabled) {
     accepted_snap_enabled = snap_enabled;
@@ -909,9 +1575,16 @@ TEST(ViewportToolRuntimeTests,
                  });
   };
 
-  ASSERT_TRUE(dispatch_frame({.hovered = true, .left_clicked = true}).handled);
+  ASSERT_TRUE(dispatch_frame({.hovered = true,
+                              .left_clicked = true,
+                              .left_down = true,
+                              .left_click_local = {20.0f, 20.0f}})
+                  .handled);
   current_event.ray.origin = {6.4f, 4.0f, 7.6f};
-  ASSERT_TRUE(dispatch_frame({.hovered = true, .left_released = true}).handled);
+  ASSERT_TRUE(dispatch_frame({.hovered = true,
+                              .left_released = true,
+                              .mouse_local = {40.0f, 20.0f}})
+                  .handled);
   EXPECT_FALSE(accepted_snap_enabled);
   EXPECT_TRUE(session.primitive_creation().active());
   EXPECT_EQ(session.primitive_creation().shape_count(), 1U);
@@ -922,7 +1595,10 @@ TEST(ViewportToolRuntimeTests,
 
   current_event.ray.direction = {};
   const ViewportToolResult failed =
-      dispatch_frame({.hovered = true, .left_clicked = true});
+      dispatch_frame({.hovered = true,
+                      .left_clicked = true,
+                      .left_down = true,
+                      .left_click_local = {20.0f, 20.0f}});
   EXPECT_TRUE(failed.active_tool_changed);
   EXPECT_TRUE(failed.sync_active_tool_from_modeling);
   EXPECT_FALSE(session.primitive_creation().active());
@@ -947,7 +1623,7 @@ TEST(ViewportToolRuntimeTests,
     ViewportModalToolState modal_state;
     int cancel_count = 0;
     ViewportBoxToolContext box_context;
-    box_context.make_event = [] { return ModelingBoxToolEvent{}; };
+    box_context.make_event_at = [](QVec2) { return ModelingBoxToolEvent{}; };
     box_context.accept_preview =
         [](std::string, AssetId, bool) -> ModelingCommandResult {
       return {.ok = true, .changed = true};
@@ -997,7 +1673,7 @@ TEST(ViewportToolRuntimeTests,
     ViewportModalToolState modal_state;
     bool session_active = true;
     ViewportBoxToolContext box_context;
-    box_context.make_event = [] { return ModelingBoxToolEvent{}; };
+    box_context.make_event_at = [](QVec2) { return ModelingBoxToolEvent{}; };
     box_context.accept_preview =
         [](std::string, AssetId, bool) -> ModelingCommandResult {
       return {.ok = true, .changed = true};

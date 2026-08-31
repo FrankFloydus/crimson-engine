@@ -60,6 +60,17 @@ protected:
     return document;
   }
 
+  [[nodiscard]] std::pair<PolygonDocument, OperationResult>
+  translated_mesh(Vec3 delta) const {
+    PolygonDocument document = session.document_copy(mesh).or_throw();
+    static_cast<void>(document.select_all_faces().or_throw());
+    OperationResult moved = document.translate_selection(delta).or_throw();
+    static_cast<void>(document.clear_selection().or_throw());
+    moved.dirty.selection = false;
+    moved.dirty.overlays = true;
+    return {std::move(document), std::move(moved)};
+  }
+
   void expect_mesh_only_selected() const {
     const auto objects = session.objects();
     ASSERT_EQ(objects.size(), 2U);
@@ -89,6 +100,22 @@ protected:
     EXPECT_EQ(actual.content_revision, expected.content_revision);
     EXPECT_EQ(actual.kind, expected.kind);
     expect_same_dirty(actual.dirty, expected.dirty);
+    ASSERT_EQ(actual.objects.size(), expected.objects.size());
+    for (std::size_t index = 0; index < actual.objects.size(); ++index) {
+      const auto &actual_object = actual.objects[index];
+      const auto &expected_object = expected.objects[index];
+      EXPECT_EQ(actual_object.object_id, expected_object.object_id);
+      EXPECT_EQ(actual_object.action, expected_object.action);
+      EXPECT_EQ(actual_object.kind, expected_object.kind);
+      EXPECT_EQ(actual_object.base_content_revision,
+                expected_object.base_content_revision);
+      EXPECT_EQ(actual_object.content_revision,
+                expected_object.content_revision);
+      EXPECT_EQ(actual_object.changed, expected_object.changed);
+      EXPECT_EQ(actual_object.material_slot, expected_object.material_slot);
+      EXPECT_EQ(actual_object.selected, expected_object.selected);
+      expect_same_dirty(actual_object.dirty, expected_object.dirty);
+    }
   }
 
   static void expect_same_curve_snapshot(const CurveDocument &actual,
@@ -97,6 +124,22 @@ protected:
     EXPECT_EQ(actual.content_identity(), expected.content_identity());
     EXPECT_EQ(actual.content_revision(), expected.content_revision());
     EXPECT_EQ(actual.identity_high_water(), expected.identity_high_water());
+  }
+
+  static void expect_same_change_snapshot(const SessionChangeSnapshot &actual,
+                                          const SessionChangeSnapshot &expected) {
+    EXPECT_EQ(actual.content_revision, expected.content_revision);
+    EXPECT_EQ(actual.selection_revision, expected.selection_revision);
+    ASSERT_EQ(actual.objects.size(), expected.objects.size());
+    for (std::size_t index = 0; index < actual.objects.size(); ++index) {
+      SCOPED_TRACE(index);
+      EXPECT_EQ(actual.objects[index].id, expected.objects[index].id);
+      EXPECT_EQ(actual.objects[index].name, expected.objects[index].name);
+      EXPECT_EQ(actual.objects[index].deleted, expected.objects[index].deleted);
+      EXPECT_EQ(actual.objects[index].kind, expected.objects[index].kind);
+      expect_same_dirty(actual.objects[index].dirty,
+                        expected.objects[index].dirty);
+    }
   }
 
   static void expect_same_session_observables(const ModelingSession &actual,
@@ -280,6 +323,1490 @@ TEST_F(ModelingCurveSessionTests, CurvePreviewSharesOneRegistryAndCommitsOnce) {
   EXPECT_TRUE(current_curve().has_same_geometry(original));
 }
 
+TEST_F(ModelingCurveSessionTests,
+       AtomicMixedPreviewUpdatesInBeginOrderAndFailurePreservesCandidate) {
+  const PolygonDocument original_mesh = session.document_copy(mesh).or_throw();
+  const CurveDocument original_curve = current_curve();
+  const std::uint64_t content_revision = session.content_revision();
+  const std::size_t undo_depth = session.undo_depth();
+
+  auto [first_mesh, first_mesh_receipt] = translated_mesh({1.0F, 0.0F, 0.0F});
+  const CurveDocument first_curve = translated_curve({0.0F, 1.0F, 0.0F});
+  std::vector<SessionPreviewDocumentUpdate> begun_updates;
+  begun_updates.push_back(
+      {.object = mesh, .document = first_mesh, .receipt = first_mesh_receipt});
+  begun_updates.push_back(
+      {.object = curve, .document = first_curve, .receipt = changed_receipt()});
+  const PreviewId preview =
+      session
+          .begin_preview_transaction("modeling.mixed.transform",
+                                     std::move(begun_updates))
+          .or_throw();
+
+  const PreviewTransactionSummary first_summary = session.preview_summary();
+  ASSERT_EQ(first_summary.objects.size(), 2U);
+  EXPECT_EQ(first_summary.object_id, mesh);
+  EXPECT_EQ(first_summary.kind, SessionObjectKind::Mesh);
+  EXPECT_EQ(first_summary.objects[0].object_id, mesh);
+  EXPECT_EQ(first_summary.objects[1].object_id, curve);
+  EXPECT_EQ(first_summary.objects[0].kind, SessionObjectKind::Mesh);
+  EXPECT_EQ(first_summary.objects[1].kind, SessionObjectKind::Curve);
+  EXPECT_TRUE(first_summary.objects[0].changed);
+  EXPECT_TRUE(first_summary.objects[1].changed);
+
+  const SessionPreviewPayload first_payload =
+      session.preview_transaction_payload(preview).or_throw();
+  ASSERT_EQ(first_payload.objects.size(), 2U);
+  EXPECT_EQ(first_payload.objects[0].object_id, mesh);
+  EXPECT_EQ(first_payload.objects[1].object_id, curve);
+  const auto *mesh_payload =
+      std::get_if<ToolPreviewPayload>(&first_payload.objects[0].payload);
+  ASSERT_NE(mesh_payload, nullptr);
+  EXPECT_TRUE(mesh_payload->valid);
+  EXPECT_FALSE(mesh_payload->mesh.vertices.empty());
+  const auto *curve_payload =
+      std::get_if<CurveDocument>(&first_payload.objects[1].payload);
+  ASSERT_NE(curve_payload, nullptr);
+  EXPECT_TRUE(curve_payload->has_same_geometry(first_curve));
+  EXPECT_TRUE(session.preview_payload(preview).ok());
+  EXPECT_TRUE(session.preview_document_copy(preview, mesh)
+                  .or_throw()
+                  .has_same_geometry(first_mesh));
+  EXPECT_TRUE(session.preview_curve_document_copy(preview, curve)
+                  .or_throw()
+                  .has_same_geometry(first_curve));
+  EXPECT_TRUE(
+      session.document_copy(mesh).or_throw().has_same_geometry(original_mesh));
+  EXPECT_TRUE(current_curve().has_same_geometry(original_curve));
+
+  auto [second_mesh, second_mesh_receipt] = translated_mesh({2.0F, 0.0F, 0.0F});
+  const CurveDocument second_curve = translated_curve({0.0F, 2.0F, 0.0F});
+  std::vector<SessionPreviewDocumentUpdate> reversed_updates;
+  reversed_updates.push_back({.object = curve,
+                              .document = second_curve,
+                              .receipt = changed_receipt()});
+  reversed_updates.push_back({.object = mesh,
+                              .document = second_mesh,
+                              .receipt = second_mesh_receipt});
+  ASSERT_TRUE(
+      session.update_preview_transaction(preview, std::move(reversed_updates))
+          .ok());
+  const PreviewTransactionSummary second_summary = session.preview_summary();
+  ASSERT_EQ(second_summary.objects.size(), 2U);
+  EXPECT_EQ(second_summary.objects[0].object_id, mesh);
+  EXPECT_EQ(second_summary.objects[1].object_id, curve);
+  EXPECT_GT(second_summary.objects[0].content_revision,
+            first_summary.objects[0].content_revision);
+  EXPECT_GT(second_summary.objects[1].content_revision,
+            first_summary.objects[1].content_revision);
+
+  OperationResult repeated_mesh_receipt;
+  repeated_mesh_receipt.changed = true;
+  repeated_mesh_receipt.dirty.geometry = true;
+  repeated_mesh_receipt.dirty.overlays = true;
+  std::vector<SessionPreviewDocumentUpdate> repeated_updates;
+  repeated_updates.push_back({
+      .object = curve,
+      .document =
+          session.preview_curve_document_copy(preview, curve).or_throw(),
+      .receipt = changed_receipt(),
+  });
+  repeated_updates.push_back({
+      .object = mesh,
+      .document = session.preview_document_copy(preview, mesh).or_throw(),
+      .receipt = repeated_mesh_receipt,
+  });
+  const auto repeated =
+      session.update_preview_transaction(preview, std::move(repeated_updates));
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_FALSE(repeated.value().changed);
+  expect_same_preview_summary(session.preview_summary(), second_summary);
+
+  std::vector<SessionPreviewDocumentUpdate> duplicate_updates;
+  duplicate_updates.push_back({.object = mesh,
+                               .document = second_mesh,
+                               .receipt = second_mesh_receipt});
+  duplicate_updates.push_back({.object = mesh,
+                               .document = second_mesh,
+                               .receipt = second_mesh_receipt});
+  EXPECT_EQ(
+      session.update_preview_transaction(preview, std::move(duplicate_updates))
+          .error()
+          .code,
+      ErrorCode::InvalidArgument);
+  expect_same_preview_summary(session.preview_summary(), second_summary);
+
+  std::vector<SessionPreviewDocumentUpdate> mismatched_updates;
+  mismatched_updates.push_back({.object = mesh,
+                                .document = second_curve,
+                                .receipt = changed_receipt()});
+  mismatched_updates.push_back({.object = curve,
+                                .document = second_mesh,
+                                .receipt = second_mesh_receipt});
+  EXPECT_EQ(
+      session.update_preview_transaction(preview,
+                                         std::move(mismatched_updates))
+          .error()
+          .code,
+      ErrorCode::UnsupportedOperation);
+  expect_same_preview_summary(session.preview_summary(), second_summary);
+
+  auto [third_mesh, third_mesh_receipt] = translated_mesh({3.0F, 0.0F, 0.0F});
+  OperationResult failed_curve_receipt;
+  failed_curve_receipt.success = false;
+  failed_curve_receipt.error_code = ErrorCode::ValidationFailed;
+  failed_curve_receipt.message = "Rejected second object.";
+  std::vector<SessionPreviewDocumentUpdate> failed_updates;
+  failed_updates.push_back({.object = mesh,
+                            .document = std::move(third_mesh),
+                            .receipt = std::move(third_mesh_receipt)});
+  failed_updates.push_back({.object = curve,
+                            .document = translated_curve({0.0F, 3.0F, 0.0F}),
+                            .receipt = std::move(failed_curve_receipt)});
+  EXPECT_EQ(
+      session.update_preview_transaction(preview, std::move(failed_updates))
+          .error()
+          .code,
+      ErrorCode::ValidationFailed);
+  expect_same_preview_summary(session.preview_summary(), second_summary);
+  EXPECT_TRUE(session.preview_document_copy(preview, mesh)
+                  .or_throw()
+                  .has_same_geometry(second_mesh));
+  EXPECT_TRUE(session.preview_curve_document_copy(preview, curve)
+                  .or_throw()
+                  .has_same_geometry(second_curve));
+
+  ASSERT_TRUE(session.cancel_preview(preview).ok());
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_TRUE(
+      session.document_copy(mesh).or_throw().has_same_geometry(original_mesh));
+  EXPECT_TRUE(current_curve().has_same_geometry(original_curve));
+
+  std::vector<SessionPreviewDocumentUpdate> duplicate_begin;
+  duplicate_begin.push_back({.object = mesh,
+                             .document = second_mesh,
+                             .receipt = second_mesh_receipt});
+  duplicate_begin.push_back({.object = mesh,
+                             .document = second_mesh,
+                             .receipt = second_mesh_receipt});
+  EXPECT_EQ(session
+                .begin_preview_transaction("modeling.invalid.duplicate",
+                                           std::move(duplicate_begin))
+                .error()
+                .code,
+            ErrorCode::InvalidArgument);
+  EXPECT_FALSE(session.preview_active());
+
+  std::vector<SessionPreviewDocumentUpdate> mismatched_begin;
+  mismatched_begin.push_back({.object = mesh,
+                              .document = second_curve,
+                              .receipt = changed_receipt()});
+  mismatched_begin.push_back({.object = curve,
+                              .document = second_mesh,
+                              .receipt = second_mesh_receipt});
+  EXPECT_EQ(session
+                .begin_preview_transaction("modeling.invalid.kind",
+                                           std::move(mismatched_begin))
+                .error()
+                .code,
+            ErrorCode::UnsupportedOperation);
+  EXPECT_FALSE(session.preview_active());
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+
+  std::vector<SessionPreviewDocumentUpdate> valid_after_failures;
+  valid_after_failures.push_back({.object = mesh,
+                                  .document = second_mesh,
+                                  .receipt = second_mesh_receipt});
+  const PreviewId next_preview =
+      session
+          .begin_preview_transaction("modeling.valid.after_failures",
+                                     std::move(valid_after_failures))
+          .or_throw();
+  EXPECT_EQ(next_preview.index, preview.index + 1U);
+  ASSERT_TRUE(session.cancel_preview(next_preview).ok());
+}
+
+TEST_F(ModelingCurveSessionTests,
+       AtomicMixedPreviewCommitsAndUndoesAsOneSessionTransition) {
+  const PolygonDocument original_mesh = session.document_copy(mesh).or_throw();
+  const CurveDocument original_curve = current_curve();
+  const std::uint64_t content_revision = session.content_revision();
+
+  auto [candidate_mesh, mesh_receipt] = translated_mesh({1.0F, 2.0F, 0.0F});
+  const CurveDocument candidate_curve = translated_curve({0.0F, 0.0F, 2.0F});
+  OperationResult curve_receipt = changed_receipt();
+  curve_receipt.dirty.topology = true;
+  std::vector<SessionPreviewDocumentUpdate> updates;
+  updates.push_back(
+      {.object = mesh, .document = candidate_mesh, .receipt = mesh_receipt});
+  updates.push_back(
+      {.object = curve, .document = candidate_curve, .receipt = curve_receipt});
+  const PreviewId preview = session
+                                .begin_preview_transaction(
+                                    "modeling.mixed.commit", std::move(updates))
+                                .or_throw();
+
+  const auto committed = session.commit_preview(preview);
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_TRUE(committed.value().changed);
+  EXPECT_TRUE(committed.value().dirty.geometry);
+  EXPECT_TRUE(committed.value().dirty.topology);
+  EXPECT_TRUE(committed.value().dirty.overlays);
+  EXPECT_EQ(session.undo_depth(), 1U);
+  EXPECT_EQ(session.content_revision(), content_revision + 1U);
+  EXPECT_TRUE(
+      session.document_copy(mesh).or_throw().has_same_geometry(candidate_mesh));
+  EXPECT_TRUE(current_curve().has_same_geometry(candidate_curve));
+
+  const SessionChangeSnapshot changes = session.changes_since(content_revision);
+  ASSERT_EQ(changes.objects.size(), 2U);
+  const auto mesh_change = std::ranges::find_if(
+      changes.objects,
+      [&](const SessionObjectChange &change) { return change.id == mesh; });
+  const auto curve_change = std::ranges::find_if(
+      changes.objects,
+      [&](const SessionObjectChange &change) { return change.id == curve; });
+  ASSERT_NE(mesh_change, changes.objects.end());
+  ASSERT_NE(curve_change, changes.objects.end());
+  EXPECT_TRUE(mesh_change->dirty.geometry);
+  EXPECT_TRUE(mesh_change->dirty.overlays);
+  EXPECT_TRUE(curve_change->dirty.geometry);
+  EXPECT_TRUE(curve_change->dirty.topology);
+  EXPECT_TRUE(curve_change->dirty.overlays);
+
+  ASSERT_TRUE(session.undo().ok());
+  EXPECT_TRUE(
+      session.document_copy(mesh).or_throw().has_same_geometry(original_mesh));
+  EXPECT_TRUE(current_curve().has_same_geometry(original_curve));
+  ASSERT_TRUE(session.redo().ok());
+  EXPECT_TRUE(
+      session.document_copy(mesh).or_throw().has_same_geometry(candidate_mesh));
+  EXPECT_TRUE(current_curve().has_same_geometry(candidate_curve));
+}
+
+TEST_F(ModelingCurveSessionTests,
+       AtomicMixedNoOpCommitDoesNotPublishHistoryOrRevisions) {
+  const PolygonDocument original_mesh = session.document_copy(mesh).or_throw();
+  const CurveDocument original_curve = current_curve();
+  const std::uint64_t content_revision = session.content_revision();
+  const std::size_t undo_depth = session.undo_depth();
+
+  OperationResult mesh_receipt = changed_receipt();
+  mesh_receipt.dirty.geometry = true;
+  std::vector<SessionPreviewDocumentUpdate> updates;
+  updates.push_back({.object = mesh,
+                     .document = original_mesh,
+                     .receipt = mesh_receipt});
+  updates.push_back({.object = curve,
+                     .document = original_curve,
+                     .receipt = changed_receipt()});
+  const PreviewId preview =
+      session
+          .begin_preview_transaction("modeling.mixed.noop", std::move(updates))
+          .or_throw();
+  const PreviewTransactionSummary summary = session.preview_summary();
+  ASSERT_EQ(summary.objects.size(), 2U);
+  EXPECT_FALSE(summary.objects[0].changed);
+  EXPECT_FALSE(summary.objects[1].changed);
+
+  const auto committed = session.commit_preview(preview);
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_FALSE(committed.value().changed);
+  EXPECT_FALSE(session.preview_active());
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_TRUE(
+      session.document_copy(mesh).or_throw().has_same_geometry(original_mesh));
+  EXPECT_TRUE(current_curve().has_same_geometry(original_curve));
+}
+
+TEST_F(ModelingCurveSessionTests,
+       SingleObjectPreviewCompatibilityMirrorsPrimaryTransactionObject) {
+  auto [candidate, receipt] = translated_mesh({0.0F, 1.0F, 0.0F});
+  const PreviewId preview =
+      session
+          .begin_document_preview(mesh, "modeling.compatibility", candidate,
+                                  receipt)
+          .or_throw();
+  const PreviewTransactionSummary summary = session.preview_summary();
+  ASSERT_EQ(summary.objects.size(), 1U);
+  EXPECT_EQ(summary.object_id, summary.objects.front().object_id);
+  EXPECT_EQ(summary.kind, summary.objects.front().kind);
+  EXPECT_EQ(summary.content_revision, summary.objects.front().content_revision);
+  expect_same_dirty(summary.dirty, summary.objects.front().dirty);
+
+  const ToolPreviewPayload legacy_payload =
+      session.preview_payload(preview).or_throw();
+  const SessionPreviewPayload transaction_payload =
+      session.preview_transaction_payload(preview).or_throw();
+  ASSERT_EQ(transaction_payload.objects.size(), 1U);
+  const auto *typed_payload = std::get_if<ToolPreviewPayload>(
+      &transaction_payload.objects.front().payload);
+  ASSERT_NE(typed_payload, nullptr);
+  EXPECT_EQ(legacy_payload.mesh.vertices.size(),
+            typed_payload->mesh.vertices.size());
+  EXPECT_EQ(legacy_payload.mesh.indices.size(),
+            typed_payload->mesh.indices.size());
+  EXPECT_EQ(
+      session.preview_document_copy(preview).or_throw().content_identity(),
+      session.preview_document_copy(preview, mesh)
+          .or_throw()
+          .content_identity());
+  ASSERT_TRUE(session.commit_preview(preview).ok());
+  EXPECT_EQ(session.undo_depth(), 1U);
+  ASSERT_TRUE(session.undo().ok());
+}
+
+TEST_F(ModelingCurveSessionTests,
+       StructuralMixedPreviewPublishesStableIdsAndRestoresWholeCheckpoint) {
+  const ModelingSession durable_before = session;
+  const PolygonDocument original_mesh = session.document_copy(mesh).or_throw();
+  const CurveDocument original_curve = current_curve();
+  auto [first_mesh, first_mesh_receipt] =
+      translated_mesh({1.0F, 0.0F, 0.0F});
+  CurveDocument first_added_curve =
+      translated_curve({0.0F, 1.0F, 0.0F});
+
+  SessionPreviewTransactionRequest request;
+  request.replace_object_selection = true;
+  request.active_participant_index = 0U;
+  request.participants.push_back({
+      .action = SessionPreviewAction::AddProvisional,
+      .document = first_added_curve,
+      .receipt = changed_receipt(),
+      .name = "Path Split",
+      .material_slot = 31U,
+      .selected = true,
+  });
+  request.participants.push_back({
+      .action = SessionPreviewAction::RemoveExisting,
+      .object = curve,
+      .material_slot = 21U,
+  });
+  request.participants.push_back({
+      .action = SessionPreviewAction::ReplaceExisting,
+      .object = mesh,
+      .document = first_mesh,
+      .receipt = first_mesh_receipt,
+      .material_slot = 11U,
+      .selected = true,
+  });
+
+  const SessionPreviewBeginResult begun =
+      session
+          .begin_preview_transaction("modeling.structural.mixed",
+                                     std::move(request))
+          .or_throw();
+  ASSERT_EQ(begun.participants.size(), 3U);
+  EXPECT_EQ(begun.participants[0].participant_index, 0U);
+  EXPECT_EQ(begun.participants[0].action,
+            SessionPreviewAction::AddProvisional);
+  const ObjectId provisional = begun.participants[0].object_id;
+  ASSERT_TRUE(provisional.valid());
+  EXPECT_GT(provisional.index, curve.index);
+  EXPECT_EQ(begun.participants[1].object_id, curve);
+  EXPECT_EQ(begun.participants[2].object_id, mesh);
+
+  const PreviewTransactionSummary first_summary = session.preview_summary();
+  ASSERT_EQ(first_summary.objects.size(), 3U);
+  EXPECT_EQ(first_summary.objects[0].object_id, mesh);
+  EXPECT_EQ(first_summary.objects[0].action,
+            SessionPreviewAction::ReplaceExisting);
+  EXPECT_EQ(first_summary.objects[0].material_slot, 11U);
+  EXPECT_EQ(first_summary.objects[1].object_id, curve);
+  EXPECT_EQ(first_summary.objects[1].action,
+            SessionPreviewAction::RemoveExisting);
+  EXPECT_EQ(first_summary.objects[2].object_id, provisional);
+  EXPECT_EQ(first_summary.objects[2].action,
+            SessionPreviewAction::AddProvisional);
+  EXPECT_EQ(first_summary.objects[2].kind, SessionObjectKind::Curve);
+  EXPECT_EQ(first_summary.objects[2].material_slot, 31U);
+  EXPECT_TRUE(first_summary.objects[2].selected);
+
+  const SessionPreviewPayload first_payload =
+      session.preview_transaction_payload(begun.preview_id).or_throw();
+  ASSERT_EQ(first_payload.objects.size(), 3U);
+  EXPECT_TRUE(std::holds_alternative<ToolPreviewPayload>(
+      first_payload.objects[0].payload));
+  EXPECT_TRUE(std::holds_alternative<std::monostate>(
+      first_payload.objects[1].payload));
+  EXPECT_TRUE(std::holds_alternative<CurveDocument>(
+      first_payload.objects[2].payload));
+  EXPECT_EQ(first_payload.objects[2].object_id, provisional);
+
+  EXPECT_TRUE(session.preview_base_document_copy(begun.preview_id, mesh)
+                  .or_throw()
+                  .has_same_geometry(original_mesh));
+  EXPECT_TRUE(session
+                  .preview_base_curve_document_copy(begun.preview_id, curve)
+                  .or_throw()
+                  .has_same_geometry(original_curve));
+  EXPECT_EQ(session
+                .preview_base_curve_document_copy(begun.preview_id,
+                                                  provisional)
+                .error()
+                .code,
+            ErrorCode::InvalidArgument);
+  EXPECT_EQ(session.preview_curve_document_copy(begun.preview_id, curve)
+                .error()
+                .code,
+            ErrorCode::InvalidId);
+  EXPECT_TRUE(session
+                  .preview_curve_document_copy(begun.preview_id, provisional)
+                  .or_throw()
+                  .has_same_geometry(first_added_curve));
+
+  const SessionPreviewCheckpoint checkpoint =
+      session.capture_preview_checkpoint(begun.preview_id).or_throw();
+  auto [second_mesh, second_mesh_receipt] =
+      translated_mesh({2.0F, 0.0F, 0.0F});
+  CurveDocument second_added_curve = first_added_curve;
+  ASSERT_TRUE(second_added_curve
+                  .transform(Transform3{.origin = {0.0F, 2.0F, 0.0F}})
+                  .ok());
+  std::vector<SessionPreviewDocumentUpdate> second_updates;
+  second_updates.push_back({.object = provisional,
+                            .document = second_added_curve,
+                            .receipt = changed_receipt()});
+  second_updates.push_back({.object = mesh,
+                            .document = second_mesh,
+                            .receipt = second_mesh_receipt});
+  ASSERT_TRUE(session
+                  .update_preview_transaction(begun.preview_id,
+                                              std::move(second_updates))
+                  .ok());
+  EXPECT_TRUE(session
+                  .preview_curve_document_copy(begun.preview_id, provisional)
+                  .or_throw()
+                  .has_same_geometry(second_added_curve));
+  const PreviewTransactionSummary second_summary = session.preview_summary();
+
+  std::vector<SessionPreviewDocumentUpdate> stale_updates;
+  stale_updates.push_back({.object = make_id<ObjectTag>(99'999U),
+                           .document = second_mesh,
+                           .receipt = second_mesh_receipt});
+  stale_updates.push_back({.object = provisional,
+                           .document = second_added_curve,
+                           .receipt = changed_receipt()});
+  EXPECT_EQ(session
+                .update_preview_transaction(begun.preview_id,
+                                            std::move(stale_updates))
+                .error()
+                .code,
+            ErrorCode::InvalidArgument);
+  expect_same_preview_summary(session.preview_summary(), second_summary);
+
+  OperationResult failed_receipt;
+  failed_receipt.success = false;
+  failed_receipt.error_code = ErrorCode::ValidationFailed;
+  std::vector<SessionPreviewDocumentUpdate> failed_updates;
+  failed_updates.push_back({.object = mesh,
+                            .document = first_mesh,
+                            .receipt = first_mesh_receipt});
+  failed_updates.push_back({.object = provisional,
+                            .document = first_added_curve,
+                            .receipt = failed_receipt});
+  EXPECT_EQ(session
+                .update_preview_transaction(begun.preview_id,
+                                            std::move(failed_updates))
+                .error()
+                .code,
+            ErrorCode::ValidationFailed);
+  expect_same_preview_summary(session.preview_summary(), second_summary);
+  EXPECT_TRUE(session
+                  .preview_curve_document_copy(begun.preview_id, provisional)
+                  .or_throw()
+                  .has_same_geometry(second_added_curve));
+
+  ASSERT_TRUE(session.restore_preview_checkpoint(checkpoint).ok());
+  EXPECT_TRUE(session.preview_document_copy(begun.preview_id, mesh)
+                  .or_throw()
+                  .has_same_geometry(first_mesh));
+  EXPECT_TRUE(session
+                  .preview_curve_document_copy(begun.preview_id, provisional)
+                  .or_throw()
+                  .has_same_geometry(first_added_curve));
+  ASSERT_TRUE(session.cancel_preview(begun.preview_id).ok());
+  expect_same_session_observables(session, durable_before);
+
+  const ObjectId after_cancel =
+      session.add_curve_document(first_added_curve, "After Cancel").or_throw();
+  EXPECT_GT(after_cancel.index, provisional.index);
+}
+
+TEST_F(ModelingCurveSessionTests,
+       StructuralCommitMaterializesRemapSelectionAndOneExactHistoryStep) {
+  const PolygonDocument original_mesh = session.document_copy(mesh).or_throw();
+  const CurveDocument original_curve = current_curve();
+  const std::uint64_t content_revision = session.content_revision();
+  auto [candidate_mesh, mesh_receipt] =
+      translated_mesh({1.0F, 2.0F, 0.0F});
+  CurveDocument added_curve = translated_curve({0.0F, 0.0F, 3.0F});
+
+  SessionPreviewTransactionRequest request;
+  request.replace_object_selection = true;
+  request.active_participant_index = 0U;
+  request.participants.push_back({
+      .action = SessionPreviewAction::AddProvisional,
+      .document = added_curve,
+      .receipt = changed_receipt(),
+      .name = "Committed Split",
+      .material_slot = 33U,
+      .selected = true,
+  });
+  request.participants.push_back({
+      .action = SessionPreviewAction::RemoveExisting,
+      .object = curve,
+      .material_slot = 22U,
+  });
+  request.participants.push_back({
+      .action = SessionPreviewAction::ReplaceExisting,
+      .object = mesh,
+      .document = candidate_mesh,
+      .receipt = mesh_receipt,
+      .material_slot = 11U,
+      .selected = true,
+  });
+  const SessionPreviewBeginResult begun =
+      session
+          .begin_preview_transaction("modeling.structural.commit",
+                                     std::move(request))
+          .or_throw();
+  const ObjectId provisional = begun.participants[0].object_id;
+
+  const SessionPreviewCommitResult committed =
+      session.commit_preview_transaction(begun.preview_id).or_throw();
+  EXPECT_TRUE(committed.operation.changed);
+  EXPECT_TRUE(committed.operation.dirty.topology);
+  EXPECT_TRUE(committed.operation.dirty.geometry);
+  EXPECT_TRUE(committed.operation.dirty.selection);
+  EXPECT_TRUE(committed.operation.dirty.materials);
+  EXPECT_EQ(session.undo_depth(), 1U);
+  EXPECT_EQ(session.content_revision(), content_revision + 1U);
+  ASSERT_EQ(committed.objects.size(), 3U);
+  EXPECT_EQ(committed.objects[0].preview_object_id, mesh);
+  EXPECT_EQ(committed.objects[0].committed_object_id, mesh);
+  EXPECT_EQ(committed.objects[0].action,
+            SessionPreviewAction::ReplaceExisting);
+  EXPECT_EQ(committed.objects[1].preview_object_id, curve);
+  EXPECT_FALSE(committed.objects[1].committed_object_id.valid());
+  EXPECT_EQ(committed.objects[1].action,
+            SessionPreviewAction::RemoveExisting);
+  EXPECT_EQ(committed.objects[2].preview_object_id, provisional);
+  EXPECT_EQ(committed.objects[2].committed_object_id, provisional);
+  EXPECT_EQ(committed.objects[2].action,
+            SessionPreviewAction::AddProvisional);
+  EXPECT_EQ(committed.objects[2].material_slot, 33U);
+  ASSERT_EQ(committed.selected_objects.size(), 2U);
+  EXPECT_EQ(committed.selected_objects[0], mesh);
+  EXPECT_EQ(committed.selected_objects[1], provisional);
+  EXPECT_EQ(committed.active_object, provisional);
+
+  const auto after_objects = session.objects();
+  ASSERT_EQ(after_objects.size(), 2U);
+  EXPECT_EQ(after_objects[0].id, mesh);
+  EXPECT_TRUE(after_objects[0].selected);
+  EXPECT_EQ(after_objects[1].id, provisional);
+  EXPECT_EQ(after_objects[1].name, "Committed Split");
+  EXPECT_TRUE(after_objects[1].selected);
+  EXPECT_TRUE(session.document_copy(mesh).or_throw().has_same_geometry(
+      candidate_mesh));
+  EXPECT_TRUE(session.curve_document_copy(provisional)
+                  .or_throw()
+                  .has_same_geometry(added_curve));
+  EXPECT_EQ(session.curve_document_copy(curve).error().code,
+            ErrorCode::InvalidId);
+
+  ASSERT_TRUE(session.undo().ok());
+  const auto undone_objects = session.objects();
+  ASSERT_EQ(undone_objects.size(), 2U);
+  EXPECT_EQ(undone_objects[0].id, mesh);
+  EXPECT_TRUE(undone_objects[0].selected);
+  EXPECT_EQ(undone_objects[1].id, curve);
+  EXPECT_FALSE(undone_objects[1].selected);
+  EXPECT_TRUE(session.document_copy(mesh).or_throw().has_same_geometry(
+      original_mesh));
+  EXPECT_TRUE(current_curve().has_same_geometry(original_curve));
+  EXPECT_TRUE(session.can_redo());
+
+  ASSERT_TRUE(session.redo().ok());
+  const auto redone_objects = session.objects();
+  ASSERT_EQ(redone_objects.size(), 2U);
+  EXPECT_EQ(redone_objects[0].id, mesh);
+  EXPECT_EQ(redone_objects[1].id, provisional);
+  EXPECT_TRUE(session.document_copy(mesh).or_throw().has_same_geometry(
+      candidate_mesh));
+  EXPECT_TRUE(session.curve_document_copy(provisional)
+                  .or_throw()
+                  .has_same_geometry(added_curve));
+  EXPECT_EQ(session.commit_preview_transaction(begun.preview_id).error().code,
+            ErrorCode::StaleId);
+}
+
+TEST_F(ModelingCurveSessionTests,
+       AddOnlyPreviewSupportsStableRepeatedUpdatesAndShiftDuplicateSelection) {
+  const PolygonDocument original = session.document_copy(mesh).or_throw();
+  SessionPreviewTransactionRequest request;
+  request.replace_object_selection = true;
+  request.active_participant_index = 0U;
+  request.participants.push_back({
+      .action = SessionPreviewAction::AddProvisional,
+      .document = original,
+      .receipt = changed_receipt(),
+      .name = "Box Copy",
+      .material_slot = 19U,
+      .selected = true,
+  });
+  const SessionPreviewBeginResult begun =
+      session
+          .begin_preview_transaction("modeling.shift_duplicate",
+                                     std::move(request))
+          .or_throw();
+  const ObjectId provisional = begun.participants.front().object_id;
+  EXPECT_TRUE(session.preview_document_copy(begun.preview_id, provisional)
+                  .or_throw()
+                  .has_same_geometry(original));
+
+  PolygonDocument moved =
+      session.preview_document_copy(begun.preview_id, provisional).or_throw();
+  ASSERT_TRUE(moved.select_all_faces().ok());
+  OperationResult moved_receipt =
+      moved.translate_selection({4.0F, 0.0F, 0.0F}).or_throw();
+  ASSERT_TRUE(moved.clear_selection().ok());
+  std::vector<SessionPreviewDocumentUpdate> updates;
+  updates.push_back({.object = provisional,
+                     .document = moved,
+                     .receipt = moved_receipt});
+  ASSERT_TRUE(session
+                  .update_preview_transaction(begun.preview_id,
+                                              std::move(updates))
+                  .ok());
+  EXPECT_EQ(session.preview_summary().objects.front().object_id, provisional);
+
+  const SessionPreviewCommitResult committed =
+      session.commit_preview_transaction(begun.preview_id).or_throw();
+  EXPECT_EQ(committed.active_object, provisional);
+  ASSERT_EQ(committed.selected_objects.size(), 1U);
+  EXPECT_EQ(committed.selected_objects.front(), provisional);
+  ASSERT_EQ(session.objects().size(), 3U);
+  EXPECT_FALSE(session.objects()[0].selected);
+  EXPECT_FALSE(session.objects()[1].selected);
+  EXPECT_TRUE(session.objects()[2].selected);
+  EXPECT_TRUE(session.document_copy(provisional)
+                  .or_throw()
+                  .has_same_geometry(moved));
+  EXPECT_EQ(session.undo_depth(), 1U);
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_EQ(session.objects().size(), 2U);
+  EXPECT_TRUE(session.objects()[0].selected);
+  ASSERT_TRUE(session.redo().ok());
+  ASSERT_EQ(session.objects().size(), 3U);
+  EXPECT_EQ(session.objects()[2].id, provisional);
+}
+
+TEST_F(ModelingCurveSessionTests,
+       StructuralCommitActivatesSelectedSurvivorWhenActiveObjectIsRemoved) {
+  const CurveDocument survivor = current_curve();
+  SessionPreviewTransactionRequest request;
+  request.replace_object_selection = true;
+  request.participants.push_back({
+      .action = SessionPreviewAction::RemoveExisting,
+      .object = mesh,
+  });
+  request.participants.push_back({
+      .action = SessionPreviewAction::ReplaceExisting,
+      .object = curve,
+      .document = survivor,
+      .receipt = changed_receipt(),
+      .selected = true,
+  });
+
+  const SessionPreviewBeginResult begun =
+      session
+          .begin_preview_transaction("modeling.structural.active_fallback",
+                                     std::move(request))
+          .or_throw();
+  const SessionPreviewCommitResult committed =
+      session.commit_preview_transaction(begun.preview_id).or_throw();
+  EXPECT_EQ(committed.active_object, curve);
+  ASSERT_EQ(committed.selected_objects.size(), 1U);
+  EXPECT_EQ(committed.selected_objects.front(), curve);
+  ASSERT_EQ(session.objects().size(), 1U);
+  EXPECT_EQ(session.objects().front().id, curve);
+  EXPECT_TRUE(session.objects().front().selected);
+  EXPECT_EQ(session.undo_depth(), 1U);
+
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_EQ(session.objects().size(), 2U);
+  EXPECT_TRUE(session.objects().front().selected);
+  ASSERT_TRUE(session.redo().ok());
+  ASSERT_EQ(session.objects().size(), 1U);
+  EXPECT_EQ(session.objects().front().id, curve);
+  EXPECT_TRUE(session.objects().front().selected);
+}
+
+TEST_F(ModelingCurveSessionTests,
+       StructuralBeginRejectsInvalidSetsWithoutConsumingIdsOrPreviewState) {
+  const std::uint64_t content_revision = session.content_revision();
+  const std::size_t undo_depth = session.undo_depth();
+  const PolygonDocument original_mesh = session.document_copy(mesh).or_throw();
+  const CurveDocument original_curve = current_curve();
+
+  SessionPreviewTransactionRequest duplicate;
+  duplicate.participants.push_back({
+      .action = SessionPreviewAction::AddProvisional,
+      .document = original_curve,
+      .receipt = changed_receipt(),
+  });
+  duplicate.participants.push_back({
+      .action = SessionPreviewAction::ReplaceExisting,
+      .object = mesh,
+      .document = original_mesh,
+      .receipt = changed_receipt(),
+  });
+  duplicate.participants.push_back({
+      .action = SessionPreviewAction::RemoveExisting,
+      .object = mesh,
+  });
+  EXPECT_EQ(session
+                .begin_preview_transaction("modeling.invalid.duplicate_action",
+                                           std::move(duplicate))
+                .error()
+                .code,
+            ErrorCode::InvalidArgument);
+
+  SessionPreviewTransactionRequest wrong_kind;
+  wrong_kind.participants.push_back({
+      .action = SessionPreviewAction::ReplaceExisting,
+      .object = mesh,
+      .document = original_curve,
+      .receipt = changed_receipt(),
+  });
+  EXPECT_EQ(session
+                .begin_preview_transaction("modeling.invalid.kind",
+                                           std::move(wrong_kind))
+                .error()
+                .code,
+            ErrorCode::UnsupportedOperation);
+
+  SessionPreviewTransactionRequest stale;
+  stale.participants.push_back({
+      .action = SessionPreviewAction::RemoveExisting,
+      .object = make_id<ObjectTag>(9999U),
+  });
+  EXPECT_EQ(session
+                .begin_preview_transaction("modeling.invalid.stale",
+                                           std::move(stale))
+                .error()
+                .code,
+            ErrorCode::InvalidId);
+  EXPECT_FALSE(session.preview_active());
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+
+  SessionPreviewTransactionRequest valid;
+  valid.participants.push_back({
+      .action = SessionPreviewAction::AddProvisional,
+      .document = original_curve,
+      .receipt = changed_receipt(),
+  });
+  const SessionPreviewBeginResult begun =
+      session
+          .begin_preview_transaction("modeling.valid.after_failures",
+                                     std::move(valid))
+          .or_throw();
+  EXPECT_EQ(begun.participants.front().object_id.index, curve.index + 1U);
+  const PreviewTransactionSummary active_summary = session.preview_summary();
+
+  SessionPreviewTransactionRequest blocked;
+  blocked.participants.push_back({
+      .action = SessionPreviewAction::RemoveExisting,
+      .object = mesh,
+  });
+  EXPECT_EQ(session
+                .begin_preview_transaction("modeling.invalid.already_active",
+                                           std::move(blocked))
+                .error()
+                .code,
+            ErrorCode::InvalidArgument);
+  expect_same_preview_summary(session.preview_summary(), active_summary);
+  ASSERT_TRUE(session.cancel_preview(begun.preview_id).ok());
+}
+
+TEST_F(ModelingCurveSessionTests,
+       MutationCheckpointRestoresMixedKindsRevisionsChangeLedgerAndRedo) {
+  const CurveDocument redo_candidate =
+      translated_curve({0.0F, 0.0F, 3.0F});
+  ASSERT_TRUE(session.rename_object(mesh, "Renamed Box").ok());
+  ASSERT_TRUE(
+      session.commit_curve_document(curve, redo_candidate, changed_receipt())
+          .ok());
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(session.can_redo());
+  ASSERT_EQ(session.undo_depth(), 1U);
+
+  const ModelingSession expected = session;
+  const SessionChangeSnapshot expected_changes = session.changes_since(0U);
+  const std::array participants = {mesh, curve};
+  SessionMutationCheckpoint checkpoint =
+      session.capture_mutation_checkpoint(participants).or_throw();
+  ASSERT_TRUE(checkpoint.valid());
+  EXPECT_TRUE(session.mutation_checkpoint_active());
+  EXPECT_FALSE(session.can_redo());
+
+  const std::array curve_only = {curve};
+  ASSERT_TRUE(session.apply_object_selection(curve_only).ok());
+  auto [changed_mesh, mesh_receipt] =
+      translated_mesh({2.0F, 0.0F, 0.0F});
+  ASSERT_TRUE(session
+                  .commit_document(mesh, std::move(changed_mesh),
+                                   std::move(mesh_receipt))
+                  .ok());
+  const CurveDocument changed_curve =
+      translated_curve({0.0F, 4.0F, 0.0F});
+  ASSERT_TRUE(
+      session.commit_curve_document(curve, changed_curve, changed_receipt())
+          .ok());
+  EXPECT_GT(session.content_revision(), expected.content_revision());
+  EXPECT_GT(session.selection_revision(), expected.selection_revision());
+  EXPECT_GT(session.undo_depth(), expected.undo_depth());
+  const std::uint64_t before_preflight_revision = session.content_revision();
+  const std::size_t before_preflight_undo_depth = session.undo_depth();
+  ASSERT_TRUE(session.preflight_mutation_checkpoint(checkpoint).ok());
+  EXPECT_TRUE(checkpoint.valid());
+  EXPECT_TRUE(session.mutation_checkpoint_active());
+  EXPECT_EQ(session.content_revision(), before_preflight_revision);
+  EXPECT_EQ(session.undo_depth(), before_preflight_undo_depth);
+
+  const auto restored =
+      session.restore_mutation_checkpoint(std::move(checkpoint));
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  EXPECT_TRUE(restored.value().changed);
+  EXPECT_FALSE(checkpoint.valid());
+  EXPECT_FALSE(session.mutation_checkpoint_active());
+  expect_same_session_observables(session, expected);
+  expect_same_change_snapshot(session.changes_since(0U), expected_changes);
+
+  ModelingSession expected_history = expected;
+  ASSERT_TRUE(session.redo().ok());
+  ASSERT_TRUE(expected_history.redo().ok());
+  expect_same_session_observables(session, expected_history);
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(expected_history.undo().ok());
+  expect_same_session_observables(session, expected_history);
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(expected_history.undo().ok());
+  expect_same_session_observables(session, expected_history);
+}
+
+TEST_F(ModelingCurveSessionTests,
+       MutationCheckpointCheckedCommitConsumesOnlyOwnedValidToken) {
+  const CurveDocument old_redo = translated_curve({1.0F, 0.0F, 0.0F});
+  ASSERT_TRUE(
+      session.commit_curve_document(curve, old_redo, changed_receipt()).ok());
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(session.can_redo());
+
+  const std::array participants = {curve};
+  SessionMutationCheckpoint checkpoint =
+      session.capture_mutation_checkpoint(participants).or_throw();
+  const CurveDocument committed_curve =
+      translated_curve({0.0F, 2.0F, 0.0F});
+  ASSERT_TRUE(session
+                  .commit_curve_document(curve, committed_curve,
+                                         changed_receipt())
+                  .ok());
+  EXPECT_FALSE(session.abort_active_mutation_checkpoint().ok());
+  EXPECT_TRUE(checkpoint.valid());
+  EXPECT_TRUE(session.mutation_checkpoint_active());
+
+  ModelingSession foreign;
+  EXPECT_EQ(foreign.preflight_mutation_checkpoint(checkpoint).error().code,
+            ErrorCode::StaleId);
+  EXPECT_TRUE(checkpoint.valid());
+  const auto wrong_owner =
+      foreign.commit_mutation_checkpoint(std::move(checkpoint));
+  ASSERT_FALSE(wrong_owner.ok());
+  EXPECT_EQ(wrong_owner.error().code, ErrorCode::StaleId);
+  EXPECT_TRUE(checkpoint.valid());
+  EXPECT_TRUE(session.mutation_checkpoint_active());
+
+  const auto committed =
+      session.commit_mutation_checkpoint(std::move(checkpoint));
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_FALSE(checkpoint.valid());
+  EXPECT_FALSE(session.mutation_checkpoint_active());
+  EXPECT_FALSE(session.can_redo());
+  EXPECT_TRUE(current_curve().has_same_geometry(committed_curve));
+  EXPECT_EQ(session.commit_mutation_checkpoint(std::move(checkpoint))
+                .error()
+                .code,
+            ErrorCode::InvalidArgument);
+
+  ASSERT_TRUE(session.undo().ok());
+  EXPECT_FALSE(current_curve().has_same_geometry(committed_curve));
+  ASSERT_TRUE(session.redo().ok());
+  EXPECT_TRUE(current_curve().has_same_geometry(committed_curve));
+}
+
+TEST_F(ModelingCurveSessionTests,
+       MutationCheckpointNoOpCommitReattachesExactRedoBranch) {
+  const CurveDocument redo_candidate =
+      translated_curve({0.0F, 0.0F, 6.0F});
+  ASSERT_TRUE(
+      session.commit_curve_document(curve, redo_candidate, changed_receipt())
+          .ok());
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(session.can_redo());
+  const ModelingSession expected = session;
+  const SessionChangeSnapshot expected_changes = session.changes_since(0U);
+
+  const std::array participants = {mesh};
+  SessionMutationCheckpoint checkpoint =
+      session.capture_mutation_checkpoint(participants).or_throw();
+  EXPECT_FALSE(session.can_redo());
+  const PolygonSelectionSnapshot current_selection =
+      session.document_copy(mesh).or_throw().selection();
+  const std::array updates = {
+      SessionComponentSelectionUpdate{mesh, current_selection}};
+  const std::array selected_objects = {mesh};
+  const auto unchanged = session.commit_component_selection_batch(
+      updates, selected_objects, mesh);
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.value().changed);
+
+  const auto committed =
+      session.commit_mutation_checkpoint(std::move(checkpoint));
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_FALSE(committed.value().changed);
+  EXPECT_FALSE(checkpoint.valid());
+  EXPECT_FALSE(session.mutation_checkpoint_active());
+  expect_same_session_observables(session, expected);
+  expect_same_change_snapshot(session.changes_since(0U), expected_changes);
+
+  ModelingSession expected_after_redo = expected;
+  ASSERT_TRUE(session.redo().ok());
+  ASSERT_TRUE(expected_after_redo.redo().ok());
+  expect_same_session_observables(session, expected_after_redo);
+  EXPECT_TRUE(current_curve().has_same_geometry(redo_candidate));
+}
+
+TEST_F(ModelingCurveSessionTests,
+       MutationCheckpointDiscardKeepsCurrentBranchAndReleasesGuard) {
+  const CurveDocument detached_redo =
+      translated_curve({0.0F, 0.0F, 4.0F});
+  ASSERT_TRUE(
+      session.commit_curve_document(curve, detached_redo, changed_receipt())
+          .ok());
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(session.can_redo());
+
+  const std::array participants = {curve};
+  SessionMutationCheckpoint checkpoint =
+      session.capture_mutation_checkpoint(participants).or_throw();
+  const CurveDocument current_branch =
+      translated_curve({0.0F, 3.0F, 0.0F});
+  ASSERT_TRUE(session
+                  .commit_curve_document(curve, current_branch,
+                                         changed_receipt())
+                  .ok());
+  const std::uint64_t branch_content_revision = session.content_revision();
+  const std::uint64_t branch_selection_revision =
+      session.selection_revision();
+  const std::size_t branch_undo_depth = session.undo_depth();
+
+  ModelingSession foreign;
+  const auto wrong_owner =
+      foreign.discard_mutation_checkpoint(std::move(checkpoint));
+  ASSERT_FALSE(wrong_owner.ok());
+  EXPECT_EQ(wrong_owner.error().code, ErrorCode::StaleId);
+  EXPECT_TRUE(checkpoint.valid());
+  EXPECT_TRUE(session.mutation_checkpoint_active());
+
+  const auto discarded =
+      session.discard_mutation_checkpoint(std::move(checkpoint));
+  ASSERT_TRUE(discarded.ok()) << discarded.error_message();
+  EXPECT_TRUE(discarded.value().changed);
+  EXPECT_FALSE(checkpoint.valid());
+  EXPECT_FALSE(session.mutation_checkpoint_active());
+  EXPECT_FALSE(session.can_redo());
+  EXPECT_EQ(session.content_revision(), branch_content_revision);
+  EXPECT_EQ(session.selection_revision(), branch_selection_revision);
+  EXPECT_EQ(session.undo_depth(), branch_undo_depth);
+  EXPECT_TRUE(current_curve().has_same_geometry(current_branch));
+  EXPECT_EQ(session.discard_mutation_checkpoint(std::move(checkpoint))
+                .error()
+                .code,
+            ErrorCode::InvalidArgument);
+
+  ASSERT_TRUE(session.undo().ok());
+  EXPECT_FALSE(current_curve().has_same_geometry(current_branch));
+  ASSERT_TRUE(session.redo().ok());
+  EXPECT_TRUE(current_curve().has_same_geometry(current_branch));
+  ASSERT_TRUE(session.rename_object(curve, "Usable After Discard").ok());
+}
+
+TEST_F(ModelingCurveSessionTests,
+       MutationCheckpointRejectsInvalidConflictingAndStructuralScopesAtomically) {
+  const ModelingSession baseline = session;
+  const SessionMutationCheckpoint empty_checkpoint;
+  EXPECT_EQ(session.preflight_mutation_checkpoint(empty_checkpoint)
+                .error()
+                .code,
+            ErrorCode::InvalidArgument);
+  const SessionPreviewCheckpoint empty_preview_checkpoint;
+  EXPECT_EQ(session.preflight_preview_checkpoint(empty_preview_checkpoint)
+                .error()
+                .code,
+            ErrorCode::InvalidArgument);
+  const std::array duplicate_participants = {curve, curve};
+  EXPECT_EQ(session.capture_mutation_checkpoint(duplicate_participants)
+                .error()
+                .code,
+            ErrorCode::InvalidArgument);
+  const std::array invalid_participants = {
+      ObjectId{.index = curve.index + 100U, .generation = 1U}};
+  EXPECT_EQ(session.capture_mutation_checkpoint(invalid_participants)
+                .error()
+                .code,
+            ErrorCode::InvalidId);
+  expect_same_session_observables(session, baseline);
+
+  const CurveDocument preview_candidate =
+      translated_curve({0.0F, 1.0F, 0.0F});
+  const PreviewId preview =
+      session
+          .begin_curve_document_preview(curve, "modeling.checkpoint.conflict",
+                                        preview_candidate,
+                                        changed_receipt())
+          .or_throw();
+  const PreviewTransactionSummary preview_summary = session.preview_summary();
+  const std::array curve_participant = {curve};
+  EXPECT_EQ(session.capture_mutation_checkpoint(curve_participant)
+                .error()
+                .code,
+            ErrorCode::InvalidArgument);
+  expect_same_preview_summary(session.preview_summary(), preview_summary);
+  ASSERT_TRUE(session.cancel_preview(preview).ok());
+
+  SessionMutationCheckpoint checkpoint =
+      session.capture_mutation_checkpoint(curve_participant).or_throw();
+  EXPECT_EQ(session.capture_mutation_checkpoint(curve_participant)
+                .error()
+                .code,
+            ErrorCode::InvalidArgument);
+  EXPECT_FALSE(session
+                   .add_document(PolygonDocument::make_box({}).or_throw(),
+                                 "Blocked")
+                   .ok());
+  EXPECT_FALSE(session.rename_object(mesh, "Unenrolled").ok());
+  EXPECT_FALSE(session.select_object(curve).ok());
+  EXPECT_TRUE(checkpoint.valid());
+  EXPECT_TRUE(session.mutation_checkpoint_active());
+  const auto restored =
+      session.restore_mutation_checkpoint(std::move(checkpoint));
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  EXPECT_FALSE(restored.value().changed);
+  expect_same_session_observables(session, baseline);
+}
+
+TEST_F(ModelingCurveSessionTests,
+       DroppedMutationCheckpointBlocksMutationsUntilCheckedAbortRestoresRedo) {
+  const CurveDocument redo_candidate =
+      translated_curve({0.0F, 0.0F, 5.0F});
+  ASSERT_TRUE(
+      session.commit_curve_document(curve, redo_candidate, changed_receipt())
+          .ok());
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(session.can_redo());
+  const ModelingSession expected = session;
+  const SessionChangeSnapshot expected_changes = session.changes_since(0U);
+
+  {
+    const std::array participants = {curve};
+    SessionMutationCheckpoint checkpoint =
+        session.capture_mutation_checkpoint(participants).or_throw();
+    const CurveDocument scoped_edit =
+        translated_curve({0.0F, 3.0F, 0.0F});
+    ASSERT_TRUE(session
+                    .commit_curve_document(curve, scoped_edit,
+                                           changed_receipt())
+                    .ok());
+  }
+  ASSERT_TRUE(session.mutation_checkpoint_active());
+  EXPECT_FALSE(session.can_redo());
+  const std::uint64_t orphaned_content_revision = session.content_revision();
+  const std::uint64_t orphaned_selection_revision =
+      session.selection_revision();
+  const std::size_t orphaned_undo_depth = session.undo_depth();
+
+  const auto blocked = session.rename_object(curve, "Blocked");
+  ASSERT_FALSE(blocked.ok());
+  EXPECT_EQ(blocked.error().code, ErrorCode::InvalidArgument);
+  EXPECT_NE(blocked.error_message().find("abort_active_mutation_checkpoint"),
+            std::string::npos);
+  EXPECT_EQ(session.content_revision(), orphaned_content_revision);
+  EXPECT_EQ(session.selection_revision(), orphaned_selection_revision);
+  EXPECT_EQ(session.undo_depth(), orphaned_undo_depth);
+  EXPECT_TRUE(session.mutation_checkpoint_active());
+
+  ModelingSession replacement;
+  session = std::move(replacement);
+  EXPECT_TRUE(session.mutation_checkpoint_active());
+  EXPECT_EQ(session.content_revision(), orphaned_content_revision);
+
+  const auto aborted = session.abort_active_mutation_checkpoint();
+  ASSERT_TRUE(aborted.ok()) << aborted.error_message();
+  EXPECT_TRUE(aborted.value().changed);
+  EXPECT_FALSE(session.mutation_checkpoint_active());
+  expect_same_session_observables(session, expected);
+  expect_same_change_snapshot(session.changes_since(0U), expected_changes);
+
+  ModelingSession expected_after_redo = expected;
+  ASSERT_TRUE(session.redo().ok());
+  ASSERT_TRUE(expected_after_redo.redo().ok());
+  expect_same_session_observables(session, expected_after_redo);
+  ASSERT_TRUE(session.rename_object(curve, "Recovered Path").ok());
+  EXPECT_EQ(session.objects()[1].name, "Recovered Path");
+  EXPECT_FALSE(session.abort_active_mutation_checkpoint().ok());
+}
+
+TEST_F(ModelingCurveSessionTests,
+       MutationCheckpointRollbackNeverRecyclesCurveComponentIdentities) {
+  const CurveDocument original = current_curve();
+  const std::uint64_t original_content_revision = session.content_revision();
+  const std::uint64_t original_selection_revision =
+      session.selection_revision();
+  const std::array participants = {curve};
+  SessionMutationCheckpoint checkpoint =
+      session.capture_mutation_checkpoint(participants).or_throw();
+
+  CurveDocument discarded = current_curve();
+  const OperationResult discarded_receipt =
+      discarded.append_point({.position = {5.0F, 1.0F, 0.0F}}).or_throw();
+  const CurvePointId discarded_point = discarded.points().back().id;
+  const CurveSegmentId discarded_segment = discarded.segments().back();
+  ASSERT_TRUE(session
+                  .commit_curve_document(curve, discarded,
+                                         discarded_receipt)
+                  .ok());
+  ASSERT_TRUE(
+      session.restore_mutation_checkpoint(std::move(checkpoint)).ok());
+
+  const CurveDocument restored = current_curve();
+  EXPECT_TRUE(restored.has_same_geometry(original));
+  EXPECT_EQ(restored.content_identity(), original.content_identity());
+  EXPECT_EQ(restored.content_revision(), original.content_revision());
+  EXPECT_EQ(session.content_revision(), original_content_revision);
+  EXPECT_EQ(session.selection_revision(), original_selection_revision);
+  EXPECT_EQ(session.undo_depth(), 0U);
+
+  CurveDocument next = restored;
+  const OperationResult next_receipt =
+      next.append_point({.position = {6.0F, 2.0F, 0.0F}}).or_throw();
+  EXPECT_GT(next.points().back().id.index, discarded_point.index);
+  EXPECT_GT(next.segments().back().index, discarded_segment.index);
+  ASSERT_TRUE(
+      session.commit_curve_document(curve, next, next_receipt).ok());
+
+  CurveDocument allocate_then_remove = current_curve();
+  ASSERT_TRUE(allocate_then_remove
+                  .append_point({.position = {8.0F, 3.0F, 0.0F}})
+                  .ok());
+  const CurvePointId no_op_discarded_point =
+      allocate_then_remove.points().back().id;
+  const CurveSegmentId no_op_discarded_segment =
+      allocate_then_remove.segments().back();
+  ASSERT_TRUE(
+      allocate_then_remove.remove_point(no_op_discarded_point).ok());
+  const auto unchanged = session.commit_curve_document(
+      curve, allocate_then_remove, changed_receipt());
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.value().changed);
+
+  CurveDocument after_no_op = current_curve();
+  ASSERT_TRUE(after_no_op
+                  .append_point({.position = {9.0F, 4.0F, 0.0F}})
+                  .ok());
+  EXPECT_GT(after_no_op.points().back().id.index,
+            no_op_discarded_point.index);
+  EXPECT_GT(after_no_op.segments().back().index,
+            no_op_discarded_segment.index);
+}
+
+TEST(ModelingSessionMutationCheckpointScalingTests,
+     OneParticipantCaptureAndRestoreStayBoundedWithSixThousandUnrelatedObjects) {
+  ModelingSession session;
+  const PolygonDocument prototype = PolygonDocument::make_box({}).or_throw();
+  constexpr std::size_t kObjectCount = 6'001U;
+  std::vector<SessionWorkspaceDocument> workspace;
+  workspace.reserve(kObjectCount);
+  for (std::size_t index = 0; index < kObjectCount; ++index) {
+    workspace.push_back({
+        .document = prototype,
+        .name = "Indexed Object",
+        .selected = index + 1U == kObjectCount,
+    });
+  }
+  const std::vector<ObjectId> objects =
+      session.replace_workspace_preserving_clipboard(std::move(workspace))
+          .or_throw();
+  const ObjectId unrelated = objects.front();
+  const ObjectId target = objects.back();
+  session.clear_history();
+  const SessionObjectSummary unrelated_before = session.objects().front();
+  const PolygonContentIdentity unrelated_identity =
+      session.document_copy(unrelated).or_throw().content_identity();
+  const SessionObjectSummary target_before = session.objects().back();
+  const PolygonDocument target_document =
+      session.document_copy(target).or_throw();
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+
+  PolygonDocument changed = target_document;
+  ASSERT_TRUE(changed.select_all_faces().ok());
+  OperationResult receipt =
+      changed.translate_selection({2.0F, 0.0F, 0.0F}).or_throw();
+  ASSERT_TRUE(changed.clear_selection().ok());
+  receipt.dirty.selection = false;
+  receipt.dirty.overlays = true;
+
+  const SessionMutationCheckpointWorkStats before =
+      session.mutation_checkpoint_work_stats();
+  const std::array participants = {target};
+  SessionMutationCheckpoint checkpoint =
+      session.capture_mutation_checkpoint(participants).or_throw();
+  const SessionMutationCheckpointWorkStats after_capture =
+      session.mutation_checkpoint_work_stats();
+  EXPECT_EQ(after_capture.capture_count, before.capture_count + 1U);
+  EXPECT_EQ(after_capture.participant_lookup_count,
+            before.participant_lookup_count + 1U);
+  EXPECT_EQ(after_capture.participant_snapshot_count,
+            before.participant_snapshot_count + 1U);
+  EXPECT_EQ(after_capture.transition_record_snapshot_count,
+            before.transition_record_snapshot_count + 1U);
+  EXPECT_EQ(after_capture.workspace_copy_count, before.workspace_copy_count);
+
+  ASSERT_TRUE(session
+                  .commit_document(target, std::move(changed),
+                                   std::move(receipt))
+                  .ok());
+  ASSERT_TRUE(
+      session.restore_mutation_checkpoint(std::move(checkpoint)).ok());
+  const SessionMutationCheckpointWorkStats after_restore =
+      session.mutation_checkpoint_work_stats();
+  EXPECT_EQ(after_restore.restore_count, before.restore_count + 1U);
+  EXPECT_EQ(after_restore.participant_restore_count,
+            before.participant_restore_count + 1U);
+  EXPECT_EQ(after_restore.history_suffix_record_count,
+            before.history_suffix_record_count + 1U);
+  EXPECT_EQ(after_restore.workspace_copy_count, before.workspace_copy_count);
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.selection_revision(), selection_revision);
+  EXPECT_EQ(session.undo_depth(), 0U);
+
+  const auto summaries = session.objects();
+  ASSERT_EQ(summaries.size(), kObjectCount);
+  EXPECT_EQ(summaries.front().id, unrelated_before.id);
+  EXPECT_EQ(summaries.front().name, unrelated_before.name);
+  EXPECT_EQ(summaries.front().selected, unrelated_before.selected);
+  EXPECT_EQ(summaries.front().content_revision,
+            unrelated_before.content_revision);
+  EXPECT_EQ(summaries.front().selection_revision,
+            unrelated_before.selection_revision);
+  EXPECT_EQ(session.document_copy(unrelated).or_throw().content_identity(),
+            unrelated_identity);
+  EXPECT_EQ(summaries.back().id, target_before.id);
+  EXPECT_EQ(summaries.back().selected, target_before.selected);
+  EXPECT_EQ(summaries.back().content_revision,
+            target_before.content_revision);
+  EXPECT_EQ(session.document_copy(target).or_throw().content_identity(),
+            target_document.content_identity());
+}
+
+TEST(ModelingSessionPreviewScalingTests,
+     OneParticipantWorkStaysBoundedWithSixThousandUnrelatedObjects) {
+  ModelingSession session;
+  const PolygonDocument prototype = PolygonDocument::make_box({}).or_throw();
+  constexpr std::size_t kObjectCount = 6'001U;
+  std::vector<SessionWorkspaceDocument> workspace;
+  workspace.reserve(kObjectCount);
+  for (std::size_t index = 0; index < kObjectCount; ++index) {
+    workspace.push_back({
+        .document = prototype,
+        .name = "Indexed Object",
+        .selected = index + 1U == kObjectCount,
+    });
+  }
+  const std::vector<ObjectId> objects =
+      session.replace_workspace_preserving_clipboard(std::move(workspace))
+          .or_throw();
+  const ObjectId target = objects.back();
+  session.clear_history();
+
+  PolygonDocument first = session.document_copy(target).or_throw();
+  ASSERT_TRUE(first.select_all_faces().ok());
+  OperationResult first_receipt =
+      first.translate_selection({1.0F, 0.0F, 0.0F}).or_throw();
+  ASSERT_TRUE(first.clear_selection().ok());
+
+  const SessionPreviewWorkStats before_begin = session.preview_work_stats();
+  SessionPreviewTransactionRequest request;
+  request.participants.push_back({
+      .action = SessionPreviewAction::ReplaceExisting,
+      .object = target,
+      .document = first,
+      .receipt = first_receipt,
+      .selected = true,
+  });
+  const SessionPreviewBeginResult begun =
+      session
+          .begin_preview_transaction("modeling.scaling.lookup",
+                                     std::move(request))
+          .or_throw();
+  const SessionPreviewWorkStats after_begin = session.preview_work_stats();
+  EXPECT_LE(after_begin.live_object_lookup_count -
+                before_begin.live_object_lookup_count,
+            2U);
+  EXPECT_EQ(after_begin.mesh_payload_build_count -
+                before_begin.mesh_payload_build_count,
+            1U);
+
+  const SessionPreviewCheckpoint checkpoint =
+      session.capture_preview_checkpoint(begun.preview_id).or_throw();
+  ASSERT_TRUE(checkpoint.valid());
+  const SessionPreviewWorkStats after_checkpoint =
+      session.preview_work_stats();
+  EXPECT_LE(after_checkpoint.live_object_lookup_count -
+                after_begin.live_object_lookup_count,
+            2U);
+  EXPECT_EQ(after_checkpoint.checkpoint_participant_reference_count -
+                after_begin.checkpoint_participant_reference_count,
+            1U);
+  EXPECT_EQ(after_checkpoint.checkpoint_authored_byte_copy_count,
+            before_begin.checkpoint_authored_byte_copy_count);
+
+  PolygonDocument second =
+      session.preview_base_document_copy(begun.preview_id, target).or_throw();
+  const SessionPreviewWorkStats after_base_read =
+      session.preview_work_stats();
+  EXPECT_EQ(after_base_read.preview_object_lookup_count -
+                after_checkpoint.preview_object_lookup_count,
+            1U);
+  ASSERT_TRUE(second.select_all_faces().ok());
+  OperationResult second_receipt =
+      second.translate_selection({2.0F, 0.0F, 0.0F}).or_throw();
+  ASSERT_TRUE(second.clear_selection().ok());
+  std::vector<SessionPreviewDocumentUpdate> updates;
+  updates.push_back({.object = target,
+                     .document = second,
+                     .receipt = second_receipt});
+  ASSERT_TRUE(session
+                  .update_preview_transaction(begun.preview_id,
+                                              std::move(updates))
+                  .ok());
+  const SessionPreviewWorkStats after_update = session.preview_work_stats();
+  EXPECT_LE(after_update.live_object_lookup_count -
+                after_base_read.live_object_lookup_count,
+            2U);
+  EXPECT_LE(after_update.preview_object_lookup_count -
+                after_base_read.preview_object_lookup_count,
+            2U);
+  EXPECT_EQ(after_update.mesh_payload_build_count -
+                after_base_read.mesh_payload_build_count,
+            1U);
+
+  ASSERT_TRUE(session.commit_preview_transaction(begun.preview_id).ok());
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(session.redo().ok());
+
+  const auto exercise_index = [&](ModelingSession &candidate) {
+    PolygonDocument current = candidate.document_copy(target).or_throw();
+    const PreviewId preview =
+        candidate
+            .begin_document_preview(target, "modeling.scaling.index_integrity",
+                                    current, OperationResult{})
+            .or_throw();
+    EXPECT_TRUE(candidate.preview_document_copy(preview, target).ok());
+    EXPECT_TRUE(candidate.cancel_preview(preview).ok());
+  };
+  exercise_index(session);
+  ModelingSession copied = session;
+  exercise_index(copied);
+  ModelingSession moved = std::move(copied);
+  exercise_index(moved);
+  ModelingSession copy_assigned;
+  copy_assigned = session;
+  exercise_index(copy_assigned);
+  ModelingSession move_assigned;
+  move_assigned = std::move(copy_assigned);
+  exercise_index(move_assigned);
+  const ModelingSession snapshot = session.current_workspace_checkpoint();
+  session.restore_snapshot_preserving_identity_high_water(snapshot);
+  exercise_index(session);
+}
+
+TEST(ModelingSessionPreviewScalingTests,
+     LargeCurveCheckpointSharesAuthoredStorageAndOmitsCompiledPayloadCopies) {
+  constexpr std::size_t kPointCount = 50'000U;
+  std::vector<CurvePointSpec> points;
+  points.reserve(kPointCount);
+  for (std::size_t index = 0; index < kPointCount; ++index) {
+    points.push_back({
+        .position = {static_cast<float>(index),
+                     static_cast<float>(index % 17U), 0.0F},
+    });
+  }
+  CurveDocument curve = CurveDocument::make_bezier(points).or_throw();
+  ModelingSession session;
+  const ObjectId object =
+      session.add_curve_document(curve, "Large Curve").or_throw();
+  session.clear_history();
+
+  CurveDocument edited = session.curve_document_copy(object).or_throw();
+  const CurveControlPoint first = edited.points().front();
+  ASSERT_TRUE(edited
+                  .set_point(first.id,
+                             {.position = {first.position.x,
+                                           first.position.y + 1.0F,
+                                           first.position.z},
+                              .incoming_handle = first.incoming_handle,
+                              .outgoing_handle = first.outgoing_handle})
+                  .ok());
+  OperationResult receipt;
+  receipt.changed = true;
+  receipt.dirty.geometry = true;
+  receipt.dirty.overlays = true;
+  const PreviewId preview =
+      session
+          .begin_curve_document_preview(object, "modeling.curve.large",
+                                        edited, receipt)
+          .or_throw();
+  const CurveContentIdentity edited_identity =
+      session.preview_curve_document_copy(preview, object)
+          .or_throw()
+          .content_identity();
+  const SessionPreviewWorkStats before = session.preview_work_stats();
+  const SessionPreviewCheckpoint checkpoint =
+      session.capture_preview_checkpoint(preview).or_throw();
+  const SessionPreviewWorkStats after = session.preview_work_stats();
+  EXPECT_EQ(after.checkpoint_count, before.checkpoint_count + 1U);
+  EXPECT_EQ(after.checkpoint_participant_reference_count,
+            before.checkpoint_participant_reference_count + 1U);
+  EXPECT_EQ(after.checkpoint_authored_byte_copy_count,
+            before.checkpoint_authored_byte_copy_count);
+  const OperationResult unchanged =
+      session.restore_preview_checkpoint(checkpoint).or_throw();
+  EXPECT_FALSE(unchanged.changed);
+  EXPECT_EQ(session.preview_curve_document_copy(preview, object)
+                .or_throw()
+                .content_identity(),
+            edited_identity);
+  ASSERT_TRUE(session.cancel_preview(preview).ok());
+}
+
 TEST_F(ModelingCurveSessionTests, CancelAndReturnToBasePreserveDurableStateAndRedo) {
   const CurveDocument original = current_curve();
   const CurveDocument changed = translated_curve({0.0F, 0.0F, 3.0F});
@@ -331,6 +1858,8 @@ TEST_F(ModelingCurveSessionTests,
   const auto checkpoint = session.capture_preview_checkpoint(preview).or_throw();
   ASSERT_TRUE(checkpoint.valid());
   const ModelingSession captured = session;
+  ASSERT_TRUE(session.preflight_preview_checkpoint(checkpoint).ok());
+  expect_same_session_observables(session, captured);
   const auto unchanged = session.restore_preview_checkpoint(checkpoint);
   ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
   EXPECT_FALSE(unchanged.value().changed);
@@ -489,6 +2018,10 @@ TEST_F(ModelingCurveSessionTests,
   assigned = session;
   const std::array destinations = {&copied, &assigned};
   for (ModelingSession *destination : destinations) {
+    EXPECT_EQ(destination->preflight_preview_checkpoint(checkpoint)
+                  .error()
+                  .code,
+              ErrorCode::StaleId);
     const auto foreign_checkpoint = destination->capture_preview_checkpoint(preview).or_throw();
     ASSERT_TRUE(destination->update_curve_document_preview(preview, second, changed_receipt()).ok());
     const ModelingSession before = *destination;

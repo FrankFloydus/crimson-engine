@@ -45,7 +45,7 @@ public:
           if (restored_group == kInvalidEntityId) {
             return document_command_missing_entity_result();
           }
-          remapped_entities[group.snapshot.original_id] = restored_group;
+          remapped_entities[group.snapshot.id] = restored_group;
           for (const DocumentEntityPlacement &child : group.children) {
             if (!scene().exists(child.entity)) {
               return document_command_missing_entity_result();
@@ -56,7 +56,7 @@ public:
             }
             scene().set_transform(child.entity, child.transform);
           }
-          group.snapshot.original_id = restored_group;
+          group.snapshot.id = restored_group;
           restored_groups.push_back(restored_group);
         }
         document_command_apply_selection(
@@ -94,7 +94,7 @@ public:
       std::vector<SceneTransformAssignment> transform_assignments;
       std::vector<EntityId> group_entities;
       for (const UngroupedEntity &state : *planned_groups) {
-        group_entities.push_back(state.snapshot.original_id);
+        group_entities.push_back(state.snapshot.id);
         for (const DocumentEntityPlacement &child : state.children) {
           parent_assignments.push_back({
               .child = child.entity,
@@ -114,7 +114,7 @@ public:
         }
       } else {
         for (const UngroupedEntity &state : *planned_groups) {
-          const EntityId group = state.snapshot.original_id;
+          const EntityId group = state.snapshot.id;
           for (const DocumentEntityPlacement &child : state.children) {
             if (!scene().set_parent(child.entity, state.parent, true)) {
               return document_command_invalid_request_result(

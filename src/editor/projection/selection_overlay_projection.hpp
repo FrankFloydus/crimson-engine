@@ -8,6 +8,7 @@
 
 #include "core/types.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "render/viewport_overlay_frame.hpp"
 
 #include <functional>
@@ -17,7 +18,6 @@
 
 namespace quader {
 
-class ModelingObjectRuntimeMap;
 class SceneDocument;
 
 /**

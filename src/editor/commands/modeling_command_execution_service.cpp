@@ -7,8 +7,10 @@
 #include "editor/commands/modeling_command_execution_service.hpp"
 
 #include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
+#include "editor/commands/scene_structural_lifecycle_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/history/modeling_preview_command_service.hpp"
+#include "editor/selection/editor_selection_service.hpp"
 
 #include <algorithm>
 #include <memory>
@@ -90,10 +92,20 @@ std::string command_label(const CommandTool *tool, std::string_view tool_id) {
 ModelingCommandResult ModelingCommandExecutionService::execute(
     EditorHistoryService &history, ModelingSessionService &modeling,
     EditorSelectionService &selection, std::string_view tool_id,
-    MaterialReference active_material) {
+    MaterialReference active_material,
+    SceneStructuralLifecycleService *structural_lifecycle) {
   const CommandTool *tool = dispatcher_.find(tool_id);
   if (tool == nullptr) {
     return {.ok = false, .message = "Command tool is not registered."};
+  }
+
+  // Provider-owned controls participate in the canonical editor selection,
+  // so Delete must resolve them before considering the selected owner object.
+  // The provider remains responsible for its authored history transaction.
+  if (tool->id() == "delete_selection") {
+    if (auto sub_selection = selection.try_delete_sub_selection()) {
+      return *std::move(sub_selection);
+    }
   }
 
   if (tool->id() == "delete_selection" &&
@@ -101,7 +113,36 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
           modeling.selection_summary(),
           modeling.has_selected_scene_aware_delete_root())) {
     return from_command_result(
-        history.execute(modeling.create_delete_selection_command()));
+        structural_lifecycle != nullptr
+            ? structural_lifecycle->destroy_selected_hierarchy()
+            : history.execute(modeling.create_delete_selection_command()));
+  }
+
+  if (tool->id() == "duplicate_meshes") {
+    const ModelingSelectionMode mode = modeling.selection_summary().mode;
+    if (mode != ModelingSelectionMode::Object &&
+        mode != ModelingSelectionMode::Group) {
+      return {
+          .ok = false,
+          .message = "Duplicate Selection is available in Object or Group "
+                     "mode.",
+      };
+    }
+    if (structural_lifecycle == nullptr) {
+      return {
+          .ok = false,
+          .message = "Scene structural lifecycle is unavailable.",
+      };
+    }
+    if (!structural_lifecycle->can_duplicate_selected_hierarchy()) {
+      return {
+          .ok = false,
+          .message = "Duplicate Selection needs a selected hierarchy.",
+      };
+    }
+    return from_command_result(structural_lifecycle->duplicate_hierarchy(
+        structural_lifecycle->selected_roots(), mode,
+        command_label(tool, tool_id), true));
   }
 
   const ModelingCommandAvailability available =
@@ -129,14 +170,23 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
 ModelingCommandResult ModelingCommandExecutionService::execute_untracked(
     ModelingSessionService &modeling, std::string_view tool_id,
     EditorSelectionService *selection) {
+  if (tool_id == std::string_view("delete_selection") &&
+      selection != nullptr) {
+    if (auto sub_selection = selection->try_delete_sub_selection()) {
+      return *std::move(sub_selection);
+    }
+  }
   return dispatcher_.execute(tool_id, modeling, selection);
 }
 
 ModelingCommandResult ModelingCommandExecutionService::begin_preview(
     EditorHistoryService &history, ModelingSessionService &modeling,
-    EditorSelectionService &selection, std::string_view action_id) {
-  if (action_id == std::string_view("delete_selection")) {
-    return execute(history, modeling, selection, action_id);
+    EditorSelectionService &selection, std::string_view action_id,
+    SceneStructuralLifecycleService *structural_lifecycle) {
+  if (action_id == std::string_view("delete_selection") ||
+      action_id == std::string_view("duplicate_meshes")) {
+    return execute(history, modeling, selection, action_id, {},
+                   structural_lifecycle);
   }
 
   const std::vector<ModelingActionItem> actions =
@@ -185,7 +235,25 @@ ModelingCommandResult ModelingCommandExecutionService::cancel_preview(
 ModelingCommandAvailability ModelingCommandExecutionService::availability(
     ModelingSessionService &modeling, std::string_view tool_id,
     EditorSelectionService *selection,
-    MaterialReference active_material) const {
+    MaterialReference active_material,
+    SceneStructuralLifecycleService *structural_lifecycle) const {
+  if (tool_id == std::string_view("delete_selection") &&
+      selection != nullptr && selection->has_sub_selection()) {
+    return ModelingCommandAvailability::available();
+  }
+  if (tool_id == std::string_view("duplicate_meshes") &&
+      structural_lifecycle != nullptr) {
+    const ModelingSelectionMode mode = modeling.selection_summary().mode;
+    if (mode != ModelingSelectionMode::Object &&
+        mode != ModelingSelectionMode::Group) {
+      return ModelingCommandAvailability::unavailable(
+          "Duplicate Selection is available in Object or Group mode.");
+    }
+    return structural_lifecycle->can_duplicate_selected_hierarchy()
+               ? ModelingCommandAvailability::available()
+               : ModelingCommandAvailability::unavailable(
+                     "Duplicate Selection needs a selected hierarchy.");
+  }
   if (tool_id == std::string_view("delete_selection") &&
       scene_aware_delete_handles_selection(
           modeling.selection_summary(),

@@ -458,24 +458,17 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
       {"name", entity.name},
       {"kind", entity_kind_name(entity.kind)},
       {"parent", entity.parent},
+      {"transform", transform_json(entity.transform)},
+      {"visibility",
+       {{"visible", entity.visibility.visible},
+        {"selectable", entity.visibility.selectable}}},
+      {"locked", entity.lock.locked},
   };
-  if (entity.transform) {
-    value["transform"] = transform_json(*entity.transform);
-  }
   if (entity.texture_mapping) {
     value["textureMapping"] = {
         {"samplingFromLocal",
          entity.texture_mapping->sampling_from_local.values},
     };
-  }
-  if (entity.visibility) {
-    value["visibility"] = {
-        {"visible", entity.visibility->visible},
-        {"selectable", entity.visibility->selectable},
-    };
-  }
-  if (entity.lock) {
-    value["locked"] = entity.lock->locked;
   }
   if (entity.modeling_object) {
     value["modelingObject"] = {
@@ -517,27 +510,6 @@ layer_json(const QdrProjectSceneLayerWriteSnapshot &layer) {
        {layer.wireframe_color.x, layer.wireframe_color.y,
         layer.wireframe_color.z}},
       {"locked", layer.locked},
-  };
-}
-
-[[nodiscard]] Json object_json(const ProjectObjectRecord &object) {
-  Json material = {{"kind", "none"}};
-  if (object.material.project_owned()) {
-    material = {{"kind", "project"},
-                {"id", std::string(object.material.project_asset().str())}};
-  } else if (object.material.embedded()) {
-    material = {{"kind", "embedded"},
-                {"id", object.material.embedded_asset()}};
-  }
-  return {
-      {"editorObjectId", object.id},
-      {"sceneEntity", object.scene_entity},
-      {"mesh", object.mesh},
-      {"material", std::move(material)},
-      {"modelingObject", object.modeling_object},
-      {"authoredName", object.authored_name},
-      {"visible", object.visible},
-      {"materialSlot", object.material_slot},
   };
 }
 
@@ -623,10 +595,6 @@ std::string qdr_scene_debug_json(
   for (const QdrProjectEntityWriteSnapshot &entity : snapshot.entities) {
     entities.push_back(entity_json(entity));
   }
-  Json objects = Json::array();
-  for (const ProjectObjectRecord &object : snapshot.object_records) {
-    objects.push_back(object_json(object));
-  }
   Json layers = Json::array();
   for (const QdrProjectSceneLayerWriteSnapshot &layer : snapshot.layers) {
     layers.push_back(layer_json(layer));
@@ -650,9 +618,8 @@ std::string qdr_scene_debug_json(
            {"curves", std::move(curves)},
            {"materials", std::move(materials)},
            {"textures", std::move(textures)},
-       }},
+      }},
       {"entities", std::move(entities)},
-      {"objects", std::move(objects)},
       {"layers", std::move(layers)},
   }.dump(2);
 }

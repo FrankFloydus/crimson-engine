@@ -1,0 +1,259 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+#pragma once
+
+#include "render/overlay/curve_tool_overlay_cache.hpp"
+#include "render/overlay/render_overlay_snapshot.hpp"
+#include "render/overlay/viewport_overlay_style_resolver.hpp"
+#include "render/overlay/viewport_scene_overlay_builder.hpp"
+#include "render/viewport_overlay_frame.hpp"
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+
+namespace quader {
+
+class ViewportSettings;
+
+/** Source-owner facts that invalidate the shared component-selection frame. */
+struct ViewportOverlaySelectionSourceStamp final {
+  std::uintptr_t source_identity = 0u;
+  std::uint64_t content_revision = 0u;
+  std::uint64_t selection_revision = 0u;
+  std::uint64_t scene_revision = 0u;
+  std::uint64_t asset_revision = 0u;
+  std::uint64_t local_visibility_revision = 0u;
+  std::uint64_t overlay_signature = 0u;
+  ViewportOverlaySelectionContext selection_context =
+      ViewportOverlaySelectionContext::Any;
+
+  friend bool operator==(const ViewportOverlaySelectionSourceStamp &,
+                         const ViewportOverlaySelectionSourceStamp &) =
+      default;
+};
+
+/** Lazily publishes the semantic component-selection frame on cache misses. */
+class ViewportOverlaySelectionFrameProvider {
+public:
+  virtual ~ViewportOverlaySelectionFrameProvider() = default;
+  [[nodiscard]] virtual ViewportOverlayFrame
+  build_selection_overlay_frame() const = 0;
+};
+
+/** Typed scene-source facts that invalidate one retained pane overlay. */
+struct ViewportOverlaySceneSubmissionStamp final {
+  RenderSceneBindingKey scene_binding;
+  std::uint64_t scene_revision = 0u;
+  std::uint64_t asset_revision = 0u;
+  std::uint64_t selection_revision = 0u;
+  std::uint64_t visibility_revision = 0u;
+  std::uint64_t local_visibility_revision = 0u;
+  std::uint64_t transform_revision = 0u;
+  std::uint64_t mesh_binding_revision = 0u;
+  std::uint64_t render_component_revision = 0u;
+
+  friend bool operator==(const ViewportOverlaySceneSubmissionStamp &,
+                         const ViewportOverlaySceneSubmissionStamp &) =
+      default;
+};
+
+/** One owner publication of pane-local semantic tool overlay state. */
+struct ViewportOverlayDynamicToolSourceStamp final {
+  std::uintptr_t source_identity = 0u;
+  std::uint64_t publication_revision = 0u;
+
+  friend bool operator==(const ViewportOverlayDynamicToolSourceStamp &,
+                         const ViewportOverlayDynamicToolSourceStamp &) =
+      default;
+};
+
+/** Compiles pane-local semantic tool state only after its typed stamp changes. */
+class ViewportOverlayDynamicToolFrameProvider {
+public:
+  virtual ~ViewportOverlayDynamicToolFrameProvider() = default;
+  [[nodiscard]] virtual ViewportOverlayFrame
+  build_dynamic_tool_overlay_frame() const = 0;
+};
+
+/** Keys one pane's retained semantic overlay independently of camera pose. */
+struct ViewportOverlayPersistentSubmissionStamp final {
+  std::uint64_t selection_overlay_revision = 0u;
+  ViewportOverlaySceneSubmissionStamp scene;
+  std::uint64_t style_signature = 0u;
+  RenderOverlaySelectionMode scene_selection_mode =
+      RenderOverlaySelectionMode::Object;
+  ViewportOverlaySelectionContext style_selection_context =
+      ViewportOverlaySelectionContext::Any;
+  ViewportOverlayProjection projection =
+      ViewportOverlayProjection::Perspective;
+  bool selection_overlay_visible = false;
+  bool selection_overlays_visible = false;
+  bool scene_overlay_requested = false;
+  bool wireframe_pane = false;
+  bool point_light_gizmos_visible = false;
+
+  friend bool operator==(const ViewportOverlayPersistentSubmissionStamp &,
+                         const ViewportOverlayPersistentSubmissionStamp &) =
+      default;
+};
+
+/** Keys the small frame-volatile stream separately from retained geometry. */
+struct ViewportOverlayDynamicSubmissionStamp final {
+  ViewportOverlayDynamicToolSourceStamp dynamic_tools;
+  /** Identifies one volatile modeling-overlay publication without hashing its geometry. */
+  struct VolatileModelingSourceStamp final {
+    std::uintptr_t source_identity = 0u;
+    std::uint64_t publication_revision = 0u;
+
+    friend bool operator==(const VolatileModelingSourceStamp &,
+                           const VolatileModelingSourceStamp &) = default;
+  } volatile_modeling;
+  ViewportOverlaySceneSubmissionStamp scene_tools;
+  CurveToolOverlaySourceStamp curve;
+  std::uint64_t style_signature = 0u;
+  ViewportOverlaySelectionContext style_selection_context =
+      ViewportOverlaySelectionContext::Any;
+  ViewportOverlayProjection projection =
+      ViewportOverlayProjection::Perspective;
+
+  friend bool operator==(const ViewportOverlayDynamicSubmissionStamp &,
+                         const ViewportOverlayDynamicSubmissionStamp &) =
+      default;
+};
+
+using ViewportOverlayVolatileModelingSourceStamp =
+    ViewportOverlayDynamicSubmissionStamp::VolatileModelingSourceStamp;
+
+/** Reports which retained backend streams still exist after a camera update. */
+struct ViewportOverlayCameraUpdate final {
+  bool persistent_available = false;
+  bool dynamic_available = false;
+};
+
+/** Render-backend endpoint used by the headless submission policy. */
+class ViewportOverlaySubmissionTarget {
+public:
+  virtual ~ViewportOverlaySubmissionTarget() = default;
+
+  [[nodiscard]] virtual ViewportOverlayCameraUpdate update_overlay_cameras(
+      std::size_t viewport_index, std::uint8_t layer_mask,
+      ViewportOverlayCamera camera) = 0;
+  virtual void submit_persistent_overlay(
+      std::size_t viewport_index, std::uint8_t layer_mask,
+      ViewportOverlayFrame frame, ViewportOverlayCamera camera) = 0;
+  virtual void submit_dynamic_overlay(
+      std::size_t viewport_index, std::uint8_t layer_mask,
+      ViewportOverlayFrame frame, ViewportOverlayCamera camera) = 0;
+};
+
+/** Semantic inputs for one pane's retained and volatile overlay streams. */
+struct ViewportOverlaySubmissionRequest final {
+  std::size_t viewport_index = 0u;
+  std::uint8_t layer_mask = 0u;
+  ViewportOverlayCamera camera;
+  ViewportOverlaySelectionSourceStamp selection_source;
+  const ViewportOverlaySelectionFrameProvider *selection_frame_provider =
+      nullptr;
+  const RenderOverlaySelectionSnapshot *scene_overlay_snapshot = nullptr;
+  const ViewportOverlayFrame *volatile_modeling_overlay_frame = nullptr;
+  ViewportOverlayVolatileModelingSourceStamp volatile_modeling_source;
+  /// Borrowed only for submit(); render owns all retained curve presentation.
+  const CurveToolPreviewState *curve_preview = nullptr;
+  ViewportOverlayDynamicToolSourceStamp dynamic_tool_source;
+  const ViewportOverlayDynamicToolFrameProvider *dynamic_tool_frame_provider =
+      nullptr;
+  RenderOverlaySelectionMode scene_selection_mode =
+      RenderOverlaySelectionMode::Object;
+  ViewportOverlaySelectionContext style_selection_context =
+      ViewportOverlaySelectionContext::Any;
+  bool overlays_visible = false;
+  bool scene_overlay_requested = false;
+  bool wireframe_pane = false;
+  bool point_light_gizmos_visible = false;
+};
+
+/** Outcome plus the unstyled dynamic stream consumed by the Qt edge HUD. */
+struct ViewportOverlaySubmissionResult final {
+  /// Borrowed from the coordinator until this pane changes or is invalidated.
+  const ViewportOverlayFrame *edge_hud_frame = nullptr;
+  std::uint64_t dynamic_source_signature = 0u;
+  bool persistent_submitted = false;
+  bool dynamic_submitted = false;
+  bool persistent_recovered = false;
+  bool dynamic_recovered = false;
+  bool camera_only = false;
+  bool selection_source_refreshed = false;
+};
+
+/** Monotonic counters for broad work performed behind retained source gates. */
+struct ViewportOverlaySubmissionWorkCounters final {
+  // These remain zero and make accidental broad source hashing test-visible.
+  std::uint64_t dynamic_source_hash_count = 0u;
+  std::uint64_t dynamic_source_hashed_record_count = 0u;
+  std::uint64_t dynamic_source_compose_count = 0u;
+  std::uint64_t dynamic_source_composed_record_count = 0u;
+  std::uint64_t curve_overlay_build_count = 0u;
+};
+
+/**
+ * Owns per-pane overlay stream composition and retained submission policy.
+ *
+ * Semantic inputs are renderer neutral. Curves remain borrowed until the
+ * dynamic stamp changes, so unchanged frames do not copy, hash, or restyle
+ * their potentially large sampled geometry.
+ */
+class ViewportOverlaySubmissionCoordinator final {
+public:
+  static constexpr std::size_t kMaxViewportSlots = 4u;
+
+  [[nodiscard]] ViewportOverlaySubmissionResult submit(
+      ViewportOverlaySubmissionRequest request,
+      const ViewportSettings &settings,
+      ViewportOverlaySubmissionTarget &target);
+
+  void invalidate(std::size_t viewport_index);
+  void invalidate_all();
+  void set_active_viewports(std::uint8_t viewport_mask);
+  [[nodiscard]] ViewportOverlaySubmissionWorkCounters work_counters() const;
+
+private:
+  /** Keys one cached selection frame by owner publication and resolved style. */
+  struct StyledSelectionSourceStamp final {
+    ViewportOverlaySelectionSourceStamp source;
+    std::uint64_t style_signature = 0u;
+
+    friend bool operator==(const StyledSelectionSourceStamp &,
+                           const StyledSelectionSourceStamp &) = default;
+  };
+
+  /** Retains the compiled shared selection frame and its publication revision. */
+  struct SelectionSourceState final {
+    StyledSelectionSourceStamp stamp;
+    ViewportOverlayFrame frame;
+    std::uint64_t publication_revision = 0u;
+    bool valid = false;
+  };
+
+  /** Retains per-pane persistent and dynamic overlay stream state. */
+  struct PaneState final {
+    ViewportOverlayPersistentSubmissionStamp persistent;
+    ViewportOverlayDynamicSubmissionStamp dynamic;
+    bool persistent_valid = false;
+    bool dynamic_valid = false;
+    ViewportOverlayFrame dynamic_source_frame;
+    std::uint64_t dynamic_source_revision = 0u;
+  };
+
+  std::array<PaneState, kMaxViewportSlots> panes_;
+  SelectionSourceState selection_source_;
+  CurveToolOverlayCache curve_overlay_source_;
+  ViewportOverlaySubmissionWorkCounters work_counters_;
+  std::uint64_t dynamic_source_publication_revision_ = 0u;
+};
+
+} // namespace quader

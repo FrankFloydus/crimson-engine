@@ -8,10 +8,12 @@
 
 #include "core/types.hpp"
 #include "editor/pivot/pivot_types.hpp"
+#include "editor/placement/scene_surface_query.hpp"
 #include "math/types.hpp"
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -54,7 +56,6 @@ struct ViewportPointPlacementPolicy {
   bool face_center = true;
   bool surface = false;
   bool grid = true;
-  bool include_effectively_locked_meshes = true;
   bool prefer_surface_normal_for_features = false;
   bool strict_kind_priority = false;
   bool grid_requires_snap_radius = true;
@@ -100,15 +101,17 @@ struct ViewportPointPlacementResult {
 viewport_active_grid_placement_plane(const ViewportCameraController &camera);
 
 /**
- * Owns native scene landmark extraction and viewport point placement policy.
+ * Owns viewport point placement policy over the canonical scene surface index.
  *
- * World-space landmarks and triangles are cached behind the scene revisions
- * that can affect mesh placement plus the mesh-asset revision. Curve,
- * material, selection, and other unrelated publications do not rebuild mesh
- * placement geometry. Projection and ray work remain camera/query dependent.
+ * A SceneSession injects its shared frozen participant/TLAS snapshot. Standalone
+ * tests and tools lazily construct the same index rather than maintaining a
+ * second triangle pipeline. Only camera projection remains service-local.
  */
 class ViewportPointPlacementService {
 public:
+  ViewportPointPlacementService() = default;
+  explicit ViewportPointPlacementService(SceneSurfaceQuery &surface_query);
+
   void set_viewport_visibility_filter(
       std::function<bool(EntityId)> filter,
       std::function<std::uint64_t()> revision_provider);
@@ -118,54 +121,42 @@ public:
           const ViewportCameraController &camera,
           const ViewportPointPlacementRequest &request);
 
+  /**
+   * Freezes the canonical render-visible surface participants for one input
+   * operation. Viewport interactions can share this snapshot for occlusion
+   * without receiving SceneSession or constructing a second query.
+   */
+  [[nodiscard]] SceneSurfaceQuerySnapshot
+  surface_snapshot(const SceneDocument &document,
+                   const AssetRegistry &assets);
+
   void invalidate();
 
+  [[nodiscard]] SceneSurfaceQueryStats surface_query_stats() const noexcept;
+
 private:
-  /// Stores one world-space feature candidate behind scene/asset gates.
-  struct CachedLandmark {
-    QVec3 world_position = {};
-    QVec3 incident_world_normal = {};
-    ViewportPointSnapKind kind = ViewportPointSnapKind::None;
-    EntityId entity = kInvalidEntityId;
-    bool effectively_locked = false;
-  };
-
-  /// Stores one world-space pick triangle behind scene/asset gates.
-  struct CachedTriangle {
-    QVec3 a = {};
-    QVec3 b = {};
-    QVec3 c = {};
-    QVec3 world_normal = {};
-    EntityId entity = kInvalidEntityId;
-    bool effectively_locked = false;
-  };
-
   /// Stores one camera-projected landmark behind the projection gate.
   struct CachedProjection {
     QVec2 screen_position = {};
     bool visible = false;
   };
 
-  void refresh_cache(const SceneDocument &document,
-                     const AssetRegistry &assets);
-  void refresh_projection_cache(const ViewportCameraController &camera);
+  void refresh_projection_cache(
+      const ViewportCameraController &camera,
+      const SceneSurfaceQuerySnapshot &surface_snapshot);
 
-  const SceneDocument *cached_document_ = nullptr;
-  const AssetRegistry *cached_assets_ = nullptr;
-  std::uint64_t cached_hierarchy_revision_ = 0;
-  std::uint64_t cached_visibility_revision_ = 0;
-  std::uint64_t cached_transform_revision_ = 0;
-  std::uint64_t cached_mesh_binding_revision_ = 0;
-  std::uint64_t cached_mesh_asset_revision_ = 0;
-  std::uint64_t cached_viewport_visibility_revision_ = 0;
-  bool cache_valid_ = false;
-  std::vector<CachedLandmark> landmarks_;
-  std::vector<CachedTriangle> triangles_;
+  SceneSurfaceQuery *shared_surface_query_ = nullptr;
+  std::unique_ptr<SceneSurfaceQuery> standalone_surface_query_;
+  const SceneDocument *standalone_document_ = nullptr;
+  const AssetRegistry *standalone_assets_ = nullptr;
+  SceneSurfaceQuerySnapshot cached_surface_snapshot_;
+  std::uint64_t cached_surface_revision_ = 0u;
   const ViewportCameraController *cached_projection_camera_ = nullptr;
   std::uint64_t cached_projection_signature_ = 0;
   std::vector<CachedProjection> projected_landmarks_;
   std::function<bool(EntityId)> viewport_visibility_filter_;
   std::function<std::uint64_t()> viewport_visibility_revision_provider_;
+  SceneSurfaceQueryScratch raycast_scratch_;
 };
 
 } // namespace quader

@@ -11,6 +11,9 @@
 namespace quader_poly::document_internal {
 
 inline constexpr float kEpsilon = 0.000001F;
+/// Keeps a component coplanar with its visible surface selectable while
+/// rejecting geometry that lies meaningfully behind that surface.
+inline constexpr float kComponentPickOcclusionTolerance = 0.001F;
 inline constexpr float kFaceAreaScoreEpsilon = kEpsilon * kEpsilon;
 inline constexpr float kGeneratedUvMapUnitsPerWorldUnit = 32.0F;
 inline constexpr float kGeneratedUvTileSizeMapUnits = 64.0F;

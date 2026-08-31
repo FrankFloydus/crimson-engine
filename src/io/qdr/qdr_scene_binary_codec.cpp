@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -86,122 +87,6 @@ qdr_camera_vector_from_fb(const fb::Vec3 *value) {
   return value ? QdrSceneViewportCameraVector{
                      value->x(), value->y(), value->z()}
                : QdrSceneViewportCameraVector{};
-}
-
-[[nodiscard]] quader::modeling::AuthoredSurfaceShading
-sdk_shading(quader_poly::SurfaceShading shading) {
-  switch (shading) {
-  case quader_poly::SurfaceShading::Flat:
-    return quader::modeling::AuthoredSurfaceShading::Flat;
-  case quader_poly::SurfaceShading::Smooth:
-    return quader::modeling::AuthoredSurfaceShading::Smooth;
-  case quader_poly::SurfaceShading::Authored:
-    return quader::modeling::AuthoredSurfaceShading::Authored;
-  }
-  return quader::modeling::AuthoredSurfaceShading::Flat;
-}
-
-[[nodiscard]] quader_poly::SurfaceShading
-native_shading(quader::modeling::AuthoredSurfaceShading shading) {
-  switch (shading) {
-  case quader::modeling::AuthoredSurfaceShading::Flat:
-    return quader_poly::SurfaceShading::Flat;
-  case quader::modeling::AuthoredSurfaceShading::Smooth:
-    return quader_poly::SurfaceShading::Smooth;
-  case quader::modeling::AuthoredSurfaceShading::Authored:
-    return quader_poly::SurfaceShading::Authored;
-  }
-  return quader_poly::SurfaceShading::Flat;
-}
-
-[[nodiscard]] quader::modeling::AuthoredTopology
-sdk_authored_topology(const quader_poly::Document &document) {
-  quader::modeling::AuthoredTopology topology;
-  topology.next_vertex_id = document.next_vertex_id;
-  topology.next_face_id = document.next_face_id;
-  topology.vertices.reserve(document.vertices.size());
-  for (const quader_poly::Vertex &vertex : document.vertices) {
-    topology.vertices.push_back({
-        .id = quader::modeling::make_id<quader::modeling::VertexTag>(vertex.id),
-        .position = {vertex.position.x, vertex.position.y, vertex.position.z},
-    });
-  }
-  topology.faces.reserve(document.faces.size());
-  for (const quader_poly::Face &face : document.faces) {
-    quader::modeling::AuthoredTopologyFace record;
-    record.id =
-        quader::modeling::make_id<quader::modeling::FaceTag>(face.id);
-    record.material_slot = face.material_slot;
-    record.shading = sdk_shading(face.normal_shading);
-    record.texture_transform = {
-        .scale = {face.texture_transform.scale.x,
-                  face.texture_transform.scale.y},
-        .shift_uv = {face.texture_transform.shift_uv.x,
-                     face.texture_transform.shift_uv.y},
-        .rotation_degrees = face.texture_transform.rotation_degrees,
-    };
-    record.vertices.reserve(face.vertices.size());
-    for (quader_poly::ElementId id : face.vertices) {
-      record.vertices.push_back(
-          quader::modeling::make_id<quader::modeling::VertexTag>(id));
-    }
-    record.uvs.reserve(face.uvs.size());
-    for (QVec2 uv : face.uvs) {
-      record.uvs.push_back({uv.x, uv.y});
-    }
-    topology.faces.push_back(std::move(record));
-  }
-  topology.hard_normal_edges.reserve(document.hard_normal_edges.size());
-  for (quader_poly::Edge edge : document.hard_normal_edges) {
-    topology.hard_normal_edges.push_back(quader::modeling::make_edge_key(
-        quader::modeling::make_id<quader::modeling::VertexTag>(edge.a),
-        quader::modeling::make_id<quader::modeling::VertexTag>(edge.b)));
-  }
-  return topology;
-}
-
-[[nodiscard]] quader_poly::Document native_authored_topology(
-    const quader::modeling::AuthoredTopology &topology) {
-  quader_poly::Document document;
-  document.next_vertex_id = topology.next_vertex_id;
-  document.next_face_id = topology.next_face_id;
-  document.vertices.reserve(topology.vertices.size());
-  for (const quader::modeling::AuthoredTopologyVertex &vertex :
-       topology.vertices) {
-    document.vertices.push_back({
-        .id = vertex.id.index,
-        .position = {vertex.position.x, vertex.position.y, vertex.position.z},
-    });
-  }
-  document.faces.reserve(topology.faces.size());
-  for (const quader::modeling::AuthoredTopologyFace &face : topology.faces) {
-    quader_poly::Face record;
-    record.id = face.id.index;
-    record.material_slot = face.material_slot;
-    record.normal_shading = native_shading(face.shading);
-    record.texture_transform = {
-        .scale = {face.texture_transform.scale.x,
-                  face.texture_transform.scale.y},
-        .shift_uv = {face.texture_transform.shift_uv.x,
-                     face.texture_transform.shift_uv.y},
-        .rotation_degrees = face.texture_transform.rotation_degrees,
-    };
-    record.vertices.reserve(face.vertices.size());
-    for (quader::modeling::VertexId id : face.vertices) {
-      record.vertices.push_back(id.index);
-    }
-    record.uvs.reserve(face.uvs.size());
-    for (quader::modeling::Vec2 uv : face.uvs) {
-      record.uvs.push_back({uv.x, uv.y});
-    }
-    document.faces.push_back(std::move(record));
-  }
-  document.hard_normal_edges.reserve(topology.hard_normal_edges.size());
-  for (quader::modeling::EdgeKey edge : topology.hard_normal_edges) {
-    document.hard_normal_edges.push_back(
-        quader_poly::make_edge(edge.a.index, edge.b.index));
-  }
-  return document;
 }
 
 [[nodiscard]] std::string string_from_fb(const flatbuffers::String *value,
@@ -547,11 +432,73 @@ scene_uuid_from_id(std::uint64_t scene_id) {
 [[nodiscard]] const fb::GeometryPayload *
 verify_geometry_payload(std::span<const std::byte> bytes);
 
+enum class EncodedGeometryWriteDisposition {
+  Preserve,
+  CanonicalizeLegacyAuthored,
+};
+
+template <typename Element>
+[[nodiscard]] bool flatbuffer_vector_is_empty(
+    const flatbuffers::Vector<Element> *values) {
+  return values == nullptr || values->size() == 0u;
+}
+
+[[nodiscard]] bool
+legacy_authored_geometry_fields_are_empty(const fb::GeometryPayload &payload) {
+  return payload.next_vertex_id() == 1u && payload.next_face_id() == 1u &&
+         flatbuffer_vector_is_empty(payload.polygon_vertices()) &&
+         flatbuffer_vector_is_empty(payload.face_ids()) &&
+         flatbuffer_vector_is_empty(payload.face_vertex_offsets()) &&
+         flatbuffer_vector_is_empty(payload.face_vertices()) &&
+         flatbuffer_vector_is_empty(payload.face_uv_offsets()) &&
+         flatbuffer_vector_is_empty(payload.face_uvs()) &&
+         flatbuffer_vector_is_empty(payload.face_material_slots()) &&
+         flatbuffer_vector_is_empty(payload.face_shading()) &&
+         flatbuffer_vector_is_empty(payload.hard_normal_edges());
+}
+
+[[nodiscard]] EncodedGeometryWriteDisposition
+encoded_geometry_write_disposition(const fb::GeometryPayload &payload,
+                                   std::uint16_t scene_schema_version) {
+  switch (payload.kind()) {
+  case fb::GeometryKind::CompiledMesh:
+    return EncodedGeometryWriteDisposition::Preserve;
+  case fb::GeometryKind::AuthoredPolygon: {
+    const flatbuffers::Vector<std::uint8_t> *authored =
+        payload.authored_payload();
+    const bool has_sdk_payload = authored != nullptr && authored->size() != 0u;
+    const bool has_legacy_fields =
+        !legacy_authored_geometry_fields_are_empty(payload);
+    if (has_sdk_payload && !has_legacy_fields) {
+      return EncodedGeometryWriteDisposition::Preserve;
+    }
+    // Repository writers used the SDK authored payload from the first binary
+    // schema onward. The CSR-only allowance is intentionally restricted to
+    // the separately supported schema 1-3 compatibility surface; schemas 4-7
+    // already required the same SDK payload as the current schema.
+    if (scene_schema_version <= 3u && (has_sdk_payload || has_legacy_fields)) {
+      return EncodedGeometryWriteDisposition::CanonicalizeLegacyAuthored;
+    }
+    if (!has_sdk_payload) {
+      throw std::runtime_error(
+          "QDR authored geometry is missing its SDK topology payload.");
+    }
+    throw std::runtime_error(
+        "QDR authored geometry contains retired CSR topology fields.");
+  }
+  default:
+    throw std::runtime_error("QDR geometry contains an unknown payload kind.");
+  }
+}
+
 [[nodiscard]] std::vector<std::byte> encode_geometry(
     const QdrProjectMeshAssetWriteSnapshot &mesh) {
   QDR_PROFILE_FUNCTION();
   if (mesh.encoded_geometry) {
-    (void)verify_geometry_payload(*mesh.encoded_geometry);
+    const fb::GeometryPayload *payload =
+        verify_geometry_payload(*mesh.encoded_geometry);
+    (void)encoded_geometry_write_disposition(*payload,
+                                             kSceneChunkSchemaVersion);
     return *mesh.encoded_geometry;
   }
   if (!mesh.geometry) {
@@ -582,8 +529,8 @@ verify_geometry_payload(std::span<const std::byte> bytes);
       mesh.authored_polygon_document) {
     kind = fb::GeometryKind::AuthoredPolygon;
     quader::modeling::Result<quader::modeling::PolygonDocument> imported =
-        quader::modeling::PolygonDocument::from_authored_topology(
-            sdk_authored_topology(*mesh.authored_polygon_document));
+        MeshProjectionService::sdk_document_from_polygon_document(
+            *mesh.authored_polygon_document);
     if (!imported.ok()) {
       throw std::runtime_error(
           "SDK authored-topology import failed: " +
@@ -907,24 +854,17 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
     } else if (entity.kind == EntityKind::Curve) {
       throw std::runtime_error("QDR curve entity is missing its curve binding.");
     }
-    flatbuffers::Offset<fb::TransformComponent> transform;
-    if (entity.transform.has_value()) {
-      const fb::Vec3 position = to_fb(entity.transform->position);
-      const fb::Vec3 rotation = to_fb(entity.transform->rotation_euler);
-      const fb::Vec3 scale = to_fb(entity.transform->scale);
-      transform = fb::CreateTransformComponent(
-          builder, &position, &rotation, &scale,
-          entity.transform->custom_pivot);
-    }
-    flatbuffers::Offset<fb::VisibilityComponent> visibility;
-    if (entity.visibility.has_value()) {
-      visibility = fb::CreateVisibilityComponent(
-          builder, entity.visibility->visible, entity.visibility->selectable);
-    }
-    flatbuffers::Offset<fb::LockComponent> lock;
-    if (entity.lock.has_value()) {
-      lock = fb::CreateLockComponent(builder, entity.lock->locked);
-    }
+    const fb::Vec3 position = to_fb(entity.transform.position);
+    const fb::Vec3 rotation = to_fb(entity.transform.rotation_euler);
+    const fb::Vec3 scale = to_fb(entity.transform.scale);
+    const flatbuffers::Offset<fb::TransformComponent> transform =
+        fb::CreateTransformComponent(builder, &position, &rotation, &scale,
+                                     entity.transform.custom_pivot);
+    const flatbuffers::Offset<fb::VisibilityComponent> visibility =
+        fb::CreateVisibilityComponent(builder, entity.visibility.visible,
+                                      entity.visibility.selectable);
+    const flatbuffers::Offset<fb::LockComponent> lock =
+        fb::CreateLockComponent(builder, entity.lock.locked);
     flatbuffers::Offset<fb::ModelingObjectComponent> modeling_object;
     if (entity.modeling_object.has_value()) {
       modeling_object = fb::CreateModelingObjectComponent(
@@ -988,19 +928,6 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
         texture_mapping, curve));
   }
 
-  std::vector<flatbuffers::Offset<fb::ObjectRecord>> objects;
-  objects.reserve(snapshot.object_records.size());
-  for (const ProjectObjectRecord &record : snapshot.object_records) {
-    objects.push_back(fb::CreateObjectRecord(
-        builder, record.id, record.scene_entity, record.mesh,
-        record.material.embedded_asset(),
-        record.modeling_object, builder.CreateString(record.authored_name),
-        record.visible, record.material_slot,
-        record.material.project_owned()
-            ? builder.CreateString(record.material.project_asset().str())
-            : flatbuffers::Offset<flatbuffers::String>{}));
-  }
-
   std::vector<ProjectAssetReference> sorted_dependencies =
       snapshot.project_asset_dependencies;
   std::sort(sorted_dependencies.begin(), sorted_dependencies.end(),
@@ -1060,7 +987,7 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
       builder, snapshot.project_id, builder.CreateString(snapshot.project_name),
       builder.CreateVector(meshes), builder.CreateVector(materials),
       builder.CreateVector(textures), builder.CreateVector(entities),
-      builder.CreateVector(objects), builder.CreateVector(dependencies),
+      {}, builder.CreateVector(dependencies),
       builder.CreateVector(layers), viewport_camera_pose,
       builder.CreateVector(curves));
   fb::FinishScenePayloadBuffer(builder, root);
@@ -1326,6 +1253,7 @@ decode_polygon_document(const fb::GeometryPayload &payload) {
 
 [[nodiscard]] MeshAsset
 decode_geometry(const fb::GeometryPayload &payload,
+                std::uint16_t scene_schema_version,
                 QdrSceneBinaryDecodeStats &stats) {
   QDR_PROFILE_FUNCTION();
   switch (payload.kind()) {
@@ -1340,46 +1268,63 @@ decode_geometry(const fb::GeometryPayload &payload,
   }
   case fb::GeometryKind::AuthoredPolygon: {
     const auto decode_started = std::chrono::steady_clock::now();
+    const EncodedGeometryWriteDisposition write_disposition =
+        encoded_geometry_write_disposition(payload, scene_schema_version);
     const flatbuffers::Vector<std::uint8_t> *authored =
         payload.authored_payload();
-    if (authored == nullptr || authored->size() == 0u) {
+    if (authored != nullptr && authored->size() != 0u) {
+      const auto *begin =
+          reinterpret_cast<const std::byte *>(authored->data());
+      quader::modeling::Result<quader::modeling::PolygonDocument> decoded =
+          quader::modeling::deserialize_qdr_authored_topology(
+              std::span<const std::byte>(begin, authored->size()));
+      if (!decoded.ok()) {
+        throw std::runtime_error(
+            "SDK authored-topology decoding failed: " +
+            decoded.error_message());
+      }
+      quader::modeling::PolygonDocument sdk_document =
+          std::move(decoded).value();
+      stats.geometry_decode_ms += std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() -
+                                      decode_started)
+                                      .count();
+      const auto compile_started = std::chrono::steady_clock::now();
+      std::optional<MeshAsset> mesh =
+          MeshProjectionService::compile_sdk_document_mesh(sdk_document);
+      stats.geometry_compile_ms += std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() -
+                                       compile_started)
+                                       .count();
+      if (!mesh.has_value()) {
+        throw std::runtime_error(
+            "SDK authored-topology projection failed.");
+      }
+      return std::move(*mesh);
+    }
+
+    if (write_disposition !=
+        EncodedGeometryWriteDisposition::CanonicalizeLegacyAuthored) {
       throw std::runtime_error(
           "QDR authored geometry is missing its SDK topology payload.");
     }
-    const auto *begin = reinterpret_cast<const std::byte *>(authored->data());
-    quader::modeling::Result<quader::modeling::PolygonDocument> decoded =
-        quader::modeling::deserialize_qdr_authored_topology(
-            std::span<const std::byte>(begin, authored->size()));
-    if (!decoded.ok()) {
-      throw std::runtime_error(
-          "SDK authored-topology decoding failed: " +
-          decoded.error_message());
-    }
-    quader::modeling::PolygonDocument sdk_document =
-        std::move(decoded).value();
-    quader::modeling::Result<quader::modeling::AuthoredTopology> exported =
-        sdk_document.authored_topology();
-    if (!exported.ok()) {
-      throw std::runtime_error(
-          "SDK authored-topology export failed: " +
-          exported.error_message());
-    }
-    quader_poly::Document document =
-        native_authored_topology(exported.value());
+
+    // Schemas 1-3 may store authored topology only in the CSR vectors. They
+    // stay reader-only for compatibility; current writers emit the SDK payload
+    // and leave these retired fields empty.
+    quader_poly::Document legacy_document = decode_polygon_document(payload);
     stats.geometry_decode_ms += std::chrono::duration<double, std::milli>(
                                     std::chrono::steady_clock::now() -
                                     decode_started)
                                     .count();
     const auto compile_started = std::chrono::steady_clock::now();
     MeshAsset mesh =
-        MeshProjectionService::compile_polygon_document_mesh(document);
+        MeshProjectionService::compile_polygon_document_mesh(legacy_document);
     stats.geometry_compile_ms += std::chrono::duration<double, std::milli>(
                                      std::chrono::steady_clock::now() -
                                      compile_started)
                                      .count();
-    mesh.has_authored_polygon_document = true;
-    mesh.authored_polygon_document =
-        std::make_shared<quader_poly::Document>(std::move(document));
+    mesh.replace_authored_polygon_document(std::move(legacy_document));
     return mesh;
   }
   default:
@@ -1417,8 +1362,15 @@ struct StoredMeshDescriptor final {
  */
 class DeferredGeometryDecoder final {
 public:
-  explicit DeferredGeometryDecoder(quader_io::QdrBinaryChunk chunk)
-      : chunk_(std::move(chunk)) {}
+  DeferredGeometryDecoder(
+      quader_io::QdrBinaryChunk chunk, std::uint16_t scene_schema_version,
+      EncodedGeometryWriteDisposition write_disposition)
+      : chunk_(std::move(chunk)), scene_schema_version_(scene_schema_version),
+        write_disposition_(write_disposition) {}
+
+  [[nodiscard]] bool preserves_encoded_geometry() const noexcept {
+    return write_disposition_ == EncodedGeometryWriteDisposition::Preserve;
+  }
 
   [[nodiscard]] MeshAsset materialize() {
     std::scoped_lock lock(mutex_);
@@ -1430,7 +1382,8 @@ public:
         QdrSceneBinaryDecodeStats deferred_stats;
         const fb::GeometryPayload *payload =
             verify_geometry_payload(chunk_.bytes());
-        decoded_.emplace(decode_geometry(*payload, deferred_stats));
+        decoded_.emplace(
+            decode_geometry(*payload, scene_schema_version_, deferred_stats));
       } catch (...) {
         failure_ = std::current_exception();
         throw;
@@ -1453,6 +1406,9 @@ public:
 
 private:
   quader_io::QdrBinaryChunk chunk_;
+  std::uint16_t scene_schema_version_ = 0u;
+  EncodedGeometryWriteDisposition write_disposition_ =
+      EncodedGeometryWriteDisposition::Preserve;
   std::mutex mutex_;
   std::optional<MeshAsset> decoded_;
   std::shared_ptr<const std::vector<std::byte>> encoded_;
@@ -1523,6 +1479,73 @@ decode_material_component(const fb::MaterialComponent &value) {
     }
   }
   return material;
+}
+
+/**
+ * Compatibility-only projection of the retired ScenePayload.objects vector.
+ * Entity components remain authoritative; legacy records may supply only a
+ * missing editor object id after their identities and references are checked.
+ */
+struct LegacyQdrObjectRecord final {
+  EditorObjectId editor_object_id = kInvalidEditorObjectId;
+  EntityId scene_entity = kInvalidEntityId;
+  AssetId mesh = kInvalidAssetId;
+  MaterialReference material;
+};
+
+[[nodiscard]] std::vector<LegacyQdrObjectRecord>
+decode_legacy_object_records(const SceneContentDocument &document,
+                             const fb::ScenePayload &payload) {
+  std::vector<LegacyQdrObjectRecord> records;
+  const auto *objects = payload.objects();
+  if (objects == nullptr) {
+    return records;
+  }
+
+  std::set<EditorObjectId> object_ids;
+  std::set<EntityId> object_entities;
+  records.reserve(objects->size());
+  for (std::size_t index = 0u; index < objects->size(); ++index) {
+    const fb::ObjectRecord *stored = objects->Get(index);
+    LegacyQdrObjectRecord record{
+        .editor_object_id = stored->editor_object_id(),
+        .scene_entity = stored->scene_entity(),
+        .mesh = stored->mesh(),
+        .material = MaterialReference(stored->material()),
+    };
+    if (const flatbuffers::String *project_id =
+            stored->project_material_id();
+        project_id != nullptr && !project_id->str().empty()) {
+      const std::optional<ProjectAssetId> parsed =
+          ProjectAssetId::parse(project_id->string_view());
+      if (!parsed.has_value() || record.material.valid()) {
+        throw std::runtime_error(
+            "QDR legacy object record contains an invalid or ambiguous "
+            "material reference.");
+      }
+      record.material = MaterialReference::project(*parsed);
+    }
+    if (record.editor_object_id == kInvalidEditorObjectId ||
+        record.scene_entity == kInvalidEntityId ||
+        !object_ids.insert(record.editor_object_id).second ||
+        !object_entities.insert(record.scene_entity).second) {
+      throw std::runtime_error(
+          "QDR scene contains duplicate or invalid legacy object records.");
+    }
+    if (record.mesh != kInvalidAssetId &&
+        !document.assets().has_mesh(record.mesh)) {
+      throw std::runtime_error(
+          "QDR legacy object record references a missing mesh asset.");
+    }
+    if (record.material.embedded() &&
+        document.assets().material(record.material.embedded_asset()) ==
+            nullptr) {
+      throw std::runtime_error(
+          "QDR legacy object record references a missing material asset.");
+    }
+    records.push_back(std::move(record));
+  }
+  return records;
 }
 
 [[nodiscard]] SceneSettingsComponent
@@ -1603,6 +1626,7 @@ void decode_assets(
     SceneContentDocument &document, const fb::ScenePayload &payload,
     const std::unordered_map<std::uint64_t,
                              const quader_io::QdrBinaryChunk *> &geometry_chunks,
+    std::uint16_t scene_schema_version,
     QdrSceneBinaryDecodeStats &stats) {
   const std::set<AssetId> referenced_meshes =
       referenced_mesh_asset_ids(payload);
@@ -1645,7 +1669,8 @@ void decode_assets(
       const fb::GeometryPayload *geometry_payload =
           verify_geometry_payload(chunk.bytes());
       decoded_geometry.emplace(
-          descriptor.geometry_id, decode_geometry(*geometry_payload, stats));
+          descriptor.geometry_id,
+          decode_geometry(*geometry_payload, scene_schema_version, stats));
       ++stats.unique_geometry_decoded_count;
       if (geometry_payload->kind() == fb::GeometryKind::AuthoredPolygon) {
         ++stats.unique_geometry_compiled_count;
@@ -1660,20 +1685,33 @@ void decode_assets(
         if (deferred == deferred_geometry.end()) {
           const quader_io::QdrBinaryChunk &chunk =
               require_geometry_chunk(geometry_chunks, geometry_id);
+          const fb::GeometryPayload *geometry_payload =
+              verify_geometry_payload(chunk.bytes());
+          const EncodedGeometryWriteDisposition write_disposition =
+              encoded_geometry_write_disposition(*geometry_payload,
+                                                 scene_schema_version);
           deferred = deferred_geometry
                          .emplace(
                              geometry_id,
-                             std::make_shared<DeferredGeometryDecoder>(chunk))
+                             std::make_shared<DeferredGeometryDecoder>(
+                                 chunk, scene_schema_version,
+                                 write_disposition))
                          .first;
         }
         const std::shared_ptr<DeferredGeometryDecoder> loader =
             deferred->second;
+        std::function<std::shared_ptr<const std::vector<std::byte>>()>
+            encoded_geometry_loader;
+        if (loader->preserves_encoded_geometry()) {
+          encoded_geometry_loader =
+              [loader]() { return loader->encoded_geometry(); };
+        }
         if (document.assets().add_deferred_mesh(
                 descriptor.id, descriptor.name,
                 descriptor.has_stable_cpu_topology,
                 descriptor.has_authored_polygon_document,
                 [loader]() { return loader->materialize(); },
-                [loader]() { return loader->encoded_geometry(); }) ==
+                std::move(encoded_geometry_loader)) ==
             kInvalidAssetId) {
           throw std::runtime_error(
               "QDR scene could not install a deferred mesh asset.");
@@ -1879,165 +1917,217 @@ decode_viewport_camera_pose(const fb::ScenePayload &payload,
   return pose;
 }
 
+[[nodiscard]] SceneEntityState
+decode_entity_state(const SceneContentDocument &document,
+                    const fb::Entity &stored,
+                    std::uint16_t schema_version) {
+  const bool is_curve = stored.kind() == fb::EntityKind::Curve;
+  if (is_curve || stored.curve() != nullptr) {
+    if (schema_version < 8u || !is_curve || stored.curve() == nullptr ||
+        stored.mesh() != nullptr || stored.light() != nullptr ||
+        stored.instance_definition() != nullptr ||
+        stored.instance_occurrence() != nullptr || stored.scene_root() ||
+        stored.scene_settings() != nullptr ||
+        stored.texture_mapping() != nullptr) {
+      throw std::runtime_error("QDR scene contains an invalid curve entity.");
+    }
+  }
+
+  SceneEntityState state;
+  state.id = stored.id();
+  state.uuid = string_from_fb(stored.uuid());
+  state.editor_object_id = stored.editor_object_id();
+  state.name = string_from_fb(stored.name(), "Entity");
+  state.kind = from_fb(stored.kind());
+  state.parent = stored.parent();
+  if (const fb::TransformComponent *value = stored.transform()) {
+    state.transform = {
+        .position = from_fb(value->position()),
+        .rotation_euler = from_fb(value->rotation_euler()),
+        .scale = from_fb(value->scale(), {1.0f, 1.0f, 1.0f}),
+        .custom_pivot = value->custom_pivot(),
+    };
+  }
+  if (const fb::VisibilityComponent *value = stored.visibility()) {
+    state.visibility = {
+        .visible = value->visible(),
+        .selectable = value->selectable(),
+    };
+  }
+  if (const fb::LockComponent *value = stored.lock()) {
+    state.lock = {.locked = value->locked()};
+  }
+  if (const fb::ModelingObjectComponent *value = stored.modeling_object()) {
+    state.modeling_object = ModelingObjectComponent{
+        .object_id = value->object_id(),
+        .material_slot = value->material_slot(),
+        .sdk_owned = value->sdk_owned(),
+        .local_frame_version =
+            schema_version >= 6u
+                ? value->local_frame_version()
+                : kLegacyUnknownModelingObjectLocalFrameVersion,
+    };
+  }
+  if (const fb::MeshComponent *value = stored.mesh()) {
+    state.mesh = MeshComponent{
+        .mesh = value->mesh(),
+        .editor_only = value->editor_only(),
+        .cast_shadows = value->cast_shadows(),
+        .double_sided = value->double_sided(),
+        .generate_collisions = value->generate_collisions(),
+        .collision_type = from_fb(value->collision_type()),
+        .display_collision = value->display_collision(),
+        .body_type = mesh_body_type_from_fb(value->body_type()),
+    };
+  }
+  if (const fb::MaterialComponent *value = stored.material()) {
+    MaterialComponent material = decode_material_component(*value);
+    if (material.material.valid()) {
+      state.material = std::move(material);
+    }
+  }
+  if (const fb::CurveComponent *value = stored.curve()) {
+    if (!document.assets().has_curve(value->curve())) {
+      throw std::runtime_error("QDR entity references a missing curve asset.");
+    }
+    state.curve = CurveComponent{.curve = value->curve()};
+  }
+  if (const fb::LightComponent *value = stored.light()) {
+    state.light = LightComponent{
+        .type = light_type_from_fb(value->type()),
+        .color = from_fb(value->color(), {1.0f, 1.0f, 1.0f}),
+        .intensity = value->intensity(),
+        .range = value->range(),
+        .casts_shadows = value->casts_shadows(),
+    };
+  }
+  if (stored.scene_root() || stored.scene_settings() != nullptr) {
+    if (stored.scene_settings() == nullptr) {
+      throw std::runtime_error(
+          "QDR scene contains invalid scene-root settings.");
+    }
+    state.scene_root = stored.scene_root();
+    state.scene_settings = decode_scene_settings(*stored.scene_settings());
+  }
+  if (stored.instance_definition() != nullptr) {
+    state.instance_definition = InstanceDefinitionComponent{};
+  }
+  if (const fb::InstanceOccurrenceComponent *value =
+          stored.instance_occurrence()) {
+    state.instance_occurrence =
+        InstanceOccurrenceComponent{.definition = value->definition()};
+  }
+  if (schema_version >= 7u && stored.texture_mapping() != nullptr) {
+    const auto *values =
+        stored.texture_mapping()->sampling_from_local();
+    TextureMappingComponent mapping;
+    if (values == nullptr ||
+        values->size() != mapping.sampling_from_local.values.size()) {
+      throw std::runtime_error(
+          "QDR entity texture mapping must contain one affine matrix.");
+    }
+    std::copy(values->begin(), values->end(),
+              mapping.sampling_from_local.values.begin());
+    state.texture_mapping = mapping;
+  }
+  if (schema_version >= 4u) {
+    state.layer_id = stored.layer_id();
+  }
+  return state;
+}
+
 void decode_entities(SceneContentDocument &document,
                      const fb::ScenePayload &payload,
                      std::uint16_t schema_version) {
+  const std::vector<LegacyQdrObjectRecord> legacy_object_records =
+      decode_legacy_object_records(document, payload);
+  std::unordered_map<EntityId, const LegacyQdrObjectRecord *>
+      legacy_record_by_entity;
+  legacy_record_by_entity.reserve(legacy_object_records.size());
+  for (const LegacyQdrObjectRecord &record : legacy_object_records) {
+    legacy_record_by_entity.emplace(record.scene_entity, &record);
+  }
+
   std::vector<SceneParentAssignment> parent_links;
   std::vector<EntityId> instance_definitions;
   std::vector<std::pair<EntityId, EntityId>> instance_occurrences;
   std::vector<SceneLayerAssignment> layer_assignments;
   std::vector<SceneTextureMappingAssignment> texture_mappings;
-  std::set<EntityId> explicit_object_id_entities;
   if (const auto *entities = payload.entities()) {
     parent_links.reserve(entities->size());
     for (std::size_t index = 0u; index < entities->size(); ++index) {
       const fb::Entity *stored = entities->Get(index);
-      const bool is_curve = stored->kind() == fb::EntityKind::Curve;
-      if (is_curve || stored->curve() != nullptr) {
-        if (schema_version < 8u || !is_curve || stored->curve() == nullptr ||
-            stored->mesh() != nullptr || stored->light() != nullptr ||
-            stored->instance_definition() != nullptr ||
-            stored->instance_occurrence() != nullptr || stored->scene_root() ||
-            stored->scene_settings() != nullptr ||
-            stored->texture_mapping() != nullptr) {
-          throw std::runtime_error("QDR scene contains an invalid curve entity.");
+      SceneEntityState state =
+          decode_entity_state(document, *stored, schema_version);
+      const auto legacy_record = legacy_record_by_entity.find(state.id);
+      if (legacy_record != legacy_record_by_entity.end()) {
+        if (state.editor_object_id != kInvalidEditorObjectId &&
+            state.editor_object_id !=
+                legacy_record->second->editor_object_id) {
+          throw std::runtime_error(
+              "QDR legacy object record id conflicts with its canonical "
+              "scene entity.");
+        }
+        if (state.editor_object_id == kInvalidEditorObjectId) {
+          state.editor_object_id =
+              legacy_record->second->editor_object_id;
         }
       }
-      const bool has_editor_object_id =
-          stored->editor_object_id() != kInvalidEditorObjectId;
+
       const EntityId entity = document.scene().create_entity_with_id(
-          stored->id(), string_from_fb(stored->name(), "Entity"),
-          from_fb(stored->kind()), stored->editor_object_id());
+          state.id, state.name, state.kind, state.editor_object_id);
       if (entity == kInvalidEntityId) {
         throw std::runtime_error(
             "QDR scene contains a duplicate or invalid entity id.");
       }
-      const std::string uuid = string_from_fb(stored->uuid());
-      if (!uuid.empty() && !document.scene().set_entity_uuid(entity, uuid)) {
+      if (!state.uuid.empty() &&
+          !document.scene().set_entity_uuid(entity, state.uuid)) {
         throw std::runtime_error(
             "QDR scene contains a duplicate or invalid entity UUID.");
       }
-      if (has_editor_object_id) {
-        explicit_object_id_entities.insert(entity);
+
+      if (state.texture_mapping.has_value()) {
+        texture_mappings.push_back(
+            {.entity = entity, .mapping = state.texture_mapping});
       }
-      if (schema_version >= 7u && stored->texture_mapping() != nullptr) {
-        const auto *values =
-            stored->texture_mapping()->sampling_from_local();
-        TextureMappingComponent mapping;
-        if (values == nullptr || values->size() !=
-                                     mapping.sampling_from_local.values.size()) {
-          throw std::runtime_error(
-              "QDR entity texture mapping must contain one affine matrix.");
-        }
-        std::copy(values->begin(), values->end(),
-                  mapping.sampling_from_local.values.begin());
-        texture_mappings.push_back({.entity = entity, .mapping = mapping});
+      if (state.layer_id != kInvalidSceneLayerId) {
+        layer_assignments.push_back(
+            {.entity = entity, .layer_id = state.layer_id});
       }
-      if (schema_version >= 4u &&
-          stored->layer_id() != kInvalidSceneLayerId) {
-        layer_assignments.push_back(SceneLayerAssignment{
-            .entity = entity,
-            .layer_id = stored->layer_id(),
-        });
+      if (!apply_scene_entity_state(
+              document.scene(), entity, state,
+              SceneEntityStateApplyOptions{
+                  .include_selection = false,
+                  .include_instance_roles = false,
+                  .include_texture_mapping = false,
+                  .include_layer_membership = false,
+              })) {
+        throw std::runtime_error(
+            "QDR scene entity component state is invalid.");
       }
-      if (const fb::TransformComponent *value = stored->transform()) {
-        document.scene().set_transform(
-            entity, TransformComponent{
-                        .position = from_fb(value->position()),
-                        .rotation_euler = from_fb(value->rotation_euler()),
-                        .scale = from_fb(value->scale(), {1.0f, 1.0f, 1.0f}),
-                        .custom_pivot = value->custom_pivot(),
-                    });
-      }
-      if (const fb::VisibilityComponent *value = stored->visibility()) {
-        document.scene().set_visible(entity, value->visible());
-        document.scene().set_selectable(entity, value->selectable());
-      }
-      if (const fb::LockComponent *value = stored->lock()) {
-        document.scene().set_locked(entity, value->locked());
-      }
-      if (const fb::ModelingObjectComponent *value = stored->modeling_object()) {
-        document.scene().set_modeling_object(
-            entity, {.object_id = value->object_id(),
-                     .material_slot = value->material_slot(),
-                     .sdk_owned = value->sdk_owned(),
-                     .local_frame_version =
-                         schema_version >= 6u
-                             ? value->local_frame_version()
-                             : kLegacyUnknownModelingObjectLocalFrameVersion});
-      }
-      if (const fb::MeshComponent *value = stored->mesh()) {
-        document.scene().set_mesh(
-            entity,
-            MeshComponent{
-                .mesh = value->mesh(),
-                .editor_only = value->editor_only(),
-                .cast_shadows = value->cast_shadows(),
-                .double_sided = value->double_sided(),
-                .generate_collisions = value->generate_collisions(),
-                .collision_type = from_fb(value->collision_type()),
-                .display_collision = value->display_collision(),
-                .body_type = mesh_body_type_from_fb(value->body_type()),
-            });
-      }
-      if (const fb::MaterialComponent *value = stored->material()) {
-        MaterialComponent material = decode_material_component(*value);
-        if (material.material.valid()) {
-          document.scene().set_material(entity, std::move(material));
-        }
-      }
-      if (const fb::CurveComponent *value = stored->curve()) {
-        if (!document.assets().has_curve(value->curve()) ||
-            !document.scene().set_curve(entity, CurveComponent{.curve = value->curve()})) {
-          throw std::runtime_error("QDR entity references a missing curve asset.");
-        }
-      }
-      if (const fb::LightComponent *value = stored->light()) {
-        document.scene().set_light(
-            entity,
-            LightComponent{
-                .type = light_type_from_fb(value->type()),
-                .color = from_fb(value->color(), {1.0f, 1.0f, 1.0f}),
-                .intensity = value->intensity(),
-                .range = value->range(),
-                .casts_shadows = value->casts_shadows(),
-            });
-      }
-      if (stored->scene_root() || stored->scene_settings() != nullptr) {
-        if (stored->scene_settings() == nullptr ||
-            !document.scene().set_scene_settings(
-                entity, decode_scene_settings(*stored->scene_settings()))) {
-          throw std::runtime_error(
-              "QDR scene contains invalid scene-root settings.");
-        }
-      }
-      const bool has_instance_definition =
-          stored->instance_definition() != nullptr;
-      const fb::InstanceOccurrenceComponent *stored_occurrence =
-          stored->instance_occurrence();
-      if (has_instance_definition && stored_occurrence != nullptr) {
+
+      if (state.instance_definition.has_value() &&
+          state.instance_occurrence.has_value()) {
         throw std::runtime_error(
             "QDR entity cannot be both an instance definition and an "
             "occurrence.");
       }
-      if (has_instance_definition) {
+      if (state.instance_definition.has_value()) {
         instance_definitions.push_back(entity);
       }
-      if (stored_occurrence != nullptr) {
-        if (from_fb(stored->kind()) != EntityKind::Instance) {
+      if (state.instance_occurrence.has_value()) {
+        if (state.kind != EntityKind::Instance) {
           throw std::runtime_error(
               "QDR instance occurrence has a non-instance entity kind.");
         }
-        instance_occurrences.emplace_back(entity,
-                                          stored_occurrence->definition());
-      } else if (from_fb(stored->kind()) == EntityKind::Instance) {
+        instance_occurrences.emplace_back(
+            entity, state.instance_occurrence->definition);
+      } else if (state.kind == EntityKind::Instance) {
         throw std::runtime_error(
             "QDR instance entity is missing its occurrence component.");
       }
-      parent_links.push_back(SceneParentAssignment{
-          .child = entity,
-          .parent = stored->parent(),
-      });
+      parent_links.push_back(
+          SceneParentAssignment{.child = entity, .parent = state.parent});
     }
   }
   if (!document.scene().replace_hierarchy(parent_links)) {
@@ -2094,59 +2184,14 @@ void decode_entities(SceneContentDocument &document,
     }
   }
 
-  std::set<EditorObjectId> object_ids;
-  std::set<EntityId> object_entities;
-  std::vector<ProjectObjectRecord> object_records;
-  if (const auto *objects = payload.objects()) {
-    object_records.reserve(objects->size());
-    for (std::size_t index = 0u; index < objects->size(); ++index) {
-      const fb::ObjectRecord *stored = objects->Get(index);
-      ProjectObjectRecord record{
-          .id = stored->editor_object_id(),
-          .scene_entity = stored->scene_entity(),
-          .mesh = stored->mesh(),
-          .material = MaterialReference(stored->material()),
-          .modeling_object = stored->modeling_object(),
-          .authored_name = string_from_fb(stored->authored_name()),
-          .visible = stored->visible(),
-          .material_slot = stored->material_slot(),
-      };
-      if (const flatbuffers::String *project_id =
-              stored->project_material_id();
-          project_id != nullptr && !project_id->str().empty()) {
-        const std::optional<ProjectAssetId> parsed =
-            ProjectAssetId::parse(project_id->string_view());
-        if (!parsed.has_value() || record.material.valid()) {
-          throw std::runtime_error(
-              "QDR object record contains an invalid or ambiguous material "
-              "reference.");
-        }
-        record.material = MaterialReference::project(*parsed);
-      }
-      const SceneContentDocumentAssetReferenceReport reference_report =
-          document.validate_asset_references(record);
-      if (!reference_report.ok()) {
-        throw std::runtime_error("QDR object record has invalid references: " +
-                                 reference_report.issues.front().message);
-      }
-      if (record.id == kInvalidEditorObjectId ||
-          !object_ids.insert(record.id).second ||
-          !object_entities.insert(record.scene_entity).second) {
-        throw std::runtime_error(
-            "QDR scene contains duplicate or invalid object records.");
-      }
-      if (explicit_object_id_entities.contains(record.scene_entity) &&
-          document.scene().editor_object_id(record.scene_entity) != record.id) {
-        throw std::runtime_error(
-            "QDR object record id does not match its scene entity.");
-      }
-      object_records.push_back(std::move(record));
+  for (const LegacyQdrObjectRecord &record : legacy_object_records) {
+    if (!document.scene().exists(record.scene_entity) ||
+        document.scene().editor_object_id(record.scene_entity) !=
+            record.editor_object_id) {
+      throw std::runtime_error(
+          "QDR legacy object record points at a missing or conflicting scene "
+          "entity.");
     }
-  }
-  const std::size_t object_count = object_records.size();
-  if (document.upsert_object_records(std::move(object_records)).size() !=
-      object_count) {
-    throw std::runtime_error("QDR scene contains conflicting object records.");
   }
 }
 
@@ -2251,7 +2296,8 @@ QdrSceneBinaryDecodeResult decode_qdr_scene_binary_with_stats(
   std::optional<QdrSceneViewportCameraPose> viewport_camera_pose =
       decode_viewport_camera_pose(*payload, metadata.schema_version);
   decode_scene_layers(document, *payload, metadata.schema_version);
-  decode_assets(document, *payload, geometry_chunks, stats);
+  decode_assets(document, *payload, geometry_chunks, metadata.schema_version,
+                stats);
   decode_curve_assets(document, *payload, metadata.schema_version);
   decode_entities(document, *payload, metadata.schema_version);
 

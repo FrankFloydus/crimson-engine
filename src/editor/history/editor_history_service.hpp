@@ -38,6 +38,7 @@ public:
     CommandResult record_executed(std::unique_ptr<IUndoableCommand> command);
     CommandResult
     record_executed_before_existing(std::unique_ptr<IUndoableCommand> command);
+    void set_label(std::string label);
     CommandResult commit();
     CommandResult cancel();
     CommandResult discard();

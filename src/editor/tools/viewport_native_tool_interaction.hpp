@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "core/command_result.hpp"
 #include "core/types.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/modeling/modeling_types.hpp"
@@ -13,10 +14,10 @@
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "viewport/curve_tool_preview.hpp"
 #include "viewport/viewport_input_types.hpp"
+#include "viewport/viewport_pointer_gesture.hpp"
 
 #include <array>
 #include <cstdint>
-#include <functional>
 #include <optional>
 
 namespace quader {
@@ -25,12 +26,27 @@ class AssetRegistry;
 class CurveToolService;
 class LinearArrayToolService;
 class PivotToolService;
-class QuaderEditorApi;
 class RadialArrayToolService;
 class SceneDocument;
 class ViewportCameraController;
 class ViewportPointPlacementService;
 struct ViewportRay;
+
+/** Commits the coordinator-owned native tool without depending on public API. */
+class ViewportNativeToolLifecyclePort {
+public:
+  virtual ~ViewportNativeToolLifecyclePort() = default;
+  [[nodiscard]] virtual CommandResult commit_active() = 0;
+};
+
+/** Resolves Curve controls through the viewport spatial-query owner. */
+class ViewportCurveControlPickingPort {
+public:
+  virtual ~ViewportCurveControlPickingPort() = default;
+  [[nodiscard]] virtual std::optional<CurveControlTarget>
+  pick(const CurveToolPreviewState &preview, QVec2 mouse_local,
+       bool anchors_only) const = 0;
+};
 
 /**
  * Carries one sampled frame into the editor-native viewport tool owner.
@@ -45,10 +61,11 @@ struct ViewportNativeToolInteractionFrame final {
   bool left_down = false;
   bool left_released = false;
   QVec2 left_click_local = {};
+  float pointer_drag_threshold_pixels = 4.0f;
   bool scene_snap_enabled = false;
   bool grid_snap_enabled = false;
-  std::function<std::optional<double>(const ViewportRay &)>
-      scene_mesh_surface_distance;
+  const ViewportCurveControlPickingPort *curve_control_picker = nullptr;
+  std::optional<QVec3> selection_transform_pivot;
   double *linear_array_wheel_remainder = nullptr;
   double *radial_array_wheel_remainder = nullptr;
 };
@@ -57,6 +74,10 @@ struct ViewportNativeToolInteractionFrame final {
  * Reports consumed input and retained-presentation invalidation decisions.
  */
 struct ViewportNativeToolInteractionResult final {
+  /// Common lifecycle outcome consumed by the interaction controller. The
+  /// tool-specific bits below remain diagnostic compatibility facts.
+  bool consumed = false;
+  bool blocks_transform_gizmo = false;
   bool radial_array_consumed = false;
   bool linear_array_consumed = false;
   bool pivot_consumed = false;
@@ -74,7 +95,8 @@ struct ViewportNativeToolInteractionResult final {
 class ViewportNativeToolInteraction final {
 public:
   [[nodiscard]] ViewportNativeToolInteractionResult handle_frame(
-      QuaderEditorApi &editor, SceneDocument &document, AssetRegistry &assets,
+      ViewportNativeToolLifecyclePort &lifecycle, SceneDocument &document,
+      AssetRegistry &assets,
       PivotToolService *pivot, LinearArrayToolService *linear_array,
       RadialArrayToolService *radial_array,
       ViewportPointPlacementService *point_placement,
@@ -93,8 +115,8 @@ public:
       const ViewportCameraController &camera);
   [[nodiscard]] static ModelingBoxToolEvent
   modeling_box_event(const ViewportCameraController &camera,
-                     const ViewportInputFrame &input, float grid_size,
-                     bool snap_enabled);
+                     QVec2 viewport_size, QVec2 mouse_local,
+                     float grid_size, bool snap_enabled);
   [[nodiscard]] static QVec3 resolved_pivot_drag_position(
       const ViewportCameraController &camera, QVec2 mouse_local,
       QVec3 current_position, const SceneDocument &document,
@@ -109,32 +131,40 @@ public:
   [[nodiscard]] static QVec3 linear_array_drag_point(
       const ViewportCameraController &camera, QVec2 mouse_local,
       const LinearArrayHandleState &handle);
-  [[nodiscard]] static std::optional<CurveControlTarget> curve_control_hit(
-      const ViewportCameraController &camera,
-      const CurveToolPreviewState &preview, QVec2 mouse_local,
-      bool anchors_only,
-      const std::function<std::optional<double>(const ViewportRay &)>
-          &mesh_surface_distance);
-
 private:
+  /** Retains press-time state for one deferred curve-point construction gesture. */
+  struct CurvePointConstructionPress final {
+    ViewportPointerGesture gesture;
+    QVec2 pointer_offset = {};
+    ViewportPointPlacementPlane plane;
+  };
+
+  /** Retains press-time state for one linear-array handle gesture. */
+  struct LinearArrayHandlePress final {
+    ViewportPointerGesture gesture;
+    QVec3 endpoint_before = {};
+  };
+
+  /** Retains press-time state for one pivot-handle gesture. */
+  struct PivotHandlePress final {
+    ViewportPointerGesture gesture;
+    QVec3 position_before = {};
+    bool persistent = false;
+  };
+
   /// Pins a deferred conversion click to the anchor and document it pressed.
   struct CurveConversionPress {
-    QuaderMouseButton button = QuaderMouseButton::None;
+    ViewportPointerGesture gesture;
     std::optional<CurveControlTarget> target;
     modeling::CurveContentIdentity content;
     EntityId entity = kInvalidEntityId;
-    std::uint64_t press_sequence = 0u;
   };
 
-  bool pivot_handle_dragging_ = false;
-  bool linear_array_handle_dragging_ = false;
-  bool curve_point_construction_dragging_ = false;
-  bool curve_point_construction_moved_ = false;
-  QVec2 curve_point_construction_mouse_origin_;
-  QVec2 curve_point_construction_pointer_offset_;
-  std::optional<ViewportPointPlacementPlane>
-      curve_point_construction_plane_;
+  std::optional<PivotHandlePress> pivot_handle_press_;
+  std::optional<LinearArrayHandlePress> linear_array_handle_press_;
+  std::optional<CurvePointConstructionPress> curve_point_construction_press_;
   std::optional<CurveConversionPress> curve_conversion_press_;
+  ViewportPointerReleaseSuppression left_release_suppression_;
 };
 
 } // namespace quader

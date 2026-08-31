@@ -11,11 +11,14 @@
 #include "editor/input/viewport_keybinding_resolver.hpp"
 #include "editor/interactions/selection_edit.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/placement/scene_surface_query.hpp"
+#include "editor/selection/checked_selection_publication_command.hpp"
+#include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/viewport/viewport_curve_picking.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
-#include "editor/viewport/viewport_native_tool_interaction.hpp"
+#include "editor/tools/viewport_native_tool_interaction.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_transform.hpp"
 #include "viewport/viewport_camera_controller.hpp"
@@ -27,16 +30,76 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <deque>
 #include <functional>
 #include <initializer_list>
 #include <limits>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
 namespace quader {
 namespace {
+
+using SceneScalarFingerprint = std::array<std::uint64_t, 12>;
+
+[[nodiscard]] SceneScalarFingerprint
+scene_scalar_fingerprint(const SceneDocument &scene) {
+  return {
+      scene.revision(),
+      scene.content_revision(),
+      scene.selection_revision(),
+      scene.hierarchy_presentation_revision(),
+      scene.visibility_revision(),
+      scene.transform_revision(),
+      scene.texture_mapping_revision(),
+      scene.mesh_binding_revision(),
+      scene.curve_binding_revision(),
+      scene.material_binding_revision(),
+      scene.render_component_revision(),
+      scene.layer_revision(),
+  };
+}
+
+class IncorrectSelectionRollbackCommand final : public IUndoableCommand {
+public:
+  IncorrectSelectionRollbackCommand(SceneDocument &scene, EntityId after,
+                                    EntityId rollback,
+                                    bool rollback_reports_changed)
+      : scene_(scene), after_(after), rollback_(rollback),
+        rollback_reports_changed_(rollback_reports_changed) {}
+
+  [[nodiscard]] const std::string &label() const override { return label_; }
+
+  CommandResult redo() override {
+    (void)scene_.replace_selection({&after_, 1u}, after_);
+    return command_changed_result();
+  }
+
+  CommandResult undo() override {
+    (void)scene_.replace_selection({&rollback_, 1u}, rollback_);
+    return rollback_reports_changed_ ? command_changed_result()
+                                     : command_unchanged_result();
+  }
+
+private:
+  SceneDocument &scene_;
+  EntityId after_ = kInvalidEntityId;
+  EntityId rollback_ = kInvalidEntityId;
+  bool rollback_reports_changed_ = true;
+  std::string label_ = "Incorrect Selection Rollback";
+};
+
+/** Supplies inert lifecycle completion to direct native-pointer tests. */
+class InertNativeToolLifecycle final
+    : public ViewportNativeToolLifecyclePort {
+public:
+  [[nodiscard]] CommandResult commit_active() override {
+    return command_unchanged_result();
+  }
+};
 
 /// Provides the real public editor and its pointer-driven Curve service.
 struct CurveToolHarness {
@@ -45,6 +108,7 @@ struct CurveToolHarness {
       QuaderApiSessionInternalAccess::from_scene_session(session)};
   ViewportCameraController camera;
   ViewportNativeToolInteraction interaction;
+  InertNativeToolLifecycle lifecycle;
   ViewportInteractionController controller;
   ViewportInputRouter router;
   ViewportSettings settings;
@@ -55,11 +119,11 @@ struct CurveToolHarness {
   double radial_wheel_remainder = 0.0;
   bool scene_snap_enabled = false;
   bool grid_snap_enabled = false;
-  std::function<ViewportMeshSnapQueryResult(const ViewportRay &, double)>
+  std::function<ViewportMeshSnapQueryResult(
+      const ViewportRay &, double, std::optional<double>)>
       mesh_snap_query;
-  std::function<std::optional<double>(const ViewportRay &)>
-      mesh_surface_distance;
   std::vector<ViewportSceneCurvePickCandidate> curve_snap_candidates;
+  std::deque<SceneSurfaceQuerySnapshot> scene_surface_snapshots;
 
   CurveToolHarness() {
     camera.set_viewport_size(800.0f, 600.0f);
@@ -86,8 +150,18 @@ struct CurveToolHarness {
       input.pointer_released_edges.push_back(
           {.button = QuaderMouseButton::Left, .local = input.mouse_local});
     }
+    const SceneSurfaceQuerySnapshot *scene_surfaces = nullptr;
+    if (session.curve().controls_editable() &&
+        (pressed || down || released ||
+         !input.curve_conversion_edges.empty())) {
+      scene_surface_snapshots.push_back(
+          session.scene_surface_query().snapshot());
+      scene_surfaces = &scene_surface_snapshots.back();
+    }
+    const ViewportCurveControlPickingAdapter curve_control_picker(
+        camera, scene_surfaces);
     const auto result = interaction.handle_frame(
-        editor, session.scene(), session.assets(), nullptr, nullptr, nullptr,
+        lifecycle, session.scene(), session.assets(), nullptr, nullptr, nullptr,
         &session.point_placement(), camera,
         {.input = input,
          .input_result = input_result,
@@ -99,7 +173,7 @@ struct CurveToolHarness {
          .left_click_local = input.mouse_local,
          .scene_snap_enabled = scene_snap_enabled,
          .grid_snap_enabled = grid_snap_enabled,
-         .scene_mesh_surface_distance = mesh_surface_distance},
+         .curve_control_picker = &curve_control_picker},
         &session.curve());
     input.pointer_pressed_edges.clear();
     input.pointer_released_edges.clear();
@@ -108,21 +182,37 @@ struct CurveToolHarness {
 
   ViewportNativeToolInteractionResult dispatch(
       bool transform_gizmo_consumed = false) {
+    const SceneSurfaceQuerySnapshot *scene_surfaces = nullptr;
+    if (session.curve().controls_editable() &&
+        !input.curve_conversion_edges.empty()) {
+      scene_surface_snapshots.push_back(
+          session.scene_surface_query().snapshot());
+      scene_surfaces = &scene_surface_snapshots.back();
+    }
+    const ViewportCurveControlPickingAdapter curve_control_picker(
+        camera, scene_surfaces);
     return interaction.handle_frame(
-        editor, session.scene(), session.assets(), nullptr, nullptr, nullptr,
+        lifecycle, session.scene(), session.assets(), nullptr, nullptr, nullptr,
         &session.point_placement(), camera,
         {.input = input,
          .input_result = input_result,
          .transform_gizmo_consumed = transform_gizmo_consumed,
          .scene_snap_enabled = scene_snap_enabled,
          .grid_snap_enabled = grid_snap_enabled,
-         .scene_mesh_surface_distance = mesh_surface_distance},
+         .curve_control_picker = &curve_control_picker},
         &session.curve());
   }
 
   [[nodiscard]] ViewportInteractionFrame gizmo_frame(
       bool pressed = false, bool down = false, bool released = false,
       QVec2 click_local = {}) {
+    const SceneSurfaceQuerySnapshot *scene_surfaces = nullptr;
+    if (session.curve().controls_editable() &&
+        (pressed || down || released)) {
+      scene_surface_snapshots.push_back(
+          session.scene_surface_query().snapshot());
+      scene_surfaces = &scene_surface_snapshots.back();
+    }
     return {
         .input_router = router,
         .camera = camera,
@@ -135,7 +225,7 @@ struct CurveToolHarness {
          .left_released = released,
          .active_tool_allows_selection_fallback = false,
          .scene_curve_pick_candidates = curve_snap_candidates,
-         .scene_mesh_surface_distance = mesh_surface_distance,
+         .scene_surfaces = scene_surfaces,
          .scene_mesh_snap_query = mesh_snap_query,
          .selection_state =
             {
@@ -197,7 +287,7 @@ struct CurveToolHarness {
                              QVec2 press_local) {
     controller.handle_after_active_tool(
         editor, gizmo_frame(pressed, down, released, press_local), {}, {},
-        nullptr, &session.curve());
+        session.native_tools(), nullptr);
   }
 
   ViewportNativeToolInteractionResult curve_native_selection_frame(
@@ -240,9 +330,10 @@ void passive_curve_selection_frame(CurveToolHarness &harness, bool pressed,
   frame.active_tool_allows_selection_fallback = true;
   const ViewportBeforeToolInteractionResult before =
       harness.controller.handle_before_active_tool(harness.editor, frame,
-                                                   &harness.session.curve());
+                                                   harness.session.native_tools());
   harness.controller.handle_after_active_tool(
-      harness.editor, frame, {}, before, nullptr, &harness.session.curve());
+      harness.editor, frame, {}, before, harness.session.native_tools(),
+      nullptr);
 }
 
 void click_passive_curve_selection(CurveToolHarness &harness, QVec2 local,
@@ -271,6 +362,28 @@ QVec2 curve_control_screen(const CurveToolHarness &harness,
                                    kind)));
   EXPECT_TRUE(projected.visible);
   return projected.position;
+}
+
+QuaderModelingObjectRef create_curve_pick_occluder(
+    CurveToolHarness &harness, QVec2 local_mouse,
+    double curve_ray_distance) {
+  const ViewportRay ray =
+      harness.camera.ray_from_viewport_point(local_mouse);
+  const QVec3 center =
+      ray.origin + ray.direction * static_cast<float>(curve_ray_distance * 0.5);
+  const float half_extent = std::clamp(
+      static_cast<float>(curve_ray_distance * 0.05), 0.1f, 0.5f);
+  const auto created = harness.editor.modeling().create_box({
+      .min = center - QVec3{half_extent, half_extent, half_extent},
+      .max = center + QVec3{half_extent, half_extent, half_extent},
+  });
+  EXPECT_TRUE(created.ok()) << created.error_message();
+  if (created.ok()) {
+    EXPECT_TRUE(harness.session.scene().set_selectable(created.value().entity,
+                                                       false));
+    harness.session.scene_surface_query().invalidate();
+  }
+  return created.value();
 }
 
 void expect_control_selection(
@@ -304,6 +417,110 @@ bool replace_curve_control_selection(
       hits, quader_editor_core::SelectionEditOperation::Replace, nullptr,
       target);
 }
+
+class FailingSubSelectionProvider final : public EditorSubSelectionProvider {
+public:
+  explicit FailingSubSelectionProvider(EntityId entity, int modeling_object_id)
+      : state_{.kind = EditorSubSelectionKind::CurveControl,
+               .entity = entity,
+               .modeling_object_id = modeling_object_id,
+               .selected = {{.index = 3,
+                             .generation = 7,
+                             .role = EditorSubSelectionElementRole::Primary}},
+               .active = EditorSubSelectionTarget{
+                   .index = 3,
+                   .generation = 7,
+                   .role = EditorSubSelectionElementRole::Primary,
+               },
+               .hover = EditorSubSelectionTarget{
+                   .index = 3,
+                   .generation = 7,
+                   .role = EditorSubSelectionElementRole::SecondaryB,
+               },
+               .revision = 41,
+               .owner_revision = 17,
+               .presentation_revision = 23} {}
+
+  EditorSubSelectionSnapshot sub_selection_snapshot() const override {
+    return {.kind = state_.kind,
+            .participates_in_bulk_selection = true,
+            .entity = state_.entity,
+            .modeling_object_id = state_.modeling_object_id,
+            .selected_count =
+                static_cast<std::uint32_t>(state_.selected.size()),
+            .active = state_.active,
+            .revision = state_.revision};
+  }
+
+  EditorSubSelectionBaseline
+  capture_sub_selection_baseline() const override {
+    return state_;
+  }
+
+  void synchronize_sub_selection_scope() override {}
+
+  ModelingCommandResult edit_sub_elements(
+      std::span<const EditorSubSelectionTarget> hits,
+      EditorSubSelectionEdit,
+      const EditorSubSelectionBaseline *,
+      std::optional<EditorSubSelectionTarget> direct_hit) override {
+    state_.selected.assign(hits.begin(), hits.end());
+    state_.active = direct_hit;
+    state_.hover.reset();
+    ++state_.revision;
+    ++state_.owner_revision;
+    ++state_.presentation_revision;
+    ++failed_edit_count;
+    return {.ok = false,
+            .changed = true,
+            .message = "Injected provider failure after mutation."};
+  }
+
+  ModelingCommandResult restore_sub_selection_baseline(
+      const EditorSubSelectionBaseline &baseline) override {
+    if (fail_restore) {
+      ++restore_count;
+      return {.ok = false,
+              .changed = true,
+              .message = "Injected provider rollback failure."};
+    }
+    const bool changed = state_.selected != baseline.selected ||
+                         state_.active != baseline.active ||
+                         state_.hover != baseline.hover ||
+                         state_.revision != baseline.revision ||
+                         state_.owner_revision != baseline.owner_revision ||
+                         state_.presentation_revision !=
+                             baseline.presentation_revision;
+    state_ = baseline;
+    ++restore_count;
+    return {.ok = true, .changed = changed};
+  }
+
+  ModelingCommandResult preview_sub_element_hover(
+      std::optional<EditorSubSelectionTarget> target) override {
+    const bool changed = state_.hover != target;
+    state_.hover = target;
+    return {.ok = true, .changed = changed};
+  }
+
+  ModelingCommandResult select_all_sub_elements() override {
+    return {.ok = true};
+  }
+  ModelingCommandResult invert_sub_elements() override {
+    return {.ok = true};
+  }
+  ModelingCommandResult clear_sub_elements() override {
+    return {.ok = true};
+  }
+  ModelingCommandResult delete_selected_sub_elements() override {
+    return {.ok = true};
+  }
+
+  EditorSubSelectionBaseline state_;
+  int failed_edit_count = 0;
+  int restore_count = 0;
+  bool fail_restore = false;
+};
 
 CommandResult begin_curve_control_selection_drag(
     CurveToolService &curve, CurveControlTarget target) {
@@ -381,7 +598,7 @@ TEST(CurveToolServiceTests, PointerPreviewDoesNotDirtyUnchangedMeshSelection) {
 }
 
 TEST(CurveToolServiceTests,
-     DisabledSceneSnappingSkipsMeshPlacementCacheDuringDrawingAndDrag) {
+     DisabledSceneSnappingSkipsSharedSurfaceQueryDuringDrawingAndDrag) {
   CurveToolHarness harness;
   for (int index = 0; index < 24; ++index) {
     SCOPED_TRACE(index);
@@ -392,39 +609,40 @@ TEST(CurveToolServiceTests,
     ASSERT_TRUE(mesh.ok()) << mesh.error_message();
   }
 
-  std::size_t visibility_filter_calls = 0u;
-  harness.session.point_placement().set_viewport_visibility_filter(
-      [&](EntityId) {
-        ++visibility_filter_calls;
-        return true;
-      },
-      []() { return 1u; });
   ASSERT_TRUE(harness.editor.tools().activate(kCurveToolId).ok());
+  const auto surface_build_count = [&]() {
+    return harness.session.point_placement()
+        .surface_query_stats()
+        .snapshot_build_count;
+  };
+  const std::uint64_t cold_build_count = surface_build_count();
 
   // A cold or explicitly invalidated cache must remain untouched whenever
   // scene landmark snapping is disabled.
   EXPECT_TRUE(harness.frame(false, false, false).curve_consumed);
   EXPECT_TRUE(harness.session.curve().preview_state().hover_world.has_value());
-  EXPECT_EQ(visibility_filter_calls, 0u);
+  EXPECT_EQ(surface_build_count(), cold_build_count);
 
   harness.scene_snap_enabled = true;
   EXPECT_TRUE(harness.frame(false, false, false).curve_consumed);
-  EXPECT_GT(visibility_filter_calls, 0u);
+  EXPECT_GT(surface_build_count(), cold_build_count);
 
-  visibility_filter_calls = 0u;
+  const std::uint64_t warm_build_count = surface_build_count();
   harness.scene_snap_enabled = false;
   harness.grid_snap_enabled = false;
-  harness.session.point_placement().invalidate();
+  harness.session.scene_surface_query().invalidate();
 
   EXPECT_TRUE(harness.frame(false, false, false).curve_consumed);
   EXPECT_TRUE(harness.session.curve().preview_state().hover_world.has_value());
-  EXPECT_EQ(visibility_filter_calls, 0u);
+  EXPECT_EQ(surface_build_count(), warm_build_count);
   EXPECT_TRUE(harness.frame(true, true, false).curve_consumed);
+  const std::uint64_t pointer_surface_build_count = surface_build_count();
+  EXPECT_GT(pointer_surface_build_count, warm_build_count);
   harness.input.mouse_local.x += 24.0f;
   EXPECT_TRUE(harness.frame(false, true, false).curve_consumed);
-  EXPECT_EQ(visibility_filter_calls, 0u);
+  EXPECT_EQ(surface_build_count(), pointer_surface_build_count);
   EXPECT_TRUE(harness.frame(false, false, true).curve_consumed);
-  EXPECT_EQ(visibility_filter_calls, 0u);
+  EXPECT_EQ(surface_build_count(), pointer_surface_build_count);
 }
 
 TEST(CurveToolServiceTests,
@@ -522,15 +740,24 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(control_hit.has_value());
   ASSERT_GT(control_hit->ray_distance, 0.0);
 
-  std::size_t mesh_depth_queries = 0u;
-  harness.mesh_surface_distance =
-      [&](const ViewportRay &) -> std::optional<double> {
-    ++mesh_depth_queries;
-    return control_hit->ray_distance * 0.5;
-  };
+  (void)create_curve_pick_occluder(harness, anchor_screen,
+                                   control_hit->ray_distance);
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(object).ok());
+  ASSERT_TRUE(curve.refresh().ok);
+  const SceneSurfaceQuerySnapshot surfaces =
+      harness.session.scene_surface_query().snapshot();
+  const ViewportRay ray =
+      harness.camera.ray_from_viewport_point(anchor_screen);
+  const auto surface_hit = surfaces.nearest_hit({
+      .world_origin = ray.origin,
+      .world_direction = ray.direction,
+      .eligibility = SceneSurfaceEligibility::RenderVisible,
+  });
+  ASSERT_TRUE(surface_hit.has_value());
+  ASSERT_LT(surface_hit->distance, control_hit->ray_distance);
   click_passive_curve_selection(harness, anchor_screen);
 
-  EXPECT_GT(mesh_depth_queries, 0u);
   EXPECT_TRUE(curve.control_selection().empty());
   const auto snapshot = harness.editor.query().entity(object.entity);
   ASSERT_TRUE(snapshot.has_value());
@@ -889,7 +1116,7 @@ TEST(CurveToolServiceTests,
   ViewportInteractionFrame select_frame = harness.gizmo_frame();
   select_frame.active_tool_allows_selection_fallback = true;
   (void)harness.controller.handle_before_active_tool(harness.editor,
-                                                     select_frame, &curve);
+                                                     select_frame, harness.session.native_tools());
   EXPECT_NE(harness.controller.transform_gizmo_frame(), nullptr);
 
   harness.router.set_active_tool(ViewportToolId::Poly);
@@ -898,11 +1125,55 @@ TEST(CurveToolServiceTests,
   ViewportInteractionFrame modal_frame = harness.gizmo_frame();
   modal_frame.active_tool_allows_selection_fallback = false;
   (void)harness.controller.handle_before_active_tool(harness.editor,
-                                                     modal_frame, &curve);
+                                                     modal_frame, harness.session.native_tools());
   EXPECT_EQ(harness.controller.transform_gizmo_frame(), nullptr);
   EXPECT_TRUE(curve.controls_editable())
       << "The modal tool suspends passive interaction without detaching the "
          "canonical Curve selection.";
+}
+
+TEST(CurveToolServiceTests,
+     ToolPointerLifecycleOwnsCurveGizmoAndConversionPrecedence) {
+  CurveToolHarness harness;
+  const QuaderModelingObjectRef object = harness.make_curve();
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(object).ok());
+  harness.router.set_active_tool(ViewportToolId::Select);
+  harness.router.set_selection_mode(ViewportSelectionMode::Object);
+  harness.input.active_tool_owns_viewport = false;
+
+  CurveToolService &curve = harness.session.curve();
+  ASSERT_TRUE(curve.refresh().ok);
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  const CurveControlTarget anchor{
+      curve.preview_state().document->points()[0].id,
+      CurveControlKind::Anchor};
+  ASSERT_TRUE(replace_curve_control_selection(curve, anchor));
+
+  ViewportInteractionFrame interaction = harness.gizmo_frame();
+  interaction.active_tool_allows_selection_fallback = true;
+  const ViewportNativeToolInteractionFrame native{
+      .input = harness.input,
+      .input_result = harness.input_result,
+  };
+  const auto dispatch = [&]() {
+    return harness.controller.handle_tool_pointer_lifecycle(
+        harness.editor, harness.session.scene(), harness.session.assets(),
+        harness.session.native_tools(), &harness.session.point_placement(),
+        harness.camera, {.interaction = interaction, .native_tool = native});
+  };
+
+  const ViewportToolPointerLifecycleResult gizmo = dispatch();
+  EXPECT_TRUE(gizmo.curve_gizmo_prepass);
+  EXPECT_FALSE(gizmo.native_tool.consumed);
+  EXPECT_NE(harness.controller.transform_gizmo_frame(), nullptr);
+
+  harness.input.curve_conversion_edges.push_back({});
+  const ViewportToolPointerLifecycleResult conversion = dispatch();
+  EXPECT_FALSE(conversion.curve_gizmo_prepass);
+  EXPECT_TRUE(conversion.native_tool.curve_consumed);
+  EXPECT_TRUE(conversion.native_tool.blocks_transform_gizmo);
+  EXPECT_TRUE(conversion.before_tool.gizmo_consumed);
 }
 
 TEST(CurveToolServiceTests,
@@ -940,7 +1211,7 @@ TEST(CurveToolServiceTests,
     ViewportInteractionFrame frame = harness.gizmo_frame();
     frame.active_tool_allows_selection_fallback = true;
     (void)harness.controller.handle_before_active_tool(harness.editor, frame,
-                                                       &curve);
+                                                       harness.session.native_tools());
     const quader_editor_core::TransformGizmoFrame *gizmo =
         harness.controller.transform_gizmo_frame();
     ASSERT_NE(gizmo, nullptr);
@@ -966,7 +1237,7 @@ TEST(CurveToolServiceTests,
   ViewportInteractionFrame control_frame = harness.gizmo_frame();
   control_frame.active_tool_allows_selection_fallback = true;
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, control_frame, &curve);
+      harness.editor, control_frame, harness.session.native_tools());
   const quader_editor_core::TransformGizmoFrame *control_gizmo =
       harness.controller.transform_gizmo_frame();
   ASSERT_NE(control_gizmo, nullptr);
@@ -978,7 +1249,7 @@ TEST(CurveToolServiceTests,
 
   ASSERT_TRUE(replace_curve_control_selection(curve));
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, control_frame, &curve);
+      harness.editor, control_frame, harness.session.native_tools());
   const quader_editor_core::TransformGizmoFrame *restored_object_gizmo =
       harness.controller.transform_gizmo_frame();
   ASSERT_NE(restored_object_gizmo, nullptr);
@@ -1014,7 +1285,7 @@ TEST(CurveToolServiceTests,
   };
 
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, passive_frame(), &curve);
+      harness.editor, passive_frame(), harness.session.native_tools());
   const auto *object_gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(object_gizmo, nullptr);
   const CurveToolPreviewState preview = curve.preview_state();
@@ -1022,7 +1293,7 @@ TEST(CurveToolServiceTests,
   const QVec2 middle_anchor =
       curve_control_screen(harness, preview, 1, CurveControlKind::Anchor);
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, passive_frame(), &curve);
+      harness.editor, passive_frame(), harness.session.native_tools());
   object_gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(object_gizmo, nullptr);
   EXPECT_NEAR(middle_anchor.x, object_gizmo->info.screen_pivot.x, 0.001f);
@@ -1035,7 +1306,7 @@ TEST(CurveToolServiceTests,
   EXPECT_FALSE(harness.controller.transform_gizmo_pointer_active());
 
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, passive_frame(), &curve);
+      harness.editor, passive_frame(), harness.session.native_tools());
   const auto *control_gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(control_gizmo, nullptr);
   const auto *control_x = find_curve_gizmo_axis(
@@ -1057,7 +1328,7 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(curve.refresh().ok);
   harness.session.history().clear();
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, passive_frame(), &curve);
+      harness.editor, passive_frame(), harness.session.native_tools());
   control_gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(control_gizmo, nullptr);
   control_x = find_curve_gizmo_axis(
@@ -1079,23 +1350,25 @@ TEST(CurveToolServiceTests,
   // press and starts the editor transform backend.
   ASSERT_TRUE(replace_curve_control_selection(curve));
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, passive_frame(), &curve);
+      harness.editor, passive_frame(), harness.session.native_tools());
   object_gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(object_gizmo, nullptr);
   const auto *object_z = find_curve_gizmo_axis(
       *object_gizmo, quader_editor_core::TransformAxis::Z);
   ASSERT_NE(object_z, nullptr);
   const QVec2 object_press = axis_screen_point(*object_z, 0.65f);
+  const SceneSurfaceQuerySnapshot surfaces =
+      harness.session.scene_surface_query().snapshot();
   EXPECT_FALSE(pick_unoccluded_viewport_curve_control(
                    harness.camera, curve.preview_state(), object_press,
-                   harness.mesh_surface_distance)
+                   surfaces)
                    .has_value());
   harness.input.mouse_local = object_press;
   harness.input.mouse_screen = object_press;
   const auto object_press_result =
       harness.controller.handle_before_active_tool(
           harness.editor, passive_frame(true, true, false, object_press),
-          &curve);
+          harness.session.native_tools());
   EXPECT_TRUE(object_press_result.gizmo_consumed);
   EXPECT_TRUE(harness.controller.transform_gizmo_pointer_active());
   harness.input.mouse_local = object_press + QVec2{0.0f, -40.0f};
@@ -1103,11 +1376,11 @@ TEST(CurveToolServiceTests,
   EXPECT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      passive_frame(false, true, false, object_press), &curve)
+                      passive_frame(false, true, false, object_press), harness.session.native_tools())
                   .gizmo_consumed);
   EXPECT_TRUE(harness.controller.dragging());
   EXPECT_FALSE(curve.dragging());
-  EXPECT_TRUE(harness.controller.cancel_active_drag(harness.editor, &curve));
+  EXPECT_TRUE(harness.controller.cancel_active_drag(harness.editor, harness.session.native_tools()));
 }
 
 TEST(CurveToolServiceTests,
@@ -1153,7 +1426,7 @@ TEST(CurveToolServiceTests,
     harness.session.mark_clean();
 
     (void)harness.controller.handle_before_active_tool(
-        harness.editor, harness.gizmo_frame(), &curve);
+        harness.editor, harness.gizmo_frame(), harness.session.native_tools());
     const quader_editor_core::TransformGizmoFrame *gizmo =
         harness.controller.transform_gizmo_frame();
     ASSERT_NE(gizmo, nullptr);
@@ -1166,7 +1439,7 @@ TEST(CurveToolServiceTests,
         harness.controller.transform_gizmo_selection_cache_stats();
     EXPECT_EQ(first_stats.curve_control_pivot_recompute_count, 1u);
     (void)harness.controller.handle_before_active_tool(
-        harness.editor, harness.gizmo_frame(), &curve);
+        harness.editor, harness.gizmo_frame(), harness.session.native_tools());
     const auto cached_stats =
         harness.controller.transform_gizmo_selection_cache_stats();
     EXPECT_EQ(cached_stats.curve_control_pivot_recompute_count,
@@ -1199,21 +1472,21 @@ TEST(CurveToolServiceTests,
     harness.input.mouse_local = start;
     harness.input.mouse_screen = start;
     const auto press = harness.controller.handle_before_active_tool(
-        harness.editor, harness.gizmo_frame(true, true, false, start), &curve);
+        harness.editor, harness.gizmo_frame(true, true, false, start), harness.session.native_tools());
     ASSERT_TRUE(press.gizmo_consumed);
     EXPECT_FALSE(harness.controller.dragging());
 
     harness.input.mouse_local = update;
     harness.input.mouse_screen = update;
     const auto drag = harness.controller.handle_before_active_tool(
-        harness.editor, harness.gizmo_frame(false, true, false, start), &curve);
+        harness.editor, harness.gizmo_frame(false, true, false, start), harness.session.native_tools());
     ASSERT_TRUE(drag.gizmo_consumed);
     ASSERT_TRUE(harness.controller.dragging());
     ASSERT_TRUE(curve.dragging());
     ASSERT_FALSE(curve.preview_state().document->has_same_geometry(before));
 
     const auto release = harness.controller.handle_before_active_tool(
-        harness.editor, harness.gizmo_frame(false, false, true, start), &curve);
+        harness.editor, harness.gizmo_frame(false, false, true, start), harness.session.native_tools());
     ASSERT_TRUE(release.gizmo_consumed);
     EXPECT_FALSE(release.selection_click_requested);
     EXPECT_FALSE(harness.controller.dragging());
@@ -1323,7 +1596,8 @@ TEST(CurveToolServiceTests,
     int snap_query_count = 0;
     double queried_radius = 0.0;
     harness.mesh_snap_query =
-        [&](const ViewportRay &, double vertex_radius)
+        [&](const ViewportRay &, double vertex_radius,
+            std::optional<double>)
         -> ViewportMeshSnapQueryResult {
       ++snap_query_count;
       queried_radius = vertex_radius;
@@ -1335,12 +1609,11 @@ TEST(CurveToolServiceTests,
               .ray_distance = 4.0,
               .pick_distance = 0.0,
           },
-          .nearest_surface_ray_distance = 4.0,
       };
     };
 
     (void)harness.controller.handle_before_active_tool(
-        harness.editor, harness.gizmo_frame(), &curve);
+        harness.editor, harness.gizmo_frame(), harness.session.native_tools());
     const auto *gizmo = harness.controller.transform_gizmo_frame();
     ASSERT_NE(gizmo, nullptr);
     const auto *axis = find_curve_gizmo_axis(*gizmo, axis_case.axis);
@@ -1359,7 +1632,7 @@ TEST(CurveToolServiceTests,
     ASSERT_TRUE(harness.controller
                     .handle_before_active_tool(
                         harness.editor,
-                        harness.gizmo_frame(true, true, false, start), &curve)
+                        harness.gizmo_frame(true, true, false, start), harness.session.native_tools())
                     .gizmo_consumed);
     EXPECT_EQ(snap_query_count, 0);
     EXPECT_TRUE(
@@ -1370,7 +1643,7 @@ TEST(CurveToolServiceTests,
     ASSERT_TRUE(harness.controller
                     .handle_before_active_tool(
                         harness.editor,
-                        harness.gizmo_frame(false, true, false, start), &curve)
+                        harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                     .gizmo_consumed);
     ASSERT_TRUE(harness.controller.dragging());
     ASSERT_TRUE(curve.dragging());
@@ -1414,7 +1687,7 @@ TEST(CurveToolServiceTests,
     ASSERT_TRUE(harness.controller
                     .handle_before_active_tool(
                         harness.editor,
-                        harness.gizmo_frame(false, false, true, start), &curve)
+                        harness.gizmo_frame(false, false, true, start), harness.session.native_tools())
                     .gizmo_consumed);
     EXPECT_FALSE(harness.controller.dragging());
     EXPECT_FALSE(curve.dragging());
@@ -1448,7 +1721,8 @@ TEST(CurveToolServiceTests,
   bool snap_available = true;
   int snap_query_count = 0;
   harness.mesh_snap_query =
-      [&](const ViewportRay &, double) -> ViewportMeshSnapQueryResult {
+      [&](const ViewportRay &, double,
+          std::optional<double>) -> ViewportMeshSnapQueryResult {
     ++snap_query_count;
     ViewportMeshSnapQueryResult result;
     if (snap_available) {
@@ -1464,7 +1738,7 @@ TEST(CurveToolServiceTests,
   };
 
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, harness.gizmo_frame(), &curve);
+      harness.editor, harness.gizmo_frame(), harness.session.native_tools());
   const auto *gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(gizmo, nullptr);
   const auto *axis = find_curve_gizmo_axis(
@@ -1477,14 +1751,14 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(true, true, false, start), &curve)
+                      harness.gizmo_frame(true, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   harness.input.mouse_local = update;
   harness.input.mouse_screen = update;
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(false, true, false, start), &curve)
+                      harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   const auto &first_overlay =
       harness.controller.transform_gizmo_snap_overlay_points();
@@ -1500,7 +1774,7 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(false, true, false, start), &curve)
+                      harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   EXPECT_TRUE(
       harness.controller.transform_gizmo_snap_overlay_points().empty());
@@ -1512,7 +1786,7 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(false, true, false, start), &curve)
+                      harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   const auto &reused_overlay =
       harness.controller.transform_gizmo_snap_overlay_points();
@@ -1529,7 +1803,7 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(false, true, false, start), &curve)
+                      harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   EXPECT_EQ(snap_query_count, query_count_before_toggle);
   EXPECT_TRUE(
@@ -1545,11 +1819,11 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(false, true, false, start), &curve)
+                      harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   ASSERT_EQ(harness.controller.transform_gizmo_snap_overlay_points().size(),
             2u);
-  EXPECT_TRUE(harness.controller.cancel_active_drag(harness.editor, &curve));
+  EXPECT_TRUE(harness.controller.cancel_active_drag(harness.editor, harness.session.native_tools()));
   EXPECT_TRUE(
       harness.controller.transform_gizmo_snap_overlay_points().empty());
   EXPECT_TRUE(curve.preview_state().document->has_same_geometry(before));
@@ -1599,16 +1873,11 @@ TEST(CurveToolServiceTests,
           std::make_shared<const modeling::CurveDocument>(*preview.document),
   });
   std::size_t mesh_snap_queries = 0u;
-  std::size_t separate_surface_queries = 0u;
   harness.mesh_snap_query =
-      [&](const ViewportRay &, double) -> ViewportMeshSnapQueryResult {
+      [&](const ViewportRay &, double,
+          std::optional<double>) -> ViewportMeshSnapQueryResult {
     ++mesh_snap_queries;
-    return {.nearest_surface_ray_distance = 1000.0};
-  };
-  harness.mesh_surface_distance =
-      [&](const ViewportRay &) -> std::optional<double> {
-    ++separate_surface_queries;
-    return 1.0;
+    return {};
   };
   harness.session.history().clear();
   harness.session.mark_clean();
@@ -1623,7 +1892,7 @@ TEST(CurveToolServiceTests,
   };
 
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, passive_frame(), &curve);
+      harness.editor, passive_frame(), harness.session.native_tools());
   const auto *gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(gizmo, nullptr);
   const auto *axis = find_curve_gizmo_axis(
@@ -1640,20 +1909,17 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor, passive_frame(true, true, false, start),
-                      &curve)
+                      harness.session.native_tools())
                   .gizmo_consumed);
   harness.input.mouse_local = update;
   harness.input.mouse_screen = update;
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor, passive_frame(false, true, false, start),
-                      &curve)
+                      harness.session.native_tools())
                   .gizmo_consumed);
   ASSERT_TRUE(curve.dragging());
   EXPECT_EQ(mesh_snap_queries, 1u);
-  EXPECT_EQ(separate_surface_queries, 0u)
-      << "Curve snapping must reuse the surface depth prepared by the mesh "
-         "snap query.";
   const std::optional<QVec3> snapped = curve.selected_controls_world_pivot();
   ASSERT_TRUE(snapped.has_value());
   EXPECT_NEAR(snapped->x, target_world.x, 0.0001f);
@@ -1674,7 +1940,7 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      passive_frame(false, false, true, start), &curve)
+                      passive_frame(false, false, true, start), harness.session.native_tools())
                   .gizmo_consumed);
   EXPECT_FALSE(curve.dragging());
   EXPECT_TRUE(
@@ -1689,6 +1955,134 @@ TEST(CurveToolServiceTests,
   EXPECT_TRUE(curve.preview_state().document->has_same_geometry(
       *preview.document));
   EXPECT_FALSE(harness.session.history().can_undo());
+}
+
+TEST(CurveToolServiceTests,
+     LockedAndNonselectableMeshesOccludeCurveAnchorSnapCandidates) {
+  struct OccluderCase {
+    bool locked = false;
+    const char *label = "";
+  };
+  constexpr std::array cases{
+      OccluderCase{true, "locked"},
+      OccluderCase{false, "nonselectable"},
+  };
+
+  for (const OccluderCase occluder_case : cases) {
+    SCOPED_TRACE(occluder_case.label);
+    CurveToolHarness harness;
+    const QuaderModelingObjectRef object = harness.make_curve();
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    ASSERT_TRUE(harness.editor.selection().select_object(object).ok());
+    harness.router.set_active_tool(ViewportToolId::Select);
+    harness.router.set_selection_mode(ViewportSelectionMode::Object);
+    harness.input.active_tool_owns_viewport = false;
+    (void)harness.settings.set_bool_value(
+        ViewportBoolSettingId::SnappingEnabled, true);
+    ASSERT_TRUE(harness.settings.bool_value(
+        ViewportBoolSettingId::SnappingEnabled));
+    ASSERT_TRUE(harness.settings.set_bool_value(
+        ViewportBoolSettingId::GridSnap, false));
+    (void)harness.settings.set_bool_value(
+        ViewportBoolSettingId::VertexSnap, true);
+    ASSERT_TRUE(
+        harness.settings.bool_value(ViewportBoolSettingId::VertexSnap));
+
+    CurveToolService &curve = harness.session.curve();
+    ASSERT_TRUE(curve.refresh().ok);
+    const CurveToolPreviewState preview = curve.preview_state();
+    ASSERT_TRUE(preview.document.has_value());
+    ASSERT_EQ(preview.document->point_count(), 2u);
+    const CurveControlTarget source{preview.document->points()[0].id,
+                                    CurveControlKind::Anchor};
+    const QVec3 target_world = transform_point(
+        preview.world_transform,
+        curve_control_local_position(preview.document->points()[1],
+                                     CurveControlKind::Anchor));
+    const ViewportScreenPoint projected_target =
+        harness.camera.project_world_point(target_world);
+    ASSERT_TRUE(projected_target.visible);
+    const ViewportRay target_ray =
+        harness.camera.ray_from_viewport_point(projected_target.position);
+    const double target_ray_distance = static_cast<double>(
+        dot(target_world - target_ray.origin, target_ray.direction));
+    ASSERT_GT(target_ray_distance, 0.0);
+
+    const QuaderModelingObjectRef occluder = create_curve_pick_occluder(
+        harness, projected_target.position, target_ray_distance);
+    ASSERT_NE(occluder.entity, kInvalidEntityId);
+    if (occluder_case.locked) {
+      ASSERT_TRUE(
+          harness.session.scene().set_selectable(occluder.entity, true));
+      ASSERT_TRUE(
+          harness.session.scene().set_locked(occluder.entity, true));
+      harness.session.scene_surface_query().invalidate();
+    }
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    ASSERT_TRUE(harness.editor.selection().select_object(object).ok());
+    ASSERT_TRUE(curve.refresh().ok);
+    ASSERT_TRUE(replace_curve_control_selection(curve, source));
+    harness.curve_snap_candidates.push_back({
+        .entity = object.entity,
+        .world_transform = preview.world_transform,
+        .document =
+            std::make_shared<const modeling::CurveDocument>(*preview.document),
+    });
+
+    std::size_t mesh_snap_queries = 0u;
+    std::optional<double> forwarded_surface_cutoff;
+    harness.mesh_snap_query =
+        [&](const ViewportRay &, double,
+            std::optional<double> maximum_ray_distance)
+        -> ViewportMeshSnapQueryResult {
+      ++mesh_snap_queries;
+      forwarded_surface_cutoff = maximum_ray_distance;
+      return {};
+    };
+    const auto passive_frame = [&](bool pressed = false, bool down = false,
+                                   bool released = false,
+                                   QVec2 click_local = QVec2{}) {
+      ViewportInteractionFrame frame =
+          harness.gizmo_frame(pressed, down, released, click_local);
+      frame.active_tool_allows_selection_fallback = true;
+      return frame;
+    };
+
+    (void)harness.controller.handle_before_active_tool(
+        harness.editor, passive_frame(), harness.session.native_tools());
+    const auto *gizmo = harness.controller.transform_gizmo_frame();
+    ASSERT_NE(gizmo, nullptr);
+    const auto *axis = find_curve_gizmo_axis(
+        *gizmo, quader_editor_core::TransformAxis::X);
+    ASSERT_NE(axis, nullptr);
+    const QVec2 start = axis_screen_point(*axis, 0.65f);
+    harness.input.mouse_local = start;
+    harness.input.mouse_screen = start;
+    ASSERT_TRUE(harness.controller
+                    .handle_before_active_tool(
+                        harness.editor,
+                        passive_frame(true, true, false, start),
+                        harness.session.native_tools())
+                    .gizmo_consumed);
+    harness.input.mouse_local = projected_target.position;
+    harness.input.mouse_screen = projected_target.position;
+    ASSERT_TRUE(harness.controller
+                    .handle_before_active_tool(
+                        harness.editor,
+                        passive_frame(false, true, false, start),
+                        harness.session.native_tools())
+                    .gizmo_consumed);
+
+    EXPECT_EQ(mesh_snap_queries, 1u);
+    ASSERT_TRUE(forwarded_surface_cutoff.has_value());
+    EXPECT_LT(*forwarded_surface_cutoff, target_ray_distance);
+    EXPECT_TRUE(
+        harness.controller.transform_gizmo_snap_overlay_points().empty())
+        << "The render-visible foreground must reject the hidden Curve "
+           "anchor even when that mesh cannot itself become a snap target.";
+    EXPECT_TRUE(harness.controller.cancel_active_drag(
+        harness.editor, harness.session.native_tools()));
+  }
 }
 
 TEST(CurveToolServiceTests,
@@ -1770,7 +2164,8 @@ TEST(CurveToolServiceTests,
 
     harness.mesh_snap_query =
         [&](const ViewportRay &ray,
-            double) -> ViewportMeshSnapQueryResult {
+            double,
+            std::optional<double>) -> ViewportMeshSnapQueryResult {
       const QVec3 from_origin = target_world - ray.origin;
       const double curve_ray_distance =
           static_cast<double>(dot(from_origin, ray.direction));
@@ -1789,7 +2184,6 @@ TEST(CurveToolServiceTests,
               .ray_distance = mesh_ray_distance,
               .pick_distance = curve_pick_distance,
           },
-          .nearest_surface_ray_distance = mesh_ray_distance,
       };
     };
 
@@ -1802,7 +2196,7 @@ TEST(CurveToolServiceTests,
       return frame;
     };
     (void)harness.controller.handle_before_active_tool(
-        harness.editor, passive_frame(), &curve);
+        harness.editor, passive_frame(), harness.session.native_tools());
     const auto *gizmo = harness.controller.transform_gizmo_frame();
     ASSERT_NE(gizmo, nullptr);
     const auto *axis = find_curve_gizmo_axis(
@@ -1818,14 +2212,14 @@ TEST(CurveToolServiceTests,
     ASSERT_TRUE(harness.controller
                     .handle_before_active_tool(
                         harness.editor,
-                        passive_frame(true, true, false, start), &curve)
+                        passive_frame(true, true, false, start), harness.session.native_tools())
                     .gizmo_consumed);
     harness.input.mouse_local = target_screen.position;
     harness.input.mouse_screen = target_screen.position;
     ASSERT_TRUE(harness.controller
                     .handle_before_active_tool(
                         harness.editor,
-                        passive_frame(false, true, false, start), &curve)
+                        passive_frame(false, true, false, start), harness.session.native_tools())
                     .gizmo_consumed);
     ASSERT_TRUE(curve.dragging());
 
@@ -1851,7 +2245,7 @@ TEST(CurveToolServiceTests,
                     ? quader_poly::kInvalidElementId
                     : quader_poly::ElementId{211});
     }
-    EXPECT_TRUE(harness.controller.cancel_active_drag(harness.editor, &curve));
+    EXPECT_TRUE(harness.controller.cancel_active_drag(harness.editor, harness.session.native_tools()));
   }
 }
 
@@ -1937,29 +2331,30 @@ TEST(CurveToolServiceTests,
   std::size_t real_mesh_queries = 0u;
   harness.mesh_snap_query =
       [&](const ViewportRay &ray,
-          double radius) -> ViewportMeshSnapQueryResult {
+          double radius,
+          std::optional<double> maximum_ray_distance)
+          -> ViewportMeshSnapQueryResult {
     ++real_mesh_queries;
-    const QuaderMeshSnapQueryResult query =
-        harness.editor.query().mesh_snap_query(
-            {.origin = ray.origin, .direction = ray.direction}, radius, false);
-    ViewportMeshSnapQueryResult result{
-        .nearest_surface_ray_distance = query.nearest_surface_ray_distance,
-    };
-    if (query.vertex_target.has_value()) {
+    const std::optional<QuaderMeshVertexSnapTarget> target =
+        harness.editor.query().mesh_vertex_snap_target(
+            {.origin = ray.origin, .direction = ray.direction}, radius, false,
+            maximum_ray_distance);
+    ViewportMeshSnapQueryResult result;
+    if (target.has_value()) {
       result.vertex_target = ViewportMeshVertexSnapTarget{
-          .modeling_object_id = query.vertex_target->modeling_object_id,
+          .modeling_object_id = target->modeling_object_id,
           .vertex_id =
-              static_cast<quader_poly::ElementId>(query.vertex_target->vertex_id),
-          .world_position = query.vertex_target->world_position,
-          .ray_distance = query.vertex_target->ray_distance,
-          .pick_distance = query.vertex_target->pick_distance,
+              static_cast<quader_poly::ElementId>(target->vertex_id),
+          .world_position = target->world_position,
+          .ray_distance = target->ray_distance,
+          .pick_distance = target->pick_distance,
       };
     }
     return result;
   };
 
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, harness.gizmo_frame(), &curve);
+      harness.editor, harness.gizmo_frame(), harness.session.native_tools());
   const auto *gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(gizmo, nullptr);
   const auto *axis = find_curve_gizmo_axis(
@@ -1975,14 +2370,14 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(true, true, false, start), &curve)
+                      harness.gizmo_frame(true, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   harness.input.mouse_local = target_screen.position;
   harness.input.mouse_screen = target_screen.position;
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(false, true, false, start), &curve)
+                      harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   ASSERT_TRUE(curve.dragging());
   EXPECT_EQ(real_mesh_queries, 1u);
@@ -2001,7 +2396,7 @@ TEST(CurveToolServiceTests,
     EXPECT_NEAR(point.position.y, target_world.y, 0.0001f);
     EXPECT_NEAR(point.position.z, target_world.z, 0.0001f);
   }
-  EXPECT_TRUE(harness.controller.cancel_active_drag(harness.editor, &curve));
+  EXPECT_TRUE(harness.controller.cancel_active_drag(harness.editor, harness.session.native_tools()));
   EXPECT_TRUE(curve.preview_state().document->has_same_geometry(
       *before.document));
 }
@@ -2053,7 +2448,7 @@ TEST(CurveToolServiceTests,
        target_point.position.z});
 
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, harness.gizmo_frame(), &curve);
+      harness.editor, harness.gizmo_frame(), harness.session.native_tools());
   const auto *gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(gizmo, nullptr);
   const auto *axis = find_curve_gizmo_axis(
@@ -2069,14 +2464,14 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(true, true, false, start), &curve)
+                      harness.gizmo_frame(true, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   harness.input.mouse_local = target_screen.position;
   harness.input.mouse_screen = target_screen.position;
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(false, true, false, start), &curve)
+                      harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   ASSERT_TRUE(curve.dragging());
   const std::optional<QVec3> snapped_pivot =
@@ -2092,7 +2487,7 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(false, false, true, start), &curve)
+                      harness.gizmo_frame(false, false, true, start), harness.session.native_tools())
                   .gizmo_consumed);
   EXPECT_FALSE(curve.dragging());
   EXPECT_TRUE(
@@ -2154,7 +2549,7 @@ TEST(CurveToolServiceTests,
     ASSERT_TRUE(curve.control_selection().contains(target));
     int snap_query_count = 0;
     harness.mesh_snap_query =
-        [&](const ViewportRay &, double)
+        [&](const ViewportRay &, double, std::optional<double>)
         -> ViewportMeshSnapQueryResult {
       ++snap_query_count;
       return {
@@ -2165,12 +2560,11 @@ TEST(CurveToolServiceTests,
               .ray_distance = 4.0,
               .pick_distance = 0.0,
           },
-          .nearest_surface_ray_distance = 4.0,
       };
     };
 
     (void)harness.controller.handle_before_active_tool(
-        harness.editor, harness.gizmo_frame(), &curve);
+        harness.editor, harness.gizmo_frame(), harness.session.native_tools());
     const auto *gizmo = harness.controller.transform_gizmo_frame();
     ASSERT_NE(gizmo, nullptr);
     QVec2 start;
@@ -2197,14 +2591,14 @@ TEST(CurveToolServiceTests,
     ASSERT_TRUE(harness.controller
                     .handle_before_active_tool(
                         harness.editor,
-                        harness.gizmo_frame(true, true, false, start), &curve)
+                        harness.gizmo_frame(true, true, false, start), harness.session.native_tools())
                     .gizmo_consumed);
     harness.input.mouse_local = update;
     harness.input.mouse_screen = update;
     ASSERT_TRUE(harness.controller
                     .handle_before_active_tool(
                         harness.editor,
-                        harness.gizmo_frame(false, true, false, start), &curve)
+                        harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                     .gizmo_consumed);
     ASSERT_TRUE(harness.controller.dragging());
     ASSERT_TRUE(curve.dragging());
@@ -2216,7 +2610,7 @@ TEST(CurveToolServiceTests,
     ASSERT_TRUE(harness.controller
                     .handle_before_active_tool(
                         harness.editor,
-                        harness.gizmo_frame(false, false, true, start), &curve)
+                        harness.gizmo_frame(false, false, true, start), harness.session.native_tools())
                     .gizmo_consumed);
     EXPECT_EQ(snap_query_count, 0);
     EXPECT_TRUE(
@@ -2241,7 +2635,7 @@ TEST(CurveToolServiceTests,
   harness.session.mark_clean();
 
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, harness.gizmo_frame(), &curve);
+      harness.editor, harness.gizmo_frame(), harness.session.native_tools());
   const auto *gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(gizmo, nullptr);
   const auto *axis = find_curve_gizmo_axis(
@@ -2263,11 +2657,11 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(true, true, false, start), &curve)
+                      harness.gizmo_frame(true, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   EXPECT_FALSE(harness.controller.dragging());
   EXPECT_FALSE(curve.dragging());
-  ASSERT_TRUE(harness.controller.cancel_active_drag(harness.editor, &curve));
+  ASSERT_TRUE(harness.controller.cancel_active_drag(harness.editor, harness.session.native_tools()));
   EXPECT_TRUE(curve.active());
   ASSERT_TRUE(curve.control_selection().active.has_value());
   EXPECT_EQ(*curve.control_selection().active, target);
@@ -2276,25 +2670,25 @@ TEST(CurveToolServiceTests,
   EXPECT_FALSE(harness.session.dirty());
 
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, harness.gizmo_frame(), &curve);
+      harness.editor, harness.gizmo_frame(), harness.session.native_tools());
   ASSERT_NE(harness.controller.transform_gizmo_frame(), nullptr);
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(true, true, false, start), &curve)
+                      harness.gizmo_frame(true, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   harness.input.mouse_local = update;
   harness.input.mouse_screen = update;
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(false, true, false, start), &curve)
+                      harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   ASSERT_TRUE(harness.controller.dragging());
   ASSERT_TRUE(curve.dragging());
   ASSERT_FALSE(curve.preview_state().document->has_same_geometry(before));
 
-  ASSERT_TRUE(harness.controller.cancel_active_drag(harness.editor, &curve));
+  ASSERT_TRUE(harness.controller.cancel_active_drag(harness.editor, harness.session.native_tools()));
   EXPECT_FALSE(harness.controller.dragging());
   EXPECT_FALSE(curve.dragging());
   EXPECT_TRUE(curve.preview_state().document->has_same_geometry(before));
@@ -2321,7 +2715,7 @@ TEST(CurveToolServiceTests,
   harness.session.mark_clean();
 
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, harness.gizmo_frame(), &curve);
+      harness.editor, harness.gizmo_frame(), harness.session.native_tools());
   const auto *gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(gizmo, nullptr);
   const auto *axis = find_curve_gizmo_axis(
@@ -2341,14 +2735,14 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(true, true, false, start), &curve)
+                      harness.gizmo_frame(true, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   harness.input.mouse_local = update;
   harness.input.mouse_screen = update;
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(false, true, false, start), &curve)
+                      harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   ASSERT_TRUE(harness.controller.dragging());
   ASSERT_TRUE(curve.dragging());
@@ -2356,7 +2750,7 @@ TEST(CurveToolServiceTests,
 
   harness.input.pointer_interaction_canceled = true;
   const auto canceled = harness.controller.handle_before_active_tool(
-      harness.editor, harness.gizmo_frame(false, false, true, start), &curve);
+      harness.editor, harness.gizmo_frame(false, false, true, start), harness.session.native_tools());
   harness.input.pointer_interaction_canceled = false;
   EXPECT_TRUE(canceled.gizmo_consumed);
   EXPECT_FALSE(harness.controller.dragging());
@@ -2401,7 +2795,7 @@ TEST(CurveToolServiceTests,
       harness.session.mark_clean();
 
       (void)harness.controller.handle_before_active_tool(
-          harness.editor, harness.gizmo_frame(), &curve);
+          harness.editor, harness.gizmo_frame(), harness.session.native_tools());
       const auto *gizmo = harness.controller.transform_gizmo_frame();
       ASSERT_NE(gizmo, nullptr);
       const auto *axis = find_curve_gizmo_axis(
@@ -2422,7 +2816,7 @@ TEST(CurveToolServiceTests,
                       .handle_before_active_tool(
                           harness.editor,
                           harness.gizmo_frame(true, true, false, start),
-                          &curve)
+                          harness.session.native_tools())
                       .gizmo_consumed);
       if (cross_threshold) {
         harness.input.mouse_local = update;
@@ -2431,7 +2825,7 @@ TEST(CurveToolServiceTests,
                         .handle_before_active_tool(
                             harness.editor,
                             harness.gizmo_frame(false, true, false, start),
-                            &curve)
+                            harness.session.native_tools())
                         .gizmo_consumed);
         ASSERT_TRUE(harness.controller.dragging());
         ASSERT_TRUE(curve.dragging());
@@ -2456,14 +2850,14 @@ TEST(CurveToolServiceTests,
       }
       const auto canceled = harness.controller.handle_before_active_tool(
           harness.editor, harness.gizmo_frame(false, true, false, start),
-          &curve);
+          harness.session.native_tools());
       harness.input_result = {};
 
       EXPECT_TRUE(canceled.gizmo_consumed);
       EXPECT_FALSE(harness.controller.dragging());
       EXPECT_FALSE(curve.dragging());
       EXPECT_FALSE(harness.controller.cancel_active_drag(harness.editor,
-                                                          &curve));
+                                                          harness.session.native_tools()));
       EXPECT_TRUE(curve.active());
       ASSERT_TRUE(curve.control_selection().active.has_value());
       EXPECT_EQ(*curve.control_selection().active, target);
@@ -2491,7 +2885,7 @@ TEST(CurveToolServiceTests,
   harness.session.mark_clean();
 
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, harness.gizmo_frame(), &curve);
+      harness.editor, harness.gizmo_frame(), harness.session.native_tools());
   const auto *gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(gizmo, nullptr);
   const auto *axis = find_curve_gizmo_axis(
@@ -2511,20 +2905,20 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(true, true, false, start), &curve)
+                      harness.gizmo_frame(true, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   harness.input.mouse_local = update;
   harness.input.mouse_screen = update;
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(false, true, false, start), &curve)
+                      harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   ASSERT_TRUE(harness.controller.dragging());
   ASSERT_TRUE(curve.dragging());
   ASSERT_FALSE(curve.preview_state().document->has_same_geometry(before));
 
-  harness.controller.reset(&harness.editor, &curve);
+  harness.controller.reset(&harness.editor, harness.session.native_tools());
   EXPECT_FALSE(harness.controller.dragging());
   EXPECT_EQ(harness.controller.transform_gizmo_frame(), nullptr);
   EXPECT_FALSE(curve.dragging());
@@ -2552,7 +2946,7 @@ TEST(CurveToolServiceTests,
   // This proves the selected anchor has an eligible Move gizmo before the
   // semantic conversion edge reserves the same pointer press for Curve.
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, harness.gizmo_frame(), &curve);
+      harness.editor, harness.gizmo_frame(), harness.session.native_tools());
   ASSERT_NE(harness.controller.transform_gizmo_frame(), nullptr);
   const QVec2 anchor = harness.camera.project_world_point(transform_point(
       curve.preview_state().world_transform,
@@ -2622,7 +3016,7 @@ TEST(CurveToolServiceTests,
   harness.resolve_chord();
 
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, harness.gizmo_frame(), &curve);
+      harness.editor, harness.gizmo_frame(), harness.session.native_tools());
   const auto *gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(gizmo, nullptr);
   const auto *axis = find_curve_gizmo_axis(
@@ -2633,7 +3027,7 @@ TEST(CurveToolServiceTests,
   harness.input.mouse_screen = gizmo_press;
   const auto pressed = harness.controller.handle_before_active_tool(
       harness.editor,
-      harness.gizmo_frame(true, true, false, gizmo_press), &curve);
+      harness.gizmo_frame(true, true, false, gizmo_press), harness.session.native_tools());
   ASSERT_TRUE(pressed.gizmo_consumed);
   ASSERT_FALSE(harness.controller.dragging());
   ASSERT_FALSE(curve.dragging());
@@ -2646,7 +3040,7 @@ TEST(CurveToolServiceTests,
             ViewportCurveConversionEdgeKind::Trigger);
   const auto held = harness.controller.handle_before_active_tool(
       harness.editor,
-      harness.gizmo_frame(false, true, false, gizmo_press), &curve);
+      harness.gizmo_frame(false, true, false, gizmo_press), harness.session.native_tools());
   ASSERT_TRUE(held.gizmo_consumed);
   const auto released = harness.dispatch(held.gizmo_consumed);
 
@@ -2658,7 +3052,7 @@ TEST(CurveToolServiceTests,
   EXPECT_EQ(*curve.control_selection().active, target);
   EXPECT_FALSE(harness.session.history().can_undo());
   EXPECT_FALSE(harness.session.dirty());
-  EXPECT_TRUE(harness.controller.cancel_active_drag(harness.editor, &curve));
+  EXPECT_TRUE(harness.controller.cancel_active_drag(harness.editor, harness.session.native_tools()));
   EXPECT_FALSE(harness.controller.dragging());
   EXPECT_FALSE(curve.dragging());
   ASSERT_TRUE(harness.editor.preferences().reset_action_shortcut(action).ok());
@@ -2839,26 +3233,32 @@ TEST(CurveToolServiceTests, CanonicalAltClickConvertsOnceWithoutDraggingOrSelect
 TEST(CurveToolServiceTests,
      ForegroundMeshDepthPreventsHiddenAltConversionFromChangingCurve) {
   CurveToolHarness harness;
-  harness.make_curve();
-  harness.activate_curve_edit();
-  harness.session.history().clear();
+  const QuaderModelingObjectRef object = harness.make_curve();
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(object).ok());
   CurveToolService &curve = harness.session.curve();
-  const modeling::CurveDocument before = *curve.preview_state().document;
+  ASSERT_TRUE(curve.refresh().ok);
+  ASSERT_TRUE(curve.preview_state().document.has_value());
   const QVec2 anchor_screen = curve_control_screen(
       harness, curve.preview_state(), 0u, CurveControlKind::Anchor);
   const auto control_hit = pick_viewport_curve_control(
       harness.camera, curve.preview_state(), anchor_screen, true);
   ASSERT_TRUE(control_hit.has_value());
   ASSERT_GT(control_hit->ray_distance, 0.0);
-  std::size_t mesh_depth_queries = 0u;
-  harness.mesh_surface_distance =
-      [&](const ViewportRay &) -> std::optional<double> {
-    ++mesh_depth_queries;
-    return control_hit->ray_distance * 0.5;
-  };
+  (void)create_curve_pick_occluder(harness, anchor_screen,
+                                   control_hit->ray_distance);
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(object).ok());
+  harness.activate_curve_edit();
+  ASSERT_TRUE(curve.refresh().ok);
+  const modeling::CurveDocument before = *curve.preview_state().document;
+  harness.session.history().clear();
+  const std::uint64_t surface_builds_before_idle =
+      harness.session.scene_surface_query().stats().snapshot_build_count;
   (void)harness.frame(false, false, false);
-  EXPECT_EQ(mesh_depth_queries, 0u)
-      << "idle Curve frames must not query mesh occlusion";
+  EXPECT_EQ(harness.session.scene_surface_query().stats().snapshot_build_count,
+            surface_builds_before_idle)
+      << "idle Curve frames must not freeze mesh occlusion";
 
   harness.input.mouse_local = anchor_screen;
   harness.input.mouse_screen = anchor_screen;
@@ -2870,8 +3270,8 @@ TEST(CurveToolServiceTests,
 
   EXPECT_TRUE(press.curve_consumed);
   EXPECT_FALSE(press.claim_interaction_pane);
-  EXPECT_EQ(mesh_depth_queries, 1u)
-      << "mesh depth is queried once only after the projected anchor hit";
+  EXPECT_GT(harness.session.scene_surface_query().stats().snapshot_build_count,
+            surface_builds_before_idle);
   EXPECT_TRUE(curve.preview_state().document->has_same_geometry(before));
   EXPECT_FALSE(curve.dragging());
   EXPECT_FALSE(harness.session.history().can_undo());
@@ -3571,6 +3971,965 @@ TEST(CurveToolServiceTests,
 }
 
 TEST(CurveToolServiceTests,
+     CanonicalSelectionProjectsCurveControlsAndRoutesBulkOperations) {
+  CurveToolHarness harness;
+  const QuaderModelingObjectRef object = harness.make_curve();
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(object).ok());
+  CurveToolService &curve = harness.session.curve();
+  ASSERT_TRUE(curve.refresh().ok);
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  const std::uint64_t modeling_selection_revision =
+      harness.session.modeling().selection_revision();
+  const CurveControlTarget first_anchor{
+      curve.preview_state().document->points()[0].id,
+      CurveControlKind::Anchor};
+  ASSERT_TRUE(replace_curve_control_selection(curve, first_anchor));
+
+  const QuaderSelectionSummary selected = harness.editor.selection().summary();
+  EXPECT_EQ(selected.sub_selection_kind,
+            QuaderSubSelectionKind::CurveControl);
+  EXPECT_EQ(selected.selected_sub_element_count, 1u);
+  EXPECT_EQ(selected.sub_selection_revision,
+            curve.control_selection_revision());
+  EXPECT_EQ(selected.selection_revision, modeling_selection_revision);
+  EXPECT_EQ(selected.selection_revision,
+            harness.session.modeling().selection_revision());
+  const EditorSelectionState editor_state = harness.session.selection().state();
+  EXPECT_EQ(editor_state.target.kind, EditorSelectionTargetKind::SubElement);
+  ASSERT_TRUE(editor_state.target.sub_element.has_value());
+  EXPECT_EQ(editor_state.target.sub_element->index, first_anchor.point.index);
+  EXPECT_EQ(editor_state.target.sub_element->generation,
+            first_anchor.point.generation);
+  EXPECT_EQ(editor_state.target.sub_element->role,
+            EditorSubSelectionElementRole::Primary);
+
+  const std::uint64_t first_sub_selection_revision =
+      selected.sub_selection_revision;
+  const CurveControlTarget second_anchor{
+      curve.preview_state().document->points()[1].id,
+      CurveControlKind::Anchor};
+  const std::array added_control{second_anchor};
+  ASSERT_TRUE(curve.edit_control_selection(
+      added_control, quader_editor_core::SelectionEditOperation::Add, nullptr,
+      second_anchor));
+  const QuaderSelectionSummary extended =
+      harness.editor.selection().summary();
+  EXPECT_GT(extended.sub_selection_revision, first_sub_selection_revision);
+  EXPECT_EQ(extended.sub_selection_revision,
+            curve.control_selection_revision());
+  EXPECT_EQ(extended.selection_revision, modeling_selection_revision);
+  EXPECT_EQ(harness.session.modeling().selection_revision(),
+            modeling_selection_revision);
+
+  const auto cleared = harness.editor.selection().clear();
+  ASSERT_TRUE(cleared.ok()) << cleared.error_message();
+  EXPECT_TRUE(cleared.changed());
+  EXPECT_TRUE(curve.control_selection().empty());
+  EXPECT_TRUE(harness.editor.query().entity(object.entity)->selected)
+      << "clearing controls must preserve their selected Curve owner";
+
+  const auto selected_all = harness.editor.selection().select_all();
+  ASSERT_TRUE(selected_all.ok()) << selected_all.error_message();
+  EXPECT_TRUE(selected_all.changed());
+  EXPECT_EQ(curve.control_selection().controls.size(), 4u);
+  EXPECT_EQ(harness.editor.selection().summary().selected_sub_element_count,
+            4u);
+
+  const auto inverted_empty = harness.editor.selection().select_inverse();
+  ASSERT_TRUE(inverted_empty.ok()) << inverted_empty.error_message();
+  EXPECT_TRUE(inverted_empty.changed());
+  EXPECT_TRUE(curve.control_selection().empty());
+  EXPECT_TRUE(harness.editor.query().entity(object.entity)->selected);
+  const QuaderSelectionSummary empty_controls =
+      harness.editor.selection().summary();
+  EXPECT_EQ(empty_controls.sub_selection_kind,
+            QuaderSubSelectionKind::CurveControl);
+  EXPECT_EQ(empty_controls.selected_sub_element_count, 0u);
+  EXPECT_EQ(empty_controls.selection_revision,
+            harness.session.modeling().selection_revision());
+
+  ASSERT_TRUE(harness.editor.selection().select_inverse().ok());
+  EXPECT_EQ(curve.control_selection().controls.size(), 4u);
+}
+
+TEST(CurveToolServiceTests,
+     CurveProviderReportsCheckedFailuresAndRestoresExactBaseline) {
+  CurveToolHarness harness;
+  const QuaderModelingObjectRef object = harness.make_curve();
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(object).ok());
+  CurveToolService &curve = harness.session.curve();
+  ASSERT_TRUE(curve.refresh().ok);
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  ASSERT_GE(curve.preview_state().document->point_count(), 2u);
+  harness.session.history().clear();
+  harness.session.mark_clean();
+
+  const auto sub_target = [](modeling::CurvePointId point) {
+    return EditorSubSelectionTarget{
+        .index = point.index,
+        .generation = point.generation,
+        .role = EditorSubSelectionElementRole::Primary,
+    };
+  };
+  const EditorSubSelectionTarget first =
+      sub_target(curve.preview_state().document->points()[0].id);
+  const EditorSubSelectionTarget second =
+      sub_target(curve.preview_state().document->points()[1].id);
+  const std::array first_hit{first};
+  ASSERT_TRUE(curve
+                  .edit_sub_elements(first_hit, EditorSubSelectionEdit::Replace,
+                                     nullptr, first)
+                  .ok);
+  ASSERT_TRUE(curve.preview_sub_element_hover(first).ok);
+  const std::uint64_t published_revision = curve.preview_state().revision;
+  const std::optional<QVec3> baseline_pivot =
+      curve.selected_controls_world_pivot();
+  ASSERT_TRUE(baseline_pivot.has_value());
+  const EditorSubSelectionBaseline baseline =
+      curve.capture_sub_selection_baseline();
+  ASSERT_TRUE(baseline.valid());
+  EXPECT_EQ(baseline.presentation_revision, published_revision);
+
+  const ModelingCommandResult hover_only_change = curve.edit_sub_elements(
+      first_hit, EditorSubSelectionEdit::Replace, &baseline, first);
+  ASSERT_TRUE(hover_only_change.ok) << hover_only_change.message;
+  EXPECT_TRUE(hover_only_change.changed)
+      << "clearing the provider hover is an observable provider mutation";
+  EXPECT_EQ(curve.control_selection_revision(), baseline.revision);
+  EXPECT_FALSE(curve.capture_sub_selection_baseline().hover.has_value());
+
+  const ModelingCommandResult hover_restored =
+      curve.restore_sub_selection_baseline(baseline);
+  ASSERT_TRUE(hover_restored.ok) << hover_restored.message;
+  EXPECT_TRUE(hover_restored.changed);
+  EXPECT_EQ(curve.capture_sub_selection_baseline(), baseline);
+  EXPECT_EQ(curve.preview_state().revision, published_revision);
+
+  const std::array second_hit{second};
+  const ModelingCommandResult edited = curve.edit_sub_elements(
+      second_hit, EditorSubSelectionEdit::Replace, &baseline, second);
+  ASSERT_TRUE(edited.ok) << edited.message;
+  ASSERT_TRUE(edited.changed);
+  EXPECT_NE(curve.preview_state().revision, published_revision);
+  ASSERT_TRUE(curve.selected_controls_world_pivot().has_value());
+  const ModelingCommandResult restored =
+      curve.restore_sub_selection_baseline(baseline);
+  ASSERT_TRUE(restored.ok) << restored.message;
+  EXPECT_TRUE(restored.changed);
+  EXPECT_EQ(curve.capture_sub_selection_baseline(), baseline);
+  EXPECT_EQ(curve.preview_state().revision, published_revision);
+  const std::optional<QVec3> restored_pivot =
+      curve.selected_controls_world_pivot();
+  ASSERT_TRUE(restored_pivot.has_value());
+  EXPECT_NEAR(restored_pivot->x, baseline_pivot->x, 0.0001f);
+  EXPECT_NEAR(restored_pivot->y, baseline_pivot->y, 0.0001f);
+  EXPECT_NEAR(restored_pivot->z, baseline_pivot->z, 0.0001f);
+
+  EditorSubSelectionTarget stale = first;
+  ++stale.generation;
+  const EditorSubSelectionBaseline before_stale =
+      curve.capture_sub_selection_baseline();
+  const ModelingCommandResult stale_hover =
+      curve.preview_sub_element_hover(stale);
+  EXPECT_FALSE(stale_hover.ok);
+  EXPECT_FALSE(stale_hover.changed);
+  EXPECT_EQ(curve.capture_sub_selection_baseline(), before_stale);
+  const std::array stale_hit{stale};
+  const ModelingCommandResult stale_edit = curve.edit_sub_elements(
+      stale_hit, EditorSubSelectionEdit::Replace, &before_stale, stale);
+  EXPECT_FALSE(stale_edit.ok);
+  EXPECT_FALSE(stale_edit.changed);
+  EXPECT_EQ(curve.capture_sub_selection_baseline(), before_stale);
+
+  ASSERT_TRUE(curve.begin_selected_control_drag().ok);
+  const ModelingCommandResult dragging_edit = curve.edit_sub_elements(
+      first_hit, EditorSubSelectionEdit::Replace, nullptr, first);
+  EXPECT_FALSE(dragging_edit.ok);
+  EXPECT_FALSE(dragging_edit.changed);
+  ASSERT_TRUE(curve.cancel_drag().ok);
+  EXPECT_FALSE(harness.session.history().can_undo());
+  EXPECT_FALSE(harness.session.dirty());
+
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(curve.control_selection().empty());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  const ModelingCommandResult detached_edit = curve.edit_sub_elements(
+      first_hit, EditorSubSelectionEdit::Replace, nullptr, first);
+  EXPECT_FALSE(detached_edit.ok);
+  EXPECT_FALSE(detached_edit.changed);
+}
+
+TEST(CurveToolServiceTests,
+     GroupUndoRedoRestoresExactCurveControlSelectionBaseline) {
+  CurveToolHarness harness;
+  const QuaderModelingObjectRef object = harness.make_curve();
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(object).ok());
+  CurveToolService &curve = harness.session.curve();
+  ASSERT_TRUE(curve.refresh().ok);
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  const modeling::CurvePointId point =
+      curve.preview_state().document->points().front().id;
+  const EditorSubSelectionTarget anchor{
+      .index = point.index,
+      .generation = point.generation,
+      .role = EditorSubSelectionElementRole::Primary,
+  };
+  const EditorSubSelectionTarget outgoing{
+      .index = point.index,
+      .generation = point.generation,
+      .role = EditorSubSelectionElementRole::SecondaryB,
+  };
+  const std::array controls{anchor, outgoing};
+  ASSERT_TRUE(curve
+                  .edit_sub_elements(controls, EditorSubSelectionEdit::Replace,
+                                     nullptr, outgoing)
+                  .ok);
+  ASSERT_TRUE(curve.preview_sub_element_hover(anchor).ok);
+  const EditorSubSelectionBaseline before =
+      curve.capture_sub_selection_baseline();
+  ASSERT_TRUE(before.valid());
+
+  const auto grouped = harness.editor.scene().group_selection("Curve Group");
+  ASSERT_TRUE(grouped.ok()) << grouped.error_message();
+  EXPECT_FALSE(curve.capture_sub_selection_baseline().valid());
+
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_EQ(curve.capture_sub_selection_baseline(), before);
+
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  EXPECT_FALSE(curve.capture_sub_selection_baseline().valid());
+}
+
+TEST(CurveToolServiceTests,
+     ResolvedSelectionProviderFailureRollsBackBeforeScenePublication) {
+  CurveToolHarness harness;
+  const auto first = harness.editor.modeling().create_box(
+      {.min = {-3.0f, -1.0f, -1.0f}, .max = {-1.0f, 1.0f, 1.0f}});
+  const auto second = harness.editor.modeling().create_box(
+      {.min = {1.0f, -1.0f, -1.0f}, .max = {3.0f, 1.0f, 1.0f}});
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(first.value()).ok());
+
+  FailingSubSelectionProvider provider(first.value().entity,
+                                       first.value().modeling_object_id);
+  harness.session.selection().set_sub_selection_provider(&provider);
+  harness.session.history().clear();
+  const EditorSubSelectionBaseline provider_before = provider.state_;
+  const ModelingSelectionSummary selection_before =
+      harness.session.selection().summary();
+  const std::vector<EntityId> scene_selection_before =
+      harness.session.scene().selected_entities();
+  const EntityId active_before = harness.session.scene().primary_selection();
+  const std::uint64_t scene_revision_before =
+      harness.session.scene().revision();
+  const std::uint64_t scene_selection_revision_before =
+      harness.session.scene().selection_revision();
+  const std::uint64_t modeling_selection_revision_before =
+      harness.session.modeling().selection_revision();
+  const auto history_before = harness.editor.history().snapshot();
+
+  const EditorSubSelectionTarget sub_target = provider_before.selected.front();
+  const EditorSelectionBoxBaseline baseline =
+      harness.session.selection().capture_box_selection_baseline();
+  const ResolvedSelectionApplyResult cross_domain =
+      harness.session.selection().apply_resolved_marquee({
+          .targets = {
+              ResolvedSelectionTarget{
+                  .domain = ResolvedSelectionDomain::SceneEntity,
+                  .entity = second.value().entity,
+              },
+              ResolvedSelectionTarget{
+                  .domain = ResolvedSelectionDomain::ModelingComponent,
+                  .entity = first.value().entity,
+                  .modeling_object_id = first.value().modeling_object_id,
+                  .component_kind = ModelingActiveSelectionKind::Vertex,
+                  .vertex = 0,
+              },
+              ResolvedSelectionTarget{
+                  .domain = ResolvedSelectionDomain::RegisteredSubElement,
+                  .entity = first.value().entity,
+                  .modeling_object_id = first.value().modeling_object_id,
+                  .sub_selection_kind =
+                      EditorSubSelectionKind::CurveControl,
+                  .sub_element = sub_target,
+              },
+          },
+          .edit = ModelingSelectionEdit::Replace,
+          .mode = ModelingSelectionMode::Object,
+          .baseline = baseline,
+      });
+  EXPECT_FALSE(cross_domain.command.ok);
+  EXPECT_FALSE(cross_domain.command.changed);
+  EXPECT_EQ(provider.failed_edit_count, 0);
+  EXPECT_EQ(provider.restore_count, 0);
+  EXPECT_EQ(provider.state_, provider_before);
+
+  const ResolvedSelectionApplyResult click =
+      harness.session.selection().apply_resolved_click({
+          .winner = ResolvedSelectionTarget{
+              .domain = ResolvedSelectionDomain::RegisteredSubElement,
+              .entity = first.value().entity,
+              .modeling_object_id = first.value().modeling_object_id,
+              .sub_selection_kind = EditorSubSelectionKind::CurveControl,
+              .sub_element = sub_target,
+          },
+          .policy = {},
+          .baseline = baseline,
+      });
+  EXPECT_FALSE(click.command.ok);
+  EXPECT_FALSE(click.command.changed);
+  EXPECT_EQ(provider.state_, provider_before);
+  EXPECT_EQ(provider.failed_edit_count, 1);
+  EXPECT_EQ(provider.restore_count, 1);
+  EXPECT_EQ(click.selection.selected_sub_element_count,
+            selection_before.selected_sub_element_count);
+  EXPECT_EQ(click.selection.sub_selection_revision,
+            selection_before.sub_selection_revision);
+  EXPECT_EQ(click.selection.selection_revision,
+            selection_before.selection_revision);
+
+  const ResolvedSelectionApplyResult marquee =
+      harness.session.selection().apply_resolved_marquee({
+          .targets = {
+              ResolvedSelectionTarget{
+                  .domain = ResolvedSelectionDomain::SceneEntity,
+                  .entity = second.value().entity,
+                  .modeling_object_id = second.value().modeling_object_id,
+              },
+              ResolvedSelectionTarget{
+                  .domain = ResolvedSelectionDomain::RegisteredSubElement,
+                  .entity = first.value().entity,
+                  .modeling_object_id = first.value().modeling_object_id,
+                  .sub_selection_kind =
+                      EditorSubSelectionKind::CurveControl,
+                  .sub_element = sub_target,
+              },
+          },
+          .edit = ModelingSelectionEdit::Replace,
+          .mode = ModelingSelectionMode::Object,
+          .baseline = baseline,
+      });
+  EXPECT_FALSE(marquee.command.ok);
+  EXPECT_FALSE(marquee.command.changed);
+  EXPECT_EQ(provider.state_, provider_before);
+  EXPECT_EQ(provider.failed_edit_count, 2);
+  EXPECT_EQ(provider.restore_count, 2);
+  EXPECT_EQ(marquee.selection.selected_sub_element_count,
+            selection_before.selected_sub_element_count);
+  EXPECT_EQ(marquee.selection.sub_selection_revision,
+            selection_before.sub_selection_revision);
+  EXPECT_EQ(marquee.selection.selection_revision,
+            selection_before.selection_revision);
+  EXPECT_EQ(harness.session.scene().selected_entities(),
+            scene_selection_before);
+  EXPECT_EQ(harness.session.scene().primary_selection(), active_before);
+  EXPECT_EQ(harness.session.scene().revision(), scene_revision_before);
+  EXPECT_EQ(harness.session.scene().selection_revision(),
+            scene_selection_revision_before);
+  EXPECT_EQ(harness.session.modeling().selection_revision(),
+            modeling_selection_revision_before);
+  const auto history_after = harness.editor.history().snapshot();
+  EXPECT_EQ(history_after.can_undo, history_before.can_undo);
+  EXPECT_EQ(history_after.can_redo, history_before.can_redo);
+  EXPECT_EQ(history_after.undo_label, history_before.undo_label);
+  EXPECT_EQ(history_after.redo_label, history_before.redo_label);
+
+  provider.fail_restore = true;
+  const ResolvedSelectionApplyResult failed_compensation =
+      harness.session.selection().apply_resolved_click({
+          .winner = ResolvedSelectionTarget{
+              .domain = ResolvedSelectionDomain::RegisteredSubElement,
+              .entity = first.value().entity,
+              .modeling_object_id = first.value().modeling_object_id,
+              .sub_selection_kind = EditorSubSelectionKind::CurveControl,
+              .sub_element = sub_target,
+          },
+          .policy = {},
+      });
+  EXPECT_FALSE(failed_compensation.command.ok);
+  EXPECT_TRUE(failed_compensation.command.changed);
+  EXPECT_NE(failed_compensation.command.message.find("rollback failed"),
+            std::string::npos);
+  harness.session.selection().set_sub_selection_provider(nullptr);
+}
+
+TEST(CurveToolServiceTests,
+     SceneSelectionProjectionFailureRestoresSceneModelingAndHistoryExactly) {
+  CurveToolHarness harness;
+  const auto first = harness.editor.modeling().create_box(
+      {.min = {-3.0f, -1.0f, -1.0f}, .max = {-1.0f, 1.0f, 1.0f}});
+  const auto second = harness.editor.modeling().create_box(
+      {.min = {1.0f, -1.0f, -1.0f}, .max = {3.0f, 1.0f, 1.0f}});
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(first.value()).ok());
+  harness.session.history().clear();
+
+  const std::vector<EntityId> scene_selection_before =
+      harness.session.scene().selected_entities();
+  const EntityId active_before = harness.session.scene().primary_selection();
+  const std::uint64_t scene_revision_before =
+      harness.session.scene().revision();
+  const std::uint64_t scene_selection_revision_before =
+      harness.session.scene().selection_revision();
+  const ModelingSelectionSummary modeling_before =
+      harness.session.modeling().selection_summary();
+  const auto history_before = harness.editor.history().snapshot();
+
+  harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+  const QuaderApiVoidResult failed =
+      harness.editor.selection().select_object(second.value());
+  EXPECT_FALSE(failed.ok());
+  EXPECT_FALSE(failed.changed());
+  EXPECT_NE(failed.error_message().find("Injected failure"),
+            std::string::npos);
+  EXPECT_EQ(harness.session.scene().selected_entities(),
+            scene_selection_before);
+  EXPECT_EQ(harness.session.scene().primary_selection(), active_before);
+  EXPECT_EQ(harness.session.scene().revision(), scene_revision_before);
+  EXPECT_EQ(harness.session.scene().selection_revision(),
+            scene_selection_revision_before);
+  const ModelingSelectionSummary modeling_after =
+      harness.session.modeling().selection_summary();
+  EXPECT_EQ(modeling_after.mode, modeling_before.mode);
+  EXPECT_EQ(modeling_after.active_object_id, modeling_before.active_object_id);
+  EXPECT_EQ(modeling_after.selected_object_count,
+            modeling_before.selected_object_count);
+  EXPECT_EQ(modeling_after.selection_revision,
+            modeling_before.selection_revision);
+  EXPECT_EQ(modeling_after.content_revision, modeling_before.content_revision);
+  const auto history_after = harness.editor.history().snapshot();
+  EXPECT_EQ(history_after.can_undo, history_before.can_undo);
+  EXPECT_EQ(history_after.can_redo, history_before.can_redo);
+  EXPECT_EQ(history_after.undo_label, history_before.undo_label);
+  EXPECT_EQ(history_after.redo_label, history_before.redo_label);
+
+  harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  const QuaderApiVoidResult selected =
+      harness.editor.selection().select_object(second.value());
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_TRUE(selected.changed());
+}
+
+TEST(CurveToolServiceTests,
+     PickSceneEntityPropagatesProjectionFailureAndCompensatesExactly) {
+  CurveToolHarness harness;
+  const auto first = harness.editor.modeling().create_box(
+      {.min = {-3.0f, -1.0f, -1.0f}, .max = {-1.0f, 1.0f, 1.0f}});
+  const auto second = harness.editor.modeling().create_box(
+      {.min = {1.0f, -1.0f, -1.0f}, .max = {3.0f, 1.0f, 1.0f}});
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(first.value()).ok());
+  harness.session.history().clear();
+
+  const std::vector<EntityId> scene_selection_before =
+      harness.session.scene().selected_entities();
+  const EntityId active_before = harness.session.scene().primary_selection();
+  const std::uint64_t scene_revision_before =
+      harness.session.scene().revision();
+  const std::uint64_t scene_selection_revision_before =
+      harness.session.scene().selection_revision();
+  const ModelingSelectionSummary modeling_before =
+      harness.session.modeling().selection_summary();
+  const auto history_before = harness.editor.history().snapshot();
+
+  harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+  const QuaderApiResult<QuaderSelectionSummary> failed =
+      harness.editor.selection().pick_scene_entity(second.value().entity, {});
+  EXPECT_FALSE(failed.ok());
+  EXPECT_FALSE(failed.changed());
+  EXPECT_NE(failed.error_message().find("Injected failure"),
+            std::string::npos);
+  EXPECT_EQ(harness.session.scene().selected_entities(),
+            scene_selection_before);
+  EXPECT_EQ(harness.session.scene().primary_selection(), active_before);
+  EXPECT_EQ(harness.session.scene().revision(), scene_revision_before);
+  EXPECT_EQ(harness.session.scene().selection_revision(),
+            scene_selection_revision_before);
+  const ModelingSelectionSummary modeling_after =
+      harness.session.modeling().selection_summary();
+  EXPECT_EQ(modeling_after.mode, modeling_before.mode);
+  EXPECT_EQ(modeling_after.active_object_id, modeling_before.active_object_id);
+  EXPECT_EQ(modeling_after.selected_object_count,
+            modeling_before.selected_object_count);
+  EXPECT_EQ(modeling_after.selection_revision,
+            modeling_before.selection_revision);
+  EXPECT_EQ(modeling_after.content_revision, modeling_before.content_revision);
+  const auto history_after = harness.editor.history().snapshot();
+  EXPECT_EQ(history_after.can_undo, history_before.can_undo);
+  EXPECT_EQ(history_after.can_redo, history_before.can_redo);
+  EXPECT_EQ(history_after.undo_label, history_before.undo_label);
+  EXPECT_EQ(history_after.redo_label, history_before.redo_label);
+
+  harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  const auto selected =
+      harness.editor.selection().pick_scene_entity(second.value().entity, {});
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_TRUE(selected.changed());
+  EXPECT_EQ(harness.session.scene().selected_entities(),
+            std::vector<EntityId>{second.value().entity});
+}
+
+TEST(CurveToolServiceTests,
+     CheckedPublicationRejectsInexactOrUnreportedSelectionInverse) {
+  const auto run = [](bool exact_selection, bool reports_changed) {
+    SceneDocument scene;
+    const EntityId before = scene.create_entity("Before");
+    const EntityId after = scene.create_entity("After");
+    const EntityId wrong = scene.create_entity("Wrong");
+    EXPECT_NE(before, kInvalidEntityId);
+    EXPECT_NE(after, kInvalidEntityId);
+    EXPECT_NE(wrong, kInvalidEntityId);
+    EXPECT_TRUE(scene.replace_selection({&before, 1u}, before));
+    const std::uint64_t revision_before = scene.revision();
+
+    std::unique_ptr<IUndoableCommand> command =
+        with_checked_selection_publication(
+            scene,
+            std::make_unique<IncorrectSelectionRollbackCommand>(
+                scene, after, exact_selection ? before : wrong,
+                reports_changed),
+            [] { return command_invalid_result("Injected publication failure"); });
+    const CommandResult result = command->redo();
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.changed);
+    EXPECT_NE(result.message.find("did not restore the exact scene selection"),
+              std::string::npos);
+    EXPECT_EQ(scene.selected_entities(),
+              std::vector<EntityId>{exact_selection ? before : wrong});
+    EXPECT_EQ(scene.primary_selection(), exact_selection ? before : wrong);
+    EXPECT_GT(scene.revision(), revision_before)
+        << "An invalid inverse must not authorize scalar rewinding.";
+  };
+
+  run(false, true);
+  run(true, false);
+}
+
+TEST(CurveToolServiceTests,
+     CheckedPublicationRejectsSceneMutationInsidePublisherBeforeInverse) {
+  SceneDocument scene;
+  const EntityId before = scene.create_entity("Before");
+  const EntityId after = scene.create_entity("After");
+  const EntityId concurrent = scene.create_entity("Concurrent");
+  ASSERT_TRUE(scene.replace_selection({&before, 1u}, before));
+  const std::uint64_t revision_before = scene.revision();
+  bool inverse_called = false;
+
+  class ObservableInverseCommand final : public IUndoableCommand {
+  public:
+    ObservableInverseCommand(SceneDocument &scene, EntityId before,
+                             EntityId after, bool &inverse_called)
+        : scene_(scene), before_(before), after_(after),
+          inverse_called_(inverse_called) {}
+
+    [[nodiscard]] const std::string &label() const override { return label_; }
+    CommandResult redo() override {
+      (void)scene_.replace_selection({&after_, 1u}, after_);
+      return command_changed_result();
+    }
+    CommandResult undo() override {
+      inverse_called_ = true;
+      (void)scene_.replace_selection({&before_, 1u}, before_);
+      return command_changed_result();
+    }
+
+  private:
+    SceneDocument &scene_;
+    EntityId before_ = kInvalidEntityId;
+    EntityId after_ = kInvalidEntityId;
+    bool &inverse_called_;
+    std::string label_ = "Observable Selection Inverse";
+  };
+
+  std::unique_ptr<IUndoableCommand> command =
+      with_checked_selection_publication(
+          scene,
+          std::make_unique<ObservableInverseCommand>(scene, before, after,
+                                                     inverse_called),
+          [&scene, concurrent] {
+            (void)scene.replace_selection({&concurrent, 1u}, concurrent);
+            return command_invalid_result("Injected publication failure");
+          });
+  const CommandResult result = command->redo();
+  EXPECT_FALSE(result.ok);
+  EXPECT_TRUE(result.changed);
+  EXPECT_FALSE(inverse_called);
+  EXPECT_NE(result.message.find("Scene changed during selection publication"),
+            std::string::npos);
+  EXPECT_EQ(scene.selected_entities(), std::vector<EntityId>{concurrent});
+  EXPECT_EQ(scene.primary_selection(), concurrent);
+  EXPECT_GT(scene.revision(), revision_before);
+}
+
+TEST(CurveToolServiceTests,
+     SelectCreatedLightPublicationFailureRestoresSceneScalarsAllocationAndHistory) {
+  CurveToolHarness harness;
+  CurveToolHarness control;
+  const auto prepare = [](CurveToolHarness &target) {
+    const auto box = target.editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}});
+    EXPECT_TRUE(box.ok()) << box.error_message();
+    if (!box.ok()) {
+      return QuaderModelingObjectRef{};
+    }
+    EXPECT_TRUE(target.editor.selection().clear().ok());
+    EXPECT_TRUE(target.editor.selection().select_object(box.value()).ok());
+    target.session.history().clear();
+    return box.value();
+  };
+  const QuaderModelingObjectRef selected = prepare(harness);
+  const QuaderModelingObjectRef control_selected = prepare(control);
+  ASSERT_NE(selected.entity, kInvalidEntityId);
+  ASSERT_NE(control_selected.entity, kInvalidEntityId);
+
+  const std::vector<EntityId> entities_before = harness.session.scene().entities();
+  const std::vector<EntityId> selection_before =
+      harness.session.scene().selected_entities();
+  const EntityId active_before = harness.session.scene().primary_selection();
+  const auto scalars_before = scene_scalar_fingerprint(harness.session.scene());
+  const ModelingSelectionSummary modeling_before =
+      harness.session.modeling().selection_summary();
+  const auto history_before = harness.editor.history().snapshot();
+
+  harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+  QuaderCreatePointLightArgs args;
+  args.name = "Failed Selected Light";
+  args.select_created = true;
+  const QuaderApiResult<QuaderEntityRef> failed =
+      harness.editor.scene().create_point_light(args);
+  EXPECT_FALSE(failed.ok());
+  EXPECT_FALSE(failed.changed());
+  EXPECT_NE(failed.error_message().find("Injected failure"),
+            std::string::npos);
+  EXPECT_EQ(harness.session.scene().entities(), entities_before);
+  EXPECT_EQ(harness.session.scene().selected_entities(), selection_before);
+  EXPECT_EQ(harness.session.scene().primary_selection(), active_before);
+  EXPECT_EQ(scene_scalar_fingerprint(harness.session.scene()), scalars_before);
+  const ModelingSelectionSummary modeling_after =
+      harness.session.modeling().selection_summary();
+  EXPECT_EQ(modeling_after.mode, modeling_before.mode);
+  EXPECT_EQ(modeling_after.active_object_id, modeling_before.active_object_id);
+  EXPECT_EQ(modeling_after.selected_object_count,
+            modeling_before.selected_object_count);
+  EXPECT_EQ(modeling_after.selection_revision,
+            modeling_before.selection_revision);
+  EXPECT_EQ(modeling_after.content_revision, modeling_before.content_revision);
+  const auto history_after = harness.editor.history().snapshot();
+  EXPECT_EQ(history_after.can_undo, history_before.can_undo);
+  EXPECT_EQ(history_after.can_redo, history_before.can_redo);
+  EXPECT_EQ(history_after.undo_label, history_before.undo_label);
+  EXPECT_EQ(history_after.redo_label, history_before.redo_label);
+
+  harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  args.name = "Selected Light";
+  const QuaderApiResult<QuaderEntityRef> created_after_failure =
+      harness.editor.scene().create_point_light(args);
+  const QuaderApiResult<QuaderEntityRef> control_created =
+      control.editor.scene().create_point_light(args);
+  ASSERT_TRUE(created_after_failure.ok())
+      << created_after_failure.error_message();
+  ASSERT_TRUE(control_created.ok()) << control_created.error_message();
+  EXPECT_EQ(created_after_failure.value().id, control_created.value().id)
+      << "Failed publication must restore the entity allocator high-water.";
+  EXPECT_EQ(created_after_failure.value().editor_object_id,
+            control_created.value().editor_object_id)
+      << "Failed publication must restore the editor-object allocator "
+         "high-water.";
+}
+
+TEST(CurveToolServiceTests,
+     BatchLockSelectionPublicationFailureRestoresOuterSceneScalarsAndHistory) {
+  CurveToolHarness harness;
+  CurveToolHarness control;
+  const auto prepare = [](CurveToolHarness &target) {
+    const auto box = target.editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}});
+    EXPECT_TRUE(box.ok()) << box.error_message();
+    if (!box.ok()) {
+      return QuaderModelingObjectRef{};
+    }
+    EXPECT_TRUE(target.editor.selection().clear().ok());
+    EXPECT_TRUE(target.editor.selection().select_object(box.value()).ok());
+    target.session.history().clear();
+    return box.value();
+  };
+  const QuaderModelingObjectRef selected = prepare(harness);
+  const QuaderModelingObjectRef control_selected = prepare(control);
+  ASSERT_NE(selected.entity, kInvalidEntityId);
+  ASSERT_NE(control_selected.entity, kInvalidEntityId);
+
+  const std::vector<EntityId> entities_before = harness.session.scene().entities();
+  const std::vector<EntityId> selection_before =
+      harness.session.scene().selected_entities();
+  const EntityId active_before = harness.session.scene().primary_selection();
+  const SceneScalarFingerprint scalars_before =
+      scene_scalar_fingerprint(harness.session.scene());
+  const ModelingSelectionSummary modeling_before =
+      harness.session.modeling().selection_summary();
+  const auto history_before = harness.editor.history().snapshot();
+
+  harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+  const DocumentCommandResult failed =
+      harness.session.document_commands().apply_scene_batch(
+          "Lock Selected In Batch",
+          {DocumentSceneBatchOperation{
+              .kind = DocumentSceneBatchOperationKind::SetLocked,
+              .entity = selected.entity,
+              .flag = true,
+          }});
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  EXPECT_NE(failed.message.find("Injected failure"), std::string::npos);
+  EXPECT_EQ(harness.session.scene().entities(), entities_before);
+  EXPECT_EQ(harness.session.scene().selected_entities(), selection_before);
+  EXPECT_EQ(harness.session.scene().primary_selection(), active_before);
+  EXPECT_EQ(scene_scalar_fingerprint(harness.session.scene()), scalars_before);
+  EXPECT_FALSE(harness.session.scene().is_effectively_locked(selected.entity));
+  const ModelingSelectionSummary modeling_after =
+      harness.session.modeling().selection_summary();
+  EXPECT_EQ(modeling_after.mode, modeling_before.mode);
+  EXPECT_EQ(modeling_after.active_object_id, modeling_before.active_object_id);
+  EXPECT_EQ(modeling_after.selected_object_count,
+            modeling_before.selected_object_count);
+  EXPECT_EQ(modeling_after.selection_revision,
+            modeling_before.selection_revision);
+  EXPECT_EQ(modeling_after.content_revision, modeling_before.content_revision);
+  const auto history_after = harness.editor.history().snapshot();
+  EXPECT_EQ(history_after.can_undo, history_before.can_undo);
+  EXPECT_EQ(history_after.can_redo, history_before.can_redo);
+  EXPECT_EQ(history_after.undo_label, history_before.undo_label);
+  EXPECT_EQ(history_after.redo_label, history_before.redo_label);
+
+  harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  const DocumentCreateEntityResult created_after_failure =
+      harness.session.document_commands().create_point_light(
+          "Allocator Probe", LightComponent{});
+  const DocumentCreateEntityResult control_created =
+      control.session.document_commands().create_point_light(
+          "Allocator Probe", LightComponent{});
+  ASSERT_TRUE(created_after_failure.ok) << created_after_failure.message;
+  ASSERT_TRUE(control_created.ok) << control_created.message;
+  EXPECT_EQ(created_after_failure.entity, control_created.entity);
+  EXPECT_EQ(harness.session.scene().editor_object_id(
+                created_after_failure.entity),
+            control.session.scene().editor_object_id(control_created.entity));
+}
+
+TEST(CurveToolServiceTests,
+     RepeatStructuralSelectionPublicationFailureRestoresOuterSceneAndHistory) {
+  CurveToolHarness harness;
+  CurveToolHarness control;
+  const auto prepare_repeat = [](CurveToolHarness &target) {
+    const auto box = target.editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}});
+    EXPECT_TRUE(box.ok()) << box.error_message();
+    if (!box.ok()) {
+      return false;
+    }
+    EXPECT_TRUE(target.editor.selection().clear().ok());
+    EXPECT_TRUE(target.editor.selection().select_object(box.value()).ok());
+    const QuaderApiResult<QuaderEntityRef> group =
+        target.editor.scene().group_selection("Repeat Group");
+    EXPECT_TRUE(group.ok()) << group.error_message();
+    if (!group.ok()) {
+      return false;
+    }
+    EXPECT_TRUE(target.editor.selection()
+                    .set_mode(QuaderSelectionMode::Group)
+                    .ok());
+    EXPECT_TRUE(target.editor.selection().select_object(group.value().id).ok());
+    EXPECT_TRUE(target.editor.modeling().begin_transform_preview(true).ok());
+    EXPECT_TRUE(target.editor.modeling()
+                    .update_transform_translate({2.0f, 0.0f, 0.0f})
+                    .ok());
+    EXPECT_TRUE(target.editor.modeling().commit_transform_preview().ok());
+    target.session.history().clear();
+    return true;
+  };
+  ASSERT_TRUE(prepare_repeat(harness));
+  ASSERT_TRUE(prepare_repeat(control));
+
+  const std::vector<EntityId> entities_before = harness.session.scene().entities();
+  const std::vector<EntityId> selection_before =
+      harness.session.scene().selected_entities();
+  const EntityId active_before = harness.session.scene().primary_selection();
+  const SceneScalarFingerprint scalars_before =
+      scene_scalar_fingerprint(harness.session.scene());
+  const ModelingSelectionSummary modeling_before =
+      harness.session.modeling().selection_summary();
+  const auto history_before = harness.editor.history().snapshot();
+
+  std::size_t publication_calls = 0u;
+  harness.session.document_commands().set_selection_publication(
+      [&harness, &publication_calls, expected_entity_count =
+                                         entities_before.size() + 2u]() {
+        ++publication_calls;
+        EXPECT_EQ(harness.session.scene().entities().size(),
+                  expected_entity_count);
+        harness.session.modeling()
+            .set_modeling_sdk_projection_failure_for_tests(
+                ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+        CommandResult result =
+            harness.session.selection().publish_scene_selection();
+        harness.session.modeling()
+            .set_modeling_sdk_projection_failure_for_tests(
+                ModelingSdkProjectionFailurePoint::None);
+        return result;
+      });
+  const QuaderApiVoidResult failed =
+      harness.editor.history().repeat_last_action();
+  EXPECT_FALSE(failed.ok());
+  EXPECT_FALSE(failed.changed());
+  EXPECT_EQ(publication_calls, 1u) << failed.error_message();
+  EXPECT_NE(failed.error_message().find("after SDK selection mutation"),
+            std::string::npos);
+  EXPECT_EQ(failed.error_message().find("during SDK duplicate batch"),
+            std::string::npos);
+  EXPECT_EQ(harness.session.scene().entities(), entities_before);
+  EXPECT_EQ(harness.session.scene().selected_entities(), selection_before);
+  EXPECT_EQ(harness.session.scene().primary_selection(), active_before);
+  EXPECT_EQ(scene_scalar_fingerprint(harness.session.scene()), scalars_before);
+  const ModelingSelectionSummary modeling_after =
+      harness.session.modeling().selection_summary();
+  EXPECT_EQ(modeling_after.mode, modeling_before.mode);
+  EXPECT_EQ(modeling_after.active_object_id, modeling_before.active_object_id);
+  EXPECT_EQ(modeling_after.selected_object_count,
+            modeling_before.selected_object_count);
+  EXPECT_EQ(modeling_after.selection_revision,
+            modeling_before.selection_revision);
+  EXPECT_EQ(modeling_after.content_revision, modeling_before.content_revision);
+  const auto history_after = harness.editor.history().snapshot();
+  EXPECT_EQ(history_after.can_undo, history_before.can_undo);
+  EXPECT_EQ(history_after.can_redo, history_before.can_redo);
+  EXPECT_EQ(history_after.undo_label, history_before.undo_label);
+  EXPECT_EQ(history_after.redo_label, history_before.redo_label);
+
+  harness.session.document_commands().set_selection_publication([&harness] {
+    return harness.session.selection().publish_scene_selection();
+  });
+  const DocumentCreateEntityResult created_after_failure =
+      harness.session.document_commands().create_point_light(
+          "Allocator Probe", LightComponent{});
+  const DocumentCreateEntityResult control_created =
+      control.session.document_commands().create_point_light(
+          "Allocator Probe", LightComponent{});
+  ASSERT_TRUE(created_after_failure.ok) << created_after_failure.message;
+  ASSERT_TRUE(control_created.ok) << control_created.message;
+  EXPECT_EQ(created_after_failure.entity, control_created.entity);
+  EXPECT_EQ(harness.session.scene().editor_object_id(
+                created_after_failure.entity),
+            control.session.scene().editor_object_id(control_created.entity));
+}
+
+TEST(CurveToolServiceTests,
+     CanonicalDeleteMutatesSelectedCurveControlsThroughCurveHistoryOwner) {
+  CurveToolHarness harness;
+  const auto created = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 0.0f, 0.0f},
+                  .outgoing_handle = {1.0f, 0.0f, 1.0f}},
+                 {.position = {0.0f, 0.0f, 2.0f}},
+                 {.position = {2.0f, 0.0f, 0.0f},
+                  .incoming_handle = {-1.0f, 0.0f, 1.0f}}},
+  });
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const QuaderModelingObjectRef object = created.value();
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(object).ok());
+  CurveToolService &curve = harness.session.curve();
+  ASSERT_TRUE(curve.refresh().ok);
+  const modeling::CurveDocument original = *curve.preview_state().document;
+  const CurveControlTarget outgoing{original.points()[0].id,
+                                    CurveControlKind::OutgoingHandle};
+  ASSERT_TRUE(replace_curve_control_selection(curve, outgoing));
+  ASSERT_TRUE(harness.editor.scene()
+                  .set_transform(object.entity,
+                                 {.position = {3.0f, 0.0f, 0.0f}})
+                  .ok());
+  EXPECT_FALSE(harness.session.selection().has_sub_selection())
+      << "cheap summary polling must not refresh a stale provider scope";
+
+  const QuaderApiVoidResult deleted_handle = harness.editor.commands().execute(
+      quader_command::kDeleteSelection);
+  ASSERT_TRUE(deleted_handle.ok()) << deleted_handle.error_message();
+  EXPECT_TRUE(deleted_handle.changed());
+  ASSERT_TRUE(curve.refresh().ok);
+  expect_point(curve.preview_state().document->points()[0].outgoing_handle,
+               {});
+  EXPECT_TRUE(curve.control_selection().empty());
+  EXPECT_TRUE(harness.editor.query().entity(object.entity)->selected);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  ASSERT_TRUE(curve.refresh().ok);
+  EXPECT_TRUE(curve.preview_state().document->has_same_geometry(original));
+
+  const CurveControlTarget anchor{original.points()[0].id,
+                                  CurveControlKind::Anchor};
+  ASSERT_TRUE(replace_curve_control_selection(curve, anchor));
+  const QuaderApiVoidResult deleted_anchor = harness.editor.commands().execute(
+      quader_command::kDeleteSelection);
+  ASSERT_TRUE(deleted_anchor.ok()) << deleted_anchor.error_message();
+  EXPECT_TRUE(deleted_anchor.changed());
+  ASSERT_TRUE(curve.refresh().ok);
+  EXPECT_EQ(curve.preview_state().document->point_count(), 2u);
+  EXPECT_TRUE(curve.control_selection().empty());
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  ASSERT_TRUE(curve.refresh().ok);
+  EXPECT_TRUE(curve.preview_state().document->has_same_geometry(original));
+}
+
+TEST(CurveToolServiceTests,
+     CurveSubSelectionDisappearsOnOwnerDeselectionAndSessionRebind) {
+  CurveToolHarness harness;
+  const QuaderModelingObjectRef object = harness.make_curve();
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(object).ok());
+  CurveToolService &curve = harness.session.curve();
+  ASSERT_TRUE(curve.refresh().ok);
+  const CurveControlTarget anchor{
+      curve.preview_state().document->points()[0].id,
+      CurveControlKind::Anchor};
+  ASSERT_TRUE(replace_curve_control_selection(curve, anchor));
+  ASSERT_EQ(harness.editor.selection().summary().selected_sub_element_count,
+            1u);
+
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  const QuaderSelectionSummary deselected =
+      harness.editor.selection().summary();
+  EXPECT_EQ(deselected.sub_selection_kind, QuaderSubSelectionKind::None);
+  EXPECT_EQ(deselected.selected_sub_element_count, 0u);
+  EXPECT_EQ(deselected.sub_selection_revision, 0u);
+  EXPECT_EQ(deselected.selection_revision,
+            harness.session.modeling().selection_revision());
+  EXPECT_TRUE(curve.control_selection().empty());
+
+  harness.session.replace_document(SceneContentDocument{});
+  const QuaderSelectionSummary rebound = harness.editor.selection().summary();
+  EXPECT_EQ(rebound.sub_selection_kind, QuaderSubSelectionKind::None);
+  EXPECT_EQ(rebound.selected_sub_element_count, 0u);
+  EXPECT_EQ(rebound.sub_selection_revision, 0u);
+  EXPECT_EQ(rebound.selection_revision,
+            harness.session.modeling().selection_revision());
+  EXPECT_FALSE(harness.session.selection().has_sub_selection());
+}
+
+TEST(CurveToolServiceTests,
      ViewportControlClicksUseCanonicalReplaceAddAndRemovePolicyOnRelease) {
   CurveToolHarness harness;
   harness.make_curve();
@@ -3838,7 +5197,7 @@ TEST(CurveToolServiceTests,
   harness.session.history().clear();
 
   (void)harness.controller.handle_before_active_tool(
-      harness.editor, harness.gizmo_frame(), &curve);
+      harness.editor, harness.gizmo_frame(), harness.session.native_tools());
   const auto *gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(gizmo, nullptr);
   EXPECT_NEAR(gizmo->info.pivot.x, pivot_before->x, 0.0001f);
@@ -3860,20 +5219,20 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(true, true, false, start), &curve)
+                      harness.gizmo_frame(true, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   harness.input.mouse_local = update;
   harness.input.mouse_screen = update;
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(false, true, false, start), &curve)
+                      harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
   ASSERT_TRUE(curve.dragging());
   ASSERT_TRUE(harness.controller
                   .handle_before_active_tool(
                       harness.editor,
-                      harness.gizmo_frame(false, false, true, start), &curve)
+                      harness.gizmo_frame(false, false, true, start), harness.session.native_tools())
                   .gizmo_consumed);
   ASSERT_FALSE(curve.dragging());
 

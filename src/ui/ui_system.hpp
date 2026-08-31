@@ -9,6 +9,7 @@
 #include "api/quader_events_api.hpp"
 #include "api/quader_materials_api.hpp"
 #include "api/quader_modeling_api.hpp"
+#include "api/quader_project_assets_api.hpp"
 #include "api/quader_standard_material_documents_api.hpp"
 #include "core/frame_timing.hpp"
 #include "core/localization_service.hpp"
@@ -19,6 +20,7 @@
 #include "ui/qt_material_presentation.hpp"
 #include "ui/qt_standard_material_preview_image_cache.hpp"
 #include "ui/qt_startup_presentation.hpp"
+#include "ui/retained_ui_presenter.hpp"
 #include "ui/ui_panel_manager.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -45,15 +47,12 @@ namespace quader {
 
 class AssetRegistry;
 class ConsolePanel;
-class CurveToolService;
 class EditorSelectionService;
 class InspectorPanel;
 class LayerPanel;
-class LinearArrayToolService;
 class ModelingSessionService;
+class NativeViewportToolCoordinator;
 class OutlinerPanel;
-class PivotToolService;
-class RadialArrayToolService;
 class ViewportPointPlacementService;
 class QtSettingsDialog;
 class QtCommandEventFilter;
@@ -108,12 +107,9 @@ public:
                              SceneDocument &document, AssetRegistry &assets,
                              ModelingSessionService &modeling,
                              EditorSelectionService &selection,
-                             PivotToolService &pivot,
-                             LinearArrayToolService &linear_array,
-                             RadialArrayToolService &radial_array,
+                             NativeViewportToolCoordinator &native_tools,
                              ViewportPointPlacementService &point_placement,
-                             AssetId default_material,
-                             CurveToolService *curve = nullptr);
+                             AssetId default_material);
   void set_default_material(AssetId default_material) {
     default_material_ = default_material;
   }
@@ -263,10 +259,7 @@ private:
   AssetRegistry *assets_ = nullptr;
   ModelingSessionService *modeling_ = nullptr;
   EditorSelectionService *selection_ = nullptr;
-  PivotToolService *pivot_ = nullptr;
-  LinearArrayToolService *linear_array_ = nullptr;
-  RadialArrayToolService *radial_array_ = nullptr;
-  CurveToolService *curve_ = nullptr;
+  NativeViewportToolCoordinator *native_tools_ = nullptr;
   ViewportPointPlacementService *point_placement_ = nullptr;
   AssetId default_material_ = kInvalidAssetId;
   FrameTiming frame_timing_{};
@@ -278,28 +271,89 @@ private:
   bool initialized_ = false;
   bool ui_settings_changed_ = false;
   std::string localized_locale_;
-  std::uint64_t outliner_scene_revision_ = 0;
-  std::uint64_t outliner_scene_selection_revision_ = 0;
-  std::uint64_t outliner_instance_edit_revision_ = 0;
-  std::uint64_t layers_scene_revision_ = 0;
-  std::uint64_t layers_scene_selection_revision_ = 0;
-  std::uint64_t inspector_scene_revision_ = 0;
-  std::uint64_t inspector_modeling_content_revision_ = 0;
-  std::uint64_t inspector_modeling_selection_revision_ = 0;
-  std::uint64_t inspector_material_presentation_revision_ = 0;
-  std::uint64_t toolbar_scene_revision_ = 0;
-  std::uint64_t toolbar_scene_selection_revision_ = 0;
-  std::uint64_t toolbar_modeling_content_revision_ = 0;
-  std::uint64_t toolbar_modeling_selection_revision_ = 0;
-  std::uint64_t toolbar_active_tool_revision_ = 0;
-  std::uint64_t toolbar_transform_space_revision_ = 0;
-  std::uint64_t tool_settings_revision_ = 0;
-  std::optional<QuaderFaceTextureRevision> face_texture_settings_revision_;
-  std::uint64_t face_texture_keybindings_revision_ = 0;
-  double face_texture_rotation_step_ = 0.0;
-  std::optional<QuaderUvPeelRevision> uv_peel_settings_revision_;
-  std::uint64_t uv_peel_keybindings_revision_ = 0;
-  bool tool_settings_refresh_valid_ = false;
+  std::uint64_t localized_revision_ = 0u;
+
+  /** Captures revisions that determine whether the retained outliner must refresh. */
+  struct OutlinerPresentationStamp final {
+    std::uint64_t hierarchy_revision = 0u;
+    std::uint64_t selection_revision = 0u;
+    std::uint64_t instance_edit_revision = 0u;
+    std::uint64_t localization_revision = 0u;
+    friend bool operator==(const OutlinerPresentationStamp &,
+                           const OutlinerPresentationStamp &) = default;
+  };
+  /** Captures revisions that determine whether the retained layers panel must refresh. */
+  struct LayersPresentationStamp final {
+    std::uint64_t layer_revision = 0u;
+    std::uint64_t selection_revision = 0u;
+    std::uint64_t localization_revision = 0u;
+    friend bool operator==(const LayersPresentationStamp &,
+                           const LayersPresentationStamp &) = default;
+  };
+  /** Captures revisions that determine whether the retained inspector must refresh. */
+  struct InspectorPresentationStamp final {
+    std::uint64_t scene_revision = 0u;
+    std::uint64_t modeling_content_revision = 0u;
+    std::uint64_t modeling_selection_revision = 0u;
+    std::uint64_t material_presentation_revision = 0u;
+    std::uint64_t localization_revision = 0u;
+    friend bool operator==(const InspectorPresentationStamp &,
+                           const InspectorPresentationStamp &) = default;
+  };
+  /** Captures owner revisions shared by retained toolbar controls. */
+  struct ToolbarOwnerPresentationStamp final {
+    bool owner_available = false;
+    std::uint64_t scene_revision = 0u;
+    std::uint64_t scene_selection_revision = 0u;
+    std::uint64_t modeling_content_revision = 0u;
+    std::uint64_t modeling_selection_revision = 0u;
+    friend bool operator==(const ToolbarOwnerPresentationStamp &,
+                           const ToolbarOwnerPresentationStamp &) = default;
+  };
+  /** Captures the active-tool revision presented by the toolbar. */
+  struct ToolbarToolPresentationStamp final {
+    std::uint64_t active_tool_revision = 0u;
+    friend bool operator==(const ToolbarToolPresentationStamp &,
+                           const ToolbarToolPresentationStamp &) = default;
+  };
+  /** Captures the transform-space revision presented by the toolbar. */
+  struct ToolbarTransformPresentationStamp final {
+    std::uint64_t transform_space_revision = 0u;
+    friend bool operator==(const ToolbarTransformPresentationStamp &,
+                           const ToolbarTransformPresentationStamp &) = default;
+  };
+  /** Captures the active settings revision presented by Tool Settings. */
+  struct ToolSettingsPresentationStamp final {
+    std::uint64_t active_settings_revision = 0u;
+    friend bool operator==(const ToolSettingsPresentationStamp &,
+                           const ToolSettingsPresentationStamp &) = default;
+  };
+  /** Captures face-texture settings and shortcut inputs shown by retained controls. */
+  struct FaceTexturePresentationStamp final {
+    QuaderFaceTextureRevision settings;
+    std::uint64_t keybindings_revision = 0u;
+    double rotation_step = 0.0;
+    friend bool operator==(const FaceTexturePresentationStamp &,
+                           const FaceTexturePresentationStamp &) = default;
+  };
+  /** Captures UV peel settings and shortcut inputs shown by retained controls. */
+  struct UvPeelPresentationStamp final {
+    QuaderUvPeelRevision settings;
+    std::uint64_t keybindings_revision = 0u;
+    friend bool operator==(const UvPeelPresentationStamp &,
+                           const UvPeelPresentationStamp &) = default;
+  };
+
+  RetainedUiPresenter<OutlinerPresentationStamp> outliner_presenter_;
+  RetainedUiPresenter<LayersPresentationStamp> layers_presenter_;
+  RetainedUiPresenter<InspectorPresentationStamp> inspector_presenter_;
+  RetainedUiPresenter<ToolbarOwnerPresentationStamp> toolbar_owner_presenter_;
+  RetainedUiPresenter<ToolbarToolPresentationStamp> toolbar_tool_presenter_;
+  RetainedUiPresenter<ToolbarTransformPresentationStamp>
+      toolbar_transform_presenter_;
+  RetainedUiPresenter<ToolSettingsPresentationStamp> tool_settings_presenter_;
+  RetainedUiPresenter<FaceTexturePresentationStamp> face_texture_presenter_;
+  RetainedUiPresenter<UvPeelPresentationStamp> uv_peel_presenter_;
   QuaderEditorApi *project_workspace_events_editor_ = nullptr;
   std::vector<QuaderEventSubscription>
       project_workspace_event_subscriptions_;
@@ -314,24 +368,30 @@ private:
   std::uint64_t material_presentation_invalidation_generation_ = 1;
   std::uint64_t material_browser_catalog_signature_ = 0;
   QuaderMaterialReference material_browser_active_reference_;
-  std::uint64_t active_material_panel_catalog_revision_ = 0;
-  QuaderMaterialReference active_material_panel_reference_;
-  bool active_material_panel_refresh_valid_ = false;
+  /** Captures material identity and catalog revision shown by the active-material panel. */
+  struct ActiveMaterialPanelPresentationStamp final {
+    std::uint64_t catalog_revision = 0u;
+    QuaderMaterialReference reference;
+    friend bool operator==(const ActiveMaterialPanelPresentationStamp &,
+                           const ActiveMaterialPanelPresentationStamp &) =
+        default;
+  };
+  RetainedUiPresenter<ActiveMaterialPanelPresentationStamp>
+      active_material_panel_presenter_;
 
+  /** Keys one attempted material-catalog rebuild by owner and invalidation revisions. */
   struct MaterialPresentationCatalogStamp final {
     const QuaderEditorApi *editor = nullptr;
-    const SceneDocument *document = nullptr;
-    const AssetRegistry *assets = nullptr;
-    std::uint64_t active_scene_id = 0;
-    std::uint64_t material_catalog_revision = 0;
+    QuaderMaterialPresentationRevision owner_revision;
     std::uint64_t event_generation = 0;
     std::uint64_t invalidation_generation = 0;
-    std::string locale;
+    std::uint64_t localization_revision = 0u;
 
     bool operator==(const MaterialPresentationCatalogStamp &) const =
         default;
   };
 
+  /** Captures source-owner state that determines material presentation validity. */
   struct MaterialPresentationContextStamp final {
     const SceneDocument *document = nullptr;
     const ModelingSessionService *modeling = nullptr;
@@ -357,16 +417,22 @@ private:
   std::optional<MaterialPresentationContextStamp>
       material_presentation_context_observation_;
   bool material_presentation_cache_valid_ = false;
-  bool inspector_material_query_valid_ = false;
-  std::uint64_t inspector_material_query_presentation_revision_ = 0;
-  std::uint64_t inspector_material_query_scene_selection_revision_ = 0;
-  std::uint64_t inspector_material_query_hierarchy_revision_ = 0;
-  std::uint64_t inspector_material_query_material_binding_revision_ = 0;
-  std::uint64_t inspector_material_query_mesh_binding_revision_ = 0;
-  std::uint64_t inspector_material_query_mesh_material_usage_revision_ = 0;
-  std::uint64_t inspector_material_query_modeling_content_revision_ = 0;
-  std::uint64_t inspector_material_query_modeling_selection_revision_ = 0;
-  std::uint64_t inspector_material_query_modeling_object_map_revision_ = 0;
+  /** Captures revisions that determine whether inspector material usage must be queried. */
+  struct InspectorMaterialQueryStamp final {
+    std::uint64_t presentation_revision = 0u;
+    std::uint64_t scene_selection_revision = 0u;
+    std::uint64_t hierarchy_revision = 0u;
+    std::uint64_t material_binding_revision = 0u;
+    std::uint64_t mesh_binding_revision = 0u;
+    std::uint64_t mesh_material_usage_revision = 0u;
+    std::uint64_t modeling_content_revision = 0u;
+    std::uint64_t modeling_selection_revision = 0u;
+    std::uint64_t modeling_object_map_revision = 0u;
+    friend bool operator==(const InspectorMaterialQueryStamp &,
+                           const InspectorMaterialQueryStamp &) = default;
+  };
+  RetainedUiPresenter<InspectorMaterialQueryStamp>
+      inspector_material_query_presenter_;
   QuaderMaterialUsageScope material_find_replace_scope_ =
       QuaderMaterialUsageScope::ActiveScene;
   std::string material_find_replace_project_identity_;
@@ -379,26 +445,30 @@ private:
   std::uint64_t material_picker_presentation_revision_ = 0;
   QtStandardMaterialPreviewImageCache
       standard_material_preview_image_cache_;
-  MaterialEditSessionId standard_material_editor_session_id_;
-  ProjectAssetId standard_material_editor_asset_id_;
-  std::uint64_t standard_material_editor_draft_revision_ = 0u;
-  std::uint64_t standard_material_editor_clean_revision_ = 0u;
-  bool standard_material_editor_dirty_ = false;
-  bool standard_material_editor_refresh_valid_ = false;
-  bool standard_material_editor_has_document_ = false;
-  std::string outliner_locale_;
-  std::string layers_locale_;
-  std::string inspector_locale_;
-  bool outliner_refresh_valid_ = false;
-  bool layers_refresh_valid_ = false;
-  bool inspector_refresh_valid_ = false;
-  bool toolbar_refresh_valid_ = false;
-  bool toolbar_owner_available_ = false;
-  std::uint64_t status_command_revision_ = 0;
-  std::uint32_t status_live_count_ = 0;
-  std::uint8_t status_live_kind_ = 0;
-  std::string status_locale_;
-  bool status_refresh_valid_ = false;
+  /** Captures the edit-session state presented by the standard material editor. */
+  struct StandardMaterialEditorPresentationStamp final {
+    MaterialEditSessionId session_id;
+    ProjectAssetId asset_id;
+    std::uint64_t draft_revision = 0u;
+    std::uint64_t clean_revision = 0u;
+    bool dirty = false;
+    bool has_document = false;
+    friend bool operator==(
+        const StandardMaterialEditorPresentationStamp &,
+        const StandardMaterialEditorPresentationStamp &) = default;
+  };
+  RetainedUiPresenter<StandardMaterialEditorPresentationStamp>
+      standard_material_editor_presenter_;
+  /** Captures command, live-object, and localization state shown in the status bar. */
+  struct StatusPresentationStamp final {
+    std::uint64_t command_revision = 0u;
+    std::uint32_t live_count = 0u;
+    std::uint8_t live_kind = 0u;
+    std::uint64_t localization_revision = 0u;
+    friend bool operator==(const StatusPresentationStamp &,
+                           const StatusPresentationStamp &) = default;
+  };
+  RetainedUiPresenter<StatusPresentationStamp> status_presenter_;
   bool home_visible_ = false;
   bool viewport_initialized_ = false;
   bool selection_toolbar_workspace_visible_ = true;

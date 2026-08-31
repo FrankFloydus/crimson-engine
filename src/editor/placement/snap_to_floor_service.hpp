@@ -9,13 +9,13 @@
 #include "editor/commands/document/document_command_result.hpp"
 #include "editor/modeling/modeling_result_types.hpp"
 #include "editor/placement/scene_surface_query.hpp"
+#include "editor/placement/snap_to_floor_tool_state_port.hpp"
 
 namespace quader {
 
 class AssetRegistry;
 class DocumentCommandService;
 class ModelingSessionService;
-class NativeViewportToolCoordinator;
 class SceneDocument;
 class SceneInstanceService;
 class ViewportLocalVisibilityService;
@@ -27,8 +27,9 @@ public:
       SceneDocument &scene, const AssetRegistry &assets,
       DocumentCommandService &document_commands,
       ModelingSessionService &modeling, SceneInstanceService &instances,
-      NativeViewportToolCoordinator &native_tools,
-      const ViewportLocalVisibilityService &local_visibility);
+      SnapToFloorToolStatePort &native_tools,
+      const ViewportLocalVisibilityService &local_visibility,
+      SceneSurfaceQuery &surface_query);
 
   [[nodiscard]] bool can_snap_selected_meshes_to_floor() const;
   DocumentCommandResult snap_selected_meshes_to_floor();
@@ -45,9 +46,9 @@ private:
   DocumentCommandService &document_commands_;
   ModelingSessionService &modeling_;
   SceneInstanceService &instances_;
-  NativeViewportToolCoordinator &native_tools_;
+  SnapToFloorToolStatePort &native_tools_;
   const ViewportLocalVisibilityService &local_visibility_;
-  SceneSurfaceQuery surface_query_;
+  SceneSurfaceQuery &surface_query_;
 };
 
 } // namespace quader

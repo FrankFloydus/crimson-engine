@@ -149,23 +149,23 @@ struct Double3 {
 }
 
 [[nodiscard]] std::optional<Error>
-validate_authored(const AuthoredCurve &authored) {
-  if (authored.points.size() > kMaxPoints) {
+validate_authored(std::span<const CurveControlPoint> points,
+                  std::span<const CurveSegmentId> segments, bool closed,
+                  CurveIdentityHighWater high_water) {
+  if (points.size() > kMaxPoints) {
     return curve_error(ErrorCode::ValidationFailed,
                        "Curve exceeds the supported point count.", "points");
   }
-  if (authored.closed && authored.points.size() < 2U) {
+  if (closed && points.size() < 2U) {
     return curve_error(ErrorCode::ValidationFailed,
                        "A closed curve needs at least two points.", "closed");
   }
   const std::size_t expected_segments =
-      authored.closed ? authored.points.size()
-                      : (authored.points.empty() ? 0U : authored.points.size() - 1U);
-  if (authored.segments.size() != expected_segments) {
+      closed ? points.size() : (points.empty() ? 0U : points.size() - 1U);
+  if (segments.size() != expected_segments) {
     return curve_error(ErrorCode::ValidationFailed,
                        "Curve segments must match the ordered path.", "segments");
   }
-  const auto high_water = authored.identity_high_water;
   if (high_water.next_point_index == 0 ||
       high_water.next_point_index > kExhaustedIndex ||
       high_water.next_segment_index == 0 ||
@@ -175,9 +175,9 @@ validate_authored(const AuthoredCurve &authored) {
                        "identity_high_water");
   }
   std::unordered_set<std::uint32_t> point_ids;
-  point_ids.reserve(authored.points.size());
-  for (std::size_t i = 0; i < authored.points.size(); ++i) {
-    const auto &point = authored.points[i];
+  point_ids.reserve(points.size());
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    const auto &point = points[i];
     if (!point.id.valid() || point.id.generation != 1 ||
         point.id.index >= high_water.next_point_index ||
         !point_ids.insert(point.id.index).second) {
@@ -192,8 +192,8 @@ validate_authored(const AuthoredCurve &authored) {
     }
   }
   std::unordered_set<std::uint32_t> segment_ids;
-  segment_ids.reserve(authored.segments.size());
-  for (const auto id : authored.segments) {
+  segment_ids.reserve(segments.size());
+  for (const auto id : segments) {
     if (!id.valid() || id.generation != 1 ||
         id.index >= high_water.next_segment_index ||
         !segment_ids.insert(id.index).second) {
@@ -203,6 +203,12 @@ validate_authored(const AuthoredCurve &authored) {
     }
   }
   return std::nullopt;
+}
+
+[[nodiscard]] std::optional<Error>
+validate_authored(const AuthoredCurve &authored) {
+  return validate_authored(authored.points, authored.segments, authored.closed,
+                           authored.identity_high_water);
 }
 
 template <typename IdType>
@@ -587,7 +593,8 @@ bool CurveDocument::has_same_geometry(const CurveDocument &other) const noexcept
 }
 
 Result<OperationResult> CurveDocument::validate() const {
-  if (auto error = validate_authored(authored_curve())) {
+  if (auto error = validate_authored(points(), segments(), closed(),
+                                     identity_high_water_)) {
     return Result<OperationResult>::failure(std::move(*error));
   }
   return unchanged();

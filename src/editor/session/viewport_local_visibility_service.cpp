@@ -19,6 +19,7 @@
 #include <optional>
 #include <span>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace quader {
@@ -50,10 +51,12 @@ ViewportLocalVisibilityService::ViewportLocalVisibilityService(
     SceneDocument &scene, AssetRegistry &assets,
     ModelingSessionService &modeling, SceneInstanceService &instances,
     NativeViewportToolCoordinator &native_tools,
-    ViewportWorkspaceService &workspace)
+    ViewportWorkspaceService &workspace,
+    ResolvedHoverClearer clear_resolved_hover)
     : scene_(scene), assets_(assets), modeling_(modeling),
       instances_(instances), native_tools_(native_tools),
-      workspace_(workspace) {}
+      workspace_(workspace),
+      clear_resolved_hover_(std::move(clear_resolved_hover)) {}
 
 bool ViewportLocalVisibilityService::active() const {
   reconcile_scene_lifecycle();
@@ -141,7 +144,7 @@ ViewportLocalVisibilityMutation ViewportLocalVisibilityService::toggle() {
   if (workspace_.local_visibility_active()) {
     const bool changed = workspace_.exit_local_visibility();
     if (changed) {
-      (void)modeling_.clear_selection_hover();
+      clear_resolved_hover_();
       lifecycle_reconcile_valid_ = false;
     }
     return {
@@ -217,7 +220,7 @@ ViewportLocalVisibilityMutation ViewportLocalVisibilityService::toggle() {
   const bool changed =
       workspace_.enter_local_visibility(baseline_ids, member_ids);
   if (changed) {
-    (void)modeling_.clear_selection_hover();
+    clear_resolved_hover_();
     last_reconciled_scene_content_revision_ = scene_.content_revision();
     last_reconciled_workspace_revision_ =
         workspace_.local_visibility_revision();
@@ -282,7 +285,7 @@ void ViewportLocalVisibilityService::reconcile_scene_lifecycle() const {
                   });
   if (!has_live_member) {
     if (workspace_.exit_local_visibility()) {
-      (void)modeling_.clear_selection_hover();
+      clear_resolved_hover_();
     }
   }
   last_reconciled_scene_content_revision_ = scene_content_revision;

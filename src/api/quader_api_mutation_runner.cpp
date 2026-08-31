@@ -10,97 +10,21 @@
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "diagnostics/profile.hpp"
-#include "editor/session/scene_session.hpp"
+#include "editor/commands/scene_structural_lifecycle_service.hpp"
+#include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
-#include "editor/tools/native_viewport_tool_coordinator.hpp"
-#include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/selection/editor_selection_service.hpp"
+#include "editor/selection/scene_selection_application.hpp"
+#include "editor/session/scene_session.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
+#include "scene/scene_document.hpp"
 
 #include <memory>
-
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace quader {
-namespace {
-
-/**
- * Captures scene selection before history replay so modeling selection can be reprojected when needed.
- */
-struct SceneSelectionSnapshot {
-    std::vector<EntityId> selected;
-    EntityId active = kInvalidEntityId;
-};
-
-SceneSelectionSnapshot capture_scene_selection(const SceneSession &session) {
-  return {
-      .selected = session.scene().selected_entities(),
-      .active = session.scene().primary_selection(),
-  };
-}
-
-bool scene_selection_changed(const SceneSelectionSnapshot &before,
-                             const SceneSession &session) {
-  return before.selected != session.scene().selected_entities() ||
-         before.active != session.scene().primary_selection();
-}
-
-bool scene_selection_contains_non_modeling_entity(
-    const SceneSession &session) {
-  for (const EntityId entity : session.scene().selected_entities()) {
-    if (session.scene().modeling_object(entity) == nullptr) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool scene_selection_contains_modeling_entity(const SceneSession &session) {
-  for (const EntityId entity : session.scene().selected_entities()) {
-    if (session.scene().modeling_object(entity) != nullptr) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void project_object_selection_after_history_selection_change(
-    SceneSession &session, const SceneSelectionSnapshot &before,
-    ModelingSelectionMode selection_mode_before, const CommandResult &result) {
-  if (!result.ok || !result.changed ||
-      !scene_selection_changed(before, session)) {
-    return;
-  }
-
-  if (is_component_selection_mode(selection_mode_before)) {
-    return;
-  }
-  if (selection_mode_before == ModelingSelectionMode::Group) {
-    session.modeling()
-        .clear_runtime_object_selection_for_scene_owned_selection();
-    return;
-  }
-
-  if (scene_selection_contains_non_modeling_entity(session)) {
-    if (!scene_selection_contains_modeling_entity(session)) {
-      session.modeling()
-          .clear_runtime_object_selection_for_scene_owned_selection();
-      return;
-    }
-    session.modeling().project_object_selection_from_scene(true);
-    return;
-  }
-
-  const ModelingSelectionSummary summary =
-      session.modeling().selection_summary();
-  if (!summary.has_selection ||
-      selection_mode_uses_scene_document(summary.mode)) {
-    session.modeling().project_object_selection_from_scene();
-  }
-}
-
-} // namespace
 
 QuaderApiMutationRunner::QuaderApiMutationRunner(QuaderApiSession session)
     : session_(std::move(session)),
@@ -228,9 +152,6 @@ QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::create_point_light(
           args.name, to_scene_light_component(args.light), args.parent,
           to_scene_transform(args.transform), args.select_created);
   const EntityId created_entity = command.entity;
-  if (command.ok && command.changed && args.select_created) {
-    session.modeling().project_object_selection_from_scene(true);
-  }
 
   const QuaderApiVoidResult status =
       run_document_result(std::move(command), "Create Point Light");
@@ -260,9 +181,6 @@ QuaderApiMutationRunner::create_directional_light(
           args.name, to_scene_light_component(args.light), args.parent,
           to_scene_transform(args.transform), args.select_created);
   const EntityId created_entity = command.entity;
-  if (command.ok && command.changed && args.select_created) {
-    session.modeling().project_object_selection_from_scene(true);
-  }
 
   const QuaderApiVoidResult status =
       run_document_result(std::move(command), "Create Directional Light");
@@ -366,7 +284,7 @@ bool QuaderApiMutationRunner::can_run_tracked_modeling_tool(
   }
   return modeling_commands_
       .availability(session.modeling(), tool_id, &session.selection(),
-                    active_material)
+                    active_material, &session.structural_lifecycle())
       .enabled;
 }
 
@@ -389,8 +307,9 @@ QuaderApiMutationRunner::run_tracked_modeling_tool(std::string_view tool_id) {
     }
   }
   return status_from(modeling_commands_.execute(history(), session.modeling(),
-                                                session.selection(), tool_id,
-                                                active_material),
+                                                 session.selection(), tool_id,
+                                                 active_material,
+                                                 &session.structural_lifecycle()),
                      QuaderMutationKind::Modeling, tool_id);
 }
 
@@ -405,7 +324,8 @@ QuaderApiVoidResult QuaderApiMutationRunner::begin_tracked_modeling_preview(
   SceneSession &session = scene_session();
   return status_from(
       modeling_commands_.begin_preview(history(), session.modeling(),
-                                       session.selection(), action_id),
+                                       session.selection(), action_id,
+                                       &session.structural_lifecycle()),
       QuaderMutationKind::Modeling, action_id);
 }
 
@@ -525,14 +445,8 @@ QuaderApiVoidResult QuaderApiMutationRunner::undo() {
       return status_from(cancel, QuaderMutationKind::Runtime, "Undo");
     }
   }
-  const SceneSelectionSnapshot before = capture_scene_selection(session);
-  const ModelingSelectionMode selection_mode_before =
-      session.modeling().selection_mode();
   EditorCommandService commands = editor_commands();
   CommandResult result = commands.undo();
-  project_object_selection_after_history_selection_change(session, before,
-                                                          selection_mode_before,
-                                                          result);
   return status_from(std::move(result), QuaderMutationKind::Document, "Undo");
 }
 
@@ -544,15 +458,8 @@ QuaderApiVoidResult QuaderApiMutationRunner::redo() {
     return status_from(command_invalid_result("Redo is not available"),
                        QuaderMutationKind::Document, "Redo");
   }
-  SceneSession &session = scene_session();
-  const SceneSelectionSnapshot before = capture_scene_selection(session);
-  const ModelingSelectionMode selection_mode_before =
-      session.modeling().selection_mode();
   EditorCommandService commands = editor_commands();
   CommandResult result = commands.redo();
-  project_object_selection_after_history_selection_change(session, before,
-                                                          selection_mode_before,
-                                                          result);
   return status_from(std::move(result), QuaderMutationKind::Document, "Redo");
 }
 
@@ -564,6 +471,140 @@ QuaderApiVoidResult QuaderApiMutationRunner::repeat_last_action() {
     return modeling_content_blocked_status("repeating a modeling action.");
   }
   SceneSession &session = scene_session();
+  if (session.modeling().repeat_last_action_uses_structural_duplicate()) {
+    const SceneSelectionState selection_before =
+        capture_scene_selection(session.scene());
+    SceneScalarCompensationCheckpoint scalar_checkpoint =
+        session.scene().capture_scalar_compensation_checkpoint();
+    if (!scalar_checkpoint.valid()) {
+      return status_from(
+          command_invalid_result(
+              "Scene scalar compensation scope is unavailable."),
+          QuaderMutationKind::Modeling, "Repeat Last Action");
+    }
+    EditorTransaction transaction =
+        session.history().begin_transaction("Repeat Last Action");
+    if (!transaction.active()) {
+      return status_from(
+          command_invalid_result(
+              "Cannot repeat while another editor transaction is active."),
+          QuaderMutationKind::Modeling, "Repeat Last Action");
+    }
+    const ModelingStructuralDuplicate structural_duplicate =
+        [&session](EditorTransaction &active_transaction,
+                   ModelingSelectionMode selection_mode,
+                   std::string_view label) {
+          return modeling_structural_duplicate_result(
+              session.structural_lifecycle()
+                  .duplicate_hierarchy_in_transaction(
+                      active_transaction,
+                      session.structural_lifecycle().selected_roots(),
+                      selection_mode, std::string(label)));
+        };
+    ModelingCommandResult repeated =
+        session.modeling().repeat_last_structural_transform(
+            transaction, session.history(), structural_duplicate);
+    if (!repeated.ok || !repeated.changed) {
+      if (!session.scene().acknowledge_scalar_compensation_checkpoint(
+              scalar_checkpoint) ||
+          !session.scene().begin_scalar_compensation_restore(
+              scalar_checkpoint)) {
+        (void)session.scene().discard_scalar_compensation_checkpoint(
+            scalar_checkpoint);
+        const CommandResult preserved =
+            transaction.active() ? transaction.commit()
+                                 : command_unchanged_result();
+        repeated.ok = false;
+        repeated.changed = true;
+        if (!repeated.message.empty()) {
+          repeated.message += "; ";
+        }
+        repeated.message +=
+            "Repeat rollback was rejected because the Scene changed outside "
+            "the compensation scope.";
+        if (!preserved.ok) {
+          repeated.message +=
+              "; applied repeat state could not be retained in history: ";
+          repeated.message += preserved.message;
+        }
+        return status_from(std::move(repeated), QuaderMutationKind::Modeling,
+                           "Repeat Last Action");
+      }
+      // The structural lifecycle owns rollback of the commands it appended
+      // when duplication itself fails. In that case the caller-owned
+      // transaction is already inactive and must not be canceled a second
+      // time, because an inactive cancel is itself an error.
+      const CommandResult rollback =
+          transaction.active() ? transaction.cancel()
+                               : command_unchanged_result();
+      const bool selection_restored = same_scene_selection(
+          selection_before, capture_scene_selection(session.scene()));
+      if (!rollback.ok || !selection_restored) {
+        (void)session.scene().discard_scalar_compensation_checkpoint(
+            scalar_checkpoint);
+        repeated.ok = false;
+        repeated.changed = true;
+        const std::string rollback_message =
+            !rollback.ok
+                ? "Repeat failed and rollback failed: " + rollback.message
+                : "Repeat rollback did not restore the exact scene selection.";
+        repeated.message = repeated.message.empty()
+                               ? rollback_message
+                               : repeated.message + "; " + rollback_message;
+      } else if (!session.scene().restore_scalar_compensation_checkpoint(
+                     scalar_checkpoint)) {
+        repeated.ok = false;
+        repeated.changed = true;
+        if (!repeated.message.empty()) {
+          repeated.message += "; ";
+        }
+        repeated.message += "Repeat scalar compensation failed.";
+      } else {
+        repeated.changed = false;
+      }
+      return status_from(std::move(repeated), QuaderMutationKind::Modeling,
+                         "Repeat Last Action");
+    }
+    if (!session.scene().acknowledge_scalar_compensation_checkpoint(
+            scalar_checkpoint)) {
+      const CommandResult committed = transaction.commit();
+      (void)session.scene().discard_scalar_compensation_checkpoint(
+          scalar_checkpoint);
+      CommandResult failure = command_invalid_result(
+          "Repeat scalar compensation boundary could not be acknowledged.");
+      failure.changed = true;
+      if (!committed.ok) {
+        failure.message += "; applied repeat state could not be retained in "
+                           "history: ";
+        failure.message += committed.message;
+      }
+      return status_from(std::move(failure), QuaderMutationKind::Modeling,
+                         "Repeat Last Action");
+    }
+    const CommandResult committed = transaction.commit();
+    const bool scene_unchanged_during_commit =
+        session.scene().begin_scalar_compensation_restore(scalar_checkpoint);
+    (void)session.scene().discard_scalar_compensation_checkpoint(
+        scalar_checkpoint);
+    if (!scene_unchanged_during_commit) {
+      CommandResult failure = command_invalid_result(
+          "Scene changed while Repeat Last Action was committed; rollback "
+          "was rejected.");
+      failure.changed = true;
+      return status_from(std::move(failure), QuaderMutationKind::Modeling,
+                         "Repeat Last Action");
+    }
+    if (!committed.ok || !committed.changed) {
+      return status_from(
+          committed.ok
+              ? command_invalid_result(
+                    "Repeat Last Action could not be committed to history.")
+              : committed,
+          QuaderMutationKind::Modeling, "Repeat Last Action");
+    }
+    return status_from(std::move(repeated), QuaderMutationKind::Modeling,
+                       "Repeat Last Action");
+  }
   EditorCommandService commands = editor_commands();
   return status_from(commands.execute_modeling(
                          std::make_unique<RepeatLastActionHistoryCommand>(

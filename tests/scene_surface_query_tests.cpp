@@ -7,12 +7,17 @@
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset.hpp"
 #include "editor/placement/scene_surface_query.hpp"
+#include "editor/placement/snap_to_floor_service.hpp"
+#include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/viewport/viewport_curve_picking.hpp"
 #include "scene/scene_document.hpp"
+#include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -227,6 +232,7 @@ TEST(SceneSurfaceQueryTests,
   EXPECT_EQ(occurrence_stats.participant_count, 4u);
   EXPECT_EQ(occurrence_stats.unique_geometry_count, 1u);
   EXPECT_EQ(occurrence_stats.blas_build_count, 1u);
+  EXPECT_EQ(occurrence_stats.landmark_count, 28u);
 
   const auto participants = with_occurrences.participants();
   const auto first_occurrence = std::ranges::find_if(
@@ -407,6 +413,246 @@ TEST(SceneSurfaceQueryTests,
   EXPECT_TRUE(after_visibility.valid());
   EXPECT_TRUE(after_occurrence.valid());
   EXPECT_TRUE(after_local_visibility.valid());
+}
+
+TEST(SceneSurfaceQueryTests,
+     SessionSharesOneWarmSurfaceIndexAcrossPlacementAndSnapToFloor) {
+  SceneSurfaceQueryHarness harness;
+  const quader::AssetId mesh = harness.add_mesh(make_surface_mesh());
+  ASSERT_NE(mesh, quader::kInvalidAssetId);
+  (void)harness.add_mesh_entity(mesh, "Shared Surface");
+
+  quader::ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.view_axis(quader::ViewportViewAxis::Y, 1);
+  quader::ViewportPointPlacementPolicy policy;
+  policy.vertex = false;
+  policy.edge_midpoint = false;
+  policy.face_center = false;
+  policy.surface = true;
+  policy.grid = false;
+  const quader::ViewportPointPlacementResult placement =
+      harness.session.point_placement().resolve(
+          harness.session.scene(), harness.session.assets(), camera,
+          {.mouse_local = {400.0f, 300.0f}, .policy = policy});
+  ASSERT_TRUE(placement.valid);
+
+  const quader::SceneSurfaceQueryStats placement_stats =
+      harness.session.point_placement().surface_query_stats();
+  const quader::SceneSurfaceQueryStats floor_stats =
+      harness.session.snap_to_floor().surface_query_stats();
+  EXPECT_EQ(placement_stats.snapshot_build_count, 1u);
+  EXPECT_EQ(floor_stats.snapshot_build_count,
+            placement_stats.snapshot_build_count);
+  EXPECT_EQ(floor_stats.blas_build_count, placement_stats.blas_build_count);
+  (void)harness.session.scene_surface_query().snapshot();
+  EXPECT_EQ(harness.session.scene_surface_query().stats().snapshot_build_count,
+            placement_stats.snapshot_build_count);
+}
+
+TEST(SceneSurfaceQueryTests,
+     PointPlacementExpandsFormalOccurrencesAndReturnsOccurrenceIdentity) {
+  SceneSurfaceQueryHarness harness;
+  const quader::AssetId mesh = harness.add_mesh(make_surface_mesh());
+  ASSERT_NE(mesh, quader::kInvalidAssetId);
+  const SceneSurfaceQueryHarness::FormalInstance formal =
+      harness.add_formal_instance(mesh, false);
+  ASSERT_TRUE(harness.session.scene().set_transform(
+      formal.first_occurrence,
+      quader::TransformComponent{.position = {1.0f, 0.0f, 0.0f}}));
+
+  quader::ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.view_axis(quader::ViewportViewAxis::Y, 1);
+  const quader::ViewportScreenPoint screen =
+      camera.project_world_point({1.0f, 0.0f, 0.0f});
+  ASSERT_TRUE(screen.visible);
+  quader::ViewportPointPlacementPolicy policy;
+  policy.vertex = false;
+  policy.edge_midpoint = false;
+  policy.face_center = false;
+  policy.surface = true;
+  policy.grid = false;
+
+  const quader::ViewportPointPlacementResult result =
+      harness.session.point_placement().resolve(
+          harness.session.scene(), harness.session.assets(), camera,
+          {.mouse_local = screen.position, .policy = policy});
+  ASSERT_TRUE(result.valid);
+  EXPECT_EQ(result.snap_kind, quader::ViewportPointSnapKind::Surface);
+  EXPECT_EQ(result.entity, formal.first_occurrence);
+  EXPECT_NEAR(result.world_position.x, 1.0f, kTestTolerance);
+  EXPECT_NEAR(result.world_position.y, 0.0f, kTestTolerance);
+
+  ASSERT_TRUE(
+      harness.session.scene().set_locked(formal.first_occurrence, true));
+  const quader::SceneSurfaceQuerySnapshot locked_snapshot =
+      harness.session.scene_surface_query().snapshot();
+  const quader::ViewportRay ray =
+      camera.ray_from_viewport_point(screen.position);
+  const std::optional<quader::SceneSurfaceHit> locked_occluder =
+      locked_snapshot.nearest_hit({
+          .world_origin = ray.origin,
+          .world_direction = ray.direction,
+          .eligibility = quader::SceneSurfaceEligibility::RenderVisible,
+      });
+  ASSERT_TRUE(locked_occluder.has_value());
+  EXPECT_EQ(locked_occluder->participant.display_entity,
+            formal.first_occurrence);
+  EXPECT_FALSE(locked_snapshot
+                   .nearest_hit({
+                       .world_origin = ray.origin,
+                       .world_direction = ray.direction,
+                       .eligibility =
+                           quader::SceneSurfaceEligibility::SelectableUnlocked,
+                   })
+                   .has_value());
+  EXPECT_FALSE(harness.session.point_placement()
+                   .resolve(harness.session.scene(), harness.session.assets(),
+                            camera,
+                            {.mouse_local = screen.position, .policy = policy})
+                   .valid);
+}
+
+TEST(SceneSurfaceQueryTests,
+     PivotLandmarksUseFormalOccurrenceTransformAndRejectLockedTargets) {
+  SceneSurfaceQueryHarness harness;
+  const quader::AssetId mesh = harness.add_mesh(make_surface_mesh());
+  ASSERT_NE(mesh, quader::kInvalidAssetId);
+  const SceneSurfaceQueryHarness::FormalInstance formal =
+      harness.add_formal_instance(mesh, false);
+  ASSERT_TRUE(harness.session.scene().set_transform(
+      formal.first_occurrence,
+      quader::TransformComponent{.position = {4.0f, 0.0f, 1.0f}}));
+
+  const quader::QVec3 occurrence_vertex{2.0f, 0.0f, -1.0f};
+  quader::ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.view_axis(quader::ViewportViewAxis::Y, 1);
+  const quader::ViewportScreenPoint screen =
+      camera.project_world_point(occurrence_vertex);
+  ASSERT_TRUE(screen.visible);
+
+  quader::ViewportPointPlacementPolicy policy =
+      quader::ViewportPointPlacementPolicy::pivot({
+          .vertex = true,
+          .edge_midpoint = false,
+          .face_center = false,
+          .grid = false,
+      });
+  const auto resolve = [&]() {
+    return harness.session.point_placement().resolve(
+        harness.session.scene(), harness.session.assets(), camera,
+        {.mouse_local = screen.position, .policy = policy});
+  };
+
+  const quader::ViewportPointPlacementResult visible = resolve();
+  ASSERT_TRUE(visible.valid);
+  EXPECT_EQ(visible.snap_kind, quader::ViewportPointSnapKind::Vertex);
+  EXPECT_EQ(visible.entity, formal.first_occurrence);
+  EXPECT_NEAR(visible.world_position.x, occurrence_vertex.x, kTestTolerance);
+  EXPECT_NEAR(visible.world_position.y, occurrence_vertex.y, kTestTolerance);
+  EXPECT_NEAR(visible.world_position.z, occurrence_vertex.z, kTestTolerance);
+
+  ASSERT_TRUE(
+      harness.session.scene().set_locked(formal.first_occurrence, true));
+  const quader::SceneSurfaceQuerySnapshot locked =
+      harness.session.scene_surface_query().snapshot();
+  ASSERT_TRUE(std::ranges::any_of(
+      locked.landmarks(), [&](const quader::SceneSurfaceLandmark &landmark) {
+        return landmark.participant.display_entity ==
+                   formal.first_occurrence &&
+               landmark.effectively_locked;
+      }));
+  EXPECT_FALSE(resolve().valid)
+      << "Locked formal geometry stays in render occlusion but cannot become "
+         "a Pivot landmark target.";
+}
+
+TEST(SceneSurfaceQueryTests,
+     LockedAndNonselectableFrontSurfacesOccludeEligiblePlacementTargets) {
+  SceneSurfaceQueryHarness harness;
+  const quader::AssetId mesh = harness.add_mesh(make_surface_mesh());
+  ASSERT_NE(mesh, quader::kInvalidAssetId);
+  const quader::EntityId back =
+      harness.add_mesh_entity(mesh, "Eligible Back Surface");
+  const quader::EntityId front = harness.add_mesh_entity(
+      mesh, "Locked Front Occluder", {0.0f, 1.0f, 0.0f});
+  ASSERT_TRUE(harness.session.scene().set_locked(front, true));
+
+  quader::ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.view_axis(quader::ViewportViewAxis::Y, 1);
+  const quader::ViewportScreenPoint screen =
+      camera.project_world_point({0.0f, 1.0f, 0.0f});
+  ASSERT_TRUE(screen.visible);
+  quader::ViewportPointPlacementPolicy policy;
+  policy.vertex = false;
+  policy.edge_midpoint = false;
+  policy.face_center = false;
+  policy.surface = true;
+  policy.grid = false;
+  const auto resolve = [&]() {
+    return harness.session.point_placement().resolve(
+        harness.session.scene(), harness.session.assets(), camera,
+        {.mouse_local = screen.position, .policy = policy});
+  };
+
+  const quader::ViewportRay ray =
+      camera.ray_from_viewport_point(screen.position);
+  const std::optional<quader::SceneSurfaceHit> visible_hit =
+      harness.session.scene_surface_query().snapshot().nearest_hit({
+          .world_origin = ray.origin,
+          .world_direction = ray.direction,
+      });
+  ASSERT_TRUE(visible_hit.has_value());
+  ASSERT_EQ(visible_hit->participant.display_entity, front);
+  EXPECT_FALSE(resolve().valid);
+
+  ASSERT_TRUE(harness.session.scene().set_locked(front, false));
+  ASSERT_TRUE(harness.session.scene().set_selectable(front, false));
+  EXPECT_FALSE(resolve().valid);
+
+  ASSERT_TRUE(harness.session.scene().set_visible(front, false));
+  const quader::ViewportPointPlacementResult revealed = resolve();
+  ASSERT_TRUE(revealed.valid);
+  EXPECT_EQ(revealed.entity, back);
+}
+
+TEST(SceneSurfaceQueryTests,
+     RenderVisibleSurfaceOverloadOccludesCurveControlsBehindLockedMeshes) {
+  SceneSurfaceQueryHarness harness;
+  const quader::AssetId mesh = harness.add_mesh(make_surface_mesh());
+  ASSERT_NE(mesh, quader::kInvalidAssetId);
+  const quader::EntityId occluder = harness.add_mesh_entity(
+      mesh, "Locked Curve Occluder", {0.0f, 1.0f, 0.0f});
+  ASSERT_TRUE(harness.session.scene().set_locked(occluder, true));
+
+  quader::ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.view_axis(quader::ViewportViewAxis::Y, 1);
+  const quader::ViewportScreenPoint screen =
+      camera.project_world_point({0.0f, 0.0f, 0.0f});
+  ASSERT_TRUE(screen.visible);
+  const std::array<quader::modeling::CurvePointSpec, 2u> points{{
+      {.position = {0.0f, 0.0f, 0.0f}},
+      {.position = {1.0f, 0.0f, 0.0f}},
+  }};
+  quader::CurveToolPreviewState curve{
+      .active = true,
+      .document =
+          quader::modeling::CurveDocument::make_bezier(points).or_throw(),
+  };
+
+  EXPECT_FALSE(quader::pick_unoccluded_viewport_curve_control(
+                   camera, curve, screen.position,
+                   harness.session.scene_surface_query().snapshot(), true)
+                   .has_value());
+  ASSERT_TRUE(harness.session.scene().set_visible(occluder, false));
+  EXPECT_TRUE(quader::pick_unoccluded_viewport_curve_control(
+                  camera, curve, screen.position,
+                  harness.session.scene_surface_query().snapshot(), true)
+                  .has_value());
 }
 
 } // namespace

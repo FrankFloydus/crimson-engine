@@ -7070,10 +7070,13 @@ simulation dependency for an editor-only geometric query.
 Invariant:
 
 - `src/editor/placement/SceneSurfaceQuery` owns native renderer-neutral CPU-triangle surface
-  queries. It freezes one immutable receiver snapshot per operation, shares geometry-keyed local
-  BLAS data across identical payloads and formal occurrences, builds a revision-keyed world TLAS,
-  performs exact two-sided nearest-hit tests with stable identity ties, and reuses one query scratch
-  buffer for a projection batch. Selected source geometry is excluded from the frozen snapshot.
+  queries. A scene session freezes all render-visible ordinary and formal-occurrence participants
+  in one immutable snapshot, borrowing the owner-cached scene occurrence projection. The query
+  shares geometry-keyed local BLAS data across identical payloads, builds a revision-keyed world
+  TLAS, performs exact two-sided nearest-hit tests with stable identity ties, and reuses query
+  scratch across a pointer or projection batch. Selectable/unlocked eligibility and source
+  exclusions are per-query policy; locked and nonselectable surfaces remain render occluders but
+  never become placement or snap targets.
 - `SnapToFloorService` resolves both workflows against that snapshot. Object mode promotes nested
   sources, samples each visible descendant AABB at its world bottom-center, and commits one atomic
   transform command. Vertex mode resolves every selected SDK vertex in world space and commits one
@@ -7784,3 +7787,81 @@ three intentional skips, five unrelated known failures), and guardrails run 402 
 seven unrelated known failures). The isolated SDK graph builds, its consumer tests pass, and its
 nested guardrail run repeats the same seven failures. Version 0.1.66 remains unchanged. No Quader
 window, smoke test, screenshot, GPU benchmark, or other visual test was launched.
+
+## 2026-08-29 - SceneDocument Is The Sole Project Object Truth
+
+- Stable editor-object identity and every live entity component are owned only by `SceneDocument`.
+  Do not restore `ProjectObjectRecord`, a project-side object allocator, or any live object-record
+  synchronization/index. Persistence, history, clipboard, and structural rollback share the
+  scene-owned `SceneEntityState` component inventory instead.
+- Current QDR writers serialize canonical `Entity` records and leave the retained
+  `ScenePayload.objects` field absent. The field and `ObjectRecord` schema stay in place solely for
+  binary-compatible reads. A legacy record is validated, may fill only a missing entity
+  `editor_object_id`, and must fail deterministically when it conflicts with an explicit entity ID;
+  all other entity fields take precedence.
+- Current authored mesh writers use the SDK topology payload through `MeshProjectionService`.
+  Schemas 1-3 CSR topology fields are reader-only compatibility data and are compiled through the
+  same projection owner; do not add another native/SDK topology conversion inside the QDR codec.
+
+Verification: the Debug `quader_document`, `quader_project_qdr_io`, and `quader_tests` targets
+build. All 74 focused QDR, document-owner, identity, atomic-write, and duplicate/delete history
+tests pass, as do all four project clipboard tests and the focused project-architecture guardrail.
+
+## 2026-08-30 - Six-Point Architecture Owner Consolidation
+
+Task/context: the broad architecture audit found six large parallel-owner outliers across
+structural commands, selection/spatial policy, viewport input, modeling publication, project
+identity, and retained render/UI synchronization. The approved AC-01 through AC-06 program removes
+those alternate production paths without changing the portable-modeling-core direction.
+
+Invariants:
+
+- `SceneStructuralLifecycleService` owns duplicate, destroy, group, and ungroup across scene,
+  modeling, Curve, selection, and history state. Grouping captures the modeling memento and every
+  registered `EditorSubSelectionBaseline`. Structural repeat state is recorded only after commit.
+  Exact modeling-memento restoration is restricted to failed-transaction compensation; normal
+  structural undo/redo keeps monotonic revisions. Delete compensation preserves both selected roots
+  and definition roots verbatim, and redo cannot publish a half-deleted scene.
+- `EditorSelectionService` owns provider selection, click/marquee policy, sticky hover, validation,
+  and mixed selections. Curve publication must enroll the native binding; hierarchy capture must
+  not invent one. A successful SDK selection no-op may still update host mode or active selection.
+  Scene-surface backface testing adjusts authored winding for reflected transforms, and mesh/Curve
+  depth and snap ordering use the canonical occurrence stack and stable comparator.
+- Native tool interaction belongs under `src/editor/tools` and the canonical viewport tool runtime.
+  `ViewportInteractionController` owns semantic precedence, `ViewportPointerGesture` owns press
+  identity/reservation/threshold/cancellation/release suppression, and the keybinding service owns
+  stateful semantic chord sequences. Qt translates and presents only.
+- Portable modeling previews support atomic multi-object participation.
+  `ModelingHostPublicationTransaction` is the native SDK/scene/asset/binding/selection/revision
+  rollback boundary, and `ModelingObjectBindingRegistry` is the mapping owner. Capture preview
+  baselines before active-operation tags. Empty participants capture no binding. Component previews
+  must publish host state before acknowledging the fence. Capture asset uniqueness before the first
+  write: preserve unique identities and use copy-on-write only for shared assets.
+- Half Cut uses typed active-operation ownership, stages settings until projection succeeds,
+  retains every source scene identity, and rebuilds the previous live preview after structural
+  failure. Curve cancellation prefers exact restoration and adapts only when external state makes
+  that baseline invalid; operation and transform cancel retain their established preserving
+  semantics.
+- `SceneDocument` is the only live project-object/component truth. `SceneEntityState` is the common
+  durable inventory for QDR, history, clipboard, bindings, and rollback. Current writers omit the
+  legacy object vector; validated legacy `ObjectRecord` and CSR topology remain reader-only.
+  Topology conversion routes through `MeshProjectionService`. Allocation-time scalar baselines
+  enable exact recreated-ID failure compensation without weakening normal revision monotonicity.
+- Typed render source stamps and dependency masks gate retained work before expensive queries.
+  `ViewportOverlaySubmissionCoordinator` owns overlay composition/submission,
+  `InstancedWireRenderBackend` owns shared wire resources, and `MaterialPresentationService` plus
+  the Standard Material adapters provide owner-derived snapshots. Retained UI presenters own typed
+  refresh stamps and unchanged-frame gates; do not restore per-frame broad catalogs or unchanged Qt
+  setter fanout.
+
+Final verification: the eight-test stability cluster passes; the allocation-failure duplicate
+rollback, related repeat rollback, and all six scalar-compensation tests pass. The full native suite
+runs 1,917 tests with 1,914 passes and three intentional licensed-fixture skips. The command
+behavior baseline retains all 190 command IDs and was approved with the six-owner consolidation
+reason after deterministic contract review. Guardrails pass 419/419. The mandatory regression gate
+passes all six CTest targets and its Debug/Profile build, and the separate full CTest invocation also
+passes 6/6. The isolated installed-SDK consumer is locked to the canonical Debug/Profile MSVC ABI
+(`/MD`, `NDEBUG`, `_ITERATOR_DEBUG_LEVEL=0`) without exporting downstream global policy. Both
+canonical app builds pass in required order at `build/vs2026/Debug/quader.exe` and
+`build/vs2026/Release/quader.exe`. No Quader window, smoke test, screenshot, GPU benchmark, or
+visual test was launched, following the user's request. Version 0.1.66 remains unchanged.

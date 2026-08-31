@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -22,6 +23,9 @@
 #include <vector>
 
 namespace quader {
+
+class SceneDocument;
+class SceneMeshOccurrenceProjectionSnapshot;
 
 /**
  * Stores the Entity Record data contract used by the scene graph document layer.
@@ -102,6 +106,168 @@ struct SceneHierarchyProjectionWorkStats {
   std::uint64_t world_transform_multiply_count = 0u;
 };
 
+/** Monotonic work counters for SceneDocument-owned spatial projections. */
+struct SceneSpatialProjectionCacheStats final {
+  std::uint64_t hierarchy_build_count = 0u;
+  std::uint64_t hierarchy_cache_hit_count = 0u;
+  std::uint64_t mesh_occurrence_build_count = 0u;
+  std::uint64_t mesh_occurrence_cache_hit_count = 0u;
+};
+
+/** Scene-owned domains that one modeling host publication may mutate. */
+enum class SceneModelingProjectionDomain : std::uint8_t {
+  None = 0u,
+  MeshBindings = 1u << 0u,
+  CurveBindings = 1u << 1u,
+  Selection = 1u << 2u,
+  Structure = 1u << 3u,
+};
+
+[[nodiscard]] constexpr SceneModelingProjectionDomain
+operator|(SceneModelingProjectionDomain left,
+          SceneModelingProjectionDomain right) noexcept {
+  return static_cast<SceneModelingProjectionDomain>(
+      static_cast<std::uint8_t>(left) |
+      static_cast<std::uint8_t>(right));
+}
+
+[[nodiscard]] constexpr SceneModelingProjectionDomain
+operator&(SceneModelingProjectionDomain left,
+          SceneModelingProjectionDomain right) noexcept {
+  return static_cast<SceneModelingProjectionDomain>(
+      static_cast<std::uint8_t>(left) &
+      static_cast<std::uint8_t>(right));
+}
+
+/** Exact bounded work performed while capturing a modeling projection. */
+struct SceneModelingProjectionCheckpointWork final {
+  std::size_t participant_reference_count = 0u;
+  std::size_t participant_record_count = 0u;
+  std::size_t live_entity_lookup_count = 0u;
+  std::size_t live_entity_record_count = 0u;
+  std::size_t mesh_binding_record_count = 0u;
+  std::size_t curve_binding_record_count = 0u;
+  std::size_t selection_record_count = 0u;
+  std::size_t structure_record_count = 0u;
+};
+
+/** Exact bounded work performed while restoring a modeling projection. */
+struct SceneModelingProjectionRestoreWork final {
+  std::size_t participant_record_count = 0u;
+  std::size_t entity_lookup_count = 0u;
+  std::size_t created_entity_removal_count = 0u;
+  std::size_t recreated_entity_count = 0u;
+  std::size_t mesh_binding_write_count = 0u;
+  std::size_t curve_binding_write_count = 0u;
+  std::size_t selection_write_count = 0u;
+  std::size_t structure_write_count = 0u;
+  std::size_t boundary_hierarchy_write_count = 0u;
+};
+
+/** Truthful work for one owner-indexed binding reference-count query. */
+struct SceneBindingReferenceCountWork final {
+  std::size_t owner_index_lookup_count = 0u;
+};
+
+/**
+ * Opaque scene-owner checkpoint for one bounded modeling publication.
+ *
+ * Allocation and scalar revision state are always captured. Selection and
+ * structural state are included only when requested. A structural checkpoint
+ * is an exclusive allocation lease: every successful entity allocation until
+ * restore must be reported as a created participant, otherwise restore is
+ * rejected before any scene mutation.
+ */
+class SceneModelingProjectionCheckpoint final {
+public:
+  SceneModelingProjectionCheckpoint() = default;
+  [[nodiscard]] bool valid() const noexcept { return state_ != nullptr; }
+  [[nodiscard]] const SceneModelingProjectionCheckpointWork &
+  work() const noexcept {
+    return work_;
+  }
+
+private:
+  friend class SceneDocument;
+  struct State;
+
+  std::shared_ptr<const State> state_;
+  SceneModelingProjectionCheckpointWork work_;
+};
+
+/** Bounded work performed by a counter-only modeling mutation fence. */
+struct SceneModelingProjectionMutationFenceWork final {
+  std::size_t input_reference_count = 0u;
+  std::size_t participant_record_count = 0u;
+  std::size_t mutation_counter_lookup_count = 0u;
+};
+
+/**
+ * Opaque acknowledged fence for bounded participant/domain mutation counters.
+ * It intentionally retains no component or payload state.
+ */
+class SceneModelingProjectionMutationFence final {
+public:
+  SceneModelingProjectionMutationFence();
+  ~SceneModelingProjectionMutationFence();
+  SceneModelingProjectionMutationFence(
+      SceneModelingProjectionMutationFence &&) noexcept;
+  SceneModelingProjectionMutationFence &
+  operator=(SceneModelingProjectionMutationFence &&) noexcept;
+  SceneModelingProjectionMutationFence(
+      const SceneModelingProjectionMutationFence &) = delete;
+  SceneModelingProjectionMutationFence &
+  operator=(const SceneModelingProjectionMutationFence &) = delete;
+
+  [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] std::size_t size() const noexcept;
+  [[nodiscard]] const SceneModelingProjectionMutationFenceWork &
+  work() const noexcept {
+    return work_;
+  }
+  [[nodiscard]] bool matches_current(
+      const SceneDocument &owner,
+      SceneModelingProjectionMutationFenceWork *work = nullptr) const;
+  [[nodiscard]] bool acknowledge_current(
+      const SceneDocument &owner,
+      std::span<const EntityId> newly_created_participants = {},
+      SceneModelingProjectionMutationFenceWork *work = nullptr);
+
+private:
+  friend class SceneDocument;
+  struct State;
+
+  std::shared_ptr<State> state_;
+  SceneModelingProjectionMutationFenceWork work_;
+};
+
+/**
+ * Move-only capability for a LIFO Scene scalar/allocation compensation scope.
+ * The checkpoint retains no entity, component, selection, or layer payload.
+ */
+class SceneScalarCompensationCheckpoint final {
+public:
+  SceneScalarCompensationCheckpoint();
+  ~SceneScalarCompensationCheckpoint();
+  SceneScalarCompensationCheckpoint(
+      SceneScalarCompensationCheckpoint &&) noexcept;
+  SceneScalarCompensationCheckpoint &
+  operator=(SceneScalarCompensationCheckpoint &&) noexcept;
+  SceneScalarCompensationCheckpoint(
+      const SceneScalarCompensationCheckpoint &) = delete;
+  SceneScalarCompensationCheckpoint &
+  operator=(const SceneScalarCompensationCheckpoint &) = delete;
+
+  [[nodiscard]] bool valid() const noexcept;
+
+private:
+  friend class SceneDocument;
+  struct State;
+
+  void reset() noexcept;
+  std::shared_ptr<State> state_;
+};
+
 /**
  * Owns one immutable, indexed projection of scene-derived hierarchy state.
  */
@@ -119,64 +285,6 @@ private:
 
   std::vector<SceneHierarchyProjectionRecord> records_;
   std::unordered_map<EntityId, std::size_t> index_by_entity_;
-};
-
-/**
- * Stores the exact scene counters and selection visible before one staged
- * modeling projection.
- *
- * Component edits on pre-existing entities must be compensated by their
- * owning adapter before restore. The scene owner removes newly published
- * entities and restores allocation/revision/selection state exactly.
- */
-class SceneProjectionCheckpoint final {
-public:
-  SceneProjectionCheckpoint() = default;
-  [[nodiscard]] bool valid() const noexcept { return valid_; }
-
-private:
-  friend class SceneDocument;
-
-  bool valid_ = false;
-  EntityId next_id_ = 1;
-  EditorObjectId next_editor_object_id_ = 1;
-  SceneLayerId next_layer_id_ = 1;
-  EntityId active_selection_ = kInvalidEntityId;
-  std::vector<EntityId> selected_entities_;
-  std::uint64_t revision_ = 0;
-  std::uint64_t content_revision_ = 0;
-  std::uint64_t selection_revision_ = 0;
-  std::uint64_t hierarchy_presentation_revision_ = 0;
-  std::uint64_t visibility_revision_ = 0;
-  std::uint64_t transform_revision_ = 0;
-  std::uint64_t texture_mapping_revision_ = 0;
-  std::uint64_t mesh_binding_revision_ = 0;
-  std::uint64_t curve_binding_revision_ = 0;
-  std::uint64_t material_binding_revision_ = 0;
-  std::uint64_t render_component_revision_ = 0;
-  std::uint64_t layer_revision_ = 0;
-};
-
-/**
- * Stores only the counters a curve payload publication can advance.
- *
- * The publishing adapter restores an existing CurveComponent separately.
- * This scalar checkpoint deliberately performs no entity or selection scan.
- */
-class SceneCurveProjectionCheckpoint final {
-public:
-  SceneCurveProjectionCheckpoint() = default;
-  [[nodiscard]] bool valid() const noexcept { return valid_; }
-
-private:
-  friend class SceneDocument;
-
-  bool valid_ = false;
-  std::uint64_t revision_ = 0;
-  std::uint64_t content_revision_ = 0;
-  std::uint64_t hierarchy_presentation_revision_ = 0;
-  std::uint64_t curve_binding_revision_ = 0;
-  std::uint64_t render_component_revision_ = 0;
 };
 
 /**
@@ -221,6 +329,11 @@ public:
     bool set_parent(EntityId child, EntityId parent,
                     bool preserve_world_transform = true);
     /**
+     * Moves an entity within its current parent's authored child order.
+     * The ordinal must name a position in the current child list.
+     */
+    bool set_sibling_ordinal(EntityId entity, std::size_t ordinal);
+    /**
      * Reparents a batch atomically while retaining each entity's current
      * local transform. This fast path is available before instance roles are
      * installed; callers that need world preservation precompute and publish
@@ -242,12 +355,14 @@ public:
     bool set_transform(EntityId id, TransformComponent transform);
     void set_transforms(std::span<const SceneTransformAssignment> transforms);
     bool set_modeling_object(EntityId id, ModelingObjectComponent object);
+    bool clear_modeling_object(EntityId id);
     bool set_instance_definition(EntityId id);
     bool clear_instance_definition(EntityId id);
     bool set_instance_occurrence(EntityId id,
                                  InstanceOccurrenceComponent occurrence);
     bool clear_instance_occurrence(EntityId id);
     bool set_mesh(EntityId id, MeshComponent mesh);
+    bool clear_mesh(EntityId id);
     bool set_curve(EntityId id, CurveComponent curve);
     bool clear_curve(EntityId id);
     bool notify_curve_payload_changed(EntityId id);
@@ -272,7 +387,9 @@ public:
         std::span<const SceneTransformAssignment> transforms,
         std::span<const SceneTextureMappingAssignment> mappings);
     bool set_light(EntityId id, LightComponent light);
+    bool clear_light(EntityId id);
     bool set_scene_settings(EntityId id, SceneSettingsComponent settings);
+    bool clear_scene_settings(EntityId id);
 
     SceneLayerId create_layer(
         std::string name = {},
@@ -308,6 +425,12 @@ public:
     const InstanceOccurrenceComponent *instance_occurrence(EntityId id) const;
     const MeshComponent* mesh(EntityId id) const;
     const CurveComponent *curve(EntityId id) const;
+    [[nodiscard]] std::size_t mesh_binding_reference_count(
+        AssetId mesh,
+        SceneBindingReferenceCountWork *work = nullptr) const;
+    [[nodiscard]] std::size_t curve_binding_reference_count(
+        AssetId curve,
+        SceneBindingReferenceCountWork *work = nullptr) const;
     const MaterialComponent* material(EntityId id) const;
     const TextureMappingComponent *texture_mapping(EntityId id) const;
     const LightComponent* light(EntityId id) const;
@@ -333,6 +456,8 @@ public:
     bool is_scene_root(EntityId id) const;
     std::vector<EntityId> root_entities() const;
     std::vector<EntityId> children(EntityId id) const;
+    [[nodiscard]] std::optional<std::size_t>
+    sibling_ordinal(EntityId entity) const;
     std::vector<EntityId> descendants(EntityId id,
                                       bool include_self = true) const;
     std::vector<EntityId> entity_tree_order() const;
@@ -340,9 +465,26 @@ public:
      * Computes world transforms, inherited visibility/locking, and instance
      * containment in one top-down scene traversal.
      */
+    [[nodiscard]] std::shared_ptr<const SceneHierarchyProjectionSnapshot>
+    hierarchy_projection() const;
+    /**
+     * Returns the scene-owned concrete mesh placement projection.
+     *
+     * The immutable pointer remains valid after later scene mutations; a new
+     * accessor call observes current scene facts. Asset and viewport policy
+     * remain consumer-owned.
+     */
+    [[nodiscard]]
+    std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+    mesh_occurrence_projection() const;
+    /** Compatibility value snapshot; hot consumers should borrow above. */
     [[nodiscard]] SceneHierarchyProjectionSnapshot
     hierarchy_projection_snapshot(
         SceneHierarchyProjectionWorkStats *work_stats = nullptr) const;
+    [[nodiscard]] SceneSpatialProjectionCacheStats
+    spatial_projection_cache_stats() const noexcept {
+      return spatial_projection_cache_stats_;
+    }
     std::vector<EntityRecord> entity_records() const;
     std::vector<EntityRecord> entity_records_tree_order() const;
     /** Projects only canonical members while an instance definition is edited. */
@@ -406,24 +548,89 @@ public:
     }
     std::uint64_t layer_revision() const { return layer_revision_; }
 
-    /** Captures scene state needed to roll back one staged host projection. */
-    [[nodiscard]] SceneProjectionCheckpoint
-    capture_projection_checkpoint() const;
     /**
-     * Removes entities created by a failed projection and restores the exact
-     * allocation, selection, and revision state captured before it.
+     * Captures only the requested participants and modeling projection
+     * domains. Scalar revisions and SceneDocument allocation high-water are
+     * always retained. The participant span must contain the complete closure
+     * of entities whose requested domains may change.
      */
-    [[nodiscard]] bool restore_projection_checkpoint(
-        const SceneProjectionCheckpoint &checkpoint,
-        std::span<const EntityId> created_entities = {});
-    /** Captures scalar state for a curve-only payload publication. */
-    [[nodiscard]] SceneCurveProjectionCheckpoint
-    capture_curve_projection_checkpoint() const;
-    /** Restores scalar state after the adapter compensates the curve binding. */
-    [[nodiscard]] bool restore_curve_projection_checkpoint(
-        const SceneCurveProjectionCheckpoint &checkpoint);
+    [[nodiscard]] SceneModelingProjectionCheckpoint
+    capture_modeling_projection_checkpoint(
+        std::span<const EntityId> participants,
+        SceneModelingProjectionDomain domains) const;
+    [[nodiscard]] SceneModelingProjectionMutationFence
+    capture_modeling_projection_mutation_fence(
+        std::span<const EntityId> participants,
+        SceneModelingProjectionDomain domains) const;
+    /** Performs the complete bounded restore preflight without mutation. */
+    [[nodiscard]] bool can_restore_modeling_projection_checkpoint(
+        const SceneModelingProjectionCheckpoint &checkpoint,
+        std::span<const EntityId> created_participants = {}) const;
+    /**
+     * Preflights a bounded restore against an acknowledged participant fence
+     * while permitting unrelated SceneDocument publications to survive.
+     */
+    [[nodiscard]] bool
+    can_restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+        const SceneModelingProjectionCheckpoint &checkpoint,
+        const SceneModelingProjectionMutationFence &acknowledged_fence,
+        std::span<const EntityId> created_participants = {}) const;
+    /**
+     * Restores one bounded modeling projection without enumerating the scene.
+     * `created_participants` must list every successful entity allocation made
+     * after capture exactly once (duplicates are accepted and normalized).
+     */
+    [[nodiscard]] bool restore_modeling_projection_checkpoint(
+        const SceneModelingProjectionCheckpoint &checkpoint,
+        std::span<const EntityId> created_participants = {},
+        SceneModelingProjectionRestoreWork *work = nullptr);
+    /**
+     * Restores only enrolled domains and participants, retains unrelated
+     * allocator/revision progress, and publishes fresh owner revisions.
+     */
+    [[nodiscard]] bool
+    restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+        const SceneModelingProjectionCheckpoint &checkpoint,
+        const SceneModelingProjectionMutationFence &acknowledged_fence,
+        std::span<const EntityId> created_participants = {},
+        SceneModelingProjectionRestoreWork *work = nullptr);
+
+    /** Begins a nestable strict-LIFO scalar/allocation compensation scope. */
+    [[nodiscard]] SceneScalarCompensationCheckpoint
+    capture_scalar_compensation_checkpoint();
+    /** Pins the exact post-forward boundary before external publication. */
+    [[nodiscard]] bool acknowledge_scalar_compensation_checkpoint(
+        SceneScalarCompensationCheckpoint &checkpoint) noexcept;
+    /** Validates the acknowledged boundary and enters semantic-inverse phase. */
+    [[nodiscard]] bool begin_scalar_compensation_restore(
+        SceneScalarCompensationCheckpoint &checkpoint) noexcept;
+    /** Restores and consumes the current innermost compensation scope. */
+    [[nodiscard]] bool restore_scalar_compensation_checkpoint(
+        SceneScalarCompensationCheckpoint &checkpoint);
+    /** Consumes the current innermost scope without restoring its baseline. */
+    [[nodiscard]] bool discard_scalar_compensation_checkpoint(
+        SceneScalarCompensationCheckpoint &checkpoint) noexcept;
 
 private:
+  friend class SceneModelingProjectionMutationFence;
+  friend class SceneScalarCompensationCheckpoint;
+  struct ModelingProjectionRestorePreparation;
+  struct ModelingProjectionMutationCounters;
+
+  [[nodiscard]] bool preflight_modeling_projection_restore(
+      const SceneModelingProjectionCheckpoint &checkpoint,
+      const SceneModelingProjectionMutationFence *acknowledged_fence,
+      std::span<const EntityId> created_participants,
+      bool preserve_concurrent_changes,
+      ModelingProjectionRestorePreparation *preparation,
+      SceneModelingProjectionRestoreWork *work) const;
+  [[nodiscard]] bool restore_modeling_projection_checkpoint_impl(
+      const SceneModelingProjectionCheckpoint &checkpoint,
+      const SceneModelingProjectionMutationFence *acknowledged_fence,
+      std::span<const EntityId> created_participants,
+      bool preserve_concurrent_changes,
+      SceneModelingProjectionRestoreWork *work);
+
   NameComponent *mutable_name(EntityId id);
   TransformComponent *mutable_transform(EntityId id);
   EntityKindComponent *mutable_entity_kind(EntityId id);
@@ -434,6 +641,13 @@ private:
 
   void mark_dirty();
   void mark_transient_dirty();
+  void mark_dirty(EntityId entity, SceneModelingProjectionDomain domain);
+  void mark_dirty(std::span<const EntityId> entities,
+                  SceneModelingProjectionDomain domain);
+  void mark_transient_dirty(EntityId entity,
+                            SceneModelingProjectionDomain domain);
+  void mark_transient_dirty(std::span<const EntityId> entities,
+                            SceneModelingProjectionDomain domain);
   EditorObjectId allocate_editor_object_id(EditorObjectId requested);
   entt::entity require_entity(EntityId id) const;
   bool is_selected(EntityId id) const;
@@ -442,6 +656,50 @@ private:
                                   EntityId active,
                                   const SceneHierarchyProjectionRecord *
                                       projection = nullptr) const;
+  void invalidate_spatial_projection_caches_after_revision_restore();
+  void note_modeling_projection_mutation(
+      EntityId entity, SceneModelingProjectionDomain domain);
+  void note_modeling_projection_mutations(
+      std::span<const EntityId> entities,
+      SceneModelingProjectionDomain domain);
+  void note_unscoped_modeling_projection_mutation();
+  void note_scalar_compensation_entity_allocation(
+      EntityId entity, EditorObjectId editor_object_id,
+      std::uint64_t allocation_serial,
+      std::uint64_t previous_allocation_serial);
+  void note_scalar_compensation_layer_allocation(
+      SceneLayerId layer, std::uint64_t allocation_serial,
+      std::uint64_t previous_allocation_serial);
+  void note_scalar_compensation_mutation(
+      EntityId entity, const ModelingProjectionMutationCounters &counters,
+      bool counter_record_existed, SceneModelingProjectionDomain domain);
+  [[nodiscard]] bool close_scalar_compensation_checkpoint(
+      const SceneScalarCompensationCheckpoint::State &state) noexcept;
+  void abandon_scalar_compensation_checkpoint(
+      const std::shared_ptr<SceneScalarCompensationCheckpoint::State> &state)
+      noexcept;
+  void collapse_abandoned_scalar_compensation_checkpoints() noexcept;
+
+  /** Captures the scene revisions that invalidate the hierarchy projection cache. */
+  struct HierarchyProjectionCacheKey final {
+    std::uint64_t restore_epoch = 0u;
+    std::uint64_t hierarchy_presentation_revision = 0u;
+    std::uint64_t transform_revision = 0u;
+
+    [[nodiscard]] bool
+    operator==(const HierarchyProjectionCacheKey &) const = default;
+  };
+
+  /** Captures the scene revisions that invalidate expanded mesh occurrences. */
+  struct MeshOccurrenceProjectionCacheKey final {
+    std::uint64_t restore_epoch = 0u;
+    std::uint64_t hierarchy_build_count = 0u;
+    std::uint64_t visibility_revision = 0u;
+    std::uint64_t mesh_binding_revision = 0u;
+
+    [[nodiscard]] bool
+    operator==(const MeshOccurrenceProjectionCacheKey &) const = default;
+  };
 
   EntityId next_id_ = 1;
   EditorObjectId next_editor_object_id_ = 1;
@@ -465,7 +723,51 @@ private:
   std::unordered_map<std::uint32_t, EntityId> ids_by_entity_;
   std::unordered_map<std::string, EntityId> entity_by_uuid_;
   std::unordered_map<EditorObjectId, EntityId> entity_by_editor_object_id_;
+  /** Tracks per-entity mutations in each scene-owned modeling projection domain. */
+  struct ModelingProjectionMutationCounters final {
+    std::uint64_t mesh_bindings = 0u;
+    std::uint64_t curve_bindings = 0u;
+    std::uint64_t selection = 0u;
+    std::uint64_t structure = 0u;
+  };
+  /** Mutation state immediately before the latest allocation of an entity ID. */
+  struct EntityAllocationMutationBaseline final {
+    std::uint64_t allocation_serial = 0u;
+    ModelingProjectionMutationCounters counters;
+    bool record_existed = false;
+  };
+  std::unordered_map<EntityId, std::uint64_t>
+      last_entity_allocation_serial_;
+  std::unordered_map<EntityId, EntityAllocationMutationBaseline>
+      last_entity_allocation_mutation_baselines_;
+  std::unordered_map<AssetId, std::size_t> mesh_binding_reference_counts_;
+  std::unordered_map<AssetId, std::size_t> curve_binding_reference_counts_;
   std::unordered_map<SceneLayerId, SceneLayerRecord> layers_;
+  std::unordered_map<EntityId, ModelingProjectionMutationCounters>
+      modeling_projection_mutations_by_entity_;
+  std::uint64_t modeling_projection_mutation_touch_serial_ = 0u;
+  std::uint64_t unscoped_modeling_projection_mutation_serial_ = 0u;
+  // Monotonic successful-allocation serial used only to validate exclusive
+  // structural rollback leases. Unlike the public ID allocator high-water it
+  // deliberately never rewinds.
+  std::uint64_t entity_allocation_serial_ = 0u;
+  std::uint64_t layer_allocation_serial_ = 0u;
+  std::unordered_map<SceneLayerId, std::uint64_t>
+      last_layer_allocation_serial_;
+  std::uint64_t next_scalar_compensation_token_ = 0u;
+  std::vector<std::shared_ptr<SceneScalarCompensationCheckpoint::State>>
+      scalar_compensation_stack_;
+  std::uint64_t spatial_projection_restore_epoch_ = 0u;
+  mutable std::optional<HierarchyProjectionCacheKey>
+      hierarchy_projection_cache_key_;
+  mutable std::shared_ptr<const SceneHierarchyProjectionSnapshot>
+      hierarchy_projection_cache_;
+  mutable SceneHierarchyProjectionWorkStats hierarchy_projection_cached_work_;
+  mutable std::optional<MeshOccurrenceProjectionCacheKey>
+      mesh_occurrence_projection_cache_key_;
+  mutable std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
+      mesh_occurrence_projection_cache_;
+  mutable SceneSpatialProjectionCacheStats spatial_projection_cache_stats_;
 };
 
 } // namespace quader

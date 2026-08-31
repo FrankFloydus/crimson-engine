@@ -15,6 +15,7 @@
 #include "scene/components.hpp"
 
 #include <functional>
+#include <memory>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -25,15 +26,23 @@ namespace quader {
 class SceneDocument;
 class AssetRegistry;
 
+/** Carries one validated document command before history executes it. */
+struct PreparedDocumentCommand final {
+  DocumentCommandResult status;
+  std::unique_ptr<IUndoableCommand> command;
+};
+
 /**
  * Coordinates Document Command Service responsibilities for the editor document ownership layer.
  */
 class DocumentCommandService {
 public:
     using EntityMutationBlocker = std::function<bool(EntityId)>;
+    using CheckedSelectionPublication = std::function<CommandResult()>;
 
     DocumentCommandService(SceneDocument& scene, EditorHistoryService& history, const AssetRegistry* assets = nullptr);
     void set_entity_mutation_blocker(EntityMutationBlocker blocker);
+    void set_selection_publication(CheckedSelectionPublication publication);
     void set_texture_lock_settings_provider(
         std::function<TextureLockSettings()> provider);
     [[nodiscard]] TextureLockSettings texture_lock_settings() const;
@@ -49,6 +58,11 @@ public:
     group_selection(std::string group_name = {},
                     TransformComponent group_transform = TransformComponent{});
     DocumentCommandResult ungroup_selection();
+    [[nodiscard]] PreparedDocumentCommand prepare_group_selection_command(
+        std::string group_name = {},
+        TransformComponent group_transform = TransformComponent{});
+    [[nodiscard]] PreparedDocumentCommand
+    prepare_ungroup_selection_command();
     DocumentDuplicateEntityResult duplicate_entity(EntityId entity);
     DocumentDuplicateHierarchyResult duplicate_selected_hierarchy();
     DocumentDuplicateHierarchyResult duplicate_hierarchy_with_existing_clones(
@@ -68,7 +82,9 @@ public:
                                           EntityId active = kInvalidEntityId,
                                           SceneSelectionApplicationMode mode =
                                               SceneSelectionApplicationMode::
-                                                  UndoableCommand);
+                                                  UndoableCommand,
+                                          CheckedSelectionPublication
+                                              publication = {});
     DocumentCommandResult apply_entity_transform(EntityId entity,
                                                  TransformComponent transform);
     DocumentCommandResult rename_entity(EntityId entity, std::string name);
@@ -123,6 +139,7 @@ public:
     EditorHistoryService& history_;
     const AssetRegistry* assets_ = nullptr;
     EntityMutationBlocker entity_mutation_blocker_;
+    CheckedSelectionPublication selection_publication_;
     std::function<TextureLockSettings()> texture_lock_settings_provider_;
 };
 

@@ -20,7 +20,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include <editor/modeling/runtime/session.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
 
 namespace quader {
@@ -74,34 +73,49 @@ RuntimeObjectSelectionProjection runtime_object_selection_for_scene_entities(
 }
 
 bool runtime_selection_matches(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &selection,
     const RuntimeObjectSelectionProjection &projection) {
-  std::vector<int> current_object_ids = session.selected_object_ids();
+  std::vector<int> current_object_ids = selection.selected_object_ids();
   std::sort(current_object_ids.begin(), current_object_ids.end());
   std::vector<int> desired_object_ids = projection.object_ids;
   std::sort(desired_object_ids.begin(), desired_object_ids.end());
   return current_object_ids == desired_object_ids &&
-         session.active_object_id() == projection.active_object_id;
+         selection.active_object_id() == projection.active_object_id;
 }
 
-bool apply_runtime_object_selection(
-    quader_editor_core::EditorSession &session,
+SelectionProjectionEditResult apply_runtime_object_selection(
+    const ModelingSelectionProjectionSnapshot &selection,
     const RuntimeObjectSelectionProjection &projection,
     bool require_object_mode) {
-  bool changed = false;
-  if (require_object_mode &&
-      session.selection_mode() != quader_editor_core::SelectionMode::Object) {
-    session.set_selection_mode(quader_editor_core::SelectionMode::Object);
-    changed = true;
+  const bool mode_matches =
+      !require_object_mode ||
+      selection.selection_mode() == quader_editor_core::SelectionMode::Object;
+  if (mode_matches && runtime_selection_matches(selection, projection)) {
+    return {.changed = false, .selection = selection};
   }
-  if ((!require_object_mode ||
-       session.selection_mode() == quader_editor_core::SelectionMode::Object) &&
-      runtime_selection_matches(session, projection)) {
-    return changed;
+
+  std::vector<quader_editor_core::PolygonObject> objects(
+      selection.objects().begin(), selection.objects().end());
+  std::vector<int> selected_ids;
+  selected_ids.reserve(projection.object_ids.size());
+  for (quader_editor_core::PolygonObject &object : objects) {
+    object.selection = quader_poly::Selection{};
+    object.component_edit_target = false;
+    object.selected = std::find(projection.object_ids.begin(),
+                                projection.object_ids.end(), object.id) !=
+                      projection.object_ids.end();
+    if (object.selected) {
+      selected_ids.push_back(object.id);
+    }
   }
-  session.set_selected_object_ids(projection.object_ids,
-                                  projection.active_object_id);
-  return true;
+  const int active_object_id = resolve_projected_active_selection<int>(
+      selected_ids, projection.active_object_id, -1);
+  return {
+      .changed = true,
+      .selection = selection.with_selection(
+          std::move(objects), quader_editor_core::SelectionMode::Object,
+          active_object_id, selection.selection_revision() + 1U),
+  };
 }
 
 std::vector<EntityId> scene_entities_for_runtime_objects(
@@ -133,30 +147,35 @@ EntityId active_scene_entity_for_runtime_object(
 } // namespace
 
 bool SelectionProjectionService::should_project_object_selection_from_scene(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &selection,
     bool force_object_mode) const {
   return force_object_mode ||
-         session.selection_mode() == quader_editor_core::SelectionMode::Object;
+         selection.selection_mode() ==
+             quader_editor_core::SelectionMode::Object;
 }
 
-bool SelectionProjectionService::project_object_selection_from_scene(
-    quader_editor_core::EditorSession &session, const SceneDocument &scene,
+SelectionProjectionEditResult
+SelectionProjectionService::project_object_selection_from_scene(
+    const ModelingSelectionProjectionSnapshot &selection,
+    const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_registry,
     bool force_object_mode) const {
-  if (!should_project_object_selection_from_scene(session, force_object_mode)) {
-    return false;
+  if (!should_project_object_selection_from_scene(selection,
+                                                  force_object_mode)) {
+    return {.changed = false, .selection = selection};
   }
 
   const std::vector<EntityId> selected_entities = scene.selected_entities();
   const RuntimeObjectSelectionProjection projection =
       runtime_object_selection_for_scene_entities(
           selected_entities, scene.primary_selection(), object_registry);
-  return apply_runtime_object_selection(session, projection, force_object_mode);
+  return apply_runtime_object_selection(selection, projection,
+                                        force_object_mode);
 }
 
 RuntimeObjectSelectionProjectionResult
 SelectionProjectionService::project_object_selection_for_scene_entities(
-    quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &selection,
     std::span<const EntityId> entities, EntityId active,
     const ModelingObjectRuntimeMap &object_registry) const {
   RuntimeObjectSelectionProjectionResult result;
@@ -165,45 +184,52 @@ SelectionProjectionService::project_object_selection_for_scene_entities(
       runtime_object_selection_for_scene_entities(entities, active,
                                                   object_registry);
   result.has_modeling_objects = projection.has_modeling_objects;
-  result.changed = apply_runtime_object_selection(session, projection, true);
+  SelectionProjectionEditResult edit =
+      apply_runtime_object_selection(selection, projection, true);
+  result.changed = edit.changed;
+  result.selection = std::move(edit.selection);
   return result;
 }
 
-bool SelectionProjectionService::promote_object_selection_for_tool(
-    quader_editor_core::EditorSession &session, const SceneDocument &scene,
+SelectionProjectionEditResult
+SelectionProjectionService::promote_object_selection_for_tool(
+    const ModelingSelectionProjectionSnapshot &selection,
+    const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_registry) const {
   const std::vector<EntityId> selected_entities = scene.selected_entities();
   const RuntimeObjectSelectionProjection projection =
       runtime_object_selection_for_scene_entities(
           selected_entities, scene.primary_selection(), object_registry);
   if (projection.has_input_entities) {
-    return apply_runtime_object_selection(session, projection, true);
+    return apply_runtime_object_selection(selection, projection, true);
   }
 
-  const std::vector<int> current_object_ids = session.selected_object_ids();
+  const std::vector<int> current_object_ids = selection.selected_object_ids();
   if (current_object_ids.empty()) {
-    return false;
+    return {.changed = false, .selection = selection};
   }
-  const int active_object_id = session.active_object_id() > 0
-                                   ? session.active_object_id()
+  const int active_object_id = selection.active_object_id() > 0
+                                   ? selection.active_object_id()
                                    : current_object_ids.back();
-  if (session.selection_mode() != quader_editor_core::SelectionMode::Object) {
-    session.set_selection_mode(quader_editor_core::SelectionMode::Object);
-  }
-  session.set_selected_object_ids(current_object_ids, active_object_id);
-  return true;
+  return apply_runtime_object_selection(
+      selection,
+      {.object_ids = current_object_ids,
+       .active_object_id = active_object_id,
+       .has_modeling_objects = true},
+      true);
 }
 
 bool SelectionProjectionService::project_scene_selection_from_modeling(
-    const quader_editor_core::EditorSession &session, SceneDocument &scene,
+    const ModelingSelectionProjectionSnapshot &selection,
+    SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_registry) const {
-  const std::vector<int> selected_object_ids = session.selected_object_ids();
+  const std::vector<int> selected_object_ids = selection.selected_object_ids();
   const std::vector<EntityId> selected_entities =
       scene_entities_for_runtime_objects(selected_object_ids, object_registry);
   const std::unordered_set<EntityId> desired_selection(
       selected_entities.begin(), selected_entities.end());
   const EntityId active = active_scene_entity_for_runtime_object(
-      session.active_object_id(), desired_selection, object_registry);
+      selection.active_object_id(), desired_selection, object_registry);
   return apply_scene_selection(
       scene, make_scene_selection(scene, selected_entities, active),
       SceneSelectionApplicationMode::RuntimeSync);
@@ -224,27 +250,28 @@ bool SelectionProjectionService::add_scene_selection(
 }
 
 std::optional<QVec3> SelectionProjectionService::world_selection_center(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &selection,
     const SceneDocument &scene, const AssetRegistry &assets,
     const ModelingObjectRuntimeMap &object_registry) const {
   if (const std::optional<SceneBounds> bounds =
-          world_selection_bounds(session, scene, assets, object_registry)) {
+          world_selection_bounds(selection, scene, assets, object_registry)) {
     return bounds_center(*bounds);
   }
 
-  const std::optional<quader::QVec3> center = session.selection_center();
+  const std::optional<quader::QVec3> center = selection.selection_center();
   return center ? std::optional<QVec3>{*center} : std::nullopt;
 }
 
 std::optional<SceneBounds> SelectionProjectionService::world_selection_bounds(
-    const quader_editor_core::EditorSession &session,
+    const ModelingSelectionProjectionSnapshot &selection,
     const SceneDocument &scene, const AssetRegistry &assets,
     const ModelingObjectRuntimeMap &object_registry,
     SelectionBoundsWorkStats *work_stats) const {
   if (work_stats != nullptr) {
     *work_stats = {};
   }
-  if (session.selection_mode() == quader_editor_core::SelectionMode::Object) {
+  if (selection.selection_mode() ==
+      quader_editor_core::SelectionMode::Object) {
     if (const std::optional<SceneBounds> bounds =
             selected_world_bounds(scene, assets)) {
       return bounds;
@@ -252,7 +279,7 @@ std::optional<SceneBounds> SelectionProjectionService::world_selection_bounds(
   }
 
   std::optional<SceneBounds> bounds;
-  for (const quader_editor_core::PolygonObject &object : session.objects()) {
+  for (const quader_editor_core::PolygonObject &object : selection.objects()) {
     if (!object.selected || object.selection.empty()) {
       continue;
     }
@@ -315,7 +342,8 @@ std::optional<SceneBounds> SelectionProjectionService::world_selection_bounds(
     return bounds;
   }
 
-  const quader_editor_core::Bounds3 runtime_bounds = session.selection_bounds();
+  const quader_editor_core::Bounds3 runtime_bounds =
+      selection.selection_bounds();
   if (!runtime_bounds.empty) {
     return SceneBounds{.min = runtime_bounds.min, .max = runtime_bounds.max};
   }

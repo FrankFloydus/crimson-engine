@@ -10,9 +10,11 @@
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
-#include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
+#include "editor/placement/scene_surface_query.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
+#include "editor/viewport/viewport_surface_occlusion_policy.hpp"
+#include "editor/viewport/viewport_vertex_snap_aggregation.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_transform.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
@@ -210,72 +212,74 @@ std::optional<QVec3> rotation_indicator_mouse_position_from_mouse(
   return hit;
 }
 
-double screen_distance_squared(QVec2 a, QVec2 b) {
-  const double dx = static_cast<double>(a.x) - static_cast<double>(b.x);
-  const double dy = static_cast<double>(a.y) - static_cast<double>(b.y);
-  return dx * dx + dy * dy;
-}
-
 struct CurveControlSnapResolution {
   quader_editor_core::TransformSnapTarget target;
   double ray_distance = 0.0;
   double pick_distance = 0.0;
 };
 
-bool snap_depth_precedes(double candidate_ray_distance,
-                         double candidate_pick_distance,
-                         const CurveControlSnapResolution &best) {
-  constexpr double kPickDepthEpsilon = 1.0e-8;
-  if (std::abs(candidate_ray_distance - best.ray_distance) >
-      kPickDepthEpsilon) {
-    return candidate_ray_distance < best.ray_distance;
-  }
-  if (std::abs(candidate_pick_distance - best.pick_distance) >
-      kPickDepthEpsilon) {
-    return candidate_pick_distance < best.pick_distance;
-  }
-  // Mesh vertices retain priority for an exact cross-domain tie. Each source
-  // has already resolved its own stable identity ordering.
-  return false;
-}
-
 std::optional<CurveControlSnapResolution> resolve_curve_control_snap_target(
     const ViewportInteractionFrame &frame, const ViewportRay &ray,
     double vertex_radius,
-    std::span<const ViewportCurveAnchorSnapCandidate> curve_candidates) {
-  std::optional<CurveControlSnapResolution> best;
-  ViewportMeshSnapQueryResult mesh_query;
-  if (frame.scene_mesh_snap_query) {
-    mesh_query = frame.scene_mesh_snap_query(ray, vertex_radius);
-    const auto &mesh_target = mesh_query.vertex_target;
-    if (mesh_target.has_value()) {
-      best = CurveControlSnapResolution{
-          .target =
-              {
-                  .kind =
-                      quader_editor_core::TransformSnapLandmarkKind::Vertex,
-                  .object_id = mesh_target->modeling_object_id,
-                  .vertex_id = mesh_target->vertex_id,
-                  .position = mesh_target->world_position,
-              },
-          .ray_distance = mesh_target->ray_distance,
-          .pick_distance = mesh_target->pick_distance,
-      };
+    std::span<const ViewportCurveAnchorSnapCandidate> curve_candidates,
+    SceneSurfaceQueryScratch &surface_query_scratch) {
+  std::optional<double> surface_ray_distance;
+  if (frame.scene_surfaces != nullptr) {
+    const std::optional<SceneSurfaceHit> surface =
+        frame.scene_surfaces->nearest_hit({
+            .world_origin = ray.origin,
+            .world_direction = ray.direction,
+            .eligibility = SceneSurfaceEligibility::RenderVisible,
+        }, surface_query_scratch);
+    if (surface.has_value()) {
+      surface_ray_distance = surface->distance;
     }
   }
 
-  if (curve_candidates.empty()) {
-    return best;
+  std::optional<ViewportMeshVertexSnapTarget> mesh_target;
+  if (frame.scene_mesh_snap_query) {
+    const std::optional<double> maximum_mesh_ray_distance =
+        surface_ray_distance.has_value()
+            ? std::optional<double>{
+                  *surface_ray_distance +
+                  kViewportSurfaceOcclusionTolerance}
+            : std::nullopt;
+    mesh_target =
+        frame
+            .scene_mesh_snap_query(ray, vertex_radius,
+                                   maximum_mesh_ray_distance)
+            .vertex_target;
   }
-  const auto curve_target = resolve_viewport_curve_anchor_snap_target(
-      ray, curve_candidates, vertex_radius, {},
-      mesh_query.nearest_surface_ray_distance);
-  if (!curve_target.has_value() ||
-      (best.has_value() &&
-       !snap_depth_precedes(curve_target->ray_distance,
-                            curve_target->pick_distance, *best))) {
-    return best;
+
+  const std::optional<ViewportCurveAnchorSnapTarget> curve_target =
+      curve_candidates.empty()
+          ? std::nullopt
+          : resolve_viewport_curve_anchor_snap_target(
+                ray, curve_candidates, vertex_radius, {},
+                surface_ray_distance);
+  const auto resolved =
+      aggregate_viewport_vertex_snap_targets(mesh_target, curve_target,
+                                             surface_ray_distance);
+  if (!resolved.has_value()) {
+    return std::nullopt;
   }
+
+  if (resolved->domain == ViewportVertexSnapDomain::Mesh) {
+    const auto &mesh = std::get<ViewportMeshVertexSnapTarget>(resolved->source);
+    return CurveControlSnapResolution{
+        .target =
+            {
+                .kind =
+                    quader_editor_core::TransformSnapLandmarkKind::Vertex,
+                .object_id = mesh.modeling_object_id,
+                .vertex_id = mesh.vertex_id,
+                .position = resolved->world_position,
+            },
+        .ray_distance = resolved->ray_distance,
+        .pick_distance = resolved->pick_distance,
+    };
+  }
+
   return CurveControlSnapResolution{
       .target =
           {
@@ -284,10 +288,10 @@ std::optional<CurveControlSnapResolution> resolve_curve_control_snap_target(
               // through the polygon object registry.
               .object_id = -1,
               .vertex_id = quader_poly::kInvalidElementId,
-              .position = curve_target->world_position,
+              .position = resolved->world_position,
           },
-      .ray_distance = curve_target->ray_distance,
-      .pick_distance = curve_target->pick_distance,
+      .ray_distance = resolved->ray_distance,
+      .pick_distance = resolved->pick_distance,
   };
 }
 
@@ -312,7 +316,8 @@ QuaderTransform3 curve_control_orientation(
 
 std::optional<TransformGizmoInteraction::CurveControlSelectionSnapshot>
 TransformGizmoInteraction::selected_curve_controls(
-    CurveToolService *curve_tool, QuaderTransformSpace transform_space) {
+    ViewportCurveInteractionPort *curve_tool,
+    QuaderTransformSpace transform_space) {
   if (curve_tool == nullptr || !curve_tool->controls_editable() ||
       curve_tool->point_construction_dragging()) {
     reset_curve_control_cache();
@@ -384,7 +389,7 @@ TransformGizmoInteraction::selected_curve_controls(
 }
 
 bool TransformGizmoInteraction::curve_control_selection_identity_matches(
-    CurveToolService *curve_tool,
+    ViewportCurveInteractionPort *curve_tool,
     const CurveControlSelectionIdentity &identity) {
   if (curve_tool == nullptr || !curve_tool->controls_editable()) {
     return false;
@@ -406,16 +411,13 @@ bool TransformGizmoInteraction::pending_drag_threshold_reached(
   if (!pending_drag_.has_value()) {
     return false;
   }
-  const double threshold =
-      quader_editor_core::kSelectionBoxDefaultDragThreshold;
-  return screen_distance_squared(
-             current, pending_drag_->begin_request.screen_position) >=
-         threshold * threshold;
+  return viewport_pointer_drag_threshold_reached(pending_drag_->pointer,
+                                                 current);
 }
 
 bool TransformGizmoInteraction::begin_pending_drag(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
-    CurveToolService *curve_tool) {
+    ViewportCurveInteractionPort *curve_tool) {
   QDR_PROFILE_FUNCTION();
   if (!pending_drag_.has_value()) {
     return false;
@@ -587,7 +589,7 @@ TransformGizmoInteraction::release_pending_click() {
 ViewportBeforeToolInteractionResult
 TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
                                         const ViewportInteractionFrame &frame,
-                                        CurveToolService *curve_tool) {
+                                        ViewportCurveInteractionPort *curve_tool) {
   QDR_PROFILE_FUNCTION();
   ViewportBeforeToolInteractionResult result;
 
@@ -763,9 +765,14 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     }
     const bool conversion_press =
         !frame.input.curve_conversion_edges.empty();
-    const auto hit = pick_unoccluded_viewport_curve_control(
-        frame.camera, curve_tool->preview_state(), frame.left_click_local,
-        frame.scene_mesh_surface_distance, conversion_press);
+    const auto hit = frame.scene_surfaces != nullptr
+                         ? pick_unoccluded_viewport_curve_control(
+                               frame.camera, curve_tool->preview_state(),
+                               frame.left_click_local, *frame.scene_surfaces,
+                               conversion_press)
+                         : pick_viewport_curve_control(
+                               frame.camera, curve_tool->preview_state(),
+                               frame.left_click_local, conversion_press);
     return hit.has_value() &&
            (conversion_press || curve_tool->control_selection().empty() ||
             !curve_tool->control_selection().contains(hit->target));
@@ -830,6 +837,12 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
               : transform_operation_for(tool, selection_mode,
                                         frame.input.modifiers);
       pending_drag_ = PendingGizmoDrag{
+          .pointer = viewport_pointer_gesture_from_latest_edge(
+              frame.input.pointer_pressed_edges, QuaderMouseButton::Left,
+              frame.left_click_local, frame.input.mouse_screen,
+              frame.input.modifiers,
+              static_cast<float>(
+                  quader_editor_core::kSelectionBoxDefaultDragThreshold)),
           .begin_request =
               {
                   .tool = api_transform_tool_for(tool),
@@ -962,7 +975,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
             snap_ray.direction = snap_ray.direction / direction_length;
             snap_target = resolve_curve_control_snap_target(
                 frame, snap_ray, update_signature.vertex_snap_radius,
-                curve_anchor_snap_candidates_);
+                curve_anchor_snap_candidates_, surface_query_scratch_);
           }
         }
         const quader_editor_core::MovePreviewResult preview = [&]() {
@@ -1108,7 +1121,7 @@ bool TransformGizmoInteraction::cancel_active_drag(QuaderEditorApi &editor) {
 }
 
 bool TransformGizmoInteraction::cancel_active_drag(
-    QuaderEditorApi &editor, CurveToolService *curve_tool) {
+    QuaderEditorApi &editor, ViewportCurveInteractionPort *curve_tool) {
   if (pending_drag_.has_value()) {
     reset_pending_drag();
     return true;
@@ -1146,8 +1159,8 @@ void TransformGizmoInteraction::reset(QuaderEditorApi *editor) {
   reset(editor, nullptr);
 }
 
-void TransformGizmoInteraction::reset(QuaderEditorApi *editor,
-                                      CurveToolService *curve_tool) {
+void TransformGizmoInteraction::reset(
+    QuaderEditorApi *editor, ViewportCurveInteractionPort *curve_tool) {
   if (dragging_ && active_backend_ == DragBackend::CurveControl &&
       curve_tool != nullptr) {
     const CommandResult cancel = curve_tool->cancel_drag();

@@ -112,9 +112,9 @@ private:
     SceneEntityNameAllocator name_allocator(scene());
     for (const DocumentEntitySnapshot &snapshot : source_snapshots_) {
       QDR_PROFILE_SCOPE("Duplicate snapshot tree");
-      const EntityId parent = snapshot.original_parent != kInvalidEntityId &&
-                                      scene().exists(snapshot.original_parent)
-                                  ? snapshot.original_parent
+      const EntityId parent = snapshot.parent != kInvalidEntityId &&
+                                      scene().exists(snapshot.parent)
+                                  ? snapshot.parent
                                   : kInvalidEntityId;
       const EntityId duplicate =
           document_command_duplicate_entity_snapshot_tree(
@@ -147,9 +147,9 @@ private:
     std::unordered_map<EntityId, EntityId> remapped_entities;
     for (const DocumentEntitySnapshot &snapshot : duplicate_snapshots_) {
       QDR_PROFILE_SCOPE("Restore duplicate snapshot tree");
-      const EntityId parent = snapshot.original_parent != kInvalidEntityId &&
-                                      scene().exists(snapshot.original_parent)
-                                  ? snapshot.original_parent
+      const EntityId parent = snapshot.parent != kInvalidEntityId &&
+                                      scene().exists(snapshot.parent)
+                                  ? snapshot.parent
                                   : kInvalidEntityId;
       const EntityId restored = restore_or_reuse_duplicate_snapshot_tree(
           snapshot, parent, remapped_entities);
@@ -166,13 +166,15 @@ private:
       const DocumentEntitySnapshot &snapshot, EntityId parent,
       std::unordered_map<EntityId, EntityId> &remapped_entities) {
     EntityId restored = kInvalidEntityId;
-    if (scene().exists(snapshot.original_id)) {
-      restored = snapshot.original_id;
-      if (parent != kInvalidEntityId && scene().exists(parent) &&
-          scene().parent(restored) != parent) {
-        if (!scene().set_parent(restored, parent, false)) {
-          return kInvalidEntityId;
-        }
+    if (scene().exists(snapshot.id)) {
+      restored = snapshot.id;
+      // A modeling memento can recreate modeled descendants before this
+      // document command rebuilds their generic ancestors. Restore both the
+      // captured parent and sibling ordinal when reusing those exact scene
+      // identities so mixed hierarchy redo preserves authored child order.
+      if (!apply_scene_entity_state_placement(scene(), restored, snapshot,
+                                              parent)) {
+        return kInvalidEntityId;
       }
       document_command_apply_entity_snapshot_common_state(
           scene(), restored, snapshot, snapshot.name);
@@ -186,7 +188,7 @@ private:
       }
     }
 
-    remapped_entities[snapshot.original_id] = restored;
+    remapped_entities[snapshot.id] = restored;
     for (const DocumentEntitySnapshot &child : snapshot.children) {
       if (restore_or_reuse_duplicate_snapshot_tree(
               child, restored, remapped_entities) == kInvalidEntityId) {

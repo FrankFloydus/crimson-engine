@@ -1130,6 +1130,73 @@ TEST(QdrModelingRuntimePickingTests,
 }
 
 TEST(QdrModelingRuntimePickingTests,
+     BoundedMoveVertexSnapFallsThroughToVisibleVertexOnSameObject) {
+  quader_editor_core::PolygonObject object;
+  object.id = 77;
+  const quader_poly::ElementId visible_vertex = quader_poly::add_vertex(
+      object.document, {0.025F, 0.0F, 4.0F});
+  const quader_poly::ElementId occluded_vertex = quader_poly::add_vertex(
+      object.document, {0.0F, 0.0F, 0.0F});
+  const std::vector objects{object};
+
+  // The authored Z distances are scaled by 0.25 into world space. This makes
+  // the visible vertex (0.05, 0, 1) sit farther from the screen ray than the
+  // occluded vertex (0, 0, 0), while remaining in front of a world-depth
+  // barrier at ray distance 4.5. The barrier must be converted to the local
+  // ray parameter before the document picker enumerates this object's points.
+  const std::array transforms{
+      scaled_pick_transform(object.id, 2.0F, 3.0F, 0.25F)};
+  const std::array bounds{quader_editor_core::PickObjectBounds{
+      .object_id = object.id,
+      .empty = false,
+      .min = {0.0F, 0.0F, 0.0F},
+      .max = {0.05F, 0.0F, 1.0F},
+  }};
+  constexpr double kVertexRadius = 0.1;
+  const quader_poly::Ray ray{{0.0F, 0.0F, 5.0F},
+                             {0.0F, 0.0F, -1.0F}};
+  quader_editor_core::PickAllWithSurfaceScratch scratch;
+
+  const auto raw = quader_editor_core::resolve_move_vertex_snap_candidate(
+      objects, quader_editor_core::SelectionMode::Object, ray, kVertexRadius,
+      bounds, transforms, false, std::nullopt, &scratch);
+  ASSERT_TRUE(raw.has_value());
+  EXPECT_EQ(raw->object_id, object.id);
+  EXPECT_EQ(raw->vertex_id, occluded_vertex);
+  EXPECT_DOUBLE_EQ(raw->ray_distance, 5.0);
+  EXPECT_DOUBLE_EQ(raw->pick_distance, 0.0);
+  ASSERT_EQ(scratch.hits.size(), 1U);
+  EXPECT_TRUE(scratch.local_surface_hits.empty());
+  const auto *hit_storage = scratch.hits.data();
+  const std::size_t hit_capacity = scratch.hits.capacity();
+
+  const auto bounded = quader_editor_core::resolve_move_vertex_snap_candidate(
+      objects, quader_editor_core::SelectionMode::Object, ray, kVertexRadius,
+      bounds, transforms, false, 4.5, &scratch);
+  ASSERT_TRUE(bounded.has_value());
+  EXPECT_EQ(bounded->object_id, raw->object_id);
+  EXPECT_EQ(bounded->vertex_id, visible_vertex);
+  EXPECT_FLOAT_EQ(bounded->position.x, 0.05F);
+  EXPECT_FLOAT_EQ(bounded->position.y, 0.0F);
+  EXPECT_FLOAT_EQ(bounded->position.z, 1.0F);
+  EXPECT_DOUBLE_EQ(bounded->ray_distance, 4.0);
+  EXPECT_NEAR(bounded->pick_distance, 0.05, 0.000001);
+  EXPECT_GT(bounded->pick_distance, raw->pick_distance);
+  EXPECT_EQ(scratch.hits.data(), hit_storage);
+  EXPECT_EQ(scratch.hits.capacity(), hit_capacity);
+  EXPECT_TRUE(scratch.local_surface_hits.empty());
+
+  const auto repeated = quader_editor_core::resolve_move_vertex_snap_candidate(
+      objects, quader_editor_core::SelectionMode::Object, ray, kVertexRadius,
+      bounds, transforms, false, 4.5, &scratch);
+  ASSERT_TRUE(repeated.has_value());
+  EXPECT_EQ(repeated->vertex_id, bounded->vertex_id);
+  EXPECT_EQ(scratch.hits.data(), hit_storage);
+  EXPECT_EQ(scratch.hits.capacity(), hit_capacity);
+  EXPECT_TRUE(scratch.local_surface_hits.empty());
+}
+
+TEST(QdrModelingRuntimePickingTests,
      ObjectClickAndHoverRespectCulledNearFaces) {
   auto front = single_quad_object(8, true);
   for (auto &vertex : front.document.edit().vertices) {

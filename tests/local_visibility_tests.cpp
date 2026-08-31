@@ -5,7 +5,11 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
+#include "api/quader_api_session_internal_access.hpp"
+#include "editor/curve/curve_tool_service.hpp"
+#include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "viewport/viewport_local_visibility.hpp"
 #include "viewport/viewport_workspace_service.hpp"
@@ -286,6 +290,82 @@ TEST(LocalVisibilityTests,
   expect_camera_state_equal(
       workspace.camera(quader::ViewportPaneId::Perspective).state(),
       camera_before);
+}
+
+TEST(LocalVisibilityTests,
+     EnterExitAndAutomaticExitClearResolvedAndProviderHover) {
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 0.0f, 0.0f}},
+                 {.position = {2.0f, 0.0f, 0.0f}}},
+      .name = "Local Visibility Hover Curve",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  quader::CurveToolService &curve_service = session.curve();
+  ASSERT_TRUE(curve_service.refresh().ok);
+  ASSERT_TRUE(curve_service.controls_editable());
+  const quader::CurveToolPreviewState &preview = curve_service.preview_state();
+  ASSERT_TRUE(preview.document.has_value());
+  ASSERT_FALSE(preview.document->points().empty());
+  const quader::modeling::CurvePointId point =
+      preview.document->points().front().id;
+
+  const auto publish_curve_hover = [&]() {
+    const quader::ModelingCommandResult hovered =
+        session.selection().preview_resolved_hover(
+            quader::ResolvedSelectionTarget{
+                .domain =
+                    quader::ResolvedSelectionDomain::RegisteredSubElement,
+                .entity = curve.value().entity,
+                .modeling_object_id = curve.value().modeling_object_id,
+                .sub_selection_kind =
+                    quader::EditorSubSelectionKind::CurveControl,
+                .sub_element = quader::EditorSubSelectionTarget{
+                    .index = point.index,
+                    .generation = point.generation,
+                    .role = quader::EditorSubSelectionElementRole::Primary,
+                },
+            });
+    ASSERT_TRUE(hovered.ok) << hovered.message;
+    const auto resolved = session.selection().resolved_hover_target();
+    ASSERT_TRUE(resolved.has_value());
+    ASSERT_EQ(resolved->domain,
+              quader::ResolvedSelectionDomain::RegisteredSubElement);
+    const quader::EditorSubSelectionBaseline baseline =
+        curve_service.capture_sub_selection_baseline();
+    ASSERT_TRUE(baseline.valid());
+    ASSERT_TRUE(baseline.hover.has_value());
+  };
+  const auto expect_hover_cleared = [&]() {
+    EXPECT_FALSE(session.selection().resolved_hover_target().has_value());
+    const quader::EditorSubSelectionBaseline baseline =
+        curve_service.capture_sub_selection_baseline();
+    ASSERT_TRUE(baseline.valid());
+    EXPECT_FALSE(baseline.hover.has_value());
+  };
+
+  publish_curve_hover();
+  ASSERT_TRUE(editor.viewports().toggle_local_visibility().ok());
+  ASSERT_TRUE(editor.viewports().local_visibility_active());
+  expect_hover_cleared();
+
+  publish_curve_hover();
+  ASSERT_TRUE(editor.viewports().toggle_local_visibility().ok());
+  ASSERT_FALSE(editor.viewports().local_visibility_active());
+  expect_hover_cleared();
+
+  ASSERT_TRUE(editor.viewports().toggle_local_visibility().ok());
+  ASSERT_TRUE(editor.viewports().local_visibility_active());
+  publish_curve_hover();
+  const quader::QuaderApiVoidResult deleted =
+      editor.modeling().delete_selection();
+  ASSERT_TRUE(deleted.ok()) << deleted.error_message();
+  EXPECT_FALSE(editor.viewports().local_visibility_active());
+  EXPECT_FALSE(session.selection().resolved_hover_target().has_value());
+  EXPECT_FALSE(curve_service.capture_sub_selection_baseline().valid());
 }
 
 TEST(LocalVisibilityTests,

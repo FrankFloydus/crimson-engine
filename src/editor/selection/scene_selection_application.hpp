@@ -14,6 +14,7 @@
 namespace quader {
 
 class SceneDocument;
+class SceneModelingProjectionCheckpoint;
 
 /**
  * Distinguishes undoable command selection writes from runtime projection sync.
@@ -59,6 +60,20 @@ make_scene_selection(const SceneDocument &scene,
 
 [[nodiscard]] bool same_scene_selection(const SceneSelectionState &left,
                                         const SceneSelectionState &right);
+
+/**
+ * Captures only Selection-domain records for the entities touched while
+ * moving between two scene selections, plus the exact scene revision scalars.
+ */
+[[nodiscard]] SceneModelingProjectionCheckpoint
+capture_scene_selection_checkpoint(const SceneDocument &scene,
+                                   const SceneSelectionState &before,
+                                   const SceneSelectionState &after);
+
+/** Restores one bounded Selection-domain checkpoint without a scene scan. */
+[[nodiscard]] bool restore_scene_selection_checkpoint(
+    SceneDocument &scene,
+    const SceneModelingProjectionCheckpoint &checkpoint);
 
 [[nodiscard]] bool scene_entity_selectable_for_user_selection(
     const SceneDocument &scene, EntityId entity);
