@@ -7,6 +7,7 @@
 #pragma once
 
 #include "core/command_result.hpp"
+#include "core/undo_redo_execute_options.hpp"
 #include "editor/modeling/runtime/selection_types.hpp"
 #include "editor/selection/editor_sub_selection_provider.hpp"
 #include "viewport/curve_tool_preview.hpp"
@@ -21,22 +22,55 @@
 namespace quader {
 
 class AssetRegistry;
+class DocumentCommandService;
 class EditorHistoryService;
+class EditorSelectionService;
 class ModelingSessionService;
 class SceneDocument;
+struct CurveComponent;
 
 inline constexpr std::string_view kCurveToolId = "curve";
 inline constexpr std::string_view kCurveClosedSetting = "curve.closed";
+inline constexpr std::string_view kCurveTypeSetting = "curve.type";
+inline constexpr std::string_view kCurveRadiusSetting = "curve.radius";
+inline constexpr std::string_view kCurveLengthSetting = "curve.length";
+inline constexpr std::string_view kCurveSolidifySetting = "curve.solidify";
+inline constexpr std::string_view kCurveSolidifyResolutionSetting =
+    "curve.solidify.resolution";
+inline constexpr std::string_view kCurveSolidifyRadiusSetting =
+    "curve.solidify.radius";
 inline constexpr std::string_view kCurveNewAction = "curve.new";
+inline constexpr std::string_view kCurveApplySolidifyAction =
+    "curve.solidify.apply";
+
+inline constexpr double kCurvePresetMinimumRadius = 0.001;
+inline constexpr double kCurvePresetMaximumRadius = 100000.0;
+inline constexpr double kCurvePresetMaximumLength = 200000.0;
+inline constexpr double kCurvePresetDefaultRadius = 1.0;
+inline constexpr double kCurveOvalDefaultLength = 4.0;
+
+/// Selects point-by-point drawing or one complete closed placement shape.
+enum class CurveCreationKind { Draw = 0, Circle = 1, Oval = 2 };
+
+/// Pins the snapped construction-plane frame used by one preset placement.
+struct CurvePresetPlacementFrame {
+  QVec3 center{};
+  QVec3 axis_u{1.0f, 0.0f, 0.0f};
+  QVec3 axis_v{0.0f, 1.0f, 0.0f};
+};
 
 /**
- * Owns one cubic Bezier drawing/editing gesture stream. Authored edits and history
- * are delegated to the same portable modeling session used by polygon tools.
+ * Owns one cubic Bezier drawing/editing gesture stream. Authored edits and
+ * history are delegated to the same portable modeling session used by polygon
+ * tools.
  */
 class CurveToolService final : public EditorSubSelectionProvider {
 public:
   CurveToolService(SceneDocument &scene, AssetRegistry &assets,
-                   EditorHistoryService &history, ModelingSessionService &modeling);
+                   EditorHistoryService &history,
+                   ModelingSessionService &modeling,
+                   EditorSelectionService &selection,
+                   DocumentCommandService &document_commands);
 
   [[nodiscard]] bool active() const { return active_; }
   [[nodiscard]] bool has_session() const { return active_; }
@@ -50,15 +84,30 @@ public:
    * controls through the normal selection lifecycle.
    */
   [[nodiscard]] bool controls_editable() const {
-    return (active_ && drawing_) ||
-           (!drawing_ && entity_ != kInvalidEntityId);
+    return (active_ && drawing_) || (!drawing_ && entity_ != kInvalidEntityId);
   }
   [[nodiscard]] bool dragging() const { return drag_.has_value(); }
   [[nodiscard]] bool point_construction_dragging() const {
     return drag_.has_value() && drag_->appended_point;
   }
   [[nodiscard]] bool can_apply() const;
+  [[nodiscard]] bool can_change_creation_kind() const;
+  [[nodiscard]] bool can_reset_settings() const;
+  /// True only for the retained, identity-checked existing Curve attachment.
+  [[nodiscard]] bool has_editable_existing_curve() const;
+  [[nodiscard]] bool can_apply_solidify() const;
   [[nodiscard]] bool closed() const;
+  [[nodiscard]] bool solidify_enabled() const;
+  [[nodiscard]] std::uint32_t solidify_resolution() const;
+  [[nodiscard]] double solidify_radius() const;
+  [[nodiscard]] CurveCreationKind creation_kind() const {
+    return creation_kind_;
+  }
+  [[nodiscard]] double preset_radius() const {
+    return creation_kind_ == CurveCreationKind::Oval ? oval_radius_
+                                                     : circle_radius_;
+  }
+  [[nodiscard]] double oval_length() const { return oval_length_; }
   [[nodiscard]] std::size_t point_count() const;
   [[nodiscard]] bool owns_editing_entity(EntityId entity) const;
   [[nodiscard]] std::uint64_t tool_settings_revision() const;
@@ -70,8 +119,24 @@ public:
   CommandResult apply();
   CommandResult new_curve();
   CommandResult set_closed(bool closed);
+  CommandResult set_solidify(bool enabled);
+  CommandResult
+  set_solidify_resolution(std::uint32_t resolution,
+                          UndoRedoExecuteOptions options = {});
+  CommandResult set_solidify_radius(double radius,
+                                    UndoRedoExecuteOptions options = {});
+  CommandResult apply_solidify();
+  CommandResult set_creation_kind(CurveCreationKind kind);
+  CommandResult set_preset_radius(double radius);
+  CommandResult set_oval_length(double length);
+  CommandResult reset_settings();
   CommandResult toggle_point_smoothness(modeling::CurvePointId point);
   CommandResult set_hover(std::optional<QVec3> world_position);
+  /// Publishes a complete, non-pickable preset at the current snapped center.
+  CommandResult
+  set_preset_hover(std::optional<CurvePresetPlacementFrame> frame);
+  /// Authors one complete preset draft at a validated construction-plane frame.
+  CommandResult place_preset(CurvePresetPlacementFrame frame);
   /**
    * Applies the editor-wide selection operation to visible Curve controls.
    * baseline pins the press-time selection for rectangle gestures; direct_hit
@@ -102,8 +167,7 @@ public:
   void synchronize_sub_selection_scope() override;
   ModelingCommandResult edit_sub_elements(
       std::span<const EditorSubSelectionTarget> hits,
-      EditorSubSelectionEdit edit,
-      const EditorSubSelectionBaseline *baseline,
+      EditorSubSelectionEdit edit, const EditorSubSelectionBaseline *baseline,
       std::optional<EditorSubSelectionTarget> direct_hit) override;
   ModelingCommandResult restore_sub_selection_baseline(
       const EditorSubSelectionBaseline &baseline) override;
@@ -134,18 +198,30 @@ private:
     QVec3 origin_world;
     std::optional<modeling::CurvePointId> construction_point;
     bool appended_point = false;
+    bool geometry_changed = false;
   };
 
   [[nodiscard]] bool editable_source(EntityId entity) const;
+  [[nodiscard]] const CurveComponent *
+  editable_existing_curve_component() const;
+  CommandResult commit_existing_curve_component(
+      CurveComponent after, UndoRedoExecuteOptions options = {});
   [[nodiscard]] std::optional<EntityId> selected_curve() const;
-  [[nodiscard]] CurveControlSelection valid_control_selection(
-      const CurveControlSelection &selection,
-      const modeling::CurveDocument &document) const;
+  [[nodiscard]] CurveControlSelection
+  valid_control_selection(const CurveControlSelection &selection,
+                          const modeling::CurveDocument &document) const;
   [[nodiscard]] ModelingCommandResult edit_control_selection_checked(
       std::span<const CurveControlTarget> hits,
       quader_editor_core::SelectionEditOperation operation,
       const CurveControlSelection *baseline,
       std::optional<CurveControlTarget> direct_hit);
+  [[nodiscard]] std::optional<modeling::CurveDocument>
+  make_current_preset_document(std::string &message) const;
+  [[nodiscard]] std::optional<modeling::CurveDocument>
+  place_current_preset(const CurvePresetPlacementFrame &frame,
+                       std::string &message) const;
+  bool convert_procedural_draft_to_draw();
+  void clear_preset_placement_state();
   void rebuild_preview_cache(std::uint64_t presentation_revision) const;
   bool set_control_selection(CurveControlSelection selection);
   void attach_source(EntityId entity);
@@ -157,9 +233,19 @@ private:
   AssetRegistry &assets_;
   EditorHistoryService &history_;
   ModelingSessionService &modeling_;
+  EditorSelectionService &selection_;
+  DocumentCommandService &document_commands_;
   bool active_ = false;
   bool drawing_ = true;
   bool preferred_closed_ = false;
+  CurveCreationKind creation_kind_ = CurveCreationKind::Draw;
+  double circle_radius_ = kCurvePresetDefaultRadius;
+  double oval_radius_ = kCurvePresetDefaultRadius;
+  double oval_length_ = kCurveOvalDefaultLength;
+  bool procedural_draft_ = false;
+  std::optional<CurvePresetPlacementFrame> procedural_frame_;
+  std::optional<CurvePresetPlacementFrame> preset_hover_frame_;
+  std::optional<modeling::CurveDocument> preset_document_cache_;
   EntityId entity_ = kInvalidEntityId;
   int modeling_object_id_ = -1;
   std::string source_uuid_;

@@ -1715,6 +1715,29 @@ public:
                            request.world_texture_projection, finalize);
   }
 
+  [[nodiscard]] ModelingCreateBoxResult create_mesh_document(
+      modeling::PolygonDocument document, std::string_view name,
+      MaterialReference material, const CreationFinalizer &finalize) {
+    if (preview_active()) {
+      return {.ok = false,
+              .changed = false,
+              .message = "Commit or cancel the active preview first."};
+    }
+    if (document.vertex_count() == 0U || document.face_count() == 0U) {
+      return {.ok = false,
+              .changed = false,
+              .message = "Document mesh must contain vertices and faces."};
+    }
+    const Result<OperationResult> validated = document.validate();
+    if (!validated.ok()) {
+      return {.ok = false,
+              .changed = false,
+              .message = validated.error_message()};
+    }
+    return create_document(std::move(document), name, 0U, material,
+                           std::nullopt, false, finalize);
+  }
+
   [[nodiscard]] ModelingCreateBoxResult create_box_from_corners(
       std::span<const QVec3> corners, std::string_view requested_name,
       MaterialReference material, const CreationFinalizer &finalize) {
@@ -7137,7 +7160,10 @@ public:
         }
         projected.curve_id = history_asset->asset;
         projected.identity.mesh.reset();
-        projected.identity.curve = CurveComponent{history_asset->asset};
+        CurveComponent curve_component =
+            projected.identity.curve.value_or(CurveComponent{});
+        curve_component.curve = history_asset->asset;
+        projected.identity.curve = curve_component;
         CurveAsset curve;
         curve.name = history_asset->identity.name;
         curve.document = std::make_shared<const modeling::CurveDocument>(
@@ -7389,7 +7415,10 @@ public:
           modeling_object.material_slot = projected.material_slot;
           restored_identity.modeling_object = modeling_object;
           if (baseline_curve.has_value()) {
-            restored_identity.curve = CurveComponent{projected.curve_id};
+            CurveComponent curve =
+                restored_identity.curve.value_or(*baseline_curve);
+            curve.curve = projected.curve_id;
+            restored_identity.curve = curve;
           }
         }
       }
@@ -11763,6 +11792,13 @@ ModelingCreateBoxResult ModelingSdkProjectionAdapter::create_mesh(
     const ModelingCreateMeshRequest &request,
     const CreationFinalizer &finalize) {
   return impl_->create_mesh(request, finalize);
+}
+
+ModelingCreateBoxResult ModelingSdkProjectionAdapter::create_mesh_document(
+    modeling::PolygonDocument document, std::string_view name,
+    MaterialReference material, const CreationFinalizer &finalize) {
+  return impl_->create_mesh_document(std::move(document), name, material,
+                                     finalize);
 }
 
 ModelingCreateBoxResult ModelingSdkProjectionAdapter::create_curve(

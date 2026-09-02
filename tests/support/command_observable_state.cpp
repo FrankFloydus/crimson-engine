@@ -10,6 +10,7 @@
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <filesystem>
 #include <iomanip>
@@ -815,6 +816,12 @@ std::string capture_scene(const CaptureData &data) {
     writer.line(prefix + ".mesh", data.mesh_label(entity->mesh));
     if (entity->has_curve) {
       writer.line(prefix + ".curve", data.curve_label(entity->curve));
+      writer.line(prefix + ".curve_solidify",
+                  bool_text(entity->curve_solidify));
+      writer.line(prefix + ".curve_solidify_resolution",
+                  std::to_string(entity->curve_solidify_resolution));
+      writer.line(prefix + ".curve_solidify_radius",
+                  float_bits(entity->curve_solidify_radius));
     }
     writer.line(prefix + ".has_material", bool_text(entity->has_material));
     writer.line(prefix + ".material",
@@ -1474,6 +1481,30 @@ std::string capture_tools(const CaptureData &data) {
     writer.line(prefix + ".max", double_bits(control.max_value));
     writer.line(prefix + ".step", double_bits(control.step));
     writer.line(prefix + ".choice_value", quote(control.choice_value));
+    if (control.kind == QuaderToolSettingControlKind::Vector3Number) {
+      std::array<const QuaderToolSettingNumberComponent *, 3U> components{
+          &control.vector3_components[0], &control.vector3_components[1],
+          &control.vector3_components[2]};
+      std::sort(components.begin(), components.end(),
+                [](const auto *left, const auto *right) {
+                  return left->id < right->id;
+                });
+      for (std::size_t component_index = 0U;
+           component_index < components.size(); ++component_index) {
+        const QuaderToolSettingNumberComponent &component =
+            *components[component_index];
+        const std::string component_prefix =
+            prefix + ".vector_component[" +
+            std::to_string(component_index) + "]";
+        writer.line(component_prefix + ".id", quote(component.id));
+        writer.line(component_prefix + ".value", double_bits(component.value));
+        writer.line(component_prefix + ".min",
+                    double_bits(component.min_value));
+        writer.line(component_prefix + ".max",
+                    double_bits(component.max_value));
+        writer.line(component_prefix + ".step", double_bits(component.step));
+      }
+    }
     std::vector<const QuaderToolSettingChoiceOption *> choices;
     choices.reserve(control.choices.size());
     for (const QuaderToolSettingChoiceOption &choice : control.choices) {

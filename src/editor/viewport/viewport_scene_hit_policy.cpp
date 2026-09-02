@@ -487,7 +487,7 @@ void append_curve_entity_hits(
     const std::array one{candidate};
     const std::optional<ViewportCurvePickHit> hit = pick_viewport_curve(
         query.camera, query.local_mouse, one, query.curve_radius_pixels,
-        visible_surface_distance);
+        visible_surface_distance, query.select_backfaces);
     if (!hit.has_value()) {
       continue;
     }
@@ -822,8 +822,41 @@ std::vector<ViewportSceneHitCandidate> collect_viewport_scene_marquee_hits(
   }
 
   for (const ViewportSceneCurvePickCandidate &candidate : query.curves) {
-    if (candidate.entity == kInvalidEntityId ||
-        candidate.sample_payload == nullptr) {
+    if (candidate.entity == kInvalidEntityId) {
+      continue;
+    }
+    if (candidate.solidified) {
+      ViewportCurveTubeProjection tube = project_viewport_curve_tube(
+          candidate,
+          {.camera = query.camera.runtime_camera(),
+           .near_plane = query.camera.near_plane(),
+           .far_plane = query.camera.far_plane(),
+           .world_point_visible = [&](QVec3 world) {
+             return world_point_is_render_visible(
+                 query.camera, query.scene_surfaces, world,
+                 surface_scratch);
+           },
+           .visibility_revision =
+                query.scene_surfaces != nullptr
+                    ? std::optional<std::uint64_t>{
+                          query.scene_surfaces->revision()}
+                    : std::optional<std::uint64_t>{0u}});
+      if (!tube.valid) {
+        continue;
+      }
+      append_projected(
+          {
+              .kind = ViewportSceneHitKind::CurveEntity,
+              .entity = candidate.entity,
+              .world_position = tube.nearest_world_position,
+              .ray_distance = tube.nearest_ray_distance,
+              .pick_distance_pixels = 0.0,
+              .source = ViewportSceneCurveEntityHit{},
+          },
+          std::move(tube.projected));
+      continue;
+    }
+    if (candidate.sample_payload == nullptr) {
       continue;
     }
     quader_editor_core::RectangleProjectedObject projected;
@@ -969,14 +1002,14 @@ std::vector<ViewportSceneHitCandidate> collect_viewport_scene_marquee_hits(
   if (query.include_curve_controls && query.curve_controls != nullptr &&
       query.curve_controls->document.has_value()) {
     const auto &document = *query.curve_controls->document;
-    constexpr std::array kinds{
+    constexpr std::array kKinds{
         CurveControlKind::Anchor, CurveControlKind::IncomingHandle,
         CurveControlKind::OutgoingHandle};
     for (std::size_t point_index = 0u;
          point_index < document.point_count(); ++point_index) {
       const modeling::CurveControlPoint &point =
           document.points()[point_index];
-      for (const CurveControlKind kind : kinds) {
+      for (const CurveControlKind kind : kKinds) {
         if (!curve_control_is_visible(*query.curve_controls, point_index,
                                       kind)) {
           continue;

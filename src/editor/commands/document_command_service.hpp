@@ -97,6 +97,9 @@ public:
     DocumentCommandResult set_mesh_component(EntityId entity,
                                              MeshComponent mesh);
     DocumentCommandResult
+    set_curve_component(EntityId entity, CurveComponent curve,
+                        UndoRedoExecuteOptions options = {});
+    DocumentCommandResult
     set_light_component(EntityId entity, LightComponent light,
                         UndoRedoExecuteOptions options = {});
     DocumentCommandResult

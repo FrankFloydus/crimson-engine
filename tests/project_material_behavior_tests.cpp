@@ -1168,6 +1168,207 @@ TEST(ProjectMaterialBehaviorTests,
 }
 
 TEST(ProjectMaterialBehaviorTests,
+     ActiveMaterialAddsAndReplacesSolidifiedCurveMaterialsWithMeshes) {
+  ProjectMaterialBehaviorHarness harness("solid-curve-object-apply");
+  harness.create();
+  const InstalledMaterial amber{
+      .path = project_path("Materials/amber.qmat"),
+      .material = project_material(kAmberMaterialId, "Amber",
+                                   {1.0f, 0.5f, 0.1f}),
+  };
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue",
+                                   {0.1f, 0.2f, 1.0f}),
+  };
+  const std::array installed{amber, blue};
+  harness.install_and_reopen(installed);
+  auto &editor = harness.editor();
+  ASSERT_TRUE(editor.project_assets().set_active_material(amber.material.id)
+                  .ok());
+
+  const auto mesh = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Pipe Companion");
+  ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0f, 0.0f, 0.0f}},
+                 {.position = {4.0f, 0.0f, 0.0f}}},
+      .name = "Material Pipe",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  const QuaderHistorySnapshot history_before_solidify = editor.query().history();
+  const QuaderApiVoidResult dormant_apply =
+      editor.commands().execute(quader_command::kApplyMaterial);
+  EXPECT_FALSE(dormant_apply.ok());
+  EXPECT_FALSE(dormant_apply.changed());
+  EXPECT_EQ(scene_material(harness.project(), curve.value().entity), nullptr);
+  expect_same_history(editor.query().history(), history_before_solidify);
+  ASSERT_TRUE(
+      editor.tools().set_setting("curve", "curve.solidify", true).ok());
+  OpenSceneSession *active_scene = harness.project().active_scene();
+  ASSERT_NE(active_scene, nullptr);
+  ASSERT_NE(active_scene->session, nullptr);
+  const CurveComponent *curve_component =
+      active_scene->session->scene().curve(curve.value().entity);
+  ASSERT_NE(curve_component, nullptr);
+  const CurveComponent curve_settings = *curve_component;
+  const QuaderApiResult<QuaderCurveSnapshot> curve_before =
+      editor.modeling().curve_snapshot(curve.value());
+  ASSERT_TRUE(curve_before.ok()) << curve_before.error_message();
+  EXPECT_EQ(scene_material(harness.project(), curve.value().entity), nullptr);
+
+  const QuaderApiVoidResult added =
+      editor.commands().execute(quader_command::kApplyMaterial);
+  ASSERT_TRUE(added.ok()) << added.error_message();
+  ASSERT_TRUE(added.changed());
+  expect_primary_material(harness.project(), curve.value().entity,
+                          amber.material.id);
+  EXPECT_EQ(editor.query().history().undo_label, "Assign Material");
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(scene_material(harness.project(), curve.value().entity), nullptr);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_primary_material(harness.project(), curve.value().entity,
+                          amber.material.id);
+
+  ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id)
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_objects(
+      {mesh.value().entity, curve.value().entity}, curve.value().entity).ok());
+  const ModelingSelectionExport selection_before =
+      exact_selection(harness.project());
+  const auto scene_selection_before = scene_selection_identity(editor);
+  const QuaderApiVoidResult replaced =
+      editor.commands().execute(quader_command::kApplyMaterial);
+  ASSERT_TRUE(replaced.ok()) << replaced.error_message();
+  ASSERT_TRUE(replaced.changed());
+  expect_primary_material(harness.project(), mesh.value().entity,
+                          blue.material.id);
+  expect_primary_material(harness.project(), curve.value().entity,
+                          blue.material.id);
+  EXPECT_EQ(scene_selection_identity(editor), scene_selection_before);
+  expect_same_selection_identity(exact_selection(harness.project()),
+                                 selection_before);
+  EXPECT_EQ(*active_scene->session->scene().curve(curve.value().entity),
+            curve_settings);
+  const QuaderApiResult<QuaderCurveSnapshot> curve_after =
+      editor.modeling().curve_snapshot(curve.value());
+  ASSERT_TRUE(curve_after.ok()) << curve_after.error_message();
+  EXPECT_TRUE(curve_after.value().document.has_same_geometry(
+      curve_before.value().document));
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_primary_material(harness.project(), mesh.value().entity,
+                          amber.material.id);
+  expect_primary_material(harness.project(), curve.value().entity,
+                          amber.material.id);
+  expect_same_selection_identity(exact_selection(harness.project()),
+                                 selection_before);
+  ASSERT_TRUE(editor.project_assets()
+                  .set_active_material(
+                      project_asset_id(kDefaultProjectMaterialId))
+                  .ok());
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_primary_material(harness.project(), mesh.value().entity,
+                          blue.material.id);
+  expect_primary_material(harness.project(), curve.value().entity,
+                          blue.material.id);
+  EXPECT_EQ(*active_scene->session->scene().curve(curve.value().entity),
+            curve_settings);
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     GroupApplyIncludesSolidifiedCurvesAndRejectsProtectedDescendants) {
+  ProjectMaterialBehaviorHarness harness("solid-curve-group-apply");
+  harness.create();
+  const InstalledMaterial amber{
+      .path = project_path("Materials/amber.qmat"),
+      .material = project_material(kAmberMaterialId, "Amber",
+                                   {1.0f, 0.5f, 0.1f}),
+  };
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue",
+                                   {0.1f, 0.2f, 1.0f}),
+  };
+  const std::array installed{amber, blue};
+  harness.install_and_reopen(installed);
+  auto &editor = harness.editor();
+  ASSERT_TRUE(editor.project_assets().set_active_material(amber.material.id)
+                  .ok());
+  const auto mesh = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Grouped Pipe Mesh");
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0f, 2.0f, 0.0f}},
+                 {.position = {4.0f, 2.0f, 0.0f}}},
+      .name = "Grouped Pipe Curve",
+  });
+  ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  ASSERT_TRUE(
+      editor.tools().set_setting("curve", "curve.solidify", true).ok());
+  ASSERT_TRUE(editor.commands().execute(quader_command::kApplyMaterial).ok());
+  ASSERT_TRUE(editor.selection().select_objects(
+      {mesh.value().entity, curve.value().entity}, curve.value().entity).ok());
+  const auto group = editor.scene().group_selection("Pipe Material Group");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Group).ok());
+  ASSERT_TRUE(editor.selection().select_object(group.value().id).ok());
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.set_visible(curve.value().entity, false));
+  ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id)
+                  .ok());
+
+  ASSERT_TRUE(fixture.set_locked(curve.value().entity, true));
+  const QuaderHistorySnapshot history_before_locked = editor.query().history();
+  const QuaderApiVoidResult locked =
+      editor.commands().execute(quader_command::kApplyMaterial);
+  EXPECT_FALSE(locked.ok());
+  EXPECT_FALSE(locked.changed());
+  expect_primary_material(harness.project(), mesh.value().entity,
+                          amber.material.id);
+  expect_primary_material(harness.project(), curve.value().entity,
+                          amber.material.id);
+  expect_same_history(editor.query().history(), history_before_locked);
+  ASSERT_TRUE(fixture.set_locked(curve.value().entity, false));
+
+  const ModelingSelectionExport selection_before =
+      exact_selection(harness.project());
+  const auto scene_selection_before = scene_selection_identity(editor);
+  const QuaderApiVoidResult applied =
+      editor.commands().execute(quader_command::kApplyMaterial);
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  ASSERT_TRUE(applied.changed());
+  expect_primary_material(harness.project(), mesh.value().entity,
+                          blue.material.id);
+  expect_primary_material(harness.project(), curve.value().entity,
+                          blue.material.id);
+  EXPECT_FALSE(editor.query().entity(curve.value().entity)->visible);
+  EXPECT_EQ(scene_selection_identity(editor), scene_selection_before);
+  expect_same_selection_identity(exact_selection(harness.project()),
+                                 selection_before);
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_primary_material(harness.project(), mesh.value().entity,
+                          amber.material.id);
+  expect_primary_material(harness.project(), curve.value().entity,
+                          amber.material.id);
+  expect_same_selection_identity(exact_selection(harness.project()),
+                                 selection_before);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_primary_material(harness.project(), mesh.value().entity,
+                          blue.material.id);
+  expect_primary_material(harness.project(), curve.value().entity,
+                          blue.material.id);
+  EXPECT_FALSE(editor.query().entity(curve.value().entity)->visible);
+}
+
+TEST(ProjectMaterialBehaviorTests,
      GroupApplyIncludesNestedHiddenMeshesAndRestoresExactSelection) {
   // The direct API, public command, and tool-dispatch history routes share the
   // same group target policy and must restore their scene-owned selection.
@@ -1442,11 +1643,11 @@ TEST(ProjectMaterialBehaviorTests,
   const auto selection = exact_selection(harness.project());
   const auto scene_selection = scene_selection_identity(editor);
   using ProjectionFailurePoint = ProjectMaterialFixture::ProjectionFailurePoint;
-  constexpr std::array failures{
+  constexpr std::array kFailures{
       ProjectionFailurePoint::AfterSdkMutation,
       ProjectionFailurePoint::CommittedSceneNotify,
       ProjectionFailurePoint::BeforeCommit};
-  for (const auto failure : failures) {
+  for (const auto failure : kFailures) {
     SCOPED_TRACE(static_cast<int>(failure));
     ASSERT_TRUE(fixture.set_projection_failure(failure));
     const auto result = editor.commands().execute(quader_command::kApplyMaterial);
@@ -3332,6 +3533,194 @@ TEST(ProjectMaterialReferenceBehaviorTests,
             MaterialReference::project(blue.material.id));
   EXPECT_EQ(scene_material(harness.project(), second.value().entity)->material,
             MaterialReference::project(blue.material.id));
+}
+
+TEST(ProjectMaterialReferenceBehaviorTests,
+     SolidifiedCurvesExposeOnlyTheirPrimaryMaterialBinding) {
+  ProjectMaterialBehaviorHarness harness("material-reference-solid-curve");
+  harness.create();
+  const InstalledMaterial amber{
+      .path = project_path("Materials/amber.qmat"),
+      .material = project_material(kAmberMaterialId, "Amber",
+                                   {1.0f, 0.5f, 0.1f}),
+  };
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue",
+                                   {0.1f, 0.25f, 1.0f}),
+  };
+  const std::array installed{amber, blue};
+  harness.install_and_reopen(installed);
+
+  const QuaderApiResult<QuaderModelingObjectRef> solid_curve =
+      harness.editor().modeling().create_curve({
+          .points = {{.position = {0.0f, 0.0f, 0.0f}},
+                     {.position = {3.0f, 0.0f, 0.0f}}},
+          .name = "Solid Material Curve",
+      });
+  ASSERT_TRUE(solid_curve.ok()) << solid_curve.error_message();
+  ASSERT_TRUE(harness.editor().selection().set_mode(QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(
+      harness.editor().selection().select_object(solid_curve.value()).ok());
+  ASSERT_TRUE(harness.editor()
+                  .tools()
+                  .set_setting("curve", "curve.solidify", true)
+                  .ok());
+
+  const QuaderApiResult<QuaderModelingObjectRef> dormant_curve =
+      harness.editor().modeling().create_curve({
+          .points = {{.position = {0.0f, 2.0f, 0.0f}},
+                     {.position = {3.0f, 2.0f, 0.0f}}},
+          .name = "Dormant Material Curve",
+      });
+  ASSERT_TRUE(dormant_curve.ok()) << dormant_curve.error_message();
+  const ProjectMaterialFixture fixture(harness.project());
+  const MaterialComponent solid_before{
+      .material = MaterialReference::project(amber.material.id),
+      .material_slots = {
+          {7u, MaterialReference::project(blue.material.id)}},
+  };
+  ASSERT_TRUE(
+      fixture.set_material(solid_curve.value().entity, solid_before));
+  ASSERT_TRUE(fixture.set_material(
+      dormant_curve.value().entity,
+      MaterialComponent{
+          .material = MaterialReference::project(blue.material.id)}));
+  ASSERT_TRUE(
+      harness.editor().selection().select_object(solid_curve.value()).ok());
+
+  const QuaderApiResult<std::vector<QuaderMaterialReference>> selected_used =
+      harness.editor().materials().used_materials(
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(selected_used.ok()) << selected_used.error_message();
+  ASSERT_EQ(selected_used.value().size(), 1u);
+  EXPECT_EQ(selected_used.value().front(),
+            QuaderMaterialReference::project(amber.material.id));
+  const QuaderApiResult<std::vector<QuaderMaterialReference>> scene_used =
+      harness.editor().materials().used_materials(
+          QuaderMaterialUsageScope::ActiveScene);
+  ASSERT_TRUE(scene_used.ok()) << scene_used.error_message();
+  ASSERT_EQ(scene_used.value().size(), 1u);
+  EXPECT_EQ(scene_used.value().front(),
+            QuaderMaterialReference::project(amber.material.id));
+
+  const QuaderHistorySnapshot history_before_slot_only =
+      harness.editor().query().history();
+  const QuaderApiVoidResult slot_only =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialReference::project(amber.material.id),
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(slot_only.ok()) << slot_only.error_message();
+  EXPECT_FALSE(slot_only.changed());
+  EXPECT_EQ(*scene_material(harness.project(), solid_curve.value().entity),
+            solid_before);
+  expect_same_history(harness.editor().query().history(),
+                      history_before_slot_only);
+
+  const QuaderApiVoidResult replaced =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(amber.material.id),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(replaced.ok()) << replaced.error_message();
+  ASSERT_TRUE(replaced.changed());
+  const MaterialComponent *solid_after =
+      scene_material(harness.project(), solid_curve.value().entity);
+  ASSERT_NE(solid_after, nullptr);
+  EXPECT_EQ(solid_after->material,
+            MaterialReference::project(blue.material.id));
+  EXPECT_EQ(solid_after->material_slots, solid_before.material_slots);
+  ASSERT_TRUE(harness.editor().history().undo().ok());
+  EXPECT_EQ(*scene_material(harness.project(), solid_curve.value().entity),
+            solid_before);
+  ASSERT_TRUE(harness.editor().history().redo().ok());
+  EXPECT_EQ(scene_material(harness.project(), solid_curve.value().entity)
+                ->material,
+            MaterialReference::project(blue.material.id));
+}
+
+TEST(ProjectMaterialReferenceBehaviorTests,
+     SolidifiedCurveGroupScopePreservesLockPolicy) {
+  ProjectMaterialBehaviorHarness harness(
+      "material-reference-solid-curve-group");
+  harness.create();
+  const InstalledMaterial amber{
+      .path = project_path("Materials/amber.qmat"),
+      .material = project_material(kAmberMaterialId, "Amber",
+                                   {1.0f, 0.5f, 0.1f}),
+  };
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue",
+                                   {0.1f, 0.25f, 1.0f}),
+  };
+  const std::array installed{amber, blue};
+  harness.install_and_reopen(installed);
+  const QuaderApiResult<QuaderModelingObjectRef> curve =
+      harness.editor().modeling().create_curve({
+          .points = {{.position = {0.0f, 0.0f, 0.0f}},
+                     {.position = {3.0f, 0.0f, 0.0f}}},
+          .name = "Grouped Solid Material Curve",
+      });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(harness.editor().selection().set_mode(QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(harness.editor().selection().select_object(curve.value()).ok());
+  ASSERT_TRUE(harness.editor()
+                  .tools()
+                  .set_setting("curve", "curve.solidify", true)
+                  .ok());
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.set_material(
+      curve.value().entity,
+      MaterialComponent{
+          .material = MaterialReference::project(amber.material.id)}));
+  const QuaderApiResult<QuaderEntityRef> group =
+      harness.editor().scene().group_selection("Solid Material Curve Group");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+  ASSERT_TRUE(harness.editor().selection().set_mode(QuaderSelectionMode::Group)
+                  .ok());
+  ASSERT_TRUE(harness.editor().selection().select_object(group.value().id)
+                  .ok());
+
+  const QuaderApiResult<std::vector<QuaderMaterialReference>> used =
+      harness.editor().materials().used_materials(
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(used.ok()) << used.error_message();
+  ASSERT_EQ(used.value().size(), 1u);
+  EXPECT_EQ(used.value().front(),
+            QuaderMaterialReference::project(amber.material.id));
+
+  ASSERT_TRUE(fixture.set_locked(group.value().id, true));
+  const QuaderHistorySnapshot history_before_locked =
+      harness.editor().query().history();
+  const QuaderApiVoidResult locked =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(amber.material.id),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  EXPECT_FALSE(locked.ok());
+  EXPECT_FALSE(locked.changed());
+  EXPECT_EQ(scene_material(harness.project(), curve.value().entity)->material,
+            MaterialReference::project(amber.material.id));
+  expect_same_history(harness.editor().query().history(),
+                      history_before_locked);
+  ASSERT_TRUE(fixture.set_locked(group.value().id, false));
+
+  const QuaderApiVoidResult replaced =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(amber.material.id),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(replaced.ok()) << replaced.error_message();
+  ASSERT_TRUE(replaced.changed());
+  EXPECT_EQ(scene_material(harness.project(), curve.value().entity)->material,
+            MaterialReference::project(blue.material.id));
+  ASSERT_TRUE(harness.editor().history().undo().ok());
+  EXPECT_EQ(scene_material(harness.project(), curve.value().entity)->material,
+            MaterialReference::project(amber.material.id));
 }
 
 TEST(ProjectMaterialReferenceBehaviorTests,

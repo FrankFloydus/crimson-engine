@@ -334,6 +334,8 @@ public:
   [[nodiscard]] bool has_face_texture_repeat() const;
   ModelingCommandResult mirror_selection(ModelingMirrorAxis axis);
   ModelingCommandResult flip_selection(ModelingFlipOrientation orientation);
+  [[nodiscard]] ModelingCommandResult
+  active_material_selection_status(bool material_reference_available) const;
   ModelingCommandResult apply_active_material(std::uint32_t material_slot = 0);
   ModelingCommandResult apply_active_material(MaterialReference material);
   ModelingCommandResult apply_material_to_mesh_at_face(
@@ -473,6 +475,9 @@ public:
   /// Curve content stays in the portable session; scene assets pin projections.
   ModelingCreateBoxResult create_curve(modeling::CurveDocument document,
                                        std::string name = "Curve");
+  /// Bakes one selected solidified Curve into an ordinary editable Mesh.
+  [[nodiscard]] ModelingCreateBoxResult
+  apply_curve_solidify(int modeling_object_id);
   [[nodiscard]] std::optional<modeling::CurveDocument> curve_document(
       int modeling_object_id, bool include_preview = true) const;
   ModelingCommandResult replace_curve_document(

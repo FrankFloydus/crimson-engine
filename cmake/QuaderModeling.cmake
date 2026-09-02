@@ -226,7 +226,8 @@ set_target_properties(quader_modeling_sdk_geometry PROPERTIES
 quader_configure_modeling_sdk_target(quader_modeling_sdk_geometry)
 
 add_library(quader_modeling_sdk_curves STATIC
-    src/sdk/core/modeling/src/curve_document.cpp)
+    src/sdk/core/modeling/src/curve_document.cpp
+    src/sdk/core/modeling/src/curve_tube.cpp)
 add_library(quader::modeling_sdk_curves ALIAS quader_modeling_sdk_curves)
 set_target_properties(quader_modeling_sdk_curves PROPERTIES
     EXPORT_NAME modeling_sdk_curves)
@@ -611,6 +612,7 @@ if(QUADER_BUILD_TESTS)
         tests/sdk/modeling_curve_arc_length_path_tests.cpp
         tests/sdk/modeling_curve_document_tests.cpp
         tests/sdk/modeling_curve_session_tests.cpp
+        tests/sdk/modeling_curve_tube_tests.cpp
         tests/sdk/modeling_sdk_consumer_tests.cpp)
     set_source_files_properties(
         tests/sdk/headers/mesh_handle_header_compile.cpp

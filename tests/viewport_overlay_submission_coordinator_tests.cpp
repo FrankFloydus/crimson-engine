@@ -98,7 +98,7 @@ private:
 };
 
 const StaticDynamicToolFrameProvider &default_dynamic_tool_provider() {
-  static const StaticDynamicToolFrameProvider provider = [] {
+  static const StaticDynamicToolFrameProvider kProvider = [] {
     ViewportOverlayFrame tool;
     tool.points.push_back({
         .position = {1.0f, 2.0f, 3.0f},
@@ -106,7 +106,7 @@ const StaticDynamicToolFrameProvider &default_dynamic_tool_provider() {
     });
     return StaticDynamicToolFrameProvider{std::move(tool)};
   }();
-  return provider;
+  return kProvider;
 }
 
 ViewportOverlaySubmissionRequest submission_request(

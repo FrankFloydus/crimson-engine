@@ -4698,6 +4698,108 @@ TEST(SceneDocumentTests, CurveBindingsPreserveKindAndTrackOwnerRevisions) {
 }
 
 TEST(SceneDocumentTests,
+     CurveSolidifyValuesHaveDefaultsAndRejectInvalidValuesAtomically) {
+  const CurveComponent defaults{.curve = 42u};
+  EXPECT_FALSE(defaults.solidify);
+  EXPECT_EQ(defaults.solidify_resolution,
+            kCurveSolidifyDefaultResolution);
+  EXPECT_FLOAT_EQ(defaults.solidify_radius, kCurveSolidifyDefaultRadius);
+
+  SceneDocument scene;
+  const EntityId entity = scene.create_entity("Solidified Curve");
+  const CurveComponent valid{
+      .curve = 42u,
+      .solidify = true,
+      .solidify_resolution = 24,
+      .solidify_radius = 2.5F,
+  };
+  ASSERT_TRUE(scene.set_curve(entity, valid));
+  ASSERT_NE(scene.curve(entity), nullptr);
+  EXPECT_EQ(*scene.curve(entity), valid);
+
+  const auto revision = scene.revision();
+  const auto binding_revision = scene.curve_binding_revision();
+  const auto material_revision = scene.material_binding_revision();
+  const auto render_revision = scene.render_component_revision();
+  const auto hierarchy_revision = scene.hierarchy_presentation_revision();
+  const auto expect_rejected_without_mutation =
+      [&](CurveComponent invalid) {
+        EXPECT_FALSE(scene.set_curve(entity, invalid));
+        ASSERT_NE(scene.curve(entity), nullptr);
+        EXPECT_EQ(*scene.curve(entity), valid);
+        EXPECT_EQ(scene.revision(), revision);
+        EXPECT_EQ(scene.curve_binding_revision(), binding_revision);
+        EXPECT_EQ(scene.material_binding_revision(), material_revision);
+        EXPECT_EQ(scene.render_component_revision(), render_revision);
+        EXPECT_EQ(scene.hierarchy_presentation_revision(), hierarchy_revision);
+      };
+
+  CurveComponent invalid = valid;
+  invalid.solidify_resolution = kCurveSolidifyMinimumResolution - 1;
+  expect_rejected_without_mutation(invalid);
+  invalid.solidify_resolution = kCurveSolidifyMaximumResolution + 1;
+  expect_rejected_without_mutation(invalid);
+  invalid = valid;
+  invalid.solidify_radius = kCurveSolidifyMinimumRadius * 0.5F;
+  expect_rejected_without_mutation(invalid);
+  invalid.solidify_radius = kCurveSolidifyMaximumRadius + 1.0F;
+  expect_rejected_without_mutation(invalid);
+  invalid.solidify_radius =
+      (std::numeric_limits<float>::infinity)();
+  expect_rejected_without_mutation(invalid);
+  invalid.solidify_radius =
+      (std::numeric_limits<float>::quiet_NaN)();
+  expect_rejected_without_mutation(invalid);
+}
+
+TEST(SceneDocumentTests,
+     CurveMaterialSurfaceRevisionTracksSolidifyWithoutTrackingGeometry) {
+  SceneDocument scene;
+  const EntityId entity = scene.create_entity("Material Surface Curve");
+  CurveComponent curve{.curve = 42u};
+  ASSERT_TRUE(scene.set_curve(entity, curve));
+  const std::uint64_t dormant_revision = scene.material_binding_revision();
+
+  curve.solidify_radius = 2.0F;
+  ASSERT_TRUE(scene.set_curve(entity, curve));
+  EXPECT_EQ(scene.material_binding_revision(), dormant_revision);
+  ASSERT_TRUE(scene.notify_curve_payload_changed(entity));
+  EXPECT_EQ(scene.material_binding_revision(), dormant_revision);
+
+  curve.solidify = true;
+  ASSERT_TRUE(scene.set_curve(entity, curve));
+  const std::uint64_t solid_revision = scene.material_binding_revision();
+  EXPECT_GT(solid_revision, dormant_revision);
+
+  curve.solidify_resolution += 1;
+  curve.solidify_radius = 3.0F;
+  ASSERT_TRUE(scene.set_curve(entity, curve));
+  EXPECT_EQ(scene.material_binding_revision(), solid_revision);
+  ASSERT_TRUE(scene.notify_curve_payload_changed(entity));
+  EXPECT_EQ(scene.material_binding_revision(), solid_revision);
+
+  curve.solidify = false;
+  ASSERT_TRUE(scene.set_curve(entity, curve));
+  const std::uint64_t disabled_revision = scene.material_binding_revision();
+  EXPECT_GT(disabled_revision, solid_revision);
+  ASSERT_TRUE(scene.clear_curve(entity));
+  EXPECT_EQ(scene.material_binding_revision(), disabled_revision);
+
+  const EntityId solid = scene.create_entity("Cleared Solid Curve");
+  curve.solidify = true;
+  ASSERT_TRUE(scene.set_curve(solid, curve));
+  const std::uint64_t before_clear = scene.material_binding_revision();
+  ASSERT_TRUE(scene.clear_curve(solid));
+  EXPECT_GT(scene.material_binding_revision(), before_clear);
+
+  const EntityId destroyed = scene.create_entity("Destroyed Solid Curve");
+  ASSERT_TRUE(scene.set_curve(destroyed, curve));
+  const std::uint64_t before_destroy = scene.material_binding_revision();
+  ASSERT_TRUE(scene.destroy_entity(destroyed));
+  EXPECT_GT(scene.material_binding_revision(), before_destroy);
+}
+
+TEST(SceneDocumentTests,
      BindingReferenceCountsTrackRebindClearSubtreeDestroyAndMove) {
   SceneDocument scene;
   const EntityId parent = scene.create_empty("Parent");
@@ -5323,15 +5425,15 @@ TEST(SceneDocumentTests,
   const EntityId unrelated = scene.create_entity("Unrelated");
   ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 10u}));
   const std::array participants{participant};
-  constexpr SceneModelingProjectionDomain domains =
+  constexpr SceneModelingProjectionDomain kDomains =
       SceneModelingProjectionDomain::MeshBindings |
       SceneModelingProjectionDomain::CurveBindings |
       SceneModelingProjectionDomain::Selection |
       SceneModelingProjectionDomain::Structure;
   const SceneModelingProjectionCheckpoint checkpoint =
-      scene.capture_modeling_projection_checkpoint(participants, domains);
+      scene.capture_modeling_projection_checkpoint(participants, kDomains);
   SceneModelingProjectionMutationFence fence =
-      scene.capture_modeling_projection_mutation_fence(participants, domains);
+      scene.capture_modeling_projection_mutation_fence(participants, kDomains);
   ASSERT_TRUE(checkpoint.valid());
   ASSERT_TRUE(fence.valid());
 
@@ -5413,6 +5515,41 @@ TEST(SceneDocumentTests,
   ASSERT_NE(scene.mesh(participant), nullptr);
   EXPECT_EQ(scene.mesh(participant)->mesh, 12u);
   EXPECT_EQ(scene.revision(), revision);
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionConcurrentCurveRestoreTracksMaterialSurfaceChange) {
+  SceneDocument scene;
+  const EntityId curve = scene.create_entity("Concurrent Curve");
+  CurveComponent dormant{.curve = 10u};
+  ASSERT_TRUE(scene.set_curve(curve, dormant));
+  const std::array participants{curve};
+  constexpr SceneModelingProjectionDomain kDomains =
+      SceneModelingProjectionDomain::CurveBindings;
+  const SceneModelingProjectionCheckpoint checkpoint =
+      scene.capture_modeling_projection_checkpoint(participants, kDomains);
+  SceneModelingProjectionMutationFence fence =
+      scene.capture_modeling_projection_mutation_fence(participants, kDomains);
+
+  CurveComponent solid = dormant;
+  solid.solidify = true;
+  ASSERT_TRUE(scene.set_curve(curve, solid));
+  ASSERT_TRUE(fence.acknowledge_current(scene));
+  const EntityId unrelated = scene.create_entity("Unrelated Progress");
+  ASSERT_TRUE(scene.set_transform(
+      unrelated, TransformComponent{.position = {3.0F, 4.0F, 5.0F}}));
+  ASSERT_TRUE(fence.matches_current(scene));
+  const std::uint64_t material_before_restore =
+      scene.material_binding_revision();
+
+  ASSERT_TRUE(
+      scene.restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+          checkpoint, fence));
+  ASSERT_NE(scene.curve(curve), nullptr);
+  EXPECT_FALSE(scene.curve(curve)->solidify);
+  EXPECT_GT(scene.material_binding_revision(), material_before_restore);
+  ASSERT_NE(scene.transform(unrelated), nullptr);
+  EXPECT_FLOAT_EQ(scene.transform(unrelated)->position.x, 3.0F);
 }
 
 TEST(SceneDocumentTests,
@@ -11865,7 +12002,13 @@ TEST(EditorHistoryServiceTests,
 TEST(DocumentCommandTests, CurveComponentsSurviveDuplicateAndDeleteUndoRedo) {
   SceneDocument scene;
   const EntityId curve = scene.create_entity("Curve");
-  ASSERT_TRUE(scene.set_curve(curve, {.curve = 42u}));
+  const CurveComponent component{
+      .curve = 42u,
+      .solidify = true,
+      .solidify_resolution = 32,
+      .solidify_radius = 1.75F,
+  };
+  ASSERT_TRUE(scene.set_curve(curve, component));
   ASSERT_TRUE(scene.set_transform(
       curve, TransformComponent{.position = {3.0f, 4.0f, 5.0f}}));
   ASSERT_TRUE(scene.set_selected(curve, true));
@@ -11875,20 +12018,20 @@ TEST(DocumentCommandTests, CurveComponentsSurviveDuplicateAndDeleteUndoRedo) {
   ASSERT_TRUE(history.execute(std::move(duplicate)).ok);
   const EntityId clone = duplicate_command->duplicate_entity();
   ASSERT_NE(scene.curve(clone), nullptr);
-  EXPECT_EQ(scene.curve(clone)->curve, 42u);
+  EXPECT_EQ(*scene.curve(clone), component);
   EXPECT_EQ(scene.kind(clone), EntityKind::Curve);
   EXPECT_FLOAT_EQ(scene.transform(clone)->position.x, 3.0f);
   ASSERT_TRUE(history.undo().ok);
   EXPECT_FALSE(scene.exists(clone));
   ASSERT_TRUE(history.redo().ok);
   ASSERT_NE(scene.curve(clone), nullptr);
-  EXPECT_EQ(scene.curve(clone)->curve, 42u);
+  EXPECT_EQ(*scene.curve(clone), component);
   ASSERT_TRUE(history.execute(
       std::make_unique<DestroyEntityCommand>(scene, clone)).ok);
   EXPECT_FALSE(scene.exists(clone));
   ASSERT_TRUE(history.undo().ok);
   ASSERT_NE(scene.curve(clone), nullptr);
-  EXPECT_EQ(scene.curve(clone)->curve, 42u);
+  EXPECT_EQ(*scene.curve(clone), component);
   EXPECT_EQ(scene.kind(clone), EntityKind::Curve);
   ASSERT_TRUE(history.redo().ok);
   EXPECT_FALSE(scene.exists(clone));
@@ -14078,6 +14221,52 @@ TEST(DocumentCommandServiceTests,
   ASSERT_NE(scene.light(created.entity), nullptr);
   EXPECT_FLOAT_EQ(scene.light(created.entity)->range, 6.5f);
   EXPECT_FALSE(scene.light(created.entity)->casts_shadows);
+}
+
+TEST(DocumentCommandServiceTests,
+     SetCurveComponentIsUndoableMergeableAndRejectsInvalidValues) {
+  SceneDocument scene;
+  EditorHistoryService history;
+  DocumentCommandService commands(scene, history);
+  const EntityId entity = scene.create_entity("Curve");
+  const CurveComponent original{.curve = 42u};
+  ASSERT_TRUE(scene.set_curve(entity, original));
+
+  CurveComponent intermediate = original;
+  intermediate.solidify = true;
+  intermediate.solidify_resolution = 16;
+  intermediate.solidify_radius = 0.5F;
+  DocumentCommandResult result = commands.set_curve_component(
+      entity, intermediate, {.merge_key = "curve.solidify.drag"});
+  ASSERT_TRUE(result.ok) << result.message;
+  EXPECT_TRUE(result.changed);
+  EXPECT_EQ(*scene.curve(entity), intermediate);
+
+  CurveComponent after = intermediate;
+  after.solidify_resolution = 40;
+  after.solidify_radius = 1.25F;
+  result = commands.set_curve_component(
+      entity, after, {.merge_key = "curve.solidify.drag"});
+  ASSERT_TRUE(result.ok) << result.message;
+  EXPECT_TRUE(result.changed);
+  EXPECT_EQ(*scene.curve(entity), after);
+
+  result = commands.set_curve_component(entity, after);
+  ASSERT_TRUE(result.ok) << result.message;
+  EXPECT_FALSE(result.changed);
+
+  CurveComponent invalid = after;
+  invalid.solidify_resolution = kCurveSolidifyMaximumResolution + 1;
+  result = commands.set_curve_component(entity, invalid);
+  EXPECT_FALSE(result.ok);
+  EXPECT_FALSE(result.changed);
+  EXPECT_EQ(*scene.curve(entity), after);
+
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_EQ(*scene.curve(entity), original);
+  EXPECT_FALSE(history.can_undo());
+  ASSERT_TRUE(history.redo().ok);
+  EXPECT_EQ(*scene.curve(entity), after);
 }
 
 TEST(DocumentCommandServiceTests, DefaultGroupNameStaysLiteralGroup) {

@@ -20,6 +20,7 @@
 #include "editor/commands/document/rename_entity_command.hpp"
 #include "editor/commands/document/reparent_entity_command.hpp"
 #include "editor/commands/document/select_entities_command.hpp"
+#include "editor/commands/document/set_curve_component_command.hpp"
 #include "editor/commands/document/set_lock_command.hpp"
 #include "editor/commands/document/set_light_component_command.hpp"
 #include "editor/commands/document/set_scene_layer_state_command.hpp"
@@ -885,6 +886,42 @@ DocumentCommandService::set_mesh_component(EntityId entity,
   return execute_document_command(
       history_, std::make_unique<SetMeshComponentCommand>(scene_, entity,
                                                           *current_mesh, mesh));
+}
+
+DocumentCommandResult DocumentCommandService::set_curve_component(
+    EntityId entity, CurveComponent curve, UndoRedoExecuteOptions options) {
+  if (mutation_blocked(entity)) {
+    return document_command_active_tool_entity_result();
+  }
+  if (!curve_component_is_valid(curve)) {
+    return document_command_invalid_request_result(
+        "Curve component is invalid");
+  }
+  if (assets_ != nullptr && assets_->curve(curve.curve) == nullptr) {
+    return document_command_invalid_request_result(
+        "Curve asset does not exist");
+  }
+  const CurveComponent *current_curve = scene_.curve(entity);
+  if (current_curve == nullptr) {
+    if (!scene_.exists(entity)) {
+      return document_command_missing_entity_result();
+    }
+    return document_command_invalid_request_result(
+        "Entity does not have a curve component");
+  }
+  if (scene_.modeling_object(entity) != nullptr &&
+      current_curve->curve != curve.curve) {
+    return document_command_modeling_owned_entity_result();
+  }
+  if (document_command_same_curve_component(*current_curve, curve)) {
+    return document_command_unchanged_result();
+  }
+
+  return execute_document_command(
+      history_,
+      std::make_unique<SetCurveComponentCommand>(scene_, entity,
+                                                 *current_curve, curve),
+      std::move(options));
 }
 
 DocumentCommandResult DocumentCommandService::set_light_component(

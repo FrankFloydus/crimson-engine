@@ -30,10 +30,12 @@ struct MeshLocalWorldBounds final {
 };
 
 std::optional<SceneBounds> local_mesh_bounds(const MeshAsset &mesh);
-/// Computes tight authored cubic bounds without relying on display tessellation.
-std::optional<SceneBounds> local_curve_bounds(const CurveAsset &curve);
+/// Computes authored cubic bounds and includes an enabled derived tube radius.
+std::optional<SceneBounds> local_curve_bounds(
+    const CurveAsset &curve, const CurveComponent &component);
 std::optional<SceneBounds> curve_world_bounds(
-    const CurveAsset &curve, const QMat4 &world_from_local);
+    const CurveAsset &curve, const CurveComponent &component,
+    const QMat4 &world_from_local);
 /// Computes tight extents from transformed geometry, not transformed AABB
 /// corners.
 std::optional<MeshLocalWorldBounds> mesh_local_world_bounds(

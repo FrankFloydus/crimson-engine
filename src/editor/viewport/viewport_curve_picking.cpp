@@ -122,6 +122,24 @@ bool curve_anchor_entity_target_precedes(
   return candidate.point < best.point;
 }
 
+bool curve_entity_pick_hit_precedes(const ViewportCurvePickHit &candidate,
+                                    const ViewportCurvePickHit &best) {
+  if (candidate.distance_pixels < best.distance_pixels - 0.25) {
+    return true;
+  }
+  if (std::abs(candidate.distance_pixels - best.distance_pixels) > 0.25) {
+    return false;
+  }
+  if (candidate.ray_distance < best.ray_distance - kCurveDepthEpsilon) {
+    return true;
+  }
+  if (std::abs(candidate.ray_distance - best.ray_distance) >
+      kCurveDepthEpsilon) {
+    return false;
+  }
+  return candidate.entity < best.entity;
+}
+
 bool ray_intersects_expanded_curve_anchor_bounds(
     const ViewportRay &ray, QVec3 bounds_min, QVec3 bounds_max,
     double padding) {
@@ -456,7 +474,8 @@ resolve_viewport_curve_anchor_snap_target(
 std::optional<ViewportCurvePickHit> pick_viewport_curve(
     const ViewportCameraController &camera, QVec2 local_mouse,
     std::span<const ViewportSceneCurvePickCandidate> candidates,
-    double radius_pixels, std::optional<double> maximum_ray_distance) {
+    double radius_pixels, std::optional<double> maximum_ray_distance,
+    bool include_backfaces) {
   if (!std::isfinite(radius_pixels) || radius_pixels <= 0.0 ||
       !std::isfinite(local_mouse.x) || !std::isfinite(local_mouse.y) ||
       (maximum_ray_distance.has_value() &&
@@ -473,7 +492,34 @@ std::optional<ViewportCurvePickHit> pick_viewport_curve(
   const double radius_squared = radius_pixels * radius_pixels;
   std::optional<ViewportCurvePickHit> best;
   for (const auto &candidate : candidates) {
-    if (candidate.entity == kInvalidEntityId || candidate.sample_payload == nullptr) {
+    if (candidate.entity == kInvalidEntityId) {
+      continue;
+    }
+    if (candidate.solidified) {
+      if (candidate.tube_payload == nullptr) {
+        continue;
+      }
+      const std::optional<ViewportCurveTubeRayHit> tube_hit =
+          candidate.tube_payload->nearest_hit(
+              candidate.world_transform, ray.origin, ray.direction,
+              include_backfaces,
+              maximum_ray_distance.value_or(
+                  std::numeric_limits<double>::infinity()));
+      if (!tube_hit.has_value()) {
+        continue;
+      }
+      const ViewportCurvePickHit hit{
+          .entity = candidate.entity,
+          .world_position = tube_hit->world_position,
+          .ray_distance = tube_hit->ray_distance,
+          .distance_pixels = 0.0,
+      };
+      if (!best.has_value() || curve_entity_pick_hit_precedes(hit, *best)) {
+        best = hit;
+      }
+      continue;
+    }
+    if (candidate.sample_payload == nullptr) {
       continue;
     }
     const auto &samples = candidate.sample_payload->samples;
@@ -527,12 +573,10 @@ std::optional<ViewportCurvePickHit> pick_viewport_curve(
       const double pixels = std::sqrt(distance_squared);
       // Prefer the closest stroke; intersections and subpixel ties prefer the
       // nearest visible depth. Entity identity breaks exact ties deterministically.
-      if (!best.has_value() || pixels < best->distance_pixels - 0.25 ||
-          (std::abs(pixels - best->distance_pixels) <= 0.25 &&
-           (distance < best->ray_distance - kCurveDepthEpsilon ||
-            (std::abs(distance - best->ray_distance) <= kCurveDepthEpsilon &&
-             candidate.entity < best->entity)))) {
-        best = ViewportCurvePickHit{candidate.entity, position, distance, pixels};
+      const ViewportCurvePickHit hit{candidate.entity, position, distance,
+                                     pixels};
+      if (!best.has_value() || curve_entity_pick_hit_precedes(hit, *best)) {
+        best = hit;
       }
     }
   }

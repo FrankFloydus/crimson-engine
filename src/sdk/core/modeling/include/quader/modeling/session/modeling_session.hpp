@@ -208,7 +208,8 @@ struct PreviewTransactionObjectSummary {
  */
 class PreviewTransactionObjectSummaryList {
 public:
-  using const_iterator =
+  // Mirrors the standard container spelling exposed by the iterator API.
+  using const_iterator = // NOLINT(readability-identifier-naming)
       std::vector<PreviewTransactionObjectSummary>::const_iterator;
 
   PreviewTransactionObjectSummaryList() = default;
@@ -235,8 +236,8 @@ public:
 private:
   [[nodiscard]] const std::vector<PreviewTransactionObjectSummary> &
   values() const noexcept {
-    static const std::vector<PreviewTransactionObjectSummary> empty_values;
-    return values_ != nullptr ? *values_ : empty_values;
+    static const std::vector<PreviewTransactionObjectSummary> kEmptyValues;
+    return values_ != nullptr ? *values_ : kEmptyValues;
   }
 
   std::shared_ptr<const std::vector<PreviewTransactionObjectSummary>> values_;

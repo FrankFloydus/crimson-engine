@@ -21,12 +21,15 @@ struct CurveToolOverlaySourceStamp final {
   std::uint64_t preview_revision = 0u;
   std::uint64_t document_identity = 0u;
   std::uint64_t document_revision = 0u;
+  std::uint64_t preset_hover_document_identity = 0u;
+  std::uint64_t preset_hover_document_revision = 0u;
   EntityId entity = kInvalidEntityId;
   int modeling_object_id = -1;
   bool active = false;
   bool drawing = false;
   bool dragging = false;
   bool document_available = false;
+  bool preset_hover_document_available = false;
 
   friend bool operator==(const CurveToolOverlaySourceStamp &,
                          const CurveToolOverlaySourceStamp &) = default;
@@ -45,12 +48,18 @@ public:
   [[nodiscard]] std::uint64_t publication_revision() const noexcept {
     return publication_revision_;
   }
+  [[nodiscard]] std::uint64_t
+  preset_hover_sample_refresh_count() const noexcept {
+    return preset_hover_sample_refresh_count_;
+  }
 
 private:
   ViewportOverlayFrame frame_;
   CurveToolOverlaySourceStamp previous_stamp_;
   std::shared_ptr<const CurveSamplePayload> samples_;
+  std::shared_ptr<const CurveSamplePayload> preset_hover_samples_;
   std::uint64_t build_count_ = 0;
+  std::uint64_t preset_hover_sample_refresh_count_ = 0;
   std::uint64_t publication_revision_ = 0;
   bool valid_ = false;
 };

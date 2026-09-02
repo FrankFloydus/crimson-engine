@@ -97,7 +97,35 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
       .blocks_document_mutation =
           [&](EntityId entity) { return curve_.owns_editing_entity(entity); },
       .activate = [&](double) { return curve_.activate(); },
-      .commit = [&] { return curve_.apply(); },
+      .commit = [&] {
+        CommandResult applied = curve_.apply();
+        if (!applied.ok) {
+          return applied;
+        }
+
+        // A finalized Curve is an ordinary selected scene object. End the
+        // creation lifecycle so CurveToolService retains it only through the
+        // passive selected-Curve editing path, then make Select authoritative
+        // for every viewport and Tool Settings observer.
+        CommandResult exited = curve_.cancel();
+        if (!exited.ok) {
+          exited.changed = applied.changed || exited.changed;
+          return exited;
+        }
+
+        ModelingCommandResult selected =
+            modeling_.activate_viewport_tool(ModelingViewportTool::Select);
+        return CommandResult{
+            .ok = selected.ok,
+            .changed =
+                applied.changed || exited.changed || selected.changed,
+            .message = !selected.message.empty()
+                           ? std::move(selected.message)
+                           : (!exited.message.empty()
+                                  ? std::move(exited.message)
+                                  : std::move(applied.message)),
+        };
+      },
       .cancel = [&] { return curve_.cancel(); },
       .reset = [&] { (void)curve_.cancel(); },
   });
@@ -301,6 +329,7 @@ NativeViewportToolCoordinator::handle_pointer_frame(
 
 void NativeViewportToolCoordinator::clear_pointer_drag_state() {
   interaction_.clear_drag_state();
+  (void)curve_.set_preset_hover(std::nullopt);
 }
 
 bool NativeViewportToolCoordinator::pointer_dragging() const {
@@ -370,7 +399,7 @@ CommandResult NativeViewportToolCoordinator::accept_active_primitive(
 }
 
 void NativeViewportToolCoordinator::reset_transient_state() {
-  interaction_.clear_drag_state();
+  clear_pointer_drag_state();
   runtime_.reset_native_lifecycles();
 }
 

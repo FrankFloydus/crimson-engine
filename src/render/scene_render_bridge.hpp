@@ -7,6 +7,7 @@
 #pragma once
 
 #include "core/types.hpp"
+#include "render/curve_solid_geometry_cache.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/instance_renderable_cache.hpp"
@@ -103,6 +104,14 @@ public:
     void sync_scene_asset_overlays(
         const RenderOverlaySelectedObjectSnapshot &selected_object_snapshot,
         const RenderOverlaySceneWireframeSnapshot &wireframe_snapshot);
+    /**
+     * Pins and derives one compound preview with this bridge's retained render
+     * caches, including transient Curve solid geometry.
+     */
+    [[nodiscard]] RenderToolPreviewSceneSnapshot
+    build_tool_preview_scene_snapshot(
+        ToolPreviewScene preview, const AssetRegistry &assets,
+        const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
     [[nodiscard]] ToolPreviewSubmissionResult
     set_tool_preview_meshes(std::vector<RenderToolPreviewMeshRecord> meshes);
     [[nodiscard]] ToolPreviewSubmissionResult set_tool_preview_scene(
@@ -156,6 +165,7 @@ public:
     SceneWireframeOverlayCache scene_wireframe_overlay_cache_;
     SelectedObjectOverlayCache selected_object_overlay_cache_;
     SceneRenderSyncService sync_service_;
+    CurveSolidGeometryCache curve_solid_geometry_cache_;
     RenderSceneSnapshot previous_scene_snapshot_;
     bool has_previous_scene_snapshot_ = false;
     RenderSceneBindingKey scene_binding_;

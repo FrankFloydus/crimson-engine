@@ -88,6 +88,7 @@ void SceneRenderBridge::shutdown() {
 
   previous_scene_snapshot_ = {};
   has_previous_scene_snapshot_ = false;
+  curve_solid_geometry_cache_.clear();
   scene_binding_ = {};
   project_material_resolver_ = nullptr;
   has_scene_binding_ = false;
@@ -127,6 +128,7 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   has_scene_binding_ = true;
   previous_scene_snapshot_ = {};
   has_previous_scene_snapshot_ = false;
+  curve_solid_geometry_cache_.clear();
   ++tool_preview_submission_revision_;
   tool_preview_suppression_signature_ = 0u;
   tool_preview_suppression_valid_ = false;
@@ -220,7 +222,8 @@ void SceneRenderBridge::sync(const SceneDocument &document,
        .project_material_resolver = project_material_resolver_,
        .project_material_revision = project_material_revision,
        .instance_edit_scope = instance_edit_scope,
-       .local_visibility = local_visibility});
+       .local_visibility = local_visibility,
+       .curve_solid_geometry_cache = &curve_solid_geometry_cache_});
   sync(std::move(snapshot));
 }
 
@@ -417,6 +420,15 @@ void SceneRenderBridge::sync_scene_asset_overlays(
     scene_wireframe_overlay_cache_.sync(*wireframe);
   }
   tool_preview_overlay_suppression_dirty_ = false;
+}
+
+RenderToolPreviewSceneSnapshot
+SceneRenderBridge::build_tool_preview_scene_snapshot(
+    ToolPreviewScene preview, const AssetRegistry &assets,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
+  return build_render_tool_preview_scene_snapshot(
+      std::move(preview), assets, local_visibility,
+      project_material_resolver_, &curve_solid_geometry_cache_);
 }
 
 ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_meshes(

@@ -17,6 +17,7 @@
 
 #include <quader/modeling/payloads.hpp>
 #include <quader/modeling/curves/curve_document.hpp>
+#include <quader/modeling/mesh/polygon_document.hpp>
 
 #include <array>
 #include <cstddef>
@@ -297,6 +298,11 @@ public:
       const CreationFinalizer &finalize = {});
   [[nodiscard]] ModelingCreateBoxResult create_mesh(
       const ModelingCreateMeshRequest &request,
+      const CreationFinalizer &finalize = {});
+  /// Publishes an already-portable authored mesh through the atomic host path.
+  [[nodiscard]] ModelingCreateBoxResult create_mesh_document(
+      modeling::PolygonDocument document, std::string_view name,
+      MaterialReference material = {},
       const CreationFinalizer &finalize = {});
   /// Publishes an SDK-authored path as a first-class scene curve.
   [[nodiscard]] ModelingCreateBoxResult create_curve(

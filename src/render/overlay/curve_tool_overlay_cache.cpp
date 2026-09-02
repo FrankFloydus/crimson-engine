@@ -12,6 +12,8 @@
 #include "render/overlay/curve_overlay_geometry.hpp"
 #include "render/viewport_overlay_policy.hpp"
 
+#include <span>
+
 namespace quader {
 CurveToolOverlaySourceStamp CurveToolOverlayCache::source_stamp(
     const CurveToolPreviewState &preview) noexcept {
@@ -23,12 +25,22 @@ CurveToolOverlaySourceStamp CurveToolOverlayCache::source_stamp(
       .document_revision = preview.document.has_value()
                                ? preview.document->content_revision()
                                : 0u,
+      .preset_hover_document_identity =
+          preview.preset_hover_document.has_value()
+              ? preview.preset_hover_document->content_identity().value
+              : 0u,
+      .preset_hover_document_revision =
+          preview.preset_hover_document.has_value()
+              ? preview.preset_hover_document->content_revision()
+              : 0u,
       .entity = preview.entity,
       .modeling_object_id = preview.modeling_object_id,
       .active = preview.active,
       .drawing = preview.drawing,
       .dragging = preview.dragging,
       .document_available = preview.document.has_value(),
+      .preset_hover_document_available =
+          preview.preset_hover_document.has_value(),
   };
 }
 
@@ -45,11 +57,31 @@ const ViewportOverlayFrame &CurveToolOverlayCache::frame(
   ++publication_revision_;
   frame_.lines.clear();
   frame_.points.clear();
-  if (!preview.active || !preview.document.has_value()) {
+  if (!preview.active) {
     samples_.reset();
+    preset_hover_samples_.reset();
     return frame_;
   }
-  if (preview.drawing) {
+  if (preview.drawing && !preview.dragging &&
+      preview.preset_hover_document.has_value()) {
+    const CurveSamplePayload *previous_preset_hover_samples =
+        preset_hover_samples_.get();
+    const auto preset_hover_samples = curve_sample_payload(
+        *preview.preset_hover_document, preset_hover_samples_);
+    if (preset_hover_samples.get() != previous_preset_hover_samples) {
+      ++preset_hover_sample_refresh_count_;
+    }
+    append_curve_overlay_stroke(
+        frame_, *preset_hover_samples, preview.preset_hover_transform,
+        ViewportOverlayLine{
+            .layer = ViewportOverlayLayer::WireframeBase,
+            .color = kOverlayHoverWireColor,
+            .width_pixels = kOverlayHoverWireLineWidthPixels,
+            .style_role = ViewportOverlayStyleRole::HoverWire,
+            .source = ViewportOverlaySource::Tool,
+        });
+  }
+  if (preview.drawing && preview.document.has_value()) {
     const auto samples = curve_sample_payload(*preview.document, samples_);
     append_curve_overlay_stroke(frame_, *samples, preview.world_transform,
         ViewportOverlayLine{
@@ -60,7 +92,15 @@ const ViewportOverlayFrame &CurveToolOverlayCache::frame(
             .source = ViewportOverlaySource::Tool,
         });
   }
-  const auto points = preview.document->points();
+  if (!preview.document.has_value()) {
+    samples_.reset();
+  }
+  if (!preview.preset_hover_document.has_value()) {
+    preset_hover_samples_.reset();
+  }
+  const auto points = preview.document.has_value()
+                          ? preview.document->points()
+                          : std::span<const modeling::CurveControlPoint>{};
   frame_.points.reserve(points.size() * 3u + 1u);
   frame_.lines.reserve(frame_.lines.size() + points.size() * 2u + 1u);
   for (std::size_t index = 0; index < points.size(); ++index) {
@@ -137,6 +177,7 @@ void CurveToolOverlayCache::reset() {
   frame_ = {};
   previous_stamp_ = {};
   samples_.reset();
+  preset_hover_samples_.reset();
   valid_ = false;
 }
 

@@ -305,6 +305,14 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("radial_array.repeat_spacing",
                                 "Repeat Spacing"),
               "Distanza tra ripetizioni");
+    EXPECT_EQ(localization.text("curve.solidify", "Solidify"),
+              "Solidifica");
+    EXPECT_EQ(localization.text("curve.solidify.resolution", "Resolution"),
+              "Risoluzione");
+    EXPECT_EQ(localization.text("curve.solidify.radius", "Radius"),
+              "Raggio");
+    EXPECT_EQ(localization.text("curve.solidify.apply", "Apply Solidify"),
+              "Applica solidificazione");
     EXPECT_EQ(localization.text("ui.action.apply", "Apply"), "Applica");
     EXPECT_EQ(localization.text("ui.action.cancel", "Cancel"), "Annulla");
     EXPECT_TRUE(localization.select_locale("en-US"));
@@ -347,6 +355,14 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("radial_array.repeat_spacing",
                                 "Repeat Spacing"),
               "Repeat Spacing");
+    EXPECT_EQ(localization.text("curve.solidify", "Solidify"),
+              "Solidify");
+    EXPECT_EQ(localization.text("curve.solidify.resolution", "Resolution"),
+              "Resolution");
+    EXPECT_EQ(localization.text("curve.solidify.radius", "Radius"),
+              "Radius");
+    EXPECT_EQ(localization.text("curve.solidify.apply", "Apply Solidify"),
+              "Apply Solidify");
     EXPECT_EQ(localization.text("ui.action.apply", "Apply"), "Apply");
     EXPECT_EQ(localization.text("ui.action.cancel", "Cancel"), "Cancel");
 }

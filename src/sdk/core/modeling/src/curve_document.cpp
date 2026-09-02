@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <quader/modeling/curves/curve_arc_length_path.hpp>
 #include <quader/modeling/curves/curve_document.hpp>
+#include <quader/modeling/curves/curve_shapes.hpp>
 
 #include <algorithm>
 #include <array>
@@ -84,6 +85,16 @@ constexpr std::array<std::byte, 4> kCurveMagic{
   return error;
 }
 
+[[nodiscard]] Error curve_shape_error(std::string message,
+                                      std::string path) {
+  Error error = make_error(ErrorCode::InvalidArgument, std::move(message));
+  error.diagnostics.push_back({.code = "curve.shape",
+                               .severity = DiagnosticSeverity::Error,
+                               .path = std::move(path),
+                               .message = error.message});
+  return error;
+}
+
 [[nodiscard]] Result<OperationResult> unchanged() {
   return Result<OperationResult>::success({});
 }
@@ -138,10 +149,10 @@ struct Double3 {
 }
 
 [[nodiscard]] bool representable(Double3 value) noexcept {
-  constexpr double limit = std::numeric_limits<float>::max();
+  constexpr double kLimit = std::numeric_limits<float>::max();
   return std::isfinite(value.x) && std::isfinite(value.y) &&
-         std::isfinite(value.z) && std::abs(value.x) <= limit &&
-         std::abs(value.y) <= limit && std::abs(value.z) <= limit;
+         std::isfinite(value.z) && std::abs(value.x) <= kLimit &&
+         std::abs(value.y) <= kLimit && std::abs(value.z) <= kLimit;
 }
 
 [[nodiscard]] Vec3 narrow(Double3 value) noexcept {
@@ -646,6 +657,114 @@ CurveDocument::make_bezier(std::span<const CurvePointSpec> points, bool closed) 
         {static_cast<std::uint32_t>(authored.identity_high_water.next_segment_index++), 1});
   }
   return from_authored_curve(authored);
+}
+
+Result<CurveDocument> make_xy_circle_curve(double radius) {
+  constexpr double kQuarterArcHandleRatio =
+      4.0 * (1.41421356237309504880168872420969807857 - 1.0) / 3.0;
+  if (!std::isfinite(radius) || radius <= 0.0) {
+    return Result<CurveDocument>::failure(curve_shape_error(
+        "Curve circle radius must be finite and positive.", "radius"));
+  }
+  if (radius > static_cast<double>(std::numeric_limits<float>::max())) {
+    return Result<CurveDocument>::failure(curve_shape_error(
+        "Curve circle radius exceeds the supported numeric range.", "radius"));
+  }
+  const float stored_radius = static_cast<float>(radius);
+  const float handle = static_cast<float>(radius * kQuarterArcHandleRatio);
+  if (!std::isfinite(stored_radius) || stored_radius <= 0.0F ||
+      !std::isfinite(handle) || handle <= 0.0F) {
+    return Result<CurveDocument>::failure(curve_shape_error(
+        "Curve circle radius cannot be represented by Curve storage.",
+        "radius"));
+  }
+
+  const std::array points{
+      CurvePointSpec{.position = {stored_radius, 0.0F, 0.0F},
+                     .incoming_handle = {0.0F, -handle, 0.0F},
+                     .outgoing_handle = {0.0F, handle, 0.0F}},
+      CurvePointSpec{.position = {0.0F, stored_radius, 0.0F},
+                     .incoming_handle = {handle, 0.0F, 0.0F},
+                     .outgoing_handle = {-handle, 0.0F, 0.0F}},
+      CurvePointSpec{.position = {-stored_radius, 0.0F, 0.0F},
+                     .incoming_handle = {0.0F, handle, 0.0F},
+                     .outgoing_handle = {0.0F, -handle, 0.0F}},
+      CurvePointSpec{.position = {0.0F, -stored_radius, 0.0F},
+                     .incoming_handle = {-handle, 0.0F, 0.0F},
+                     .outgoing_handle = {handle, 0.0F, 0.0F}},
+  };
+  return CurveDocument::make_bezier(points, true);
+}
+
+Result<CurveDocument> make_xy_stadium_curve(double radius,
+                                            double total_length) {
+  if (!std::isfinite(radius) || radius <= 0.0) {
+    return Result<CurveDocument>::failure(curve_shape_error(
+        "Curve stadium radius must be finite and positive.", "radius"));
+  }
+  if (!std::isfinite(total_length)) {
+    return Result<CurveDocument>::failure(curve_shape_error(
+        "Curve stadium total length must be finite.", "total_length"));
+  }
+  const double diameter = radius * 2.0;
+  if (!std::isfinite(diameter) || total_length < diameter) {
+    return Result<CurveDocument>::failure(curve_shape_error(
+        "Curve stadium total length must be at least twice its radius.",
+        "total_length"));
+  }
+  if (total_length == diameter) {
+    return make_xy_circle_curve(radius);
+  }
+
+  constexpr double kQuarterArcHandleRatio =
+      4.0 * (1.41421356237309504880168872420969807857 - 1.0) / 3.0;
+  const double half_length = total_length * 0.5;
+  const double cap_center_offset = half_length - radius;
+  const double straight_handle_length = (total_length - diameter) / 3.0;
+  if (half_length > static_cast<double>(std::numeric_limits<float>::max()) ||
+      radius > static_cast<double>(std::numeric_limits<float>::max())) {
+    return Result<CurveDocument>::failure(curve_shape_error(
+        "Curve stadium dimensions exceed the supported numeric range.",
+        "total_length"));
+  }
+
+  const float stored_half_length = static_cast<float>(half_length);
+  const float stored_radius = static_cast<float>(radius);
+  const float stored_offset = static_cast<float>(cap_center_offset);
+  const float arc_handle =
+      static_cast<float>(radius * kQuarterArcHandleRatio);
+  const float straight_handle = static_cast<float>(straight_handle_length);
+  if (!std::isfinite(stored_half_length) || !std::isfinite(stored_radius) ||
+      !std::isfinite(stored_offset) || !std::isfinite(arc_handle) ||
+      !std::isfinite(straight_handle) || stored_radius <= 0.0F ||
+      arc_handle <= 0.0F || straight_handle <= 0.0F ||
+      stored_half_length <= stored_radius || stored_offset <= 0.0F) {
+    return Result<CurveDocument>::failure(curve_shape_error(
+        "Curve stadium dimensions cannot be represented by Curve storage.",
+        "total_length"));
+  }
+
+  const std::array points{
+      CurvePointSpec{.position = {stored_half_length, 0.0F, 0.0F},
+                     .incoming_handle = {0.0F, -arc_handle, 0.0F},
+                     .outgoing_handle = {0.0F, arc_handle, 0.0F}},
+      CurvePointSpec{.position = {stored_offset, stored_radius, 0.0F},
+                     .incoming_handle = {arc_handle, 0.0F, 0.0F},
+                     .outgoing_handle = {-straight_handle, 0.0F, 0.0F}},
+      CurvePointSpec{.position = {-stored_offset, stored_radius, 0.0F},
+                     .incoming_handle = {straight_handle, 0.0F, 0.0F},
+                     .outgoing_handle = {-arc_handle, 0.0F, 0.0F}},
+      CurvePointSpec{.position = {-stored_half_length, 0.0F, 0.0F},
+                     .incoming_handle = {0.0F, arc_handle, 0.0F},
+                     .outgoing_handle = {0.0F, -arc_handle, 0.0F}},
+      CurvePointSpec{.position = {-stored_offset, -stored_radius, 0.0F},
+                     .incoming_handle = {-arc_handle, 0.0F, 0.0F},
+                     .outgoing_handle = {straight_handle, 0.0F, 0.0F}},
+      CurvePointSpec{.position = {stored_offset, -stored_radius, 0.0F},
+                     .incoming_handle = {-straight_handle, 0.0F, 0.0F},
+                     .outgoing_handle = {arc_handle, 0.0F, 0.0F}},
+  };
+  return CurveDocument::make_bezier(points, true);
 }
 
 Result<CurveDocument>

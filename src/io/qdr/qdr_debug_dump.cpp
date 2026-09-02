@@ -482,7 +482,12 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
     value["mesh"] = mesh_component_json(*entity.mesh);
   }
   if (entity.curve) {
-    value["curve"] = {{"curve", entity.curve->curve}};
+    value["curve"] = {
+        {"curve", entity.curve->curve},
+        {"solidify", entity.curve->solidify},
+        {"solidifyResolution", entity.curve->solidify_resolution},
+        {"solidifyRadius", entity.curve->solidify_radius},
+    };
   }
   if (entity.material) {
     value["material"] = material_component_json(*entity.material);

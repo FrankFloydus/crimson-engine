@@ -9,6 +9,8 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
+#include "ui/qt_semantic_axis_colors.hpp"
+#include "ui/qt_tool_settings_drag_spinner.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
 #include "ui/ui_panel.hpp"
 
@@ -53,6 +55,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -143,6 +146,23 @@ bool uses_integer_spin_box(const QuaderToolSettingControl &control) {
          control.min_value >= kIntMinimum && control.max_value <= kIntMaximum;
 }
 
+QString group_object_name(std::string_view id, std::size_t index) {
+  if (!id.empty()) {
+    return QStringLiteral("tool_settings.group.%1").arg(qtext(id));
+  }
+  return QStringLiteral("tool_settings.group.unnamed_%1")
+      .arg(static_cast<qulonglong>(index));
+}
+
+int integer_single_step(double step) {
+  if (!std::isfinite(step) || step <= 0.0) {
+    return 1;
+  }
+  return std::max(
+      1, static_cast<int>(std::llround(std::min(
+             step, static_cast<double>(std::numeric_limits<int>::max())))));
+}
+
 int decimal_places_for_step(double step) {
   if (!std::isfinite(step) || step <= 0.0) {
     return 3;
@@ -163,11 +183,24 @@ bool same_choice_structure(const QuaderToolSettingChoiceOption &left,
          left.value == right.value;
 }
 
+bool same_vector_component_structure(
+    const QuaderToolSettingNumberComponent &left,
+    const QuaderToolSettingNumberComponent &right) {
+  return left.id == right.id;
+}
+
+bool same_group_structure(const QuaderToolSettingGroup &left,
+                          const QuaderToolSettingGroup &right) {
+  return left.id == right.id && left.label == right.label &&
+         left.expanded_by_default == right.expanded_by_default;
+}
+
 bool same_control_structure(const QuaderToolSettingControl &left,
                             const QuaderToolSettingControl &right) {
   if (left.kind != right.kind || left.id != right.id ||
-      left.label != right.label ||
+      left.label != right.label || left.group_id != right.group_id ||
       left.number_interaction != right.number_interaction ||
+      left.number_presentation != right.number_presentation ||
       left.choice_presentation != right.choice_presentation ||
       left.choices.size() != right.choices.size()) {
     return false;
@@ -181,6 +214,13 @@ bool same_control_structure(const QuaderToolSettingControl &left,
       return false;
     }
   }
+  for (std::size_t index = 0; index < left.vector3_components.size();
+       ++index) {
+    if (!same_vector_component_structure(left.vector3_components[index],
+                                         right.vector3_components[index])) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -188,11 +228,17 @@ bool same_target_structure(const QuaderToolSettingsTarget &left,
                            const QuaderToolSettingsTarget &right) {
   if (left.active != right.active || left.tool_id != right.tool_id ||
       left.title != right.title || left.description != right.description ||
-      left.controls.size() != right.controls.size()) {
+      left.controls.size() != right.controls.size() ||
+      left.groups.size() != right.groups.size()) {
     return false;
   }
   for (std::size_t index = 0; index < left.controls.size(); ++index) {
     if (!same_control_structure(left.controls[index], right.controls[index])) {
+      return false;
+    }
+  }
+  for (std::size_t index = 0; index < left.groups.size(); ++index) {
+    if (!same_group_structure(left.groups[index], right.groups[index])) {
       return false;
     }
   }
@@ -271,6 +317,8 @@ void present_inline_message(QLabel &label, const QString &message) {
 /// Keeps one disclosure section expanded/collapsed without rebuilding it.
 class QtToolSettingsSection final : public QWidget {
 public:
+  std::function<void(bool)> expansion_changed;
+
   explicit QtToolSettingsSection(QString stable_name,
                                  QWidget *parent = nullptr)
       : QWidget(parent) {
@@ -300,6 +348,9 @@ public:
                        header_->setArrowType(expanded ? Qt::DownArrow
                                                        : Qt::RightArrow);
                        content_->setVisible(expanded);
+                       if (expansion_changed) {
+                         expansion_changed(expanded);
+                       }
                      });
   }
 
@@ -313,6 +364,14 @@ public:
   }
 
   [[nodiscard]] QWidget *content() const { return content_; }
+
+  [[nodiscard]] bool expanded() const { return header_->isChecked(); }
+
+  void set_expanded(bool expanded) {
+    if (header_->isChecked() != expanded) {
+      header_->setChecked(expanded);
+    }
+  }
 
 private:
   QToolButton *header_ = nullptr;
@@ -420,6 +479,16 @@ std::string next_texture_edit_merge_key() {
   static std::atomic<std::uint64_t> next_id{1};
   return "texture-settings:" +
          std::to_string(next_id.fetch_add(1, std::memory_order_relaxed));
+}
+
+std::string next_tool_setting_edit_merge_key(std::string_view control_id) {
+  static std::atomic<std::uint64_t> next_id{1};
+  std::string result = "tool-settings:";
+  result.append(control_id);
+  result.push_back(':');
+  result.append(
+      std::to_string(next_id.fetch_add(1, std::memory_order_relaxed)));
+  return result;
 }
 
 /// Static presentation metadata for one API-owned face texture property.
@@ -573,6 +642,7 @@ struct QtToolSettingsPanel::Impl {
     std::uint64_t settings_revision = 0;
     std::uint64_t active_tool_revision = 0;
     std::string tool_id;
+    std::string merge_key;
     bool preview_active = false;
   };
 
@@ -581,6 +651,18 @@ struct QtToolSettingsPanel::Impl {
     QRadioButton *button = nullptr;
     std::string option_id;
     double value = 0.0;
+  };
+
+  /// Retains one independently dispatched component of an XYZ numeric row.
+  struct Vector3ComponentWidget {
+    std::string id;
+    QDoubleSpinBox *spin = nullptr;
+    QTimer *dispatch_timer = nullptr;
+    std::optional<double> pending_value;
+    std::optional<NumberDispatchLifecycle> pending_lifecycle;
+    std::function<void(double, QuaderToolSettingEditOptions)> dispatch;
+    std::string continuous_merge_key;
+    bool enabled = true;
   };
 
   /// Holds the widget variant used to edit one typed tool setting control.
@@ -592,14 +674,24 @@ struct QtToolSettingsPanel::Impl {
     QCheckBox *toggle = nullptr;
     QSpinBox *integer = nullptr;
     QDoubleSpinBox *floating = nullptr;
+    QtToolSettingsDragSpinner *number_drag_spinner = nullptr;
     QtToolSettingsNumberSlider *number_slider = nullptr;
     QComboBox *dropdown = nullptr;
     QtToolSettingsNumberSliderMapping number_slider_mapping;
     QTimer *number_dispatch_timer = nullptr;
     std::optional<double> pending_number_value;
     std::optional<NumberDispatchLifecycle> pending_number_lifecycle;
-    std::function<void(double)> number_dispatch;
+    std::function<void(double, QuaderToolSettingEditOptions)> number_dispatch;
+    std::string continuous_number_merge_key;
     std::vector<ChoiceWidget> choices;
+    std::array<Vector3ComponentWidget, 3> vector3_components;
+  };
+
+  /// Maps one descriptor disclosure group to its retained section and layout.
+  struct ControlGroupWidget {
+    std::string id;
+    QtToolSettingsSection *section = nullptr;
+    QVBoxLayout *layout = nullptr;
   };
 
   /// Retained input and pending gesture state; the modeling API owns face data.
@@ -785,6 +877,8 @@ struct QtToolSettingsPanel::Impl {
     });
     present_inactive_target();
   }
+
+  ~Impl() { clear_controls(); }
 
   void bind(QuaderEditorApi &editor) {
     discard_pending_number_dispatches();
@@ -1086,7 +1180,16 @@ struct QtToolSettingsPanel::Impl {
     }
     return std::any_of(
         controls_.begin(), controls_.end(), [](const ControlWidget &binding) {
-          return binding.pending_number_value.has_value() ||
+          const bool vector_pending = std::any_of(
+              binding.vector3_components.begin(),
+              binding.vector3_components.end(),
+              [](const Vector3ComponentWidget &component) {
+                return component.pending_value.has_value();
+              });
+          return binding.pending_number_value.has_value() || vector_pending ||
+                 (binding.number_drag_spinner != nullptr &&
+                   (binding.number_drag_spinner->is_dragging() ||
+                    binding.number_drag_spinner->is_editing())) ||
                  (binding.number_slider != nullptr &&
                   binding.number_slider->isSliderDown());
         });
@@ -1680,7 +1783,19 @@ private:
   void clear_controls() {
     // Stop old control-owned timers before deleting their rows and callbacks.
     discard_pending_number_dispatches();
+    for (ControlWidget &binding : controls_) {
+      if (binding.number_drag_spinner == nullptr) {
+        continue;
+      }
+      binding.number_drag_spinner->value_changed = {};
+      binding.number_drag_spinner->editing_started = {};
+      binding.number_drag_spinner->editing_canceled = {};
+      binding.number_drag_spinner->editing_finished = {};
+      binding.number_drag_spinner->drag_started = {};
+      binding.number_drag_spinner->drag_finished = {};
+    }
     controls_.clear();
+    control_groups_.clear();
     empty_settings_label_ = nullptr;
     clear_layout(*controls_layout_);
     target_title_->clear();
@@ -1699,10 +1814,20 @@ private:
     controls_layout_->addWidget(empty_settings_label_);
   }
 
+  void set_tool_sections_visible(bool visible) {
+    if (description_section_->isHidden() == visible) {
+      description_section_->setVisible(visible);
+    }
+    if (settings_section_->isHidden() == visible) {
+      settings_section_->setVisible(visible);
+    }
+  }
+
   void present_inactive_target() {
     clear_controls();
     last_target_.reset();
     inactive_presented_ = true;
+    set_tool_sections_visible(false);
     target_title_->setText(localized_text(
         localization_, "tool_settings.no_active.title", "No Active Tool"));
     description_label_->setText(localized_text(
@@ -1714,11 +1839,75 @@ private:
     controls_layout_->addStretch(1);
   }
 
+  void begin_number_continuous_edit(std::size_t control_index) {
+    if (control_index >= controls_.size()) {
+      return;
+    }
+    ControlWidget &binding = controls_[control_index];
+    if (!binding.continuous_number_merge_key.empty()) {
+      return;
+    }
+    // Finish a preceding arrow, wheel, or keyboard step before a new
+    // continuous gesture establishes its own merge identity.
+    flush_number_dispatch(control_index);
+    binding.continuous_number_merge_key =
+        next_tool_setting_edit_merge_key(binding.id);
+  }
+
+  void finish_number_continuous_edit(std::size_t control_index) {
+    if (control_index >= controls_.size()) {
+      return;
+    }
+    flush_number_dispatch(control_index);
+    controls_[control_index].continuous_number_merge_key.clear();
+  }
+
+  void begin_vector3_continuous_edit(std::size_t control_index,
+                                     std::size_t component_index) {
+    if (control_index >= controls_.size() || component_index >= 3U) {
+      return;
+    }
+    Vector3ComponentWidget &component =
+        controls_[control_index].vector3_components[component_index];
+    if (!component.continuous_merge_key.empty()) {
+      return;
+    }
+    flush_vector3_dispatch(control_index, component_index);
+    component.continuous_merge_key =
+        next_tool_setting_edit_merge_key(component.id);
+  }
+
+  void finish_vector3_continuous_edit(std::size_t control_index,
+                                      std::size_t component_index) {
+    if (control_index >= controls_.size() || component_index >= 3U) {
+      return;
+    }
+    flush_vector3_dispatch(control_index, component_index);
+    controls_[control_index]
+        .vector3_components[component_index]
+        .continuous_merge_key.clear();
+  }
+
   void queue_number_dispatch(std::size_t control_index, double value) {
     if (control_index >= controls_.size()) {
       return;
     }
     ControlWidget &binding = controls_[control_index];
+    if (binding.pending_number_value.has_value() &&
+        binding.number_drag_spinner != nullptr) {
+      const std::string_view pending_merge_key =
+          binding.pending_number_lifecycle.has_value()
+              ? std::string_view(
+                    binding.pending_number_lifecycle->merge_key)
+              : std::string_view{};
+      if (binding.continuous_number_merge_key.empty() ||
+          pending_merge_key != binding.continuous_number_merge_key) {
+        // Discrete values are delayed for preview pacing, but never replace a
+        // preceding discrete history step. Continuous values may replace the
+        // pending sample because all dispatched samples share one merge key.
+        flush_number_dispatch(control_index);
+      }
+    }
     if (!binding.pending_number_value.has_value()) {
       if (editor_ == nullptr || !last_target_.has_value() ||
           !last_target_->active) {
@@ -1728,19 +1917,58 @@ private:
           .settings_revision = editor_->tools().active_settings_revision(),
           .active_tool_revision = editor_->tools().active_tool_revision(),
           .tool_id = last_target_->tool_id,
+          .merge_key = binding.continuous_number_merge_key,
           .preview_active = last_target_->preview_active,
       };
     }
     binding.pending_number_value = value;
     if (binding.number_dispatch_timer != nullptr) {
-      const bool pointer_drag = binding.number_slider != nullptr &&
-                                binding.number_slider->isSliderDown();
+      const bool text_edit = binding.number_drag_spinner != nullptr &&
+                             binding.number_drag_spinner->is_editing();
+      if (text_edit) {
+        // Native text entry remains an atomic edit: Enter/focus-out commits
+        // the final value, while Escape can still discard it regardless of
+        // how long the user pauses between keystrokes.
+        binding.number_dispatch_timer->stop();
+        return;
+      }
+      const bool pointer_drag =
+          (binding.number_drag_spinner != nullptr &&
+           binding.number_drag_spinner->is_dragging()) ||
+          (binding.number_slider != nullptr &&
+           binding.number_slider->isSliderDown());
       // Pointer drags publish the latest value at a bounded cadence so live
       // geometry remains visible without compiling once per mouse event.
       // Keyboard, wheel, and spin edits retain one trailing dispatch window.
       if (!pointer_drag || !binding.number_dispatch_timer->isActive()) {
         binding.number_dispatch_timer->start();
       }
+    }
+  }
+
+  void queue_vector3_dispatch(std::size_t control_index,
+                              std::size_t component_index, double value) {
+    if (control_index >= controls_.size() || component_index >= 3U) {
+      return;
+    }
+    Vector3ComponentWidget &component =
+        controls_[control_index].vector3_components[component_index];
+    if (!component.pending_value.has_value()) {
+      if (editor_ == nullptr || !last_target_.has_value() ||
+          !last_target_->active) {
+        return;
+      }
+      component.pending_lifecycle = NumberDispatchLifecycle{
+          .settings_revision = editor_->tools().active_settings_revision(),
+          .active_tool_revision = editor_->tools().active_tool_revision(),
+          .tool_id = last_target_->tool_id,
+          .merge_key = component.continuous_merge_key,
+          .preview_active = last_target_->preview_active,
+      };
+    }
+    component.pending_value = value;
+    if (component.dispatch_timer != nullptr) {
+      component.dispatch_timer->start();
     }
   }
 
@@ -1759,17 +1987,46 @@ private:
       return false;
     }
 
-    const QuaderToolSettingsTarget target = editor_->tools().active_settings();
-    if (!target.active || target.tool_id != lifecycle.tool_id ||
-        target.preview_active != lifecycle.preview_active) {
+    // The revisions above are the owner contract for descriptor and tool
+    // identity. Reuse the retained descriptor captured for this gesture rather
+    // than rebuilding the broad settings snapshot on every drag dispatch; Path
+    // Array's snapshot may need to validate and publish geometry.
+    if (!last_target_.has_value() || !last_target_->active ||
+        last_target_->tool_id != lifecycle.tool_id ||
+        last_target_->preview_active != lifecycle.preview_active) {
       return false;
     }
     return std::any_of(
-        target.controls.begin(), target.controls.end(),
+        last_target_->controls.begin(), last_target_->controls.end(),
         [&binding](const QuaderToolSettingControl &control) {
           return control.kind == QuaderToolSettingControlKind::Number &&
                  control.id == binding.id;
         });
+  }
+
+  [[nodiscard]] bool vector3_dispatch_lifecycle_is_current(
+      std::size_t control_index, std::size_t component_index,
+      const Vector3ComponentWidget &component) const {
+    if (editor_ == nullptr || !component.pending_lifecycle.has_value() ||
+        !last_target_.has_value() || !last_target_->active ||
+        control_index >= last_target_->controls.size() ||
+        component_index >= 3U) {
+      return false;
+    }
+    const NumberDispatchLifecycle &lifecycle =
+        *component.pending_lifecycle;
+    if (editor_->tools().active_settings_revision() !=
+            lifecycle.settings_revision ||
+        editor_->tools().active_tool_revision() !=
+            lifecycle.active_tool_revision ||
+        last_target_->tool_id != lifecycle.tool_id ||
+        last_target_->preview_active != lifecycle.preview_active) {
+      return false;
+    }
+    const QuaderToolSettingControl &control =
+        last_target_->controls[control_index];
+    return control.kind == QuaderToolSettingControlKind::Vector3Number &&
+           control.vector3_components[component_index].id == component.id;
   }
 
   void rebind_pending_number_dispatches_to_current_revision() {
@@ -1781,12 +2038,21 @@ private:
     const std::uint64_t active_tool_revision =
         editor_->tools().active_tool_revision();
     for (ControlWidget &binding : controls_) {
-      if (!binding.pending_number_lifecycle.has_value()) {
-        continue;
+      if (binding.pending_number_lifecycle.has_value()) {
+        binding.pending_number_lifecycle->settings_revision =
+            settings_revision;
+        binding.pending_number_lifecycle->active_tool_revision =
+            active_tool_revision;
       }
-      binding.pending_number_lifecycle->settings_revision = settings_revision;
-      binding.pending_number_lifecycle->active_tool_revision =
-          active_tool_revision;
+      for (Vector3ComponentWidget &component :
+           binding.vector3_components) {
+        if (!component.pending_lifecycle.has_value()) {
+          continue;
+        }
+        component.pending_lifecycle->settings_revision = settings_revision;
+        component.pending_lifecycle->active_tool_revision =
+            active_tool_revision;
+      }
     }
   }
 
@@ -1801,6 +2067,10 @@ private:
     const bool lifecycle_current =
         number_dispatch_lifecycle_is_current(binding);
     const double value = *binding.pending_number_value;
+    std::string merge_key =
+        binding.pending_number_lifecycle.has_value()
+            ? std::move(binding.pending_number_lifecycle->merge_key)
+            : std::string{};
     binding.pending_number_value.reset();
     binding.pending_number_lifecycle.reset();
     if (binding.number_dispatch_timer != nullptr) {
@@ -1810,25 +2080,76 @@ private:
       schedule_refresh();
       return;
     }
-    binding.number_dispatch(value);
+    binding.number_dispatch(
+        value, {.merge_key = std::move(merge_key)});
     // A successful owner write advances the settings revision. Other values
     // queued in the same UI lifecycle remain valid and must still flush.
+    rebind_pending_number_dispatches_to_current_revision();
+  }
+
+  void flush_vector3_dispatch(std::size_t control_index,
+                              std::size_t component_index) {
+    if (control_index >= controls_.size() || component_index >= 3U) {
+      return;
+    }
+    Vector3ComponentWidget &component =
+        controls_[control_index].vector3_components[component_index];
+    if (!component.pending_value.has_value()) {
+      return;
+    }
+    const bool lifecycle_current = vector3_dispatch_lifecycle_is_current(
+        control_index, component_index, component);
+    const double value = *component.pending_value;
+    std::string merge_key = component.pending_lifecycle.has_value()
+                                ? std::move(
+                                      component.pending_lifecycle->merge_key)
+                                : std::string{};
+    component.pending_value.reset();
+    component.pending_lifecycle.reset();
+    if (component.dispatch_timer != nullptr) {
+      component.dispatch_timer->stop();
+    }
+    if (!lifecycle_current || !component.dispatch) {
+      schedule_refresh();
+      return;
+    }
+    component.dispatch(value, {.merge_key = std::move(merge_key)});
     rebind_pending_number_dispatches_to_current_revision();
   }
 
   void flush_pending_number_dispatches() {
     for (std::size_t index = 0; index < controls_.size(); ++index) {
       flush_number_dispatch(index);
+      for (std::size_t component = 0; component < 3U; ++component) {
+        flush_vector3_dispatch(index, component);
+      }
+    }
+  }
+
+  void discard_pending_number_dispatch(std::size_t control_index) {
+    if (control_index >= controls_.size()) {
+      return;
+    }
+    ControlWidget &binding = controls_[control_index];
+    binding.pending_number_value.reset();
+    binding.pending_number_lifecycle.reset();
+    binding.continuous_number_merge_key.clear();
+    if (binding.number_dispatch_timer != nullptr) {
+      binding.number_dispatch_timer->stop();
+    }
+    for (Vector3ComponentWidget &component : binding.vector3_components) {
+      component.pending_value.reset();
+      component.pending_lifecycle.reset();
+      component.continuous_merge_key.clear();
+      if (component.dispatch_timer != nullptr) {
+        component.dispatch_timer->stop();
+      }
     }
   }
 
   void discard_pending_number_dispatches() {
-    for (ControlWidget &binding : controls_) {
-      binding.pending_number_value.reset();
-      binding.pending_number_lifecycle.reset();
-      if (binding.number_dispatch_timer != nullptr) {
-        binding.number_dispatch_timer->stop();
-      }
+    for (std::size_t index = 0; index < controls_.size(); ++index) {
+      discard_pending_number_dispatch(index);
     }
   }
 
@@ -1979,15 +2300,75 @@ private:
     }
   }
 
+  [[nodiscard]] static std::string control_group_state_key(
+      std::string_view tool_id, std::string_view group_id) {
+    std::string key(tool_id);
+    key.push_back('\n');
+    key.append(group_id);
+    return key;
+  }
+
+  [[nodiscard]] ControlGroupWidget *find_control_group(
+      std::string_view id) {
+    const auto found = std::find_if(
+        control_groups_.begin(), control_groups_.end(),
+        [id](const ControlGroupWidget &group) { return group.id == id; });
+    return found == control_groups_.end() ? nullptr : &*found;
+  }
+
+  void build_control_groups(const QuaderToolSettingsTarget &target) {
+    for (std::size_t index = 0; index < target.groups.size(); ++index) {
+      const QuaderToolSettingGroup &group = target.groups[index];
+      if (group.id.empty() || find_control_group(group.id) != nullptr ||
+          std::none_of(target.controls.begin(), target.controls.end(),
+                       [&group](const QuaderToolSettingControl &control) {
+                         return control.group_id == group.id;
+                       })) {
+        continue;
+      }
+
+      auto *section = new QtToolSettingsSection(
+          group_object_name(group.id, index), controls_container_);
+      section->set_title(localized_descriptor_label(
+          localization_, group.id, group.label));
+      const std::string state_key =
+          control_group_state_key(target.tool_id, group.id);
+      const auto remembered = control_group_expansion_.find(state_key);
+      section->set_expanded(remembered != control_group_expansion_.end()
+                                ? remembered->second
+                                : group.expanded_by_default);
+      section->expansion_changed = [this, state_key](bool expanded) {
+        control_group_expansion_[state_key] = expanded;
+      };
+
+      auto *layout = new QVBoxLayout(section->content());
+      layout->setContentsMargins(8, 6, 8, 6);
+      layout->setSpacing(6);
+      controls_layout_->addWidget(section);
+      control_groups_.push_back(ControlGroupWidget{
+          .id = group.id,
+          .section = section,
+          .layout = layout,
+      });
+    }
+  }
+
   void rebuild(const QuaderToolSettingsTarget &target) {
     clear_controls();
     inactive_presented_ = false;
+    set_tool_sections_visible(true);
     target_title_->setText(localized_target_title(localization_, target));
     description_label_->setText(
         localized_target_description(localization_, target));
 
+    build_control_groups(target);
     for (std::size_t index = 0; index < target.controls.size(); ++index) {
-      add_control(target, target.controls[index], index);
+      const QuaderToolSettingControl &control = target.controls[index];
+      ControlGroupWidget *group = find_control_group(control.group_id);
+      add_control(target, control, index,
+                  group != nullptr ? group->section->content()
+                                   : controls_container_,
+                  group != nullptr ? *group->layout : *controls_layout_);
     }
     if (target.controls.empty()) {
       add_empty_settings_message(localized_text(
@@ -2000,7 +2381,8 @@ private:
 
   void add_control(const QuaderToolSettingsTarget &target,
                    const QuaderToolSettingControl &control,
-                   std::size_t control_index) {
+                   std::size_t control_index, QWidget *control_parent,
+                   QVBoxLayout &control_layout) {
     ControlWidget binding{
         .kind = control.kind,
         .id = control.id,
@@ -2012,7 +2394,7 @@ private:
 
     switch (control.kind) {
     case QuaderToolSettingControlKind::Toggle: {
-      auto *toggle = new QCheckBox(label, controls_container_);
+      auto *toggle = new QCheckBox(label, control_parent);
       toggle->setObjectName(object_name);
       toggle->setAccessibleName(label);
       QObject::connect(toggle, &QCheckBox::toggled, &panel_,
@@ -2029,13 +2411,13 @@ private:
                            schedule_refresh();
                          }
                        });
-      controls_layout_->addWidget(toggle);
+      control_layout.addWidget(toggle);
       binding.container = toggle;
       binding.toggle = toggle;
       break;
     }
     case QuaderToolSettingControlKind::Number: {
-      auto *row = new QWidget(controls_container_);
+      auto *row = new QWidget(control_parent);
       row->setObjectName(object_name + QStringLiteral(".row"));
       auto *row_layout = new QGridLayout(row);
       row_layout->setColumnStretch(0, 1);
@@ -2049,28 +2431,16 @@ private:
           qt_tool_settings_number_slider_mapping(
               control.min_value, control.max_value, integer_control,
               control.step);
-      auto *slider =
-          new QtToolSettingsNumberSlider(Qt::Horizontal, row);
-      slider->setObjectName(object_name + QStringLiteral(".slider"));
-      slider->setAccessibleName(label);
-      slider->setRange(slider_mapping.slider_minimum,
-                       slider_mapping.slider_maximum);
-      slider->set_stepwise_interaction(
-          control.number_interaction ==
-          QuaderToolSettingNumberInteraction::Stepped);
-      slider->setTracking(true);
-      row_layout->addWidget(slider, 1, 0);
-      binding.number_slider = slider;
-      binding.number_slider_mapping = slider_mapping;
-
       const auto send_number_to_editor =
           [this, tool_id = target.tool_id,
-           control_id = control.id](double value) {
+           control_id = control.id](
+              double value, QuaderToolSettingEditOptions options) {
             if (editor_ == nullptr) {
               return;
             }
             const QuaderApiVoidResult result =
-                editor_->tools().set_setting(tool_id, control_id, value);
+                editor_->tools().set_setting(tool_id, control_id, value,
+                                             std::move(options));
             log_failure("Tool settings update", result);
             if (!result.ok()) {
               schedule_refresh();
@@ -2085,9 +2455,74 @@ private:
                        [this, control_index]() {
                          flush_number_dispatch(control_index);
                        });
+
+      const bool use_drag_spinner =
+          integer_control &&
+          control.number_presentation ==
+              QuaderToolSettingNumberPresentation::DragSpinner;
+      if (use_drag_spinner) {
+        auto *spinner = new QtToolSettingsDragSpinner(row);
+        spinner->setObjectName(object_name + QStringLiteral(".spinner"));
+        spinner->spin_box()->setObjectName(object_name);
+        spinner->set_accessible_label(label);
+        spinner->set_range(slider_mapping.slider_minimum,
+                           slider_mapping.slider_maximum);
+        spinner->set_single_step(integer_single_step(control.step));
+        spinner->spin_box()->setKeyboardTracking(false);
+        spinner->set_value(qt_tool_settings_number_slider_position(
+            slider_mapping, control.number_value));
+        spinner->value_changed = [this, control_index](int value) {
+          if (editor_ == nullptr || synchronizing_) {
+            return;
+          }
+          queue_number_dispatch(control_index, static_cast<double>(value));
+        };
+        spinner->editing_started = [this, control_index]() {
+          begin_number_continuous_edit(control_index);
+        };
+        spinner->editing_canceled = [this, control_index]() {
+          discard_pending_number_dispatch(control_index);
+          schedule_refresh();
+        };
+        spinner->editing_finished = [this, control_index]() {
+          finish_number_continuous_edit(control_index);
+        };
+        spinner->drag_started = [this, control_index]() {
+          begin_number_continuous_edit(control_index);
+        };
+        spinner->drag_finished = [this, control_index]() {
+          finish_number_continuous_edit(control_index);
+        };
+        row_layout->addWidget(spinner, 1, 0, 1, 2, Qt::AlignLeft);
+        field_label->setBuddy(spinner->spin_box());
+        binding.integer = spinner->spin_box();
+        binding.number_drag_spinner = spinner;
+        binding.number_slider_mapping = slider_mapping;
+        control_layout.addWidget(row);
+        binding.container = row;
+        break;
+      }
+
+      auto *slider =
+          new QtToolSettingsNumberSlider(Qt::Horizontal, row);
+      slider->setObjectName(object_name + QStringLiteral(".slider"));
+      slider->setAccessibleName(label);
+      slider->setRange(slider_mapping.slider_minimum,
+                       slider_mapping.slider_maximum);
+      slider->set_stepwise_interaction(
+          control.number_interaction ==
+          QuaderToolSettingNumberInteraction::Stepped);
+      slider->setTracking(true);
+      row_layout->addWidget(slider, 1, 0);
+      binding.number_slider = slider;
+      binding.number_slider_mapping = slider_mapping;
+      QObject::connect(slider, &QSlider::sliderPressed, &panel_,
+                       [this, control_index]() {
+                         begin_number_continuous_edit(control_index);
+                       });
       QObject::connect(slider, &QSlider::sliderReleased, &panel_,
                        [this, control_index]() {
-                         flush_number_dispatch(control_index);
+                         finish_number_continuous_edit(control_index);
                        });
 
       if (integer_control) {
@@ -2096,8 +2531,8 @@ private:
         spin->setAccessibleName(label);
         spin->setRange(slider_mapping.slider_minimum,
                        slider_mapping.slider_maximum);
-        spin->setSingleStep(
-            std::max(1, static_cast<int>(std::llround(control.step))));
+        spin->setSingleStep(integer_single_step(control.step));
+        spin->setKeyboardTracking(false);
         slider->setSingleStep(spin->singleStep());
         QObject::connect(
             slider, &QSlider::valueChanged, &panel_,
@@ -2112,11 +2547,11 @@ private:
               {
                 const QSignalBlocker spin_blocker(spin);
                 spin->setValue(value);
-              }
-              update_slider_steps(*slider, mapping, value,
-                                  spin->singleStep());
-              queue_number_dispatch(control_index,
-                                    static_cast<double>(value));
+                            }
+                            update_slider_steps(*slider, mapping, value,
+                                                spin->singleStep());
+                            queue_number_dispatch(control_index,
+                                                  static_cast<double>(value));
             });
         QObject::connect(spin, &QSpinBox::valueChanged, &panel_,
                          [this, spin, slider, control_index](int value) {
@@ -2140,8 +2575,15 @@ private:
                          });
         QObject::connect(spin, &QSpinBox::editingFinished, &panel_,
                          [this, control_index]() {
-                           flush_number_dispatch(control_index);
+                           finish_number_continuous_edit(control_index);
                          });
+        if (QLineEdit *editor = spin->findChild<QLineEdit *>();
+            editor != nullptr) {
+          QObject::connect(editor, &QLineEdit::textEdited, &panel_,
+                           [this, control_index](const QString &) {
+                             begin_number_continuous_edit(control_index);
+                           });
+        }
         row_layout->addWidget(spin, 1, 1);
         field_label->setBuddy(spin);
         binding.integer = spin;
@@ -2155,6 +2597,7 @@ private:
         spin->setSingleStep(std::isfinite(control.step) && control.step > 0.0
                                 ? control.step
                                 : 0.001);
+        spin->setKeyboardTracking(false);
         // The legacy ImGui slider displayed four decimal places. Preserve at
         // least that precision so descriptor endpoints such as 0.0625 remain
         // representable by the paired stock Fusion spin box.
@@ -2191,27 +2634,151 @@ private:
                              slider->setValue(
                                  qt_tool_settings_number_slider_position(
                                      mapping, value));
-                           }
-                           update_slider_steps(*slider, mapping, value,
-                                               spin->singleStep());
-                           queue_number_dispatch(control_index, value);
+                            }
+                            update_slider_steps(*slider, mapping, value,
+                                                spin->singleStep());
+                            queue_number_dispatch(control_index, value);
                          });
         QObject::connect(spin, &QDoubleSpinBox::editingFinished, &panel_,
                          [this, control_index]() {
-                           flush_number_dispatch(control_index);
+                           finish_number_continuous_edit(control_index);
                          });
+        if (QLineEdit *editor = spin->findChild<QLineEdit *>();
+            editor != nullptr) {
+          QObject::connect(editor, &QLineEdit::textEdited, &panel_,
+                           [this, control_index](const QString &) {
+                             begin_number_continuous_edit(control_index);
+                           });
+        }
         row_layout->addWidget(spin, 1, 1);
         field_label->setBuddy(spin);
         binding.floating = spin;
       }
-      controls_layout_->addWidget(row);
+      control_layout.addWidget(row);
+      binding.container = row;
+      break;
+    }
+    case QuaderToolSettingControlKind::Vector3Number: {
+      auto *row = new QWidget(control_parent);
+      row->setObjectName(object_name + QStringLiteral(".row"));
+      auto *row_layout = new QVBoxLayout(row);
+      row_layout->setContentsMargins(0, 0, 0, 0);
+      row_layout->setSpacing(3);
+
+      auto *field_label = new QLabel(label, row);
+      field_label->setObjectName(object_name + QStringLiteral(".label"));
+      field_label->setWordWrap(true);
+      row_layout->addWidget(field_label);
+
+      auto *fields = new QWidget(row);
+      fields->setObjectName(object_name + QStringLiteral(".fields"));
+      fields->setMinimumWidth(0);
+      fields->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+      auto *fields_layout = new QGridLayout(fields);
+      fields_layout->setContentsMargins(0, 0, 0, 0);
+      fields_layout->setHorizontalSpacing(4);
+      constexpr std::array<const char *, 3> kAxisNames{{"X", "Y", "Z"}};
+      constexpr std::array<quader_editor_core::ViewAxis, 3> kAxes{{
+          quader_editor_core::ViewAxis::X,
+          quader_editor_core::ViewAxis::Y,
+          quader_editor_core::ViewAxis::Z,
+      }};
+
+      for (std::size_t axis = 0; axis < 3U; ++axis) {
+        const QuaderToolSettingNumberComponent &component =
+            control.vector3_components[axis];
+        const int label_column = static_cast<int>(axis * 2U);
+        const int field_column = label_column + 1;
+        const QString component_name = control_object_name(
+            component.id, control_index * 3U + axis);
+        auto *axis_label =
+            new QLabel(QString::fromLatin1(kAxisNames[axis]), fields);
+        axis_label->setObjectName(component_name +
+                                  QStringLiteral(".axis_label"));
+        axis_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        apply_qt_semantic_axis_label_color(*axis_label, kAxes[axis]);
+        fields_layout->addWidget(axis_label, 0, label_column);
+
+        auto *spin = new QDoubleSpinBox(fields);
+        spin->setObjectName(component_name);
+        spin->setAccessibleName(
+            QStringLiteral("%1 %2").arg(label,
+                                         QString::fromLatin1(kAxisNames[axis])));
+        spin->setDecimals(
+            std::max(4, decimal_places_for_step(component.step)));
+        spin->setRange(std::min(component.min_value, component.max_value),
+                       std::max(component.min_value, component.max_value));
+        spin->setSingleStep(std::isfinite(component.step) &&
+                                    component.step > 0.0
+                                ? component.step
+                                : 0.001);
+        spin->setKeyboardTracking(false);
+        spin->setMinimumWidth(0);
+        spin->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        spin->setValue(component.value);
+        spin->setEnabled(component.enabled);
+        fields_layout->setColumnStretch(field_column, 1);
+        fields_layout->addWidget(spin, 0, field_column);
+        axis_label->setBuddy(spin);
+
+        auto *dispatch_timer = new QTimer(spin);
+        dispatch_timer->setSingleShot(true);
+        dispatch_timer->setInterval(kNumberDispatchIntervalMs);
+        Vector3ComponentWidget &component_binding =
+            binding.vector3_components[axis];
+        component_binding.id = component.id;
+        component_binding.spin = spin;
+        component_binding.dispatch_timer = dispatch_timer;
+        component_binding.enabled = component.enabled;
+        component_binding.dispatch =
+            [this, tool_id = target.tool_id,
+             component_id = component.id](
+                double value, QuaderToolSettingEditOptions options) {
+              if (editor_ == nullptr) {
+                return;
+              }
+              const QuaderApiVoidResult result = editor_->tools().set_setting(
+                  tool_id, component_id, value, std::move(options));
+              log_failure("Tool settings update", result);
+              if (!result.ok()) {
+                schedule_refresh();
+              }
+            };
+        QObject::connect(dispatch_timer, &QTimer::timeout, &panel_,
+                         [this, control_index, axis]() {
+                           flush_vector3_dispatch(control_index, axis);
+                         });
+        QObject::connect(spin, &QDoubleSpinBox::valueChanged, &panel_,
+                         [this, control_index, axis](double value) {
+                           if (editor_ == nullptr || synchronizing_) {
+                             return;
+                           }
+                           queue_vector3_dispatch(control_index, axis, value);
+                         });
+        QObject::connect(spin, &QDoubleSpinBox::editingFinished, &panel_,
+                         [this, control_index, axis]() {
+                           finish_vector3_continuous_edit(control_index,
+                                                          axis);
+                         });
+        if (QLineEdit *editor = spin->findChild<QLineEdit *>();
+            editor != nullptr) {
+          QObject::connect(editor, &QLineEdit::textEdited, &panel_,
+                           [this, control_index,
+                            axis](const QString &) {
+                             begin_vector3_continuous_edit(control_index,
+                                                           axis);
+                           });
+        }
+      }
+      row_layout->addWidget(fields);
+      control_layout.addWidget(row);
       binding.container = row;
       break;
     }
     case QuaderToolSettingControlKind::Choice: {
       if (control.choice_presentation ==
           QuaderToolSettingChoicePresentation::Dropdown) {
-        auto *row = new QWidget(controls_container_);
+        auto *row = new QWidget(control_parent);
         row->setObjectName(object_name + QStringLiteral(".row"));
         auto *row_layout = new QHBoxLayout(row);
         auto *field_label = new QLabel(label, row);
@@ -2251,13 +2818,13 @@ private:
               // replaced with the fields for the newly selected kind.
               schedule_refresh();
             });
-        controls_layout_->addWidget(row);
+        control_layout.addWidget(row);
         binding.container = row;
         binding.dropdown = dropdown;
         break;
       }
 
-      auto *group = new QGroupBox(label, controls_container_);
+      auto *group = new QGroupBox(label, control_parent);
       group->setObjectName(object_name);
       auto *choice_layout = new QVBoxLayout(group);
       auto *button_group = new QButtonGroup(group);
@@ -2298,27 +2865,32 @@ private:
         binding.choices.push_back(
             ChoiceWidget{radio, option.id, option.value});
       }
-      controls_layout_->addWidget(group);
+      control_layout.addWidget(group);
       binding.container = group;
       break;
     }
     case QuaderToolSettingControlKind::Action: {
-      auto *button = new QPushButton(label, controls_container_);
+      auto *button = new QPushButton(label, control_parent);
       button->setObjectName(object_name);
       button->setAccessibleName(label);
       QObject::connect(button, &QPushButton::clicked, &panel_,
                        [this, tool_id = target.tool_id,
                         action_id = control.id]() {
                          if (editor_ == nullptr) {
+                           discard_pending_number_dispatches();
                            return;
                          }
+                         // Actions consume the presented settings. Commit any
+                         // coalesced numeric edit first so the owner observes
+                         // the latest value rather than the last timer tick.
+                         flush_pending_number_dispatches();
                          const QuaderApiVoidResult result =
                              editor_->tools().execute_action(tool_id,
                                                              action_id);
                          log_failure("Tool settings action", result);
                          schedule_refresh();
                        });
-      controls_layout_->addWidget(button);
+      control_layout.addWidget(button);
       binding.container = button;
       break;
     }
@@ -2376,11 +2948,60 @@ private:
       const bool slider_editing =
           binding.number_slider != nullptr &&
           binding.number_slider->isSliderDown();
+      const bool drag_spinner_editing =
+          binding.number_drag_spinner != nullptr &&
+          (binding.number_drag_spinner->is_dragging() ||
+           binding.number_drag_spinner->is_editing());
       const bool number_dispatch_pending =
           binding.pending_number_value.has_value();
       const bool number_interaction_active =
-          slider_editing || integer_editing || floating_editing ||
+          slider_editing || drag_spinner_editing || integer_editing ||
+          floating_editing ||
           number_dispatch_pending;
+
+      for (std::size_t axis = 0; axis < 3U; ++axis) {
+        Vector3ComponentWidget &component_binding =
+            binding.vector3_components[axis];
+        if (component_binding.spin == nullptr) {
+          continue;
+        }
+        const QuaderToolSettingNumberComponent &component =
+            control.vector3_components[axis];
+        if (component_binding.enabled != component.enabled) {
+          component_binding.spin->setEnabled(component.enabled);
+          component_binding.enabled = component.enabled;
+        }
+        const bool component_editing =
+            widget_or_descendant_has_focus(component_binding.spin) ||
+            component_binding.pending_value.has_value();
+        if (component_editing) {
+          continue;
+        }
+        const double minimum =
+            std::min(component.min_value, component.max_value);
+        const double maximum =
+            std::max(component.min_value, component.max_value);
+        const double single_step =
+            std::isfinite(component.step) && component.step > 0.0
+                ? component.step
+                : 0.001;
+        const int decimals =
+            std::max(4, decimal_places_for_step(component.step));
+        const QSignalBlocker blocker(component_binding.spin);
+        if (component_binding.spin->decimals() != decimals) {
+          component_binding.spin->setDecimals(decimals);
+        }
+        if (component_binding.spin->minimum() != minimum ||
+            component_binding.spin->maximum() != maximum) {
+          component_binding.spin->setRange(minimum, maximum);
+        }
+        if (component_binding.spin->singleStep() != single_step) {
+          component_binding.spin->setSingleStep(single_step);
+        }
+        if (component_binding.spin->value() != component.value) {
+          component_binding.spin->setValue(component.value);
+        }
+      }
 
       if (binding.number_slider != nullptr) {
         const bool integer_control = binding.integer != nullptr;
@@ -2410,11 +3031,7 @@ private:
 
         if (!number_interaction_active) {
           if (binding.integer != nullptr) {
-            binding.integer->setSingleStep(std::max(
-                1, static_cast<int>(std::llround(std::clamp(
-                       control.step, 1.0,
-                       static_cast<double>(
-                           std::numeric_limits<int>::max()))))));
+            binding.integer->setSingleStep(integer_single_step(control.step));
           }
           if (binding.floating != nullptr) {
             binding.floating->setSingleStep(
@@ -2427,12 +3044,28 @@ private:
         }
       }
 
+      if (binding.number_drag_spinner != nullptr &&
+          !number_interaction_active) {
+        const QtToolSettingsNumberSliderMapping desired_mapping =
+            qt_tool_settings_number_slider_mapping(
+                control.min_value, control.max_value, true, control.step);
+        binding.number_drag_spinner->set_range(desired_mapping.slider_minimum,
+                                               desired_mapping.slider_maximum);
+        binding.number_drag_spinner->set_single_step(
+            integer_single_step(control.step));
+        binding.number_drag_spinner->set_value(
+            qt_tool_settings_number_slider_position(desired_mapping,
+                                                    control.number_value));
+        binding.number_slider_mapping = desired_mapping;
+      }
+
       if (binding.toggle != nullptr) {
         const QSignalBlocker blocker(binding.toggle);
         binding.toggle->setChecked(control.bool_value);
       }
-      if (binding.integer != nullptr && !integer_editing && !slider_editing &&
-          !number_dispatch_pending) {
+      if (binding.integer != nullptr &&
+          binding.number_drag_spinner == nullptr && !integer_editing &&
+          !slider_editing && !number_dispatch_pending) {
         const QSignalBlocker blocker(binding.integer);
         binding.integer->setValue(
             static_cast<int>(std::llround(control.number_value)));
@@ -2524,6 +3157,8 @@ private:
   QPushButton *apply_button_ = nullptr;
   QPushButton *cancel_button_ = nullptr;
   std::vector<ControlWidget> controls_;
+  std::vector<ControlGroupWidget> control_groups_;
+  std::unordered_map<std::string, bool> control_group_expansion_;
   std::array<TextureControlWidget, 5> texture_controls_;
   std::array<QPushButton *, 25> texture_action_buttons_{};
   std::array<QLabel *, 6> texture_action_group_labels_{};

@@ -25,6 +25,7 @@
 #include <editor/modeling/runtime/tool_runtime_policy.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <optional>
 #include <cstdlib>
@@ -51,6 +52,7 @@ enum class ActiveToolSettingsSourceKind : std::uint8_t {
 struct ActiveToolSettingsSource {
   const void *identity = nullptr;
   std::uint64_t revision = 0;
+  std::uint64_t dependent_revision = 0;
   ActiveToolSettingsSourceKind kind = ActiveToolSettingsSourceKind::Modeling;
   // Captures owner presentation state that is intentionally independent from
   // its settings revision. Primitive placement freezes reset mid-gesture.
@@ -87,7 +89,9 @@ active_tool_settings_source(const SceneSession &session) {
     return {
         .identity = &curve,
         .revision = curve.tool_settings_revision(),
+        .dependent_revision = session.modeling().content_revision(),
         .kind = ActiveToolSettingsSourceKind::Curve,
+        .reset_availability_token = curve.can_reset_settings(),
     };
   }
   const PrimitiveCreationToolService &primitive =
@@ -122,6 +126,14 @@ active_tool_settings_source(const SceneSession &session) {
         .identity = &pivot,
         .revision = pivot.tool_settings_revision(),
         .kind = ActiveToolSettingsSourceKind::Pivot,
+    };
+  }
+  if (curve.has_editable_existing_curve()) {
+    return {
+        .identity = &curve,
+        .revision = curve.tool_settings_revision(),
+        .dependent_revision = session.modeling().content_revision(),
+        .kind = ActiveToolSettingsSourceKind::Curve,
     };
   }
   const ModelingSessionService &modeling = session.modeling();
@@ -220,7 +232,11 @@ QuaderToolSettingControl number_control(std::string id, std::string label,
                                         QuaderToolSettingNumberInteraction
                                             interaction =
                                                 QuaderToolSettingNumberInteraction::
-                                                    Continuous) {
+                                                    Continuous,
+                                        QuaderToolSettingNumberPresentation
+                                            presentation =
+                                                QuaderToolSettingNumberPresentation::
+                                                    SliderSpinBox) {
   return {
       .kind = QuaderToolSettingControlKind::Number,
       .id = std::move(id),
@@ -230,7 +246,44 @@ QuaderToolSettingControl number_control(std::string id, std::string label,
       .max_value = max_value,
       .step = step,
       .number_interaction = interaction,
+      .number_presentation = presentation,
   };
+}
+
+QuaderToolSettingControl vector3_number_control(
+    std::string id, std::string label, std::string group_id,
+    std::array<std::string, 3> component_ids, const QVec3 &value,
+    double min_value, double max_value, double step) {
+  QuaderToolSettingControl result{
+      .kind = QuaderToolSettingControlKind::Vector3Number,
+      .id = std::move(id),
+      .label = std::move(label),
+      .group_id = std::move(group_id),
+  };
+  result.vector3_components = {{
+      {
+          .id = std::move(component_ids[0]),
+          .value = static_cast<double>(value.x),
+          .min_value = min_value,
+          .max_value = max_value,
+          .step = step,
+      },
+      {
+          .id = std::move(component_ids[1]),
+          .value = static_cast<double>(value.y),
+          .min_value = min_value,
+          .max_value = max_value,
+          .step = step,
+      },
+      {
+          .id = std::move(component_ids[2]),
+          .value = static_cast<double>(value.z),
+          .min_value = min_value,
+          .max_value = max_value,
+          .step = step,
+      },
+  }};
+  return result;
 }
 
 QuaderToolSettingControl choice_control(
@@ -312,6 +365,51 @@ primitive_kind_from_setting_value(double value) {
   return std::nullopt;
 }
 
+std::string_view curve_creation_kind_setting_id(CurveCreationKind kind) {
+  switch (kind) {
+  case CurveCreationKind::Draw:
+    return "draw";
+  case CurveCreationKind::Circle:
+    return "circle";
+  case CurveCreationKind::Oval:
+    return "oval";
+  }
+  return {};
+}
+
+double curve_creation_kind_setting_value(CurveCreationKind kind) {
+  return static_cast<double>(static_cast<int>(kind));
+}
+
+std::optional<CurveCreationKind>
+curve_creation_kind_from_setting_id(std::string_view value) {
+  if (value == "draw") {
+    return CurveCreationKind::Draw;
+  }
+  if (value == "circle") {
+    return CurveCreationKind::Circle;
+  }
+  if (value == "oval") {
+    return CurveCreationKind::Oval;
+  }
+  return std::nullopt;
+}
+
+std::optional<CurveCreationKind>
+curve_creation_kind_from_setting_value(double value) {
+  if (!std::isfinite(value)) {
+    return std::nullopt;
+  }
+  for (const CurveCreationKind kind : {
+           CurveCreationKind::Draw, CurveCreationKind::Circle,
+           CurveCreationKind::Oval}) {
+    if (value == curve_creation_kind_setting_value(kind)) {
+      return kind;
+    }
+  }
+  return std::nullopt;
+}
+
 std::string_view path_array_axis_setting_id(PathArraySignedAxis axis) {
   switch (axis) {
   case PathArraySignedAxis::PositiveX:
@@ -350,6 +448,39 @@ path_array_axis_from_setting_id(std::string_view value) {
     }
   }
   return std::nullopt;
+}
+
+std::optional<std::size_t> path_array_vector_component(
+    std::string_view name, std::string_view x_setting,
+    std::string_view y_setting, std::string_view z_setting) {
+  if (name == x_setting) {
+    return 0U;
+  }
+  if (name == y_setting) {
+    return 1U;
+  }
+  if (name == z_setting) {
+    return 2U;
+  }
+  return std::nullopt;
+}
+
+void set_path_array_vector_component(QVec3 &setting, std::size_t component,
+                                     double value) {
+  const float converted = static_cast<float>(value);
+  switch (component) {
+  case 0U:
+    setting.x = converted;
+    break;
+  case 1U:
+    setting.y = converted;
+    break;
+  case 2U:
+    setting.z = converted;
+    break;
+  default:
+    break;
+  }
 }
 
 QuaderToolSettingControl action_control(std::string id, std::string label) {
@@ -414,9 +545,15 @@ QuaderToolSettingsTarget linear_array_tool_settings_target(
 
 QuaderToolSettingsTarget
 path_array_tool_settings_target(const PathArrayToolService &path_array) {
+  constexpr std::string_view kPlacementGroup =
+      "path_array.group.placement";
+  constexpr std::string_view kRotationGroup = "path_array.group.rotation";
+  constexpr std::string_view kScaleGroup = "path_array.group.scale";
+
+  const bool preview_valid = path_array.preview_valid();
   QuaderToolSettingsTarget result{
       .active = true,
-      .preview_active = path_array.preview_valid(),
+      .preview_active = preview_valid,
       .tool_id = std::string(kPathArrayToolId),
       .title = "Path Array",
       .description =
@@ -424,19 +561,41 @@ path_array_tool_settings_target(const PathArrayToolService &path_array) {
           "the selected curve.",
       .can_reset = true,
       .apply_visible = true,
-      .can_apply = path_array.preview_valid(),
+      .can_apply = preview_valid,
       .can_cancel = true,
   };
-  result.controls.push_back(number_control(
+  result.groups = {
+      {.id = std::string(kPlacementGroup),
+       .label = "Placement",
+       .expanded_by_default = true},
+      {.id = std::string(kRotationGroup),
+       .label = "Rotation",
+       .expanded_by_default = false},
+      {.id = std::string(kScaleGroup),
+       .label = "Scale",
+       .expanded_by_default = false},
+  };
+
+  QuaderToolSettingControl count = number_control(
       std::string(kPathArrayCountSetting), "Num Copies", path_array.count(),
       kPathArrayMinimumCount, path_array.maximum_count(), 1.0,
-      QuaderToolSettingNumberInteraction::Stepped));
-  result.controls.push_back(number_control(
+      QuaderToolSettingNumberInteraction::Stepped,
+      QuaderToolSettingNumberPresentation::DragSpinner);
+  count.group_id = kPlacementGroup;
+  result.controls.push_back(std::move(count));
+
+  QuaderToolSettingControl distance = number_control(
       std::string(kPathArrayDistanceSetting), "Distance",
-      path_array.distance(), 0.0, path_array.maximum_distance(), 0.001));
-  result.controls.push_back(toggle_control(
+      path_array.distance(), 0.0, path_array.maximum_distance(), 0.001);
+  distance.group_id = kPlacementGroup;
+  result.controls.push_back(std::move(distance));
+
+  QuaderToolSettingControl follow_path = toggle_control(
       std::string(kPathArrayFollowPathSetting), "Follow Path",
-      path_array.follow_path()));
+      path_array.follow_path());
+  follow_path.group_id = kPlacementGroup;
+  result.controls.push_back(std::move(follow_path));
+
   QuaderToolSettingControl axis = choice_control(
       std::string(kPathArrayForwardAxisSetting), "Forward Axis",
       std::string(path_array_axis_setting_id(path_array.forward_axis())),
@@ -449,8 +608,62 @@ path_array_tool_settings_target(const PathArrayToolService &path_array) {
           {.id = "negative_z", .label = "-Z", .value = 5.0},
       },
       QuaderToolSettingChoicePresentation::Dropdown);
+  axis.group_id = kPlacementGroup;
   axis.enabled = path_array.follow_path();
   result.controls.push_back(std::move(axis));
+
+  result.controls.push_back(vector3_number_control(
+      "path_array.rotation_offset", "Offset per Copy",
+      std::string(kRotationGroup),
+      {std::string(kPathArrayRotationOffsetXSetting),
+       std::string(kPathArrayRotationOffsetYSetting),
+       std::string(kPathArrayRotationOffsetZSetting)},
+      path_array.rotation_offset_degrees(),
+      kPathArrayRotationUiMinimumDegrees,
+      kPathArrayRotationUiMaximumDegrees, kPathArrayRotationUiStepDegrees));
+  result.controls.push_back(vector3_number_control(
+      "path_array.rotation_random_min", "Random Minimum",
+      std::string(kRotationGroup),
+      {std::string(kPathArrayRotationRandomMinXSetting),
+       std::string(kPathArrayRotationRandomMinYSetting),
+       std::string(kPathArrayRotationRandomMinZSetting)},
+      path_array.rotation_random_min_degrees(),
+      kPathArrayRotationUiMinimumDegrees,
+      kPathArrayRotationUiMaximumDegrees, kPathArrayRotationUiStepDegrees));
+  result.controls.push_back(vector3_number_control(
+      "path_array.rotation_random_max", "Random Maximum",
+      std::string(kRotationGroup),
+      {std::string(kPathArrayRotationRandomMaxXSetting),
+       std::string(kPathArrayRotationRandomMaxYSetting),
+       std::string(kPathArrayRotationRandomMaxZSetting)},
+      path_array.rotation_random_max_degrees(),
+      kPathArrayRotationUiMinimumDegrees,
+      kPathArrayRotationUiMaximumDegrees, kPathArrayRotationUiStepDegrees));
+
+  result.controls.push_back(vector3_number_control(
+      "path_array.scale_offset", "Scale Factor per Copy",
+      std::string(kScaleGroup),
+      {std::string(kPathArrayScaleOffsetXSetting),
+       std::string(kPathArrayScaleOffsetYSetting),
+       std::string(kPathArrayScaleOffsetZSetting)},
+      path_array.scale_offset_factors(), kPathArrayScaleUiMinimumFactor,
+      kPathArrayScaleUiMaximumFactor, kPathArrayScaleUiStepFactor));
+  result.controls.push_back(vector3_number_control(
+      "path_array.scale_random_min", "Random Minimum",
+      std::string(kScaleGroup),
+      {std::string(kPathArrayScaleRandomMinXSetting),
+       std::string(kPathArrayScaleRandomMinYSetting),
+       std::string(kPathArrayScaleRandomMinZSetting)},
+      path_array.scale_random_min_factors(), kPathArrayScaleUiMinimumFactor,
+      kPathArrayScaleUiMaximumFactor, kPathArrayScaleUiStepFactor));
+  result.controls.push_back(vector3_number_control(
+      "path_array.scale_random_max", "Random Maximum",
+      std::string(kScaleGroup),
+      {std::string(kPathArrayScaleRandomMaxXSetting),
+       std::string(kPathArrayScaleRandomMaxYSetting),
+       std::string(kPathArrayScaleRandomMaxZSetting)},
+      path_array.scale_random_max_factors(), kPathArrayScaleUiMinimumFactor,
+      kPathArrayScaleUiMaximumFactor, kPathArrayScaleUiStepFactor));
   return result;
 }
 
@@ -838,27 +1051,105 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
   return result;
 }
 
-QuaderToolSettingsTarget curve_tool_settings_target(
-    const CurveToolService &curve) {
+QuaderToolSettingsTarget
+curve_tool_settings_target(const CurveToolService &curve) {
+  constexpr double kPresetDimensionStep = 0.001;
+  const bool active_tool = curve.active();
+
   QuaderToolSettingsTarget result{
       .active = true,
-      .preview_active = curve.drawing() || curve.dragging(),
+      .preview_active = active_tool && (curve.drawing() || curve.dragging()),
       .tool_id = std::string(kCurveToolId),
       .title = "Curve",
-      .description =
-          "Click to add points; drag to shape bends. Use Apply to finish. "
-          "Use the configured point conversion gesture to toggle corner/smooth. "
-          "Select a curve and use this tool to edit its points and handles.",
-      .can_reset = false,
-      .apply_visible = true,
+      .description = active_tool
+                         ? "Draw a curve point by point or choose a Circle or "
+                           "Oval preset. Use Apply to finish. Use the configured "
+                           "point conversion gesture to toggle corner/smooth. "
+                           "Select a curve and use this tool to edit its points "
+                           "and handles."
+                         : "Edit the selected Curve and its solidified shape.",
+      .can_reset = curve.can_reset_settings(),
+      .apply_visible = active_tool,
       .can_apply = curve.can_apply(),
-      .can_cancel = true,
+      .can_cancel = active_tool,
   };
-  result.controls.push_back(toggle_control(std::string(kCurveClosedSetting),
-                                           "Closed", curve.closed()));
   if (!curve.drawing()) {
-    result.controls.push_back(action_control(std::string(kCurveNewAction),
-                                             "New Curve"));
+    result.controls.push_back(toggle_control(std::string(kCurveClosedSetting),
+                                             "Closed", curve.closed()));
+    const bool solidify = curve.solidify_enabled();
+    result.controls.push_back(toggle_control(
+        std::string(kCurveSolidifySetting), "Solidify", solidify));
+    QuaderToolSettingControl resolution = number_control(
+        std::string(kCurveSolidifyResolutionSetting), "Resolution",
+        curve.solidify_resolution(), kCurveSolidifyMinimumResolution,
+        kCurveSolidifyMaximumResolution, 1.0,
+        QuaderToolSettingNumberInteraction::Stepped,
+        QuaderToolSettingNumberPresentation::DragSpinner);
+    resolution.enabled = solidify;
+    result.controls.push_back(std::move(resolution));
+    QuaderToolSettingControl radius = number_control(
+        std::string(kCurveSolidifyRadiusSetting), "Radius",
+        curve.solidify_radius(), kCurveSolidifyMinimumRadius,
+        kCurveSolidifyMaximumRadius, kCurveSolidifyMinimumRadius);
+    radius.enabled = solidify;
+    result.controls.push_back(std::move(radius));
+    if (curve.has_editable_existing_curve()) {
+      QuaderToolSettingControl apply_solidify = action_control(
+          std::string(kCurveApplySolidifyAction), "Apply Solidify");
+      apply_solidify.enabled = curve.can_apply_solidify();
+      result.controls.push_back(std::move(apply_solidify));
+    }
+    if (active_tool) {
+      result.controls.push_back(
+          action_control(std::string(kCurveNewAction), "New Curve"));
+    }
+    return result;
+  }
+
+  const CurveCreationKind kind = curve.creation_kind();
+  QuaderToolSettingControl type = choice_control(
+      std::string(kCurveTypeSetting), "Curve Type",
+      std::string(curve_creation_kind_setting_id(kind)),
+      {
+          {.id = "draw",
+           .label = "Draw",
+           .value = curve_creation_kind_setting_value(CurveCreationKind::Draw)},
+          {.id = "circle",
+           .label = "Circle",
+           .value = curve_creation_kind_setting_value(
+               CurveCreationKind::Circle)},
+          {.id = "oval",
+           .label = "Oval",
+           .value = curve_creation_kind_setting_value(CurveCreationKind::Oval)},
+      },
+      QuaderToolSettingChoicePresentation::Dropdown);
+  type.enabled = curve.can_change_creation_kind();
+  result.controls.push_back(std::move(type));
+
+  switch (kind) {
+  case CurveCreationKind::Draw:
+    result.controls.push_back(toggle_control(std::string(kCurveClosedSetting),
+                                             "Closed", curve.closed()));
+    break;
+  case CurveCreationKind::Circle:
+    result.controls.push_back(
+        number_control(std::string(kCurveRadiusSetting), "Radius",
+                       curve.preset_radius(), kCurvePresetMinimumRadius,
+                       kCurvePresetMaximumRadius, kPresetDimensionStep));
+    break;
+  case CurveCreationKind::Oval: {
+    const double radius = curve.preset_radius();
+    const double length = curve.oval_length();
+    result.controls.push_back(
+        number_control(std::string(kCurveRadiusSetting), "Radius", radius,
+                       kCurvePresetMinimumRadius,
+                       std::min(kCurvePresetMaximumRadius, length * 0.5),
+                       kPresetDimensionStep));
+    result.controls.push_back(number_control(
+        std::string(kCurveLengthSetting), "Length", length, radius * 2.0,
+        kCurvePresetMaximumLength, kPresetDimensionStep));
+    break;
+  }
   }
   return result;
 }
@@ -962,6 +1253,9 @@ QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
   if (session.pivot().persistent_active()) {
     return pivot_tool_settings_target(session.pivot());
   }
+  if (session.curve().has_editable_existing_curve()) {
+    return curve_tool_settings_target(session.curve());
+  }
   const ModelingSessionService &modeling = session.modeling();
   return modeling_tool_settings_target(modeling.tool_settings_target(),
                                        modeling.interaction_settings());
@@ -974,11 +1268,14 @@ std::uint64_t QuaderToolsApi::active_settings_revision() const {
   if (!active_settings_source_valid_ ||
       active_settings_source_identity_ != source.identity ||
       active_settings_source_revision_ != source.revision ||
+      active_settings_source_dependent_revision_ !=
+          source.dependent_revision ||
       active_settings_source_kind_ != source_kind ||
       active_settings_source_reset_availability_token_ !=
           source.reset_availability_token) {
     active_settings_source_identity_ = source.identity;
     active_settings_source_revision_ = source.revision;
+    active_settings_source_dependent_revision_ = source.dependent_revision;
     active_settings_source_kind_ = source_kind;
     active_settings_source_reset_availability_token_ =
         source.reset_availability_token;
@@ -1001,7 +1298,9 @@ std::uint64_t QuaderToolsApi::active_tool_revision() const {
 
 QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  std::string_view name,
-                                                 double value) {
+                                                 double value,
+                                                 QuaderToolSettingEditOptions
+                                                     options) {
   SceneSession &session = scene_session(session_);
   if (session.path_array().active()) {
     if (!tool_id.empty() && tool_id != kPathArrayToolId) {
@@ -1049,16 +1348,155 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
           session, session.path_array().set_forward_axis(*axis),
           QuaderMutationKind::Runtime, "Set Path Array Forward Axis");
     }
+    if (const auto component = path_array_vector_component(
+            name, kPathArrayRotationOffsetXSetting,
+            kPathArrayRotationOffsetYSetting,
+            kPathArrayRotationOffsetZSetting)) {
+      QVec3 setting = session.path_array().rotation_offset_degrees();
+      set_path_array_vector_component(setting, *component, value);
+      return api_status_from_command(
+          session,
+          session.path_array().set_rotation_offset_degrees(setting),
+          QuaderMutationKind::Runtime, "Set Path Array Rotation Offset");
+    }
+    if (const auto component = path_array_vector_component(
+            name, kPathArrayRotationRandomMinXSetting,
+            kPathArrayRotationRandomMinYSetting,
+            kPathArrayRotationRandomMinZSetting)) {
+      QVec3 setting = session.path_array().rotation_random_min_degrees();
+      set_path_array_vector_component(setting, *component, value);
+      return api_status_from_command(
+          session,
+          session.path_array().set_rotation_random_min_degrees(setting),
+          QuaderMutationKind::Runtime,
+          "Set Path Array Rotation Random Minimum");
+    }
+    if (const auto component = path_array_vector_component(
+            name, kPathArrayRotationRandomMaxXSetting,
+            kPathArrayRotationRandomMaxYSetting,
+            kPathArrayRotationRandomMaxZSetting)) {
+      QVec3 setting = session.path_array().rotation_random_max_degrees();
+      set_path_array_vector_component(setting, *component, value);
+      return api_status_from_command(
+          session,
+          session.path_array().set_rotation_random_max_degrees(setting),
+          QuaderMutationKind::Runtime,
+          "Set Path Array Rotation Random Maximum");
+    }
+    if (const auto component = path_array_vector_component(
+            name, kPathArrayScaleOffsetXSetting,
+            kPathArrayScaleOffsetYSetting, kPathArrayScaleOffsetZSetting)) {
+      QVec3 setting = session.path_array().scale_offset_factors();
+      set_path_array_vector_component(setting, *component, value);
+      return api_status_from_command(
+          session, session.path_array().set_scale_offset_factors(setting),
+          QuaderMutationKind::Runtime, "Set Path Array Scale Offset");
+    }
+    if (const auto component = path_array_vector_component(
+            name, kPathArrayScaleRandomMinXSetting,
+            kPathArrayScaleRandomMinYSetting,
+            kPathArrayScaleRandomMinZSetting)) {
+      QVec3 setting = session.path_array().scale_random_min_factors();
+      set_path_array_vector_component(setting, *component, value);
+      return api_status_from_command(
+          session,
+          session.path_array().set_scale_random_min_factors(setting),
+          QuaderMutationKind::Runtime,
+          "Set Path Array Scale Random Minimum");
+    }
+    if (const auto component = path_array_vector_component(
+            name, kPathArrayScaleRandomMaxXSetting,
+            kPathArrayScaleRandomMaxYSetting,
+            kPathArrayScaleRandomMaxZSetting)) {
+      QVec3 setting = session.path_array().scale_random_max_factors();
+      set_path_array_vector_component(setting, *component, value);
+      return api_status_from_command(
+          session,
+          session.path_array().set_scale_random_max_factors(setting),
+          QuaderMutationKind::Runtime,
+          "Set Path Array Scale Random Maximum");
+    }
     return quader_api_failure_status(session, "Unknown Path Array setting.");
   }
-  if (session.curve().active()) {
-    if ((!tool_id.empty() && tool_id != kCurveToolId) ||
-        name != kCurveClosedSetting || (value != 0.0 && value != 1.0)) {
+  CurveToolService &curve = session.curve();
+  const bool curve_setting_target =
+      curve.active() ||
+      (curve.has_editable_existing_curve() &&
+       (tool_id.empty() || tool_id == kCurveToolId));
+  if (curve_setting_target) {
+    if (!tool_id.empty() && tool_id != kCurveToolId) {
+      return quader_api_failure_status(
+          session, "Tool setting does not belong to Curve.");
+    }
+    if (name == kCurveTypeSetting) {
+      const std::optional<CurveCreationKind> kind =
+          curve_creation_kind_from_setting_value(value);
+      if (!kind.has_value()) {
+        return quader_api_failure_status(session, "Invalid Curve type.");
+      }
+      return api_status_from_command(
+          session, curve.set_creation_kind(*kind),
+          QuaderMutationKind::Runtime, "Set Curve Type");
+    }
+    if (name == kCurveRadiusSetting) {
+      return api_status_from_command(
+          session, curve.set_preset_radius(value),
+          QuaderMutationKind::Runtime, "Set Curve Radius");
+    }
+    if (name == kCurveLengthSetting) {
+      return api_status_from_command(
+          session, curve.set_oval_length(value),
+          QuaderMutationKind::Runtime, "Set Curve Length");
+    }
+    if (name == kCurveSolidifySetting) {
+      if ((value != 0.0 && value != 1.0) ||
+          !curve.has_editable_existing_curve()) {
+        return quader_api_failure_status(session,
+                                         "Invalid Curve Solidify setting.");
+      }
+      return api_status_from_command(
+          session, curve.set_solidify(value != 0.0),
+          QuaderMutationKind::Document, "Set Curve Solidify");
+    }
+    if (name == kCurveSolidifyResolutionSetting) {
+      if (!std::isfinite(value) || std::round(value) != value ||
+          value < static_cast<double>(kCurveSolidifyMinimumResolution) ||
+          value > static_cast<double>(kCurveSolidifyMaximumResolution) ||
+          !curve.has_editable_existing_curve()) {
+        return quader_api_failure_status(
+            session, "Invalid Curve Solidify resolution.");
+      }
+      return api_status_from_command(
+          session,
+          curve.set_solidify_resolution(
+              static_cast<std::uint32_t>(value),
+              {.merge_key = std::move(options.merge_key)}),
+          QuaderMutationKind::Document, "Set Curve Solidify Resolution");
+    }
+    if (name == kCurveSolidifyRadiusSetting) {
+      if (!std::isfinite(value) || value < kCurveSolidifyMinimumRadius ||
+          value > kCurveSolidifyMaximumRadius ||
+          !curve.has_editable_existing_curve()) {
+        return quader_api_failure_status(session,
+                                         "Invalid Curve Solidify radius.");
+      }
+      return api_status_from_command(
+          session,
+          curve.set_solidify_radius(
+              value, {.merge_key = std::move(options.merge_key)}),
+          QuaderMutationKind::Document, "Set Curve Solidify Radius");
+    }
+    if (name != kCurveClosedSetting ||
+        !std::isfinite(value) || (value != 0.0 && value != 1.0)) {
       return quader_api_failure_status(session, "Invalid Curve setting.");
     }
-    const bool drawing = session.curve().drawing();
+    const bool drawing = curve.drawing();
+    if (drawing && curve.creation_kind() != CurveCreationKind::Draw) {
+      return quader_api_failure_status(
+          session, "Closed is only available for drawn Curves.");
+    }
     return api_status_from_command(
-        session, session.curve().set_closed(value != 0.0),
+        session, curve.set_closed(value != 0.0),
         drawing ? QuaderMutationKind::Runtime : QuaderMutationKind::Modeling,
         "Set Curve Closed");
   }
@@ -1197,6 +1635,18 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
         session, session.path_array().set_forward_axis(*axis),
         QuaderMutationKind::Runtime, "Set Path Array Forward Axis");
   }
+  if (session.curve().active() && name == kCurveTypeSetting) {
+    if (!tool_id.empty() && tool_id != kCurveToolId) {
+      return quader_api_failure_status(
+          session, "Tool setting does not belong to Curve.");
+    }
+    const std::optional<CurveCreationKind> kind =
+        curve_creation_kind_from_setting_id(value);
+    if (!kind.has_value()) {
+      return quader_api_failure_status(session, "Invalid Curve type.");
+    }
+    return set_setting(tool_id, name, curve_creation_kind_setting_value(*kind));
+  }
   if (session.primitive_creation().active() &&
       name == kPrimitiveTypeSetting) {
     if (!tool_id.empty() && tool_id != kCreatePrimitiveToolId) {
@@ -1237,6 +1687,11 @@ QuaderApiVoidResult QuaderToolsApi::execute_action(std::string_view tool_id,
     return api_status_from_command(session, session.curve().new_curve(),
                                     QuaderMutationKind::Runtime, "New Curve");
   }
+  if (tool_id == kCurveToolId && action_id == kCurveApplySolidifyAction) {
+    return api_status_from_command(
+        session, session.curve().apply_solidify(),
+        QuaderMutationKind::Document, "Apply Curve Solidify");
+  }
   if (tool_id == kPivotToolId) {
     return api_status_from_command(
         session, session.pivot().execute_align_action(action_id),
@@ -1251,6 +1706,11 @@ QuaderApiVoidResult QuaderToolsApi::reset_active_settings() {
     return api_status_from_command(
         session, session.path_array().reset_settings(),
         QuaderMutationKind::Runtime, "Reset Path Array Settings");
+  }
+  if (session.curve().active()) {
+    return api_status_from_command(
+        session, session.curve().reset_settings(),
+        QuaderMutationKind::Runtime, "Reset Curve Settings");
   }
   if (session.primitive_creation().active()) {
     return api_status_from_command(
@@ -1271,6 +1731,10 @@ QuaderApiVoidResult QuaderToolsApi::reset_active_settings() {
     return api_status_from_command(
         session, session.pivot().reset_settings(),
         QuaderMutationKind::Runtime, "Reset Pivot Settings");
+  }
+  if (session.curve().has_editable_existing_curve()) {
+    return quader_api_failure_status(
+        session, "Selected Curve settings do not have a reset action.");
   }
 
   ModelingCommandResult result =

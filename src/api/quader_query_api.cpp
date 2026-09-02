@@ -143,6 +143,9 @@ QuaderEntitySnapshot entity_snapshot_for(const SceneSession &session,
   if (const CurveComponent *curve = scene.curve(entity)) {
     snapshot.has_curve = true;
     snapshot.curve = curve->curve;
+    snapshot.curve_solidify = curve->solidify;
+    snapshot.curve_solidify_resolution = curve->solidify_resolution;
+    snapshot.curve_solidify_radius = curve->solidify_radius;
   }
   if (const TextureMappingComponent *mapping = scene.texture_mapping(entity)) {
     snapshot.texture_sampling_from_local = mapping->sampling_from_local;

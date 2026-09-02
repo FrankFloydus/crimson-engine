@@ -27,8 +27,11 @@ Chunk schema v1 contains:
   `QDRG` wrapper, so the native container delegates durable polygon semantics
   to the portable modeling core.
 
-Current scene metadata uses schema 8. It appends curve assets with SDK-owned
-binary authored controls and an explicit curve component on each curve entity.
+Current scene metadata uses schema 9. It adds durable per-entity curve
+solidification state: enabled, radial resolution, and radius. Schema 8 appended
+curve assets with SDK-owned binary authored controls and an explicit curve
+component on each curve entity; schema-8 curves load with solidification
+disabled, resolution 8, and radius 0.1.
 Curve controls, open/closed state, stable point/segment IDs and allocation
 cursors survive a round trip; display samples and edit-tool drafts do not.
 Curve payloads and bindings are validated before a scene is returned. Curves

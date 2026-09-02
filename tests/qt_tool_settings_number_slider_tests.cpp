@@ -14,6 +14,7 @@
 #include "editor/session/scene_session.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "ui/qt_command_event_filter.hpp"
+#include "ui/qt_tool_settings_drag_spinner.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_panel.hpp"
@@ -26,9 +27,10 @@
 #include <QDoubleSpinBox>
 #include <QDockWidget>
 #include <QEventLoop>
+#include <QHBoxLayout>
 #include <QKeyEvent>
-#include <QLineEdit>
 #include <QLabel>
+#include <QLineEdit>
 #include <QLocale>
 #include <QMouseEvent>
 #include <QMainWindow>
@@ -40,6 +42,7 @@
 #include <QScrollArea>
 #include <QScopeGuard>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QSlider>
 #include <QSpinBox>
 #include <QStyle>
@@ -56,6 +59,7 @@
 #include <filesystem>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #ifndef QUADER_SOURCE_DIR
 #define QUADER_SOURCE_DIR "."
@@ -73,6 +77,12 @@ void send_mouse_event(QWidget &target, QEvent::Type type, QPoint position,
 
 void send_key_event(QWidget &target, int key) {
   QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier);
+  QCoreApplication::sendEvent(&target, &event);
+}
+
+void send_text_event(QWidget &target, QChar character) {
+  QKeyEvent event(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
+                  QString(character));
   QCoreApplication::sendEvent(&target, &event);
 }
 
@@ -150,6 +160,25 @@ const quader::QuaderToolSettingControl *find_setting(
         return control.id == id;
       });
   return found == target.controls.end() ? nullptr : &*found;
+}
+
+const quader::QuaderToolSettingNumberComponent *find_vector_component(
+    const quader::QuaderToolSettingsTarget &target, std::string_view id) {
+  for (const quader::QuaderToolSettingControl &control : target.controls) {
+    if (control.kind !=
+        quader::QuaderToolSettingControlKind::Vector3Number) {
+      continue;
+    }
+    const auto found = std::find_if(
+        control.vector3_components.begin(), control.vector3_components.end(),
+        [id](const quader::QuaderToolSettingNumberComponent &component) {
+          return component.id == id;
+        });
+    if (found != control.vector3_components.end()) {
+      return &*found;
+    }
+  }
+  return nullptr;
 }
 
 quader::QuaderApiVoidResult set_face_texture_field(
@@ -535,6 +564,564 @@ TEST(QtToolSettingsNumberSliderTests,
   slider.hide();
 }
 
+TEST(QtToolSettingsDragSpinnerTests,
+     IdleCenterAdvertisesHorizontalDragAndStationaryClickEditsAllText) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-drag-spinner-click-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::QtToolSettingsDragSpinner spinner;
+  spinner.set_range(2, 128);
+  spinner.set_single_step(1);
+  spinner.set_value(12);
+  spinner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  spinner.resize(240, 32);
+  spinner.show();
+  QCoreApplication::processEvents();
+
+  auto *center = spinner.findChild<QSpinBox *>(
+      QStringLiteral("drag_spinner.editor"));
+  ASSERT_NE(center, nullptr);
+  auto *editor = center->findChild<QLineEdit *>(
+      QStringLiteral("drag_spinner.editor.line_edit"));
+  ASSERT_NE(editor, nullptr);
+  EXPECT_EQ(editor->cursor().shape(), Qt::SizeHorCursor);
+
+  const QPoint press = editor->rect().center();
+  send_mouse_event(*editor, QEvent::MouseButtonPress, press, Qt::LeftButton,
+                   Qt::LeftButton);
+  const QPoint sub_threshold(
+      press.x() + std::max(0, QApplication::startDragDistance() - 1),
+      press.y());
+  send_mouse_event(*editor, QEvent::MouseMove, sub_threshold, Qt::NoButton,
+                   Qt::LeftButton);
+  EXPECT_FALSE(spinner.is_dragging());
+  EXPECT_EQ(spinner.value(), 12);
+  send_mouse_event(*editor, QEvent::MouseButtonRelease, sub_threshold,
+                   Qt::LeftButton, Qt::NoButton);
+  QCoreApplication::processEvents();
+
+  EXPECT_FALSE(spinner.is_dragging());
+  EXPECT_EQ(spinner.value(), 12);
+  EXPECT_TRUE(editor->hasSelectedText());
+  EXPECT_EQ(editor->selectedText(), editor->text());
+  EXPECT_EQ(editor->cursor().shape(), Qt::IBeamCursor);
+  EXPECT_TRUE(spinner.is_editing());
+
+  spinner.hide();
+}
+
+TEST(QtToolSettingsDragSpinnerTests,
+     TextEntryCommitsWithEnterAndEscapeRestoresTheCommittedValue) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-drag-spinner-edit-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::QtToolSettingsDragSpinner spinner;
+  spinner.set_range(2, 128);
+  spinner.set_value(12);
+  spinner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  spinner.resize(240, 32);
+  spinner.show();
+  QCoreApplication::processEvents();
+
+  int finished_edits = 0;
+  spinner.editing_finished = [&finished_edits]() { ++finished_edits; };
+
+  auto *editor = spinner.findChild<QLineEdit *>(
+      QStringLiteral("drag_spinner.editor.line_edit"));
+  ASSERT_NE(editor, nullptr);
+  const QPoint click = editor->rect().center();
+  send_mouse_event(*editor, QEvent::MouseButtonPress, click, Qt::LeftButton,
+                   Qt::LeftButton);
+  send_mouse_event(*editor, QEvent::MouseButtonRelease, click, Qt::LeftButton,
+                   Qt::NoButton);
+  ASSERT_TRUE(editor->hasSelectedText());
+  send_text_event(*editor, u'2');
+  send_text_event(*editor, u'7');
+  send_key_event(*editor, Qt::Key_Return);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(spinner.value(), 27);
+  EXPECT_EQ(finished_edits, 1);
+
+  send_mouse_event(*editor, QEvent::MouseButtonPress, click, Qt::LeftButton,
+                   Qt::LeftButton);
+  send_mouse_event(*editor, QEvent::MouseButtonRelease, click, Qt::LeftButton,
+                   Qt::NoButton);
+  ASSERT_TRUE(editor->hasSelectedText());
+  send_text_event(*editor, u'9');
+  send_text_event(*editor, u'3');
+  send_key_event(*editor, Qt::Key_Escape);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(spinner.value(), 27);
+  EXPECT_EQ(finished_edits, 2);
+
+  spinner.hide();
+}
+
+TEST(QtToolSettingsDragSpinnerTests,
+     DragDiscardsThresholdThenMapsEightLogicalPixelsPerStepAndClampsLive) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-drag-spinner-scrub-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::QtToolSettingsDragSpinner spinner;
+  spinner.set_range(2, 20);
+  spinner.set_single_step(1);
+  spinner.set_value(10);
+  spinner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  spinner.resize(240, 32);
+  spinner.show();
+  QCoreApplication::processEvents();
+
+  int drag_starts = 0;
+  int drag_finishes = 0;
+  spinner.drag_started = [&drag_starts]() { ++drag_starts; };
+  spinner.drag_finished = [&drag_finishes]() { ++drag_finishes; };
+
+  auto *editor = spinner.findChild<QLineEdit *>(
+      QStringLiteral("drag_spinner.editor.line_edit"));
+  ASSERT_NE(editor, nullptr);
+  const QPoint press = editor->rect().center();
+  const int threshold = QApplication::startDragDistance();
+  const QPoint crossed(press.x() + threshold + 1, press.y());
+  send_mouse_event(*editor, QEvent::MouseButtonPress, press, Qt::LeftButton,
+                   Qt::LeftButton);
+  send_mouse_event(*editor, QEvent::MouseMove, crossed, Qt::NoButton,
+                   Qt::LeftButton);
+  ASSERT_TRUE(spinner.is_dragging());
+  EXPECT_EQ(drag_starts, 1);
+  EXPECT_EQ(spinner.value(), 10)
+      << "the gesture threshold must not be converted into value travel";
+
+  const QPoint seven_pixels_after_origin(crossed.x() + 7, crossed.y());
+  send_mouse_event(*editor, QEvent::MouseMove, seven_pixels_after_origin,
+                   Qt::NoButton, Qt::LeftButton);
+  EXPECT_EQ(spinner.value(), 10);
+  const QPoint eight_pixels_after_origin(crossed.x() + 8, crossed.y());
+  send_mouse_event(*editor, QEvent::MouseMove, eight_pixels_after_origin,
+                   Qt::NoButton, Qt::LeftButton);
+  EXPECT_EQ(spinner.value(), 11);
+  const QPoint twenty_four_pixels_after_origin(crossed.x() + 24,
+                                                crossed.y());
+  send_mouse_event(*editor, QEvent::MouseMove, twenty_four_pixels_after_origin,
+                   Qt::NoButton, Qt::LeftButton);
+  EXPECT_EQ(spinner.value(), 13)
+      << "each eight logical horizontal pixels must advance one singleStep";
+
+  const QPoint far_right(crossed.x() + 10'000, crossed.y());
+  send_mouse_event(*editor, QEvent::MouseMove, far_right, Qt::NoButton,
+                   Qt::LeftButton);
+  EXPECT_EQ(spinner.value(), spinner.maximum());
+  const QPoint far_left(crossed.x() - 10'000, crossed.y());
+  send_mouse_event(*editor, QEvent::MouseMove, far_left, Qt::NoButton,
+                   Qt::LeftButton);
+  EXPECT_EQ(spinner.value(), spinner.minimum());
+
+  send_mouse_event(*editor, QEvent::MouseButtonRelease, far_left,
+                   Qt::LeftButton, Qt::NoButton);
+  EXPECT_FALSE(spinner.is_dragging());
+  EXPECT_EQ(drag_finishes, 1);
+  EXPECT_GE(spinner.value(), spinner.minimum());
+  EXPECT_LE(spinner.value(), spinner.maximum());
+
+  spinner.hide();
+}
+
+TEST(QtToolSettingsDragSpinnerTests,
+     FiveDigitEditorRemainsCompactInsideAWideSettingsRow) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-drag-spinner-size-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  QWidget row;
+  row.setAttribute(Qt::WA_DontShowOnScreen, true);
+  auto *layout = new QHBoxLayout(&row);
+  auto *spinner = new quader::QtToolSettingsDragSpinner(&row);
+  spinner->set_range(0, 99'999);
+  spinner->set_value(99'999);
+  layout->addWidget(spinner, 0, Qt::AlignLeft);
+  layout->addStretch(1);
+  row.resize(480, 48);
+  row.show();
+  QCoreApplication::processEvents();
+
+  auto *center = spinner->spin_box();
+  auto *editor = center->findChild<QLineEdit *>(
+      QStringLiteral("drag_spinner.editor.line_edit"));
+  ASSERT_NE(editor, nullptr);
+  EXPECT_EQ(spinner->sizePolicy().horizontalPolicy(), QSizePolicy::Fixed);
+  EXPECT_EQ(center->sizePolicy().horizontalPolicy(), QSizePolicy::Fixed);
+  EXPECT_EQ(spinner->width(), spinner->sizeHint().width());
+  EXPECT_LT(spinner->width(), row.width() / 2);
+  EXPECT_GE(editor->contentsRect().width(),
+            editor->fontMetrics().horizontalAdvance(QStringLiteral("99999")));
+
+  row.hide();
+}
+
+TEST(QtToolSettingsDragSpinnerTests,
+     ArrowButtonsApplyExactlyOneStepAndDisableAtTheirBounds) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-drag-spinner-arrow-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::QtToolSettingsDragSpinner spinner;
+  spinner.set_range(2, 8);
+  spinner.set_single_step(2);
+  spinner.set_value(6);
+  spinner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  spinner.resize(240, 32);
+  spinner.show();
+  QCoreApplication::processEvents();
+
+  QToolButton *left = spinner.findChild<QToolButton *>(
+      QStringLiteral("drag_spinner.decrease"));
+  QToolButton *right = spinner.findChild<QToolButton *>(
+      QStringLiteral("drag_spinner.increase"));
+  ASSERT_NE(left, nullptr);
+  ASSERT_NE(right, nullptr);
+  EXPECT_TRUE(left->isEnabled());
+  EXPECT_TRUE(right->isEnabled());
+
+  left->click();
+  EXPECT_EQ(spinner.value(), 4);
+  left->click();
+  EXPECT_EQ(spinner.value(), 2);
+  EXPECT_FALSE(left->isEnabled());
+  left->click();
+  EXPECT_EQ(spinner.value(), 2);
+
+  right->click();
+  EXPECT_EQ(spinner.value(), 4);
+  spinner.set_value(8);
+  EXPECT_FALSE(right->isEnabled());
+  right->click();
+  EXPECT_EQ(spinner.value(), 8);
+
+  spinner.hide();
+}
+
+TEST(QtToolSettingsDragSpinnerTests,
+     PathArrayPanelRetainsSpinnerQueuesArrowsAndFlushesReleasedDrag) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-path-array-drag-spinner-panel-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::QuaderStandaloneEditor standalone =
+      quader::create_standalone_editor();
+  quader::QuaderEditorApi &editor = standalone.editor();
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0F, 0.0F, 0.0F}},
+                 {.position = {32.0F, 0.0F, 0.0F}}},
+      .name = "Path Array Spinner Driver",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::PathArray).ok());
+
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  QCoreApplication::processEvents();
+
+  auto *spinner = dynamic_cast<quader::QtToolSettingsDragSpinner *>(
+      panel.findChild<QWidget *>(QStringLiteral(
+          "tool_settings.control.path_array.count.spinner")));
+  ASSERT_NE(spinner, nullptr);
+  QPointer<quader::QtToolSettingsDragSpinner> retained_spinner(spinner);
+  auto *center = panel.findChild<QSpinBox *>(
+      QStringLiteral("tool_settings.control.path_array.count"));
+  auto *line_edit = spinner->findChild<QLineEdit *>(
+      QStringLiteral("drag_spinner.editor.line_edit"));
+  auto *decrease = spinner->findChild<QToolButton *>(
+      QStringLiteral("drag_spinner.decrease"));
+  auto *increase = spinner->findChild<QToolButton *>(
+      QStringLiteral("drag_spinner.increase"));
+  ASSERT_NE(center, nullptr);
+  ASSERT_NE(line_edit, nullptr);
+  ASSERT_NE(decrease, nullptr);
+  ASSERT_NE(increase, nullptr);
+  EXPECT_EQ(spinner->spin_box(), center);
+  EXPECT_EQ(panel.findChild<QSlider *>(QStringLiteral(
+                "tool_settings.control.path_array.count.slider")),
+            nullptr);
+  EXPECT_NE(panel.findChild<QSlider *>(QStringLiteral(
+                "tool_settings.control.path_array.distance.slider")),
+            nullptr);
+
+  const auto owner_count = [&editor]() {
+    const quader::QuaderToolSettingsTarget target =
+        editor.tools().active_settings();
+    const quader::QuaderToolSettingControl *control =
+        find_setting(target, "path_array.count");
+    return control == nullptr
+               ? -1
+               : static_cast<int>(std::llround(control->number_value));
+  };
+
+  ASSERT_EQ(owner_count(), 4);
+  increase->click();
+  EXPECT_EQ(spinner->value(), 5);
+  EXPECT_EQ(owner_count(), 4);
+  process_events_for(125);
+  EXPECT_EQ(owner_count(), 5);
+  decrease->click();
+  EXPECT_EQ(spinner->value(), 4);
+  process_events_for(125);
+  EXPECT_EQ(owner_count(), 4);
+
+  const QPoint press = line_edit->rect().center();
+  const QPoint crossed(press.x() + QApplication::startDragDistance() + 1,
+                       press.y());
+  const QPoint three_steps(crossed.x() + 24, crossed.y());
+  send_mouse_event(*line_edit, QEvent::MouseButtonPress, press,
+                   Qt::LeftButton, Qt::LeftButton);
+  send_mouse_event(*line_edit, QEvent::MouseMove, crossed, Qt::NoButton,
+                   Qt::LeftButton);
+  send_mouse_event(*line_edit, QEvent::MouseMove, three_steps, Qt::NoButton,
+                   Qt::LeftButton);
+  ASSERT_TRUE(spinner->is_dragging());
+  EXPECT_TRUE(panel.numeric_interaction_active());
+  EXPECT_EQ(spinner->value(), 7);
+  EXPECT_EQ(owner_count(), 4);
+  send_mouse_event(*line_edit, QEvent::MouseButtonRelease, three_steps,
+                   Qt::LeftButton, Qt::NoButton);
+  EXPECT_FALSE(spinner->is_dragging());
+  EXPECT_EQ(owner_count(), 7)
+      << "drag release must synchronously flush the coalesced owner update";
+
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("path_array", "path_array.count", 8.0)
+                  .ok());
+  panel.refresh();
+  EXPECT_EQ(dynamic_cast<quader::QtToolSettingsDragSpinner *>(
+                panel.findChild<QWidget *>(QStringLiteral(
+                    "tool_settings.control.path_array.count.spinner"))),
+            retained_spinner.data());
+  EXPECT_EQ(spinner->value(), 8);
+
+  panel.unbind();
+  panel.hide();
+}
+
+TEST(QtToolSettingsDragSpinnerTests,
+     PathArrayPanelDefersStaleRefreshDuringDragAndTextEditing) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-path-array-spinner-refresh-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::QuaderStandaloneEditor standalone =
+      quader::create_standalone_editor();
+  quader::QuaderEditorApi &editor = standalone.editor();
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0F, 0.0F, 0.0F}},
+                 {.position = {32.0F, 0.0F, 0.0F}}},
+      .name = "Path Array Spinner Refresh Driver",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::PathArray).ok());
+
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  QCoreApplication::processEvents();
+  auto *spinner = dynamic_cast<quader::QtToolSettingsDragSpinner *>(
+      panel.findChild<QWidget *>(QStringLiteral(
+          "tool_settings.control.path_array.count.spinner")));
+  ASSERT_NE(spinner, nullptr);
+  auto *line_edit = spinner->findChild<QLineEdit *>(
+      QStringLiteral("drag_spinner.editor.line_edit"));
+  ASSERT_NE(line_edit, nullptr);
+
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("path_array", "path_array.count", 10.0)
+                  .ok());
+  panel.refresh();
+  ASSERT_EQ(spinner->value(), 10);
+  const QPoint press = line_edit->rect().center();
+  const QPoint crossed(press.x() + QApplication::startDragDistance() + 1,
+                       press.y());
+  const QPoint one_step(crossed.x() + 8, crossed.y());
+  send_mouse_event(*line_edit, QEvent::MouseButtonPress, press,
+                   Qt::LeftButton, Qt::LeftButton);
+  send_mouse_event(*line_edit, QEvent::MouseMove, crossed, Qt::NoButton,
+                   Qt::LeftButton);
+  send_mouse_event(*line_edit, QEvent::MouseMove, one_step, Qt::NoButton,
+                   Qt::LeftButton);
+  ASSERT_TRUE(spinner->is_dragging());
+  ASSERT_EQ(spinner->value(), 11);
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("path_array", "path_array.count", 40.0)
+                  .ok());
+  panel.refresh();
+  EXPECT_EQ(spinner->value(), 11)
+      << "an owner refresh must not move an actively dragged local value";
+  send_mouse_event(*line_edit, QEvent::MouseButtonRelease, one_step,
+                   Qt::LeftButton, Qt::NoButton);
+  process_events_for(10);
+  EXPECT_EQ(spinner->value(), 40)
+      << "the invalidated local dispatch must reconcile after release";
+
+  const QPoint click = line_edit->rect().center();
+  send_mouse_event(*line_edit, QEvent::MouseButtonPress, click,
+                   Qt::LeftButton, Qt::LeftButton);
+  send_mouse_event(*line_edit, QEvent::MouseButtonRelease, click,
+                   Qt::LeftButton, Qt::NoButton);
+  ASSERT_TRUE(spinner->is_editing());
+  ASSERT_TRUE(line_edit->hasSelectedText());
+  send_text_event(*line_edit, u'9');
+  send_text_event(*line_edit, u'9');
+  ASSERT_EQ(line_edit->text(), QStringLiteral("99"));
+  ASSERT_EQ(spinner->value(), 40)
+      << "uncommitted text must not change the spin box value";
+  process_events_for(125);
+  const quader::QuaderToolSettingsTarget editing_target =
+      editor.tools().active_settings();
+  const quader::QuaderToolSettingControl *editing_count =
+      find_setting(editing_target, "path_array.count");
+  ASSERT_NE(editing_count, nullptr);
+  EXPECT_EQ(static_cast<int>(std::llround(editing_count->number_value)), 40)
+      << "text entry must remain local until Enter or focus-out commits it";
+  EXPECT_EQ(line_edit->text(), QStringLiteral("99"));
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("path_array", "path_array.count", 30.0)
+                  .ok());
+  panel.refresh();
+  EXPECT_EQ(line_edit->text(), QStringLiteral("99"))
+      << "an owner refresh must not replace active text input";
+  send_key_event(*line_edit, Qt::Key_Escape);
+  process_events_for(10);
+  EXPECT_FALSE(spinner->is_editing());
+  EXPECT_EQ(spinner->value(), 30)
+      << "cancelled stale text input must reconcile to current owner state";
+
+  panel.unbind();
+  panel.hide();
+}
+
+TEST(QtToolSettingsPanelTests,
+     DescriptorGroupsRetainDisclosureAndVector3ComponentsDispatchById) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-tool-settings-groups-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::QuaderStandaloneEditor standalone =
+      quader::create_standalone_editor();
+  quader::QuaderEditorApi &editor = standalone.editor();
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0F, 0.0F, 0.0F}},
+                 {.position = {32.0F, 0.0F, 0.0F}}},
+      .name = "Path Array Group Driver",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::PathArray).ok());
+
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  QCoreApplication::processEvents();
+
+  auto *placement_header = panel.findChild<QToolButton *>(QStringLiteral(
+      "tool_settings.group.path_array.group.placement.header"));
+  auto *rotation_header = panel.findChild<QToolButton *>(QStringLiteral(
+      "tool_settings.group.path_array.group.rotation.header"));
+  auto *rotation_content = panel.findChild<QWidget *>(QStringLiteral(
+      "tool_settings.group.path_array.group.rotation.content"));
+  auto *scale_header = panel.findChild<QToolButton *>(QStringLiteral(
+      "tool_settings.group.path_array.group.scale.header"));
+  ASSERT_NE(placement_header, nullptr);
+  ASSERT_NE(rotation_header, nullptr);
+  ASSERT_NE(rotation_content, nullptr);
+  ASSERT_NE(scale_header, nullptr);
+  EXPECT_TRUE(placement_header->isChecked());
+  EXPECT_FALSE(rotation_header->isChecked());
+  EXPECT_TRUE(rotation_content->isHidden());
+  EXPECT_FALSE(scale_header->isChecked());
+
+  auto *rotation_x = panel.findChild<QDoubleSpinBox *>(QStringLiteral(
+      "tool_settings.control.path_array.rotation_offset.x"));
+  auto *rotation_y = panel.findChild<QDoubleSpinBox *>(QStringLiteral(
+      "tool_settings.control.path_array.rotation_offset.y"));
+  auto *rotation_z = panel.findChild<QDoubleSpinBox *>(QStringLiteral(
+      "tool_settings.control.path_array.rotation_offset.z"));
+  ASSERT_NE(rotation_x, nullptr);
+  ASSERT_NE(rotation_y, nullptr);
+  ASSERT_NE(rotation_z, nullptr);
+  EXPECT_EQ(panel.findChild<QSlider *>(QStringLiteral(
+                "tool_settings.control.path_array.rotation_offset.x.slider")),
+            nullptr);
+  EXPECT_NE(dynamic_cast<quader::QtToolSettingsDragSpinner *>(
+                panel.findChild<QWidget *>(QStringLiteral(
+                    "tool_settings.control.path_array.count.spinner"))),
+            nullptr)
+      << "ungrouped control presentation must remain available in groups";
+
+  rotation_header->click();
+  ASSERT_TRUE(rotation_header->isChecked());
+  ASSERT_FALSE(rotation_content->isHidden());
+  QPointer<QDoubleSpinBox> retained_rotation_x(rotation_x);
+  rotation_x->setValue(12.5);
+  EXPECT_TRUE(panel.numeric_interaction_active());
+  process_events_for(125);
+  const quader::QuaderToolSettingNumberComponent *owner_rotation_x =
+      find_vector_component(editor.tools().active_settings(),
+                            "path_array.rotation_offset.x");
+  ASSERT_NE(owner_rotation_x, nullptr);
+  EXPECT_DOUBLE_EQ(owner_rotation_x->value, 12.5);
+
+  panel.refresh();
+  EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(QStringLiteral(
+                "tool_settings.control.path_array.rotation_offset.x")),
+            retained_rotation_x.data());
+  EXPECT_TRUE(rotation_header->isChecked());
+
+  quader::LocalizationService italian;
+  ASSERT_TRUE(italian.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales",
+      "it-IT"));
+  panel.set_localization(italian);
+  QCoreApplication::processEvents();
+  rotation_header = panel.findChild<QToolButton *>(QStringLiteral(
+      "tool_settings.group.path_array.group.rotation.header"));
+  ASSERT_NE(rotation_header, nullptr);
+  EXPECT_TRUE(rotation_header->isChecked())
+      << "a descriptor rebuild must restore disclosure state by stable id";
+  EXPECT_EQ(rotation_header->text(), QStringLiteral("Rotazione"));
+
+  panel.unbind();
+  panel.hide();
+}
+
 TEST(QtToolSettingsNumberSliderTests,
      DynamicRadialBoundsUpdateInPlaceWithoutDestroyingActiveEditors) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
@@ -654,10 +1241,14 @@ TEST(QtToolSettingsPanelTests,
 
   auto *description_header = panel.findChild<QToolButton *>(
       QStringLiteral("tool_settings.section.description.header"));
+  auto *description_section = panel.findChild<QWidget *>(
+      QStringLiteral("tool_settings.section.description"));
   auto *description_content = panel.findChild<QWidget *>(
       QStringLiteral("tool_settings.section.description.content"));
   auto *settings_header = panel.findChild<QToolButton *>(
       QStringLiteral("tool_settings.section.settings.header"));
+  auto *settings_section = panel.findChild<QWidget *>(
+      QStringLiteral("tool_settings.section.settings"));
   auto *settings_content = panel.findChild<QWidget *>(
       QStringLiteral("tool_settings.section.settings.content"));
   auto *description = panel.findChild<QLabel *>(
@@ -671,8 +1262,10 @@ TEST(QtToolSettingsPanelTests,
           panel.findChild<QSlider *>(QStringLiteral(
               "tool_settings.control.radial_array.copies.slider")));
   ASSERT_NE(description_header, nullptr);
+  ASSERT_NE(description_section, nullptr);
   ASSERT_NE(description_content, nullptr);
   ASSERT_NE(settings_header, nullptr);
+  ASSERT_NE(settings_section, nullptr);
   ASSERT_NE(settings_content, nullptr);
   ASSERT_NE(description, nullptr);
   ASSERT_NE(reset, nullptr);
@@ -682,6 +1275,8 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_FALSE(description->text().isEmpty());
   EXPECT_TRUE(description_header->isChecked());
   EXPECT_TRUE(settings_header->isChecked());
+  EXPECT_FALSE(description_section->isHidden());
+  EXPECT_FALSE(settings_section->isHidden());
   EXPECT_FALSE(description_content->isHidden());
   EXPECT_FALSE(settings_content->isHidden());
   EXPECT_TRUE(reset->isEnabled());
@@ -708,6 +1303,8 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_FALSE(panel.has_active_target());
   EXPECT_FALSE(panel.isHidden());
   EXPECT_FALSE(reset->isEnabled());
+  EXPECT_TRUE(description_section->isHidden());
+  EXPECT_TRUE(settings_section->isHidden());
   auto *target_title = panel.findChild<QLabel *>(
       QStringLiteral("tool_settings.target_title"));
   ASSERT_NE(target_title, nullptr);
@@ -725,6 +1322,8 @@ TEST(QtToolSettingsPanelTests,
       QStringLiteral(
           "tool_settings.control.operation.cut.keep_mode.option.discard_left"));
   ASSERT_NE(discard_left, nullptr);
+  EXPECT_FALSE(description_section->isHidden());
+  EXPECT_FALSE(settings_section->isHidden());
   EXPECT_EQ(discard_left->text(), QStringLiteral("Scarta sinistra"));
   EXPECT_EQ(target_title->text(), QStringLiteral("Taglia"));
   EXPECT_EQ(reset->text(), QStringLiteral("Ripristina predefiniti"));
@@ -767,6 +1366,10 @@ TEST(QtToolSettingsPanelTests,
   QCoreApplication::processEvents();
   auto *section = panel.findChild<QWidget *>(
       QStringLiteral("tool_settings.section.texture"));
+  auto *description_section = panel.findChild<QWidget *>(
+      QStringLiteral("tool_settings.section.description"));
+  auto *settings_section = panel.findChild<QWidget *>(
+      QStringLiteral("tool_settings.section.settings"));
   auto *header = panel.findChild<QToolButton *>(
       QStringLiteral("tool_settings.section.texture.header"));
   auto *content = panel.findChild<QWidget *>(
@@ -790,6 +1393,8 @@ TEST(QtToolSettingsPanelTests,
   auto *shift_left = panel.findChild<QPushButton *>(
       QStringLiteral("tool_settings.edit_texture.shift_left"));
   ASSERT_NE(section, nullptr);
+  ASSERT_NE(description_section, nullptr);
+  ASSERT_NE(settings_section, nullptr);
   ASSERT_NE(header, nullptr);
   ASSERT_NE(content, nullptr);
   ASSERT_NE(scale_x, nullptr);
@@ -806,6 +1411,8 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_EQ(scale_y->locale().decimalPoint(), QStringLiteral("."));
   EXPECT_TRUE(section->isHidden());
   EXPECT_TRUE(edit_section->isHidden());
+  EXPECT_TRUE(description_section->isHidden());
+  EXPECT_TRUE(settings_section->isHidden());
   EXPECT_TRUE(edit_header->isChecked());
   EXPECT_FALSE(treat_as_one->isChecked());
   EXPECT_EQ(edit_section->findChildren<QPushButton *>().size(), 25);
@@ -825,6 +1432,8 @@ TEST(QtToolSettingsPanelTests,
   panel.refresh_texture_settings();
   EXPECT_FALSE(section->isHidden());
   EXPECT_FALSE(edit_section->isHidden());
+  EXPECT_TRUE(description_section->isHidden());
+  EXPECT_TRUE(settings_section->isHidden());
   EXPECT_FALSE(panel.has_active_target());
   EXPECT_DOUBLE_EQ(scale_x->value(), 1.0);
   EXPECT_EQ(scale_y->text(), QStringLiteral("--"));
@@ -1429,7 +2038,7 @@ TEST(QtToolSettingsPanelTests,
     EXPECT_DOUBLE_EQ(spins[index]->value(), index < 2 ? 1.0 : 0.0);
     spins[index]->setValue(kValues[index]);
   }
-  process_events_for(75);
+  process_events_for(125);
   const quader::QuaderUvPeelOptions expected{
       .axis = quader::QuaderUvPeelAxis::V, .world_space = false,
       .u_repeat = 2.0, .v_repeat = 3.0, .u_offset = 0.25, .v_offset = -0.5};
@@ -1636,7 +2245,7 @@ TEST(QtToolSettingsPanelTests,
                      Qt::LeftButton, Qt::NoButton);
     EXPECT_EQ(world_space->isChecked(), toggle != 0);
   }
-  process_events_for(75);
+  process_events_for(125);
   auto *repeat_text = repeat->findChild<QLineEdit *>();
   ASSERT_NE(repeat_text, nullptr);
   EXPECT_EQ(repeat_text->text(), QStringLiteral("-"));
@@ -1646,7 +2255,7 @@ TEST(QtToolSettingsPanelTests,
   // Accepting a correction to the stored value clears the validation message
   // even when the owner need not advance its settings revision.
   type_spin_text(*repeat, QStringLiteral("1"));
-  process_events_for(75);
+  process_events_for(125);
   EXPECT_TRUE(message->isHidden());
   finish_spin_edit(*repeat);
   repeat->setValue(3.0);
@@ -1657,7 +2266,7 @@ TEST(QtToolSettingsPanelTests,
             quader::QuaderUvPeelOptions{});
   EXPECT_FALSE(message->isHidden());
   EXPECT_FALSE(panel.numeric_interaction_active());
-  process_events_for(75);
+  process_events_for(125);
   EXPECT_EQ(editor.modeling().uv_peel_settings().options.u_repeat, 1.0);
 
   repeat->setValue(2.0);
@@ -1678,7 +2287,7 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_FALSE(apply->isEnabled());
   EXPECT_FALSE(panel.numeric_interaction_active());
   EXPECT_FALSE(message->isHidden());
-  process_events_for(75);
+  process_events_for(125);
   EXPECT_EQ(editor.modeling().uv_peel_settings().options, external_options);
   ASSERT_TRUE(editor.modeling().cancel_transform_preview().ok());
   panel.refresh_uv_peel_settings();
@@ -1970,6 +2579,481 @@ TEST(QtToolSettingsPanelTests,
                 "tool_settings.control.primitive.box.subdivisions_x")),
             retained_subdivisions.data());
   EXPECT_TRUE(reset->isEnabled());
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     CurvePresetDropdownReusesGenericEditorsAndItalianLocalization) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-curve-preset-settings-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Curve).ok());
+
+  quader::LocalizationService italian;
+  ASSERT_TRUE(italian.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales",
+      "it-IT"));
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.set_localization(italian);
+  panel.bind(editor);
+  panel.show();
+  QCoreApplication::processEvents();
+
+  auto *type = panel.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.curve.type"));
+  auto *type_label = panel.findChild<QLabel *>(
+      QStringLiteral("tool_settings.control.curve.type.label"));
+  auto *closed = panel.findChild<QCheckBox *>(
+      QStringLiteral("tool_settings.control.curve.closed"));
+  ASSERT_NE(type, nullptr);
+  ASSERT_NE(type_label, nullptr);
+  ASSERT_NE(closed, nullptr);
+  EXPECT_EQ(type_label->text(), QStringLiteral("Tipo di curva"));
+  EXPECT_EQ(closed->text(), QStringLiteral("Chiusa"));
+  ASSERT_EQ(type->count(), 3);
+  EXPECT_EQ(type->itemText(type->findData(QStringLiteral("draw"))),
+            QStringLiteral("Disegna"));
+  EXPECT_EQ(type->itemText(type->findData(QStringLiteral("circle"))),
+            QStringLiteral("Cerchio"));
+  EXPECT_EQ(type->itemText(type->findData(QStringLiteral("oval"))),
+            QStringLiteral("Ovale"));
+
+  const int circle_index = type->findData(QStringLiteral("circle"));
+  ASSERT_GE(circle_index, 0);
+  type->setCurrentIndex(circle_index);
+  process_events_for(75);
+  type = panel.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.curve.type"));
+  auto *radius = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.control.curve.radius"));
+  auto *radius_label = panel.findChild<QLabel *>(
+      QStringLiteral("tool_settings.control.curve.radius.label"));
+  ASSERT_NE(type, nullptr);
+  ASSERT_NE(radius, nullptr);
+  ASSERT_NE(radius_label, nullptr);
+  EXPECT_EQ(type->currentData().toString(), QStringLiteral("circle"));
+  EXPECT_EQ(radius_label->text(), QStringLiteral("Raggio"));
+  EXPECT_EQ(panel.findChild<QCheckBox *>(
+                QStringLiteral("tool_settings.control.curve.closed")),
+            nullptr);
+  EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(
+                QStringLiteral("tool_settings.control.curve.length")),
+            nullptr);
+
+  const int oval_index = type->findData(QStringLiteral("oval"));
+  ASSERT_GE(oval_index, 0);
+  type->setCurrentIndex(oval_index);
+  process_events_for(75);
+  type = panel.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.curve.type"));
+  radius = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.control.curve.radius"));
+  auto *length = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.control.curve.length"));
+  auto *length_label = panel.findChild<QLabel *>(
+      QStringLiteral("tool_settings.control.curve.length.label"));
+  ASSERT_NE(type, nullptr);
+  ASSERT_NE(radius, nullptr);
+  ASSERT_NE(length, nullptr);
+  ASSERT_NE(length_label, nullptr);
+  EXPECT_EQ(type->currentData().toString(), QStringLiteral("oval"));
+  EXPECT_EQ(length_label->text(), QStringLiteral("Lunghezza"));
+  EXPECT_DOUBLE_EQ(radius->minimum(), 0.001);
+  EXPECT_DOUBLE_EQ(radius->maximum(), 2.0);
+  EXPECT_DOUBLE_EQ(radius->singleStep(), 0.001);
+  EXPECT_DOUBLE_EQ(length->minimum(), 2.0);
+  EXPECT_DOUBLE_EQ(length->maximum(), 200000.0);
+  EXPECT_DOUBLE_EQ(length->singleStep(), 0.001);
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     PassiveSelectedCurveSolidifyRetainsGenericEnabledEditors) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-passive-curve-solidify-settings-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0F, 0.0F, 0.0F}},
+                 {.position = {3.0F, 0.0F, 0.0F}}},
+      .name = "Passive Curve Solidify UI",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Curve).ok());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  ASSERT_EQ(editor.tools().active_tool(), "select");
+
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  QCoreApplication::processEvents();
+
+  auto *description_section = panel.findChild<QWidget *>(
+      QStringLiteral("tool_settings.section.description"));
+  auto *settings_section = panel.findChild<QWidget *>(
+      QStringLiteral("tool_settings.section.settings"));
+  auto *solidify = panel.findChild<QCheckBox *>(
+      QStringLiteral("tool_settings.control.curve.solidify"));
+  auto *resolution_row = panel.findChild<QWidget *>(
+      QStringLiteral("tool_settings.control.curve.solidify.resolution.row"));
+  auto *resolution = panel.findChild<QSpinBox *>(
+      QStringLiteral("tool_settings.control.curve.solidify.resolution"));
+  auto *radius_row = panel.findChild<QWidget *>(
+      QStringLiteral("tool_settings.control.curve.solidify.radius.row"));
+  auto *radius = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.control.curve.solidify.radius"));
+  auto *apply_solidify = panel.findChild<QPushButton *>(
+      QStringLiteral("tool_settings.control.curve.solidify.apply"));
+  ASSERT_NE(description_section, nullptr);
+  ASSERT_NE(settings_section, nullptr);
+  ASSERT_NE(solidify, nullptr);
+  ASSERT_NE(resolution_row, nullptr);
+  ASSERT_NE(resolution, nullptr);
+  ASSERT_NE(radius_row, nullptr);
+  ASSERT_NE(radius, nullptr);
+  ASSERT_NE(apply_solidify, nullptr);
+  EXPECT_TRUE(panel.has_active_target());
+  EXPECT_FALSE(description_section->isHidden());
+  EXPECT_FALSE(settings_section->isHidden());
+  EXPECT_FALSE(solidify->isChecked());
+  EXPECT_FALSE(resolution_row->isEnabled());
+  EXPECT_FALSE(resolution->isEnabled());
+  EXPECT_FALSE(radius_row->isEnabled());
+  EXPECT_FALSE(radius->isEnabled());
+  EXPECT_FALSE(apply_solidify->isEnabled());
+  EXPECT_EQ(resolution->value(), 8);
+  EXPECT_NEAR(radius->value(), 0.1, 1.0e-6);
+
+  const QPointer<QCheckBox> retained_solidify(solidify);
+  const QPointer<QWidget> retained_resolution_row(resolution_row);
+  const QPointer<QSpinBox> retained_resolution(resolution);
+  const QPointer<QWidget> retained_radius_row(radius_row);
+  const QPointer<QDoubleSpinBox> retained_radius(radius);
+  const QPointer<QPushButton> retained_apply_solidify(apply_solidify);
+  solidify->click();
+  panel.refresh();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(panel.findChild<QCheckBox *>(
+                QStringLiteral("tool_settings.control.curve.solidify")),
+            retained_solidify.data());
+  EXPECT_EQ(panel.findChild<QWidget *>(QStringLiteral(
+                "tool_settings.control.curve.solidify.resolution.row")),
+            retained_resolution_row.data());
+  EXPECT_EQ(panel.findChild<QSpinBox *>(QStringLiteral(
+                "tool_settings.control.curve.solidify.resolution")),
+            retained_resolution.data());
+  EXPECT_EQ(panel.findChild<QWidget *>(QStringLiteral(
+                "tool_settings.control.curve.solidify.radius.row")),
+            retained_radius_row.data());
+  EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(QStringLiteral(
+                "tool_settings.control.curve.solidify.radius")),
+            retained_radius.data());
+  EXPECT_EQ(panel.findChild<QPushButton *>(QStringLiteral(
+                "tool_settings.control.curve.solidify.apply")),
+            retained_apply_solidify.data());
+  EXPECT_TRUE(retained_solidify->isChecked());
+  EXPECT_TRUE(retained_resolution_row->isEnabled());
+  EXPECT_TRUE(retained_resolution->isEnabled());
+  EXPECT_TRUE(retained_radius_row->isEnabled());
+  EXPECT_TRUE(retained_radius->isEnabled());
+  EXPECT_TRUE(retained_apply_solidify->isEnabled());
+
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("curve", "curve.solidify.resolution", 24.0)
+                  .ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("curve", "curve.solidify.radius", 0.75)
+                  .ok());
+  panel.refresh();
+  EXPECT_EQ(panel.findChild<QSpinBox *>(QStringLiteral(
+                "tool_settings.control.curve.solidify.resolution")),
+            retained_resolution.data());
+  EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(QStringLiteral(
+                "tool_settings.control.curve.solidify.radius")),
+            retained_radius.data());
+  EXPECT_EQ(retained_resolution->value(), 24);
+  EXPECT_DOUBLE_EQ(retained_radius->value(), 0.75);
+
+  ASSERT_TRUE(editor.selection().clear().ok());
+  panel.refresh();
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(panel.has_active_target());
+  EXPECT_TRUE(description_section->isHidden());
+  EXPECT_TRUE(settings_section->isHidden());
+  EXPECT_TRUE(retained_solidify.isNull());
+  EXPECT_TRUE(retained_resolution.isNull());
+  EXPECT_TRUE(retained_radius.isNull());
+  EXPECT_TRUE(retained_apply_solidify.isNull());
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     PassiveCurveSolidifyActionFlushesLatestNumericDraftBeforeDispatch) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-passive-curve-solidify-apply-flush-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0F, 0.0F, 0.0F}},
+                 {.position = {3.0F, 0.0F, 0.0F}}},
+      .name = "Pending Solidify Radius",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Curve).ok());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  QCoreApplication::processEvents();
+
+  auto *solidify = panel.findChild<QCheckBox *>(
+      QStringLiteral("tool_settings.control.curve.solidify"));
+  ASSERT_NE(solidify, nullptr);
+  solidify->click();
+  panel.refresh();
+
+  auto *radius = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.control.curve.solidify.radius"));
+  auto *apply_solidify = panel.findChild<QPushButton *>(
+      QStringLiteral("tool_settings.control.curve.solidify.apply"));
+  ASSERT_NE(radius, nullptr);
+  ASSERT_NE(apply_solidify, nullptr);
+  ASSERT_TRUE(apply_solidify->isEnabled());
+
+  session.history().clear();
+  radius->setValue(0.75);
+  const quader::QuaderToolSettingControl *owner_radius = find_setting(
+      editor.tools().active_settings(), "curve.solidify.radius");
+  ASSERT_NE(owner_radius, nullptr);
+  EXPECT_NEAR(owner_radius->number_value, 0.1, 1.0e-6)
+      << "the coalesced edit must still be pending before the action";
+
+  apply_solidify->click();
+  const auto source_after_apply =
+      editor.query().entity(curve.value().entity);
+  ASSERT_TRUE(source_after_apply.has_value());
+  ASSERT_TRUE(source_after_apply->has_curve);
+  EXPECT_NEAR(source_after_apply->curve_solidify_radius, 0.75F, 1.0e-6F);
+  const std::vector<quader::QuaderEntitySnapshot> entities_after_apply =
+      editor.query().entities();
+  EXPECT_EQ(static_cast<std::size_t>(std::count_if(
+                entities_after_apply.begin(), entities_after_apply.end(),
+                [](const quader::QuaderEntitySnapshot &entity) {
+                  return entity.has_mesh;
+                })),
+            1U)
+      << "Apply Solidify must observe the flushed Radius and create the mesh";
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  const std::vector<quader::QuaderEntitySnapshot> entities_after_apply_undo =
+      editor.query().entities();
+  EXPECT_FALSE(std::any_of(
+      entities_after_apply_undo.begin(), entities_after_apply_undo.end(),
+      [](const quader::QuaderEntitySnapshot &entity) {
+        return entity.has_mesh;
+      }));
+  const auto source_after_apply_undo =
+      editor.query().entity(curve.value().entity);
+  ASSERT_TRUE(source_after_apply_undo.has_value());
+  EXPECT_NEAR(source_after_apply_undo->curve_solidify_radius, 0.75F, 1.0e-6F)
+      << "the numeric edit must precede the separately undoable Apply action";
+  ASSERT_TRUE(editor.history().undo().ok());
+  const auto source_after_radius_undo =
+      editor.query().entity(curve.value().entity);
+  ASSERT_TRUE(source_after_radius_undo.has_value());
+  EXPECT_NEAR(source_after_radius_undo->curve_solidify_radius, 0.1F, 1.0e-6F);
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     PassiveCurveSolidifyNumericGesturesMergeWhileArrowsStayDiscrete) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-passive-curve-solidify-gesture-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0F, 0.0F, 0.0F}},
+                 {.position = {3.0F, 0.0F, 0.0F}}},
+      .name = "Passive Curve Solidify Gestures",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Curve).ok());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.resize(360, 640);
+  panel.bind(editor);
+  panel.show();
+  QCoreApplication::processEvents();
+
+  auto *solidify = panel.findChild<QCheckBox *>(
+      QStringLiteral("tool_settings.control.curve.solidify"));
+  auto *resolution_spinner =
+      dynamic_cast<quader::QtToolSettingsDragSpinner *>(
+          panel.findChild<QWidget *>(QStringLiteral(
+              "tool_settings.control.curve.solidify.resolution.spinner")));
+  auto *resolution_editor = resolution_spinner != nullptr
+                                ? resolution_spinner->findChild<QLineEdit *>(
+                                      QStringLiteral(
+                                          "drag_spinner.editor.line_edit"))
+                                : nullptr;
+  auto *resolution_increase =
+      resolution_spinner != nullptr
+          ? resolution_spinner->findChild<QToolButton *>(
+                QStringLiteral("drag_spinner.increase"))
+          : nullptr;
+  auto *radius_slider = panel.findChild<QSlider *>(QStringLiteral(
+      "tool_settings.control.curve.solidify.radius.slider"));
+  ASSERT_NE(solidify, nullptr);
+  ASSERT_NE(resolution_spinner, nullptr);
+  ASSERT_NE(resolution_editor, nullptr);
+  ASSERT_NE(resolution_increase, nullptr);
+  ASSERT_NE(radius_slider, nullptr);
+  solidify->click();
+  panel.refresh();
+  ASSERT_TRUE(resolution_spinner->isEnabled());
+  ASSERT_TRUE(radius_slider->isEnabled());
+
+  const auto owner_number = [&editor](std::string_view id) {
+    const quader::QuaderToolSettingControl *setting =
+        find_setting(editor.tools().active_settings(), id);
+    EXPECT_NE(setting, nullptr);
+    return setting != nullptr ? setting->number_value : 0.0;
+  };
+
+  session.history().clear();
+  const QPoint resolution_press = resolution_editor->rect().center();
+  const QPoint resolution_crossed(
+      resolution_press.x() + QApplication::startDragDistance() + 1,
+      resolution_press.y());
+  const QPoint resolution_first(resolution_crossed.x() + 8,
+                                resolution_crossed.y());
+  const QPoint resolution_second(resolution_crossed.x() + 24,
+                                 resolution_crossed.y());
+  send_mouse_event(*resolution_editor, QEvent::MouseButtonPress,
+                   resolution_press, Qt::LeftButton, Qt::LeftButton);
+  send_mouse_event(*resolution_editor, QEvent::MouseMove,
+                   resolution_crossed, Qt::NoButton, Qt::LeftButton);
+  send_mouse_event(*resolution_editor, QEvent::MouseMove, resolution_first,
+                   Qt::NoButton, Qt::LeftButton);
+  ASSERT_TRUE(resolution_spinner->is_dragging());
+  process_events_for(75);
+  EXPECT_DOUBLE_EQ(owner_number("curve.solidify.resolution"), 9.0);
+  send_mouse_event(*resolution_editor, QEvent::MouseMove, resolution_second,
+                   Qt::NoButton, Qt::LeftButton);
+  process_events_for(75);
+  EXPECT_DOUBLE_EQ(owner_number("curve.solidify.resolution"), 11.0);
+  send_mouse_event(*resolution_editor, QEvent::MouseButtonRelease,
+                   resolution_second, Qt::LeftButton, Qt::NoButton);
+  ASSERT_TRUE(editor.history().undo().ok());
+  panel.refresh();
+  EXPECT_EQ(resolution_spinner->value(), 8);
+  EXPECT_FALSE(session.history().can_undo())
+      << "periodic Resolution previews must merge into one gesture";
+
+  session.history().clear();
+  resolution_increase->click();
+  resolution_increase->click();
+  process_events_for(75);
+  EXPECT_DOUBLE_EQ(owner_number("curve.solidify.resolution"), 10.0);
+  ASSERT_TRUE(editor.history().undo().ok());
+  panel.refresh();
+  EXPECT_EQ(resolution_spinner->value(), 9);
+  ASSERT_TRUE(editor.history().undo().ok());
+  panel.refresh();
+  EXPECT_EQ(resolution_spinner->value(), 8)
+      << "each arrow activation must remain one discrete history step";
+
+  session.history().clear();
+  EXPECT_FALSE(resolution_spinner->spin_box()->keyboardTracking());
+  const QPoint resolution_click = resolution_editor->rect().center();
+  send_mouse_event(*resolution_editor, QEvent::MouseButtonPress,
+                   resolution_click, Qt::LeftButton, Qt::LeftButton);
+  send_mouse_event(*resolution_editor, QEvent::MouseButtonRelease,
+                   resolution_click, Qt::LeftButton, Qt::NoButton);
+  ASSERT_TRUE(resolution_spinner->is_editing());
+  ASSERT_TRUE(resolution_editor->hasSelectedText());
+  send_text_event(*resolution_editor, u'1');
+  send_text_event(*resolution_editor, u'6');
+  process_events_for(75);
+  EXPECT_DOUBLE_EQ(owner_number("curve.solidify.resolution"), 8.0)
+      << "a text gesture must stay local until its explicit commit";
+  send_key_event(*resolution_editor, Qt::Key_Return);
+  EXPECT_DOUBLE_EQ(owner_number("curve.solidify.resolution"), 16.0);
+  ASSERT_TRUE(editor.history().undo().ok());
+  panel.refresh();
+  EXPECT_EQ(resolution_spinner->value(), 8);
+  EXPECT_FALSE(session.history().can_undo());
+
+  session.history().clear();
+  const QRect radius_groove = slider_groove(*radius_slider);
+  const QRect radius_handle = slider_handle(*radius_slider);
+  ASSERT_GT(radius_groove.width(), 20);
+  const QPoint radius_press = radius_handle.center();
+  const QPoint radius_first(radius_groove.left() + radius_groove.width() / 3,
+                            radius_groove.center().y());
+  const QPoint radius_second(
+      radius_groove.left() + (radius_groove.width() * 2) / 3,
+      radius_groove.center().y());
+  send_mouse_event(*radius_slider, QEvent::MouseButtonPress, radius_press,
+                   Qt::LeftButton, Qt::LeftButton);
+  send_mouse_event(*radius_slider, QEvent::MouseMove, radius_first,
+                   Qt::NoButton, Qt::LeftButton);
+  process_events_for(75);
+  const double first_radius = owner_number("curve.solidify.radius");
+  EXPECT_NE(first_radius, 0.1);
+  send_mouse_event(*radius_slider, QEvent::MouseMove, radius_second,
+                   Qt::NoButton, Qt::LeftButton);
+  process_events_for(75);
+  const double final_radius = owner_number("curve.solidify.radius");
+  EXPECT_NE(final_radius, first_radius);
+  send_mouse_event(*radius_slider, QEvent::MouseButtonRelease, radius_second,
+                   Qt::LeftButton, Qt::NoButton);
+  ASSERT_TRUE(editor.history().undo().ok());
+  panel.refresh();
+  EXPECT_NEAR(owner_number("curve.solidify.radius"), 0.1, 1.0e-6);
+  EXPECT_FALSE(session.history().can_undo())
+      << "periodic Radius previews must merge into one gesture";
+
   panel.unbind();
 }
 

@@ -26,6 +26,7 @@
 namespace quader {
 
 class AssetRegistry;
+enum class CurveCreationKind;
 class CurveToolService;
 class EditorSelectionService;
 class LinearArrayToolService;
@@ -159,6 +160,15 @@ private:
     ViewportPointPlacementPlane plane;
   };
 
+  /** Pins one empty preset's exact press-time plane placement until release. */
+  struct CurvePresetPlacementPress final {
+    ViewportPointerGesture gesture;
+    QVec3 center = {};
+    QVec3 axis_u = {1.0f, 0.0f, 0.0f};
+    QVec3 axis_v = {0.0f, 1.0f, 0.0f};
+    CurveCreationKind creation_kind{};
+  };
+
   /** Retains press-time state for one linear-array handle gesture. */
   struct LinearArrayHandlePress final {
     ViewportPointerGesture gesture;
@@ -190,6 +200,7 @@ private:
   std::optional<PivotHandlePress> pivot_handle_press_;
   std::optional<LinearArrayHandlePress> linear_array_handle_press_;
   std::optional<CurvePointConstructionPress> curve_point_construction_press_;
+  std::optional<CurvePresetPlacementPress> curve_preset_placement_press_;
   std::optional<CurveConversionPress> curve_conversion_press_;
   std::optional<PathArraySourcePress> path_array_source_press_;
   const PathArrayToolService *path_array_exclusion_owner_ = nullptr;

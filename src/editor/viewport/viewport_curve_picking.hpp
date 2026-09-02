@@ -190,7 +190,8 @@ resolve_viewport_curve_anchor_snap_target(
     const ViewportCameraController &camera, QVec2 local_mouse,
     std::span<const ViewportSceneCurvePickCandidate> candidates,
     double radius_pixels = 8.0,
-    std::optional<double> maximum_ray_distance = std::nullopt);
+    std::optional<double> maximum_ray_distance = std::nullopt,
+    bool include_backfaces = true);
 
 /** Picks sampled Curves behind no render-visible mesh surface. */
 [[nodiscard]] std::optional<ViewportCurvePickHit>

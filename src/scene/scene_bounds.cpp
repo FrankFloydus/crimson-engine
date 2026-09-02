@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace quader {
 namespace {
@@ -119,6 +120,11 @@ std::optional<SceneBounds> instance_occurrence_world_bounds(
   return result;
 }
 
+void expand_bounds(SceneBounds &bounds, QVec3 extent) {
+  bounds.min = bounds.min - extent;
+  bounds.max = bounds.max + extent;
+}
+
 std::optional<SceneBounds> entity_world_bounds_with_projection(
     const SceneDocument &document, const AssetRegistry &assets,
     const SceneMeshOccurrenceProjectionSnapshot &mesh_projection,
@@ -149,7 +155,8 @@ std::optional<SceneBounds> entity_world_bounds_with_projection(
   if (const CurveComponent *component = document.curve(entity)) {
     if (const CurveAsset *curve = assets.curve(component->curve)) {
       if (const std::optional<SceneBounds> bounds = curve_world_bounds(
-              *curve, document.world_transform_matrix(entity))) {
+              *curve, *component,
+              document.world_transform_matrix(entity))) {
         return bounds;
       }
     }
@@ -209,7 +216,8 @@ std::optional<SceneBounds> local_mesh_bounds(const MeshAsset &mesh) {
   return bounds;
 }
 
-std::optional<SceneBounds> local_curve_bounds(const CurveAsset &curve) {
+std::optional<SceneBounds> local_curve_bounds(
+    const CurveAsset &curve, const CurveComponent &component) {
   if (!curve.document) {
     return std::nullopt;
   }
@@ -217,12 +225,20 @@ std::optional<SceneBounds> local_curve_bounds(const CurveAsset &curve) {
   if (!bounds.valid) {
     return std::nullopt;
   }
-  return SceneBounds{.min = {bounds.min.x, bounds.min.y, bounds.min.z},
+  SceneBounds result{.min = {bounds.min.x, bounds.min.y, bounds.min.z},
                      .max = {bounds.max.x, bounds.max.y, bounds.max.z}};
+  if (component.solidify && curve_component_is_valid(component)) {
+    const QVec3 radius{component.solidify_radius,
+                       component.solidify_radius,
+                       component.solidify_radius};
+    expand_bounds(result, radius);
+  }
+  return result;
 }
 
 std::optional<SceneBounds> curve_world_bounds(
-    const CurveAsset &curve, const QMat4 &world_from_local) {
+    const CurveAsset &curve, const CurveComponent &component,
+    const QMat4 &world_from_local) {
   if (!curve.document) {
     return std::nullopt;
   }
@@ -241,8 +257,33 @@ std::optional<SceneBounds> curve_world_bounds(
   if (!bounds.valid) {
     return std::nullopt;
   }
-  return SceneBounds{.min = {bounds.min.x, bounds.min.y, bounds.min.z},
+  SceneBounds result{.min = {bounds.min.x, bounds.min.y, bounds.min.z},
                      .max = {bounds.max.x, bounds.max.y, bounds.max.z}};
+  if (component.solidify && curve_component_is_valid(component)) {
+    // The image of a local radius sphere under the entity's complete linear
+    // transform bounds every possible tube cross-section. Each world-axis
+    // extent is the norm of the corresponding matrix row times the radius.
+    const double radius = component.solidify_radius;
+    const QVec3 extent{
+        static_cast<float>(radius * std::sqrt(
+            static_cast<double>(m[0]) * m[0] +
+            static_cast<double>(m[4]) * m[4] +
+            static_cast<double>(m[8]) * m[8])),
+        static_cast<float>(radius * std::sqrt(
+            static_cast<double>(m[1]) * m[1] +
+            static_cast<double>(m[5]) * m[5] +
+            static_cast<double>(m[9]) * m[9])),
+        static_cast<float>(radius * std::sqrt(
+            static_cast<double>(m[2]) * m[2] +
+            static_cast<double>(m[6]) * m[6] +
+            static_cast<double>(m[10]) * m[10])),
+    };
+    if (std::isfinite(extent.x) && std::isfinite(extent.y) &&
+        std::isfinite(extent.z)) {
+      expand_bounds(result, extent);
+    }
+  }
+  return result;
 }
 
 std::optional<SceneBounds> mesh_world_bounds(

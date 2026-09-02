@@ -311,6 +311,7 @@ add_library(quader_assets STATIC
     src/assets/curve_asset_payload.cpp
     src/assets/bake_service.cpp
     src/assets/material_document.cpp
+    src/assets/modeling_mesh_payload_adapter.cpp
     src/assets/mesh_wire_geometry.cpp
     src/assets/project_asset_id.cpp
 )
@@ -358,6 +359,7 @@ add_library(quader_editor_services STATIC
     src/editor/commands/modeling_command_execution_service.cpp
     src/editor/commands/scene_structural_lifecycle_service.cpp
     src/editor/history/editor_history_service.cpp
+    src/editor/commands/modeling_selection_memento_command.cpp
     src/editor/input/quader_keybinding_target_catalog.cpp
     src/editor/material/material_reference_service.cpp
     src/editor/modeling/services/primitive_creation_tool_service.cpp
@@ -722,6 +724,7 @@ if(WIN32)
 endif()
 
 add_library(quader_render STATIC
+    src/render/curve_solid_geometry_cache.cpp
     src/render/filament_utils.cpp
     src/render/filament_buffer_descriptor_factory.cpp
     src/render/filament_environment_library.cpp
@@ -882,6 +885,7 @@ add_library(quader_ui STATIC
     src/ui/qt_auxiliary_window_state.cpp
     src/ui/qt_settings_dialog.cpp
     src/ui/qt_settings_controller.cpp
+    src/ui/qt_tool_settings_drag_spinner.cpp
     src/ui/qt_tool_settings_number_slider.cpp
     src/ui/qt_tool_settings_panel.cpp
     src/ui/qt_unsaved_confirmation_dialog.cpp
@@ -1459,6 +1463,7 @@ if(QUADER_BUILD_TESTS)
         tests/project_workspace_storage_tests.cpp
         tests/project_session_workspace_tests.cpp
         tests/primitive_creation_tool_service_tests.cpp
+        tests/curve_solid_render_tests.cpp
         tests/qdr_binary_container_tests.cpp
         tests/qdr_binary_scene_codec_tests.cpp
         tests/modeling_session_service_split_tests.cpp

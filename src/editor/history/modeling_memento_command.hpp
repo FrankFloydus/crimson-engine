@@ -198,6 +198,34 @@ private:
 };
 
 /**
+ * Applies Curve Solidify as one modeling-backed bake command.
+ */
+class ApplyCurveSolidifyHistoryCommand final : public ModelingMementoCommand {
+public:
+  ApplyCurveSolidifyHistoryCommand(ModelingSessionService &modeling,
+                                   int modeling_object_id)
+      : ModelingMementoCommand(modeling, "Apply Solidify"),
+        modeling_object_id_(modeling_object_id) {}
+
+  [[nodiscard]] const ModelingCreateBoxResult &created() const {
+    return created_;
+  }
+
+private:
+  ModelingCommandResult execute_initial() override {
+    created_ = modeling().apply_curve_solidify(modeling_object_id_);
+    return {
+        .ok = created_.ok,
+        .changed = created_.changed,
+        .message = created_.message,
+    };
+  }
+
+  int modeling_object_id_ = kInvalidModelingObjectId;
+  ModelingCreateBoxResult created_;
+};
+
+/**
  * Creates one or more source-inclusive linear arrays as one history item.
  */
 class LinearArrayHistoryCommand final : public ModelingMementoCommand {

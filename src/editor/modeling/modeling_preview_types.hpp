@@ -62,7 +62,11 @@ struct ModelingToolPreviewCurve final {
   EntityId source_entity = kInvalidEntityId;
   EntityId visibility_entity = kInvalidEntityId;
   AssetId curve = kInvalidAssetId;
+  MaterialComponent material;
   std::vector<QMat4> instance_transforms;
+  bool solidify = false;
+  int solidify_resolution = kCurveSolidifyDefaultResolution;
+  float solidify_radius = static_cast<float>(kCurveSolidifyDefaultRadius);
   bool suppress_source = false;
   std::uint64_t layout_key = 0u;
 };

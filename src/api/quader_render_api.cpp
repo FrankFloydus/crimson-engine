@@ -363,9 +363,8 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
     }
   }
   RenderToolPreviewSceneSnapshot preview_snapshot =
-      build_render_tool_preview_scene_snapshot(
-          std::move(neutral_preview), session.assets, &local_visibility,
-          project_material_resolver);
+      bridge.build_tool_preview_scene_snapshot(
+          std::move(neutral_preview), session.assets, &local_visibility);
   const bool compound_publication_required =
       native_array_kind == 3u || !preview_snapshot.curves.empty() ||
       !preview_snapshot.lights.empty() ||

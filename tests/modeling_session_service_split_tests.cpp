@@ -1779,6 +1779,56 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
+     MeshSyncServicePreservesCurveSolidifySettingsAcrossRebindingAndDuplicate) {
+  SceneDocument scene;
+  const EntityId source = scene.create_entity("Source Curve");
+  const CurveComponent source_component{
+      .curve = 11u,
+      .solidify = true,
+      .solidify_resolution = 36,
+      .solidify_radius = 2.25F,
+  };
+  ASSERT_TRUE(scene.set_curve(source, source_component));
+  ASSERT_TRUE(scene.set_modeling_object(
+      source, {.object_id = 100, .sdk_owned = true}));
+
+  ModelingObjectRuntimeMap object_map;
+  ASSERT_TRUE(object_map.bind(100, source));
+  const std::array<int, 1> requested{100};
+  const std::vector<ModelingObjectSceneIdentity> identities =
+      object_map.capture_scene_identities_for_modeling_objects(scene,
+                                                               requested);
+  ASSERT_EQ(identities.size(), 1U);
+
+  const EntityId duplicate = scene.create_entity("Duplicate Curve");
+  ASSERT_TRUE(scene.set_curve(duplicate, {.curve = 99u}));
+  ModelingMeshSyncService mesh_sync;
+  ASSERT_TRUE(mesh_sync.apply_scene_identity_to_duplicate_entity(
+      scene, duplicate, identities.front()));
+  ASSERT_NE(scene.curve(duplicate), nullptr);
+  EXPECT_EQ(scene.curve(duplicate)->curve, 99u);
+  EXPECT_TRUE(scene.curve(duplicate)->solidify);
+  EXPECT_EQ(scene.curve(duplicate)->solidify_resolution, 36);
+  EXPECT_FLOAT_EQ(scene.curve(duplicate)->solidify_radius, 2.25F);
+
+  ASSERT_TRUE(
+      mesh_sync.set_projected_curve_binding(scene, duplicate, 101u));
+  ASSERT_NE(scene.curve(duplicate), nullptr);
+  EXPECT_EQ(scene.curve(duplicate)->curve, 101u);
+  EXPECT_TRUE(scene.curve(duplicate)->solidify);
+  EXPECT_EQ(scene.curve(duplicate)->solidify_resolution, 36);
+  EXPECT_FLOAT_EQ(scene.curve(duplicate)->solidify_radius, 2.25F);
+
+  ASSERT_TRUE(mesh_sync.bind_projected_curve_object(scene, duplicate, 101,
+                                                    102u));
+  ASSERT_NE(scene.curve(duplicate), nullptr);
+  EXPECT_EQ(scene.curve(duplicate)->curve, 102u);
+  EXPECT_TRUE(scene.curve(duplicate)->solidify);
+  EXPECT_EQ(scene.curve(duplicate)->solidify_resolution, 36);
+  EXPECT_FLOAT_EQ(scene.curve(duplicate)->solidify_radius, 2.25F);
+}
+
+TEST(ModelingSessionServiceSplitTests,
      MeshSyncEntityMaterialReportsNoOpMutationAndOwnerFailure) {
   SceneDocument scene;
   ModelingMeshSyncService mesh_sync;
@@ -4818,6 +4868,22 @@ protected:
 };
 
 TEST_F(CurveModelingProjectionTests,
+       SolidCurveMaterialAvailabilityRequiresAReference) {
+  const QuaderModelingObjectRef curve = create_curve(editor_);
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor_.selection().select_object(curve).ok());
+  ASSERT_TRUE(
+      editor_.tools().set_setting("curve", "curve.solidify", true).ok());
+
+  const ModelingCommandResult missing_reference =
+      session_.modeling().active_material_selection_status(false);
+  EXPECT_FALSE(missing_reference.ok);
+  EXPECT_FALSE(missing_reference.changed);
+  EXPECT_FALSE(missing_reference.message.empty());
+  EXPECT_TRUE(session_.modeling().active_material_selection_status(true).ok);
+}
+
+TEST_F(CurveModelingProjectionTests,
        CancelPreviewRestoresPayloadAndExactOwnerRevisionsAndKeepsRedo) {
   const auto curve = create_curve(editor_);
   const auto original = read_curve(editor_, curve);
@@ -4894,7 +4960,7 @@ TEST_F(CurveModelingProjectionTests,
   const auto mesh = create_box(editor_);
   ASSERT_TRUE(editor_.scene().rename(mesh.entity, "Renamed Companion").ok());
   ASSERT_TRUE(editor_.history().undo().ok());
-  constexpr std::array failures{
+  constexpr std::array kFailures{
       ModelingSdkProjectionFailurePoint::AfterSdkMutation,
       ModelingSdkProjectionFailurePoint::AfterAssetInstall,
       ModelingSdkProjectionFailurePoint::AfterEntityCreate,
@@ -4909,7 +4975,7 @@ TEST_F(CurveModelingProjectionTests,
   const auto scene_selection_revision = session_.scene().selection_revision();
   const auto asset_counts = editor_.query().assets();
   ASSERT_TRUE(history.can_redo);
-  for (const auto point : failures) {
+  for (const auto point : kFailures) {
     SCOPED_TRACE(static_cast<int>(point));
     inject(point);
     const auto failed = editor_.modeling().create_curve(example_curve_args());
@@ -4945,12 +5011,12 @@ TEST_F(CurveModelingProjectionTests,
   const auto identity = editor_.query().entity(curve.entity);
   ASSERT_TRUE(identity.has_value());
   const auto asset_revision = session_.assets().curve_revision(identity->curve);
-  constexpr std::array failures{
+  constexpr std::array kFailures{
       ModelingSdkProjectionFailurePoint::AfterSdkMutation,
       ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
       ModelingSdkProjectionFailurePoint::CommittedSceneNotify,
       ModelingSdkProjectionFailurePoint::BeforeCommit};
-  for (const auto point : failures) {
+  for (const auto point : kFailures) {
     SCOPED_TRACE(static_cast<int>(point));
     inject(point);
     const auto failed = editor_.modeling().replace_curve(curve, edited);
@@ -4984,11 +5050,11 @@ TEST_F(CurveModelingProjectionTests,
   inject(ModelingSdkProjectionFailurePoint::None);
   expect_same_revisions(editor_.revisions(), original_revisions);
   const auto original_history = editor_.query().history();
-  constexpr std::array failures{
+  constexpr std::array kFailures{
       ModelingSdkProjectionFailurePoint::AfterSdkMutation,
       ModelingSdkProjectionFailurePoint::PreviewAssetReplace,
       ModelingSdkProjectionFailurePoint::PreviewSceneNotify};
-  for (const auto point : failures) {
+  for (const auto point : kFailures) {
     SCOPED_TRACE(static_cast<int>(point));
     ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
     ASSERT_TRUE(editor_.modeling().update_curve_preview(first).ok());

@@ -99,6 +99,10 @@ std::optional<CurveControlTarget> curve_control_hit(
              : std::nullopt;
 }
 
+bool curve_creation_kind_is_preset(CurveCreationKind kind) {
+  return kind == CurveCreationKind::Circle || kind == CurveCreationKind::Oval;
+}
+
 } // namespace
 
 ViewportNativeToolInteractionResult
@@ -349,18 +353,35 @@ ViewportNativeToolInteraction::handle_frame(
       (curve->active() || frame.transform_gizmo_consumed || curve->dragging() ||
        !input.curve_conversion_edges.empty() ||
        curve_conversion_press_.has_value() ||
-       curve_point_construction_press_.has_value());
+       curve_point_construction_press_.has_value() ||
+       curve_preset_placement_press_.has_value());
   if (curve_interaction_requested) {
     output.curve_consumed = true;
     output.consumed = true;
     output.blocks_transform_gizmo = true;
     record_change(curve->refresh());
+    const auto clear_curve_hover = [&]() {
+      if (curve->drawing() &&
+          curve_creation_kind_is_preset(curve->creation_kind())) {
+        record_change(curve->set_preset_hover(std::nullopt));
+      } else {
+        record_change(curve->set_hover(std::nullopt));
+      }
+    };
     if (!curve->point_construction_dragging()) {
       if (curve_point_construction_press_) {
         left_release_suppression_.begin(QuaderMouseButton::Left,
                                         frame.left_down);
       }
       curve_point_construction_press_.reset();
+    }
+    if (curve_preset_placement_press_ &&
+        (!curve->drawing() || curve->point_count() != 0u ||
+         curve->creation_kind() !=
+             curve_preset_placement_press_->creation_kind)) {
+      left_release_suppression_.begin(QuaderMouseButton::Left,
+                                      frame.left_down);
+      curve_preset_placement_press_.reset();
     }
     if (frame.transform_gizmo_consumed) {
       // TransformGizmoInteraction owns any selected-control transaction. This
@@ -372,6 +393,11 @@ ViewportNativeToolInteraction::handle_frame(
                                         frame.left_down);
         curve_point_construction_press_.reset();
       }
+      if (curve_preset_placement_press_) {
+        left_release_suppression_.begin(QuaderMouseButton::Left,
+                                        frame.left_down);
+        curve_preset_placement_press_.reset();
+      }
       if (curve_conversion_press_) {
         const bool released =
             viewport_pointer_edge_after(input.pointer_released_edges,
@@ -381,7 +407,7 @@ ViewportNativeToolInteraction::handle_frame(
           curve_conversion_press_.reset();
         }
       }
-      record_change(curve->set_hover(std::nullopt));
+      clear_curve_hover();
       return output;
     }
     const bool blocked = native_pointer_interrupted(frame);
@@ -394,6 +420,11 @@ ViewportNativeToolInteraction::handle_frame(
         }
         curve_point_construction_press_.reset();
       }
+      if (curve_preset_placement_press_) {
+        left_release_suppression_.begin(QuaderMouseButton::Left,
+                                        frame.left_down);
+        curve_preset_placement_press_.reset();
+      }
       if (curve_conversion_press_) {
         const bool released =
             viewport_pointer_edge_after(input.pointer_released_edges,
@@ -405,12 +436,12 @@ ViewportNativeToolInteraction::handle_frame(
           curve_conversion_press_.reset();
         }
       }
-      record_change(curve->set_hover(std::nullopt));
+      clear_curve_hover();
       return output;
     }
 
     const bool conversion_input = !input.curve_conversion_edges.empty();
-    if (!curve->dragging() &&
+    if (!curve->dragging() && !curve_preset_placement_press_ &&
         (conversion_input || curve_conversion_press_)) {
       if (conversion_input && input.viewport_hovered &&
           input.viewport_focused && !frame.suppress_hover_work) {
@@ -514,7 +545,7 @@ ViewportNativeToolInteraction::handle_frame(
               curve_conversion_press_->gesture.press) != nullptr) {
         curve_conversion_press_.reset();
       }
-      record_change(curve->set_hover(std::nullopt));
+      clear_curve_hover();
       // A conversion miss is inert; it must not start placement or a handle drag.
       return output;
     }
@@ -548,50 +579,125 @@ ViewportNativeToolInteraction::handle_frame(
           });
     };
 
-    if (!curve->dragging() && input.viewport_hovered &&
-        !frame.suppress_hover_work) {
-      const ViewportPointPlacementPlane construction_plane =
-          viewport_active_grid_placement_plane(camera);
+    const ViewportPointPlacementPlane construction_plane =
+        viewport_active_grid_placement_plane(camera);
+    const CurveCreationKind creation_kind = curve->creation_kind();
+    const bool preset_creation =
+        curve_creation_kind_is_preset(creation_kind);
+    const bool empty_preset = curve->drawing() && preset_creation &&
+                              curve->point_count() == 0u;
+    if (!curve->dragging() && !curve_preset_placement_press_ &&
+        input.viewport_hovered && !frame.suppress_hover_work) {
       if (frame.left_pressed && !canceled_left_release) {
-        const auto hit = curve_control_hit(
-            frame, curve->preview_state(), frame.left_click_local, false);
         const bool plain_construction_gesture =
             !input.modifiers.primary && !input.modifiers.shift &&
             !input.modifiers.alt;
-        if (!hit && curve->drawing() && plain_construction_gesture) {
+        if (empty_preset && plain_construction_gesture) {
           const auto placement = resolve_position(frame.left_click_local,
-                                                    construction_plane);
+                                                   construction_plane);
           if (placement.valid) {
-            const CommandResult begun =
-                curve->begin_point(placement.world_position);
-            record_change(begun);
-            if (begun.ok && curve->point_construction_dragging()) {
-              const QVec3 origin = *curve->drag_origin_world();
-              CurvePointConstructionPress construction_press{
-                  .gesture = viewport_pointer_gesture_from_latest_edge(
-                      input.pointer_pressed_edges, QuaderMouseButton::Left,
-                       frame.left_click_local, input.mouse_screen,
-                       input.modifiers, frame.pointer_drag_threshold_pixels),
-                  .pointer_offset = camera.project_world_point(origin).position -
-                                    frame.left_click_local,
-                  .plane = construction_plane,
-              };
-              construction_press.plane.origin = origin;
-              curve_point_construction_press_ =
-                  std::move(construction_press);
-              output.claim_interaction_pane = true;
+            const CurvePresetPlacementFrame preset_frame{
+                .center = placement.world_position,
+                .axis_u = construction_plane.u_axis,
+                .axis_v = construction_plane.v_axis,
+            };
+            curve_preset_placement_press_ = CurvePresetPlacementPress{
+                .gesture = viewport_pointer_gesture_from_latest_edge(
+                    input.pointer_pressed_edges, QuaderMouseButton::Left,
+                    frame.left_click_local, input.mouse_screen,
+                    input.modifiers, frame.pointer_drag_threshold_pixels),
+                .center = placement.world_position,
+                .axis_u = construction_plane.u_axis,
+                .axis_v = construction_plane.v_axis,
+                .creation_kind = creation_kind,
+            };
+            record_change(curve->set_preset_hover(preset_frame));
+            output.claim_interaction_pane = true;
+          } else {
+            record_change(curve->set_preset_hover(std::nullopt));
+          }
+        } else if (creation_kind == CurveCreationKind::Draw) {
+          const auto hit = curve_control_hit(
+              frame, curve->preview_state(), frame.left_click_local, false);
+          if (!hit && curve->drawing() && plain_construction_gesture) {
+            const auto placement = resolve_position(frame.left_click_local,
+                                                     construction_plane);
+            if (placement.valid) {
+              const CommandResult begun =
+                  curve->begin_point(placement.world_position);
+              record_change(begun);
+              if (begun.ok && curve->point_construction_dragging()) {
+                const QVec3 origin = *curve->drag_origin_world();
+                CurvePointConstructionPress construction_press{
+                    .gesture = viewport_pointer_gesture_from_latest_edge(
+                        input.pointer_pressed_edges, QuaderMouseButton::Left,
+                        frame.left_click_local, input.mouse_screen,
+                        input.modifiers, frame.pointer_drag_threshold_pixels),
+                    .pointer_offset =
+                        camera.project_world_point(origin).position -
+                        frame.left_click_local,
+                    .plane = construction_plane,
+                };
+                construction_press.plane.origin = origin;
+                curve_point_construction_press_ =
+                    std::move(construction_press);
+                output.claim_interaction_pane = true;
+              }
             }
           }
         }
       } else if (curve->drawing()) {
         const auto placement = resolve_position(input.mouse_local,
-                                                  construction_plane);
-        record_change(curve->set_hover(
-            placement.valid ? std::optional<QVec3>(placement.world_position)
-                            : std::nullopt));
+                                                 construction_plane);
+        if (preset_creation) {
+          std::optional<CurvePresetPlacementFrame> preset_hover;
+          if (empty_preset && placement.valid && !canceled_left_release) {
+            preset_hover = CurvePresetPlacementFrame{
+                .center = placement.world_position,
+                .axis_u = construction_plane.u_axis,
+                .axis_v = construction_plane.v_axis,
+            };
+          }
+          record_change(curve->set_preset_hover(preset_hover));
+        } else {
+          record_change(curve->set_hover(
+              placement.valid ? std::optional<QVec3>(placement.world_position)
+                              : std::nullopt));
+        }
       }
-    } else if (!curve->dragging()) {
-      record_change(curve->set_hover(std::nullopt));
+    } else if (!curve->dragging() && !curve_preset_placement_press_) {
+      clear_curve_hover();
+    }
+
+    if (curve_preset_placement_press_) {
+      const ViewportPointerButtonEdge *release = matching_left_release(
+          frame, curve_preset_placement_press_->gesture);
+      const bool matching_release =
+          release != nullptr || synthetic_left_release_matches(
+                                    frame,
+                                    curve_preset_placement_press_->gesture);
+      const QVec2 pointer_local =
+          release != nullptr ? release->local : input.mouse_local;
+      const bool moved = viewport_pointer_drag_threshold_reached(
+          curve_preset_placement_press_->gesture, pointer_local);
+      const bool foreign_or_stale_release =
+          frame.left_released && !matching_release;
+      const bool abandoned = !frame.left_down && !frame.left_released;
+      if (moved || foreign_or_stale_release || abandoned ||
+          canceled_left_release) {
+        left_release_suppression_.begin(QuaderMouseButton::Left,
+                                        frame.left_down);
+        curve_preset_placement_press_.reset();
+        record_change(curve->set_preset_hover(std::nullopt));
+      } else if (matching_release) {
+        const CurvePresetPlacementFrame placement{
+            .center = curve_preset_placement_press_->center,
+            .axis_u = curve_preset_placement_press_->axis_u,
+            .axis_v = curve_preset_placement_press_->axis_v,
+        };
+        curve_preset_placement_press_.reset();
+        record_change(curve->place_preset(placement));
+      }
     }
 
     if (curve_point_construction_press_ &&
@@ -634,6 +740,10 @@ ViewportNativeToolInteraction::handle_frame(
     left_release_suppression_.begin(QuaderMouseButton::Left, frame.left_down);
   }
   curve_point_construction_press_.reset();
+  if (curve_preset_placement_press_) {
+    left_release_suppression_.begin(QuaderMouseButton::Left, frame.left_down);
+  }
+  curve_preset_placement_press_.reset();
   curve_conversion_press_.reset();
 
   if (radial_array != nullptr && radial_array->active()) {
@@ -910,7 +1020,8 @@ ViewportNativeToolInteraction::handle_frame(
 
 void ViewportNativeToolInteraction::clear_drag_state() {
   if (pivot_handle_press_ || linear_array_handle_press_ ||
-      curve_point_construction_press_ || path_array_source_press_) {
+      curve_point_construction_press_ || curve_preset_placement_press_ ||
+      path_array_source_press_) {
     // Lifecycle cancellation can run before the next sampled frame. Keep the
     // originating left release reserved so it cannot become a selection click.
     left_release_suppression_.begin(QuaderMouseButton::Left, true);
@@ -918,6 +1029,7 @@ void ViewportNativeToolInteraction::clear_drag_state() {
   pivot_handle_press_.reset();
   linear_array_handle_press_.reset();
   curve_point_construction_press_.reset();
+  curve_preset_placement_press_.reset();
   curve_conversion_press_.reset();
   path_array_source_press_.reset();
 }
@@ -926,6 +1038,7 @@ bool ViewportNativeToolInteraction::dragging() const {
   return pivot_handle_press_.has_value() ||
          linear_array_handle_press_.has_value() ||
          curve_point_construction_press_.has_value() ||
+         curve_preset_placement_press_.has_value() ||
          curve_conversion_press_.has_value() ||
          path_array_source_press_.has_value();
 }

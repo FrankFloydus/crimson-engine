@@ -10,6 +10,7 @@
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "scene/scene_hierarchy_visibility.hpp"
+#include "scene/scene_material_surface.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 
@@ -22,8 +23,8 @@
 namespace quader {
 namespace {
 
-/// Associates one semantic selection path with its canonical mesh owner.
-struct ScopedMeshTarget final {
+/// Associates one semantic selection path with its material-surface owner.
+struct ScopedMaterialSurfaceTarget final {
   EntityId entity = kInvalidEntityId;
   bool context_locked = false;
 };
@@ -71,10 +72,11 @@ live_material_slots(const MeshAsset &mesh) {
   return slots;
 }
 
-void append_scoped_mesh_target(std::vector<ScopedMeshTarget> &targets,
-                               EntityId entity, bool context_locked) {
+void append_scoped_material_surface_target(
+    std::vector<ScopedMaterialSurfaceTarget> &targets, EntityId entity,
+    bool context_locked) {
   const auto found = std::ranges::find_if(
-      targets, [entity](const ScopedMeshTarget &target) {
+      targets, [entity](const ScopedMaterialSurfaceTarget &target) {
         return target.entity == entity;
       });
   if (found == targets.end()) {
@@ -100,7 +102,7 @@ void append_scoped_mesh_target(std::vector<ScopedMeshTarget> &targets,
   return false;
 }
 
-/** Applies read-only/selectability policy to a mesh and every linked path. */
+/** Applies read-only/selectability policy to a surface and every linked path. */
 [[nodiscard]] bool material_target_is_effectively_unselectable(
     const SceneDocument &scene, EntityId entity) {
   const EntityId definition = scene.containing_instance_definition(entity);
@@ -123,7 +125,7 @@ void append_scoped_mesh_target(std::vector<ScopedMeshTarget> &targets,
 }
 
 void append_group_target(const SceneDocument &scene, EntityId selected_root,
-                         std::vector<ScopedMeshTarget> &targets) {
+                         std::vector<ScopedMaterialSurfaceTarget> &targets) {
   if (!scene.exists(selected_root)) {
     return;
   }
@@ -138,34 +140,35 @@ void append_group_target(const SceneDocument &scene, EntityId selected_root,
            scene.descendants(occurrence->definition, false)) {
         if (scene.containing_instance_definition(member) !=
                 occurrence->definition ||
-            scene.mesh(member) == nullptr) {
+            !scene_entity_has_material_surface(scene, member)) {
           continue;
         }
-        append_scoped_mesh_target(
+        append_scoped_material_surface_target(
             targets, member,
             occurrence_locked || scene.is_effectively_locked(member) ||
                 linked_occurrence_is_locked(scene, member));
       }
       continue;
     }
-    if (scene.mesh(candidate) != nullptr) {
-      append_scoped_mesh_target(targets, candidate,
-                                scene.is_effectively_locked(candidate));
+    if (scene_entity_has_material_surface(scene, candidate)) {
+      append_scoped_material_surface_target(
+          targets, candidate, scene.is_effectively_locked(candidate));
     }
   }
 }
 
-[[nodiscard]] std::vector<ScopedMeshTarget> scoped_mesh_targets(
+[[nodiscard]] std::vector<ScopedMaterialSurfaceTarget>
+scoped_material_surface_targets(
     const SceneDocument &scene, const ModelingSessionService &modeling,
     MaterialReferenceUsageScope scope) {
-  std::vector<ScopedMeshTarget> targets;
+  std::vector<ScopedMaterialSurfaceTarget> targets;
   if (scope == MaterialReferenceUsageScope::ActiveScene) {
     for (const EntityId entity : scene.entity_tree_order()) {
-      if (scene.mesh(entity) != nullptr) {
-        append_scoped_mesh_target(targets, entity,
-                                  scene.is_effectively_locked(entity) ||
-                                      linked_occurrence_is_locked(scene,
-                                                                  entity));
+      if (scene_entity_has_material_surface(scene, entity)) {
+        append_scoped_material_surface_target(
+            targets, entity,
+            scene.is_effectively_locked(entity) ||
+                linked_occurrence_is_locked(scene, entity));
       }
     }
     return targets;
@@ -185,9 +188,9 @@ void append_group_target(const SceneDocument &scene, EntityId selected_root,
     return targets;
   }
   for (const EntityId entity : selected) {
-    if (scene.mesh(entity) != nullptr) {
-      append_scoped_mesh_target(targets, entity,
-                                scene.is_effectively_locked(entity));
+    if (scene_entity_has_material_surface(scene, entity)) {
+      append_scoped_material_surface_target(
+          targets, entity, scene.is_effectively_locked(entity));
     }
   }
   return targets;
@@ -235,6 +238,18 @@ replaced_material_component(const MaterialComponent *existing,
   }
   return changed ? std::optional<MaterialComponent>(std::move(desired))
                  : std::nullopt;
+}
+
+[[nodiscard]] std::optional<MaterialComponent>
+replaced_primary_material_component(const MaterialComponent *existing,
+                                    MaterialReference source,
+                                    MaterialReference replacement) {
+  if (existing == nullptr || existing->material != source) {
+    return std::nullopt;
+  }
+  MaterialComponent desired = *existing;
+  desired.material = replacement;
+  return desired;
 }
 
 [[nodiscard]] bool apply_component_state(
@@ -394,15 +409,22 @@ std::vector<MaterialReference> MaterialReferenceService::used_materials(
     return result;
   }
 
-  for (const ScopedMeshTarget &target :
-       scoped_mesh_targets(*scene_, *modeling_, scope)) {
+  for (const ScopedMaterialSurfaceTarget &target :
+       scoped_material_surface_targets(*scene_, *modeling_, scope)) {
     const MeshComponent *mesh_component = scene_->mesh(target.entity);
     const MaterialComponent *material_component =
         scene_->material(target.entity);
+    if (material_component == nullptr) {
+      continue;
+    }
+    if (scene_entity_has_solid_curve_surface(*scene_, target.entity)) {
+      (void)append_distinct_reference(result, material_component->material);
+      continue;
+    }
     const MeshAsset *mesh = mesh_component != nullptr
                                 ? assets_->mesh(mesh_component->mesh)
                                 : nullptr;
-    if (mesh == nullptr || material_component == nullptr) {
+    if (mesh == nullptr) {
       continue;
     }
     for (const std::uint32_t slot : live_material_slots(*mesh)) {
@@ -469,11 +491,14 @@ MaterialReferenceService::prepare_replacement(
       }
     }
   } else {
-    for (const ScopedMeshTarget &target :
-         scoped_mesh_targets(*scene_, *modeling_, scope)) {
+    for (const ScopedMaterialSurfaceTarget &target :
+         scoped_material_surface_targets(*scene_, *modeling_, scope)) {
       const MaterialComponent *existing = scene_->material(target.entity);
-      std::optional<MaterialComponent> desired = replaced_material_component(
-          existing, source, replacement);
+      std::optional<MaterialComponent> desired =
+          scene_entity_has_solid_curve_surface(*scene_, target.entity)
+              ? replaced_primary_material_component(existing, source,
+                                                    replacement)
+              : replaced_material_component(existing, source, replacement);
       if (!desired.has_value()) {
         continue;
       }

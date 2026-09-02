@@ -30,6 +30,7 @@
 
 namespace quader {
 
+class CurveSolidGeometryCache;
 struct CurveSamplePayload;
 
 /**
@@ -221,6 +222,9 @@ struct RenderSceneSnapshot : RenderSourceStamp {
   std::uint64_t frame_index = 0;
   RenderSceneSnapshotDirtyState dirty;
   bool reused_previous_records = false;
+  // Prevents the Curve-publication overlay fast path from retaining stale
+  // derived tube geometry when Curve assets or components change.
+  bool has_solidified_curves = false;
   std::vector<RenderSceneMeshRecord> meshes;
   std::vector<RenderSceneInstancePrimitiveRecord> instance_primitives;
   std::vector<RenderSceneLightRecord> lights;
@@ -239,6 +243,7 @@ struct RenderSceneSnapshotBuildOptions {
   std::uint64_t project_material_revision = 0u;
   RenderInstanceEditScope instance_edit_scope;
   const ViewportLocalVisibilitySnapshot *local_visibility = nullptr;
+  CurveSolidGeometryCache *curve_solid_geometry_cache = nullptr;
 };
 
 /**
@@ -293,7 +298,11 @@ struct RenderToolPreviewCurveRecord final {
   AssetId curve = kInvalidAssetId;
   std::uint64_t curve_revision = 0u;
   std::shared_ptr<const CurveSamplePayload> sample_payload;
+  MaterialComponent material;
   std::vector<QMat4> instance_transforms;
+  bool solidify = false;
+  int solidify_resolution = kCurveSolidifyDefaultResolution;
+  float solidify_radius = static_cast<float>(kCurveSolidifyDefaultRadius);
   bool suppress_source = false;
   std::uint64_t layout_key = 0u;
 };

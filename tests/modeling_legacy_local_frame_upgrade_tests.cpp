@@ -522,7 +522,7 @@ TEST(ModelingLegacyLocalFrameUpgradeTests,
 
 TEST(ModelingLegacyLocalFrameUpgradeTests,
      PublicationFailuresRestoreExactNativeOwnerState) {
-  constexpr std::array failure_points{
+  constexpr std::array kFailurePoints{
       ModelingLegacyLocalFrameUpgradeFailurePoint::AfterMeshPublication,
       ModelingLegacyLocalFrameUpgradeFailurePoint::AfterTransformPublication,
       ModelingLegacyLocalFrameUpgradeFailurePoint::
@@ -530,7 +530,7 @@ TEST(ModelingLegacyLocalFrameUpgradeTests,
   };
 
   for (const ModelingLegacyLocalFrameUpgradeFailurePoint failure_point :
-       failure_points) {
+       kFailurePoints) {
     SCOPED_TRACE(static_cast<int>(failure_point));
     SceneDocument scene;
     AssetRegistry assets;

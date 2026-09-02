@@ -203,12 +203,16 @@ bool ModelingMeshSyncService::bind_projected_curve_object(
           current_modeling_object != nullptr
               ? current_modeling_object->local_frame_version
               : kCanonicalModelingObjectLocalFrameVersion);
+  const CurveComponent *current_curve = scene.curve(entity);
+  CurveComponent curve = current_curve != nullptr ? *current_curve
+                                                   : CurveComponent{};
+  curve.curve = curve_id;
   return scene.set_modeling_object(
              entity, {.object_id = modeling_object_id,
                       .material_slot = 0u,
                       .sdk_owned = true,
                       .local_frame_version = local_frame_version}) &&
-         scene.set_curve(entity, {.curve = curve_id});
+         scene.set_curve(entity, curve);
 }
 
 bool ModelingMeshSyncService::mark_projected_object_sdk_owned(
@@ -232,7 +236,11 @@ bool ModelingMeshSyncService::set_projected_mesh_binding(
 
 bool ModelingMeshSyncService::set_projected_curve_binding(
     SceneDocument &scene, EntityId entity, AssetId curve_id) const {
-  return scene.set_curve(entity, {.curve = curve_id});
+  const CurveComponent *current_curve = scene.curve(entity);
+  CurveComponent curve = current_curve != nullptr ? *current_curve
+                                                   : CurveComponent{};
+  curve.curve = curve_id;
+  return scene.set_curve(entity, curve);
 }
 
 bool ModelingMeshSyncService::set_projected_material(
@@ -455,7 +463,10 @@ bool ModelingMeshSyncService::apply_scene_identity_to_duplicate_entity(
     duplicate_identity.mesh = duplicate_mesh;
   }
   if (const CurveComponent *curve = scene.curve(entity)) {
-    duplicate_identity.curve = CurveComponent{.curve = curve->curve};
+    CurveComponent duplicate_curve =
+        duplicate_identity.curve.value_or(*curve);
+    duplicate_curve.curve = curve->curve;
+    duplicate_identity.curve = duplicate_curve;
   }
   duplicate_identity.instance_definition.reset();
   duplicate_identity.instance_occurrence.reset();

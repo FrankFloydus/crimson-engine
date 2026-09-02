@@ -11,6 +11,7 @@
 #include "editor/commands/document_command_service.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
+#include "editor/commands/modeling_selection_memento_command.hpp"
 #include "editor/modeling/services/modeling_hierarchy_duplicate_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
@@ -18,7 +19,6 @@
 
 #include <algorithm>
 #include <memory>
-#include <optional>
 #include <unordered_set>
 #include <utility>
 
@@ -33,159 +33,6 @@ SceneStructuralDuplicateBatchResult
 duplicate_batch_failure(CommandResult result) {
   return SceneStructuralDuplicateBatchResult(std::move(result));
 }
-
-CommandResult modeling_memento_status(ModelingCommandResult result) {
-  return {
-      .ok = result.ok,
-      .changed = result.changed,
-      .message = std::move(result.message),
-  };
-}
-
-struct StructuralSelectionMemento final {
-  ModelingSessionMemento modeling;
-  std::optional<EditorSubSelectionBaseline> sub_selection;
-
-  [[nodiscard]] bool valid() const noexcept { return modeling.valid(); }
-};
-
-StructuralSelectionMemento
-capture_structural_selection_memento(ModelingSessionService &modeling,
-                                     EditorSelectionService *selection) {
-  return {
-      .modeling = modeling.capture_history_memento(true),
-      .sub_selection =
-          selection != nullptr
-              ? selection->capture_registered_sub_selection_baseline()
-              : std::nullopt,
-  };
-}
-
-CommandResult restore_structural_selection_memento(
-    ModelingSessionService &modeling, EditorSelectionService *selection,
-    const StructuralSelectionMemento &memento) {
-  CommandResult restored = modeling_memento_status(
-      modeling.restore_history_memento_preserving_scene_selection(
-          memento.modeling));
-  if (!restored.ok || selection == nullptr) {
-    return restored;
-  }
-  CommandResult sub_selection = modeling_memento_status(
-      selection->restore_registered_sub_selection_baseline(
-          memento.sub_selection));
-  if (!sub_selection.ok) {
-    sub_selection.changed = true;
-    return sub_selection;
-  }
-  restored.changed = restored.changed || sub_selection.changed;
-  return restored;
-}
-
-/** Restores modeling selection after its owning structural scene transition. */
-class StructuralSelectionMementoCommand final : public IUndoableCommand {
-public:
-  StructuralSelectionMementoCommand(
-      ModelingSessionService &modeling, EditorSelectionService *selection,
-      std::unique_ptr<IUndoableCommand> structural_command)
-      : modeling_(modeling), selection_(selection),
-        structural_command_(std::move(structural_command)) {}
-
-  [[nodiscard]] const std::string &label() const override {
-    return structural_command_->label();
-  }
-
-  CommandResult undo() override {
-    if (!executed_) {
-      return command_invalid_result(
-          "Structural selection command has not been executed.");
-    }
-    return apply(false, before_, after_);
-  }
-
-  CommandResult redo() override {
-    if (executed_) {
-      return apply(true, after_, before_);
-    }
-    if (!structural_command_) {
-      return command_invalid_result(
-          "Structural selection command is unavailable.");
-    }
-
-    before_ = capture_structural_selection_memento(modeling_, selection_);
-    if (!before_.valid()) {
-      return command_invalid_result(
-          "Structural selection state could not be captured.");
-    }
-    CommandResult result = structural_command_->redo();
-    if (!result.ok || !result.changed) {
-      return result;
-    }
-
-    after_ = capture_structural_selection_memento(modeling_, selection_);
-    if (!after_.valid()) {
-      return rollback_initial(command_invalid_result(
-          "Structural selection history state could not be captured."));
-    }
-    executed_ = true;
-    return result;
-  }
-
-private:
-  CommandResult apply(bool redo, const StructuralSelectionMemento &target,
-                      const StructuralSelectionMemento &rollback_target) {
-    CommandResult result =
-        redo ? structural_command_->redo() : structural_command_->undo();
-    if (!result.ok || !result.changed) {
-      return result;
-    }
-
-    CommandResult restored = restore_structural_selection_memento(
-        modeling_, selection_, target);
-    if (restored.ok) {
-      return result;
-    }
-
-    const CommandResult inverse =
-        redo ? structural_command_->undo() : structural_command_->redo();
-    const CommandResult modeling_rollback = restore_structural_selection_memento(
-        modeling_, selection_, rollback_target);
-    if (inverse.ok && inverse.changed && modeling_rollback.ok) {
-      restored.changed = false;
-      return restored;
-    }
-    restored.changed = true;
-    if (!restored.message.empty()) {
-      restored.message += "; ";
-    }
-    restored.message +=
-        "structural selection rollback could not restore its exact state";
-    return restored;
-  }
-
-  CommandResult rollback_initial(CommandResult failure) {
-    const CommandResult inverse = structural_command_->undo();
-    const CommandResult modeling_rollback = restore_structural_selection_memento(
-        modeling_, selection_, before_);
-    if (inverse.ok && inverse.changed && modeling_rollback.ok) {
-      failure.changed = false;
-      return failure;
-    }
-    failure.changed = true;
-    if (!failure.message.empty()) {
-      failure.message += "; ";
-    }
-    failure.message +=
-        "structural selection rollback could not restore its exact state";
-    return failure;
-  }
-
-  ModelingSessionService &modeling_;
-  EditorSelectionService *selection_ = nullptr;
-  std::unique_ptr<IUndoableCommand> structural_command_;
-  StructuralSelectionMemento before_;
-  StructuralSelectionMemento after_;
-  bool executed_ = false;
-};
 
 CommandResult duplicate_rollback_failure(
     CommandResult failure, const CommandResult &document_rollback,
@@ -529,7 +376,7 @@ SceneStructuralLifecycleService::group_selection(
     return result;
   }
   static_cast<DocumentCommandResult &>(result) = history_.execute(
-      std::make_unique<StructuralSelectionMementoCommand>(
+      std::make_unique<ModelingSelectionMementoCommand>(
           modeling_, selection_, std::move(prepared.command)));
   if (result.ok && result.changed) {
     result.group_entity = scene_.primary_selection();
@@ -545,7 +392,7 @@ SceneStructuralLifecycleService::ungroup_selection() {
     return std::move(prepared.status);
   }
   return history_.execute(
-      std::make_unique<StructuralSelectionMementoCommand>(
+      std::make_unique<ModelingSelectionMementoCommand>(
           modeling_, selection_, std::move(prepared.command)));
 }
 

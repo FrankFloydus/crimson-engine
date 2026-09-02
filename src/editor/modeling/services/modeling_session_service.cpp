@@ -37,6 +37,7 @@
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
 #include "scene/scene_hierarchy_visibility.hpp"
+#include "scene/scene_material_surface.hpp"
 #include "scene/scene_transform.hpp"
 #include "scene/scene_transform_pivot.hpp"
 #include "scene/scene_texture_mapping.hpp"
@@ -73,6 +74,7 @@
 #include <editor/modeling/runtime/repeat_last_action.hpp>
 #include <editor/modeling/runtime/runtime_command.hpp>
 #include <editor/modeling/runtime/session.hpp>
+#include <quader/modeling/curves/curve_tube.hpp>
 #include <quader/modeling/neutral/geometry/geometry.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
 #include <quader/modeling/neutral/polygon/document_selection.hpp>
@@ -3824,12 +3826,12 @@ public:
 
   ModelingCommandResult apply_active_material(std::uint32_t material_slot) {
     if (selection_mode() == ModelingSelectionMode::Group) {
-      const GroupMaterialTargets targets = selected_group_material_targets();
+      const MaterialSurfaceTargets targets = selected_material_surface_targets();
       if (!targets.command.ok) {
         return targets.command;
       }
       return sdk_projection_adapter_.assign_material_slot_to_objects(
-          targets.objects, material_slot, true);
+          targets.mesh_objects, material_slot, true);
     }
     quader_editor_core::AssignMaterialOperationSettings settings;
     settings.material_slot = material_slot;
@@ -4159,31 +4161,153 @@ public:
     return slot;
   }
 
-  /// Resolves scene-owned group selection once at execution time. Linked
-  /// definitions require explicit mesh editing and are never traversed here.
-  struct GroupMaterialTargets final {
+  /// Pins every renderable material surface selected by Object or Group mode.
+  /// Mesh topology remains SDK-owned; solidified Curves need only their
+  /// scene-owned primary material component updated.
+  struct MaterialSurfaceTargets final {
     ModelingCommandResult command{.ok = true};
-    std::vector<int> objects;
+    std::vector<int> mesh_objects;
+    std::vector<EntityId> solid_curves;
+    bool preserve_scene_selection = false;
+
+    [[nodiscard]] bool empty() const noexcept {
+      return mesh_objects.empty() && solid_curves.empty();
+    }
   };
 
-  [[nodiscard]] GroupMaterialTargets selected_group_material_targets() const {
+  [[nodiscard]] static MaterialSurfaceTargets
+  rejected_material_surface_targets(std::string message) {
+    return MaterialSurfaceTargets{
+        .command = {.ok = false, .message = std::move(message)}};
+  }
+
+  [[nodiscard]] ModelingCommandResult append_material_surface_target(
+      EntityId entity, bool group_target,
+      const ModelingInstanceEditScope &edit_scope,
+      std::unordered_set<int> &visited_meshes,
+      std::unordered_set<EntityId> &visited_curves,
+      MaterialSurfaceTargets &result) const {
     const auto rejected = [](std::string message) {
-      return GroupMaterialTargets{
-          .command = {.ok = false, .message = std::move(message)}};
+      return ModelingCommandResult{
+          .ok = false, .changed = false, .message = std::move(message)};
     };
+
+    if (!scene_.exists(entity)) {
+      return rejected("A selected material surface is not live.");
+    }
+    const CurveComponent *curve = scene_.curve(entity);
+    if (curve != nullptr && curve->solidify &&
+        !scene_entity_has_solid_curve_surface(scene_, entity)) {
+      return rejected("A selected solidified Curve is invalid.");
+    }
+    if (!scene_entity_has_material_surface(scene_, entity)) {
+      return {.ok = true, .changed = false};
+    }
+
+    const bool is_curve = scene_entity_has_solid_curve_surface(scene_, entity);
+    const std::string_view target_name =
+        is_curve ? "solidified Curve" : "mesh";
+    if (scene_.is_effectively_locked(entity)) {
+      return rejected("A selected " + std::string(target_name) +
+                      " material surface is locked.");
+    }
+
+    const EntityId definition = scene_.containing_instance_definition(entity);
+    if (!group_target && edit_scope.active()) {
+      if (is_curve || definition != edit_scope.definition ||
+          !scene_.exists(edit_scope.occurrence) ||
+          !scene_hierarchy_segment_is_selectable(
+              scene_, entity, edit_scope.definition) ||
+          scene_.is_effectively_locked(edit_scope.occurrence) ||
+          (scene_.visibility(edit_scope.occurrence) != nullptr &&
+           !scene_.visibility(edit_scope.occurrence)->selectable)) {
+        return rejected("A selected material surface is outside the active "
+                        "instance edit scope or read-only.");
+      }
+    } else {
+      if (!group_target && definition != kInvalidEntityId) {
+        return rejected("Enter instance edit before applying material to a "
+                        "definition mesh.");
+      }
+      if (!scene_hierarchy_segment_is_selectable_ignoring_visibility(scene_,
+                                                                      entity)) {
+        return rejected("A selected " + std::string(target_name) +
+                        " material surface is read-only.");
+      }
+    }
+
+    if (scene_.instance_occurrence(entity) != nullptr ||
+        scene_.is_instance_definition_entity(entity) ||
+        (is_curve && scene_.is_instance_definition_member(entity))) {
+      return rejected("A selected material surface is not directly editable.");
+    }
+    const ModelingObjectComponent *object = scene_.modeling_object(entity);
+    if (object == nullptr || object->object_id <= 0 ||
+        !sdk_projection_adapter_.owns_object(object->object_id)) {
+      return rejected("A selected " + std::string(target_name) +
+                      " material surface is not editable.");
+    }
+    if (is_curve) {
+      if (visited_curves.insert(entity).second) {
+        result.solid_curves.push_back(entity);
+      }
+    } else if (visited_meshes.insert(object->object_id).second) {
+      result.mesh_objects.push_back(object->object_id);
+    }
+    return {.ok = true, .changed = false};
+  }
+
+  [[nodiscard]] MaterialSurfaceTargets selected_material_surface_targets() const {
     if (sdk_projection_adapter_.preview_active() || transform_drag_active() ||
         modal_tool_owns_viewport()) {
-      return rejected("Commit or cancel the active tool or preview before applying material.");
+      return rejected_material_surface_targets(
+          "Commit or cancel the active tool or preview before applying material.");
     }
-    const ModelingInstanceEditScope scope =
+
+    const ModelingSelectionMode mode = selection_mode();
+    if (mode != ModelingSelectionMode::Object &&
+        mode != ModelingSelectionMode::Group) {
+      return rejected_material_surface_targets(
+          "Apply Material works in object, group, or face mode.");
+    }
+    const ModelingInstanceEditScope edit_scope =
         instance_edit_scope_provider_ ? instance_edit_scope_provider_()
                                       : ModelingInstanceEditScope{};
-    if (scope.active()) {
-      return rejected("Select meshes in Object mode when applying material inside an instance.");
+    if (mode == ModelingSelectionMode::Group && edit_scope.active()) {
+      return rejected_material_surface_targets(
+          "Select meshes in Object mode when applying material inside an instance.");
     }
+
+    MaterialSurfaceTargets result;
+    result.preserve_scene_selection = mode == ModelingSelectionMode::Group;
+    std::unordered_set<int> visited_meshes;
+    std::unordered_set<EntityId> visited_curves;
+
+    if (mode == ModelingSelectionMode::Object) {
+      const ModelingSelectionExport selection = export_selection();
+      for (const ModelingSelectionExportObject &object : selection.objects) {
+        if (!object.selected || object.entity == kInvalidEntityId) {
+          continue;
+        }
+        const ModelingCommandResult appended = append_material_surface_target(
+            object.entity, false, edit_scope, visited_meshes, visited_curves,
+            result);
+        if (!appended.ok) {
+          return rejected_material_surface_targets(appended.message);
+        }
+      }
+      if (result.empty()) {
+        return rejected_material_surface_targets(
+            "Select one or more meshes or solidified Curves before applying "
+            "material.");
+      }
+      return result;
+    }
+
     const std::vector<EntityId> selected = scene_.selected_entities();
     if (selected.empty()) {
-      return rejected("Select one or more groups containing editable meshes first.");
+      return rejected_material_surface_targets(
+          "Select one or more groups containing material surfaces first.");
     }
     // The shared root helper omits locked roots, so validate the entire selected
     // set first rather than silently applying only to its unlocked remainder.
@@ -4192,45 +4316,38 @@ public:
           scene_.kind(group) != EntityKind::Empty ||
           scene_.is_instance_definition_entity(group) ||
           scene_.is_instance_definition_member(group)) {
-        return rejected("Apply Material in Group mode requires ordinary scene groups.");
+        return rejected_material_surface_targets(
+            "Apply Material in Group mode requires ordinary scene groups.");
       }
       if (scene_.is_effectively_locked(group)) {
-        return rejected("A selected material group is locked.");
+        return rejected_material_surface_targets(
+            "A selected material group is locked.");
       }
-      if (!scene_hierarchy_segment_is_selectable_ignoring_visibility(scene_, group)) {
-        return rejected("A selected material group is read-only.");
+      if (!scene_hierarchy_segment_is_selectable_ignoring_visibility(scene_,
+                                                                      group)) {
+        return rejected_material_surface_targets(
+            "A selected material group is read-only.");
       }
     }
 
-    GroupMaterialTargets result;
-    std::unordered_set<int> visited;
     for (const EntityId root : document_command_selected_root_entities(scene_)) {
       for (const EntityId entity : scene_.descendants(root, true)) {
         if (scene_.instance_occurrence(entity) != nullptr ||
             scene_.is_instance_definition_entity(entity) ||
             scene_.is_instance_definition_member(entity)) {
-          return rejected("Enter instance edit and select its meshes before applying material.");
+          return rejected_material_surface_targets(
+              "Enter instance edit and select its meshes before applying material.");
         }
-        if (scene_.kind(entity) != EntityKind::Mesh) {
-          continue;
-        }
-        if (scene_.is_effectively_locked(entity)) {
-          return rejected("A mesh in the selected material groups is locked.");
-        }
-        if (!scene_hierarchy_segment_is_selectable_ignoring_visibility(scene_, entity)) {
-          return rejected("A mesh in the selected material groups is read-only.");
-        }
-        const ModelingObjectComponent *object = scene_.modeling_object(entity);
-        if (object == nullptr || !sdk_projection_adapter_.owns_object(object->object_id)) {
-          return rejected("A mesh in the selected material groups is not editable.");
-        }
-        if (visited.insert(object->object_id).second) {
-          result.objects.push_back(object->object_id);
+        const ModelingCommandResult appended = append_material_surface_target(
+            entity, true, edit_scope, visited_meshes, visited_curves, result);
+        if (!appended.ok) {
+          return rejected_material_surface_targets(appended.message);
         }
       }
     }
-    if (result.objects.empty()) {
-      return rejected("The selected groups contain no editable meshes.");
+    if (result.empty()) {
+      return rejected_material_surface_targets(
+          "The selected groups contain no editable meshes or solidified Curves.");
     }
     return result;
   }
@@ -4300,6 +4417,79 @@ public:
     }
     modeling_result.changed = modeling_result.changed || component_changed;
     return modeling_result;
+  }
+
+  ModelingCommandResult apply_material_to_surfaces(
+      const MaterialSurfaceTargets &targets, MaterialReference material) {
+    if (!targets.command.ok) {
+      return targets.command;
+    }
+    if (!material.valid()) {
+      return {.ok = false,
+              .changed = false,
+              .message = "The active material is unavailable."};
+    }
+
+    ModelingCommandResult result{.ok = true};
+    if (!targets.mesh_objects.empty()) {
+      result = normalize_whole_object_materials(
+          targets.mesh_objects, material, targets.preserve_scene_selection);
+      if (!result.ok) {
+        return result;
+      }
+    }
+
+    bool curve_changed = false;
+    for (const EntityId entity : targets.solid_curves) {
+      const MaterialComponent desired{.material = material};
+      const MaterialComponent *current = scene_.material(entity);
+      if (current != nullptr && *current == desired) {
+        continue;
+      }
+      if (!mesh_sync_service_.set_entity_material(scene_, entity, desired)) {
+        return {.ok = false,
+                .changed = result.changed || curve_changed,
+                .message =
+                    "A solidified Curve material could not be applied."};
+      }
+      curve_changed = true;
+    }
+    result.changed = result.changed || curve_changed;
+    return result;
+  }
+
+  [[nodiscard]] ModelingCommandResult
+  active_material_selection_status(bool material_reference_available) const {
+    const ModelingSelectionMode mode = selection_mode();
+    if (mode != ModelingSelectionMode::Object &&
+        mode != ModelingSelectionMode::Group &&
+        mode != ModelingSelectionMode::Face) {
+      return {.ok = false,
+              .changed = false,
+              .message =
+                  "Apply Material works in object, group, or face mode."};
+    }
+    if (mode == ModelingSelectionMode::Face) {
+      return selection_summary().selected_face_count != 0u
+                 ? ModelingCommandResult{.ok = true}
+                 : ModelingCommandResult{
+                       .ok = false,
+                       .changed = false,
+                       .message =
+                           "Select one or more faces before applying material."};
+    }
+    const MaterialSurfaceTargets targets = selected_material_surface_targets();
+    if (!targets.command.ok) {
+      return targets.command;
+    }
+    if (!material_reference_available && !targets.solid_curves.empty()) {
+      return {.ok = false,
+              .changed = false,
+              .message =
+                  "Choose an active material before applying it to a "
+                  "solidified Curve."};
+    }
+    return targets.command;
   }
 
   [[nodiscard]] ModelingProjectMaterialQueryResult
@@ -4478,10 +4668,8 @@ public:
     }
 
     if (selection_mode() == ModelingSelectionMode::Group) {
-      const GroupMaterialTargets targets = selected_group_material_targets();
-      return targets.command.ok
-                 ? normalize_whole_object_materials(targets.objects, material, true)
-                 : targets.command;
+      const MaterialSurfaceTargets targets = selected_material_surface_targets();
+      return apply_material_to_surfaces(targets, material);
     }
 
     const ModelingSelectionSummary summary = selection_summary();
@@ -4511,14 +4699,8 @@ public:
     }
 
     if (summary.mode == ModelingSelectionMode::Object) {
-      std::vector<int> selected_object_ids;
-      selected_object_ids.reserve(selection.objects.size());
-      for (const ModelingSelectionExportObject &object : selection.objects) {
-        if (object.selected) {
-          selected_object_ids.push_back(object.modeling_object_id);
-        }
-      }
-      return normalize_whole_object_materials(selected_object_ids, material);
+      return apply_material_to_surfaces(selected_material_surface_targets(),
+                                        material);
     }
 
     bool component_changed = false;
@@ -7716,6 +7898,133 @@ public:
     return created;
   }
 
+  ModelingCreateBoxResult apply_curve_solidify(int modeling_object_id) {
+    const auto rejected = [](std::string message) {
+      return ModelingCreateBoxResult{
+          .ok = false, .changed = false, .message = std::move(message)};
+    };
+    if (sdk_projection_adapter_.preview_active() || transform_drag_active() ||
+        structural_drag_checkpoint_active_ ||
+        structural_transform_preview_active() || modal_tool_owns_viewport()) {
+      return rejected(
+          "Commit or cancel the active tool, drag, or preview before applying "
+          "Curve Solidify.");
+    }
+    const ModelingInstanceEditScope scope = instance_edit_scope_provider_
+        ? instance_edit_scope_provider_()
+        : ModelingInstanceEditScope{};
+    if (scope.active()) {
+      return rejected("Exit instance editing before applying Curve Solidify.");
+    }
+    if (selection_mode() != ModelingSelectionMode::Object ||
+        !curve_target_is_editable(modeling_object_id)) {
+      return rejected("Select one editable solidified Curve in Object mode.");
+    }
+
+    const std::optional<EntityId> source =
+        object_registry_.entity_for_modeling_object(modeling_object_id);
+    const std::vector<EntityId> selected = scene_.selected_entities();
+    if (!source.has_value() || selected.size() != 1U ||
+        selected.front() != *source) {
+      return rejected("Select only the Curve to apply Solidify.");
+    }
+
+    const CurveComponent *current_curve = scene_.curve(*source);
+    const ModelingObjectComponent *current_object =
+        scene_.modeling_object(*source);
+    const VisibilityComponent *current_visibility = scene_.visibility(*source);
+    const TransformComponent *current_transform = scene_.transform(*source);
+    const NameComponent *current_name = scene_.name(*source);
+    const EntityId parent = scene_.parent(*source);
+    if (scene_.kind(*source) != EntityKind::Curve ||
+        scene_.mesh(*source) != nullptr || current_curve == nullptr ||
+        !curve_component_is_valid(*current_curve) || !current_curve->solidify ||
+        assets_.curve(current_curve->curve) == nullptr ||
+        current_object == nullptr ||
+        current_object->object_id != modeling_object_id ||
+        !current_object->sdk_owned || !scene_.is_effectively_visible(*source) ||
+        (current_visibility != nullptr && !current_visibility->selectable) ||
+        !try_scene_matrix_inverse(scene_.world_transform_matrix(*source))
+             .has_value()) {
+      return rejected("Enable valid Solidify settings on the selected Curve.");
+    }
+    if (current_transform == nullptr || current_name == nullptr ||
+        !scene_transform_is_finite(*current_transform) ||
+        scene_.uuid(*source).empty() || parent == kInvalidEntityId ||
+        !scene_.exists(parent)) {
+      return rejected("The selected Curve placement is invalid.");
+    }
+
+    const std::optional<modeling::CurveDocument> curve_document =
+        sdk_projection_adapter_.curve_document(modeling_object_id, false);
+    if (!curve_document.has_value()) {
+      return rejected("The selected Curve document is unavailable.");
+    }
+    auto tube = modeling::build_curve_tube_mesh(
+        *curve_document,
+        {.radius = static_cast<double>(current_curve->solidify_radius),
+         .radial_resolution =
+             static_cast<std::uint32_t>(current_curve->solidify_resolution)});
+    if (!tube.ok()) {
+      return rejected(tube.error_message().empty()
+                          ? "Curve Solidify could not produce an editable mesh."
+                          : tube.error_message());
+    }
+
+    const CurveComponent source_curve = *current_curve;
+    CurveComponent retained_curve = source_curve;
+    retained_curve.solidify = false;
+    const TransformComponent source_transform = *current_transform;
+    const SceneLayerId source_layer = scene_.entity_layer(*source);
+    const std::string source_uuid = scene_.uuid(*source);
+    const std::string baked_base_name = current_name->name.empty()
+                                            ? "Curve Mesh"
+                                            : current_name->name + " Mesh";
+    const std::string baked_name = SceneEntityNaming::next_name(
+        scene_, baked_base_name);
+    std::optional<MaterialComponent> source_material_component;
+    if (const MaterialComponent *material = scene_.material(*source)) {
+      source_material_component = *material;
+    }
+    const MaterialReference source_material =
+        source_material_component.has_value() ? source_material_component->material
+                                              : MaterialReference{};
+
+    modeling::CurveTubeMesh baked = std::move(tube).value();
+    ModelingCreateBoxResult created =
+        sdk_projection_adapter_.create_mesh_document(
+            std::move(baked.document), baked_name, source_material,
+            [this, source = *source, source_uuid, source_curve,
+             retained_curve, parent, source_transform, source_material_component,
+             source_layer](const ModelingObjectRecord &created_object) {
+              if (!scene_.exists(source) || scene_.uuid(source) != source_uuid) {
+                return false;
+              }
+              const CurveComponent *live_curve = scene_.curve(source);
+              if (live_curve == nullptr || *live_curve != source_curve) {
+                return false;
+              }
+              if (!mesh_sync_service_.place_created_scene_object(
+                      scene_, created_object.entity, parent, source_transform) ||
+                  !scene_.set_entity_layer(created_object.entity,
+                                           source_layer) ||
+                  (source_material_component.has_value() &&
+                   !mesh_sync_service_.set_projected_material(
+                       scene_, created_object.entity,
+                       &*source_material_component)) ||
+                  !scene_.set_curve(source, retained_curve)) {
+                return false;
+              }
+              return true;
+            });
+    if (created.ok) {
+      app_selection_mode_ = ModelingSelectionMode::Object;
+      invalidate_selection_overlay_caches();
+      created.message = "Applied Curve Solidify.";
+    }
+    return created;
+  }
+
   [[nodiscard]] std::optional<modeling::CurveDocument> curve_document(
       int modeling_object_id, bool include_preview) const {
     return sdk_projection_adapter_.curve_document(modeling_object_id, include_preview);
@@ -9748,6 +10057,12 @@ ModelingSessionService::flip_selection(ModelingFlipOrientation orientation) {
 }
 
 ModelingCommandResult
+ModelingSessionService::active_material_selection_status(
+    bool material_reference_available) const {
+  return impl_->active_material_selection_status(material_reference_available);
+}
+
+ModelingCommandResult
 ModelingSessionService::apply_active_material(std::uint32_t material_slot) {
   return impl_->apply_active_material(material_slot);
 }
@@ -10218,6 +10533,11 @@ ModelingSessionService::create_mesh(const ModelingCreateMeshRequest &request) {
 ModelingCreateBoxResult ModelingSessionService::create_curve(
     modeling::CurveDocument document, std::string name) {
   return impl_->create_curve(std::move(document), std::move(name));
+}
+
+ModelingCreateBoxResult
+ModelingSessionService::apply_curve_solidify(int modeling_object_id) {
+  return impl_->apply_curve_solidify(modeling_object_id);
 }
 
 std::optional<modeling::CurveDocument> ModelingSessionService::curve_document(

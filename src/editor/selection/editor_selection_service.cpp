@@ -391,7 +391,16 @@ EditorSelectionService::restore_registered_sub_selection_baseline(
     const std::optional<EditorSubSelectionBaseline> &baseline) {
   summary_cache_valid_ = false;
   if (!baseline.has_value()) {
-    return {.ok = true, .changed = false};
+    if (sub_selection_provider_ == nullptr) {
+      return {.ok = true, .changed = false};
+    }
+    const EditorSubSelectionSnapshot before =
+        current_sub_selection_snapshot();
+    sub_selection_provider_->synchronize_sub_selection_scope();
+    const EditorSubSelectionSnapshot after =
+        current_sub_selection_snapshot();
+    summary_cache_valid_ = false;
+    return {.ok = true, .changed = before != after};
   }
   if (sub_selection_provider_ == nullptr) {
     return {.ok = false,

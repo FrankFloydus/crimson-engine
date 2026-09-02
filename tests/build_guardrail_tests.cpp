@@ -3104,6 +3104,8 @@ TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
 
 TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string tool_settings_panel_source =
+      read_source_file("src/ui/qt_tool_settings_panel.cpp");
   const std::string panel_manager_source =
       read_source_file("src/ui/ui_panel_manager.cpp");
   const std::string main_menu_source =
@@ -3135,6 +3137,10 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   const std::string status_refresh = source_slice(
       ui_system_source, "void UISystem::refresh_status_bar()",
       "void UISystem::present_lifecycle_result(");
+  const std::string number_dispatch_lifecycle = source_slice(
+      tool_settings_panel_source,
+      "bool number_dispatch_lifecycle_is_current(",
+      "void rebind_pending_number_dispatches_to_current_revision(");
 
   expect_contains(frame_refresh, "outliner_panel_->refresh(context)");
   expect_contains(frame_refresh, "layer_panel_->refresh(context)");
@@ -3306,12 +3312,19 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   const std::size_t tool_settings_refresh =
       frame_refresh.find("tool_settings_panel_->refresh()",
                          tool_settings_gate);
+  const std::size_t numeric_interaction_gate =
+      frame_refresh.find("!numeric_interaction_active", tool_settings_gate);
   ASSERT_NE(tool_settings_revision, std::string::npos);
   ASSERT_NE(tool_settings_gate, std::string::npos);
+  ASSERT_NE(numeric_interaction_gate, std::string::npos);
   ASSERT_NE(tool_settings_refresh, std::string::npos);
   EXPECT_LT(tool_settings_revision, tool_settings_gate);
+  EXPECT_LT(numeric_interaction_gate, tool_settings_refresh);
   EXPECT_LT(tool_settings_gate, tool_settings_refresh);
   expect_missing(frame_refresh, "tools().active_settings()");
+  expect_contains(number_dispatch_lifecycle, "active_settings_revision()");
+  expect_contains(number_dispatch_lifecycle, "active_tool_revision()");
+  expect_missing(number_dispatch_lifecycle, "active_settings()");
   expect_contains(primitive_reset_availability,
                   "modeling_.box_drag_state()");
   expect_missing(primitive_reset_availability, "box_preview(");

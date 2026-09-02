@@ -12,25 +12,12 @@ namespace quader {
 
 ModelingCommandAvailability AssignMaterialTool::custom_availability(
     const ModelingCommandExecutionContext &context) const {
-  const ModelingSelectionSummary summary =
-      context.modeling.selection_summary();
-  if (summary.mode != ModelingSelectionMode::Object &&
-      summary.mode != ModelingSelectionMode::Group &&
-      summary.mode != ModelingSelectionMode::Face) {
-    return ModelingCommandAvailability::unavailable(
-        "Apply Material works in object, group, or face mode.");
-  }
-  if (((summary.mode == ModelingSelectionMode::Object ||
-        summary.mode == ModelingSelectionMode::Group) &&
-       summary.selected_object_count == 0u) ||
-      (summary.mode == ModelingSelectionMode::Face &&
-       summary.selected_face_count == 0u)) {
-    return ModelingCommandAvailability::unavailable(
-        summary.mode == ModelingSelectionMode::Face
-            ? "Select one or more faces before applying material."
-            : "Select one or more meshes or groups before applying material.");
-  }
-  return ModelingCommandAvailability::available();
+  const ModelingCommandResult status =
+      context.modeling.active_material_selection_status(
+          context.active_material.valid());
+  return status.ok
+             ? ModelingCommandAvailability::available()
+             : ModelingCommandAvailability::unavailable(status.message);
 }
 
 ModelingCommandResult AssignMaterialTool::execute_custom_command(

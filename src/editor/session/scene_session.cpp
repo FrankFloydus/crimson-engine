@@ -141,7 +141,8 @@ void SceneSession::rebuild_services() {
       document_.scene(), document_.assets(), *history_, *modeling_,
       *selection_, *instances_);
   curve_ = std::make_unique<CurveToolService>(
-      document_.scene(), document_.assets(), *history_, *modeling_);
+      document_.scene(), document_.assets(), *history_, *modeling_,
+      *selection_, *document_commands_);
   selection_->set_sub_selection_provider(curve_.get());
   path_array_ = std::make_unique<PathArrayToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_,

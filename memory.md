@@ -7912,11 +7912,16 @@ or visual test was launched.
   overflow wraps by path length. This matches Blender's Fixed Count + Constant Offset followed by a
   Curve modifier with Stretch disabled; do not replace it with Fit Curve, clamped endpoint samples,
   or count-dependent spacing.
-- Copy-count controls use the generic stepped number interaction in Tool Settings. Linear Count,
-  Radial Copies, and Path Num Copies use native `QSlider` pointer tracking with `singleStep`,
-  `pageStep`, and `tickInterval` set to one descriptor step and visible value-space ticks. Wheel,
-  arrows, Page Up/Down, and groove presses advance by one step. Do not restore pixel-detent drag
-  accumulation: it disconnects the thumb from the pointer and becomes visibly laggy.
+- Copy-count controls use the generic stepped number interaction in Tool Settings. Linear Count and
+  Radial Copies retain native `QSlider` pointer tracking with `singleStep`, `pageStep`, and
+  `tickInterval` set to one descriptor step and visible value-space ticks. Path Num Copies opts into
+  the generic `DragSpinner` presentation instead: its side arrows apply exactly one descriptor
+  step, a stationary center click selects the native `QSpinBox` text, and horizontal center drag
+  discards the platform gesture threshold before applying one step per eight logical pixels. The
+  center advertises scrubbing with `Qt::SizeHorCursor`, rebases at bounds for immediate reversal,
+  and keeps expensive preview writes on the existing coalesced dispatch while the local value
+  tracks the pointer immediately. Presentation and numeric interaction remain separate descriptor
+  policies; do not add Path Array-specific Qt branches or replace Linear/Radial sliders implicitly.
 - Static multi-transform previews use retained Filament instance-buffer chunks and publish count
   changes through a prepared hidden generation. Capacity is retained across shrink/regrow edits,
   chunk offsets advance by active count, and transient-light pools grow only to their high-water
@@ -7928,3 +7933,176 @@ guarded command baseline was intentionally updated and its contract test passes.
 regression gate and an independent full CTest pass both report 6/6. Canonical Debug/Profile and
 Release `quader` builds pass in the required order. No app window, GPU smoke check, screenshot, or
 visual test was launched.
+
+### Path Array drag-spinner presentation
+
+- `QuaderToolSettingNumberPresentation::DragSpinner` is a reusable Tool Settings presentation;
+  Path Array Num Copies is its first opt-in. Keep its Qt construction generic and descriptor-driven.
+  Linear/Radial count and Path Array Distance retain their existing slider presentations.
+- The spinner center uses the horizontal-resize cursor, distinguishes a stationary click from a
+  platform-threshold drag, selects all text for native integer entry, and scrubs one descriptor step
+  per eight logical pixels after discarding threshold travel. Side arrows always apply exactly one
+  descriptor step. Rebase at limits so reversing direction responds immediately. Enter commits,
+  Escape restores the value from before editing, and panel teardown clears callbacks before row
+  destruction.
+- Keep local pointer tracking immediate while routing expensive owner/preview changes through the
+  existing coalesced dispatch; flush the final value on release.
+- Native spinner text entry stays local for the full edit, even across pauses longer than the
+  coalescing interval. Enter or focus-out flushes once; Escape discards the pending owner write and
+  restores the pre-edit value. Flush any earlier arrow action when text editing begins.
+- Size the native numeric center for five digits and keep both the center and wrapper horizontally
+  fixed. Tool Settings places the spinner at the left of its field instead of stretching it across
+  the row; sizing continues to come from the active Qt style and font rather than hardcoded chrome.
+- During a numeric pointer interaction, do not rebuild retained Tool Settings presentation or call
+  the broad `active_settings()` snapshot from the timer dispatch lifecycle check. Owner revision
+  checks and the retained descriptor validate the queued write; presentation catches up once the
+  gesture ends.
+- Path Array prepares canonical path stations, rotation-minimizing frames, and closed-seam twist
+  once per pinned path/source/Follow Path/signed-axis backbone. Count and Distance changes evaluate
+  only station transforms on that prepared backbone. Keep Count, Distance, and `layout_revision`
+  out of the cache key; clear the cache with the tool session, not on every preview invalidation.
+
+Verification: all 14 focused spinner/catalog tests pass. The affected workflow, mandatory regression
+gate, and an independent full CTest pass all six CTest targets. Canonical Debug/Profile and Release
+`quader` builds pass in the required order. Version 0.1.66 remains unchanged. No app window, GPU
+smoke check, screenshot, or visual test was launched.
+
+### Path Array transform variation
+
+- Station zero remains the exact reused source. For station `i > 0`, Rotation Offset is a repeated
+  source-local Euler step, while Scale Factor per Copy is multiplicative (`factor^i`, so `1.05`
+  means five percent growth per copy). Random rotation degrees and random scale factors are sampled
+  independently per axis and station from a stateless UUID-derived seed. Count growth must preserve
+  every existing random prefix, and preview, Apply, Undo, and Redo must reuse the same matrices.
+- The cached Path Array backbone carries the source root's affine local-variation frame: parent
+  linear transform followed by the root's authored rotation, with the root's signed scale excluded.
+  This keeps mirrored and nonuniformly parented sources consistent with normal local transform
+  semantics. Variation remains a lightweight placement input and must never enter the backbone
+  cache key. Reject cumulative scale underflow, overflow, singular matrices, and unrepresentable
+  world-to-local results instead of publishing partial content.
+- Tool Settings exposes generic descriptor-owned disclosure groups and compact `Vector3Number`
+  rows. Placement starts expanded; Rotation and Scale start collapsed and retain their disclosure
+  state. Qt must not branch on Path Array setting IDs. Component writes stay coalesced, and crossing
+  a random Min or Max atomically moves the opposite endpoint so either field can be edited first.
+
+Verification: 51/51 focused Path Array, compound preview, catalog, and generic Qt panel tests pass.
+The approved 191-command baseline changes only `tools.activate.path_array`. The affected workflow,
+mandatory regression gate, and independent full CTest each pass all six registered targets. Both
+canonical Debug/Profile and Release executables build successfully in required order. Version
+0.1.66 remains unchanged, and no app window, GPU smoke check, screenshot, or visual test was
+launched.
+
+## 2026-09-01 - Curve Circle and Oval creation presets
+
+- `quader::modeling::make_xy_circle_curve` and `make_xy_stadium_curve` are the portable canonical
+  geometry owners. Circle uses four counterclockwise cubic quarter arcs; Stadium uses two exact
+  straight segments plus four cubic quarter arcs and collapses exactly to the Circle form when its
+  total length equals its diameter. They return ordinary `CurveDocument` values and add no QDR
+  metadata or schema state.
+- `CurveToolService` owns the session-retained Draw/Circle/Oval choice and per-type dimensions.
+  Preset geometry remains procedural only between center placement and Apply or a successful
+  geometry edit. Type/size changes regenerate around the pinned construction-plane frame; choosing
+  Draw or completing a control move, deletion, or smooth/corner conversion freezes the geometry as
+  an ordinary Draw draft. Selection changes and canceled/no-op moves do not end that state.
+- Preset hover is a separate non-pickable preview document. Pointer movement changes only its
+  construction-plane transform; the renderer cache retains canonical samples and tessellation.
+  Placement reuses the normal point-placement/snapping service and exact pointer provenance. Drag,
+  modifiers, navigation interruption, capture loss, and later empty clicks cannot place or append
+  geometry.
+- Tool Settings remains descriptor-driven: `curve.type`, `curve.radius`, and `curve.length` use the
+  generic dropdown and numeric controls with dynamic visibility/ranges and EN/IT localization.
+  Apply remains the existing single `Create Curve` history command, after which the selected result
+  is a normal editable Curve.
+
+Verification: 15 focused native workflow tests, five portable shape-factory tests, the generic Qt
+settings/localization test, and the command behavior contract pass. The affected workflow,
+mandatory regression gate, and independent full CTest each pass all six registered targets.
+Canonical Debug/Profile and Release `quader` builds pass in required order. Version 0.1.66 remains
+unchanged. No Quader window, GPU smoke check, screenshot, or visual test was launched.
+
+## 2026-09-01 - Solidified Curve material surfaces
+
+- The shared scene material-surface policy treats ordinary meshes and valid solidified Curves as
+  assignable surfaces. Active-material assignment, group traversal, Inspector visibility, and
+  material Find/Replace must route through that policy instead of maintaining mesh-only filters.
+- A solidified Curve owns one primary `MaterialComponent` binding. Applying or replacing a Curve
+  material must not normalize or reinterpret arbitrary mesh-style slot data. Mixed mesh/Curve and
+  nested-group operations preflight the complete target set, respect locks/read-only/instance
+  ownership, and commit one undoable history action atomically.
+- `material_binding_revision` tracks Curve material-surface eligibility transitions, including
+  Solidify toggles, removal, destruction, and concurrent checkpoint restore. Point edits, radius,
+  resolution, and other Curve geometry changes do not advance it, so retained Inspector/material
+  presentation does not wake while editing Curve geometry.
+- Material-only changes rebind the generated tube's material while retaining its cached solid
+  geometry payload; they must not retessellate the Curve.
+
+Verification: eight focused material/history/revision/render-cache tests pass. The affected
+workflow and mandatory regression gate each pass all six registered CTest targets, including the
+isolated installed-SDK build. Version 0.1.66 remains unchanged, and no Quader window, GPU smoke
+check, screenshot, or visual test was launched.
+
+## 2026-09-01 - Curve Solidify and passive Curve settings
+
+- `CurveComponent` owns persistent Solidify state (`solidify`, cross-section `resolution`, and
+  `radius`). Passive Tool Settings for exactly one selected Curve route edits through
+  `DocumentCommandService`, so toggles, scrubs, direct entry, Undo, Redo, duplication, history
+  snapshots, and QDR round trips use the same command and scene-component policy. QDR scene schema
+  9 stores the fields; schema 8 reads with disabled Solidify defaults.
+- `quader::modeling::tessellate_curve_tube` is the portable tube owner. It builds uncapped open
+  tubes and continuous-seam closed tubes from adaptive Curve samples using rotation-minimizing frames and
+  deterministic closed-loop twist correction. Portable vertex/index limits reject excessive or
+  degenerate output atomically instead of emitting partial geometry.
+- `CurveSolidGeometryCache` derives renderer-neutral tube payloads behind exact Curve/settings
+  revisions. Rendering, bounds, exact click picking, marquee silhouette picking, and Path Array
+  compound previews consume that shared semantic geometry. Render and picker caches are bounded;
+  the picker accounts for live payload and projection ownership under one aggregate budget and
+  falls back to sampled centerline picking when tube derivation is invalid or oversized.
+- Passive Curve settings expose Closed, Solidify, Resolution, and Radius while Select is active;
+  Resolution and Radius use generic descriptor enablement and are disabled when Solidify is off.
+  Tool Settings hides its Description and Settings disclosure sections when there is no active or
+  passive tool target. Face/material sections remain independently available.
+- Applying a newly authored Curve completes the existing `Create Curve` transaction, preserves the
+  created Curve selection for passive editing, and returns the editor to Select through the normal
+  native tool lifecycle.
+
+Verification: focused portable tube, Curve service, render/picking, QDR, API, localization, generic
+Qt, and lifecycle tests pass. The affected workflow, mandatory regression gate, and independent
+full CTest each pass all six registered targets, including the isolated installed-SDK build.
+Canonical Debug/Profile and Release `quader` builds pass in required order. Version 0.1.66 remains
+unchanged. No Quader window, GPU smoke check, screenshot, or visual test was launched.
+
+## 2026-09-01 - Apply Curve Solidify as an editable Mesh
+
+- `curve.solidify.apply` bakes exactly one selected, valid solidified Curve into a normal SDK-owned
+  editable Mesh. The source Curve remains in the scene as the generator, with Solidify disabled so
+  the rendered tube is not duplicated.
+- The baked Mesh inherits the source parent, exact local transform, display layer, and complete
+  material component. Its authored polygon document uses welded station rings, outward quads,
+  smooth shading, material slot 0, and per-corner UV seams; open paths remain uncapped and closed
+  paths weld the longitudinal seam.
+- Apply is one `Apply Solidify` history item. The normal scene/modeling publication transaction and
+  reusable `ModelingSelectionMementoCommand` restore stable identities plus the exact Curve
+  selection and point/handle subselection on Undo; Redo recreates the same Mesh identity and leaves
+  the baked Mesh selected without stale Curve controls.
+- Tool Settings exposes Apply through the generic action descriptor. A successful Apply exits the
+  Curve tool and returns to normal selection behavior.
+
+Verification: focused portable topology, Curve service, editor API, generic Qt action, and
+localization tests pass. The affected workflow and mandatory regression gate pass all six
+registered CTest targets, including the full editor suite and isolated installed-SDK build.
+Canonical Debug/Profile and Release `quader` builds pass in required order. No Quader window, GPU
+smoke check, screenshot, or visual test was launched.
+
+## 2026-09-02 - clang-tidy with MSVC STL vector helpers
+
+- LLVM 22.1.8 can incorrectly enable MSVC STL vectorized equality helpers for Quader's 16-byte
+  class keys, reaching the STL's deliberate `unexpected size` assertion. Canonical MSVC builds do
+  not enable that class-type path, so changing correct `find`/`count` product code would only hide
+  an analyzer/toolchain mismatch.
+- `tools/check_cpp_style.py` disables `_USE_STD_VECTOR_ALGORITHMS` through a clang-tidy-only extra
+  argument. Keep this flag confined to static analysis; do not add it to native build presets or
+  production targets.
+
+Verification: the C++ style gate passes all 599 translation units. The mandatory regression gate
+passes all six CTest targets, and canonical Debug/Profile and Release `quader` builds pass in the
+required order.

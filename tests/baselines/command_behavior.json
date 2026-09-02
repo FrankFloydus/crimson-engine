@@ -22636,7 +22636,7 @@
         }
       },
       "before": "1985caa5a07954078832965af9c4ec8d",
-      "after": "29b9897ee0e78f3453d6dca95ec70e37",
+      "after": "7d4b8f32388e96fdd65c2cfcd52c95c8",
       "before_domains": {
         "documents": "bf55a0979f4e8f42bf6db8dff9e504ac",
         "scene": "77986fe2a2151b40387a16471d2cc4f5",
@@ -22658,7 +22658,7 @@
         "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
         "assets": "b0d0663d16b55503bb28de1fc73164a9",
         "history": "0147e55dc7a5afa94125bb23b5c6bd24",
-        "tools": "0844551a51d437c66d85be3b26f2434d",
+        "tools": "050d6802a51a6dccdde031549b0f40b0",
         "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
         "preferences": "5990439db9260895c3882ca36e65c89d",
         "revisions": "ecf3cb38a54a3b6422dc855c8f1b77ff"
@@ -22691,30 +22691,30 @@
           "modeling_selection": 2
         }
       },
-      "before": "a5f4b7533e5bc77c3ad736ab44ca4554",
-      "after": "9dfde75e059bbdbcbeb2a59b4f442aea",
+      "before": "b2c51f4392a7d454bbc509ac154defb0",
+      "after": "0574788812e75884fcb4925d7d49f88e",
       "before_domains": {
         "documents": "c203aebd33ef43901b5476e66d66fde9",
-        "scene": "360b677773b4d76430597e819cef0ac0",
+        "scene": "7aecdaefb2129bd5b7fe75c9b070fd46",
         "geometry": "8f7c349018be90eb45610e6fc204d735",
         "selection": "a75364f4c97a4f3b6ed3f2fbe512e763",
         "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
         "assets": "40d000c290d49c782e3bf5709f9e85dd",
         "history": "814150f27ec358e86fed6dec276166fd",
-        "tools": "4f6814a82d727def9299cc506ab85861",
+        "tools": "a36c9b46c0105f03334a637a67ad2903",
         "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
         "preferences": "5990439db9260895c3882ca36e65c89d",
         "revisions": "d80b28749071406ede33d3ac3d4aa5c7"
       },
       "after_domains": {
         "documents": "c203aebd33ef43901b5476e66d66fde9",
-        "scene": "360b677773b4d76430597e819cef0ac0",
+        "scene": "7aecdaefb2129bd5b7fe75c9b070fd46",
         "geometry": "8f7c349018be90eb45610e6fc204d735",
         "selection": "a75364f4c97a4f3b6ed3f2fbe512e763",
         "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
         "assets": "40d000c290d49c782e3bf5709f9e85dd",
         "history": "814150f27ec358e86fed6dec276166fd",
-        "tools": "1ca0fe525b01272a017c20f755be3622",
+        "tools": "b07ba31ed8283601d25769eb1e5f3552",
         "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
         "preferences": "5990439db9260895c3882ca36e65c89d",
         "revisions": "d1ebf23c973352a50f3883afcc8779b1"
@@ -22725,5 +22725,5 @@
       "lifecycle": {}
     }
   },
-  "approved_change_reason": "Path Array Distance is now independent of Num Copies and open overflow extrapolates like Blender Fixed Count plus Constant Offset"
+  "approved_change_reason": "Curve Solidify is now a passive tool setting with an Apply action that bakes a mesh while retaining the generator Curve."
 }

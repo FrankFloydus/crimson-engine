@@ -14,6 +14,8 @@
 #include <quader/modeling/api/tools.hpp>
 #include <quader/modeling/curves/curve_arc_length_path.hpp>
 #include <quader/modeling/curves/curve_document.hpp>
+#include <quader/modeling/curves/curve_shapes.hpp>
+#include <quader/modeling/curves/curve_tube.hpp>
 #include <quader/modeling/ids.hpp>
 #include <quader/modeling/input/viewport_host_input_snapshot.hpp>
 #include <quader/modeling/io/obj_mesh_view.hpp>

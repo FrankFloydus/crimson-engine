@@ -12,6 +12,7 @@
 #include "editor/modeling/modeling_tool_preview_scene_adapter.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/scene_session.hpp"
+#include "render/curve_solid_geometry_cache.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/scene_render_extraction.hpp"
 #include "render/tool_preview_renderable_cache.hpp"
@@ -24,6 +25,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -288,6 +290,7 @@ TEST(PathArrayCompoundPreviewTests,
   EXPECT_TRUE(mesh.suppress_source);
   EXPECT_EQ(mesh.instance_transforms.size(), kPathArrayDefaultCount);
   EXPECT_EQ(preview.scene.curves.front().source_entity, hierarchy.curve);
+  EXPECT_FALSE(preview.scene.curves.front().solidify);
   EXPECT_EQ(preview.scene.curves.front().instance_transforms.size(),
             kPathArrayDefaultCount);
   for (const EntityId marker_entity : {hierarchy.root, hierarchy.generic}) {
@@ -345,6 +348,7 @@ TEST(PathArrayCompoundPreviewTests,
   EXPECT_TRUE(snapshot.meshes.front().cast_shadows);
   ASSERT_EQ(snapshot.curves.size(), 1U);
   ASSERT_NE(snapshot.curves.front().sample_payload, nullptr);
+  EXPECT_FALSE(snapshot.curves.front().solidify);
   EXPECT_FALSE(snapshot.curves.front().sample_payload->samples.empty());
   ASSERT_EQ(snapshot.lights.size(), 3U);
   EXPECT_TRUE(snapshot.lights[0].light == preview.scene.lights[0].light);
@@ -378,6 +382,95 @@ TEST(PathArrayCompoundPreviewTests,
       [](const ViewportOverlayIcon &icon) {
         return icon.source == ViewportOverlaySource::Tool;
       }));
+}
+
+TEST(PathArrayCompoundPreviewTests,
+     SolidifiedCurveParticipantPublishesCachedTransientTubeAtEveryStation) {
+  CompoundPreviewHarness harness;
+  const QuaderModelingObjectRef path = create_curve(harness.editor);
+  const QuaderModelingObjectRef source_curve = create_curve(harness.editor);
+  SceneDocument &scene = harness.session.scene();
+  const AssetId pipe_material = harness.session.assets().add_material(
+      make_default_quader_material("Path Array Pipe"));
+  ASSERT_NE(pipe_material, kInvalidAssetId);
+  const EntityId source_root = scene.create_empty("Solid Curve Source");
+  ASSERT_TRUE(scene.set_parent(source_curve.entity, source_root, false));
+  ASSERT_TRUE(scene.set_material(
+      source_curve.entity, MaterialComponent{.material = pipe_material}));
+  const CurveComponent *authored = scene.curve(source_curve.entity);
+  ASSERT_NE(authored, nullptr);
+  CurveComponent solid = *authored;
+  solid.solidify = true;
+  solid.solidify_resolution = 12;
+  solid.solidify_radius = 0.35F;
+  ASSERT_TRUE(scene.set_curve(source_curve.entity, solid));
+  ASSERT_EQ(scene.mesh(source_curve.entity), nullptr);
+
+  ASSERT_TRUE(harness.editor.selection().select_object(path).ok());
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.select_source(source_root).ok);
+
+  const PathArrayPreviewState &first_preview = tool.preview_state();
+  ASSERT_TRUE(first_preview.active);
+  ASSERT_EQ(first_preview.scene.curves.size(), 1U);
+  const ModelingToolPreviewCurve &modeled_curve =
+      first_preview.scene.curves.front();
+  EXPECT_EQ(modeled_curve.source_entity, source_curve.entity);
+  EXPECT_TRUE(modeled_curve.solidify);
+  EXPECT_EQ(modeled_curve.solidify_resolution, 12);
+  EXPECT_FLOAT_EQ(modeled_curve.solidify_radius, 0.35F);
+  EXPECT_EQ(modeled_curve.material.material.embedded_asset(), pipe_material);
+  EXPECT_EQ(modeled_curve.instance_transforms.size(),
+            kPathArrayDefaultCount);
+
+  CurveSolidGeometryCache geometry_cache;
+  ToolPreviewScene neutral = project_modeling_tool_preview_scene(
+      first_preview.scene, scene);
+  ASSERT_EQ(neutral.curves.size(), 1U);
+  EXPECT_TRUE(neutral.curves.front().solidify);
+  EXPECT_EQ(neutral.curves.front().solidify_resolution, 12);
+  EXPECT_FLOAT_EQ(neutral.curves.front().solidify_radius, 0.35F);
+  RenderToolPreviewSceneSnapshot first =
+      build_render_tool_preview_scene_snapshot(
+          std::move(neutral), harness.session.assets(), nullptr, nullptr,
+          &geometry_cache);
+  ASSERT_TRUE(first.complete);
+  ASSERT_EQ(first.curves.size(), 1U);
+  EXPECT_TRUE(first.curves.front().solidify);
+  EXPECT_EQ(first.curves.front().solidify_resolution, 12);
+  EXPECT_FLOAT_EQ(first.curves.front().solidify_radius, 0.35F);
+  ASSERT_EQ(first.meshes.size(), 1U);
+  const RenderToolPreviewMeshRecord &tube = first.meshes.front();
+  EXPECT_EQ(tube.source_entity, source_curve.entity);
+  EXPECT_EQ(tube.material.component.material.embedded_asset(), pipe_material);
+  EXPECT_TRUE(tube.cast_shadows);
+  EXPECT_FALSE(tube.double_sided);
+  EXPECT_EQ(tube.instance_transforms.size(), kPathArrayDefaultCount);
+  ASSERT_TRUE(tube.renderable());
+  const std::shared_ptr<const MeshGeometryPayload> geometry =
+      tube.mesh.geometry_payload();
+  ASSERT_NE(geometry, nullptr);
+  EXPECT_EQ(geometry_cache.stats().build_count, 1U);
+  EXPECT_FALSE(build_render_tool_preview_overlay_frame(first).lines.empty())
+      << "solid Curve previews retain the authored centerline overlay";
+  EXPECT_EQ(scene.mesh(source_curve.entity), nullptr)
+      << "preview derivation must not author a persistent Mesh component";
+
+  ASSERT_TRUE(tool.set_count(3U).ok);
+  ToolPreviewScene moved = project_modeling_tool_preview_scene(
+      tool.preview_state().scene, scene);
+  RenderToolPreviewSceneSnapshot second =
+      build_render_tool_preview_scene_snapshot(
+          std::move(moved), harness.session.assets(), nullptr, nullptr,
+          &geometry_cache);
+  ASSERT_TRUE(second.complete);
+  ASSERT_EQ(second.meshes.size(), 1U);
+  EXPECT_EQ(second.meshes.front().instance_transforms.size(), 3U);
+  EXPECT_EQ(second.meshes.front().mesh.geometry_payload(), geometry);
+  EXPECT_EQ(geometry_cache.stats().build_count, 1U)
+      << "station-only changes reuse the exact derived tube";
+  EXPECT_EQ(geometry_cache.stats().hit_count, 1U);
 }
 
 TEST(PathArrayCompoundPreviewTests,

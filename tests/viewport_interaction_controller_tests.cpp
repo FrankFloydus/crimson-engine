@@ -12,8 +12,9 @@
 #include "assets/mesh_asset.hpp"
 #include "editor/array/path_array_tool_service.hpp"
 #include "editor/curve/curve_tool_service.hpp"
-#include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modeling/modeling_viewport_camera_adapter.hpp"
 #include "editor/modeling/runtime/tool_constants.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/input/viewport_keybinding_resolver.hpp"
 #include "editor/input/quader_input_binding.hpp"
 #include "editor/interactions/viewport_projection.hpp"
@@ -391,6 +392,22 @@ create_box_at(ViewportInteractionHarness &harness, quader::QVec3 center) {
           "Viewport Interaction Box");
   EXPECT_TRUE(box.ok) << box.message;
   return box.value();
+}
+
+void set_curve_solidify(ViewportInteractionHarness &harness,
+                        quader::EntityId entity, float radius,
+                        int resolution = 8) {
+  const quader::CurveComponent *current =
+      harness.session.scene().curve(entity);
+  ASSERT_NE(current, nullptr);
+  if (current == nullptr) {
+    return;
+  }
+  quader::CurveComponent updated = *current;
+  updated.solidify = true;
+  updated.solidify_radius = radius;
+  updated.solidify_resolution = resolution;
+  ASSERT_TRUE(harness.session.scene().set_curve(entity, updated));
 }
 
 quader::QuaderModelingObjectRef create_project_box_at(
@@ -1882,6 +1899,246 @@ TEST(ViewportCurvePickingTests,
   }
 }
 
+TEST(ViewportCurvePickingTests,
+     SolidifiedCurveUsesExactTubeSurfaceAndReusesBlasAcrossTransforms) {
+  ViewportInteractionHarness harness;
+  const auto curve = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 0.0f, 0.0f}},
+                 {.position = {2.0f, 0.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  set_curve_solidify(harness, curve.value().entity, 1.0f);
+
+  const auto initial = harness.frame().scene_curve_pick_candidates;
+  ASSERT_EQ(initial.size(), 1u);
+  ASSERT_TRUE(initial.front().solidified);
+  ASSERT_NE(initial.front().tube_payload, nullptr);
+  EXPECT_GT(initial.front().tube_payload->triangle_count(), 0u);
+  EXPECT_EQ(harness.curve_pick_cache.tube_payload_build_count(), 1u);
+  const auto payload = initial.front().tube_payload;
+
+  const quader::QVec2 inside =
+      harness.camera.project_world_point({0.0f, 0.5f, 0.0f}).position;
+  const auto hit = quader::pick_viewport_curve(harness.camera, inside, initial);
+  ASSERT_TRUE(hit.has_value());
+  EXPECT_EQ(hit->entity, curve.value().entity);
+  EXPECT_EQ(hit->distance_pixels, 0.0);
+  const quader::QVec2 outside =
+      harness.camera.project_world_point({0.0f, 1.1f, 0.0f}).position;
+  EXPECT_FALSE(
+      quader::pick_viewport_curve(harness.camera, outside, initial).has_value());
+
+  ASSERT_TRUE(harness.session.scene().set_transform(
+      curve.value().entity,
+      quader::TransformComponent{.position = {0.0f, 2.0f, 0.0f}}));
+  const auto moved = harness.frame().scene_curve_pick_candidates;
+  ASSERT_EQ(moved.size(), 1u);
+  EXPECT_EQ(moved.front().tube_payload, payload);
+  EXPECT_EQ(harness.curve_pick_cache.tube_payload_build_count(), 1u)
+      << "World-transform changes must not retessellate or rebuild the BLAS.";
+
+  set_curve_solidify(harness, curve.value().entity, 0.5f, 12);
+  const auto settings_changed = harness.frame().scene_curve_pick_candidates;
+  ASSERT_EQ(settings_changed.size(), 1u);
+  EXPECT_NE(settings_changed.front().tube_payload, payload);
+  EXPECT_EQ(harness.curve_pick_cache.tube_payload_build_count(), 2u);
+}
+
+TEST(ViewportCurvePickingTests,
+     DegenerateSolidifyFallsBackToCanonicalSampledCurveSemantics) {
+  ViewportInteractionHarness harness;
+  const auto curve = harness.editor.modeling().create_curve({
+      .points = {{.position = {0.0f, 0.0f, 0.0f}},
+                 {.position = {0.0f, 0.0f, 0.0f}},
+                 {.position = {0.0f, 0.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  set_curve_solidify(harness, curve.value().entity, 0.25f);
+
+  const auto candidates = harness.frame().scene_curve_pick_candidates;
+  ASSERT_EQ(candidates.size(), 1u);
+  ASSERT_NE(harness.session.scene().curve(curve.value().entity), nullptr);
+  EXPECT_TRUE(harness.session.scene().curve(curve.value().entity)->solidify);
+  EXPECT_FALSE(candidates.front().solidified)
+      << "Semantic tube picking requires an actual derived payload.";
+  EXPECT_EQ(candidates.front().tube_payload, nullptr);
+  ASSERT_NE(candidates.front().sample_payload, nullptr);
+  EXPECT_FALSE(candidates.front().sample_payload->samples.empty());
+  EXPECT_FALSE(quader::pick_viewport_curve(
+                   harness.camera, {400.0f, 300.0f}, candidates)
+                   .has_value())
+      << "The fallback must retain the sampled-stroke policy, including its "
+         "canonical rejection of zero-length segments.";
+}
+
+TEST(ViewportCurvePickingTests,
+     SolidifyBudgetFailureKeepsSampledStrokeClickAndMarqueePicking) {
+  ViewportInteractionHarness harness;
+  constexpr std::size_t kRingCount = 31'008u;
+  quader::QuaderCreateCurveArgs args;
+  args.points.reserve(kRingCount);
+  for (std::size_t index = 0u; index < kRingCount; ++index) {
+    const float fraction = static_cast<float>(index) /
+                           static_cast<float>(kRingCount - 1u);
+    args.points.push_back(
+        {.position = {-1.5f + 3.0f * fraction, 0.0f, 0.0f}});
+  }
+  const auto curve = harness.editor.modeling().create_curve(args);
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  set_curve_solidify(harness, curve.value().entity, 0.1f, 128);
+
+  const auto candidates = harness.frame().scene_curve_pick_candidates;
+  ASSERT_EQ(candidates.size(), 1u);
+  ASSERT_NE(harness.session.scene().curve(curve.value().entity), nullptr);
+  EXPECT_TRUE(harness.session.scene().curve(curve.value().entity)->solidify);
+  EXPECT_FALSE(candidates.front().solidified);
+  EXPECT_EQ(candidates.front().tube_payload, nullptr);
+  ASSERT_NE(candidates.front().sample_payload, nullptr);
+  ASSERT_GE(candidates.front().sample_payload->samples.size(), kRingCount);
+
+  const quader::QVec2 center =
+      harness.camera.project_world_point({0.0f, 0.0f, 0.0f}).position;
+  const auto click =
+      quader::pick_viewport_curve(harness.camera, center, candidates);
+  ASSERT_TRUE(click.has_value());
+  EXPECT_EQ(click->entity, curve.value().entity);
+
+  quader::ModelingBoxSelectRequest request{
+      .camera = {.orthographic = true,
+                 .origin = {0.0f, 0.0f, 8.0f},
+                 .viewport_size = {800.0f, 600.0f},
+                 .orthographic_size = 12.0},
+      .start = {390.0f, 290.0f},
+      .end = {410.0f, 310.0f},
+      .rule = quader::ModelingBoxSelectionRule::Crossing,
+  };
+  const auto visible = [](quader::EntityId) { return true; };
+  EXPECT_EQ(harness.curve_pick_cache.box_pick_entities(
+                harness.session.scene(), harness.session.assets(), request, 0u,
+                visible),
+            std::vector<quader::EntityId>{curve.value().entity});
+}
+
+TEST(ViewportCurvePickingTests,
+     SolidifiedCurvePayloadCacheIsBoundedAndResetClearsItsCounters) {
+  ViewportInteractionHarness harness;
+  const auto curve = harness.editor.modeling().create_curve({
+      .points = {{.position = {-1.0f, 0.0f, 0.0f}},
+                 {.position = {1.0f, 0.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+
+  constexpr std::size_t kDistinctSettings = 65u;
+  std::vector<quader::ViewportSceneCurvePickCandidate> retained_payloads;
+  retained_payloads.reserve(kDistinctSettings);
+  for (std::size_t index = 0u; index < kDistinctSettings; ++index) {
+    set_curve_solidify(harness, curve.value().entity,
+                       0.1f + static_cast<float>(index) * 0.01f);
+    const auto candidates = harness.frame().scene_curve_pick_candidates;
+    ASSERT_EQ(candidates.size(), 1u);
+    ASSERT_NE(candidates.front().tube_payload, nullptr);
+    retained_payloads.push_back(candidates.front());
+  }
+  EXPECT_EQ(harness.curve_pick_cache.tube_payload_build_count(),
+            kDistinctSettings);
+
+  set_curve_solidify(harness, curve.value().entity, 0.1f);
+  const auto replacement = harness.frame().scene_curve_pick_candidates;
+  ASSERT_EQ(replacement.size(), 1u);
+  ASSERT_NE(replacement.front().tube_payload, nullptr);
+  EXPECT_EQ(harness.curve_pick_cache.tube_payload_build_count(),
+            kDistinctSettings + 1u)
+      << "The least-recently-used setting must be evicted at capacity.";
+  std::size_t expected_live_payload_bytes =
+      replacement.front().tube_payload->estimated_bytes();
+  for (const auto &candidate : retained_payloads) {
+    expected_live_payload_bytes += candidate.tube_payload->estimated_bytes();
+  }
+  EXPECT_EQ(harness.curve_pick_cache.tube_payload_cached_bytes(),
+            expected_live_payload_bytes)
+      << "Eviction from the lookup LRU cannot release caller-retained payload "
+         "reservations.";
+
+  const quader::ModelingViewportCamera projection_camera{
+      .orthographic = true,
+      .origin = {0.0f, 0.0f, 8.0f},
+      .viewport_size = {800.0f, 600.0f},
+      .orthographic_size = 12.0,
+  };
+  const auto runtime_camera =
+      quader::modeling_runtime_camera(projection_camera);
+  constexpr std::size_t kProjectionsPerPayload = 4u;
+  for (auto candidate : retained_payloads) {
+    for (std::size_t projection = 0u;
+         projection < kProjectionsPerPayload; ++projection) {
+      candidate.world_transform.values[12] +=
+          static_cast<float>(projection) * 0.001f;
+      EXPECT_TRUE(quader::project_viewport_curve_tube(
+                      candidate,
+                      {.camera = runtime_camera,
+                       .near_plane = 0.01,
+                       .far_plane = 1000.0})
+                      .valid);
+    }
+  }
+  constexpr std::size_t kGlobalProjectionCapacity = 64u * 4u;
+  EXPECT_EQ(harness.curve_pick_cache.tube_projection_build_count(),
+            kDistinctSettings * kProjectionsPerPayload);
+  EXPECT_EQ(harness.curve_pick_cache.tube_projection_cache_entry_count(),
+            kGlobalProjectionCapacity);
+  EXPECT_EQ(harness.curve_pick_cache.tube_projection_eviction_count(),
+            kDistinctSettings * kProjectionsPerPayload -
+                kGlobalProjectionCapacity)
+      << "All payloads must compete in one projection LRU.";
+  EXPECT_EQ(harness.curve_pick_cache.tube_cached_bytes(),
+            harness.curve_pick_cache.tube_payload_cached_bytes() +
+                harness.curve_pick_cache.tube_projection_cached_bytes());
+  EXPECT_LE(harness.curve_pick_cache.tube_cached_bytes(),
+            harness.curve_pick_cache.tube_cache_byte_capacity());
+
+  const auto first_projection_builds =
+      retained_payloads.front().tube_payload->projection_build_count();
+  EXPECT_TRUE(quader::project_viewport_curve_tube(
+                  retained_payloads.front(),
+                  {.camera = runtime_camera,
+                   .near_plane = 0.01,
+                   .far_plane = 1000.0})
+                  .valid);
+  EXPECT_EQ(retained_payloads.front().tube_payload->projection_build_count(),
+            first_projection_builds + 1u)
+      << "The oldest projection must be the first aggregate LRU victim.";
+  EXPECT_EQ(harness.curve_pick_cache.tube_projection_eviction_count(), 5u);
+
+  retained_payloads.clear();
+  harness.curve_pick_cache.reset();
+  EXPECT_EQ(harness.curve_pick_cache.build_count(), 0u);
+  EXPECT_EQ(harness.curve_pick_cache.rectangle_build_count(), 0u);
+  EXPECT_EQ(harness.curve_pick_cache.tube_payload_build_count(), 0u);
+  EXPECT_EQ(harness.curve_pick_cache.tube_payload_cached_bytes(), 0u);
+  EXPECT_EQ(harness.curve_pick_cache.tube_projection_cached_bytes(), 0u);
+  EXPECT_EQ(harness.curve_pick_cache.tube_cached_bytes(), 0u);
+  EXPECT_EQ(harness.curve_pick_cache.tube_projection_cache_entry_count(), 0u);
+  EXPECT_EQ(harness.curve_pick_cache.tube_projection_build_count(), 0u);
+  EXPECT_EQ(harness.curve_pick_cache.tube_projection_eviction_count(), 0u);
+}
+
+TEST(ViewportCurvePickingTests,
+     OversizedTubePickPayloadCannotBypassTheAggregateByteBudget) {
+  constexpr std::size_t kStandaloneBudgetBytes = 32u * 1024u * 1024u;
+  constexpr std::size_t kEstimatedBytesPerTriangle = 256u;
+  const std::size_t triangle_count =
+      kStandaloneBudgetBytes / kEstimatedBytesPerTriangle + 1u;
+  std::vector<quader::ViewportCurveTubeTriangle> triangles(
+      triangle_count,
+      {.a = {0.0f, 0.0f, 0.0f},
+       .b = {1.0f, 0.0f, 0.0f},
+       .c = {0.0f, 1.0f, 0.0f}});
+  EXPECT_EQ(quader::ViewportCurveTubePickPayload::build(std::move(triangles)),
+            nullptr)
+      << "An oversized valid triangle set must fall back before allocating an "
+         "unaccounted BVH.";
+}
+
 TEST(ViewportCurveAnchorSnapTests,
      SinglePointDocumentsContributeAnchorsButNeverHandleEndpoints) {
   const std::array anchor_near_ray{
@@ -2335,6 +2592,63 @@ TEST(ViewportCurveMarqueeTests,
   ASSERT_EQ(retained.size(), 1u);
   EXPECT_EQ(retained.data(), storage);
   EXPECT_EQ(retained.front().sample_payload, samples);
+}
+
+TEST(ViewportCurveMarqueeTests,
+     SolidifiedCurveContainmentAndCrossingUseVisibleTubeSilhouette) {
+  ViewportInteractionHarness harness;
+  const auto curve = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 0.0f, 0.0f}},
+                 {.position = {2.0f, 0.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  set_curve_solidify(harness, curve.value().entity, 1.0f);
+
+  quader::ViewportCurvePickCache cache;
+  quader::ModelingBoxSelectRequest request{
+      .camera = {.orthographic = true,
+                 .origin = {0.0f, 0.0f, 8.0f},
+                 .viewport_size = {800.0f, 600.0f},
+                 .orthographic_size = 12.0},
+      .start = {390.0f, 258.0f},
+      .end = {410.0f, 266.0f},
+      .rule = quader::ModelingBoxSelectionRule::Crossing,
+  };
+  const auto visible = [](quader::EntityId) { return true; };
+  const auto pick = [&] {
+    return cache.box_pick_entities(harness.session.scene(),
+                                   harness.session.assets(), request, 0u,
+                                   visible);
+  };
+  EXPECT_EQ(pick(), std::vector<quader::EntityId>{curve.value().entity})
+      << "The rectangle intersects the tube but not its hidden centerline.";
+  EXPECT_EQ(cache.rectangle_build_count(), 1u);
+  const auto candidates = cache.candidates(
+      harness.session.scene(), harness.session.assets(), 0u, visible);
+  ASSERT_EQ(candidates.size(), 1u);
+  ASSERT_NE(candidates.front().tube_payload, nullptr);
+  EXPECT_EQ(candidates.front().tube_payload->projection_build_count(), 1u);
+
+  request.start = {290.0f, 295.0f};
+  request.end = {510.0f, 305.0f};
+  request.rule = quader::ModelingBoxSelectionRule::Contain;
+  EXPECT_TRUE(pick().empty())
+      << "Containing only the centerline must not contain a solidified Curve.";
+  EXPECT_EQ(cache.rectangle_build_count(), 1u)
+      << "Rectangle edits reuse the camera/source tube projection.";
+  EXPECT_EQ(candidates.front().tube_payload->projection_build_count(), 1u);
+
+  request.start = {290.0f, 240.0f};
+  request.end = {510.0f, 360.0f};
+  EXPECT_EQ(pick(), std::vector<quader::EntityId>{curve.value().entity});
+
+  auto api_request = curve_marquee_request({390.0f, 258.0f},
+                                            {410.0f, 266.0f});
+  api_request.rule = quader::QuaderBoxSelectionRule::Crossing;
+  const auto selected = harness.editor.selection().box_select(api_request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{curve.value().entity});
 }
 
 TEST(ViewportCurveMarqueeTests,
@@ -9659,4 +9973,380 @@ TEST(ViewportInteractionControllerTests,
 
   (void)click({790.0f, 590.0f});
   EXPECT_EQ(harness.session.path_array().source_root(), replacement.entity);
+}
+
+namespace {
+
+struct CurvePresetPointerOptions final {
+  quader::ViewportModifiers modifiers = {};
+  std::optional<std::uint64_t> release_sequence;
+  bool navigation_gizmo_consumed = false;
+  bool transform_gizmo_consumed = false;
+  bool suppress_hover_work = false;
+  bool scene_snap_enabled = false;
+  bool grid_snap_enabled = false;
+};
+
+void configure_curve_preset_viewport(ViewportInteractionHarness &harness) {
+  harness.camera.view_axis(quader::ViewportViewAxis::Y, 1);
+  harness.router.set_active_tool(quader::ViewportToolId::Curve);
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+  harness.input.orthographic_view = true;
+  harness.input.active_tool_owns_viewport = true;
+  harness.input.modal_tool_active = true;
+}
+
+quader::ViewportToolPointerLifecycleResult
+dispatch_curve_preset_pointer(ViewportInteractionHarness &harness,
+                              std::uint64_t &sequence, bool pressed, bool down,
+                              bool released, quader::QVec2 local,
+                              CurvePresetPointerOptions options = {}) {
+  harness.input.mouse_local = local;
+  harness.input.mouse_screen = local;
+  harness.input.modifiers = options.modifiers;
+  harness.input.pointer_pressed_edges.clear();
+  harness.input.pointer_released_edges.clear();
+  if (pressed) {
+    harness.input.pointer_pressed_edges.push_back({
+        .button = quader::QuaderMouseButton::Left,
+        .local = local,
+        .sequence = sequence++,
+    });
+  }
+  if (released) {
+    const std::uint64_t release_sequence =
+        options.release_sequence.has_value() ? *options.release_sequence
+                                             : sequence++;
+    harness.input.pointer_released_edges.push_back({
+        .button = quader::QuaderMouseButton::Left,
+        .local = local,
+        .sequence = release_sequence,
+    });
+  }
+
+  const quader::ViewportInteractionFrame interaction =
+      harness.frame(pressed, down, released, local);
+  return harness.controller.handle_tool_pointer_lifecycle(
+      harness.editor, harness.session.scene(), harness.session.assets(),
+      harness.session.native_tools(), &harness.session.point_placement(),
+      harness.camera,
+      quader::ViewportToolPointerLifecycleFrame{
+          .interaction = interaction,
+          .native_tool =
+              {
+                  .input = harness.input,
+                  .input_result = harness.input_result,
+                  .navigation_gizmo_consumed =
+                      options.navigation_gizmo_consumed,
+                  .transform_gizmo_consumed = options.transform_gizmo_consumed,
+                  .suppress_hover_work = options.suppress_hover_work,
+                  .left_pressed = pressed,
+                  .left_down = down,
+                  .left_released = released,
+                  .left_click_local = local,
+                  .pointer_drag_threshold_pixels = 4.0f,
+                  .scene_snap_enabled = options.scene_snap_enabled,
+                  .grid_snap_enabled = options.grid_snap_enabled,
+              },
+      });
+}
+
+quader::QVec3
+curve_preset_hover_center(const quader::CurveToolPreviewState &preview) {
+  return {
+      preview.preset_hover_transform.values[12],
+      preview.preset_hover_transform.values[13],
+      preview.preset_hover_transform.values[14],
+  };
+}
+
+quader::QVec3
+curve_anchor_centroid(const quader::modeling::CurveDocument &document) {
+  quader::QVec3 result{};
+  for (const auto &point : document.points()) {
+    result.x += point.position.x;
+    result.y += point.position.y;
+    result.z += point.position.z;
+  }
+  if (document.point_count() != 0u) {
+    const float inverse_count =
+        1.0f / static_cast<float>(document.point_count());
+    result = result * inverse_count;
+  }
+  return result;
+}
+
+enum class CurvePresetPointerInterruption {
+  PointerCanceled,
+  FocusLost,
+  Navigation,
+  CameraChanged,
+  ViewChanged,
+  NavigationGizmo,
+  Abandoned,
+};
+
+} // namespace
+
+TEST(ViewportInteractionControllerTests,
+     CurvePresetsHoverFreezeAndPlaceOnOneStationaryClick) {
+  struct PresetCase final {
+    quader::CurveCreationKind kind;
+    std::size_t expected_points = 0u;
+    std::string_view label;
+  };
+  for (const PresetCase preset : {
+           PresetCase{quader::CurveCreationKind::Circle, 4u, "circle"},
+           PresetCase{quader::CurveCreationKind::Oval, 6u, "oval"},
+       }) {
+    SCOPED_TRACE(preset.label);
+    ViewportInteractionHarness harness;
+    ASSERT_TRUE(
+        harness.editor.tools().activate(quader::ViewportToolId::Curve).ok());
+    ASSERT_TRUE(harness.session.curve().set_creation_kind(preset.kind).ok);
+    configure_curve_preset_viewport(harness);
+
+    std::uint64_t sequence = 100u;
+    constexpr quader::QVec2 kPressLocal{447.0f, 327.0f};
+    const CurvePresetPointerOptions snapped{.grid_snap_enabled = true};
+    const auto hover = dispatch_curve_preset_pointer(
+        harness, sequence, false, false, false, kPressLocal, snapped);
+    EXPECT_TRUE(hover.native_tool.curve_consumed);
+    EXPECT_TRUE(hover.native_tool.blocks_transform_gizmo);
+    EXPECT_EQ(harness.session.curve().point_count(), 0u);
+    const quader::CurveToolPreviewState &hover_preview =
+        harness.session.curve().preview_state();
+    ASSERT_TRUE(hover_preview.preset_hover_document.has_value());
+    EXPECT_EQ(hover_preview.preset_hover_document->point_count(),
+              preset.expected_points);
+    const quader::QVec3 frozen_center =
+        curve_preset_hover_center(hover_preview);
+    const float grid_size =
+        quader::viewport_grid_world_size_for_preset(harness.input.grid_preset);
+    EXPECT_NEAR(frozen_center.x / grid_size,
+                std::round(frozen_center.x / grid_size), 0.0001f);
+    EXPECT_NEAR(frozen_center.y / grid_size,
+                std::round(frozen_center.y / grid_size), 0.0001f);
+    EXPECT_NEAR(frozen_center.z / grid_size,
+                std::round(frozen_center.z / grid_size), 0.0001f);
+
+    const auto press = dispatch_curve_preset_pointer(
+        harness, sequence, true, true, false, kPressLocal, snapped);
+    EXPECT_TRUE(press.native_tool.claim_interaction_pane);
+    EXPECT_TRUE(harness.session.native_tools().pointer_dragging());
+    EXPECT_EQ(harness.session.curve().point_count(), 0u);
+
+    quader::QVec2 within_threshold = kPressLocal;
+    within_threshold.x += 2.0f;
+    (void)dispatch_curve_preset_pointer(harness, sequence, false, true, false,
+                                        within_threshold, snapped);
+    ASSERT_TRUE(harness.session.curve()
+                    .preview_state()
+                    .preset_hover_document.has_value());
+    const quader::QVec3 held_center =
+        curve_preset_hover_center(harness.session.curve().preview_state());
+    EXPECT_FLOAT_EQ(held_center.x, frozen_center.x);
+    EXPECT_FLOAT_EQ(held_center.y, frozen_center.y);
+    EXPECT_FLOAT_EQ(held_center.z, frozen_center.z);
+    EXPECT_EQ(harness.session.curve().point_count(), 0u);
+
+    const auto release = dispatch_curve_preset_pointer(
+        harness, sequence, false, false, true, within_threshold, snapped);
+    EXPECT_TRUE(release.native_tool.curve_consumed);
+    EXPECT_FALSE(harness.session.native_tools().pointer_dragging());
+    EXPECT_EQ(harness.session.curve().point_count(), preset.expected_points);
+    EXPECT_TRUE(harness.session.curve().can_apply());
+    const quader::CurveToolPreviewState &placed_preview =
+        harness.session.curve().preview_state();
+    ASSERT_TRUE(placed_preview.document.has_value());
+    EXPECT_TRUE(placed_preview.document->closed());
+    EXPECT_FALSE(placed_preview.preset_hover_document.has_value());
+    const quader::QVec3 centroid =
+        curve_anchor_centroid(*placed_preview.document);
+    EXPECT_NEAR(centroid.x, frozen_center.x, 0.0001f);
+    EXPECT_NEAR(centroid.y, frozen_center.y, 0.0001f);
+    EXPECT_NEAR(centroid.z, frozen_center.z, 0.0001f);
+    const quader::modeling::CurveContentIdentity placed_identity =
+        placed_preview.document->content_identity();
+
+    constexpr quader::QVec2 kEmptyLocal{790.0f, 590.0f};
+    (void)dispatch_curve_preset_pointer(harness, sequence, true, true, false,
+                                        kEmptyLocal);
+    (void)dispatch_curve_preset_pointer(harness, sequence, false, false, true,
+                                        kEmptyLocal);
+    ASSERT_TRUE(harness.session.curve().preview_state().document.has_value());
+    EXPECT_EQ(
+        harness.session.curve().preview_state().document->content_identity(),
+        placed_identity);
+    EXPECT_EQ(harness.session.curve().point_count(), preset.expected_points);
+    EXPECT_FALSE(harness.session.native_tools().pointer_dragging());
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     CurvePresetModifiersAndDragThresholdCannotPlaceGeometry) {
+  ViewportInteractionHarness harness;
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Curve).ok());
+  ASSERT_TRUE(harness.session.curve()
+                  .set_creation_kind(quader::CurveCreationKind::Circle)
+                  .ok);
+  configure_curve_preset_viewport(harness);
+
+  std::uint64_t sequence = 200u;
+  constexpr quader::QVec2 kPressLocal{420.0f, 315.0f};
+  const CurvePresetPointerOptions modified{
+      .modifiers = {.primary = false, .shift = true, .alt = false},
+  };
+  (void)dispatch_curve_preset_pointer(harness, sequence, true, true, false,
+                                      kPressLocal, modified);
+  (void)dispatch_curve_preset_pointer(harness, sequence, false, false, true,
+                                      kPressLocal, modified);
+  EXPECT_FALSE(harness.session.native_tools().pointer_dragging());
+  EXPECT_EQ(harness.session.curve().point_count(), 0u);
+
+  (void)dispatch_curve_preset_pointer(harness, sequence, true, true, false,
+                                      kPressLocal);
+  ASSERT_TRUE(harness.session.native_tools().pointer_dragging());
+  quader::QVec2 dragged = kPressLocal;
+  dragged.x += 4.0f;
+  (void)dispatch_curve_preset_pointer(harness, sequence, false, true, false,
+                                      dragged);
+  EXPECT_FALSE(harness.session.native_tools().pointer_dragging());
+  EXPECT_EQ(harness.session.curve().point_count(), 0u);
+  EXPECT_FALSE(harness.session.curve()
+                   .preview_state()
+                   .preset_hover_document.has_value());
+
+  const auto suppressed_release = dispatch_curve_preset_pointer(
+      harness, sequence, false, false, true, dragged);
+  EXPECT_TRUE(suppressed_release.native_tool.consumed);
+  EXPECT_EQ(harness.session.curve().point_count(), 0u);
+
+  (void)dispatch_curve_preset_pointer(harness, sequence, true, true, false,
+                                      kPressLocal);
+  (void)dispatch_curve_preset_pointer(harness, sequence, false, false, true,
+                                      kPressLocal);
+  EXPECT_EQ(harness.session.curve().point_count(), 4u);
+}
+
+TEST(ViewportInteractionControllerTests,
+     CurvePresetPressCancelsAcrossEveryViewportInterruption) {
+  struct InterruptionCase final {
+    CurvePresetPointerInterruption kind;
+    std::string_view label;
+  };
+  for (const InterruptionCase interruption : {
+           InterruptionCase{CurvePresetPointerInterruption::PointerCanceled,
+                            "pointer canceled"},
+           InterruptionCase{CurvePresetPointerInterruption::FocusLost,
+                            "focus lost"},
+           InterruptionCase{CurvePresetPointerInterruption::Navigation,
+                            "navigation"},
+           InterruptionCase{CurvePresetPointerInterruption::CameraChanged,
+                            "camera changed"},
+           InterruptionCase{CurvePresetPointerInterruption::ViewChanged,
+                            "view changed"},
+           InterruptionCase{CurvePresetPointerInterruption::NavigationGizmo,
+                            "navigation gizmo"},
+           InterruptionCase{CurvePresetPointerInterruption::Abandoned,
+                            "abandoned"},
+       }) {
+    SCOPED_TRACE(interruption.label);
+    ViewportInteractionHarness harness;
+    ASSERT_TRUE(
+        harness.editor.tools().activate(quader::ViewportToolId::Curve).ok());
+    ASSERT_TRUE(harness.session.curve()
+                    .set_creation_kind(quader::CurveCreationKind::Circle)
+                    .ok);
+    configure_curve_preset_viewport(harness);
+
+    std::uint64_t sequence = 300u;
+    constexpr quader::QVec2 kLocal{430.0f, 320.0f};
+    (void)dispatch_curve_preset_pointer(harness, sequence, true, true, false,
+                                        kLocal);
+    ASSERT_TRUE(harness.session.native_tools().pointer_dragging());
+
+    CurvePresetPointerOptions options;
+    bool down = true;
+    switch (interruption.kind) {
+    case CurvePresetPointerInterruption::PointerCanceled:
+      harness.input.pointer_interaction_canceled = true;
+      break;
+    case CurvePresetPointerInterruption::FocusLost:
+      harness.input.viewport_focused = false;
+      break;
+    case CurvePresetPointerInterruption::Navigation:
+      harness.input_result.navigation_active = true;
+      break;
+    case CurvePresetPointerInterruption::CameraChanged:
+      harness.input_result.camera_changed = true;
+      break;
+    case CurvePresetPointerInterruption::ViewChanged:
+      harness.input_result.view_changed = true;
+      break;
+    case CurvePresetPointerInterruption::NavigationGizmo:
+      options.navigation_gizmo_consumed = true;
+      break;
+    case CurvePresetPointerInterruption::Abandoned:
+      down = false;
+      break;
+    }
+    (void)dispatch_curve_preset_pointer(harness, sequence, false, down, false,
+                                        kLocal, options);
+    EXPECT_FALSE(harness.session.native_tools().pointer_dragging());
+    EXPECT_EQ(harness.session.curve().point_count(), 0u);
+    EXPECT_FALSE(harness.session.curve()
+                     .preview_state()
+                     .preset_hover_document.has_value());
+
+    harness.input.pointer_interaction_canceled = false;
+    harness.input.viewport_focused = true;
+    harness.input_result = {};
+    (void)dispatch_curve_preset_pointer(harness, sequence, false, false, true,
+                                        kLocal);
+    EXPECT_EQ(harness.session.curve().point_count(), 0u);
+    EXPECT_FALSE(harness.session.native_tools().pointer_dragging());
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     CurvePresetPressUsesExactReleaseProvenanceAndExplicitDragReset) {
+  ViewportInteractionHarness harness;
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Curve).ok());
+  ASSERT_TRUE(harness.session.curve()
+                  .set_creation_kind(quader::CurveCreationKind::Oval)
+                  .ok);
+  configure_curve_preset_viewport(harness);
+
+  std::uint64_t sequence = 500u;
+  constexpr quader::QVec2 kLocal{410.0f, 310.0f};
+  (void)dispatch_curve_preset_pointer(harness, sequence, true, true, false,
+                                      kLocal);
+  ASSERT_TRUE(harness.session.native_tools().pointer_dragging());
+  (void)dispatch_curve_preset_pointer(harness, sequence, false, false, true,
+                                      kLocal, {.release_sequence = 499u});
+  EXPECT_FALSE(harness.session.native_tools().pointer_dragging());
+  EXPECT_EQ(harness.session.curve().point_count(), 0u);
+
+  // A later release cannot complete the canceled press.
+  (void)dispatch_curve_preset_pointer(harness, sequence, false, false, true,
+                                      kLocal);
+  EXPECT_EQ(harness.session.curve().point_count(), 0u);
+
+  (void)dispatch_curve_preset_pointer(harness, sequence, true, true, false,
+                                      kLocal);
+  ASSERT_TRUE(harness.session.native_tools().pointer_dragging());
+  ASSERT_TRUE(harness.session.curve()
+                  .preview_state()
+                  .preset_hover_document.has_value());
+  harness.session.native_tools().clear_pointer_drag_state();
+  EXPECT_FALSE(harness.session.native_tools().pointer_dragging());
+  EXPECT_FALSE(harness.session.curve()
+                   .preview_state()
+                   .preset_hover_document.has_value());
+  (void)dispatch_curve_preset_pointer(harness, sequence, false, false, true,
+                                      kLocal);
+  EXPECT_EQ(harness.session.curve().point_count(), 0u);
 }

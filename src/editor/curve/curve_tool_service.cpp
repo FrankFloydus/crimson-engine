@@ -7,12 +7,17 @@
 #include "editor/curve/curve_tool_service.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "editor/commands/document_command_service.hpp"
 #include "editor/history/curve_history_commands.hpp"
 #include "editor/history/editor_history_service.hpp"
+#include "editor/history/modeling_memento_command.hpp"
+#include "editor/commands/modeling_selection_memento_command.hpp"
 #include "editor/interactions/selection_edit.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_transform.hpp"
+
+#include <quader/modeling/curves/curve_shapes.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -25,9 +30,7 @@
 namespace quader {
 namespace {
 
-QVec3 native_point(modeling::Vec3 point) {
-  return {point.x, point.y, point.z};
-}
+QVec3 native_point(modeling::Vec3 point) { return {point.x, point.y, point.z}; }
 
 modeling::Vec3 portable_point(QVec3 point) {
   return {point.x, point.y, point.z};
@@ -42,31 +45,131 @@ bool same_point(QVec3 left, QVec3 right) {
   return left.x == right.x && left.y == right.y && left.z == right.z;
 }
 
+constexpr float kPresetFrameEpsilon = 0.000001f;
+
+bool same_frame(const CurvePresetPlacementFrame &left,
+                const CurvePresetPlacementFrame &right) {
+  return same_point(left.center, right.center) &&
+         same_point(left.axis_u, right.axis_u) &&
+         same_point(left.axis_v, right.axis_v);
+}
+
+std::optional<CurvePresetPlacementFrame>
+normalized_preset_frame(CurvePresetPlacementFrame frame) {
+  if (!finite_point(frame.center) || !finite_point(frame.axis_u) ||
+      !finite_point(frame.axis_v)) {
+    return std::nullopt;
+  }
+  const float u_length = length(frame.axis_u);
+  if (!std::isfinite(u_length) || u_length <= kPresetFrameEpsilon) {
+    return std::nullopt;
+  }
+  frame.axis_u = frame.axis_u / u_length;
+  frame.axis_v = frame.axis_v - frame.axis_u * dot(frame.axis_v, frame.axis_u);
+  const float v_length = length(frame.axis_v);
+  if (!std::isfinite(v_length) || v_length <= kPresetFrameEpsilon) {
+    return std::nullopt;
+  }
+  frame.axis_v = frame.axis_v / v_length;
+  const QVec3 normal = cross(frame.axis_u, frame.axis_v);
+  if (!finite_point(normal) || length(normal) <= kPresetFrameEpsilon) {
+    return std::nullopt;
+  }
+  return frame;
+}
+
+QMat4 preset_frame_matrix(const CurvePresetPlacementFrame &frame) {
+  const QVec3 normal = normalize(cross(frame.axis_u, frame.axis_v));
+  QMat4 result;
+  result.values[0] = frame.axis_u.x;
+  result.values[1] = frame.axis_u.y;
+  result.values[2] = frame.axis_u.z;
+  result.values[4] = frame.axis_v.x;
+  result.values[5] = frame.axis_v.y;
+  result.values[6] = frame.axis_v.z;
+  result.values[8] = normal.x;
+  result.values[9] = normal.y;
+  result.values[10] = normal.z;
+  result.values[12] = frame.center.x;
+  result.values[13] = frame.center.y;
+  result.values[14] = frame.center.z;
+  return result;
+}
+
+modeling::Transform3
+preset_frame_transform(const CurvePresetPlacementFrame &frame) {
+  const QVec3 normal = normalize(cross(frame.axis_u, frame.axis_v));
+  return {
+      .x_axis = portable_point(frame.axis_u),
+      .y_axis = portable_point(frame.axis_v),
+      .z_axis = portable_point(normal),
+      .origin = portable_point(frame.center),
+  };
+}
+
+std::optional<modeling::CurveDocument>
+make_preset_document(CurveCreationKind kind, double circle_radius,
+                     double oval_radius, double oval_length,
+                     std::string &message) {
+  modeling::Result<modeling::CurveDocument> created;
+  switch (kind) {
+  case CurveCreationKind::Circle:
+    created = modeling::make_xy_circle_curve(circle_radius);
+    break;
+  case CurveCreationKind::Oval:
+    created = modeling::make_xy_stadium_curve(oval_radius, oval_length);
+    break;
+  case CurveCreationKind::Draw:
+    message = "Draw curves do not have preset geometry.";
+    return std::nullopt;
+  default:
+    message = "Unknown Curve creation type.";
+    return std::nullopt;
+  }
+  if (!created.ok()) {
+    message = created.error_message();
+    return std::nullopt;
+  }
+  return std::move(created).value();
+}
+
+std::optional<modeling::CurveDocument>
+transform_preset_document(const modeling::CurveDocument &canonical,
+                          const CurvePresetPlacementFrame &frame,
+                          std::string &message) {
+  modeling::CurveDocument placed = canonical;
+  const auto transformed = placed.transform(preset_frame_transform(frame));
+  if (!transformed.ok()) {
+    message = transformed.error_message();
+    return std::nullopt;
+  }
+  return placed;
+}
+
 std::uint64_t curve_point_key(modeling::CurvePointId id) {
   return (static_cast<std::uint64_t>(id.index) << 32u) |
          static_cast<std::uint64_t>(id.generation);
 }
 
-const modeling::CurveControlPoint *find_point(
-    const modeling::CurveDocument &document, modeling::CurvePointId id) {
+const modeling::CurveControlPoint *
+find_point(const modeling::CurveDocument &document, modeling::CurvePointId id) {
   const auto points = document.points();
-  const auto found = std::find_if(points.begin(), points.end(),
-                                  [id](const auto &point) {
-                                    return point.id == id;
-                                  });
+  const auto found =
+      std::find_if(points.begin(), points.end(),
+                   [id](const auto &point) { return point.id == id; });
   return found == points.end() ? nullptr : &*found;
 }
 
-std::vector<CurveControlTarget> visible_curve_controls(
-    const modeling::CurveDocument &document, bool drawing) {
+std::vector<CurveControlTarget>
+visible_curve_controls(const modeling::CurveDocument &document, bool drawing) {
   std::vector<CurveControlTarget> controls;
   controls.reserve(document.point_count() * 3u);
   for (std::size_t point_index = 0; point_index < document.point_count();
        ++point_index) {
     const modeling::CurvePointId point = document.points()[point_index].id;
-    for (const CurveControlKind kind : {
-             CurveControlKind::Anchor, CurveControlKind::IncomingHandle,
-             CurveControlKind::OutgoingHandle}) {
+    for (const CurveControlKind kind :
+         {CurveControlKind::Anchor, CurveControlKind::IncomingHandle,
+          CurveControlKind::OutgoingHandle}) {
       if (curve_control_is_visible(document, drawing, point_index, kind)) {
         controls.push_back({.point = point, .kind = kind});
       }
@@ -140,12 +243,57 @@ ModelingCommandResult modeling_result(CommandResult result) {
 } // namespace
 
 CurveToolService::CurveToolService(SceneDocument &scene, AssetRegistry &assets,
-                                 EditorHistoryService &history,
-                                 ModelingSessionService &modeling)
-    : scene_(scene), assets_(assets), history_(history), modeling_(modeling) {}
+                                   EditorHistoryService &history,
+                                   ModelingSessionService &modeling,
+                                   EditorSelectionService &selection,
+                                   DocumentCommandService &document_commands)
+    : scene_(scene), assets_(assets), history_(history), modeling_(modeling),
+      selection_(selection), document_commands_(document_commands) {}
 
 bool CurveToolService::can_apply() const {
   return active_ && drawing_ && draft_.point_count() >= 2u && !dragging();
+}
+
+bool CurveToolService::can_change_creation_kind() const {
+  return active_ && drawing_ && !dragging() &&
+         (draft_.point_count() == 0u || procedural_draft_);
+}
+
+bool CurveToolService::can_reset_settings() const {
+  return active_ && drawing_ && !dragging();
+}
+
+bool CurveToolService::has_editable_existing_curve() const {
+  return editable_existing_curve_component() != nullptr;
+}
+
+bool CurveToolService::can_apply_solidify() const {
+  const CurveComponent *component = editable_existing_curve_component();
+  return component != nullptr && component->solidify && !dragging();
+}
+
+bool CurveToolService::solidify_enabled() const {
+  const CurveComponent *component = editable_existing_curve_component();
+  return component != nullptr && component->solidify;
+}
+
+std::uint32_t CurveToolService::solidify_resolution() const {
+  const CurveComponent *component = editable_existing_curve_component();
+  return component != nullptr
+             ? static_cast<std::uint32_t>(component->solidify_resolution)
+             : static_cast<std::uint32_t>(kCurveSolidifyDefaultResolution);
+}
+
+double CurveToolService::solidify_radius() const {
+  const CurveComponent *component = editable_existing_curve_component();
+  if (component == nullptr) {
+    return kCurveSolidifyDefaultRadius;
+  }
+  const float stored_default =
+      static_cast<float>(kCurveSolidifyDefaultRadius);
+  return component->solidify_radius == stored_default
+             ? kCurveSolidifyDefaultRadius
+             : static_cast<double>(component->solidify_radius);
 }
 
 bool CurveToolService::closed() const {
@@ -154,6 +302,9 @@ bool CurveToolService::closed() const {
     if (preview.document.has_value()) {
       return preview.document->closed();
     }
+  }
+  if (creation_kind_ != CurveCreationKind::Draw) {
+    return true;
   }
   return preferred_closed_;
 }
@@ -186,11 +337,45 @@ const CurveToolPreviewState &CurveToolService::preview_state() const {
   return cached_preview_;
 }
 
+std::optional<modeling::CurveDocument>
+CurveToolService::make_current_preset_document(std::string &message) const {
+  return make_preset_document(creation_kind_, circle_radius_, oval_radius_,
+                              oval_length_, message);
+}
+
+std::optional<modeling::CurveDocument>
+CurveToolService::place_current_preset(const CurvePresetPlacementFrame &frame,
+                                       std::string &message) const {
+  std::optional<modeling::CurveDocument> canonical = preset_document_cache_;
+  if (!canonical.has_value()) {
+    canonical = make_current_preset_document(message);
+  }
+  if (!canonical.has_value()) {
+    return std::nullopt;
+  }
+  return transform_preset_document(*canonical, frame, message);
+}
+
+bool CurveToolService::convert_procedural_draft_to_draw() {
+  if (!drawing_ || !procedural_draft_) {
+    return false;
+  }
+  procedural_draft_ = false;
+  procedural_frame_.reset();
+  preset_hover_frame_.reset();
+  creation_kind_ = CurveCreationKind::Draw;
+  return true;
+}
+
+void CurveToolService::clear_preset_placement_state() {
+  procedural_draft_ = false;
+  procedural_frame_.reset();
+  preset_hover_frame_.reset();
+}
+
 void CurveToolService::rebuild_preview_cache(
     std::uint64_t presentation_revision) const {
-  const bool source_editable =
-      !drawing_ && editable_source(entity_) &&
-      scene_.uuid(entity_) == source_uuid_;
+  const bool source_editable = has_editable_existing_curve();
   const bool controls_active = (active_ && drawing_) || source_editable;
   CurveToolPreviewState preview{
       .active = controls_active,
@@ -199,7 +384,9 @@ void CurveToolService::rebuild_preview_cache(
       .entity = entity_,
       .modeling_object_id = modeling_object_id_,
       .control_selection = control_selection_,
-      .hover_world = hover_world_,
+      .hover_world = preset_hover_frame_.has_value()
+                         ? std::optional<QVec3>(preset_hover_frame_->center)
+                         : hover_world_,
       .revision = presentation_revision,
   };
   if (active_ && drawing_) {
@@ -207,6 +394,12 @@ void CurveToolService::rebuild_preview_cache(
   } else if (source_editable) {
     preview.document = modeling_.curve_document(modeling_object_id_);
     preview.world_transform = scene_.world_transform_matrix(entity_);
+  }
+  if (active_ && drawing_ && !dragging() && draft_.point_count() == 0u &&
+      creation_kind_ != CurveCreationKind::Draw &&
+      preset_hover_frame_.has_value() && preset_document_cache_.has_value()) {
+    preview.preset_hover_document = preset_document_cache_;
+    preview.preset_hover_transform = preset_frame_matrix(*preset_hover_frame_);
   }
   cached_preview_ = std::move(preview);
   cached_tool_revision_ = revision_;
@@ -216,9 +409,10 @@ void CurveToolService::rebuild_preview_cache(
 }
 
 bool CurveToolService::editable_source(EntityId entity) const {
+  const CurveComponent *curve = scene_.curve(entity);
   const VisibilityComponent *visibility = scene_.visibility(entity);
-  return scene_.curve(entity) != nullptr &&
-         assets_.curve(scene_.curve(entity)->curve) != nullptr &&
+  return curve != nullptr && curve_component_is_valid(*curve) &&
+         assets_.curve(curve->curve) != nullptr &&
          scene_.modeling_object(entity) != nullptr &&
          scene_.is_effectively_visible(entity) &&
          !scene_.is_effectively_locked(entity) &&
@@ -227,6 +421,39 @@ bool CurveToolService::editable_source(EntityId entity) const {
          (visibility == nullptr || visibility->selectable) &&
          try_scene_matrix_inverse(scene_.world_transform_matrix(entity))
              .has_value();
+}
+
+const CurveComponent *
+CurveToolService::editable_existing_curve_component() const {
+  if (drawing_ || entity_ == kInvalidEntityId) {
+    return nullptr;
+  }
+  const EntityUuidComponent *identity = scene_.entity_uuid(entity_);
+  if (identity == nullptr || identity->uuid != source_uuid_) {
+    return nullptr;
+  }
+  const CurveComponent *curve = scene_.curve(entity_);
+  const ModelingObjectComponent *modeling_object =
+      scene_.modeling_object(entity_);
+  if (curve == nullptr || !curve_component_is_valid(*curve) ||
+      assets_.curve(curve->curve) == nullptr || modeling_object == nullptr ||
+      modeling_object->object_id != modeling_object_id_ ||
+      modeling_.modeling_object_for_entity(entity_).value_or(-1) !=
+          modeling_object_id_) {
+    return nullptr;
+  }
+  return curve;
+}
+
+CommandResult CurveToolService::commit_existing_curve_component(
+    CurveComponent after, UndoRedoExecuteOptions options) {
+  const CommandResult result = document_commands_.set_curve_component(
+      entity_, std::move(after), std::move(options));
+  if (result.ok && result.changed) {
+    observe_owner_revisions();
+    invalidate(true);
+  }
+  return result;
 }
 
 std::optional<EntityId> CurveToolService::selected_curve() const {
@@ -301,6 +528,7 @@ bool CurveToolService::set_control_selection(CurveControlSelection selection) {
 
 void CurveToolService::attach_source(EntityId entity) {
   drawing_ = false;
+  clear_preset_placement_state();
   entity_ = entity;
   source_uuid_ = scene_.uuid(entity);
   modeling_object_id_ =
@@ -315,6 +543,7 @@ void CurveToolService::attach_source(EntityId entity) {
 
 void CurveToolService::detach_source() {
   drawing_ = true;
+  clear_preset_placement_state();
   entity_ = kInvalidEntityId;
   modeling_object_id_ = -1;
   source_uuid_.clear();
@@ -345,6 +574,7 @@ CommandResult CurveToolService::activate() {
   active_ = true;
   drawing_ = true;
   draft_ = {};
+  clear_preset_placement_state();
   if (const auto entity = selected_curve()) {
     attach_source(*entity);
   }
@@ -354,8 +584,8 @@ CommandResult CurveToolService::activate() {
 }
 
 CommandResult CurveToolService::refresh() {
-  const bool lost_preview = drag_ && !drawing_ &&
-                            !modeling_.curve_document_preview_active();
+  const bool lost_preview =
+      drag_ && !drawing_ && !modeling_.curve_document_preview_active();
   if (!lost_preview && observed_scene_revision_ == scene_.revision() &&
       observed_modeling_revision_ == modeling_.content_revision() &&
       observed_asset_revision_ == assets_.revision() &&
@@ -367,12 +597,10 @@ CommandResult CurveToolService::refresh() {
       observed_selection_revision_ != scene_.selection_revision() ||
       observed_modeling_selection_revision_ != modeling_.selection_revision();
   if (!drawing_) {
-    const bool source_valid = editable_source(entity_) &&
-                              scene_.uuid(entity_) == source_uuid_ &&
-                               scene_.modeling_object(entity_)->object_id ==
-                                   modeling_object_id_ &&
-                               modeling_.curve_document(modeling_object_id_,
-                                                        false).has_value();
+    const bool source_valid =
+        editable_source(entity_) && scene_.uuid(entity_) == source_uuid_ &&
+        scene_.modeling_object(entity_)->object_id == modeling_object_id_ &&
+        modeling_.curve_document(modeling_object_id_, false).has_value();
     const std::vector<EntityId> selected = scene_.selected_entities();
     const bool source_still_selected =
         modeling_.selection_mode() == ModelingSelectionMode::Object &&
@@ -394,8 +622,7 @@ CommandResult CurveToolService::refresh() {
     } else if (!control_selection_.empty()) {
       // A same-entity document replacement can retire generational point IDs
       // without changing scene selection or source identity.
-      const auto current =
-          modeling_.curve_document(modeling_object_id_, false);
+      const auto current = modeling_.curve_document(modeling_object_id_, false);
       if (!current) {
         (void)set_control_selection({});
       } else {
@@ -434,7 +661,8 @@ CommandResult CurveToolService::cancel() {
 
 CommandResult CurveToolService::apply() {
   if (!can_apply()) {
-    return command_invalid_result("Place at least two points and finish the current drag.");
+    return command_invalid_result(
+        "Place at least two points and finish the current drag.");
   }
   auto command = std::make_unique<CreateCurveHistoryCommand>(modeling_, draft_);
   const CreateCurveHistoryCommand *created = command.get();
@@ -459,6 +687,7 @@ CommandResult CurveToolService::new_curve() {
     return command_unchanged_result();
   }
   drawing_ = true;
+  clear_preset_placement_state();
   entity_ = kInvalidEntityId;
   modeling_object_id_ = -1;
   source_uuid_.clear();
@@ -471,10 +700,20 @@ CommandResult CurveToolService::new_curve() {
 }
 
 CommandResult CurveToolService::set_closed(bool closed_value) {
-  if (!active_ || dragging()) {
-    return command_invalid_result("Finish the active curve drag before changing closure.");
+  if (dragging()) {
+    return command_invalid_result(
+        "Finish the active curve drag before changing closure.");
   }
-  (void)refresh();
+  const CommandResult refreshed = refresh();
+  if (!refreshed.ok) {
+    return refreshed;
+  }
+  if (!active_ && !has_editable_existing_curve()) {
+    return command_invalid_result("Select one editable Curve first.");
+  }
+  if (drawing_ && creation_kind_ != CurveCreationKind::Draw) {
+    return command_invalid_result("Circle and Oval presets are always closed.");
+  }
   if (closed() == closed_value) {
     return command_unchanged_result();
   }
@@ -501,10 +740,9 @@ CommandResult CurveToolService::set_closed(bool closed_value) {
   }
   CurveControlSelection next_selection =
       valid_control_selection(control_selection_, *document);
-  const CommandResult result = history_.execute(
-      std::make_unique<ReplaceCurveHistoryCommand>(modeling_,
-                                                  modeling_object_id_,
-                                                  std::move(*document)));
+  const CommandResult result =
+      history_.execute(std::make_unique<ReplaceCurveHistoryCommand>(
+          modeling_, modeling_object_id_, std::move(*document)));
   if (result.ok && result.changed) {
     preferred_closed_ = closed_value;
     (void)set_control_selection(std::move(next_selection));
@@ -514,16 +752,345 @@ CommandResult CurveToolService::set_closed(bool closed_value) {
   return result;
 }
 
-CommandResult CurveToolService::toggle_point_smoothness(modeling::CurvePointId point) {
-  if (!controls_editable() || dragging()) {
-    return command_invalid_result("Finish the active curve drag before converting a point.");
+CommandResult CurveToolService::set_solidify(bool enabled) {
+  const CommandResult refreshed = refresh();
+  if (!refreshed.ok) {
+    return refreshed;
+  }
+  const CurveComponent *current = editable_existing_curve_component();
+  if (current == nullptr) {
+    return command_invalid_result("Select one editable existing Curve first.");
+  }
+  if (current->solidify == enabled) {
+    return command_unchanged_result();
+  }
+
+  CurveComponent updated = *current;
+  updated.solidify = enabled;
+  return commit_existing_curve_component(std::move(updated));
+}
+
+CommandResult
+CurveToolService::set_solidify_resolution(
+    std::uint32_t resolution, UndoRedoExecuteOptions options) {
+  if (resolution <
+          static_cast<std::uint32_t>(kCurveSolidifyMinimumResolution) ||
+      resolution >
+          static_cast<std::uint32_t>(kCurveSolidifyMaximumResolution)) {
+    return command_invalid_result("Invalid Curve solidify resolution.");
   }
   const CommandResult refreshed = refresh();
   if (!refreshed.ok) {
     return refreshed;
   }
-  auto candidate = drawing_ ? std::optional(draft_)
-                            : modeling_.curve_document(modeling_object_id_, false);
+  const CurveComponent *current = editable_existing_curve_component();
+  if (current == nullptr) {
+    return command_invalid_result("Select one editable existing Curve first.");
+  }
+  if (current->solidify_resolution == static_cast<int>(resolution)) {
+    return command_unchanged_result();
+  }
+
+  CurveComponent updated = *current;
+  updated.solidify_resolution = static_cast<int>(resolution);
+  return commit_existing_curve_component(std::move(updated),
+                                         std::move(options));
+}
+
+CommandResult CurveToolService::set_solidify_radius(
+    double radius, UndoRedoExecuteOptions options) {
+  if (!std::isfinite(radius) || radius < kCurveSolidifyMinimumRadius ||
+      radius > kCurveSolidifyMaximumRadius) {
+    return command_invalid_result("Invalid Curve solidify radius.");
+  }
+  const CommandResult refreshed = refresh();
+  if (!refreshed.ok) {
+    return refreshed;
+  }
+  const CurveComponent *current = editable_existing_curve_component();
+  if (current == nullptr) {
+    return command_invalid_result("Select one editable existing Curve first.");
+  }
+  const float native_radius = static_cast<float>(radius);
+  if (current->solidify_radius == native_radius) {
+    return command_unchanged_result();
+  }
+
+  CurveComponent updated = *current;
+  updated.solidify_radius = native_radius;
+  return commit_existing_curve_component(std::move(updated),
+                                         std::move(options));
+}
+
+CommandResult CurveToolService::apply_solidify() {
+  const CommandResult refreshed = refresh();
+  if (!refreshed.ok) {
+    return refreshed;
+  }
+  if (dragging()) {
+    return command_invalid_result(
+        "Finish the active Curve drag before applying Solidify.");
+  }
+  const CurveComponent *current = editable_existing_curve_component();
+  if (current == nullptr) {
+    return command_invalid_result("Select one editable existing Curve first.");
+  }
+  if (!current->solidify) {
+    return command_invalid_result("Enable Curve Solidify before applying it.");
+  }
+
+  auto bake = std::make_unique<ApplyCurveSolidifyHistoryCommand>(
+      modeling_, modeling_object_id_);
+  CommandResult result = history_.execute(
+      std::make_unique<ModelingSelectionMementoCommand>(
+          modeling_, &selection_, std::move(bake)));
+  if (!result.ok || !result.changed) {
+    return result;
+  }
+
+  active_ = false;
+  detach_source();
+  observe_owner_revisions();
+  invalidate(true);
+  return result;
+}
+
+CommandResult CurveToolService::set_creation_kind(CurveCreationKind kind) {
+  if (!can_change_creation_kind()) {
+    return command_invalid_result("Curve type can only change before drawing "
+                                  "or while a preset remains procedural.");
+  }
+  if (kind != CurveCreationKind::Draw && kind != CurveCreationKind::Circle &&
+      kind != CurveCreationKind::Oval) {
+    return command_invalid_result("Unknown Curve creation type.");
+  }
+  if (creation_kind_ == kind) {
+    return command_unchanged_result();
+  }
+
+  if (kind == CurveCreationKind::Draw) {
+    creation_kind_ = kind;
+    procedural_draft_ = false;
+    procedural_frame_.reset();
+    preset_hover_frame_.reset();
+    hover_world_.reset();
+    invalidate(true);
+    return command_changed_result();
+  }
+
+  std::string message;
+  std::optional<modeling::CurveDocument> canonical = make_preset_document(
+      kind, circle_radius_, oval_radius_, oval_length_, message);
+  if (!canonical.has_value()) {
+    return command_invalid_result(std::move(message));
+  }
+
+  std::optional<modeling::CurveDocument> placed;
+  if (procedural_draft_) {
+    if (!procedural_frame_.has_value()) {
+      return command_invalid_result(
+          "The procedural Curve placement is unavailable.");
+    }
+    placed = transform_preset_document(*canonical, *procedural_frame_, message);
+    if (!placed.has_value()) {
+      return command_invalid_result(std::move(message));
+    }
+  }
+
+  const std::size_t old_point_count = draft_.point_count();
+  creation_kind_ = kind;
+  preset_document_cache_ = std::move(*canonical);
+  hover_world_.reset();
+  if (placed.has_value()) {
+    draft_ = std::move(*placed);
+    preferred_closed_ = true;
+    if (old_point_count != draft_.point_count()) {
+      (void)set_control_selection({});
+    } else {
+      (void)set_control_selection(
+          valid_control_selection(control_selection_, draft_));
+    }
+  }
+  invalidate(true);
+  return command_changed_result();
+}
+
+CommandResult CurveToolService::set_preset_radius(double radius) {
+  if (!active_ || !drawing_ || dragging() ||
+      creation_kind_ == CurveCreationKind::Draw) {
+    return command_invalid_result(
+        "Curve preset radius is unavailable in the current state.");
+  }
+  if (!std::isfinite(radius) || radius < kCurvePresetMinimumRadius ||
+      radius > kCurvePresetMaximumRadius) {
+    return command_invalid_result("Invalid Curve preset radius.");
+  }
+  if (creation_kind_ == CurveCreationKind::Oval &&
+      radius * 2.0 > oval_length_) {
+    return command_invalid_result(
+        "Oval radius cannot exceed half of its total length.");
+  }
+  const double current = preset_radius();
+  if (current == radius) {
+    return command_unchanged_result();
+  }
+
+  const double next_circle_radius =
+      creation_kind_ == CurveCreationKind::Circle ? radius : circle_radius_;
+  const double next_oval_radius =
+      creation_kind_ == CurveCreationKind::Oval ? radius : oval_radius_;
+  std::string message;
+  std::optional<modeling::CurveDocument> canonical =
+      make_preset_document(creation_kind_, next_circle_radius, next_oval_radius,
+                           oval_length_, message);
+  if (!canonical.has_value()) {
+    return command_invalid_result(std::move(message));
+  }
+  std::optional<modeling::CurveDocument> placed;
+  if (procedural_draft_) {
+    if (!procedural_frame_.has_value()) {
+      return command_invalid_result(
+          "The procedural Curve placement is unavailable.");
+    }
+    placed = transform_preset_document(*canonical, *procedural_frame_, message);
+    if (!placed.has_value()) {
+      return command_invalid_result(std::move(message));
+    }
+  }
+
+  const std::size_t old_point_count = draft_.point_count();
+  if (creation_kind_ == CurveCreationKind::Circle) {
+    circle_radius_ = radius;
+  } else {
+    oval_radius_ = radius;
+  }
+  preset_document_cache_ = std::move(*canonical);
+  if (placed.has_value()) {
+    draft_ = std::move(*placed);
+    if (old_point_count != draft_.point_count()) {
+      (void)set_control_selection({});
+    } else {
+      (void)set_control_selection(
+          valid_control_selection(control_selection_, draft_));
+    }
+  }
+  invalidate(true);
+  return command_changed_result();
+}
+
+CommandResult CurveToolService::set_oval_length(double length_value) {
+  if (!active_ || !drawing_ || dragging() ||
+      creation_kind_ != CurveCreationKind::Oval) {
+    return command_invalid_result(
+        "Oval length is unavailable in the current state.");
+  }
+  if (!std::isfinite(length_value) || length_value < oval_radius_ * 2.0 ||
+      length_value > kCurvePresetMaximumLength) {
+    return command_invalid_result("Invalid Oval total length.");
+  }
+  if (oval_length_ == length_value) {
+    return command_unchanged_result();
+  }
+
+  std::string message;
+  std::optional<modeling::CurveDocument> canonical = make_preset_document(
+      creation_kind_, circle_radius_, oval_radius_, length_value, message);
+  if (!canonical.has_value()) {
+    return command_invalid_result(std::move(message));
+  }
+  std::optional<modeling::CurveDocument> placed;
+  if (procedural_draft_) {
+    if (!procedural_frame_.has_value()) {
+      return command_invalid_result(
+          "The procedural Curve placement is unavailable.");
+    }
+    placed = transform_preset_document(*canonical, *procedural_frame_, message);
+    if (!placed.has_value()) {
+      return command_invalid_result(std::move(message));
+    }
+  }
+
+  const std::size_t old_point_count = draft_.point_count();
+  oval_length_ = length_value;
+  preset_document_cache_ = std::move(*canonical);
+  if (placed.has_value()) {
+    draft_ = std::move(*placed);
+    if (old_point_count != draft_.point_count()) {
+      (void)set_control_selection({});
+    } else {
+      (void)set_control_selection(
+          valid_control_selection(control_selection_, draft_));
+    }
+  }
+  invalidate(true);
+  return command_changed_result();
+}
+
+CommandResult CurveToolService::reset_settings() {
+  if (!can_reset_settings()) {
+    return command_invalid_result(
+        "Curve settings cannot reset in the current state.");
+  }
+  if (creation_kind_ == CurveCreationKind::Draw) {
+    return set_closed(false);
+  }
+  if (creation_kind_ == CurveCreationKind::Circle) {
+    return set_preset_radius(kCurvePresetDefaultRadius);
+  }
+
+  if (oval_radius_ == kCurvePresetDefaultRadius &&
+      oval_length_ == kCurveOvalDefaultLength) {
+    return command_unchanged_result();
+  }
+  std::string message;
+  std::optional<modeling::CurveDocument> canonical = make_preset_document(
+      CurveCreationKind::Oval, circle_radius_, kCurvePresetDefaultRadius,
+      kCurveOvalDefaultLength, message);
+  if (!canonical.has_value()) {
+    return command_invalid_result(std::move(message));
+  }
+  std::optional<modeling::CurveDocument> placed;
+  if (procedural_draft_) {
+    if (!procedural_frame_.has_value()) {
+      return command_invalid_result(
+          "The procedural Curve placement is unavailable.");
+    }
+    placed = transform_preset_document(*canonical, *procedural_frame_, message);
+    if (!placed.has_value()) {
+      return command_invalid_result(std::move(message));
+    }
+  }
+
+  const std::size_t old_point_count = draft_.point_count();
+  oval_radius_ = kCurvePresetDefaultRadius;
+  oval_length_ = kCurveOvalDefaultLength;
+  preset_document_cache_ = std::move(*canonical);
+  if (placed.has_value()) {
+    draft_ = std::move(*placed);
+    if (old_point_count != draft_.point_count()) {
+      (void)set_control_selection({});
+    } else {
+      (void)set_control_selection(
+          valid_control_selection(control_selection_, draft_));
+    }
+  }
+  invalidate(true);
+  return command_changed_result();
+}
+
+CommandResult
+CurveToolService::toggle_point_smoothness(modeling::CurvePointId point) {
+  if (!controls_editable() || dragging()) {
+    return command_invalid_result(
+        "Finish the active curve drag before converting a point.");
+  }
+  const CommandResult refreshed = refresh();
+  if (!refreshed.ok) {
+    return refreshed;
+  }
+  auto candidate = drawing_
+                       ? std::optional(draft_)
+                       : modeling_.curve_document(modeling_object_id_, false);
   if (!candidate) {
     return command_invalid_result("The selected curve is no longer available.");
   }
@@ -546,20 +1113,21 @@ CommandResult CurveToolService::toggle_point_smoothness(modeling::CurvePointId p
       .controls = std::move(selection_edit.selected),
       .active = selection_edit.active,
   };
+  const bool converted_procedural = drawing_ && procedural_draft_;
   if (drawing_) {
     draft_ = std::move(*candidate);
+    (void)convert_procedural_draft_to_draw();
   } else {
-    const CommandResult result = history_.execute(
-        std::make_unique<ReplaceCurveHistoryCommand>(modeling_,
-                                                    modeling_object_id_,
-                                                    std::move(*candidate)));
+    const CommandResult result =
+        history_.execute(std::make_unique<ReplaceCurveHistoryCommand>(
+            modeling_, modeling_object_id_, std::move(*candidate)));
     if (!result.ok || !result.changed) {
       return result;
     }
     observe_owner_revisions();
   }
   (void)set_control_selection(std::move(next_selection));
-  invalidate();
+  invalidate(converted_procedural);
   return command_changed_result();
 }
 
@@ -567,7 +1135,8 @@ CommandResult CurveToolService::set_hover(std::optional<QVec3> position) {
   if (position && !finite_point(*position)) {
     return command_invalid_result("Curve hover position must be finite.");
   }
-  if (!active_ || !drawing_ || dragging()) {
+  if (!active_ || !drawing_ || dragging() ||
+      creation_kind_ != CurveCreationKind::Draw) {
     position.reset();
   }
   if (position.has_value() == hover_world_.has_value() &&
@@ -579,13 +1148,89 @@ CommandResult CurveToolService::set_hover(std::optional<QVec3> position) {
   return command_changed_result();
 }
 
+CommandResult CurveToolService::set_preset_hover(
+    std::optional<CurvePresetPlacementFrame> frame) {
+  std::optional<CurvePresetPlacementFrame> normalized;
+  if (frame.has_value()) {
+    normalized = normalized_preset_frame(*frame);
+    if (!normalized.has_value()) {
+      return command_invalid_result(
+          "Curve preset placement frame must be finite and nondegenerate.");
+    }
+  }
+
+  const bool accepts_hover = active_ && drawing_ && !dragging() &&
+                             draft_.point_count() == 0u &&
+                             creation_kind_ != CurveCreationKind::Draw;
+  if (!accepts_hover) {
+    normalized.reset();
+  }
+  if (normalized.has_value() && !preset_document_cache_.has_value()) {
+    std::string message;
+    std::optional<modeling::CurveDocument> canonical =
+        make_current_preset_document(message);
+    if (!canonical.has_value()) {
+      return command_invalid_result(std::move(message));
+    }
+    preset_document_cache_ = std::move(*canonical);
+  }
+  if (normalized.has_value() == preset_hover_frame_.has_value() &&
+      (!normalized || same_frame(*normalized, *preset_hover_frame_))) {
+    return command_unchanged_result();
+  }
+  preset_hover_frame_ = normalized;
+  invalidate();
+  return command_changed_result();
+}
+
+CommandResult CurveToolService::place_preset(CurvePresetPlacementFrame frame) {
+  if (!active_ || !drawing_ || dragging() ||
+      creation_kind_ == CurveCreationKind::Draw) {
+    return command_invalid_result(
+        "A Curve preset cannot be placed in the current state.");
+  }
+  if (draft_.point_count() != 0u) {
+    return command_unchanged_result();
+  }
+  const std::optional<CurvePresetPlacementFrame> normalized =
+      normalized_preset_frame(frame);
+  if (!normalized.has_value()) {
+    return command_invalid_result(
+        "Curve preset placement frame must be finite and nondegenerate.");
+  }
+  std::string message;
+  if (!preset_document_cache_.has_value()) {
+    std::optional<modeling::CurveDocument> canonical =
+        make_current_preset_document(message);
+    if (!canonical.has_value()) {
+      return command_invalid_result(std::move(message));
+    }
+    preset_document_cache_ = std::move(*canonical);
+  }
+  std::optional<modeling::CurveDocument> placed =
+      place_current_preset(*normalized, message);
+  if (!placed.has_value()) {
+    return command_invalid_result(std::move(message));
+  }
+
+  draft_ = std::move(*placed);
+  preferred_closed_ = true;
+  procedural_draft_ = true;
+  procedural_frame_ = normalized;
+  preset_hover_frame_.reset();
+  hover_world_.reset();
+  (void)set_control_selection({});
+  invalidate(true);
+  return command_changed_result();
+}
+
 bool CurveToolService::edit_control_selection(
     std::span<const CurveControlTarget> hits,
     quader_editor_core::SelectionEditOperation operation,
     const CurveControlSelection *baseline,
     std::optional<CurveControlTarget> direct_hit) {
-  const ModelingCommandResult result = edit_control_selection_checked(
-      hits, operation, baseline, direct_hit);
+  const ModelingCommandResult result =
+      edit_control_selection_checked(hits, operation, baseline, direct_hit);
   return result.ok && result.changed;
 }
 
@@ -601,8 +1246,7 @@ ModelingCommandResult CurveToolService::edit_control_selection_checked(
   if (dragging()) {
     return {.ok = false,
             .changed = refreshed.changed,
-            .message =
-                "Finish the active Curve drag before editing controls."};
+            .message = "Finish the active Curve drag before editing controls."};
   }
   if (!controls_editable()) {
     return {.ok = false,
@@ -620,8 +1264,7 @@ ModelingCommandResult CurveToolService::edit_control_selection_checked(
       baseline != nullptr ? *baseline : control_selection_, *preview.document);
   CurveControlSelection hit_selection;
   hit_selection.controls.assign(hits.begin(), hits.end());
-  hit_selection =
-      valid_control_selection(hit_selection, *preview.document);
+  hit_selection = valid_control_selection(hit_selection, *preview.document);
   if (direct_hit && !hit_selection.contains(*direct_hit)) {
     direct_hit.reset();
   }
@@ -723,8 +1366,7 @@ void CurveToolService::synchronize_sub_selection_scope() {
 }
 
 ModelingCommandResult CurveToolService::edit_sub_elements(
-    std::span<const EditorSubSelectionTarget> hits,
-    EditorSubSelectionEdit edit,
+    std::span<const EditorSubSelectionTarget> hits, EditorSubSelectionEdit edit,
     const EditorSubSelectionBaseline *baseline,
     std::optional<EditorSubSelectionTarget> direct_hit) {
   const CommandResult refreshed = refresh();
@@ -734,8 +1376,7 @@ ModelingCommandResult CurveToolService::edit_sub_elements(
   if (dragging()) {
     return {.ok = false,
             .changed = refreshed.changed,
-            .message =
-                "Finish the active Curve drag before editing controls."};
+            .message = "Finish the active Curve drag before editing controls."};
   }
   if (!controls_editable()) {
     return {.ok = false,
@@ -782,7 +1423,8 @@ ModelingCommandResult CurveToolService::edit_sub_elements(
   CurveControlSelection curve_baseline;
   const CurveControlSelection *curve_baseline_pointer = nullptr;
   if (baseline != nullptr) {
-    if (baseline->kind != snapshot.kind || baseline->entity != snapshot.entity ||
+    if (baseline->kind != snapshot.kind ||
+        baseline->entity != snapshot.entity ||
         baseline->modeling_object_id != snapshot.modeling_object_id) {
       return {.ok = false,
               .changed = refreshed.changed,
@@ -796,10 +1438,9 @@ ModelingCommandResult CurveToolService::edit_sub_elements(
       curve_baseline.active = curve_control_target(*baseline->active);
     }
     std::sort(curve_baseline.controls.begin(), curve_baseline.controls.end());
-    curve_baseline.controls.erase(
-        std::unique(curve_baseline.controls.begin(),
-                    curve_baseline.controls.end()),
-        curve_baseline.controls.end());
+    curve_baseline.controls.erase(std::unique(curve_baseline.controls.begin(),
+                                              curve_baseline.controls.end()),
+                                  curve_baseline.controls.end());
     const CurveControlSelection valid_baseline =
         valid_control_selection(curve_baseline, *preview.document);
     if (valid_baseline != curve_baseline) {
@@ -813,8 +1454,7 @@ ModelingCommandResult CurveToolService::edit_sub_elements(
   ModelingCommandResult result = edit_control_selection_checked(
       curve_hits, selection_edit_operation(edit), curve_baseline_pointer,
       direct_hit.has_value()
-          ? std::optional<CurveControlTarget>(
-                curve_control_target(*direct_hit))
+          ? std::optional<CurveControlTarget>(curve_control_target(*direct_hit))
           : std::nullopt);
   if (!result.ok) {
     result.changed = result.changed || refreshed.changed;
@@ -832,9 +1472,10 @@ ModelingCommandResult CurveToolService::restore_sub_selection_baseline(
   if (!refreshed.ok) {
     return {.ok = false,
             .changed = true,
-            .message = refreshed.message.empty()
-                           ? "Curve selection rollback could not refresh its owner."
-                           : refreshed.message};
+            .message =
+                refreshed.message.empty()
+                    ? "Curve selection rollback could not refresh its owner."
+                    : refreshed.message};
   }
   const EditorSubSelectionSnapshot snapshot = sub_selection_snapshot();
   if (baseline.kind != EditorSubSelectionKind::CurveControl ||
@@ -891,8 +1532,7 @@ ModelingCommandResult CurveToolService::restore_sub_selection_baseline(
   sub_element_hover_ = baseline.hover;
   revision_ = baseline.owner_revision;
   preview_revision_ = baseline.presentation_revision;
-  cached_control_preview_revision_ =
-      std::numeric_limits<std::uint64_t>::max();
+  cached_control_preview_revision_ = std::numeric_limits<std::uint64_t>::max();
   cached_control_selection_revision_ =
       std::numeric_limits<std::uint64_t>::max();
   cached_controls_world_pivot_.reset();
@@ -914,8 +1554,7 @@ ModelingCommandResult CurveToolService::preview_sub_element_hover(
                   "Finish the active Curve drag before previewing controls."};
     }
     if (!controls_editable() ||
-        sub_selection_snapshot().kind !=
-            EditorSubSelectionKind::CurveControl) {
+        sub_selection_snapshot().kind != EditorSubSelectionKind::CurveControl) {
       return {.ok = false,
               .changed = refreshed.changed,
               .message = "The Curve control hover owner is stale."};
@@ -1013,7 +1652,8 @@ ModelingCommandResult CurveToolService::delete_selected_sub_elements() {
   if (dragging()) {
     return {.ok = false,
             .changed = false,
-            .message = "Finish the active Curve drag before deleting controls."};
+            .message =
+                "Finish the active Curve drag before deleting controls."};
   }
   const auto &preview = preview_state();
   if (!preview.document) {
@@ -1050,27 +1690,22 @@ ModelingCommandResult CurveToolService::delete_selected_sub_elements() {
     }
     modeling::CurvePointSpec replacement{
         .position = point.position,
-        .incoming_handle = incoming ? modeling::Vec3{}
-                                    : point.incoming_handle,
-        .outgoing_handle = outgoing ? modeling::Vec3{}
-                                    : point.outgoing_handle,
+        .incoming_handle = incoming ? modeling::Vec3{} : point.incoming_handle,
+        .outgoing_handle = outgoing ? modeling::Vec3{} : point.outgoing_handle,
     };
     handle_edits.push_back({.id = point.id, .point = replacement});
   }
   if (!handle_edits.empty()) {
     const auto edited = candidate.set_points(handle_edits);
     if (!edited.ok()) {
-      return {.ok = false,
-              .changed = false,
-              .message = edited.error_message()};
+      return {.ok = false, .changed = false, .message = edited.error_message()};
     }
   }
   for (const modeling::CurvePointId point : removed_anchors) {
     const auto removed = candidate.remove_point(point);
     if (!removed.ok()) {
-      return {.ok = false,
-              .changed = false,
-              .message = removed.error_message()};
+      return {
+          .ok = false, .changed = false, .message = removed.error_message()};
     }
   }
 
@@ -1079,9 +1714,10 @@ ModelingCommandResult CurveToolService::delete_selected_sub_elements() {
   const bool next_closed = candidate.closed();
   if (drawing_) {
     draft_ = std::move(candidate);
+    (void)convert_procedural_draft_to_draw();
   } else {
-    const CommandResult result = history_.execute(
-        std::make_unique<ReplaceCurveHistoryCommand>(
+    const CommandResult result =
+        history_.execute(std::make_unique<ReplaceCurveHistoryCommand>(
             modeling_, modeling_object_id_, std::move(candidate)));
     if (!result.ok || !result.changed) {
       return modeling_result(result);
@@ -1115,11 +1751,12 @@ std::optional<QVec3> CurveToolService::selected_controls_world_pivot() const {
   QVec3 maximum{};
   bool any = false;
   const auto points = preview.document->points();
-  for (std::size_t point_index = 0; point_index < points.size(); ++point_index) {
+  for (std::size_t point_index = 0; point_index < points.size();
+       ++point_index) {
     const auto &point = points[point_index];
-    for (const CurveControlKind kind : {
-             CurveControlKind::Anchor, CurveControlKind::IncomingHandle,
-             CurveControlKind::OutgoingHandle}) {
+    for (const CurveControlKind kind :
+         {CurveControlKind::Anchor, CurveControlKind::IncomingHandle,
+          CurveControlKind::OutgoingHandle}) {
       const CurveControlTarget target{.point = point.id, .kind = kind};
       if (!control_selection_.contains(target) ||
           !curve_control_is_visible(preview, point_index, kind)) {
@@ -1146,12 +1783,15 @@ std::optional<QVec3> CurveToolService::selected_controls_world_pivot() const {
 }
 
 CommandResult CurveToolService::begin_point(QVec3 world_position) {
-  if (!active_ || !drawing_ || dragging() || !finite_point(world_position)) {
-    return command_invalid_result("Cannot place a curve point in the current state.");
+  if (!active_ || !drawing_ || dragging() ||
+      creation_kind_ != CurveCreationKind::Draw ||
+      !finite_point(world_position)) {
+    return command_invalid_result(
+        "Cannot place a curve point in the current state.");
   }
   modeling::CurveDocument candidate = draft_;
-  const auto appended = candidate.append_point(
-      {.position = portable_point(world_position)});
+  const auto appended =
+      candidate.append_point({.position = portable_point(world_position)});
   if (!appended.ok()) {
     return command_invalid_result(appended.error_message());
   }
@@ -1168,10 +1808,11 @@ CommandResult CurveToolService::begin_point(QVec3 world_position) {
   };
   drag_ = Drag{
       .before = draft_,
-      .selection = CurveControlSelection{
-          .controls = {target},
-          .active = target,
-      },
+      .selection =
+          CurveControlSelection{
+              .controls = {target},
+              .active = target,
+          },
       .selection_before = control_selection_,
       .origin_world = world_position,
       .construction_point = target.point,
@@ -1219,7 +1860,8 @@ CommandResult CurveToolService::begin_selected_control_drag() {
       .origin_world = *origin_world,
   };
   if (!drawing_) {
-    const auto begun = modeling_.begin_curve_document_preview(modeling_object_id_);
+    const auto begun =
+        modeling_.begin_curve_document_preview(modeling_object_id_);
     if (!begun.ok) {
       return modeling_memento_command_result(begun);
     }
@@ -1265,8 +1907,8 @@ CommandResult CurveToolService::update_drag(QVec3 world_position) {
       return command_invalid_result(changed.error_message());
     }
   } else {
-    const QVec3 local_origin = transform_point(
-        drag_->inverse_world_transform, drag_->origin_world);
+    const QVec3 local_origin =
+        transform_point(drag_->inverse_world_transform, drag_->origin_world);
     const QVec3 local_position =
         transform_point(drag_->inverse_world_transform, world_position);
     const QVec3 local_delta = local_position - local_origin;
@@ -1299,12 +1941,12 @@ CommandResult CurveToolService::update_drag(QVec3 world_position) {
             portable_point(native_point(point.position) + local_delta);
       } else {
         if (incoming_selected) {
-          replacement.incoming_handle = portable_point(
-              native_point(point.incoming_handle) + local_delta);
+          replacement.incoming_handle =
+              portable_point(native_point(point.incoming_handle) + local_delta);
         }
         if (outgoing_selected) {
-          replacement.outgoing_handle = portable_point(
-              native_point(point.outgoing_handle) + local_delta);
+          replacement.outgoing_handle =
+              portable_point(native_point(point.outgoing_handle) + local_delta);
         }
       }
       edits.push_back({.id = point.id, .point = replacement});
@@ -1320,11 +1962,13 @@ CommandResult CurveToolService::update_drag(QVec3 world_position) {
     }
     draft_ = std::move(candidate);
   } else {
-    const auto updated = modeling_.update_curve_document_preview(std::move(candidate));
+    const auto updated =
+        modeling_.update_curve_document_preview(std::move(candidate));
     if (!updated.ok || !updated.changed) {
       return modeling_memento_command_result(updated);
     }
   }
+  drag_->geometry_changed = true;
   observe_owner_revisions();
   invalidate();
   return command_changed_result();
@@ -1339,6 +1983,7 @@ CommandResult CurveToolService::commit_drag() {
     return refreshed;
   }
   const bool appended_point = drag_->appended_point;
+  const bool geometry_changed = drag_->geometry_changed;
   const std::optional<modeling::CurvePointId> dragged_point =
       drag_->construction_point;
   if (!drawing_) {
@@ -1356,6 +2001,9 @@ CommandResult CurveToolService::commit_drag() {
     };
     (void)set_control_selection(
         CurveControlSelection{.controls = {anchor}, .active = anchor});
+  }
+  if (!appended_point && geometry_changed) {
+    (void)convert_procedural_draft_to_draw();
   }
   observe_owner_revisions();
   invalidate(true);

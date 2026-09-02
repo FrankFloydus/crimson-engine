@@ -1039,14 +1039,14 @@ TEST(QtViewportSurfaceInputTests,
         const auto active_before = session.scene().primary_selection();
         const auto selection_revision_before = session.scene().selection_revision();
         const auto history_before = editor.history().snapshot();
-        constexpr std::array event_types{
+        constexpr std::array kEventTypes{
             QEvent::MouseButtonPress, QEvent::MouseButtonRelease,
             QEvent::MouseButtonDblClick, QEvent::MouseButtonRelease};
-        for (std::size_t index = 0; index < event_types.size(); ++index) {
-          const bool release = event_types[index] == QEvent::MouseButtonRelease;
+        for (std::size_t index = 0; index < kEventTypes.size(); ++index) {
+          const bool release = kEventTypes[index] == QEvent::MouseButtonRelease;
           // Selection intent belongs to the double-click event, even when the
           // modifier has already been released before the next input frame.
-          QMouseEvent event(event_types[index], local, global, Qt::LeftButton,
+          QMouseEvent event(kEventTypes[index], local, global, Qt::LeftButton,
                             release ? Qt::NoButton : Qt::LeftButton,
                             release ? Qt::NoModifier : modifiers);
           QApplication::sendEvent(surface, &event);

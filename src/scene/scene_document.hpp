@@ -539,7 +539,7 @@ public:
     std::uint64_t curve_binding_revision() const {
       return curve_binding_revision_;
     }
-    /// Revision of entity MaterialComponent bindings only.
+    /// Revision of entity material bindings and material-surface eligibility.
     std::uint64_t material_binding_revision() const {
       return material_binding_revision_;
     }

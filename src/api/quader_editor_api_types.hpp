@@ -9,9 +9,10 @@
 #include "api/quader_api_result.hpp"
 #include "api/quader_viewport_layout_types.hpp"
 
+#include <array>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
-#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -115,6 +116,7 @@ enum class QuaderToolSettingControlKind {
   Number,
   Choice,
   Action,
+  Vector3Number,
 };
 
 /**
@@ -137,6 +139,17 @@ enum class QuaderToolSettingNumberInteraction {
 };
 
 /**
+ * Selects the retained native presentation for a numeric tool setting.
+ * SliderSpinBox keeps the established paired slider and text field. A
+ * DragSpinner exposes discrete side steps plus a horizontally scrubbable
+ * central value that becomes a text editor after a stationary click.
+ */
+enum class QuaderToolSettingNumberPresentation {
+  SliderSpinBox,
+  DragSpinner,
+};
+
+/**
  * Represents a selectable value for a tool setting choice control.
  */
 struct QuaderToolSettingChoiceOption {
@@ -146,12 +159,36 @@ struct QuaderToolSettingChoiceOption {
 };
 
 /**
+ * Represents one independently writable component of a compact XYZ numeric
+ * setting. The component id is the public setting id dispatched by the UI.
+ */
+struct QuaderToolSettingNumberComponent {
+  std::string id;
+  bool enabled = true;
+  double value = 0.0;
+  double min_value = 0.0;
+  double max_value = 1.0;
+  double step = 1.0;
+};
+
+/**
+ * Describes one optional disclosure group in the flat Tool Settings model.
+ * Controls opt in through QuaderToolSettingControl::group_id.
+ */
+struct QuaderToolSettingGroup {
+  std::string id;
+  std::string label;
+  bool expanded_by_default = true;
+};
+
+/**
  * Represents one editable or executable tool setting control.
  */
 struct QuaderToolSettingControl {
   QuaderToolSettingControlKind kind = QuaderToolSettingControlKind::Toggle;
   std::string id;
   std::string label;
+  std::string group_id;
   bool enabled = true;
   bool bool_value = false;
   double number_value = 0.0;
@@ -160,10 +197,13 @@ struct QuaderToolSettingControl {
   double step = 1.0;
   QuaderToolSettingNumberInteraction number_interaction =
       QuaderToolSettingNumberInteraction::Continuous;
+  QuaderToolSettingNumberPresentation number_presentation =
+      QuaderToolSettingNumberPresentation::SliderSpinBox;
   std::string choice_value;
   std::vector<QuaderToolSettingChoiceOption> choices;
   QuaderToolSettingChoicePresentation choice_presentation =
       QuaderToolSettingChoicePresentation::Radio;
+  std::array<QuaderToolSettingNumberComponent, 3> vector3_components;
 };
 
 /**
@@ -176,6 +216,7 @@ struct QuaderToolSettingsTarget {
   std::string title;
   std::string description;
   std::vector<QuaderToolSettingControl> controls;
+  std::vector<QuaderToolSettingGroup> groups;
   bool can_reset = false;
   bool apply_visible = false;
   bool can_apply = false;

@@ -985,6 +985,9 @@ TEST(UiLayoutGuardrailTests,
   const std::string number_slider_header =
       read_source_file("src/ui/qt_tool_settings_number_slider.hpp");
   const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string generic_action = source_slice(
+      tool, "case QuaderToolSettingControlKind::Action:",
+      "control_layout.addWidget(button);");
 
   expect_contains(settings_header,
                   "class QtSettingsDialog final : public QDialog");
@@ -1094,10 +1097,21 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(tool, "editor_->tools().commit_active_tool_preview()");
   expect_contains(tool, "editor_->tools().cancel_active_tool_preview()");
   expect_contains(tool, "editor_->tools().execute_action(");
+  const std::size_t action_flush =
+      generic_action.find("flush_pending_number_dispatches();");
+  const std::size_t action_dispatch =
+      generic_action.find("editor_->tools().execute_action(");
+  ASSERT_NE(action_flush, std::string::npos);
+  ASSERT_NE(action_dispatch, std::string::npos);
+  EXPECT_LT(action_flush, action_dispatch);
   expect_contains(tool, "localization->text(id, fallback)");
   expect_contains(tool, "localized_descriptor_label(");
   expect_missing(tool, "qtext(control.label)");
   expect_missing(tool, "qtext(option.label)");
+  expect_contains(tool, "QuaderToolSettingControlKind::Vector3Number");
+  expect_contains(tool, "control.group_id");
+  expect_contains(tool, "group.expanded_by_default");
+  expect_missing(tool, "path_array.");
 
   expect_contains(ui_source, "new QtSettingsDialog(main_window_.get())");
   expect_contains(ui_source,
@@ -3418,7 +3432,36 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(cache, "scene_available ? assets_ : nullptr");
   expect_contains(cache, "scene_available ? document_ : nullptr");
   expect_contains(cache, "scene_available ? modeling_ : nullptr");
+  expect_contains(
+      cache,
+      "scene_available ? document_->material_binding_revision() : 0u");
+  expect_missing(cache, "document_->curve_binding_revision()");
   expect_missing(cache, "active_scene_id == 0u) {");
+}
+
+TEST(UiLayoutGuardrailTests,
+     InspectorMaterialSurfaceQueryTracksSolidifiedCurveBindings) {
+  const std::string header = read_source_file("src/ui/ui_system.hpp");
+  const std::string ui = read_source_file("src/ui/ui_system.cpp");
+  const std::string refresh = source_slice(
+      ui, "void UISystem::refresh_inspector_material_presentation()",
+      "void UISystem::show_home()");
+
+  expect_contains(header, "std::uint64_t material_binding_revision = 0u;");
+  expect_contains(
+      refresh, "scene_entity_has_material_surface(*document_, entity)");
+  expect_contains(refresh, "mix(stamp.material_binding_revision)");
+  expect_missing(refresh, "curve_binding_revision");
+  const auto revision_gate = refresh.find(
+      "if (!inspector_material_query_presenter_.needs_refresh(stamp))");
+  const auto material_query = refresh.find("materials().used_materials(");
+  const auto surface_query =
+      refresh.find("scene_entity_has_material_surface(*document_, entity)");
+  ASSERT_NE(revision_gate, std::string::npos);
+  ASSERT_NE(material_query, std::string::npos);
+  ASSERT_NE(surface_query, std::string::npos);
+  EXPECT_LT(revision_gate, material_query);
+  EXPECT_LT(revision_gate, surface_query);
 }
 
 TEST(UiLayoutGuardrailTests,

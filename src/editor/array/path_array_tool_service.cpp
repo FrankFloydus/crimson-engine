@@ -76,6 +76,54 @@ bool finite_vector(QVec3 value) {
          std::isfinite(value.z);
 }
 
+QVec3 componentwise_minimum(QVec3 left, QVec3 right) {
+  return {std::min(left.x, right.x), std::min(left.y, right.y),
+          std::min(left.z, right.z)};
+}
+
+QVec3 componentwise_maximum(QVec3 left, QVec3 right) {
+  return {std::max(left.x, right.x), std::max(left.y, right.y),
+          std::max(left.z, right.z)};
+}
+
+std::optional<QMat4> source_local_variation_frame(
+    const SceneDocument &scene, EntityId source,
+    const TransformComponent &local_transform) {
+  const EntityId parent = scene.parent(source);
+  const QMat4 parent_world =
+      parent == kInvalidEntityId ? scene_transform_identity_matrix()
+                                 : scene.world_transform_matrix(parent);
+  if (!scene_matrix_is_finite(parent_world) ||
+      !scene_transform_is_finite(local_transform)) {
+    return std::nullopt;
+  }
+  const glm::mat3 parent_linear{to_glm(parent_world)};
+  const glm::mat3 local_rotation = glm::mat3_cast(
+      to_glm(quat_from_euler_radians(local_transform.rotation_euler)));
+  const QMat4 frame = from_glm(glm::mat4{parent_linear * local_rotation});
+  return scene_matrix_is_finite(frame) ? std::optional<QMat4>{frame}
+                                       : std::nullopt;
+}
+
+std::uint64_t path_array_variation_seed(std::string_view path_uuid,
+                                        std::string_view source_uuid) {
+  constexpr std::uint64_t kFnvOffset = 14695981039346656037ULL;
+  constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
+  std::uint64_t hash = kFnvOffset;
+  const auto append = [&](std::string_view value) {
+    for (const unsigned char byte : value) {
+      hash ^= static_cast<std::uint64_t>(byte);
+      hash *= kFnvPrime;
+    }
+    hash ^= 0xffU;
+    hash *= kFnvPrime;
+  };
+  append("quader.path_array.variation.v1");
+  append(path_uuid);
+  append(source_uuid);
+  return path_array_layout_detail::splitmix64(hash);
+}
+
 modeling::Transform3 sdk_transform(const QMat4 &value) {
   const auto &matrix = value.values;
   return {
@@ -274,6 +322,8 @@ void PathArrayToolService::invalidate_preview() {
 void PathArrayToolService::clear_preview() {
   invalidate_preview();
   cached_preview_ = {};
+  cached_layout_backbone_key_.reset();
+  cached_layout_backbone_.reset();
 }
 
 double PathArrayToolService::fit_distance(double path_length, bool closed,
@@ -504,6 +554,40 @@ PathArraySignedAxis PathArrayToolService::forward_axis() const {
                               : kPathArrayDefaultForwardAxis;
 }
 
+QVec3 PathArrayToolService::rotation_offset_degrees() const {
+  return session_.has_value() ? session_->variation.rotation_offset_degrees
+                              : kPathArrayDefaultRotationOffsetDegrees;
+}
+
+QVec3 PathArrayToolService::rotation_random_min_degrees() const {
+  return session_.has_value()
+             ? session_->variation.rotation_random_min_degrees
+             : kPathArrayDefaultRotationRandomMinDegrees;
+}
+
+QVec3 PathArrayToolService::rotation_random_max_degrees() const {
+  return session_.has_value()
+             ? session_->variation.rotation_random_max_degrees
+             : kPathArrayDefaultRotationRandomMaxDegrees;
+}
+
+QVec3 PathArrayToolService::scale_offset_factors() const {
+  return session_.has_value() ? session_->variation.scale_offset_factors
+                              : kPathArrayDefaultScaleOffsetFactors;
+}
+
+QVec3 PathArrayToolService::scale_random_min_factors() const {
+  return session_.has_value()
+             ? session_->variation.scale_random_min_factors
+             : kPathArrayDefaultScaleRandomMinFactors;
+}
+
+QVec3 PathArrayToolService::scale_random_max_factors() const {
+  return session_.has_value()
+             ? session_->variation.scale_random_max_factors
+             : kPathArrayDefaultScaleRandomMaxFactors;
+}
+
 std::uint32_t PathArrayToolService::maximum_count() const {
   if (!session_.has_value() || !session_->source.has_value()) {
     return kPathArrayMaximumCount;
@@ -663,10 +747,13 @@ CommandResult PathArrayToolService::select_source(EntityId source) {
       .distance = session_->distance,
       .follow_path = session_->follow_path,
       .forward_axis = session_->forward_axis,
+      .variation = session_->variation,
       .path_generation = session_->path_generation,
       .source_generation = candidate_source_generation,
       .layout_revision = session_->layout_revision,
   };
+  candidate.variation.seed = path_array_variation_seed(
+      candidate.path.uuid, candidate.source->uuid);
   const std::optional<PathArrayLayoutResult> candidate_layout =
       build_layout(candidate);
   if (!candidate_layout.has_value() ||
@@ -688,6 +775,7 @@ CommandResult PathArrayToolService::select_source(EntityId source) {
   if (source_changed) {
     session_->source = std::move(candidate.source);
     session_->source_generation = candidate_source_generation;
+    session_->variation.seed = candidate.variation.seed;
   }
   session_->count = next_count;
   if (!source_changed && !settings_changed && !selected.changed) {
@@ -796,6 +884,82 @@ PathArrayToolService::set_forward_axis(PathArraySignedAxis axis) {
   return command_changed_result();
 }
 
+CommandResult
+PathArrayToolService::set_variation(PathArrayVariationSettings variation) {
+  if (!session_.has_value()) {
+    return command_invalid_result("Path Array tool is not active.");
+  }
+  variation.seed = session_->variation.seed;
+  const std::string validation_error =
+      path_array_variation_validation_error(variation);
+  if (!validation_error.empty()) {
+    return command_invalid_result(validation_error);
+  }
+  if (session_->variation == variation) {
+    return command_unchanged_result();
+  }
+  session_->variation = variation;
+  session_->layout_revision = issue_revision();
+  invalidate_preview();
+  issue_tool_settings_revision();
+  return command_changed_result();
+}
+
+CommandResult
+PathArrayToolService::set_rotation_offset_degrees(QVec3 value) {
+  PathArrayVariationSettings variation =
+      session_.has_value() ? session_->variation : PathArrayVariationSettings{};
+  variation.rotation_offset_degrees = value;
+  return set_variation(variation);
+}
+
+CommandResult
+PathArrayToolService::set_rotation_random_min_degrees(QVec3 value) {
+  PathArrayVariationSettings variation =
+      session_.has_value() ? session_->variation : PathArrayVariationSettings{};
+  variation.rotation_random_min_degrees = value;
+  variation.rotation_random_max_degrees = componentwise_maximum(
+      variation.rotation_random_max_degrees, value);
+  return set_variation(variation);
+}
+
+CommandResult
+PathArrayToolService::set_rotation_random_max_degrees(QVec3 value) {
+  PathArrayVariationSettings variation =
+      session_.has_value() ? session_->variation : PathArrayVariationSettings{};
+  variation.rotation_random_max_degrees = value;
+  variation.rotation_random_min_degrees = componentwise_minimum(
+      variation.rotation_random_min_degrees, value);
+  return set_variation(variation);
+}
+
+CommandResult PathArrayToolService::set_scale_offset_factors(QVec3 value) {
+  PathArrayVariationSettings variation =
+      session_.has_value() ? session_->variation : PathArrayVariationSettings{};
+  variation.scale_offset_factors = value;
+  return set_variation(variation);
+}
+
+CommandResult
+PathArrayToolService::set_scale_random_min_factors(QVec3 value) {
+  PathArrayVariationSettings variation =
+      session_.has_value() ? session_->variation : PathArrayVariationSettings{};
+  variation.scale_random_min_factors = value;
+  variation.scale_random_max_factors =
+      componentwise_maximum(variation.scale_random_max_factors, value);
+  return set_variation(variation);
+}
+
+CommandResult
+PathArrayToolService::set_scale_random_max_factors(QVec3 value) {
+  PathArrayVariationSettings variation =
+      session_.has_value() ? session_->variation : PathArrayVariationSettings{};
+  variation.scale_random_max_factors = value;
+  variation.scale_random_min_factors =
+      componentwise_minimum(variation.scale_random_min_factors, value);
+  return set_variation(variation);
+}
+
 CommandResult PathArrayToolService::reset_settings() {
   if (!session_.has_value()) {
     return command_invalid_result("Path Array tool is not active.");
@@ -805,10 +969,13 @@ CommandResult PathArrayToolService::reset_settings() {
   const double reset_distance =
       fit_distance(session_->path.path.total_length(),
                    session_->path.path.closed(), reset_count);
+  PathArrayVariationSettings reset_variation;
+  reset_variation.seed = session_->variation.seed;
   const bool changed = session_->count != reset_count ||
                        session_->distance != reset_distance ||
                        !session_->follow_path ||
-                       session_->forward_axis != kPathArrayDefaultForwardAxis;
+                       session_->forward_axis != kPathArrayDefaultForwardAxis ||
+                       session_->variation != reset_variation;
   defaults_.remembered_distance = reset_distance;
   if (!changed) {
     return command_unchanged_result();
@@ -817,6 +984,7 @@ CommandResult PathArrayToolService::reset_settings() {
   session_->distance = reset_distance;
   session_->follow_path = kPathArrayDefaultFollowPath;
   session_->forward_axis = kPathArrayDefaultForwardAxis;
+  session_->variation = reset_variation;
   session_->layout_revision = issue_revision();
   invalidate_preview();
   issue_tool_settings_revision();
@@ -834,8 +1002,13 @@ PathArrayToolService::capture_source(EntityId source) const {
   const QMat4 root_world = scene_.world_transform_matrix(source);
   const std::optional<QMat4> root_inverse =
       try_scene_matrix_inverse(root_world);
+  const std::optional<QMat4> variation_frame =
+      root_transform != nullptr
+          ? source_local_variation_frame(scene_, source, *root_transform)
+          : std::nullopt;
   if (root_transform == nullptr || !pivot.has_value() ||
-      !finite_vector(*pivot) || !root_inverse.has_value()) {
+      !finite_vector(*pivot) || !root_inverse.has_value() ||
+      !variation_frame.has_value()) {
     return std::nullopt;
   }
 
@@ -845,6 +1018,7 @@ PathArrayToolService::capture_source(EntityId source) const {
       .parent = scene_.parent(source),
       .local_transform = *root_transform,
       .world_transform = root_world,
+      .variation_frame_world = *variation_frame,
       .visible_pivot_world = *pivot,
   };
 
@@ -1034,6 +1208,10 @@ PathArrayToolService::capture_source(EntityId source) const {
             .source_entity = entity,
             .visibility_entity = entity,
             .curve = curve->curve,
+            .material = entity_material(scene_, entity),
+            .solidify = curve->solidify,
+            .solidify_resolution = curve->solidify_resolution,
+            .solidify_radius = curve->solidify_radius,
             .member_from_root = scene_transform_multiply(
                 *root_inverse, scene_.world_transform_matrix(entity)),
         });
@@ -1167,6 +1345,10 @@ bool PathArrayToolService::same_source_snapshot(
     return first.source_entity == second.source_entity &&
            first.visibility_entity == second.visibility_entity &&
            first.curve == second.curve &&
+           first.material == second.material &&
+           first.solidify == second.solidify &&
+           first.solidify_resolution == second.solidify_resolution &&
+           first.solidify_radius == second.solidify_radius &&
            same_matrix(first.member_from_root, second.member_from_root);
   };
   const auto same_light = [](const LightParticipant &first,
@@ -1187,6 +1369,8 @@ bool PathArrayToolService::same_source_snapshot(
          left.parent == right.parent &&
          same_transform(left.local_transform, right.local_transform) &&
          same_matrix(left.world_transform, right.world_transform) &&
+         same_matrix(left.variation_frame_world,
+                     right.variation_frame_world) &&
          same_vector(left.visible_pivot_world, right.visible_pivot_world) &&
          left.hierarchy_node_count == right.hierarchy_node_count &&
          left.visible_preview_participant_count ==
@@ -1212,21 +1396,47 @@ bool PathArrayToolService::same_source_snapshot(
          left.suppression.occurrences == right.suppression.occurrences;
 }
 
+const PathArrayLayoutBackbone &
+PathArrayToolService::layout_backbone(const Session &session) const {
+  const LayoutBackboneCacheKey key{
+      .path_generation = session.path_generation,
+      .source_generation = session.source_generation,
+      .follow_path = session.follow_path,
+      .forward_axis = session.follow_path ? session.forward_axis
+                                          : kPathArrayDefaultForwardAxis,
+  };
+  if (!cached_layout_backbone_key_.has_value() ||
+      *cached_layout_backbone_key_ != key ||
+      !cached_layout_backbone_.has_value()) {
+    PathArrayLayoutBackbone prepared = prepare_path_array_layout_backbone({
+        .path_stations = session.path.layout_stations,
+        .source_world_transform = session.source->world_transform,
+        .source_variation_frame_world =
+            session.source->variation_frame_world,
+        .source_pivot_world = session.source->visible_pivot_world,
+        .follow_path = session.follow_path,
+        .signed_axis = session.forward_axis,
+        .closed = session.path.path.closed(),
+    });
+    cached_layout_backbone_key_ = key;
+    cached_layout_backbone_ = std::move(prepared);
+    ++layout_work_stats_.backbone_build_count;
+  }
+  return *cached_layout_backbone_;
+}
+
 std::optional<PathArrayLayoutResult>
 PathArrayToolService::build_layout(const Session &session) const {
   if (session.path.layout_stations.size() < 2U ||
       !session.source.has_value()) {
     return std::nullopt;
   }
-  PathArrayLayoutResult result = build_path_array_layout({
-      .path_stations = session.path.layout_stations,
-      .source_world_transform = session.source->world_transform,
-      .source_pivot_world = session.source->visible_pivot_world,
+  const PathArrayLayoutBackbone &backbone = layout_backbone(session);
+  ++layout_work_stats_.layout_evaluation_count;
+  PathArrayLayoutResult result = build_path_array_layout(backbone, {
       .count = session.count,
       .distance = session.distance,
-      .follow_path = session.follow_path,
-      .signed_axis = session.forward_axis,
-      .closed = session.path.path.closed(),
+      .variation = session.variation,
   });
   if (!result.ok || result.world_transforms.size() != session.count) {
     return std::nullopt;
@@ -1501,6 +1711,10 @@ const PathArrayPreviewState &PathArrayToolService::preview_state() const {
         .source_entity = participant.source_entity,
         .visibility_entity = participant.visibility_entity,
         .curve = participant.curve,
+        .material = participant.material,
+        .solidify = participant.solidify,
+        .solidify_resolution = participant.solidify_resolution,
+        .solidify_radius = participant.solidify_radius,
         .suppress_source = true,
         .layout_key = preview_layout_key(2U, participant.source_entity,
                                          participant.visibility_entity),

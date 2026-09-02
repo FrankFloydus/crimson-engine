@@ -53,7 +53,11 @@ struct ToolPreviewCurve final {
   EntityId source_entity = kInvalidEntityId;
   EntityId visibility_entity = kInvalidEntityId;
   AssetId curve = kInvalidAssetId;
+  MaterialComponent material;
   std::vector<QMat4> instance_transforms;
+  bool solidify = false;
+  int solidify_resolution = kCurveSolidifyDefaultResolution;
+  float solidify_radius = static_cast<float>(kCurveSolidifyDefaultRadius);
   bool suppress_source = false;
   std::uint64_t layout_key = 0u;
 };
@@ -111,9 +115,9 @@ build_render_scene_snapshot(const SceneDocument &document,
                             RenderSceneSnapshotBuildOptions options = {});
 /**
  * Advances an existing main-scene snapshot across a curve-only publication.
- * Authored curves are rendered by the overlay snapshot, so no mesh or light
- * record changes when the exact curve/render revision pair is the only
- * render-component change.
+ * Authored centerlines are rendered by the overlay snapshot, so no mesh or
+ * light record changes when the exact curve/render revision pair is the only
+ * render-component change and the scene has no solidified Curves.
  */
 [[nodiscard]] bool try_refresh_render_scene_snapshot_curve_publication(
     RenderSceneSnapshot &snapshot, const SceneDocument &document,
@@ -156,7 +160,8 @@ build_render_tool_preview_snapshot(std::vector<ToolPreviewMesh> meshes,
 build_render_tool_preview_scene_snapshot(
     ToolPreviewScene preview, const AssetRegistry &assets,
     const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
-    const RenderProjectMaterialResolver *project_material_resolver = nullptr);
+    const RenderProjectMaterialResolver *project_material_resolver = nullptr,
+    CurveSolidGeometryCache *curve_solid_geometry_cache = nullptr);
 
 /** Builds camera-independent Curve, Light-marker, and group-marker geometry. */
 [[nodiscard]] ViewportOverlayFrame build_render_tool_preview_overlay_frame(

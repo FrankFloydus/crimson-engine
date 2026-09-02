@@ -864,7 +864,7 @@ TEST(ViewportToolRuntimeTests,
 
 TEST(ViewportToolRuntimeTests,
      KnifeShortcutPreservesSelectionModeInRuntimeAndInputRouter) {
-  const std::array kModes{
+  const std::array modes{
       ViewportSelectionMode::Vertex,
       ViewportSelectionMode::Edge,
       ViewportSelectionMode::Face,
@@ -876,7 +876,7 @@ TEST(ViewportToolRuntimeTests,
       .tool = ViewportToolId::Knife,
   };
 
-  for (const ViewportSelectionMode mode : kModes) {
+  for (const ViewportSelectionMode mode : modes) {
     SCOPED_TRACE(static_cast<int>(mode));
 
     ViewportToolRuntime runtime;

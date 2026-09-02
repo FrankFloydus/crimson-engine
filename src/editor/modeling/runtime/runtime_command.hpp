@@ -24,8 +24,8 @@ struct EditorRuntimeSelectionView {
   int active_object_id = -1;
 
   [[nodiscard]] const std::vector<PolygonObject> &objects() const noexcept {
-    static const std::vector<PolygonObject> empty;
-    return object_records != nullptr ? *object_records : empty;
+    static const std::vector<PolygonObject> kEmpty;
+    return object_records != nullptr ? *object_records : kEmpty;
   }
 
   [[nodiscard]] SelectionMode selection_mode() const noexcept { return mode; }

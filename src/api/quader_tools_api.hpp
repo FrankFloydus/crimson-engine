@@ -11,8 +11,21 @@
 #include "api/quader_viewport_input_types.hpp"
 
 #include <cstdint>
+#include <string>
 
 namespace quader {
+
+/**
+ * Describes optional history behavior for one numeric Tool Settings edit.
+ *
+ * Reuse one nonempty merge key only for owner updates produced by the same
+ * continuous drag or text-entry gesture. Discrete edits should leave it
+ * empty so each accepted change remains an independent history step. Tool
+ * owners without mergeable document history ignore this option.
+ */
+struct QuaderToolSettingEditOptions {
+  std::string merge_key;
+};
 
 /**
  * Exposes Quader Tools API operations through the public Quader API surface.
@@ -31,7 +44,8 @@ public:
     [[nodiscard]] std::uint64_t active_settings_revision() const;
     [[nodiscard]] std::uint64_t active_tool_revision() const;
     QuaderApiVoidResult set_setting(std::string_view tool_id,
-                                    std::string_view name, double value);
+                                    std::string_view name, double value,
+                                    QuaderToolSettingEditOptions options = {});
     QuaderApiVoidResult set_setting(std::string_view tool_id,
                                     std::string_view name, bool value);
     QuaderApiVoidResult set_setting(std::string_view tool_id,
@@ -66,6 +80,7 @@ public:
     QuaderToolsRuntimeHooks hooks_;
     mutable const void *active_settings_source_identity_ = nullptr;
     mutable std::uint64_t active_settings_source_revision_ = 0;
+    mutable std::uint64_t active_settings_source_dependent_revision_ = 0;
     mutable std::uint64_t active_settings_revision_ = 0;
     mutable std::uint8_t active_settings_source_kind_ = 0;
     mutable bool active_settings_source_reset_availability_token_ = false;

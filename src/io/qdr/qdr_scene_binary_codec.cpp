@@ -50,7 +50,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 8u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 9u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 [[nodiscard]] fb::Vec2 to_fb(QVec2 value) {
@@ -841,7 +841,8 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
   for (const QdrProjectEntityWriteSnapshot &entity : snapshot.entities) {
     flatbuffers::Offset<fb::CurveComponent> curve;
     if (entity.curve.has_value()) {
-      if (entity.kind != EntityKind::Curve ||
+      if (!curve_component_is_valid(*entity.curve) ||
+          entity.kind != EntityKind::Curve ||
           !curve_ids.contains(entity.curve->curve) ||
           entity.mesh.has_value() || entity.light.has_value() ||
           entity.instance_definition.has_value() ||
@@ -850,7 +851,9 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
           entity.texture_mapping.has_value()) {
         throw std::runtime_error("QDR entity curve binding is invalid.");
       }
-      curve = fb::CreateCurveComponent(builder, entity.curve->curve);
+      curve = fb::CreateCurveComponent(
+          builder, entity.curve->curve, entity.curve->solidify,
+          entity.curve->solidify_resolution, entity.curve->solidify_radius);
     } else if (entity.kind == EntityKind::Curve) {
       throw std::runtime_error("QDR curve entity is missing its curve binding.");
     }
@@ -1990,7 +1993,17 @@ decode_entity_state(const SceneContentDocument &document,
     if (!document.assets().has_curve(value->curve())) {
       throw std::runtime_error("QDR entity references a missing curve asset.");
     }
-    state.curve = CurveComponent{.curve = value->curve()};
+    CurveComponent curve{.curve = value->curve()};
+    if (schema_version >= 9u) {
+      curve.solidify = value->solidify();
+      curve.solidify_resolution = value->solidify_resolution();
+      curve.solidify_radius = value->solidify_radius();
+    }
+    if (!curve_component_is_valid(curve)) {
+      throw std::runtime_error(
+          "QDR scene contains an invalid curve component.");
+    }
+    state.curve = curve;
   }
   if (const fb::LightComponent *value = stored.light()) {
     state.light = LightComponent{

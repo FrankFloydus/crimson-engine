@@ -51,6 +51,9 @@ struct QuaderEntitySnapshot {
   std::optional<QMat4> texture_sampling_from_local;
   bool has_curve = false;
   AssetId curve = kInvalidAssetId;
+  bool curve_solidify = false;
+  int curve_solidify_resolution = 8;
+  float curve_solidify_radius = 0.1F;
 };
 
 /**

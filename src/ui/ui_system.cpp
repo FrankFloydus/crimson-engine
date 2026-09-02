@@ -19,8 +19,9 @@
 #include "platform/platform_shell.hpp"
 #include "platform/window_placement.hpp"
 #include "quader_app_version.hpp"
-#include "ui/standard_material_preview_render_snapshot_adapter.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_material_surface.hpp"
+#include "ui/standard_material_preview_render_snapshot_adapter.hpp"
 #include "ui/console_panel.hpp"
 #include "ui/inspector_panel.hpp"
 #include "ui/layer_panel.hpp"
@@ -1746,16 +1747,16 @@ void UISystem::refresh_inspector_material_presentation() {
       editor_->materials().used_materials(
           QuaderMaterialUsageScope::Selection);
   const QuaderSelectionSummary selection = editor_->selection().summary();
-  const bool object_mesh_selection =
+  const bool object_material_surface_selection =
       selection.mode == QuaderSelectionMode::Object &&
       std::ranges::any_of(
           document_->selected_entities(), [this](EntityId entity) {
-            return document_->mesh(entity) != nullptr;
+            return scene_entity_has_material_surface(*document_, entity);
           });
   const bool section_visible =
       selection.mode == QuaderSelectionMode::Face ||
       selection.mode == QuaderSelectionMode::Group ||
-      object_mesh_selection;
+      object_material_surface_selection;
   std::uint64_t revision = 1469598103934665603ull;
   const auto mix = [&revision](std::uint64_t value) {
     revision ^= value;
@@ -2344,7 +2345,8 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       console_panel_->refresh(context);
     }
   }
-  if (panel_visible(UIPanelId::ToolSettings)) {
+  if (panel_visible(UIPanelId::ToolSettings) &&
+      !numeric_interaction_active) {
     const ToolSettingsPresentationStamp stamp{
         .active_settings_revision = frame_tool_settings_revision,
     };

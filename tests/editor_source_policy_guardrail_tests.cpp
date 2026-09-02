@@ -999,7 +999,7 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_NE(binding_registry.find("preserving_concurrent_changes"),
             std::string::npos);
 
-  constexpr std::array<std::string_view, 10> retired_adapter_state{
+  constexpr std::array<std::string_view, 10> kRetiredAdapterState{
       "HostPublicationState",
       "preview_base_snapshot_",
       "workspace_update_base_snapshot_",
@@ -1011,7 +1011,7 @@ TEST(ModelingSessionServiceSplitTests,
       "(void)publication.rollback",
       "static_cast<void>(publication.rollback",
   };
-  for (const std::string_view retired : retired_adapter_state) {
+  for (const std::string_view retired : kRetiredAdapterState) {
     EXPECT_EQ(sdk_adapter.find(retired), std::string::npos) << retired;
   }
 
@@ -1067,7 +1067,7 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_NE(resolved_pivot_replay.find(".changed = true"),
             std::string::npos);
 
-  constexpr std::array<std::string_view, 8> retired_pivot_fallbacks{
+  constexpr std::array<std::string_view, 8> kRetiredPivotFallbacks{
       "reset_from_scene(",
       "rollback_initial_apply",
       "for (auto rollback =",
@@ -1077,7 +1077,7 @@ TEST(ModelingSessionServiceSplitTests,
       "(void)publication.rollback",
       "static_cast<void>(publication.rollback",
   };
-  for (const std::string_view retired : retired_pivot_fallbacks) {
+  for (const std::string_view retired : kRetiredPivotFallbacks) {
     EXPECT_EQ(pivot.find(retired), std::string::npos) << retired;
   }
 }
@@ -1135,7 +1135,7 @@ TEST(ModelingSessionServiceSplitTests,
       read_source_file(
           "src/editor/selection/selection_projection_service.cpp"),
   };
-  constexpr std::array<std::string_view, 6> retired{
+  constexpr std::array<std::string_view, 6> kRetired{
       "native_selection_projection_view",
       "selection_projection_view",
       "native_selection_projection(",
@@ -1144,7 +1144,7 @@ TEST(ModelingSessionServiceSplitTests,
       "apply_selection_projection(",
   };
   for (const std::string &source : sources) {
-    for (const std::string_view symbol : retired) {
+    for (const std::string_view symbol : kRetired) {
       EXPECT_EQ(source.find(symbol), std::string::npos) << symbol;
     }
   }
@@ -1162,7 +1162,7 @@ TEST(ModelingSessionServiceSplitTests,
 
 TEST(ModelingSessionServiceSplitTests,
       SceneToModelingSelectionProjectionResultsAreNeverDiscarded) {
-  constexpr std::array<std::string_view, 6> checked_calls{
+  constexpr std::array<std::string_view, 6> kCheckedCalls{
       ".project_object_selection_from_scene(",
       "->project_object_selection_from_scene(",
       ".clear_object_selection_preserving_mode(",
@@ -1178,7 +1178,7 @@ TEST(ModelingSessionServiceSplitTests,
     for (std::size_t index = 0u; index < lines.size(); ++index) {
       const std::string &line = lines[index];
       std::size_t call = std::string::npos;
-      for (const std::string_view checked_call : checked_calls) {
+      for (const std::string_view checked_call : kCheckedCalls) {
         call = line.find(checked_call);
         if (call != std::string::npos) {
           break;
@@ -1213,11 +1213,11 @@ TEST(ModelingSessionServiceSplitTests,
 
 TEST(SelectionPublicationAuthorityGuardrailTests,
      FacadesCannotBypassCheckedSelectionPublicationOwner) {
-  constexpr std::array<std::string_view, 2> direct_projection_owners{
+  constexpr std::array<std::string_view, 2> kDirectProjectionOwners{
       "src/editor/modeling/services/modeling_session_service.cpp",
       "src/editor/selection/editor_selection_service.cpp",
   };
-  constexpr std::array<std::string_view, 8> raw_scene_selection_owners{
+  constexpr std::array<std::string_view, 8> kRawSceneSelectionOwners{
       "src/editor/commands/document/document_command_scene_helpers.hpp",
       "src/editor/commands/document/select_entities_command.hpp",
       "src/editor/commands/document/set_scene_layer_state_command.hpp",
@@ -1227,17 +1227,16 @@ TEST(SelectionPublicationAuthorityGuardrailTests,
       "src/editor/selection/scene_selection_application.hpp",
       "src/editor/selection/selection_projection_service.cpp",
   };
-  constexpr std::array<std::string_view, 8>
-      scalar_compensation_owners{
-          "src/api/quader_api_mutation_runner.cpp",
-          "src/editor/commands/scene_structural_lifecycle_service.cpp",
-          "src/editor/commands/scene_structural_lifecycle_service.hpp",
-          "src/editor/instances/project_clipboard_service.cpp",
-          "src/editor/modeling/services/modeling_transform_drag_service.cpp",
-          "src/editor/selection/checked_selection_publication_command.hpp",
-          "src/scene/scene_document.cpp",
-          "src/scene/scene_document.hpp",
-      };
+  constexpr std::array<std::string_view, 8> kScalarCompensationOwners{
+      "src/api/quader_api_mutation_runner.cpp",
+      "src/editor/commands/scene_structural_lifecycle_service.cpp",
+      "src/editor/commands/scene_structural_lifecycle_service.hpp",
+      "src/editor/instances/project_clipboard_service.cpp",
+      "src/editor/modeling/services/modeling_transform_drag_service.cpp",
+      "src/editor/selection/checked_selection_publication_command.hpp",
+      "src/scene/scene_document.cpp",
+      "src/scene/scene_document.hpp",
+  };
   const auto allowed = [](std::string_view path, const auto &owners) {
     return std::find(owners.begin(), owners.end(), path) != owners.end();
   };
@@ -1253,14 +1252,14 @@ TEST(SelectionPublicationAuthorityGuardrailTests,
         source.find("->project_object_selection_from_scene(") !=
             std::string::npos;
     EXPECT_TRUE(!directly_projects ||
-                allowed(relative, direct_projection_owners))
+                allowed(relative, kDirectProjectionOwners))
         << relative
         << " bypasses EditorSelectionService scene-selection publication";
 
     const bool directly_applies =
         source.find("apply_scene_selection(") != std::string::npos;
     EXPECT_TRUE(!directly_applies ||
-                allowed(relative, raw_scene_selection_owners))
+                allowed(relative, kRawSceneSelectionOwners))
         << relative << " bypasses the selection application primitives";
 
     const bool directly_compensates_scalars =
@@ -1275,7 +1274,7 @@ TEST(SelectionPublicationAuthorityGuardrailTests,
         source.find("discard_scalar_compensation_checkpoint(") !=
             std::string::npos;
     EXPECT_TRUE(!directly_compensates_scalars ||
-                allowed(relative, scalar_compensation_owners))
+                allowed(relative, kScalarCompensationOwners))
         << relative
         << " creates a parallel Scene scalar-compensation policy";
   }
@@ -2528,6 +2527,8 @@ TEST(PathArraySourcePolicyGuardrailTests,
             std::string::npos);
   EXPECT_NE(header.find("cached_source_generation_"), std::string::npos);
   EXPECT_NE(header.find("cached_changed_source_"), std::string::npos);
+  EXPECT_NE(header.find("cached_layout_backbone_key_"), std::string::npos);
+  EXPECT_NE(header.find("cached_layout_backbone_"), std::string::npos);
 
   const std::string refresh = source_slice(
       source, "CommandResult PathArrayToolService::refresh()",
@@ -2585,6 +2586,31 @@ TEST(PathArraySourcePolicyGuardrailTests,
     EXPECT_EQ(setting.find("capture_source("), std::string::npos);
   }
 
+  const std::string layout_backbone = source_slice(
+      source, "PathArrayToolService::layout_backbone(",
+      "std::optional<PathArrayLayoutResult>");
+  EXPECT_NE(layout_backbone.find("session.path_generation"),
+            std::string::npos);
+  EXPECT_NE(layout_backbone.find("session.source_generation"),
+            std::string::npos);
+  EXPECT_NE(layout_backbone.find("session.follow_path"), std::string::npos);
+  EXPECT_NE(layout_backbone.find("session.forward_axis"), std::string::npos);
+  EXPECT_EQ(layout_backbone.find("session.count"), std::string::npos);
+  EXPECT_EQ(layout_backbone.find("session.distance"), std::string::npos);
+  EXPECT_EQ(layout_backbone.find("session.variation"), std::string::npos);
+  EXPECT_EQ(layout_backbone.find("session.layout_revision"),
+            std::string::npos)
+      << "Count, Distance, and transform-variation previews must reuse the "
+         "prepared path/frame backbone.";
+
+  const std::string layout_evaluation = source_slice(
+      source, "std::optional<PathArrayLayoutResult>\n"
+              "PathArrayToolService::build_layout(",
+      "PathArrayToolService::build_preview_mesh_mappings(");
+  EXPECT_NE(layout_evaluation.find(".variation = session.variation"),
+            std::string::npos)
+      << "Transform variation belongs to lightweight station evaluation.";
+
   const std::string texture_plan = source_slice(
       source, "PathArrayToolService::build_preview_mesh_mappings(",
       "std::uint64_t PathArrayToolService::issue_revision()");
@@ -2592,6 +2618,50 @@ TEST(PathArraySourcePolicyGuardrailTests,
             std::string::npos);
   EXPECT_NE(texture_plan.find("cached_texture_mapping_plan_"),
             std::string::npos);
+}
+
+TEST(CurveSolidPickingSourcePolicyTests,
+     TubeDerivationAndProjectionStayBehindRetainedRevisionCaches) {
+  const std::string cache = read_source_file(
+      "src/editor/modeling/picking/curve_picking_cache.cpp");
+  const std::string pointer = read_source_file(
+      "src/editor/viewport/viewport_curve_picking.cpp");
+  const std::string scene_policy = read_source_file(
+      "src/editor/viewport/viewport_scene_hit_policy.cpp");
+
+  EXPECT_EQ(pointer.find("tessellate_curve_tube"), std::string::npos)
+      << "Pointer hover must only traverse the retained tube BLAS.";
+  EXPECT_EQ(scene_policy.find("tessellate_curve_tube"), std::string::npos)
+      << "Marquee arbitration must only project retained tube geometry.";
+  EXPECT_NE(cache.find("tube_payload_for("), std::string::npos);
+  EXPECT_NE(cache.find("content_identity == content_identity"),
+            std::string::npos);
+  EXPECT_NE(cache.find("content_revision == content_revision"),
+            std::string::npos);
+  EXPECT_NE(cache.find("kTubePayloadCacheCapacity"), std::string::npos);
+  EXPECT_NE(cache.find("kTubePayloadCacheByteCapacity"),
+            std::string::npos);
+  EXPECT_NE(cache.find("tube_payload_cached_bytes_"), std::string::npos);
+  EXPECT_NE(cache.find("kMaximumDetailedTubeProjectionTriangles"),
+            std::string::npos);
+  EXPECT_NE(cache.find("kTubeProjectionCacheByteCapacity"),
+            std::string::npos);
+  EXPECT_NE(cache.find("kTubeAggregateCacheByteCapacity"),
+            std::string::npos);
+  EXPECT_NE(cache.find("try_register_payload"), std::string::npos)
+      << "Tube BLAS estimates and every retained camera projection must share "
+         "one byte ceiling.";
+  EXPECT_NE(cache.find("unregister_payload"), std::string::npos)
+      << "Payload bytes must remain reserved for the payload's full shared "
+         "lifetime, including caller-retained candidates.";
+  EXPECT_NE(cache.find("ViewportCurveTubeProjectionCache"),
+            std::string::npos)
+      << "Projection reuse must be centralized across retained tube payloads.";
+  EXPECT_EQ(cache.find("mutable std::vector<ProjectionCacheEntry>"),
+            std::string::npos)
+      << "A per-payload projection LRU multiplies its byte budget by every "
+         "retained Curve.";
+  EXPECT_NE(scene_policy.find(".visibility_revision ="), std::string::npos);
 }
 
 } // namespace

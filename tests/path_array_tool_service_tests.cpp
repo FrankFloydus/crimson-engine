@@ -20,7 +20,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <numbers>
 #include <span>
 #include <string>
 #include <string_view>
@@ -327,12 +329,31 @@ TEST(PathArrayToolServiceTests,
     ASSERT_TRUE(tool.set_distance(0.25).ok);
     ASSERT_TRUE(tool.set_follow_path(false).ok);
     ASSERT_TRUE(tool.set_forward_axis(PathArraySignedAxis::NegativeZ).ok);
+    ASSERT_TRUE(
+        tool.set_rotation_offset_degrees({2.0F, 3.0F, 4.0F}).ok);
+    ASSERT_TRUE(tool.set_rotation_random_min_degrees(
+                        {-10.0F, -20.0F, -30.0F})
+                    .ok);
+    ASSERT_TRUE(tool.set_rotation_random_max_degrees(
+                        {10.0F, 20.0F, 30.0F})
+                    .ok);
+    ASSERT_TRUE(tool.set_scale_offset_factors({1.1F, 0.9F, 1.2F}).ok);
+    ASSERT_TRUE(
+        tool.set_scale_random_min_factors({0.5F, 0.6F, 0.7F}).ok);
+    ASSERT_TRUE(
+        tool.set_scale_random_max_factors({1.5F, 1.6F, 1.7F}).ok);
     const CommandResult reset = tool.reset_settings();
     ASSERT_TRUE(reset.ok) << reset.message;
     EXPECT_EQ(tool.count(), kPathArrayDefaultCount);
     EXPECT_NEAR(tool.distance(), 1.0, 0.0001);
     EXPECT_TRUE(tool.follow_path());
     EXPECT_EQ(tool.forward_axis(), PathArraySignedAxis::PositiveX);
+    EXPECT_EQ(tool.rotation_offset_degrees().x, 0.0F);
+    EXPECT_EQ(tool.rotation_random_min_degrees().y, 0.0F);
+    EXPECT_EQ(tool.rotation_random_max_degrees().z, 0.0F);
+    EXPECT_EQ(tool.scale_offset_factors().x, 1.0F);
+    EXPECT_EQ(tool.scale_random_min_factors().y, 1.0F);
+    EXPECT_EQ(tool.scale_random_max_factors().z, 1.0F);
     EXPECT_NEAR(defaults->remembered_distance.value(), 1.0, 0.0001);
     ASSERT_TRUE(tool.cancel().ok);
   }
@@ -433,6 +454,281 @@ TEST(PathArrayToolServiceTests,
 }
 
 TEST(PathArrayToolServiceTests,
+     DistanceAndCountPreviewsReuseThePreparedPathBackbone) {
+  PathArrayHarness harness;
+  const QuaderModelingObjectRef path =
+      create_path(harness.editor, {24.0F, 0.0F, 0.0F});
+  const QuaderModelingObjectRef source = create_box(harness.editor);
+  select_path(harness, path);
+
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_distance(1.0).ok);
+  ASSERT_TRUE(tool.select_source(source.entity).ok);
+
+  const PathArrayPreviewState first = tool.preview_state();
+  ASSERT_TRUE(first.active);
+  ASSERT_EQ(first.root_world_transforms.size(), kPathArrayDefaultCount);
+  const PathArrayLayoutWorkStats first_work =
+      tool.layout_work_stats_for_tests();
+  ASSERT_EQ(first_work.backbone_build_count, 1U);
+
+  ASSERT_TRUE(tool.set_distance(2.5).ok);
+  const PathArrayPreviewState distance_preview = tool.preview_state();
+  ASSERT_TRUE(distance_preview.active);
+  EXPECT_GT(distance_preview.revision, first.revision);
+  EXPECT_DOUBLE_EQ(distance_preview.effective_distance, 2.5);
+  ASSERT_EQ(distance_preview.root_world_transforms.size(),
+            kPathArrayDefaultCount);
+  EXPECT_NE(distance_preview.root_world_transforms[1U].values,
+            first.root_world_transforms[1U].values);
+  PathArrayLayoutWorkStats work = tool.layout_work_stats_for_tests();
+  EXPECT_EQ(work.backbone_build_count, first_work.backbone_build_count);
+  EXPECT_EQ(work.layout_evaluation_count,
+            first_work.layout_evaluation_count + 1U);
+
+  ASSERT_TRUE(tool.set_count(7U).ok);
+  const PathArrayPreviewState count_preview = tool.preview_state();
+  ASSERT_TRUE(count_preview.active);
+  EXPECT_GT(count_preview.revision, distance_preview.revision);
+  ASSERT_EQ(count_preview.root_world_transforms.size(), 7U);
+  for (std::size_t index = 0U;
+       index < distance_preview.root_world_transforms.size(); ++index) {
+    EXPECT_EQ(count_preview.root_world_transforms[index].values,
+              distance_preview.root_world_transforms[index].values);
+  }
+  work = tool.layout_work_stats_for_tests();
+  EXPECT_EQ(work.backbone_build_count, first_work.backbone_build_count);
+  EXPECT_EQ(work.layout_evaluation_count,
+            first_work.layout_evaluation_count + 2U);
+
+  ASSERT_TRUE(tool.set_distance(4.0).ok);
+  const PathArrayPreviewState second_distance_preview = tool.preview_state();
+  ASSERT_TRUE(second_distance_preview.active);
+  EXPECT_GT(second_distance_preview.revision, count_preview.revision);
+  EXPECT_DOUBLE_EQ(second_distance_preview.effective_distance, 4.0);
+  EXPECT_NE(second_distance_preview.root_world_transforms[1U].values,
+            count_preview.root_world_transforms[1U].values);
+  work = tool.layout_work_stats_for_tests();
+  EXPECT_EQ(work.backbone_build_count, first_work.backbone_build_count);
+  EXPECT_EQ(work.layout_evaluation_count,
+            first_work.layout_evaluation_count + 3U);
+
+  const std::uint64_t stable_revision = second_distance_preview.revision;
+  const CommandResult unchanged = tool.set_distance(4.0);
+  EXPECT_TRUE(unchanged.ok);
+  EXPECT_FALSE(unchanged.changed);
+  EXPECT_EQ(tool.preview_state().revision, stable_revision);
+  EXPECT_EQ(tool.layout_work_stats_for_tests().backbone_build_count,
+            work.backbone_build_count);
+  EXPECT_EQ(tool.layout_work_stats_for_tests().layout_evaluation_count,
+            work.layout_evaluation_count);
+
+  ASSERT_TRUE(tool.set_forward_axis(PathArraySignedAxis::NegativeZ).ok);
+  const PathArrayPreviewState axis_preview = tool.preview_state();
+  ASSERT_TRUE(axis_preview.active);
+  EXPECT_GT(axis_preview.revision, stable_revision);
+  PathArrayLayoutWorkStats orientation_work =
+      tool.layout_work_stats_for_tests();
+  EXPECT_EQ(orientation_work.backbone_build_count,
+            work.backbone_build_count + 1U);
+  EXPECT_EQ(orientation_work.layout_evaluation_count,
+            work.layout_evaluation_count + 1U);
+
+  ASSERT_TRUE(tool.set_follow_path(false).ok);
+  const PathArrayPreviewState no_follow_preview = tool.preview_state();
+  ASSERT_TRUE(no_follow_preview.active);
+  EXPECT_GT(no_follow_preview.revision, axis_preview.revision);
+  orientation_work = tool.layout_work_stats_for_tests();
+  EXPECT_EQ(orientation_work.backbone_build_count,
+            work.backbone_build_count + 2U);
+  EXPECT_EQ(orientation_work.layout_evaluation_count,
+            work.layout_evaluation_count + 2U);
+
+  ASSERT_TRUE(tool.set_forward_axis(PathArraySignedAxis::PositiveY).ok);
+  const PathArrayPreviewState no_follow_axis_preview = tool.preview_state();
+  ASSERT_TRUE(no_follow_axis_preview.active);
+  EXPECT_GT(no_follow_axis_preview.revision, no_follow_preview.revision);
+  const PathArrayLayoutWorkStats no_follow_axis_work =
+      tool.layout_work_stats_for_tests();
+  EXPECT_EQ(no_follow_axis_work.backbone_build_count,
+            orientation_work.backbone_build_count)
+      << "the signed axis is not a backbone input when Follow Path is off";
+  EXPECT_EQ(no_follow_axis_work.layout_evaluation_count,
+            orientation_work.layout_evaluation_count + 1U);
+}
+
+TEST(PathArrayToolServiceTests,
+     VariationSettingsValidateLazilyAndReuseThePreparedBackbone) {
+  PathArrayHarness harness;
+  const QuaderModelingObjectRef path =
+      create_path(harness.editor, {24.0F, 0.0F, 0.0F});
+  const QuaderModelingObjectRef source = create_box(harness.editor);
+  select_path(harness, path);
+
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_distance(2.0).ok);
+  ASSERT_TRUE(tool.select_source(source.entity).ok);
+  const PathArrayPreviewState neutral = tool.preview_state();
+  ASSERT_TRUE(neutral.active);
+  const PathArrayLayoutWorkStats initial_work =
+      tool.layout_work_stats_for_tests();
+  const std::uint64_t initial_settings_revision =
+      tool.tool_settings_revision();
+
+  EXPECT_FALSE(tool.set_rotation_offset_degrees(
+                       {std::numeric_limits<float>::infinity(), 0.0F, 0.0F})
+                   .ok);
+  EXPECT_FALSE(tool.set_scale_offset_factors({0.0F, 1.0F, 1.0F}).ok);
+  EXPECT_EQ(tool.tool_settings_revision(), initial_settings_revision);
+  EXPECT_EQ(tool.preview_state().revision, neutral.revision);
+
+  ASSERT_TRUE(
+      tool.set_rotation_offset_degrees({2.0F, 4.0F, 6.0F}).ok);
+  ASSERT_TRUE(tool.set_rotation_random_min_degrees(
+                      {-10.0F, -20.0F, -30.0F})
+                  .ok);
+  ASSERT_TRUE(tool.set_rotation_random_max_degrees(
+                      {10.0F, 20.0F, 30.0F})
+                  .ok);
+  ASSERT_TRUE(tool.set_scale_offset_factors({1.1F, 0.9F, 1.2F}).ok);
+  ASSERT_TRUE(
+      tool.set_scale_random_min_factors({0.5F, 0.6F, 0.7F}).ok);
+  ASSERT_TRUE(
+      tool.set_scale_random_max_factors({1.5F, 1.6F, 1.7F}).ok);
+  EXPECT_FLOAT_EQ(tool.rotation_offset_degrees().x, 2.0F);
+  EXPECT_FLOAT_EQ(tool.rotation_random_min_degrees().y, -20.0F);
+  EXPECT_FLOAT_EQ(tool.rotation_random_max_degrees().z, 30.0F);
+  EXPECT_FLOAT_EQ(tool.scale_offset_factors().x, 1.1F);
+  EXPECT_FLOAT_EQ(tool.scale_random_min_factors().y, 0.6F);
+  EXPECT_FLOAT_EQ(tool.scale_random_max_factors().z, 1.7F);
+
+  const PathArrayPreviewState varied = tool.preview_state();
+  ASSERT_TRUE(varied.active);
+  EXPECT_EQ(varied.root_world_transforms.front().values,
+            neutral.root_world_transforms.front().values);
+  EXPECT_NE(varied.root_world_transforms[1U].values,
+            neutral.root_world_transforms[1U].values);
+  PathArrayLayoutWorkStats work = tool.layout_work_stats_for_tests();
+  EXPECT_EQ(work.backbone_build_count, initial_work.backbone_build_count);
+  EXPECT_EQ(work.layout_evaluation_count,
+            initial_work.layout_evaluation_count + 1U)
+      << "batched setting edits should remain lazy until preview demand";
+
+  ASSERT_TRUE(tool.reset_settings().ok);
+  const PathArrayPreviewState reset = tool.preview_state();
+  ASSERT_TRUE(reset.active);
+  EXPECT_EQ(tool.rotation_offset_degrees().x, 0.0F);
+  EXPECT_EQ(tool.scale_offset_factors().x, 1.0F);
+  EXPECT_EQ(reset.root_world_transforms.front().values,
+            neutral.root_world_transforms.front().values);
+  work = tool.layout_work_stats_for_tests();
+  EXPECT_EQ(work.backbone_build_count, initial_work.backbone_build_count);
+  EXPECT_EQ(work.layout_evaluation_count,
+            initial_work.layout_evaluation_count + 2U);
+}
+
+TEST(PathArrayToolServiceTests,
+     RandomRangeEndpointEditsMoveCrossedOppositeEndpointsAtomically) {
+  PathArrayHarness harness;
+  const QuaderModelingObjectRef path =
+      create_path(harness.editor, {12.0F, 0.0F, 0.0F});
+  select_path(harness, path);
+
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+
+  ASSERT_TRUE(
+      tool.set_rotation_random_min_degrees({5.0F, -2.0F, 3.0F}).ok);
+  EXPECT_FLOAT_EQ(tool.rotation_random_min_degrees().x, 5.0F);
+  EXPECT_FLOAT_EQ(tool.rotation_random_min_degrees().y, -2.0F);
+  EXPECT_FLOAT_EQ(tool.rotation_random_max_degrees().x, 5.0F);
+  EXPECT_FLOAT_EQ(tool.rotation_random_max_degrees().y, 0.0F);
+  EXPECT_FLOAT_EQ(tool.rotation_random_max_degrees().z, 3.0F);
+
+  ASSERT_TRUE(
+      tool.set_rotation_random_max_degrees({2.0F, -3.0F, 4.0F}).ok);
+  EXPECT_FLOAT_EQ(tool.rotation_random_min_degrees().x, 2.0F);
+  EXPECT_FLOAT_EQ(tool.rotation_random_min_degrees().y, -3.0F);
+  EXPECT_FLOAT_EQ(tool.rotation_random_min_degrees().z, 3.0F);
+  EXPECT_FLOAT_EQ(tool.rotation_random_max_degrees().x, 2.0F);
+  EXPECT_FLOAT_EQ(tool.rotation_random_max_degrees().y, -3.0F);
+  EXPECT_FLOAT_EQ(tool.rotation_random_max_degrees().z, 4.0F);
+
+  ASSERT_TRUE(tool.set_scale_random_min_factors({2.0F, 0.5F, 3.0F}).ok);
+  EXPECT_FLOAT_EQ(tool.scale_random_min_factors().x, 2.0F);
+  EXPECT_FLOAT_EQ(tool.scale_random_min_factors().y, 0.5F);
+  EXPECT_FLOAT_EQ(tool.scale_random_max_factors().x, 2.0F);
+  EXPECT_FLOAT_EQ(tool.scale_random_max_factors().y, 1.0F);
+  EXPECT_FLOAT_EQ(tool.scale_random_max_factors().z, 3.0F);
+
+  ASSERT_TRUE(tool.set_scale_random_max_factors({1.5F, 0.25F, 4.0F}).ok);
+  EXPECT_FLOAT_EQ(tool.scale_random_min_factors().x, 1.5F);
+  EXPECT_FLOAT_EQ(tool.scale_random_min_factors().y, 0.25F);
+  EXPECT_FLOAT_EQ(tool.scale_random_min_factors().z, 3.0F);
+  EXPECT_FLOAT_EQ(tool.scale_random_max_factors().x, 1.5F);
+  EXPECT_FLOAT_EQ(tool.scale_random_max_factors().y, 0.25F);
+  EXPECT_FLOAT_EQ(tool.scale_random_max_factors().z, 4.0F);
+}
+
+TEST(PathArrayToolServiceTests,
+     MirroredHierarchyUsesTheSourceRootsAuthoredLocalVariationFrame) {
+  PathArrayHarness harness;
+  const QuaderModelingObjectRef path =
+      create_path(harness.editor, {8.0F, 0.0F, 0.0F});
+  const QuaderTransform parent_transform{
+      .rotation_euler = {0.2F, -0.1F, 0.35F},
+      .scale = {-1.5F, 0.8F, 1.2F},
+  };
+  const QuaderEntityRef parent = create_empty(
+      harness.editor, "Mirrored Parent", kInvalidEntityId, parent_transform);
+  const QuaderTransform source_transform{
+      .rotation_euler = {-0.15F, 0.25F, 0.4F},
+      .scale = {-2.0F, 0.75F, 1.25F},
+  };
+  const QuaderEntityRef source_root = create_empty(
+      harness.editor, "Mirrored Source", parent.id, source_transform);
+  const QuaderModelingObjectRef child =
+      create_box(harness.editor, "Mirrored Source Mesh");
+  ASSERT_TRUE(
+      harness.editor.scene().reparent(child.entity, source_root.id, false).ok());
+  select_path(harness, path);
+
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_follow_path(false).ok);
+  ASSERT_TRUE(tool.set_count(2U).ok);
+  ASSERT_TRUE(tool.set_distance(2.0).ok);
+  ASSERT_TRUE(tool.select_source(source_root.id).ok);
+  ASSERT_TRUE(
+      tool.set_rotation_offset_degrees({0.0F, 0.0F, 30.0F}).ok);
+  const PathArrayPreviewState preview = tool.preview_state();
+
+  ASSERT_TRUE(preview.active);
+  ASSERT_EQ(preview.root_world_transforms.size(), 2U);
+  EXPECT_EQ(preview.root_world_transforms.front().values,
+            harness.session.scene()
+                .world_transform_matrix(source_root.id)
+                .values);
+  const QQuat source_rotation =
+      quat_from_euler_radians(source_transform.rotation_euler);
+  const QQuat rotation_step = quat_from_euler_radians(
+      {0.0F, 0.0F, 30.0F * std::numbers::pi_v<float> / 180.0F});
+  const QMat4 expected_local = compose_transform(QTransform{
+      .position = transform_point(
+          inverse(harness.session.scene().world_transform_matrix(parent.id)),
+          {2.0F, 0.0F, 0.0F}),
+      .rotation = normalize(source_rotation * rotation_step),
+      .scale = source_transform.scale,
+  });
+  const QMat4 expected_world = scene_transform_multiply(
+      harness.session.scene().world_transform_matrix(parent.id),
+      expected_local);
+  expect_matrix_near(preview.root_world_transforms[1U], expected_world);
+}
+
+TEST(PathArrayToolServiceTests,
      InvalidSourcesAreInertAndValidReplacementPublishesWholePreview) {
   PathArrayHarness harness;
   const QuaderModelingObjectRef path =
@@ -458,6 +754,8 @@ TEST(PathArrayToolServiceTests,
             std::vector<EntityId>{first.entity});
   EXPECT_TRUE(harness.session.scene().visibility(first.entity)->visible)
       << "preview suppression must not edit SceneDocument visibility";
+  const PathArrayLayoutWorkStats first_work =
+      tool.layout_work_stats_for_tests();
 
   for (const EntityId invalid : {path.entity, other_curve.entity, empty.id,
                                  harness.session.scene().scene_root()}) {
@@ -468,6 +766,10 @@ TEST(PathArrayToolServiceTests,
     EXPECT_EQ(harness.session.scene().selected_entities(),
               std::vector<EntityId>{first.entity});
   }
+  EXPECT_EQ(tool.layout_work_stats_for_tests().backbone_build_count,
+            first_work.backbone_build_count);
+  EXPECT_EQ(tool.layout_work_stats_for_tests().layout_evaluation_count,
+            first_work.layout_evaluation_count);
 
   const CommandResult replaced = tool.select_source(second.entity);
   ASSERT_TRUE(replaced.ok) << replaced.message;
@@ -477,8 +779,60 @@ TEST(PathArrayToolServiceTests,
   EXPECT_GT(second_preview.revision, first_preview.revision);
   EXPECT_EQ(second_preview.scene.suppression.entities,
             std::vector<EntityId>{second.entity});
+  const PathArrayLayoutWorkStats second_work =
+      tool.layout_work_stats_for_tests();
+  EXPECT_EQ(second_work.backbone_build_count,
+            first_work.backbone_build_count + 1U);
+  EXPECT_EQ(second_work.layout_evaluation_count,
+            first_work.layout_evaluation_count + 2U);
   EXPECT_TRUE(harness.session.scene().visibility(first.entity)->visible);
   EXPECT_TRUE(harness.session.scene().visibility(second.entity)->visible);
+}
+
+TEST(PathArrayToolServiceTests,
+     RandomPatternReturnsExactlyWhenAFormerSourceIsReselected) {
+  PathArrayHarness harness;
+  const QuaderModelingObjectRef path =
+      create_path(harness.editor, {12.0F, 0.0F, 0.0F});
+  const QuaderModelingObjectRef first =
+      create_box(harness.editor, "First Pattern Source");
+  const QuaderModelingObjectRef second =
+      create_box(harness.editor, "Second Pattern Source");
+  select_path(harness, path);
+
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_follow_path(false).ok);
+  ASSERT_TRUE(tool.select_source(first.entity).ok);
+  ASSERT_TRUE(
+      tool.set_rotation_random_min_degrees({-25.0F, -15.0F, -5.0F}).ok);
+  ASSERT_TRUE(
+      tool.set_rotation_random_max_degrees({25.0F, 15.0F, 5.0F}).ok);
+  ASSERT_TRUE(
+      tool.set_scale_random_min_factors({0.5F, 0.6F, 0.7F}).ok);
+  ASSERT_TRUE(
+      tool.set_scale_random_max_factors({1.5F, 1.6F, 1.7F}).ok);
+  const PathArrayPreviewState first_pattern = tool.preview_state();
+  ASSERT_TRUE(first_pattern.active);
+
+  ASSERT_TRUE(tool.select_source(second.entity).ok);
+  const PathArrayPreviewState second_pattern = tool.preview_state();
+  ASSERT_TRUE(second_pattern.active);
+  EXPECT_NE(second_pattern.root_world_transforms[1U].values,
+            first_pattern.root_world_transforms[1U].values)
+      << "different stable source identities should receive different seeds";
+
+  ASSERT_TRUE(tool.select_source(first.entity).ok);
+  const PathArrayPreviewState returned_pattern = tool.preview_state();
+  ASSERT_TRUE(returned_pattern.active);
+  ASSERT_EQ(returned_pattern.root_world_transforms.size(),
+            first_pattern.root_world_transforms.size());
+  for (std::size_t index = 0U;
+       index < first_pattern.root_world_transforms.size(); ++index) {
+    EXPECT_EQ(returned_pattern.root_world_transforms[index].values,
+              first_pattern.root_world_transforms[index].values)
+        << "source reselection rerolled station " << index;
+  }
 }
 
 TEST(PathArrayToolServiceTests,
@@ -666,6 +1020,62 @@ TEST(PathArrayToolServiceTests,
             std::vector<EntityId>{path.entity});
   EXPECT_EQ(harness.session.selection().mode(), ModelingSelectionMode::Object);
   EXPECT_EQ(curve.control_selection(), control_baseline);
+}
+
+TEST(PathArrayToolServiceTests,
+     VariedPreviewApplyUndoAndRedoUseTheExactSameRootMatrices) {
+  PathArrayHarness harness;
+  const QuaderModelingObjectRef path =
+      create_path(harness.editor, {10.0F, 0.0F, 0.0F});
+  const QuaderModelingObjectRef source =
+      create_box(harness.editor, "Varied Matrix Source");
+  select_path(harness, path);
+  harness.session.history().clear();
+  const std::size_t entity_count_before =
+      harness.session.scene().entities().size();
+  const QMat4 source_before =
+      harness.session.scene().world_transform_matrix(source.entity);
+
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_follow_path(false).ok);
+  ASSERT_TRUE(tool.set_count(3U).ok);
+  ASSERT_TRUE(tool.set_distance(2.0).ok);
+  ASSERT_TRUE(tool.select_source(source.entity).ok);
+  ASSERT_TRUE(
+      tool.set_rotation_offset_degrees({5.0F, 10.0F, 15.0F}).ok);
+  ASSERT_TRUE(tool.set_scale_offset_factors({1.1F, 0.9F, 1.2F}).ok);
+  const PathArrayPreviewState preview = tool.preview_state();
+  ASSERT_TRUE(preview.active);
+  ASSERT_EQ(preview.root_world_transforms.size(), 3U);
+
+  const CommandResult applied = tool.apply();
+  ASSERT_TRUE(applied.ok) << applied.message;
+  const std::vector<EntityId> roots = hierarchy_roots_named(
+      harness.session.scene(), "Varied Matrix Source");
+  ASSERT_EQ(roots.size(), 3U);
+  ASSERT_EQ(roots.front(), source.entity);
+  for (std::size_t index = 0U; index < roots.size(); ++index) {
+    expect_matrix_near(harness.session.scene().world_transform_matrix(
+                           roots[index]),
+                       preview.root_world_transforms[index]);
+  }
+
+  const CommandResult undone = harness.session.history().undo();
+  ASSERT_TRUE(undone.ok) << undone.message;
+  EXPECT_EQ(harness.session.scene().entities().size(), entity_count_before);
+  expect_matrix_near(
+      harness.session.scene().world_transform_matrix(source.entity),
+      source_before);
+
+  const CommandResult redone = harness.session.history().redo();
+  ASSERT_TRUE(redone.ok) << redone.message;
+  for (std::size_t index = 0U; index < roots.size(); ++index) {
+    ASSERT_TRUE(harness.session.scene().exists(roots[index]));
+    expect_matrix_near(harness.session.scene().world_transform_matrix(
+                           roots[index]),
+                       preview.root_world_transforms[index]);
+  }
 }
 
 TEST(PathArrayToolServiceTests,

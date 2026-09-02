@@ -2088,7 +2088,8 @@ void QuaderCommandsApi::Impl::register_commands() {
                                         "assign_material",
                                         "Apply Material");
   // The contextual host action is Face-only; the public assign-material tool
-  // also normalizes every face of selected meshes and group descendants.
+  // also targets selected mesh and solidified-Curve surfaces, including group
+  // descendants, while normalizing whole-mesh face slots.
   keybinding_target_catalog_.set_selection_modes(
       quader_command::kApplyMaterial.string(),
       kSelectionModeObject | kSelectionModeFace | kSelectionModeGroup,

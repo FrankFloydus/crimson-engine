@@ -55,6 +55,187 @@ void write_u32(std::vector<std::byte> &bytes, std::size_t offset,
   }
 }
 
+[[nodiscard]] double signed_anchor_area_twice(const CurveDocument &document) {
+  double area = 0.0;
+  const auto points = document.points();
+  for (std::size_t index = 0; index < points.size(); ++index) {
+    const Vec3 current = points[index].position;
+    const Vec3 next = points[(index + 1U) % points.size()].position;
+    area += static_cast<double>(current.x) * next.y -
+            static_cast<double>(current.y) * next.x;
+  }
+  return area;
+}
+
+TEST(ModelingCurveDocumentTests, CircleFactoryCreatesCanonicalCounterclockwiseBezier) {
+  constexpr double kRadius = 2.0;
+  constexpr float kHandle =
+      static_cast<float>(kRadius *
+                         (4.0 * (1.4142135623730950488 - 1.0) / 3.0));
+  const auto created = make_xy_circle_curve(kRadius);
+  ASSERT_TRUE(created.ok());
+  const CurveDocument &circle = created.value();
+  EXPECT_TRUE(circle.closed());
+  EXPECT_EQ(circle.point_count(), 4U);
+  EXPECT_EQ(circle.segment_count(), 4U);
+  EXPECT_TRUE(circle.validate().ok());
+  EXPECT_GT(signed_anchor_area_twice(circle), 0.0);
+
+  const std::array expected{
+      CurvePointSpec{.position = {2, 0, 0},
+                     .incoming_handle = {0, -kHandle, 0},
+                     .outgoing_handle = {0, kHandle, 0}},
+      CurvePointSpec{.position = {0, 2, 0},
+                     .incoming_handle = {kHandle, 0, 0},
+                     .outgoing_handle = {-kHandle, 0, 0}},
+      CurvePointSpec{.position = {-2, 0, 0},
+                     .incoming_handle = {0, kHandle, 0},
+                     .outgoing_handle = {0, -kHandle, 0}},
+      CurvePointSpec{.position = {0, -2, 0},
+                     .incoming_handle = {-kHandle, 0, 0},
+                     .outgoing_handle = {kHandle, 0, 0}},
+  };
+  for (std::size_t index = 0; index < expected.size(); ++index) {
+    expect_vec_near(circle.points()[index].position, expected[index].position, 0);
+    expect_vec_near(circle.points()[index].incoming_handle,
+                    expected[index].incoming_handle, 0);
+    expect_vec_near(circle.points()[index].outgoing_handle,
+                    expected[index].outgoing_handle, 0);
+  }
+  const CurveBounds bounds = circle.bounds();
+  ASSERT_TRUE(bounds.valid);
+  expect_vec_near(bounds.min, {-2, -2, 0});
+  expect_vec_near(bounds.max, {2, 2, 0});
+
+  const auto start = circle.evaluate(circle.segments()[0], 0.0);
+  const auto end = circle.evaluate(circle.segments()[0], 1.0);
+  ASSERT_TRUE(start.ok());
+  ASSERT_TRUE(end.ok());
+  EXPECT_GT(start.value().tangent.y, 0);
+  EXPECT_FLOAT_EQ(start.value().tangent.x, 0);
+  EXPECT_LT(end.value().tangent.x, 0);
+  EXPECT_FLOAT_EQ(end.value().tangent.y, 0);
+}
+
+TEST(ModelingCurveDocumentTests, StadiumFactoryCreatesFourArcsAndTwoExactLines) {
+  constexpr double kRadius = 2.0;
+  constexpr double kTotalLength = 10.0;
+  constexpr float kHalfLength = 5.0F;
+  constexpr float kOffset = 3.0F;
+  constexpr float kStraightHandle = 2.0F;
+  constexpr float kArcHandle =
+      static_cast<float>(kRadius *
+                         (4.0 * (1.4142135623730950488 - 1.0) / 3.0));
+  const auto created = make_xy_stadium_curve(kRadius, kTotalLength);
+  ASSERT_TRUE(created.ok());
+  const CurveDocument &stadium = created.value();
+  EXPECT_TRUE(stadium.closed());
+  EXPECT_EQ(stadium.point_count(), 6U);
+  EXPECT_EQ(stadium.segment_count(), 6U);
+  EXPECT_TRUE(stadium.validate().ok());
+  EXPECT_GT(signed_anchor_area_twice(stadium), 0.0);
+
+  const std::array expected{
+      CurvePointSpec{.position = {kHalfLength, 0, 0},
+                     .incoming_handle = {0, -kArcHandle, 0},
+                     .outgoing_handle = {0, kArcHandle, 0}},
+      CurvePointSpec{.position = {kOffset, 2, 0},
+                     .incoming_handle = {kArcHandle, 0, 0},
+                     .outgoing_handle = {-kStraightHandle, 0, 0}},
+      CurvePointSpec{.position = {-kOffset, 2, 0},
+                     .incoming_handle = {kStraightHandle, 0, 0},
+                     .outgoing_handle = {-kArcHandle, 0, 0}},
+      CurvePointSpec{.position = {-kHalfLength, 0, 0},
+                     .incoming_handle = {0, kArcHandle, 0},
+                     .outgoing_handle = {0, -kArcHandle, 0}},
+      CurvePointSpec{.position = {-kOffset, -2, 0},
+                     .incoming_handle = {-kArcHandle, 0, 0},
+                     .outgoing_handle = {kStraightHandle, 0, 0}},
+      CurvePointSpec{.position = {kOffset, -2, 0},
+                     .incoming_handle = {-kStraightHandle, 0, 0},
+                     .outgoing_handle = {kArcHandle, 0, 0}},
+  };
+  for (std::size_t index = 0; index < expected.size(); ++index) {
+    expect_vec_near(stadium.points()[index].position, expected[index].position, 0);
+    expect_vec_near(stadium.points()[index].incoming_handle,
+                    expected[index].incoming_handle, 0);
+    expect_vec_near(stadium.points()[index].outgoing_handle,
+                    expected[index].outgoing_handle, 0);
+  }
+
+  const CurveBounds bounds = stadium.bounds();
+  ASSERT_TRUE(bounds.valid);
+  expect_vec_near(bounds.min, {-5, -2, 0});
+  expect_vec_near(bounds.max, {5, 2, 0});
+  const auto top_middle = stadium.evaluate(stadium.segments()[1], 0.5);
+  const auto bottom_middle = stadium.evaluate(stadium.segments()[4], 0.5);
+  ASSERT_TRUE(top_middle.ok());
+  ASSERT_TRUE(bottom_middle.ok());
+  expect_vec_near(top_middle.value().position, {0, 2, 0});
+  expect_vec_near(bottom_middle.value().position, {0, -2, 0});
+  EXPECT_LT(top_middle.value().tangent.x, 0);
+  EXPECT_FLOAT_EQ(top_middle.value().tangent.y, 0);
+  EXPECT_GT(bottom_middle.value().tangent.x, 0);
+  EXPECT_FLOAT_EQ(bottom_middle.value().tangent.y, 0);
+}
+
+TEST(ModelingCurveDocumentTests, StadiumDiameterBoundaryUsesCanonicalCircle) {
+  const auto circle = make_xy_circle_curve(3.25);
+  const auto stadium = make_xy_stadium_curve(3.25, 6.5);
+  ASSERT_TRUE(circle.ok());
+  ASSERT_TRUE(stadium.ok());
+  EXPECT_TRUE(stadium.value().has_same_geometry(circle.value()));
+  EXPECT_EQ(stadium.value().point_count(), 4U);
+}
+
+TEST(ModelingCurveDocumentTests, ShapeFactoriesRejectInvalidOrUnrepresentableDimensions) {
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double infinity = std::numeric_limits<double>::infinity();
+  for (const double radius : {0.0, -1.0, nan, infinity,
+                              std::numeric_limits<double>::max(),
+                              std::numeric_limits<double>::denorm_min()}) {
+    const auto circle = make_xy_circle_curve(radius);
+    ASSERT_FALSE(circle.ok());
+    EXPECT_EQ(circle.error().code, ErrorCode::InvalidArgument);
+  }
+  for (const auto [radius, total_length] :
+       std::array<std::array<double, 2>, 8>{
+           std::array{0.0, 4.0}, std::array{-1.0, 4.0},
+           std::array{nan, 4.0}, std::array{1.0, nan},
+           std::array{1.0, infinity}, std::array{2.0, 3.999},
+           std::array{std::numeric_limits<double>::max(),
+                      std::numeric_limits<double>::max()},
+           std::array{1.0, std::numeric_limits<double>::max()}}) {
+    const auto stadium = make_xy_stadium_curve(radius, total_length);
+    ASSERT_FALSE(stadium.ok());
+    EXPECT_EQ(stadium.error().code, ErrorCode::InvalidArgument);
+  }
+}
+
+TEST(ModelingCurveDocumentTests, ShapeFactoryDocumentsTransformAndSerializeNormally) {
+  auto stadium = make_xy_stadium_curve(2.0, 10.0).or_throw();
+  const auto transformed = stadium.transform({.x_axis = {0, 1, 0},
+                                              .y_axis = {-1, 0, 0},
+                                              .z_axis = {0, 0, 1},
+                                              .origin = {10, 20, 30}});
+  ASSERT_TRUE(transformed.ok());
+  EXPECT_TRUE(transformed.value().changed);
+  expect_vec_near(stadium.points()[0].position, {10, 25, 30});
+  expect_vec_near(stadium.points()[1].position, {8, 23, 30});
+  const CurveBounds bounds = stadium.bounds();
+  ASSERT_TRUE(bounds.valid);
+  expect_vec_near(bounds.min, {8, 15, 30});
+  expect_vec_near(bounds.max, {12, 25, 30});
+
+  const auto encoded = serialize_curve_document(stadium);
+  ASSERT_TRUE(encoded.ok());
+  const auto decoded = deserialize_curve_document(encoded.value());
+  ASSERT_TRUE(decoded.ok());
+  EXPECT_TRUE(decoded.value().has_same_geometry(stadium));
+  EXPECT_EQ(serialize_curve_document(decoded.value()).or_throw(),
+            encoded.value());
+}
+
 TEST(ModelingCurveDocumentTests, EmptyAndIsolatedPointAreValidDrafts) {
   CurveDocument document;
   EXPECT_TRUE(document.validate().ok());
@@ -496,8 +677,8 @@ TEST(ModelingCurveDocumentTests, SplittingPreservesShapeAndStableAdjacentIdentit
   const auto segment = document.segments().front();
   const auto first_id = document.points().front().id;
   const auto last_id = document.points().back().id;
-  constexpr double split = 0.37;
-  const auto result = document.split_segment(segment, split);
+  constexpr double kSplit = 0.37;
+  const auto result = document.split_segment(segment, kSplit);
   ASSERT_TRUE(result.ok());
   ASSERT_TRUE(result.value().changed);
   ASSERT_EQ(document.point_count(), 3U);
@@ -511,9 +692,9 @@ TEST(ModelingCurveDocumentTests, SplittingPreservesShapeAndStableAdjacentIdentit
   for (int i = 0; i <= 100; ++i) {
     const double t = i / 100.0;
     const auto expected = before.evaluate(segment, t);
-    const auto actual = t <= split
-                            ? document.evaluate(document.segments()[0], t / split)
-                            : document.evaluate(document.segments()[1], (t - split) / (1.0 - split));
+    const auto actual = t <= kSplit
+                            ? document.evaluate(document.segments()[0], t / kSplit)
+                            : document.evaluate(document.segments()[1], (t - kSplit) / (1.0 - kSplit));
     ASSERT_TRUE(expected.ok());
     ASSERT_TRUE(actual.ok());
     expect_vec_near(actual.value().position, expected.value().position, 1.0e-5F);
@@ -545,10 +726,10 @@ TEST(ModelingCurveDocumentTests, SplittingClosingSegmentAppendsAnAnchorAndPreser
 }
 
 TEST(ModelingCurveDocumentTests, SplitOffsetsReconstructControlsRelativeToTheStoredAnchor) {
-  constexpr float origin = 128.0F;
+  constexpr float kOrigin = 128.0F;
   const std::array points{
-      CurvePointSpec{.position = {origin, 0, 0}, .outgoing_handle = {1, 0, 0}},
-      CurvePointSpec{.position = {origin, 1, 0}, .incoming_handle = {1, 0, 0}},
+      CurvePointSpec{.position = {kOrigin, 0, 0}, .outgoing_handle = {1, 0, 0}},
+      CurvePointSpec{.position = {kOrigin, 1, 0}, .incoming_handle = {1, 0, 0}},
   };
   auto document = CurveDocument::make_bezier(points).or_throw();
   const auto result = document.split_segment(document.segments().front(), 0.37);
@@ -556,7 +737,7 @@ TEST(ModelingCurveDocumentTests, SplitOffsetsReconstructControlsRelativeToTheSto
   ASSERT_TRUE(result.value().changed);
   ASSERT_EQ(document.point_count(), 3U);
   const auto &inserted = document.points()[1];
-  const double stored_x = static_cast<double>(inserted.position.x) - origin;
+  const double stored_x = static_cast<double>(inserted.position.x) - kOrigin;
   const double stored_y = inserted.position.y;
   // Ideal de Casteljau controls around t=.37 are (.6031,.1369) and
   // (.8631,.6031), relative to the original first anchor. The stored anchor
@@ -695,8 +876,8 @@ TEST(ModelingCurveDocumentTests, CornerSegmentsNeedOnlyTheirEndpointsAndClosedSa
 
 TEST(ModelingCurveDocumentTests, AdaptiveOutputChordsRespectTheRequestedTolerance) {
   const auto document = make_arch();
-  constexpr double tolerance = 0.002;
-  const auto samples = document.sample({.tolerance = tolerance});
+  constexpr double kTolerance = 0.002;
+  const auto samples = document.sample({.tolerance = kTolerance});
   ASSERT_TRUE(samples.ok());
   for (std::size_t i = 1; i < samples.value().size(); ++i) {
     const auto &start = samples.value()[i - 1];
@@ -714,16 +895,16 @@ TEST(ModelingCurveDocumentTests, AdaptiveOutputChordsRespectTheRequestedToleranc
       const double factor = length_squared > 0
                                 ? std::clamp((px * dx + py * dy) / length_squared, 0.0, 1.0)
                                 : 0;
-      EXPECT_LE(std::hypot(px - factor * dx, py - factor * dy), tolerance + 1.0e-6);
+      EXPECT_LE(std::hypot(px - factor * dx, py - factor * dy), kTolerance + 1.0e-6);
     }
   }
 }
 
 TEST(ModelingCurveDocumentTests, UnrepresentableDisplayPrecisionFailsInsteadOfLosingABend) {
-  constexpr float origin = 16777216.0F;
+  constexpr float kOrigin = 16777216.0F;
   const std::array points{
-      CurvePointSpec{.position = {origin, 0, 0}, .outgoing_handle = {1, 0, 0}},
-      CurvePointSpec{.position = {origin, 1, 0}, .incoming_handle = {1, 0, 0}},
+      CurvePointSpec{.position = {kOrigin, 0, 0}, .outgoing_handle = {1, 0, 0}},
+      CurvePointSpec{.position = {kOrigin, 1, 0}, .incoming_handle = {1, 0, 0}},
   };
   const auto created = CurveDocument::make_bezier(points);
   ASSERT_TRUE(created.ok());
@@ -737,7 +918,7 @@ TEST(ModelingCurveDocumentTests, UnrepresentableDisplayPrecisionFailsInsteadOfLo
   ASSERT_TRUE(coarse.ok());
   EXPECT_EQ(coarse.value().size(), 2U);
   EXPECT_EQ(created.value().content_identity(), identity);
-  EXPECT_GT(created.value().bounds().max.x, origin);
+  EXPECT_GT(created.value().bounds().max.x, kOrigin);
 }
 
 TEST(ModelingCurveDocumentTests, CollinearOvershootingHandlesStillNeedSubdivision) {
@@ -798,9 +979,9 @@ TEST(ModelingCurveDocumentTests, RestoringAStateCanRetainIdentityHighWaterWithou
 TEST(ModelingCurveDocumentTests, ExhaustedIdentitySpaceNeverWrapsToRetiredIds) {
   auto document = make_arch();
   const auto identity = document.content_identity();
-  constexpr std::uint64_t exhausted =
+  constexpr std::uint64_t kExhausted =
       std::uint64_t{std::numeric_limits<std::uint32_t>::max()} + 1U;
-  document.preserve_identity_high_water({exhausted, exhausted});
+  document.preserve_identity_high_water({kExhausted, kExhausted});
   EXPECT_TRUE(document.validate().ok());
   EXPECT_FALSE(document.append_point({}).ok());
   EXPECT_FALSE(document.split_segment(document.segments().front()).ok());

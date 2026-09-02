@@ -47,7 +47,9 @@ struct CurveControlSelection {
  * Pins toolkit-neutral authored controls for the current draw/edit session.
  * The service owns this cached view until its next mutation or refresh. Existing
  * curves pin the portable session's immutable document; only an uncommitted new
- * path is a tool-owned draft. Tessellation is left to the render owner.
+ * path is a tool-owned draft. A complete placement candidate is pinned
+ * separately and never participates in control picking. Tessellation is left
+ * to the render owner.
  */
 struct CurveToolPreviewState {
   bool active = false;
@@ -59,6 +61,11 @@ struct CurveToolPreviewState {
   QMat4 world_transform;
   CurveControlSelection control_selection;
   std::optional<QVec3> hover_world;
+  // Pins a complete placement candidate independently of the authored draft.
+  // Render owners may sample this document, but controls and picking must keep
+  // using `document` exclusively.
+  std::optional<modeling::CurveDocument> preset_hover_document;
+  QMat4 preset_hover_transform;
   std::uint64_t revision = 0;
 };
 

@@ -93,6 +93,11 @@ inline bool document_command_same_mesh_component(const MeshComponent &left,
   return left == right;
 }
 
+inline bool document_command_same_curve_component(const CurveComponent &left,
+                                                  const CurveComponent &right) {
+  return left == right;
+}
+
 inline bool document_command_same_light_component(const LightComponent &left,
                                                   const LightComponent &right) {
   return left == right;

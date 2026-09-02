@@ -235,6 +235,9 @@ table MeshComponent {
 
 table CurveComponent {
   curve:ulong;
+  solidify:bool = false;
+  solidify_resolution:int = 8;
+  solidify_radius:float = 0.1;
 }
 
 table MaterialComponent {

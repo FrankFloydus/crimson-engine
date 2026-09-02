@@ -10,6 +10,7 @@
 
 #include "assets/asset_registry.hpp"
 #include "diagnostics/profile.hpp"
+#include "render/curve_solid_geometry_cache.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/overlay/curve_overlay_geometry.hpp"
@@ -228,6 +229,7 @@ void mark_light_dirty(RenderSceneLightRecord &record,
 
 void reuse_previous_render_records(RenderSceneSnapshot &snapshot,
                                    const RenderSceneSnapshot &previous) {
+  snapshot.has_solidified_curves = previous.has_solidified_curves;
   snapshot.meshes = previous.meshes;
   snapshot.instance_primitives = previous.instance_primitives;
   snapshot.lights = previous.lights;
@@ -245,6 +247,14 @@ void reuse_previous_render_records(RenderSceneSnapshot &snapshot,
     light.light_dirty = false;
     light.transform_dirty = false;
   }
+}
+
+[[nodiscard]] bool
+scene_has_solidified_curves(const SceneDocument &document) {
+  return std::ranges::any_of(document.entities(), [&](EntityId entity) {
+    const CurveComponent *component = document.curve(entity);
+    return component != nullptr && component->solidify;
+  });
 }
 
 } // namespace
@@ -678,6 +688,12 @@ RenderSceneMeshRecord make_render_scene_mesh_record(
     EntityId entity_id, const MeshComponent &component,
     const RenderProjectMaterialResolver *project_material_resolver,
     const RenderSceneSnapshot *previous);
+RenderSceneMeshRecord make_render_scene_curve_solid_record(
+    const SceneDocument &document, const AssetRegistry &assets,
+    EntityId entity_id, const CurveComponent &component,
+    CurveSolidGeometryCache &geometry_cache,
+    const RenderProjectMaterialResolver *project_material_resolver,
+    const RenderSceneSnapshot *previous);
 
 RenderSceneSnapshot build_render_scene_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
@@ -707,6 +723,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
           ? options.previous
           : nullptr;
   snapshot.dirty = scene_snapshot_dirty_state(snapshot, previous);
+  snapshot.has_solidified_curves = scene_has_solidified_curves(document);
   if (can_reuse_previous_render_records(snapshot, previous)) {
     reuse_previous_render_records(snapshot, *previous);
     return snapshot;
@@ -735,6 +752,15 @@ RenderSceneSnapshot build_render_scene_snapshot(
     }
   }
 
+  CurveSolidGeometryCache transient_curve_solid_geometry_cache(
+      CurveSolidGeometryCache::kDefaultCapacity,
+      CurveSolidGeometryCache::kDefaultByteCapacity);
+  CurveSolidGeometryCache &curve_solid_geometry_cache =
+      options.curve_solid_geometry_cache != nullptr
+          ? *options.curve_solid_geometry_cache
+          : transient_curve_solid_geometry_cache;
+  std::vector<RenderSceneMeshRecord> solid_curve_meshes;
+
   for (const EntityId entity_id : document.entities()) {
     QDR_PROFILE_SCOPE("Scene render extract entity");
     if (!document.is_effectively_visible(entity_id) ||
@@ -750,6 +776,14 @@ RenderSceneSnapshot build_render_scene_snapshot(
       continue;
     }
     const QMat4 world_transform = document.world_transform_matrix(entity_id);
+
+    if (const CurveComponent *component = document.curve(entity_id);
+        component != nullptr && component->solidify) {
+      solid_curve_meshes.push_back(make_render_scene_curve_solid_record(
+          document, assets, entity_id, *component,
+          curve_solid_geometry_cache, options.project_material_resolver,
+          previous));
+    }
 
     if (const LightComponent *component = document.light(entity_id)) {
       snapshot.live_light_entities.insert(entity_id);
@@ -860,6 +894,14 @@ RenderSceneSnapshot build_render_scene_snapshot(
           group.definition_from_geometry, occurrences);
     }
   }
+
+  for (RenderSceneMeshRecord &record : solid_curve_meshes) {
+    if (record.renderable()) {
+      snapshot.live_mesh_entities.insert(record.entity_id);
+    }
+    snapshot.meshes.push_back(std::move(record));
+  }
+  std::ranges::sort(snapshot.meshes, {}, &RenderSceneMeshRecord::entity_id);
 
   return snapshot;
 }
@@ -1040,6 +1082,70 @@ RenderSceneMeshRecord make_render_scene_mesh_record(
   return entry;
 }
 
+RenderSceneMeshRecord make_render_scene_curve_solid_record(
+    const SceneDocument &document, const AssetRegistry &assets,
+    EntityId entity_id, const CurveComponent &component,
+    CurveSolidGeometryCache &geometry_cache,
+    const RenderProjectMaterialResolver *project_material_resolver,
+    const RenderSceneSnapshot *previous) {
+  const CurveAsset *asset = assets.curve(component.curve);
+  std::shared_ptr<const MeshGeometryPayload> geometry;
+  if (asset != nullptr && asset->document != nullptr &&
+      curve_component_is_valid(component)) {
+    geometry = geometry_cache.geometry(
+        *asset->document, static_cast<double>(component.solidify_radius),
+        static_cast<std::uint32_t>(component.solidify_resolution));
+  }
+
+  RenderMeshAssetSnapshot mesh{.mesh_id = component.curve};
+  if (geometry != nullptr) {
+    const MeshGeometryContentId content_id = geometry->content_id();
+    mesh.mesh_revision = RenderSignatureBuilder{}
+                             .add_value(asset->document->content_identity().value)
+                             .add_value(asset->document->content_revision())
+                             .add_value(static_cast<std::uint64_t>(
+                                 component.solidify_resolution))
+                             .add_value(std::bit_cast<std::uint32_t>(
+                                 component.solidify_radius))
+                             .add_value(content_id.value)
+                             .value();
+    mesh.geometry_payload = geometry;
+    mesh.geometry_token = reinterpret_cast<std::uintptr_t>(geometry.get());
+    mesh.geometry_content_id = content_id;
+    mesh.vertices = geometry->vertices;
+    mesh.indices = geometry->indices;
+    mesh.primitives = geometry->primitives;
+    mesh.present = true;
+  }
+
+  const MaterialComponent *scene_material = document.material(entity_id);
+  const RenderMaterialBindingSnapshot material =
+      build_render_material_binding_snapshot(
+          assets, scene_material, project_material_resolver);
+  const QMat4 world_transform = document.world_transform_matrix(entity_id);
+  RenderSceneMeshRecord entry{
+      .entity_id = entity_id,
+      .mesh = std::move(mesh),
+      .mesh_component = {.mesh = component.curve,
+                         .cast_shadows = true,
+                         .double_sided = false,
+                         .generate_collisions = false},
+      .material = material,
+      .material_reference =
+          scene_material ? scene_material->material : MaterialReference{},
+      .material_id = scene_material
+                         ? scene_material->material.embedded_asset()
+                         : kInvalidAssetId,
+      .material_revision = material.revision,
+      .world_transform = world_transform,
+      .sampling_from_local = QMat4{},
+      .transform_revision =
+          RenderSignatureBuilder::light_transform_signature(world_transform),
+  };
+  mark_mesh_dirty(entry, previous_mesh_record(previous, entity_id));
+  return entry;
+}
+
 namespace {
 
 RenderTextureAssetSnapshot build_render_project_texture_snapshot(
@@ -1135,6 +1241,13 @@ bool try_refresh_render_scene_snapshot_curve_publication(
     std::uint64_t project_material_revision,
     RenderInstanceEditScope instance_edit_scope,
     const ViewportLocalVisibilitySnapshot *local_visibility) {
+  // Curve publications are overlay-only only while no Curve can contribute a
+  // derived main-scene tube. Check both states so enabling and disabling the
+  // last tube cannot retain stale mesh records.
+  if (snapshot.has_solidified_curves ||
+      scene_has_solidified_curves(document)) {
+    return false;
+  }
   const RenderSourceStamp current = capture_render_source_stamp(
       document, assets,
       {
@@ -1316,15 +1429,24 @@ bool try_refresh_render_scene_snapshot_transforms(
   const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
       mesh_projection = document.mesh_occurrence_projection();
   for (RenderSceneMeshRecord &record : snapshot.meshes) {
-    const SceneMeshOccurrenceProjectionRecord *placement =
-        mesh_projection->find({
-            .display_entity = record.entity_id,
-            .geometry_entity = record.entity_id,
-        });
-    if (placement == nullptr) {
-      return false;
+    const CurveComponent *curve_component =
+        document.curve(record.entity_id);
+    const bool solidified_curve =
+        curve_component != nullptr && curve_component->solidify;
+    QMat4 world_transform;
+    if (solidified_curve) {
+      world_transform = document.world_transform_matrix(record.entity_id);
+    } else {
+      const SceneMeshOccurrenceProjectionRecord *placement =
+          mesh_projection->find({
+              .display_entity = record.entity_id,
+              .geometry_entity = record.entity_id,
+          });
+      if (placement == nullptr) {
+        return false;
+      }
+      world_transform = placement->world_from_geometry;
     }
-    const QMat4 &world_transform = placement->world_from_geometry;
     const std::uint64_t transform_revision =
         RenderSignatureBuilder::light_transform_signature(world_transform);
     record.mesh_dirty = false;
@@ -1334,8 +1456,12 @@ bool try_refresh_render_scene_snapshot_transforms(
         record.transform_revision != transform_revision;
     record.world_transform = world_transform;
     record.transform_revision = transform_revision;
-    const QMat4 mapping = effective_texture_sampling_from_local(
-                             document, record.entity_id).value_or(QMat4{});
+    const QMat4 mapping =
+        solidified_curve
+            ? QMat4{}
+            : effective_texture_sampling_from_local(document,
+                                                    record.entity_id)
+                  .value_or(QMat4{});
     record.texture_mapping_dirty =
         record.sampling_from_local.values != mapping.values;
     record.sampling_from_local = mapping;
@@ -1499,7 +1625,8 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
 RenderToolPreviewSceneSnapshot build_render_tool_preview_scene_snapshot(
     ToolPreviewScene preview, const AssetRegistry &assets,
     const ViewportLocalVisibilitySnapshot *local_visibility,
-    const RenderProjectMaterialResolver *project_material_resolver) {
+    const RenderProjectMaterialResolver *project_material_resolver,
+    CurveSolidGeometryCache *curve_solid_geometry_cache) {
   RenderToolPreviewSceneSnapshot snapshot;
   snapshot.revision = preview.revision;
   for (const ToolPreviewMesh &mesh : preview.meshes) {
@@ -1511,9 +1638,14 @@ RenderToolPreviewSceneSnapshot build_render_tool_preview_scene_snapshot(
       snapshot.complete = false;
     }
   }
-  snapshot.meshes = build_render_tool_preview_snapshot(
-      std::move(preview.meshes), assets, local_visibility,
-      project_material_resolver);
+
+  CurveSolidGeometryCache transient_curve_solid_geometry_cache(
+      CurveSolidGeometryCache::kDefaultCapacity,
+      CurveSolidGeometryCache::kDefaultByteCapacity);
+  CurveSolidGeometryCache &solid_geometry_cache =
+      curve_solid_geometry_cache != nullptr
+          ? *curve_solid_geometry_cache
+          : transient_curve_solid_geometry_cache;
 
   snapshot.curves.reserve(preview.curves.size());
   for (ToolPreviewCurve &curve : preview.curves) {
@@ -1530,11 +1662,57 @@ RenderToolPreviewSceneSnapshot build_render_tool_preview_scene_snapshot(
       snapshot.complete = false;
       continue;
     }
+    const CurveComponent component{
+        .curve = curve.curve,
+        .solidify = curve.solidify,
+        .solidify_resolution = curve.solidify_resolution,
+        .solidify_radius = curve.solidify_radius,
+    };
+    if (!curve_component_is_valid(component)) {
+      snapshot.complete = false;
+      continue;
+    }
     std::shared_ptr<const CurveSamplePayload> samples =
         curve_sample_payload(*asset);
     if (samples == nullptr || !samples->error_message.empty()) {
       snapshot.complete = false;
       continue;
+    }
+    if (curve.solidify) {
+      std::shared_ptr<const MeshGeometryPayload> geometry =
+          solid_geometry_cache.geometry(
+              *asset->document, static_cast<double>(curve.solidify_radius),
+              static_cast<std::uint32_t>(curve.solidify_resolution));
+      if (geometry != nullptr) {
+        MeshAsset solid_mesh;
+        solid_mesh.id = curve.curve;
+        solid_mesh.revision = MeshAssetRevision{
+            RenderSignatureBuilder{}
+                .add_value(asset->revision.value)
+                .add_value(asset->document->content_identity().value)
+                .add_value(asset->document->content_revision())
+                .add_value(
+                    static_cast<std::uint64_t>(curve.solidify_resolution))
+                .add_value(std::bit_cast<std::uint32_t>(
+                    curve.solidify_radius))
+                .add_value(geometry->content_id().value)
+                .value()};
+        solid_mesh.name = asset->name;
+        solid_mesh.share_geometry(std::move(geometry));
+        preview.meshes.push_back({
+            .source_entity = curve.source_entity,
+            .visibility_entity = visibility_entity,
+            .material = curve.material,
+            .mesh = std::move(solid_mesh),
+            .transform = curve.instance_transforms.front(),
+            .instance_transforms = curve.instance_transforms,
+            .sampling_from_local = QMat4{},
+            .double_sided = false,
+            .cast_shadows = true,
+            .suppress_source = curve.suppress_source,
+            .layout_key = curve.layout_key,
+        });
+      }
     }
     snapshot.curves.push_back({
         .source_entity = curve.source_entity,
@@ -1542,11 +1720,19 @@ RenderToolPreviewSceneSnapshot build_render_tool_preview_scene_snapshot(
         .curve = curve.curve,
         .curve_revision = asset->revision.value,
         .sample_payload = std::move(samples),
+        .material = std::move(curve.material),
         .instance_transforms = std::move(curve.instance_transforms),
+        .solidify = curve.solidify,
+        .solidify_resolution = curve.solidify_resolution,
+        .solidify_radius = curve.solidify_radius,
         .suppress_source = curve.suppress_source,
         .layout_key = curve.layout_key,
     });
   }
+
+  snapshot.meshes = build_render_tool_preview_snapshot(
+      std::move(preview.meshes), assets, local_visibility,
+      project_material_resolver);
 
   snapshot.lights.reserve(preview.lights.size());
   for (ToolPreviewLight &light : preview.lights) {

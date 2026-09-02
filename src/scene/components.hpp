@@ -11,6 +11,7 @@
 #include "core/scene_environment_catalog.hpp"
 #include "math/types.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -266,12 +267,32 @@ struct MeshComponent {
   [[nodiscard]] bool operator==(const MeshComponent &) const = default;
 };
 
+inline constexpr int kCurveSolidifyMinimumResolution = 3;
+inline constexpr int kCurveSolidifyMaximumResolution = 128;
+inline constexpr int kCurveSolidifyDefaultResolution = 8;
+inline constexpr double kCurveSolidifyMinimumRadius = 0.001;
+inline constexpr double kCurveSolidifyMaximumRadius = 100000.0;
+inline constexpr double kCurveSolidifyDefaultRadius = 0.1;
+
 /// Binds one native scene entity to an immutable SDK curve asset projection.
 struct CurveComponent {
   AssetId curve = kInvalidAssetId;
+  bool solidify = false;
+  int solidify_resolution = kCurveSolidifyDefaultResolution;
+  float solidify_radius = static_cast<float>(kCurveSolidifyDefaultRadius);
 
   [[nodiscard]] bool operator==(const CurveComponent &) const = default;
 };
+
+[[nodiscard]] inline bool
+curve_component_is_valid(const CurveComponent &component) {
+  return component.curve != kInvalidAssetId &&
+         component.solidify_resolution >= kCurveSolidifyMinimumResolution &&
+         component.solidify_resolution <= kCurveSolidifyMaximumResolution &&
+         std::isfinite(component.solidify_radius) &&
+         component.solidify_radius >= kCurveSolidifyMinimumRadius &&
+         component.solidify_radius <= kCurveSolidifyMaximumRadius;
+}
 
 /**
  * Represents a Material Component value used by the scene graph document layer.

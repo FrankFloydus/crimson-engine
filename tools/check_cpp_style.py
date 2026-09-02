@@ -178,6 +178,9 @@ def run_clang_tidy(
 		r".*[\\/](godot-cpp|thirdparty|vcpkg_installed|_deps)[\\/].*",
 		"-warnings-as-errors",
 		"readability-identifier-naming",
+		# LLVM can otherwise select MSVC STL vector helpers for trivially comparable
+		# 16-byte class values, whose implementation deliberately rejects that size.
+		"-extra-arg=-D_USE_STD_VECTOR_ALGORITHMS=0",
 		"-j",
 		str(jobs),
 		"-quiet",

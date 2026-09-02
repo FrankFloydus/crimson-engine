@@ -290,7 +290,7 @@ std::vector<MeshQuadUvInterpolation> build_mesh_quad_uv_interpolations(
       }
     }
   }
-  constexpr std::array<QVec3, 4> coordinates{
+  constexpr std::array<QVec3, 4> kCoordinates{
       QVec3{0.0f, 0.0f, 0.0f}, QVec3{1.0f, 0.0f, 0.0f},
       QVec3{1.0f, 1.0f, 1.0f}, QVec3{0.0f, 1.0f, 0.0f}};
   for (const MeshPrimitiveSpan primitive : primitives) {
@@ -310,7 +310,7 @@ std::vector<MeshQuadUvInterpolation> build_mesh_quad_uv_interpolations(
       continue;
     }
     for (std::size_t index = 0u; index < 4u; ++index) {
-      result[corners[index]] = {.coordinates = coordinates[index],
+      result[corners[index]] = {.coordinates = kCoordinates[index],
                                 .geometry_warp = geometry_warp,
                                 .uv_correction = uv_correction,
                                 .enabled = true};

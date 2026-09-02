@@ -36,6 +36,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -204,6 +205,38 @@ void erase_flatbuffer_root_field(std::vector<std::byte> &bytes,
   const std::uint16_t absent = 0;
   std::memcpy(bytes.data() + vtable_offset + field_offset, &absent,
               sizeof(absent));
+}
+
+template <typename Scalar>
+void overwrite_flatbuffer_table_scalar(std::vector<std::byte> &bytes,
+                                       std::size_t table_offset,
+                                       std::size_t field_index,
+                                       Scalar value) {
+  static_assert(std::is_trivially_copyable_v<Scalar>);
+  ASSERT_LE(table_offset + sizeof(std::int32_t), bytes.size());
+  std::int32_t vtable_distance = 0;
+  std::memcpy(&vtable_distance, bytes.data() + table_offset,
+              sizeof(vtable_distance));
+  const std::int64_t vtable_offset =
+      static_cast<std::int64_t>(table_offset) - vtable_distance;
+  ASSERT_GE(vtable_offset, 0);
+  const std::size_t vtable_entry =
+      4u + field_index * sizeof(std::uint16_t);
+  ASSERT_LE(static_cast<std::size_t>(vtable_offset) + vtable_entry +
+                sizeof(std::uint16_t),
+            bytes.size());
+  std::uint16_t vtable_size = 0;
+  std::memcpy(&vtable_size, bytes.data() + vtable_offset,
+              sizeof(vtable_size));
+  ASSERT_GE(vtable_size, vtable_entry + sizeof(std::uint16_t));
+  std::uint16_t field_offset = 0;
+  std::memcpy(&field_offset,
+              bytes.data() + vtable_offset + vtable_entry,
+              sizeof(field_offset));
+  ASSERT_NE(field_offset, 0u);
+  ASSERT_LE(table_offset + field_offset + sizeof(Scalar), bytes.size());
+  std::memcpy(bytes.data() + table_offset + field_offset, &value,
+              sizeof(value));
 }
 
 [[nodiscard]] quader_io::QdrBinaryContainerReadResult
@@ -626,7 +659,7 @@ TEST(QdrBinarySceneCodecTests,
 }
 
 TEST(QdrBinarySceneCodecTests,
-     SchemaEightRejectsAuthoredGeometryWithoutSdkPayload) {
+     CurrentSchemaRejectsAuthoredGeometryWithoutSdkPayload) {
   SceneContentDocument document = simple_scene();
   ASSERT_TRUE(document.assets().replace_mesh(
       10u, authored_triangle_mesh("Missing SDK Payload", 0.0f)));
@@ -761,7 +794,7 @@ TEST(QdrBinarySceneCodecTests,
                           quader_io::QdrBinaryChunkType::SceneMetadata)) {
       continue;
     }
-    EXPECT_EQ(chunk.schema_version, 8u);
+    EXPECT_EQ(chunk.schema_version, 9u);
     flatbuffers::Verifier verifier(
         reinterpret_cast<const std::uint8_t *>(chunk.bytes().data()),
         chunk.bytes().size());
@@ -825,9 +858,15 @@ TEST(QdrBinarySceneCodecTests,
                                 legacy_csr_topology());
 }
 
-TEST(QdrBinarySceneCodecTests, SchemaEightPreservesAuthoredCurvesAndStableIds) {
+TEST(QdrBinarySceneCodecTests,
+     SchemaNinePreservesAuthoredCurvesSolidifySettingsAndStableIds) {
   for (const bool closed : {false, true}) {
     SceneContentDocument document = scene_with_curve(closed);
+    ASSERT_TRUE(document.scene().set_curve(
+        200u, {.curve = 20u,
+               .solidify = true,
+               .solidify_resolution = 24,
+               .solidify_radius = 1.75F}));
     ASSERT_TRUE(document.scene().set_transform(
         200u, TransformComponent{.position = {10.0f, -2.0f, 8.0f},
                                   .scale = {2.0f, 1.0f, 3.0f}}));
@@ -845,6 +884,10 @@ TEST(QdrBinarySceneCodecTests, SchemaEightPreservesAuthoredCurvesAndStableIds) {
     EXPECT_EQ(read.document.scene().kind(200u), EntityKind::Curve);
     ASSERT_NE(read.document.scene().curve(200u), nullptr);
     EXPECT_EQ(read.document.scene().curve(200u)->curve, 20u);
+    EXPECT_TRUE(read.document.scene().curve(200u)->solidify);
+    EXPECT_EQ(read.document.scene().curve(200u)->solidify_resolution, 24);
+    EXPECT_FLOAT_EQ(read.document.scene().curve(200u)->solidify_radius,
+                    1.75F);
     EXPECT_EQ(read.document.scene().uuid(200u), document.scene().uuid(200u));
     EXPECT_EQ(read.document.scene().modeling_object(200u)->object_id, 81);
     EXPECT_FLOAT_EQ(read.document.scene().transform(200u)->position.x, 10.0f);
@@ -859,6 +902,34 @@ TEST(QdrBinarySceneCodecTests, SchemaEightPreservesAuthoredCurvesAndStableIds) {
     EXPECT_TRUE(read.document.validate_asset_references().ok());
     EXPECT_TRUE(read.document.validate_object_identity_invariants().ok());
   }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     SchemaEightCurveBindingsUseSolidifyDefaults) {
+  SceneContentDocument document = scene_with_curve();
+  ASSERT_TRUE(document.scene().set_curve(
+      200u, {.curve = 20u,
+             .solidify = true,
+             .solidify_resolution = 64,
+             .solidify_radius = 7.5F}));
+  const auto parsed = parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  auto chunks = copy_chunks(parsed);
+  auto metadata = std::ranges::find_if(chunks, [](const auto &chunk) {
+    return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+  });
+  ASSERT_NE(metadata, chunks.end());
+  metadata->schema_version = 8u;
+
+  const auto read = QdrDocumentReader::deserialize_project_document(
+      quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks)));
+  ASSERT_TRUE(read.ok) << read.message;
+  const CurveComponent *curve = read.document.scene().curve(200u);
+  ASSERT_NE(curve, nullptr);
+  EXPECT_EQ(curve->curve, 20u);
+  EXPECT_FALSE(curve->solidify);
+  EXPECT_EQ(curve->solidify_resolution, kCurveSolidifyDefaultResolution);
+  EXPECT_FLOAT_EQ(curve->solidify_radius, kCurveSolidifyDefaultRadius);
 }
 
 TEST(QdrBinarySceneCodecTests, CurveWriteSnapshotPinsControlsBeforeLaterEdits) {
@@ -891,6 +962,13 @@ TEST(QdrBinarySceneCodecTests, RejectsMissingOrInconsistentCurveBindingsOnWrite)
   auto entity = std::ranges::find_if(snapshot.entities,
       [](const auto &value) { return value.id == 200u; });
   ASSERT_NE(entity, snapshot.entities.end());
+  entity->curve->solidify_resolution = kCurveSolidifyMinimumResolution - 1;
+  EXPECT_THROW(serialize_invalid_snapshot(), std::runtime_error);
+  entity->curve->solidify_resolution = kCurveSolidifyDefaultResolution;
+  entity->curve->solidify_radius =
+      (std::numeric_limits<float>::quiet_NaN)();
+  EXPECT_THROW(serialize_invalid_snapshot(), std::runtime_error);
+  entity->curve->solidify_radius = kCurveSolidifyDefaultRadius;
   entity->curve->curve = 404u;
   EXPECT_THROW(serialize_invalid_snapshot(), std::runtime_error);
   entity->curve = CurveComponent{.curve = 20u};
@@ -901,6 +979,47 @@ TEST(QdrBinarySceneCodecTests, RejectsMissingOrInconsistentCurveBindingsOnWrite)
   EXPECT_THROW(serialize_invalid_snapshot(), std::runtime_error);
   ASSERT_TRUE(document.assets().remove_curve(20u));
   EXPECT_FALSE(qdr_project_write_snapshot_from_document(document).ok());
+}
+
+TEST(QdrBinarySceneCodecTests, RejectsInvalidStoredCurveSolidifySettings) {
+  SceneContentDocument document = scene_with_curve();
+  ASSERT_TRUE(document.scene().set_curve(
+      200u, {.curve = 20u,
+             .solidify = true,
+             .solidify_resolution = 24,
+             .solidify_radius = 1.5F}));
+  const auto parsed = parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  auto chunks = copy_chunks(parsed);
+  auto metadata = std::ranges::find_if(chunks, [](const auto &chunk) {
+    return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+  });
+  ASSERT_NE(metadata, chunks.end());
+  const qdr_fb::ScenePayload *payload =
+      qdr_fb::GetScenePayload(metadata->bytes.data());
+  ASSERT_NE(payload, nullptr);
+  ASSERT_NE(payload->entities(), nullptr);
+  const qdr_fb::CurveComponent *stored_curve = nullptr;
+  for (const qdr_fb::Entity *stored : *payload->entities()) {
+    if (stored != nullptr && stored->id() == 200u) {
+      stored_curve = stored->curve();
+      break;
+    }
+  }
+  ASSERT_NE(stored_curve, nullptr);
+  const auto *table_bytes =
+      reinterpret_cast<const std::byte *>(stored_curve);
+  const std::size_t table_offset =
+      static_cast<std::size_t>(table_bytes - metadata->bytes.data());
+  overwrite_flatbuffer_table_scalar<std::int32_t>(
+      metadata->bytes, table_offset, 2u,
+      kCurveSolidifyMinimumResolution - 1);
+  metadata->content_hash = 0u;
+
+  const auto read = QdrDocumentReader::deserialize_project_document(
+      quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks)));
+  EXPECT_FALSE(read.ok);
+  EXPECT_NE(read.message.find("invalid curve component"), std::string::npos);
 }
 
 TEST(QdrBinarySceneCodecTests, RejectsCorruptAuthoredCurveInsteadOfDroppingIt) {
@@ -1051,7 +1170,7 @@ TEST(QdrBinarySceneCodecTests,
                                  quader_io::QdrBinaryChunkType::SceneMetadata);
       });
   ASSERT_NE(metadata, parsed.chunks.end());
-  EXPECT_EQ(metadata->schema_version, 8u);
+  EXPECT_EQ(metadata->schema_version, 9u);
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(
@@ -2027,7 +2146,7 @@ TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
   ASSERT_TRUE(parsed.ok) << parsed.message;
   std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
   ASSERT_FALSE(chunks.empty());
-  chunks.front().schema_version = 9u;
+  chunks.front().schema_version = 10u;
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(

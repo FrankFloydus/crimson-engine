@@ -2605,6 +2605,75 @@ TEST(CurveToolOverlayCacheTests,
 }
 
 TEST(CurveToolOverlayCacheTests,
+     PresetHoverIsStrokeOnlyAndRetainsSamplesAcrossPlacementTransforms) {
+  const CurveAsset asset = make_overlay_curve_asset();
+  ASSERT_NE(asset.document, nullptr);
+  const auto expected_samples = curve_sample_payload(asset);
+  ASSERT_TRUE(expected_samples->error_message.empty());
+  ASSERT_GT(expected_samples->samples.size(), 2u);
+
+  CurveToolPreviewState preview;
+  preview.active = true;
+  preview.drawing = true;
+  preview.preset_hover_document = *asset.document;
+  preview.preset_hover_transform.values[12] = 2.0f;
+  preview.hover_world = QVec3{2.0f, 3.0f, 0.0f};
+  preview.revision = 1u;
+
+  CurveToolOverlayCache cache;
+  const auto &initial = cache.frame(preview);
+  ASSERT_EQ(initial.lines.size(), expected_samples->samples.size() - 1u);
+  ASSERT_EQ(initial.points.size(), 1u);
+  EXPECT_EQ(line_count_for(initial, ViewportOverlayLayer::ToolHandle), 0u);
+  EXPECT_EQ(point_count_for(initial, ViewportOverlayLayer::ToolHandle), 0u);
+  EXPECT_EQ(initial.lines.front().layer, ViewportOverlayLayer::WireframeBase);
+  EXPECT_EQ(initial.lines.front().style_role,
+            ViewportOverlayStyleRole::HoverWire);
+  EXPECT_EQ(initial.lines.front().color, kOverlayHoverWireColor);
+  EXPECT_FLOAT_EQ(initial.lines.front().width_pixels,
+                  kOverlayHoverWireLineWidthPixels);
+  EXPECT_EQ(initial.lines.front().source, ViewportOverlaySource::Tool);
+  EXPECT_FLOAT_EQ(initial.lines.front().start.x, 2.0f);
+  EXPECT_EQ(initial.points.front().layer, ViewportOverlayLayer::HoverVertex);
+  EXPECT_FLOAT_EQ(initial.points.front().position.x, 2.0f);
+  EXPECT_FLOAT_EQ(initial.points.front().position.y, 3.0f);
+  EXPECT_EQ(cache.build_count(), 1u);
+  EXPECT_EQ(cache.preset_hover_sample_refresh_count(), 1u);
+
+  const auto *retained_lines = initial.lines.data();
+  EXPECT_EQ(cache.frame(preview).lines.data(), retained_lines);
+  EXPECT_EQ(cache.build_count(), 1u);
+  EXPECT_EQ(cache.preset_hover_sample_refresh_count(), 1u);
+
+  preview.preset_hover_transform.values[12] = 7.0f;
+  preview.hover_world = QVec3{7.0f, 3.0f, 0.0f};
+  ++preview.revision;
+  const auto &moved = cache.frame(preview);
+  ASSERT_FALSE(moved.lines.empty());
+  ASSERT_EQ(moved.points.size(), 1u);
+  EXPECT_FLOAT_EQ(moved.lines.front().start.x, 7.0f);
+  EXPECT_FLOAT_EQ(moved.points.front().position.x, 7.0f);
+  EXPECT_EQ(cache.build_count(), 2u);
+  EXPECT_EQ(cache.preset_hover_sample_refresh_count(), 1u)
+      << "world placement must not resample unchanged preset geometry";
+
+  modeling::CurveDocument changed = *asset.document;
+  ASSERT_TRUE(changed.append_point({.position = {8.0f, 0.0f, 0.0f}}).ok());
+  preview.preset_hover_document = std::move(changed);
+  (void)cache.frame(preview);
+  EXPECT_EQ(cache.build_count(), 3u)
+      << "content identity changes invalidate even without a tool revision";
+  EXPECT_EQ(cache.preset_hover_sample_refresh_count(), 2u);
+
+  preview.dragging = true;
+  ++preview.revision;
+  const auto &dragging = cache.frame(preview);
+  EXPECT_TRUE(dragging.lines.empty());
+  EXPECT_TRUE(dragging.points.empty());
+  EXPECT_EQ(cache.preset_hover_sample_refresh_count(), 2u);
+}
+
+TEST(CurveToolOverlayCacheTests,
      DraftSamplesItsPathWhileExistingCurveEditingAddsOnlyControls) {
   const CurveAsset asset = make_overlay_curve_asset();
   ASSERT_NE(asset.document, nullptr);

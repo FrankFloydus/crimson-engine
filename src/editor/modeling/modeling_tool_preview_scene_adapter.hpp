@@ -60,7 +60,11 @@ namespace quader {
         .source_entity = curve.source_entity,
         .visibility_entity = visibility,
         .curve = curve.curve,
+        .material = std::move(curve.material),
         .instance_transforms = std::move(curve.instance_transforms),
+        .solidify = curve.solidify,
+        .solidify_resolution = curve.solidify_resolution,
+        .solidify_radius = curve.solidify_radius,
         .suppress_source = curve.suppress_source,
         .layout_key = curve.layout_key,
     });

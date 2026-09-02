@@ -2204,20 +2204,20 @@ TEST(EditorApiTests, CurveToolUsesUnassignedActivationAndSharedFinalizeBinding) 
   auto &editor = harness.editor;
   const auto path = keybinding_test_path("curve-activation");
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
-  constexpr auto command = quader::quader_command::kToolsActivateCurve;
-  const auto descriptor = editor.commands().descriptor(command);
+  constexpr auto kCommand = quader::quader_command::kToolsActivateCurve;
+  const auto descriptor = editor.commands().descriptor(kCommand);
   ASSERT_TRUE(descriptor.has_value());
   EXPECT_EQ(descriptor->label, "Curve");
   EXPECT_TRUE(descriptor->enabled);
   const auto catalog = editor.commands().keybinding_catalog();
-  const auto *entry = find_keybinding_catalog_entry(catalog, command.string());
+  const auto *entry = find_keybinding_catalog_entry(catalog, kCommand.string());
   ASSERT_NE(entry, nullptr);
   EXPECT_TRUE(entry->default_shortcut.empty());
   EXPECT_TRUE(entry->unassigned);
   EXPECT_EQ(entry->localization_key,
             "keybindings.target.tools.activate.curve.label");
 
-  ASSERT_TRUE(editor.preferences().set_shortcut(command, "Ctrl+Alt+F22").ok());
+  ASSERT_TRUE(editor.preferences().set_shortcut(kCommand, "Ctrl+Alt+F22").ok());
   quader::ViewportToolState state;
   const auto chord = single_input_chord("Ctrl+Alt+F22");
   const auto dispatch = editor.commands().dispatch_viewport_input_binding(
@@ -2234,7 +2234,7 @@ TEST(EditorApiTests, CurveToolUsesUnassignedActivationAndSharedFinalizeBinding) 
   EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
                 chord, state, true, true).kind,
             quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
-  ASSERT_TRUE(editor.commands().execute(command).ok());
+  ASSERT_TRUE(editor.commands().execute(kCommand).ok());
   EXPECT_EQ(editor.tools().active_tool(), "curve");
   EXPECT_EQ(editor.query().tool_status().active_tool,
             quader::QuaderViewportTool::Curve);
@@ -2242,8 +2242,14 @@ TEST(EditorApiTests, CurveToolUsesUnassignedActivationAndSharedFinalizeBinding) 
   const auto settings = editor.tools().active_settings();
   ASSERT_TRUE(settings.active);
   EXPECT_FALSE(settings.can_apply);
-  ASSERT_EQ(settings.controls.size(), 1u);
-  EXPECT_EQ(settings.controls.front().id, "curve.closed");
+  ASSERT_EQ(settings.controls.size(), 2u);
+  EXPECT_EQ(settings.controls[0].id, "curve.type");
+  EXPECT_EQ(settings.controls[0].kind,
+            quader::QuaderToolSettingControlKind::Choice);
+  EXPECT_EQ(settings.controls[0].choice_presentation,
+            quader::QuaderToolSettingChoicePresentation::Dropdown);
+  EXPECT_EQ(settings.controls[0].choice_value, "draw");
+  EXPECT_EQ(settings.controls[1].id, "curve.closed");
   const auto revision = editor.tools().active_settings_revision();
   for (int frame = 0; frame < 32; ++frame) {
     EXPECT_EQ(editor.tools().active_settings_revision(), revision);
@@ -2270,6 +2276,536 @@ TEST(EditorApiTests, CurveToolUsesUnassignedActivationAndSharedFinalizeBinding) 
   EXPECT_EQ(editor.tools().active_tool(), "select");
   EXPECT_FALSE(editor.history().can_undo());
   std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests,
+     CurvePresetToolSettingsProjectDynamicFieldsAndValidateAtomically) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Curve).ok());
+
+  quader::QuaderToolSettingsTarget settings = editor.tools().active_settings();
+  const quader::QuaderToolSettingControl *type =
+      find_tool_setting_control(settings, "curve.type");
+  ASSERT_NE(type, nullptr);
+  EXPECT_EQ(type->choice_value, "draw");
+  ASSERT_EQ(type->choices.size(), 3U);
+  EXPECT_EQ(type->choices[0].id, "draw");
+  EXPECT_EQ(type->choices[1].id, "circle");
+  EXPECT_EQ(type->choices[2].id, "oval");
+  EXPECT_NE(find_tool_setting_control(settings, "curve.closed"), nullptr);
+  EXPECT_EQ(find_tool_setting_control(settings, "curve.radius"), nullptr);
+  EXPECT_EQ(find_tool_setting_control(settings, "curve.length"), nullptr);
+  EXPECT_FALSE(
+      editor.tools().set_setting("curve", "curve.radius", 2.0).ok());
+
+  ASSERT_TRUE(
+      editor.tools().set_setting("curve", "curve.type", "circle").ok());
+  settings = editor.tools().active_settings();
+  type = find_tool_setting_control(settings, "curve.type");
+  const quader::QuaderToolSettingControl *radius =
+      find_tool_setting_control(settings, "curve.radius");
+  ASSERT_NE(type, nullptr);
+  ASSERT_NE(radius, nullptr);
+  EXPECT_EQ(type->choice_value, "circle");
+  EXPECT_DOUBLE_EQ(radius->number_value, 1.0);
+  EXPECT_DOUBLE_EQ(radius->min_value, 0.001);
+  EXPECT_DOUBLE_EQ(radius->max_value, 100000.0);
+  EXPECT_DOUBLE_EQ(radius->step, 0.001);
+  EXPECT_EQ(find_tool_setting_control(settings, "curve.closed"), nullptr);
+  EXPECT_EQ(find_tool_setting_control(settings, "curve.length"), nullptr);
+  EXPECT_FALSE(editor.tools().set_setting("curve", "curve.closed", true).ok());
+  EXPECT_FALSE(editor.tools().set_setting("curve", "curve.length", 5.0).ok());
+
+  ASSERT_TRUE(
+      editor.tools().set_setting("curve", "curve.radius", 2.5).ok());
+  settings = editor.tools().active_settings();
+  radius = find_tool_setting_control(settings, "curve.radius");
+  ASSERT_NE(radius, nullptr);
+  EXPECT_DOUBLE_EQ(radius->number_value, 2.5);
+  EXPECT_TRUE(settings.can_reset);
+
+  ASSERT_TRUE(
+      editor.tools().set_setting("curve", "curve.type", "oval").ok());
+  settings = editor.tools().active_settings();
+  type = find_tool_setting_control(settings, "curve.type");
+  radius = find_tool_setting_control(settings, "curve.radius");
+  const quader::QuaderToolSettingControl *length =
+      find_tool_setting_control(settings, "curve.length");
+  ASSERT_NE(type, nullptr);
+  ASSERT_NE(radius, nullptr);
+  ASSERT_NE(length, nullptr);
+  EXPECT_EQ(type->choice_value, "oval");
+  EXPECT_DOUBLE_EQ(radius->number_value, 1.0);
+  EXPECT_DOUBLE_EQ(radius->max_value, 2.0);
+  EXPECT_DOUBLE_EQ(length->number_value, 4.0);
+  EXPECT_DOUBLE_EQ(length->min_value, 2.0);
+  EXPECT_DOUBLE_EQ(length->max_value, 200000.0);
+  EXPECT_DOUBLE_EQ(length->step, 0.001);
+
+  ASSERT_TRUE(
+      editor.tools().set_setting("curve", "curve.radius", 1.5).ok());
+  ASSERT_TRUE(
+      editor.tools().set_setting("curve", "curve.length", 5.0).ok());
+  settings = editor.tools().active_settings();
+  radius = find_tool_setting_control(settings, "curve.radius");
+  length = find_tool_setting_control(settings, "curve.length");
+  ASSERT_NE(radius, nullptr);
+  ASSERT_NE(length, nullptr);
+  EXPECT_DOUBLE_EQ(radius->max_value, 2.5);
+  EXPECT_DOUBLE_EQ(length->min_value, 3.0);
+
+  EXPECT_FALSE(
+      editor.tools().set_setting("curve", "curve.radius", 3.0).ok());
+  EXPECT_FALSE(
+      editor.tools().set_setting("curve", "curve.length", 2.9).ok());
+  settings = editor.tools().active_settings();
+  radius = find_tool_setting_control(settings, "curve.radius");
+  length = find_tool_setting_control(settings, "curve.length");
+  ASSERT_NE(radius, nullptr);
+  ASSERT_NE(length, nullptr);
+  EXPECT_DOUBLE_EQ(radius->number_value, 1.5);
+  EXPECT_DOUBLE_EQ(length->number_value, 5.0);
+
+  ASSERT_TRUE(editor.tools().reset_active_settings().ok());
+  settings = editor.tools().active_settings();
+  type = find_tool_setting_control(settings, "curve.type");
+  radius = find_tool_setting_control(settings, "curve.radius");
+  length = find_tool_setting_control(settings, "curve.length");
+  ASSERT_NE(type, nullptr);
+  ASSERT_NE(radius, nullptr);
+  ASSERT_NE(length, nullptr);
+  EXPECT_EQ(type->choice_value, "oval");
+  EXPECT_DOUBLE_EQ(radius->number_value, 1.0);
+  EXPECT_DOUBLE_EQ(length->number_value, 4.0);
+  EXPECT_TRUE(settings.can_reset);
+
+  ASSERT_TRUE(editor.tools().set_setting("curve", "curve.type", 0.0).ok());
+  settings = editor.tools().active_settings();
+  EXPECT_EQ(find_tool_setting_control(settings, "curve.radius"), nullptr);
+  EXPECT_EQ(find_tool_setting_control(settings, "curve.length"), nullptr);
+  EXPECT_NE(find_tool_setting_control(settings, "curve.closed"), nullptr);
+  EXPECT_FALSE(
+      editor.tools().set_setting("curve", "curve.type", "ellipse").ok());
+  EXPECT_FALSE(editor.tools().set_setting("curve", "curve.type", 3.0).ok());
+  EXPECT_FALSE(
+      editor.tools().set_setting("path_array", "curve.type", "circle").ok());
+  const quader::QuaderToolSettingsTarget final_settings =
+      editor.tools().active_settings();
+  type = find_tool_setting_control(final_settings, "curve.type");
+  ASSERT_NE(type, nullptr);
+  EXPECT_EQ(type->choice_value, "draw");
+
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  const auto existing = editor.modeling().create_curve({
+      .points = {{.position = {0.0F, 0.0F, 0.0F}},
+                 {.position = {2.0F, 0.0F, 0.0F}}},
+      .name = "Existing Curve Settings",
+  });
+  ASSERT_TRUE(existing.ok()) << existing.error_message();
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(existing.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Curve).ok());
+  const quader::QuaderToolSettingsTarget editing_settings =
+      editor.tools().active_settings();
+  EXPECT_EQ(find_tool_setting_control(editing_settings, "curve.type"),
+            nullptr);
+  EXPECT_NE(find_tool_setting_control(editing_settings, "curve.closed"),
+            nullptr);
+  const quader::QuaderToolSettingControl *apply_solidify =
+      find_tool_setting_control(editing_settings, "curve.solidify.apply");
+  ASSERT_NE(apply_solidify, nullptr);
+  EXPECT_FALSE(apply_solidify->enabled);
+  const quader::QuaderToolSettingControl *new_curve =
+      find_tool_setting_control(editing_settings, "curve.new");
+  ASSERT_NE(new_curve, nullptr);
+  EXPECT_EQ(new_curve->kind, quader::QuaderToolSettingControlKind::Action);
+  EXPECT_FALSE(editing_settings.can_reset);
+}
+
+TEST(EditorApiTests,
+     PassiveSelectedCurveSolidifySettingsAreTypedUndoableAndPersistent) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0F, 0.0F, 0.0F}},
+                 {.position = {3.0F, 0.0F, 0.0F}}},
+      .name = "Passive Solidify Settings",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Curve).ok());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+
+  quader::QuaderToolSettingsTarget settings = editor.tools().active_settings();
+  EXPECT_TRUE(settings.active);
+  EXPECT_FALSE(settings.preview_active);
+  EXPECT_EQ(settings.tool_id, "curve");
+  EXPECT_FALSE(settings.can_reset);
+  EXPECT_FALSE(settings.apply_visible);
+  EXPECT_FALSE(settings.can_apply);
+  EXPECT_FALSE(settings.can_cancel);
+  ASSERT_EQ(settings.controls.size(), 5U);
+  EXPECT_EQ(settings.controls[0].id, "curve.closed");
+  EXPECT_EQ(settings.controls[1].id, "curve.solidify");
+  EXPECT_EQ(settings.controls[2].id, "curve.solidify.resolution");
+  EXPECT_EQ(settings.controls[3].id, "curve.solidify.radius");
+  EXPECT_EQ(settings.controls[4].id, "curve.solidify.apply");
+  EXPECT_EQ(find_tool_setting_control(settings, "curve.new"), nullptr);
+  EXPECT_EQ(count_tool_setting_controls_of_kind(
+                settings, quader::QuaderToolSettingControlKind::Action),
+            1U);
+
+  const quader::QuaderToolSettingControl *closed =
+      find_tool_setting_control(settings, "curve.closed");
+  const quader::QuaderToolSettingControl *solidify =
+      find_tool_setting_control(settings, "curve.solidify");
+  const quader::QuaderToolSettingControl *resolution =
+      find_tool_setting_control(settings, "curve.solidify.resolution");
+  const quader::QuaderToolSettingControl *radius =
+      find_tool_setting_control(settings, "curve.solidify.radius");
+  const quader::QuaderToolSettingControl *apply_solidify =
+      find_tool_setting_control(settings, "curve.solidify.apply");
+  ASSERT_NE(closed, nullptr);
+  ASSERT_NE(solidify, nullptr);
+  ASSERT_NE(resolution, nullptr);
+  ASSERT_NE(radius, nullptr);
+  ASSERT_NE(apply_solidify, nullptr);
+  EXPECT_EQ(closed->kind, quader::QuaderToolSettingControlKind::Toggle);
+  EXPECT_EQ(closed->label, "Closed");
+  EXPECT_FALSE(closed->bool_value);
+  EXPECT_EQ(solidify->kind, quader::QuaderToolSettingControlKind::Toggle);
+  EXPECT_EQ(solidify->label, "Solidify");
+  EXPECT_FALSE(solidify->bool_value);
+  EXPECT_EQ(resolution->kind, quader::QuaderToolSettingControlKind::Number);
+  EXPECT_EQ(resolution->label, "Resolution");
+  EXPECT_DOUBLE_EQ(resolution->number_value, 8.0);
+  EXPECT_DOUBLE_EQ(resolution->min_value, 3.0);
+  EXPECT_DOUBLE_EQ(resolution->max_value, 128.0);
+  EXPECT_DOUBLE_EQ(resolution->step, 1.0);
+  EXPECT_EQ(resolution->number_interaction,
+            quader::QuaderToolSettingNumberInteraction::Stepped);
+  EXPECT_EQ(resolution->number_presentation,
+            quader::QuaderToolSettingNumberPresentation::DragSpinner);
+  EXPECT_FALSE(resolution->enabled);
+  EXPECT_EQ(radius->kind, quader::QuaderToolSettingControlKind::Number);
+  EXPECT_EQ(radius->label, "Radius");
+  EXPECT_NEAR(radius->number_value, 0.1, 1.0e-6);
+  EXPECT_DOUBLE_EQ(radius->min_value, 0.001);
+  EXPECT_DOUBLE_EQ(radius->max_value, 100000.0);
+  EXPECT_DOUBLE_EQ(radius->step, 0.001);
+  EXPECT_FALSE(radius->enabled);
+  EXPECT_EQ(apply_solidify->kind,
+            quader::QuaderToolSettingControlKind::Action);
+  EXPECT_EQ(apply_solidify->label, "Apply Solidify");
+  EXPECT_FALSE(apply_solidify->enabled);
+
+  const auto history_before_unchanged = editor.query().history();
+  const std::uint64_t revision_before_unchanged =
+      editor.tools().active_settings_revision();
+  for (const auto unchanged : {
+           editor.tools().set_setting("curve", "curve.closed", false),
+           editor.tools().set_setting("curve", "curve.solidify", false),
+           editor.tools().set_setting("curve", "curve.solidify.resolution",
+                                      8.0),
+           editor.tools().set_setting("curve", "curve.solidify.radius", 0.1),
+       }) {
+    EXPECT_TRUE(unchanged.ok()) << unchanged.error_message();
+    EXPECT_FALSE(unchanged.changed());
+  }
+  const auto history_after_unchanged = editor.query().history();
+  EXPECT_EQ(history_after_unchanged.can_undo,
+            history_before_unchanged.can_undo);
+  EXPECT_EQ(history_after_unchanged.can_redo,
+            history_before_unchanged.can_redo);
+  EXPECT_EQ(history_after_unchanged.undo_label,
+            history_before_unchanged.undo_label);
+  EXPECT_EQ(history_after_unchanged.redo_label,
+            history_before_unchanged.redo_label);
+  EXPECT_EQ(editor.tools().active_settings_revision(),
+            revision_before_unchanged);
+
+  const quader::QuaderApiVoidResult enabled =
+      editor.tools().set_setting("curve", "curve.solidify", true);
+  ASSERT_TRUE(enabled.ok()) << enabled.error_message();
+  EXPECT_TRUE(enabled.changed());
+  EXPECT_EQ(enabled.mutation_kind, quader::QuaderMutationKind::Document);
+  settings = editor.tools().active_settings();
+  EXPECT_TRUE(find_tool_setting_control(settings, "curve.solidify")
+                  ->bool_value);
+  EXPECT_TRUE(find_tool_setting_control(
+                  settings, "curve.solidify.resolution")
+                  ->enabled);
+  EXPECT_TRUE(find_tool_setting_control(settings, "curve.solidify.radius")
+                  ->enabled);
+  EXPECT_TRUE(find_tool_setting_control(settings, "curve.solidify.apply")
+                  ->enabled);
+  EXPECT_EQ(editor.query().history().undo_label, "Set Curve Component");
+  ASSERT_TRUE(editor.history().undo().ok());
+  settings = editor.tools().active_settings();
+  EXPECT_FALSE(find_tool_setting_control(settings, "curve.solidify")
+                   ->bool_value);
+  ASSERT_TRUE(editor.history().redo().ok());
+  settings = editor.tools().active_settings();
+  EXPECT_TRUE(find_tool_setting_control(settings, "curve.solidify")
+                  ->bool_value);
+
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("curve", "curve.solidify.resolution", 24.0)
+                  .ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  settings = editor.tools().active_settings();
+  EXPECT_DOUBLE_EQ(find_tool_setting_control(
+                       settings, "curve.solidify.resolution")
+                       ->number_value,
+                   8.0);
+  ASSERT_TRUE(editor.history().redo().ok());
+  settings = editor.tools().active_settings();
+  EXPECT_DOUBLE_EQ(find_tool_setting_control(
+                       settings, "curve.solidify.resolution")
+                       ->number_value,
+                   24.0);
+
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("curve", "curve.solidify.radius", 0.75)
+                  .ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  settings = editor.tools().active_settings();
+  EXPECT_NEAR(find_tool_setting_control(settings, "curve.solidify.radius")
+                  ->number_value,
+              0.1, 1.0e-6);
+  ASSERT_TRUE(editor.history().redo().ok());
+  settings = editor.tools().active_settings();
+  EXPECT_DOUBLE_EQ(find_tool_setting_control(settings, "curve.solidify.radius")
+                       ->number_value,
+                   0.75);
+
+  const auto history_before_invalid = editor.query().history();
+  const std::uint64_t revision_before_invalid =
+      editor.tools().active_settings_revision();
+  for (const double invalid_resolution : {
+           2.0, 129.0, 3.5, std::numeric_limits<double>::quiet_NaN()}) {
+    EXPECT_FALSE(editor.tools()
+                     .set_setting("curve", "curve.solidify.resolution",
+                                  invalid_resolution)
+                     .ok());
+  }
+  for (const double invalid_radius : {
+           0.0005, 100000.5, std::numeric_limits<double>::infinity(),
+           std::numeric_limits<double>::quiet_NaN()}) {
+    EXPECT_FALSE(editor.tools()
+                     .set_setting("curve", "curve.solidify.radius",
+                                  invalid_radius)
+                     .ok());
+  }
+  settings = editor.tools().active_settings();
+  EXPECT_DOUBLE_EQ(find_tool_setting_control(
+                       settings, "curve.solidify.resolution")
+                       ->number_value,
+                   24.0);
+  EXPECT_DOUBLE_EQ(find_tool_setting_control(settings, "curve.solidify.radius")
+                       ->number_value,
+                   0.75);
+  const auto history_after_invalid = editor.query().history();
+  EXPECT_EQ(history_after_invalid.can_undo, history_before_invalid.can_undo);
+  EXPECT_EQ(history_after_invalid.can_redo, history_before_invalid.can_redo);
+  EXPECT_EQ(history_after_invalid.undo_label,
+            history_before_invalid.undo_label);
+  EXPECT_EQ(history_after_invalid.redo_label,
+            history_before_invalid.redo_label);
+  EXPECT_EQ(editor.tools().active_settings_revision(), revision_before_invalid);
+
+  ASSERT_TRUE(
+      editor.tools().set_setting("curve", "curve.solidify", false).ok());
+  settings = editor.tools().active_settings();
+  EXPECT_FALSE(find_tool_setting_control(settings, "curve.solidify")
+                   ->bool_value);
+  EXPECT_FALSE(find_tool_setting_control(
+                   settings, "curve.solidify.resolution")
+                   ->enabled);
+  EXPECT_FALSE(find_tool_setting_control(settings, "curve.solidify.radius")
+                   ->enabled);
+  EXPECT_FALSE(find_tool_setting_control(settings, "curve.solidify.apply")
+                   ->enabled);
+  EXPECT_DOUBLE_EQ(find_tool_setting_control(
+                       settings, "curve.solidify.resolution")
+                       ->number_value,
+                   24.0);
+  EXPECT_DOUBLE_EQ(find_tool_setting_control(settings, "curve.solidify.radius")
+                       ->number_value,
+                   0.75);
+  ASSERT_TRUE(editor.history().undo().ok());
+  settings = editor.tools().active_settings();
+  EXPECT_TRUE(find_tool_setting_control(settings, "curve.solidify")
+                  ->bool_value);
+  ASSERT_TRUE(editor.history().redo().ok());
+
+  const std::uint64_t revision_before_replacement =
+      editor.tools().active_settings_revision();
+  auto curve_snapshot = editor.modeling().curve_snapshot(curve.value(), false);
+  ASSERT_TRUE(curve_snapshot.ok()) << curve_snapshot.error_message();
+  quader::modeling::CurveDocument replacement =
+      curve_snapshot.value().document;
+  ASSERT_TRUE(replacement.set_closed(true).ok());
+  ASSERT_TRUE(
+      editor.modeling().replace_curve(curve.value(), std::move(replacement)).ok());
+  EXPECT_GT(editor.tools().active_settings_revision(),
+            revision_before_replacement);
+  for (int replay = 0; replay < 3; ++replay) {
+    settings = editor.tools().active_settings();
+    EXPECT_FALSE(find_tool_setting_control(settings, "curve.solidify")
+                     ->bool_value);
+    EXPECT_DOUBLE_EQ(find_tool_setting_control(
+                         settings, "curve.solidify.resolution")
+                         ->number_value,
+                     24.0);
+    EXPECT_DOUBLE_EQ(find_tool_setting_control(
+                         settings, "curve.solidify.radius")
+                         ->number_value,
+                     0.75);
+    if (replay == 0) {
+      ASSERT_TRUE(editor.history().undo().ok());
+    } else if (replay == 1) {
+      ASSERT_TRUE(editor.history().redo().ok());
+    }
+  }
+  EXPECT_FALSE(editor.tools().reset_active_settings().ok());
+
+  const std::uint64_t revision_before_deselect =
+      editor.tools().active_settings_revision();
+  ASSERT_TRUE(editor.selection().clear().ok());
+  settings = editor.tools().active_settings();
+  EXPECT_FALSE(settings.active);
+  EXPECT_NE(settings.tool_id, "curve");
+  EXPECT_GT(editor.tools().active_settings_revision(),
+            revision_before_deselect);
+}
+
+TEST(EditorApiTests,
+     CurveSolidifyApplyActionRoutesThroughPublicToolSettingsApi) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0F, 0.0F, 0.0F}},
+                 {.position = {3.0F, 0.0F, 0.0F}}},
+      .name = "Public Solidify Apply",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Curve).ok());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+
+  const quader::QuaderApiVoidResult disabled =
+      editor.tools().execute_action("curve", "curve.solidify.apply");
+  EXPECT_FALSE(disabled.ok());
+  EXPECT_EQ(user_entity_count(editor), 1U);
+
+  ASSERT_TRUE(
+      editor.tools().set_setting("curve", "curve.solidify", true).ok());
+  const quader::QuaderToolSettingControl *apply = find_tool_setting_control(
+      editor.tools().active_settings(), "curve.solidify.apply");
+  ASSERT_NE(apply, nullptr);
+  EXPECT_TRUE(apply->enabled);
+
+  const quader::QuaderApiVoidResult applied =
+      editor.tools().execute_action("curve", "curve.solidify.apply");
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  EXPECT_TRUE(applied.changed());
+  EXPECT_EQ(applied.mutation_kind, quader::QuaderMutationKind::Document);
+  EXPECT_EQ(user_entity_count(editor), 2U);
+  const auto generator = editor.query().entity(curve.value().entity);
+  ASSERT_TRUE(generator.has_value());
+  EXPECT_TRUE(generator->has_curve);
+  const std::vector<quader::QuaderEntitySnapshot> entities_after_apply =
+      editor.query().entities();
+  EXPECT_EQ(static_cast<std::size_t>(std::count_if(
+                entities_after_apply.begin(), entities_after_apply.end(),
+                [](const quader::QuaderEntitySnapshot &entity) {
+                  return entity.has_mesh;
+                })),
+            1U);
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(user_entity_count(editor), 1U);
+  EXPECT_TRUE(editor.query().entity(curve.value().entity).has_value());
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(user_entity_count(editor), 2U);
+  EXPECT_TRUE(editor.query().entity(curve.value().entity).has_value());
+}
+
+TEST(EditorApiTests,
+     NumericToolSettingMergeKeysCoalesceOnlyOneContinuousSolidifyGesture) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0F, 0.0F, 0.0F}},
+                 {.position = {3.0F, 0.0F, 0.0F}}},
+      .name = "Continuous Solidify Settings",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Curve).ok());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+
+  const quader::QuaderToolSettingEditOptions resolution_gesture{
+      .merge_key = "api.curve.solidify.resolution.drag"};
+  const auto first_resolution = editor.tools().set_setting(
+      "curve", "curve.solidify.resolution", 12.0, resolution_gesture);
+  ASSERT_TRUE(first_resolution.ok()) << first_resolution.error_message();
+  EXPECT_EQ(first_resolution.mutation_kind,
+            quader::QuaderMutationKind::Document);
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("curve", "curve.solidify.resolution", 24.0,
+                               resolution_gesture)
+                  .ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_DOUBLE_EQ(find_tool_setting_control(editor.tools().active_settings(),
+                                             "curve.solidify.resolution")
+                       ->number_value,
+                   8.0);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_DOUBLE_EQ(find_tool_setting_control(editor.tools().active_settings(),
+                                             "curve.solidify.resolution")
+                       ->number_value,
+                   24.0);
+
+  const quader::QuaderToolSettingEditOptions radius_gesture{
+      .merge_key = "api.curve.solidify.radius.drag"};
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("curve", "curve.solidify.radius", 0.25,
+                               radius_gesture)
+                  .ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("curve", "curve.solidify.radius", 0.75,
+                               radius_gesture)
+                  .ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_NEAR(find_tool_setting_control(editor.tools().active_settings(),
+                                        "curve.solidify.radius")
+                  ->number_value,
+              0.1, 1.0e-6);
+
+  // Empty merge keys are the discrete public API contract: one undo returns
+  // to the immediately preceding accepted value rather than the baseline.
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("curve", "curve.solidify.resolution", 16.0)
+                  .ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("curve", "curve.solidify.resolution", 20.0)
+                  .ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_DOUBLE_EQ(find_tool_setting_control(editor.tools().active_settings(),
+                                             "curve.solidify.resolution")
+                       ->number_value,
+                   16.0);
 }
 
 TEST(EditorApiTests,

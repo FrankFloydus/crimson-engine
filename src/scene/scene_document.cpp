@@ -402,7 +402,7 @@ SceneDocument::capture_modeling_projection_mutation_fence(
     SceneModelingProjectionDomain domains) const {
   SceneModelingProjectionMutationFence fence;
   fence.work_.input_reference_count = participants.size();
-  constexpr std::uint8_t known_domains =
+  constexpr std::uint8_t kKnownDomains =
       static_cast<std::uint8_t>(
           SceneModelingProjectionDomain::MeshBindings) |
       static_cast<std::uint8_t>(
@@ -412,7 +412,7 @@ SceneDocument::capture_modeling_projection_mutation_fence(
   const std::uint8_t requested_domains =
       static_cast<std::uint8_t>(domains);
   if (requested_domains == 0u ||
-      (requested_domains & static_cast<std::uint8_t>(~known_domains)) != 0u) {
+      (requested_domains & static_cast<std::uint8_t>(~kKnownDomains)) != 0u) {
     return fence;
   }
 
@@ -1518,6 +1518,7 @@ bool SceneDocument::restore_modeling_projection_checkpoint_impl(
     }
   }
 
+  bool restored_curve_material_surface_changed = false;
   for (const auto &record : state.participants) {
     if (!record.existed || !exists(record.entity)) {
       continue;
@@ -1539,6 +1540,13 @@ bool SceneDocument::restore_modeling_projection_checkpoint_impl(
     if (has_projection_domain(
             state.domains, SceneModelingProjectionDomain::CurveBindings)) {
       const CurveComponent *current = registry_.try_get<CurveComponent>(entity);
+      const bool current_is_material_surface =
+          current != nullptr && current->solidify;
+      const bool restored_is_material_surface =
+          record.curve.has_value() && record.curve->solidify;
+      restored_curve_material_surface_changed =
+          restored_curve_material_surface_changed ||
+          current_is_material_surface != restored_is_material_surface;
       replace_binding_reference(
           curve_binding_reference_counts_,
           current == nullptr ? std::nullopt
@@ -1600,6 +1608,9 @@ bool SceneDocument::restore_modeling_projection_checkpoint_impl(
       }
       if (restore_curve) {
         ++curve_binding_revision_;
+      }
+      if (restored_curve_material_surface_changed) {
+        ++material_binding_revision_;
       }
       if (restore_structure) {
         ++visibility_revision_;
@@ -2023,7 +2034,10 @@ bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
   const bool material_binding_destroyed =
       std::any_of(to_destroy.begin(), to_destroy.end(),
                   [this](EntityId entity) {
-                    return material(entity) != nullptr;
+                    const CurveComponent *curve_component = curve(entity);
+                    return material(entity) != nullptr ||
+                           (curve_component != nullptr &&
+                            curve_component->solidify);
                   });
   const bool curve_binding_destroyed =
       std::any_of(to_destroy.begin(), to_destroy.end(),
@@ -2935,7 +2949,7 @@ bool SceneDocument::clear_mesh(EntityId id) {
 
 bool SceneDocument::set_curve(EntityId id, CurveComponent value) {
   const entt::entity entity = require_entity(id);
-  if (entity == entt::null || value.curve == kInvalidAssetId ||
+  if (entity == entt::null || !curve_component_is_valid(value) ||
       is_scene_root(id) || mesh(id) != nullptr || light(id) != nullptr ||
       texture_mapping(id) != nullptr ||
       instance_occurrence(id) != nullptr ||
@@ -2947,6 +2961,8 @@ bool SceneDocument::set_curve(EntityId id, CurveComponent value) {
     return true;
   }
   const CurveComponent *current = registry_.try_get<CurveComponent>(entity);
+  const bool material_surface_changed =
+      current == nullptr ? value.solidify : current->solidify != value.solidify;
   replace_binding_reference(
       curve_binding_reference_counts_,
       current == nullptr ? std::nullopt
@@ -2960,6 +2976,9 @@ bool SceneDocument::set_curve(EntityId id, CurveComponent value) {
     ++hierarchy_presentation_revision_;
   }
   ++curve_binding_revision_;
+  if (material_surface_changed) {
+    ++material_binding_revision_;
+  }
   ++render_component_revision_;
   mark_dirty(id, SceneModelingProjectionDomain::CurveBindings);
   return true;
@@ -2970,14 +2989,17 @@ bool SceneDocument::clear_curve(EntityId id) {
   if (entity == entt::null || !registry_.all_of<CurveComponent>(entity)) {
     return false;
   }
-  decrement_binding_reference(
-      curve_binding_reference_counts_,
-      registry_.get<CurveComponent>(entity).curve);
+  const CurveComponent &current = registry_.get<CurveComponent>(entity);
+  const bool material_surface_changed = current.solidify;
+  decrement_binding_reference(curve_binding_reference_counts_, current.curve);
   registry_.remove<CurveComponent>(entity);
   registry_.emplace_or_replace<EntityKindComponent>(
       entity, EntityKindComponent{.kind = EntityKind::Generic});
   ++hierarchy_presentation_revision_;
   ++curve_binding_revision_;
+  if (material_surface_changed) {
+    ++material_binding_revision_;
+  }
   ++render_component_revision_;
   mark_dirty(id, SceneModelingProjectionDomain::CurveBindings);
   return true;
