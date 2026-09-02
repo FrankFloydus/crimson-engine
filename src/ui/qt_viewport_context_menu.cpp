@@ -110,7 +110,8 @@ void QtViewportContextMenuPresenter::show(
     ViewportInputRouter &input_router, LocalizationService &localization,
     const QuaderActionSet &action_set, QuaderSelectionMode selection_mode,
     const std::optional<ProjectAssetId> &material_under_mouse,
-    const std::function<void(ProjectAssetId)> &open_material_editor) const {
+    const std::function<void(ProjectAssetId)> &open_material_editor,
+    ViewportRuntimeBindingToken runtime_binding) const {
   QDR_PROFILE_SCOPE("Qt viewport context menu show");
 
   QMenu menu(&parent);
@@ -292,6 +293,9 @@ void QtViewportContextMenuPresenter::show(
     QDR_PROFILE_SCOPE("Qt viewport context menu exec");
     selected_action = menu.exec(global_point);
   }
+  if (!runtime_binding.current()) {
+    return;
+  }
   if (selected_action == nullptr) {
     return;
   }
@@ -329,6 +333,9 @@ void QtViewportContextMenuPresenter::show(
     QDR_PROFILE_SCOPE("Qt viewport context menu dispatch command");
     const QuaderApiVoidResult result =
         editor.commands().execute(selected->command_id);
+    if (!runtime_binding.current()) {
+      return;
+    }
     if (!result.ok()) {
       LOG_ERROR("Context command '{}' failed: {}", selected->source_id,
                 result.error_message().empty() ? "Operation failed."

@@ -4849,6 +4849,177 @@ std::uint64_t overlay_frame_fingerprint(const ViewportOverlayFrame &frame) {
   return hash;
 }
 
+class ModelingSelectionProjectionRollbackTests : public testing::Test {
+protected:
+  ModelingSelectionProjectionRollbackTests()
+      : api_session_(QuaderApiSessionInternalAccess::from_scene_session(session_)),
+        editor_(api_session_) {}
+
+  void inject(ModelingSdkProjectionFailurePoint point) {
+    session_.modeling().set_modeling_sdk_projection_failure_for_tests(point);
+  }
+
+  SceneSession session_;
+  QuaderApiSession api_session_;
+  QuaderEditorApi editor_;
+};
+
+TEST_F(ModelingSelectionProjectionRollbackTests,
+       ComponentInverseFailureBoundariesRestoreExactSelectionAndOverlay) {
+  const QuaderModelingObjectRef first = create_box(editor_);
+  const QuaderModelingObjectRef second = create_box(editor_);
+  ASSERT_TRUE(editor_.selection().select_object(first).ok());
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor_.selection().select_edge(first, 1, 2).ok());
+  ASSERT_TRUE(editor_.selection()
+                  .select_edge(first, 2, 3, QuaderSelectionEdit::Add)
+                  .ok());
+
+  // An active constrained scope makes the otherwise-unselected second mesh an
+  // inversion target. Its projected selection would change the Scene, making
+  // SelectionScenePublication a required and observable failure boundary.
+  session_.modeling().set_viewport_visibility_filter(
+      [first_entity = first.entity,
+       second_entity = second.entity](EntityId entity) {
+        return entity == first_entity || entity == second_entity;
+      },
+      [] { return 1U; }, [] { return true; });
+
+  const auto exact_selected_edges = [](const ModelingSelectionExport &selection) {
+    std::vector<std::array<std::uint64_t, 3>> edges;
+    for (const ModelingSelectionExportObject &object : selection.objects) {
+      for (const ModelingSelectionExportEdge &edge : object.selected_edges) {
+        edges.push_back({
+            static_cast<std::uint64_t>(object.modeling_object_id),
+            static_cast<std::uint64_t>(edge.a),
+            static_cast<std::uint64_t>(edge.b),
+        });
+      }
+    }
+    std::ranges::sort(edges);
+    return edges;
+  };
+  const auto exact_selected_objects = [](const ModelingSelectionExport &selection) {
+    std::vector<std::pair<int, bool>> objects;
+    objects.reserve(selection.objects.size());
+    for (const ModelingSelectionExportObject &object : selection.objects) {
+      objects.emplace_back(object.modeling_object_id, object.selected);
+    }
+    std::ranges::sort(objects);
+    return objects;
+  };
+
+  const ModelingSelectionExport selection_before =
+      session_.modeling().export_selection();
+  const std::vector<std::array<std::uint64_t, 3>> edges_before =
+      exact_selected_edges(selection_before);
+  ASSERT_EQ(edges_before,
+            (std::vector<std::array<std::uint64_t, 3>>{
+                {static_cast<std::uint64_t>(first.modeling_object_id), 1U, 2U},
+                {static_cast<std::uint64_t>(first.modeling_object_id), 2U, 3U},
+            }));
+  ASSERT_EQ(selection_before.summary.mode, ModelingSelectionMode::Edge);
+  ASSERT_EQ(selection_before.summary.active_kind,
+            ModelingActiveSelectionKind::Edge);
+  ASSERT_EQ(selection_before.summary.active_object_id,
+            first.modeling_object_id);
+  ASSERT_EQ(selection_before.summary.active_edge_a, 2);
+  ASSERT_EQ(selection_before.summary.active_edge_b, 3);
+  ASSERT_EQ(selection_before.summary.selected_edge_count, 2U);
+
+  const std::vector<std::pair<int, bool>> selected_objects_before =
+      exact_selected_objects(selection_before);
+  const std::vector<EntityId> selected_scene_entities_before =
+      session_.scene().selected_entities();
+  const std::span<const EntityId> selected_component_entities =
+      session_.modeling().selected_component_entities();
+  const std::vector<EntityId> selected_component_entities_before(
+      selected_component_entities.begin(), selected_component_entities.end());
+  const EntityId primary_scene_selection_before =
+      session_.scene().primary_selection();
+  ASSERT_EQ(selected_scene_entities_before,
+            (std::vector<EntityId>{first.entity}));
+  ASSERT_EQ(primary_scene_selection_before, first.entity);
+
+  const QuaderRevisionStamp revisions_before = editor_.revisions();
+  const QuaderHistorySnapshot history_before = editor_.query().history();
+  const std::uint64_t modeling_content_revision_before =
+      session_.modeling().content_revision();
+  const std::uint64_t modeling_selection_revision_before =
+      session_.modeling().selection_revision();
+  const std::uint64_t scene_revision_before = session_.scene().revision();
+  const std::uint64_t scene_selection_revision_before =
+      session_.scene().selection_revision();
+  const std::uint64_t assets_revision_before = session_.assets().revision();
+  const std::uint64_t overlay_signature_before =
+      session_.modeling().selection_overlay_signature();
+  const std::uint64_t overlay_fingerprint_before = overlay_frame_fingerprint(
+      session_.modeling().selection_overlay_frame());
+
+  constexpr std::array kFailures{
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation,
+      ModelingSdkProjectionFailurePoint::SelectionScenePublication,
+  };
+  for (const ModelingSdkProjectionFailurePoint failure_point : kFailures) {
+    SCOPED_TRACE(static_cast<int>(failure_point));
+    inject(failure_point);
+    const QuaderApiVoidResult failed = editor_.selection().select_inverse();
+    inject(ModelingSdkProjectionFailurePoint::None);
+    EXPECT_FALSE(failed.ok());
+    EXPECT_FALSE(failed.changed());
+
+    const ModelingSelectionExport selection_after =
+        session_.modeling().export_selection();
+    EXPECT_EQ(exact_selected_edges(selection_after), edges_before);
+    EXPECT_EQ(exact_selected_objects(selection_after), selected_objects_before);
+    EXPECT_EQ(selection_after.summary.mode, selection_before.summary.mode);
+    EXPECT_EQ(selection_after.summary.has_selection,
+              selection_before.summary.has_selection);
+    EXPECT_EQ(selection_after.summary.active_kind,
+              selection_before.summary.active_kind);
+    EXPECT_EQ(selection_after.summary.active_object_id,
+              selection_before.summary.active_object_id);
+    EXPECT_EQ(selection_after.summary.active_edge_a,
+              selection_before.summary.active_edge_a);
+    EXPECT_EQ(selection_after.summary.active_edge_b,
+              selection_before.summary.active_edge_b);
+    EXPECT_EQ(selection_after.summary.selected_object_count,
+              selection_before.summary.selected_object_count);
+    EXPECT_EQ(selection_after.summary.selected_edge_count,
+              selection_before.summary.selected_edge_count);
+    EXPECT_EQ(selection_after.summary.content_revision,
+              selection_before.summary.content_revision);
+    EXPECT_EQ(selection_after.summary.selection_revision,
+              selection_before.summary.selection_revision);
+    const std::span<const EntityId> selected_component_entities_after =
+        session_.modeling().selected_component_entities();
+    EXPECT_EQ(std::vector<EntityId>(selected_component_entities_after.begin(),
+                                    selected_component_entities_after.end()),
+              selected_component_entities_before);
+
+    EXPECT_EQ(session_.scene().selected_entities(),
+              selected_scene_entities_before);
+    EXPECT_EQ(session_.scene().primary_selection(),
+              primary_scene_selection_before);
+    EXPECT_EQ(session_.modeling().content_revision(),
+              modeling_content_revision_before);
+    EXPECT_EQ(session_.modeling().selection_revision(),
+              modeling_selection_revision_before);
+    EXPECT_EQ(session_.scene().revision(), scene_revision_before);
+    EXPECT_EQ(session_.scene().selection_revision(),
+              scene_selection_revision_before);
+    EXPECT_EQ(session_.assets().revision(), assets_revision_before);
+    expect_same_revisions(editor_.revisions(), revisions_before);
+    expect_same_history(editor_.query().history(), history_before);
+
+    EXPECT_EQ(session_.modeling().selection_overlay_signature(),
+              overlay_signature_before);
+    EXPECT_EQ(overlay_frame_fingerprint(
+                  session_.modeling().selection_overlay_frame()),
+              overlay_fingerprint_before);
+  }
+}
+
 /// Exercises native publication checkpoints, retained asset revisions, workspace
 /// hydration and out-of-band scene changes. Ordinary edit intent still uses the
 /// public API; only native boundary injection and inspection bypass that facade.

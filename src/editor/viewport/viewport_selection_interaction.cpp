@@ -302,16 +302,17 @@ pick_selection(QuaderEditorApi &editor, ViewportInputRouter &input_router,
                int click_count, bool preserve_selection_on_miss = false,
                bool preserve_selection_on_selected_hit = false,
                bool preserve_existing_component_selection_on_hit = false,
-                bool cycle_depth = false,
-                ViewportModifiers cycle_modifiers = {},
-                const EditorSelectionBoxBaseline *baseline = nullptr,
-                ViewportCurveInteractionPort *curve = nullptr,
-                SceneSurfaceQueryScratch *surface_scratch = nullptr,
-                bool curve_controls_only = false) {
+               ViewportModifiers click_modifiers = {},
+               bool cycle_depth = false,
+               ViewportModifiers cycle_modifiers = {},
+               const EditorSelectionBoxBaseline *baseline = nullptr,
+               ViewportCurveInteractionPort *curve = nullptr,
+               SceneSurfaceQueryScratch *surface_scratch = nullptr,
+               bool curve_controls_only = false) {
   QDR_PROFILE_FUNCTION();
   const ModelingPickSelectRequest request = make_pick_select_request(
           frame.camera, frame.settings, local_mouse,
-          cycle_depth ? cycle_modifiers : frame.input.modifiers,
+          cycle_depth ? cycle_modifiers : click_modifiers,
           cycle_depth ? 1 : click_count, preserve_selection_on_miss,
           preserve_selection_on_selected_hit,
           preserve_existing_component_selection_on_hit, cycle_depth);
@@ -651,7 +652,8 @@ ViewportSelectionInteraction::commit_pick_selection(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
     QVec2 local_mouse, int click_count, bool preserve_selection_on_miss,
     bool preserve_selection_on_selected_hit,
-    bool preserve_existing_component_selection_on_hit, bool cycle_depth,
+    bool preserve_existing_component_selection_on_hit,
+    ViewportModifiers click_modifiers, bool cycle_depth,
     ViewportModifiers cycle_modifiers,
     std::optional<ResolvedSelectionTarget> hovered_before_selection,
     ViewportCurveInteractionPort *curve, bool curve_controls_only) {
@@ -667,9 +669,9 @@ ViewportSelectionInteraction::commit_pick_selection(
        frame.input.selection_click_delay_for_double_click) &&
       frame.double_click_interval_seconds > 0.0) {
     const ViewportModifiers modifiers =
-        frame.input.selection_click_delay_for_double_click
-            ? frame.input.selection_click_modifiers
-            : depth_click_baseline_->pointer.modifiers;
+        depth_click_baseline_->delay_single_click
+            ? depth_click_baseline_->pointer.modifiers
+            : click_modifiers;
     ViewportPointerGesture pending_pointer = depth_click_baseline_->pointer;
     pending_pointer.press.local = local_mouse;
     pending_pointer.modifiers = modifiers;
@@ -705,7 +707,8 @@ ViewportSelectionInteraction::commit_pick_selection(
   ViewportSelectionApplyResult result = pick_selection(
       editor, frame.input_router, frame, local_mouse, click_count,
       preserve_selection_on_miss, preserve_selection_on_selected_hit,
-      preserve_existing_component_selection_on_hit, cycle_depth, cycle_modifiers,
+      preserve_existing_component_selection_on_hit, click_modifiers,
+      cycle_depth, cycle_modifiers,
       apply_first_click_baseline ? &depth_click_baseline_->selection : nullptr,
       curve, &scene_surface_scratch_, curve_controls_only);
   last_selection_command_result_ = result.command;
@@ -912,12 +915,14 @@ void ViewportSelectionInteraction::handle_frame(
         selection_owner(editor).resolved_hover_target();
     const std::optional<ViewportSelectionApplyResult> applied =
         commit_pick_selection(
-        editor, frame, before_tool.selection_click_local,
-        std::max(1, before_tool.selection_click_count),
-        true, !before_tool.selection_cycle_depth,
-        !before_tool.selection_cycle_depth, before_tool.selection_cycle_depth,
-        before_tool.selection_cycle_depth_modifiers, hovered_before_selection,
-        curve);
+            editor, frame, before_tool.selection_click_local,
+            std::max(1, before_tool.selection_click_count), true,
+            !before_tool.selection_cycle_depth,
+            !before_tool.selection_cycle_depth,
+            before_tool.selection_click_modifiers,
+            before_tool.selection_cycle_depth,
+            before_tool.selection_cycle_depth_modifiers,
+            hovered_before_selection, curve);
     if (applied.has_value()) {
       const QuaderSelectionSummary &summary = applied->selection;
       paint_selection_active_ =
@@ -944,7 +949,8 @@ void ViewportSelectionInteraction::handle_frame(
         selection_owner(editor).resolved_hover_target();
     const std::optional<ViewportSelectionApplyResult> applied =
         commit_pick_selection(
-        editor, frame, frame.input.mouse_local, 1, true, false, false, true,
+        editor, frame, frame.input.mouse_local, 1, true, false, false,
+        frame.input.modifiers, true,
         frame.input.cycle_selection_depth_modifiers,
         hovered_before_selection, curve);
     if (applied.has_value()) {
@@ -1072,6 +1078,9 @@ void ViewportSelectionInteraction::handle_frame(
             box_pointer_.has_value()
                 ? static_cast<double>(box_pointer_->drag_threshold_pixels)
                  : quader_editor_core::kSelectionBoxDefaultDragThreshold);
+    const ViewportModifiers click_modifiers =
+        box_pointer_.has_value() ? box_pointer_->modifiers
+                                 : frame.input.modifiers;
     box_pointer_.reset();
     const std::optional<ResolvedSelectionTarget> hovered_before_selection =
         box_hovered_before_selection_;
@@ -1098,7 +1107,7 @@ void ViewportSelectionInteraction::handle_frame(
           commit_pick_selection(
               editor, frame, frame.left_click_local,
               std::max(1, frame.left_click_count), box_cycle_depth_, false,
-              false, box_cycle_depth_, box_cycle_modifiers_,
+              false, click_modifiers, box_cycle_depth_, box_cycle_modifiers_,
               hovered_before_selection, curve,
               !can_pick && include_curve_controls);
       if (applied.has_value()) {
@@ -1159,7 +1168,8 @@ void ViewportSelectionInteraction::handle_frame(
         selection_owner(editor).resolved_hover_target();
     const ViewportSelectionApplyResult applied = pick_selection(
         editor, frame.input_router, frame, frame.input.mouse_local, 0, false,
-        false, false, false, {}, nullptr, curve, &scene_surface_scratch_);
+        false, false, frame.input.modifiers, false, {}, nullptr, curve,
+        &scene_surface_scratch_);
     last_selection_command_result_ = applied.command;
     const QuaderSelectionSummary &summary = applied.selection;
     paint_selection_active_ =
@@ -1258,7 +1268,8 @@ QuaderSelectionSummary ViewportSelectionInteraction::pick_context_menu_target(
   cancel_pending_click();
   const ViewportSelectionApplyResult applied = pick_selection(
       editor, frame.input_router, frame, frame.input.mouse_local, 1, true, true,
-      true, false, {}, nullptr, nullptr, &scene_surface_scratch_);
+      true, frame.input.modifiers, false, {}, nullptr, nullptr,
+      &scene_surface_scratch_);
   last_selection_command_result_ = applied.command;
   const QuaderSelectionSummary &summary = applied.selection;
   paint_selection_active_ =

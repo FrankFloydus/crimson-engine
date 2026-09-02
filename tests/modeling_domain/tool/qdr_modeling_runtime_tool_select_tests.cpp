@@ -173,51 +173,6 @@ TEST(QdrModelingRuntimeToolSelectTests,
 		std::vector<int> { 0 }));
 }
 
-TEST(QdrModelingRuntimeToolSelectTests,
-	SelectionSetCommandsPublishActiveElementsForCompressedComponentResults) {
-	quader_editor_core::SelectionSetCommandRequest request;
-	request.universe = simple_universe();
-	request.current_selection.mode = quader_editor_core::SelectionMode::Edge;
-	request.command = quader_editor_core::SelectionSetCommand::SelectAll;
-
-	quader_editor_core::RectangleSelectionResult result =
-		quader_editor_core::apply_selection_set_command(request);
-	EXPECT_TRUE((result.selection.selected_edge_full_object_ids ==
-		std::vector<int> { 1, 2 }));
-	EXPECT_TRUE(result.selection.active_object_id == 1);
-	EXPECT_TRUE((result.selection.active_edge_vertex_indices ==
-		std::vector<int> { 1, 2 }));
-
-	request.current_selection.selected_edge_full_object_ids = { 1 };
-	request.command = quader_editor_core::SelectionSetCommand::Invert;
-	result = quader_editor_core::apply_selection_set_command(request);
-	EXPECT_TRUE((result.selection.selected_edge_full_object_ids ==
-		std::vector<int> { 2 }));
-	EXPECT_TRUE(result.selection.active_object_id == 2);
-	EXPECT_TRUE((result.selection.active_edge_vertex_indices ==
-		std::vector<int> { 0, 1 }));
-
-	request = {};
-	request.universe = simple_universe();
-	request.current_selection.mode = quader_editor_core::SelectionMode::Vertex;
-	request.command = quader_editor_core::SelectionSetCommand::SelectAll;
-	result = quader_editor_core::apply_selection_set_command(request);
-	EXPECT_TRUE((result.selection.selected_vertex_full_object_ids ==
-		std::vector<int> { 1, 2 }));
-	EXPECT_TRUE(result.selection.active_object_id == 1);
-	EXPECT_TRUE((result.selection.active_vertex_indices ==
-		std::vector<int> { 1 }));
-
-	request.current_selection.selected_vertex_full_object_ids = { 1 };
-	request.command = quader_editor_core::SelectionSetCommand::Invert;
-	result = quader_editor_core::apply_selection_set_command(request);
-	EXPECT_TRUE((result.selection.selected_vertex_full_object_ids ==
-		std::vector<int> { 2 }));
-	EXPECT_TRUE(result.selection.active_object_id == 2);
-	EXPECT_TRUE((result.selection.active_vertex_indices ==
-		std::vector<int> { 0 }));
-}
-
 TEST(QdrModelingRuntimeToolSelectTests, RectangleSelectionRemoveEditsExistingFaceSelections) {
 	quader_editor_core::RectangleSelectionRequest request;
         request.current_selection.mode =

@@ -227,3 +227,29 @@ TEST(QtNavigationGizmoInteractionTests,
   EXPECT_FALSE(interaction.input_locked());
   EXPECT_FALSE(camera.is_dragging());
 }
+
+TEST(QtNavigationGizmoInteractionTests,
+     AbandonDropsPointerStateWithoutCallingThePreviousCamera) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  QtNavigationGizmoInteraction interaction;
+  const quader_editor_core::ViewCubePrimitives primitives =
+      interaction.primitives(camera, kGizmoSize);
+  ASSERT_TRUE(primitives.ok);
+  ASSERT_FALSE(primitives.faces.empty());
+
+  ASSERT_TRUE(interaction.press(camera, ViewportPaneId::Perspective,
+                                kGizmoSize,
+                                primitives.faces.front().screen_position));
+  ASSERT_TRUE(interaction.input_locked());
+  ASSERT_TRUE(camera.is_dragging());
+
+  interaction.abandon();
+
+  EXPECT_FALSE(interaction.input_locked());
+  EXPECT_FALSE(interaction.drag_started());
+  // Owner-free abandon intentionally cannot end the previous camera drag.
+  // A normal live-owner cancel remains responsible for that path.
+  EXPECT_TRUE(camera.is_dragging());
+  camera.end_drag();
+}

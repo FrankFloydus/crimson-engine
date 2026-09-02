@@ -134,6 +134,7 @@ private:
       bool preserve_selection_on_miss = false,
       bool preserve_selection_on_selected_hit = false,
       bool preserve_existing_component_selection_on_hit = false,
+      ViewportModifiers click_modifiers = {},
       bool cycle_depth = false, ViewportModifiers cycle_modifiers = {},
       std::optional<ResolvedSelectionTarget> hovered_before_selection =
           std::nullopt,

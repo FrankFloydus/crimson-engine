@@ -23,6 +23,7 @@ public:
   explicit LayerPanel(QWidget *parent = nullptr);
   ~LayerPanel() override;
 
+  void abandon_runtime() noexcept;
   void refresh(UIContext &context);
 
 private:

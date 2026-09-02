@@ -2116,6 +2116,124 @@ Result<OperationResult> ModelingSession::apply_object_selection(
       session_result(changed, "Object selection changed."));
 }
 
+Result<OperationResult> ModelingSession::invert_component_selection_batch(
+    std::span<const SessionComponentSelectionUniverse> targets) {
+  const auto valid_component_mode = [](SelectionMode mode) {
+    switch (mode) {
+    case SelectionMode::Vertex:
+    case SelectionMode::Edge:
+    case SelectionMode::Face:
+      return true;
+    }
+    return false;
+  };
+  const auto eligible_universe_empty =
+      [](const PolygonSelectionUniverse &eligible) {
+        return eligible.vertices.empty() && eligible.edges.empty() &&
+               eligible.faces.empty();
+      };
+  std::unordered_set<std::uint64_t> targeted_objects;
+  targeted_objects.reserve(targets.size());
+  std::unordered_map<std::uint64_t, bool> target_should_remain_selected;
+  target_should_remain_selected.reserve(targets.size());
+  std::vector<SessionComponentSelectionUpdate> updates;
+  updates.reserve(targets.size());
+
+  for (const SessionComponentSelectionUniverse &target : targets) {
+    const auto object = find_object(impl_->state, target.object);
+    if (!target.object.valid() || object == impl_->state.objects.end()) {
+      return Result<OperationResult>::failure(
+          make_error(ErrorCode::InvalidId, "Object ID is not live."));
+    }
+    if (!targeted_objects.insert(object_id_key(target.object)).second) {
+      return Result<OperationResult>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "A component selection inversion contains a duplicate object."));
+    }
+    if (object->kind() != SessionObjectKind::Mesh) {
+      return Result<OperationResult>::failure(wrong_document_kind_error());
+    }
+    if (!valid_component_mode(target.eligible.mode)) {
+      return Result<OperationResult>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "Component selection inversion requires a valid mode."));
+    }
+
+    PolygonDocument inverted = object->polygon_document();
+    const PolygonSelectionSnapshot before_selection = inverted.selection();
+    const bool had_component_selection =
+        !before_selection.vertices.empty() || !before_selection.edges.empty() ||
+        !before_selection.faces.empty();
+    if (target.adopt_eligible_mode &&
+        eligible_universe_empty(target.eligible)) {
+      target_should_remain_selected.emplace(object_id_key(target.object),
+                                            object->selected);
+      updates.push_back({
+          .object = target.object,
+          .selection = before_selection,
+      });
+      continue;
+    }
+    if (target.adopt_eligible_mode &&
+        selection_mode_for_kind(before_selection.kind) !=
+            std::optional<SelectionMode>{target.eligible.mode}) {
+      Result<OperationResult> converted =
+          inverted.set_selection_mode(target.eligible.mode);
+      if (!converted.ok()) {
+        return Result<OperationResult>::failure(std::move(converted).error());
+      }
+    }
+    Result<OperationResult> inversion =
+        inverted.invert_selection(target.eligible);
+    if (!inversion.ok()) {
+      return Result<OperationResult>::failure(std::move(inversion).error());
+    }
+    PolygonSelectionSnapshot inverted_selection = inverted.selection();
+    const bool has_selection = !inverted_selection.vertices.empty() ||
+                               !inverted_selection.edges.empty() ||
+                               !inverted_selection.faces.empty();
+    // Inversion must not discard an existing edit participant merely because
+    // every eligible component toggled off. Otherwise a second inversion
+    // cannot restore the original set. A genuinely empty universe is an exact
+    // no-op and therefore preserves the preexisting object-selection flag.
+    const bool should_remain_selected =
+        inversion.value().changed
+            ? (object->selected || had_component_selection || has_selection)
+            : object->selected;
+    target_should_remain_selected.emplace(object_id_key(target.object),
+                                          should_remain_selected);
+    updates.push_back({
+        .object = target.object,
+        .selection = std::move(inverted_selection),
+    });
+  }
+
+  std::vector<ObjectId> selected_objects;
+  selected_objects.reserve(impl_->state.objects.size());
+  for (const SessionObject &object : impl_->state.objects) {
+    const auto targeted =
+        target_should_remain_selected.find(object_id_key(object.id));
+    const bool selected = targeted == target_should_remain_selected.end()
+                              ? object.selected
+                              : targeted->second;
+    if (selected) {
+      selected_objects.push_back(object.id);
+    }
+  }
+
+  ObjectId next_active = impl_->state.active_object;
+  const bool active_is_selected =
+      next_active.valid() &&
+      std::ranges::find(selected_objects, next_active) !=
+          selected_objects.end();
+  if (!active_is_selected) {
+    next_active = selected_objects.empty() ? ObjectId{}
+                                           : selected_objects.front();
+  }
+  return commit_component_selection_batch(updates, selected_objects,
+                                          next_active);
+}
+
 Result<OperationResult> ModelingSession::commit_component_selection_batch(
     std::span<const SessionComponentSelectionUpdate> updates,
     std::span<const ObjectId> selected_objects, ObjectId active_object) {
@@ -4903,6 +5021,10 @@ std::vector<SessionObjectSummary> ModelingSession::objects() const {
     });
   }
   return result;
+}
+
+ObjectId ModelingSession::active_object() const noexcept {
+  return impl_->state.active_object;
 }
 
 std::uint64_t ModelingSession::content_revision() const {

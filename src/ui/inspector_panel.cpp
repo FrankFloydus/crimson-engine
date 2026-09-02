@@ -474,6 +474,28 @@ struct InspectorPanel::Impl {
     force_rebuild_ = true;
   }
 
+  void abandon_runtime() noexcept {
+    ++runtime_binding_generation_;
+    active_transform_preview_.abandon();
+    active_transform_edit_.reset();
+    active_continuous_edit_.reset();
+    continuous_edit_active_ = false;
+    active_continuous_id_.clear();
+    selection_.clear();
+    primary_ = kInvalidEntityId;
+    editor_ = nullptr;
+    document_ = nullptr;
+    modeling_ = nullptr;
+    localization_ = nullptr;
+    preview_document_ = nullptr;
+    preview_assets_ = nullptr;
+    force_rebuild_ = true;
+    if (active_color_dialog_ != nullptr) {
+      active_color_dialog_->reject();
+    }
+    active_color_dialog_ = nullptr;
+  }
+
   void refresh(UIContext &context) {
     const SceneDocument *next_document = &context.scene.document;
     const ModelingSessionService *next_modeling = &context.scene.modeling;
@@ -486,17 +508,25 @@ struct InspectorPanel::Impl {
     if (next_primary == kInvalidEntityId && !next_selection.empty()) {
       next_primary = next_selection.front();
     }
+    if (owner_changed && (document_ != nullptr || modeling_ != nullptr)) {
+      // The former SceneSession may already be gone when a host rebind arrives.
+      // Disarm previews without restoring through their non-owning document.
+      abandon_runtime();
+    }
     const bool selection_changed =
         owner_changed || next_selection != selection_ ||
         next_primary != primary_;
-    if (selection_changed && active_color_dialog_ != nullptr) {
+    if (!owner_changed && selection_changed &&
+        active_color_dialog_ != nullptr) {
       active_color_dialog_->reject();
     }
-    if (selection_changed) {
+    if (!owner_changed && selection_changed) {
       cancel_active_transform_edit();
       active_continuous_edit_.reset();
       continuous_edit_active_ = false;
       active_continuous_id_.clear();
+    }
+    if (selection_changed) {
       selection_ = std::move(next_selection);
       primary_ = next_primary;
       force_rebuild_ = true;
@@ -969,7 +999,14 @@ private:
                 }
               });
 
+          const std::uint64_t dialog_generation = runtime_binding_generation_;
           const int result = dialog.exec();
+          if (active_color_dialog_ == &dialog) {
+            active_color_dialog_ = nullptr;
+          }
+          if (runtime_binding_generation_ != dialog_generation) {
+            return;
+          }
           const QColor committed = dialog.currentColor();
           if (result == QDialog::Accepted && committed.isValid() &&
               committed != initial) {
@@ -979,7 +1016,6 @@ private:
           } else if (guarded_button != nullptr) {
             guarded_button->set_swatch_color(initial);
           }
-          active_color_dialog_ = nullptr;
           force_rebuild_ = true;
         });
     return button;
@@ -1876,6 +1912,7 @@ private:
       std::numeric_limits<std::uint64_t>::max();
   std::uint64_t built_material_presentation_revision_ =
       std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t runtime_binding_generation_ = 0;
   std::string built_locale_;
   std::string active_continuous_id_;
   bool continuous_edit_active_ = false;
@@ -1893,6 +1930,8 @@ void InspectorPanel::set_material_presentation(
     InspectorMaterialPresentationSnapshot snapshot) {
   impl_->set_material_presentation(std::move(snapshot));
 }
+
+void InspectorPanel::abandon_runtime() noexcept { impl_->abandon_runtime(); }
 
 void InspectorPanel::refresh(UIContext &context) { impl_->refresh(context); }
 

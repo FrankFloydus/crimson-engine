@@ -423,6 +423,8 @@ OperationReceipt OperationsApi::paste_selection(PasteOptions options) {
   if (!pasted.ok()) {
     return handle_failure(*context_, pasted.error());
   }
+  remember_selection_interaction(
+      *context_, SelectionUnion{.kind = SelectionKind::Object});
   return receipt_from_result(pasted.value().operation,
                              current_revisions(*context_));
 }

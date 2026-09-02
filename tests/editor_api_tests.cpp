@@ -11067,7 +11067,126 @@ TEST(EditorApiTests, ObjectSelectAllAndInvertUseSceneEntitiesAndExcludeLockedAnd
 }
 
 TEST(EditorApiTests,
-     ComponentSelectAllAndInverseOnlyAffectMeshesWithSelectedComponents) {
+     SceneInverseXorsOnlyVisibleEligibleEntitiesAndRetainsIneligiblePrimary) {
+  constexpr std::array kModes{quader::QuaderSelectionMode::Object,
+                              quader::QuaderSelectionMode::Group};
+  for (const quader::QuaderSelectionMode mode : kModes) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const auto create_empty = [&](std::string name) {
+      const quader::QuaderApiResult<quader::QuaderEntityRef> created =
+          editor.scene().create_entity({
+              .name = std::move(name),
+              .kind = quader::QuaderEntityKind::Empty,
+          });
+      EXPECT_TRUE(created.ok()) << created.error_message();
+      return created.value();
+    };
+
+    const quader::QuaderEntityRef hidden = create_empty("Inverse Hidden");
+    const quader::QuaderEntityRef locked = create_empty("Inverse Locked");
+    const quader::QuaderEntityRef selected_eligible =
+        create_empty("Inverse Selected Eligible");
+    const quader::QuaderEntityRef empty_eligible =
+        create_empty("Inverse Empty Eligible");
+
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(editor.selection()
+                    .select_objects({hidden.id, selected_eligible.id}, hidden.id)
+                    .ok());
+    ASSERT_TRUE(editor.scene().set_visible(hidden.id, false).ok());
+    ASSERT_TRUE(editor.scene().set_locked(locked.id, true).ok());
+    ASSERT_TRUE(editor.selection()
+                    .select_objects_for_inspection(
+                        {hidden.id, locked.id, selected_eligible.id}, hidden.id)
+                    .ok());
+    ASSERT_EQ(selected_entities(editor),
+              (std::vector<quader::EntityId>{hidden.id, locked.id,
+                                             selected_eligible.id}));
+
+    const quader::QuaderApiVoidResult inverted =
+        editor.selection().select_inverse();
+    ASSERT_TRUE(inverted.ok()) << inverted.error_message();
+    EXPECT_TRUE(inverted.changed());
+    EXPECT_EQ(selected_entities(editor),
+              (std::vector<quader::EntityId>{hidden.id, locked.id,
+                                             empty_eligible.id}));
+    ASSERT_TRUE(editor.query().entity(hidden.id).has_value());
+    EXPECT_TRUE(editor.query().entity(hidden.id)->active);
+
+    const quader::QuaderApiVoidResult restored =
+        editor.selection().select_inverse();
+    ASSERT_TRUE(restored.ok()) << restored.error_message();
+    EXPECT_TRUE(restored.changed());
+    EXPECT_EQ(selected_entities(editor),
+              (std::vector<quader::EntityId>{hidden.id, locked.id,
+                                             selected_eligible.id}));
+    ASSERT_TRUE(editor.query().entity(hidden.id).has_value());
+    EXPECT_TRUE(editor.query().entity(hidden.id)->active);
+  }
+}
+
+TEST(EditorApiTests,
+     SceneInversePreservesOutsideLocalScopeAndItsPrimary) {
+  constexpr std::array kModes{quader::QuaderSelectionMode::Object,
+                              quader::QuaderSelectionMode::Group};
+  for (const quader::QuaderSelectionMode mode : kModes) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const auto create_empty = [&](std::string name) {
+      const quader::QuaderApiResult<quader::QuaderEntityRef> created =
+          editor.scene().create_entity({
+              .name = std::move(name),
+              .kind = quader::QuaderEntityKind::Empty,
+          });
+      EXPECT_TRUE(created.ok()) << created.error_message();
+      return created.value();
+    };
+
+    const quader::QuaderEntityRef local_selected =
+        create_empty("Inverse Local Selected");
+    const quader::QuaderEntityRef local_empty =
+        create_empty("Inverse Local Empty");
+    const quader::QuaderEntityRef outside =
+        create_empty("Inverse Outside Local Scope");
+
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(editor.selection()
+                    .select_objects({local_selected.id, outside.id}, outside.id)
+                    .ok());
+    const std::array<quader::ViewportLocalVisibilityEntityId, 3> baseline{
+        local_selected.id, local_empty.id, outside.id};
+    const std::array<quader::ViewportLocalVisibilityEntityId, 2> members{
+        local_selected.id, local_empty.id};
+    quader::ViewportWorkspaceService &workspace =
+        quader::QuaderViewportApiRuntimeAccess::workspace(editor.viewports());
+    ASSERT_TRUE(workspace.enter_local_visibility(baseline, members));
+
+    const quader::QuaderApiVoidResult inverted =
+        editor.selection().select_inverse();
+    ASSERT_TRUE(inverted.ok()) << inverted.error_message();
+    EXPECT_TRUE(inverted.changed());
+    EXPECT_EQ(selected_entities(editor),
+              (std::vector<quader::EntityId>{local_empty.id, outside.id}));
+    ASSERT_TRUE(editor.query().entity(outside.id).has_value());
+    EXPECT_TRUE(editor.query().entity(outside.id)->active);
+
+    const quader::QuaderApiVoidResult restored =
+        editor.selection().select_inverse();
+    ASSERT_TRUE(restored.ok()) << restored.error_message();
+    EXPECT_TRUE(restored.changed());
+    EXPECT_EQ(selected_entities(editor),
+              (std::vector<quader::EntityId>{local_selected.id, outside.id}));
+    ASSERT_TRUE(editor.query().entity(outside.id).has_value());
+    EXPECT_TRUE(editor.query().entity(outside.id)->active);
+    EXPECT_TRUE(workspace.exit_local_visibility());
+  }
+}
+
+TEST(EditorApiTests,
+     ComponentSelectAllKeepsSeedScopeAndInverseTargetsEveryEligibleEditScopeMesh) {
   const auto create_three_boxes = [](quader::QuaderEditorApi &editor) {
     std::array<quader::QuaderModelingObjectRef, 3> boxes;
     boxes[0] = create_selected_box(editor, "Component Scope A");
@@ -11139,11 +11258,462 @@ TEST(EditorApiTests,
         harness.editor.selection().select_inverse();
     ASSERT_TRUE(inverted.ok()) << inverted.error_message();
     EXPECT_TRUE(inverted.changed());
-    EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count, 14u);
+    EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count, 22u);
     EXPECT_EQ(selected_entities(harness.editor),
               (std::vector<quader::EntityId>{boxes[0].entity,
-                                             boxes[1].entity}));
+                                             boxes[1].entity,
+                                             boxes[2].entity}));
   }
+}
+
+TEST(EditorApiTests,
+     ComponentInverseSkipsHiddenAndLockedMeshesWithoutDisturbingSelection) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef eligible =
+      create_selected_box(editor, "Inverse Eligible Mesh");
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> hidden =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {3.0f, -1.0f, -1.0f},
+              .max = {5.0f, 1.0f, 1.0f},
+          },
+          "Inverse Hidden Mesh");
+  ASSERT_TRUE(hidden.ok()) << hidden.error_message();
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> locked =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {7.0f, -1.0f, -1.0f},
+              .max = {9.0f, 1.0f, 1.0f},
+          },
+          "Inverse Locked Mesh");
+  ASSERT_TRUE(locked.ok()) << locked.error_message();
+  ASSERT_TRUE(editor.scene().set_locked(locked.value().entity, true).ok());
+
+  ASSERT_TRUE(editor.selection()
+                  .select_objects(
+                      {eligible.entity, hidden.value().entity,
+                       locked.value().entity},
+                      locked.value().entity)
+                  .ok());
+  ASSERT_TRUE(editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Vertex)
+                  .ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_vertex(eligible, 1,
+                                 quader::QuaderSelectionEdit::Add)
+                  .ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_vertex(hidden.value(), 1,
+                                 quader::QuaderSelectionEdit::Add)
+                  .ok());
+  ASSERT_EQ(editor.selection().summary().selected_vertex_count, 2u);
+
+  ASSERT_TRUE(editor.scene().set_visible(hidden.value().entity, false).ok());
+  const quader::QuaderApiVoidResult inverted =
+      editor.selection().select_inverse();
+  ASSERT_TRUE(inverted.ok()) << inverted.error_message();
+  EXPECT_TRUE(inverted.changed());
+  EXPECT_EQ(editor.selection().summary().selected_vertex_count, 8u);
+  EXPECT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{eligible.entity,
+                                           hidden.value().entity}));
+  ASSERT_TRUE(editor.query().entity(locked.value().entity).has_value());
+  EXPECT_FALSE(editor.query().entity(locked.value().entity)->selected);
+
+  const auto selected_vertices_for = [](const quader::QuaderOverlayFrame &frame,
+                                        int modeling_object_id) {
+    return std::count_if(
+        frame.points.begin(), frame.points.end(),
+        [modeling_object_id](const quader::QuaderOverlayPoint &point) {
+          return point.layer == quader::QuaderOverlayLayer::SelectedVertex &&
+                 point.element.object_id == modeling_object_id;
+        });
+  };
+  const quader::QuaderOverlayFrame hidden_overlay =
+      editor.render().selection_overlay_frame();
+  EXPECT_EQ(selected_vertices_for(hidden_overlay, eligible.modeling_object_id),
+            7);
+  EXPECT_EQ(selected_vertices_for(hidden_overlay,
+                                  hidden.value().modeling_object_id),
+            0);
+  EXPECT_EQ(selected_vertices_for(hidden_overlay,
+                                  locked.value().modeling_object_id),
+            0);
+
+  ASSERT_TRUE(editor.scene().set_visible(hidden.value().entity, true).ok());
+  const quader::QuaderOverlayFrame visible_overlay =
+      editor.render().selection_overlay_frame();
+  EXPECT_EQ(selected_vertices_for(visible_overlay, eligible.modeling_object_id),
+            7);
+  EXPECT_EQ(selected_vertices_for(visible_overlay,
+                                  hidden.value().modeling_object_id),
+            1);
+  EXPECT_EQ(selected_vertices_for(visible_overlay,
+                                  locked.value().modeling_object_id),
+            0);
+}
+
+TEST(EditorApiTests,
+     ComponentInverseRetainsAnEmptyOrdinaryEditScopeForRestoration) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Inverse Ordinary Scope");
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_vertex(box, 1, quader::QuaderSelectionEdit::Add)
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_all().ok());
+  ASSERT_EQ(editor.selection().summary().selected_vertex_count, 8U);
+
+  const quader::QuaderApiVoidResult emptied =
+      editor.selection().select_inverse();
+  ASSERT_TRUE(emptied.ok()) << emptied.error_message();
+  EXPECT_TRUE(emptied.changed());
+  EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0U);
+  EXPECT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{box.entity}));
+
+  const quader::QuaderApiVoidResult restored =
+      editor.selection().select_inverse();
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  EXPECT_TRUE(restored.changed());
+  EXPECT_EQ(editor.selection().summary().selected_vertex_count, 8U);
+  EXPECT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{box.entity}));
+}
+
+TEST(EditorApiTests,
+     ComponentModeSwitchConvertsEveryEditScopeMeshBeforeInverse) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef first =
+      create_selected_box(editor, "Inverse Mode First");
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> second =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {3.0F, -1.0F, -1.0F},
+              .max = {5.0F, 1.0F, 1.0F},
+          },
+          "Inverse Mode Second");
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({first.entity, second.value().entity},
+                                  second.value().entity)
+                  .ok());
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_vertex(first, 1, quader::QuaderSelectionEdit::Add)
+                  .ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_vertex(second.value(), 1,
+                                 quader::QuaderSelectionEdit::Add)
+                  .ok());
+  ASSERT_EQ(editor.selection().summary().selected_vertex_count, 2U);
+
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0U);
+  EXPECT_EQ(editor.selection().summary().selected_edge_count, 0U);
+  EXPECT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{first.entity,
+                                           second.value().entity}));
+
+  const quader::QuaderApiVoidResult inverted =
+      editor.selection().select_inverse();
+  ASSERT_TRUE(inverted.ok()) << inverted.error_message();
+  EXPECT_TRUE(inverted.changed());
+  EXPECT_EQ(editor.selection().summary().selected_edge_count, 24U);
+}
+
+TEST(EditorApiTests,
+     ComponentInversePreservesSceneOnlySelectionAndPrimary) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Inverse Scene-Only Primary Mesh");
+  quader::QuaderCreatePointLightArgs light_args;
+  light_args.name = "Inverse Scene-Only Primary Light";
+  const quader::QuaderApiResult<quader::QuaderEntityRef> light =
+      editor.scene().create_point_light(light_args);
+  ASSERT_TRUE(light.ok()) << light.error_message();
+
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({box.entity, light.value().id},
+                                  light.value().id)
+                  .ok());
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+  ASSERT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{box.entity, light.value().id}));
+  ASSERT_TRUE(editor.query().entity(light.value().id).has_value());
+  ASSERT_TRUE(editor.query().entity(light.value().id)->active);
+
+  const quader::QuaderApiVoidResult inverted =
+      editor.selection().select_inverse();
+  ASSERT_TRUE(inverted.ok()) << inverted.error_message();
+  EXPECT_TRUE(inverted.changed());
+  EXPECT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{box.entity, light.value().id}));
+  ASSERT_TRUE(editor.query().entity(light.value().id).has_value());
+  EXPECT_TRUE(editor.query().entity(light.value().id)->active);
+}
+
+TEST(EditorApiTests,
+     ComponentInverseTargetsLocalVisibilityMembersAndPreservesOutsideSelection) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef local_selected =
+      create_selected_box(editor, "Inverse Local Selected Mesh");
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> local_empty =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {3.0f, -1.0f, -1.0f},
+              .max = {5.0f, 1.0f, 1.0f},
+          },
+          "Inverse Local Empty Mesh");
+  ASSERT_TRUE(local_empty.ok()) << local_empty.error_message();
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> outside =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {7.0f, -1.0f, -1.0f},
+              .max = {9.0f, 1.0f, 1.0f},
+          },
+          "Inverse Outside Local Visibility Mesh");
+  ASSERT_TRUE(outside.ok()) << outside.error_message();
+
+  ASSERT_TRUE(editor.selection()
+                  .select_objects(
+                      {local_selected.entity, local_empty.value().entity,
+                       outside.value().entity},
+                      outside.value().entity)
+                  .ok());
+  ASSERT_TRUE(editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Vertex)
+                  .ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_vertex(local_selected, 1,
+                                 quader::QuaderSelectionEdit::Add)
+                  .ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_vertex(outside.value(), 1,
+                                 quader::QuaderSelectionEdit::Add)
+                  .ok());
+  ASSERT_EQ(editor.selection().summary().selected_vertex_count, 2u);
+
+  const std::array<quader::ViewportLocalVisibilityEntityId, 3> baseline{
+      local_selected.entity, local_empty.value().entity,
+      outside.value().entity};
+  const std::array<quader::ViewportLocalVisibilityEntityId, 2> members{
+      local_selected.entity, local_empty.value().entity};
+  quader::ViewportWorkspaceService &workspace =
+      quader::QuaderViewportApiRuntimeAccess::workspace(editor.viewports());
+  ASSERT_TRUE(workspace.enter_local_visibility(baseline, members));
+
+  const quader::QuaderApiVoidResult inverted =
+      editor.selection().select_inverse();
+  ASSERT_TRUE(inverted.ok()) << inverted.error_message();
+  EXPECT_TRUE(inverted.changed());
+  EXPECT_EQ(editor.selection().summary().selected_vertex_count, 16u);
+  EXPECT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{local_selected.entity,
+                                           local_empty.value().entity,
+                                           outside.value().entity}));
+
+  const auto selected_vertices_for = [](const quader::QuaderOverlayFrame &frame,
+                                        int modeling_object_id) {
+    return std::count_if(
+        frame.points.begin(), frame.points.end(),
+        [modeling_object_id](const quader::QuaderOverlayPoint &point) {
+          return point.layer == quader::QuaderOverlayLayer::SelectedVertex &&
+                 point.element.object_id == modeling_object_id;
+        });
+  };
+  const quader::QuaderOverlayFrame isolated_overlay =
+      editor.render().selection_overlay_frame();
+  EXPECT_EQ(selected_vertices_for(isolated_overlay,
+                                  local_selected.modeling_object_id),
+            7);
+  EXPECT_EQ(selected_vertices_for(isolated_overlay,
+                                  local_empty.value().modeling_object_id),
+            8);
+  EXPECT_EQ(selected_vertices_for(isolated_overlay,
+                                  outside.value().modeling_object_id),
+            0);
+
+  ASSERT_TRUE(workspace.exit_local_visibility());
+  const quader::QuaderOverlayFrame restored_overlay =
+      editor.render().selection_overlay_frame();
+  EXPECT_EQ(selected_vertices_for(restored_overlay,
+                                  local_selected.modeling_object_id),
+            7);
+  EXPECT_EQ(selected_vertices_for(restored_overlay,
+                                  local_empty.value().modeling_object_id),
+            8);
+  EXPECT_EQ(selected_vertices_for(restored_overlay,
+                                  outside.value().modeling_object_id),
+            1);
+}
+
+TEST(EditorApiTests,
+     ComponentInverseUsesEveryMemberOfTheActiveInstanceEditScope) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> first =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {-4.0F, -1.0F, -1.0F},
+              .max = {-2.0F, 1.0F, 1.0F},
+          },
+          "Instance Inverse First Member");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> second =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {2.0F, -1.0F, -1.0F},
+              .max = {4.0F, 1.0F, 1.0F},
+          },
+          "Instance Inverse Second Member");
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({first.value().entity, second.value().entity},
+                                  second.value().entity)
+                  .ok());
+
+  const auto created = editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(created.changed());
+  ASSERT_EQ(created.value().definition.members.size(), 2U);
+  const auto first_member = editor.query().modeling_object_for_entity(
+      created.value().definition.members[0].id);
+  const auto second_member = editor.query().modeling_object_for_entity(
+      created.value().definition.members[1].id);
+  ASSERT_TRUE(first_member.has_value());
+  ASSERT_TRUE(second_member.has_value());
+  const quader::EntityId occurrence = created.value().occurrence.root.id;
+  const quader::QVec3 occurrence_offset{10.0F, -4.0F, 3.0F};
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(occurrence,
+                                 quader::QuaderTransform{
+                                     .position = occurrence_offset,
+                                 })
+                  .ok());
+  ASSERT_TRUE(editor.modeling().enter_instance_edit(occurrence).ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({first_member->entity, second_member->entity},
+                                  second_member->entity)
+                  .ok());
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+  const auto pick_vertex = [&editor, &occurrence_offset](float local_x,
+                                                         float local_y) {
+    quader::QuaderPickSelectRequest request;
+    request.ray = {
+        .origin = {local_x + occurrence_offset.x,
+                   local_y + occurrence_offset.y, 20.0F},
+        .direction = {0.0F, 0.0F, -1.0F},
+    };
+    request.shift_pressed = true;
+    return editor.selection().pick_select(request);
+  };
+  for (const quader::QVec2 vertex :
+       {quader::QVec2{-4.0F, -1.0F}, quader::QVec2{-2.0F, 1.0F},
+        quader::QVec2{4.0F, -1.0F}, quader::QVec2{2.0F, 1.0F}}) {
+    const quader::QuaderApiResult<quader::QuaderSelectionSummary> selected =
+        pick_vertex(vertex.x, vertex.y);
+    ASSERT_TRUE(selected.ok()) << selected.error_message();
+    ASSERT_TRUE(selected.changed());
+  }
+  ASSERT_EQ(editor.selection().summary().selected_vertex_count, 4U);
+
+  const std::array<quader::QVec3, 8> box_vertices{
+      quader::QVec3{-1.0F, -1.0F, 1.0F},
+      quader::QVec3{1.0F, -1.0F, 1.0F},
+      quader::QVec3{1.0F, 1.0F, 1.0F},
+      quader::QVec3{-1.0F, 1.0F, 1.0F},
+      quader::QVec3{-1.0F, -1.0F, -1.0F},
+      quader::QVec3{-1.0F, 1.0F, -1.0F},
+      quader::QVec3{1.0F, 1.0F, -1.0F},
+      quader::QVec3{1.0F, -1.0F, -1.0F},
+  };
+  const auto selected_vertex_points_for = [](
+                                              const quader::QuaderOverlayFrame
+                                                  &overlay,
+                                              int modeling_object_id) {
+    std::vector<quader::QuaderOverlayPoint> selected;
+    std::copy_if(
+        overlay.points.begin(), overlay.points.end(),
+        std::back_inserter(selected),
+        [modeling_object_id](const quader::QuaderOverlayPoint &point) {
+          return point.layer == quader::QuaderOverlayLayer::SelectedVertex &&
+                 point.element.object_id == modeling_object_id;
+        });
+    std::sort(selected.begin(), selected.end(),
+              [](const quader::QuaderOverlayPoint &left,
+                 const quader::QuaderOverlayPoint &right) {
+                return left.element.vertex_id < right.element.vertex_id;
+              });
+    return selected;
+  };
+  const auto expect_projected_selection = [&box_vertices, &occurrence_offset,
+                                           &selected_vertex_points_for](
+                                              const quader::QuaderOverlayFrame
+                                                  &overlay,
+                                              int modeling_object_id,
+                                              float local_x_offset,
+                                              std::span<const int> expected) {
+    const std::vector<quader::QuaderOverlayPoint> points =
+        selected_vertex_points_for(overlay, modeling_object_id);
+    ASSERT_EQ(points.size(), expected.size());
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+      const int vertex_id = expected[index];
+      ASSERT_EQ(points[index].element.vertex_id, vertex_id);
+      ASSERT_GE(vertex_id, 1);
+      ASSERT_LE(vertex_id, static_cast<int>(box_vertices.size()));
+      const quader::QVec3 local =
+          box_vertices[static_cast<std::size_t>(vertex_id - 1)];
+      expect_vec3_near(points[index].position,
+                       {local.x + local_x_offset + occurrence_offset.x,
+                        local.y + occurrence_offset.y,
+                        local.z + occurrence_offset.z});
+    }
+  };
+
+  const quader::QuaderApiVoidResult inverted =
+      editor.selection().select_inverse();
+  ASSERT_TRUE(inverted.ok()) << inverted.error_message();
+  ASSERT_TRUE(inverted.changed());
+  EXPECT_EQ(editor.selection().summary().selected_vertex_count, 12U);
+  EXPECT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{first_member->entity,
+                                           second_member->entity}));
+  const quader::QuaderOverlayFrame inverted_overlay =
+      editor.render().selection_overlay_frame();
+  constexpr std::array kFirstInverse{2, 4, 5, 6, 7, 8};
+  constexpr std::array kSecondInverse{1, 3, 5, 6, 7, 8};
+  expect_projected_selection(inverted_overlay, first_member->modeling_object_id,
+                             -3.0F, kFirstInverse);
+  expect_projected_selection(inverted_overlay,
+                             second_member->modeling_object_id, 3.0F,
+                             kSecondInverse);
+
+  const quader::QuaderApiVoidResult restored =
+      editor.selection().select_inverse();
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  ASSERT_TRUE(restored.changed());
+  EXPECT_EQ(editor.selection().summary().selected_vertex_count, 4U);
+  const quader::QuaderOverlayFrame restored_overlay =
+      editor.render().selection_overlay_frame();
+  constexpr std::array kFirstOriginal{1, 3};
+  constexpr std::array kSecondOriginal{2, 4};
+  expect_projected_selection(restored_overlay, first_member->modeling_object_id,
+                             -3.0F, kFirstOriginal);
+  expect_projected_selection(restored_overlay,
+                             second_member->modeling_object_id, 3.0F,
+                             kSecondOriginal);
 }
 
 TEST(EditorApiTests,
@@ -15372,6 +15942,18 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.selection().select_all().ok());
   EXPECT_EQ(editor.selection().summary().selected_face_count, 6u);
   ASSERT_TRUE(editor.selection().select_inverse().ok());
+  EXPECT_EQ(editor.selection().summary().selected_face_count, 0u);
+  const quader::QuaderApiVoidResult inverted_empty_scope =
+      editor.selection().select_inverse();
+  ASSERT_TRUE(inverted_empty_scope.ok())
+      << inverted_empty_scope.error_message();
+  EXPECT_TRUE(inverted_empty_scope.changed());
+  EXPECT_EQ(editor.selection().summary().selected_face_count, 6u);
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{member.entity});
+  ASSERT_TRUE(editor.query().entity(context.entity).has_value());
+  EXPECT_FALSE(editor.query().entity(context.entity)->selected);
+  ASSERT_TRUE(editor.selection().clear().ok());
   EXPECT_EQ(editor.selection().summary().selected_face_count, 0u);
 
   ASSERT_TRUE(editor.selection().hover_face(member, 1).ok());

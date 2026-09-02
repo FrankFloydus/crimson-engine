@@ -577,6 +577,7 @@ TransformGizmoInteraction::release_pending_click() {
       result.selection_click_requested = true;
       result.selection_click_local = pending_drag_->click_local;
       result.selection_click_count = pending_drag_->click_count;
+      result.selection_click_modifiers = pending_drag_->pointer.modifiers;
       result.selection_cycle_depth = pending_drag_->cycle_depth;
       result.selection_cycle_depth_modifiers =
           pending_drag_->cycle_depth_modifiers;

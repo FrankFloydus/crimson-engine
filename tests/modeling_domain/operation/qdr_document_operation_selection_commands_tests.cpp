@@ -181,7 +181,7 @@ TEST(QdrDocumentOperationSelectionCommandsTests,
 }
 
 TEST(QdrDocumentOperationSelectionCommandsTests,
-     LoopsUnionAllOriginalSeedsAndRingsStopAtNonQuads)
+     IsolatedOuterCornerLoopsStayAtTheirSeedsAndRingsStopAtNonQuads)
 {
     Document loops_document;
     const AddedFace first = add_quad(loops_document, 0.0F);
@@ -191,8 +191,8 @@ TEST(QdrDocumentOperationSelectionCommandsTests,
         make_edge(second.vertices[0], second.vertices[1]);
     Selection loops = edge_selection({ first_seed, second_seed }, first_seed);
 
-    EXPECT_TRUE(add_selected_edge_loops(loops_document, loops));
-    EXPECT_EQ(loops.edges.size(), 8U);
+    EXPECT_FALSE(add_selected_edge_loops(loops_document, loops));
+    EXPECT_EQ(loops.edges.size(), 2U);
     EXPECT_EQ(loops.active_edge, first_seed);
     EXPECT_FALSE(add_selected_edge_loops(loops_document, loops));
 

@@ -393,6 +393,13 @@ enum class ModelingSelectionEdit {
   Toggle,
 };
 
+/** Selects a topology expansion for an edge click. */
+enum class ModelingEdgeSelectionTraversal {
+  None,
+  Loop,
+  Ring,
+};
+
 /**
  * Enumerates ModelingBoxSelectionRule values used by the modeling layer.
  */
@@ -419,6 +426,19 @@ struct ModelingComponentSelectionRequest {
   int active_face = -1;
 };
 
+/**
+ * Identifies the pickable component universe that may be toggled by one
+ * selection inversion. Components outside this universe retain their current
+ * selection state.
+ */
+struct ModelingComponentSelectionUniverse {
+  int modeling_object_id = -1;
+  ModelingSelectionMode mode = ModelingSelectionMode::Vertex;
+  std::vector<int> vertices;
+  std::vector<std::pair<int, int>> edges;
+  std::vector<int> faces;
+};
+
 /** Applies full click policy to one component hit resolved by another owner. */
 struct ModelingResolvedComponentSelectionRequest {
   int modeling_object_id = -1;
@@ -429,7 +449,8 @@ struct ModelingResolvedComponentSelectionRequest {
   int face = -1;
   ModelingSelectionEdit edit = ModelingSelectionEdit::Replace;
   int click_count = 1;
-  bool edge_loop_select = false;
+  ModelingEdgeSelectionTraversal edge_traversal =
+      ModelingEdgeSelectionTraversal::None;
   bool preserve_selection_on_selected_hit = false;
   bool preserve_existing_component_selection_on_hit = false;
 };
@@ -468,6 +489,16 @@ struct ModelingPickSelectRequest {
   bool select_backfaces = true;
   bool cycle_depth = false;
   double cycle_origin_tolerance = 0.0;
+
+  [[nodiscard]] ModelingEdgeSelectionTraversal
+  edge_traversal_requested(ModelingSelectionMode mode) const noexcept {
+    if (mode != ModelingSelectionMode::Edge || !alt_pressed) {
+      return ModelingEdgeSelectionTraversal::None;
+    }
+    return control_pressed || command_pressed
+               ? ModelingEdgeSelectionTraversal::Ring
+               : ModelingEdgeSelectionTraversal::Loop;
+  }
 
   [[nodiscard]] bool depth_cycle_requested(ModelingSelectionMode mode) const noexcept {
     return mode == ModelingSelectionMode::Object && cycle_depth &&

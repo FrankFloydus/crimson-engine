@@ -24,6 +24,7 @@
 #include <numeric>
 #include <optional>
 #include <ranges>
+#include <set>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -205,6 +206,29 @@ selection_kind_from_native(quader_poly::SelectionMode mode) {
     return SelectionKind::Face;
   }
   return SelectionKind::Vertex;
+}
+
+[[nodiscard]] quader_poly::SelectionMode native_selection_mode(
+    SelectionMode mode) {
+  switch (mode) {
+  case SelectionMode::Vertex:
+    return quader_poly::SelectionMode::Vertex;
+  case SelectionMode::Edge:
+    return quader_poly::SelectionMode::Edge;
+  case SelectionMode::Face:
+    return quader_poly::SelectionMode::Face;
+  }
+  return quader_poly::SelectionMode::Vertex;
+}
+
+[[nodiscard]] bool valid_selection_mode(SelectionMode mode) {
+  switch (mode) {
+  case SelectionMode::Vertex:
+  case SelectionMode::Edge:
+  case SelectionMode::Face:
+    return true;
+  }
+  return false;
 }
 
 [[nodiscard]] bool
@@ -602,6 +626,131 @@ void update_active_selection(
 
 [[nodiscard]] quader_poly::Edge native_edge(EdgeKey edge) {
   return quader_poly::make_edge(edge.a.index, edge.b.index);
+}
+
+[[nodiscard]] Result<quader_poly::ComponentSelectionUniverse>
+native_selection_universe(
+    const PolygonDocumentImpl &impl,
+    const PolygonSelectionUniverse &eligible) {
+  if (!valid_selection_mode(eligible.mode)) {
+    return Result<quader_poly::ComponentSelectionUniverse>::failure(
+        make_error(ErrorCode::InvalidArgument,
+                   "Selection inversion requires a valid component mode."));
+  }
+  const bool payload_matches_mode =
+      (eligible.mode == SelectionMode::Vertex && eligible.edges.empty() &&
+       eligible.faces.empty()) ||
+      (eligible.mode == SelectionMode::Edge && eligible.vertices.empty() &&
+       eligible.faces.empty()) ||
+      (eligible.mode == SelectionMode::Face && eligible.vertices.empty() &&
+       eligible.edges.empty());
+  if (!payload_matches_mode) {
+    return Result<quader_poly::ComponentSelectionUniverse>::failure(
+        make_error(ErrorCode::InvalidArgument,
+                   "Selection inversion universe payload does not match its mode."));
+  }
+
+  quader_poly::ComponentSelectionUniverse universe;
+  universe.mode = native_selection_mode(eligible.mode);
+  if (eligible.mode == SelectionMode::Vertex) {
+    std::unordered_set<quader_poly::ElementId> live_ids;
+    const bool use_live_index = selection_validation_uses_index(
+        eligible.vertices.size(), impl.document->vertices.size());
+    if (use_live_index) {
+      live_ids.reserve(impl.document->vertices.size());
+      for (const quader_poly::Vertex &vertex : impl.document->vertices) {
+        live_ids.emplace(vertex.id);
+      }
+    }
+    universe.vertices.reserve(eligible.vertices.size());
+    std::set<VertexId> unique_ids;
+    for (const VertexId id : eligible.vertices) {
+      if (!unique_ids.insert(id).second) {
+        return Result<quader_poly::ComponentSelectionUniverse>::failure(
+            make_error(ErrorCode::InvalidArgument,
+                       "Selection inversion universe contains a duplicate vertex."));
+      }
+      Result<OperationResult> validation = validate_vertex_id(
+          *impl.document, id, use_live_index ? &live_ids : nullptr);
+      if (!validation.ok()) {
+        return Result<quader_poly::ComponentSelectionUniverse>::failure(
+            validation.error());
+      }
+      universe.vertices.push_back(id.index);
+    }
+    return Result<quader_poly::ComponentSelectionUniverse>::success(
+        std::move(universe));
+  }
+  if (eligible.mode == SelectionMode::Edge) {
+    const std::vector<quader_poly::Edge> live_edges =
+        quader_poly::document_edges(*impl.document);
+    std::unordered_set<quader_poly::ElementId> live_vertex_ids;
+    const bool use_live_index = selection_validation_uses_index(
+        eligible.edges.size(), impl.document->vertices.size());
+    if (use_live_index) {
+      live_vertex_ids.reserve(impl.document->vertices.size());
+      for (const quader_poly::Vertex &vertex : impl.document->vertices) {
+        live_vertex_ids.emplace(vertex.id);
+      }
+    }
+    universe.edges.reserve(eligible.edges.size());
+    std::set<EdgeKey> unique_edges;
+    for (const EdgeKey edge : eligible.edges) {
+      if (edge != make_edge_key(edge.a, edge.b)) {
+        return Result<quader_poly::ComponentSelectionUniverse>::failure(
+            make_error(ErrorCode::InvalidArgument,
+                       "Selection inversion requires canonical edge keys."));
+      }
+      if (!unique_edges.insert(edge).second) {
+        return Result<quader_poly::ComponentSelectionUniverse>::failure(
+            make_error(ErrorCode::InvalidArgument,
+                       "Selection inversion universe contains a duplicate edge."));
+      }
+      Result<OperationResult> validation = validate_edge_key(
+          *impl.document, edge, live_edges,
+          use_live_index ? &live_vertex_ids : nullptr);
+      if (!validation.ok()) {
+        return Result<quader_poly::ComponentSelectionUniverse>::failure(
+            validation.error());
+      }
+      universe.edges.push_back(native_edge(edge));
+    }
+    return Result<quader_poly::ComponentSelectionUniverse>::success(
+        std::move(universe));
+  }
+
+  if (eligible.mode != SelectionMode::Face) {
+    return Result<quader_poly::ComponentSelectionUniverse>::failure(
+        make_error(ErrorCode::InvalidArgument,
+                   "Selection inversion requires a valid component mode."));
+  }
+  std::unordered_set<quader_poly::ElementId> live_ids;
+  const bool use_live_index = selection_validation_uses_index(
+      eligible.faces.size(), impl.document->faces.size());
+  if (use_live_index) {
+    live_ids.reserve(impl.document->faces.size());
+    for (const quader_poly::Face &face : impl.document->faces) {
+      live_ids.emplace(face.id);
+    }
+  }
+  universe.faces.reserve(eligible.faces.size());
+  std::set<FaceId> unique_ids;
+  for (const FaceId id : eligible.faces) {
+    if (!unique_ids.insert(id).second) {
+      return Result<quader_poly::ComponentSelectionUniverse>::failure(
+          make_error(ErrorCode::InvalidArgument,
+                     "Selection inversion universe contains a duplicate face."));
+    }
+    Result<OperationResult> validation = validate_face_id(
+        *impl.document, id, use_live_index ? &live_ids : nullptr);
+    if (!validation.ok()) {
+      return Result<quader_poly::ComponentSelectionUniverse>::failure(
+          validation.error());
+    }
+    universe.faces.push_back(id.index);
+  }
+  return Result<quader_poly::ComponentSelectionUniverse>::success(
+      std::move(universe));
 }
 
 [[nodiscard]] quader_poly::KnifePointTarget
@@ -1965,6 +2114,35 @@ Result<OperationResult> PolygonDocument::select_all_edges() {
 Result<OperationResult> PolygonDocument::select_all_faces() {
   const std::vector<FaceId> ids = face_ids();
   return select_faces(ids, SelectionEdit::Replace);
+}
+
+Result<OperationResult>
+PolygonDocument::invert_selection(const PolygonSelectionUniverse &eligible) {
+  if (!valid_selection_mode(eligible.mode)) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Selection inversion requires a valid component mode."));
+  }
+  const quader_poly::SelectionMode requested_mode =
+      native_selection_mode(eligible.mode);
+  if (impl_->selection->mode != requested_mode) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Selection inversion universe mode must match the current selection mode."));
+  }
+  Result<quader_poly::ComponentSelectionUniverse> native_universe =
+      native_selection_universe(*impl_, eligible);
+  if (!native_universe.ok()) {
+    return Result<OperationResult>::failure(native_universe.error());
+  }
+
+  quader_poly::Selection selection = *impl_->selection;
+  const bool changed = quader_poly::invert_component_selection(
+      *impl_->document, selection, native_universe.value());
+  commit_selection(*impl_, std::move(selection), changed);
+  return operation_success(
+      selection_only_result(changed, changed ? "Selection inverted."
+                                             : "Selection unchanged."));
 }
 
 Result<OperationResult>

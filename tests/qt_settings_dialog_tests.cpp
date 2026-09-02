@@ -10,6 +10,8 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/session/project_session.hpp"
+#include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "ui/inspector_panel.hpp"
 #include "ui/qt_color_swatch_button.hpp"
@@ -48,6 +50,7 @@
 #include <QPushButton>
 #include <QStringList>
 #include <QTableView>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QTreeView>
 #include <QWheelEvent>
@@ -2002,6 +2005,107 @@ TEST(InspectorPanelTests,
 }
 
 TEST(InspectorPanelTests,
+     RuntimeAbandonDisarmsTransformPreviewBeforeSceneOwnerRelease) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-runtime-abandon-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  InspectorPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+
+  auto expired_session = std::make_unique<SceneSession>();
+  auto expired_editor = std::make_unique<QuaderEditorApi>(
+      QuaderApiSessionInternalAccess::from_scene_session(*expired_session));
+  const QuaderApiResult<QuaderEntityRef> expired_entity =
+      expired_editor->scene().create_entity({
+          .name = "Expiring Inspector Owner",
+          .kind = QuaderEntityKind::Empty,
+      });
+  ASSERT_TRUE(expired_entity.ok()) << expired_entity.error_message();
+  ASSERT_TRUE(
+      expired_editor->scene().select(expired_entity.value().id).ok());
+  ASSERT_NE(expired_session->history().undo_label(), nullptr);
+  const std::string undo_label_before_preview =
+      *expired_session->history().undo_label();
+  {
+    UIInspectorPreviewContext preview{
+        .document = expired_session->scene(),
+        .assets = expired_session->assets(),
+    };
+    UIContext context{
+        .intent = {.editor = *expired_editor},
+        .scene = {.document = expired_session->scene(),
+                  .assets = expired_session->assets(),
+                  .modeling = expired_session->modeling(),
+                  .selection = expired_session->selection()},
+        .inspector_preview = &preview,
+        .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+        .localization = localization,
+    };
+    panel.refresh(context);
+  }
+
+  auto *position_x = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("inspector.transform.position.x"));
+  ASSERT_NE(position_x, nullptr);
+  position_x->setValue(4.25);
+  const TransformComponent *previewed =
+      expired_session->scene().transform(expired_entity.value().id);
+  ASSERT_NE(previewed, nullptr);
+  EXPECT_FLOAT_EQ(previewed->position.x, 4.25f);
+  ASSERT_NE(expired_session->history().undo_label(), nullptr);
+  EXPECT_EQ(*expired_session->history().undo_label(),
+            undo_label_before_preview);
+
+  // The host is allowed to release the old SceneSession before its binding
+  // callback. Abandonment must therefore be pointer-free and leave no preview
+  // destructor that tries to restore through the expired document.
+  panel.abandon_runtime();
+  expired_editor.reset();
+  expired_session.reset();
+
+  SceneSession replacement_session;
+  QuaderEditorApi replacement_editor(
+      QuaderApiSessionInternalAccess::from_scene_session(replacement_session));
+  const QuaderApiResult<QuaderEntityRef> replacement_entity =
+      replacement_editor.scene().create_entity({
+          .name = "Replacement Inspector Owner",
+          .kind = QuaderEntityKind::Empty,
+      });
+  ASSERT_TRUE(replacement_entity.ok()) << replacement_entity.error_message();
+  ASSERT_TRUE(
+      replacement_editor.scene().select(replacement_entity.value().id).ok());
+  UIInspectorPreviewContext replacement_preview{
+      .document = replacement_session.scene(),
+      .assets = replacement_session.assets(),
+  };
+  UIContext replacement_context{
+      .intent = {.editor = replacement_editor},
+      .scene = {.document = replacement_session.scene(),
+                .assets = replacement_session.assets(),
+                .modeling = replacement_session.modeling(),
+                .selection = replacement_session.selection()},
+      .inspector_preview = &replacement_preview,
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+  panel.refresh(replacement_context);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+  position_x = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("inspector.transform.position.x"));
+  ASSERT_NE(position_x, nullptr);
+  EXPECT_DOUBLE_EQ(position_x->value(), 0.0);
+  panel.abandon_runtime();
+}
+
+TEST(InspectorPanelTests,
      ColorCancelDoesNotMutateDocumentHistoryOrDirtyState) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -2697,6 +2801,83 @@ TEST(QtMainMenuTests, RebuildAndDestructionReleaseOwnedHierarchy) {
   EXPECT_TRUE(retained_action.isNull());
   EXPECT_TRUE(menu_bar.actions().isEmpty());
   EXPECT_TRUE(menu_bar.findChildren<QMenu *>().isEmpty());
+}
+
+TEST(QtMainMenuTests,
+     CloseCommandsRebindRuntimeWithoutDestroyingTheirDispatchOwner) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-main-menu-rebind-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const std::filesystem::path project_root =
+      std::filesystem::path(temporary.path().toStdWString()) / "Project";
+  std::error_code directory_error;
+  ASSERT_TRUE(std::filesystem::create_directory(project_root, directory_error))
+      << directory_error.message();
+
+  ProjectSession project;
+  const ProjectSessionResult created = project.create(project_root);
+  ASSERT_TRUE(created.ok) << created.message;
+  const ProjectSessionResult second = project.new_scene();
+  ASSERT_TRUE(second.ok) << second.message;
+  ASSERT_EQ(project.open_scenes().size(), 2u);
+  ASSERT_NE(project.active_scene(), nullptr);
+
+  QuaderEditorApi editor(project);
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  QMenuBar menu_bar;
+  QtMainMenu menu;
+  menu.initialize(menu_bar,
+                  QtMainMenuContext{
+                      .editor = editor,
+                      .modeling = project.active_scene()->session->modeling(),
+                      .viewport_settings = viewport_settings,
+                      .localization = localization,
+                  });
+
+  QPointer<QMenu> file_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_file"));
+  QPointer<QAction> close_scene = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_scene_document_close"));
+  QPointer<QAction> close_project =
+      menu_bar.findChild<QAction *>(QStringLiteral("command_project_close"));
+  ASSERT_FALSE(file_menu.isNull());
+  ASSERT_FALSE(close_scene.isNull());
+  ASSERT_FALSE(close_project.isNull());
+
+  int synchronous_rebinds = 0;
+  QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, [&](SceneSession &replacement) {
+        ++synchronous_rebinds;
+        menu.rebind_runtime(editor, replacement.modeling());
+        EXPECT_FALSE(file_menu.isNull());
+        EXPECT_FALSE(close_scene.isNull());
+        EXPECT_FALSE(close_project.isNull());
+      });
+
+  QMenu *const retained_file_menu = file_menu.data();
+  QAction *const retained_scene_action = close_scene.data();
+  QAction *const retained_project_action = close_project.data();
+  close_scene->trigger();
+  EXPECT_EQ(synchronous_rebinds, 1);
+  EXPECT_EQ(project.open_scenes().size(), 1u);
+  EXPECT_EQ(file_menu.data(), retained_file_menu);
+  EXPECT_EQ(close_scene.data(), retained_scene_action);
+  EXPECT_EQ(close_project.data(), retained_project_action);
+
+  close_project->trigger();
+  EXPECT_EQ(synchronous_rebinds, 2);
+  EXPECT_FALSE(project.has_project());
+  EXPECT_EQ(file_menu.data(), retained_file_menu);
+  EXPECT_EQ(close_scene.data(), retained_scene_action);
+  EXPECT_EQ(close_project.data(), retained_project_action);
+  menu.refresh();
 }
 
 TEST(QtMainWindowTests, MenuExitAndNativeCloseShareOneRequestBoundary) {

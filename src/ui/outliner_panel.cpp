@@ -158,13 +158,23 @@ bool select_only(QuaderEditorApi &editor, const std::vector<EntityId> &entities,
   return result.ok && result.changed;
 }
 
+struct OutlinerRuntimeBindingToken final {
+  const std::uint64_t *generation = nullptr;
+  std::uint64_t expected = 0;
+
+  [[nodiscard]] bool current() const noexcept {
+    return generation != nullptr && *generation == expected;
+  }
+};
+
 bool select_current_scene_selection(QuaderEditorApi &editor,
                                     const SceneDocument &document) {
   const std::vector<EntityId> selected = document.selected_entities();
   return select_only(editor, selected, document.primary_selection());
 }
 
-void group_selection(QuaderEditorApi &editor, const SceneDocument &document) {
+void group_selection(QuaderEditorApi &editor, const SceneDocument &document,
+                     OutlinerRuntimeBindingToken binding) {
   const std::vector<EntityId> roots =
       document_command_selected_root_entities(document);
   if (roots.empty()) {
@@ -173,13 +183,13 @@ void group_selection(QuaderEditorApi &editor, const SceneDocument &document) {
 
   const QuaderApiVoidResult result =
       editor.commands().execute(quader_command::kGroupSelection);
-  if (result.ok && result.changed) {
+  if (result.ok && result.changed && binding.current()) {
     (void)select_current_scene_selection(editor, document);
   }
 }
 
 void ungroup_entity(QuaderEditorApi &editor, const SceneDocument &document,
-                    EntityId group) {
+                    EntityId group, OutlinerRuntimeBindingToken binding) {
   if (!document.exists(group) || document.kind(group) != EntityKind::Empty ||
       !document.has_children(group)) {
     return;
@@ -187,15 +197,19 @@ void ungroup_entity(QuaderEditorApi &editor, const SceneDocument &document,
 
   if (!contains_entity(document.selected_entities(), group)) {
     (void)select_only(editor, {group}, group);
+    if (!binding.current()) {
+      return;
+    }
   }
   const QuaderApiVoidResult result =
       editor.commands().execute(quader_command::kUngroupSelection);
-  if (result.ok && result.changed) {
+  if (result.ok && result.changed && binding.current()) {
     (void)select_current_scene_selection(editor, document);
   }
 }
 
-void delete_selection(QuaderEditorApi &editor, const SceneDocument &document) {
+void delete_selection(QuaderEditorApi &editor, const SceneDocument &document,
+                      OutlinerRuntimeBindingToken binding) {
   const std::vector<EntityId> roots =
       document_command_selected_root_entities(document);
   if (roots.empty()) {
@@ -206,6 +220,9 @@ void delete_selection(QuaderEditorApi &editor, const SceneDocument &document) {
   if (previous_mode != QuaderSelectionMode::Object &&
       previous_mode != QuaderSelectionMode::Group) {
     (void)editor.selection().set_mode(QuaderSelectionMode::Object);
+    if (!binding.current()) {
+      return;
+    }
   }
   (void)editor.commands().execute(quader_command::kDeleteSelection);
 }
@@ -258,6 +275,11 @@ public:
 
   [[nodiscard]] bool selection_gesture_active() const noexcept {
     return selection_gesture_active_;
+  }
+
+  void abandon_selection_gesture() noexcept {
+    selection_gesture_active_ = false;
+    resetting_selection_anchor_ = false;
   }
 
   void reset_selection_anchor(const QModelIndex &index) {
@@ -463,7 +485,31 @@ struct OutlinerPanel::Impl {
                      });
   }
 
+  void abandon_runtime() noexcept {
+    ++runtime_binding_generation_;
+    editor_ = nullptr;
+    document_ = nullptr;
+    localization_ = nullptr;
+    instance_scope_definition_ = kInvalidEntityId;
+    cache_ = {};
+    item_by_entity_.clear();
+    collapsed_entities_.clear();
+    synced_selection_revision_ = 0;
+    syncing_expansion_ = false;
+    syncing_model_ = false;
+    syncing_selection_ = false;
+    pending_widget_selection_sync_ = false;
+    widget_selection_sync_deferred_ = false;
+    selection_revision_valid_ = false;
+    selection_sync_after_model_rebuild_ = true;
+    tree_->abandon_selection_gesture();
+  }
+
   void refresh(UIContext &context) {
+    if ((editor_ != nullptr && editor_ != &context.intent.editor) ||
+        (document_ != nullptr && document_ != &context.scene.document)) {
+      abandon_runtime();
+    }
     editor_ = &context.intent.editor;
     document_ = &context.scene.document;
     const bool localization_changed =
@@ -823,9 +869,13 @@ private:
       return;
     }
     pending_widget_selection_sync_ = true;
+    const std::uint64_t scheduled_generation = runtime_binding_generation_;
     QMetaObject::invokeMethod(
         &panel_,
-        [this]() {
+        [this, scheduled_generation]() {
+          if (runtime_binding_generation_ != scheduled_generation) {
+            return;
+          }
           pending_widget_selection_sync_ = false;
           handle_widget_selection_changed();
         },
@@ -859,10 +909,14 @@ private:
                    : (selected.empty() ? kInvalidEntityId : selected.back());
     }
 
+    const std::uint64_t mutation_generation = runtime_binding_generation_;
     const QuaderApiVoidResult result =
         editor_->selection().select_objects_for_inspection(
             std::span<const EntityId>(selected.data(), selected.size()),
             active);
+    if (runtime_binding_generation_ != mutation_generation) {
+      return;
+    }
     if (!result.ok) {
       selection_sync_after_model_rebuild_ = true;
       sync_selection();
@@ -884,6 +938,7 @@ private:
       return;
     }
 
+    const std::uint64_t mutation_generation = runtime_binding_generation_;
     QuaderApiVoidResult result;
     if (column == column_index(OutlinerColumn::Visible)) {
       result = editor_->scene().set_visible(entity, !entity_record->visible);
@@ -893,12 +948,20 @@ private:
       return;
     }
 
+    if (runtime_binding_generation_ != mutation_generation) {
+      return;
+    }
+
     if (!result.ok || !result.changed) {
       cache_.valid = false;
     }
+    const std::uint64_t scheduled_generation = runtime_binding_generation_;
     QMetaObject::invokeMethod(
         &panel_,
-        [this]() {
+        [this, scheduled_generation]() {
+          if (runtime_binding_generation_ != scheduled_generation) {
+            return;
+          }
           refresh_model_if_needed();
           sync_selection();
         },
@@ -931,8 +994,12 @@ private:
       return;
     }
 
+    const std::uint64_t mutation_generation = runtime_binding_generation_;
     const QuaderApiVoidResult result =
         editor_->scene().rename(entity, next_name);
+    if (runtime_binding_generation_ != mutation_generation) {
+      return;
+    }
     if (!result.ok) {
       const QSignalBlocker model_blocker(model_);
       item->setText(qt_text(entity_record->name));
@@ -968,7 +1035,12 @@ private:
       QDR_PROFILE_SCOPE("Qt outliner context menu query state");
       refresh_model_if_needed();
       if (!contains_entity(document_->selected_entities(), entity)) {
+        const std::uint64_t selection_generation =
+            runtime_binding_generation_;
         (void)select_only(*editor_, {entity}, entity);
+        if (runtime_binding_generation_ != selection_generation) {
+          return;
+        }
       }
       sync_selection();
     }
@@ -1021,25 +1093,37 @@ private:
       ungroup_action->setEnabled(can_ungroup);
     }
 
+    const std::uint64_t menu_generation = runtime_binding_generation_;
     QAction *chosen = nullptr;
     {
       QDR_PROFILE_SCOPE("Qt outliner context menu exec");
       chosen = menu.exec(global_position);
     }
+    if (runtime_binding_generation_ != menu_generation) {
+      return;
+    }
+    const OutlinerRuntimeBindingToken binding{
+        .generation = &runtime_binding_generation_,
+        .expected = menu_generation,
+    };
     {
       QDR_PROFILE_SCOPE("Qt outliner context menu dispatch action");
       if (chosen == rename_action) {
         begin_rename(entity);
         return;
       } else if (chosen == delete_action) {
-        delete_selection(*editor_, *document_);
+        delete_selection(*editor_, *document_, binding);
       } else if (chosen == duplicate_action) {
         duplicate_selection(*editor_);
       } else if (chosen == group_action) {
-        group_selection(*editor_, *document_);
+        group_selection(*editor_, *document_, binding);
       } else if (chosen == ungroup_action) {
-        ungroup_entity(*editor_, *document_, entity);
+        ungroup_entity(*editor_, *document_, entity, binding);
       }
+    }
+
+    if (!binding.current()) {
+      return;
     }
 
     {
@@ -1062,6 +1146,7 @@ private:
   std::unordered_set<EntityId> collapsed_entities_;
   EntityId instance_scope_definition_ = kInvalidEntityId;
   std::uint64_t synced_selection_revision_ = 0;
+  std::uint64_t runtime_binding_generation_ = 0;
   bool syncing_expansion_ = false;
   bool syncing_model_ = false;
   bool syncing_selection_ = false;
@@ -1075,6 +1160,8 @@ OutlinerPanel::OutlinerPanel(QWidget *parent)
     : QWidget(parent), impl_(std::make_unique<Impl>(*this)) {}
 
 OutlinerPanel::~OutlinerPanel() = default;
+
+void OutlinerPanel::abandon_runtime() noexcept { impl_->abandon_runtime(); }
 
 void OutlinerPanel::refresh(UIContext &context) { impl_->refresh(context); }
 

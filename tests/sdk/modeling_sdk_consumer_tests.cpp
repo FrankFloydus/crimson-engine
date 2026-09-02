@@ -1626,6 +1626,471 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
+     SessionSelectionInvertTogglesOnlyEligibleUniverseAtomically) {
+  Result<PolygonDocument> document_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(document_result.ok()) << document_result.error_message();
+  const std::vector<EdgeKey> edges = document_result.value().edge_ids();
+  ASSERT_GE(edges.size(), 4U);
+
+  ModelingSession session;
+  Result<ObjectId> object =
+      session.add_document(std::move(document_result).value(), "Box");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+
+  const PolygonSelectionSnapshot initial{
+      .kind = SelectionKind::Edge,
+      .edges = {edges[0], edges[1]},
+      .has_active = true,
+      .active_edge = edges[0],
+  };
+  const std::array<SessionComponentSelectionUpdate, 1> seed_updates{{
+      {.object = object.value(), .selection = initial},
+  }};
+  const std::array<ObjectId, 1> selected_objects{object.value()};
+  ASSERT_TRUE(session
+                  .commit_component_selection_batch(
+                      seed_updates, selected_objects, object.value())
+                  .ok());
+
+  const SessionComponentSelectionUniverse target{
+      .object = object.value(),
+      .eligible =
+          {
+              .mode = SelectionMode::Edge,
+              .edges = {edges[1], edges[2], edges[3]},
+          },
+  };
+  const std::array targets{target};
+  const std::size_t undo_depth = session.undo_depth();
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+
+  Result<OperationResult> inverted =
+      session.invert_component_selection_batch(targets);
+  ASSERT_TRUE(inverted.ok()) << inverted.error_message();
+  EXPECT_TRUE(inverted.value().success) << inverted.value().message;
+  EXPECT_TRUE(inverted.value().changed);
+  EXPECT_TRUE(inverted.value().dirty.selection);
+  EXPECT_TRUE(inverted.value().dirty.overlays);
+  EXPECT_EQ(session.undo_depth(), undo_depth + 1U);
+  EXPECT_EQ(session.content_revision(), content_revision + 1U);
+  EXPECT_EQ(session.selection_revision(), selection_revision + 1U);
+  EXPECT_EQ(session.active_object(), object.value());
+
+  Result<PolygonDocument> after_first = session.document_copy(object.value());
+  ASSERT_TRUE(after_first.ok()) << after_first.error_message();
+  const PolygonSelectionSnapshot first_selection = after_first.value().selection();
+  EXPECT_EQ(first_selection.kind, SelectionKind::Edge);
+  EXPECT_EQ(first_selection.edges,
+            (std::vector<EdgeKey>{edges[0], edges[2], edges[3]}));
+  EXPECT_TRUE(first_selection.has_active);
+  EXPECT_EQ(first_selection.active_edge, edges[0]);
+
+  ASSERT_TRUE(session.undo().ok());
+  Result<PolygonDocument> after_undo = session.document_copy(object.value());
+  ASSERT_TRUE(after_undo.ok()) << after_undo.error_message();
+  EXPECT_EQ(after_undo.value().selection().edges, initial.edges);
+  EXPECT_EQ(after_undo.value().selection().active_edge, initial.active_edge);
+  ASSERT_TRUE(session.redo().ok());
+  Result<PolygonDocument> after_redo = session.document_copy(object.value());
+  ASSERT_TRUE(after_redo.ok()) << after_redo.error_message();
+  EXPECT_EQ(after_redo.value().selection().edges, first_selection.edges);
+  EXPECT_EQ(after_redo.value().selection().active_edge,
+            first_selection.active_edge);
+
+  Result<OperationResult> restored =
+      session.invert_component_selection_batch(targets);
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  Result<PolygonDocument> after_second = session.document_copy(object.value());
+  ASSERT_TRUE(after_second.ok()) << after_second.error_message();
+  EXPECT_EQ(after_second.value().selection().edges, initial.edges);
+  EXPECT_TRUE(after_second.value().selection().has_active);
+  EXPECT_EQ(after_second.value().selection().active_edge, initial.active_edge);
+
+  const SessionComponentSelectionUniverse current_only_target{
+      .object = object.value(),
+      .eligible = {.mode = SelectionMode::Edge, .edges = initial.edges},
+  };
+  const std::array current_only_targets{current_only_target};
+  Result<OperationResult> emptied =
+      session.invert_component_selection_batch(current_only_targets);
+  ASSERT_TRUE(emptied.ok()) << emptied.error_message();
+  EXPECT_TRUE(emptied.value().changed);
+  EXPECT_TRUE(session.document_copy(object.value()).value().selection().edges.empty());
+  const auto summaries_after_empty = session.objects();
+  ASSERT_EQ(summaries_after_empty.size(), 1U);
+  EXPECT_TRUE(summaries_after_empty.front().selected);
+  EXPECT_EQ(session.active_object(), object.value());
+
+  Result<OperationResult> restored_from_empty =
+      session.invert_component_selection_batch(current_only_targets);
+  ASSERT_TRUE(restored_from_empty.ok()) << restored_from_empty.error_message();
+  EXPECT_EQ(session.document_copy(object.value()).value().selection().edges,
+            initial.edges);
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionSelectionInvertPublishesTwoObjectsAsOneHistoryTransition) {
+  Result<PolygonDocument> first_document = PolygonDocument::make_box({});
+  Result<PolygonDocument> second_document = PolygonDocument::make_box({});
+  ASSERT_TRUE(first_document.ok()) << first_document.error_message();
+  ASSERT_TRUE(second_document.ok()) << second_document.error_message();
+  const std::vector<EdgeKey> first_edges = first_document.value().edge_ids();
+  const std::vector<VertexId> second_vertices =
+      second_document.value().vertex_ids();
+  ASSERT_GE(first_edges.size(), 5U);
+  ASSERT_GE(second_vertices.size(), 5U);
+
+  const PolygonSelectionSnapshot first_initial{
+      .kind = SelectionKind::Edge,
+      .edges = {first_edges[1], first_edges[4]},
+      .has_active = true,
+      .active_edge = first_edges[4],
+  };
+  const PolygonSelectionSnapshot second_initial{
+      .kind = SelectionKind::Vertex,
+      .vertices = {second_vertices[0], second_vertices[3]},
+      .has_active = true,
+      .active_vertex = second_vertices[3],
+  };
+  std::vector<EdgeKey> expected_first_edges;
+  for (const EdgeKey edge : first_edges) {
+    if (std::ranges::find(first_initial.edges, edge) ==
+        first_initial.edges.end()) {
+      expected_first_edges.push_back(edge);
+    }
+  }
+  std::vector<VertexId> expected_second_vertices;
+  for (const VertexId vertex : second_vertices) {
+    if (std::ranges::find(second_initial.vertices, vertex) ==
+        second_initial.vertices.end()) {
+      expected_second_vertices.push_back(vertex);
+    }
+  }
+  ASSERT_FALSE(expected_first_edges.empty());
+  ASSERT_FALSE(expected_second_vertices.empty());
+
+  ModelingSession session;
+  Result<ObjectId> first =
+      session.add_document(std::move(first_document).value(), "First");
+  Result<ObjectId> second =
+      session.add_document(std::move(second_document).value(), "Second");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  const std::array<SessionComponentSelectionUpdate, 2> seed_updates{{
+      {.object = first.value(), .selection = first_initial},
+      {.object = second.value(), .selection = second_initial},
+  }};
+  const std::array<ObjectId, 2> selected_objects{first.value(), second.value()};
+  Result<OperationResult> seeded = session.commit_component_selection_batch(
+      seed_updates, selected_objects, second.value());
+  ASSERT_TRUE(seeded.ok()) << seeded.error_message();
+
+  const std::array<SessionComponentSelectionUniverse, 2> targets{{
+      {.object = first.value(),
+       .eligible = {.mode = SelectionMode::Edge, .edges = first_edges}},
+      {.object = second.value(),
+       .eligible = {.mode = SelectionMode::Vertex,
+                    .vertices = second_vertices}},
+  }};
+  const std::size_t undo_depth = session.undo_depth();
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+
+  Result<OperationResult> inverted =
+      session.invert_component_selection_batch(targets);
+  ASSERT_TRUE(inverted.ok()) << inverted.error_message();
+  EXPECT_TRUE(inverted.value().changed);
+  EXPECT_TRUE(inverted.value().dirty.selection);
+  EXPECT_TRUE(inverted.value().dirty.overlays);
+  EXPECT_EQ(session.undo_depth(), undo_depth + 1U);
+  EXPECT_EQ(session.content_revision(), content_revision + 1U);
+  EXPECT_EQ(session.selection_revision(), selection_revision + 1U);
+  EXPECT_EQ(session.active_object(), second.value());
+  expect_session_object_selected(session, first.value(), true);
+  expect_session_object_selected(session, second.value(), true);
+
+  Result<PolygonDocument> first_after = session.document_copy(first.value());
+  Result<PolygonDocument> second_after = session.document_copy(second.value());
+  ASSERT_TRUE(first_after.ok()) << first_after.error_message();
+  ASSERT_TRUE(second_after.ok()) << second_after.error_message();
+  const PolygonSelectionSnapshot first_inverted =
+      first_after.value().selection();
+  const PolygonSelectionSnapshot second_inverted =
+      second_after.value().selection();
+  EXPECT_EQ(first_inverted.kind, SelectionKind::Edge);
+  EXPECT_EQ(first_inverted.edges, expected_first_edges);
+  EXPECT_TRUE(first_inverted.has_active);
+  EXPECT_EQ(first_inverted.active_edge, expected_first_edges.back());
+  EXPECT_EQ(second_inverted.kind, SelectionKind::Vertex);
+  EXPECT_EQ(second_inverted.vertices, expected_second_vertices);
+  EXPECT_TRUE(second_inverted.has_active);
+  EXPECT_EQ(second_inverted.active_vertex, expected_second_vertices.back());
+
+  const SessionChangeSnapshot changes =
+      session.changes_since(content_revision);
+  ASSERT_EQ(changes.objects.size(), 2U);
+  for (const ObjectId object : selected_objects) {
+    const auto changed = std::ranges::find_if(
+        changes.objects, [&](const SessionObjectChange &candidate) {
+          return candidate.id == object;
+        });
+    ASSERT_NE(changed, changes.objects.end());
+    EXPECT_TRUE(changed->dirty.selection);
+    EXPECT_TRUE(changed->dirty.overlays);
+    EXPECT_FALSE(changed->dirty.topology);
+    EXPECT_FALSE(changed->dirty.geometry);
+  }
+
+  Result<OperationResult> undo = session.undo();
+  ASSERT_TRUE(undo.ok()) << undo.error_message();
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_TRUE(session.can_redo());
+  EXPECT_EQ(session.active_object(), second.value());
+  first_after = session.document_copy(first.value());
+  second_after = session.document_copy(second.value());
+  ASSERT_TRUE(first_after.ok()) << first_after.error_message();
+  ASSERT_TRUE(second_after.ok()) << second_after.error_message();
+  EXPECT_EQ(first_after.value().selection().edges, first_initial.edges);
+  EXPECT_EQ(first_after.value().selection().active_edge,
+            first_initial.active_edge);
+  EXPECT_EQ(second_after.value().selection().vertices,
+            second_initial.vertices);
+  EXPECT_EQ(second_after.value().selection().active_vertex,
+            second_initial.active_vertex);
+  expect_session_object_selected(session, first.value(), true);
+  expect_session_object_selected(session, second.value(), true);
+
+  Result<OperationResult> redo = session.redo();
+  ASSERT_TRUE(redo.ok()) << redo.error_message();
+  EXPECT_EQ(session.undo_depth(), undo_depth + 1U);
+  EXPECT_EQ(session.active_object(), second.value());
+  first_after = session.document_copy(first.value());
+  second_after = session.document_copy(second.value());
+  ASSERT_TRUE(first_after.ok()) << first_after.error_message();
+  ASSERT_TRUE(second_after.ok()) << second_after.error_message();
+  EXPECT_EQ(first_after.value().selection().edges, expected_first_edges);
+  EXPECT_EQ(first_after.value().selection().active_edge,
+            expected_first_edges.back());
+  EXPECT_EQ(second_after.value().selection().vertices,
+            expected_second_vertices);
+  EXPECT_EQ(second_after.value().selection().active_vertex,
+            expected_second_vertices.back());
+  expect_session_object_selected(session, first.value(), true);
+  expect_session_object_selected(session, second.value(), true);
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionSelectionInvertEmptyUniverseIsAnExactNoOp) {
+  Result<PolygonDocument> document = PolygonDocument::make_box({});
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  const std::vector<EdgeKey> edges = document.value().edge_ids();
+  ASSERT_FALSE(edges.empty());
+
+  ModelingSession session;
+  Result<ObjectId> object =
+      session.add_document(std::move(document).value(), "Hidden Box");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  const std::array<SessionComponentSelectionUpdate, 1> seed{{
+      {.object = object.value(),
+       .selection = {.kind = SelectionKind::Edge,
+                     .edges = {edges.front()},
+                     .has_active = true,
+                     .active_edge = edges.front()}},
+  }};
+  ASSERT_TRUE(session
+                  .commit_component_selection_batch(
+                      seed, std::span<const ObjectId>{}, ObjectId{})
+                  .ok());
+  ASSERT_FALSE(session.objects().front().selected);
+
+  const std::size_t undo_depth = session.undo_depth();
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+  const std::array<SessionComponentSelectionUniverse, 1> targets{{
+      {.object = object.value(),
+       .eligible = {.mode = SelectionMode::Edge}},
+  }};
+  Result<OperationResult> inverted =
+      session.invert_component_selection_batch(targets);
+  ASSERT_TRUE(inverted.ok()) << inverted.error_message();
+  EXPECT_FALSE(inverted.value().changed);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.selection_revision(), selection_revision);
+  EXPECT_FALSE(session.objects().front().selected);
+  EXPECT_FALSE(session.active_object().valid());
+  EXPECT_EQ(session.document_copy(object.value()).value().selection().edges,
+            seed.front().selection.edges);
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionSelectionInvertAdoptedEmptyUniverseDoesNotChangeModeOrSelection) {
+  Result<PolygonDocument> document = PolygonDocument::make_box({});
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  const std::vector<EdgeKey> edges = document.value().edge_ids();
+  ASSERT_FALSE(edges.empty());
+
+  ModelingSession session;
+  Result<ObjectId> object =
+      session.add_document(std::move(document).value(), "Hidden Box");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  const std::array<SessionComponentSelectionUpdate, 1> seed{{
+      {.object = object.value(),
+       .selection = {.kind = SelectionKind::Edge,
+                     .edges = {edges.front()},
+                     .has_active = true,
+                     .active_edge = edges.front()}},
+  }};
+  ASSERT_TRUE(session
+                  .commit_component_selection_batch(
+                      seed, std::span<const ObjectId>{}, ObjectId{})
+                  .ok());
+
+  const std::size_t undo_depth = session.undo_depth();
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+  const std::array<SessionComponentSelectionUniverse, 1> targets{{
+      {.object = object.value(),
+       .eligible = {.mode = SelectionMode::Vertex},
+       .adopt_eligible_mode = true},
+  }};
+  Result<OperationResult> inverted =
+      session.invert_component_selection_batch(targets);
+  ASSERT_TRUE(inverted.ok()) << inverted.error_message();
+  EXPECT_FALSE(inverted.value().changed);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.selection_revision(), selection_revision);
+
+  Result<PolygonDocument> after = session.document_copy(object.value());
+  ASSERT_TRUE(after.ok()) << after.error_message();
+  const PolygonSelectionSnapshot selection = after.value().selection();
+  EXPECT_EQ(selection.kind, SelectionKind::Edge);
+  EXPECT_EQ(selection.edges, seed.front().selection.edges);
+  EXPECT_TRUE(selection.has_active);
+  EXPECT_EQ(selection.active_edge, seed.front().selection.active_edge);
+  EXPECT_FALSE(session.objects().front().selected);
+  EXPECT_FALSE(session.active_object().valid());
+
+  const std::array<SessionComponentSelectionUniverse, 1> invalid_targets{{
+      {.object = object.value(),
+       .eligible = {
+           .mode = static_cast<SelectionMode>(
+               (std::numeric_limits<std::underlying_type_t<SelectionMode>>::max)()),
+       },
+       .adopt_eligible_mode = true},
+  }};
+  Result<OperationResult> invalid =
+      session.invert_component_selection_batch(invalid_targets);
+  ASSERT_FALSE(invalid.ok());
+  EXPECT_EQ(invalid.error().code, ErrorCode::InvalidArgument);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.selection_revision(), selection_revision);
+  EXPECT_EQ(session.document_copy(object.value()).value().selection().kind,
+            SelectionKind::Edge);
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionSelectionInvertRejectsStaleAndDuplicateTargetsAtomically) {
+  Result<PolygonDocument> first_document = PolygonDocument::make_box({});
+  Result<PolygonDocument> second_document = PolygonDocument::make_box({});
+  ASSERT_TRUE(first_document.ok()) << first_document.error_message();
+  ASSERT_TRUE(second_document.ok()) << second_document.error_message();
+  const std::vector<EdgeKey> first_edges = first_document.value().edge_ids();
+  const std::vector<EdgeKey> second_edges = second_document.value().edge_ids();
+  const std::vector<VertexId> second_vertices =
+      second_document.value().vertex_ids();
+  ASSERT_GE(first_edges.size(), 2U);
+  ASSERT_GE(second_edges.size(), 2U);
+  EdgeKey stale_edge;
+  for (std::size_t first_index = 0U;
+       first_index < second_vertices.size() && !stale_edge.valid();
+       ++first_index) {
+    for (std::size_t second_index = first_index + 1U;
+         second_index < second_vertices.size(); ++second_index) {
+      const EdgeKey candidate = make_edge_key(second_vertices[first_index],
+                                               second_vertices[second_index]);
+      if (std::ranges::find(second_edges, candidate) == second_edges.end()) {
+        stale_edge = candidate;
+        break;
+      }
+    }
+  }
+  ASSERT_TRUE(stale_edge.valid());
+
+  ModelingSession session;
+  Result<ObjectId> first =
+      session.add_document(std::move(first_document).value(), "First");
+  Result<ObjectId> second =
+      session.add_document(std::move(second_document).value(), "Second");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+
+  const std::array<SessionComponentSelectionUpdate, 2> seed_updates{{
+      {.object = first.value(),
+       .selection = {.kind = SelectionKind::Edge,
+                     .edges = {first_edges[0]},
+                     .has_active = true,
+                     .active_edge = first_edges[0]}},
+      {.object = second.value(),
+       .selection = {.kind = SelectionKind::Edge,
+                     .edges = {second_edges[0]},
+                     .has_active = true,
+                     .active_edge = second_edges[0]}},
+  }};
+  const std::array<ObjectId, 2> selected_objects{first.value(), second.value()};
+  ASSERT_TRUE(session
+                  .commit_component_selection_batch(
+                      seed_updates, selected_objects, second.value())
+                  .ok());
+  const std::size_t undo_depth = session.undo_depth();
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+
+  const std::array<SessionComponentSelectionUniverse, 2> stale_targets{{
+      {.object = first.value(),
+       .eligible = {.mode = SelectionMode::Edge,
+                    .edges = {first_edges[0], first_edges[1]}}},
+      {.object = second.value(),
+       .eligible = {.mode = SelectionMode::Edge,
+                    .edges = {stale_edge}}},
+  }};
+  Result<OperationResult> stale =
+      session.invert_component_selection_batch(stale_targets);
+  ASSERT_FALSE(stale.ok());
+  EXPECT_EQ(stale.error().code, ErrorCode::StaleId);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.selection_revision(), selection_revision);
+  EXPECT_EQ(session.document_copy(first.value()).value().selection().edges,
+            seed_updates[0].selection.edges);
+  EXPECT_EQ(session.document_copy(second.value()).value().selection().edges,
+            seed_updates[1].selection.edges);
+
+  const std::array<SessionComponentSelectionUniverse, 2> duplicate_targets{{
+      {.object = first.value(),
+       .eligible = {.mode = SelectionMode::Edge,
+                    .edges = {first_edges[0]}}},
+      {.object = first.value(),
+       .eligible = {.mode = SelectionMode::Edge,
+                    .edges = {first_edges[1]}}},
+  }};
+  Result<OperationResult> duplicate =
+      session.invert_component_selection_batch(duplicate_targets);
+  ASSERT_FALSE(duplicate.ok());
+  EXPECT_EQ(duplicate.error().code, ErrorCode::InvalidArgument);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.selection_revision(), selection_revision);
+  EXPECT_EQ(session.document_copy(first.value()).value().selection().edges,
+            seed_updates[0].selection.edges);
+  EXPECT_EQ(session.document_copy(second.value()).value().selection().edges,
+            seed_updates[1].selection.edges);
+}
+
+TEST(ModelingSdkConsumerTests,
      SessionDenseObjectDuplicationPublishesOneAtomicTransition) {
   constexpr std::size_t kSourceCount = 64u;
   Result<PolygonDocument> template_document = PolygonDocument::make_box({});
@@ -2574,13 +3039,46 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_EQ(selected.size(), 1U);
   EXPECT_EQ(selected.front().id(), second.id());
 
-  const FaceSelection all_second_faces = second.faces().all();
-  const std::vector<FaceId> one_face_id{all_second_faces.faces().front()};
-  FaceSelection one_face = second.faces().only(one_face_id);
-  ASSERT_TRUE(one_face.replace().success);
-  OperationReceipt inverted_faces = quader.selection().invert();
-  ASSERT_TRUE(inverted_faces.success);
-  EXPECT_EQ(second.faces().selected().count(), second.faces().all().count() - 1U);
+  const EdgeSelection all_second_edges = second.edges().all();
+  const std::vector<EdgeKey> all_edge_ids(all_second_edges.edges().begin(),
+                                          all_second_edges.edges().end());
+  ASSERT_GE(all_edge_ids.size(), 5U);
+  const std::vector<EdgeKey> initial_edges{all_edge_ids[1], all_edge_ids[4]};
+  ASSERT_TRUE(second.edges().only(initial_edges).replace().success);
+
+  OperationReceipt inverted_edges = quader.selection().invert();
+  ASSERT_TRUE(inverted_edges.success);
+  std::vector<EdgeKey> expected_complement;
+  for (const EdgeKey edge : all_edge_ids) {
+    if (std::ranges::find(initial_edges, edge) == initial_edges.end()) {
+      expected_complement.push_back(edge);
+    }
+  }
+  const EdgeSelection selected_complement = second.edges().selected();
+  EXPECT_EQ(std::vector<EdgeKey>(selected_complement.edges().begin(),
+                                 selected_complement.edges().end()),
+            expected_complement);
+
+  OperationReceipt restored_edges = quader.selection().invert();
+  ASSERT_TRUE(restored_edges.success);
+  const EdgeSelection restored_selection = second.edges().selected();
+  EXPECT_EQ(std::vector<EdgeKey>(restored_selection.edges().begin(),
+                                 restored_selection.edges().end()),
+            initial_edges);
+
+  ASSERT_TRUE(second.edges().all().replace().success);
+  OperationReceipt emptied_edges = quader.selection().invert();
+  ASSERT_TRUE(emptied_edges.success);
+  EXPECT_TRUE(second.edges().selected().empty());
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), second.id());
+
+  OperationReceipt restored_all_edges = quader.selection().invert();
+  ASSERT_TRUE(restored_all_edges.success);
+  const EdgeSelection all_edges_restored = second.edges().selected();
+  EXPECT_EQ(std::vector<EdgeKey>(all_edges_restored.edges().begin(),
+                                 all_edges_restored.edges().end()),
+            all_edge_ids);
 
   ASSERT_TRUE(second.transform().translate({2.0F, 0.0F, 0.0F}).success);
   const MeshPayload before_mirror = second.payloads().compile_mesh();
@@ -2596,6 +3094,374 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_TRUE(after_bounds.has_value());
   expect_vec3_near(after_bounds->min, {-3.0F, -1.0F, -1.0F});
   expect_vec3_near(after_bounds->max, {-1.0F, 1.0F, 1.0F});
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiSelectionInvertSupportsMixedComponentModes) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle first = quader.create_box({.name = "Vertex Mesh"});
+  MeshHandle second = quader.create_box({.name = "Edge Mesh"});
+  ASSERT_TRUE(first.valid());
+  ASSERT_TRUE(second.valid());
+
+  const VertexSelection all_first_vertices = first.vertices().all();
+  const std::vector<VertexId> all_vertex_ids(
+      all_first_vertices.vertices().begin(),
+      all_first_vertices.vertices().end());
+  const EdgeSelection all_second_edges = second.edges().all();
+  const std::vector<EdgeKey> all_edge_ids(all_second_edges.edges().begin(),
+                                          all_second_edges.edges().end());
+  ASSERT_GE(all_vertex_ids.size(), 5U);
+  ASSERT_GE(all_edge_ids.size(), 6U);
+
+  const std::vector<VertexId> initial_vertices{all_vertex_ids[1],
+                                                all_vertex_ids[4]};
+  const std::vector<EdgeKey> initial_edges{all_edge_ids[0], all_edge_ids[3],
+                                           all_edge_ids[5]};
+  ASSERT_TRUE(first.vertices().only(initial_vertices).replace().success);
+  ASSERT_TRUE(second.edges().only(initial_edges).add().success);
+  ASSERT_EQ(quader.selected_meshes().size(), 2U);
+
+  std::vector<VertexId> expected_vertices;
+  for (const VertexId vertex : all_vertex_ids) {
+    if (std::ranges::find(initial_vertices, vertex) ==
+        initial_vertices.end()) {
+      expected_vertices.push_back(vertex);
+    }
+  }
+  std::vector<EdgeKey> expected_edges;
+  for (const EdgeKey edge : all_edge_ids) {
+    if (std::ranges::find(initial_edges, edge) == initial_edges.end()) {
+      expected_edges.push_back(edge);
+    }
+  }
+
+  OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  EXPECT_TRUE(inverted.changed);
+  const VertexSelection inverted_vertices = first.vertices().selected();
+  const EdgeSelection inverted_edges = second.edges().selected();
+  EXPECT_EQ(std::vector<VertexId>(inverted_vertices.vertices().begin(),
+                                  inverted_vertices.vertices().end()),
+            expected_vertices);
+  EXPECT_EQ(std::vector<EdgeKey>(inverted_edges.edges().begin(),
+                                 inverted_edges.edges().end()),
+            expected_edges);
+  ASSERT_EQ(quader.selected_meshes().size(), 2U);
+
+  OperationReceipt restored = quader.selection().invert();
+  ASSERT_TRUE(restored.success) << restored.error.message;
+  EXPECT_TRUE(restored.changed);
+  const VertexSelection restored_vertices = first.vertices().selected();
+  const EdgeSelection restored_edges = second.edges().selected();
+  EXPECT_EQ(std::vector<VertexId>(restored_vertices.vertices().begin(),
+                                  restored_vertices.vertices().end()),
+            initial_vertices);
+  EXPECT_EQ(std::vector<EdgeKey>(restored_edges.edges().begin(),
+                                 restored_edges.edges().end()),
+            initial_edges);
+  ASSERT_EQ(quader.selected_meshes().size(), 2U);
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiDirectComponentOperationEstablishesInvertMode) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle mesh = quader.create_box({.name = "Direct Face Operation"});
+  ASSERT_TRUE(mesh.valid());
+  ASSERT_TRUE(mesh.select().replace().success);
+
+  const FaceSelection all_faces = mesh.faces().all();
+  const std::vector<FaceId> all_face_ids(all_faces.faces().begin(),
+                                         all_faces.faces().end());
+  ASSERT_GE(all_face_ids.size(), 3U);
+  const std::vector<FaceId> initial_faces{all_face_ids[1]};
+
+  OperationReceipt shaded = mesh.faces().only(initial_faces).shade_smooth();
+  ASSERT_TRUE(shaded.success) << shaded.error.message;
+  ASSERT_TRUE(shaded.changed);
+  const FaceSelection selected_before_invert = mesh.faces().selected();
+  EXPECT_EQ(std::vector<FaceId>(selected_before_invert.faces().begin(),
+                                selected_before_invert.faces().end()),
+            initial_faces);
+
+  OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  EXPECT_TRUE(inverted.changed);
+  std::vector<FaceId> expected_faces;
+  for (const FaceId face : all_face_ids) {
+    if (std::ranges::find(initial_faces, face) == initial_faces.end()) {
+      expected_faces.push_back(face);
+    }
+  }
+  const FaceSelection selected_after_invert = mesh.faces().selected();
+  EXPECT_EQ(std::vector<FaceId>(selected_after_invert.faces().begin(),
+                                selected_after_invert.faces().end()),
+            expected_faces);
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), mesh.id());
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiComponentInvertRetainsPerObjectModeAcrossSelectionUndo) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle mesh = quader.create_box({.name = "Undo Component Mode"});
+  ASSERT_TRUE(mesh.valid());
+
+  const EdgeSelection all_edges = mesh.edges().all();
+  const std::vector<EdgeKey> all_edge_ids(all_edges.edges().begin(),
+                                          all_edges.edges().end());
+  ASSERT_GE(all_edge_ids.size(), 2U);
+  const std::array<EdgeKey, 1> initial_edge{{all_edge_ids.front()}};
+  ASSERT_TRUE(mesh.edges().only(initial_edge).replace().success);
+  ASSERT_EQ(mesh.edges().selected().count(), 1U);
+
+  const OperationReceipt undone = quader.undo();
+  ASSERT_TRUE(undone.success) << undone.error.message;
+  EXPECT_TRUE(undone.changed);
+  EXPECT_TRUE(mesh.edges().selected().empty());
+  EXPECT_TRUE(quader.selected_meshes().empty());
+
+  const OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  EXPECT_TRUE(inverted.changed);
+  const EdgeSelection selected_after_invert = mesh.edges().selected();
+  EXPECT_EQ(std::vector<EdgeKey>(selected_after_invert.edges().begin(),
+                                 selected_after_invert.edges().end()),
+            all_edge_ids);
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), mesh.id());
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiObjectSelectionClearsComponentEditParticipants) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle component_mesh =
+      quader.create_box({.name = "Former Component Participant"});
+  MeshHandle object_mesh = quader.create_box({.name = "Object Selection"});
+  ASSERT_TRUE(component_mesh.valid());
+  ASSERT_TRUE(object_mesh.valid());
+
+  const EdgeSelection all_edges = component_mesh.edges().all();
+  const std::vector<EdgeKey> all_edge_ids(all_edges.edges().begin(),
+                                          all_edges.edges().end());
+  ASSERT_FALSE(all_edge_ids.empty());
+  const std::array<EdgeKey, 1> initial_edge{{all_edge_ids.front()}};
+  ASSERT_TRUE(component_mesh.edges().only(initial_edge).replace().success);
+  ASSERT_TRUE(object_mesh.select().replace().success);
+
+  const OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  EXPECT_TRUE(inverted.changed);
+  const std::vector<MeshHandle> selected = quader.selected_meshes();
+  ASSERT_EQ(selected.size(), 1U);
+  EXPECT_EQ(selected.front().id(), component_mesh.id());
+  const EdgeSelection retained_edges = component_mesh.edges().selected();
+  EXPECT_EQ(std::vector<EdgeKey>(retained_edges.edges().begin(),
+                                 retained_edges.edges().end()),
+            std::vector<EdgeKey>(initial_edge.begin(), initial_edge.end()));
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiObjectDestructionClearsComponentEditParticipant) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle mesh = quader.create_box({.name = "Destroyed Participant"});
+  ASSERT_TRUE(mesh.valid());
+
+  const EdgeSelection all_edges = mesh.edges().all();
+  const std::vector<EdgeKey> all_edge_ids(all_edges.edges().begin(),
+                                          all_edges.edges().end());
+  ASSERT_FALSE(all_edge_ids.empty());
+  const std::array<EdgeKey, 1> initial_edge{{all_edge_ids.front()}};
+  ASSERT_TRUE(mesh.edges().only(initial_edge).replace().success);
+  ASSERT_TRUE(mesh.destroy().success);
+  EXPECT_FALSE(mesh.valid());
+
+  const OperationReceipt restored = quader.undo();
+  ASSERT_TRUE(restored.success) << restored.error.message;
+  EXPECT_TRUE(restored.changed);
+  ASSERT_TRUE(mesh.valid());
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+
+  const OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  EXPECT_TRUE(inverted.changed);
+  EXPECT_TRUE(quader.selected_meshes().empty());
+  const EdgeSelection retained_edges = mesh.edges().selected();
+  EXPECT_EQ(std::vector<EdgeKey>(retained_edges.edges().begin(),
+                                 retained_edges.edges().end()),
+            std::vector<EdgeKey>(initial_edge.begin(), initial_edge.end()));
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiObjectDuplicateClearsComponentInteractionDomain) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle source = quader.create_box({.name = "Duplicate Source"});
+  ASSERT_TRUE(source.valid());
+
+  const EdgeSelection all_edges = source.edges().all();
+  const std::vector<EdgeKey> all_edge_ids(all_edges.edges().begin(),
+                                          all_edges.edges().end());
+  ASSERT_GE(all_edge_ids.size(), 3U);
+  const std::array<EdgeKey, 1> initial_edge{{all_edge_ids[1]}};
+  ASSERT_TRUE(source.edges().only(initial_edge).replace().success);
+
+  MeshHandle duplicate = source.duplicate({.offset = {3.0F, 0.0F, 0.0F}});
+  ASSERT_TRUE(duplicate.valid());
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), duplicate.id());
+
+  const OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), source.id());
+  const EdgeSelection retained_source_edges = source.edges().selected();
+  EXPECT_EQ(std::vector<EdgeKey>(retained_source_edges.edges().begin(),
+                                 retained_source_edges.edges().end()),
+            std::vector<EdgeKey>(initial_edge.begin(), initial_edge.end()));
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiCombineRetiredSourceDoesNotConsumeFirstObjectInverse) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle survivor = quader.create_box({.name = "Combine Survivor"});
+  MeshHandle source = quader.create_box({
+      .name = "Combine Component Source",
+      .min = {3.0F, -1.0F, -1.0F},
+      .max = {5.0F, 1.0F, 1.0F},
+  });
+  ASSERT_TRUE(survivor.valid());
+  ASSERT_TRUE(source.valid());
+
+  const EdgeSelection source_edges = source.edges().all();
+  ASSERT_FALSE(source_edges.empty());
+  const std::array<EdgeKey, 1> initial_edge{{source_edges.edges().front()}};
+  ASSERT_TRUE(source.edges().only(initial_edge).replace().success);
+
+  const std::array<MeshHandle, 1> sources{{source}};
+  const OperationReceipt combined = survivor.combine_with(sources);
+  ASSERT_TRUE(combined.success) << combined.error.message;
+  EXPECT_FALSE(source.valid());
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), survivor.id());
+
+  const OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  EXPECT_TRUE(inverted.changed);
+  EXPECT_TRUE(quader.selected_meshes().empty());
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiCombineClearsSurvivingComponentInteractionDomain) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle survivor =
+      quader.create_box({.name = "Component Combine Survivor"});
+  MeshHandle source = quader.create_box({
+      .name = "Plain Combine Source",
+      .min = {3.0F, -1.0F, -1.0F},
+      .max = {5.0F, 1.0F, 1.0F},
+  });
+  ASSERT_TRUE(survivor.valid());
+  ASSERT_TRUE(source.valid());
+
+  const EdgeSelection survivor_edges = survivor.edges().all();
+  ASSERT_FALSE(survivor_edges.empty());
+  const std::array<EdgeKey, 1> initial_edge{{survivor_edges.edges().front()}};
+  ASSERT_TRUE(survivor.edges().only(initial_edge).replace().success);
+
+  const std::array<MeshHandle, 1> sources{{source}};
+  const OperationReceipt combined = survivor.combine_with(sources);
+  ASSERT_TRUE(combined.success) << combined.error.message;
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), survivor.id());
+  EXPECT_TRUE(survivor.edges().selected().empty());
+
+  const OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  EXPECT_TRUE(inverted.changed);
+  EXPECT_TRUE(quader.selected_meshes().empty());
+  EXPECT_TRUE(survivor.edges().selected().empty());
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiFirstInversePrunesParticipantsRetiredByStructuralUndo) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle retired = quader.create_box({.name = "Retired Participant"});
+  ASSERT_TRUE(retired.valid());
+  const EdgeSelection retired_edges = retired.edges().all();
+  ASSERT_FALSE(retired_edges.empty());
+  const std::array<EdgeKey, 1> initial_edge{{retired_edges.edges().front()}};
+  ASSERT_TRUE(retired.edges().only(initial_edge).replace().success);
+
+  ASSERT_TRUE(quader.undo().success);
+  ASSERT_TRUE(quader.undo().success);
+  EXPECT_FALSE(retired.valid());
+  EXPECT_TRUE(quader.mesh_summaries().empty());
+
+  MeshHandle replacement =
+      quader.create_box({.name = "Replacement Object Target"});
+  ASSERT_TRUE(replacement.valid());
+  EXPECT_TRUE(quader.selected_meshes().empty());
+
+  const OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  EXPECT_TRUE(inverted.changed);
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), replacement.id());
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiComponentClearRetainsParticipantsForTheNextInverse) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle mesh = quader.create_box({.name = "Clear Component Scope"});
+  ASSERT_TRUE(mesh.valid());
+
+  const EdgeSelection all_edges = mesh.edges().all();
+  const std::vector<EdgeKey> all_edge_ids(all_edges.edges().begin(),
+                                          all_edges.edges().end());
+  ASSERT_GE(all_edge_ids.size(), 2U);
+  const std::array<EdgeKey, 1> initial_edge{{all_edge_ids.front()}};
+  ASSERT_TRUE(mesh.edges().only(initial_edge).replace().success);
+
+  const OperationReceipt cleared = quader.selection().clear();
+  ASSERT_TRUE(cleared.success) << cleared.error.message;
+  EXPECT_TRUE(cleared.changed);
+  EXPECT_TRUE(mesh.edges().selected().empty());
+  EXPECT_TRUE(quader.selected_meshes().empty());
+
+  const OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  EXPECT_TRUE(inverted.changed);
+  const EdgeSelection selected = mesh.edges().selected();
+  EXPECT_EQ(std::vector<EdgeKey>(selected.edges().begin(),
+                                 selected.edges().end()),
+            all_edge_ids);
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), mesh.id());
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiEmptySelectAllClearsRetiredComponentParticipants) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle retired = quader.create_box({.name = "Empty Select All"});
+  ASSERT_TRUE(retired.valid());
+  const EdgeSelection retired_edges = retired.edges().all();
+  ASSERT_FALSE(retired_edges.empty());
+  const std::array<EdgeKey, 1> initial_edge{{retired_edges.edges().front()}};
+  ASSERT_TRUE(retired.edges().only(initial_edge).replace().success);
+  ASSERT_TRUE(quader.undo().success);
+  ASSERT_TRUE(quader.undo().success);
+  ASSERT_TRUE(quader.mesh_summaries().empty());
+
+  const OperationReceipt selected_all = quader.selection().select_all();
+  ASSERT_TRUE(selected_all.success) << selected_all.error.message;
+  EXPECT_FALSE(selected_all.changed);
+
+  MeshHandle replacement = quader.create_box({.name = "Object Domain"});
+  ASSERT_TRUE(replacement.valid());
+  const OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), replacement.id());
 }
 
 TEST(ModelingSdkConsumerTests,
@@ -2753,6 +3619,83 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
+     ModelingBatchFailureRestoresPriorObjectInteractionDomain) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle existing = quader.create_box({.name = "Existing Object Mode"});
+  ASSERT_TRUE(existing.valid());
+  ASSERT_TRUE(existing.select().replace().success);
+
+  BatchResult batch =
+      quader.batch("Rollback component interaction")
+          .create_box({.name = "Transient Component Participant"})
+          .as("body")
+          .with_mesh("body", [](MeshHandle mesh) {
+            static_cast<void>(mesh.edges().all().replace());
+            const std::array<EdgeKey, 1> invalid_edges{};
+            static_cast<void>(mesh.edges().only(invalid_edges).replace());
+          })
+          .commit();
+
+  ASSERT_FALSE(batch.success());
+  EXPECT_EQ(batch.receipt.error.code, ErrorCode::InvalidId);
+  ASSERT_EQ(quader.mesh_summaries().size(), 1U);
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), existing.id());
+
+  const OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  EXPECT_TRUE(inverted.changed);
+  EXPECT_TRUE(quader.selected_meshes().empty());
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingBatchFailureRestoresPriorComponentInteractionDomain) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle existing =
+      quader.create_box({.name = "Existing Component Mode"});
+  ASSERT_TRUE(existing.valid());
+  const EdgeSelection all_edges = existing.edges().all();
+  const std::vector<EdgeKey> all_edge_ids(all_edges.edges().begin(),
+                                          all_edges.edges().end());
+  ASSERT_GE(all_edge_ids.size(), 3U);
+  const std::array<EdgeKey, 1> initial_edge{{all_edge_ids[1]}};
+  ASSERT_TRUE(existing.edges().only(initial_edge).replace().success);
+
+  BatchResult batch =
+      quader.batch("Rollback object interaction")
+          .create_box({.name = "Transient Object Target"})
+          .as("body")
+          .with_mesh("body", [](MeshHandle mesh) {
+            static_cast<void>(mesh.select().replace());
+            const std::array<EdgeKey, 1> invalid_edges{};
+            static_cast<void>(mesh.edges().only(invalid_edges).replace());
+          })
+          .commit();
+
+  ASSERT_FALSE(batch.success());
+  EXPECT_EQ(batch.receipt.error.code, ErrorCode::InvalidId);
+  ASSERT_EQ(quader.mesh_summaries().size(), 1U);
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), existing.id());
+
+  std::vector<EdgeKey> expected_complement;
+  for (const EdgeKey edge : all_edge_ids) {
+    if (edge != initial_edge.front()) {
+      expected_complement.push_back(edge);
+    }
+  }
+  const OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  EXPECT_TRUE(inverted.changed);
+  const EdgeSelection selected = existing.edges().selected();
+  EXPECT_EQ(std::vector<EdgeKey>(selected.edges().begin(),
+                                 selected.edges().end()),
+            expected_complement);
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), existing.id());
+}
+
+TEST(ModelingSdkConsumerTests,
      ModelingBatchInvalidCreateHasPolicyIndependentFailureReceipt) {
   const BoxOptions invalid{
       .name = "Invalid Box",
@@ -2859,6 +3802,35 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_TRUE(undone.success) << undone.error.message;
   EXPECT_EQ(quader.mesh_summaries().size(), 1U);
   EXPECT_TRUE(source.valid());
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiPasteTransitionsFromComponentsToObjectInteraction) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle source = quader.create_box({.name = "Paste Domain Source"});
+  ASSERT_TRUE(source.valid());
+  ASSERT_TRUE(source.select().replace().success);
+  ASSERT_TRUE(quader.operations().copy_selection().success);
+
+  const EdgeSelection all_edges = source.edges().all();
+  ASSERT_FALSE(all_edges.empty());
+  const std::array<EdgeKey, 1> initial_edge{{all_edges.edges().front()}};
+  ASSERT_TRUE(source.edges().only(initial_edge).replace().success);
+
+  const OperationReceipt pasted =
+      quader.operations().paste_selection({.offset = {3.0F, 0.0F, 0.0F}});
+  ASSERT_TRUE(pasted.success) << pasted.error.message;
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_NE(quader.selected_meshes().front().id(), source.id());
+
+  const OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), source.id());
+  const EdgeSelection retained = source.edges().selected();
+  EXPECT_EQ(std::vector<EdgeKey>(retained.edges().begin(),
+                                 retained.edges().end()),
+            std::vector<EdgeKey>(initial_edge.begin(), initial_edge.end()));
 }
 
 TEST(ModelingSdkConsumerTests,
@@ -2976,6 +3948,37 @@ TEST(ModelingSdkConsumerTests, ModelingApiPolyToolCreatesSingleFaceMesh) {
   const AuthoredPolygonPayload payload = selected.front().payloads().authored_polygon();
   EXPECT_EQ(payload.vertices.size(), 4U);
   EXPECT_EQ(payload.faces.size(), 1U);
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiPolyCommitTransitionsFromComponentsToObjectInteraction) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle existing = quader.create_box({.name = "Poly Domain Existing"});
+  ASSERT_TRUE(existing.valid());
+  const EdgeSelection all_edges = existing.edges().all();
+  ASSERT_FALSE(all_edges.empty());
+  const std::array<EdgeKey, 1> initial_edge{{all_edges.edges().front()}};
+  ASSERT_TRUE(existing.edges().only(initial_edge).replace().success);
+
+  const OperationReceipt created =
+      quader.tools()
+          .activate_poly_tool()
+          .add_point({0.0F, 0.0F, 0.0F})
+          .add_point({2.0F, 0.0F, 0.0F})
+          .add_point({0.0F, 0.0F, 2.0F})
+          .commit();
+  ASSERT_TRUE(created.success) << created.error.message;
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_NE(quader.selected_meshes().front().id(), existing.id());
+
+  const OperationReceipt inverted = quader.selection().invert();
+  ASSERT_TRUE(inverted.success) << inverted.error.message;
+  ASSERT_EQ(quader.selected_meshes().size(), 1U);
+  EXPECT_EQ(quader.selected_meshes().front().id(), existing.id());
+  const EdgeSelection retained = existing.edges().selected();
+  EXPECT_EQ(std::vector<EdgeKey>(retained.edges().begin(),
+                                 retained.edges().end()),
+            std::vector<EdgeKey>(initial_edge.begin(), initial_edge.end()));
 }
 
 TEST(ModelingSdkConsumerTests,

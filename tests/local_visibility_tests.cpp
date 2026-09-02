@@ -428,11 +428,14 @@ TEST(LocalVisibilityTests,
     EXPECT_EQ(editor.selection().summary().selected_vertex_count, 8u);
     ASSERT_TRUE(editor.selection().select_inverse().ok());
     EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
-    const quader::QuaderApiVoidResult inverse_without_component_scope =
+    const quader::QuaderApiVoidResult inverse_empty_local_scope =
         editor.selection().select_inverse();
-    ASSERT_TRUE(inverse_without_component_scope.ok())
-        << inverse_without_component_scope.error_message();
-    EXPECT_FALSE(inverse_without_component_scope.changed());
+    ASSERT_TRUE(inverse_empty_local_scope.ok())
+        << inverse_empty_local_scope.error_message();
+    EXPECT_TRUE(inverse_empty_local_scope.changed());
+    EXPECT_EQ(editor.selection().summary().selected_vertex_count, 8u);
+
+    ASSERT_TRUE(editor.selection().clear().ok());
     EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
 
     ASSERT_TRUE(editor.selection().hover_vertex(outside, 1).ok());

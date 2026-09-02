@@ -7,6 +7,7 @@
 #pragma once
 
 #include "api/quader_input_types.hpp"
+#include "viewport/viewport_runtime_binding_token.hpp"
 
 #include <vector>
 
@@ -25,7 +26,8 @@ public:
                       ViewportInputFrame &input,
                       std::vector<QuaderInputChord> &suppressed_chords,
                       double &linear_array_wheel_remainder,
-                      double &radial_array_wheel_remainder);
+                      double &radial_array_wheel_remainder,
+                      ViewportRuntimeBindingToken runtime_binding = {});
 };
 
 } // namespace quader

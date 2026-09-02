@@ -377,7 +377,8 @@ public:
   [[nodiscard]] ModelingCommandResult
   select_mesh_ngons(std::span<const int> modeling_object_ids);
   [[nodiscard]] ModelingCommandResult select_all();
-  [[nodiscard]] ModelingCommandResult invert_selection();
+  [[nodiscard]] ModelingCommandResult invert_selection(
+      std::span<const ModelingComponentSelectionUniverse> universes);
   [[nodiscard]] ModelingCommandResult clear_selection();
   [[nodiscard]] ModelingCommandResult
   remove_objects(std::span<const int> modeling_object_ids);

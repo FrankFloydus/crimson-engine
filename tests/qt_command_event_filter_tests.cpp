@@ -8,6 +8,8 @@
 
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
+#include "editor/session/project_session.hpp"
+#include "editor/session/quader_editor_api_session_access.hpp"
 #include "ui/qt_command_event_filter.hpp"
 
 #include <QApplication>
@@ -15,12 +17,15 @@
 #include <QCoreApplication>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QTabBar>
+#include <QTemporaryDir>
 #include <QTreeWidget>
 #include <QWidget>
 
 #include <cstdint>
+#include <filesystem>
 
 namespace {
 
@@ -280,6 +285,65 @@ TEST(QtCommandEventFilterTests,
 
   application.removeEventFilter(&command_filter);
   auxiliary_window.hide();
+}
+
+TEST(QtCommandEventFilterTests,
+     CloseSceneRebindKeepsTheDispatchingApplicationFilterAlive) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-command-close-rebind-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  application.setQuitOnLastWindowClosed(false);
+
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const std::filesystem::path project_root =
+      std::filesystem::path(temporary.path().toStdWString()) / "Project";
+  std::error_code directory_error;
+  ASSERT_TRUE(std::filesystem::create_directory(project_root, directory_error))
+      << directory_error.message();
+
+  quader::ProjectSession project;
+  const quader::ProjectSessionResult created = project.create(project_root);
+  ASSERT_TRUE(created.ok) << created.message;
+  const quader::ProjectSessionResult second = project.new_scene();
+  ASSERT_TRUE(second.ok) << second.message;
+  ASSERT_EQ(project.open_scenes().size(), 2u);
+
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  quader::QtCommandEventFilter command_filter(editor, {});
+  QPointer<quader::QtCommandEventFilter> retained_filter(&command_filter);
+  int synchronous_rebinds = 0;
+  quader::QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, [&](quader::SceneSession &) {
+        ++synchronous_rebinds;
+        command_filter.rebind_editor(editor);
+        EXPECT_EQ(retained_filter.data(), &command_filter);
+      });
+  application.installEventFilter(&command_filter);
+
+  QWidget editor_surface;
+  editor_surface.setFocusPolicy(Qt::StrongFocus);
+  editor_surface.show();
+  editor_surface.activateWindow();
+  editor_surface.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::focusWidget(), &editor_surface);
+
+  send_key_press(editor_surface, Qt::Key_W, Qt::ControlModifier,
+                 QStringLiteral("w"));
+
+  EXPECT_EQ(synchronous_rebinds, 1);
+  EXPECT_EQ(project.open_scenes().size(), 1u);
+  EXPECT_EQ(retained_filter.data(), &command_filter);
+  EXPECT_TRUE(editor.commands().last_status().has_value());
+  EXPECT_TRUE(editor.commands().last_status()->ok());
+
+  application.removeEventFilter(&command_filter);
+  editor_surface.hide();
 }
 
 } // namespace

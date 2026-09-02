@@ -948,6 +948,14 @@ TEST(ProgrammaticApiGuardrailTests, SelectionCommandToolsPreferEditorSelectionSe
         << relative;
     EXPECT_NE(source.find(expectedRoute), std::string::npos) << relative;
   }
+
+  const std::string invert_tool = read_file(
+      source_root() / "src/editor/commands/modeling/invert_selection_tool.cpp");
+  EXPECT_EQ(invert_tool.find("context.modeling.invert_selection()"),
+            std::string::npos);
+  EXPECT_NE(invert_tool.find(
+                "Invert Selection requires the editor selection service."),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests,
@@ -1031,6 +1039,93 @@ TEST(ProgrammaticApiGuardrailTests, PublicSelectionApiDelegatesEntityEditPolicyT
   EXPECT_NE(service_source.find("EditorSelectionService::edit_scene_selection("),
             std::string::npos);
   EXPECT_NE(service_source.find("resolve_scene_selection_edit("),
+            std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests,
+     ComponentSelectionInversionUsesSingleModelingSessionOwner) {
+  const std::string sdk_selection = read_file(
+      source_root() / "src/sdk/core/modeling/src/selection.cpp");
+  const std::string selection_invert = source_slice(
+      sdk_selection, "OperationReceipt SelectionApi::invert() {",
+      "ObjectSelection SelectionApi::objects(");
+  ASSERT_FALSE(selection_invert.empty());
+  EXPECT_NE(selection_invert.find("invert_component_selection_batch("),
+            std::string::npos);
+  EXPECT_EQ(selection_invert.find(".invert_selection("), std::string::npos);
+  EXPECT_EQ(selection_invert.find("commit_document_receipt("),
+            std::string::npos);
+
+  const std::string host_adapter = read_file(
+      source_root() /
+      "src/editor/modeling/services/modeling_sdk_projection_adapter.cpp");
+  const std::string adapter_invert = source_slice(
+      host_adapter,
+      "[[nodiscard]] ModelingCommandResult invert_selection(",
+      "[[nodiscard]] ModelingCommandResult clear_selection() {");
+  ASSERT_FALSE(adapter_invert.empty());
+  EXPECT_NE(adapter_invert.find("session_.invert_component_selection_batch("),
+            std::string::npos);
+  EXPECT_EQ(adapter_invert.find(".invert_selection("), std::string::npos);
+  EXPECT_EQ(adapter_invert.find("set_component_selections("),
+            std::string::npos);
+  EXPECT_EQ(adapter_invert.find("set_object_selection("), std::string::npos);
+  EXPECT_EQ(adapter_invert.find("std::vector<EntityId> inverted"),
+            std::string::npos);
+
+  const std::string adapter_entry = source_slice(
+      host_adapter,
+      "ModelingCommandResult ModelingSdkProjectionAdapter::invert_selection(",
+      "ModelingCommandResult ModelingSdkProjectionAdapter::clear_selection() {");
+  ASSERT_FALSE(adapter_entry.empty());
+  EXPECT_NE(adapter_entry.find("return impl_->invert_selection(universes);"),
+            std::string::npos);
+
+  const std::string adapter_header = read_file(
+      source_root() /
+      "src/editor/modeling/services/modeling_sdk_projection_adapter.hpp");
+  const std::string adapter_declaration = source_slice(
+      adapter_header,
+      "[[nodiscard]] ModelingCommandResult invert_selection(",
+      "[[nodiscard]] ModelingCommandResult clear_selection();");
+  ASSERT_FALSE(adapter_declaration.empty());
+  EXPECT_EQ(adapter_declaration.find("universes = {}"), std::string::npos);
+
+  const std::string modeling_service = read_file(
+      source_root() /
+      "src/editor/modeling/services/modeling_session_service.cpp");
+  const std::string service_invert = source_slice(
+      modeling_service, "ModelingCommandResult invert_selection() {",
+      "ModelingCommandResult clear_selection() {");
+  ASSERT_FALSE(service_invert.empty());
+  EXPECT_NE(service_invert.find("selection_mode_uses_scene_document("),
+            std::string::npos);
+  EXPECT_NE(service_invert.find("component_selection_universes("),
+            std::string::npos);
+  EXPECT_NE(service_invert.find(
+                "sdk_projection_adapter_.invert_selection(universes)"),
+            std::string::npos);
+  EXPECT_EQ(service_invert.find("sdk_projection_adapter_.invert_selection();"),
+            std::string::npos);
+
+  const std::string selection_service = read_file(
+      source_root() /
+      "src/editor/modeling/services/modeling_session_services.cpp");
+  const std::string constrained_select_all = source_slice(
+      selection_service,
+      "ModelingSelectionService::select_all_in_constrained_component_scope(",
+      "ModelingSelectionService::component_selection_universes(");
+  ASSERT_FALSE(constrained_select_all.empty());
+  EXPECT_EQ(constrained_select_all.find("invert"), std::string::npos);
+  EXPECT_EQ(constrained_select_all.find("currently_selected"),
+            std::string::npos);
+
+  const std::string runtime_header = read_file(
+      source_root() / "src/editor/modeling/runtime/session.hpp");
+  const std::string runtime_policy = read_file(
+      source_root() / "src/editor/modeling/runtime/selection_policy.cpp");
+  EXPECT_EQ(runtime_header.find("SelectionSetCommand"), std::string::npos);
+  EXPECT_EQ(runtime_policy.find("apply_selection_set_command"),
             std::string::npos);
 }
 

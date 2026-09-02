@@ -357,13 +357,13 @@ QuaderProjectApi::create(const std::filesystem::path &root_path) {
   if (!created.ok) {
     return quader_api_failure_status(scene_session(session_), created.message);
   }
-  if (events_ != nullptr) {
-    publish_project_close_events(*events_, std::move(close_events));
-  }
   if (project_session_->active_scene() != nullptr) {
     if (binding_changed_) {
       binding_changed_(session_);
     }
+  }
+  if (events_ != nullptr) {
+    publish_project_close_events(*events_, std::move(close_events));
   }
   remember_open_project();
   if (events_ != nullptr) {
@@ -435,11 +435,11 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
         return quader_api_failure_status(scene_session(session_),
                                          opened.message);
       }
-      if (events_ != nullptr) {
-        publish_project_close_events(*events_, std::move(close_events));
-      }
       if (binding_changed_) {
         binding_changed_(session_);
+      }
+      if (events_ != nullptr) {
+        publish_project_close_events(*events_, std::move(close_events));
       }
       remember_open_project();
       if (events_ != nullptr) {
@@ -572,11 +572,13 @@ QuaderApiVoidResult QuaderProjectApi::close() {
   if (!closed.ok) {
     return quader_api_failure_status(scene_session(session_), closed.message);
   }
-  if (binding_changed_) {
-    binding_changed_(session_);
-  }
-  if (events_ != nullptr) {
-    publish_project_close_events(*events_, std::move(close_events));
+  if (closed.changed) {
+    if (binding_changed_) {
+      binding_changed_(session_);
+    }
+    if (events_ != nullptr) {
+      publish_project_close_events(*events_, std::move(close_events));
+    }
   }
   return project_runtime_status(scene_session(session_), closed.changed,
                                 closed.message);

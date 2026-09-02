@@ -107,6 +107,8 @@ public:
     DocumentCommandResult commit(EditorHistoryService& history);
     QuaderApiVoidResult commit(QuaderEditorApi& editor);
     DocumentCommandResult cancel();
+    /// Drops an expired preview owner without attempting scene restoration.
+    void abandon() noexcept;
     void reset();
 
     QuaderApiVoidResult move_selected_to_primary_position(

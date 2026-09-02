@@ -50,6 +50,7 @@ public:
   QtCommandEventFilter(const QtCommandEventFilter &) = delete;
   QtCommandEventFilter &operator=(const QtCommandEventFilter &) = delete;
 
+  void rebind_editor(QuaderEditorApi &editor) noexcept;
   void set_command_input_owner_provider(
       QtApplicationCommandInputOwnerProvider provider);
 

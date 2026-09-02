@@ -3115,6 +3115,11 @@ public:
     volatile_overlay_cache_.valid = false;
   }
 
+  [[nodiscard]] ModelingInstanceEditScope instance_edit_scope() const {
+    return instance_edit_scope_provider_ ? instance_edit_scope_provider_()
+                                        : ModelingInstanceEditScope{};
+  }
+
   void set_viewport_visibility_filter(
       std::function<bool(EntityId)> filter,
       std::function<std::uint64_t()> revision_provider,
@@ -3413,7 +3418,6 @@ public:
       return result;
     }
 
-    app_selection_mode_ = mode;
     std::vector<EntityId> scene_only_selection;
     scene_only_selection.reserve(scene_.selected_entities().size());
     for (const EntityId entity : scene_.selected_entities()) {
@@ -3440,6 +3444,9 @@ public:
 
     ModelingCommandResult result =
         sdk_projection_adapter_.set_selection_mode(mode);
+    if (result.ok) {
+      app_selection_mode_ = mode;
+    }
     result.changed = result.changed || canceled_preview;
     invalidate_selection_overlay_caches();
     if (mode == ModelingSelectionMode::Object &&
@@ -3461,7 +3468,7 @@ public:
         selection_projection_snapshot();
     if (const std::optional<ModelingSelectionProjectionCommandResult> scoped =
             selection_service_.select_all_in_constrained_component_scope(
-                projection, scene_, object_registry_, false,
+                projection, scene_, object_registry_,
                 runtime_.hover().candidate_object_id)) {
       if (!scoped->command.ok) {
         return scoped->command;
@@ -3485,27 +3492,31 @@ public:
   }
 
   ModelingCommandResult invert_selection() {
+    if (selection_mode_uses_scene_document(app_selection_mode_)) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "Object and Group selection inversion must be routed "
+                     "through EditorSelectionService.",
+      };
+    }
+
     const ModelingSelectionProjectionSnapshot &projection =
         selection_projection_snapshot();
-    if (const std::optional<ModelingSelectionProjectionCommandResult> scoped =
-            selection_service_.select_all_in_constrained_component_scope(
-                projection, scene_, object_registry_, true,
-                kInvalidModelingObjectId)) {
-      if (!scoped->command.ok) {
-        return scoped->command;
-      }
-      ModelingCommandResult published =
-          sdk_projection_adapter_.apply_selection_projection_checked(
-              scoped->projection);
-      if (published.ok && published.changed) {
-        invalidate_selection_overlay_caches();
-      }
-      if (published.message.empty()) {
-        published.message = scoped->command.message;
-      }
-      return published;
+    if (projection.selection_mode() ==
+        quader_editor_core::SelectionMode::Object) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message =
+              "Component selection inversion requires a component mode.",
+      };
     }
-    ModelingCommandResult result = sdk_projection_adapter_.invert_selection();
+    const std::vector<ModelingComponentSelectionUniverse> universes =
+        selection_service_.component_selection_universes(
+            projection, scene_, object_registry_);
+    ModelingCommandResult result =
+        sdk_projection_adapter_.invert_selection(universes);
     if (result.ok && result.changed) {
       invalidate_selection_overlay_caches();
     }
@@ -8723,10 +8734,10 @@ public:
               .message = "Resolved component target is no longer live."};
     }
 
-    const bool expands_hit =
-        request.click_count > 1 ||
-        (request.edge_loop_select &&
-         request.kind == ModelingActiveSelectionKind::Edge);
+    const bool edge_traversal =
+        request.kind == ModelingActiveSelectionKind::Edge &&
+        request.edge_traversal != ModelingEdgeSelectionTraversal::None;
+    const bool expands_hit = request.click_count > 1 || edge_traversal;
     if (!expands_hit && request.edit == ModelingSelectionEdit::Replace &&
         request.preserve_selection_on_selected_hit && target_selected) {
       return {.ok = true};
@@ -8741,7 +8752,10 @@ public:
     ModelingComponentSelectionRequest component{
         .modeling_object_id = request.modeling_object_id,
         .mode = request.mode,
-        .edit = request.edit,
+        .edit = edge_traversal && request.edit == ModelingSelectionEdit::Toggle
+                    ? (target_selected ? ModelingSelectionEdit::Remove
+                                       : ModelingSelectionEdit::Add)
+                    : request.edit,
     };
     if (request.kind == ModelingActiveSelectionKind::Vertex) {
       if (request.click_count > 1) {
@@ -8758,12 +8772,28 @@ public:
                                     : component.vertices.back();
     } else if (request.kind == ModelingActiveSelectionKind::Edge) {
       if (expands_hit) {
-        const std::vector<quader_poly::Edge> edges =
-            quader_poly::edge_loop_edges(
-                document,
-                quader_poly::make_edge(request.edge.first,
-                                       request.edge.second),
-                request.face);
+        const quader_poly::Edge seed = quader_poly::make_edge(
+            request.edge.first, request.edge.second);
+        std::vector<quader_poly::Edge> edges =
+            request.edge_traversal == ModelingEdgeSelectionTraversal::Ring
+                ? quader_poly::edge_ring_edges(document, seed)
+                : quader_poly::edge_loop_edges(document, seed, request.face);
+        if (request.edge_traversal ==
+                ModelingEdgeSelectionTraversal::Loop &&
+            request.edit == ModelingSelectionEdit::Replace &&
+            target_selected &&
+            std::ranges::all_of(edges, [&](quader_poly::Edge edge) {
+              return quader_poly::selection_contains(selected, edge);
+            })) {
+          const std::vector<quader_poly::Edge> boundary =
+              quader_poly::edge_boundary_component_edges(document, seed);
+          if (!boundary.empty() &&
+              !std::ranges::all_of(boundary, [&](quader_poly::Edge edge) {
+                return quader_poly::selection_contains(selected, edge);
+              })) {
+            edges = boundary;
+          }
+        }
         component.edges.reserve(edges.size());
         for (const quader_poly::Edge edge : edges) {
           component.edges.emplace_back(edge.a, edge.b);
@@ -9931,6 +9961,10 @@ ModelingCommandResult
 ModelingSessionService::restore_mesh_documents_from_scene(
     std::span<const EntityId> entities) {
   return impl_->restore_mesh_documents_from_scene(entities);
+}
+
+ModelingInstanceEditScope ModelingSessionService::instance_edit_scope() const {
+  return impl_->instance_edit_scope();
 }
 
 void ModelingSessionService::set_instance_edit_scope_provider(

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "viewport/viewport_runtime_binding_token.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
 #include "editor/viewport/transform_gizmo_interaction.hpp"
@@ -76,13 +77,15 @@ public:
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
       const ViewportToolResult &tool_result,
       const ViewportBeforeToolInteractionResult &before_tool,
-      ViewportToolHoverPort *tool_hover = nullptr);
+      ViewportToolHoverPort *tool_hover = nullptr,
+      ViewportRuntimeBindingToken runtime_binding = {});
   void handle_after_active_tool(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
       const ViewportToolResult &tool_result,
       const ViewportBeforeToolInteractionResult &before_tool,
       NativeViewportToolCoordinator &native_tools,
-      ViewportToolHoverPort *tool_hover = nullptr);
+      ViewportToolHoverPort *tool_hover = nullptr,
+      ViewportRuntimeBindingToken runtime_binding = {});
   [[nodiscard]] QuaderSelectionSummary
   pick_context_menu_target(QuaderEditorApi &editor,
                            const ViewportInteractionFrame &frame);
@@ -186,12 +189,14 @@ private:
       const ViewportToolResult &tool_result,
       const ViewportBeforeToolInteractionResult &before_tool,
       ViewportToolHoverPort *tool_hover,
-      ViewportCurveInteractionPort *curve);
+      ViewportCurveInteractionPort *curve,
+      ViewportRuntimeBindingToken runtime_binding);
 
   void handle_material_interactions(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
       const ViewportToolResult &tool_result,
-      const ViewportBeforeToolInteractionResult &before_tool);
+      const ViewportBeforeToolInteractionResult &before_tool,
+      ViewportRuntimeBindingToken runtime_binding);
   [[nodiscard]] std::optional<ViewportBeforeToolInteractionResult>
   reserve_face_texture_transfer(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,

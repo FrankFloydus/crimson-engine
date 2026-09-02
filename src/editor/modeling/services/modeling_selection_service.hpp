@@ -85,8 +85,19 @@ public:
   select_all_in_constrained_component_scope(
       const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
-      const ModelingObjectRuntimeMap &object_map, bool invert,
+      const ModelingObjectRuntimeMap &object_map,
       int sticky_component_object_id) const;
+  /**
+   * Builds the directly pickable component universes for the current editing
+   * scope. This is a read-only host query; inversion policy stays in the
+   * portable modeling session.
+   */
+  [[nodiscard]] std::vector<ModelingComponentSelectionUniverse>
+  component_selection_universes(
+      const ModelingSelectionProjectionSnapshot &session,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_map,
+      quader_poly::PickOptions pick_options = {}) const;
   [[nodiscard]] ModelingSelectionProjectionApplyResult
   apply_component_selection_command(
       const ModelingSelectionProjectionSnapshot &session,

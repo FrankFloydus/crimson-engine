@@ -88,6 +88,18 @@ struct Selection {
 };
 
 /**
+ * Defines the component universe that a bulk selection command may affect.
+ * Components outside this set keep their current selection state, matching
+ * hidden/pickability-aware editor behavior.
+ */
+struct ComponentSelectionUniverse {
+  SelectionMode mode = SelectionMode::Vertex;
+  std::vector<ElementId> vertices;
+  std::vector<Edge> edges;
+  std::vector<ElementId> faces;
+};
+
+/**
  * Enumerates stale polygon selection liveness issues detected from a document snapshot.
  */
 enum class PolygonSelectionLivenessIssueCode {
@@ -205,6 +217,16 @@ selected_face_normals_in_comparison_space(
 [[nodiscard]] bool shrink_selection(
     const Document& document,
     Selection& selection);
+[[nodiscard]] ComponentSelectionUniverse all_component_selection_universe(
+    const Document& document,
+    SelectionMode mode);
+[[nodiscard]] bool invert_component_selection(
+    const Document& document,
+    Selection& selection);
+[[nodiscard]] bool invert_component_selection(
+    const Document& document,
+    Selection& selection,
+    const ComponentSelectionUniverse& universe);
 [[nodiscard]] bool apply_component_selection_command(
     const Document& document,
     Selection& selection,

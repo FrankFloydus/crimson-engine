@@ -507,6 +507,40 @@ void QtViewportPanel::reset_interactions(QuaderEditorApi *editor,
   }
 }
 
+void QtViewportPanel::abandon_interactions() {
+  ++runtime_binding_generation_;
+  interaction_editor_ = nullptr;
+  interaction_native_tools_ = nullptr;
+  workspace_ = nullptr;
+  persisted_camera_signature_valid_ = false;
+  active_tool_revision_valid_ = false;
+  set_modal_tool_owns_viewport_snapshot(false);
+  for (Pane &pane_state : panes_) {
+    if (pane_state.navigation_gizmo != nullptr) {
+      pane_state.navigation_gizmo->abandon_camera();
+    }
+    if (pane_state.surface != nullptr) {
+      pane_state.surface->abandon_input();
+    }
+  }
+  for (SplitHandleHost &handle : split_handles_) {
+    if (handle.widget != nullptr && QWidget::mouseGrabber() == handle.widget) {
+      handle.widget->releaseMouse();
+    }
+  }
+  split_handle_dragging_ = false;
+  input_router_.reset();
+  interaction_controller_.reset();
+  interaction_controller_.clear_modal_tool_state();
+  active_box_preview_ = {};
+  modal_tool_dragging_ = false;
+  pending_external_pointer_event_ = false;
+  pending_external_pointer_left_release_only_ = true;
+  suppressed_keybinding_chords_.clear();
+  linear_array_wheel_remainder_ = 0.0;
+  radial_array_wheel_remainder_ = 0.0;
+}
+
 void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
   interaction_controller_.cancel_pending_material_interaction();
   interaction_controller_.cancel_pending_selection_click();
@@ -2045,6 +2079,8 @@ void QtViewportPanel::process_viewport_input(
   if (workspace_ == nullptr) {
     return;
   }
+  const std::uint64_t input_binding_generation =
+      runtime_binding_generation_;
   if (interaction_editor_ != &editor) {
     refresh_keybinding_presentation(editor);
   }
@@ -2052,9 +2088,18 @@ void QtViewportPanel::process_viewport_input(
   if (native_tools.refresh().changed) {
     hover_controller_.invalidate();
   }
+  if (runtime_binding_generation_ != input_binding_generation) {
+    return;
+  }
   const NativeViewportToolPresentationSnapshot native_presentation =
       native_tools.presentation_snapshot();
-  sync_active_tool_from_editor(editor, modeling, native_tools);
+  sync_active_tool_from_editor(
+      editor, modeling, native_tools,
+      {.current_generation = &runtime_binding_generation_,
+       .expected_generation = input_binding_generation});
+  if (runtime_binding_generation_ != input_binding_generation) {
+    return;
+  }
 
   const float delta_seconds = static_cast<float>(
       std::clamp(frame_delta_seconds, 0.0, 0.1));
@@ -2206,9 +2251,29 @@ void QtViewportPanel::process_viewport_input(
       !input.wheel_input_edges.empty();
   ViewportKeybindingResolver::resolve(
       editor, input_router_.state(), input, suppressed_keybinding_chords_,
-      linear_array_wheel_remainder_, radial_array_wheel_remainder_);
-  if (keybinding_edge_can_change_tool &&
-      sync_active_tool_from_editor(editor, modeling, native_tools)) {
+      linear_array_wheel_remainder_, radial_array_wheel_remainder_,
+      {.current_generation = &runtime_binding_generation_,
+       .expected_generation = input_binding_generation});
+  if (runtime_binding_generation_ != input_binding_generation) {
+    // A synchronous command (for example Close Scene) rebound every runtime
+    // owner while this stack still holds references to the previous scene.
+    // The rebind has already abandoned Qt-owned state, so no old owner may be
+    // observed again in this input frame.
+    suppressed_keybinding_chords_.clear();
+    linear_array_wheel_remainder_ = 0.0;
+    radial_array_wheel_remainder_ = 0.0;
+    return;
+  }
+  const bool active_tool_changed =
+      keybinding_edge_can_change_tool &&
+      sync_active_tool_from_editor(
+          editor, modeling, native_tools,
+          {.current_generation = &runtime_binding_generation_,
+           .expected_generation = input_binding_generation});
+  if (runtime_binding_generation_ != input_binding_generation) {
+    return;
+  }
+  if (active_tool_changed) {
     input.modal_tool_active =
         interaction_controller_.has_active_modal_preview(
             *preview_ports.preview, resolved_grid_snap_enabled) ||
@@ -2258,16 +2323,22 @@ void QtViewportPanel::process_viewport_input(
   const ViewportShortcutControllerResult preview_shortcut =
       shortcut_controller_.handle_operation_preview_shortcut(
           result, input.operation_preview_active, editor);
+  if (runtime_binding_generation_ != input_binding_generation) {
+    return;
+  }
   const bool preview_shortcut_consumed = preview_shortcut.consumed;
   if (preview_shortcut.invalidate_hover) {
     hover_controller_.invalidate();
   }
   if (!preview_shortcut_consumed && result.shortcut_handled &&
       result.shortcut.kind == ViewportShortcutKind::SetSelectionMode) {
-    log_command_failure(
-        "Selection mode change",
-        editor.selection().set_mode(to_api_selection_mode(
-            viewport_selection_mode_to_app(result.shortcut.selection_mode))));
+    const QuaderApiVoidResult mode_change = editor.selection().set_mode(
+        to_api_selection_mode(
+            viewport_selection_mode_to_app(result.shortcut.selection_mode)));
+    if (runtime_binding_generation_ != input_binding_generation) {
+      return;
+    }
+    log_command_failure("Selection mode change", mode_change);
     input_router_.set_selection_mode(app_selection_mode_to_viewport(
         to_modeling_selection_mode(editor.selection().summary().mode)));
     interaction_controller_.clear_modal_drag_state();
@@ -2293,10 +2364,16 @@ void QtViewportPanel::process_viewport_input(
               : QuaderApiVoidResult{.ok = false,
                                     .changed = false,
                                     .message = "No active viewport tool."};
+      if (runtime_binding_generation_ != input_binding_generation) {
+        return;
+      }
       if (!activation.ok) {
         log_command_failure("Viewport tool activation", activation);
         input_router_.set_active_tool(ViewportToolId::Select);
         (void)editor.tools().activate(ViewportToolId::Select);
+        if (runtime_binding_generation_ != input_binding_generation) {
+          return;
+        }
       }
       interaction_controller_.clear_modal_tool_state();
       interaction_controller_.reset(&editor, native_tools);
@@ -2306,6 +2383,9 @@ void QtViewportPanel::process_viewport_input(
   if (!preview_shortcut_consumed) {
     const ViewportShortcutControllerResult modeling_shortcut =
         shortcut_controller_.handle_modeling_shortcut(result, editor);
+    if (runtime_binding_generation_ != input_binding_generation) {
+      return;
+    }
     if (modeling_shortcut.invalidate_hover) {
       hover_controller_.invalidate();
     }
@@ -2465,13 +2545,23 @@ void QtViewportPanel::process_viewport_input(
   auto cancel_active_modal_tool = [&](bool exit_tool) {
     if (interaction_controller_.active_tool_uses_editor_native_lifecycle(
             input_router_.state().active_tool)) {
-      log_command_failure("Native viewport tool cancel",
-                          editor.tools().cancel_active_tool_preview());
+      const QuaderApiVoidResult canceled =
+          editor.tools().cancel_active_tool_preview();
+      if (runtime_binding_generation_ != input_binding_generation) {
+        return false;
+      }
+      log_command_failure("Native viewport tool cancel", canceled);
       native_tools.clear_pointer_drag_state();
-      sync_active_tool_from_editor(editor, modeling, native_tools);
+      sync_active_tool_from_editor(
+          editor, modeling, native_tools,
+          {.current_generation = &runtime_binding_generation_,
+           .expected_generation = input_binding_generation});
+      if (runtime_binding_generation_ != input_binding_generation) {
+        return false;
+      }
       interaction_controller_.reset(&editor, native_tools);
       hover_controller_.invalidate();
-      return;
+      return true;
     }
     ViewportModelingToolPortCallbacks callbacks;
     callbacks.invalidate_hover = [&]() { hover_controller_.invalidate(); };
@@ -2490,17 +2580,28 @@ void QtViewportPanel::process_viewport_input(
         ViewportToolEvent{.kind = ViewportToolEventKind::Cancel,
                           .tool = input_router_.state().active_tool,
                           .exit_active_modal_tool = exit_tool});
+    if (runtime_binding_generation_ != input_binding_generation) {
+      return false;
+    }
     interaction_controller_.reset(&editor, native_tools);
     hover_controller_.invalidate();
+    return true;
   };
 
   bool cancel_consumed = false;
   if (!preview_shortcut_consumed && result.cancel_requested) {
-    if (interaction_controller_.cancel_active_drag(editor, native_tools)) {
+    const bool active_drag_canceled =
+        interaction_controller_.cancel_active_drag(editor, native_tools);
+    if (runtime_binding_generation_ != input_binding_generation) {
+      return;
+    }
+    if (active_drag_canceled) {
       cancel_consumed = true;
     }
     if (!cancel_consumed && modal_tool_owns_viewport()) {
-      cancel_active_modal_tool(true);
+      if (!cancel_active_modal_tool(true)) {
+        return;
+      }
       cancel_consumed = true;
     }
   }
@@ -2523,7 +2624,9 @@ void QtViewportPanel::process_viewport_input(
           .cut_dragging = current_tool_status.cut_dragging,
           .mirror_dragging = current_tool_status.mirror_dragging,
       })) {
-    cancel_active_modal_tool(true);
+    if (!cancel_active_modal_tool(true)) {
+      return;
+    }
     cancel_consumed = true;
   }
 
@@ -2557,10 +2660,19 @@ void QtViewportPanel::process_viewport_input(
                   },
               .cancel_consumed = cancel_consumed,
           });
+  if (runtime_binding_generation_ != input_binding_generation) {
+    return;
+  }
   const ViewportNativeToolInteractionResult &native_tool_result =
       pointer_lifecycle.native_tool;
   if (native_tool_result.sync_active_tool) {
-    sync_active_tool_from_editor(editor, modeling, native_tools);
+    sync_active_tool_from_editor(
+        editor, modeling, native_tools,
+        {.current_generation = &runtime_binding_generation_,
+         .expected_generation = input_binding_generation});
+    if (runtime_binding_generation_ != input_binding_generation) {
+      return;
+    }
   }
   if (native_tool_result.claim_interaction_pane) {
     interaction_pane_id_ = *input_pane;
@@ -2795,11 +2907,19 @@ void QtViewportPanel::process_viewport_input(
                           interaction_frame.monotonic_time_seconds,
                   },
           });
+  if (runtime_binding_generation_ != input_binding_generation) {
+    return;
+  }
   active_box_preview_ = interaction_controller_.box_preview(
       *preview_ports.preview, resolved_grid_snap_enabled);
   interaction_controller_.handle_after_active_tool(
       editor, interaction_frame, active_tool_result, before_tool,
-      native_tools, tool_context.ports.hover);
+      native_tools, tool_context.ports.hover,
+      {.current_generation = &runtime_binding_generation_,
+       .expected_generation = input_binding_generation});
+  if (runtime_binding_generation_ != input_binding_generation) {
+    return;
+  }
 
   bool show_context_menu = false;
   QPoint context_menu_global_point;
@@ -2837,6 +2957,9 @@ void QtViewportPanel::process_viewport_input(
               static_cast<QuaderModelingObjectId>(
                   material_face_target->object_id),
               static_cast<QuaderElementId>(material_face_target->face_id));
+      if (runtime_binding_generation_ != input_binding_generation) {
+        return;
+      }
       if (material.ok()) {
         context_menu_material_under_mouse = material.value().id;
       }
@@ -2844,6 +2967,9 @@ void QtViewportPanel::process_viewport_input(
     const QuaderSelectionSummary summary =
         interaction_controller_.pick_context_menu_target(editor,
                                                          context_frame);
+    if (runtime_binding_generation_ != input_binding_generation) {
+      return;
+    }
     context_menu_selection_mode = summary.mode;
     const QuaderActionQuery query{
         .surface = QuaderActionSurface::ViewportContextMenu,
@@ -2905,13 +3031,23 @@ void QtViewportPanel::process_viewport_input(
         *pane_state.surface_container, context_menu_global_point, editor,
         input_router_, *localization_, context_menu_action_set,
         context_menu_selection_mode, context_menu_material_under_mouse,
-        open_material_editor_callback_);
+        open_material_editor_callback_,
+        {.current_generation = &runtime_binding_generation_,
+         .expected_generation = input_binding_generation});
+    if (runtime_binding_generation_ != input_binding_generation) {
+      return;
+    }
   }
   if (show_delete_popup &&
       delete_popup_presenter_.show(
           *pane_state.surface_container, delete_popup_global_point, editor,
-    modeling, input_router_, *localization_)) {
+          modeling, input_router_, *localization_,
+          {.current_generation = &runtime_binding_generation_,
+           .expected_generation = input_binding_generation})) {
     hover_controller_.invalidate();
+  }
+  if (runtime_binding_generation_ != input_binding_generation) {
+    return;
   }
   const ModelingToolStatus final_tool_status = modeling.tool_status();
   modal_tool_dragging_ = final_tool_status.insert_edge_loop_dragging ||
@@ -2929,7 +3065,8 @@ void QtViewportPanel::process_viewport_input(
 
 bool QtViewportPanel::sync_active_tool_from_editor(
     QuaderEditorApi &editor, ModelingSessionService &modeling,
-    NativeViewportToolCoordinator &native_tools) {
+    NativeViewportToolCoordinator &native_tools,
+    ViewportRuntimeBindingToken runtime_binding) {
   input_router_.set_selection_mode(
       app_selection_mode_to_viewport(modeling.selection_mode()));
   input_router_.sync_grid_preset_snapshot(workspace_->grid_preset());
@@ -2953,6 +3090,9 @@ bool QtViewportPanel::sync_active_tool_from_editor(
     interaction_controller_.clear_modal_tool_state();
     native_tools.clear_pointer_drag_state();
     const QuaderApiVoidResult cleared_hover = editor.selection().clear_hover();
+    if (!runtime_binding.current()) {
+      return changed;
+    }
     if (!cleared_hover.ok()) {
       LOG_ERROR("Viewport tool activation hover clear failed: {}",
                 cleared_hover.error_message().empty()

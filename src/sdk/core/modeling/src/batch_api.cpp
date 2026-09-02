@@ -121,9 +121,9 @@ find_alias(const std::vector<std::pair<std::string, ObjectId>> &aliases,
   return step.alias.empty() ? step.box.name : step.alias;
 }
 
-[[nodiscard]] OperationReceipt batch_failure(ModelingApiContext &context,
-                                             Error error,
-                                             std::size_t undo_mark) {
+[[nodiscard]] OperationReceipt batch_failure(
+    ModelingApiContext &context, Error error, std::size_t undo_mark,
+    const ModelingSelectionInteractionState &selection_interaction) {
   const std::size_t current_depth = context.session.undo_depth();
   const bool needs_rollback = current_depth > undo_mark;
   const bool history_rewound = current_depth < undo_mark;
@@ -140,6 +140,7 @@ find_alias(const std::vector<std::pair<std::string, ObjectId>> &aliases,
     });
     error = std::move(rollback_error);
   }
+  restore_selection_interaction(context, selection_interaction);
   detail::record_error(context, error);
   return detail::failed_receipt(error, detail::current_revisions(context));
 }
@@ -149,11 +150,13 @@ void finish_batch_guard(ModelingApiContext &context) {
   static_cast<void>(ModelingSessionTransactionAccess::finish(context.session));
 }
 
-void record_batch_step_failure(BatchResult &result,
-                               ModelingApiContext &context, Error error,
-                               std::size_t undo_mark) {
+void record_batch_step_failure(
+    BatchResult &result, ModelingApiContext &context, Error error,
+    std::size_t undo_mark,
+    const ModelingSelectionInteractionState &selection_interaction) {
   finish_batch_guard(context);
-  result.receipt = batch_failure(context, error, undo_mark);
+  result.receipt =
+      batch_failure(context, error, undo_mark, selection_interaction);
   result.meshes.clear();
   result.step_receipts.push_back(
       detail::failed_receipt(error, result.receipt.revisions));
@@ -309,10 +312,12 @@ BatchResult ModelingBatch::commit() {
   ModelingApi api(state_->context);
   result.context_ = state_->context;
   const std::size_t undo_mark = state_->context->session.undo_depth();
+  const ModelingSelectionInteractionState selection_interaction =
+      capture_selection_interaction(*state_->context);
   if (std::optional<Error> validation =
           validate_batch_dependencies(state_->steps)) {
-    result.receipt =
-        batch_failure(*state_->context, std::move(*validation), undo_mark);
+    result.receipt = batch_failure(*state_->context, std::move(*validation),
+                                   undo_mark, selection_interaction);
     return result;
   }
   if (!ModelingSessionTransactionAccess::begin(state_->context->session)) {
@@ -335,24 +340,28 @@ BatchResult ModelingBatch::commit() {
         mesh = api.create_box(step.box);
       } catch (const ModelingException &exception) {
         record_batch_step_failure(result, *state_->context,
-                                  exception.error(), undo_mark);
+                                  exception.error(), undo_mark,
+                                  selection_interaction);
         return result;
       } catch (const std::exception &exception) {
         record_batch_step_failure(
             result, *state_->context,
-            unexpected_batch_exception("create_box", &exception), undo_mark);
+            unexpected_batch_exception("create_box", &exception), undo_mark,
+            selection_interaction);
         return result;
       } catch (...) {
         record_batch_step_failure(
             result, *state_->context,
-            unexpected_batch_exception("create_box"), undo_mark);
+            unexpected_batch_exception("create_box"), undo_mark,
+            selection_interaction);
         return result;
       }
       if (state_->context->error_epoch != error_epoch) {
         const Error error = state_->context->last_error.value_or(make_error(
             ErrorCode::InternalError,
             "Batch create_box recorded an error without diagnostics."));
-        record_batch_step_failure(result, *state_->context, error, undo_mark);
+        record_batch_step_failure(result, *state_->context, error, undo_mark,
+                                  selection_interaction);
         return result;
       }
       if (!mesh.valid()) {
@@ -360,7 +369,7 @@ BatchResult ModelingBatch::commit() {
             result, *state_->context,
             make_error(ErrorCode::InternalError,
                        "Batch create_box did not create a mesh."),
-            undo_mark);
+            undo_mark, selection_interaction);
         return result;
       }
       result.meshes.push_back({step_alias(step), mesh.id()});
@@ -375,7 +384,7 @@ BatchResult ModelingBatch::commit() {
           result, *state_->context,
           make_error(ErrorCode::InvalidArgument,
                      "Batch mesh alias is not available: " + step.alias),
-          undo_mark);
+          undo_mark, selection_interaction);
       return result;
     }
 
@@ -393,7 +402,8 @@ BatchResult ModelingBatch::commit() {
         const Error error = state_->context->last_error.value_or(make_error(
             ErrorCode::InternalError,
             "Batch mesh operation recorded an error without diagnostics."));
-        record_batch_step_failure(result, *state_->context, error, undo_mark);
+        record_batch_step_failure(result, *state_->context, error, undo_mark,
+                                  selection_interaction);
         return result;
       }
       const OperationReceipt observed =
@@ -406,7 +416,8 @@ BatchResult ModelingBatch::commit() {
                 ? make_error(ErrorCode::InternalError,
                              "Batch callback returned failure without an error.")
                 : receipt.error;
-        record_batch_step_failure(result, *state_->context, error, undo_mark);
+        record_batch_step_failure(result, *state_->context, error, undo_mark,
+                                  selection_interaction);
         return result;
       } else if (receipt.changed != observed.changed ||
                  !same_dirty(receipt.dirty, observed.dirty)) {
@@ -414,7 +425,7 @@ BatchResult ModelingBatch::commit() {
             result, *state_->context,
             make_error(ErrorCode::InternalError,
                        "Batch callback receipt does not match committed state."),
-            undo_mark);
+            undo_mark, selection_interaction);
         return result;
       } else {
         receipt.revisions = observed.revisions;
@@ -422,17 +433,20 @@ BatchResult ModelingBatch::commit() {
       result.step_receipts.push_back(std::move(receipt));
     } catch (const ModelingException &exception) {
       record_batch_step_failure(result, *state_->context,
-                                exception.error(), undo_mark);
+                                exception.error(), undo_mark,
+                                selection_interaction);
       return result;
     } catch (const std::exception &exception) {
       record_batch_step_failure(
           result, *state_->context,
-          unexpected_batch_exception("mesh callback", &exception), undo_mark);
+          unexpected_batch_exception("mesh callback", &exception), undo_mark,
+          selection_interaction);
       return result;
     } catch (...) {
       record_batch_step_failure(
           result, *state_->context,
-          unexpected_batch_exception("mesh callback"), undo_mark);
+          unexpected_batch_exception("mesh callback"), undo_mark,
+          selection_interaction);
       return result;
     }
   }
@@ -443,7 +457,7 @@ BatchResult ModelingBatch::commit() {
         *state_->context,
         make_error(ErrorCode::InvalidArgument,
                    "Batch callback violated the atomic transaction boundary."),
-        undo_mark);
+        undo_mark, selection_interaction);
     result.meshes.clear();
     return result;
   }
@@ -452,7 +466,7 @@ BatchResult ModelingBatch::commit() {
         *state_->context,
         make_error(ErrorCode::InternalError,
                    "Batch history crossed below its transaction boundary."),
-        undo_mark);
+        undo_mark, selection_interaction);
     result.meshes.clear();
     return result;
   }

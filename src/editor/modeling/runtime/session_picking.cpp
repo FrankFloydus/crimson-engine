@@ -2663,10 +2663,11 @@ bool pick_select_all_faces(
 	return true;
 }
 
-bool pick_select_edge_loop(
+bool pick_select_edge_traversal(
 		std::vector<PolygonObject>& objects,
 		SelectionMode& mode,
 		SelectionEditOperation operation,
+		EdgeSelectionTraversal traversal,
 		const quader_poly::Ray& ray,
 		int& active_object_id,
 		quader_poly::PickOptions pick_options,
@@ -2675,13 +2676,11 @@ bool pick_select_edge_loop(
 		std::span<const PickObjectTransform> object_transforms)
 {
   const bool replace_selection = operation == SelectionEditOperation::Replace;
-  const bool remove_selection_value =
-      operation == SelectionEditOperation::Remove;
+  const bool prefer_selected_hit =
+      operation == SelectionEditOperation::Remove ||
+      operation == SelectionEditOperation::Toggle;
   apply_editor_surface_pick_policy(pick_options);
   if (objects.empty()) {
-    if (replace_selection) {
-      clear_selection(objects, active_object_id);
-    }
     return false;
   }
   mode = SelectionMode::Edge;
@@ -2693,7 +2692,7 @@ bool pick_select_edge_loop(
   if (const std::optional<SourceWireComponentPick> source_wire_hit =
           pick_active_source_wire_component(objects, SelectionMode::Edge, ray,
                                             options, -1,
-                                            remove_selection_value,
+                                            prefer_selected_hit,
                                             object_bounds,
                                             face_geometry,
                                             object_transforms)) {
@@ -2706,9 +2705,6 @@ bool pick_select_edge_loop(
                             object_bounds, face_geometry, -1,
                             object_transforms)) ||
       hit.kind != quader_poly::ElementKind::Edge) {
-    if (replace_selection) {
-      clear_selection(objects, active_object_id);
-    }
     return false;
   }
         const PickObjectTransform *object_transform =
@@ -2724,11 +2720,46 @@ bool pick_select_edge_loop(
         const quader_poly::ElementId context_face_id =
             edge_loop_context_face_id(objects[hit_index].document, hit,
                                       local_ray, context_options);
-        const std::vector<quader_poly::Edge> loop_edges =
-            quader_poly::edge_loop_edges(objects[hit_index].document, hit.edge,
-                                         context_face_id);
-	if (loop_edges.empty()) {
+        quader_poly::Document const& hit_document =
+            objects[hit_index].document;
+        std::vector<quader_poly::Edge> traversal_edges =
+            traversal == EdgeSelectionTraversal::Ring
+                ? quader_poly::edge_ring_edges(hit_document, hit.edge)
+                : quader_poly::edge_loop_edges(hit_document, hit.edge,
+                                               context_face_id);
+	if (traversal_edges.empty()) {
 		return false;
+	}
+	PolygonObject& object = objects[hit_index];
+	quader_poly::document_internal::DocumentPickFacts pick_facts(
+		object.document, options);
+	std::erase_if(traversal_edges, [&](const quader_poly::Edge edge) {
+		return !pick_facts.edge_can_be_picked(edge);
+	});
+	if (traversal_edges.empty()) {
+		return false;
+	}
+	const bool target_selected =
+		quader_poly::selection_contains(object.selection, hit.edge);
+	const bool remove_selection_value =
+		operation == SelectionEditOperation::Remove ||
+		(operation == SelectionEditOperation::Toggle && target_selected);
+	if (traversal == EdgeSelectionTraversal::Loop && replace_selection &&
+		target_selected &&
+		std::ranges::all_of(traversal_edges, [&](const quader_poly::Edge edge) {
+			return quader_poly::selection_contains(object.selection, edge);
+		})) {
+		std::vector<quader_poly::Edge> boundary_edges =
+			quader_poly::edge_boundary_component_edges(hit_document, hit.edge);
+		std::erase_if(boundary_edges, [&](const quader_poly::Edge edge) {
+			return !pick_facts.edge_can_be_picked(edge);
+		});
+		if (!boundary_edges.empty() &&
+			!std::ranges::all_of(boundary_edges, [&](const quader_poly::Edge edge) {
+				return quader_poly::selection_contains(object.selection, edge);
+			})) {
+			traversal_edges = std::move(boundary_edges);
+		}
 	}
 	for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
 		if (index != hit_index && replace_selection) {
@@ -2738,29 +2769,22 @@ bool pick_select_edge_loop(
 		}
 	}
 
-	PolygonObject& object = objects[hit_index];
 	const bool was_edit_target = object.selected || object.id == active_object_id;
-        quader_poly::document_internal::DocumentPickFacts pick_facts(
-            object.document, options);
         object.selection.mode = quader_poly::SelectionMode::Edge;
         if (replace_selection) {
 		object.selection.clear();
                 object.selection.mode = quader_poly::SelectionMode::Edge;
         }
 	if (remove_selection_value) {
-		for (const quader_poly::Edge& loop_edge : loop_edges) {
-			if (!pick_facts.edge_can_be_picked(loop_edge)) {
-				continue;
-			}
+		for (const quader_poly::Edge& loop_edge : traversal_edges) {
 			const quader_poly::Edge normalized = quader_poly::make_edge(loop_edge.a, loop_edge.b);
 			std::erase_if(object.selection.edges, [normalized](quader_poly::Edge edge) {
 				return quader_poly::make_edge(edge.a, edge.b) == normalized;
 			});
 		}
 	} else {
-		for (const quader_poly::Edge& loop_edge : loop_edges) {
-			if (pick_facts.edge_can_be_picked(loop_edge) &&
-					!quader_poly::selection_contains(object.selection, loop_edge)) {
+		for (const quader_poly::Edge& loop_edge : traversal_edges) {
+			if (!quader_poly::selection_contains(object.selection, loop_edge)) {
 				object.selection.edges.push_back(quader_poly::make_edge(loop_edge.a, loop_edge.b));
 			}
 		}
@@ -2782,6 +2806,40 @@ bool pick_select_edge_loop(
 	object.component_edit_target = true;
 	active_object_id = object.id;
 	return true;
+}
+
+bool pick_select_edge_loop(
+		std::vector<PolygonObject>& objects,
+		SelectionMode& mode,
+		SelectionEditOperation operation,
+		const quader_poly::Ray& ray,
+		int& active_object_id,
+		quader_poly::PickOptions pick_options,
+		std::span<const PickObjectBounds> object_bounds,
+		std::span<const PickObjectFaceGeometry> face_geometry,
+		std::span<const PickObjectTransform> object_transforms)
+{
+	return pick_select_edge_traversal(
+		objects, mode, operation, EdgeSelectionTraversal::Loop, ray,
+		active_object_id, pick_options, object_bounds, face_geometry,
+		object_transforms);
+}
+
+bool pick_select_edge_ring(
+		std::vector<PolygonObject>& objects,
+		SelectionMode& mode,
+		SelectionEditOperation operation,
+		const quader_poly::Ray& ray,
+		int& active_object_id,
+		quader_poly::PickOptions pick_options,
+		std::span<const PickObjectBounds> object_bounds,
+		std::span<const PickObjectFaceGeometry> face_geometry,
+		std::span<const PickObjectTransform> object_transforms)
+{
+	return pick_select_edge_traversal(
+		objects, mode, operation, EdgeSelectionTraversal::Ring, ray,
+		active_object_id, pick_options, object_bounds, face_geometry,
+		object_transforms);
 }
 
 bool pick_select_all_vertices(
@@ -2995,7 +3053,7 @@ ApplyPickSelectionProjectionResult apply_pick_selection(
             (operation == SelectionEditOperation::Replace ||
              operation == SelectionEditOperation::Add ||
              operation == SelectionEditOperation::Remove) &&
-            !request.edge_loop_select) {
+            request.edge_traversal == EdgeSelectionTraversal::None) {
           quader_poly::PickOptions options = request.pick_options;
           apply_editor_surface_pick_policy(options);
           options.mode = quader_poly::SelectionMode::Face;
@@ -3061,10 +3119,11 @@ ApplyPickSelectionProjectionResult apply_pick_selection(
 		return projection;
 	}
 
-	const bool edge_loop_select =
-		request.edge_loop_select && mode == SelectionMode::Edge;
+	const bool edge_traversal_select =
+		request.edge_traversal != EdgeSelectionTraversal::None &&
+		mode == SelectionMode::Edge;
 	const bool multi_click = request.click_count > 1;
-	const bool single_component_pick = !multi_click && !edge_loop_select;
+	const bool single_component_pick = !multi_click && !edge_traversal_select;
         if (request.preserve_existing_component_selection_on_hit &&
             operation == SelectionEditOperation::Replace &&
             single_component_pick &&
@@ -3110,13 +3169,20 @@ ApplyPickSelectionProjectionResult apply_pick_selection(
               resolved_active_object_id,
               request.pick_options, request.object_bounds,
               request.face_geometry, request.object_transforms);
-        } else if ((multi_click || edge_loop_select) &&
+        } else if ((multi_click || edge_traversal_select) &&
                    mode == SelectionMode::Edge) {
-          result.hit = pick_select_edge_loop(
-              picking_objects, mode, operation, request.ray,
-              resolved_active_object_id,
-              request.pick_options, request.object_bounds,
-              request.face_geometry, request.object_transforms);
+          result.hit =
+              request.edge_traversal == EdgeSelectionTraversal::Ring
+                  ? pick_select_edge_ring(
+                        picking_objects, mode, operation, request.ray,
+                        resolved_active_object_id, request.pick_options,
+                        request.object_bounds, request.face_geometry,
+                        request.object_transforms)
+                  : pick_select_edge_loop(
+                        picking_objects, mode, operation, request.ray,
+                        resolved_active_object_id, request.pick_options,
+                        request.object_bounds, request.face_geometry,
+                        request.object_transforms);
         } else if (multi_click && mode == SelectionMode::Vertex) {
           result.hit = pick_select_all_vertices(
               picking_objects, mode, operation, request.ray,

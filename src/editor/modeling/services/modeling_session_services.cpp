@@ -48,6 +48,7 @@
 #include <editor/interactions/viewport_projection.hpp>
 #include <editor/modeling/runtime/runtime_command.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document_picking.hpp>
 #include <quader/modeling/neutral/polygon/document_selection.hpp>
 
 namespace quader {
@@ -533,6 +534,19 @@ to_runtime_selection_edit(ModelingSelectionEdit edit) {
   return quader_editor_core::SelectionEditOperation::Replace;
 }
 
+quader_editor_core::EdgeSelectionTraversal to_runtime_edge_traversal(
+    ModelingEdgeSelectionTraversal traversal) {
+  switch (traversal) {
+  case ModelingEdgeSelectionTraversal::Loop:
+    return quader_editor_core::EdgeSelectionTraversal::Loop;
+  case ModelingEdgeSelectionTraversal::Ring:
+    return quader_editor_core::EdgeSelectionTraversal::Ring;
+  case ModelingEdgeSelectionTraversal::None:
+    return quader_editor_core::EdgeSelectionTraversal::None;
+  }
+  return quader_editor_core::EdgeSelectionTraversal::None;
+}
+
 ModelingActiveSelectionKind
 modeling_active_selection_kind_from_runtime(
     quader_editor_core::ActiveSelectionKind kind) {
@@ -782,6 +796,43 @@ void bake_picking_object_world_transform(
     vertex.position = transform_point(transform.world_from_object,
                                       vertex.position);
   }
+}
+
+[[nodiscard]] ModelingComponentSelectionUniverse
+pickable_component_selection_universe(
+    const quader_editor_core::PolygonObject &object,
+    quader_editor_core::SelectionMode mode,
+    quader_poly::PickOptions pick_options) {
+  ModelingComponentSelectionUniverse universe;
+  universe.modeling_object_id = object.id;
+  universe.mode = runtime_selection_mode_to_app(mode);
+  pick_options.mode = quader_editor_core::component_selection_mode(mode);
+  quader_poly::DocumentPickQuery pick_query(object.document, pick_options);
+  switch (mode) {
+  case quader_editor_core::SelectionMode::Edge:
+    for (const quader_poly::Edge edge : pick_query.edges()) {
+      if (pick_query.edge_can_be_picked(edge)) {
+        universe.edges.emplace_back(edge.a, edge.b);
+      }
+    }
+    break;
+  case quader_editor_core::SelectionMode::Face:
+    for (const quader_poly::Face &face : object.document.faces) {
+      if (!pick_options.hides_material_slot(face.material_slot)) {
+        universe.faces.push_back(face.id);
+      }
+    }
+    break;
+  case quader_editor_core::SelectionMode::Vertex:
+  case quader_editor_core::SelectionMode::Object:
+    for (const quader_poly::Vertex &vertex : object.document.vertices) {
+      if (pick_query.vertex_can_be_picked(vertex.id)) {
+        universe.vertices.push_back(vertex.id);
+      }
+    }
+    break;
+  }
+  return universe;
 }
 
 } // namespace
@@ -1426,6 +1477,16 @@ ModelingSelectionService::apply_pick_selection(
   const std::span<const quader_editor_core::PickObjectTransform>
       object_transforms = cached_local_picking_transforms(
           session, scene, object_registry);
+  const ModelingEdgeSelectionTraversal edge_traversal =
+      request.edge_traversal_requested(
+          runtime_selection_mode_to_app(session.selection_mode()));
+  const quader_editor_core::SelectionEditOperation selection_edit =
+      edge_traversal != ModelingEdgeSelectionTraversal::None
+          ? (request.shift_pressed
+                 ? quader_editor_core::SelectionEditOperation::Toggle
+                 : quader_editor_core::SelectionEditOperation::Replace)
+          : quader_editor_core::selection_edit_operation_from_modifiers(
+                request.control_pressed, request.shift_pressed);
   quader_editor_core::ApplyPickSelectionProjectionResult projected =
       quader_editor_core::apply_pick_selection(
           std::vector<quader_editor_core::PolygonObject>(
@@ -1434,14 +1495,11 @@ ModelingSelectionService::apply_pick_selection(
           std::vector<quader_editor_core::PolygonObject>(cached_objects.begin(),
                                                          cached_objects.end()),
           quader_editor_core::ApplyPickSelectionRequest{
-              .operation =
-                  quader_editor_core::selection_edit_operation_from_modifiers(
-                      request.control_pressed,
-                      request.shift_pressed),
+              .operation = selection_edit,
               .ray = to_runtime_ray(request.ray),
               .pick_options = pick_options,
               .click_count = request.click_count,
-              .edge_loop_select = request.alt_pressed,
+              .edge_traversal = to_runtime_edge_traversal(edge_traversal),
               .preserve_existing_component_selection_on_hit =
                   request.preserve_existing_component_selection_on_hit,
               .preserve_selection_on_selected_hit =
@@ -1608,7 +1666,7 @@ std::optional<ModelingSelectionProjectionCommandResult>
 ModelingSelectionService::select_all_in_constrained_component_scope(
     const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene,
-    const ModelingObjectRuntimeMap &object_map, bool invert,
+    const ModelingObjectRuntimeMap &object_map,
     int sticky_component_object_id) const {
   const bool instance_scope_active = instance_edit_scope().active();
   const bool viewport_scope_active = viewport_visibility_active();
@@ -1616,8 +1674,7 @@ ModelingSelectionService::select_all_in_constrained_component_scope(
       app_selection_mode() == ModelingSelectionMode::Group) {
     return std::nullopt;
   }
-  const bool sticky_scope_requested =
-      !invert && sticky_component_object_id > 0;
+  const bool sticky_scope_requested = sticky_component_object_id > 0;
   if (!instance_scope_active && !viewport_scope_active &&
       !sticky_scope_requested) {
     return std::nullopt;
@@ -1676,10 +1733,7 @@ ModelingSelectionService::select_all_in_constrained_component_scope(
     switch (session.selection_mode()) {
     case quader_editor_core::SelectionMode::Edge:
       for (const quader_poly::Edge edge : cached_document_edges(object)) {
-        if (!invert ||
-            !quader_poly::selection_contains(object.selection, edge)) {
-          next_selection.edges.push_back(edge);
-        }
+        next_selection.edges.push_back(edge);
       }
       if (!next_selection.edges.empty()) {
         next_selection.has_active = true;
@@ -1689,10 +1743,7 @@ ModelingSelectionService::select_all_in_constrained_component_scope(
       break;
     case quader_editor_core::SelectionMode::Face:
       for (const quader_poly::Face &face : object.document.faces) {
-        if (!invert || !quader_poly::selection_contains_face(object.selection,
-                                                              face.id)) {
-          next_selection.faces.push_back(face.id);
-        }
+        next_selection.faces.push_back(face.id);
       }
       if (!next_selection.faces.empty()) {
         next_selection.has_active = true;
@@ -1703,10 +1754,7 @@ ModelingSelectionService::select_all_in_constrained_component_scope(
     case quader_editor_core::SelectionMode::Vertex:
     case quader_editor_core::SelectionMode::Object:
       for (const quader_poly::Vertex &vertex : object.document.vertices) {
-        if (!invert ||
-            !quader_poly::selection_contains(object.selection, vertex.id)) {
-          next_selection.vertices.push_back(vertex.id);
-        }
+        next_selection.vertices.push_back(vertex.id);
       }
       if (!next_selection.vertices.empty()) {
         next_selection.has_active = true;
@@ -1734,13 +1782,49 @@ ModelingSelectionService::select_all_in_constrained_component_scope(
       .command = {
           .ok = true,
           .changed = applied.changed,
-          .message = applied.changed
-                         ? (invert ? "Visible selection inverted."
-                                   : "Components selected.")
-                         : "Selection unchanged.",
+          .message = applied.changed ? "Components selected."
+                                     : "Selection unchanged.",
       },
       .projection = std::move(applied.projection),
   };
+}
+
+std::vector<ModelingComponentSelectionUniverse>
+ModelingSelectionService::component_selection_universes(
+    const ModelingSelectionProjectionSnapshot &session,
+    const SceneDocument &scene,
+    const ModelingObjectRuntimeMap &object_map,
+    quader_poly::PickOptions pick_options) const {
+  const quader_editor_core::SelectionMode mode = session.selection_mode();
+  if (mode == quader_editor_core::SelectionMode::Object ||
+      app_selection_mode() == ModelingSelectionMode::Group) {
+    return {};
+  }
+
+  const std::vector<quader_editor_core::PolygonObject> &picking_objects =
+      cached_local_picking_objects(session, scene, object_map);
+  const bool constrained_scope_defines_edit_targets =
+      instance_edit_scope().active() || viewport_visibility_active();
+
+  std::vector<ModelingComponentSelectionUniverse> universes;
+  universes.reserve(picking_objects.size());
+  std::unordered_set<int> visited_objects;
+  visited_objects.reserve(picking_objects.size());
+  for (const quader_editor_core::PolygonObject &object : picking_objects) {
+    const bool edit_target =
+        constrained_scope_defines_edit_targets || object.selected ||
+        object.component_edit_target ||
+        quader_editor_core::component_selection_has_mode_components(
+            object.selection, mode);
+    if (object.id <= 0 || !edit_target ||
+        !visited_objects.insert(object.id).second) {
+      continue;
+    }
+
+    universes.push_back(
+        pickable_component_selection_universe(object, mode, pick_options));
+  }
+  return universes;
 }
 
 ModelingSelectionProjectionApplyResult

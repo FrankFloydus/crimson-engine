@@ -580,7 +580,7 @@ ModelingCommandResult EditorSelectionService::set_component_selection(
     const ModelingComponentSelectionRequest &request) {
   const std::optional<EntityId> entity =
       modeling_.entity_for_modeling_object(request.modeling_object_id);
-  if (!entity.has_value() || !scene_target_selectable(*entity)) {
+  if (!entity.has_value() || !component_owner_selectable(*entity)) {
     return {.ok = false,
             .changed = false,
             .message = "The component owner is not visible in the current "
@@ -615,6 +615,20 @@ bool EditorSelectionService::scene_target_selectable(EntityId entity) const {
   return scene_scope_filter_ ? scene_scope_filter_(entity)
                              : scene_entity_selectable_for_user_selection(
                                    scene_, entity);
+}
+
+bool EditorSelectionService::component_owner_selectable(EntityId entity) const {
+  if (scene_target_selectable(entity)) {
+    return true;
+  }
+  if (!scene_entity_selectable_for_user_selection(scene_, entity)) {
+    return false;
+  }
+  const ModelingInstanceEditScope edit_scope = modeling_.instance_edit_scope();
+  return edit_scope.active() &&
+         scene_.containing_instance_definition(entity) ==
+             edit_scope.definition &&
+         entity != edit_scope.definition;
 }
 
 std::vector<EntityId>
@@ -673,17 +687,38 @@ ModelingCommandResult EditorSelectionService::invert() {
   }
 
   const std::vector<EntityId> current = scene_.selected_entities();
+  const EntityId current_active = scene_.primary_selection();
   const std::unordered_set<EntityId> current_membership(
       current.begin(), current.end());
+  std::vector<EntityId> candidates = scene_bulk_candidates(selection_mode);
+  std::erase_if(candidates, [this](EntityId entity) {
+    return !scene_.is_effectively_visible(entity);
+  });
+  const std::unordered_set<EntityId> candidate_membership(
+      candidates.begin(), candidates.end());
+
   std::vector<EntityId> selected;
-  for (const EntityId entity : scene_bulk_candidates(selection_mode)) {
+  selected.reserve(current.size() + candidates.size());
+  for (const EntityId entity : current) {
+    if (!candidate_membership.contains(entity)) {
+      selected.push_back(entity);
+    }
+  }
+  for (const EntityId entity : candidates) {
     if (!current_membership.contains(entity)) {
       selected.push_back(entity);
     }
   }
-  const EntityId active = selected.empty() ? kInvalidEntityId : selected.back();
+
+  const EntityId active =
+      std::find(selected.begin(), selected.end(), current_active) !=
+              selected.end()
+          ? current_active
+          : (selected.empty() ? kInvalidEntityId : selected.back());
+  // The XOR is already policy-resolved. Reapplying user pickability here would
+  // discard hidden, locked, or out-of-scope members that must stay selected.
   return modeling_command_result_from_document(
-      set_scene_selection(selected, active));
+      set_inspection_scene_selection(selected, active));
 }
 
 ModelingCommandResult EditorSelectionService::clear() {
@@ -1052,6 +1087,8 @@ ModelingCommandResult EditorSelectionService::restore_sub_selection_after_failur
 ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
     const ResolvedSelectionClickRequest &request) {
   const ModelingSelectionMode selection_mode = modeling_.selection_mode();
+  const ModelingEdgeSelectionTraversal edge_traversal =
+      request.policy.edge_traversal_requested(selection_mode);
   if (request.baseline.has_value() &&
       request.baseline->mode != selection_mode) {
     return {
@@ -1146,6 +1183,10 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
       return scene_pick_selection_result(kInvalidEntityId, selection_mode,
                                          request.policy, baseline);
     }
+    // Blender-style edge loop/ring gestures are inert when the pointer misses.
+    if (edge_traversal != ModelingEdgeSelectionTraversal::None) {
+      return {.command = {.ok = true}, .selection = summary()};
+    }
     ModelingCommandResult command{.ok = true};
     if (!request.policy.preserve_selection_on_miss &&
         click_selection_edit(request.policy) ==
@@ -1233,9 +1274,13 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
       .vertex = winner.vertex,
       .edge = {winner.edge_a, winner.edge_b},
       .face = winner.face,
-      .edit = click_selection_edit(request.policy),
+      .edit = edge_traversal != ModelingEdgeSelectionTraversal::None
+                  ? (request.policy.shift_pressed
+                         ? ModelingSelectionEdit::Toggle
+                         : ModelingSelectionEdit::Replace)
+                  : click_selection_edit(request.policy),
       .click_count = request.policy.click_count,
-      .edge_loop_select = request.policy.alt_pressed,
+      .edge_traversal = edge_traversal,
       .preserve_selection_on_selected_hit =
           request.policy.preserve_selection_on_selected_hit,
       .preserve_existing_component_selection_on_hit =

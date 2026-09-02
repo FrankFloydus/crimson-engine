@@ -9,6 +9,124 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-09-02 - Hidden-Aware Component Selection Inversion
+
+Task/context: Inverting multiple selected edge rings reselected the original
+edges because component inversion used duplicated whole-topology complements
+instead of one hidden/pickability-aware eligible universe.
+
+Invariant:
+
+- Component inversion is XOR over the host-resolved eligible universe only.
+  Hidden, locked, out-of-local-visibility, out-of-instance-edit-scope, and
+  material-slot-filtered components are outside that universe and keep their
+  prior selection state.
+- The native host resolves that universe through the same document-picking
+  projection used by viewport selection. The portable core accepts explicit
+  material-slot filtering, but the current product has no persisted per-component
+  material-slot hidden state; do not invent a second host-only material policy.
+- The portable polygon/session owners perform the actual inversion. Public SDK,
+  native host adapters, commands, and constrained-scope paths must route through
+  the same session batch path rather than computing their own complements.
+- A genuinely empty eligible universe is an exact no-op, including
+  `adopt_eligible_mode` public-facade calls that would otherwise convert the
+  stored component mode. Fully inverted edit participants remain selected so a
+  second invert can restore the original component set.
+- Switching from scene object selection that includes scene-only entities into a
+  component mode must commit the requested app mode after SDK synchronization;
+  object-selection sync is allowed to project selected mesh objects but must not
+  leave the app mode as Object.
+- Component inversion publication preserves selected scene-only entities and
+  their primary selection. Instance occurrences are intentionally not preserved
+  as scene-only component-mode companions; instance-edit component work uses the
+  active definition-member scope instead.
+- The public SDK facade skips selected non-mesh documents safely and retains each
+  mesh participant's component mode; one curve must not abort inversion for the
+  eligible meshes.
+
+Affected owners/files: SDK polygon/session selection, public SDK selection
+facade context, native modeling session/projection adapter, editor selection
+service, viewport edge traversal interaction, and selection overlay regressions.
+
+Verification: exact multi-ring tests assert the selected edge IDs and semantic
+overlay after invert and after the restoring second invert. Focused SDK/API,
+local-visibility, instance-scope, viewport, and Qt regressions passed; all 246 SDK
+consumer tests and all 504 modeling-domain tests passed; and
+`tools/regression_gate.ps1` passed.
+
+## 2026-09-02 - Runtime Rebind Invalidates Expired UI Owners
+
+Task/context: Quader fatal error `QDR-FATAL-0005` was an access violation while
+closing or replacing a project. A synchronous lifecycle mutation could destroy a
+`SceneSession` while retained Qt panels, input dispatch, or a nested presenter
+still held non-owning pointers to its runtime owners.
+
+Invariant:
+
+- Project/scene lifecycle APIs must install the replacement binding before they
+  publish close/switch events. Failed and repeated no-op closes must not rebind.
+- `UISystem::install_runtime_hooks()` must abandon retained panel state before
+  attaching replacement owners, and shutdown must clear runtime hooks before
+  callback owners are destroyed. Normal shutdown still cancels through live
+  owners; rebind abandonment is strictly owner-free.
+- `QtViewportPanel::abandon_interactions()` increments the shared
+  `ViewportRuntimeBindingToken`, nulls raw owners, abandons cameras, and asks each
+  `QtViewportSurface` to clear queued/held pointer state and suppress trailing
+  releases. Do not replace it with cleanup that calls the outgoing owners.
+- Every synchronous public mutation, command dispatch, tool phase, and nested
+  context/delete presenter must compare the binding token immediately afterward
+  before touching old state. Ordered key dispatch stops the remaining same-frame
+  edges after a rebind, and `App::render_frame()` reacquires the active scene
+  after viewport input.
+- Retained main-menu and command-filter objects rebind in place. Outliner,
+  Inspector, and Layers use owner-free abandonment plus generation fences around
+  mutations and nested event loops.
+
+Affected owners/files: project/scene public lifecycle APIs, `App`, `UISystem`,
+Qt viewport panel/surface/gizmo/presenters, keybinding resolver and viewport
+interaction controller, retained menu/filter, Outliner, Inspector, Layers, and
+Qt project/input regressions.
+
+Verification: synchronous owner-destruction tests cover project close, repeated
+no-op close, same-frame Ctrl+W then Ctrl+A dispatch, and Outliner command rebind;
+focused Qt close/rebind and source guardrails passed; and the complete
+`tools/regression_gate.ps1` passed.
+
+## 2026-09-02 - Blender-Style Edge Loop And Ring Selection
+
+Task/context: Edge-mode modified clicks needed Blender's loop/ring interaction instead of treating
+the primary modifier as the generic Remove edit or choosing a loop from the picked face context.
+
+Invariant:
+
+- In Edge mode, plain `Alt+LeftMouseClick` replaces selection with the loop through the seed;
+  `Ctrl+Alt+LeftMouseClick` (or canonical Command+Alt) replaces it with the ring. Shift changes
+  either gesture to a whole-set, seed-based toggle: remove when the seed was selected, add when it
+  was not. A traversal miss preserves selection. Ctrl/Command without Alt retains ordinary Remove.
+- `ViewportPointerGesture` owns the physical modifier chord captured at press, and
+  `ViewportSelectionInteraction` must carry that frozen chord through deferred click release.
+  Releasing Alt, Ctrl/Command, or Shift before LMB must not reinterpret the pending gesture.
+- Typed `ModelingEdgeSelectionTraversal` / runtime `EdgeSelectionTraversal` intent flows through
+  the pick request, `EditorSelectionService`, and modeling session owners. Do not encode Ring as a
+  special combination of generic selection edits or add a second UI-owned traversal path.
+- `quader_poly::edge_loop_edges()` and `edge_ring_edges()` own topology. Loops follow topological
+  continuation and stop where a Blender-style continuation is not defined; rings cross opposite
+  edges of quad faces and stop at non-quad or non-manifold topology. Picked face context no longer
+  chooses a loop side. Repeated plain Alt-click on an already selected open-boundary seed cycles
+  between the delimited loop and `edge_boundary_component_edges()`; other clicks remain
+  deterministic replacements.
+
+Affected owners/files: viewport gesture/selection interaction, editor selection/modeling request
+types and services, runtime picking, and portable polygon selection topology plus their focused
+viewport/runtime/modeling-domain regressions.
+
+This entry supersedes the Ctrl+Alt-as-Remove and picked-face/face-context edge-loop behavior
+recorded in the 2026-07-07 and 2026-07-08 selection entries. Those entries remain as historical
+context, not current interaction authority.
+
+Verification scope: focused gesture, loop/ring topology, toggle, miss, and press-chord regressions;
+the selection affected check and mandatory regression gate; then both canonical native app builds.
+
 ## 2026-08-28 - Session-Only Orthographic Wireframe Defaults
 
 `ViewportWorkspacePaneState` keeps separate transient shading choices for perspective and

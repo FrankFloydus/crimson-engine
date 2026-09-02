@@ -144,6 +144,7 @@ OperationReceipt MeshHandle::destroy() {
   if (!result.ok()) {
     return handle_failure(*context_, result.error());
   }
+  forget_component_edit_participant(*context_, object_);
   return receipt_from_result(result.value(), current_revisions(*context_));
 }
 
@@ -157,6 +158,8 @@ MeshHandle MeshHandle::duplicate(DuplicateOptions options) {
   if (!object.ok()) {
     return handle_value_failure(*context_, object.error(), MeshHandle{});
   }
+  remember_selection_interaction(
+      *context_, SelectionUnion{.kind = SelectionKind::Object});
   return MeshHandle(context_, object.value());
 }
 
@@ -170,6 +173,8 @@ OperationReceipt MeshHandle::combine_with(std::span<const MeshHandle> meshes) {
   if (!result.ok()) {
     return handle_failure(*context_, result.error());
   }
+  remember_selection_interaction(
+      *context_, SelectionUnion{.kind = SelectionKind::Object});
   return receipt_from_result(result.value(), current_revisions(*context_));
 }
 

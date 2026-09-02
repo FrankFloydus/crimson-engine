@@ -335,8 +335,16 @@ through the canonical action catalog; no private Alt/LMB check may bypass it.
 
 Alt-hover face-plane slicing and its Alt+RMB viewport gesture are temporarily inactive.
 Their modeling API, history, cut implementation, and explicit face-plane query remain available;
-the latter is also used for read-only material picking. Edge-mode Alt+click loop selection is
-unchanged.
+the latter is also used for read-only material picking. In Edge mode, `Alt+LeftMouseClick`
+replaces the selection with the Blender-style edge loop through the clicked edge, while
+`Ctrl+Alt+LeftMouseClick` (`Command+Alt+LeftMouseClick` through the canonical primary modifier)
+replaces it with the corresponding edge ring. Adding Shift makes either gesture a whole-set,
+seed-based toggle: a selected clicked edge removes the complete loop or ring, and an unselected
+clicked edge adds it. A traversal click that misses geometry is a no-op and does not clear the
+current selection. The modifier chord captured at pointer press remains authoritative through a
+deferred release commit, even if a modifier is released first. Repeating plain Alt-click on the
+same selected open-boundary seed cycles between its delimited loop and the complete connected
+boundary component.
 
 The 25 Edit Texture actions are independent bindable commands in `viewport.selection.face`.
 All deliberately have no default mapping; their IDs use the `modeling.texture.` prefix with

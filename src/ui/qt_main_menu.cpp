@@ -283,7 +283,7 @@ struct QtMainMenu::Impl {
                      [this, action, command_id, checked]() {
                        QDR_PROFILE_SCOPE(
                            "Qt main menu dispatch command action");
-                       (void)context.editor.commands().execute(command_id);
+                       (void)context.editor.get().commands().execute(command_id);
                        if (checked) {
                          const bool checked_value = checked();
                          if (action->isChecked() != checked_value) {
@@ -292,7 +292,7 @@ struct QtMainMenu::Impl {
                          }
                          const std::optional<QuaderCommandDescriptor>
                              descriptor =
-                                 context.editor.commands().descriptor(
+                                 context.editor.get().commands().descriptor(
                                      command_id);
                          const bool enabled =
                              descriptor.has_value() && descriptor->enabled;
@@ -506,7 +506,7 @@ struct QtMainMenu::Impl {
         *menu, quader_command::kSelectToggleBackfaceSelection,
         "ui.menu.select.toggle_backface_selection",
         "Toggle Backface Selection", [this]() {
-          return context.editor.preferences().backface_selection_enabled();
+          return context.editor.get().preferences().backface_selection_enabled();
         });
     add_selection_mode_separator(*menu, kNonGroupSelectionModes);
     add_selection_mode_action(
@@ -560,7 +560,7 @@ struct QtMainMenu::Impl {
         snap, &QAction::toggled, connection_context.get(),
         [this](bool checked) {
           QDR_PROFILE_SCOPE("Qt main menu dispatch bool setting");
-          (void)context.editor.preferences().set_grid_snap_enabled(checked);
+          (void)context.editor.get().preferences().set_grid_snap_enabled(checked);
         });
     bool_setting_actions.push_back(
         {snap, top_level_owner(*align_menu),
@@ -645,12 +645,14 @@ struct QtMainMenu::Impl {
       action->setCheckable(true);
       const ViewportToolId tool_id = tool->viewport_tool();
       const std::string command_id =
-          context.editor.commands().command_id_for_tool_activation(tool->id());
+          context.editor.get().commands().command_id_for_tool_activation(
+              tool->id());
       QObject::connect(action, &QAction::triggered, connection_context.get(),
                        [this, command_id]() {
                          QDR_PROFILE_SCOPE(
                              "Qt main menu dispatch tool action");
-                         (void)context.editor.commands().execute(command_id);
+                         (void)context.editor.get().commands().execute(
+                             command_id);
                        });
       tool_actions.push_back({
           .action = action,
@@ -692,13 +694,13 @@ struct QtMainMenu::Impl {
         *menu, quader_command::kViewportToggleLocalVisibility,
         "ui.menu.view.toggle_local_visibility", "Toggle Local Visibility",
         [this]() {
-          return context.editor.viewports().local_visibility_active();
+          return context.editor.get().viewports().local_visibility_active();
         });
     add_command_action(
         *menu, quader_command::kViewportToggleTransformSpace,
         "ui.menu.view.toggle_transform_space", "Local Transforms",
         [this]() {
-          return context.editor.viewports().transform_space() ==
+          return context.editor.get().viewports().transform_space() ==
                  QuaderTransformSpace::Local;
         });
     menu->addSeparator();
@@ -718,7 +720,7 @@ struct QtMainMenu::Impl {
                      [this](bool visible) {
                        QDR_PROFILE_SCOPE(
                            "Qt main menu dispatch bool setting");
-                       (void)context.editor.preferences()
+                       (void)context.editor.get().preferences()
                            .set_navigation_gizmo_visible(visible);
                      });
     menu->addSeparator();
@@ -845,10 +847,10 @@ struct QtMainMenu::Impl {
                          QDR_PROFILE_SCOPE(
                              "Qt main menu dispatch layout action");
                          if (command_id.has_value()) {
-                           (void)context.editor.commands().execute(
+                           (void)context.editor.get().commands().execute(
                                *command_id);
                          } else {
-                           (void)context.editor.viewports().set_layout(layout);
+                           (void)context.editor.get().viewports().set_layout(layout);
                          }
                        });
       layout_actions.push_back(
@@ -877,7 +879,7 @@ struct QtMainMenu::Impl {
   }
 
   [[nodiscard]] ModelingSelectionMode current_selection_mode() const {
-    return context.modeling.selection_mode();
+    return context.modeling.get().selection_mode();
   }
 
   void refresh_menu(QMenu &menu, ModelingSelectionMode selection_mode) {
@@ -890,7 +892,7 @@ struct QtMainMenu::Impl {
           continue;
         }
         const std::optional<QuaderCommandDescriptor> command =
-            context.editor.commands().descriptor(entry.command_id);
+            context.editor.get().commands().descriptor(entry.command_id);
         const std::string shortcut =
             command.has_value() ? command->shortcut : std::string{};
         const bool checked = entry.checked ? entry.checked() : false;
@@ -939,11 +941,11 @@ struct QtMainMenu::Impl {
           continue;
         }
         if (!current_layout.has_value()) {
-          current_layout = context.editor.viewports().layout();
+          current_layout = context.editor.get().viewports().layout();
         }
         const std::optional<QuaderCommandDescriptor> command =
             entry.command_id.has_value()
-                ? context.editor.commands().descriptor(*entry.command_id)
+                ? context.editor.get().commands().descriptor(*entry.command_id)
                 : std::nullopt;
         const std::string shortcut =
             command.has_value() ? command->shortcut : std::string{};
@@ -1019,7 +1021,7 @@ struct QtMainMenu::Impl {
       if (navigation_gizmo_action != nullptr) {
         present_checked(
             *navigation_gizmo_action,
-            context.editor.preferences().navigation_gizmo_visible());
+            context.editor.get().preferences().navigation_gizmo_visible());
       }
       if (material_browser_action != nullptr) {
         present_text(*material_browser_action,
@@ -1052,10 +1054,10 @@ struct QtMainMenu::Impl {
           continue;
         }
         if (!active_tool.has_value()) {
-          active_tool = context.editor.tools().active_tool();
+          active_tool = context.editor.get().tools().active_tool();
         }
         const std::optional<QuaderCommandDescriptor> command =
-            context.editor.commands().descriptor(entry.command_id);
+            context.editor.get().commands().descriptor(entry.command_id);
         const std::string shortcut =
             command.has_value() ? command->shortcut : std::string{};
         present_text(*entry.action,
@@ -1077,6 +1079,15 @@ void QtMainMenu::initialize(QMenuBar &menu_bar, QtMainMenuContext context) {
   impl_ = std::make_unique<Impl>(std::move(context));
   impl_->menu_bar = &menu_bar;
   rebuild();
+}
+
+void QtMainMenu::rebind_runtime(
+    QuaderEditorApi &editor, ModelingSessionService &modeling) noexcept {
+  if (!impl_) {
+    return;
+  }
+  impl_->context.editor = std::ref(editor);
+  impl_->context.modeling = std::ref(modeling);
 }
 
 void QtMainMenu::rebuild() {

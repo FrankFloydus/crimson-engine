@@ -85,6 +85,9 @@ public:
    */
   [[nodiscard]] QtViewportInputFrame
   take_input_frame(float delta_seconds, bool route_active_navigation);
+  // Discards queued and held input from a released runtime binding. Focus,
+  // hover, and the last pointer position remain available to the next owner.
+  void abandon_input();
   void set_pointer_capture(bool captured);
   [[nodiscard]] bool pointer_captured() const;
 

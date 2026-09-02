@@ -10,25 +10,6 @@ namespace quader::modeling {
 using namespace detail;
 namespace {
 
-template <typename T>
-[[nodiscard]] std::vector<T> complement_ids(const std::vector<T> &all,
-                                            const std::vector<T> &selected) {
-  std::vector<T> result;
-  for (const T &id : all) {
-    bool found = false;
-    for (const T &selected_id : selected) {
-      if (selected_id == id) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      result.push_back(id);
-    }
-  }
-  return result;
-}
-
 [[nodiscard]] bool selection_payload_matches_kind(
     const SelectionUnion &selection) {
   switch (selection.kind) {
@@ -147,6 +128,7 @@ OperationReceipt Selection::apply(SelectionEdit edit) const {
     if (!result.ok()) {
       return handle_failure(*context_, result.error());
     }
+    remember_selection_interaction(*context_, selection_);
     return receipt_from_result(result.value(), current_revisions(*context_));
   }
   Result<OperationReceipt> result =
@@ -154,6 +136,7 @@ OperationReceipt Selection::apply(SelectionEdit edit) const {
   if (!result.ok()) {
     return handle_failure(*context_, result.error());
   }
+  remember_selection_interaction(*context_, selection_);
   return std::move(result).value();
 }
 
@@ -180,6 +163,7 @@ OperationReceipt ObjectSelection::delete_objects() const {
     if (!result.ok()) {
       return handle_failure(*context_, result.error());
     }
+    forget_component_edit_participant(*context_, object);
     receipt = receipt_from_result(result.value(), current_revisions(*context_));
   }
   return receipt;
@@ -202,6 +186,8 @@ MeshHandle ObjectSelection::duplicate(DuplicateOptions options) const {
   if (!object.ok()) {
     return handle_value_failure(*context_, object.error(), MeshHandle{});
   }
+  remember_selection_interaction(
+      *context_, SelectionUnion{.kind = SelectionKind::Object});
   return MeshHandle(context_, object.value());
 }
 
@@ -211,6 +197,8 @@ OperationReceipt ObjectSelection::combine() const {
   if (!result.ok()) {
     return handle_failure(*context_, result.error());
   }
+  remember_selection_interaction(
+      *context_, SelectionUnion{.kind = SelectionKind::Object});
   return receipt_from_result(result.value(), current_revisions(*context_));
 }
 
@@ -467,6 +455,7 @@ MeshHandle FaceSelection::extract() const {
   if (!object.ok()) {
     return handle_value_failure(*context_, object.error(), MeshHandle{});
   }
+  remember_selection_interaction(*context_, selection_);
   return MeshHandle(context_, object.value());
 }
 
@@ -529,6 +518,37 @@ OperationReceipt SelectionApi::set_default_edit(SelectionEdit edit) {
 }
 
 OperationReceipt SelectionApi::clear() {
+  prune_stale_component_edit_participants(*context_);
+  if (context_->selection_domain == ModelingSelectionDomain::Component) {
+    std::vector<SessionComponentSelectionUpdate> updates;
+    updates.reserve(context_->session.objects().size());
+    for (const SessionObjectSummary &summary : context_->session.objects()) {
+      if (summary.kind != SessionObjectKind::Mesh) {
+        continue;
+      }
+      Result<PolygonDocument> document =
+          context_->session.document_copy(summary.id);
+      if (!document.ok()) {
+        return handle_failure(*context_, document.error());
+      }
+      PolygonSelectionSnapshot empty;
+      const auto remembered_mode = context_->component_edit_modes.find(
+          modeling_api_object_key(summary.id));
+      empty.kind = remembered_mode == context_->component_edit_modes.end()
+                       ? document.value().selection().kind
+                       : component_selection_kind(remembered_mode->second);
+      updates.push_back({.object = summary.id, .selection = std::move(empty)});
+    }
+
+    Result<OperationResult> cleared =
+        context_->session.commit_component_selection_batch(
+            updates, std::span<const ObjectId>{});
+    if (!cleared.ok()) {
+      return handle_failure(*context_, cleared.error());
+    }
+    return receipt_from_result(cleared.value(), current_revisions(*context_));
+  }
+
   Result<OperationResult> objects_cleared =
       context_->session.apply_object_selection(std::span<const ObjectId>{},
                                                SelectionEdit::Replace);
@@ -555,12 +575,16 @@ OperationReceipt SelectionApi::clear() {
     }
     receipt = std::move(committed).value();
   }
+  remember_selection_interaction(
+      *context_, SelectionUnion{.kind = SelectionKind::Object});
   return receipt;
 }
 
 OperationReceipt SelectionApi::select_all() {
   std::vector<MeshHandle> meshes = MeshCollection(context_).all();
   if (meshes.empty()) {
+    remember_selection_interaction(
+        *context_, SelectionUnion{.kind = SelectionKind::Object});
     OperationReceipt receipt;
     receipt.revisions = current_revisions(*context_);
     return receipt;
@@ -569,9 +593,8 @@ OperationReceipt SelectionApi::select_all() {
 }
 
 OperationReceipt SelectionApi::invert() {
-  const SelectionSummary current = summary();
-  if (current.vertex_count == 0U && current.edge_count == 0U &&
-      current.face_count == 0U) {
+  prune_stale_component_edit_participants(*context_);
+  if (context_->selection_domain == ModelingSelectionDomain::Object) {
     std::vector<ObjectId> inverted;
     for (const SessionObjectSummary &object : context_->session.objects()) {
       if (!object.selected) {
@@ -583,12 +606,19 @@ OperationReceipt SelectionApi::invert() {
     if (!result.ok()) {
       return handle_failure(*context_, result.error());
     }
+    remember_selection_interaction(
+        *context_, SelectionUnion{.kind = SelectionKind::Object});
     return receipt_from_result(result.value(), current_revisions(*context_));
   }
 
-  OperationReceipt receipt;
+  std::vector<SessionComponentSelectionUniverse> targets;
+  std::unordered_map<std::uint64_t, SelectionMode> live_participant_modes;
+  live_participant_modes.reserve(context_->component_edit_modes.size());
   for (const SessionObjectSummary &object : context_->session.objects()) {
-    if (!object.selected) {
+    const auto remembered_mode = context_->component_edit_modes.find(
+        modeling_api_object_key(object.id));
+    if (remembered_mode == context_->component_edit_modes.end() ||
+        object.kind != SessionObjectKind::Mesh) {
       continue;
     }
     Result<PolygonDocument> document =
@@ -597,31 +627,31 @@ OperationReceipt SelectionApi::invert() {
       return handle_failure(*context_, document.error());
     }
     PolygonDocument working = std::move(document).value();
-    const PolygonSelectionSnapshot snapshot = working.selection();
-    PolygonSelectionSnapshot inverted;
-    inverted.kind = snapshot.kind;
-    if (snapshot.kind == SelectionKind::Vertex) {
-      inverted.vertices =
-          complement_ids(working.vertex_ids(), snapshot.vertices);
-    } else if (snapshot.kind == SelectionKind::Edge) {
-      inverted.edges = complement_ids(working.edge_ids(), snapshot.edges);
-    } else if (snapshot.kind == SelectionKind::Face) {
-      inverted.faces = complement_ids(working.face_ids(), snapshot.faces);
+    const SelectionMode mode = remembered_mode->second;
+    PolygonSelectionUniverse eligible;
+    eligible.mode = mode;
+    if (mode == SelectionMode::Vertex) {
+      eligible.vertices = working.vertex_ids();
+    } else if (mode == SelectionMode::Edge) {
+      eligible.edges = working.edge_ids();
+    } else {
+      eligible.faces = working.face_ids();
     }
-    Result<OperationResult> applied =
-        working.apply_selection(inverted, SelectionEdit::Replace);
-    if (!applied.ok()) {
-      return handle_failure(*context_, applied.error());
-    }
-    Result<OperationReceipt> committed =
-        commit_document_receipt(*context_, object.id, std::move(working),
-                                std::move(applied).value());
-    if (!committed.ok()) {
-      return handle_failure(*context_, committed.error());
-    }
-    receipt = std::move(committed).value();
+    targets.push_back({.object = object.id,
+                       .eligible = std::move(eligible),
+                       .adopt_eligible_mode = true});
+    live_participant_modes.emplace(modeling_api_object_key(object.id), mode);
   }
-  return receipt;
+  Result<OperationResult> result =
+      context_->session.invert_component_selection_batch(targets);
+  if (!result.ok()) {
+    return handle_failure(*context_, result.error());
+  }
+  context_->component_edit_modes = std::move(live_participant_modes);
+  context_->selection_domain = context_->component_edit_modes.empty()
+                                   ? ModelingSelectionDomain::Object
+                                   : ModelingSelectionDomain::Component;
+  return receipt_from_result(result.value(), current_revisions(*context_));
 }
 
 ObjectSelection SelectionApi::objects(std::span<const ObjectId> objects,

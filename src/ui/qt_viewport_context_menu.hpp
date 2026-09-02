@@ -7,6 +7,7 @@
 #pragma once
 
 #include "api/quader_api_types.hpp"
+#include "viewport/viewport_runtime_binding_token.hpp"
 
 #include <functional>
 #include <optional>
@@ -33,8 +34,8 @@ public:
             const QuaderActionSet &action_set,
             QuaderSelectionMode selection_mode,
             const std::optional<ProjectAssetId> &material_under_mouse,
-            const std::function<void(ProjectAssetId)> &open_material_editor)
-      const;
+            const std::function<void(ProjectAssetId)> &open_material_editor,
+            ViewportRuntimeBindingToken runtime_binding = {}) const;
 };
 
 } // namespace quader

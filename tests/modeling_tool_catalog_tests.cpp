@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_command_ids.hpp"
+#include "assets/asset_registry.hpp"
 #include "editor/commands/modeling_command_tool_catalog.hpp"
 
 #include "editor/commands/activate_viewport_tool_action_tool.hpp"
@@ -21,6 +22,8 @@
 #include "editor/commands/modeling/select_all_tool.hpp"
 #include "editor/modeling/services/modeling_action_catalog.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
+#include "scene/scene_document.hpp"
 #include <editor/metadata/host_contract.hpp>
 
 #include <gtest/gtest.h>
@@ -152,6 +155,22 @@ TEST(ModelingToolCatalogTests, PublicCommandBridgeMetadataLivesOnCommandDescript
   ASSERT_NE(combine_meshes, nullptr);
   EXPECT_TRUE(combine_meshes->public_command_id().empty());
   EXPECT_TRUE(combine_meshes->registers_public_command());
+}
+
+TEST(ModelingToolCatalogTests,
+     InvertSelectionWithoutEditorSelectionOwnerFailsClearly) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService modeling(scene, assets);
+  const CommandTool *invert = find_modeling_command_tool("invert_selection");
+  ASSERT_NE(invert, nullptr);
+
+  const ModelingCommandResult result = invert->execute(modeling);
+
+  EXPECT_FALSE(result.ok);
+  EXPECT_FALSE(result.changed);
+  EXPECT_EQ(result.message,
+            "Invert Selection requires the editor selection service.");
 }
 
 TEST(ModelingToolCatalogTests, HostOperationActionIdsResolveToCommandTools) {

@@ -9,7 +9,10 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "editor/session/project_session.hpp"
+#include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/session/scene_session.hpp"
+#include "render/render_system.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_main_menu.hpp"
 #include "ui/qt_project_home_page.hpp"
@@ -19,7 +22,9 @@
 #include "ui/qt_texture_toolbar.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_tool_toolbar.hpp"
+#include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
+#include "ui/ui_system.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_settings.hpp"
 
@@ -58,9 +63,11 @@
 #include <QToolButton>
 
 #include <array>
+#include <cstdlib>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -1419,4 +1426,104 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(open_scene_requests, 1);
 
   workspace.set_viewport_widget(nullptr);
+}
+
+TEST(QtProjectWorkspaceTests,
+     ProjectCloseDropsExpiredViewportInteractionOwnersBeforeFallbackRebind) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-project-close-rebind-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  const char *local_app_data = std::getenv("LOCALAPPDATA");
+  ASSERT_NE(local_app_data, nullptr);
+  const std::filesystem::path project_root =
+      std::filesystem::path(local_app_data) /
+      "ui-project-close-runtime-rebind";
+  std::error_code cleanup_error;
+  std::filesystem::remove_all(project_root, cleanup_error);
+  cleanup_error.clear();
+  ASSERT_TRUE(std::filesystem::create_directory(project_root, cleanup_error));
+  ASSERT_FALSE(cleanup_error);
+  struct ScopedProjectRoot final {
+    std::filesystem::path path;
+    ~ScopedProjectRoot() {
+      std::error_code error;
+      std::filesystem::remove_all(path, error);
+    }
+  } scoped_project_root{project_root};
+
+  const std::filesystem::path resource_root =
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ASSERT_NE(ui.main_window(), nullptr);
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+
+  quader::SceneSession *bound_scene = nullptr;
+  int scene_bind_count = 0;
+  bool project_scene_was_bound = false;
+  bool fallback_bound_after_project_release = false;
+  const auto bind_scene = [&](quader::SceneSession &scene) {
+    ++scene_bind_count;
+    bound_scene = &scene;
+    project_scene_was_bound = project_scene_was_bound || project.has_project();
+    fallback_bound_after_project_release =
+        fallback_bound_after_project_release ||
+        (project_scene_was_bound && !project.has_project() &&
+         project.active_scene() == nullptr &&
+         bound_scene == &project.fallback_scene());
+    ui.install_runtime_hooks(
+        editor, scene.scene(), scene.assets(), scene.modeling(),
+        scene.selection(), scene.native_tools(), scene.point_placement(),
+        quader::kInvalidAssetId);
+  };
+  quader::QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, bind_scene);
+  bind_scene(project.fallback_scene());
+  ui.show();
+  ASSERT_TRUE(ui.main_window()->isVisible());
+
+  const quader::QuaderApiVoidResult created =
+      editor.project().create(project_root);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor.project().has_project());
+  ASSERT_NE(project.active_scene(), nullptr);
+  ASSERT_EQ(bound_scene, project.active_scene()->session.get());
+
+  QWidget *viewport_widget = ui.main_window()->findChild<QWidget *>(
+      QStringLiteral("viewportWorkspace"));
+  ASSERT_NE(viewport_widget, nullptr);
+  auto *viewport_panel =
+      dynamic_cast<quader::QtViewportPanel *>(viewport_widget);
+  ASSERT_NE(viewport_panel, nullptr);
+  viewport_panel->process_input(
+      editor, bound_scene->scene(), bound_scene->assets(),
+      bound_scene->modeling(), quader::kInvalidAssetId,
+      bound_scene->native_tools(), &bound_scene->point_placement(), 1.0 / 60.0);
+
+  quader::SceneSession *const outgoing_scene = bound_scene;
+  EXPECT_TRUE(ui.main_window()->close());
+  EXPECT_FALSE(ui.main_window()->isVisible());
+  EXPECT_FALSE(editor.project().has_project());
+  EXPECT_EQ(project.active_scene(), nullptr);
+  EXPECT_EQ(bound_scene, &project.fallback_scene());
+  EXPECT_NE(bound_scene, outgoing_scene);
+  EXPECT_EQ(scene_bind_count, 3);
+  EXPECT_TRUE(fallback_bound_after_project_release);
+  // Consume the rebound owners once: merely storing the fallback pointers does
+  // not prove that the panel dropped every non-owning pointer to the released
+  // project scene.
+  viewport_panel->process_input(
+      editor, bound_scene->scene(), bound_scene->assets(),
+      bound_scene->modeling(), quader::kInvalidAssetId,
+      bound_scene->native_tools(), &bound_scene->point_placement(), 1.0 / 60.0);
+
+  ui.shutdown();
 }

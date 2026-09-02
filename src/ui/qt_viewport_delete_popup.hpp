@@ -7,6 +7,7 @@
 #pragma once
 
 #include "api/quader_command_ids.hpp"
+#include "viewport/viewport_runtime_binding_token.hpp"
 #include "editor/modeling/modeling_types.hpp"
 
 #include <array>
@@ -70,7 +71,8 @@ public:
   show(QWidget &focus_parent, const QPoint &global_point,
        QuaderEditorApi &editor, ModelingSessionService &modeling,
        ViewportInputRouter &input_router,
-       LocalizationService &localization);
+       LocalizationService &localization,
+       ViewportRuntimeBindingToken runtime_binding = {});
 
 private:
   std::unique_ptr<QtRetainedMessageBox> object_confirmation_;

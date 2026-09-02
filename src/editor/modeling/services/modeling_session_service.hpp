@@ -291,6 +291,7 @@ public:
   void reset_from_scene();
   [[nodiscard]] ModelingCommandResult
   restore_mesh_documents_from_scene(std::span<const EntityId> entities);
+  [[nodiscard]] ModelingInstanceEditScope instance_edit_scope() const;
   void set_instance_edit_scope_provider(
       std::function<ModelingInstanceEditScope()> provider);
   void set_viewport_visibility_filter(

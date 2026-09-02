@@ -12,6 +12,8 @@
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/session/project_session.hpp"
+#include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
 #include "editor/tools/viewport_native_tool_interaction.hpp"
@@ -30,11 +32,13 @@
 #include <QMouseEvent>
 #include <QPoint>
 #include <QPointF>
+#include <QTemporaryDir>
 #include <QWheelEvent>
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <filesystem>
 #include <initializer_list>
 #include <optional>
 #include <utility>
@@ -1183,6 +1187,174 @@ TEST(QtViewportSurfaceInputTests,
   QApplication::sendEvent(surface, &middle_release);
   process_input();
   EXPECT_EQ(session.viewport_workspace().grid_preset(), default_preset);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     AbandonInputDiscardsQueuedHeldAndTrailingReleaseEdges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-abandon-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  const QPointF local{24.0, 32.0};
+  const QPointF global{124.0, 232.0};
+  QEnterEvent enter(local, local, global);
+  QApplication::sendEvent(&surface, &enter);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(&surface, &focus);
+  QKeyEvent key_press(QEvent::KeyPress, Qt::Key_A, Qt::ControlModifier,
+                      QStringLiteral("a"));
+  QApplication::sendEvent(&surface, &key_press);
+  QMouseEvent mouse_press(QEvent::MouseButtonPress, local, global,
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(&surface, &mouse_press);
+  QWheelEvent wheel(local, global, {}, QPoint{0, 120}, Qt::NoButton,
+                    Qt::NoModifier, Qt::NoScrollPhase, false);
+  QApplication::sendEvent(&surface, &wheel);
+
+  surface.abandon_input();
+
+  QKeyEvent key_release(QEvent::KeyRelease, Qt::Key_A, Qt::ControlModifier,
+                        QStringLiteral("a"));
+  QApplication::sendEvent(&surface, &key_release);
+  QMouseEvent mouse_release(QEvent::MouseButtonRelease, local, global,
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(&surface, &mouse_release);
+  const quader::QtViewportInputFrame abandoned =
+      surface.take_input_frame(1.0f / 60.0f, false);
+
+  EXPECT_TRUE(abandoned.input.viewport_hovered);
+  EXPECT_TRUE(abandoned.input.viewport_focused);
+  EXPECT_TRUE(abandoned.input.pressed_input_chords.empty());
+  EXPECT_TRUE(abandoned.input.released_input_chords.empty());
+  EXPECT_TRUE(abandoned.input.active_input_chords.empty());
+  EXPECT_TRUE(abandoned.input.pointer_pressed_edges.empty());
+  EXPECT_TRUE(abandoned.input.pointer_released_edges.empty());
+  EXPECT_TRUE(abandoned.input.pointer_drag_started_edges.empty());
+  EXPECT_TRUE(abandoned.input.wheel_input_edges.empty());
+  EXPECT_FALSE(abandoned.left_pressed);
+  EXPECT_FALSE(abandoned.left_down);
+  EXPECT_FALSE(abandoned.left_released);
+  EXPECT_FALSE(abandoned.pointer_activity());
+
+  QKeyEvent fresh_press(QEvent::KeyPress, Qt::Key_B, Qt::NoModifier,
+                        QStringLiteral("b"));
+  QApplication::sendEvent(&surface, &fresh_press);
+  QKeyEvent fresh_release(QEvent::KeyRelease, Qt::Key_B, Qt::NoModifier,
+                          QStringLiteral("b"));
+  QApplication::sendEvent(&surface, &fresh_release);
+  const quader::QtViewportInputFrame fresh =
+      surface.take_input_frame(1.0f / 60.0f, false);
+  ASSERT_EQ(fresh.input.pressed_input_chords.size(), 1u);
+  ASSERT_EQ(fresh.input.released_input_chords.size(), 1u);
+  EXPECT_EQ(fresh.input.pressed_input_chords.front(),
+            fresh.input.released_input_chords.front());
+}
+
+TEST(QtViewportSurfaceInputTests,
+     CloseSceneShortcutStopsTheOldInputFrameAfterRuntimeRebind) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-close-scene-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  quader::ProjectSession project;
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const quader::QuaderApiVoidResult created = editor.project().create(
+      std::filesystem::path(temporary.path().toStdWString()));
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const std::optional<quader::SceneSessionId> surviving_scene_id =
+      editor.scene_documents().active_scene_id();
+  ASSERT_TRUE(surviving_scene_id.has_value());
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef>
+      surviving_object = editor.modeling().create_box(
+          {.min = {-1.0f, -1.0f, -1.0f},
+           .max = {1.0f, 1.0f, 1.0f}});
+  ASSERT_TRUE(surviving_object.ok()) << surviving_object.error_message();
+  ASSERT_TRUE(editor.selection().clear().ok());
+  const quader::QuaderApiResult<quader::SceneSessionId> closing_scene =
+      editor.scene_documents().new_scene();
+  ASSERT_TRUE(closing_scene.ok()) << closing_scene.error_message();
+  ASSERT_NE(closing_scene.value(), *surviving_scene_id);
+  ASSERT_NE(project.active_scene(), nullptr);
+
+  quader::QtViewportPanel panel;
+  quader::SceneSession *bound_scene = project.active_scene()->session.get();
+  ASSERT_NE(bound_scene, nullptr);
+  quader::SceneSession *const closing_scene_owner = bound_scene;
+  const quader::OpenSceneSession *surviving_scene =
+      project.find(*surviving_scene_id);
+  ASSERT_NE(surviving_scene, nullptr);
+  quader::SceneSession *const surviving_scene_owner =
+      surviving_scene->session.get();
+  ASSERT_NE(surviving_scene_owner, nullptr);
+  int rebind_count = 0;
+  quader::QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, [&](quader::SceneSession &scene) {
+        ++rebind_count;
+        panel.abandon_interactions();
+        bound_scene = &scene;
+        panel.attach_workspace(scene.viewport_workspace());
+      });
+  panel.attach_workspace(bound_scene->viewport_workspace());
+  quader::QtViewportSurface *surface =
+      panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+  const QPointF local{400.0, 300.0};
+  const QPointF global{500.0, 400.0};
+  QEnterEvent enter(local, local, global);
+  QApplication::sendEvent(surface, &enter);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &focus);
+
+  const auto process_bound_scene = [&]() {
+    panel.process_input(
+        editor, bound_scene->scene(), bound_scene->assets(),
+        bound_scene->modeling(), {}, bound_scene->native_tools(),
+        &bound_scene->point_placement(), 1.0 / 60.0);
+  };
+  process_bound_scene();
+
+  QKeyEvent close_press(QEvent::KeyPress, Qt::Key_W, Qt::ControlModifier,
+                        QStringLiteral("w"));
+  QApplication::sendEvent(surface, &close_press);
+  QKeyEvent select_all_press(QEvent::KeyPress, Qt::Key_A,
+                             Qt::ControlModifier, QStringLiteral("a"));
+  QApplication::sendEvent(surface, &select_all_press);
+  // Capture the outgoing references exactly as App/UISystem do. The Ctrl+W
+  // dispatch destroys this SceneSession and synchronously installs the next
+  // one before process_input returns.
+  panel.process_input(
+      editor, closing_scene_owner->scene(), closing_scene_owner->assets(),
+      closing_scene_owner->modeling(), {}, closing_scene_owner->native_tools(),
+      &closing_scene_owner->point_placement(), 1.0 / 60.0);
+
+  EXPECT_EQ(rebind_count, 1);
+  EXPECT_EQ(bound_scene, surviving_scene_owner);
+  EXPECT_EQ(editor.scene_documents().active_scene_id(), surviving_scene_id);
+  EXPECT_EQ(project.find(closing_scene.value()), nullptr);
+  EXPECT_TRUE(surviving_scene_owner->scene().selected_entities().empty())
+      << "the later Ctrl+A edge from the old frame reached the replacement";
+
+  QKeyEvent close_release(QEvent::KeyRelease, Qt::Key_W,
+                          Qt::ControlModifier, QStringLiteral("w"));
+  QApplication::sendEvent(surface, &close_release);
+  QKeyEvent select_all_release(QEvent::KeyRelease, Qt::Key_A,
+                               Qt::ControlModifier, QStringLiteral("a"));
+  QApplication::sendEvent(surface, &select_all_release);
+  process_bound_scene();
+  EXPECT_EQ(rebind_count, 1);
+  EXPECT_EQ(project.active_scene_id(), *surviving_scene_id);
+  EXPECT_TRUE(surviving_scene_owner->scene().selected_entities().empty());
 }
 
 TEST(QtInputAdapterTests, MapsWheelDirectionsAndSmoothPixelFallback) {

@@ -71,6 +71,9 @@ public:
             QVec2 delta);
   bool release(ViewportCameraController &camera, ViewportPaneId pane_id);
   void cancel(ViewportCameraController &camera);
+  // Clears retained pointer state without touching the camera. Runtime rebinds
+  // use this after the previous camera owner may already have been released.
+  void abandon();
 
   [[nodiscard]] bool input_locked() const { return dragging_; }
   [[nodiscard]] bool drag_started() const { return drag_started_; }
@@ -99,6 +102,8 @@ public:
                              QWidget *parent = nullptr);
 
   void set_camera(ViewportCameraController *camera);
+  // Detaches a potentially expired non-owning camera without dereferencing it.
+  void abandon_camera();
   void set_gizmo_visible(bool visible);
   void set_focus_pane_callback(FocusPaneCallback callback);
 

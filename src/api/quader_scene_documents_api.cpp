@@ -182,8 +182,8 @@ QuaderApiResult<SceneSessionId> QuaderSceneDocumentsApi::new_scene() {
         impl_->standalone_session_id);
   }
   ProjectSessionResult result = impl_->project_session->new_scene();
-  impl_->notify_binding_changed();
-  if (result.ok) {
+  if (result.ok && result.changed) {
+    impl_->notify_binding_changed();
     impl_->publish(quader_event::kSceneOpened);
     impl_->publish(quader_event::kActiveSceneChanged);
   }
@@ -205,12 +205,16 @@ QuaderSceneDocumentsApi::open(ProjectRelativePath path) {
       impl_->project_session->active_scene_id();
   ProjectSessionResult result =
       impl_->project_session->open_scene(std::move(path));
-  impl_->notify_binding_changed();
   if (result.ok) {
+    const SceneSessionId active_after =
+        impl_->project_session->active_scene_id();
+    if (active_after != active_before) {
+      impl_->notify_binding_changed();
+    }
     if (impl_->project_session->open_scenes().size() > open_count_before) {
       impl_->publish(quader_event::kSceneOpened);
     }
-    if (impl_->project_session->active_scene_id() != active_before) {
+    if (active_after != active_before) {
       impl_->publish(quader_event::kActiveSceneChanged);
     }
   }
@@ -524,9 +528,11 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::close(SceneSessionId id) {
   ProjectSessionResult result =
       impl_->project_session->close_scene(id, discard);
   if (result.ok) {
-    impl_->publish(std::move(closed_event));
     if (active_before == id) {
       impl_->notify_binding_changed();
+    }
+    impl_->publish(std::move(closed_event));
+    if (active_before == id) {
       impl_->publish(quader_event::kActiveSceneChanged);
     }
   }

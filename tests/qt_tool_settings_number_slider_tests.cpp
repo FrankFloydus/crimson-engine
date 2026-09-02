@@ -152,6 +152,16 @@ void process_events_for(int milliseconds) {
   event_loop.exec();
 }
 
+template <typename Predicate>
+bool process_events_until(Predicate condition, int timeout_milliseconds) {
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(timeout_milliseconds);
+  while (!condition() && std::chrono::steady_clock::now() < deadline) {
+    process_events_for(25);
+  }
+  return condition();
+}
+
 const quader::QuaderToolSettingControl *find_setting(
     const quader::QuaderToolSettingsTarget &target, std::string_view id) {
   const auto found = std::find_if(
@@ -3043,7 +3053,9 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_NE(first_radius, 0.1);
   send_mouse_event(*radius_slider, QEvent::MouseMove, radius_second,
                    Qt::NoButton, Qt::LeftButton);
-  process_events_for(75);
+  EXPECT_TRUE(process_events_until(
+      [&] { return owner_number("curve.solidify.radius") != first_radius; },
+      1000));
   const double final_radius = owner_number("curve.solidify.radius");
   EXPECT_NE(final_radius, first_radius);
   send_mouse_event(*radius_slider, QEvent::MouseButtonRelease, radius_second,

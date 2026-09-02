@@ -12,6 +12,7 @@
 #include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
+#include "editor/session/quader_editor_api_session_access.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "scene/scene_transform.hpp"
 
@@ -291,6 +292,9 @@ TEST(ProjectSessionWorkspace,
     OpenSceneSession *source = project.active_scene();
     ASSERT_NE(source, nullptr);
     const auto target_path = create_closed_transition_target(editor);
+    int host_rebind_requests = 0;
+    QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+        editor, [&](SceneSession &) { ++host_rebind_requests; });
     ASSERT_TRUE(editor.tools().activate(kCurveToolId).ok());
     CurveToolService &curve = source->session->curve();
     ASSERT_TRUE(curve.preview_state().document.has_value());
@@ -312,6 +316,9 @@ TEST(ProjectSessionWorkspace,
           : editor.scene_documents().new_scene();
       EXPECT_FALSE(failed.ok());
     }
+    EXPECT_EQ(host_rebind_requests, 0)
+        << "failed scene transitions must not ask the host to abandon and "
+           "reinstall live viewport interactions";
     EXPECT_EQ(project.active_scene_id(), active_id);
     EXPECT_EQ(project.activation_generation(), generation);
     EXPECT_EQ(project.open_scenes().size(), tab_count);
@@ -323,6 +330,242 @@ TEST(ProjectSessionWorkspace,
     EXPECT_TRUE(curve.preview_state().document->has_same_geometry(preview));
     EXPECT_TRUE(curve.cancel_drag().ok);
   }
+}
+
+TEST(ProjectSessionWorkspace,
+     AlreadyActiveOpenDoesNotRebindOrDisturbLiveViewportInteraction) {
+  ScopedProjectSessionDirectory temporary("scene-open-active-noop");
+  ProjectSession project;
+  const auto created = project.create(temporary.make_empty_child("Project"));
+  ASSERT_TRUE(created.ok) << created.message;
+  QuaderEditorApi editor(project);
+  (void)create_saved_transition_curve(project, editor);
+  OpenSceneSession *source = project.active_scene();
+  ASSERT_NE(source, nullptr);
+  ASSERT_TRUE(source->path.has_value());
+  ASSERT_TRUE(editor.tools().activate(kCurveToolId).ok());
+  CurveToolService &curve = source->session->curve();
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  const auto point = curve.preview_state().document->points()[0].id;
+  ASSERT_TRUE(select_and_begin_curve_control_drag(curve, {.point = point}));
+  ASSERT_TRUE(curve.update_drag({-5.0f, 1.0f, 2.0f}).ok);
+  const auto preview = *curve.preview_state().document;
+
+  int host_rebind_requests = 0;
+  QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, [&](SceneSession &) { ++host_rebind_requests; });
+  const QuaderApiResult<SceneSessionId> opened =
+      editor.scene_documents().open(*source->path);
+
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  EXPECT_FALSE(opened.changed());
+  EXPECT_EQ(opened.value(), source->session_id);
+  EXPECT_EQ(host_rebind_requests, 0)
+      << "opening the already-active tab must preserve host interaction "
+         "ownership";
+  EXPECT_EQ(project.active_scene(), source);
+  EXPECT_TRUE(curve.active());
+  EXPECT_TRUE(curve.dragging());
+  EXPECT_TRUE(source->session->modeling().curve_document_preview_active());
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  EXPECT_TRUE(curve.preview_state().document->has_same_geometry(preview));
+  EXPECT_TRUE(curve.cancel_drag().ok);
+}
+
+TEST(ProjectSessionWorkspace,
+     RepeatedProjectCloseDoesNotRebindOrCancelFallbackCurveDrag) {
+  ScopedProjectSessionDirectory temporary("project-close-noop-rebind");
+  ProjectSession project;
+  const ProjectSessionResult created =
+      project.create(temporary.make_empty_child("Project"));
+  ASSERT_TRUE(created.ok) << created.message;
+  QuaderEditorApi editor(project);
+
+  int host_rebind_requests = 0;
+  SceneSession *rebound_session = nullptr;
+  QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, [&](SceneSession &replacement) {
+        ++host_rebind_requests;
+        rebound_session = &replacement;
+      });
+  int project_closed_events = 0;
+  const QuaderEventSubscription closed_subscription = editor.events().subscribe(
+      quader_event::kProjectClosed,
+      [&](const QuaderEvent &) { ++project_closed_events; });
+  ASSERT_TRUE(closed_subscription.valid());
+
+  const QuaderApiVoidResult first_close = editor.project().close();
+  ASSERT_TRUE(first_close.ok()) << first_close.error_message();
+  ASSERT_TRUE(first_close.changed());
+  EXPECT_FALSE(project.has_project());
+  EXPECT_EQ(host_rebind_requests, 1);
+  EXPECT_EQ(project_closed_events, 1);
+  ASSERT_EQ(rebound_session, &project.fallback_scene());
+
+  SceneSession &fallback = project.fallback_scene();
+  const std::array<modeling::CurvePointSpec, 2> points{{
+      {.position = {-2.0f, 0.0f, 0.0f}},
+      {.position = {2.0f, 0.0f, 0.0f}},
+  }};
+  auto curve_document = modeling::CurveDocument::make_bezier(points);
+  ASSERT_TRUE(curve_document.ok()) << curve_document.error_message();
+  const ModelingCreateBoxResult curve_object = fallback.modeling().create_curve(
+      std::move(curve_document).value(), "Fallback Close No-op Curve");
+  ASSERT_TRUE(curve_object.ok) << curve_object.message;
+  ASSERT_TRUE(editor.tools().activate(kCurveToolId).ok());
+  CurveToolService &curve = fallback.curve();
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  const modeling::CurvePointId point =
+      curve.preview_state().document->points()[0].id;
+  ASSERT_TRUE(select_and_begin_curve_control_drag(curve, {.point = point}));
+  ASSERT_TRUE(curve.update_drag({-5.0f, 1.0f, 2.0f}).ok);
+  ASSERT_TRUE(curve.dragging());
+  ASSERT_TRUE(
+      project.fallback_scene().modeling().curve_document_preview_active());
+  const modeling::CurveDocument dragged_preview =
+      *curve.preview_state().document;
+  const SceneContentRevisionStamp content_stamp =
+      project.fallback_scene().content_revision_stamp();
+
+  for (int repetition = 0; repetition < 2; ++repetition) {
+    SCOPED_TRACE(repetition);
+    const QuaderApiVoidResult no_op = editor.project().close();
+    ASSERT_TRUE(no_op.ok()) << no_op.error_message();
+    EXPECT_FALSE(no_op.changed());
+    EXPECT_EQ(host_rebind_requests, 1);
+    EXPECT_EQ(project_closed_events, 1);
+    EXPECT_EQ(rebound_session, &project.fallback_scene());
+    EXPECT_TRUE(curve.active());
+    EXPECT_TRUE(curve.dragging());
+    EXPECT_TRUE(
+        project.fallback_scene().modeling().curve_document_preview_active());
+    ASSERT_TRUE(curve.preview_state().document.has_value());
+    EXPECT_TRUE(
+        curve.preview_state().document->has_same_geometry(dragged_preview));
+    EXPECT_EQ(project.fallback_scene().content_revision_stamp(),
+              content_stamp);
+  }
+  EXPECT_TRUE(curve.cancel_drag().ok);
+}
+
+TEST(ProjectSessionWorkspace,
+     ProjectReplacementCloseEventsObserveTheReplacementViewportBinding) {
+  ScopedProjectSessionDirectory temporary("project-rebind-before-events");
+  const std::filesystem::path original_root =
+      temporary.make_empty_child("Original");
+  const std::filesystem::path created_replacement_root =
+      temporary.make_empty_child("CreatedReplacement");
+  const std::filesystem::path opened_replacement_root =
+      temporary.make_empty_child("OpenedReplacement");
+
+  std::filesystem::path opened_replacement_manifest;
+  {
+    ProjectSession prepared_project;
+    QuaderEditorApi prepared_editor(prepared_project);
+    ASSERT_TRUE(
+        prepared_editor.project().create(opened_replacement_root).ok());
+    const std::optional<SceneSessionId> prepared_scene =
+        prepared_editor.scene_documents().active_scene_id();
+    ASSERT_TRUE(prepared_scene.has_value());
+    ASSERT_TRUE(prepared_editor.scene_documents()
+                    .save_as(*prepared_scene,
+                             project_path("Scenes/Prepared.qdr"))
+                    .ok());
+    opened_replacement_manifest =
+        prepared_editor.project().manifest_path();
+    ASSERT_TRUE(prepared_editor.project().close().ok());
+  }
+
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(original_root).ok());
+  ASSERT_TRUE(
+      editor.viewports().set_layout(ViewportLayoutId::FourQuad).changed());
+  ASSERT_TRUE(editor.viewports().set_grid_preset(9).changed());
+
+  int host_rebind_count = 0;
+  QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, [&](SceneSession &) { ++host_rebind_count; });
+  std::vector<int> close_event_rebind_counts;
+  std::vector<ViewportLayoutId> close_event_layouts;
+  std::vector<int> close_event_grid_presets;
+  std::vector<bool> close_event_local_visibility;
+  const QuaderEventSubscription closed = editor.events().subscribe(
+      quader_event::kSceneClosed, [&](const QuaderEvent &) {
+        close_event_rebind_counts.push_back(host_rebind_count);
+        close_event_layouts.push_back(editor.viewports().layout());
+        close_event_grid_presets.push_back(editor.viewports().grid_preset());
+        close_event_local_visibility.push_back(
+            editor.viewports().local_visibility_active());
+      });
+  ASSERT_TRUE(closed.valid());
+
+  ASSERT_TRUE(editor.project().create(created_replacement_root).ok());
+  ASSERT_EQ(close_event_rebind_counts, (std::vector<int>{1}));
+  ASSERT_EQ(close_event_layouts,
+            (std::vector<ViewportLayoutId>{ViewportLayoutId::Single}));
+  ASSERT_EQ(close_event_grid_presets, (std::vector<int>{6}));
+  ASSERT_EQ(close_event_local_visibility, (std::vector<bool>{false}));
+
+  ASSERT_TRUE(
+      editor.viewports().set_layout(ViewportLayoutId::TwoVertical).changed());
+  ASSERT_TRUE(editor.viewports().set_grid_preset(7).changed());
+  ASSERT_TRUE(editor.project().open(opened_replacement_manifest).ok());
+  EXPECT_EQ(close_event_rebind_counts, (std::vector<int>{1, 2}));
+  EXPECT_EQ(close_event_layouts,
+            (std::vector<ViewportLayoutId>{ViewportLayoutId::Single,
+                                           ViewportLayoutId::Single}));
+  EXPECT_EQ(close_event_grid_presets, (std::vector<int>{6, 6}));
+  EXPECT_EQ(close_event_local_visibility,
+            (std::vector<bool>{false, false}));
+}
+
+TEST(ProjectSessionWorkspace,
+     ActiveSceneCloseEventObservesTheNextSceneViewportBinding) {
+  ScopedProjectSessionDirectory temporary("scene-close-rebind-before-event");
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(
+      editor.project().create(temporary.make_empty_child("Project")).ok());
+  const std::optional<SceneSessionId> first_id =
+      editor.scene_documents().active_scene_id();
+  ASSERT_TRUE(first_id.has_value());
+  ASSERT_TRUE(editor.viewports().set_grid_preset(3).changed());
+
+  const QuaderApiResult<SceneSessionId> second =
+      editor.scene_documents().new_scene();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(editor.viewports().set_grid_preset(8).changed());
+  ASSERT_TRUE(editor.scene_documents().activate(*first_id).changed());
+  ASSERT_EQ(editor.viewports().grid_preset(), 3);
+
+  int host_rebind_count = 0;
+  QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, [&](SceneSession &) { ++host_rebind_count; });
+  std::optional<SceneSessionId> active_during_close_event;
+  int grid_during_close_event = 0;
+  bool local_visibility_during_close_event = true;
+  int rebind_count_during_close_event = 0;
+  const QuaderEventSubscription closed = editor.events().subscribe(
+      quader_event::kSceneClosed, [&](const QuaderEvent &) {
+        active_during_close_event = editor.scene_documents().active_scene_id();
+        grid_during_close_event = editor.viewports().grid_preset();
+        local_visibility_during_close_event =
+            editor.viewports().local_visibility_active();
+        rebind_count_during_close_event = host_rebind_count;
+      });
+  ASSERT_TRUE(closed.valid());
+
+  const QuaderApiVoidResult close_result =
+      editor.scene_documents().close(*first_id);
+  ASSERT_TRUE(close_result.ok()) << close_result.error_message();
+  EXPECT_TRUE(close_result.changed());
+  EXPECT_EQ(active_during_close_event,
+            std::optional<SceneSessionId>(second.value()));
+  EXPECT_EQ(grid_during_close_event, 8);
+  EXPECT_FALSE(local_visibility_during_close_event);
+  EXPECT_EQ(rebind_count_during_close_event, 1);
+  EXPECT_EQ(host_rebind_count, 1);
 }
 
 TEST(ProjectSessionWorkspace, InvalidSceneReadDoesNotCancelOutgoingCurveDrag) {

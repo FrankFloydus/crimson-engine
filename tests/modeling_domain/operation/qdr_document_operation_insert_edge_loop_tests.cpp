@@ -6,6 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "operation_validation_test_helpers.hpp"
 
+#include <array>
+#include <cstddef>
+#include <ranges>
+#include <span>
+#include <vector>
+
 using namespace quader_poly;
 
 namespace {
@@ -103,6 +109,53 @@ void expect_nonquad_path_commit_splits_quad(std::size_t non_quad_side_count) {
 		selection.edges.front(),
 		{ 0.5F, 0.0F, 0.0F },
 		{ 0.5F, 1.0F, 0.0F }));
+}
+
+/// Stores a rectangular quad grid and its vertex IDs in row-major order.
+struct QuadGridFixture {
+	Document document;
+	std::size_t columns = 0U;
+	std::vector<ElementId> vertices;
+
+	[[nodiscard]] ElementId vertex(std::size_t column,
+	                               std::size_t row) const {
+		return vertices[row * (columns + 1U) + column];
+	}
+};
+
+QuadGridFixture make_quad_grid(std::size_t columns, std::size_t rows) {
+	QuadGridFixture fixture;
+	fixture.columns = columns;
+	fixture.vertices.reserve((columns + 1U) * (rows + 1U));
+	for (std::size_t row = 0U; row <= rows; ++row) {
+		for (std::size_t column = 0U; column <= columns; ++column) {
+			fixture.vertices.push_back(add_vertex(
+				fixture.document,
+				{ static_cast<float>(column), static_cast<float>(row), 0.0F }));
+		}
+	}
+	for (std::size_t row = 0U; row < rows; ++row) {
+		for (std::size_t column = 0U; column < columns; ++column) {
+			EXPECT_NE(add_face(
+			              fixture.document,
+			              std::array<ElementId, 4> {
+				              fixture.vertex(column, row),
+				              fixture.vertex(column + 1U, row),
+				              fixture.vertex(column + 1U, row + 1U),
+				              fixture.vertex(column, row + 1U),
+			              }),
+			          kInvalidElementId);
+		}
+	}
+	return fixture;
+}
+
+void expect_edge_set(std::span<const Edge> actual,
+	                 std::span<const Edge> expected) {
+	ASSERT_EQ(actual.size(), expected.size());
+	for (const Edge edge : expected) {
+		EXPECT_TRUE(std::ranges::find(actual, edge) != actual.end());
+	}
 }
 
 } // namespace
@@ -258,119 +311,199 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopAllowsUnrelatedNonMa
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }
 
-TEST(QdrDocumentOperationInsertEdgeLoopTests, EdgeLoopSelectionSurvivesConversionFromAPickedFace) {
-	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     EdgeLoopSelectionStopsAtIsolatedQuadOuterCornersAndIgnoresFaceContext) {
+	const qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	const Edge seed =
+		make_edge(fixture.bottom_left, fixture.bottom_right);
+	const std::array<Edge, 1> expected { seed };
 
-	PickResult face_pick;
-	face_pick.hit = true;
-        face_pick.kind = ElementKind::Face;
-        face_pick.face_id = fixture.face;
+	expect_edge_set(edge_loop_edges(fixture.document, seed), expected);
+	expect_edge_set(
+		edge_loop_edges(fixture.document, seed, fixture.face), expected);
+
 	Selection selection;
-	select_only(selection, face_pick);
-
-        EXPECT_TRUE(selection.mode == SelectionMode::Face);
-        EXPECT_TRUE(selection_contains_face(selection, fixture.face));
+	select_edge_loop(fixture.document, selection, seed);
+	EXPECT_EQ(selection.mode, SelectionMode::Edge);
+	expect_edge_set(selection.edges, expected);
 	EXPECT_TRUE(selection.has_active);
-        EXPECT_TRUE(selection.active_kind == ElementKind::Face);
-        EXPECT_TRUE(selection.active_face == fixture.face);
-
-        convert_selection_mode(fixture.document, selection,
-                               SelectionMode::Edge);
-
-        EXPECT_TRUE(selection.mode == SelectionMode::Edge);
-        EXPECT_TRUE(selection.edges.size() == 4U);
-	EXPECT_TRUE(selection_contains(selection, make_edge(fixture.bottom_left, fixture.bottom_right)));
-
-	const std::optional<quader::QVec3> center = selection_center(fixture.document, selection);
-	EXPECT_TRUE(center.has_value());
-	EXPECT_NEAR(center->x, 0.0F, 0.0001);
-	EXPECT_NEAR(center->y, 0.0F, 0.0001);
-	EXPECT_NEAR(center->z, 0.0F, 0.0001);
-
-	Selection loop_selection;
-	const Edge seed = make_edge(fixture.bottom_left, fixture.bottom_right);
-	select_edge_loop(fixture.document, loop_selection, seed);
-
-        EXPECT_TRUE(loop_selection.mode == SelectionMode::Edge);
-        EXPECT_TRUE(loop_selection.edges.size() == 4U);
-	EXPECT_TRUE(selection_contains(loop_selection, seed));
-	EXPECT_TRUE(selection_contains(loop_selection, make_edge(fixture.bottom_right, fixture.top_right)));
-	EXPECT_TRUE(selection_contains(loop_selection, make_edge(fixture.top_right, fixture.top_left)));
-	EXPECT_TRUE(selection_contains(loop_selection, make_edge(fixture.top_left, fixture.bottom_left)));
+	EXPECT_EQ(selection.active_kind, ElementKind::Edge);
+	EXPECT_EQ(selection.active_edge, seed);
 }
 
-TEST(QdrDocumentOperationInsertEdgeLoopTests, EdgeLoopSelectionFollowsBoundaryFanThroughSharedEdges) {
-	qdr_test::BoundaryFanLoopFixture fixture = qdr_test::make_boundary_fan_loop_document();
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     EdgeLoopSelectionStopsAtValenceThreeCubePoles) {
+	const Document document = make_cube({});
+	const std::vector<Edge> edges = document_edges(document);
+	ASSERT_FALSE(edges.empty());
+	const Edge seed = edges.front();
+	const std::array<Edge, 1> expected { seed };
 
-	Selection selection;
-	select_edge_loop(fixture.document, selection, fixture.seed);
-
-	EXPECT_TRUE(selection.mode == SelectionMode::Edge);
-	ASSERT_TRUE(selection.edges.size() == fixture.expected_loop_edges.size());
-	for (const Edge& edge : fixture.expected_loop_edges) {
-		EXPECT_TRUE(selection_contains(selection, edge));
-	}
-	for (const Edge& edge : fixture.disconnected_fan_edges) {
-		EXPECT_FALSE(selection_contains(selection, edge));
-	}
+	expect_edge_set(edge_loop_edges(document, seed), expected);
 }
 
-TEST(QdrDocumentOperationInsertEdgeLoopTests, EdgeLoopSelectionUsesFaceContextForSharedCornerEdges) {
-	qdr_test::ManifoldCornerLoopFixture fixture =
-		qdr_test::make_manifold_corner_loop_document();
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     EdgeLoopSelectionFollowsTopologicalOppositesAcrossRegularQuadGrid) {
+	const QuadGridFixture fixture = make_quad_grid(3U, 3U);
+	const Edge seed = make_edge(fixture.vertex(1U, 1U),
+	                            fixture.vertex(1U, 2U));
+	const std::array<Edge, 3> expected {
+		make_edge(fixture.vertex(1U, 0U), fixture.vertex(1U, 1U)),
+		seed,
+		make_edge(fixture.vertex(1U, 2U), fixture.vertex(1U, 3U)),
+	};
 
-	const std::vector<Edge> loop_edges =
-		edge_loop_edges(fixture.document, fixture.seed, fixture.top_face);
-	Selection loop_selection;
-	loop_selection.mode = SelectionMode::Edge;
-	loop_selection.edges = loop_edges;
-
-	ASSERT_TRUE(loop_edges.size() == fixture.expected_top_loop_edges.size());
-	for (const Edge& edge : fixture.expected_top_loop_edges) {
-		EXPECT_TRUE(selection_contains(loop_selection, edge));
-	}
-	for (const Edge& edge : fixture.side_only_edges) {
-		EXPECT_FALSE(selection_contains(loop_selection, edge));
-	}
+	expect_edge_set(edge_loop_edges(fixture.document, seed), expected);
 }
 
-TEST(QdrDocumentOperationInsertEdgeLoopTests, EdgeLoopSelectionUsesPickedSurfaceBoundaryForSharedLipEdges) {
-	qdr_test::SharedLipLoopFixture fixture =
-		qdr_test::make_shared_lip_loop_document();
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     EdgeLoopSelectionFollowsStraightBoundaryFanAndStopsAtOuterCorners) {
+	const QuadGridFixture fixture = make_quad_grid(3U, 1U);
+	const Edge seed = make_edge(fixture.vertex(1U, 1U),
+	                            fixture.vertex(2U, 1U));
+	const std::array<Edge, 3> expected {
+		make_edge(fixture.vertex(0U, 1U), fixture.vertex(1U, 1U)),
+		seed,
+		make_edge(fixture.vertex(2U, 1U), fixture.vertex(3U, 1U)),
+	};
 
-	const std::vector<Edge> loop_edges =
-		edge_loop_edges(fixture.document, fixture.seed,
-		                fixture.top_mid_face);
-	Selection loop_selection;
-	loop_selection.mode = SelectionMode::Edge;
-	loop_selection.edges = loop_edges;
-
-	ASSERT_TRUE(loop_edges.size() ==
-	            fixture.expected_top_region_loop_edges.size());
-	for (const Edge& edge : fixture.expected_top_region_loop_edges) {
-		EXPECT_TRUE(selection_contains(loop_selection, edge));
-	}
-	for (const Edge& edge : fixture.excluded_edges) {
-		EXPECT_FALSE(selection_contains(loop_selection, edge));
-	}
+	expect_edge_set(edge_loop_edges(fixture.document, seed), expected);
 }
 
-TEST(QdrDocumentOperationInsertEdgeLoopTests, EdgeLoopSelectionKeepsBoundaryHoleLoopWhenPickedFaceContextExists) {
-	qdr_test::OpenBoxBoundaryLoopFixture fixture =
-		qdr_test::make_open_box_boundary_loop_document();
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     EdgeLoopSelectionDelimitsBoundaryTransitionsIntoNgons) {
+	Document document;
+	const ElementId q0 = add_vertex(document, { 0.0F, 0.0F, 0.0F });
+	const ElementId q1 = add_vertex(document, { 1.0F, 0.0F, 0.0F });
+	const ElementId q2 = add_vertex(document, { 1.0F, 1.0F, 0.0F });
+	const ElementId q3 = add_vertex(document, { 0.0F, 1.0F, 0.0F });
+	ASSERT_NE(add_face(document,
+	                   std::array<ElementId, 4> { q0, q1, q2, q3 }),
+	          kInvalidElementId);
+	const ElementId p1 = add_vertex(document, { 2.0F, 0.0F, 0.0F });
+	const ElementId p2 = add_vertex(document, { 2.5F, 0.5F, 0.0F });
+	const ElementId p3 = add_vertex(document, { 2.0F, 1.5F, 0.0F });
+	ASSERT_NE(add_face(document,
+	                   std::array<ElementId, 5> { q2, q1, p1, p2, p3 }),
+	          kInvalidElementId);
 
-	const std::vector<Edge> loop_edges =
-		edge_loop_edges(fixture.document, fixture.seed, fixture.top_face);
-	Selection loop_selection;
-	loop_selection.mode = SelectionMode::Edge;
-	loop_selection.edges = loop_edges;
+	const Edge quad_seed = make_edge(q0, q1);
+	const std::array<Edge, 1> quad_expected { quad_seed };
+	expect_edge_set(edge_loop_edges(document, quad_seed), quad_expected);
 
-	ASSERT_TRUE(loop_edges.size() ==
-	            fixture.expected_open_side_loop_edges.size());
-	for (const Edge& edge : fixture.expected_open_side_loop_edges) {
-		EXPECT_TRUE(selection_contains(loop_selection, edge));
-	}
-	for (const Edge& edge : fixture.excluded_face_perimeter_edges) {
-		EXPECT_FALSE(selection_contains(loop_selection, edge));
-	}
+	const Edge ngon_seed = make_edge(q1, p1);
+	const std::array<Edge, 4> ngon_expected {
+		ngon_seed,
+		make_edge(p1, p2),
+		make_edge(p2, p3),
+		make_edge(p3, q2),
+	};
+	expect_edge_set(edge_loop_edges(document, ngon_seed), ngon_expected);
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     EdgeRingSelectionCrossesTheOppositeEdgeOfAQuad) {
+	const qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	const Edge seed =
+		make_edge(fixture.bottom_left, fixture.bottom_right);
+	const std::array<Edge, 2> expected {
+		seed,
+		make_edge(fixture.top_left, fixture.top_right),
+	};
+
+	expect_edge_set(edge_ring_edges(fixture.document, seed), expected);
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     EdgeRingSelectionStopsAtNgonsAndBeforeNonmanifoldEdges) {
+	Document ngon_document;
+	const ElementId a =
+		add_vertex(ngon_document, { 0.0F, 0.0F, 0.0F });
+	const ElementId b =
+		add_vertex(ngon_document, { 1.0F, 0.0F, 0.0F });
+	const ElementId c =
+		add_vertex(ngon_document, { 1.0F, 1.0F, 0.0F });
+	const ElementId d =
+		add_vertex(ngon_document, { 0.0F, 1.0F, 0.0F });
+	ASSERT_NE(add_face(ngon_document,
+	                   std::array<ElementId, 4> { a, b, c, d }),
+	          kInvalidElementId);
+	const ElementId e =
+		add_vertex(ngon_document, { 2.0F, -0.5F, 0.0F });
+	const ElementId f =
+		add_vertex(ngon_document, { 2.5F, 0.5F, 0.0F });
+	const ElementId g =
+		add_vertex(ngon_document, { 2.0F, 1.5F, 0.0F });
+	ASSERT_NE(add_face(ngon_document,
+	                   std::array<ElementId, 5> { b, e, f, g, c }),
+	          kInvalidElementId);
+	const Edge ngon_seed = make_edge(a, d);
+	const Edge ngon_delimiter = make_edge(b, c);
+	const std::array<Edge, 2> ngon_expected { ngon_seed, ngon_delimiter };
+	expect_edge_set(edge_ring_edges(ngon_document, ngon_seed),
+	                ngon_expected);
+
+	Document nonmanifold_document;
+	const ElementId n0 =
+		add_vertex(nonmanifold_document, { 0.0F, 0.0F, 0.0F });
+	const ElementId n1 =
+		add_vertex(nonmanifold_document, { 1.0F, 0.0F, 0.0F });
+	const ElementId n2 =
+		add_vertex(nonmanifold_document, { 1.0F, 1.0F, 0.0F });
+	const ElementId n3 =
+		add_vertex(nonmanifold_document, { 0.0F, 1.0F, 0.0F });
+	ASSERT_NE(add_face(nonmanifold_document,
+	                   std::array<ElementId, 4> { n0, n1, n2, n3 }),
+	          kInvalidElementId);
+	const ElementId n4 =
+		add_vertex(nonmanifold_document, { 2.0F, 0.0F, 0.0F });
+	const ElementId n5 =
+		add_vertex(nonmanifold_document, { 2.0F, 1.0F, 0.0F });
+	const ElementId n6 =
+		add_vertex(nonmanifold_document, { 1.5F, 0.0F, 1.0F });
+	const ElementId n7 =
+		add_vertex(nonmanifold_document, { 1.5F, 1.0F, 1.0F });
+	ASSERT_NE(add_face(nonmanifold_document,
+	                   std::array<ElementId, 4> { n1, n4, n5, n2 }),
+	          kInvalidElementId);
+	ASSERT_NE(add_face(nonmanifold_document,
+	                   std::array<ElementId, 4> { n2, n7, n6, n1 }),
+	          kInvalidElementId);
+	const Edge nonmanifold_seed = make_edge(n0, n3);
+	const Edge nonmanifold_delimiter = make_edge(n1, n2);
+	ASSERT_EQ(qdr_test::edge_incidence_count(
+	              nonmanifold_document, nonmanifold_delimiter),
+	          3);
+	const std::array<Edge, 1> nonmanifold_expected { nonmanifold_seed };
+	expect_edge_set(
+		edge_ring_edges(nonmanifold_document, nonmanifold_seed),
+		nonmanifold_expected);
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     BoundaryComponentTraversalReturnsTheCompleteConnectedBoundaryGraph) {
+	const QuadGridFixture fixture = make_quad_grid(3U, 1U);
+	const Edge seed = make_edge(fixture.vertex(1U, 1U),
+	                            fixture.vertex(2U, 1U));
+	const std::array<Edge, 8> expected_bfs {
+		seed,
+		make_edge(fixture.vertex(0U, 1U), fixture.vertex(1U, 1U)),
+		make_edge(fixture.vertex(2U, 1U), fixture.vertex(3U, 1U)),
+		make_edge(fixture.vertex(0U, 0U), fixture.vertex(0U, 1U)),
+		make_edge(fixture.vertex(3U, 0U), fixture.vertex(3U, 1U)),
+		make_edge(fixture.vertex(0U, 0U), fixture.vertex(1U, 0U)),
+		make_edge(fixture.vertex(2U, 0U), fixture.vertex(3U, 0U)),
+		make_edge(fixture.vertex(1U, 0U), fixture.vertex(2U, 0U)),
+	};
+
+	EXPECT_TRUE(edge_boundary_component_edges(fixture.document, seed) ==
+	            std::vector<Edge>(expected_bfs.begin(), expected_bfs.end()));
+	const Edge manifold_edge =
+		make_edge(fixture.vertex(1U, 0U), fixture.vertex(1U, 1U));
+	EXPECT_TRUE(edge_boundary_component_edges(fixture.document, manifold_edge)
+	                .empty());
+	EXPECT_TRUE(edge_boundary_component_edges(
+	                fixture.document,
+	                { kInvalidElementId, kInvalidElementId })
+	                .empty());
 }

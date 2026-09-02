@@ -2858,7 +2858,7 @@ TEST(ViewportCurveMarqueeTests,
 }
 
 TEST(ViewportInteractionControllerTests,
-     OrthographicPlainAndModifiedDoubleClicksStillSelectEdgeLoops) {
+     OrthographicModifiedDoubleClicksRespectBlenderEdgeLoopPoleStopping) {
   ViewportInteractionHarness harness;
   const auto box = create_unit_box(harness);
   ASSERT_TRUE(harness.editor.selection()
@@ -2874,7 +2874,7 @@ TEST(ViewportInteractionControllerTests,
 
   harness.click_selection(edge.position, 2);
   const auto loop = harness.editor.selection().summary();
-  ASSERT_GT(loop.selected_edge_count, 1u);
+  ASSERT_EQ(loop.selected_edge_count, 1u);
   EXPECT_EQ(loop.active_object_id, box.modeling_object_id);
   EXPECT_EQ(loop.mode, quader::QuaderSelectionMode::Edge);
 
@@ -2888,7 +2888,7 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
-     CoalescedGizmoDoubleClickStillSelectsAnEdgeLoop) {
+     CoalescedGizmoDoubleClickRespectsBlenderEdgeLoopPoleStopping) {
   ViewportInteractionHarness harness;
   (void)create_unit_box(harness);
   ASSERT_TRUE(harness.editor.selection()
@@ -2929,7 +2929,7 @@ TEST(ViewportInteractionControllerTests,
   harness.controller.handle_after_active_tool(
       harness.editor, combined, {}, before_combined);
   const auto loop = harness.editor.selection().summary();
-  EXPECT_GT(loop.selected_edge_count, 1u);
+  EXPECT_EQ(loop.selected_edge_count, 1u);
 
   auto release = harness.frame(false, false, true, hit);
   release.left_click_count = 2;
@@ -4444,7 +4444,8 @@ TEST(ViewportInteractionControllerTests, ShortMoveGizmoClickKeepsEdgeSelection) 
     EXPECT_FALSE(harness.controller.dragging());
 }
 
-TEST(ViewportInteractionControllerTests, AltClickEdgeSelectsLoopThroughViewportFallback) {
+TEST(ViewportInteractionControllerTests,
+     AltClickEdgeSelectsBlenderStyleLoopThroughViewportFallback) {
     ViewportInteractionHarness harness;
     (void)create_unit_box(harness);
 
@@ -4475,6 +4476,240 @@ TEST(ViewportInteractionControllerTests, AltClickEdgeSelectsLoopThroughViewportF
     harness.controller.handle_after_active_tool(
         harness.editor, release_frame, quader::ViewportToolResult{},
         quader::ViewportBeforeToolInteractionResult{});
+
+    const quader::QuaderSelectionSummary selection =
+        harness.editor.selection().summary();
+    EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Edge);
+    EXPECT_EQ(selection.selected_edge_count, 1u);
+    EXPECT_EQ(selection.active_kind, quader::QuaderActiveSelectionKind::Edge);
+}
+
+TEST(ViewportInteractionControllerTests,
+     CtrlAltClickEdgeSelectsBlenderStyleRingThroughViewportFallback) {
+    ViewportInteractionHarness harness;
+    (void)create_unit_box(harness);
+
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Edge)
+                    .ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+
+    const quader::ViewportScreenPoint edge_midpoint =
+        harness.camera.project_world_point({1.0f, 0.0f, 1.0f});
+    ASSERT_TRUE(edge_midpoint.visible);
+    harness.input.modifiers.primary = true;
+    harness.input.modifiers.alt = true;
+
+    harness.click_selection(edge_midpoint.position);
+
+    const quader::QuaderSelectionSummary selection =
+        harness.editor.selection().summary();
+    EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Edge);
+    EXPECT_EQ(selection.selected_edge_count, 4u);
+    EXPECT_EQ(selection.active_kind, quader::QuaderActiveSelectionKind::Edge);
+}
+
+TEST(ViewportInteractionControllerTests,
+     MultipleEdgeRingsInvertToExactOverlayComplementAndRestore) {
+    using EdgeId = std::pair<int, int>;
+
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Edge)
+                    .ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+
+    const auto normalized_edge = [](int a, int b) -> EdgeId {
+      return a < b ? EdgeId{a, b} : EdgeId{b, a};
+    };
+    const auto sorted_unique = [](std::vector<EdgeId> edges) {
+      std::sort(edges.begin(), edges.end());
+      edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+      return edges;
+    };
+    const auto exported_edges = [&](const quader::ModelingSelectionExport &value) {
+      const auto object = std::find_if(
+          value.objects.begin(), value.objects.end(), [&](const auto &candidate) {
+            return candidate.modeling_object_id == box.modeling_object_id;
+          });
+      if (object == value.objects.end()) {
+        ADD_FAILURE() << "The selected box is missing from the selection export.";
+        return std::vector<EdgeId>{};
+      }
+      std::vector<EdgeId> result;
+      result.reserve(object->selected_edges.size());
+      for (const quader::ModelingSelectionExportEdge &edge :
+           object->selected_edges) {
+        result.push_back(normalized_edge(static_cast<int>(edge.a),
+                                         static_cast<int>(edge.b)));
+      }
+      return sorted_unique(std::move(result));
+    };
+    const auto overlay_edges = [&](const quader::QuaderOverlayFrame &frame,
+                                   quader::QuaderOverlayLayer layer) {
+      std::vector<EdgeId> result;
+      for (const quader::QuaderOverlayLine &line : frame.lines) {
+        if (line.layer != layer ||
+            line.element.object_id != box.modeling_object_id) {
+          continue;
+        }
+        EXPECT_GT(line.element.edge_a, 0);
+        EXPECT_GT(line.element.edge_b, 0);
+        result.push_back(
+            normalized_edge(line.element.edge_a, line.element.edge_b));
+      }
+      return sorted_unique(std::move(result));
+    };
+
+    const quader::ViewportScreenPoint y_ring_edge =
+        harness.camera.project_world_point({1.0f, 0.0f, 1.0f});
+    const quader::ViewportScreenPoint x_ring_edge =
+        harness.camera.project_world_point({0.0f, -1.0f, 1.0f});
+    ASSERT_TRUE(y_ring_edge.visible);
+    ASSERT_TRUE(x_ring_edge.visible);
+
+    harness.input.modifiers.primary = true;
+    harness.input.modifiers.alt = true;
+    harness.click_selection(y_ring_edge.position);
+    ASSERT_EQ(harness.editor.selection().summary().selected_edge_count, 4u);
+
+    harness.input.modifiers.shift = true;
+    harness.click_selection(x_ring_edge.position);
+    ASSERT_EQ(harness.editor.selection().summary().selected_edge_count, 8u);
+    ASSERT_TRUE(harness.session.modeling().clear_selection_hover().ok);
+    harness.input.modifiers = {};
+
+    const std::vector<EdgeId> original_ring_edges{
+        {1, 2}, {1, 4}, {2, 3}, {3, 4},
+        {5, 6}, {5, 8}, {6, 7}, {7, 8},
+    };
+    const std::vector<EdgeId> all_box_edges{
+        {1, 2}, {1, 4}, {1, 5}, {2, 3}, {2, 8}, {3, 4},
+        {3, 7}, {4, 6}, {5, 6}, {5, 8}, {6, 7}, {7, 8},
+    };
+    const std::vector<EdgeId> expected_complement{
+        {1, 5}, {2, 8}, {3, 7}, {4, 6},
+    };
+
+    const quader::ModelingSelectionExport before_export =
+        harness.session.modeling().export_selection();
+    EXPECT_EQ(exported_edges(before_export), original_ring_edges);
+
+    const quader::QuaderOverlayFrame warm_overlay =
+        harness.editor.query().selection_overlay();
+    const std::vector<EdgeId> source_wire_edges = overlay_edges(
+        warm_overlay, quader::QuaderOverlayLayer::SourceWire);
+    EXPECT_EQ(source_wire_edges, all_box_edges);
+    EXPECT_EQ(overlay_edges(warm_overlay,
+                            quader::QuaderOverlayLayer::SelectedEdge),
+              original_ring_edges);
+
+    std::vector<EdgeId> source_wire_complement;
+    for (const EdgeId edge : source_wire_edges) {
+      if (!std::binary_search(original_ring_edges.begin(),
+                              original_ring_edges.end(), edge)) {
+        source_wire_complement.push_back(edge);
+      }
+    }
+    ASSERT_EQ(source_wire_complement, expected_complement);
+
+    const quader::QuaderApiVoidResult inverted =
+        harness.editor.commands().execute(
+            quader::quader_command::kSelectInverse);
+    ASSERT_TRUE(inverted.ok()) << inverted.error_message();
+    EXPECT_TRUE(inverted.changed());
+    EXPECT_EQ(harness.editor.selection().summary().selected_edge_count, 4u);
+
+    const std::vector<EdgeId> inverted_edges = exported_edges(
+        harness.session.modeling().export_selection());
+    EXPECT_EQ(inverted_edges, source_wire_complement);
+    for (const EdgeId edge : original_ring_edges) {
+      EXPECT_FALSE(std::binary_search(inverted_edges.begin(),
+                                      inverted_edges.end(), edge));
+    }
+
+    const quader::QuaderOverlayFrame inverted_overlay =
+        harness.editor.query().selection_overlay();
+    EXPECT_EQ(overlay_edges(inverted_overlay,
+                            quader::QuaderOverlayLayer::SourceWire),
+              source_wire_edges);
+    EXPECT_EQ(overlay_edges(inverted_overlay,
+                            quader::QuaderOverlayLayer::SelectedEdge),
+              inverted_edges);
+
+    const quader::QuaderApiVoidResult restored =
+        harness.editor.commands().execute(
+            quader::quader_command::kSelectInverse);
+    ASSERT_TRUE(restored.ok()) << restored.error_message();
+    EXPECT_TRUE(restored.changed());
+    EXPECT_EQ(harness.editor.selection().summary().selected_edge_count, 8u);
+    EXPECT_EQ(exported_edges(harness.session.modeling().export_selection()),
+              original_ring_edges);
+
+    const quader::QuaderOverlayFrame restored_overlay =
+        harness.editor.query().selection_overlay();
+    EXPECT_EQ(overlay_edges(restored_overlay,
+                            quader::QuaderOverlayLayer::SourceWire),
+              source_wire_edges);
+    EXPECT_EQ(overlay_edges(restored_overlay,
+                            quader::QuaderOverlayLayer::SelectedEdge),
+              original_ring_edges);
+}
+
+TEST(ViewportInteractionControllerTests,
+     ShiftCtrlAltClickTogglesEntireBlenderStyleEdgeRingOff) {
+    ViewportInteractionHarness harness;
+    (void)create_unit_box(harness);
+
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Edge)
+                    .ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+
+    const quader::ViewportScreenPoint edge_midpoint =
+        harness.camera.project_world_point({1.0f, 0.0f, 1.0f});
+    ASSERT_TRUE(edge_midpoint.visible);
+    harness.input.modifiers.primary = true;
+    harness.input.modifiers.alt = true;
+    harness.click_selection(edge_midpoint.position);
+    ASSERT_EQ(harness.editor.selection().summary().selected_edge_count, 4u);
+
+    harness.input.modifiers.shift = true;
+    harness.click_selection(edge_midpoint.position);
+
+    const quader::QuaderSelectionSummary selection =
+        harness.editor.selection().summary();
+    EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Edge);
+    EXPECT_EQ(selection.selected_edge_count, 0u);
+    EXPECT_EQ(selection.active_kind, quader::QuaderActiveSelectionKind::None);
+}
+
+TEST(ViewportInteractionControllerTests,
+     EdgeRingClickUsesPressTimeModifiersAfterKeysAreReleased) {
+    ViewportInteractionHarness harness;
+    (void)create_unit_box(harness);
+
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Edge)
+                    .ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+
+    const quader::ViewportScreenPoint edge_midpoint =
+        harness.camera.project_world_point({1.0f, 0.0f, 1.0f});
+    ASSERT_TRUE(edge_midpoint.visible);
+    harness.input.modifiers.primary = true;
+    harness.input.modifiers.alt = true;
+    harness.input.mouse_local = edge_midpoint.position;
+    harness.input.mouse_screen = edge_midpoint.position;
+
+    harness.dispatch_frame(
+        harness.frame(true, true, false, edge_midpoint.position));
+
+    harness.input.modifiers = {};
+    harness.dispatch_frame(
+        harness.frame(false, false, true, edge_midpoint.position));
 
     const quader::QuaderSelectionSummary selection =
         harness.editor.selection().summary();

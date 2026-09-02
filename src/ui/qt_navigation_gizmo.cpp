@@ -210,6 +210,14 @@ void QtNavigationGizmoInteraction::cancel(
   pressed_hit_ = {};
 }
 
+void QtNavigationGizmoInteraction::abandon() {
+  dragging_ = false;
+  drag_started_ = false;
+  pane_id_ = ViewportPaneId::Perspective;
+  accumulated_drag_ = {};
+  pressed_hit_ = {};
+}
+
 QtNavigationGizmo::QtNavigationGizmo(ViewportPaneId pane_id,
                                      QWidget *parent)
     : QFrame(parent), pane_id_(pane_id) {
@@ -241,6 +249,19 @@ void QtNavigationGizmo::set_camera(ViewportCameraController *camera) {
   if (camera_changed) {
     hover_hit_ = {};
   }
+  update();
+}
+
+void QtNavigationGizmo::abandon_camera() {
+  interaction_.abandon();
+  camera_ = nullptr;
+  camera_snapshot_ = qt_navigation_gizmo_camera_snapshot(nullptr);
+  if (QWidget::mouseGrabber() == this) {
+    releaseMouse();
+  }
+  unsetCursor();
+  hover_hit_ = {};
+  interaction_activity_ = false;
   update();
 }
 

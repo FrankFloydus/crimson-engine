@@ -18194,18 +18194,41 @@ TEST(ModelingSessionServiceTests, SelectionCommandsStaySynchronizedWithScene) {
   EXPECT_EQ(service.selection_summary().selected_object_count, 2u);
   EXPECT_EQ(scene.selected_entities().size(), 2u);
 
-  const ModelingCommandResult invert_all = service.invert_selection();
+  const ModelingCommandResult rejected_object_invert =
+      service.invert_selection();
+  EXPECT_FALSE(rejected_object_invert.ok);
+  EXPECT_FALSE(rejected_object_invert.changed);
+  EXPECT_NE(rejected_object_invert.message.find("EditorSelectionService"),
+            std::string::npos);
+  EXPECT_EQ(scene.selected_entities().size(), 2u);
+
+  const ModelingCommandResult invert_all =
+      editor_selection.selection.invert();
   ASSERT_TRUE(invert_all.ok) << invert_all.message;
   EXPECT_TRUE(scene.selected_entities().empty());
 
   ASSERT_TRUE(
       select_through_editor(editor_selection.selection, {first.object.entity})
           .ok);
-  const ModelingCommandResult invert_one = service.invert_selection();
+  const ModelingCommandResult invert_one =
+      editor_selection.selection.invert();
   ASSERT_TRUE(invert_one.ok) << invert_one.message;
   EXPECT_EQ(service.selection_summary().selected_object_count, 1u);
   ASSERT_EQ(scene.selected_entities().size(), 1u);
   EXPECT_EQ(scene.selected_entities().front(), second.object.entity);
+
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Group).ok);
+  const std::vector<EntityId> group_selection_before =
+      scene.selected_entities();
+  const EntityId group_primary_before = scene.primary_selection();
+  const ModelingCommandResult rejected_group_invert =
+      service.invert_selection();
+  EXPECT_FALSE(rejected_group_invert.ok);
+  EXPECT_FALSE(rejected_group_invert.changed);
+  EXPECT_NE(rejected_group_invert.message.find("EditorSelectionService"),
+            std::string::npos);
+  EXPECT_EQ(scene.selected_entities(), group_selection_before);
+  EXPECT_EQ(scene.primary_selection(), group_primary_before);
 }
 
 TEST(ModelingSessionServiceTests,
@@ -18335,7 +18358,16 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(service.invert_selection().ok);
   summary = service.selection_summary();
   EXPECT_EQ(summary.selected_face_count, 0u);
-  EXPECT_TRUE(scene.selected_entities().empty());
+  EXPECT_EQ(scene.selected_entities(),
+            (std::vector<EntityId>{first.object.entity,
+                                   second.object.entity}));
+
+  ASSERT_TRUE(service.invert_selection().ok);
+  summary = service.selection_summary();
+  EXPECT_EQ(summary.selected_face_count, 12u);
+  EXPECT_EQ(scene.selected_entities(),
+            (std::vector<EntityId>{first.object.entity,
+                                   second.object.entity}));
 }
 
 TEST(ModelingSessionServiceTests,

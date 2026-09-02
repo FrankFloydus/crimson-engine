@@ -610,6 +610,16 @@ DocumentCommandResult SceneTransformDragService::cancel() {
     return result;
 }
 
+void SceneTransformDragService::abandon() noexcept {
+  if (preview_) {
+    preview_->abandon();
+  }
+  preview_.reset();
+  targets_.clear();
+  label_ = "Transform Selection";
+  world_pivot_ = {};
+}
+
 void SceneTransformDragService::reset() {
     preview_.reset();
     targets_.clear();

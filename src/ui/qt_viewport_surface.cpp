@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace quader {
@@ -127,6 +128,8 @@ struct QtViewportSurface::InputAccumulator {
   std::vector<ViewportPointerButtonEdge> pointer_drag_started_edges;
   std::vector<QuaderWheelInputEdge> wheel;
   std::unordered_map<int, QuaderInputChord> active_keys;
+  std::unordered_set<int> abandoned_key_releases;
+  std::unordered_set<int> abandoned_pointer_releases;
   std::optional<QuaderInputChord> middle_drag;
   std::optional<QuaderInputChord> right_drag;
   std::unordered_map<int, ClickCandidate> click_candidates;
@@ -349,6 +352,52 @@ QtViewportSurface::take_input_frame(float delta_seconds,
     recenter_captured_pointer();
   }
   return frame;
+}
+
+void QtViewportSurface::abandon_input() {
+  if (input_ == nullptr) {
+    return;
+  }
+
+  std::unordered_set<int> abandoned_key_releases =
+      std::move(input_->abandoned_key_releases);
+  for (const auto &[key, chord] : input_->active_keys) {
+    (void)chord;
+    abandoned_key_releases.insert(key);
+  }
+  std::unordered_set<int> abandoned_pointer_releases =
+      std::move(input_->abandoned_pointer_releases);
+  const auto suppress_pointer_release = [&](QuaderMouseButton button,
+                                            bool down) {
+    if (down || input_->click_candidates.contains(static_cast<int>(button))) {
+      abandoned_pointer_releases.insert(static_cast<int>(button));
+    }
+  };
+  suppress_pointer_release(QuaderMouseButton::Left, input_->left_down);
+  suppress_pointer_release(QuaderMouseButton::Middle, input_->middle_down);
+  suppress_pointer_release(QuaderMouseButton::Right, input_->right_down);
+
+  set_pointer_capture(false);
+  ++pointer_capture_generation_;
+  native_capture_loss_pending_ = false;
+  relative_pointer_input_.clear();
+
+  InputAccumulator replacement;
+  replacement.hovered = input_->hovered;
+  replacement.focused = input_->focused;
+  replacement.suppress_warp_event = input_->suppress_warp_event;
+  replacement.warp_motion_overtook_target =
+      input_->warp_motion_overtook_target;
+  replacement.warp_target_local = input_->warp_target_local;
+  replacement.mouse_screen = input_->mouse_screen;
+  replacement.mouse_local = input_->mouse_local;
+  replacement.has_mouse_position = input_->has_mouse_position;
+  replacement.modifiers = input_->modifiers;
+  replacement.abandoned_key_releases =
+      std::move(abandoned_key_releases);
+  replacement.abandoned_pointer_releases =
+      std::move(abandoned_pointer_releases);
+  *input_ = std::move(replacement);
 }
 
 void QtViewportSurface::set_pointer_capture(bool captured) {
@@ -699,6 +748,7 @@ void QtViewportSurface::record_key_press(QKeyEvent &event) {
   if (!chord.has_value()) {
     return;
   }
+  input_->abandoned_key_releases.erase(event.key());
   input_->modifiers = viewport_modifiers(event.modifiers());
   input_->pressed.push_back(*chord);
   input_->active_keys.insert_or_assign(event.key(), *chord);
@@ -709,6 +759,9 @@ void QtViewportSurface::record_key_release(QKeyEvent &event) {
     return;
   }
   input_->modifiers = viewport_modifiers(event.modifiers());
+  if (input_->abandoned_key_releases.erase(event.key()) > 0u) {
+    return;
+  }
   const auto found = input_->active_keys.find(event.key());
   if (found != input_->active_keys.end()) {
     input_->released.push_back(found->second);
@@ -733,6 +786,7 @@ void QtViewportSurface::record_mouse_press(QMouseEvent &event,
   if (!button.has_value()) {
     return;
   }
+  input_->abandoned_pointer_releases.erase(static_cast<int>(*button));
   input_->pointer_pressed_edges.push_back({
       .button = *button,
       .local = input_->mouse_local,
@@ -803,6 +857,10 @@ void QtViewportSurface::record_mouse_release(QMouseEvent &event) {
   const std::optional<QuaderMouseButton> button =
       quader_mouse_button_from_qt_button(event.button());
   if (!button.has_value()) {
+    return;
+  }
+  if (input_->abandoned_pointer_releases.erase(
+          static_cast<int>(*button)) > 0u) {
     return;
   }
   input_->pointer_released_edges.push_back({

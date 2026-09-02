@@ -54,11 +54,13 @@ using quader::modeling::ObjectId;
 using quader::modeling::OperationResult;
 using quader::modeling::PolygonDocument;
 using quader::modeling::PolygonSelectionSnapshot;
+using quader::modeling::PolygonSelectionUniverse;
 using quader::modeling::PreviewId;
 using quader::modeling::Result;
 using quader::modeling::SelectionEdit;
 using quader::modeling::SelectionKind;
 using quader::modeling::SelectionMode;
+using quader::modeling::SessionComponentSelectionUniverse;
 using quader::modeling::SessionDocumentHistoryRestore;
 using quader::modeling::SessionDocumentUpdate;
 using quader::modeling::SessionWorkspaceDocument;
@@ -3555,16 +3557,39 @@ public:
         return selected;
       }
     }
-    if (active_native_object_id_ == kInvalidModelingObjectId) {
+    std::vector<int> targets;
+    targets.reserve(summaries.size());
+    for (const auto &object : summaries) {
+      if (!object.selected ||
+          object.kind != modeling::SessionObjectKind::Mesh) {
+        continue;
+      }
+      const std::optional<int> native = native_object(object.id);
+      if (native.has_value()) {
+        targets.push_back(*native);
+      }
+    }
+    const auto active =
+        std::find(targets.begin(), targets.end(), active_native_object_id_);
+    if (active != targets.end()) {
+      std::rotate(active, std::next(active), targets.end());
+    }
+    if (targets.empty()) {
       selection_mode_ = mode;
       ++mode_revision_;
       return {.ok = true, .changed = true};
     }
-    ModelingComponentSelectionRequest request;
-    request.modeling_object_id = active_native_object_id_;
-    request.mode = mode;
-    request.edit = ModelingSelectionEdit::Add;
-    ModelingCommandResult result = set_component_selection(request);
+
+    std::vector<ModelingComponentSelectionRequest> requests;
+    requests.reserve(targets.size());
+    for (const int target : targets) {
+      requests.push_back({
+          .modeling_object_id = target,
+          .mode = mode,
+          .edit = ModelingSelectionEdit::Add,
+      });
+    }
+    ModelingCommandResult result = set_component_selections(requests);
     if (result.ok && !result.changed) {
       result.changed = true;
     }
@@ -4102,118 +4127,264 @@ public:
     return set_component_selections(requests);
   }
 
-  [[nodiscard]] ModelingCommandResult invert_selection() {
+  [[nodiscard]] ModelingCommandResult invert_selection(
+      std::span<const ModelingComponentSelectionUniverse> universes) {
     if (selection_mode_ == ModelingSelectionMode::Object ||
         selection_mode_ == ModelingSelectionMode::Group) {
-      std::vector<EntityId> inverted;
-      EntityId active = kInvalidEntityId;
-      const std::vector<quader::modeling::SessionObjectSummary> objects =
-          session_.objects();
-      for (const auto &[native_id, object_id] : sdk_bindings()) {
-        const auto summary = std::find_if(
-            objects.begin(), objects.end(),
-            [object_id](const auto &candidate) {
-              return candidate.id == object_id;
-            });
-        if (summary == objects.end() || summary->selected) {
-          continue;
-        }
-        const std::optional<EntityId> entity =
-            object_map_.entity_for_modeling_object(native_id);
-        if (entity.has_value() && scene_.exists(*entity)) {
-          inverted.push_back(*entity);
-          active = *entity;
-        }
-      }
-      return set_object_selection(inverted, active);
+      return failure(
+          "Object and Group selection inversion must be routed through "
+          "EditorSelectionService.");
     }
 
-    std::vector<int> targets;
-    targets.reserve(sdk_bindings().size());
-    for (const auto &[native_id, object_id] : sdk_bindings()) {
-      const auto entity = object_map_.entity_for_modeling_object(native_id);
-      if (entity.has_value() && scene_.curve(*entity) != nullptr) {
+    const PreviewSelectionEditState preview_edit =
+        suspend_operation_preview_for_selection_edit();
+    if (!preview_edit.ok) {
+      return failure(preview_edit.message);
+    }
+    if (universes.empty()) {
+      return finish_operation_preview_selection_edit(
+          preview_edit,
+          {.ok = true, .changed = false, .message = "Selection unchanged."});
+    }
+
+    std::vector<SessionComponentSelectionUniverse> sdk_universes;
+    sdk_universes.reserve(universes.size());
+    std::unordered_map<std::uint64_t, std::size_t> universe_by_object;
+    universe_by_object.reserve(universes.size());
+    const auto append_unique = []<typename Value>(std::vector<Value> &values,
+                                                   Value value) {
+      if (std::find(values.begin(), values.end(), value) == values.end()) {
+        values.push_back(value);
+      }
+    };
+    for (const ModelingComponentSelectionUniverse &universe : universes) {
+      if (universe.mode != selection_mode_) {
+        return finish_operation_preview_selection_edit(
+            preview_edit,
+            failure("Component inversion universe mode does not match the "
+                    "active selection mode."));
+      }
+      const std::optional<ObjectId> object =
+          sdk_object(universe.modeling_object_id);
+      if (!object.has_value()) {
+        return finish_operation_preview_selection_edit(
+            preview_edit, failure("SDK modeling object ID is not live."));
+      }
+
+      const std::uint64_t object_key = sdk_object_key(*object);
+      auto found = universe_by_object.find(object_key);
+      if (found == universe_by_object.end()) {
+        const std::size_t index = sdk_universes.size();
+        universe_by_object.emplace(object_key, index);
+        sdk_universes.push_back({
+            .object = *object,
+            .eligible = {.mode = to_sdk_component_mode(universe.mode)},
+        });
+        found = universe_by_object.find(object_key);
+      }
+      PolygonSelectionUniverse &eligible =
+          sdk_universes[found->second].eligible;
+      for (const int vertex : universe.vertices) {
+        if (vertex <= 0) {
+          return finish_operation_preview_selection_edit(
+              preview_edit,
+              failure("Component inversion contains an invalid vertex ID."));
+        }
+        append_unique(
+            eligible.vertices,
+            quader::modeling::make_id<quader::modeling::VertexTag>(
+                static_cast<std::uint32_t>(vertex)));
+      }
+      for (const auto [first, second] : universe.edges) {
+        if (first <= 0 || second <= 0 || first == second) {
+          return finish_operation_preview_selection_edit(
+              preview_edit,
+              failure("Component inversion contains an invalid edge ID."));
+        }
+        append_unique(
+            eligible.edges,
+            quader::modeling::make_edge_key(
+                quader::modeling::make_id<quader::modeling::VertexTag>(
+                    static_cast<std::uint32_t>(first)),
+                quader::modeling::make_id<quader::modeling::VertexTag>(
+                    static_cast<std::uint32_t>(second))));
+      }
+      for (const int face : universe.faces) {
+        if (face <= 0) {
+          return finish_operation_preview_selection_edit(
+              preview_edit,
+              failure("Component inversion contains an invalid face ID."));
+        }
+        append_unique(
+            eligible.faces,
+            quader::modeling::make_id<quader::modeling::FaceTag>(
+                static_cast<std::uint32_t>(face)));
+      }
+    }
+    if (sdk_universes.empty()) {
+      return finish_operation_preview_selection_edit(
+          preview_edit,
+          {.ok = true, .changed = false, .message = "Selection unchanged."});
+    }
+
+    const SceneSelectionState scene_selection_before =
+        capture_scene_selection(scene_);
+    std::vector<EntityId> preserved_scene_only_entities;
+    preserved_scene_only_entities.reserve(
+        scene_selection_before.selected.size());
+    for (const EntityId entity : scene_selection_before.selected) {
+      // Formal instance occurrences are atomic targets only in Object/Group
+      // mode. Component editing publishes definition-member entities, so an
+      // occurrence is not a scene-only companion to preserve here.
+      if (scene_.modeling_object(entity) == nullptr &&
+          scene_.instance_occurrence(entity) == nullptr) {
+        preserved_scene_only_entities.push_back(entity);
+      }
+    }
+    const EntityId preserved_scene_only_active =
+        std::find(preserved_scene_only_entities.begin(),
+                  preserved_scene_only_entities.end(),
+                  scene_selection_before.active) !=
+                preserved_scene_only_entities.end()
+            ? scene_selection_before.active
+            : kInvalidEntityId;
+
+    const std::vector<quader::modeling::SessionObjectSummary> before_objects =
+        session_.objects();
+    std::vector<ObjectId> mutation_participants;
+    mutation_participants.reserve(before_objects.size());
+    std::ranges::transform(before_objects,
+                           std::back_inserter(mutation_participants),
+                           &modeling::SessionObjectSummary::id);
+
+    AdapterPublicationState host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.sdk_rollback = ModelingSdkRollbackPolicy::MutationCheckpoint,
+         .checkpoint_scope =
+             ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_assets = false,
+         .capture_scene_entities = false,
+         .capture_bindings = false,
+         .capture_hierarchy = false,
+         .capture_scene_selection = true,
+         .affected_sdk_object_ids = mutation_participants});
+    if (!publication.ready()) {
+      return finish_operation_preview_selection_edit(
+          preview_edit,
+          failure("SDK component-inversion checkpoint is unavailable."));
+    }
+    const std::size_t undo_mark = publication.sdk_undo_mark();
+    const auto rollback = [&](std::string message) {
+      return rollback_publication_result(publication,
+                                         failure(std::move(message)));
+    };
+
+    Result<OperationResult> inverted = [&]() {
+      QDR_PROFILE_SCOPE("Component inversion atomic SDK mutation");
+      return session_.invert_component_selection_batch(sdk_universes);
+    }();
+    if (!inverted.ok()) {
+      return finish_operation_preview_selection_edit(
+          preview_edit, rollback(inverted.error_message()));
+    }
+    if (inverted.value().changed &&
+        fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
+      return finish_operation_preview_selection_edit(
+          preview_edit,
+          rollback("Injected failure after SDK component inversion."));
+    }
+
+    const std::vector<quader::modeling::SessionObjectSummary> after_objects =
+        session_.objects();
+    std::vector<EntityId> selected_entities;
+    selected_entities.reserve(after_objects.size() +
+                              preserved_scene_only_entities.size());
+    for (const quader::modeling::SessionObjectSummary &summary :
+         after_objects) {
+      if (!summary.selected) {
         continue;
       }
-      Result<PolygonDocument> copied = session_.document_copy(object_id);
-      if (!copied.ok()) {
-        return failure(copied.error_message());
+      const std::optional<int> native = native_object(summary.id);
+      const std::optional<EntityId> entity =
+          native.has_value()
+              ? object_map_.entity_for_modeling_object(*native)
+              : std::nullopt;
+      if (!entity.has_value() || !scene_.exists(*entity)) {
+        return finish_operation_preview_selection_edit(
+            preview_edit,
+            rollback("SDK component inversion scene projection failed."));
       }
-      const PolygonSelectionSnapshot selection = copied.value().selection();
-      if (component_selection_participates_in_mode(selection,
-                                                   selection_mode_)) {
-        targets.push_back(native_id);
+      selected_entities.push_back(*entity);
+    }
+    selected_entities.insert(selected_entities.end(),
+                             preserved_scene_only_entities.begin(),
+                             preserved_scene_only_entities.end());
+
+    const ObjectId sdk_active = session_.active_object();
+    int active_native = kInvalidModelingObjectId;
+    EntityId active_entity = kInvalidEntityId;
+    if (sdk_active.valid()) {
+      const std::optional<int> native = native_object(sdk_active);
+      const std::optional<EntityId> entity =
+          native.has_value()
+              ? object_map_.entity_for_modeling_object(*native)
+              : std::nullopt;
+      if (!native.has_value() || !entity.has_value() ||
+          !scene_.exists(*entity)) {
+        return finish_operation_preview_selection_edit(
+            preview_edit,
+            rollback("SDK component inversion active-object projection "
+                     "failed."));
+      }
+      active_native = *native;
+      active_entity = *entity;
+    }
+
+    const SceneSelectionState desired_scene_selection = make_scene_selection(
+        scene_, selected_entities,
+        preserved_scene_only_active != kInvalidEntityId
+            ? preserved_scene_only_active
+            : active_entity);
+    const bool scene_selection_changed =
+        !same_scene_selection(scene_selection_before, desired_scene_selection);
+    const bool adapter_selection_changed =
+        active_native_object_id_ != active_native;
+    if (!inverted.value().changed && !scene_selection_changed &&
+        !adapter_selection_changed) {
+      return finish_operation_preview_selection_edit(
+          preview_edit,
+          commit_publication_result(publication, from_sdk(inverted)));
+    }
+    if (scene_selection_changed) {
+      if (fails(
+              ModelingSdkProjectionFailurePoint::SelectionScenePublication)) {
+        return finish_operation_preview_selection_edit(
+            preview_edit,
+            rollback("Injected failure during SDK component inversion "
+                     "publication."));
+      }
+      QDR_PROFILE_SCOPE("Component inversion atomic scene publication");
+      (void)apply_scene_selection(scene_, desired_scene_selection,
+                                  SceneSelectionApplicationMode::RuntimeSync);
+      if (!same_scene_selection(capture_scene_selection(scene_),
+                                desired_scene_selection)) {
+        return finish_operation_preview_selection_edit(
+            preview_edit,
+            rollback("SDK component inversion scene publication failed."));
       }
     }
-    const auto active =
-        std::find(targets.begin(), targets.end(), active_native_object_id_);
-    if (active != targets.end()) {
-      std::rotate(active, std::next(active), targets.end());
-    }
-    if (targets.empty()) {
-      return {.ok = true, .changed = false, .message = "Selection unchanged."};
-    }
-    std::vector<ModelingComponentSelectionRequest> requests;
-    requests.reserve(targets.size());
-    for (const int native_id : targets) {
-      const std::optional<ObjectId> object = sdk_object(native_id);
-      if (!object.has_value()) {
-        return failure("SDK modeling object ID is not live.");
-      }
-      Result<PolygonDocument> copied = session_.document_copy(*object);
-      if (!copied.ok()) {
-        return failure(copied.error_message());
-      }
-      Result<AuthoredTopology> topology = copied.value().authored_topology();
-      if (!topology.ok()) {
-        return failure(topology.error_message());
-      }
-      const PolygonSelectionSnapshot current = copied.value().selection();
-      ModelingComponentSelectionRequest request;
-      request.modeling_object_id = native_id;
-      request.mode = selection_mode_;
-      request.edit = ModelingSelectionEdit::Replace;
-      if (selection_mode_ == ModelingSelectionMode::Vertex) {
-        for (const auto &vertex : topology.value().vertices) {
-          if (std::find(current.vertices.begin(), current.vertices.end(),
-                        vertex.id) == current.vertices.end()) {
-            request.vertices.push_back(static_cast<int>(vertex.id.index));
-          }
-        }
-        if (!request.vertices.empty()) {
-          request.active_kind = ModelingActiveSelectionKind::Vertex;
-          request.active_vertex = request.vertices.back();
-        }
-      } else if (selection_mode_ == ModelingSelectionMode::Edge) {
-        for (const EdgeKey edge : copied.value().edge_ids()) {
-          if (std::ranges::none_of(
-                  current.edges,
-                  [edge](const EdgeKey current_edge) {
-                    return current_edge == edge;
-                  })) {
-            request.edges.emplace_back(static_cast<int>(edge.a.index),
-                                       static_cast<int>(edge.b.index));
-          }
-        }
-        if (!request.edges.empty()) {
-          request.active_kind = ModelingActiveSelectionKind::Edge;
-          request.active_edge = request.edges.back();
-        }
-      } else {
-        for (const auto &face : topology.value().faces) {
-          if (std::find(current.faces.begin(), current.faces.end(), face.id) ==
-              current.faces.end()) {
-            request.faces.push_back(static_cast<int>(face.id.index));
-          }
-        }
-        if (!request.faces.empty()) {
-          request.active_kind = ModelingActiveSelectionKind::Face;
-          request.active_face = request.faces.back();
-        }
-      }
-      requests.push_back(std::move(request));
-    }
-    return set_component_selections(requests);
+    active_native_object_id_ = active_native;
+    inverted.value().changed = inverted.value().changed ||
+                               scene_selection_changed ||
+                               adapter_selection_changed;
+    session_.squash_undo_since(undo_mark);
+    return finish_operation_preview_selection_edit(
+        preview_edit,
+        commit_publication_result(publication, from_sdk(inverted)));
   }
 
   [[nodiscard]] ModelingCommandResult clear_selection() {
@@ -11964,8 +12135,9 @@ ModelingCommandResult ModelingSdkProjectionAdapter::select_all() {
   return impl_->select_all();
 }
 
-ModelingCommandResult ModelingSdkProjectionAdapter::invert_selection() {
-  return impl_->invert_selection();
+ModelingCommandResult ModelingSdkProjectionAdapter::invert_selection(
+    std::span<const ModelingComponentSelectionUniverse> universes) {
+  return impl_->invert_selection(universes);
 }
 
 ModelingCommandResult ModelingSdkProjectionAdapter::clear_selection() {

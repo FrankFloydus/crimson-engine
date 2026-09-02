@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <functional>
 #include <optional>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace quader::modeling {
@@ -48,6 +50,12 @@ struct ModelingRenderMeshCacheEntry {
   MeshPayload mesh;
 };
 
+/** Distinguishes public object interaction from component interaction. */
+enum class ModelingSelectionDomain {
+  Object,
+  Component,
+};
+
 /**
  * Stores shared mutable state for public API facade handles.
  */
@@ -58,11 +66,134 @@ struct ModelingApiContext {
   std::optional<Error> last_error;
   std::uint64_t error_epoch = 0;
   SelectionEdit default_edit = SelectionEdit::Replace;
+  // Public-facade interaction state deliberately survives selection undo, as
+  // an editor mode does. Documents own exact component sets; entries in this
+  // map identify the current component-edit participants and repair each
+  // participant's mode after undo. The map also supports heterogeneous
+  // component kinds in one edit scope.
+  ModelingSelectionDomain selection_domain = ModelingSelectionDomain::Object;
+  std::unordered_map<std::uint64_t, SelectionMode> component_edit_modes;
   std::string active_tool = "select";
   std::optional<ModelingRepeatOperation> repeat_operation;
   bool repeating_operation = false;
   std::vector<ModelingRenderMeshCacheEntry> render_mesh_cache;
 };
+
+/** Captures facade-owned selection interaction state around atomic workflows. */
+struct ModelingSelectionInteractionState {
+  ModelingSelectionDomain domain = ModelingSelectionDomain::Object;
+  std::unordered_map<std::uint64_t, SelectionMode> component_edit_modes;
+};
+
+[[nodiscard]] constexpr std::uint64_t
+modeling_api_object_key(ObjectId object) noexcept {
+  return (static_cast<std::uint64_t>(object.generation) << 32U) |
+         static_cast<std::uint64_t>(object.index);
+}
+
+[[nodiscard]] inline std::optional<SelectionMode>
+component_selection_mode(SelectionKind kind) {
+  switch (kind) {
+  case SelectionKind::Vertex:
+    return SelectionMode::Vertex;
+  case SelectionKind::Edge:
+    return SelectionMode::Edge;
+  case SelectionKind::Face:
+    return SelectionMode::Face;
+  case SelectionKind::Object:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] inline SelectionKind
+component_selection_kind(SelectionMode mode) noexcept {
+  switch (mode) {
+  case SelectionMode::Vertex:
+    return SelectionKind::Vertex;
+  case SelectionMode::Edge:
+    return SelectionKind::Edge;
+  case SelectionMode::Face:
+    return SelectionKind::Face;
+  }
+  return SelectionKind::Vertex;
+}
+
+[[nodiscard]] inline ModelingSelectionInteractionState
+capture_selection_interaction(const ModelingApiContext &context) {
+  return {
+      .domain = context.selection_domain,
+      .component_edit_modes = context.component_edit_modes,
+  };
+}
+
+inline void restore_selection_interaction(
+    ModelingApiContext &context,
+    const ModelingSelectionInteractionState &interaction) {
+  context.selection_domain = interaction.domain;
+  context.component_edit_modes = interaction.component_edit_modes;
+}
+
+inline void remember_selection_interaction(ModelingApiContext &context,
+                                           const SelectionUnion &selection) {
+  if (selection.kind == SelectionKind::Object) {
+    context.selection_domain = ModelingSelectionDomain::Object;
+    context.component_edit_modes.clear();
+    return;
+  }
+  const std::optional<SelectionMode> mode =
+      component_selection_mode(selection.kind);
+  if (!mode.has_value() || !selection.object.valid()) {
+    return;
+  }
+  context.selection_domain = ModelingSelectionDomain::Component;
+  context.component_edit_modes.insert_or_assign(
+      modeling_api_object_key(selection.object), *mode);
+}
+
+inline void forget_component_edit_participant(ModelingApiContext &context,
+                                               ObjectId object) {
+  if (object.valid()) {
+    context.component_edit_modes.erase(modeling_api_object_key(object));
+  }
+  if (context.component_edit_modes.empty()) {
+    context.selection_domain = ModelingSelectionDomain::Object;
+  }
+}
+
+/**
+ * Drops facade participants whose session objects no longer exist. Interaction
+ * mode intentionally survives ordinary selection undo, but it must not leave
+ * the next global selection command trapped in an empty component scope after
+ * structural undo or another object-lifetime transition.
+ */
+inline void prune_stale_component_edit_participants(
+    ModelingApiContext &context) {
+  if (context.selection_domain == ModelingSelectionDomain::Object) {
+    context.component_edit_modes.clear();
+    return;
+  }
+
+  const std::vector<SessionObjectSummary> objects = context.session.objects();
+  std::unordered_set<std::uint64_t> live_meshes;
+  live_meshes.reserve(objects.size());
+  for (const SessionObjectSummary &object : objects) {
+    if (object.kind == SessionObjectKind::Mesh) {
+      live_meshes.emplace(modeling_api_object_key(object.id));
+    }
+  }
+  for (auto participant = context.component_edit_modes.begin();
+       participant != context.component_edit_modes.end();) {
+    if (!live_meshes.contains(participant->first)) {
+      participant = context.component_edit_modes.erase(participant);
+    } else {
+      ++participant;
+    }
+  }
+  if (context.component_edit_modes.empty()) {
+    context.selection_domain = ModelingSelectionDomain::Object;
+  }
+}
 
 /**
  * Stores one pending public preview operation without mutating session truth.
@@ -305,6 +436,7 @@ commit_document_receipt(ModelingApiContext &context, ObjectId object,
   if (!result.ok()) {
     return handle_failure(context, result.error());
   }
+  remember_selection_interaction(context, selection);
   context.last_error.reset();
   return std::move(result).value();
 }

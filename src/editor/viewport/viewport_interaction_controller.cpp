@@ -438,9 +438,10 @@ void ViewportInteractionController::handle_after_active_tool(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
     const ViewportToolResult &tool_result,
     const ViewportBeforeToolInteractionResult &before_tool,
-    ViewportToolHoverPort *tool_hover) {
+    ViewportToolHoverPort *tool_hover,
+    ViewportRuntimeBindingToken runtime_binding) {
   handle_after_active_tool_impl(editor, frame, tool_result, before_tool,
-                                tool_hover, nullptr);
+                                tool_hover, nullptr, runtime_binding);
 }
 
 void ViewportInteractionController::handle_after_active_tool_impl(
@@ -448,16 +449,27 @@ void ViewportInteractionController::handle_after_active_tool_impl(
     const ViewportToolResult &tool_result,
     const ViewportBeforeToolInteractionResult &before_tool,
     ViewportToolHoverPort *tool_hover,
-    ViewportCurveInteractionPort *curve) {
+    ViewportCurveInteractionPort *curve,
+    ViewportRuntimeBindingToken runtime_binding) {
   QDR_PROFILE_FUNCTION();
+  if (!runtime_binding.current()) {
+    return;
+  }
   ViewportInteractionFrame prepared = frame;
   if (before_tool.selection_after_pending_pick.has_value()) {
     prepared.selection_state = *before_tool.selection_after_pending_pick;
   }
   if (frame.input_result.cancel_requested) {
     (void)transform_gizmo_.cancel_active_drag(editor, curve);
+    if (!runtime_binding.current()) {
+      return;
+    }
   }
-  handle_material_interactions(editor, prepared, tool_result, before_tool);
+  handle_material_interactions(editor, prepared, tool_result, before_tool,
+                               runtime_binding);
+  if (!runtime_binding.current()) {
+    return;
+  }
   selection_.handle_frame(editor, prepared, tool_result, before_tool, tool_hover,
                           curve);
 }
@@ -467,16 +479,22 @@ void ViewportInteractionController::handle_after_active_tool(
     const ViewportToolResult &tool_result,
     const ViewportBeforeToolInteractionResult &before_tool,
     NativeViewportToolCoordinator &native_tools,
-    ViewportToolHoverPort *tool_hover) {
+    ViewportToolHoverPort *tool_hover,
+    ViewportRuntimeBindingToken runtime_binding) {
   handle_after_active_tool_impl(editor, frame, tool_result, before_tool,
                                 tool_hover,
-                                &native_tools.curve_interaction());
+                                &native_tools.curve_interaction(),
+                                runtime_binding);
 }
 
 void ViewportInteractionController::handle_material_interactions(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
     const ViewportToolResult &tool_result,
-    const ViewportBeforeToolInteractionResult &before_tool) {
+    const ViewportBeforeToolInteractionResult &before_tool,
+    ViewportRuntimeBindingToken runtime_binding) {
+  if (!runtime_binding.current()) {
+    return;
+  }
   if (frame.input.transfer_face_texture_pressed) {
     pending_apply_active_material_.reset();
     if (!before_tool.transfer_face_texture_requested ||
@@ -497,11 +515,15 @@ void ViewportInteractionController::handle_material_interactions(
     if (const std::optional<QuaderHoverTarget> target =
             pick_material_face_target(editor, frame, local_mouse)) {
       ++material_interaction_work_stats_.transfer_face_texture_request_count;
-      log_material_interaction_failure(
-          "Continue texture from selected face",
+      const QuaderApiVoidResult transferred =
           editor.modeling().transfer_face_texture_to_face(
               static_cast<QuaderModelingObjectId>(target->object_id),
-              static_cast<QuaderElementId>(target->face_id)));
+              static_cast<QuaderElementId>(target->face_id));
+      if (!runtime_binding.current()) {
+        return;
+      }
+      log_material_interaction_failure("Continue texture from selected face",
+                                       transferred);
     }
     return;
   }
@@ -543,11 +565,14 @@ void ViewportInteractionController::handle_material_interactions(
     if (const std::optional<QuaderHoverTarget> target =
             pick_material_face_target(editor, frame)) {
       ++material_interaction_work_stats_.apply_face_to_mesh_request_count;
-      log_material_interaction_failure(
-          "Apply face material to mesh",
+      const QuaderApiVoidResult applied =
           editor.modeling().apply_face_material_to_mesh(
               static_cast<QuaderModelingObjectId>(target->object_id),
-              static_cast<QuaderElementId>(target->face_id)));
+              static_cast<QuaderElementId>(target->face_id));
+      if (!runtime_binding.current()) {
+        return;
+      }
+      log_material_interaction_failure("Apply face material to mesh", applied);
     }
   }
 
@@ -560,14 +585,20 @@ void ViewportInteractionController::handle_material_interactions(
           editor.modeling().project_material_for_face(
               static_cast<QuaderModelingObjectId>(target->object_id),
               static_cast<QuaderElementId>(target->face_id));
+      if (!runtime_binding.current()) {
+        return;
+      }
       if (!material.ok()) {
         log_material_interaction_failure("Read clicked face material",
                                          material);
       } else {
-        log_material_interaction_failure(
-            "Set active face material",
-            editor.project_assets().set_active_material(
-                material.value().id));
+        const QuaderApiVoidResult activated =
+            editor.project_assets().set_active_material(material.value().id);
+        if (!runtime_binding.current()) {
+          return;
+        }
+        log_material_interaction_failure("Set active face material",
+                                         activated);
       }
     }
   }
@@ -586,15 +617,19 @@ void ViewportInteractionController::handle_material_interactions(
             : 0.0;
     if (timeout <= 0.0) {
       ++material_interaction_work_stats_.apply_target_request_count;
-      log_material_interaction_failure(
-          "Apply active material under mouse",
+      const QuaderApiVoidResult applied =
           selection_mode == ViewportSelectionMode::Face
               ? editor.modeling().apply_active_material_to_face(
                     static_cast<QuaderModelingObjectId>(target->object_id),
                     static_cast<QuaderElementId>(target->face_id))
               : editor.modeling().apply_active_material_to_mesh(
                     static_cast<QuaderModelingObjectId>(target->object_id),
-                    static_cast<QuaderElementId>(target->face_id)));
+                    static_cast<QuaderElementId>(target->face_id));
+      if (!runtime_binding.current()) {
+        return;
+      }
+      log_material_interaction_failure("Apply active material under mouse",
+                                       applied);
     } else {
       const std::optional<SceneSessionId> scene_session_id =
           editor.scene_documents().active_scene_id();
@@ -650,8 +685,7 @@ void ViewportInteractionController::handle_material_interactions(
     return;
   }
   ++material_interaction_work_stats_.apply_target_request_count;
-  log_material_interaction_failure(
-      "Apply active material under mouse",
+  const QuaderApiVoidResult applied =
       pending.selection_mode == ViewportSelectionMode::Face
           ? editor.modeling().apply_active_material_to_face(
                 static_cast<QuaderModelingObjectId>(
@@ -660,7 +694,12 @@ void ViewportInteractionController::handle_material_interactions(
           : editor.modeling().apply_active_material_to_mesh(
                 static_cast<QuaderModelingObjectId>(
                     pending.modeling_object_id),
-                static_cast<QuaderElementId>(pending.face_id)));
+                static_cast<QuaderElementId>(pending.face_id));
+  if (!runtime_binding.current()) {
+    return;
+  }
+  log_material_interaction_failure("Apply active material under mouse",
+                                   applied);
 }
 
 void ViewportInteractionController::cancel_pending_material_interaction() {

@@ -119,6 +119,7 @@ struct ViewportBeforeToolInteractionResult {
   bool selection_click_requested = false;
   QVec2 selection_click_local = {};
   int selection_click_count = 1;
+  ViewportModifiers selection_click_modifiers = {};
   bool selection_cycle_depth = false;
   ViewportModifiers selection_cycle_depth_modifiers = {};
 };

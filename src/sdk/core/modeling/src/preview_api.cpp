@@ -151,6 +151,7 @@ PreviewHandle::PreviewHandle(std::shared_ptr<ModelingPreviewState> state)
     record_error(*state_->context, begun.error());
     return;
   }
+  remember_selection_interaction(*state_->context, state_->selection);
   state_->id = begun.value();
   state_->payload_revision =
       state_->context->session.preview_summary().content_revision;

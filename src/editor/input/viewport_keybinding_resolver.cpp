@@ -647,12 +647,13 @@ bool release_suppressed_input_chord(
 
 } // namespace
 
-void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
-                         const ViewportToolState &state,
-                         ViewportInputFrame &input,
-                         std::vector<QuaderInputChord> &suppressed_chords,
-                         double &linear_array_wheel_remainder,
-                         double &radial_array_wheel_remainder) {
+void ViewportKeybindingResolver::resolve(
+    QuaderEditorApi &editor, const ViewportToolState &state,
+    ViewportInputFrame &input,
+    std::vector<QuaderInputChord> &suppressed_chords,
+    double &linear_array_wheel_remainder,
+    double &radial_array_wheel_remainder,
+    ViewportRuntimeBindingToken runtime_binding) {
   input.resolved_shortcuts.clear();
   input.navigation_bindings = {};
   input.linear_array_copy_delta = 0;
@@ -689,11 +690,15 @@ void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
 
   bool wheel_event_resolved_linear_array_action = false;
   bool wheel_event_resolved_radial_array_action = false;
+  bool dispatch_continues = runtime_binding.current();
   PointerEdgeProvenanceCursor pointer_edge_cursor;
   dispatch_ordered_viewport_input_edges(
       input.pressed_input_chords, input.wheel_input_edges,
       [&](const QuaderInputChord &chord, ViewportInputEdgeKind kind,
           double wheel_step_delta) {
+        if (!dispatch_continues) {
+          return true;
+        }
         // Consume provenance before suppression or action lookup so an
         // unbound same-button chord cannot shift a later bound event onto the
         // wrong raw pointer position.
@@ -794,6 +799,10 @@ void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
                   stateful_dispatch_handled;
               return stateful_dispatch_handled;
             });
+        if (!runtime_binding.current()) {
+          dispatch_continues = false;
+          return true;
+        }
         if (pending_before) {
           input.keybinding_input_consumed = true;
         }
@@ -810,6 +819,9 @@ void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
         return handled;
       },
       [&](std::span<const QuaderWheelInputEdge>) {
+        if (!dispatch_continues) {
+          return;
+        }
         if (state.active_tool == ViewportToolId::LinearArray) {
           finish_array_wheel_event(
               wheel_event_resolved_linear_array_action,
@@ -822,6 +834,10 @@ void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
         wheel_event_resolved_linear_array_action = false;
         wheel_event_resolved_radial_array_action = false;
       });
+
+  if (!dispatch_continues) {
+    return;
+  }
 
   for (const QuaderInputChord &chord : input.active_input_chords) {
     if (input_chord_is_suppressed(suppressed_chords, chord)) {

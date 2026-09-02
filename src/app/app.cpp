@@ -525,19 +525,21 @@ bool App::render_frame(const FrameTiming &frame_timing) {
     ui_.refresh(frame_timing, render_system_.frame_performance_stats());
   }
   const auto ui_refresh_end = std::chrono::steady_clock::now();
-  const OpenSceneSession *active_scene = project_session_.active_scene();
-  if (active_scene != nullptr) {
+  if (project_session_.active_scene() != nullptr) {
     QDR_PROFILE_SCOPE("UI process viewport input");
     ui_.process_viewport_input();
   }
   const auto viewport_input_end = std::chrono::steady_clock::now();
-  if (active_scene != nullptr) {
+  // Viewport commands execute synchronously and may close the active scene.
+  // Do not retain an OpenSceneSession pointer across that dispatch boundary.
+  if (project_session_.active_scene() != nullptr) {
     QDR_PROFILE_SCOPE("Render sync scene");
     (void)QuaderRenderApiRuntimeAccess::sync_scene(editor_->render(),
                                                    render_bridge_);
   }
   const auto scene_sync_end = std::chrono::steady_clock::now();
-  if (active_scene != nullptr && active_scene->session != nullptr) {
+  if (const OpenSceneSession *active_scene = project_session_.active_scene();
+      active_scene != nullptr && active_scene->session != nullptr) {
     const SceneSessionReadView session_view = active_scene->session->read_view();
     if (const EntityId root = session_view.scene.scene_root();
         root != kInvalidEntityId) {
@@ -548,12 +550,12 @@ bool App::render_frame(const FrameTiming &frame_timing) {
     }
   }
   const auto scene_settings_end = std::chrono::steady_clock::now();
-  if (active_scene != nullptr) {
+  if (project_session_.active_scene() != nullptr) {
     ui_.prepare_viewports(render_bridge_, render_overlay_snapshot_cache_);
   }
   const auto viewport_prepare_end = std::chrono::steady_clock::now();
   const bool render_scene_viewports =
-      active_scene != nullptr && ui_.can_render_viewports();
+      project_session_.active_scene() != nullptr && ui_.can_render_viewports();
   const std::size_t submitted =
       ui_.render_surfaces(render_scene_viewports);
   const auto viewport_render_end = std::chrono::steady_clock::now();

@@ -284,10 +284,27 @@ struct LayerPanel::Impl {
                      &panel_, [this]() { create_layer(true); });
   }
 
+  void abandon_runtime() noexcept {
+    ++runtime_binding_generation_;
+    editor_ = nullptr;
+    document_ = nullptr;
+    localization_ = nullptr;
+    select_after_refresh_.reset();
+    synchronization_valid_ = false;
+    syncing_model_ = false;
+    if (active_color_dialog_ != nullptr) {
+      active_color_dialog_->reject();
+    }
+    active_color_dialog_ = nullptr;
+  }
+
   void refresh(UIContext &context) {
     const bool owner_changed =
         editor_ != &context.intent.editor ||
         document_ != &context.scene.document;
+    if (owner_changed && (editor_ != nullptr || document_ != nullptr)) {
+      abandon_runtime();
+    }
     editor_ = &context.intent.editor;
     document_ = &context.scene.document;
     localization_ = &context.localization;
@@ -518,9 +535,13 @@ private:
     if (editor_ == nullptr) {
       return;
     }
+    const std::uint64_t mutation_generation = runtime_binding_generation_;
     const QuaderApiResult<QuaderLayerSnapshot> result =
         from_selection ? editor_->layers().create_from_selection()
                        : editor_->layers().create();
+    if (runtime_binding_generation_ != mutation_generation) {
+      return;
+    }
     if (!result.ok()) {
       return;
     }
@@ -536,8 +557,12 @@ private:
     if (found == layer_by_id_.end()) {
       return;
     }
+    const std::uint64_t mutation_generation = runtime_binding_generation_;
     const QuaderApiVoidResult result =
         editor_->layers().set_visible(id, !found->second.visible);
+    if (runtime_binding_generation_ != mutation_generation) {
+      return;
+    }
     if (result.ok() && result.changed()) {
       synchronize(true);
     }
@@ -551,8 +576,12 @@ private:
     if (found == layer_by_id_.end()) {
       return;
     }
+    const std::uint64_t mutation_generation = runtime_binding_generation_;
     const QuaderApiVoidResult result =
         editor_->layers().set_locked(id, !found->second.locked);
+    if (runtime_binding_generation_ != mutation_generation) {
+      return;
+    }
     if (result.ok() && result.changed()) {
       synchronize(true);
     }
@@ -572,7 +601,11 @@ private:
     if (next_name == found->second.name) {
       return;
     }
+    const std::uint64_t mutation_generation = runtime_binding_generation_;
     const QuaderApiVoidResult result = editor_->layers().rename(id, next_name);
+    if (runtime_binding_generation_ != mutation_generation) {
+      return;
+    }
     if (!result.ok()) {
       const QSignalBlocker blocker(model_);
       item->setText(qt_text(found->second.name));
@@ -604,12 +637,24 @@ private:
                        }
                      });
 
+    const std::uint64_t dialog_generation = runtime_binding_generation_;
+    active_color_dialog_ = &dialog;
     const int dialog_result = dialog.exec();
+    if (active_color_dialog_ == &dialog) {
+      active_color_dialog_ = nullptr;
+    }
+    if (runtime_binding_generation_ != dialog_generation) {
+      return;
+    }
     const QColor committed = dialog.selectedColor();
     if (dialog_result == QDialog::Accepted && committed.isValid() &&
         !same_color(committed, initial)) {
+      const std::uint64_t mutation_generation = runtime_binding_generation_;
       const QuaderApiVoidResult result =
           editor_->layers().set_wireframe_color(id, layer_color(committed));
+      if (runtime_binding_generation_ != mutation_generation) {
+        return;
+      }
       if (result.ok()) {
         synchronize(true);
         return;
@@ -673,10 +718,14 @@ private:
       delete_action->setEnabled(!selected.empty());
     }
 
+    const std::uint64_t menu_generation = runtime_binding_generation_;
     QAction *chosen = nullptr;
     {
       QDR_PROFILE_SCOPE("Qt layers context menu exec");
       chosen = menu.exec(global_position);
+    }
+    if (runtime_binding_generation_ != menu_generation) {
+      return;
     }
     QuaderApiVoidResult result;
     {
@@ -693,6 +742,9 @@ private:
       } else {
         return;
       }
+    }
+    if (runtime_binding_generation_ != menu_generation) {
+      return;
     }
     if (result.ok() && result.changed()) {
       QDR_PROFILE_SCOPE("Qt layers context menu synchronize result");
@@ -713,7 +765,9 @@ private:
   std::optional<QuaderLayerId> select_after_refresh_;
   std::uint64_t synchronized_layer_revision_ = 0;
   std::uint64_t synchronized_selection_revision_ = 0;
+  std::uint64_t runtime_binding_generation_ = 0;
   std::string synchronized_locale_;
+  QColorDialog *active_color_dialog_ = nullptr;
   bool synchronization_valid_ = false;
   bool syncing_model_ = false;
 };
@@ -722,6 +776,8 @@ LayerPanel::LayerPanel(QWidget *parent)
     : QWidget(parent), impl_(std::make_unique<Impl>(*this)) {}
 
 LayerPanel::~LayerPanel() = default;
+
+void LayerPanel::abandon_runtime() noexcept { impl_->abandon_runtime(); }
 
 void LayerPanel::refresh(UIContext &context) { impl_->refresh(context); }
 

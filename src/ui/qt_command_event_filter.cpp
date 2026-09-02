@@ -272,6 +272,11 @@ QtCommandEventFilter::QtCommandEventFilter(
     : QObject(parent), editor_(&editor),
       tool_state_provider_(std::move(tool_state_provider)) {}
 
+void QtCommandEventFilter::rebind_editor(QuaderEditorApi &editor) noexcept {
+  editor_ = &editor;
+  reset_pending_chord();
+}
+
 void QtCommandEventFilter::set_command_input_owner_provider(
     QtApplicationCommandInputOwnerProvider provider) {
   command_input_owner_provider_ = std::move(provider);

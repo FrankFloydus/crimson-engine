@@ -44,6 +44,7 @@ public:
   explicit OutlinerPanel(QWidget *parent = nullptr);
   ~OutlinerPanel() override;
 
+  void abandon_runtime() noexcept;
   void refresh(UIContext &context);
 
 private:

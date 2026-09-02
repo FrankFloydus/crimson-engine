@@ -76,6 +76,19 @@ struct SessionComponentSelectionUpdate {
 };
 
 /**
+ * Toggles one object's current component selection inside an explicit live
+ * eligibility universe.
+ */
+struct SessionComponentSelectionUniverse {
+  ObjectId object{};
+  PolygonSelectionUniverse eligible;
+  // Public facade interaction state can deliberately outlive selection undo.
+  // When enabled, adopt the explicit eligible mode before toggling; ordinary
+  // session and host callers retain strict mode-mismatch validation.
+  bool adopt_eligible_mode = false;
+};
+
+/**
  * Replaces one session object's portable document as part of an atomic
  * multi-object publication.
  */
@@ -385,6 +398,8 @@ public:
   [[nodiscard]] Result<OperationResult> commit_component_selection_batch(
       std::span<const SessionComponentSelectionUpdate> updates,
       std::span<const ObjectId> selected_objects, ObjectId active_object = {});
+  [[nodiscard]] Result<OperationResult> invert_component_selection_batch(
+      std::span<const SessionComponentSelectionUniverse> targets);
   [[nodiscard]] Result<OperationResult>
   commit_documents_batch(std::vector<SessionDocumentUpdate> updates,
                          bool preserve_object_selection = false);
@@ -568,6 +583,7 @@ public:
   [[nodiscard]] bool preview_active() const;
   [[nodiscard]] bool preview_active(PreviewId preview_id) const;
   [[nodiscard]] std::vector<SessionObjectSummary> objects() const;
+  [[nodiscard]] ObjectId active_object() const noexcept;
   [[nodiscard]] std::uint64_t content_revision() const;
   [[nodiscard]] std::uint64_t selection_revision() const;
   [[nodiscard]] SessionChangeSnapshot

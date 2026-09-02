@@ -91,6 +91,10 @@ public:
   [[nodiscard]] bool empty() const { return edits_.empty(); }
   [[nodiscard]] const std::vector<DocumentTransformEdit> &edits() const { return edits_; }
 
+  /// Disarms destruction without touching the scene owner. This is reserved
+  /// for host teardown after that non-owning scene reference has expired.
+  void abandon() noexcept { active_ = false; }
+
   DocumentCommandResult preview_transform(
       EntityId entity, TransformComponent transform,
       SceneTextureTransformKind kind = SceneTextureTransformKind::Combined) {

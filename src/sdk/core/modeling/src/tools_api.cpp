@@ -399,6 +399,8 @@ OperationReceipt PolyTool::commit(std::string) {
     return handle_failure(*context_, selection.error());
   }
   context_->session.squash_undo_since(undo_mark);
+  remember_selection_interaction(
+      *context_, SelectionUnion{.kind = SelectionKind::Object});
 
   OperationReceipt receipt =
       receipt_from_result(selection.value(), current_revisions(*context_));

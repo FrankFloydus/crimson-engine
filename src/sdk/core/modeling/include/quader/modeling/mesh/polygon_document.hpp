@@ -133,6 +133,17 @@ struct PolygonSelectionSnapshot {
 };
 
 /**
+ * Defines the live component domain toggled by selection inversion. Selected
+ * components outside this universe are preserved.
+ */
+struct PolygonSelectionUniverse {
+  SelectionMode mode = SelectionMode::Vertex;
+  std::vector<VertexId> vertices;
+  std::vector<EdgeKey> edges;
+  std::vector<FaceId> faces;
+};
+
+/**
  * SDK edge bevel options that mirror the current polygon operation defaults.
  */
 struct EdgeBevelSpec {
@@ -229,6 +240,8 @@ public:
   [[nodiscard]] Result<OperationResult> select_all_vertices();
   [[nodiscard]] Result<OperationResult> select_all_edges();
   [[nodiscard]] Result<OperationResult> select_all_faces();
+  [[nodiscard]] Result<OperationResult>
+  invert_selection(const PolygonSelectionUniverse &eligible);
   [[nodiscard]] Result<OperationResult>
   apply_selection(const PolygonSelectionSnapshot &selection,
                   SelectionEdit edit = SelectionEdit::Replace);

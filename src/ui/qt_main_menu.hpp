@@ -26,8 +26,8 @@ class QuaderEditorApi;
  * Long-lived owner references and shell callbacks used by the Qt menu bar.
  */
 struct QtMainMenuContext {
-  QuaderEditorApi &editor;
-  ModelingSessionService &modeling;
+  std::reference_wrapper<QuaderEditorApi> editor;
+  std::reference_wrapper<ModelingSessionService> modeling;
   ViewportSettings &viewport_settings;
   LocalizationService &localization;
   std::function<void()> request_quit;
@@ -64,6 +64,8 @@ public:
   QtMainMenu &operator=(const QtMainMenu &) = delete;
 
   void initialize(QMenuBar &menu_bar, QtMainMenuContext context);
+  void rebind_runtime(QuaderEditorApi &editor,
+                      ModelingSessionService &modeling) noexcept;
   void rebuild();
   void refresh();
 

@@ -250,6 +250,67 @@ UISystem::UISystem() = default;
 
 UISystem::~UISystem() { shutdown(); }
 
+void UISystem::abandon_scene_backed_panels() noexcept {
+  if (outliner_panel_ != nullptr) {
+    outliner_panel_->abandon_runtime();
+  }
+  if (inspector_panel_ != nullptr) {
+    inspector_panel_->abandon_runtime();
+  }
+  if (layer_panel_ != nullptr) {
+    layer_panel_->abandon_runtime();
+  }
+}
+
+void UISystem::bind_scene_backed_panels() {
+  if (editor_ == nullptr || document_ == nullptr || assets_ == nullptr ||
+      modeling_ == nullptr || selection_ == nullptr) {
+    return;
+  }
+  UIInspectorPreviewContext preview{.document = *document_, .assets = *assets_};
+  UIContext context{
+      .intent = {.editor = *editor_},
+      .scene =
+          {
+              .document = *document_,
+              .assets = *assets_,
+              .modeling = *modeling_,
+              .selection = *selection_,
+              .default_material = default_material_,
+          },
+      .inspector_preview = &preview,
+      .preferences =
+          {
+              .ui = settings_,
+              .viewport = viewport_settings_,
+              .ui_settings_changed = &ui_settings_changed_,
+          },
+      .localization = localization_,
+  };
+  if (outliner_panel_ != nullptr) {
+    outliner_panel_->refresh(context);
+  }
+  if (layer_panel_ != nullptr) {
+    layer_panel_->refresh(context);
+  }
+  if (inspector_panel_ != nullptr) {
+    refresh_inspector_material_presentation();
+    inspector_panel_->refresh(context);
+  }
+}
+
+void UISystem::clear_editor_runtime_hooks() {
+  if (editor_ == nullptr) {
+    return;
+  }
+  editor_->viewports().set_runtime_hooks(QuaderViewportRuntimeHooks{});
+#ifndef NDEBUG
+  editor_->dev_tools().set_runtime_hooks(QuaderDevToolsRuntimeHooks{});
+#endif
+  editor_->ui().set_runtime_hooks(QuaderUIRuntimeHooks{});
+  editor_->preferences().set_runtime_hooks(QuaderPreferencesRuntimeHooks{});
+}
+
 bool UISystem::initialize(RenderSystem &render_system,
                           const std::filesystem::path &executable_dir) {
   if (initialized_) {
@@ -667,8 +728,11 @@ void UISystem::install_runtime_hooks(
     ModelingSessionService &modeling, EditorSelectionService &selection,
     NativeViewportToolCoordinator &native_tools,
     ViewportPointPlacementService &point_placement, AssetId default_material) {
+  abandon_scene_backed_panels();
   if (viewport_panel_ != nullptr) {
-    viewport_panel_->reset_interactions(editor_, native_tools_);
+    // Project rebinding can release the previous SceneSession before this
+    // callback. Drop only Qt-owned state; the stored runtime pair may dangle.
+    viewport_panel_->abandon_interactions();
   }
   editor_ = &editor;
   document_ = &document;
@@ -694,6 +758,7 @@ void UISystem::install_runtime_hooks(
   status_presenter_.invalidate();
   project_workspace_instance_edit_revision_ = 0;
   project_workspace_instance_edit_revision_valid_ = false;
+  bind_scene_backed_panels();
   bind_project_workspace_events(editor);
 
   selection_toolbar_->set_mode_requested_callback(
@@ -802,10 +867,11 @@ void UISystem::install_runtime_hooks(
         handle_settings_dialog_change(kind);
       });
 
-  main_menu_ = std::make_unique<QtMainMenu>();
-  main_menu_->initialize(
-      *main_window_->menuBar(),
-      QtMainMenuContext{
+  if (main_menu_ == nullptr) {
+    main_menu_ = std::make_unique<QtMainMenu>();
+    main_menu_->initialize(
+        *main_window_->menuBar(),
+        QtMainMenuContext{
           .editor = editor,
           .modeling = modeling,
           .viewport_settings = viewport_settings_,
@@ -889,7 +955,13 @@ void UISystem::install_runtime_hooks(
                        editor_->project().has_project() &&
                        editor_->scene_documents().has_active_scene();
               },
-      });
+        });
+  } else {
+    // A close command can synchronously rebind the active SceneSession from a
+    // QAction callback owned by this menu. Keep that callback owner alive and
+    // update only the runtime references it resolves on subsequent access.
+    main_menu_->rebind_runtime(editor, modeling);
+  }
 
   editor.viewports().set_runtime_hooks(QuaderViewportRuntimeHooks{
       .frame_all =
@@ -1175,26 +1247,27 @@ void UISystem::install_runtime_hooks(
           },
   });
 
-  if (command_event_filter_ != nullptr) {
+  if (command_event_filter_ == nullptr) {
+    command_event_filter_ = std::make_unique<QtCommandEventFilter>(
+        editor, [this]() {
+          return viewport_panel_ != nullptr ? viewport_panel_->tool_state()
+                                            : ViewportToolState{};
+        });
+    command_event_filter_->set_command_input_owner_provider([this]() {
+      return qt_window_owns_command_input(settings_dialog_) ||
+             qt_window_owns_command_input(material_browser_window_) ||
+             qt_window_owns_command_input(material_picker_window_) ||
+             qt_window_owns_command_input(material_find_replace_dialog_) ||
+             qt_window_owns_command_input(standard_material_editor_window_);
+    });
     if (QCoreApplication *application = QApplication::instance()) {
-      application->removeEventFilter(command_event_filter_.get());
+      application->installEventFilter(command_event_filter_.get());
     }
-    command_event_filter_.reset();
-  }
-  command_event_filter_ = std::make_unique<QtCommandEventFilter>(
-      editor, [this]() {
-        return viewport_panel_ != nullptr ? viewport_panel_->tool_state()
-                                          : ViewportToolState{};
-      });
-  command_event_filter_->set_command_input_owner_provider([this]() {
-    return qt_window_owns_command_input(settings_dialog_) ||
-           qt_window_owns_command_input(material_browser_window_) ||
-           qt_window_owns_command_input(material_picker_window_) ||
-           qt_window_owns_command_input(material_find_replace_dialog_) ||
-           qt_window_owns_command_input(standard_material_editor_window_);
-  });
-  if (QCoreApplication *application = QApplication::instance()) {
-    application->installEventFilter(command_event_filter_.get());
+  } else {
+    // Ctrl+W can close a scene and re-enter this function from inside the
+    // filter's own eventFilter call. Rebind it in place so event delivery can
+    // return through the same live QObject.
+    command_event_filter_->rebind_editor(editor);
   }
   refresh_project_workspace();
 }
@@ -2060,6 +2133,8 @@ void UISystem::shutdown() {
   if (main_window_ == nullptr && render_system_ == nullptr) {
     return;
   }
+  clear_editor_runtime_hooks();
+  abandon_scene_backed_panels();
   (void)save_settings();
   (void)save_viewport_settings();
   save_window_state();

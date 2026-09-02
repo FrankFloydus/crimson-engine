@@ -2270,10 +2270,11 @@ TEST(UiLayoutGuardrailTests, QtViewportSupportsOneThroughFourPaneLayouts) {
            "kViewportLayoutTwoHorizontal", "kViewportLayoutFourQuad"}) {
     expect_contains(menu, command);
   }
-  expect_contains(menu, "context.editor.commands().execute(");
+  expect_contains(menu, "context.editor.get().commands().execute(");
   expect_contains(menu,
-                  "context.editor.commands().descriptor(*entry.command_id)");
-  expect_contains(menu, "editor.viewports().set_layout(layout)");
+                  "context.editor.get().commands().descriptor(*entry.command_id)");
+  expect_contains(menu,
+                  "context.editor.get().viewports().set_layout(layout)");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -2727,7 +2728,7 @@ TEST(UiLayoutGuardrailTests,
 
   const std::string explicit_reset = source_slice(
       panel, "void QtViewportPanel::reset_interactions(",
-      "void QtViewportPanel::attach_workspace(");
+      "void QtViewportPanel::abandon_interactions()");
   expect_contains(explicit_reset,
                   "interaction_controller_.reset(editor, *native_tools)");
   expect_contains(explicit_reset, "interaction_native_tools_ = nullptr");
@@ -2744,6 +2745,580 @@ TEST(UiLayoutGuardrailTests,
       panel, "void QtViewportPanel::process_viewport_input(",
       "bool QtViewportPanel::sync_active_tool_from_editor(");
   expect_contains(input, "interaction_native_tools_ = &native_tools");
+}
+
+TEST(UiLayoutGuardrailTests,
+     RuntimeHookRebindAbandonsInteractionsWithoutTouchingExpiredOwners) {
+  const std::string panel_header =
+      read_source_file("src/ui/qt_viewport_panel.hpp");
+  const std::string panel =
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string gizmo_header =
+      read_source_file("src/ui/qt_navigation_gizmo.hpp");
+  const std::string gizmo =
+      read_source_file("src/ui/qt_navigation_gizmo.cpp");
+  const std::string surface_header =
+      read_source_file("src/ui/qt_viewport_surface.hpp");
+  const std::string surface =
+      read_source_file("src/ui/qt_viewport_surface.cpp");
+  const std::string resolver_header = read_source_file(
+      "src/editor/input/viewport_keybinding_resolver.hpp");
+  const std::string runtime_token_header = read_source_file(
+      "src/viewport/viewport_runtime_binding_token.hpp");
+  const std::string resolver = read_source_file(
+      "src/editor/input/viewport_keybinding_resolver.cpp");
+  const std::string interaction_controller_header = read_source_file(
+      "src/editor/viewport/viewport_interaction_controller.hpp");
+  const std::string interaction_controller = read_source_file(
+      "src/editor/viewport/viewport_interaction_controller.cpp");
+  const std::string context_menu_source =
+      read_source_file("src/ui/qt_viewport_context_menu.cpp");
+  const std::string delete_popup_source =
+      read_source_file("src/ui/qt_viewport_delete_popup.cpp");
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+
+  expect_contains(panel_header, "void abandon_interactions();");
+  expect_contains(panel_header, "runtime_binding_generation_");
+  const std::string abandon = source_slice(
+      panel, "void QtViewportPanel::abandon_interactions()",
+      "void QtViewportPanel::attach_workspace(");
+  expect_contains(abandon, "++runtime_binding_generation_;");
+  expect_contains(abandon, "navigation_gizmo->abandon_camera();");
+  expect_contains(abandon, "pane_state.surface->abandon_input();");
+  expect_contains(abandon, "handle.widget->releaseMouse();");
+  expect_contains(abandon, "split_handle_dragging_ = false;");
+  expect_contains(abandon, "input_router_.reset();");
+  expect_contains(abandon, "interaction_controller_.reset();");
+  expect_contains(abandon, "set_modal_tool_owns_viewport_snapshot(false);");
+  expect_contains(abandon,
+                  "interaction_controller_.clear_modal_tool_state();");
+  expect_contains(abandon, "interaction_editor_ = nullptr");
+  expect_contains(abandon, "interaction_native_tools_ = nullptr");
+  expect_contains(abandon, "workspace_ = nullptr");
+  expect_contains(abandon, "active_box_preview_ = {};");
+  expect_contains(abandon, "modal_tool_dragging_ = false");
+  expect_contains(abandon, "pending_external_pointer_event_ = false");
+  expect_contains(abandon, "linear_array_wheel_remainder_ = 0.0");
+  expect_contains(abandon, "radial_array_wheel_remainder_ = 0.0");
+  expect_missing(abandon, "*interaction_native_tools_");
+  expect_missing(abandon, "interaction_controller_.reset(interaction_editor_");
+
+  expect_contains(gizmo_header, "void abandon_camera();");
+  expect_contains(gizmo_header, "void abandon();");
+  const std::string abandon_camera = source_slice(
+      gizmo, "void QtNavigationGizmo::abandon_camera()",
+      "void QtNavigationGizmo::set_gizmo_visible(");
+  expect_contains(abandon_camera, "interaction_.abandon();");
+  expect_contains(abandon_camera, "camera_ = nullptr;");
+  expect_missing(abandon_camera, "*camera_");
+  expect_missing(abandon_camera, "finish_interaction(");
+
+  expect_contains(surface_header, "void abandon_input();");
+  const std::string abandon_input = source_slice(
+      surface, "void QtViewportSurface::abandon_input()",
+      "void QtViewportSurface::set_pointer_capture(");
+  expect_contains(abandon_input, "set_pointer_capture(false);");
+  expect_contains(abandon_input, "input_->active_keys");
+  expect_contains(abandon_input, "input_->click_candidates");
+  expect_contains(abandon_input, "InputAccumulator replacement;");
+  expect_contains(abandon_input, "replacement.hovered = input_->hovered;");
+  expect_contains(abandon_input, "replacement.focused = input_->focused;");
+  expect_contains(surface, "abandoned_key_releases.erase(event.key())");
+  expect_contains(surface, "abandoned_pointer_releases.erase(");
+
+  const std::string install = source_slice(
+      ui_system, "void UISystem::install_runtime_hooks(",
+      "void UISystem::refresh_project_workspace(");
+  const std::size_t abandon_old_binding =
+      install.find("viewport_panel_->abandon_interactions();");
+  const std::size_t bind_editor = install.find("editor_ = &editor;");
+  const std::size_t bind_native_tools =
+      install.find("native_tools_ = &native_tools;");
+  const std::size_t attach_workspace =
+      install.find("viewport_panel_->attach_workspace(workspace);");
+  ASSERT_NE(abandon_old_binding, std::string::npos);
+  ASSERT_NE(bind_editor, std::string::npos);
+  ASSERT_NE(bind_native_tools, std::string::npos);
+  ASSERT_NE(attach_workspace, std::string::npos);
+  EXPECT_LT(abandon_old_binding, bind_editor);
+  EXPECT_LT(abandon_old_binding, bind_native_tools);
+  EXPECT_LT(bind_native_tools, attach_workspace);
+  const std::string before_owner_rebind = install.substr(0, bind_editor);
+  expect_missing(before_owner_rebind, "reset_interactions(");
+
+  const std::string destructor = source_slice(
+      panel, "QtViewportPanel::~QtViewportPanel()",
+      "bool QtViewportPanel::initialize(");
+  expect_contains(destructor, "shutdown();");
+
+  const std::string shutdown = source_slice(
+      ui_system, "void UISystem::shutdown()", "void UISystem::refresh(");
+  expect_contains(shutdown,
+                  "viewport_panel_->reset_interactions(editor_, "
+                  "native_tools_)");
+
+  const std::string input = source_slice(
+      panel, "void QtViewportPanel::process_viewport_input(",
+      "bool QtViewportPanel::sync_active_tool_from_editor(");
+  expect_contains(input,
+                  "const std::uint64_t input_binding_generation =");
+  expect_contains(input,
+                  ".current_generation = &runtime_binding_generation_");
+  expect_contains(input,
+                  ".expected_generation = input_binding_generation");
+  expect_contains(resolver_header,
+                  "ViewportRuntimeBindingToken runtime_binding = {}");
+  expect_contains(runtime_token_header,
+                  "struct ViewportRuntimeBindingToken");
+  expect_contains(runtime_token_header, "bool current() const");
+  expect_contains(resolver, "bool dispatch_continues = runtime_binding.current();");
+  expect_contains(resolver, "if (!dispatch_continues)");
+  expect_contains(resolver, "if (!runtime_binding.current())");
+  expect_contains(resolver, "dispatch_continues = false;");
+  const std::size_t stateful_dispatch =
+      resolver.find("const bool handled = dispatch_viewport_input_edge(");
+  const std::size_t per_edge_token_check =
+      resolver.find("if (!runtime_binding.current())", stateful_dispatch);
+  const std::size_t deferred_pointer_work =
+      resolver.find("reserve_deferred_action_pointer(", stateful_dispatch);
+  ASSERT_NE(stateful_dispatch, std::string::npos);
+  ASSERT_NE(per_edge_token_check, std::string::npos);
+  ASSERT_NE(deferred_pointer_work, std::string::npos);
+  EXPECT_LT(stateful_dispatch, per_edge_token_check);
+  EXPECT_LT(per_edge_token_check, deferred_pointer_work);
+  const std::size_t resolve =
+      input.find("ViewportKeybindingResolver::resolve(");
+  const std::size_t first_generation_gate = input.find(
+      "runtime_binding_generation_ != input_binding_generation", resolve);
+  const std::size_t post_resolve_tool_sync =
+      input.find("sync_active_tool_from_editor(", resolve);
+  ASSERT_NE(resolve, std::string::npos);
+  ASSERT_NE(first_generation_gate, std::string::npos);
+  ASSERT_NE(post_resolve_tool_sync, std::string::npos);
+  EXPECT_LT(resolve, first_generation_gate);
+  EXPECT_LT(first_generation_gate, post_resolve_tool_sync);
+  EXPECT_GE(count_occurrences(
+                input,
+                "runtime_binding_generation_ != input_binding_generation"),
+            3u);
+  expect_contains(input.substr(first_generation_gate),
+                  "suppressed_keybinding_chords_.clear();");
+  const std::size_t context_menu =
+      input.find("context_menu_presenter_.show(");
+  const std::size_t context_menu_gate = input.find(
+      "runtime_binding_generation_ != input_binding_generation",
+      context_menu);
+  const std::size_t delete_popup =
+      input.find("delete_popup_presenter_.show(", context_menu);
+  const std::size_t delete_popup_gate = input.find(
+      "runtime_binding_generation_ != input_binding_generation",
+      delete_popup);
+  const std::size_t final_tool_status =
+      input.find("const ModelingToolStatus final_tool_status", delete_popup);
+  ASSERT_NE(context_menu, std::string::npos);
+  ASSERT_NE(context_menu_gate, std::string::npos);
+  ASSERT_NE(delete_popup, std::string::npos);
+  ASSERT_NE(delete_popup_gate, std::string::npos);
+  ASSERT_NE(final_tool_status, std::string::npos);
+  EXPECT_LT(context_menu, context_menu_gate);
+  EXPECT_LT(context_menu_gate, delete_popup);
+  EXPECT_LT(delete_popup, delete_popup_gate);
+  EXPECT_LT(delete_popup_gate, final_tool_status);
+
+  const std::size_t context_exec =
+      context_menu_source.find("menu.exec(global_point)");
+  const std::size_t context_exec_gate = context_menu_source.find(
+      "if (!runtime_binding.current())", context_exec);
+  const std::size_t context_selected_action =
+      context_menu_source.find("if (selected_action == nullptr)",
+                               context_exec);
+  ASSERT_NE(context_exec, std::string::npos);
+  ASSERT_NE(context_exec_gate, std::string::npos);
+  ASSERT_NE(context_selected_action, std::string::npos);
+  EXPECT_LT(context_exec, context_exec_gate);
+  EXPECT_LT(context_exec_gate, context_selected_action);
+  const std::size_t context_command = context_menu_source.find(
+      "editor.commands().execute(selected->command_id)");
+  const std::size_t context_command_gate = context_menu_source.find(
+      "if (!runtime_binding.current())", context_command);
+  const std::size_t context_router_sync =
+      context_menu_source.find("input_router.set_selection_mode",
+                               context_command);
+  ASSERT_NE(context_command, std::string::npos);
+  ASSERT_NE(context_command_gate, std::string::npos);
+  ASSERT_NE(context_router_sync, std::string::npos);
+  EXPECT_LT(context_command, context_command_gate);
+  EXPECT_LT(context_command_gate, context_router_sync);
+
+  const std::size_t confirmation_exec =
+      delete_popup_source.find("return confirmation.present(");
+  const std::size_t confirmation_gate = delete_popup_source.find(
+      "if (!runtime_binding.current())", confirmation_exec);
+  const std::size_t confirmation_dispatch = delete_popup_source.find(
+      "return execute_delete_popup_command", confirmation_exec);
+  ASSERT_NE(confirmation_exec, std::string::npos);
+  ASSERT_NE(confirmation_gate, std::string::npos);
+  ASSERT_NE(confirmation_dispatch, std::string::npos);
+  EXPECT_LT(confirmation_exec, confirmation_gate);
+  EXPECT_LT(confirmation_gate, confirmation_dispatch);
+  const std::size_t delete_menu_exec =
+      delete_popup_source.find("selected_action = menu.exec(global_point)");
+  const std::size_t delete_menu_gate = delete_popup_source.find(
+      "if (!runtime_binding.current())", delete_menu_exec);
+  const std::size_t delete_menu_dispatch = delete_popup_source.find(
+      "return execute_delete_popup_command", delete_menu_exec);
+  ASSERT_NE(delete_menu_exec, std::string::npos);
+  ASSERT_NE(delete_menu_gate, std::string::npos);
+  ASSERT_NE(delete_menu_dispatch, std::string::npos);
+  EXPECT_LT(delete_menu_exec, delete_menu_gate);
+  EXPECT_LT(delete_menu_gate, delete_menu_dispatch);
+
+  expect_contains(interaction_controller_header,
+                  "ViewportRuntimeBindingToken runtime_binding = {}");
+  const std::string after_active_tool = source_slice(
+      interaction_controller,
+      "void ViewportInteractionController::handle_after_active_tool_impl(",
+      "void ViewportInteractionController::handle_after_active_tool(");
+  const std::size_t material_phase =
+      after_active_tool.find("handle_material_interactions(");
+  const std::size_t material_phase_gate = after_active_tool.find(
+      "if (!runtime_binding.current())", material_phase);
+  const std::size_t selection_phase =
+      after_active_tool.find("selection_.handle_frame(");
+  ASSERT_NE(material_phase, std::string::npos);
+  ASSERT_NE(material_phase_gate, std::string::npos);
+  ASSERT_NE(selection_phase, std::string::npos);
+  EXPECT_LT(material_phase, material_phase_gate);
+  EXPECT_LT(material_phase_gate, selection_phase);
+  const std::string material_interactions = source_slice(
+      interaction_controller,
+      "void ViewportInteractionController::handle_material_interactions(",
+      "void ViewportInteractionController::cancel_pending_material_interaction(");
+  EXPECT_GE(count_occurrences(material_interactions,
+                              "if (!runtime_binding.current())"),
+            7u);
+  const std::size_t material_query =
+      material_interactions.find("project_material_for_face(");
+  const std::size_t material_query_gate = material_interactions.find(
+      "if (!runtime_binding.current())", material_query);
+  const std::size_t material_query_result_use =
+      material_interactions.find("if (!material.ok())", material_query);
+  ASSERT_NE(material_query, std::string::npos);
+  ASSERT_NE(material_query_gate, std::string::npos);
+  ASSERT_NE(material_query_result_use, std::string::npos);
+  EXPECT_LT(material_query, material_query_gate);
+  EXPECT_LT(material_query_gate, material_query_result_use);
+  for (const std::string_view mutation : {
+           "transfer_face_texture_to_face(",
+           "apply_face_material_to_mesh(",
+           "set_active_material(",
+           "apply_active_material_to_face(",
+           "apply_active_material_to_mesh(",
+       }) {
+    expect_contains(material_interactions, mutation);
+  }
+  const std::size_t after_active_tool_call =
+      input.find("interaction_controller_.handle_after_active_tool(");
+  const std::size_t after_active_tool_gate = input.find(
+      "runtime_binding_generation_ != input_binding_generation",
+      after_active_tool_call);
+  ASSERT_NE(after_active_tool_call, std::string::npos);
+  ASSERT_NE(after_active_tool_gate, std::string::npos);
+  expect_contains(input.substr(after_active_tool_call,
+                               after_active_tool_gate -
+                                   after_active_tool_call),
+                  ".expected_generation = input_binding_generation");
+
+  const std::size_t context_material_query =
+      input.find("project_material_for_face(");
+  const std::size_t context_material_query_gate = input.find(
+      "runtime_binding_generation_ != input_binding_generation",
+      context_material_query);
+  const std::size_t context_material_query_result_use =
+      input.find("if (material.ok())", context_material_query);
+  const std::size_t context_target_pick =
+      input.find("pick_context_menu_target(", context_material_query);
+  ASSERT_NE(context_material_query, std::string::npos);
+  ASSERT_NE(context_material_query_gate, std::string::npos);
+  ASSERT_NE(context_material_query_result_use, std::string::npos);
+  ASSERT_NE(context_target_pick, std::string::npos);
+  EXPECT_LT(context_material_query, context_material_query_gate);
+  EXPECT_LT(context_material_query_gate, context_material_query_result_use);
+  EXPECT_LT(context_material_query_gate, context_target_pick);
+}
+
+TEST(UiLayoutGuardrailTests,
+     RuntimeHookRebindRetainsMenuAndCommandFilterCallbackOwners) {
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+  const std::string menu_header =
+      read_source_file("src/ui/qt_main_menu.hpp");
+  const std::string menu_source =
+      read_source_file("src/ui/qt_main_menu.cpp");
+  const std::string filter_header =
+      read_source_file("src/ui/qt_command_event_filter.hpp");
+  const std::string filter_source =
+      read_source_file("src/ui/qt_command_event_filter.cpp");
+  const std::string install = source_slice(
+      ui_system, "void UISystem::install_runtime_hooks(",
+      "void UISystem::refresh_project_workspace(");
+
+  const std::size_t menu_first_install =
+      install.find("if (main_menu_ == nullptr)");
+  const std::size_t menu_creation =
+      install.find("main_menu_ = std::make_unique<QtMainMenu>()");
+  const std::size_t menu_rebind =
+      install.find("main_menu_->rebind_runtime(editor, modeling)");
+  ASSERT_NE(menu_first_install, std::string::npos);
+  ASSERT_NE(menu_creation, std::string::npos);
+  ASSERT_NE(menu_rebind, std::string::npos);
+  EXPECT_LT(menu_first_install, menu_creation);
+  EXPECT_LT(menu_creation, menu_rebind);
+  EXPECT_EQ(install.find("main_menu_ = std::make_unique<QtMainMenu>()",
+                         menu_creation + 1u),
+            std::string::npos);
+  expect_contains(menu_header, "void rebind_runtime(QuaderEditorApi &editor,");
+  expect_contains(menu_source, "impl_->context.editor = std::ref(editor)");
+  expect_contains(menu_source,
+                  "impl_->context.modeling = std::ref(modeling)");
+
+  const std::size_t filter_first_install =
+      install.find("if (command_event_filter_ == nullptr)");
+  const std::size_t filter_creation = install.find(
+      "command_event_filter_ = std::make_unique<QtCommandEventFilter>");
+  const std::size_t filter_rebind =
+      install.find("command_event_filter_->rebind_editor(editor)");
+  ASSERT_NE(filter_first_install, std::string::npos);
+  ASSERT_NE(filter_creation, std::string::npos);
+  ASSERT_NE(filter_rebind, std::string::npos);
+  EXPECT_LT(filter_first_install, filter_creation);
+  EXPECT_LT(filter_creation, filter_rebind);
+  expect_missing(install, "command_event_filter_.reset()");
+  expect_missing(install,
+                 "removeEventFilter(command_event_filter_.get())");
+  expect_contains(filter_header,
+                  "void rebind_editor(QuaderEditorApi &editor) noexcept;");
+  expect_contains(filter_source, "editor_ = &editor;");
+
+  const std::string shutdown = source_slice(
+      ui_system, "void UISystem::shutdown()", "void UISystem::refresh(");
+  expect_contains(shutdown,
+                  "removeEventFilter(command_event_filter_.get())");
+  expect_contains(shutdown, "command_event_filter_.reset()");
+}
+
+TEST(UiLayoutGuardrailTests,
+     RuntimeHookRebindDetachesAndSynchronouslyBindsSceneBackedPanels) {
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+  const std::string outliner_header =
+      read_source_file("src/ui/outliner_panel.hpp");
+  const std::string outliner =
+      read_source_file("src/ui/outliner_panel.cpp");
+  const std::string inspector_header =
+      read_source_file("src/ui/inspector_panel.hpp");
+  const std::string inspector =
+      read_source_file("src/ui/inspector_panel.cpp");
+  const std::string layer_header =
+      read_source_file("src/ui/layer_panel.hpp");
+  const std::string layer = read_source_file("src/ui/layer_panel.cpp");
+  const std::string drag_header = read_source_file(
+      "src/editor/transform/scene_transform_drag_service.hpp");
+  const std::string drag_source = read_source_file(
+      "src/editor/transform/scene_transform_drag_service.cpp");
+  const std::string transaction = read_source_file(
+      "src/editor/history/scene_transform_preview_transaction.hpp");
+
+  for (const std::string *header :
+       {&outliner_header, &inspector_header, &layer_header}) {
+    expect_contains(*header, "void abandon_runtime() noexcept;");
+  }
+
+  const std::string outliner_abandon = source_slice(
+      outliner, "void abandon_runtime() noexcept {",
+      "void refresh(UIContext &context)");
+  expect_contains(outliner_abandon, "++runtime_binding_generation_");
+  expect_contains(outliner_abandon, "editor_ = nullptr");
+  expect_contains(outliner_abandon, "document_ = nullptr");
+  expect_contains(outliner_abandon, "cache_ = {}");
+  expect_contains(outliner_abandon, "tree_->abandon_selection_gesture()");
+  expect_missing(outliner_abandon, "document_->");
+  EXPECT_GE(count_occurrences(outliner, "[this, scheduled_generation]"), 2u);
+  expect_contains(outliner,
+                  "runtime_binding_generation_ != scheduled_generation");
+  expect_contains(outliner,
+                  "runtime_binding_generation_ != menu_generation");
+
+  const std::string layer_abandon = source_slice(
+      layer, "void abandon_runtime() noexcept {",
+      "void refresh(UIContext &context)");
+  expect_contains(layer_abandon, "++runtime_binding_generation_");
+  expect_contains(layer_abandon, "editor_ = nullptr");
+  expect_contains(layer_abandon, "document_ = nullptr");
+  expect_contains(layer_abandon, "active_color_dialog_->reject()");
+  expect_missing(layer_abandon, "document_->");
+  expect_contains(layer,
+                  "runtime_binding_generation_ != dialog_generation");
+  expect_contains(layer, "runtime_binding_generation_ != menu_generation");
+
+  const std::string inspector_abandon = source_slice(
+      inspector, "void abandon_runtime() noexcept {",
+      "void refresh(UIContext &context)");
+  const std::size_t preview_abandon =
+      inspector_abandon.find("active_transform_preview_.abandon()");
+  const std::size_t forget_document =
+      inspector_abandon.find("document_ = nullptr");
+  ASSERT_NE(preview_abandon, std::string::npos);
+  ASSERT_NE(forget_document, std::string::npos);
+  EXPECT_LT(preview_abandon, forget_document);
+  expect_contains(inspector_abandon, "++runtime_binding_generation_");
+  expect_contains(inspector_abandon, "preview_document_ = nullptr");
+  expect_contains(inspector_abandon, "active_color_dialog_->reject()");
+  expect_missing(inspector_abandon, "active_transform_preview_.cancel()");
+  expect_missing(inspector_abandon, "document_->");
+  expect_contains(inspector,
+                  "runtime_binding_generation_ != dialog_generation");
+
+  expect_contains(drag_header, "void abandon() noexcept;");
+  const std::string drag_abandon = source_slice(
+      drag_source, "void SceneTransformDragService::abandon() noexcept",
+      "void SceneTransformDragService::reset()");
+  expect_contains(drag_abandon, "preview_->abandon()");
+  expect_contains(drag_abandon, "preview_.reset()");
+  expect_missing(drag_abandon, "cancel()");
+  expect_contains(transaction, "void abandon() noexcept { active_ = false; }");
+
+  const std::string detach = source_slice(
+      ui_system, "void UISystem::abandon_scene_backed_panels() noexcept",
+      "void UISystem::bind_scene_backed_panels()");
+  expect_contains(detach, "outliner_panel_->abandon_runtime()");
+  expect_contains(detach, "inspector_panel_->abandon_runtime()");
+  expect_contains(detach, "layer_panel_->abandon_runtime()");
+
+  const std::string bind = source_slice(
+      ui_system, "void UISystem::bind_scene_backed_panels()",
+      "void UISystem::clear_editor_runtime_hooks()");
+  expect_contains(bind, "UIContext context{");
+  expect_contains(bind, "outliner_panel_->refresh(context)");
+  expect_contains(bind, "layer_panel_->refresh(context)");
+  expect_contains(bind, "inspector_panel_->refresh(context)");
+
+  const std::string install = source_slice(
+      ui_system, "void UISystem::install_runtime_hooks(",
+      "void UISystem::refresh_project_workspace(");
+  const std::size_t detach_old =
+      install.find("abandon_scene_backed_panels();");
+  const std::size_t bind_editor = install.find("editor_ = &editor;");
+  const std::size_t bind_new = install.find("bind_scene_backed_panels();");
+  ASSERT_NE(detach_old, std::string::npos);
+  ASSERT_NE(bind_editor, std::string::npos);
+  ASSERT_NE(bind_new, std::string::npos);
+  EXPECT_LT(detach_old, bind_editor);
+  EXPECT_LT(bind_editor, bind_new);
+}
+
+TEST(UiLayoutGuardrailTests,
+     ShutdownClearsUiRuntimeHooksBeforeDestroyingTheirCallbackOwner) {
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+  const std::string clear_hooks = source_slice(
+      ui_system, "void UISystem::clear_editor_runtime_hooks()",
+      "bool UISystem::initialize(");
+  expect_contains(
+      clear_hooks,
+      "set_runtime_hooks(QuaderViewportRuntimeHooks{})");
+  expect_contains(clear_hooks,
+                  "set_runtime_hooks(QuaderDevToolsRuntimeHooks{})");
+  expect_contains(clear_hooks, "set_runtime_hooks(QuaderUIRuntimeHooks{})");
+  expect_contains(
+      clear_hooks,
+      "set_runtime_hooks(QuaderPreferencesRuntimeHooks{})");
+
+  const std::string shutdown = source_slice(
+      ui_system, "void UISystem::shutdown()", "void UISystem::refresh(");
+  const std::size_t clear =
+      shutdown.find("clear_editor_runtime_hooks();");
+  const std::size_t destroy_menu = shutdown.find("main_menu_.reset()");
+  const std::size_t destroy_window = shutdown.find("main_window_.reset()");
+  const std::size_t forget_editor = shutdown.find("editor_ = nullptr");
+  ASSERT_NE(clear, std::string::npos);
+  ASSERT_NE(destroy_menu, std::string::npos);
+  ASSERT_NE(destroy_window, std::string::npos);
+  ASSERT_NE(forget_editor, std::string::npos);
+  EXPECT_LT(clear, destroy_menu);
+  EXPECT_LT(clear, destroy_window);
+  EXPECT_LT(clear, forget_editor);
+  expect_contains(shutdown, "abandon_scene_backed_panels();");
+}
+
+TEST(UiLayoutGuardrailTests,
+     OutlinerAndLayerMutationsStopWhenSynchronousEventsRebindOwners) {
+  const std::string outliner =
+      read_source_file("src/ui/outliner_panel.cpp");
+  const std::string layer = read_source_file("src/ui/layer_panel.cpp");
+
+  expect_contains(outliner, "struct OutlinerRuntimeBindingToken final");
+  expect_contains(outliner, "*generation == expected");
+  const std::string group = source_slice(
+      outliner, "void group_selection(", "void ungroup_entity(");
+  const std::size_t group_dispatch =
+      group.find("editor.commands().execute(quader_command::kGroupSelection)");
+  const std::size_t group_generation = group.find("binding.current()");
+  const std::size_t group_old_document =
+      group.find("select_current_scene_selection(editor, document)");
+  ASSERT_NE(group_dispatch, std::string::npos);
+  ASSERT_NE(group_generation, std::string::npos);
+  ASSERT_NE(group_old_document, std::string::npos);
+  EXPECT_LT(group_dispatch, group_generation);
+  EXPECT_LT(group_generation, group_old_document);
+
+  const std::string ungroup = source_slice(
+      outliner, "void ungroup_entity(", "void delete_selection(");
+  const std::size_t ungroup_dispatch = ungroup.find(
+      "editor.commands().execute(quader_command::kUngroupSelection)");
+  const std::size_t ungroup_post_dispatch_generation =
+      ungroup.find("binding.current()", ungroup_dispatch);
+  const std::size_t ungroup_old_document =
+      ungroup.find("select_current_scene_selection(editor, document)");
+  ASSERT_NE(ungroup_dispatch, std::string::npos);
+  ASSERT_NE(ungroup_post_dispatch_generation, std::string::npos);
+  ASSERT_NE(ungroup_old_document, std::string::npos);
+  EXPECT_LT(ungroup_dispatch, ungroup_post_dispatch_generation);
+  EXPECT_LT(ungroup_post_dispatch_generation, ungroup_old_document);
+
+  const std::string menu = source_slice(
+      outliner, "void show_context_menu(EntityId entity,",
+      "OutlinerPanel &panel_");
+  expect_contains(menu, "const OutlinerRuntimeBindingToken binding{");
+  expect_contains(menu, "if (!binding.current())");
+  expect_contains(menu, "group_selection(*editor_, *document_, binding)");
+  expect_contains(menu,
+                  "ungroup_entity(*editor_, *document_, entity, binding)");
+  expect_contains(menu, "delete_selection(*editor_, *document_, binding)");
+  EXPECT_GE(count_occurrences(
+                outliner,
+                "runtime_binding_generation_ != mutation_generation"),
+            3u);
+  EXPECT_GE(count_occurrences(
+                layer,
+                "runtime_binding_generation_ != mutation_generation"),
+            5u);
+  EXPECT_GE(count_occurrences(
+                layer, "runtime_binding_generation_ != menu_generation"),
+            2u);
+}
+
+TEST(UiLayoutGuardrailTests,
+     AppFrameDoesNotRetainSceneOwnerAcrossViewportCommandDispatch) {
+  const std::string app = read_source_file("src/app/app.cpp");
+  const std::string frame = source_slice(
+      app, "bool App::render_frame(", "void App::schedule_next_frame(");
+  const std::size_t input = frame.find("ui_.process_viewport_input();");
+  const std::size_t scene_pointer = frame.find(
+      "const OpenSceneSession *active_scene = project_session_.active_scene();");
+  ASSERT_NE(input, std::string::npos);
+  ASSERT_NE(scene_pointer, std::string::npos);
+  EXPECT_LT(input, scene_pointer);
+  expect_missing(frame.substr(0, input),
+                 "const OpenSceneSession *active_scene");
+  EXPECT_GE(count_occurrences(frame, "project_session_.active_scene()"), 5u);
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -2886,16 +3461,18 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(menu_header, "without owning shortcuts");
   expect_contains(menu_header,
                   "Keyboard dispatch remains owned by QuaderKeybindingService");
-  expect_contains(menu, "editor.commands().execute(command_id)");
+  expect_contains(menu,
+                  "context.editor.get().commands().execute(command_id)");
   expect_missing(menu, "editor.commands().available()");
+  expect_contains(
+      menu, "context.editor.get().commands().descriptor(entry.command_id)");
   expect_contains(menu,
-                  "context.editor.commands().descriptor(entry.command_id)");
-  expect_contains(menu,
-                  "context.editor.commands().descriptor(*entry.command_id)");
+                  "context.editor.get().commands().descriptor(*entry.command_id)");
   expect_contains(menu, "command->shortcut");
   expect_contains(menu, "command_id_for_tool_activation(");
-  expect_contains(menu, "context.editor.commands().execute(command_id)");
-  expect_missing(menu, "context.editor.tools().activate(tool_id)");
+  expect_contains(menu,
+                  "context.editor.get().commands().execute(command_id)");
+  expect_missing(menu, "context.editor.get().tools().activate(tool_id)");
   expect_contains(menu, "QLatin1Char('\\t')");
   expect_contains(menu, "present_text(*entry.action,");
   expect_contains(menu, "if (action.text() != text)");

@@ -6,7 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/commands/modeling/invert_selection_tool.hpp"
 
-#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 
 namespace quader {
@@ -15,7 +14,12 @@ ModelingCommandResult InvertSelectionTool::execute_custom_command(ModelingComman
     if (context.selection != nullptr) {
         return context.selection->invert();
     }
-    return context.modeling.invert_selection();
+    return {
+        .ok = false,
+        .changed = false,
+        .message =
+            "Invert Selection requires the editor selection service.",
+    };
 }
 
 } // namespace quader

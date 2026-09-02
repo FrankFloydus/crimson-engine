@@ -159,6 +159,9 @@ private:
       int native_client_height_pixels) const;
   void save_auxiliary_window_state();
   void schedule_auxiliary_window_state_save();
+  void abandon_scene_backed_panels() noexcept;
+  void bind_scene_backed_panels();
+  void clear_editor_runtime_hooks();
   void bind_project_workspace_events(QuaderEditorApi &editor);
   void clear_project_workspace_events();
   void refresh_status_bar();

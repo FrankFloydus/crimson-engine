@@ -45,6 +45,7 @@ public:
 
   void set_material_presentation(
       InspectorMaterialPresentationSnapshot snapshot);
+  void abandon_runtime() noexcept;
   void refresh(UIContext &context);
 
 private:

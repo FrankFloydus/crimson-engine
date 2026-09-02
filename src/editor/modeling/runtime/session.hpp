@@ -260,6 +260,13 @@ struct PickRequest {
 
 struct PickCycleState;
 
+/** Selects a topology expansion for an edge pick. */
+enum class EdgeSelectionTraversal {
+  None,
+  Loop,
+  Ring,
+};
+
 /**
  * Stores the Apply Pick Selection Request data contract used by the modeling
  * runtime domain.
@@ -269,7 +276,7 @@ struct ApplyPickSelectionRequest {
   quader_poly::Ray ray;
   quader_poly::PickOptions pick_options;
   int click_count = 1;
-  bool edge_loop_select = false;
+  EdgeSelectionTraversal edge_traversal = EdgeSelectionTraversal::None;
   bool preserve_existing_component_selection_on_hit = false;
   bool preserve_selection_on_selected_hit = false;
   bool preserve_selection_on_miss = false;
@@ -448,24 +455,6 @@ struct RectangleSelectionRequest {
  */
 struct RectangleSelectionResult {
   RectangleSelectionState selection;
-};
-
-/**
- * Enumerates SelectionSetCommand values used by the modeling layer.
- */
-enum class SelectionSetCommand {
-  SelectAll,
-  Invert,
-};
-
-/**
- * Stores the Selection Set Command Request data contract used by the modeling
- * runtime domain.
- */
-struct SelectionSetCommandRequest {
-  RectangleSelectionState current_selection;
-  RectangleSelectionUniverse universe;
-  SelectionSetCommand command = SelectionSetCommand::SelectAll;
 };
 
 /**
@@ -1060,8 +1049,6 @@ plan_drag_seed_pick(const PickSelectionState &selection,
 RectangleSelectionResult
 apply_rectangle_selection(const RectangleSelectionRequest &request);
 RectangleSelectionResult
-apply_selection_set_command(const SelectionSetCommandRequest &request);
-RectangleSelectionResult
 convert_selection_to_face_mode(const FaceModeConversionRequest &request);
 FullElementPromotionResult promote_full_element_selection_to_object(
     const FullElementPromotionRequest &request);
@@ -1253,6 +1240,14 @@ bool pick_select_all_faces(
     std::span<const PickObjectFaceGeometry> face_geometry = {},
     std::span<const PickObjectTransform> object_transforms = {});
 bool pick_select_edge_loop(
+    std::vector<PolygonObject> &objects, SelectionMode &mode,
+    SelectionEditOperation operation, const quader_poly::Ray &ray,
+    int &active_object_id,
+    quader_poly::PickOptions pick_options = quader_poly::PickOptions(),
+    std::span<const PickObjectBounds> object_bounds = {},
+    std::span<const PickObjectFaceGeometry> face_geometry = {},
+    std::span<const PickObjectTransform> object_transforms = {});
+bool pick_select_edge_ring(
     std::vector<PolygonObject> &objects, SelectionMode &mode,
     SelectionEditOperation operation, const quader_poly::Ray &ray,
     int &active_object_id,

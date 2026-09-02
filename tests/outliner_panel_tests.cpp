@@ -9,6 +9,8 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "editor/session/project_session.hpp"
+#include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "ui/outliner_panel.hpp"
 #include "ui/ui_context.hpp"
@@ -30,6 +32,7 @@
 #include <QPersistentModelIndex>
 #include <QStyle>
 #include <QStyleOptionViewItem>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QTreeView>
 
@@ -635,6 +638,162 @@ TEST(OutlinerPanelTests,
             QString::fromStdString(other_name));
   EXPECT_NE(other_index.data().toString(), QStringLiteral("First"))
       << "equal revisions from different documents must not reuse a tree";
+}
+
+TEST(OutlinerPanelTests,
+     GroupCommandStopsOldDocumentAccessAfterSynchronousProjectRebind) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-outliner-reentrant-group-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  application.setQuitOnLastWindowClosed(false);
+
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const std::filesystem::path project_root =
+      std::filesystem::path(temporary.path().toStdWString()) / "Project";
+  std::error_code directory_error;
+  ASSERT_TRUE(
+      std::filesystem::create_directory(project_root, directory_error));
+  ASSERT_FALSE(directory_error) << directory_error.message();
+  quader::ProjectSession project;
+  const quader::ProjectSessionResult created = project.create(project_root);
+  ASSERT_TRUE(created.ok) << created.message;
+  quader::QuaderEditorApi editor(project);
+  editor.scene_documents().set_runtime_hooks({
+      .confirm_dirty_scene =
+          [](const quader::QuaderSceneDocumentInfo &, std::string_view) {
+            return quader::QuaderDirtySceneDecision::Discard;
+          },
+  });
+
+  quader::OpenSceneSession *active = project.active_scene();
+  ASSERT_NE(active, nullptr);
+  const auto first = editor.scene().create_entity({
+      .name = "First Group Member",
+      .kind = quader::QuaderEntityKind::Empty,
+  });
+  const auto second = editor.scene().create_entity({
+      .name = "Second Group Member",
+      .kind = quader::QuaderEntityKind::Empty,
+  });
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  const std::array selected{first.value().id, second.value().id};
+  ASSERT_TRUE(editor.selection()
+                  .select_objects_for_inspection(selected, first.value().id)
+                  .ok());
+  auto saved_path =
+      quader::ProjectRelativePath::parse_portable("Scenes/ReentrantGroup.qdr");
+  ASSERT_TRUE(saved_path.ok()) << saved_path.error().message;
+  const quader::QuaderApiVoidResult saved = editor.scene_documents().save_as(
+      active->session_id, saved_path.take_value());
+  ASSERT_TRUE(saved.ok()) << saved.error_message();
+  const quader::EntityId fallback_entity =
+      project.fallback_scene().scene().create_entity("Fallback Entity");
+  ASSERT_NE(fallback_entity, quader::kInvalidEntityId);
+
+  quader::UISettings ui_settings = quader::UISettings::defaults();
+  quader::ViewportSettings viewport_settings =
+      quader::ViewportSettings::defaults();
+  quader::LocalizationService localization = loaded_localization();
+  quader::UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = active->session->scene(),
+                .assets = active->session->assets(),
+                .modeling = active->session->modeling(),
+                .selection = active->session->selection()},
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+
+  quader::OutlinerPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.resize(460, 560);
+  panel.show();
+  panel.refresh(context);
+  QCoreApplication::processEvents();
+  auto *tree = panel.findChild<QTreeView *>(QStringLiteral("outliner.tree"));
+  ASSERT_NE(tree, nullptr);
+  tree->expandAll();
+  QCoreApplication::processEvents();
+  const QModelIndex target =
+      find_entity_index(*tree->model(), first.value().id);
+  ASSERT_TRUE(target.isValid());
+
+  bool fallback_bound = false;
+  quader::QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, [&](quader::SceneSession &replacement) {
+        panel.abandon_runtime();
+        quader::UIContext replacement_context{
+            .intent = {.editor = editor},
+            .scene = {.document = replacement.scene(),
+                      .assets = replacement.assets(),
+                      .modeling = replacement.modeling(),
+                      .selection = replacement.selection()},
+            .preferences = {.ui = ui_settings,
+                            .viewport = viewport_settings},
+            .localization = localization,
+        };
+        panel.refresh(replacement_context);
+        fallback_bound = &replacement == &project.fallback_scene();
+      });
+
+  bool close_dispatched = false;
+  const quader::QuaderEventSubscription dirty_subscription =
+      editor.events().subscribe(
+          quader::quader_event::kSceneDirtyChanged,
+          [&](const quader::QuaderEvent &) {
+            if (close_dispatched) {
+              return;
+            }
+            close_dispatched = true;
+            const quader::QuaderApiVoidResult closed =
+                editor.project().close();
+            EXPECT_TRUE(closed.ok()) << closed.error_message();
+            EXPECT_TRUE(closed.changed());
+          });
+  ASSERT_TRUE(dirty_subscription.valid());
+
+  bool group_action_dispatched = false;
+  QTimer::singleShot(0, &panel, [&]() {
+    auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+    if (menu == nullptr ||
+        menu->objectName() != QStringLiteral("outliner.context_menu")) {
+      ADD_FAILURE() << "Expected the outliner context menu to open.";
+      if (QWidget *popup = QApplication::activePopupWidget()) {
+        popup->close();
+      }
+      return;
+    }
+    auto *group_action = menu->findChild<QAction *>(
+        QStringLiteral("outliner.action.group"));
+    ASSERT_NE(group_action, nullptr);
+    ASSERT_TRUE(group_action->isEnabled());
+    group_action_dispatched = true;
+    menu->setActiveAction(group_action);
+    QKeyEvent accept_action(QEvent::KeyPress, Qt::Key_Return,
+                            Qt::NoModifier);
+    QApplication::sendEvent(menu, &accept_action);
+    if (menu->isVisible()) {
+      menu->close();
+    }
+  });
+  const QPoint target_position = tree->visualRect(target).center();
+  QContextMenuEvent context_event(
+      QContextMenuEvent::Mouse, target_position,
+      tree->viewport()->mapToGlobal(target_position));
+  QCoreApplication::sendEvent(tree->viewport(), &context_event);
+  QCoreApplication::processEvents();
+
+  EXPECT_TRUE(group_action_dispatched);
+  EXPECT_TRUE(close_dispatched);
+  EXPECT_TRUE(fallback_bound);
+  EXPECT_FALSE(project.has_project());
+  EXPECT_TRUE(find_entity_index(*tree->model(), fallback_entity).isValid());
+  panel.abandon_runtime();
 }
 
 TEST(OutlinerPanelTests, DoubleClickExpandsGroupsWithoutStartingRename) {

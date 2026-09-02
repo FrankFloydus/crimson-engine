@@ -653,7 +653,7 @@
         }
       },
       "before": "f0d335edbd3982cafc349ada3e901d08",
-      "after": "db1f448d025cfb4b1ff64c08627b3616",
+      "after": "4efd1d18c3b62b44ac97d0e52cae6ff0",
       "before_domains": {
         "documents": "c203aebd33ef43901b5476e66d66fde9",
         "scene": "9749dec8b18420372e1626a827a8bc29",
@@ -671,8 +671,8 @@
         "documents": "c203aebd33ef43901b5476e66d66fde9",
         "scene": "9749dec8b18420372e1626a827a8bc29",
         "geometry": "0ee032aebbe968f29a69eb402880fac0",
-        "selection": "fcc99e011e84fe3cd95110d43ad44009",
-        "overlay": "4af29ea628e40207401ba876e1a541d9",
+        "selection": "aa9ea7cfa902efa238b2428a5ff8df7d",
+        "overlay": "d64d6e36728a4356d35cb84fc9848e8a",
         "assets": "6d7e42975a0deda918a78529b098ea3f",
         "history": "149456ac50c57b034878e2c8e60ec8de",
         "tools": "4f6814a82d727def9299cc506ab85861",
@@ -22725,5 +22725,5 @@
       "lifecycle": {}
     }
   },
-  "approved_change_reason": "Curve Solidify is now a passive tool setting with an Apply action that bakes a mesh while retaining the generator Curve."
+  "approved_change_reason": "Edge loop selection now follows Blender-style topology and pole stopping instead of face-context boundary expansion."
 }

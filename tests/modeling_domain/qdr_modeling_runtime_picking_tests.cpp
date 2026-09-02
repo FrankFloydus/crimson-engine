@@ -1035,6 +1035,54 @@ TEST(QdrModelingRuntimePickingTests,
 }
 
 TEST(QdrModelingRuntimePickingTests,
+	HiddenMaterialSlotSelectionInvertPreservesHiddenEdges) {
+	quader_editor_core::PolygonObject object = adjacent_face_object();
+	quader_poly::Selection& selection = object.selection;
+	selection.mode = quader_poly::SelectionMode::Edge;
+
+	const quader_poly::PickOptions options =
+		hidden_slot_pick_options(quader_poly::SelectionMode::Edge);
+	quader_poly::DocumentPickQuery query(object.document, options);
+	quader_poly::ComponentSelectionUniverse eligible;
+	eligible.mode = quader_poly::SelectionMode::Edge;
+	std::vector<quader_poly::Edge> hidden_only;
+	for (const quader_poly::Edge edge : query.edges()) {
+		(query.edge_can_be_picked(edge) ? eligible.edges : hidden_only)
+			.push_back(edge);
+	}
+	ASSERT_EQ(eligible.edges.size(), 4U);
+	ASSERT_EQ(hidden_only.size(), 3U);
+
+	selection.edges = { eligible.edges[0], hidden_only[0] };
+	selection.has_active = true;
+	selection.active_kind = quader_poly::ElementKind::Edge;
+	selection.active_edge = hidden_only[0];
+	const quader_poly::Selection initial = selection;
+
+	ASSERT_TRUE(quader_poly::invert_component_selection(
+		object.document, selection, eligible));
+	EXPECT_EQ(selection.mode, quader_poly::SelectionMode::Edge);
+	EXPECT_TRUE(selection.has_active);
+	EXPECT_EQ(selection.active_kind, quader_poly::ElementKind::Edge);
+	EXPECT_EQ(selection.active_edge, hidden_only[0]);
+	EXPECT_TRUE(quader_poly::selection_contains(selection, hidden_only[0]));
+	EXPECT_FALSE(quader_poly::selection_contains(selection, hidden_only[1]));
+	EXPECT_FALSE(quader_poly::selection_contains(selection, hidden_only[2]));
+	EXPECT_FALSE(quader_poly::selection_contains(selection, eligible.edges[0]));
+	EXPECT_TRUE(quader_poly::selection_contains(selection, eligible.edges[1]));
+	EXPECT_TRUE(quader_poly::selection_contains(selection, eligible.edges[2]));
+	EXPECT_TRUE(quader_poly::selection_contains(selection, eligible.edges[3]));
+	ASSERT_EQ(selection.edges.size(), 4U);
+
+	ASSERT_TRUE(quader_poly::invert_component_selection(
+		object.document, selection, eligible));
+	EXPECT_EQ(selection.edges, initial.edges);
+	EXPECT_EQ(selection.has_active, initial.has_active);
+	EXPECT_EQ(selection.active_kind, initial.active_kind);
+	EXPECT_EQ(selection.active_edge, initial.active_edge);
+}
+
+TEST(QdrModelingRuntimePickingTests,
 	EditorSessionPickSelectReportsOnlyMaterialSelectionChanges) {
 	editor_session_pick_select_reports_only_material_selection_changes();
 }
@@ -1522,6 +1570,103 @@ TEST(QdrModelingRuntimePickingTests,
        .cycle_depth = true});
   ASSERT_TRUE(result.hit);
   EXPECT_EQ(session.objects().front().selection.faces.size(), 6U);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     EdgeRingTraversalSelectsFourParallelCubeEdges) {
+  quader_editor_core::EditorSession session({cube_object(7)});
+  session.set_selection_mode(quader_editor_core::SelectionMode::Edge);
+  auto options = quader_editor_core::selection_pick_options_from_radii(
+      0.05, 0.05, false);
+  options.mode = quader_poly::SelectionMode::Edge;
+
+  const auto selected = quader_editor_core::apply_pick_selection(
+      session, session.objects(),
+      {.ray = {{0.0F, -1.0F, 5.0F}, {0.0F, 0.0F, -1.0F}},
+       .pick_options = options,
+       .edge_traversal = quader_editor_core::EdgeSelectionTraversal::Ring});
+
+  ASSERT_TRUE(selected.hit);
+  EXPECT_TRUE(selected.changed);
+  ASSERT_EQ(session.objects().front().selection.edges.size(), 4U);
+  for (const quader_poly::Edge edge :
+       session.objects().front().selection.edges) {
+    const quader_poly::Vertex *a =
+        quader_poly::find_vertex(session.objects().front().document, edge.a);
+    const quader_poly::Vertex *b =
+        quader_poly::find_vertex(session.objects().front().document, edge.b);
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    EXPECT_GT(std::abs(a->position.x - b->position.x), 1.9F);
+    EXPECT_FLOAT_EQ(a->position.y, b->position.y);
+    EXPECT_FLOAT_EQ(a->position.z, b->position.z);
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     EdgeRingToggleUsesClickedSeedForWholeRing) {
+  quader_editor_core::EditorSession session({cube_object(7)});
+  session.set_selection_mode(quader_editor_core::SelectionMode::Edge);
+  auto options = quader_editor_core::selection_pick_options_from_radii(
+      0.05, 0.05, false);
+  options.mode = quader_poly::SelectionMode::Edge;
+  quader_editor_core::ApplyPickSelectionRequest request{
+      .ray = {{0.0F, -1.0F, 5.0F}, {0.0F, 0.0F, -1.0F}},
+      .pick_options = options,
+      .edge_traversal = quader_editor_core::EdgeSelectionTraversal::Ring,
+  };
+  ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                  session, session.objects(), request)
+                  .hit);
+  const std::vector<quader_poly::Edge> expected_ring =
+      session.objects().front().selection.edges;
+  ASSERT_EQ(expected_ring.size(), 4U);
+
+  request.operation = quader_editor_core::SelectionEditOperation::Toggle;
+  const auto removed = quader_editor_core::apply_pick_selection(
+      session, session.objects(), request);
+  ASSERT_TRUE(removed.hit);
+  EXPECT_TRUE(removed.changed);
+  EXPECT_TRUE(session.objects().front().selection.edges.empty());
+
+  const auto added = quader_editor_core::apply_pick_selection(
+      session, session.objects(), request);
+  ASSERT_TRUE(added.hit);
+  EXPECT_TRUE(added.changed);
+  const auto &selected_edges = session.objects().front().selection.edges;
+  ASSERT_EQ(selected_edges.size(), expected_ring.size());
+  EXPECT_TRUE(std::is_permutation(selected_edges.begin(), selected_edges.end(),
+                                  expected_ring.begin(), expected_ring.end()));
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     EdgeRingTraversalMissPreservesExistingSelection) {
+  quader_editor_core::EditorSession session({cube_object(7)});
+  session.set_selection_mode(quader_editor_core::SelectionMode::Edge);
+  auto options = quader_editor_core::selection_pick_options_from_radii(
+      0.05, 0.05, false);
+  options.mode = quader_poly::SelectionMode::Edge;
+  quader_editor_core::ApplyPickSelectionRequest request{
+      .ray = {{0.0F, -1.0F, 5.0F}, {0.0F, 0.0F, -1.0F}},
+      .pick_options = options,
+      .edge_traversal = quader_editor_core::EdgeSelectionTraversal::Ring,
+  };
+  ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                  session, session.objects(), request)
+                  .hit);
+  const std::vector<quader_poly::Edge> expected_ring =
+      session.objects().front().selection.edges;
+  ASSERT_EQ(expected_ring.size(), 4U);
+  const std::uint64_t selection_revision =
+      session.state().selection_revision;
+
+  request.ray = miss_ray();
+  const auto missed = quader_editor_core::apply_pick_selection(
+      session, session.objects(), request);
+  EXPECT_FALSE(missed.hit);
+  EXPECT_FALSE(missed.changed);
+  EXPECT_EQ(session.objects().front().selection.edges, expected_ring);
+  EXPECT_EQ(session.state().selection_revision, selection_revision);
 }
 
 TEST(QdrModelingRuntimePickingTests,

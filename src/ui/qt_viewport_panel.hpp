@@ -8,6 +8,7 @@
 
 #include "api/quader_api_result.hpp"
 #include "api/quader_viewport_layout_types.hpp"
+#include "viewport/viewport_runtime_binding_token.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
 #include "editor/viewport/viewport_curve_picking.hpp"
 #include "render/render_system.hpp"
@@ -83,6 +84,9 @@ public:
 
   void reset_interactions(QuaderEditorApi *editor,
                           NativeViewportToolCoordinator *native_tools);
+  // Drops Qt-owned interaction state without touching the previous non-owning
+  // runtime binding, which may already have been destroyed during a rebind.
+  void abandon_interactions();
 
   void attach_workspace(ViewportWorkspaceService &workspace);
   void set_viewport_settings(const ViewportSettings &settings);
@@ -192,7 +196,8 @@ private:
   void observe_persisted_camera_change(QuaderEditorApi &editor);
   bool sync_active_tool_from_editor(QuaderEditorApi &editor,
                                     ModelingSessionService &modeling,
-                                    NativeViewportToolCoordinator &native_tools);
+                                    NativeViewportToolCoordinator &native_tools,
+                                    ViewportRuntimeBindingToken runtime_binding = {});
   [[nodiscard]] const ViewportSettings &active_viewport_settings() const;
   [[nodiscard]] Pane &pane(ViewportPaneId pane_id);
   [[nodiscard]] const Pane &pane(ViewportPaneId pane_id) const;
@@ -234,11 +239,14 @@ private:
       ViewportSplitHandleId::TwoHorizontal;
   bool split_handle_dragging_ = false;
   QFocusFrame *focused_pane_frame_ = nullptr;
-  // Non-owning runtime pair. UISystem explicitly resets and clears it before
-  // replacing or destroying the scene services; Qt-owned workspace and
-  // shutdown resets may use it only while that binding remains installed.
+  // Non-owning runtime pair. UISystem abandons it without dereferencing it
+  // before a runtime rebind because the previous scene services may already
+  // be destroyed. Shutdown resets may use it only while the binding is live.
   QuaderEditorApi *interaction_editor_ = nullptr;
   NativeViewportToolCoordinator *interaction_native_tools_ = nullptr;
+  // Changes before a synchronous runtime rebind drops the old scene owners.
+  // Long input frames compare their captured value after command dispatch.
+  std::uint64_t runtime_binding_generation_ = 0;
   std::uint64_t active_tool_revision_ = 0;
   ModelingBoxPreview active_box_preview_ = {};
   bool modal_tool_dragging_ = false;

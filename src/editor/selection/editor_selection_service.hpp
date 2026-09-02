@@ -282,6 +282,7 @@ public:
 
 private:
   [[nodiscard]] bool scene_target_selectable(EntityId entity) const;
+  [[nodiscard]] bool component_owner_selectable(EntityId entity) const;
   [[nodiscard]] std::vector<EntityId>
   scene_bulk_candidates(ModelingSelectionMode mode) const;
   [[nodiscard]] EditorSelectionTarget
