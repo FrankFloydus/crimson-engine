@@ -245,6 +245,13 @@ public:
       const ModelingPickSelectRequest &request);
   ModelingCommandResult preview_resolved_hover(
       std::optional<ResolvedSelectionTarget> target);
+  /**
+   * Publishes one spatial hover sample. An empty sample clears the immediate
+   * element target while retaining the current component-mode mesh candidate;
+   * explicit lifecycle clears still use clear_hover().
+   */
+  ModelingCommandResult preview_spatial_hover(
+      std::optional<ResolvedSelectionTarget> target);
   [[nodiscard]] std::optional<ResolvedSelectionTarget>
   resolved_hover_target() const { return resolved_hover_target_; }
   /**

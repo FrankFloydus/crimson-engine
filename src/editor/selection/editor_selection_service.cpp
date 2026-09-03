@@ -1528,6 +1528,24 @@ ModelingCommandResult EditorSelectionService::preview_resolved_hover(
   return publish_resolved_hover(std::move(target), false);
 }
 
+ModelingCommandResult EditorSelectionService::preview_spatial_hover(
+    std::optional<ResolvedSelectionTarget> target) {
+  if (target.has_value() ||
+      !is_component_selection_mode(modeling_.selection_mode())) {
+    return publish_resolved_hover(std::move(target), false);
+  }
+
+  const ModelingHoverSummary current = modeling_.selection_hover_summary();
+  if (current.candidate_object_id <= 0) {
+    return publish_resolved_hover(std::nullopt, false);
+  }
+
+  ModelingHoverSummary empty_spatial_sample;
+  empty_spatial_sample.candidate_object_id = current.candidate_object_id;
+  return publish_resolved_hover(std::nullopt, false,
+                                &empty_spatial_sample);
+}
+
 ModelingCommandResult EditorSelectionService::publish_resolved_hover(
     std::optional<ResolvedSelectionTarget> target,
     bool explicit_modeling_element_request,

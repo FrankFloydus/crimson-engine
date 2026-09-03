@@ -1219,7 +1219,7 @@ void ViewportSelectionInteraction::handle_frame(
                                        frame.input.mouse_local, hover_request,
                                        curve, &scene_surface_scratch_);
     const ModelingCommandResult hover =
-        selection_owner(editor).preview_resolved_hover(hover_target);
+        selection_owner(editor).preview_spatial_hover(hover_target);
     if (!hover.ok) {
       LOG_ERROR("Viewport hover failed: {}",
                 hover.message.empty() ? "Hover failed." : hover.message);

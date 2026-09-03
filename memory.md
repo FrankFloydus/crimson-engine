@@ -9,6 +9,32 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-09-03 - Cross-Domain Component Hover Preserves Sticky Mesh Wire
+
+Task/context: Vertex, Edge, and Face hover lost the current mesh wire as soon as the pointer moved
+onto empty viewport space, even though the modeling picker still retained its sticky candidate.
+The cross-domain viewport path reduced a miss to a bare null resolved target and treated it like an
+explicit lifecycle clear.
+
+Invariant:
+
+- `EditorSelectionService` distinguishes an empty spatial hover sample from `clear_hover()`.
+  Component-mode spatial misses clear the immediate vertex/edge/face target but retain the current
+  candidate mesh; pointer/tool/session lifecycle clears still remove it.
+- With no selected component on mesh A, hovering mesh B replaces A's candidate wire. With selected
+  current-mode components on A, A remains independently sticky while hovered B is additive. A
+  following grid/background miss preserves both wires and never changes selection or its revision.
+- Mesh/Object mode hover never emits a mesh outline. Its selected wire remains click-owned.
+
+Owners: `EditorSelectionService`, `ViewportSelectionInteraction`, and the viewport interaction
+regression suite. This extends the 2026-07-04 component source-wire invariant through the newer
+cross-domain selection owner.
+
+Verification: the end-to-end two-mesh viewport test passes for Vertex, Edge, and Face modes; the
+Mesh-mode hover/click test passes; 124 affected guardrails and 789 affected editor/viewport tests
+pass; the complete regression gate passes all six registered suites (including 2,123 app tests and
+the isolated SDK build); and both canonical Debug/Profile and Release executables build.
+
 ## 2026-09-02 - Hidden-Aware Component Selection Inversion
 
 Task/context: Inverting multiple selected edge rings reselected the original
