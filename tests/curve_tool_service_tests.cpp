@@ -2460,6 +2460,7 @@ TEST(CurveToolServiceTests,
     const QVec2 update =
         start + screen_axis * (96.0f / screen_axis_length);
 
+    harness.input.transform_vertex_snap_down = true;
     harness.input.mouse_local = start;
     harness.input.mouse_screen = start;
     ASSERT_TRUE(harness.controller
@@ -2531,7 +2532,103 @@ TEST(CurveToolServiceTests,
 }
 
 TEST(CurveToolServiceTests,
-     AnchorSnapOverlayReusesStorageAndClearsOnMissToggleAndCancel) {
+     AnchorCentralGizmoHeldSnapMatchesVertexExactlyDespiteCoarseGrid) {
+  CurveToolHarness harness;
+  harness.camera.set_view_direction({-0.45f, -0.35f, -0.82f});
+  harness.make_curve();
+  harness.activate_curve_edit();
+  (void)harness.settings.set_bool_value(
+      ViewportBoolSettingId::SnappingEnabled, true);
+  (void)harness.settings.set_bool_value(ViewportBoolSettingId::GridSnap,
+                                        true);
+  (void)harness.settings.set_bool_value(ViewportBoolSettingId::VertexSnap,
+                                        false);
+  ASSERT_TRUE(harness.settings.bool_value(
+      ViewportBoolSettingId::SnappingEnabled));
+  ASSERT_TRUE(
+      harness.settings.bool_value(ViewportBoolSettingId::GridSnap));
+  ASSERT_FALSE(
+      harness.settings.bool_value(ViewportBoolSettingId::VertexSnap));
+  harness.input.grid_preset = 10;
+  harness.input.transform_vertex_snap_down = true;
+
+  CurveToolService &curve = harness.session.curve();
+  const modeling::CurveDocument before = *curve.preview_state().document;
+  const CurveControlTarget anchor{before.points()[0].id,
+                                  CurveControlKind::Anchor};
+  ASSERT_TRUE(replace_curve_control_selection(curve, anchor));
+  const std::optional<QVec3> pivot_before =
+      curve.selected_controls_world_pivot();
+  ASSERT_TRUE(pivot_before.has_value());
+  const QVec3 snap_world = *pivot_before + QVec3{5.35f, -2.45f, 3.2f};
+  int snap_query_count = 0;
+  harness.mesh_snap_query =
+      [&](const ViewportRay &, double,
+          std::optional<double>) -> ViewportMeshSnapQueryResult {
+    ++snap_query_count;
+    return {
+        .vertex_target = ViewportMeshVertexSnapTarget{
+            .modeling_object_id = 117,
+            .vertex_id = 63,
+            .world_position = snap_world,
+            .ray_distance = 4.0,
+            .pick_distance = 0.0,
+        },
+    };
+  };
+
+  (void)harness.controller.handle_before_active_tool(
+      harness.editor, harness.gizmo_frame(), harness.session.native_tools());
+  const auto *gizmo = harness.controller.transform_gizmo_frame();
+  ASSERT_NE(gizmo, nullptr);
+  const auto *center = find_curve_gizmo_plane(
+      *gizmo, quader_editor_core::TransformAxis::All);
+  ASSERT_NE(center, nullptr);
+  const QVec2 start = plane_screen_center(*center);
+  const ViewportScreenPoint target_screen =
+      harness.camera.project_world_point(snap_world);
+  ASSERT_TRUE(target_screen.visible);
+
+  harness.input.mouse_local = start;
+  harness.input.mouse_screen = start;
+  ASSERT_TRUE(harness.controller
+                  .handle_before_active_tool(
+                      harness.editor,
+                      harness.gizmo_frame(true, true, false, start),
+                      harness.session.native_tools())
+                  .gizmo_consumed);
+  EXPECT_EQ(snap_query_count, 0);
+
+  harness.input.mouse_local = target_screen.position;
+  harness.input.mouse_screen = target_screen.position;
+  ASSERT_TRUE(harness.controller
+                  .handle_before_active_tool(
+                      harness.editor,
+                      harness.gizmo_frame(false, true, false, start),
+                      harness.session.native_tools())
+                  .gizmo_consumed);
+  ASSERT_TRUE(harness.controller.dragging());
+  ASSERT_TRUE(curve.dragging());
+  EXPECT_EQ(snap_query_count, 1);
+  const std::optional<QVec3> snapped_pivot =
+      curve.selected_controls_world_pivot();
+  ASSERT_TRUE(snapped_pivot.has_value());
+  EXPECT_NEAR(snapped_pivot->x, snap_world.x, 0.0001f);
+  EXPECT_NEAR(snapped_pivot->y, snap_world.y, 0.0001f);
+  EXPECT_NEAR(snapped_pivot->z, snap_world.z, 0.0001f);
+
+  ASSERT_TRUE(harness.controller
+                  .handle_before_active_tool(
+                      harness.editor,
+                      harness.gizmo_frame(false, false, true, start),
+                      harness.session.native_tools())
+                  .gizmo_consumed);
+  EXPECT_FALSE(harness.controller.dragging());
+  EXPECT_FALSE(curve.dragging());
+}
+
+TEST(CurveToolServiceTests,
+     AnchorSnapRequiresHeldActionAndReusesOverlayStorage) {
   CurveToolHarness harness;
   harness.make_curve();
   harness.activate_curve_edit();
@@ -2593,6 +2690,20 @@ TEST(CurveToolServiceTests,
                       harness.editor,
                       harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
+  EXPECT_EQ(snap_query_count, 0);
+  EXPECT_TRUE(
+      harness.controller.transform_gizmo_snap_overlay_points().empty())
+      << "Persistent snapping settings must not activate gizmo vertex snap.";
+
+  harness.input.transform_vertex_snap_down = true;
+  update.x += 7.0f;
+  harness.input.mouse_local = update;
+  harness.input.mouse_screen = update;
+  ASSERT_TRUE(harness.controller
+                  .handle_before_active_tool(
+                      harness.editor,
+                      harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
+                  .gizmo_consumed);
   const auto &first_overlay =
       harness.controller.transform_gizmo_snap_overlay_points();
   ASSERT_EQ(first_overlay.size(), 2u);
@@ -2627,9 +2738,8 @@ TEST(CurveToolServiceTests,
   EXPECT_EQ(reused_overlay.data(), overlay_storage);
   EXPECT_EQ(reused_overlay.capacity(), overlay_capacity);
 
-  ASSERT_TRUE(harness.settings.set_bool_value(
-      ViewportBoolSettingId::VertexSnap, false));
-  const int query_count_before_toggle = snap_query_count;
+  harness.input.transform_vertex_snap_down = false;
+  const int query_count_before_release = snap_query_count;
   update.x += 7.0f;
   harness.input.mouse_local = update;
   harness.input.mouse_screen = update;
@@ -2638,14 +2748,20 @@ TEST(CurveToolServiceTests,
                       harness.editor,
                       harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
-  EXPECT_EQ(snap_query_count, query_count_before_toggle);
+  EXPECT_EQ(snap_query_count, query_count_before_release);
   EXPECT_TRUE(
       harness.controller.transform_gizmo_snap_overlay_points().empty());
 
-  (void)harness.settings.set_bool_value(ViewportBoolSettingId::VertexSnap,
-                                        true);
-  ASSERT_TRUE(
+  ASSERT_TRUE(harness.settings.set_bool_value(
+      ViewportBoolSettingId::SnappingEnabled, false));
+  ASSERT_TRUE(harness.settings.set_bool_value(
+      ViewportBoolSettingId::VertexSnap, false));
+  ASSERT_FALSE(harness.settings.bool_value(
+      ViewportBoolSettingId::SnappingEnabled));
+  ASSERT_FALSE(
       harness.settings.bool_value(ViewportBoolSettingId::VertexSnap));
+  harness.input.transform_vertex_snap_down = true;
+  const int query_count_before_override = snap_query_count;
   update.x += 7.0f;
   harness.input.mouse_local = update;
   harness.input.mouse_screen = update;
@@ -2654,6 +2770,7 @@ TEST(CurveToolServiceTests,
                       harness.editor,
                       harness.gizmo_frame(false, true, false, start), harness.session.native_tools())
                   .gizmo_consumed);
+  EXPECT_EQ(snap_query_count, query_count_before_override + 1);
   ASSERT_EQ(harness.controller.transform_gizmo_snap_overlay_points().size(),
             2u);
   EXPECT_TRUE(harness.controller.cancel_active_drag(harness.editor, harness.session.native_tools()));
@@ -2737,6 +2854,7 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(projected_target.visible);
   const QVec2 update = projected_target.position;
 
+  harness.input.transform_vertex_snap_down = true;
   harness.input.mouse_local = start;
   harness.input.mouse_screen = start;
   ASSERT_TRUE(harness.controller
@@ -2889,6 +3007,7 @@ TEST(CurveToolServiceTests,
         *gizmo, quader_editor_core::TransformAxis::X);
     ASSERT_NE(axis, nullptr);
     const QVec2 start = axis_screen_point(*axis, 0.65f);
+    harness.input.transform_vertex_snap_down = true;
     harness.input.mouse_local = start;
     harness.input.mouse_screen = start;
     ASSERT_TRUE(harness.controller
@@ -3040,6 +3159,7 @@ TEST(CurveToolServiceTests,
         harness.camera.project_world_point(target_world);
     ASSERT_TRUE(target_screen.visible);
 
+    harness.input.transform_vertex_snap_down = true;
     harness.input.mouse_local = start;
     harness.input.mouse_screen = start;
     ASSERT_TRUE(harness.controller
@@ -3198,6 +3318,7 @@ TEST(CurveToolServiceTests,
       harness.camera.project_world_point(target_world);
   ASSERT_TRUE(target_screen.visible);
 
+  harness.input.transform_vertex_snap_down = true;
   harness.input.mouse_local = start;
   harness.input.mouse_screen = start;
   ASSERT_TRUE(harness.controller
@@ -3292,6 +3413,7 @@ TEST(CurveToolServiceTests,
       harness.camera.project_world_point(target_world);
   ASSERT_TRUE(target_screen.visible);
 
+  harness.input.transform_vertex_snap_down = true;
   harness.input.mouse_local = start;
   harness.input.mouse_screen = start;
   ASSERT_TRUE(harness.controller
@@ -3330,7 +3452,7 @@ TEST(CurveToolServiceTests,
 }
 
 TEST(CurveToolServiceTests,
-     HandleAndPlaneGizmosDoNotQueryMeshVertexSnap) {
+     HandleAndOrdinaryAxisPlaneGizmosDoNotQueryMeshVertexSnap) {
   struct IneligibleCase {
     CurveControlKind control;
     quader_editor_core::TransformAxis axis;
@@ -3419,6 +3541,7 @@ TEST(CurveToolServiceTests,
       update = start + screen_axis * (96.0f / screen_axis_length);
     }
 
+    harness.input.transform_vertex_snap_down = true;
     harness.input.mouse_local = start;
     harness.input.mouse_screen = start;
     ASSERT_TRUE(harness.controller

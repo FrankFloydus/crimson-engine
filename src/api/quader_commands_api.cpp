@@ -263,6 +263,18 @@ bool face_texture_transfer_assignment_uses_unsupported_pointer_gesture(
   });
 }
 
+bool transform_vertex_snap_assignment_uses_non_holdable_shortcut(
+    const QuaderKeybindingActionKey &action,
+    const std::vector<QuaderInputChord> &sequence) {
+  if (action.action_id != "viewport.transform.vertex_snap") {
+    return false;
+  }
+  return sequence.size() != 1u ||
+         sequence.front().device != QuaderInputDevice::Keyboard ||
+         sequence.front().key == QuaderKeyCode::None ||
+         sequence.front().gesture != QuaderInputGesture::Press;
+}
+
 bool command_semantically_requires_viewport(std::string_view command_id) {
   if (command_id == quader_command::kViewportSpawnWindow.string()) {
     return false;
@@ -1362,6 +1374,13 @@ QuaderCommandsApi::Impl::analyze_shortcut_assignment(
         "Continue Texture requires a mouse button press, click, or "
         "double-click; drag and wheel gestures do not identify one exact "
         "owned pointer edge.";
+    return analysis;
+  }
+  if (transform_vertex_snap_assignment_uses_non_holdable_shortcut(
+          action, *proposed)) {
+    analysis.message =
+        "Hold Vertex Snap requires exactly one keyboard press chord so it "
+        "can remain active while held.";
     return analysis;
   }
 
@@ -3005,7 +3024,9 @@ void QuaderCommandsApi::Impl::normalize_loaded_user_keybindings() {
       const std::optional<std::vector<QuaderInputChord>> parsed =
           quader_input_parse_shortcut(override.rule->shortcut);
       if (!parsed || material_assignment_uses_reserved_bare_right_mouse(
-                         override.entry->key, *parsed)) {
+                         override.entry->key, *parsed) ||
+          transform_vertex_snap_assignment_uses_non_holdable_shortcut(
+              override.entry->key, *parsed)) {
         continue;
       }
     }

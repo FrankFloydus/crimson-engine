@@ -7885,10 +7885,12 @@ seven failures. No Quader window, smoke test, screenshot, or GPU benchmark was l
 - Selecting an anchor presents its tangent lines in the selected-vertex color and its related,
   otherwise-unselected handles in cyan; an explicitly selected handle keeps the normal selection
   color. Overlay visibility and picking continue to share the same endpoint policy.
-- Anchor-only axis movement uses the canonical Move grid, precision, and vertex-snap settings.
-  Eligible targets include mesh vertices, unselected anchors on the same Curve, anchors on other
-  Curves, and active-draft anchors; handles and plane movement never use vertex snapping. Selected
-  anchors are excluded from the frozen candidate set. Cross-domain ranking uses projected group
+- Anchor-only X/Y/Z movement uses the canonical Move grid and precision behavior plus the current
+  momentary held-V vertex-snap action. Eligible targets include mesh vertices, unselected anchors
+  on the same Curve, anchors on other Curves, and active-draft anchors. Handles and ordinary
+  XY/XZ/YZ plane movement never use vertex snapping; the `All` center/free handle is the deliberate
+  exception and applies a target's complete XYZ displacement. Selected anchors are excluded from
+  the frozen candidate set. Cross-domain ranking uses projected group
   distance, world depth, typed target identity, and point ID with the established mesh-occlusion
   tolerance. Scene-selected meshes remain eligible because Curve controls are a separate selection
   domain and those meshes stay stationary during the gesture.
@@ -8380,9 +8382,10 @@ stays screen-stationary. Canonical build artifacts are recorded in the task hand
   not also emitted as an ordinary filled XY/XZ/YZ handle.
 - A Move `All` drag captures the press-time camera Z axis as `MoveToolState::world_plane_normal`.
   Start and update rays intersect that same pivot-centered plane, preserving both independent
-  screen-plane components without collapsing onto a world or local axis. Vertex snapping remains
-  disabled for `All`; normal grid, precision, pending-click fallback, preview, cancellation, and
-  one-edit undo/redo lifecycles continue through the shared Move owners.
+  screen-plane components without collapsing onto a world or local axis. Ordinary free movement
+  retains normal grid, precision, pending-click fallback, preview, cancellation, and one-edit
+  undo/redo lifecycles; the held-V vertex-snap override below may deliberately leave the captured
+  camera plane to make the source and target vertices coincide exactly.
 - Scene objects and portable vertex, edge, and face selections consume the same resulting world
   delta. Curve-control movement also uses the shared Move math and retains `CurveToolService` as
   its preview/history owner.
@@ -8392,3 +8395,36 @@ both grid-snap paths, hover styling, stationary-click fallback, object and verte
 selection retention, and undo/redo. The affected workflow passes its 633 app/viewport, 61 metadata,
 and 204 runtime selections plus focused guardrails. The mandatory regression gate passes all six
 registered CTest targets, including the complete app suite and isolated SDK configure/build.
+
+## 2026-09-03 - Transform vertex snapping is a momentary held-V action
+
+- `viewport.transform.vertex_snap` is the bindable semantic input source of truth, with bare `V`
+  as its compiled default. The resolver derives `ViewportInputFrame::transform_vertex_snap_down`
+  only from active chords, so release, focus loss, navigation capture, or a coalesced press/release
+  cannot leave snapping latched. Its Move/Curve/active-drag context also permits holding V before
+  the gizmo crosses the drag threshold. Rebinding accepts exactly one holdable keyboard press
+  chord; non-holdable sequences and pointer/wheel gestures are rejected, and invalid loaded
+  overrides are ignored so the compiled `V` default remains effective.
+- Transform-gizmo updates query vertex targets only while that semantic state is down. They use the
+  configured pick radius directly and therefore do not depend on the persistent master, grid, or
+  Vertex Snap toggles. Those persistent settings remain intact for point placement and other
+  non-transform workflows. When no vertex is under the cursor, the ordinary grid-aware Move path
+  remains the fallback.
+- X/Y/Z handles retain their projected-axis snap behavior. The Move center (`TransformAxis::All`)
+  instead applies the complete world-space pivot-to-target displacement, converted back through the
+  model transform. A single selected vertex therefore lands exactly on the hovered eligible vertex,
+  including depth, and vertex snapping takes precedence over any grid size or grid quantization.
+- The same momentary gate applies to Curve-control transform gizmos. Moving component vertices are
+  excluded by the canonical picker, while unselected vertices on the same mesh remain eligible.
+  This supersedes the earlier persistent-settings wording for Curve gizmo snapping; ordinary
+  XY/XZ/YZ plane handles remain ineligible, while the center/free `All` handle is eligible.
+
+Owners: canonical held state lives in the viewport input types and keybinding resolver; the
+transform-gizmo interaction decides whether to query a target; shared Move math owns axis versus
+free-center displacement; the modeling transform-drag service prepares picker caches by delegating
+to that Move eligibility policy.
+
+Verification: 15 focused input/gizmo/Curve tests, 16 Move runtime tests, and two focused source
+guardrails pass. The repository-selected affected workflow passes, and the mandatory regression
+gate passes all six registered CTest targets, including the 2,117-test app suite (three opt-in
+stress tests skipped) and the isolated SDK configure/build.

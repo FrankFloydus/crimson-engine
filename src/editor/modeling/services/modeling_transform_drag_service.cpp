@@ -247,29 +247,12 @@ ModelingTransformAxis from_runtime(quader_editor_core::TransformAxis axis) {
   return ModelingTransformAxis::None;
 }
 
-bool transform_drag_axis_supports_vertex_snap(
-    quader_editor_core::TransformAxis axis) {
-  switch (axis) {
-  case quader_editor_core::TransformAxis::X:
-  case quader_editor_core::TransformAxis::Y:
-  case quader_editor_core::TransformAxis::Z:
-    return true;
-  case quader_editor_core::TransformAxis::Xy:
-  case quader_editor_core::TransformAxis::Xz:
-  case quader_editor_core::TransformAxis::Yz:
-  case quader_editor_core::TransformAxis::All:
-  case quader_editor_core::TransformAxis::None:
-    return false;
-  }
-  return false;
-}
-
 bool transform_drag_can_use_vertex_snap(
     const quader_editor_core::TransformDragState &drag) {
   return drag.active &&
          drag.tool == quader_editor_core::ViewportInteractionTool::Move &&
          drag.move.active &&
-         transform_drag_axis_supports_vertex_snap(drag.axis);
+         quader_editor_core::move_axis_supports_vertex_snap(drag.axis);
 }
 
 bool transform_drag_has_stationary_vertex_snap_target(

@@ -842,6 +842,24 @@ bool has_snap_target_vertex_point(const quader::QuaderOverlayFrame &frame) {
                      });
 }
 
+std::optional<quader::QuaderMeshVertexSnapTarget>
+vertex_snap_target_at(ViewportInteractionHarness &harness,
+                      quader::QVec3 world_position) {
+  const quader::ViewportScreenPoint projected =
+      harness.camera.project_world_point(world_position);
+  EXPECT_TRUE(projected.visible);
+  if (!projected.visible) {
+    return std::nullopt;
+  }
+  const quader::ViewportRay ray =
+      harness.camera.ray_from_viewport_point(projected.position);
+  return harness.editor.query().mesh_vertex_snap_target(
+      {.origin = ray.origin, .direction = ray.direction},
+      harness.settings.float_value(
+          quader::ViewportFloatSettingId::PickVertexRadius),
+      false);
+}
+
 bool has_triangle_style(const quader::QuaderOverlayFrame &frame,
                         quader::QuaderOverlayStyleRole role) {
   return std::any_of(frame.triangles.begin(), frame.triangles.end(),
@@ -4475,6 +4493,7 @@ TEST(ViewportInteractionControllerTests, VertexSnapDoesNotStealPendingMoveGizmoV
         quader::ViewportBoolSettingId::VertexSnap, true);
     ASSERT_TRUE(
         harness.settings.bool_value(quader::ViewportBoolSettingId::VertexSnap));
+    harness.input.transform_vertex_snap_down = true;
 
     const quader::QuaderModelingObjectRef box = create_unit_box(harness);
     select_single_component(harness, box, quader::QuaderSelectionMode::Vertex);
@@ -4520,6 +4539,198 @@ TEST(ViewportInteractionControllerTests, VertexSnapDoesNotStealPendingMoveGizmoV
     EXPECT_FALSE(harness.controller.dragging());
     EXPECT_FALSE(has_snap_target_vertex_point(
         harness.editor.query().selection_overlay()));
+}
+
+TEST(ViewportInteractionControllerTests,
+     MoveGizmoVertexSnapRequiresHeldActionAndReevaluatesStationaryAxisDrag) {
+  ViewportInteractionHarness harness;
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  (void)harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::SnappingEnabled, true);
+  (void)harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::GridSnap, false);
+  (void)harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::VertexSnap, true);
+  ASSERT_TRUE(harness.settings.bool_value(
+      quader::ViewportBoolSettingId::SnappingEnabled));
+  ASSERT_FALSE(harness.settings.bool_value(
+      quader::ViewportBoolSettingId::GridSnap));
+  ASSERT_TRUE(harness.settings.bool_value(
+      quader::ViewportBoolSettingId::VertexSnap));
+  ASSERT_GT(quader::viewport_vertex_snap_radius(harness.settings), 0.0f);
+
+  const quader::QuaderModelingObjectRef source =
+      create_box_at(harness, {-3.0f, 0.0f, 0.0f});
+  const quader::QuaderModelingObjectRef target =
+      create_box_at(harness, {3.0f, 2.0f, 2.0f});
+  const auto target_vertex =
+      vertex_snap_target_at(harness, {2.0f, 1.0f, 3.0f});
+  ASSERT_TRUE(target_vertex.has_value());
+  ASSERT_EQ(target_vertex->modeling_object_id, target.modeling_object_id);
+
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(source).ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+  (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+  const quader_editor_core::TransformGizmoFrame *gizmo =
+      harness.controller.transform_gizmo_frame();
+  ASSERT_NE(gizmo, nullptr);
+  const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+  ASSERT_NE(axis, nullptr);
+  const quader::QVec2 start = axis_screen_point(*axis, 0.25f);
+  const quader::ViewportScreenPoint target_screen =
+      harness.camera.project_world_point(target_vertex->world_position);
+  ASSERT_TRUE(target_screen.visible);
+  const quader::QVec2 snap_probe =
+      target_screen.position + quader::QVec2{2.0f, 0.0f};
+
+  harness.input.mouse_local = start;
+  harness.input.mouse_screen = start;
+  const auto press = harness.controller.handle_before_active_tool(
+      harness.editor, harness.frame(true, true, false, start));
+  ASSERT_TRUE(press.gizmo_consumed);
+
+  harness.input.mouse_local = snap_probe;
+  harness.input.mouse_screen = snap_probe;
+  harness.input.transform_vertex_snap_down = false;
+  const auto ordinary_drag = harness.controller.handle_before_active_tool(
+      harness.editor, harness.frame(false, true, false, start));
+  ASSERT_TRUE(ordinary_drag.gizmo_consumed);
+  ASSERT_TRUE(harness.controller.dragging());
+  const std::optional<quader::QVec3> ordinary_pivot =
+      harness.editor.query().selection_transform_pivot();
+  ASSERT_TRUE(ordinary_pivot.has_value());
+  EXPECT_GT(std::abs(ordinary_pivot->x - target_vertex->world_position.x),
+            0.01f)
+      << "The persistent Vertex Snap setting must not activate gizmo snapping.";
+
+  harness.input.transform_vertex_snap_down = true;
+  const auto held_drag = harness.controller.handle_before_active_tool(
+      harness.editor, harness.frame(false, true, false, start));
+  ASSERT_TRUE(held_drag.gizmo_consumed);
+  const std::optional<quader::QVec3> snapped_pivot =
+      harness.editor.query().selection_transform_pivot();
+  ASSERT_TRUE(snapped_pivot.has_value());
+  EXPECT_NEAR(snapped_pivot->x, target_vertex->world_position.x, 0.001f);
+  EXPECT_NEAR(snapped_pivot->y, 0.0f, 0.001f);
+  EXPECT_NEAR(snapped_pivot->z, 0.0f, 0.001f);
+
+  harness.input.transform_vertex_snap_down = false;
+  const auto released_drag = harness.controller.handle_before_active_tool(
+      harness.editor, harness.frame(false, true, false, start));
+  ASSERT_TRUE(released_drag.gizmo_consumed);
+  const std::optional<quader::QVec3> released_pivot =
+      harness.editor.query().selection_transform_pivot();
+  ASSERT_TRUE(released_pivot.has_value());
+  expect_vec3_near(*released_pivot, *ordinary_pivot);
+
+  const auto release = harness.controller.handle_before_active_tool(
+      harness.editor, harness.frame(false, false, true, start));
+  EXPECT_TRUE(release.gizmo_consumed);
+}
+
+TEST(ViewportInteractionControllerTests,
+     HeldVertexSnapMovesCentralGizmoVertexExactlyDespiteCoarseGridSnap) {
+  ViewportInteractionHarness harness;
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  const quader::QVec3 source_center{-2.75f, -2.2f, 0.4f};
+  const quader::QVec3 target_center{2.35f, 1.7f, 2.4f};
+  const quader::QuaderModelingObjectRef source =
+      create_box_at(harness, source_center);
+  const quader::QuaderModelingObjectRef target =
+      create_box_at(harness, target_center);
+  const auto source_vertex = vertex_snap_target_at(
+      harness, source_center + quader::QVec3{-1.0f, -1.0f, 1.0f});
+  const auto target_vertex = vertex_snap_target_at(
+      harness, target_center + quader::QVec3{-1.0f, -1.0f, 1.0f});
+  ASSERT_TRUE(source_vertex.has_value());
+  ASSERT_TRUE(target_vertex.has_value());
+  ASSERT_EQ(source_vertex->modeling_object_id, source.modeling_object_id);
+  ASSERT_EQ(target_vertex->modeling_object_id, target.modeling_object_id);
+
+  ASSERT_TRUE(harness.editor.selection().select_object(source).ok());
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Vertex)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_vertex(source, source_vertex->vertex_id)
+                  .ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Vertex);
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+  (void)harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::SnappingEnabled, true);
+  (void)harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::GridSnap, true);
+  (void)harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::VertexSnap, false);
+  ASSERT_TRUE(harness.settings.bool_value(
+      quader::ViewportBoolSettingId::SnappingEnabled));
+  ASSERT_TRUE(harness.settings.bool_value(
+      quader::ViewportBoolSettingId::GridSnap));
+  ASSERT_FALSE(harness.settings.bool_value(
+      quader::ViewportBoolSettingId::VertexSnap));
+  harness.input.grid_preset = 10;
+  harness.input.transform_vertex_snap_down = true;
+  ASSERT_TRUE(quader::viewport_grid_snap_active(harness.settings, false));
+  ASSERT_EQ(quader::viewport_vertex_snap_radius(harness.settings), 0.0f);
+  ASSERT_GT(quader::viewport_grid_world_size_for_preset(
+                harness.input.grid_preset),
+            4.0f);
+
+  const std::optional<quader::QVec3> initial_pivot =
+      harness.editor.query().selection_transform_pivot();
+  ASSERT_TRUE(initial_pivot.has_value());
+  expect_vec3_near(*initial_pivot, source_vertex->world_position);
+  harness.session.history().clear();
+
+  (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+  const quader_editor_core::TransformGizmoFrame *gizmo =
+      harness.controller.transform_gizmo_frame();
+  ASSERT_NE(gizmo, nullptr);
+  const quader::QVec2 start = gizmo->info.screen_pivot;
+  const quader::ViewportScreenPoint target_screen =
+      harness.camera.project_world_point(target_vertex->world_position);
+  ASSERT_TRUE(target_screen.visible);
+
+  harness.input.mouse_local = start;
+  harness.input.mouse_screen = start;
+  const auto press = harness.controller.handle_before_active_tool(
+      harness.editor, harness.frame(true, true, false, start));
+  ASSERT_TRUE(press.gizmo_consumed);
+
+  harness.input.mouse_local = target_screen.position;
+  harness.input.mouse_screen = target_screen.position;
+  const auto drag = harness.controller.handle_before_active_tool(
+      harness.editor, harness.frame(false, true, false, start));
+  ASSERT_TRUE(drag.gizmo_consumed);
+  ASSERT_TRUE(harness.controller.dragging());
+  const std::optional<quader::QVec3> snapped_pivot =
+      harness.editor.query().selection_transform_pivot();
+  ASSERT_TRUE(snapped_pivot.has_value());
+  expect_vec3_near(*snapped_pivot, target_vertex->world_position);
+
+  const auto release = harness.controller.handle_before_active_tool(
+      harness.editor, harness.frame(false, false, true, start));
+  ASSERT_TRUE(release.gizmo_consumed);
+  ASSERT_TRUE(harness.editor.history().snapshot().can_undo);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_FALSE(harness.editor.history().snapshot().can_undo)
+      << "The complete center-handle snap must commit as one undo step.";
+  const std::optional<quader::QVec3> undone_pivot =
+      harness.editor.query().selection_transform_pivot();
+  ASSERT_TRUE(undone_pivot.has_value());
+  expect_vec3_near(*undone_pivot, *initial_pivot);
 }
 
 TEST(ViewportInteractionControllerTests, ShortMoveGizmoClickKeepsEdgeSelection) {

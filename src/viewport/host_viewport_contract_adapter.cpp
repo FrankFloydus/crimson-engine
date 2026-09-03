@@ -523,6 +523,21 @@ viewport_input_action_binding_catalog() {
       },
       {
           .target_id =
+              viewport_input_action_target_id("transform.vertex_snap"),
+          .action_id = "viewport.transform.vertex_snap",
+          .label = "Hold Vertex Snap",
+          .localization_key =
+              "keybindings.target.viewport.transform.vertex_snap.label",
+          .context = ViewportInputBindingContext::Viewport,
+          .shortcut = "V",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "(transformDrag.active || activeTool.move || "
+                  "curveControls.editable)",
+          .weight = 40,
+          .action = ViewportInputActionKind::TransformVertexSnap,
+      },
+      {
+          .target_id =
               viewport_input_action_target_id("linear_array.constraint_x"),
           .label = "Linear Array X Constraint",
           .localization_key =

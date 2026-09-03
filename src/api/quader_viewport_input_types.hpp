@@ -195,6 +195,7 @@ enum class ViewportInputActionKind {
     AddSelectionDepth,
     RemoveSelectionDepth,
     ToggleCurvePointSmoothness,
+    TransformVertexSnap,
 };
 
 /**

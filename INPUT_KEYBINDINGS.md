@@ -70,6 +70,7 @@ Existing important keys include:
 - `navigation.panActive`
 - `modalTool.active`
 - `activeTool.ownsViewport`
+- `transformDrag.active`
 - `activeTool.<tool-id>`
 - `selectionMode.<mode-id>`
 - `canUndo`
@@ -256,6 +257,15 @@ example, `Align X Center`, `Activate Move Tool`, and `Bridge Selected Edges`).
 
 Current compiled defaults added with the scoped editor are:
 
+- `V` temporarily arms vertex snapping while it is held in the Move tool, Curve-control editing,
+  or an active transform drag through `viewport.transform.vertex_snap`. This lets a user hold the
+  key before crossing a gizmo's drag threshold. Active-key frames resolve to the semantic
+  `ViewportInputFrame::transform_vertex_snap_down` state; a press released before the frame is
+  sampled does not count as held, and release, focus loss, or applicable-tool context loss clears
+  the state. Transform interactions consume this state instead of testing the raw key. Because
+  the action is level-triggered, Settings accepts exactly one keyboard press chord for it;
+  sequences and mouse/wheel gestures are rejected, and an invalid persisted override falls back
+  to the compiled `V` mapping.
 - `Ctrl+Shift+P` opens Search Commands from the canonical
   `ui.search_commands` command. The palette does not install a private Qt
   shortcut, and the global binding continues to yield while native text input

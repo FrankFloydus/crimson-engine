@@ -479,7 +479,11 @@ TEST(ModelingSessionServiceTests,
           "drag.tool == quader_editor_core::ViewportInteractionTool::Move"),
       std::string::npos);
   EXPECT_NE(source.find("drag.move.active"), std::string::npos);
-  EXPECT_NE(source.find("transform_drag_axis_supports_vertex_snap(drag.axis)"),
+  EXPECT_NE(
+      source.find(
+          "quader_editor_core::move_axis_supports_vertex_snap(drag.axis)"),
+      std::string::npos);
+  EXPECT_EQ(source.find("bool transform_drag_axis_supports_vertex_snap("),
             std::string::npos);
   EXPECT_NE(source.find("request.vertex_snap_radius > 0.0 &&"),
             std::string::npos);

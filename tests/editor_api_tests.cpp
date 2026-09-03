@@ -5308,6 +5308,9 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
         !requires_editable_curve_controls) {
       state.active_tool = quader::ViewportToolId::Curve;
     }
+    if (descriptor.when.find("activeTool.move") != std::string_view::npos) {
+      state.active_tool = quader::ViewportToolId::Move;
+    }
     EXPECT_TRUE(
         has_keybinding(rules, descriptor.target_id, descriptor.shortcut))
         << descriptor.target_id << " / " << descriptor.shortcut;
@@ -5345,6 +5348,14 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
     if (modal_only_action) {
       input_context.modal_tool_active = true;
     }
+    const bool references_positive_transform_drag =
+        descriptor.when.find("!transformDrag.active") ==
+            std::string_view::npos &&
+        descriptor.when.find("transformDrag.active") !=
+            std::string_view::npos;
+    if (references_positive_transform_drag) {
+      input_context.active_transform_drag = true;
+    }
     const bool owning_tool_only_action =
         descriptor.when.find("!activeTool.ownsViewport") ==
             std::string_view::npos &&
@@ -5373,6 +5384,190 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
     }
     ASSERT_TRUE(matched) << descriptor.target_id;
   }
+}
+
+TEST(EditorApiTests,
+     TransformVertexSnapInputTracksHeldVInApplicableGizmoContexts) {
+  const std::filesystem::path path =
+      keybinding_test_path("transform-vertex-snap-held-v");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+
+  quader::ViewportToolState state;
+  std::vector<quader::QuaderInputChord> suppressed_chords;
+  double linear_array_wheel_remainder = 0.0;
+  double radial_array_wheel_remainder = 0.0;
+  const quader::QuaderInputChord v = single_input_chord("V");
+  auto resolve = [&](quader::ViewportInputFrame &input) {
+    quader::ViewportKeybindingResolver::resolve(
+        editor, state, input, suppressed_chords,
+        linear_array_wheel_remainder, radial_array_wheel_remainder);
+  };
+
+  quader::ViewportInputFrame input;
+  input.viewport_focused = true;
+  input.pressed_input_chords = {v};
+  input.active_input_chords = {v};
+  resolve(input);
+  EXPECT_FALSE(input.transform_vertex_snap_down);
+
+  state.active_tool = quader::ViewportToolId::Move;
+  input.pressed_input_chords = {v};
+  input.active_input_chords = {v};
+  resolve(input);
+  EXPECT_TRUE(input.transform_vertex_snap_down)
+      << "holding V before crossing the gizmo drag threshold must be armed";
+
+  state.active_tool = quader::ViewportToolId::Select;
+  input.active_transform_drag = true;
+  input.pressed_input_chords.clear();
+  input.active_input_chords = {v};
+  resolve(input);
+  EXPECT_TRUE(input.transform_vertex_snap_down);
+
+  input.active_input_chords.clear();
+  input.released_input_chords = {v};
+  resolve(input);
+  EXPECT_FALSE(input.transform_vertex_snap_down);
+
+  input.released_input_chords.clear();
+  input.pressed_input_chords = {v};
+  input.released_input_chords = {v};
+  resolve(input);
+  EXPECT_FALSE(input.transform_vertex_snap_down)
+      << "a press released before the frame is sampled is not held";
+
+  input.pressed_input_chords.clear();
+  input.released_input_chords.clear();
+  input.transform_vertex_snap_down = true;
+  resolve(input);
+  EXPECT_FALSE(input.transform_vertex_snap_down);
+
+  input.active_input_chords = {v};
+  input.active_transform_drag = false;
+  resolve(input);
+  EXPECT_FALSE(input.transform_vertex_snap_down);
+
+  input.curve_controls_editable = true;
+  resolve(input);
+  EXPECT_TRUE(input.transform_vertex_snap_down);
+
+  input.transform_vertex_snap_down = true;
+  input.viewport_focused = false;
+  resolve(input);
+  EXPECT_FALSE(input.transform_vertex_snap_down);
+
+  input.transform_vertex_snap_down = true;
+  input.viewport_focused = true;
+  input.text_input_active = true;
+  resolve(input);
+  EXPECT_FALSE(input.transform_vertex_snap_down);
+
+  input.text_input_active = false;
+  input.curve_controls_editable = false;
+  input.active_transform_drag = true;
+  input.navigation_active = true;
+  resolve(input);
+  EXPECT_FALSE(input.transform_vertex_snap_down);
+  std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests,
+     TransformVertexSnapBindingRequiresOneHoldableKeyboardChord) {
+  constexpr std::string_view kTarget = "viewport.transform.vertex_snap";
+  const std::filesystem::path path =
+      keybinding_test_path("transform-vertex-snap-rebinding");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+
+  const std::vector<quader::QuaderKeybindingCatalogEntry> catalog =
+      editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *entry =
+      find_keybinding_catalog_entry(catalog, kTarget);
+  ASSERT_NE(entry, nullptr);
+  const quader::QuaderKeybindingActionKey action = entry->key;
+
+  for (const std::string_view unsupported : {
+           "Ctrl+K V", "WheelUp", "LeftMouse", "LeftMouseClick",
+           "LeftMouseDoubleClick", "MiddleMouseDrag"}) {
+    SCOPED_TRACE(unsupported);
+    const quader::QuaderKeybindingAssignmentAnalysis analysis =
+        editor.commands().analyze_shortcut_assignment(action, unsupported);
+    EXPECT_FALSE(analysis.ok);
+    EXPECT_NE(analysis.message.find("keyboard press"), std::string::npos);
+    const quader::QuaderApiVoidResult rejected =
+        editor.preferences().set_action_shortcut(
+            action, std::string(unsupported),
+            quader::QuaderKeybindingConflictPolicy::Replace);
+    EXPECT_FALSE(rejected.ok());
+  }
+  const quader::QuaderApiVoidResult legacy_target_rejected =
+      editor.preferences().set_shortcut(kTarget, "LeftMouse");
+  EXPECT_FALSE(legacy_target_rejected.ok());
+
+  const quader::QuaderApiVoidResult rebound =
+      editor.preferences().set_action_shortcut(
+          action, "Ctrl+Alt+V",
+          quader::QuaderKeybindingConflictPolicy::Replace);
+  ASSERT_TRUE(rebound.ok()) << rebound.error_message();
+  EXPECT_TRUE(rebound.changed());
+
+  CommandTestHarness reloaded_harness;
+  quader::QuaderEditorApi &reloaded = reloaded_harness.editor;
+  ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+  const std::vector<quader::QuaderKeybindingCatalogEntry> reloaded_catalog =
+      reloaded.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *reloaded_entry =
+      find_keybinding_catalog_entry(reloaded_catalog, kTarget);
+  ASSERT_NE(reloaded_entry, nullptr);
+  EXPECT_EQ(reloaded_entry->shortcut, "Ctrl+Alt+V");
+  EXPECT_EQ(reloaded_entry->source,
+            quader::QuaderKeybindingSourceKind::User);
+
+  quader::ViewportToolState state;
+  state.active_tool = quader::ViewportToolId::Move;
+  quader::ViewportInputFrame input;
+  input.viewport_focused = true;
+  input.active_input_chords = {single_input_chord("Ctrl+Alt+V")};
+  std::vector<quader::QuaderInputChord> suppressed_chords;
+  double linear_array_wheel_remainder = 0.0;
+  double radial_array_wheel_remainder = 0.0;
+  quader::ViewportKeybindingResolver::resolve(
+      reloaded, state, input, suppressed_chords,
+      linear_array_wheel_remainder, radial_array_wheel_remainder);
+  EXPECT_TRUE(input.transform_vertex_snap_down);
+
+  const std::filesystem::path invalid_path =
+      keybinding_test_path("transform-vertex-snap-invalid-loaded");
+  {
+    std::ofstream file(invalid_path);
+    ASSERT_TRUE(file.good());
+    file << "[\n"
+         << "  {\"command\":\"" << kTarget
+         << "\",\"key\":\"Ctrl+K V\"}\n"
+         << "]\n";
+  }
+  const std::string invalid_file_before = read_text_file(invalid_path);
+  CommandTestHarness normalized_harness;
+  quader::QuaderEditorApi &normalized = normalized_harness.editor;
+  ASSERT_TRUE(
+      normalized.commands().set_keybinding_storage_path(invalid_path).ok());
+  const std::vector<quader::QuaderKeybindingCatalogEntry> normalized_catalog =
+      normalized.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *normalized_entry =
+      find_keybinding_catalog_entry(normalized_catalog, kTarget);
+  ASSERT_NE(normalized_entry, nullptr);
+  EXPECT_EQ(normalized_entry->shortcut, "V");
+  EXPECT_EQ(normalized_entry->source,
+            quader::QuaderKeybindingSourceKind::Default);
+  EXPECT_FALSE(normalized_entry->customized);
+  EXPECT_EQ(read_text_file(invalid_path), invalid_file_before)
+      << "load-time normalization must not rewrite a hand-authored file";
+
+  std::filesystem::remove(path);
+  std::filesystem::remove(invalid_path);
 }
 
 TEST(EditorApiTests,
@@ -17037,7 +17232,7 @@ TEST(EditorApiTests,
           [&](const std::string &target_id) {
             return !command_ids.contains(target_id);
           }));
-  EXPECT_EQ(non_command_target_count, 48u);
+  EXPECT_EQ(non_command_target_count, 49u);
 
   for (const std::string &typed_id : typed_command_ids()) {
     EXPECT_TRUE(actual_target_ids.contains(typed_id)) << typed_id;

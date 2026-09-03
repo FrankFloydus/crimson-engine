@@ -381,7 +381,12 @@ TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalToo
                 "frame.settings, frame.input.modifiers.primary)"),
             std::string::npos);
   EXPECT_NE(transform_gizmo.find(".vertex_snap_radius ="), std::string::npos);
+  EXPECT_NE(transform_gizmo.find("frame.input.transform_vertex_snap_down"),
+            std::string::npos);
   EXPECT_NE(transform_gizmo.find(
+                "ViewportFloatSettingId::PickVertexRadius"),
+            std::string::npos);
+  EXPECT_EQ(transform_gizmo.find(
                 ".vertex_snap_radius = viewport_vertex_snap_radius(frame.settings)"),
             std::string::npos);
   EXPECT_NE(transform_gizmo.find(".grid_snap_enabled = grid_snap_active"),

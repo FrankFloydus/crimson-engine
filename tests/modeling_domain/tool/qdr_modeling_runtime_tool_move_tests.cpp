@@ -417,7 +417,8 @@ TEST(QdrModelingRuntimeToolMoveTests, ObjectMoveDragSnapsSelectionCenterToGridIn
   EXPECT_NEAR(state.center_world.x + preview.preview_delta.x, 1.0F, 0.0001);
 }
 
-TEST(QdrModelingRuntimeToolMoveTests, MoveDragSnapsPreviewDeltaToHoveredVertexTarget) {
+TEST(QdrModelingRuntimeToolMoveTests,
+     AxisMoveDragProjectsHoveredVertexTargetOntoTheActiveAxis) {
   quader_editor_core::MoveToolState state =
       begin_axis_move(quader_editor_core::TransformAxis::Y, {2.0F, 3.0F, 4.0F});
 
@@ -430,6 +431,100 @@ TEST(QdrModelingRuntimeToolMoveTests, MoveDragSnapsPreviewDeltaToHoveredVertexTa
   EXPECT_NEAR(preview.preview_delta.x, 0.0F, 0.0001);
   EXPECT_NEAR(preview.preview_delta.y, 4.0F, 0.0001);
   EXPECT_NEAR(preview.preview_delta.z, 0.0F, 0.0001);
+}
+
+TEST(QdrModelingRuntimeToolMoveTests,
+     FreeMoveDragSnapsTheCenterExactlyToTheHoveredVertexTarget) {
+	const quader_poly::Transform3 model_transform =
+		nonorthogonal_orientation();
+	const quader::QVec3 center {2.0F, -3.0F, 4.0F};
+	const quader::QVec3 expected_local_delta {1.25F, -0.5F, 2.0F};
+	const quader::QVec3 expected_world_delta =
+		transformed_vector(model_transform, expected_local_delta);
+
+	quader_editor_core::MoveToolState state;
+	state.active = true;
+	state.axis = quader_editor_core::TransformAxis::All;
+	state.model_transform = model_transform;
+	state.center_world = center;
+
+	ASSERT_TRUE(quader_editor_core::move_axis_supports_vertex_snap(
+		quader_editor_core::TransformAxis::All));
+	const quader_editor_core::MovePreviewResult preview =
+		quader_editor_core::preview_move_to_axis_snap_target(
+			state, center + expected_world_delta);
+
+	ASSERT_TRUE(preview.ok);
+	EXPECT_NEAR(
+		preview.preview_distance, quader::length(expected_world_delta),
+		0.0001);
+	EXPECT_NEAR(preview.preview_delta.x, expected_local_delta.x, 0.0001F);
+	EXPECT_NEAR(preview.preview_delta.y, expected_local_delta.y, 0.0001F);
+	EXPECT_NEAR(preview.preview_delta.z, expected_local_delta.z, 0.0001F);
+	const quader::QVec3 resolved_world_target =
+		center + transformed_vector(model_transform, preview.preview_delta);
+	EXPECT_NEAR(
+		resolved_world_target.x, center.x + expected_world_delta.x, 0.0001F);
+	EXPECT_NEAR(
+		resolved_world_target.y, center.y + expected_world_delta.y, 0.0001F);
+	EXPECT_NEAR(
+		resolved_world_target.z, center.z + expected_world_delta.z, 0.0001F);
+}
+
+TEST(QdrModelingRuntimeToolMoveTests,
+     FreeMoveSnapsTheSelectedVertexOntoAnotherVertexDespiteGridQuantization) {
+	quader_editor_core::PolygonObject object = cube_object(1);
+	const quader_poly::Vertex source_vertex =
+		object.document.read().vertices.at(0);
+	const quader_poly::Vertex target_vertex =
+		object.document.read().vertices.at(2);
+	quader_editor_core::EditorSession session({object});
+	quader_poly::Selection selection;
+	selection.vertices = {source_vertex.id};
+	session.set_component_selection(
+		object.id, selection,
+		quader_editor_core::SelectionMode::Vertex);
+
+	quader_editor_core::TransformDragState drag;
+	drag.active = true;
+	drag.tool = quader_editor_core::ViewportInteractionTool::Move;
+	drag.operation = quader_editor_core::TransformDragOperation::Transform;
+	drag.axis = quader_editor_core::TransformAxis::All;
+	drag.scene_transform_preview_eligible = true;
+	drag.move.active = true;
+	drag.move.axis = quader_editor_core::TransformAxis::All;
+	drag.move.center_world = source_vertex.position;
+
+	quader_editor_core::TransformDragPreviewInput input;
+	input.camera = front_camera();
+	input.screen_position = {100.0F, 100.0F};
+	input.ray = {
+		{target_vertex.position.x, target_vertex.position.y, 6.0F},
+		{0.0F, 0.0F, -1.0F}};
+	input.grid_enabled = true;
+	input.grid_size = 100.0;
+	input.vertex_snap_enabled = true;
+	input.vertex_snap_radius = 0.2;
+
+	const quader_editor_core::CommandResult result =
+		quader_editor_core::apply_transform_drag_preview(session, drag, input);
+
+	ASSERT_TRUE(result.ok);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(
+		drag.snap_target.kind ==
+		quader_editor_core::TransformSnapLandmarkKind::Vertex);
+	EXPECT_TRUE(drag.snap_target.object_id == object.id);
+	EXPECT_TRUE(drag.snap_target.vertex_id == target_vertex.id);
+	EXPECT_NEAR(
+		source_vertex.position.x + drag.move.preview_delta.x,
+		target_vertex.position.x, 0.0001F);
+	EXPECT_NEAR(
+		source_vertex.position.y + drag.move.preview_delta.y,
+		target_vertex.position.y, 0.0001F);
+	EXPECT_NEAR(
+		source_vertex.position.z + drag.move.preview_delta.z,
+		target_vertex.position.z, 0.0001F);
 }
 
 TEST(QdrModelingRuntimeToolMoveTests, MoveDragSnapsSelectedAnchorToVertexTargetOnAnotherMesh) {

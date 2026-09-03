@@ -592,6 +592,7 @@ keybindings.target.viewport.material.transfer_face_texture.label=Continua la tex
 keybindings.target.viewport.curve.toggle_point_smoothness.label=Alterna punto curva angolare / morbido
 keybindings.target.viewport.modal_tool.mode_cycle.label=Cambia modalità mantenimento taglio
 keybindings.target.viewport.quick_pivot.label=Pivot rapido
+keybindings.target.viewport.transform.vertex_snap.label=Mantieni aggancio ai vertici
 keybindings.target.viewport.linear_array.constraint_x.label=Vincolo X serie lineare
 keybindings.target.viewport.linear_array.constraint_y.label=Vincolo Y serie lineare
 keybindings.target.viewport.linear_array.constraint_z.label=Vincolo Z serie lineare

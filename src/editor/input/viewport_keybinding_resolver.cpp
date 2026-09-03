@@ -208,6 +208,8 @@ void mark_action_down(ViewportInputFrame &input,
                       ViewportInputActionKind action) {
   if (action == ViewportInputActionKind::QuickPivot) {
     input.quick_pivot_down = true;
+  } else if (action == ViewportInputActionKind::TransformVertexSnap) {
+    input.transform_vertex_snap_down = true;
   } else {
     mark_navigation_down(input.navigation_bindings, action);
   }
@@ -718,6 +720,7 @@ void ViewportKeybindingResolver::resolve(
     ViewportRuntimeBindingToken runtime_binding) {
   input.resolved_shortcuts.clear();
   input.navigation_bindings = {};
+  input.transform_vertex_snap_down = false;
   input.linear_array_copy_delta = 0;
   input.radial_array_copy_delta = 0;
   input.sample_face_material_pressed = false;

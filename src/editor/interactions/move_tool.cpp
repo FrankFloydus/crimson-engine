@@ -372,7 +372,8 @@ public:
 			};
 			state.screen_axis = vec2_normalize_or(state.screen_axis, { 1.0F, 0.0F });
 		}
-		if (move_axis_supports_vertex_snap(input.axis) && input.has_start_ray) {
+		if (!transform_axis_is_plane(input.axis) &&
+				move_axis_supports_vertex_snap(input.axis) && input.has_start_ray) {
                   const DragDistanceResult start_distance =
                       axis_distance_from_ray(state.world_axis,
                                              state.center_world,
@@ -432,7 +433,15 @@ public:
 			return { false, "Move tool is not active.", {}, {}, {} };
 		}
 		if (!move_axis_supports_vertex_snap(state.axis)) {
-			return { false, "Move snap target requires a single move axis.", {}, {}, {} };
+			return { false, "Move snap target requires an axis or free-move handle.", {}, {}, {} };
+		}
+		if (state.axis == TransformAxis::All) {
+			const quader::QVec3 world_delta = target_position - state.center_world;
+			const double distance = quader::length(world_delta);
+			state.preview_distance = distance;
+			state.preview_delta =
+				inverse_transform_vector(state.model_transform, world_delta);
+			return { true, {}, distance, distance, state.preview_delta };
 		}
 		const double distance =
 			vec3_dot(target_position - state.center_world, state.world_axis);
@@ -653,7 +662,7 @@ const MoveTool& move_tool_impl()
 bool move_axis_supports_vertex_snap(TransformAxis axis)
 {
   return axis == TransformAxis::X || axis == TransformAxis::Y ||
-         axis == TransformAxis::Z;
+         axis == TransformAxis::Z || axis == TransformAxis::All;
 }
 
 quader_poly::PickOptions move_vertex_snap_pick_options(double vertex_radius)

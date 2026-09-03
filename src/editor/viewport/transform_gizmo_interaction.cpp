@@ -961,7 +961,11 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
         .screen_position = frame.input.mouse_local,
         .viewport_size = frame.input.viewport_size,
         .grid_preset = frame.input.grid_preset,
-        .vertex_snap_radius = viewport_vertex_snap_radius(frame.settings),
+        .vertex_snap_radius =
+            frame.input.transform_vertex_snap_down
+                ? frame.settings.float_value(
+                      ViewportFloatSettingId::PickVertexRadius)
+                : 0.0f,
         .grid_snap_enabled = grid_snap_active,
         .rotation_snap_degrees = rotation_snap_degrees,
         .precision = frame.input.modifiers.primary,

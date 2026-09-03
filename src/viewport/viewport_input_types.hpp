@@ -135,6 +135,7 @@ struct ViewportInputFrame {
   bool quick_pivot_pressed = false;
   bool quick_pivot_down = false;
   bool quick_pivot_released = false;
+  bool transform_vertex_snap_down = false;
   bool tool_constraint_x_pressed = false;
   bool tool_constraint_y_pressed = false;
   bool tool_constraint_z_pressed = false;

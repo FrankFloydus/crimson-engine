@@ -592,6 +592,7 @@ keybindings.target.viewport.material.transfer_face_texture.label=Continue Textur
 keybindings.target.viewport.curve.toggle_point_smoothness.label=Toggle Curve Point Corner / Smooth
 keybindings.target.viewport.modal_tool.mode_cycle.label=Cycle Cut Keep Mode
 keybindings.target.viewport.quick_pivot.label=Quick Pivot
+keybindings.target.viewport.transform.vertex_snap.label=Hold Vertex Snap
 keybindings.target.viewport.linear_array.constraint_x.label=Linear Array X Constraint
 keybindings.target.viewport.linear_array.constraint_y.label=Linear Array Y Constraint
 keybindings.target.viewport.linear_array.constraint_z.label=Linear Array Z Constraint
