@@ -833,8 +833,10 @@ std::optional<std::vector<quader::QVec2>> solve_face_texture_base_uvs(
   const auto finite_uv = [](quader::QVec2 uv) {
     return std::isfinite(uv.x) && std::isfinite(uv.y);
   };
+  constexpr std::array<float, 4> kIdentityCarrier{1.0F, 0.0F, 0.0F, 1.0F};
   std::vector<quader::QVec2> base_uvs;
   base_uvs.reserve(positions.size());
+  double solve_condition = 1.0;
   if (is_identity_texture_mapping(sampling_from_local)) {
     for (const auto uv : effective_uvs) {
       const auto base = unapply_face_texture_transform(uv, transform);
@@ -846,7 +848,6 @@ std::optional<std::vector<quader::QVec2>> solve_face_texture_base_uvs(
   } else {
     std::vector<quader::QVec2> deltas;
     deltas.reserve(positions.size());
-    constexpr std::array<float, 4> kIdentityCarrier{1.0F, 0.0F, 0.0F, 1.0F};
     for (std::size_t index = 0U; index < positions.size(); ++index) {
       const auto position = positions[index];
       const auto q = generated_texture_uv(position, geometric_normal);
@@ -879,6 +880,16 @@ std::optional<std::vector<quader::QVec2>> solve_face_texture_base_uvs(
     if (!std::isfinite(determinant) || std::abs(determinant) <= 1.0e-10) {
       return std::nullopt;
     }
+    const double matrix_norm =
+        std::max(std::abs(a) + std::abs(b), std::abs(c) + std::abs(d));
+    const double inverse_norm =
+        std::max(std::abs(d) + std::abs(b),
+                 std::abs(c) + std::abs(a)) /
+        std::abs(determinant);
+    solve_condition = matrix_norm * inverse_norm;
+    if (!std::isfinite(solve_condition)) {
+      return std::nullopt;
+    }
     const double inverse = 1.0 / (determinant * scale);
     const std::array<double, 4> carrier{
         (target_carrier[0] * d - target_carrier[1] * c) * inverse,
@@ -904,19 +915,48 @@ std::optional<std::vector<quader::QVec2>> solve_face_texture_base_uvs(
   const auto actual_carrier = face_texture_carrier(
       positions, base_uvs, geometric_normal, transform);
   for (std::size_t index = 0U; index < positions.size(); ++index) {
+    const auto transformed =
+        apply_face_texture_transform(base_uvs[index], transform);
     const auto actual = evaluate_texture_mapping(
-        apply_face_texture_transform(base_uvs[index], transform),
+        transformed,
         positions[index], geometric_normal, actual_carrier,
         sampling_from_local);
-    const auto close = [](float left, float right) {
+    const auto q = generated_texture_uv(positions[index], geometric_normal);
+    const auto mapped_q = evaluate_texture_mapping(
+        q, positions[index], geometric_normal, kIdentityCarrier,
+        sampling_from_local);
+    const auto delta = mapped_q - q;
+    // Base UVs and carriers are stored as floats. Small or anisotropic
+    // sampling transforms can therefore produce large intermediate terms that
+    // cancel to a valid UV, with roundoff proportional to both the solve
+    // condition and those terms. Keep the strict floor for normal mappings,
+    // but allow small reconstruction error up to a bounded ceiling.
+    const auto close = [](float left, float right, double roundoff_scale) {
+      constexpr float kAbsoluteTolerance = 2.0e-5F;
+      constexpr float kMaximumRoundoffTolerance = 5.0e-4F;
+      constexpr float kRoundoffOperations = 8.0F;
       constexpr float kRelativeTolerance =
           16.0F * std::numeric_limits<float>::epsilon();
+      const double roundoff_tolerance = std::min<double>(
+          kMaximumRoundoffTolerance,
+          kAbsoluteTolerance + kRoundoffOperations *
+              std::numeric_limits<float>::epsilon() * roundoff_scale);
       return std::isfinite(left) && std::isfinite(right) &&
-             std::abs(left - right) <= 2.0e-5F +
+             std::abs(left - right) <= roundoff_tolerance +
                  kRelativeTolerance * std::max(std::abs(left), std::abs(right));
     };
-    if (!close(actual.x, effective_uvs[index].x) ||
-        !close(actual.y, effective_uvs[index].y)) {
+    const float evaluation_scale_x =
+        std::abs(transformed.x) +
+        std::abs(actual_carrier[0] * delta.x) +
+        std::abs(actual_carrier[1] * delta.y);
+    const float evaluation_scale_y =
+        std::abs(transformed.y) +
+        std::abs(actual_carrier[2] * delta.x) +
+        std::abs(actual_carrier[3] * delta.y);
+    if (!close(actual.x, effective_uvs[index].x,
+               solve_condition * evaluation_scale_x) ||
+        !close(actual.y, effective_uvs[index].y,
+               solve_condition * evaluation_scale_y)) {
       return std::nullopt;
     }
   }

@@ -453,7 +453,7 @@ public:
   selected_component_entities() const;
   [[nodiscard]] ModelingSelectionExport export_selection() const;
   [[nodiscard]] ModelingSelectedFaceTextureSnapshot
-  selected_face_texture_settings() const;
+  selected_face_texture_settings(bool include_whole_meshes = false) const;
   [[nodiscard]] ModelingCommandResult apply_face_texture_updates(
       std::span<const ModelingFaceTextureUpdateBatch> batches);
   [[nodiscard]] ModelingCommandResult apply_face_texture_action(

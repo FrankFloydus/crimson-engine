@@ -299,6 +299,12 @@ inline constexpr QuaderCommandId kModelingTextureAlignToFace{
     "modeling.texture.align_to_face"};
 inline constexpr QuaderCommandId kModelingTextureAlignToView{
     "modeling.texture.align_to_view"};
+inline constexpr QuaderCommandId kModelingTextureProjectCube{
+    "modeling.texture.project_cube"};
+inline constexpr QuaderCommandId kModelingTextureProjectCylinder{
+    "modeling.texture.project_cylinder"};
+inline constexpr QuaderCommandId kModelingTextureProjectSphere{
+    "modeling.texture.project_sphere"};
 inline constexpr QuaderCommandId kModelingTextureScaleXUp{
     "modeling.texture.scale_x_up"};
 inline constexpr QuaderCommandId kModelingTextureScaleXDown{
@@ -538,6 +544,9 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kModelingTextureAlignToGrid,
     kModelingTextureAlignToFace,
     kModelingTextureAlignToView,
+    kModelingTextureProjectCube,
+    kModelingTextureProjectCylinder,
+    kModelingTextureProjectSphere,
     kModelingTextureScaleXUp,
     kModelingTextureScaleXDown,
     kModelingTextureScaleYUp,

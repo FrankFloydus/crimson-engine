@@ -65,15 +65,22 @@ constexpr std::array<NativeModelingActionCommand, 3>
 struct FaceTextureCommand final {
   QuaderCommandId command_id;
   QuaderFaceTextureAction action;
+  bool mesh_level = false;
 };
 
-constexpr std::array<FaceTextureCommand, 25> kFaceTextureCommands{{
+constexpr std::array<FaceTextureCommand, 28> kFaceTextureCommands{{
         {quader_command::kModelingTextureAlignToGrid,
          QuaderFaceTextureAction::AlignToGrid},
         {quader_command::kModelingTextureAlignToFace,
          QuaderFaceTextureAction::AlignToFace},
         {quader_command::kModelingTextureAlignToView,
          QuaderFaceTextureAction::AlignToView},
+        {quader_command::kModelingTextureProjectCube,
+         QuaderFaceTextureAction::ProjectCube, true},
+        {quader_command::kModelingTextureProjectCylinder,
+         QuaderFaceTextureAction::ProjectCylinder, true},
+        {quader_command::kModelingTextureProjectSphere,
+         QuaderFaceTextureAction::ProjectSphere, true},
         {quader_command::kModelingTextureScaleXUp,
          QuaderFaceTextureAction::ScaleXUp},
         {quader_command::kModelingTextureScaleXDown,
@@ -2189,16 +2196,29 @@ void QuaderCommandsApi::Impl::register_commands() {
     register_command(
         command.command_id,
         std::string(quader_face_texture_action_label(command.action)),
-        [this, action = command.action] {
+        [this, action = command.action, mesh_level = command.mesh_level] {
           const auto settings = api_.modeling().face_texture_settings();
+          const QuaderSelectionSummary selection = api_.selection().summary();
+          const std::uint64_t selection_token =
+              mesh_level && selection.mode == QuaderSelectionMode::Object
+                  ? selection.selection_revision
+                  : settings.selection_token;
           return api_.modeling().apply_face_texture_action(
-              {.action = action, .selection_token = settings.selection_token});
+              {.action = action, .selection_token = selection_token});
         },
-        {}, [this] {
+        {}, [this, mesh_level = command.mesh_level] {
+          if (mesh_level) {
+            const QuaderSelectionSummary selection = api_.selection().summary();
+            if (selection.mode == QuaderSelectionMode::Object) {
+              return selection.selected_object_count > 0u;
+            }
+          }
           return api_.modeling().face_texture_settings().editable;
         });
     set_keybinding_selection_modes(command.command_id.string(),
-                                   kSelectionModeFace);
+                                   command.mesh_level
+                                       ? kSelectionModeObject | kSelectionModeFace
+                                       : kSelectionModeFace);
   }
   register_command(
       quader_command::kModelingUvPeel, "UV Peel",

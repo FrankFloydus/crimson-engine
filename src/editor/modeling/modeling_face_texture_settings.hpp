@@ -27,6 +27,13 @@ enum class ModelingFaceTextureField { ScaleX, ScaleY, ShiftX, ShiftY, Rotate };
 
 using ModelingFaceTextureAction = modeling::FaceTextureAction;
 
+[[nodiscard]] inline constexpr bool
+modeling_face_texture_action_is_projection(ModelingFaceTextureAction action) {
+  return action == ModelingFaceTextureAction::ProjectCube ||
+         action == ModelingFaceTextureAction::ProjectCylinder ||
+         action == ModelingFaceTextureAction::ProjectSphere;
+}
+
 /// Captures action settings once; repeat resolves the current targets afresh.
 struct ModelingFaceTextureActionRequest final {
   modeling::FaceTextureActionOptions options;
@@ -57,6 +64,9 @@ modeling_face_texture_action_label(ModelingFaceTextureAction action) {
   case ModelingFaceTextureAction::AlignToGrid: return "Align Texture to Grid";
   case ModelingFaceTextureAction::AlignToFace: return "Align Texture to Face";
   case ModelingFaceTextureAction::AlignToView: return "Align Texture to View";
+  case ModelingFaceTextureAction::ProjectCube: return "Cube UV Projection";
+  case ModelingFaceTextureAction::ProjectCylinder: return "Cylinder UV Projection";
+  case ModelingFaceTextureAction::ProjectSphere: return "Sphere UV Projection";
   case ModelingFaceTextureAction::ScaleXUp: return "Increase Texture Scale X";
   case ModelingFaceTextureAction::ScaleXDown: return "Decrease Texture Scale X";
   case ModelingFaceTextureAction::ScaleYUp: return "Increase Texture Scale Y";

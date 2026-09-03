@@ -4887,10 +4887,12 @@ public:
   }
 
   [[nodiscard]] ModelingSelectedFaceTextureSnapshot
-  selected_face_texture_settings() const {
+  selected_face_texture_settings(bool include_whole_meshes = false) const {
     ++stats_.face_texture_summary_build_count;
     ModelingSelectedFaceTextureSnapshot result;
-    if (selection_mode_ != ModelingSelectionMode::Face) {
+    const bool whole_meshes = include_whole_meshes &&
+                              selection_mode_ == ModelingSelectionMode::Object;
+    if (selection_mode_ != ModelingSelectionMode::Face && !whole_meshes) {
       return result;
     }
     const std::vector<ObjectId> selected = selected_sdk_objects();
@@ -4903,7 +4905,9 @@ public:
     for (std::size_t index = 0; index < selected.size(); ++index) {
       const auto &document = documents.value()[index];
       const PolygonSelectionSnapshot selection = document.selection();
-      if (selection.faces.empty()) {
+      const std::vector<FaceId> faces =
+          whole_meshes ? document.face_ids() : selection.faces;
+      if (faces.empty()) {
         continue;
       }
       const auto native = native_object(selected[index]);
@@ -4914,7 +4918,7 @@ public:
         result.command = failure("A selected face mesh is no longer live.");
         return result;
       }
-      auto properties = document.face_texture_settings(selection.faces);
+      auto properties = document.face_texture_settings(faces);
       if (!properties.ok()) {
         result.command = failure(properties.error_message());
         return result;
@@ -4984,8 +4988,12 @@ public:
   [[nodiscard]] ModelingCommandResult apply_face_texture_action(
       std::span<const ModelingFaceTextureActionTarget> targets,
       const modeling::FaceTextureActionOptions &options) {
-    if (selection_mode_ != ModelingSelectionMode::Face) {
-      return failure("Texture actions require face selection mode.");
+    const bool projection =
+        modeling_face_texture_action_is_projection(options.action);
+    if (selection_mode_ != ModelingSelectionMode::Face &&
+        !(projection && selection_mode_ == ModelingSelectionMode::Object)) {
+      return failure(
+          "Texture actions require face mode, or mesh mode for UV projection.");
     }
     if (targets.empty()) {
       return failure("Select one or more editable faces first.");
@@ -12209,8 +12217,9 @@ ModelingSdkProjectionAdapter::assign_material_slot_to_selection(
 }
 
 ModelingSelectedFaceTextureSnapshot
-ModelingSdkProjectionAdapter::selected_face_texture_settings() const {
-  return impl_->selected_face_texture_settings();
+ModelingSdkProjectionAdapter::selected_face_texture_settings(
+    bool include_whole_meshes) const {
+  return impl_->selected_face_texture_settings(include_whole_meshes);
 }
 
 ModelingCommandResult ModelingSdkProjectionAdapter::apply_face_texture_updates(

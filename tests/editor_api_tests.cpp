@@ -2070,7 +2070,7 @@ TEST(EditorApiTests, TextureLockPreferencesToggleIndependentlyAndRemainBindable)
 }
 
 TEST(EditorApiTests,
-     EditTextureCommandsHaveTypedFaceScopesAndUnassignedDefaults) {
+     EditTextureCommandsHaveTypedSelectionScopesAndUnassignedDefaults) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   const std::filesystem::path path =
@@ -2081,6 +2081,9 @@ TEST(EditorApiTests,
       quader::quader_command::kModelingTextureAlignToGrid,
       quader::quader_command::kModelingTextureAlignToFace,
       quader::quader_command::kModelingTextureAlignToView,
+      quader::quader_command::kModelingTextureProjectCube,
+      quader::quader_command::kModelingTextureProjectCylinder,
+      quader::quader_command::kModelingTextureProjectSphere,
       quader::quader_command::kModelingTextureScaleXUp,
       quader::quader_command::kModelingTextureScaleXDown,
       quader::quader_command::kModelingTextureScaleYUp,
@@ -2119,7 +2122,16 @@ TEST(EditorApiTests,
     const auto *entry =
         find_keybinding_catalog_entry(catalog, command.string());
     ASSERT_NE(entry, nullptr);
-    EXPECT_EQ(entry->scope_id, "viewport.selection.face");
+    const bool mesh_level =
+        command.string() ==
+            quader::quader_command::kModelingTextureProjectCube.string() ||
+        command.string() ==
+            quader::quader_command::kModelingTextureProjectCylinder.string() ||
+        command.string() ==
+            quader::quader_command::kModelingTextureProjectSphere.string();
+    EXPECT_EQ(entry->scope_id, mesh_level
+                                   ? "viewport.selection.object_or_face"
+                                   : "viewport.selection.face");
     EXPECT_EQ(entry->localization_key,
               "command." + std::string(command.string()));
     EXPECT_TRUE(entry->default_shortcut.empty());
@@ -2151,10 +2163,52 @@ TEST(EditorApiTests,
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
   for (const quader::QuaderCommandId command : kCommands) {
-    EXPECT_FALSE(editor.commands().descriptor(command)->enabled)
+    const bool mesh_level =
+        command.string() ==
+            quader::quader_command::kModelingTextureProjectCube.string() ||
+        command.string() ==
+            quader::quader_command::kModelingTextureProjectCylinder.string() ||
+        command.string() ==
+            quader::quader_command::kModelingTextureProjectSphere.string();
+    EXPECT_EQ(editor.commands().descriptor(command)->enabled, mesh_level)
         << command.string();
   }
   std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests, UvProjectionCommandsExecuteInMeshAndFaceModes) {
+  constexpr std::array kCommands{
+      quader::quader_command::kModelingTextureProjectCube,
+      quader::quader_command::kModelingTextureProjectCylinder,
+      quader::quader_command::kModelingTextureProjectSphere,
+  };
+  for (const quader::QuaderCommandId command : kCommands) {
+    SCOPED_TRACE(command.string());
+    {
+      CommandTestHarness harness;
+      create_selected_box(harness.editor, "Mesh UV Projection");
+      const quader::QuaderApiVoidResult projected =
+          harness.editor.commands().execute(command);
+      EXPECT_TRUE(projected.ok()) << projected.error_message();
+      EXPECT_TRUE(projected.changed()) << command.string();
+      EXPECT_EQ(harness.editor.selection().summary().mode,
+                quader::QuaderSelectionMode::Object);
+    }
+    {
+      CommandTestHarness harness;
+      const auto object =
+          create_selected_box(harness.editor, "Face UV Projection");
+      ASSERT_TRUE(harness.editor.selection()
+                      .set_mode(quader::QuaderSelectionMode::Face)
+                      .ok());
+      ASSERT_TRUE(harness.editor.selection().select_face(object, 1).ok());
+      const quader::QuaderApiVoidResult projected =
+          harness.editor.commands().execute(command);
+      EXPECT_TRUE(projected.ok()) << projected.error_message();
+      EXPECT_TRUE(projected.changed()) << command.string();
+      EXPECT_EQ(harness.editor.selection().summary().selected_face_count, 1u);
+    }
+  }
 }
 
 TEST(EditorApiTests,
@@ -17164,9 +17218,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 197u);
+  EXPECT_EQ(commands.size(), 200u);
 #else
-  EXPECT_EQ(commands.size(), 198u);
+  EXPECT_EQ(commands.size(), 201u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

@@ -2330,6 +2330,8 @@ TEST(QtMainMenuTests,
   auto *edge_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_edge"));
   auto *face_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_face"));
   auto *uv_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_uv"));
+  auto *uv_projection_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_uv_projection"));
   auto *uv_align_menu =
       menu_bar.findChild<QMenu *>(QStringLiteral("menu_uv_align"));
   auto *uv_flip_menu =
@@ -2354,6 +2356,7 @@ TEST(QtMainMenuTests,
   ASSERT_NE(edge_menu, nullptr);
   ASSERT_NE(face_menu, nullptr);
   ASSERT_NE(uv_menu, nullptr);
+  ASSERT_NE(uv_projection_menu, nullptr);
   ASSERT_NE(uv_align_menu, nullptr);
   ASSERT_NE(uv_flip_menu, nullptr);
   ASSERT_NE(uv_fit_menu, nullptr);
@@ -2435,22 +2438,23 @@ TEST(QtMainMenuTests,
   EXPECT_EQ(projected_main_menu_commands.size(), expected_main_menu_commands);
 
   const QList<QAction *> uv_actions = uv_menu->actions();
-  ASSERT_EQ(uv_actions.size(), 9);
+  ASSERT_EQ(uv_actions.size(), 10);
   EXPECT_EQ(uv_actions[0]->objectName(),
             QStringLiteral("command_modeling_uv_peel"));
-  EXPECT_TRUE(uv_actions[1]->isSeparator());
-  EXPECT_EQ(uv_actions[2], uv_align_menu->menuAction());
-  EXPECT_EQ(uv_actions[3]->objectName(),
-            QStringLiteral("command_modeling_texture_rotate_clockwise"));
-  EXPECT_EQ(uv_actions[3]->text(), QStringLiteral("Rotate CW"));
+  EXPECT_EQ(uv_actions[1], uv_projection_menu->menuAction());
+  EXPECT_TRUE(uv_actions[2]->isSeparator());
+  EXPECT_EQ(uv_actions[3], uv_align_menu->menuAction());
   EXPECT_EQ(uv_actions[4]->objectName(),
+            QStringLiteral("command_modeling_texture_rotate_clockwise"));
+  EXPECT_EQ(uv_actions[4]->text(), QStringLiteral("Rotate CW"));
+  EXPECT_EQ(uv_actions[5]->objectName(),
             QStringLiteral(
                 "command_modeling_texture_rotate_counter_clockwise"));
-  EXPECT_EQ(uv_actions[4]->text(), QStringLiteral("Rotate CCW"));
-  EXPECT_TRUE(uv_actions[5]->isSeparator());
-  EXPECT_EQ(uv_actions[6], uv_flip_menu->menuAction());
-  EXPECT_EQ(uv_actions[7], uv_fit_menu->menuAction());
-  EXPECT_EQ(uv_actions[8], uv_justify_menu->menuAction());
+  EXPECT_EQ(uv_actions[5]->text(), QStringLiteral("Rotate CCW"));
+  EXPECT_TRUE(uv_actions[6]->isSeparator());
+  EXPECT_EQ(uv_actions[7], uv_flip_menu->menuAction());
+  EXPECT_EQ(uv_actions[8], uv_fit_menu->menuAction());
+  EXPECT_EQ(uv_actions[9], uv_justify_menu->menuAction());
 
   const auto expect_uv_submenu = [](QMenu &submenu, std::string_view title,
                                     std::initializer_list<std::string_view>
@@ -2478,6 +2482,12 @@ TEST(QtMainMenuTests,
       ++label;
     }
   };
+  expect_uv_submenu(
+      *uv_projection_menu, "Projection",
+      {"command_modeling_texture_project_cube",
+       "command_modeling_texture_project_cylinder",
+       "command_modeling_texture_project_sphere"},
+      {"Cube", "Cylinder", "Sphere"});
   expect_uv_submenu(
       *uv_align_menu, "Align",
       {"command_modeling_texture_align_to_grid",
@@ -2535,6 +2545,8 @@ TEST(QtMainMenuTests,
       QStringLiteral("command_modeling_dissolve_edges"));
   auto *uv_peel = menu_bar.findChild<QAction *>(
       QStringLiteral("command_modeling_uv_peel"));
+  auto *project_texture_cube = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_texture_project_cube"));
   auto *extract_faces = menu_bar.findChild<QAction *>(
       QStringLiteral("command_modeling_extract_faces"));
   auto *thicken_faces = menu_bar.findChild<QAction *>(
@@ -2595,7 +2607,8 @@ TEST(QtMainMenuTests,
   for (QAction *action : {extract_faces, thicken_faces, invert_faces}) {
     expect_owned_only_by(action, face_menu);
   }
-  for (QAction *action : {uv_peel, align_texture_to_grid}) {
+  for (QAction *action :
+       {uv_peel, project_texture_cube, align_texture_to_grid}) {
     expect_owned_only_by(action, uv_menu);
   }
   for (QAction *action : {invert_mesh, create_outer_hull, half_cut}) {
@@ -2699,14 +2712,20 @@ TEST(QtMainMenuTests,
           editor.commands().descriptor(
               QuaderCommandId{std::string_view{command_id}});
       ASSERT_TRUE(descriptor.has_value()) << command_id;
+      const bool is_projection =
+          uv_projection_menu->actions().contains(action);
       const bool presentation_domain_matches =
-          action == uv_peel ? mode == QuaderSelectionMode::Edge
-                            : mode == QuaderSelectionMode::Face;
+          action == uv_peel
+              ? mode == QuaderSelectionMode::Edge
+              : is_projection
+                    ? mode == QuaderSelectionMode::Object ||
+                          mode == QuaderSelectionMode::Face
+                    : mode == QuaderSelectionMode::Face;
       EXPECT_EQ(action->isEnabled(),
                 descriptor->enabled && presentation_domain_matches)
           << command_id;
     }
-    EXPECT_EQ(projected_uv_commands, 16u);
+    EXPECT_EQ(projected_uv_commands, 19u);
   }
 
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
@@ -2723,6 +2742,7 @@ TEST(QtMainMenuTests,
   EXPECT_FALSE(bevel_edges->isEnabled());
   EXPECT_FALSE(invert_faces->isEnabled());
   EXPECT_FALSE(uv_peel->isEnabled());
+  EXPECT_TRUE(project_texture_cube->isEnabled());
   EXPECT_FALSE(align_texture_to_grid->isEnabled());
   const std::optional<QuaderCommandDescriptor> shared_face_shading =
       editor.commands().descriptor(quader_command::kModelingShadeFacesSmooth);
@@ -2750,6 +2770,7 @@ TEST(QtMainMenuTests,
                                         Qt::DirectConnection));
   EXPECT_TRUE(bevel_edges->isEnabled());
   EXPECT_TRUE(uv_peel->isEnabled());
+  EXPECT_FALSE(project_texture_cube->isEnabled());
   EXPECT_FALSE(align_texture_to_grid->isEnabled());
 
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
@@ -2760,6 +2781,7 @@ TEST(QtMainMenuTests,
                                         Qt::DirectConnection));
   EXPECT_TRUE(shade_faces_smooth->isEnabled());
   EXPECT_FALSE(uv_peel->isEnabled());
+  EXPECT_TRUE(project_texture_cube->isEnabled());
   EXPECT_TRUE(align_texture_to_grid->isEnabled());
 
   auto *select_all =

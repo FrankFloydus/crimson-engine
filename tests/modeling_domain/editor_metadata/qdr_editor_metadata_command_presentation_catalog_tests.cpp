@@ -245,6 +245,21 @@ TEST(QdrEditorMetadataCommandPresentationCatalogTests,
   EXPECT_TRUE(quader::has_command_presentation_surface(
       align_uv_to_view, CommandPresentationSurface::MainMenu));
 
+  const std::array<quader::QuaderCommandId, 3> uv_projections{{
+      quader::quader_command::kModelingTextureProjectCube,
+      quader::quader_command::kModelingTextureProjectCylinder,
+      quader::quader_command::kModelingTextureProjectSphere,
+  }};
+  for (std::size_t index = 0; index < uv_projections.size(); ++index) {
+    const CommandPresentationDescriptor &projection =
+        require_presentation(uv_projections[index]);
+    EXPECT_EQ(projection.domain, CommandPresentationDomain::UV);
+    EXPECT_EQ(projection.group, CommandPresentationGroup::Texture);
+    EXPECT_EQ(projection.rank, 501u + index);
+    EXPECT_TRUE(quader::has_command_presentation_surface(
+        projection, CommandPresentationSurface::MainMenu));
+  }
+
   const CommandPresentationDescriptor &dissolve_vertices =
       require_presentation(
           quader::quader_command::kModelingDissolveVertices);

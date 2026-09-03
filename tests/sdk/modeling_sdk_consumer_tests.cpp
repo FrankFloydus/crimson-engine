@@ -5861,6 +5861,223 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
+     FaceTextureCubeProjectionUsesSelectedLocalBoundsAndResetsSettings) {
+  auto created = PolygonDocument::make_box(
+      {.min = {-2.0F, -1.0F, -0.5F}, .max = {2.0F, 1.0F, 0.5F}});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  std::vector<FaceTextureTransformUpdate> updates;
+  for (const FaceId face : created.value().face_ids()) {
+    updates.push_back({.face = face, .scale_x = -2.0F, .scale_y = 0.5F,
+                       .shift_x = 0.25F, .shift_y = -0.5F,
+                       .rotation_degrees = 37.0F});
+  }
+  ASSERT_TRUE(created.value().set_face_texture_transforms(updates).ok());
+  auto target = texture_action_target(created.value());
+  target.world_from_local = {
+      .x_axis = {0.0F, 0.0F, 3.0F}, .y_axis = {0.0F, 2.0F, 0.0F},
+      .z_axis = {-4.0F, 0.0F, 0.0F}, .origin = {17.0F, -9.0F, 23.0F}};
+  const auto result = prepare_face_texture_action(
+      std::span<const FaceTextureActionTarget>(&target, 1U),
+      {.action = FaceTextureAction::ProjectCube});
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  ASSERT_TRUE(result.value().changed);
+  const auto topology = result.value().documents.front().document.authored_topology();
+  ASSERT_TRUE(topology.ok());
+  bool found_full_width = false;
+  for (const auto &face : topology.value().faces) {
+    EXPECT_EQ(face.texture_transform, FaceTextureTransform{});
+    ASSERT_EQ(face.uvs.size(), face.vertices.size());
+    float minimum_u = std::numeric_limits<float>::infinity();
+    float maximum_u = -std::numeric_limits<float>::infinity();
+    for (const auto uv : face.uvs) {
+      EXPECT_TRUE(std::isfinite(uv.x));
+      EXPECT_TRUE(std::isfinite(uv.y));
+      EXPECT_GE(uv.x, 0.0F);
+      EXPECT_LE(uv.x, 1.0F);
+      EXPECT_GE(uv.y, 0.0F);
+      EXPECT_LE(uv.y, 1.0F);
+      minimum_u = std::min(minimum_u, uv.x);
+      maximum_u = std::max(maximum_u, uv.x);
+    }
+    found_full_width = found_full_width ||
+                       std::abs((maximum_u - minimum_u) - 1.0F) < 0.0001F;
+  }
+  EXPECT_TRUE(found_full_width);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureCylinderProjectionCorrectsSeamsAndProjectsPlanarCaps) {
+  auto created = PolygonDocument::make_cylinder(
+      {.width = 4.0F, .height = 6.0F, .depth = 2.0F, .side_count = 8});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto result = prepare_face_texture_action(
+      std::array{texture_action_target(created.value())},
+      {.action = FaceTextureAction::ProjectCylinder});
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  ASSERT_TRUE(result.value().changed);
+  const auto topology = result.value().documents.front().document.authored_topology();
+  ASSERT_TRUE(topology.ok());
+  bool found_cap = false;
+  const auto position = [&](VertexId id) {
+    const auto found = std::ranges::find(topology.value().vertices, id,
+                                        &AuthoredTopologyVertex::id);
+    EXPECT_NE(found, topology.value().vertices.end());
+    return found == topology.value().vertices.end() ? Vec3{} : found->position;
+  };
+  for (const auto &face : topology.value().faces) {
+    EXPECT_EQ(face.texture_transform, FaceTextureTransform{});
+    ASSERT_EQ(face.uvs.size(), face.vertices.size());
+    const float first_y = position(face.vertices.front()).y;
+    const bool cap = std::ranges::all_of(face.vertices, [&](VertexId id) {
+      return position(id).y == first_y;
+    });
+    found_cap = found_cap || cap;
+    float minimum_u = std::numeric_limits<float>::infinity();
+    float maximum_u = -std::numeric_limits<float>::infinity();
+    for (std::size_t corner = 0U; corner < face.uvs.size(); ++corner) {
+      const auto uv = face.uvs[corner];
+      EXPECT_TRUE(std::isfinite(uv.x));
+      EXPECT_TRUE(std::isfinite(uv.y));
+      minimum_u = std::min(minimum_u, uv.x);
+      maximum_u = std::max(maximum_u, uv.x);
+      if (cap) {
+        EXPECT_GE(uv.x, 0.0F);
+        EXPECT_LE(uv.x, 1.0F);
+        EXPECT_GE(uv.y, 0.0F);
+        EXPECT_LE(uv.y, 1.0F);
+      } else {
+        EXPECT_NEAR(uv.y, position(face.vertices[corner]).y < 0.0F ? 0.0F : 1.0F,
+                    0.0001F);
+      }
+    }
+    if (!cap) {
+      EXPECT_LE(maximum_u - minimum_u, 0.5F);
+    }
+  }
+  EXPECT_TRUE(found_cap);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureSphereProjectionNormalizesEllipsoidAndUsesFanPoleU) {
+  auto created = PolygonDocument::make_sphere(
+      {.width = 4.0F, .height = 6.0F, .depth = 2.0F,
+       .radial_segments = 8, .rings = 4});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto result = prepare_face_texture_action(
+      std::array{texture_action_target(created.value())},
+      {.action = FaceTextureAction::ProjectSphere});
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  ASSERT_TRUE(result.value().changed);
+  const auto topology = result.value().documents.front().document.authored_topology();
+  ASSERT_TRUE(topology.ok());
+  bool found_pole_face = false;
+  const auto position = [&](VertexId id) {
+    const auto found = std::ranges::find(topology.value().vertices, id,
+                                        &AuthoredTopologyVertex::id);
+    EXPECT_NE(found, topology.value().vertices.end());
+    return found == topology.value().vertices.end() ? Vec3{} : found->position;
+  };
+  for (const auto &face : topology.value().faces) {
+    EXPECT_EQ(face.texture_transform, FaceTextureTransform{});
+    ASSERT_EQ(face.uvs.size(), face.vertices.size());
+    std::vector<std::size_t> poles;
+    float minimum_non_pole_u = std::numeric_limits<float>::infinity();
+    float maximum_non_pole_u = -std::numeric_limits<float>::infinity();
+    for (std::size_t corner = 0U; corner < face.uvs.size(); ++corner) {
+      const auto point = position(face.vertices[corner]);
+      const auto uv = face.uvs[corner];
+      EXPECT_TRUE(std::isfinite(uv.x));
+      EXPECT_TRUE(std::isfinite(uv.y));
+      if (std::abs(point.x) < 0.0001F && std::abs(point.z) < 0.0001F) {
+        poles.push_back(corner);
+        EXPECT_NEAR(uv.y, point.y > 0.0F ? 0.0F : 1.0F, 0.0001F);
+      } else {
+        minimum_non_pole_u = std::min(minimum_non_pole_u, uv.x);
+        maximum_non_pole_u = std::max(maximum_non_pole_u, uv.x);
+      }
+    }
+    if (!poles.empty()) {
+      found_pole_face = true;
+      ASSERT_EQ(face.vertices.size(), 3U);
+      const std::size_t pole = poles.front();
+      const std::size_t previous = (pole + face.uvs.size() - 1U) % face.uvs.size();
+      const std::size_t next = (pole + 1U) % face.uvs.size();
+      EXPECT_NEAR(face.uvs[pole].x,
+                  (face.uvs[previous].x + face.uvs[next].x) * 0.5F, 0.0001F);
+    }
+    EXPECT_LE(maximum_non_pole_u - minimum_non_pole_u, 0.5F);
+  }
+  EXPECT_TRUE(found_pole_face);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureSphereProjectionPreservesOccurrenceTextureMapping) {
+  auto created = PolygonDocument::make_sphere(
+      {.width = 4.0F, .height = 6.0F, .depth = 2.0F,
+       .radial_segments = 8, .rings = 4});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  constexpr std::array<Transform3, 6> kSamplingTransforms{{
+      {.origin = {3.0F, -4.0F, 1.0F}},
+      {.x_axis = {2.0F, 0.0F, 0.0F}, .y_axis = {0.0F, 3.0F, 0.0F},
+       .z_axis = {0.0F, 0.0F, 0.5F}, .origin = {3.0F, -4.0F, 1.0F}},
+      {.x_axis = {-1.5F, 0.0F, 0.0F}, .y_axis = {0.0F, 2.0F, 0.0F},
+       .z_axis = {0.0F, 0.0F, 1.0F}, .origin = {3.0F, -4.0F, 1.0F}},
+      {.x_axis = {0.0F, 0.0F, 2.0F}, .y_axis = {0.0F, 3.0F, 0.0F},
+       .z_axis = {-1.0F, 0.0F, 0.0F}, .origin = {5.0F, 7.0F, 11.0F}},
+      {.x_axis = {0.001F, 0.0F, 0.0F},
+       .y_axis = {0.0F, 0.001F, 0.0F},
+       .z_axis = {0.0F, 0.0F, 0.001F}},
+      {.x_axis = {-100.0F, -0.2F, -10.0F},
+       .y_axis = {-10.0F, -1.0F, -30.0F},
+       .z_axis = {-20.0F, -0.1F, -100.0F},
+       .origin = {3.0F, -4.0F, 1.0F}},
+  }};
+  for (std::size_t index = 0; index < kSamplingTransforms.size(); ++index) {
+    SCOPED_TRACE(index);
+    auto target = texture_action_target(created.value());
+    target.sampling_from_local = kSamplingTransforms[index];
+    const auto result = prepare_face_texture_action(
+        std::span<const FaceTextureActionTarget>(&target, 1U),
+        {.action = FaceTextureAction::ProjectSphere});
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_TRUE(result.value().changed);
+    ASSERT_EQ(result.value().documents.size(), 1U);
+    auto repeat_target =
+        texture_action_target(result.value().documents.front().document);
+    repeat_target.sampling_from_local = kSamplingTransforms[index];
+    const auto repeated = prepare_face_texture_action(
+        std::span<const FaceTextureActionTarget>(&repeat_target, 1U),
+        {.action = FaceTextureAction::ProjectSphere});
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.value().changed);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureRoundProjectionsAcceptSelectedPlanarFaceBounds) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {-2.0F, -1.0F, 3.0F}, {2.0F, -1.0F, 3.0F},
+      {2.0F, 1.0F, 3.0F}, {-2.0F, 1.0F, 3.0F},
+  }};
+  auto created = make_texture_action_face(kPoints);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  for (const auto action : {FaceTextureAction::ProjectCylinder,
+                            FaceTextureAction::ProjectSphere}) {
+    SCOPED_TRACE(static_cast<int>(action));
+    const auto result = prepare_face_texture_action(
+        std::array{texture_action_target(created.value())}, {.action = action});
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    ASSERT_TRUE(result.value().changed);
+    const auto topology = result.value().documents.front().document.authored_topology();
+    ASSERT_TRUE(topology.ok());
+    for (const auto uv : topology.value().faces.front().uvs) {
+      EXPECT_TRUE(std::isfinite(uv.x));
+      EXPECT_TRUE(std::isfinite(uv.y));
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
      FaceTextureFitAndJustifyUseCurrentCornerBoundsWithoutChangingOtherAxes) {
   constexpr std::array<Vec3, 4> kPoints{{
       {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},

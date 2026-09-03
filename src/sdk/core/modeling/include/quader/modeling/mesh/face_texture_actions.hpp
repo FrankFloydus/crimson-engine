@@ -41,6 +41,9 @@ enum class FaceTextureAction {
   JustifyTop,
   JustifyBottom,
   JustifyCenter,
+  ProjectCube,
+  ProjectCylinder,
+  ProjectSphere,
 };
 
 /// One selected face and its material's decoded pixel dimensions.

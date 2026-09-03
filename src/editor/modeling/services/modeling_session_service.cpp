@@ -2277,22 +2277,54 @@ public:
 
   ModelingCommandResult apply_face_texture_action(
       const ModelingFaceTextureActionRequest &request) {
-    const ModelingFaceTextureSettings settings = face_texture_settings();
-    if (!settings.editable) {
-      return {.ok = false,
-              .changed = false,
-              .message = settings.disabled_reason.empty()
-                             ? "Select one or more editable faces first."
-                             : settings.disabled_reason};
-    }
-    if (request.selection_token == 0 ||
-        request.selection_token != settings.selection_token) {
-      return {.ok = false,
-              .changed = false,
-              .message = "The face selection changed before the texture action."};
-    }
     if (modeling_face_texture_action_label(request.options.action).empty()) {
       return {.ok = false, .message = "Unknown face texture action."};
+    }
+
+    const bool whole_meshes =
+        modeling_face_texture_action_is_projection(request.options.action) &&
+        selection_mode() == ModelingSelectionMode::Object;
+    ModelingSelectedFaceTextureSnapshot action_selection;
+    if (whole_meshes) {
+      if (sdk_projection_adapter_.preview_active() || transform_drag_active() ||
+          modal_tool_owns_viewport()) {
+        return {.ok = false,
+                .changed = false,
+                .message = "Commit or cancel the active tool or preview before projecting UVs."};
+      }
+      if (request.selection_token == 0 ||
+          request.selection_token != selection_revision()) {
+        return {.ok = false,
+                .changed = false,
+                .message = "The mesh selection changed before the UV projection."};
+      }
+      action_selection =
+          sdk_projection_adapter_.selected_face_texture_settings(true);
+      if (!action_selection.command.ok) {
+        return action_selection.command;
+      }
+      if (action_selection.objects.empty()) {
+        return {.ok = false,
+                .changed = false,
+                .message = "Select one or more editable meshes first."};
+      }
+    } else {
+      const ModelingFaceTextureSettings settings = face_texture_settings();
+      if (!settings.editable) {
+        return {.ok = false,
+                .changed = false,
+                .message = settings.disabled_reason.empty()
+                               ? "Select one or more editable faces first."
+                               : settings.disabled_reason};
+      }
+      if (request.selection_token == 0 ||
+          request.selection_token != settings.selection_token) {
+        return {.ok = false,
+                .changed = false,
+                .message =
+                    "The face selection changed before the texture action."};
+      }
+      action_selection = face_texture_selection_cache_;
     }
 
     const ModelingInstanceEditScope scope =
@@ -2303,8 +2335,8 @@ public:
     options.active_target_key = 0;
     options.active_face = {};
     std::vector<ModelingFaceTextureActionTarget> targets;
-    targets.reserve(face_texture_selection_cache_.objects.size());
-    for (const auto &object : face_texture_selection_cache_.objects) {
+    targets.reserve(action_selection.objects.size());
+    for (const auto &object : action_selection.objects) {
       const auto world = modeling_object_world_transform(object.modeling_object_id);
       const EntityId occurrence =
           scope.active() && scene_.containing_instance_definition(object.entity) ==
@@ -2349,7 +2381,8 @@ public:
         face_texture_context_.record_applied_rotation_delta(options.rotation_degrees);
       } else if (options.action == ModelingFaceTextureAction::RotateCounterClockwise) {
         face_texture_context_.record_applied_rotation_delta(-options.rotation_degrees);
-      } else if (options.action == ModelingFaceTextureAction::AlignToGrid) {
+      } else if (options.action == ModelingFaceTextureAction::AlignToGrid ||
+                 modeling_face_texture_action_is_projection(options.action)) {
         face_texture_context_.invalidate();
       }
       auto &repeat = history_bridge_.repeat_last_action();
@@ -5363,9 +5396,15 @@ public:
         return {false, false, "No repeatable texture action is available."};
       }
       const quader_editor_core::RepeatLastActionState repeated_action = repeat;
+      const std::uint64_t selection_token =
+          modeling_face_texture_action_is_projection(
+              repeat.last_face_texture->action) &&
+                  selection_mode() == ModelingSelectionMode::Object
+              ? selection_revision()
+              : face_texture_settings().selection_token;
       const ModelingCommandResult result = apply_face_texture_action({
           .options = *repeat.last_face_texture,
-          .selection_token = face_texture_settings().selection_token,
+          .selection_token = selection_token,
       });
       repeat = repeated_action;
       return {.ok = result.ok, .changed = result.changed, .message = result.message};

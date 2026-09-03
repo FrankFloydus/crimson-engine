@@ -545,6 +545,18 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                Fixture::TextureFaceSelection,
                kTextureDomains, Outcome::ChangeRequired,
                UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kModelingTextureProjectCube,
+               Fixture::TextureFaceSelection,
+               kTextureDomains, Outcome::ChangeRequired,
+               UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kModelingTextureProjectCylinder,
+               Fixture::TextureFaceSelection,
+               kTextureDomains, Outcome::ChangeRequired,
+               UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kModelingTextureProjectSphere,
+               Fixture::TextureFaceSelection,
+               kTextureDomains, Outcome::ChangeRequired,
+               UndoRepeat::UndoableAndRepeatable),
       contract(quader_command::kModelingTextureScaleXUp,
                Fixture::TextureFaceSelection,
                kTextureDomains, Outcome::ChangeRequired,
@@ -729,9 +741,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 197U);
+  static_assert(std::size(kContracts) == 200U);
 #else
-  static_assert(std::size(kContracts) == 198U);
+  static_assert(std::size(kContracts) == 201U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

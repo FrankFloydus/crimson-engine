@@ -8428,3 +8428,33 @@ Verification: 15 focused input/gizmo/Curve tests, 16 Move runtime tests, and two
 guardrails pass. The repository-selected affected workflow passes, and the mandatory regression
 gate passes all six registered CTest targets, including the 2,117-test app suite (three opt-in
 stress tests skipped) and the isolated SDK configure/build.
+
+## 2026-09-03 - Primitive UV projection supports Mesh and Face scope
+
+- `FaceTextureAction` owns deterministic Cube, Cylinder, and Sphere projection in the portable
+  modeling core. Cube uses dominant-normal planes normalized by the selected target-local maximum
+  extent. Cylinder and Sphere are Y-up, normalize nonuniform local bounds, repair each face across
+  the longitude branch, and define stable planar-selection fallbacks; Cylinder maps axial caps
+  planarly and Sphere fans pole U from adjacent regular corners. Projection materializes per-corner
+  UVs and resets the authored face texture transform.
+- Quader's Mesh selection mode is internally `ModelingSelectionMode::Object`. In that mode the
+  native adapter explicitly supplies every face of each selected polygon mesh; Face mode supplies
+  only selected faces. It never changes component selection to obtain whole-mesh scope. Existing
+  non-projection texture actions remain Face-only.
+- Public commands `modeling.texture.project_cube`, `project_cylinder`, and `project_sphere` are
+  available through `UV -> Projection`, are unassigned by default, and reuse the atomic texture
+  publication, clone-on-write, history, undo/redo, and repeat pipeline. Mesh-mode requests validate
+  the object-selection revision while Face-mode requests retain the face-texture selection token.
+- No third-party library is warranted for these elementary projections. Keep xatlas as a possible
+  future private implementation for automatic chart generation and packing, not primitive mapping.
+- Explicit UV edits must preserve the scene-owned texture-lock/occurrence sampling transform;
+  clearing or baking it would break shared instance occurrences. The inverse UV solve validates
+  float reconstruction with a condition- and intermediate-magnitude-aware tolerance capped at
+  `0.0005`, because supported `0.001` object scale can otherwise create a false rejection from
+  harmless cancellation roundoff on sphere pole faces. Singular and materially inaccurate solves
+  remain rejected.
+
+Verification: all 38 focused SDK face-texture tests pass, Mesh- and Face-mode public command tests
+pass, and the mandatory regression gate passes all six registered CTest entries, including the
+2,119-test app suite and isolated SDK configure/build. Both canonical Debug/Profile and Release
+executables build successfully.

@@ -338,7 +338,13 @@ std::string menu_command_localization_key(QuaderCommandId command_id) {
     QuaderCommandId command_id;
     std::string_view localization_key;
   };
-  static constexpr std::array<UvMenuLabel, 15> kUvMenuLabels{{
+  static constexpr std::array<UvMenuLabel, 18> kUvMenuLabels{{
+      {quader_command::kModelingTextureProjectCube,
+       "ui.menu.uv.projection.cube"},
+      {quader_command::kModelingTextureProjectCylinder,
+       "ui.menu.uv.projection.cylinder"},
+      {quader_command::kModelingTextureProjectSphere,
+       "ui.menu.uv.projection.sphere"},
       {quader_command::kModelingTextureAlignToGrid,
        "ui.menu.uv.align.to_grid"},
       {quader_command::kModelingTextureAlignToFace,
@@ -407,7 +413,8 @@ bool presentation_domain_matches_selection(
     return selection_mode == ModelingSelectionMode::Face;
   case CommandPresentationDomain::UV:
     return selection_mode == ModelingSelectionMode::Edge ||
-           selection_mode == ModelingSelectionMode::Face;
+           selection_mode == ModelingSelectionMode::Face ||
+           selection_mode == ModelingSelectionMode::Object;
   default:
     return true;
   }
@@ -1191,6 +1198,10 @@ struct QtMainMenu::Impl {
     (void)add_presented_rank_range(
         *menu, CommandPresentationDomain::UV,
         CommandPresentationGroup::Texture, 500u, 500u);
+    (void)add_presented_rank_range_submenu(
+        *menu, "ui.menu.uv.projection", "Projection", "menu_uv_projection",
+        CommandPresentationDomain::UV, CommandPresentationGroup::Texture, 501u,
+        503u);
     menu->addSeparator();
     (void)add_presented_rank_range_submenu(
         *menu, "ui.menu.uv.align", "Align", "menu_uv_align",

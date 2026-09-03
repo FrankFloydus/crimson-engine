@@ -44,6 +44,8 @@ using quader_geometry::QVec3d;
 
 constexpr float kTextureDensity =
     quader_poly::document_internal::kGeneratedUvTilesPerWorldUnit;
+constexpr double kPi = 3.141592653589793238462643383279502884;
+constexpr double kTau = 2.0 * kPi;
 
 [[nodiscard]] QVec3 native_vector(Vec3 value) {
   return {value.x, value.y, value.z};
@@ -726,7 +728,7 @@ struct TextureAffine {
       target.sampling);
   if (!base.has_value()) {
     return face_error(face,
-        "This projection cannot preserve the occurrence texture mapping.");
+        "The current texture-lock mapping is too distorted to apply this UV edit accurately.");
   }
   if (desired_transform == face.face->texture_transform &&
       std::ranges::equal(*base, face.face->uvs, [](QVec2 left, QVec2 right) {
@@ -925,6 +927,300 @@ struct TextureAffine {
         base, desired_transform));
   }
   return set_effective_uvs(target, face, desired, desired_transform);
+}
+
+/// Target-local bounds of exactly the faces included in one projection request.
+struct ProjectionBounds {
+  double min_x = std::numeric_limits<double>::infinity();
+  double min_y = std::numeric_limits<double>::infinity();
+  double min_z = std::numeric_limits<double>::infinity();
+  double max_x = -std::numeric_limits<double>::infinity();
+  double max_y = -std::numeric_limits<double>::infinity();
+  double max_z = -std::numeric_limits<double>::infinity();
+
+  void include(QVec3 point) {
+    min_x = std::min(min_x, static_cast<double>(point.x));
+    min_y = std::min(min_y, static_cast<double>(point.y));
+    min_z = std::min(min_z, static_cast<double>(point.z));
+    max_x = std::max(max_x, static_cast<double>(point.x));
+    max_y = std::max(max_y, static_cast<double>(point.y));
+    max_z = std::max(max_z, static_cast<double>(point.z));
+  }
+
+  [[nodiscard]] double extent_x() const { return max_x - min_x; }
+  [[nodiscard]] double extent_y() const { return max_y - min_y; }
+  [[nodiscard]] double extent_z() const { return max_z - min_z; }
+  [[nodiscard]] double largest_extent() const {
+    return std::max({extent_x(), extent_y(), extent_z()});
+  }
+  [[nodiscard]] double center_x() const { return (min_x + max_x) * 0.5; }
+  [[nodiscard]] double center_y() const { return (min_y + max_y) * 0.5; }
+  [[nodiscard]] double center_z() const { return (min_z + max_z) * 0.5; }
+};
+
+[[nodiscard]] bool usable_extent(double extent) {
+  return std::isfinite(extent) && extent > 0.0;
+}
+
+[[nodiscard]] double projection_extent(double extent,
+                                       const ProjectionBounds &bounds) {
+  return usable_extent(extent) ? extent : bounds.largest_extent();
+}
+
+[[nodiscard]] bool cylinder_cap(const FaceWork &face) {
+  const double vertical = std::abs(static_cast<double>(face.normal.y));
+  const double horizontal = std::max(
+      std::abs(static_cast<double>(face.normal.x)),
+      std::abs(static_cast<double>(face.normal.z)));
+  constexpr double kAxisTolerance =
+      64.0 * std::numeric_limits<float>::epsilon();
+  return vertical > 0.0 && horizontal <= kAxisTolerance * vertical;
+}
+
+[[nodiscard]] double longitude_u(double normalized_x, double normalized_z) {
+  double result = std::atan2(normalized_z, normalized_x) / kTau;
+  if (result < 0.0) {
+    result += 1.0;
+  }
+  return result;
+}
+
+/// Keeps a face crossing the longitude branch from spanning almost a full map.
+[[nodiscard]] bool correct_longitude_branch(
+    std::vector<QVec2> &uvs, std::span<const std::uint8_t> pole_corners = {}) {
+  double minimum = std::numeric_limits<double>::infinity();
+  double maximum = -std::numeric_limits<double>::infinity();
+  bool found = false;
+  for (std::size_t corner = 0U; corner < uvs.size(); ++corner) {
+    if (!pole_corners.empty() && pole_corners[corner] != 0U) {
+      continue;
+    }
+    if (!finite(uvs[corner])) {
+      return false;
+    }
+    minimum = std::min(minimum, static_cast<double>(uvs[corner].x));
+    maximum = std::max(maximum, static_cast<double>(uvs[corner].x));
+    found = true;
+  }
+  if (!found) {
+    return false;
+  }
+  if (maximum - minimum > 0.5) {
+    for (std::size_t corner = 0U; corner < uvs.size(); ++corner) {
+      if ((!pole_corners.empty() && pole_corners[corner] != 0U) ||
+          uvs[corner].x >= 0.5F) {
+        continue;
+      }
+      uvs[corner].x += 1.0F;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] std::optional<Error> apply_cube_projection(
+    TargetWork &target, const FaceWork &face, const ProjectionBounds &bounds) {
+  const double extent =
+      bounds.largest_extent();
+  if (!usable_extent(extent)) {
+    return face_error(face, "Cube projection requires non-collapsed bounds.");
+  }
+  std::vector<QVec2> desired;
+  desired.reserve(face.local_positions.size());
+  const double scale = 1.0 / (static_cast<double>(kTextureDensity) * extent);
+  for (const auto position : face.local_positions) {
+    const QVec3 centered{
+        static_cast<float>(static_cast<double>(position.x) - bounds.center_x()),
+        static_cast<float>(static_cast<double>(position.y) - bounds.center_y()),
+        static_cast<float>(static_cast<double>(position.z) - bounds.center_z())};
+    const auto planar = quader_poly::generated_texture_uv(centered, face.normal);
+    const QVec2 projected{
+        static_cast<float>(0.5 + static_cast<double>(planar.x) * scale),
+        static_cast<float>(0.5 + static_cast<double>(planar.y) * scale)};
+    if (!finite(projected)) {
+      return face_error(face, "Cube projection produced non-finite coordinates.");
+    }
+    desired.push_back(projected);
+  }
+  return set_effective_uvs(target, face, desired, NativeTextureTransform{});
+}
+
+[[nodiscard]] std::optional<Error> apply_cylinder_projection(
+    TargetWork &target, const FaceWork &face, const ProjectionBounds &bounds) {
+  const double largest_extent = bounds.largest_extent();
+  if (!usable_extent(largest_extent)) {
+    return face_error(
+        face, "Cylinder projection requires non-collapsed selected geometry.");
+  }
+  const double extent_x = projection_extent(bounds.extent_x(), bounds);
+  const double extent_y = projection_extent(bounds.extent_y(), bounds);
+  const double extent_z = projection_extent(bounds.extent_z(), bounds);
+  const bool cap = cylinder_cap(face);
+  const double radius_x = extent_x * 0.5;
+  const double radius_z = extent_z * 0.5;
+  std::vector<QVec2> desired;
+  desired.reserve(face.local_positions.size());
+  for (const auto position : face.local_positions) {
+    const double normalized_x =
+        (static_cast<double>(position.x) - bounds.center_x()) / radius_x;
+    const double normalized_z =
+        (static_cast<double>(position.z) - bounds.center_z()) / radius_z;
+    QVec2 projected;
+    if (cap) {
+      projected = {
+          static_cast<float>(0.5 + normalized_x * 0.5),
+          static_cast<float>(0.5 + normalized_z * 0.5 *
+                                       (face.normal.y >= 0.0F ? 1.0 : -1.0))};
+    } else {
+      const double radius_squared =
+          normalized_x * normalized_x + normalized_z * normalized_z;
+      double longitude_x = normalized_x;
+      double longitude_z = normalized_z;
+      if (!std::isfinite(radius_squared)) {
+        return face_error(face, "Cylinder projection radius is non-finite.");
+      }
+      if (radius_squared <= 0.0) {
+        longitude_x = static_cast<double>(face.normal.x);
+        longitude_z = static_cast<double>(face.normal.z);
+        if (longitude_x == 0.0 && longitude_z == 0.0) {
+          longitude_x = 1.0;
+        }
+      }
+      projected = {
+          static_cast<float>(longitude_u(longitude_x, longitude_z)),
+          static_cast<float>((static_cast<double>(position.y) - bounds.min_y) /
+                             extent_y)};
+    }
+    if (!finite(projected)) {
+      return face_error(
+          face, "Cylinder projection produced non-finite coordinates.");
+    }
+    desired.push_back(projected);
+  }
+  if (!cap && !correct_longitude_branch(desired)) {
+    return face_error(face, "Cylinder longitude correction is invalid.");
+  }
+  return set_effective_uvs(target, face, desired, NativeTextureTransform{});
+}
+
+[[nodiscard]] std::optional<Error> apply_sphere_projection(
+    TargetWork &target, const FaceWork &face, const ProjectionBounds &bounds) {
+  const double largest_extent = bounds.largest_extent();
+  if (!usable_extent(largest_extent)) {
+    return face_error(
+        face, "Sphere projection requires non-collapsed selected geometry.");
+  }
+  const double extent_x = projection_extent(bounds.extent_x(), bounds);
+  const double extent_y = projection_extent(bounds.extent_y(), bounds);
+  const double extent_z = projection_extent(bounds.extent_z(), bounds);
+  const double radius_x = extent_x * 0.5;
+  const double radius_y = extent_y * 0.5;
+  const double radius_z = extent_z * 0.5;
+  std::vector<QVec2> desired;
+  std::vector<std::uint8_t> poles;
+  desired.reserve(face.local_positions.size());
+  poles.reserve(face.local_positions.size());
+  constexpr double kPoleTolerance =
+      64.0 * std::numeric_limits<float>::epsilon();
+  for (const auto position : face.local_positions) {
+    const double normalized_x =
+        (static_cast<double>(position.x) - bounds.center_x()) / radius_x;
+    const double normalized_y =
+        (static_cast<double>(position.y) - bounds.center_y()) / radius_y;
+    const double normalized_z =
+        (static_cast<double>(position.z) - bounds.center_z()) / radius_z;
+    double direction_x = normalized_x;
+    double direction_y = normalized_y;
+    double direction_z = normalized_z;
+    double length_squared = direction_x * direction_x +
+                            direction_y * direction_y +
+                            direction_z * direction_z;
+    if (!std::isfinite(length_squared)) {
+      return face_error(face, "Sphere projection radius is non-finite.");
+    }
+    if (length_squared <= 0.0) {
+      direction_x = static_cast<double>(face.normal.x);
+      direction_y = static_cast<double>(face.normal.y);
+      direction_z = static_cast<double>(face.normal.z);
+      length_squared = direction_x * direction_x + direction_y * direction_y +
+                       direction_z * direction_z;
+    }
+    const double length = std::sqrt(length_squared);
+    const double radial = std::hypot(direction_x, direction_z);
+    const bool pole = radial <= kPoleTolerance * length;
+    const double u = pole ? 0.0 : longitude_u(direction_x, direction_z);
+    const double v = std::acos(std::clamp(direction_y / length, -1.0, 1.0)) /
+                     kPi;
+    const QVec2 projected{static_cast<float>(u), static_cast<float>(v)};
+    if (!finite(projected)) {
+      return face_error(
+          face, "Sphere projection produced non-finite coordinates.");
+    }
+    desired.push_back(projected);
+    poles.push_back(pole ? 1U : 0U);
+  }
+  if (!correct_longitude_branch(desired, poles)) {
+    return face_error(face, "Sphere longitude correction is invalid.");
+  }
+  for (std::size_t pole = 0U; pole < poles.size(); ++pole) {
+    if (poles[pole] == 0U) {
+      continue;
+    }
+    std::optional<std::size_t> previous;
+    std::optional<std::size_t> next;
+    for (std::size_t distance = 1U; distance < poles.size(); ++distance) {
+      const std::size_t candidate = (pole + poles.size() - distance) % poles.size();
+      if (poles[candidate] == 0U) {
+        previous = candidate;
+        break;
+      }
+    }
+    for (std::size_t distance = 1U; distance < poles.size(); ++distance) {
+      const std::size_t candidate = (pole + distance) % poles.size();
+      if (poles[candidate] == 0U) {
+        next = candidate;
+        break;
+      }
+    }
+    if (!previous.has_value() || !next.has_value()) {
+      return face_error(face, "Sphere pole has no usable fan neighbors.");
+    }
+    desired[pole].x =
+        (desired[*previous].x + desired[*next].x) * 0.5F;
+  }
+  return set_effective_uvs(target, face, desired, NativeTextureTransform{});
+}
+
+[[nodiscard]] std::optional<Error> apply_projection(
+    std::vector<TargetWork> &targets, std::span<const FaceWork> faces,
+    FaceTextureAction action) {
+  std::vector<ProjectionBounds> bounds(targets.size());
+  for (const auto &face : faces) {
+    for (const auto position : face.local_positions) {
+      bounds[face.target_index].include(position);
+    }
+  }
+  for (const auto &face : faces) {
+    auto &target = targets[face.target_index];
+    std::optional<Error> error;
+    switch (action) {
+    case FaceTextureAction::ProjectCube:
+      error = apply_cube_projection(target, face, bounds[face.target_index]);
+      break;
+    case FaceTextureAction::ProjectCylinder:
+      error = apply_cylinder_projection(target, face, bounds[face.target_index]);
+      break;
+    case FaceTextureAction::ProjectSphere:
+      error = apply_sphere_projection(target, face, bounds[face.target_index]);
+      break;
+    default:
+      return make_error(ErrorCode::UnsupportedOperation,
+                        "The texture action is not a projection.");
+    }
+    if (error.has_value()) {
+      return error;
+    }
+  }
+  return std::nullopt;
 }
 
 [[nodiscard]] bool self_intersects(const NativeDocument &document,
@@ -1145,13 +1441,72 @@ struct TextureAffine {
 }
 
 [[nodiscard]] bool bounds_action(FaceTextureAction action) {
-  return action >= FaceTextureAction::FitBoth &&
-         action <= FaceTextureAction::JustifyCenter;
+  switch (action) {
+  case FaceTextureAction::FitBoth:
+  case FaceTextureAction::FitX:
+  case FaceTextureAction::FitY:
+  case FaceTextureAction::JustifyLeft:
+  case FaceTextureAction::JustifyRight:
+  case FaceTextureAction::JustifyTop:
+  case FaceTextureAction::JustifyBottom:
+  case FaceTextureAction::JustifyCenter:
+    return true;
+  default:
+    return false;
+  }
+}
+
+[[nodiscard]] bool alignment_action(FaceTextureAction action) {
+  return action == FaceTextureAction::AlignToGrid ||
+         action == FaceTextureAction::AlignToFace ||
+         action == FaceTextureAction::AlignToView;
+}
+
+[[nodiscard]] bool projection_action(FaceTextureAction action) {
+  return action == FaceTextureAction::ProjectCube ||
+         action == FaceTextureAction::ProjectCylinder ||
+         action == FaceTextureAction::ProjectSphere;
 }
 
 [[nodiscard]] bool geometry_action(FaceTextureAction action) {
   return action == FaceTextureAction::FlipFaceHorizontal ||
          action == FaceTextureAction::FlipFaceVertical;
+}
+
+[[nodiscard]] bool valid_action(FaceTextureAction action) {
+  switch (action) {
+  case FaceTextureAction::AlignToGrid:
+  case FaceTextureAction::AlignToFace:
+  case FaceTextureAction::AlignToView:
+  case FaceTextureAction::ScaleXUp:
+  case FaceTextureAction::ScaleXDown:
+  case FaceTextureAction::ScaleYUp:
+  case FaceTextureAction::ScaleYDown:
+  case FaceTextureAction::ShiftLeft:
+  case FaceTextureAction::ShiftRight:
+  case FaceTextureAction::ShiftUp:
+  case FaceTextureAction::ShiftDown:
+  case FaceTextureAction::RotateClockwise:
+  case FaceTextureAction::RotateCounterClockwise:
+  case FaceTextureAction::FlipTextureHorizontal:
+  case FaceTextureAction::FlipTextureVertical:
+  case FaceTextureAction::FlipFaceHorizontal:
+  case FaceTextureAction::FlipFaceVertical:
+  case FaceTextureAction::FitBoth:
+  case FaceTextureAction::FitX:
+  case FaceTextureAction::FitY:
+  case FaceTextureAction::JustifyLeft:
+  case FaceTextureAction::JustifyRight:
+  case FaceTextureAction::JustifyTop:
+  case FaceTextureAction::JustifyBottom:
+  case FaceTextureAction::JustifyCenter:
+  case FaceTextureAction::ProjectCube:
+  case FaceTextureAction::ProjectCylinder:
+  case FaceTextureAction::ProjectSphere:
+    return true;
+  default:
+    return false;
+  }
 }
 
 [[nodiscard]] Result<PreparedFaceTextureAction> prepare_texture_documents(
@@ -1198,8 +1553,7 @@ Result<PreparedFaceTextureAction> prepare_face_texture_action(
   const auto fail = [](Error error) {
     return Result<PreparedFaceTextureAction>::failure(std::move(error));
   };
-  if (options.action < FaceTextureAction::AlignToGrid ||
-      options.action > FaceTextureAction::JustifyCenter) {
+  if (!valid_action(options.action)) {
     return fail(make_error(ErrorCode::InvalidArgument, "Unknown face texture action."));
   }
   if ((options.action == FaceTextureAction::RotateClockwise ||
@@ -1267,7 +1621,11 @@ Result<PreparedFaceTextureAction> prepare_face_texture_action(
            std::pair{targets[right.target_index].target->key, right.requested.face};
   });
   const auto &reference = active == faces.end() ? *fallback : *active;
-  if (geometry_action(options.action)) {
+  if (projection_action(options.action)) {
+    if (auto error = apply_projection(targets, faces, options.action)) {
+      return fail(std::move(*error));
+    }
+  } else if (geometry_action(options.action)) {
     if (auto error = apply_geometry_mirror(targets, faces, reference, options)) {
       return fail(std::move(*error));
     }
@@ -1280,7 +1638,7 @@ Result<PreparedFaceTextureAction> prepare_face_texture_action(
     for (const auto &face : faces) {
       auto &target = targets[face.target_index];
       std::optional<Error> error;
-      if (options.action <= FaceTextureAction::AlignToView) {
+      if (alignment_action(options.action)) {
         error = apply_alignment(target, face, options);
       } else if (bounds_action(options.action)) {
         error = apply_individual_bounds(target, face, options.action);

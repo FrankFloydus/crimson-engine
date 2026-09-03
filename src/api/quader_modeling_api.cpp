@@ -112,6 +112,12 @@ to_modeling_face_texture_action(QuaderFaceTextureAction action) {
     return ModelingFaceTextureAction::AlignToFace;
   case QuaderFaceTextureAction::AlignToView:
     return ModelingFaceTextureAction::AlignToView;
+  case QuaderFaceTextureAction::ProjectCube:
+    return ModelingFaceTextureAction::ProjectCube;
+  case QuaderFaceTextureAction::ProjectCylinder:
+    return ModelingFaceTextureAction::ProjectCylinder;
+  case QuaderFaceTextureAction::ProjectSphere:
+    return ModelingFaceTextureAction::ProjectSphere;
   case QuaderFaceTextureAction::ScaleXUp:
     return ModelingFaceTextureAction::ScaleXUp;
   case QuaderFaceTextureAction::ScaleXDown:
