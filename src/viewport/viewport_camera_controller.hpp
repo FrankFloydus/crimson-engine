@@ -168,6 +168,13 @@ public:
     project_visible_world_segment(QVec3 start, QVec3 end) const;
     bool is_dragging() const { return drag_mode_ != ViewportDragMode::None; }
     bool orthographic_view_locked() const { return orthographic_view_locked_; }
+    /**
+     * Reports whether the current orthographic projection came from the
+     * temporary Alt-orbit snap rather than an explicit view-axis request.
+     */
+    bool orbit_snap_orthographic_projection() const {
+      return orbit_snap_orthographic_projection_;
+    }
 
   private:
     QVec3 forward() const;
@@ -207,6 +214,7 @@ public:
     QVec2 last_mouse_ = {};
     ViewportDragMode drag_mode_ = ViewportDragMode::None;
     bool orthographic_view_locked_ = false;
+    bool orbit_snap_orthographic_projection_ = false;
     ViewportCameraPose orbit_snap_source_pose_ = {};
     bool has_orbit_snap_source_ = false;
 };

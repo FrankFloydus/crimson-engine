@@ -366,6 +366,7 @@ void ViewportCameraController::begin_drag(
     sync_perspective_distance_from_orthographic_zoom(state_);
     state_.projection = ViewportProjection::Perspective;
     orthographic_view_locked_ = false;
+    orbit_snap_orthographic_projection_ = false;
     if (converting_from_orthographic) {
       ensure_perspective_target_within_clip_range();
       establish_zoom_envelope_from_current_view();
@@ -395,6 +396,7 @@ void ViewportCameraController::update_drag_delta(QVec2 delta,
     // because that would move the camera even though no orbit is allowed.
     drag_mode_ = mode;
     state_.projection = ViewportProjection::Orthographic;
+    orbit_snap_orthographic_projection_ = false;
     pending_navigation_anchor_.reset();
     pending_navigation_anchor_repair_only_ = false;
     orbit_anchor_.reset();
@@ -434,6 +436,7 @@ void ViewportCameraController::update_drag_delta(QVec2 delta) {
       (drag_mode_ == ViewportDragMode::Orbit ||
        drag_mode_ == ViewportDragMode::OrbitSnap)) {
     state_.projection = ViewportProjection::Orthographic;
+    orbit_snap_orthographic_projection_ = false;
     pending_navigation_anchor_.reset();
     pending_navigation_anchor_repair_only_ = false;
     orbit_anchor_.reset();
@@ -496,9 +499,11 @@ void ViewportCameraController::update_drag_delta(QVec2 delta) {
       state_.projection = ViewportProjection::Orthographic;
       state_.orthographic_size = snapped_orthographic_size;
       orthographic_view_locked_ = false;
+      orbit_snap_orthographic_projection_ = true;
     } else {
       state_.projection = ViewportProjection::Perspective;
       orthographic_view_locked_ = false;
+      orbit_snap_orthographic_projection_ = false;
     }
     if (converting_from_orthographic &&
         state_.projection == ViewportProjection::Perspective) {
@@ -530,6 +535,7 @@ void ViewportCameraController::update_drag_delta(QVec2 delta) {
                             state_.distance);
     state_.projection = ViewportProjection::Perspective;
     orthographic_view_locked_ = false;
+    orbit_snap_orthographic_projection_ = false;
     clear_orbit_snap_source();
   }
   apply_clip_plane_constraints();
@@ -695,6 +701,7 @@ bool ViewportCameraController::focus_optional_bounds(
 void ViewportCameraController::view_axis(ViewportViewAxis axis, int sign,
                                           ViewportAxisLock lock) {
   clear_orbit_snap_source();
+  orbit_snap_orthographic_projection_ = false;
   pending_navigation_anchor_.reset();
   pending_navigation_anchor_repair_only_ = false;
   orbit_anchor_.reset();
@@ -714,6 +721,7 @@ void ViewportCameraController::view_axis(ViewportViewAxis axis, int sign,
 void ViewportCameraController::unlock_orthographic_view() {
   clear_orbit_snap_source();
   orthographic_view_locked_ = false;
+  orbit_snap_orthographic_projection_ = false;
   if (state_.projection == ViewportProjection::Orthographic) {
     sync_perspective_distance_from_orthographic_zoom(state_);
     state_.projection = ViewportProjection::Perspective;
@@ -725,6 +733,7 @@ void ViewportCameraController::unlock_orthographic_view() {
 
 void ViewportCameraController::set_view_direction(QVec3 forward_direction) {
   clear_orbit_snap_source();
+  orbit_snap_orthographic_projection_ = false;
   pending_navigation_anchor_.reset();
   pending_navigation_anchor_repair_only_ = false;
   orbit_anchor_.reset();
@@ -846,6 +855,7 @@ bool ViewportCameraController::restore_perspective_pose(
   state_.target = camera_pose.target;
   state_.distance = distance;
   state_.projection = ViewportProjection::Perspective;
+  orbit_snap_orthographic_projection_ = false;
   transient_far_plane_floor_ = 0.0f;
   pivot_ = state_.target;
   pending_navigation_anchor_.reset();

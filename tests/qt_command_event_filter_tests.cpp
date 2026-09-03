@@ -11,6 +11,7 @@
 #include "editor/session/project_session.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "ui/qt_command_event_filter.hpp"
+#include "ui/qt_viewport_surface.hpp"
 
 #include <QApplication>
 #include <QComboBox>
@@ -26,6 +27,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 
 namespace {
 
@@ -285,6 +287,63 @@ TEST(QtCommandEventFilterTests,
 
   application.removeEventFilter(&command_filter);
   auxiliary_window.hide();
+}
+
+TEST(QtCommandEventFilterTests,
+     ViewportFocusedSaveCompletesBeforeAFollowingWindowCloseCheck) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-command-viewport-save-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  application.setQuitOnLastWindowClosed(false);
+
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const std::filesystem::path scene_path =
+      std::filesystem::path(temporary.path().toStdWString()) /
+      "viewport-save.qdr";
+
+  quader::QuaderStandaloneEditor standalone =
+      quader::create_standalone_editor();
+  quader::QuaderEditorApi &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto initial = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Initial Saved Object");
+  ASSERT_TRUE(initial.ok()) << initial.error_message();
+  const std::optional<quader::SceneSessionId> scene_id =
+      editor.scene_documents().active_scene_id();
+  ASSERT_TRUE(scene_id.has_value());
+  ASSERT_TRUE(
+      editor.scene_documents().save_as_native_path(*scene_id, scene_path).ok());
+  ASSERT_FALSE(editor.project().dirty());
+
+  const auto unsaved = editor.modeling().create_box(
+      {.min = {2.0f, -1.0f, -1.0f}, .max = {4.0f, 1.0f, 1.0f}},
+      "Unsaved Viewport Object");
+  ASSERT_TRUE(unsaved.ok()) << unsaved.error_message();
+  ASSERT_TRUE(editor.project().dirty());
+
+  quader::QtCommandEventFilter command_filter(editor, {});
+  application.installEventFilter(&command_filter);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+
+  QKeyEvent save_event(QEvent::KeyPress, Qt::Key_S, Qt::ControlModifier,
+                       QStringLiteral("s"));
+  QCoreApplication::sendEvent(&surface, &save_event);
+
+  EXPECT_FALSE(editor.project().dirty())
+      << "Ctrl+S must finish synchronously before a following close event";
+  EXPECT_TRUE(std::filesystem::exists(scene_path));
+  const quader::QtViewportInputFrame queued_input =
+      surface.take_input_frame(0.0f, false);
+  EXPECT_TRUE(queued_input.input.pressed_input_chords.empty())
+      << "the synchronously dispatched global command must not run again on "
+         "the next viewport frame";
+
+  application.removeEventFilter(&command_filter);
 }
 
 TEST(QtCommandEventFilterTests,

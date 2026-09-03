@@ -7878,6 +7878,39 @@ TEST(ViewportWorkspaceServiceTests,
 }
 
 TEST(ViewportWorkspaceServiceTests,
+     OrbitSnapKeepsPerspectiveShadingUntilAnExplicitViewSwitch) {
+  ViewportWorkspaceService workspace;
+  constexpr ViewportPaneId kPane = ViewportPaneId::Perspective;
+  ASSERT_TRUE(
+      workspace.set_shading_mode(kPane, ViewportShadingMode::Normal));
+  ViewportCameraController &camera = workspace.camera(kPane);
+  camera.focus_origin(8.0f);
+  camera.set_view_direction({0.02f, 0.0f, -1.0f});
+
+  camera.begin_drag({100.0f, 100.0f}, ViewportDragMode::OrbitSnap);
+  camera.update_drag({101.0f, 100.0f});
+  camera.end_drag();
+
+  ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+  ASSERT_TRUE(camera.orbit_snap_orthographic_projection());
+  EXPECT_EQ(workspace.shading_mode(kPane), ViewportShadingMode::Normal);
+  ASSERT_TRUE(
+      workspace.set_shading_mode(kPane, ViewportShadingMode::Albedo));
+
+  const ViewportView snapped_view = workspace.view(kPane);
+  ASSERT_NE(snapped_view, ViewportView::Perspective);
+  ASSERT_TRUE(workspace.set_view(kPane, snapped_view))
+      << "choosing the already-snapped axis explicitly must make it a manual "
+         "orthographic view";
+  EXPECT_FALSE(camera.orbit_snap_orthographic_projection());
+  EXPECT_TRUE(camera.orthographic_view_locked());
+  EXPECT_EQ(workspace.shading_mode(kPane), ViewportShadingMode::Wireframe);
+
+  ASSERT_TRUE(workspace.set_view(kPane, ViewportView::Perspective));
+  EXPECT_EQ(workspace.shading_mode(kPane), ViewportShadingMode::Albedo);
+}
+
+TEST(ViewportWorkspaceServiceTests,
      LocalVisibilityCameraRestoreKeepsBothProjectionShadingChoices) {
   ViewportWorkspaceService workspace;
   ASSERT_TRUE(
@@ -8954,12 +8987,14 @@ TEST(ViewportCameraTests, OrbitSnapUsesRuntimeOrthogonalSnap) {
   EXPECT_NEAR(forward.z, -1.0f, 0.001f);
   EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
   EXPECT_FALSE(camera.orthographic_view_locked());
+  EXPECT_TRUE(camera.orbit_snap_orthographic_projection());
   EXPECT_GT(camera.state().orthographic_size, 0.0f);
 
   camera.begin_drag({100.0f, 100.0f}, ViewportDragMode::Orbit);
   camera.update_drag({118.0f, 100.0f});
   camera.end_drag();
   EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+  EXPECT_FALSE(camera.orbit_snap_orthographic_projection());
 }
 
 TEST(ViewportCameraTests, OrbitSnapPreservesPerspectiveZoomLevel) {

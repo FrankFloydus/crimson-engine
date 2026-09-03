@@ -191,6 +191,16 @@ public:
         const QuaderInputChord &chord, const ViewportToolState &state,
         bool viewport_focused, bool text_input_active,
         QuaderViewportKeybindingContext input_context = {});
+    /**
+     * Probes one edge without consuming sequence state and returns an enabled
+     * global command when it is an exact match. Native hosts use this to run
+     * global commands synchronously before a viewport queues the same edge.
+     */
+    [[nodiscard]] std::optional<std::string>
+    resolve_immediate_global_command(
+        const QuaderInputChord &chord, const ViewportToolState &state,
+        bool text_input_active,
+        QuaderViewportKeybindingContext input_context = {}) const;
     /** Resolves Apply/Cancel for a focused active native-tool settings editor. */
     [[nodiscard]] QuaderNativeToolSettingsDispatch
     dispatch_native_tool_settings_input_binding(

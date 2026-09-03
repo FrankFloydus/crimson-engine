@@ -45,6 +45,12 @@ LocalVisibilityEntityIds union_local_visibility_entity_ids(
   return combined;
 }
 
+bool uses_orthographic_shading(
+    const ViewportCameraController &camera) noexcept {
+  return camera.state().projection == ViewportProjection::Orthographic &&
+         !camera.orbit_snap_orthographic_projection();
+}
+
 } // namespace
 
 void reset_viewport_camera_for_view(ViewportCameraController &camera,
@@ -191,7 +197,7 @@ bool ViewportWorkspaceService::set_grid_preset(int preset) {
 ViewportShadingMode
 ViewportWorkspaceService::shading_mode(ViewportPaneId pane_id) const {
   const ViewportWorkspacePaneState &pane_state = pane(pane_id);
-  return pane_state.camera.state().projection == ViewportProjection::Orthographic
+  return uses_orthographic_shading(pane_state.camera)
              ? pane_state.orthographic_shading
              : pane_state.perspective_shading;
 }
@@ -203,7 +209,7 @@ bool ViewportWorkspaceService::set_shading_mode(ViewportPaneId pane_id,
   }
   ViewportWorkspacePaneState &pane_state = pane(pane_id);
   ViewportShadingMode &current =
-      pane_state.camera.state().projection == ViewportProjection::Orthographic
+      uses_orthographic_shading(pane_state.camera)
           ? pane_state.orthographic_shading
           : pane_state.perspective_shading;
   if (current == mode) {
@@ -220,7 +226,9 @@ ViewportView ViewportWorkspaceService::view(ViewportPaneId pane_id) const {
 bool ViewportWorkspaceService::set_view(ViewportPaneId pane_id,
                                         ViewportView view) {
   ViewportWorkspacePaneState &pane_state = pane(pane_id);
-  if (viewport_view_for_camera(pane_state.camera) == view) {
+  if (viewport_view_for_camera(pane_state.camera) == view &&
+      !(pane_state.camera.orbit_snap_orthographic_projection() &&
+        view != ViewportView::Perspective)) {
     return false;
   }
   reset_viewport_camera_for_view(pane_state.camera, view);

@@ -8458,3 +8458,27 @@ Verification: all 38 focused SDK face-texture tests pass, Mesh- and Face-mode pu
 pass, and the mandatory regression gate passes all six registered CTest entries, including the
 2,119-test app suite and isolated SDK configure/build. Both canonical Debug/Profile and Release
 executables build successfully.
+
+## 2026-09-03 - Viewport global saves are synchronous and orbit snaps retain shading
+
+- A Qt viewport surface queues ordinary input until the next app frame, but native window-close
+  preflight runs synchronously. Leaving every viewport-focused key press in that queue allowed a
+  Ctrl+S immediately followed by the window X to run the dirty-scene prompt before Save executed.
+  `QtCommandEventFilter` now uses the command API's stateless exact-match probe to execute enabled
+  global commands at the Qt event boundary, consumes that edge, and leaves viewport-scoped input
+  plus stateful chord sequences with the viewport router. Do not special-case Ctrl+S or duplicate
+  keybinding definitions in Qt.
+- `ViewportCameraController` records whether its current orthographic projection was produced by
+  temporary Alt-orbit snapping. `ViewportWorkspaceService` keeps using the pane's perspective
+  shading slot for that transient projection; explicit view-axis requests continue using the
+  orthographic slot, whose default is Wireframe. Explicitly choosing the same axis currently shown
+  by an orbit snap is an intentional transition to a locked manual orthographic view and must not
+  be treated as a no-op.
+
+Owners: command availability, context, and mapping remain in `QuaderCommandsApi` and its
+keybinding owners; Qt owns synchronous native event ordering; the camera owns projection
+provenance; the workspace owns perspective/orthographic shading selection.
+
+Verification: 77 focused command-filter, camera, and workspace tests pass. The affected workflow
+passes 1,302 app tests plus focused architecture guardrails, and the mandatory regression gate
+passes all six registered CTest entries, including the isolated SDK configure/build.

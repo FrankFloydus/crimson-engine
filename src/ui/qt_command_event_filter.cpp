@@ -309,9 +309,7 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       reset_pending_chord();
       return QObject::eventFilter(watched, event);
     }
-    if (viewport_surface_has_focus(watched)) {
-      return QObject::eventFilter(watched, event);
-    }
+    const bool viewport_focused = viewport_surface_has_focus(watched);
 
     const std::optional<QuaderInputChord> chord =
         quader_pressed_input_chord_from_qt_event(
@@ -322,6 +320,32 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
 
     const ViewportToolState state = qt_command_dispatch_tool_state(
         tool_state_provider_, editor_->viewports().grid_preset());
+    if (viewport_focused) {
+      const std::optional<std::string> immediate_command =
+          editor_->commands().resolve_immediate_global_command(
+              *chord, state, false);
+      if (!immediate_command.has_value()) {
+        return QObject::eventFilter(watched, event);
+      }
+
+      // The viewport queues input until the next app frame. Global commands
+      // must run at the Qt event boundary so a following close event observes
+      // effects such as a completed save. Consuming the edge also prevents the
+      // viewport router from executing the same command a second time.
+      reset_pending_chord();
+      const QuaderApiVoidResult result = [&]() {
+        QDR_PROFILE_SCOPE("Qt viewport global command execute");
+        return editor_->commands().execute(*immediate_command);
+      }();
+      if (!result.ok) {
+        LOG_ERROR("Qt viewport global keybinding command failed: {}",
+                  result.message.empty() ? "Command failed."
+                                         : result.message);
+      }
+      event->accept();
+      return true;
+    }
+
     const bool text_input_active = text_input_has_focus();
     const bool native_tool_settings_editor_focused =
         qt_object_belongs_to_tool_settings_panel(focus_widget) &&

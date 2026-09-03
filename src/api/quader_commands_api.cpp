@@ -931,6 +931,11 @@ public:
         const QuaderInputChord &chord, const ViewportToolState &state,
         bool viewport_focused, bool text_input_active,
         QuaderViewportKeybindingContext input_context = {});
+    [[nodiscard]] std::optional<std::string>
+    resolve_immediate_global_command(
+        const QuaderInputChord &chord, const ViewportToolState &state,
+        bool text_input_active,
+        QuaderViewportKeybindingContext input_context = {}) const;
     [[nodiscard]] QuaderNativeToolSettingsDispatch
     dispatch_native_tool_settings_input_binding(
         const QuaderInputChord &chord, const ViewportToolState &state);
@@ -1795,6 +1800,32 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
   }
 
   return {};
+}
+
+std::optional<std::string>
+QuaderCommandsApi::Impl::resolve_immediate_global_command(
+    const QuaderInputChord &chord, const ViewportToolState &state,
+    bool text_input_active,
+    QuaderViewportKeybindingContext input_context) const {
+  if (chord.empty()) {
+    return std::nullopt;
+  }
+
+  const QuaderKeybindingContext context = viewport_keybinding_context(
+      state, true, text_input_active, input_context,
+      api_.history().can_undo(), api_.history().can_redo());
+  const QuaderKeybindingDispatch dispatch = keybindings_.resolve_sequence(
+      {chord}, context, [this](std::string_view target_id) {
+        const QuaderKeybindingTargetMetadata *metadata =
+            keybinding_target_metadata(target_id);
+        return metadata != nullptr &&
+               metadata->context == QuaderKeybindingContextKind::Global &&
+               registry_.contains(target_id) && registry_.enabled(target_id) &&
+               !viewport_target_requires_router_dispatch(target_id);
+      });
+  return dispatch.kind == QuaderKeybindingDispatch::Kind::ExactMatch
+             ? std::optional<std::string>{dispatch.target_id}
+             : std::nullopt;
 }
 
 QuaderNativeToolSettingsDispatch
@@ -3233,6 +3264,15 @@ QuaderCommandsApi::dispatch_viewport_input_binding(
     QuaderViewportKeybindingContext input_context) {
   return impl_->dispatch_viewport_input_binding(
       chord, state, viewport_focused, text_input_active, input_context);
+}
+
+std::optional<std::string>
+QuaderCommandsApi::resolve_immediate_global_command(
+    const QuaderInputChord &chord, const ViewportToolState &state,
+    bool text_input_active,
+    QuaderViewportKeybindingContext input_context) const {
+  return impl_->resolve_immediate_global_command(
+      chord, state, text_input_active, input_context);
 }
 
 QuaderNativeToolSettingsDispatch
