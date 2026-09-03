@@ -105,6 +105,8 @@ make_gizmo_input(const ViewportInteractionFrame &frame, ViewportToolId tool,
       viewport_grid_world_size_for_preset(frame.input.grid_preset);
   input.gizmo_size_pixels = kOverlayTransformGizmoSizePixels;
   input.pick_radius_pixels = kOverlayTransformGizmoPickRadiusPixels;
+  input.move_center_radius_pixels =
+      kOverlayTransformGizmoMoveCenterRadiusPixels;
   input.gizmo_scale = std::max(
       frame.settings.float_value(ViewportFloatSettingId::GizmoSize), 0.1f);
   input.ring_segments = 64;

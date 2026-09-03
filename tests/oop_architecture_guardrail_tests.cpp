@@ -920,6 +920,9 @@ TEST(OopArchitectureGuardrailTests, OverlayGeometryAndPixelPolicyStayShared) {
            std::string_view{"kOverlayTransformGizmoSizePixels"},
            std::string_view{"kOverlayTransformGizmoPickRadiusPixels"},
            std::string_view{"kOverlayTransformGizmoMoveCenterRadiusPixels"},
+           std::string_view{
+               "kOverlayTransformGizmoMoveCenterBorderWidthPixels"},
+           std::string_view{"kOverlayTransformGizmoMoveCenterDotSizePixels"},
            std::string_view{"kOverlayTransformGizmoScaleHandleSizePixels"},
            std::string_view{"kOverlayTransformGizmoScaleCenterSizePixels"},
            std::string_view{"kOverlayTransformGizmoAxisLineWidthPixels"},

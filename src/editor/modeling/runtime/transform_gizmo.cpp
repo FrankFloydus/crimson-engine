@@ -439,6 +439,9 @@ TransformGizmoFrame build_transform_gizmo_frame(const TransformGizmoFrameInput& 
 	frame.info.hover_axis = input.hover_axis;
 	frame.info.active_axis = input.active_axis;
 	frame.info.gizmo_scale = clamped_gizmo_scale(input.gizmo_scale);
+	frame.info.move_center_radius_pixels =
+		std::max(1.0, input.move_center_radius_pixels) *
+		frame.info.gizmo_scale;
 	if (!input.has_selection || !input.has_pivot || !transform_gizmo_tool_has_frame(input.tool)) {
 		return frame;
 	}
@@ -480,6 +483,14 @@ TransformGizmoFrame build_transform_gizmo_frame(const TransformGizmoFrameInput& 
             (kGizmoPlaneDistance + kGizmoPlaneSize * 0.5);
         const double plane_half_size =
             pixel_world * unit_screen_size * (kGizmoPlaneSize * 0.5);
+        if (input.tool == ViewportInteractionTool::Move) {
+          const double center_half_size =
+              pixel_world * frame.info.move_center_radius_pixels;
+          add_gizmo_plane(frame, input.camera, TransformAxis::All,
+                          input.pivot, input.camera.transform.x_axis,
+                          input.camera.transform.y_axis, 0.0,
+                          center_half_size);
+        }
         add_gizmo_axis(frame, input.camera, TransformAxis::X, input.pivot,
                        axis_length, input.orientation);
         add_gizmo_axis(frame, input.camera, TransformAxis::Y, input.pivot,
@@ -519,6 +530,39 @@ TransformGizmoPickHit pick_transform_gizmo(const TransformGizmoFrameInput& input
 
         if (input.tool == ViewportInteractionTool::Move ||
             input.tool == ViewportInteractionTool::Scale) {
+          if (input.tool == ViewportInteractionTool::Move) {
+            const auto center = std::find_if(
+                frame.planes.begin(), frame.planes.end(),
+                [](const TransformGizmoPlanePrimitive &plane) {
+                  return plane.axis == TransformAxis::All;
+                });
+            if (center != frame.planes.end()) {
+              const std::array<quader::QVec2, 4> polygon{
+                  center->screen0,
+                  center->screen1,
+                  center->screen2,
+                  center->screen3,
+              };
+              if (point_in_convex_gizmo_polygon(screen_position, polygon)) {
+                result.hit = true;
+                result.axis = TransformAxis::All;
+                result.local_direction = axis_vector(TransformAxis::All);
+                result.world_direction =
+                    normalized_axis(input.camera.transform.z_axis);
+                if (vec3_is_tiny(result.world_direction)) {
+                  result.world_direction = normalized_axis(
+                      input.camera.transform.origin - input.pivot);
+                }
+                if (vec3_is_tiny(result.world_direction)) {
+                  result.world_direction = {0.0F, 0.0F, 1.0F};
+                }
+                result.screen_tip = plane_centroid(*center);
+                result.distance = std::sqrt(
+                    vec2_distance_squared(screen_position, result.screen_tip));
+                return result;
+              }
+            }
+          }
           std::vector<TransformGizmoPickCandidate> candidates;
           candidates.reserve(frame.axes.size());
           for (const TransformGizmoAxisPrimitive &axis : frame.axes) {
@@ -545,6 +589,9 @@ TransformGizmoPickHit pick_transform_gizmo(const TransformGizmoFrameInput& input
             return axis_hit;
           }
           for (const TransformGizmoPlanePrimitive &plane : frame.planes) {
+            if (plane.axis == TransformAxis::All) {
+              continue;
+            }
             const std::array<quader::QVec2, 4> polygon{
                 plane.screen0,
                 plane.screen1,

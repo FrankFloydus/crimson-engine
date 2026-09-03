@@ -133,6 +133,7 @@ struct TransformGizmoFrameInfo {
         quader::QVec3 pivot;
 	quader::QVec2 screen_pivot;
 	double gizmo_scale = 1.0;
+	double move_center_radius_pixels = 7.0;
 	TransformGizmoRotateIndicator rotate_indicator;
 };
 
@@ -162,6 +163,7 @@ struct TransformGizmoFrameInput {
   double grid_size = 1.0;
   double gizmo_size_pixels = 68.0;
   double pick_radius_pixels = 12.0;
+  double move_center_radius_pixels = 7.0;
   double gizmo_scale = 1.0;
   int ring_segments = 64;
 };

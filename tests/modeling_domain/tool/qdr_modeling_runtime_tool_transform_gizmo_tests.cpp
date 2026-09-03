@@ -167,6 +167,93 @@ TEST(QdrModelingRuntimeToolTransformGizmoTests, TransformGizmoBuildsFramesOnlyFo
 }
 
 TEST(QdrModelingRuntimeToolTransformGizmoTests,
+     MoveCenterHandleFacesTheCameraAndWinsAtTheSharedAxisOrigin) {
+	constexpr float kInvSqrtTwo = 0.70710678F;
+	quader_editor_core::TransformGizmoFrameInput input;
+	input.tool = quader_editor_core::ViewportInteractionTool::Move;
+	input.has_selection = true;
+	input.has_pivot = true;
+	input.pivot = {};
+	input.camera = front_camera();
+	input.camera.transform.origin = {
+		6.0F * kInvSqrtTwo, 0.0F, 6.0F * kInvSqrtTwo};
+	input.camera.transform.x_axis = {kInvSqrtTwo, 0.0F, -kInvSqrtTwo};
+	input.camera.transform.y_axis = {0.0F, 1.0F, 0.0F};
+	input.camera.transform.z_axis = {kInvSqrtTwo, 0.0F, kInvSqrtTwo};
+	input.gizmo_size_pixels = 80.0;
+	input.pick_radius_pixels = 10.0;
+	input.move_center_radius_pixels = 8.0;
+
+	const quader_editor_core::TransformGizmoFrame frame =
+		quader_editor_core::build_transform_gizmo_frame(input);
+	ASSERT_TRUE(frame.info.ok);
+	EXPECT_EQ(
+		std::count_if(
+			frame.planes.begin(), frame.planes.end(),
+			[](const quader_editor_core::TransformGizmoPlanePrimitive& plane) {
+				return plane.axis == quader_editor_core::TransformAxis::All;
+			}),
+		1);
+
+	const auto center_plane = std::find_if(
+		frame.planes.begin(), frame.planes.end(),
+		[](const quader_editor_core::TransformGizmoPlanePrimitive& plane) {
+			return plane.axis == quader_editor_core::TransformAxis::All;
+		});
+	ASSERT_TRUE(center_plane != frame.planes.end());
+	const quader::QVec2 center_screen {
+		(center_plane->screen0.x + center_plane->screen1.x +
+		 center_plane->screen2.x + center_plane->screen3.x) * 0.25F,
+		(center_plane->screen0.y + center_plane->screen1.y +
+		 center_plane->screen2.y + center_plane->screen3.y) * 0.25F,
+	};
+	EXPECT_NEAR(center_screen.x, frame.info.screen_pivot.x, 0.0001F);
+	EXPECT_NEAR(center_screen.y, frame.info.screen_pivot.y, 0.0001F);
+	EXPECT_NEAR(
+		screen_distance(center_plane->screen0, center_plane->screen1),
+		static_cast<float>(input.move_center_radius_pixels * 2.0), 0.5F);
+	EXPECT_NEAR(
+		screen_distance(center_plane->screen1, center_plane->screen2),
+		static_cast<float>(input.move_center_radius_pixels * 2.0), 0.5F);
+
+	const auto distance_from_view_plane = [&input](quader::QVec3 point) {
+		const quader::QVec3 offset {
+			point.x - input.pivot.x,
+			point.y - input.pivot.y,
+			point.z - input.pivot.z,
+		};
+		return offset.x * input.camera.transform.z_axis.x +
+			offset.y * input.camera.transform.z_axis.y +
+			offset.z * input.camera.transform.z_axis.z;
+	};
+	EXPECT_NEAR(distance_from_view_plane(center_plane->world0), 0.0F, 0.0001F);
+	EXPECT_NEAR(distance_from_view_plane(center_plane->world1), 0.0F, 0.0001F);
+	EXPECT_NEAR(distance_from_view_plane(center_plane->world2), 0.0F, 0.0001F);
+	EXPECT_NEAR(distance_from_view_plane(center_plane->world3), 0.0F, 0.0001F);
+
+	ASSERT_FALSE(frame.axes.empty());
+	for (const quader_editor_core::TransformGizmoAxisPrimitive& axis : frame.axes) {
+		EXPECT_NEAR(axis.screen_start.x, frame.info.screen_pivot.x, 0.0001F);
+		EXPECT_NEAR(axis.screen_start.y, frame.info.screen_pivot.y, 0.0001F);
+	}
+	const quader_editor_core::TransformGizmoPickHit center_hit =
+		quader_editor_core::pick_transform_gizmo(input, frame.info.screen_pivot);
+	ASSERT_TRUE(center_hit.hit);
+	EXPECT_TRUE(center_hit.axis == quader_editor_core::TransformAxis::All);
+	EXPECT_NEAR(center_hit.world_direction.x, kInvSqrtTwo, 0.0001F);
+	EXPECT_NEAR(center_hit.world_direction.y, 0.0F, 0.0001F);
+	EXPECT_NEAR(center_hit.world_direction.z, kInvSqrtTwo, 0.0001F);
+
+	const quader_editor_core::TransformGizmoAxisPrimitive* x_axis =
+		find_axis(frame, quader_editor_core::TransformAxis::X);
+	ASSERT_TRUE(x_axis != nullptr);
+	const quader_editor_core::TransformGizmoPickHit axis_tip_hit =
+		quader_editor_core::pick_transform_gizmo(input, x_axis->screen_tip);
+	ASSERT_TRUE(axis_tip_hit.hit);
+	EXPECT_TRUE(axis_tip_hit.axis == quader_editor_core::TransformAxis::X);
+}
+
+TEST(QdrModelingRuntimeToolTransformGizmoTests,
      TransformGizmoBuildsAndPicksHandlesInTheProvidedOrientation) {
 	quader_editor_core::TransformGizmoFrameInput input;
 	input.tool = quader_editor_core::ViewportInteractionTool::Move;

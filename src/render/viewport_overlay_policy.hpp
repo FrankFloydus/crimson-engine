@@ -106,7 +106,8 @@ inline constexpr std::uint32_t kOverlayToolAxisXHighlightColor = rgba8(255, 204,
 inline constexpr std::uint32_t kOverlayToolAxisYHighlightColor = rgba8(230, 255, 192, 255);
 inline constexpr std::uint32_t kOverlayToolAxisZHighlightColor = rgba8(202, 228, 255, 255);
 inline constexpr std::uint32_t kOverlayToolAxisHighlightColor = rgba8(255, 250, 204, 255);
-inline constexpr std::uint32_t kOverlayToolCenterColor = rgba8(238, 242, 247, 230);
+inline constexpr std::uint32_t kOverlayTransformGizmoMoveCenterColor =
+    rgba8(253, 255, 136, 255);
 inline constexpr std::uint32_t kOverlayToolLineShadowColor = rgba8(0, 0, 0, 112);
 inline constexpr std::uint32_t kOverlayToolTrackballColor = rgba8(210, 214, 219, 138);
 inline constexpr std::uint32_t kOverlayToolPlaneXYColor = kOverlayToolAxisZColor;
@@ -151,7 +152,10 @@ inline constexpr float kOverlayLightMarkerOutlineGrowthPixels = 2.0f;
 inline constexpr float kOverlayPointLightGizmoSizePixels = 64.0f;
 inline constexpr float kOverlayTransformGizmoSizePixels = 80.0f;
 inline constexpr float kOverlayTransformGizmoPickRadiusPixels = 12.0f;
-inline constexpr float kOverlayTransformGizmoMoveCenterRadiusPixels = 3.5f;
+inline constexpr float kOverlayTransformGizmoMoveCenterRadiusPixels = 10.0f;
+inline constexpr float kOverlayTransformGizmoMoveCenterBorderWidthPixels =
+    1.0f;
+inline constexpr float kOverlayTransformGizmoMoveCenterDotSizePixels = 4.0f;
 inline constexpr float kOverlayTransformGizmoScaleHandleSizePixels = 11.2f;
 inline constexpr float kOverlayTransformGizmoScaleCenterSizePixels = 10.0f;
 inline constexpr float kOverlayTransformGizmoAxisLineWidthPixels = 1.6f;

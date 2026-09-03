@@ -78,6 +78,7 @@ render_tool(quader_editor_core::ViewportInteractionTool tool) {
       .pivot = source.info.pivot,
       .screen_pivot = source.info.screen_pivot,
       .gizmo_scale = source.info.gizmo_scale,
+      .move_center_radius_pixels = source.info.move_center_radius_pixels,
       .rotate_indicator = {
           .active = source.info.rotate_indicator.active,
           .axis = render_axis(source.info.rotate_indicator.axis),
@@ -261,6 +262,7 @@ void add_gizmo_info(
       .add_vec3(info.pivot)
       .add_vec2(info.screen_pivot);
   add_double(signature, info.gizmo_scale);
+  add_double(signature, info.move_center_radius_pixels);
   signature.add_bool(info.rotate_indicator.active)
       .add_value(static_cast<std::uint64_t>(info.rotate_indicator.axis))
       .add_vec3(info.rotate_indicator.world_axis)

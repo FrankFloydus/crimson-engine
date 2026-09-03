@@ -729,6 +729,8 @@ test_gizmo_input(quader_editor_core::ViewportInteractionTool tool,
       harness.camera, harness.input.viewport_size);
   input.gizmo_size_pixels = quader::kOverlayTransformGizmoSizePixels;
   input.pick_radius_pixels = quader::kOverlayTransformGizmoPickRadiusPixels;
+  input.move_center_radius_pixels =
+      quader::kOverlayTransformGizmoMoveCenterRadiusPixels;
   input.ring_segments = 32;
   return input;
 }
@@ -877,12 +879,35 @@ bool has_line_style(const quader::ViewportOverlayFrame &frame,
 TEST(ViewportTransformGizmoOverlayBuilderTests, EmitsGodotStyleTransformGizmoVisuals) {
     ViewportInteractionHarness harness;
 
+    EXPECT_EQ(quader::kOverlayTransformGizmoMoveCenterColor,
+              quader::rgba8(253, 255, 136, 255));
+    EXPECT_FLOAT_EQ(quader::kOverlayTransformGizmoMoveCenterRadiusPixels,
+                    10.0f);
+    EXPECT_FLOAT_EQ(
+        quader::kOverlayTransformGizmoMoveCenterBorderWidthPixels, 1.0f);
+    EXPECT_FLOAT_EQ(quader::kOverlayTransformGizmoMoveCenterDotSizePixels,
+                    4.0f);
+
     const quader_editor_core::TransformGizmoFrame move_frame =
         quader_editor_core::build_transform_gizmo_frame(test_gizmo_input(
             quader_editor_core::ViewportInteractionTool::Move, harness));
     ASSERT_TRUE(move_frame.info.ok);
     const quader::ViewportOverlayFrame move_overlay =
         build_gizmo_overlay(move_frame, harness);
+
+    const auto center_plane = std::find_if(
+        move_frame.planes.begin(), move_frame.planes.end(),
+        [](const quader_editor_core::TransformGizmoPlanePrimitive &plane) {
+          return plane.axis == quader_editor_core::TransformAxis::All;
+    });
+    ASSERT_NE(center_plane, move_frame.planes.end());
+    const auto screen_distance = [](quader::QVec2 a, quader::QVec2 b) {
+      return std::hypot(a.x - b.x, a.y - b.y);
+    };
+    EXPECT_NEAR(screen_distance(center_plane->screen0, center_plane->screen1),
+                20.0f, 0.5f);
+    EXPECT_NEAR(screen_distance(center_plane->screen1, center_plane->screen2),
+                20.0f, 0.5f);
 
     EXPECT_EQ(
         std::count_if(
@@ -902,16 +927,113 @@ TEST(ViewportTransformGizmoOverlayBuilderTests, EmitsGodotStyleTransformGizmoVis
                            triangle.color == quader::kOverlayToolPlaneXYColor;
                   }),
               2);
+    const auto same_position = [](quader::QVec3 a, quader::QVec3 b) {
+      return length(a - b) <= 0.0001f;
+    };
+    const auto matches_edge = [&same_position](
+                                  const quader::ViewportOverlayLine &line,
+                                  quader::QVec3 a, quader::QVec3 b) {
+      return (same_position(line.start, a) && same_position(line.end, b)) ||
+             (same_position(line.start, b) && same_position(line.end, a));
+    };
+    const std::array<std::pair<quader::QVec3, quader::QVec3>, 4>
+        center_edges{{
+            {center_plane->world0, center_plane->world1},
+            {center_plane->world1, center_plane->world2},
+            {center_plane->world2, center_plane->world3},
+            {center_plane->world3, center_plane->world0},
+        }};
+    for (const auto &[edge_start, edge_end] : center_edges) {
+      EXPECT_EQ(
+          std::count_if(
+              move_overlay.lines.begin(), move_overlay.lines.end(),
+              [&](const quader::ViewportOverlayLine &line) {
+                return line.layer ==
+                           quader::ViewportOverlayLayer::ToolHandle &&
+                       line.color ==
+                           quader::kOverlayTransformGizmoMoveCenterColor &&
+                       std::abs(
+                           line.width_pixels -
+                           quader::kOverlayTransformGizmoMoveCenterBorderWidthPixels) <=
+                           0.001f &&
+                       line.style_role ==
+                           quader::ViewportOverlayStyleRole::ExplicitColor &&
+                       line.source == quader::ViewportOverlaySource::Tool &&
+                       matches_edge(line, edge_start, edge_end);
+              }),
+          1);
+    }
+    EXPECT_EQ(
+        std::count_if(
+            move_overlay.points.begin(), move_overlay.points.end(),
+            [&move_frame](const quader::ViewportOverlayPoint &point) {
+              return point.layer == quader::ViewportOverlayLayer::ToolHandle &&
+                     point.color ==
+                         quader::kOverlayTransformGizmoMoveCenterColor &&
+                     length(point.position - move_frame.info.pivot) <=
+                         0.0001f &&
+                     std::abs(
+                         point.size_pixels -
+                         quader::kOverlayTransformGizmoMoveCenterDotSizePixels) <=
+                         0.001f &&
+                     !point.outline_growth_pixels.has_value();
+            }),
+        1);
     EXPECT_TRUE(std::none_of(
         move_overlay.triangles.begin(), move_overlay.triangles.end(),
         [](const quader::ViewportOverlayTriangle &triangle) {
-          return triangle.color == quader::kOverlayToolCenterColor;
-        }));
+          return triangle.color ==
+                 quader::kOverlayTransformGizmoMoveCenterColor;
+        })) << "the Maya-style center square must remain hollow";
     EXPECT_TRUE(
         std::none_of(move_overlay.lines.begin(), move_overlay.lines.end(),
                      [](const quader::ViewportOverlayLine &line) {
                        return line.color == quader::kOverlayToolLineShadowColor;
                      }));
+
+    quader_editor_core::TransformGizmoFrameInput hovered_move_input =
+        test_gizmo_input(quader_editor_core::ViewportInteractionTool::Move,
+                         harness);
+    hovered_move_input.hover_axis =
+        quader_editor_core::TransformAxis::All;
+    const quader::ViewportOverlayFrame hovered_move_overlay =
+        build_gizmo_overlay(
+            quader_editor_core::build_transform_gizmo_frame(
+                hovered_move_input),
+            harness);
+    EXPECT_EQ(
+        std::count_if(
+            hovered_move_overlay.lines.begin(),
+            hovered_move_overlay.lines.end(),
+            [](const quader::ViewportOverlayLine &line) {
+              return line.layer == quader::ViewportOverlayLayer::ToolHandle &&
+                     line.color == quader::kOverlayToolAxisHighlightColor &&
+                     std::abs(
+                         line.width_pixels -
+                         quader::kOverlayTransformGizmoMoveCenterBorderWidthPixels) <=
+                         0.001f;
+            }),
+        4);
+    EXPECT_EQ(
+        std::count_if(
+            hovered_move_overlay.points.begin(),
+            hovered_move_overlay.points.end(),
+            [](const quader::ViewportOverlayPoint &point) {
+              return point.layer == quader::ViewportOverlayLayer::ToolHandle &&
+                     point.color == quader::kOverlayToolAxisHighlightColor &&
+                     std::abs(
+                         point.size_pixels -
+                         quader::kOverlayTransformGizmoMoveCenterDotSizePixels) <=
+                         0.001f &&
+                     !point.outline_growth_pixels.has_value();
+            }),
+        1);
+    EXPECT_TRUE(std::none_of(
+        hovered_move_overlay.triangles.begin(),
+        hovered_move_overlay.triangles.end(),
+        [](const quader::ViewportOverlayTriangle &triangle) {
+          return triangle.color == quader::kOverlayToolAxisHighlightColor;
+        })) << "hover must not fill the Maya-style center square";
 
     const quader_editor_core::TransformGizmoFrame scale_frame =
         quader_editor_core::build_transform_gizmo_frame(test_gizmo_input(
@@ -6658,6 +6780,130 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObj
 }
 
 TEST(ViewportInteractionControllerTests,
+     MoveGizmoCenterDragsObjectsAndComponentsFreelyInTheViewPlane) {
+  struct SelectionCase {
+    quader::QuaderSelectionMode mode = quader::QuaderSelectionMode::Object;
+    const char *label = "";
+  };
+
+  for (const SelectionCase selection_case : {
+           SelectionCase{quader::QuaderSelectionMode::Object, "object"},
+           SelectionCase{quader::QuaderSelectionMode::Vertex, "vertex"},
+           SelectionCase{quader::QuaderSelectionMode::Edge, "edge"},
+           SelectionCase{quader::QuaderSelectionMode::Face, "face"},
+       }) {
+    SCOPED_TRACE(selection_case.label);
+    ViewportInteractionHarness harness;
+    ASSERT_TRUE(harness.settings.set_bool_value(
+        quader::ViewportBoolSettingId::GridSnap, false));
+    ASSERT_TRUE(harness.settings.set_bool_value(
+        quader::ViewportBoolSettingId::VertexSnap, false));
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    if (selection_case.mode == quader::QuaderSelectionMode::Object) {
+      ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+    } else {
+      select_single_component(harness, box, selection_case.mode);
+    }
+    ASSERT_TRUE(
+        harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    const quader_editor_core::TransformGizmoFrame *frame =
+        harness.controller.transform_gizmo_frame();
+    ASSERT_NE(frame, nullptr);
+    const quader::QVec2 start = frame->info.screen_pivot;
+    harness.input.mouse_local = start;
+    harness.input.mouse_screen = start;
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    frame = harness.controller.transform_gizmo_frame();
+    ASSERT_NE(frame, nullptr);
+    EXPECT_EQ(frame->info.hover_axis,
+              quader_editor_core::TransformAxis::All);
+
+    const std::optional<quader::QVec3> before_center =
+        harness.editor.query().selection_center();
+    ASSERT_TRUE(before_center.has_value());
+    const quader::TransformComponent before_transform =
+        *harness.session.scene().transform(box.entity);
+    const quader::QuaderSelectionSummary before_selection =
+        harness.editor.selection().summary();
+    harness.session.history().clear();
+
+    const quader::QVec2 update = start + quader::QVec2{72.0f, -48.0f};
+    const quader::ViewportBeforeToolInteractionResult press =
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(true, true, false, start));
+    ASSERT_TRUE(press.gizmo_consumed);
+    harness.input.mouse_local = update;
+    harness.input.mouse_screen = update;
+    const quader::ViewportBeforeToolInteractionResult drag =
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(false, true, false, start));
+    ASSERT_TRUE(drag.gizmo_consumed);
+    ASSERT_TRUE(harness.controller.dragging());
+    frame = harness.controller.transform_gizmo_frame();
+    ASSERT_NE(frame, nullptr);
+    EXPECT_EQ(frame->info.active_axis,
+              quader_editor_core::TransformAxis::All);
+
+    const quader::ViewportBeforeToolInteractionResult release =
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(false, false, true, start));
+    ASSERT_TRUE(release.gizmo_consumed);
+    EXPECT_FALSE(harness.controller.dragging());
+
+    const std::optional<quader::QVec3> after_center =
+        harness.editor.query().selection_center();
+    ASSERT_TRUE(after_center.has_value());
+    const quader::QVec3 delta = *after_center - *before_center;
+    const quader::ViewportCameraBasis camera_basis =
+        quader::ViewportCameraAdapter::basis(harness.camera);
+    EXPECT_GT(std::abs(dot(delta, camera_basis.right)), 0.01f);
+    EXPECT_GT(std::abs(dot(delta, camera_basis.up)), 0.01f);
+    EXPECT_NEAR(dot(delta, camera_basis.forward), 0.0f, 0.001f);
+
+    const quader::TransformComponent after_transform =
+        *harness.session.scene().transform(box.entity);
+    if (selection_case.mode == quader::QuaderSelectionMode::Object) {
+      EXPECT_GT(length(after_transform.position - before_transform.position),
+                0.01f);
+    } else {
+      expect_transform_near(after_transform, before_transform);
+    }
+    const quader::QuaderSelectionSummary after_selection =
+        harness.editor.selection().summary();
+    EXPECT_EQ(after_selection.mode, before_selection.mode);
+    EXPECT_EQ(after_selection.selected_object_count,
+              before_selection.selected_object_count);
+    EXPECT_EQ(after_selection.selected_vertex_count,
+              before_selection.selected_vertex_count);
+    EXPECT_EQ(after_selection.selected_edge_count,
+              before_selection.selected_edge_count);
+    EXPECT_EQ(after_selection.selected_face_count,
+              before_selection.selected_face_count);
+
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    const std::optional<quader::QVec3> undone_center =
+        harness.editor.query().selection_center();
+    ASSERT_TRUE(undone_center.has_value());
+    expect_vec3_near(*undone_center, *before_center);
+    expect_transform_near(*harness.session.scene().transform(box.entity),
+                          before_transform);
+
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    const std::optional<quader::QVec3> redone_center =
+        harness.editor.query().selection_center();
+    ASSERT_TRUE(redone_center.has_value());
+    expect_vec3_near(*redone_center, *after_center);
+    expect_transform_near(*harness.session.scene().transform(box.entity),
+                          after_transform);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
      UniformScaleGizmoShrinksFreshGridSizedMeshBelowCreationSize) {
   ViewportInteractionHarness harness;
   const quader::QuaderApiResult<quader::QuaderModelingObjectRef> created =
@@ -8014,6 +8260,13 @@ TEST(ViewportToolOverlaySourceTests,
     inputs.transform_gizmo = &gizmo;
     inputs.gizmos_visible = true;
     inputs.revisions.scene_transform = 5u;
+    const quader::ViewportToolOverlaySource gizmo_before_center_resize{inputs};
+    gizmo.info.move_center_radius_pixels += 1.0;
+    const quader::ViewportToolOverlaySource gizmo_after_center_resize{inputs};
+    EXPECT_NE(gizmo_after_center_resize.source_stamp(),
+              gizmo_before_center_resize.source_stamp())
+        << "center handle size must invalidate retained overlay geometry";
+
     const quader::ViewportToolOverlaySource gizmo_before_owner_change{inputs};
     ++inputs.revisions.scene_transform;
     const quader::ViewportToolOverlaySource gizmo_after_owner_change{inputs};

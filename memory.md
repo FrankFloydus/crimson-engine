@@ -2686,6 +2686,8 @@ Resolved approach:
 - Reworked overlay rendering to use slim arrow cones, square-prism scale handles, full rotate rings
   for the neutral trackball/view ring, front-only colored rotate axis arcs, Godot axis colors,
   normal-axis plane colors, and no move center dot or black axis underpaint.
+- The no-center decision above was superseded by the 2026-09-03 functional free-move handle. Do not
+  restore the old decorative circle; the current Move center is a pickable camera-plane square.
 - Restored the previous rotate drag pie indicator as overlay geometry owned by the transform gizmo
   frame/builder instead of UI-only immediate drawing.
 - Added guardrail coverage for the Godot-style dimensions, colors, and emitted overlay primitives.
@@ -8362,3 +8364,31 @@ affected-owner workflow passes. The mandatory regression gate passes all six reg
 entries, including the 2,112-test app suite and SDK-only isolation build. A physical Qt panel test
 drives wheel and MMB events through the production input path and proves the repaired world anchor
 stays screen-stationary. Canonical build artifacts are recorded in the task handoff.
+
+## 2026-09-03 - Move gizmo center owns view-plane free movement
+
+- Move reuses `TransformAxis::All` for one functional center handle; Scale retains its existing
+  uniform meaning for `All`. No new public axis, command, or SDK surface is needed.
+- The semantic gizmo frame owns a camera-facing square at the pivot. Its pixel radius comes from
+  render policy, scales with the gizmo-size preference, and participates in the retained overlay
+  signature. Picking tests that square before the three shafts so the shared origin cannot resolve
+  accidentally to X; axis picking outside the square keeps its existing priority.
+- The renderer represents the same semantic handle as a hollow 20-pixel camera-facing square plus
+  a four-pixel center dot. Its idle `#FDFF88` color and one-pixel border match the Maya reference;
+  hover or active state uses the common axis-highlight color. The four border lines use the
+  semantic plane corners, keeping the rendered and picked extents identical, while the plane is
+  not also emitted as an ordinary filled XY/XZ/YZ handle.
+- A Move `All` drag captures the press-time camera Z axis as `MoveToolState::world_plane_normal`.
+  Start and update rays intersect that same pivot-centered plane, preserving both independent
+  screen-plane components without collapsing onto a world or local axis. Vertex snapping remains
+  disabled for `All`; normal grid, precision, pending-click fallback, preview, cancellation, and
+  one-edit undo/redo lifecycles continue through the shared Move owners.
+- Scene objects and portable vertex, edge, and face selections consume the same resulting world
+  delta. Curve-control movement also uses the shared Move math and retains `CurveToolService` as
+  its preview/history owner.
+
+Verification: focused gizmo/move tests cover center-first picking, oblique view-plane motion,
+both grid-snap paths, hover styling, stationary-click fallback, object and vertex/edge/face drags,
+selection retention, and undo/redo. The affected workflow passes its 633 app/viewport, 61 metadata,
+and 204 runtime selections plus focused guardrails. The mandatory regression gate passes all six
+registered CTest targets, including the complete app suite and isolated SDK configure/build.

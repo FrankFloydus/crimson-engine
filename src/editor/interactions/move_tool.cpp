@@ -29,7 +29,7 @@ namespace {
 bool transform_axis_is_plane(TransformAxis axis)
 {
   return axis == TransformAxis::Xy || axis == TransformAxis::Xz ||
-         axis == TransformAxis::Yz;
+         axis == TransformAxis::Yz || axis == TransformAxis::All;
 }
 
 double axis_coordinate(quader::QVec3 position, TransformAxis axis)
@@ -82,6 +82,24 @@ quader::QVec3 transform_plane_normal(
 		return vec3_is_tiny(normal)
 			? oriented_axis(orientation, TransformAxis::X)
 			: normalized_axis(normal);
+	}
+	return {};
+}
+
+quader::QVec3 move_plane_normal(const MoveBeginInput& input)
+{
+	if (input.axis != TransformAxis::All) {
+		return transform_plane_normal(input.axis, input.orientation);
+	}
+	if (input.has_camera) {
+		const quader::QVec3 camera_normal =
+			normalized_axis(input.camera_transform.z_axis);
+		if (!vec3_is_tiny(camera_normal)) {
+			return camera_normal;
+		}
+	}
+	if (input.has_start_ray) {
+		return normalized_axis(input.start_ray.direction);
 	}
 	return {};
 }
@@ -153,6 +171,17 @@ quader::QVec3 snap_center_drag_delta(
 			snap_world_value(logical_target.z, grid_size) - logical_center.z);
 	}
 	return transform_vector(orientation, logical_delta);
+}
+
+quader::QVec3 project_drag_delta_onto_plane(
+		quader::QVec3 delta,
+		quader::QVec3 plane_normal)
+{
+	const quader::QVec3 normal = normalized_axis(plane_normal);
+	if (vec3_is_tiny(normal)) {
+		return delta;
+	}
+	return delta - vec3_scale(normal, vec3_dot(delta, normal));
 }
 
 bool edge_uses_vertex(quader_poly::Edge edge, quader_poly::ElementId vertex_id)
@@ -281,7 +310,9 @@ public:
 	{
 		quader::QVec3 next_world_axis = input.has_world_direction
 			? input.world_direction
-			: transform_vector(input.orientation, axis_vector(input.axis));
+			: (input.axis == TransformAxis::All && input.has_camera
+				? input.camera_transform.z_axis
+				: transform_vector(input.orientation, axis_vector(input.axis)));
 		if (vec3_is_tiny(next_world_axis)) {
 			next_world_axis = transform_vector(input.orientation, axis_vector(input.axis));
 			if (vec3_is_tiny(next_world_axis)) {
@@ -307,13 +338,20 @@ public:
 		state.center_local = input.center_local;
 		state.center_world = input.has_world_center ? input.world_center : transform_point(input.model_transform, input.center_local);
 		state.start_screen = input.screen_position;
+		state.world_plane_normal = transform_axis_is_plane(input.axis)
+			? move_plane_normal(input)
+			: quader::QVec3 {};
+		if (transform_axis_is_plane(input.axis) &&
+				vec3_is_tiny(state.world_plane_normal)) {
+			return { false, "Invalid move plane.", {} };
+		}
 		state.plane_start_point = state.center_world;
 		if (transform_axis_is_plane(input.axis) && input.has_start_ray) {
 			const DragPointResult plane_hit =
 				drag_point_on_plane(
 					input.start_ray,
 					state.center_world,
-					transform_plane_normal(input.axis, state.orientation));
+					state.world_plane_normal);
 			if (plane_hit.ok) {
 				state.plane_start_point = plane_hit.point;
 			}
@@ -424,16 +462,20 @@ public:
 				drag_point_on_plane(
 					ray,
 					state.center_world,
-					transform_plane_normal(state.axis, state.orientation));
+					state.world_plane_normal);
 			if (current_plane_point.ok) {
 				const quader::QVec3 raw_delta = current_plane_point.point - state.plane_start_point;
-				const quader::QVec3 world_delta = snap_center_to_grid && grid_enabled
+				quader::QVec3 world_delta = snap_center_to_grid && grid_enabled
 					? snap_center_drag_delta(
 						state.axis, state.center_world, raw_delta,
 						state.orientation, grid_size)
 					: plane_drag_delta(
 						state.axis, raw_delta, state.orientation,
 						grid_size, grid_enabled);
+				if (state.axis == TransformAxis::All) {
+					world_delta = project_drag_delta_onto_plane(
+						world_delta, state.world_plane_normal);
+				}
 				delta = inverse_transform_vector(state.model_transform, world_delta);
 				distance = quader::length(world_delta);
 			}

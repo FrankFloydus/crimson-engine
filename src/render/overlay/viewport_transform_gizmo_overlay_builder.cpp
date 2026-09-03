@@ -277,6 +277,34 @@ void append_plane(ViewportOverlayFrame &overlay_frame,
               ViewportOverlayLayer::ToolPlaneLine, 1.2f, false);
 }
 
+void append_move_center_handle(
+    ViewportOverlayFrame &overlay_frame,
+    const RenderTransformGizmoRecord &gizmo_frame,
+    const RenderTransformGizmoPlane &center, float width_scale) {
+  const std::uint32_t color = highlighted(gizmo_frame, center.axis)
+                                  ? kOverlayToolAxisHighlightColor
+                                  : kOverlayTransformGizmoMoveCenterColor;
+  const float border_width =
+      kOverlayTransformGizmoMoveCenterBorderWidthPixels * width_scale;
+  append_line(overlay_frame, center.world0, center.world1, color,
+              ViewportOverlayLayer::ToolHandle, border_width);
+  append_line(overlay_frame, center.world1, center.world2, color,
+              ViewportOverlayLayer::ToolHandle, border_width);
+  append_line(overlay_frame, center.world2, center.world3, color,
+              ViewportOverlayLayer::ToolHandle, border_width);
+  append_line(overlay_frame, center.world3, center.world0, color,
+              ViewportOverlayLayer::ToolHandle, border_width);
+  overlay_frame.points.push_back({
+      .layer = ViewportOverlayLayer::ToolHandle,
+      .position = gizmo_frame.info.pivot,
+      .color = color,
+      .size_pixels =
+          kOverlayTransformGizmoMoveCenterDotSizePixels * width_scale,
+      .style_role = ViewportOverlayStyleRole::ExplicitColor,
+      .source = ViewportOverlaySource::Tool,
+  });
+}
+
 void append_cone_handle(ViewportOverlayFrame &overlay_frame, QVec3 base_center,
                         QVec3 tip, std::uint32_t color, float radius_world) {
   QVec3 axis = tip - base_center;
@@ -558,6 +586,9 @@ void append_move_or_scale_gizmo(
     const ViewportOverlayCamera &camera, float width_scale) {
   for (const RenderTransformGizmoPlane &plane :
        gizmo_frame.planes) {
+    if (plane.axis == RenderTransformAxis::All) {
+      continue;
+    }
     if (!drag_plane_includes(gizmo_frame.info.active_axis, plane.axis)) {
       continue;
     }
@@ -587,6 +618,19 @@ void append_move_or_scale_gizmo(
     } else {
       append_arrow_handle(overlay_frame, axis.world_start, axis.world_tip,
                           color, axis_line_width);
+    }
+  }
+
+  if (gizmo_frame.info.tool == RenderTransformTool::Move) {
+    const auto center = std::find_if(
+        gizmo_frame.planes.begin(), gizmo_frame.planes.end(),
+        [](const RenderTransformGizmoPlane &plane) {
+          return plane.axis == RenderTransformAxis::All;
+        });
+    if (center != gizmo_frame.planes.end() &&
+        drag_plane_includes(gizmo_frame.info.active_axis, center->axis)) {
+      append_move_center_handle(overlay_frame, gizmo_frame, *center,
+                                width_scale);
     }
   }
 

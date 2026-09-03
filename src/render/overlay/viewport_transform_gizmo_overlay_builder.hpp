@@ -113,6 +113,7 @@ struct RenderTransformGizmoInfo final {
   QVec3 pivot;
   QVec2 screen_pivot;
   double gizmo_scale = 1.0;
+  double move_center_radius_pixels = 7.0;
   RenderTransformGizmoRotateIndicator rotate_indicator;
 };
 
