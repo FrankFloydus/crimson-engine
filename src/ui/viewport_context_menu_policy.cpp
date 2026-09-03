@@ -58,12 +58,118 @@ viewport_context_menu_action_bucket(QuaderSelectionMode mode,
                ? ViewportContextMenuActionBucket::Object
                : ViewportContextMenuActionBucket::Suppressed;
   }
-  if (action_id == "delete_selection" &&
-      (mode == QuaderSelectionMode::Object ||
-       mode == QuaderSelectionMode::Group)) {
+  if (action_id == "delete_selection" && (mode == QuaderSelectionMode::Object ||
+                                          mode == QuaderSelectionMode::Group)) {
     return ViewportContextMenuActionBucket::Object;
   }
   return ViewportContextMenuActionBucket::Modeling;
+}
+
+ViewportContextMenuActionDisposition
+viewport_context_menu_action_disposition(QuaderSelectionMode mode,
+                                         std::string_view action_id) {
+  if (viewport_context_menu_action_bucket(mode, action_id) ==
+      ViewportContextMenuActionBucket::Suppressed) {
+    return ViewportContextMenuActionDisposition::Suppressed;
+  }
+  if (mode == QuaderSelectionMode::Group &&
+      action_id == "duplicate_meshes") {
+    return ViewportContextMenuActionDisposition::Suppressed;
+  }
+
+  switch (mode) {
+  case QuaderSelectionMode::Object:
+    if (action_id == "snap_meshes_to_floor" || action_id == "combine_mesh" ||
+        action_id == "half_cut" || action_id == "create_outer_hull") {
+      return ViewportContextMenuActionDisposition::Primary;
+    }
+    break;
+  case QuaderSelectionMode::Vertex:
+    if (action_id == "merge_vertices_at_center" ||
+        action_id == "bevel_vertices" || action_id == "connect_vertices") {
+      return ViewportContextMenuActionDisposition::Primary;
+    }
+    break;
+  case QuaderSelectionMode::Edge:
+    if (action_id == "bevel_edges" || action_id == "bridge_edges" ||
+        action_id == "connect_edges" || action_id == "fill_hole") {
+      return ViewportContextMenuActionDisposition::Primary;
+    }
+    break;
+  case QuaderSelectionMode::Face:
+    if (action_id == "thicken_faces" || action_id == "bridge_faces" ||
+        action_id == "combine_faces" || action_id == "extract_faces") {
+      return ViewportContextMenuActionDisposition::Primary;
+    }
+    break;
+  case QuaderSelectionMode::Group:
+    break;
+  }
+
+  return ViewportContextMenuActionDisposition::Catalog;
+}
+
+std::uint32_t viewport_context_menu_primary_rank(QuaderSelectionMode mode,
+                                                 std::string_view action_id) {
+  switch (mode) {
+  case QuaderSelectionMode::Object:
+    if (action_id == "snap_meshes_to_floor") {
+      return 10U;
+    }
+    if (action_id == "combine_mesh") {
+      return 20U;
+    }
+    if (action_id == "half_cut") {
+      return 30U;
+    }
+    if (action_id == "create_outer_hull") {
+      return 40U;
+    }
+    break;
+  case QuaderSelectionMode::Vertex:
+    if (action_id == "merge_vertices_at_center") {
+      return 10U;
+    }
+    if (action_id == "bevel_vertices") {
+      return 20U;
+    }
+    if (action_id == "connect_vertices") {
+      return 30U;
+    }
+    break;
+  case QuaderSelectionMode::Edge:
+    if (action_id == "bevel_edges") {
+      return 10U;
+    }
+    if (action_id == "bridge_edges") {
+      return 20U;
+    }
+    if (action_id == "connect_edges") {
+      return 30U;
+    }
+    if (action_id == "fill_hole") {
+      return 40U;
+    }
+    break;
+  case QuaderSelectionMode::Face:
+    if (action_id == "thicken_faces") {
+      return 10U;
+    }
+    if (action_id == "bridge_faces") {
+      return 20U;
+    }
+    if (action_id == "combine_faces") {
+      return 30U;
+    }
+    if (action_id == "extract_faces") {
+      return 40U;
+    }
+    break;
+  case QuaderSelectionMode::Group:
+    break;
+  }
+
+  return 500U;
 }
 
 bool should_open_viewport_context_menu(

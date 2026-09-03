@@ -186,14 +186,26 @@ struct QuaderInputChord {
 };
 
 /**
+ * Stores a toolkit-neutral two-dimensional input position. Its coordinate
+ * space is selected by the host that marks the value as present.
+ */
+struct QuaderInputPosition {
+  float x = 0.0f;
+  float y = 0.0f;
+};
+
+/**
  * Couples one canonical wheel chord with the signed physical step magnitude
  * captured for the same event. A full conventional wheel notch is 1.0; high
  * resolution devices may contribute fractional steps that consumers retain
- * across frames.
+ * across frames. Production viewport hosts also attach the event-time local
+ * position; synthetic callers can omit the trailing provenance fields.
  */
 struct QuaderWheelInputEdge {
   QuaderInputChord chord;
   double step_delta = 0.0;
+  QuaderInputPosition local = {};
+  bool has_local_position = false;
 };
 
 inline bool operator==(const QuaderInputChord& left, const QuaderInputChord& right) {

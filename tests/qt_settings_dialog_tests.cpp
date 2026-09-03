@@ -9,6 +9,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "editor/metadata/command_presentation_catalog.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
@@ -53,9 +54,11 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QTreeView>
+#include <QVariant>
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -2263,7 +2266,8 @@ TEST(InspectorPanelTests,
             std::optional<std::string>("Set Scene Settings"));
 }
 
-TEST(QtMainMenuTests, SelectMenuTracksSelectionModeAndOwnsSelectionCommands) {
+TEST(QtMainMenuTests,
+     StableTaxonomyKeepsSelectionCommandsDiscoverableInSelectMenu) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-select-menu-tests";
@@ -2276,8 +2280,7 @@ TEST(QtMainMenuTests, SelectMenuTracksSelectionModeAndOwnsSelectionCommands) {
       QuaderApiSessionInternalAccess::from_scene_session(session));
   const QuaderApiResult<QuaderModelingObjectRef> box =
       editor.modeling().create_box(
-          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
-                       .max = {1.0f, 1.0f, 1.0f}},
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
           "Select Menu Box");
   ASSERT_TRUE(box.ok()) << box.error_message();
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
@@ -2292,54 +2295,485 @@ TEST(QtMainMenuTests, SelectMenuTracksSelectionModeAndOwnsSelectionCommands) {
     };
   };
   editor.preferences().set_runtime_hooks(QuaderPreferencesRuntimeHooks{
-      .backface_selection_enabled = [&] {
-        return viewport_settings.bool_value(
-            ViewportBoolSettingId::BackfaceSelection);
-      },
-      .set_backface_selection_enabled = [&](bool enabled) {
-        return runtime_result(viewport_settings.set_bool_value(
-            ViewportBoolSettingId::BackfaceSelection, enabled));
-      },
+      .backface_selection_enabled =
+          [&] {
+            return viewport_settings.bool_value(
+                ViewportBoolSettingId::BackfaceSelection);
+          },
+      .set_backface_selection_enabled =
+          [&](bool enabled) {
+            return runtime_result(viewport_settings.set_bool_value(
+                ViewportBoolSettingId::BackfaceSelection, enabled));
+          },
   });
   LocalizationService localization = loaded_localization();
   QMenuBar menu_bar;
   QtMainMenu menu;
-  menu.initialize(menu_bar,
-                  QtMainMenuContext{
-                      .editor = editor,
-                      .modeling = session.modeling(),
-                      .viewport_settings = viewport_settings,
-                      .localization = localization,
-                  });
+  menu.initialize(menu_bar, QtMainMenuContext{
+                                .editor = editor,
+                                .modeling = session.modeling(),
+                                .viewport_settings = viewport_settings,
+                                .localization = localization,
+                            });
 
-  auto *edit_menu =
-      menu_bar.findChild<QMenu *>(QStringLiteral("menu_edit"));
+  auto *edit_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_edit"));
   auto *select_menu =
       menu_bar.findChild<QMenu *>(QStringLiteral("menu_select"));
-  auto *align_menu =
-      menu_bar.findChild<QMenu *>(QStringLiteral("menu_align"));
+  auto *file_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_file"));
+  auto *create_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_create"));
+  auto *object_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_object"));
+  auto *mesh_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_mesh"));
+  auto *vertex_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_vertex"));
+  auto *edge_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_edge"));
+  auto *face_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_face"));
+  auto *uv_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_uv"));
+  auto *uv_align_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_uv_align"));
+  auto *uv_flip_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_uv_flip"));
+  auto *uv_fit_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_uv_fit"));
+  auto *uv_justify_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_uv_justify"));
+  auto *view_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_view"));
+  auto *window_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_window"));
+  auto *help_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_help"));
+  auto *edge_normals_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_edge_normals"));
+  ASSERT_NE(file_menu, nullptr);
   ASSERT_NE(edit_menu, nullptr);
   ASSERT_NE(select_menu, nullptr);
-  ASSERT_NE(align_menu, nullptr);
+  ASSERT_NE(create_menu, nullptr);
+  ASSERT_NE(object_menu, nullptr);
+  ASSERT_NE(mesh_menu, nullptr);
+  ASSERT_NE(vertex_menu, nullptr);
+  ASSERT_NE(edge_menu, nullptr);
+  ASSERT_NE(face_menu, nullptr);
+  ASSERT_NE(uv_menu, nullptr);
+  ASSERT_NE(uv_align_menu, nullptr);
+  ASSERT_NE(uv_flip_menu, nullptr);
+  ASSERT_NE(uv_fit_menu, nullptr);
+  ASSERT_NE(uv_justify_menu, nullptr);
+  ASSERT_NE(view_menu, nullptr);
+  ASSERT_NE(window_menu, nullptr);
+  ASSERT_NE(help_menu, nullptr);
+  ASSERT_NE(edge_normals_menu, nullptr);
+
+  // Command-backed rows synchronize immediately before the menu is shown.
+  // Exercise that retained-menu lifecycle before asserting user-visible labels.
+  ASSERT_TRUE(QMetaObject::invokeMethod(uv_menu, "aboutToShow",
+                                        Qt::DirectConnection));
 
   const QList<QAction *> top_level_actions = menu_bar.actions();
-  EXPECT_EQ(top_level_actions.indexOf(select_menu->menuAction()),
-            top_level_actions.indexOf(edit_menu->menuAction()) + 1);
-  EXPECT_EQ(top_level_actions.indexOf(align_menu->menuAction()),
-            top_level_actions.indexOf(select_menu->menuAction()) + 1);
+  const std::array<QMenu *, 13> expected_top_level{
+      file_menu, edit_menu, select_menu, create_menu, object_menu,
+      mesh_menu, vertex_menu, edge_menu, face_menu, uv_menu, view_menu,
+      window_menu, help_menu,
+  };
+  ASSERT_EQ(top_level_actions.size(),
+            static_cast<qsizetype>(expected_top_level.size()));
+  for (qsizetype index = 0;
+       index < static_cast<qsizetype>(expected_top_level.size()); ++index) {
+    EXPECT_EQ(
+        top_level_actions[index],
+        expected_top_level[static_cast<std::size_t>(index)]->menuAction());
+  }
+  EXPECT_EQ(menu_bar.findChild<QMenu *>(QStringLiteral("menu_align")), nullptr);
+  EXPECT_EQ(menu_bar.findChild<QMenu *>(QStringLiteral("menu_cleanup")),
+            nullptr);
+  EXPECT_EQ(menu_bar.findChild<QMenu *>(QStringLiteral("menu_tools")), nullptr);
+  EXPECT_EQ(menu_bar.findChild<QMenu *>(QStringLiteral("menu_layout")),
+            nullptr);
+  EXPECT_EQ(menu_bar.findChild<QMenu *>(QStringLiteral("menu_face_texture")),
+            nullptr);
+  EXPECT_EQ(
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_face_texture_align")),
+      nullptr);
+  EXPECT_EQ(
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_face_texture_scale")),
+      nullptr);
+  EXPECT_EQ(
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_face_texture_shift")),
+      nullptr);
+  EXPECT_EQ(
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_face_texture_rotate")),
+      nullptr);
+  EXPECT_EQ(
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_face_texture_flip")),
+      nullptr);
+  EXPECT_EQ(
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_face_texture_fit")),
+      nullptr);
+  EXPECT_EQ(
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_face_texture_justify")),
+      nullptr);
 
-  auto *select_all = menu_bar.findChild<QAction *>(
-      QStringLiteral("command_select_all"));
-  auto *select_inverse = menu_bar.findChild<QAction *>(
-      QStringLiteral("command_select_inverse"));
+  std::multiset<std::string> projected_main_menu_commands;
+  for (QAction *action : menu_bar.findChildren<QAction *>()) {
+    const QVariant command_id = action->property("quaderCommandId");
+    if (command_id.isValid()) {
+      projected_main_menu_commands.insert(command_id.toString().toStdString());
+    }
+  }
+  std::size_t expected_main_menu_commands = 0u;
+  for (const CommandPresentationDescriptor &presentation :
+       command_presentation_catalog()) {
+    if (!has_command_presentation_surface(
+            presentation, CommandPresentationSurface::MainMenu)) {
+      continue;
+    }
+    ++expected_main_menu_commands;
+    EXPECT_EQ(projected_main_menu_commands.count(
+                  std::string(presentation.command_id.string())),
+              1u)
+        << presentation.command_id.string();
+  }
+  EXPECT_EQ(projected_main_menu_commands.size(), expected_main_menu_commands);
+
+  const QList<QAction *> uv_actions = uv_menu->actions();
+  ASSERT_EQ(uv_actions.size(), 9);
+  EXPECT_EQ(uv_actions[0]->objectName(),
+            QStringLiteral("command_modeling_uv_peel"));
+  EXPECT_TRUE(uv_actions[1]->isSeparator());
+  EXPECT_EQ(uv_actions[2], uv_align_menu->menuAction());
+  EXPECT_EQ(uv_actions[3]->objectName(),
+            QStringLiteral("command_modeling_texture_rotate_clockwise"));
+  EXPECT_EQ(uv_actions[3]->text(), QStringLiteral("Rotate CW"));
+  EXPECT_EQ(uv_actions[4]->objectName(),
+            QStringLiteral(
+                "command_modeling_texture_rotate_counter_clockwise"));
+  EXPECT_EQ(uv_actions[4]->text(), QStringLiteral("Rotate CCW"));
+  EXPECT_TRUE(uv_actions[5]->isSeparator());
+  EXPECT_EQ(uv_actions[6], uv_flip_menu->menuAction());
+  EXPECT_EQ(uv_actions[7], uv_fit_menu->menuAction());
+  EXPECT_EQ(uv_actions[8], uv_justify_menu->menuAction());
+
+  const auto expect_uv_submenu = [](QMenu &submenu, std::string_view title,
+                                    std::initializer_list<std::string_view>
+                                        command_object_names,
+                                    std::initializer_list<std::string_view>
+                                        labels) {
+    EXPECT_EQ(submenu.title(),
+              QString::fromUtf8(title.data(),
+                                static_cast<qsizetype>(title.size())));
+    const QList<QAction *> actions = submenu.actions();
+    ASSERT_EQ(actions.size(),
+              static_cast<qsizetype>(command_object_names.size()));
+    ASSERT_EQ(command_object_names.size(), labels.size());
+    auto command = command_object_names.begin();
+    auto label = labels.begin();
+    for (qsizetype index = 0; index < actions.size(); ++index) {
+      EXPECT_EQ(actions[index]->menu(), nullptr);
+      EXPECT_EQ(actions[index]->objectName(),
+                QString::fromUtf8(command->data(),
+                                  static_cast<qsizetype>(command->size())));
+      EXPECT_EQ(actions[index]->text(),
+                QString::fromUtf8(label->data(),
+                                  static_cast<qsizetype>(label->size())));
+      ++command;
+      ++label;
+    }
+  };
+  expect_uv_submenu(
+      *uv_align_menu, "Align",
+      {"command_modeling_texture_align_to_grid",
+       "command_modeling_texture_align_to_face",
+       "command_modeling_texture_align_to_view"},
+      {"To Grid", "To Face", "To View"});
+  expect_uv_submenu(*uv_flip_menu, "Flip",
+                    {"command_modeling_texture_flip_texture_horizontal",
+                     "command_modeling_texture_flip_texture_vertical"},
+                    {"Horizontal", "Vertical"});
+  expect_uv_submenu(*uv_fit_menu, "Fit",
+                    {"command_modeling_texture_fit_both",
+                     "command_modeling_texture_fit_x",
+                     "command_modeling_texture_fit_y"},
+                    {"Both", "X", "Y"});
+  expect_uv_submenu(*uv_justify_menu, "Justify",
+                    {"command_modeling_texture_justify_left",
+                     "command_modeling_texture_justify_right",
+                     "command_modeling_texture_justify_top",
+                     "command_modeling_texture_justify_bottom",
+                     "command_modeling_texture_justify_center"},
+                    {"Left", "Right", "Top", "Bottom", "Center"});
+
+  for (const std::string_view removed_from_main_menu :
+       {"command_modeling_texture_scale_x_up",
+        "command_modeling_texture_scale_x_down",
+        "command_modeling_texture_scale_y_up",
+        "command_modeling_texture_scale_y_down",
+        "command_modeling_texture_shift_left",
+        "command_modeling_texture_shift_right",
+        "command_modeling_texture_shift_up",
+        "command_modeling_texture_shift_down",
+        "command_modeling_texture_flip_face_horizontal",
+        "command_modeling_texture_flip_face_vertical"}) {
+    const QString object_name = QString::fromUtf8(
+        removed_from_main_menu.data(),
+        static_cast<qsizetype>(removed_from_main_menu.size()));
+    EXPECT_EQ(menu_bar.findChild<QAction *>(object_name), nullptr)
+        << removed_from_main_menu;
+  }
+
+  auto *connect_vertices = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_connect_vertices"));
+  auto *bevel_vertices = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_bevel_vertices"));
+  auto *dissolve_vertices = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_dissolve_vertices"));
+  auto *insert_edge_loop = menu_bar.findChild<QAction *>(
+      QStringLiteral("tool_insert_edge_loop"));
+  auto *bevel_edges = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_bevel_edges"));
+  auto *fill_hole = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_fill_hole"));
+  auto *dissolve_edges = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_dissolve_edges"));
+  auto *uv_peel = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_uv_peel"));
+  auto *extract_faces = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_extract_faces"));
+  auto *thicken_faces = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_thicken_faces"));
+  auto *invert_faces = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_invert_faces"));
+  auto *align_texture_to_grid = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_texture_align_to_grid"));
+  auto *duplicate_meshes = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_duplicate_meshes"));
+  auto *combine_mesh = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_combine_mesh"));
+  auto *merge_edges = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_merge_edges"));
+  auto *mirror_selection_x = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_mirror_selection_x"));
+  auto *recalculate_normals = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_recalculate_face_normals"));
+  auto *shade_faces_smooth = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_shade_faces_smooth"));
+  auto *invert_mesh = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_invert_mesh"));
+  auto *create_outer_hull = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_create_outer_hull"));
+  auto *half_cut = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_half_cut"));
+
+  ASSERT_NE(duplicate_meshes, nullptr);
+  ASSERT_NE(combine_mesh, nullptr);
+  ASSERT_NE(merge_edges, nullptr);
+  ASSERT_NE(mirror_selection_x, nullptr);
+  ASSERT_NE(recalculate_normals, nullptr);
+  ASSERT_NE(shade_faces_smooth, nullptr);
+  EXPECT_LT(mesh_menu->actions().indexOf(duplicate_meshes),
+            mesh_menu->actions().indexOf(combine_mesh));
+  EXPECT_LT(edge_menu->actions().indexOf(merge_edges),
+            edge_menu->actions().indexOf(edge_normals_menu->menuAction()));
+
+  const std::array<QMenu *, 5> component_menus{
+      mesh_menu, vertex_menu, edge_menu, face_menu, uv_menu};
+  const auto expect_owned_only_by =
+      [&](QAction *action, QMenu *expected_owner) {
+        ASSERT_NE(action, nullptr);
+        for (QMenu *candidate : component_menus) {
+          EXPECT_EQ(candidate->findChildren<QAction *>().contains(action),
+                    candidate == expected_owner)
+              << action->objectName().toStdString();
+        }
+      };
+  for (QAction *action :
+       {connect_vertices, bevel_vertices, dissolve_vertices}) {
+    expect_owned_only_by(action, vertex_menu);
+  }
+  for (QAction *action :
+       {insert_edge_loop, bevel_edges, fill_hole, dissolve_edges}) {
+    expect_owned_only_by(action, edge_menu);
+  }
+  for (QAction *action : {extract_faces, thicken_faces, invert_faces}) {
+    expect_owned_only_by(action, face_menu);
+  }
+  for (QAction *action : {uv_peel, align_texture_to_grid}) {
+    expect_owned_only_by(action, uv_menu);
+  }
+  for (QAction *action : {invert_mesh, create_outer_hull, half_cut}) {
+    expect_owned_only_by(action, mesh_menu);
+  }
+
+  const auto expect_cleanup_tail =
+      [](QMenu &owner,
+         std::initializer_list<std::string_view> cleanup_object_names) {
+        const QList<QAction *> actions = owner.actions();
+        ASSERT_GT(cleanup_object_names.size(), 0u);
+        ASSERT_GT(actions.size(),
+                  static_cast<qsizetype>(cleanup_object_names.size()));
+        const qsizetype first_cleanup =
+            actions.size() -
+            static_cast<qsizetype>(cleanup_object_names.size());
+        ASSERT_GT(first_cleanup, 0);
+        EXPECT_TRUE(actions[first_cleanup - 1]->isSeparator());
+        qsizetype action_index = first_cleanup;
+        for (const std::string_view object_name : cleanup_object_names) {
+          EXPECT_EQ(actions[action_index]->objectName(),
+                    QString::fromUtf8(
+                        object_name.data(),
+                        static_cast<qsizetype>(object_name.size())));
+          ++action_index;
+        }
+      };
+  expect_cleanup_tail(*mesh_menu, {"command_modeling_remove_doubles"});
+  expect_cleanup_tail(*vertex_menu,
+                      {"command_modeling_dissolve_vertices"});
+  expect_cleanup_tail(*edge_menu, {"command_modeling_dissolve_edges",
+                                   "command_modeling_collapse_edges"});
+  expect_cleanup_tail(*face_menu, {"command_modeling_collapse_faces"});
+
+  struct ComponentActionExpectation final {
+    QAction *action = nullptr;
+    QuaderCommandId command_id;
+    std::optional<QuaderSelectionMode> operand_mode;
+  };
+  const std::array<ComponentActionExpectation, 15> component_actions{{
+      {connect_vertices, quader_command::kModelingConnectVertices,
+       QuaderSelectionMode::Vertex},
+      {bevel_vertices, quader_command::kModelingBevelVertices,
+       QuaderSelectionMode::Vertex},
+      {dissolve_vertices, quader_command::kModelingDissolveVertices,
+       QuaderSelectionMode::Vertex},
+      {insert_edge_loop, quader_command::kToolsActivateInsertEdgeLoop,
+       QuaderSelectionMode::Edge},
+      {bevel_edges, quader_command::kModelingBevelEdges,
+       QuaderSelectionMode::Edge},
+      {fill_hole, quader_command::kModelingFillHole,
+       QuaderSelectionMode::Edge},
+      {dissolve_edges, quader_command::kModelingDissolveEdges,
+       QuaderSelectionMode::Edge},
+      {uv_peel, quader_command::kModelingUvPeel, QuaderSelectionMode::Edge},
+      {extract_faces, quader_command::kModelingExtractFaces,
+       QuaderSelectionMode::Face},
+      {thicken_faces, quader_command::kModelingThickenFaces,
+       QuaderSelectionMode::Face},
+      {invert_faces, quader_command::kModelingInvertFaces,
+       QuaderSelectionMode::Face},
+      {align_texture_to_grid, quader_command::kModelingTextureAlignToGrid,
+       QuaderSelectionMode::Face},
+      {invert_mesh, quader_command::kModelingInvertMesh, std::nullopt},
+      {create_outer_hull, quader_command::kModelingCreateOuterHull,
+       std::nullopt},
+      {half_cut, quader_command::kModelingHalfCut, std::nullopt},
+  }};
+  for (const QuaderSelectionMode mode :
+       {QuaderSelectionMode::Object, QuaderSelectionMode::Vertex,
+        QuaderSelectionMode::Edge, QuaderSelectionMode::Face,
+        QuaderSelectionMode::Group}) {
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    for (QMenu *component_menu : component_menus) {
+      ASSERT_TRUE(QMetaObject::invokeMethod(component_menu, "aboutToShow",
+                                            Qt::DirectConnection));
+      EXPECT_TRUE(component_menu->menuAction()->isVisible());
+    }
+    for (const auto &[action, command_id, operand_mode] : component_actions) {
+      ASSERT_NE(action, nullptr);
+      EXPECT_TRUE(action->isVisible()) << command_id.string();
+      const std::optional<QuaderCommandDescriptor> descriptor =
+          editor.commands().descriptor(command_id);
+      ASSERT_TRUE(descriptor.has_value()) << command_id.string();
+      const bool presentation_domain_matches =
+          !operand_mode.has_value() || *operand_mode == mode;
+      EXPECT_EQ(action->isEnabled(),
+                descriptor->enabled && presentation_domain_matches)
+          << command_id.string();
+    }
+    std::size_t projected_uv_commands = 0u;
+    for (QAction *action : uv_menu->findChildren<QAction *>()) {
+      const QVariant command_property = action->property("quaderCommandId");
+      if (!command_property.isValid()) {
+        continue;
+      }
+      ++projected_uv_commands;
+      const std::string command_id =
+          command_property.toString().toStdString();
+      const std::optional<QuaderCommandDescriptor> descriptor =
+          editor.commands().descriptor(
+              QuaderCommandId{std::string_view{command_id}});
+      ASSERT_TRUE(descriptor.has_value()) << command_id;
+      const bool presentation_domain_matches =
+          action == uv_peel ? mode == QuaderSelectionMode::Edge
+                            : mode == QuaderSelectionMode::Face;
+      EXPECT_EQ(action->isEnabled(),
+                descriptor->enabled && presentation_domain_matches)
+          << command_id;
+    }
+    EXPECT_EQ(projected_uv_commands, 16u);
+  }
+
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(QMetaObject::invokeMethod(vertex_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  ASSERT_TRUE(QMetaObject::invokeMethod(edge_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  ASSERT_TRUE(QMetaObject::invokeMethod(face_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  ASSERT_TRUE(QMetaObject::invokeMethod(uv_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_FALSE(connect_vertices->isEnabled());
+  EXPECT_FALSE(bevel_edges->isEnabled());
+  EXPECT_FALSE(invert_faces->isEnabled());
+  EXPECT_FALSE(uv_peel->isEnabled());
+  EXPECT_FALSE(align_texture_to_grid->isEnabled());
+  const std::optional<QuaderCommandDescriptor> shared_face_shading =
+      editor.commands().descriptor(quader_command::kModelingShadeFacesSmooth);
+  ASSERT_TRUE(shared_face_shading.has_value());
+  EXPECT_TRUE(shared_face_shading->enabled);
+  EXPECT_FALSE(shade_faces_smooth->isEnabled());
+  EXPECT_EQ(uv_peel->text(), QStringLiteral("UV Peel"));
+  EXPECT_EQ(align_texture_to_grid->text(), QStringLiteral("To Grid"));
+
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.selection().select_vertex(box.value(), 1).ok());
+  ASSERT_TRUE(editor.selection().select_all().ok());
+  ASSERT_GT(editor.selection().summary().selected_vertex_count, 0u);
+  ASSERT_TRUE(QMetaObject::invokeMethod(vertex_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_TRUE(bevel_vertices->isEnabled());
+
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(box.value(), 1, 2).ok());
+  ASSERT_TRUE(editor.selection().select_all().ok());
+  ASSERT_GT(editor.selection().summary().selected_edge_count, 0u);
+  ASSERT_TRUE(QMetaObject::invokeMethod(edge_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  ASSERT_TRUE(QMetaObject::invokeMethod(uv_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_TRUE(bevel_edges->isEnabled());
+  EXPECT_TRUE(uv_peel->isEnabled());
+  EXPECT_FALSE(align_texture_to_grid->isEnabled());
+
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_faces(box.value(), {1}).ok());
+  ASSERT_TRUE(QMetaObject::invokeMethod(face_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  ASSERT_TRUE(QMetaObject::invokeMethod(uv_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_TRUE(shade_faces_smooth->isEnabled());
+  EXPECT_FALSE(uv_peel->isEnabled());
+  EXPECT_TRUE(align_texture_to_grid->isEnabled());
+
+  auto *select_all =
+      menu_bar.findChild<QAction *>(QStringLiteral("command_select_all"));
+  auto *select_inverse =
+      menu_bar.findChild<QAction *>(QStringLiteral("command_select_inverse"));
   auto *toggle_backface_selection = menu_bar.findChild<QAction *>(
       QStringLiteral("command_select_toggle_backface_selection"));
   auto *select_direction = menu_bar.findChild<QAction *>(
       QStringLiteral("command_select_edge_direction"));
   auto *select_loops = menu_bar.findChild<QAction *>(
       QStringLiteral("command_select_edge_loops"));
-  auto *select_ring = menu_bar.findChild<QAction *>(
-      QStringLiteral("command_select_edge_ring"));
+  auto *select_ring =
+      menu_bar.findChild<QAction *>(QStringLiteral("command_select_edge_ring"));
   auto *select_same_material = menu_bar.findChild<QAction *>(
       QStringLiteral("command_select_face_same_material"));
   auto *select_coplanar = menu_bar.findChild<QAction *>(
@@ -2350,18 +2784,27 @@ TEST(QtMainMenuTests, SelectMenuTracksSelectionModeAndOwnsSelectionCommands) {
       QStringLiteral("command_select_mesh_ngons"));
   auto *select_similar = menu_bar.findChild<QAction *>(
       QStringLiteral("command_select_mesh_similar"));
-  auto *grow = menu_bar.findChild<QAction *>(
-      QStringLiteral("command_select_grow"));
-  auto *shrink = menu_bar.findChild<QAction *>(
-      QStringLiteral("command_select_shrink"));
+  auto *grow =
+      menu_bar.findChild<QAction *>(QStringLiteral("command_select_grow"));
+  auto *shrink =
+      menu_bar.findChild<QAction *>(QStringLiteral("command_select_shrink"));
   auto *clear_selection = menu_bar.findChild<QAction *>(
       QStringLiteral("command_edit_clear_selection"));
 
-  const std::array<QAction *, 13> select_actions{
-      select_all,          select_inverse,       toggle_backface_selection,
-      select_direction,    select_loops,         select_ring,
-      select_same_material, select_coplanar,     select_normal,
-      select_ngons,        select_similar,       grow,
+  const std::array<QAction *, 14> select_actions{
+      clear_selection,
+      select_all,
+      select_inverse,
+      toggle_backface_selection,
+      select_direction,
+      select_loops,
+      select_ring,
+      select_same_material,
+      select_coplanar,
+      select_normal,
+      select_ngons,
+      select_similar,
+      grow,
       shrink,
   };
   for (QAction *action : select_actions) {
@@ -2369,54 +2812,118 @@ TEST(QtMainMenuTests, SelectMenuTracksSelectionModeAndOwnsSelectionCommands) {
     EXPECT_TRUE(select_menu->actions().contains(action));
     EXPECT_FALSE(edit_menu->actions().contains(action));
   }
-  ASSERT_NE(clear_selection, nullptr);
-  EXPECT_TRUE(edit_menu->actions().contains(clear_selection));
-  EXPECT_FALSE(select_menu->actions().contains(clear_selection));
 
   const std::array<QAction *, 10> mode_specific_actions{
-      select_direction, select_loops,         select_ring,
-      select_same_material, select_coplanar,  select_normal,
-      select_ngons,     select_similar,       grow,
+      select_direction,
+      select_loops,
+      select_ring,
+      select_same_material,
+      select_coplanar,
+      select_normal,
+      select_ngons,
+      select_similar,
+      grow,
       shrink,
   };
-  const auto expect_visible_for_mode =
-      [&](QuaderSelectionMode mode,
-          std::initializer_list<QAction *> expected_visible) {
-        ASSERT_TRUE(editor.selection().set_mode(mode).ok());
-        ASSERT_TRUE(QMetaObject::invokeMethod(select_menu, "aboutToShow",
-                                              Qt::DirectConnection));
-        const std::set<QAction *> visible(expected_visible);
-        EXPECT_TRUE(select_all->isVisible());
-        EXPECT_TRUE(select_inverse->isVisible());
-        EXPECT_TRUE(toggle_backface_selection->isVisible());
-        for (QAction *action : mode_specific_actions) {
-          EXPECT_EQ(action->isVisible(), visible.contains(action));
-        }
-      };
+  const auto expect_visible_for_mode = [&](QuaderSelectionMode mode) {
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(QMetaObject::invokeMethod(select_menu, "aboutToShow",
+                                          Qt::DirectConnection));
+    EXPECT_TRUE(select_all->isVisible());
+    EXPECT_TRUE(select_inverse->isVisible());
+    EXPECT_TRUE(toggle_backface_selection->isVisible());
+    for (QAction *action : mode_specific_actions) {
+      EXPECT_TRUE(action->isVisible());
+    }
+  };
 
-  expect_visible_for_mode(QuaderSelectionMode::Object,
-                          {select_ngons, select_similar});
-  expect_visible_for_mode(
-      QuaderSelectionMode::Edge,
-      {select_direction, select_loops, select_ring, grow, shrink});
-  expect_visible_for_mode(
-      QuaderSelectionMode::Face,
-      {select_same_material, select_coplanar, select_normal, grow, shrink});
-  expect_visible_for_mode(QuaderSelectionMode::Vertex, {grow, shrink});
-  expect_visible_for_mode(QuaderSelectionMode::Group, {});
+  expect_visible_for_mode(QuaderSelectionMode::Object);
+  expect_visible_for_mode(QuaderSelectionMode::Edge);
+  expect_visible_for_mode(QuaderSelectionMode::Face);
+  expect_visible_for_mode(QuaderSelectionMode::Vertex);
+  expect_visible_for_mode(QuaderSelectionMode::Group);
 
   EXPECT_TRUE(toggle_backface_selection->isCheckable());
   EXPECT_FALSE(toggle_backface_selection->isChecked());
   EXPECT_EQ(toggle_backface_selection->text(),
             QStringLiteral("Toggle Backface Selection\tCtrl+Shift+F9"));
   toggle_backface_selection->trigger();
-  EXPECT_TRUE(viewport_settings.bool_value(
-      ViewportBoolSettingId::BackfaceSelection));
+  EXPECT_TRUE(
+      viewport_settings.bool_value(ViewportBoolSettingId::BackfaceSelection));
   EXPECT_TRUE(toggle_backface_selection->isChecked());
+
+  ASSERT_TRUE(localization.select_locale("it-IT"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(mesh_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  ASSERT_TRUE(QMetaObject::invokeMethod(face_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  ASSERT_TRUE(QMetaObject::invokeMethod(uv_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_TRUE(mirror_selection_x->text().startsWith(
+      QStringLiteral("Specchia selezione lungo l'asse X")));
+  EXPECT_TRUE(recalculate_normals->text().startsWith(
+      QStringLiteral("Ricalcola normali di mesh o facce selezionate")));
+  EXPECT_TRUE(shade_faces_smooth->text().startsWith(QStringLiteral(
+      "Imposta ombreggiatura morbida su mesh o facce selezionate")));
+  menu.rebuild();
+  EXPECT_EQ(menu_bar.findChild<QMenu *>(QStringLiteral("menu_mesh"))->title(),
+            QStringLiteral("Me&sh"));
+  EXPECT_EQ(menu_bar.findChild<QMenu *>(QStringLiteral("menu_vertex"))->title(),
+            QStringLiteral("Ver&tice"));
+  EXPECT_EQ(menu_bar.findChild<QMenu *>(QStringLiteral("menu_edge"))->title(),
+            QStringLiteral("Spi&golo"));
+  EXPECT_EQ(menu_bar.findChild<QMenu *>(QStringLiteral("menu_face"))->title(),
+            QStringLiteral("Facc&ia"));
+  auto *localized_uv_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_uv"));
+  ASSERT_NE(localized_uv_menu, nullptr);
+  EXPECT_EQ(localized_uv_menu->title(), QStringLiteral("&UV"));
+  auto *localized_uv_align =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_uv_align"));
+  auto *localized_uv_flip =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_uv_flip"));
+  auto *localized_uv_fit =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_uv_fit"));
+  auto *localized_uv_justify =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_uv_justify"));
+  ASSERT_NE(localized_uv_align, nullptr);
+  ASSERT_NE(localized_uv_flip, nullptr);
+  ASSERT_NE(localized_uv_fit, nullptr);
+  ASSERT_NE(localized_uv_justify, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(localized_uv_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_EQ(localized_uv_align->title(), QStringLiteral("Allinea"));
+  EXPECT_EQ(localized_uv_flip->title(), QStringLiteral("Ribalta"));
+  EXPECT_EQ(localized_uv_fit->title(), QStringLiteral("Adatta"));
+  EXPECT_EQ(localized_uv_justify->title(), QStringLiteral("Giustifica"));
+  EXPECT_EQ(localized_uv_align->actions()[0]->text(),
+            QStringLiteral("Alla griglia"));
+  EXPECT_EQ(localized_uv_flip->actions()[0]->text(),
+            QStringLiteral("Orizzontale"));
+  EXPECT_EQ(localized_uv_fit->actions()[0]->text(),
+            QStringLiteral("Entrambi gli assi"));
+  EXPECT_EQ(localized_uv_justify->actions()[0]->text(),
+            QStringLiteral("Sinistra"));
+  auto *localized_rotate_cw = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_texture_rotate_clockwise"));
+  auto *localized_rotate_ccw = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_texture_rotate_counter_clockwise"));
+  ASSERT_NE(localized_rotate_cw, nullptr);
+  ASSERT_NE(localized_rotate_ccw, nullptr);
+  EXPECT_EQ(localized_rotate_cw->text(),
+            QStringLiteral("Ruota in senso orario"));
+  EXPECT_EQ(localized_rotate_ccw->text(),
+            QStringLiteral("Ruota in senso antiorario"));
+  EXPECT_EQ(
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_face_texture_align")),
+      nullptr);
+  EXPECT_EQ(
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_face_texture_justify")),
+      nullptr);
 }
 
 TEST(QtMainMenuTests,
-     AlignMenuRemainsVisibleAndRefreshesLeavesAcrossSelectionModes) {
+     ObjectArrangeMenuRemainsVisibleAndOwnsTheSingleGridSnapControl) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-align-menu-tests";
@@ -2429,13 +2936,11 @@ TEST(QtMainMenuTests,
       QuaderApiSessionInternalAccess::from_scene_session(session));
   const QuaderApiResult<QuaderModelingObjectRef> first =
       editor.modeling().create_box(
-          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
-                       .max = {1.0f, 1.0f, 1.0f}},
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
           "Align Menu First");
   const QuaderApiResult<QuaderModelingObjectRef> second =
       editor.modeling().create_box(
-          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
-                       .max = {1.0f, 1.0f, 1.0f}},
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
           "Align Menu Second");
   ASSERT_TRUE(first.ok()) << first.error_message();
   ASSERT_TRUE(second.ok()) << second.error_message();
@@ -2454,38 +2959,50 @@ TEST(QtMainMenuTests,
     };
   };
   editor.preferences().set_runtime_hooks(QuaderPreferencesRuntimeHooks{
-      .grid_snap_enabled = [&] {
-        return viewport_settings.bool_value(ViewportBoolSettingId::GridSnap);
-      },
-      .set_grid_snap_enabled = [&](bool enabled) {
-        return runtime_result(viewport_settings.set_bool_value(
-            ViewportBoolSettingId::GridSnap, enabled));
-      },
+      .grid_snap_enabled =
+          [&] {
+            return viewport_settings.bool_value(
+                ViewportBoolSettingId::GridSnap);
+          },
+      .set_grid_snap_enabled =
+          [&](bool enabled) {
+            return runtime_result(viewport_settings.set_bool_value(
+                ViewportBoolSettingId::GridSnap, enabled));
+          },
   });
 
   LocalizationService localization = loaded_localization();
   QMenuBar menu_bar;
   QtMainMenu menu;
-  menu.initialize(menu_bar,
-                  QtMainMenuContext{
-                      .editor = editor,
-                      .modeling = session.modeling(),
-                      .viewport_settings = viewport_settings,
-                      .localization = localization,
-                  });
+  menu.initialize(menu_bar, QtMainMenuContext{
+                                .editor = editor,
+                                .modeling = session.modeling(),
+                                .viewport_settings = viewport_settings,
+                                .localization = localization,
+                            });
 
-  auto *edit_menu =
-      menu_bar.findChild<QMenu *>(QStringLiteral("menu_edit"));
-  auto *align_menu =
-      menu_bar.findChild<QMenu *>(QStringLiteral("menu_align"));
+  auto *edit_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_edit"));
+  auto *object_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_object"));
+  auto *arrange_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_object_arrange"));
+  auto *snapping_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_object_snapping"));
   auto *align_x_min = menu_bar.findChild<QAction *>(
       QStringLiteral("command_modeling_align_x_min"));
-  auto *snap_to_grid = menu_bar.findChild<QAction *>(
-      QStringLiteral("action_align_snap_to_grid"));
+  auto *grid_snap =
+      menu_bar.findChild<QAction *>(QStringLiteral("action_grid_snap"));
   ASSERT_NE(edit_menu, nullptr);
-  ASSERT_NE(align_menu, nullptr);
+  ASSERT_NE(object_menu, nullptr);
+  ASSERT_NE(arrange_menu, nullptr);
+  ASSERT_NE(snapping_menu, nullptr);
   ASSERT_NE(align_x_min, nullptr);
-  ASSERT_NE(snap_to_grid, nullptr);
+  ASSERT_NE(grid_snap, nullptr);
+  EXPECT_TRUE(arrange_menu->findChildren<QAction *>().contains(align_x_min));
+  EXPECT_TRUE(snapping_menu->actions().contains(grid_snap));
+  EXPECT_EQ(menu_bar.findChild<QAction *>(
+                QStringLiteral("action_align_snap_to_grid")),
+            nullptr);
 
   for (const QuaderSelectionMode mode :
        {QuaderSelectionMode::Object, QuaderSelectionMode::Edge,
@@ -2497,19 +3014,18 @@ TEST(QtMainMenuTests,
     // top-level menu after changing selection mode.
     ASSERT_TRUE(QMetaObject::invokeMethod(edit_menu, "aboutToShow",
                                           Qt::DirectConnection));
-    EXPECT_TRUE(align_menu->menuAction()->isVisible());
+    EXPECT_TRUE(object_menu->menuAction()->isVisible());
 
-    ASSERT_TRUE(QMetaObject::invokeMethod(align_menu, "aboutToShow",
+    ASSERT_TRUE(QMetaObject::invokeMethod(object_menu, "aboutToShow",
                                           Qt::DirectConnection));
     EXPECT_EQ(align_x_min->isEnabled(), mode == QuaderSelectionMode::Object);
-    EXPECT_TRUE(snap_to_grid->isEnabled());
-    EXPECT_TRUE(snap_to_grid->isCheckable());
+    EXPECT_TRUE(grid_snap->isEnabled());
+    EXPECT_TRUE(grid_snap->isCheckable());
   }
 
-  ASSERT_TRUE(snap_to_grid->isChecked());
-  snap_to_grid->trigger();
-  EXPECT_FALSE(
-      viewport_settings.bool_value(ViewportBoolSettingId::GridSnap));
+  ASSERT_TRUE(grid_snap->isChecked());
+  grid_snap->trigger();
+  EXPECT_FALSE(viewport_settings.bool_value(ViewportBoolSettingId::GridSnap));
 }
 
 TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
@@ -2530,14 +3046,12 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings).ok());
   const QuaderApiResult<QuaderModelingObjectRef> box =
       editor.modeling().create_box(
-          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
-                       .max = {1.0f, 1.0f, 1.0f}},
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
           "Menu Pivot Box");
   ASSERT_TRUE(box.ok()) << box.error_message();
   const QuaderApiResult<QuaderModelingObjectRef> baseline_box =
       editor.modeling().create_box(
-          QuaderBounds{.min = {3.0f, -1.0f, -1.0f},
-                       .max = {5.0f, 1.0f, 1.0f}},
+          QuaderBounds{.min = {3.0f, -1.0f, -1.0f}, .max = {5.0f, 1.0f, 1.0f}},
           "Menu Local Visibility Baseline");
   ASSERT_TRUE(baseline_box.ok()) << baseline_box.error_message();
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
@@ -2549,28 +3063,28 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   int material_browser_requests = 0;
   bool material_browser_available = false;
   UISettings panel_settings = UISettings::defaults();
-  menu.initialize(menu_bar,
-                  QtMainMenuContext{
-                      .editor = editor,
-                      .modeling = session.modeling(),
-                      .viewport_settings = viewport_settings,
-                      .localization = localization,
-                      .panel_visible = [&panel_settings](UIPanelId id) {
-                        return panel_settings.is_panel_visible(id);
-                      },
-                      .set_panel_visible =
-                          [&panel_settings](UIPanelId id, bool visible) {
-                            panel_settings.set_panel_visible(id, visible);
-                          },
-                      .show_material_browser =
-                          [&material_browser_requests]() {
-                            ++material_browser_requests;
-                          },
-                      .material_browser_available =
-                          [&material_browser_available]() {
-                            return material_browser_available;
-                          },
-                  });
+  menu.initialize(
+      menu_bar,
+      QtMainMenuContext{
+          .editor = editor,
+          .modeling = session.modeling(),
+          .viewport_settings = viewport_settings,
+          .localization = localization,
+          .panel_visible =
+              [&panel_settings](UIPanelId id) {
+                return panel_settings.is_panel_visible(id);
+              },
+          .set_panel_visible =
+              [&panel_settings](UIPanelId id, bool visible) {
+                panel_settings.set_panel_visible(id, visible);
+              },
+          .show_material_browser =
+              [&material_browser_requests]() { ++material_browser_requests; },
+          .material_browser_available =
+              [&material_browser_available]() {
+                return material_browser_available;
+              },
+      });
   // Menu descriptors are intentionally synchronized on demand; initialization
   // only builds the retained hierarchy and global chrome.
   menu.refresh();
@@ -2578,8 +3092,8 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
       menu_bar.findChild<QAction *>(QStringLiteral("tool_pivot"));
   ASSERT_NE(pivot_action, nullptr);
   EXPECT_TRUE(pivot_action->text().contains(QStringLiteral("\tP")));
-  auto *two_vertical = menu_bar.findChild<QAction *>(
-      QStringLiteral("layout_two_vertical"));
+  auto *two_vertical =
+      menu_bar.findChild<QAction *>(QStringLiteral("layout_two_vertical"));
   ASSERT_NE(two_vertical, nullptr);
   EXPECT_TRUE(two_vertical->text().contains(QStringLiteral("\tCtrl+2")));
   auto *local_visibility_action = menu_bar.findChild<QAction *>(
@@ -2591,8 +3105,8 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   EXPECT_TRUE(local_visibility_action->shortcut().isEmpty());
   EXPECT_EQ(local_visibility_action->text(),
             QStringLiteral("Toggle Local Visibility\tBackslash"));
-  auto *material_browser_action = menu_bar.findChild<QAction *>(
-      QStringLiteral("action_material_browser"));
+  auto *material_browser_action =
+      menu_bar.findChild<QAction *>(QStringLiteral("action_material_browser"));
   ASSERT_NE(material_browser_action, nullptr);
   EXPECT_FALSE(material_browser_action->isEnabled());
   material_browser_available = true;
@@ -2602,8 +3116,8 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
             QStringLiteral("Material Browser"));
   material_browser_action->trigger();
   EXPECT_EQ(material_browser_requests, 1);
-  auto *active_material_action = menu_bar.findChild<QAction *>(
-      QStringLiteral("panel_active_material"));
+  auto *active_material_action =
+      menu_bar.findChild<QAction *>(QStringLiteral("panel_active_material"));
   ASSERT_NE(active_material_action, nullptr);
   EXPECT_EQ(active_material_action->text(), QStringLiteral("Active Material"));
   EXPECT_TRUE(active_material_action->isChecked());
@@ -2626,19 +3140,17 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   EXPECT_TRUE(create_instance_action->isEnabled());
   EXPECT_FALSE(flatten_instance_action->isEnabled());
 
-  ASSERT_TRUE(editor.preferences()
-                  .set_shortcut(quader_command::kToolsActivatePivot,
-                                "Ctrl+Alt+P")
-                  .ok());
+  ASSERT_TRUE(
+      editor.preferences()
+          .set_shortcut(quader_command::kToolsActivatePivot, "Ctrl+Alt+P")
+          .ok());
   ASSERT_TRUE(editor.preferences()
                   .set_shortcut(quader_command::kViewportLayoutTwoVertical,
                                 "Ctrl+Alt+2")
                   .ok());
   menu.refresh();
-  EXPECT_TRUE(
-      pivot_action->text().contains(QStringLiteral("\tCtrl+Alt+P")));
-  EXPECT_TRUE(
-      two_vertical->text().contains(QStringLiteral("\tCtrl+Alt+2")));
+  EXPECT_TRUE(pivot_action->text().contains(QStringLiteral("\tCtrl+Alt+P")));
+  EXPECT_TRUE(two_vertical->text().contains(QStringLiteral("\tCtrl+Alt+2")));
   EXPECT_FALSE(editor.commands().last_status().has_value());
 
   pivot_action->trigger();
@@ -2658,13 +3170,11 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   EXPECT_FALSE(local_visibility_action->isChecked());
 
   ASSERT_TRUE(editor.commands()
-                  .execute(
-                      quader_command::kViewportToggleLocalVisibility)
+                  .execute(quader_command::kViewportToggleLocalVisibility)
                   .ok());
   EXPECT_TRUE(editor.viewports().local_visibility_active());
   EXPECT_FALSE(local_visibility_action->isChecked());
-  auto *view_menu =
-      menu_bar.findChild<QMenu *>(QStringLiteral("menu_view"));
+  auto *view_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_view"));
   ASSERT_NE(view_menu, nullptr);
   ASSERT_TRUE(QMetaObject::invokeMethod(view_menu, "aboutToShow",
                                         Qt::DirectConnection));
@@ -2695,25 +3205,27 @@ TEST(QtMainMenuTests,
   bool available = false;
   int presentation_requests = 0;
   menu.initialize(
-      menu_bar,
-      QtMainMenuContext{
-          .editor = editor,
-          .modeling = session.modeling(),
-          .viewport_settings = viewport_settings,
-          .localization = localization,
-          .show_material_find_replace =
-              [&presentation_requests]() { ++presentation_requests; },
-          .material_find_replace_available =
-              [&available]() { return available; },
-      });
+      menu_bar, QtMainMenuContext{
+                    .editor = editor,
+                    .modeling = session.modeling(),
+                    .viewport_settings = viewport_settings,
+                    .localization = localization,
+                    .show_material_find_replace =
+                        [&presentation_requests]() { ++presentation_requests; },
+                    .material_find_replace_available =
+                        [&available]() { return available; },
+                });
 
-  auto *edit_menu =
-      menu_bar.findChild<QMenu *>(QStringLiteral("menu_edit"));
+  auto *object_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_object"));
+  auto *materials_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_object_materials"));
   auto *find_replace = menu_bar.findChild<QAction *>(
       QStringLiteral("action_material_find_replace"));
-  ASSERT_NE(edit_menu, nullptr);
+  ASSERT_NE(object_menu, nullptr);
+  ASSERT_NE(materials_menu, nullptr);
   ASSERT_NE(find_replace, nullptr);
-  EXPECT_TRUE(edit_menu->actions().contains(find_replace));
+  EXPECT_TRUE(materials_menu->actions().contains(find_replace));
   EXPECT_TRUE(find_replace->shortcut().isEmpty());
   EXPECT_FALSE(find_replace->isEnabled());
   find_replace->trigger();
@@ -2721,22 +3233,23 @@ TEST(QtMainMenuTests,
   EXPECT_FALSE(editor.commands().last_status().has_value());
 
   available = true;
-  ASSERT_TRUE(QMetaObject::invokeMethod(edit_menu, "aboutToShow",
+  ASSERT_TRUE(QMetaObject::invokeMethod(object_menu, "aboutToShow",
                                         Qt::DirectConnection));
   EXPECT_TRUE(find_replace->isEnabled());
-  EXPECT_EQ(find_replace->text(), QString::fromUtf8("Find/Replace…"));
+  EXPECT_EQ(find_replace->text(),
+            QString::fromUtf8("Find/Replace Materials…"));
   find_replace->trigger();
   EXPECT_EQ(presentation_requests, 1);
   EXPECT_FALSE(editor.commands().last_status().has_value());
 
   ASSERT_TRUE(localization.select_locale("it-IT"));
-  ASSERT_TRUE(QMetaObject::invokeMethod(edit_menu, "aboutToShow",
+  ASSERT_TRUE(QMetaObject::invokeMethod(object_menu, "aboutToShow",
                                         Qt::DirectConnection));
   EXPECT_EQ(find_replace->text(),
-            QString::fromUtf8("Trova/Sostituisci…"));
+            QString::fromUtf8("Trova/Sostituisci materiali…"));
 
   available = false;
-  ASSERT_TRUE(QMetaObject::invokeMethod(edit_menu, "aboutToShow",
+  ASSERT_TRUE(QMetaObject::invokeMethod(object_menu, "aboutToShow",
                                         Qt::DirectConnection));
   EXPECT_FALSE(find_replace->isEnabled());
 }

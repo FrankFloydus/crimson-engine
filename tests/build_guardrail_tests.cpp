@@ -3803,8 +3803,8 @@ TEST(BuildGuardrailTests, QtViewportKeepsMultiPaneLayoutWorkspace) {
                  "workspace{ViewportWorkspaceLayoutPolicy::SinglePaneOnly}");
   expect_missing(scene_session_header,
                  "ViewportWorkspaceLayoutPolicy::SinglePaneOnly");
-  expect_contains(main_menu_source,
-                  "context.editor.get().viewports().set_layout(layout)");
+  expect_missing(main_menu_source,
+                 "context.editor.get().viewports().set_layout(layout)");
   expect_contains(viewport_panel_header,
                   "std::array<Pane, kViewportPaneCount> panes_");
   expect_contains(viewport_panel_source, "ViewportPaneId::Perspective");

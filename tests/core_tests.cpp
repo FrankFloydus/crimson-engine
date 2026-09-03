@@ -93,6 +93,7 @@
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/modeling_sdk_viewport_input_adapter.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
+#include "viewport/viewport_camera_clip_planes.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_grid_placement_policy.hpp"
 #include "viewport/viewport_input_router.hpp"
@@ -4408,37 +4409,73 @@ TEST(ViewportContextMenuPolicyTests,
 
 TEST(ViewportContextMenuPolicyTests,
      SeparatesTopologyActionsFromObjectAndGroupIntent) {
-  EXPECT_EQ(viewport_context_menu_modeling_section(
-                QuaderSelectionMode::Object),
+  EXPECT_EQ(viewport_context_menu_modeling_section(QuaderSelectionMode::Object),
             ViewportContextMenuModelingSection::Mesh);
-  EXPECT_EQ(viewport_context_menu_modeling_section(
-                QuaderSelectionMode::Vertex),
+  EXPECT_EQ(viewport_context_menu_modeling_section(QuaderSelectionMode::Vertex),
             ViewportContextMenuModelingSection::Vertex);
-  EXPECT_EQ(viewport_context_menu_modeling_section(
-                QuaderSelectionMode::Edge),
+  EXPECT_EQ(viewport_context_menu_modeling_section(QuaderSelectionMode::Edge),
             ViewportContextMenuModelingSection::Edge);
-  EXPECT_EQ(viewport_context_menu_modeling_section(
-                QuaderSelectionMode::Face),
+  EXPECT_EQ(viewport_context_menu_modeling_section(QuaderSelectionMode::Face),
             ViewportContextMenuModelingSection::Face);
-  EXPECT_FALSE(viewport_context_menu_modeling_section(
-                   QuaderSelectionMode::Group)
-                   .has_value());
+  EXPECT_FALSE(
+      viewport_context_menu_modeling_section(QuaderSelectionMode::Group)
+          .has_value());
 
-  EXPECT_EQ(viewport_context_menu_action_bucket(
+  EXPECT_EQ(viewport_context_menu_action_bucket(QuaderSelectionMode::Object,
+                                                "duplicate_meshes"),
+            ViewportContextMenuActionBucket::Modeling);
+  EXPECT_EQ(viewport_context_menu_action_bucket(QuaderSelectionMode::Object,
+                                                "copy_pivot_from_active"),
+            ViewportContextMenuActionBucket::Object);
+  EXPECT_EQ(viewport_context_menu_action_bucket(QuaderSelectionMode::Object,
+                                                "delete_selection"),
+            ViewportContextMenuActionBucket::Object);
+  EXPECT_EQ(viewport_context_menu_action_bucket(QuaderSelectionMode::Face,
+                                                "delete_selection"),
+            ViewportContextMenuActionBucket::Modeling);
+  EXPECT_EQ(viewport_context_menu_action_bucket(QuaderSelectionMode::Group,
+                                                "delete_selection"),
+            ViewportContextMenuActionBucket::Object);
+
+  EXPECT_EQ(viewport_context_menu_action_disposition(
+                QuaderSelectionMode::Object, "combine_mesh"),
+            ViewportContextMenuActionDisposition::Primary);
+  EXPECT_EQ(viewport_context_menu_action_disposition(
                 QuaderSelectionMode::Object, "duplicate_meshes"),
-            ViewportContextMenuActionBucket::Modeling);
-  EXPECT_EQ(viewport_context_menu_action_bucket(
-                QuaderSelectionMode::Object, "copy_pivot_from_active"),
-            ViewportContextMenuActionBucket::Object);
-  EXPECT_EQ(viewport_context_menu_action_bucket(
-                QuaderSelectionMode::Object, "delete_selection"),
-            ViewportContextMenuActionBucket::Object);
-  EXPECT_EQ(viewport_context_menu_action_bucket(
-                QuaderSelectionMode::Face, "delete_selection"),
-            ViewportContextMenuActionBucket::Modeling);
-  EXPECT_EQ(viewport_context_menu_action_bucket(
-                QuaderSelectionMode::Group, "delete_selection"),
-            ViewportContextMenuActionBucket::Object);
+            ViewportContextMenuActionDisposition::Catalog);
+  EXPECT_EQ(viewport_context_menu_action_disposition(
+                QuaderSelectionMode::Object, "shade_smooth_mesh"),
+            ViewportContextMenuActionDisposition::Catalog);
+  EXPECT_EQ(viewport_context_menu_action_disposition(
+                QuaderSelectionMode::Vertex, "merge_vertices"),
+            ViewportContextMenuActionDisposition::Catalog);
+  EXPECT_EQ(viewport_context_menu_action_disposition(
+                QuaderSelectionMode::Vertex, "snap_vertices_to_floor"),
+            ViewportContextMenuActionDisposition::Catalog);
+  EXPECT_EQ(viewport_context_menu_action_disposition(QuaderSelectionMode::Edge,
+                                                     "bevel_edges"),
+            ViewportContextMenuActionDisposition::Primary);
+  EXPECT_EQ(viewport_context_menu_action_disposition(QuaderSelectionMode::Edge,
+                                                     "harden_edge_normals"),
+            ViewportContextMenuActionDisposition::Catalog);
+  EXPECT_EQ(viewport_context_menu_action_disposition(QuaderSelectionMode::Face,
+                                                     "detach_faces"),
+            ViewportContextMenuActionDisposition::Catalog);
+  EXPECT_EQ(viewport_context_menu_action_disposition(QuaderSelectionMode::Face,
+                                                     "delete_selection"),
+            ViewportContextMenuActionDisposition::Catalog);
+  EXPECT_EQ(viewport_context_menu_action_disposition(QuaderSelectionMode::Group,
+                                                     "duplicate_meshes"),
+            ViewportContextMenuActionDisposition::Suppressed);
+
+  EXPECT_LT(viewport_context_menu_primary_rank(QuaderSelectionMode::Edge,
+                                               "bevel_edges"),
+            viewport_context_menu_primary_rank(QuaderSelectionMode::Edge,
+                                               "bridge_edges"));
+  EXPECT_LT(viewport_context_menu_primary_rank(QuaderSelectionMode::Face,
+                                               "thicken_faces"),
+            viewport_context_menu_primary_rank(QuaderSelectionMode::Face,
+                                               "combine_faces"));
 }
 
 TEST(ViewportContextMenuPolicyTests, BlocksModalToolsMissingActionsAndDrags) {
@@ -4471,7 +4508,6 @@ TEST(ViewportContextMenuPolicyTests, BlocksModalToolsMissingActionsAndDrags) {
   request.accumulated_drag_delta = {20.0f, 0.0f};
   EXPECT_FALSE(should_open_viewport_context_menu(request));
 }
-
 
 TEST(ViewportContextMenuPolicyTests,
      BlocksCapturedFlyDragEvenWhenCursorReturnsToPressPoint) {
@@ -7444,6 +7480,54 @@ TEST(ViewportCameraTests,
   expect_vec3_near(camera.pose().up, before_invalid.up);
 }
 
+TEST(ViewportCameraTests,
+     RestoredSubNearPlanePosesKeepTheirTargetRenderableAndZoomReversible) {
+  for (const float authored_distance : {0.000002f, 0.0005f, 0.001f}) {
+    SCOPED_TRACE(authored_distance);
+    ViewportCameraController camera;
+    const ViewportCameraPose authored{
+        .eye = {0.0f, 0.0f, 0.0f},
+        .target = {0.0f, 0.0f, -authored_distance},
+        .up = {0.0f, 1.0f, 0.0f},
+    };
+
+    ASSERT_TRUE(camera.restore_perspective_pose(authored));
+    camera.set_clip_planes(0.05f, 1000.0f);
+
+    const ViewportCameraPose restored = camera.pose();
+    EXPECT_NEAR(camera.state().distance,
+                2.0f * kViewportCameraMinimumNearPlane, 0.0000001f);
+    EXPECT_LT(camera.state().near_plane, camera.state().distance);
+    EXPECT_FLOAT_EQ(restored.target.x, authored.target.x);
+    EXPECT_FLOAT_EQ(restored.target.y, authored.target.y);
+    EXPECT_FLOAT_EQ(restored.target.z, authored.target.z);
+    EXPECT_NEAR(restored.eye.z,
+                authored.target.z + camera.state().distance, 0.0000001f);
+    EXPECT_NEAR(dot(normalize(restored.target - restored.eye),
+                    normalize(authored.target - authored.eye)),
+                1.0f, 0.000001f);
+    ASSERT_TRUE(camera.project_world_point(restored.target).visible);
+
+    camera.scroll(-1.0f);
+    ASSERT_NEAR(camera.state().distance,
+                2.0f * kViewportCameraMinimumNearPlane *
+                    static_cast<float>(
+                        quader_editor_core::kNavigationZoomStepFactor),
+                0.000001f);
+    camera.scroll(1.0f);
+
+    EXPECT_NEAR(camera.state().distance,
+                2.0f * kViewportCameraMinimumNearPlane, 0.0000001f);
+    EXPECT_NEAR(camera.pose().eye.x, restored.eye.x, 0.0000001f);
+    EXPECT_NEAR(camera.pose().eye.y, restored.eye.y, 0.0000001f);
+    EXPECT_NEAR(camera.pose().eye.z, restored.eye.z, 0.0000001f);
+    EXPECT_NEAR(camera.pose().target.x, restored.target.x, 0.000000001f);
+    EXPECT_NEAR(camera.pose().target.y, restored.target.y, 0.000000001f);
+    EXPECT_NEAR(camera.pose().target.z, restored.target.z, 0.000000001f);
+    EXPECT_TRUE(camera.project_world_point(restored.target).visible);
+  }
+}
+
 TEST(ViewportWorkspaceServiceTests,
      AuxiliaryViewportRecordsOwnWindowedCameraAndRenderState) {
   ViewportWorkspaceService workspace;
@@ -7867,6 +7951,467 @@ TEST(ViewportCameraTests, OrbitPanAndZoomChangePose) {
   EXPECT_LT(camera.state().distance, initial_distance);
 }
 
+TEST(ViewportCameraTests,
+     PerspectiveWheelZoomRoundTripsWithoutChangingPannedTarget) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(20.0f);
+  camera.begin_drag({120.0f, 140.0f}, ViewportDragMode::Pan);
+  camera.update_drag({245.0f, 205.0f});
+  camera.end_drag();
+
+  const ViewportCameraPose before = camera.pose();
+  const float initial_distance = camera.state().distance;
+  camera.scroll(-3.25f);
+  EXPECT_GT(camera.state().distance, initial_distance);
+
+  camera.scroll(3.25f);
+
+  EXPECT_NEAR(camera.state().distance, initial_distance, 0.001f);
+  expect_vec3_near(camera.state().target, before.target);
+  expect_vec3_near(camera.pose().eye, before.eye);
+}
+
+TEST(ViewportCameraTests,
+     PerspectiveZoomLimitKeepsPannedOrbitPivotStable) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(490.0f);
+  camera.begin_drag({100.0f, 100.0f}, ViewportDragMode::Pan);
+  camera.update_drag({190.0f, 155.0f});
+  camera.end_drag();
+
+  const ViewportCameraPose panned_pose = camera.pose();
+  const QVec3 panned_target = camera.state().target;
+  camera.scroll(-1.0f);
+
+  const float crossed_distance = 490.0f * 1.18f;
+  EXPECT_NEAR(camera.state().distance, crossed_distance, 0.001f);
+  EXPECT_NEAR(length(camera.pose().eye - panned_pose.eye),
+              crossed_distance - 490.0f, 0.001f);
+  expect_vec3_near(camera.state().target, panned_target);
+  const ViewportCameraPose capped_pose = camera.pose();
+
+  for (int index = 0; index < 32; ++index) {
+    camera.scroll(-1.0f);
+  }
+
+  EXPECT_NEAR(camera.state().distance, crossed_distance, 0.001f);
+  expect_vec3_near(camera.pose().eye, capped_pose.eye);
+  expect_vec3_near(camera.state().target, panned_target);
+
+  camera.begin_drag({300.0f, 240.0f}, ViewportDragMode::Orbit);
+  camera.update_drag({345.0f, 265.0f});
+  camera.end_drag();
+
+  expect_vec3_near(camera.state().target, panned_target);
+  EXPECT_NEAR(camera.state().distance, crossed_distance, 0.001f);
+  EXPECT_NEAR(length(camera.pose().eye - camera.state().target),
+              crossed_distance,
+              0.001f);
+
+  camera.scroll(1.0f);
+
+  EXPECT_NEAR(camera.state().distance, 490.0f, 0.001f);
+  expect_vec3_near(camera.state().target, panned_target);
+}
+
+TEST(ViewportCameraTests,
+     GestureAnchorRepairsPoisonedDepthWithoutMovingTheVisiblePose) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -158.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  constexpr QVec3 kSceneAnchor{2.0f, 0.5f, -5.0f};
+  const ViewportCameraPose before = camera.pose();
+  const ViewportScreenPoint anchor_before =
+      camera.project_world_point(kSceneAnchor);
+  ASSERT_TRUE(anchor_before.visible);
+
+  camera.begin_drag({400.0f, 300.0f}, ViewportDragMode::Orbit,
+                    kSceneAnchor, true);
+
+  // A press without accepted motion is not a persistent camera mutation.
+  expect_vec3_near(camera.pose().eye, before.eye);
+  EXPECT_NEAR(dot(normalize(camera.pose().target - camera.pose().eye),
+                  normalize(before.target - before.eye)),
+              1.0f, 0.0001f);
+  EXPECT_NEAR(camera.state().distance, 158.0f, 0.0001f);
+
+  constexpr float kDragPixels = 5.0f;
+  camera.update_drag_delta({kDragPixels, 0.0f});
+  camera.end_drag();
+
+  const ViewportCameraPose after = camera.pose();
+  EXPECT_NEAR(camera.state().distance, 5.0f, 0.0001f);
+  EXPECT_NEAR(length(after.target - after.eye), 5.0f, 0.0001f);
+  const ViewportScreenPoint anchor_after =
+      camera.project_world_point(kSceneAnchor);
+  ASSERT_TRUE(anchor_after.visible);
+  EXPECT_NEAR(anchor_after.position.x, anchor_before.position.x, 0.01f);
+  EXPECT_NEAR(anchor_after.position.y, anchor_before.position.y, 0.01f);
+
+  const float orbit_angle = std::acos(std::clamp(
+      dot(normalize(before.target - before.eye),
+          normalize(after.target - after.eye)),
+      -1.0f, 1.0f));
+  const float expected_angle =
+      kDragPixels *
+      static_cast<float>(viewport_host_defaults().orbit_radians_per_pixel);
+  EXPECT_NEAR(orbit_angle, expected_angle, 0.0001f);
+  const float anchor_radius = length(before.eye - kSceneAnchor);
+  EXPECT_LE(length(after.eye - before.eye),
+            2.0f * anchor_radius * std::sin(expected_angle * 0.5f) + 0.001f);
+
+  const ViewportCameraPose before_zoom = camera.pose();
+  camera.scroll(1.0f);
+  EXPECT_NEAR(camera.state().distance, 5.0f / 1.18f, 0.001f);
+  EXPECT_LT(length(camera.pose().eye - before_zoom.eye), 1.0f);
+}
+
+TEST(ViewportCameraTests,
+     OffscreenGestureAnchorFallsBackToItsSceneDepthWithoutHugeSweep) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -158.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const ViewportCameraPose before = camera.pose();
+
+  camera.begin_drag({400.0f, 300.0f}, ViewportDragMode::Orbit,
+                    QVec3{10000.0f, 0.0f, -5.0f});
+  camera.update_drag_delta({5.0f, 0.0f});
+  camera.end_drag();
+
+  EXPECT_NEAR(camera.state().distance, 5.0f, 0.0001f);
+  const float expected_angle =
+      5.0f *
+      static_cast<float>(viewport_host_defaults().orbit_radians_per_pixel);
+  EXPECT_LE(length(camera.pose().eye - before.eye),
+            2.0f * 5.0f * std::sin(expected_angle * 0.5f) + 0.001f);
+}
+
+TEST(ViewportCameraTests,
+     StationaryAndCanceledAnchoredGesturesDoNotMutateCameraState) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -158.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const ViewportCameraPose before = camera.pose();
+
+  camera.begin_drag({400.0f, 300.0f}, ViewportDragMode::Orbit,
+                    QVec3{0.0f, 0.0f, -5.0f});
+  camera.end_drag();
+  EXPECT_NEAR(camera.state().distance, 158.0f, 0.0001f);
+  expect_vec3_near(camera.pose().eye, before.eye);
+  expect_vec3_near(camera.pose().target, before.target);
+
+  camera.begin_drag({400.0f, 300.0f}, ViewportDragMode::Pan,
+                    QVec3{0.0f, 0.0f, -5.0f});
+  camera.update_drag_delta({});
+  camera.end_drag();
+  EXPECT_NEAR(camera.state().distance, 158.0f, 0.0001f);
+  expect_vec3_near(camera.pose().eye, before.eye);
+  expect_vec3_near(camera.pose().target, before.target);
+
+  camera.set_view_direction({0.5f, 0.0f, -1.0f});
+  const ViewportCameraPose before_snap = camera.pose();
+  const QVec3 snap_forward =
+      normalize(before_snap.target - before_snap.eye);
+  camera.begin_drag({400.0f, 300.0f}, ViewportDragMode::OrbitSnap,
+                    before_snap.eye + snap_forward * 5.0f);
+  camera.update_drag_delta({});
+  camera.end_drag();
+  EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+  EXPECT_NEAR(camera.state().distance, 158.0f, 0.0001f);
+  expect_vec3_near(camera.pose().eye, before_snap.eye);
+  expect_vec3_near(camera.pose().target, before_snap.target);
+}
+
+TEST(ViewportCameraTests,
+     PanAnchorRepairsDepthWithoutAJumpAndUsesTheVisibleSurfaceScale) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -158.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const ViewportCameraPose before = camera.pose();
+
+  camera.begin_drag({400.0f, 300.0f}, ViewportDragMode::Pan,
+                    QVec3{0.0f, 0.0f, -5.0f});
+
+  expect_vec3_near(camera.pose().eye, before.eye);
+  camera.update_drag_delta({10.0f, 0.0f});
+  camera.end_drag();
+
+  EXPECT_NEAR(camera.state().distance, 5.0f, 0.0001f);
+  const float world_pan = length(camera.pose().eye - before.eye);
+  EXPECT_GT(world_pan, 0.05f);
+  EXPECT_LT(world_pan, 0.2f);
+}
+
+TEST(ViewportCameraTests,
+     WheelAnchorRepairsPoisonedDepthAndRoundTripsAtSceneScale) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -158.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  constexpr QVec3 kSceneAnchor{2.0f, 0.5f, -5.0f};
+  const ViewportCameraPose before = camera.pose();
+
+  camera.scroll(1.0f, kSceneAnchor);
+  EXPECT_NEAR(camera.state().distance, 5.0f / 1.18f, 0.001f);
+  EXPECT_LT(length(camera.pose().eye - before.eye), 1.0f);
+
+  camera.scroll(-1.0f, kSceneAnchor);
+  expect_vec3_near(camera.pose().eye, before.eye);
+  EXPECT_NEAR(camera.state().distance, 5.0f, 0.001f);
+  expect_vec3_near(camera.state().target, {0.0f, 0.0f, -5.0f});
+}
+
+TEST(ViewportCameraTests,
+     DistantSceneDepthDoesNotPullANearbyCameraAwayFromItsTarget) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -5.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const QVec3 original_target = camera.state().target;
+
+  camera.scroll(-1.0f, QVec3{0.0f, 0.0f, -100.0f});
+
+  EXPECT_NEAR(camera.state().distance, 5.0f * 1.18f, 0.001f);
+  expect_vec3_near(camera.state().target, original_target);
+}
+
+TEST(ViewportInputRouterTests,
+     DistantSceneFallbackDoesNotInflateAValidNearbyOrbitRadius) {
+  ViewportInputRouter router;
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -5.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const ViewportCameraPose before = camera.pose();
+
+  ViewportInputFrame input;
+  input.viewport_hovered = true;
+  input.viewport_focused = true;
+  input.viewport_size = {800.0f, 600.0f};
+  input.mouse_screen = {400.0f, 300.0f};
+  input.navigation_anchor = QVec3{0.0f, 0.0f, -100.0f};
+  input.navigation_anchor_repair_only = true;
+  set_navigation_pressed(input, ViewportInputActionKind::Orbit);
+  (void)router.handle_frame(input, camera);
+
+  input.mouse_delta = {5.0f, 0.0f};
+  set_navigation_down(input, ViewportInputActionKind::Orbit);
+  (void)router.handle_frame(input, camera);
+  input.mouse_delta = {};
+  set_navigation_released(input, ViewportInputActionKind::Orbit);
+  (void)router.handle_frame(input, camera);
+
+  EXPECT_NEAR(camera.state().distance, 5.0f, 0.0001f);
+  expect_vec3_near(camera.state().target, before.target);
+  const float expected_angle =
+      5.0f *
+      static_cast<float>(viewport_host_defaults().orbit_radians_per_pixel);
+  EXPECT_LE(length(camera.pose().eye - before.eye),
+            2.0f * 5.0f * std::sin(expected_angle * 0.5f) + 0.001f);
+}
+
+TEST(ViewportCameraTests,
+     SevereWheelDepthRepairIsStableAcrossPosePersistenceRoundTrip) {
+  ViewportCameraController live_camera;
+  live_camera.set_viewport_size(800.0f, 600.0f);
+  live_camera.focus_origin(100.0f);
+  const ViewportCameraPose saved_pose = live_camera.pose();
+  const QVec3 forward =
+      normalize(saved_pose.target - saved_pose.eye);
+  const QVec3 scene_depth = saved_pose.eye + forward * 5.0f;
+
+  ViewportCameraController restored_camera;
+  restored_camera.set_viewport_size(800.0f, 600.0f);
+  ASSERT_TRUE(restored_camera.restore_perspective_pose(saved_pose));
+
+  live_camera.scroll(1.0f, scene_depth);
+  restored_camera.scroll(1.0f, scene_depth);
+
+  EXPECT_NEAR(live_camera.state().distance,
+              restored_camera.state().distance, 0.0001f);
+  expect_vec3_near(live_camera.pose().eye, restored_camera.pose().eye);
+  expect_vec3_near(live_camera.pose().target,
+                   restored_camera.pose().target);
+}
+
+TEST(ViewportCameraTests,
+     VisibleFarGestureAnchorKeepsItsScaleAndZoomsInGradually) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -900.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+
+  camera.begin_drag({400.0f, 300.0f}, ViewportDragMode::Orbit,
+                    QVec3{0.0f, 0.0f, -900.0f});
+  camera.update_drag_delta({5.0f, 0.0f});
+  camera.end_drag();
+  EXPECT_NEAR(camera.state().distance, 900.0f, 0.01f);
+
+  camera.scroll(1.0f);
+  EXPECT_NEAR(camera.state().distance, 900.0f / 1.18f, 0.01f);
+}
+
+TEST(ViewportCameraTests,
+     RestoreOversizedPerspectivePoseKeepsExactViewAndZoomsInGradually) {
+  ViewportCameraController camera;
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {10.0f, 20.0f, 30.0f},
+      .target = {10.0f, 20.0f, -9970.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+
+  expect_vec3_near(camera.pose().eye, {10.0f, 20.0f, 30.0f});
+  expect_vec3_near(normalize(camera.pose().target - camera.pose().eye),
+                   {0.0f, 0.0f, -1.0f});
+  EXPECT_NEAR(camera.state().distance, 10000.0f, 0.001f);
+  expect_vec3_near(camera.state().target, {10.0f, 20.0f, -9970.0f});
+  camera.set_clip_planes(0.05f, 1000.0f);
+  EXPECT_GT(camera.state().far_plane, camera.state().distance);
+  EXPECT_TRUE(camera.project_world_point(camera.state().target).visible);
+
+  camera.scroll(1.0f);
+  EXPECT_NEAR(camera.state().distance, 10000.0f / 1.18f, 0.01f);
+}
+
+TEST(ViewportCameraTests,
+     RestoredExceptionalPerspectiveDistancesReverseTheNextWheelStep) {
+  ViewportCameraController far_camera;
+  ASSERT_TRUE(far_camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -900.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const ViewportCameraPose far_before = far_camera.pose();
+  far_camera.scroll(1.0f);
+  ASSERT_NEAR(far_camera.state().distance, 900.0f / 1.18f, 0.001f);
+  far_camera.scroll(-1.0f);
+  EXPECT_NEAR(far_camera.state().distance, 900.0f, 0.001f);
+  expect_vec3_near(far_camera.pose().eye, far_before.eye);
+  expect_vec3_near(far_camera.pose().target, far_before.target);
+
+  ViewportCameraController near_camera;
+  ASSERT_TRUE(near_camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -0.01f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const ViewportCameraPose near_before = near_camera.pose();
+  near_camera.scroll(-1.0f);
+  ASSERT_NEAR(near_camera.state().distance, 0.01f * 1.18f, 0.000001f);
+  near_camera.scroll(1.0f);
+  EXPECT_NEAR(near_camera.state().distance, 0.01f, 0.000001f);
+  expect_vec3_near(near_camera.pose().eye, near_before.eye);
+  expect_vec3_near(near_camera.pose().target, near_before.target);
+}
+
+TEST(ViewportCameraTests,
+     RestoredPositiveSubMinimumPoseZoomsOutWithoutTargetDrift) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -0.01f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const QVec3 target_before = camera.state().target;
+  camera.set_clip_planes(0.05f, 1000.0f);
+  ASSERT_LT(camera.state().near_plane, camera.state().distance);
+  ASSERT_TRUE(camera.project_world_point(target_before).visible);
+
+  camera.scroll(-1.0f);
+  camera.set_clip_planes(0.05f, 1000.0f);
+
+  EXPECT_NEAR(camera.state().distance, 0.01f * 1.18f, 0.000001f);
+  EXPECT_LT(camera.state().near_plane, camera.state().distance);
+  EXPECT_TRUE(camera.project_world_point(target_before).visible);
+  expect_vec3_near(camera.state().target, target_before);
+  expect_vec3_near(camera.pose().eye, {0.0f, 0.0f, 0.0018f});
+}
+
+TEST(ViewportCameraTests,
+     OffCenterCursorZoomRoundTripsAroundTheTargetDepthPlane) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(100.0f);
+  camera.set_view_direction({0.0f, 0.0f, -1.0f});
+  constexpr QVec2 kCursor{760.0f, 30.0f};
+
+  const ViewportCameraPose before = camera.pose();
+  const QVec3 forward = normalize(before.target - before.eye);
+  const ViewportRay ray = camera.ray_from_viewport_point(kCursor);
+  const float ray_plane_distance =
+      dot(before.target - ray.origin, forward) /
+      dot(ray.direction, forward);
+  const QVec3 cursor_anchor =
+      ray.origin + ray.direction * ray_plane_distance;
+
+  camera.scroll_to_cursor(2.5f, kCursor);
+
+  const ViewportScreenPoint zoomed_anchor =
+      camera.project_world_point(cursor_anchor);
+  ASSERT_TRUE(zoomed_anchor.visible);
+  EXPECT_NEAR(zoomed_anchor.position.x, kCursor.x, 0.01f);
+  EXPECT_NEAR(zoomed_anchor.position.y, kCursor.y, 0.01f);
+
+  camera.scroll_to_cursor(-2.5f, kCursor);
+
+  EXPECT_NEAR(camera.state().distance, 100.0f, 0.001f);
+  expect_vec3_near(camera.state().target, before.target);
+  expect_vec3_near(camera.pose().eye, before.eye);
+}
+
+TEST(ViewportCameraTests,
+     OffCenterCursorZoomAtMaximumDistanceDoesNotDriftCamera) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(500.0f);
+  constexpr QVec2 kCursor{760.0f, 30.0f};
+  const ViewportCameraPose before = camera.pose();
+
+  for (int index = 0; index < 32; ++index) {
+    camera.scroll_to_cursor(-1.0f, kCursor);
+  }
+
+  EXPECT_NEAR(camera.state().distance, 500.0f, 0.001f);
+  expect_vec3_near(camera.state().target, before.target);
+  expect_vec3_near(camera.pose().eye, before.eye);
+
+  camera.scroll_to_cursor(1.0f, kCursor);
+
+  EXPECT_NEAR(camera.state().distance, 500.0f / 1.18f, 0.001f);
+  EXPECT_GT(length(camera.pose().eye - before.eye), 50.0f);
+}
+
 TEST(ViewportCameraTests, DefaultPerspectiveMatchesViewportContract) {
   ViewportCameraController camera;
   const ViewportCameraPose pose = camera.pose();
@@ -8018,10 +8563,13 @@ TEST(ViewportCameraTests, ClipsBothDepthPlanesBeforeProjectingWorldSegments) {
     camera.focus_origin(64.0f);
     camera.view_axis(ViewportViewAxis::Z, 1);
     camera.set_viewport_size(800.0f, 600.0f);
-    camera.set_clip_planes(1.0f, 9.0f);
     if (perspective) {
       camera.unlock_orthographic_view();
     }
+    // This test owns an intentionally tiny clip range. Apply it after the
+    // projection transition, whose separate contract keeps the converted
+    // orthographic target visible by expanding a transient far-depth floor.
+    camera.set_clip_planes(1.0f, 9.0f);
     const ViewportCameraBasis basis = ViewportCameraAdapter::basis(camera);
     const auto world_point = [&](float depth, float horizontal) {
       return basis.eye + basis.forward * depth + basis.right * horizontal;
@@ -8074,10 +8622,10 @@ TEST(ViewportCameraTests, RejectsExcludedSegmentsButKeepsViewAlignedEdges) {
     camera.focus_origin(64.0f);
     camera.view_axis(ViewportViewAxis::Z, 1);
     camera.set_viewport_size(800.0f, 600.0f);
-    camera.set_clip_planes(1.0f, 9.0f);
     if (perspective) {
       camera.unlock_orthographic_view();
     }
+    camera.set_clip_planes(1.0f, 9.0f);
     const ViewportCameraBasis basis = ViewportCameraAdapter::basis(camera);
     const auto point_at_depth = [&](float depth) {
       return basis.eye + basis.forward * depth;
@@ -8113,6 +8661,95 @@ TEST(ViewportCameraTests, FocusBoundsFramesDocumentCenter) {
   EXPECT_NEAR(camera.state().target.y, 0.0f, 0.001f);
   EXPECT_NEAR(camera.state().target.z, 0.0f, 0.001f);
   EXPECT_GT(camera.state().distance, 4.0f);
+}
+
+TEST(ViewportCameraTests, FocusBoundsFramesBeyondInteractiveZoomLimit) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+
+  camera.focus_bounds({10.0f, -300.0f, 0.0f},
+                      {14.0f, 300.0f, 0.0f});
+
+  EXPECT_NEAR(camera.state().target.x, 12.0f, 0.001f);
+  EXPECT_NEAR(camera.state().target.y, 0.0f, 0.001f);
+  EXPECT_NEAR(camera.state().target.z, 0.0f, 0.001f);
+  EXPECT_GT(camera.state().distance, 500.0f);
+  for (const QVec3 corner :
+       {QVec3{10.0f, -300.0f, 0.0f}, QVec3{10.0f, 300.0f, 0.0f},
+        QVec3{14.0f, -300.0f, 0.0f}, QVec3{14.0f, 300.0f, 0.0f}}) {
+    const ViewportScreenPoint projected = camera.project_world_point(corner);
+    ASSERT_TRUE(projected.visible);
+    EXPECT_GE(projected.position.x, 0.0f);
+    EXPECT_LE(projected.position.x, 800.0f);
+    EXPECT_GE(projected.position.y, 0.0f);
+    EXPECT_LE(projected.position.y, 600.0f);
+  }
+}
+
+TEST(ViewportCameraTests,
+     ExceptionalOrthographicFocusReversesTheNextWheelStep) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.view_axis(ViewportViewAxis::Z, 1, ViewportAxisLock::Unlocked);
+  camera.focus_bounds({-2000.0f, -2000.0f, -1.0f},
+                      {2000.0f, 2000.0f, 1.0f});
+  ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+  ASSERT_GT(camera.state().orthographic_size,
+            static_cast<float>(
+                quader_editor_core::kNavigationMaxOrthographicZoomOutSize));
+  const float initial_size = camera.state().orthographic_size;
+
+  camera.scroll(1.0f);
+  ASSERT_NEAR(camera.state().orthographic_size, initial_size / 1.18f,
+              0.001f);
+  camera.scroll(-1.0f);
+
+  EXPECT_NEAR(camera.state().orthographic_size, initial_size, 0.001f);
+}
+
+TEST(ViewportCameraTests, FocusBoundsExpandsFarPlaneToKeepEveryCornerVisible) {
+  constexpr QVec3 kMinimum{-100.0f, -100.0f, -100.0f};
+  constexpr QVec3 kMaximum{100.0f, 100.0f, 100.0f};
+  const auto verify_projection = [&](bool orthographic) {
+    ViewportCameraController camera;
+    camera.set_viewport_size(800.0f, 600.0f);
+    camera.set_clip_planes(0.05f, 10.0f);
+    if (orthographic) {
+      camera.view_axis(ViewportViewAxis::Z, 1, ViewportAxisLock::Unlocked);
+    }
+
+    camera.focus_bounds(kMinimum, kMaximum);
+
+    const float expanded_far_plane = camera.state().far_plane;
+    EXPECT_GT(expanded_far_plane, 10.0f);
+    // QtViewportPanel synchronizes the scene-authored clip values after input
+    // processing on every frame. Reapplying the unchanged values must not
+    // erase the transient depth guarantee established by Focus Bounds.
+    camera.set_clip_planes(0.05f, 10.0f);
+    EXPECT_FLOAT_EQ(camera.state().far_plane, expanded_far_plane);
+    for (const float x : {kMinimum.x, kMaximum.x}) {
+      for (const float y : {kMinimum.y, kMaximum.y}) {
+        for (const float z : {kMinimum.z, kMaximum.z}) {
+          const ViewportScreenPoint projected =
+              camera.project_world_point({x, y, z});
+          ASSERT_TRUE(projected.visible);
+          EXPECT_GE(projected.position.x, 0.0f);
+          EXPECT_LE(projected.position.x, 800.0f);
+          EXPECT_GE(projected.position.y, 0.0f);
+          EXPECT_LE(projected.position.y, 600.0f);
+        }
+      }
+    }
+
+    // A real scene-settings edit deliberately replaces the transient framing
+    // policy; the controller must not permanently hide authored clip changes.
+    camera.set_clip_planes(0.05f, 20.0f);
+    EXPECT_FLOAT_EQ(camera.state().far_plane, 20.0f);
+    EXPECT_FALSE(camera.project_world_point(camera.state().target).visible);
+  };
+
+  verify_projection(false);
+  verify_projection(true);
 }
 
 TEST(ViewportCameraTests, SetViewDirectionKeepsTargetDistanceAndSnapsAxis) {
@@ -8155,6 +8792,40 @@ TEST(ViewportCameraTests, ViewAxisUsesRuntimeNavigationPolicy) {
   EXPECT_TRUE(camera.orthographic_view_locked());
   EXPECT_GT(camera.state().orthographic_size, 0.0f);
   EXPECT_GT(length(pose.up), 0.99f);
+}
+
+TEST(ViewportCameraTests,
+     LockedOrthographicOrbitRejectsPendingAnchorBeforeRebase) {
+  for (const bool enter_orbit_snap : {false, true}) {
+    SCOPED_TRACE(enter_orbit_snap);
+    ViewportCameraController camera;
+    camera.set_viewport_size(800.0f, 600.0f);
+    camera.focus_origin(20.0f);
+    camera.view_axis(ViewportViewAxis::Z, 1, ViewportAxisLock::Locked);
+    const ViewportCameraPose before = camera.pose();
+    const float distance_before = camera.state().distance;
+    const float orthographic_size_before = camera.state().orthographic_size;
+    const QVec3 forward = normalize(before.target - before.eye);
+    const QVec3 nearer_anchor = before.eye + forward * 2.0f;
+
+    camera.begin_drag({400.0f, 300.0f}, ViewportDragMode::Orbit,
+                      nearer_anchor);
+    if (enter_orbit_snap) {
+      camera.update_drag_delta({8.0f, 0.0f},
+                               ViewportDragMode::OrbitSnap);
+    } else {
+      camera.update_drag_delta({8.0f, 0.0f});
+    }
+    camera.end_drag();
+
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+    EXPECT_TRUE(camera.orthographic_view_locked());
+    EXPECT_FLOAT_EQ(camera.state().distance, distance_before);
+    EXPECT_FLOAT_EQ(camera.state().orthographic_size,
+                    orthographic_size_before);
+    EXPECT_EQ(viewport_camera_pose_persistence_signature(camera.pose()),
+              viewport_camera_pose_persistence_signature(before));
+  }
 }
 
 TEST(ViewportCameraTests, ViewCubeAxisSnapDoesNotLockOrbit) {
@@ -8273,7 +8944,7 @@ TEST(ViewportCameraTests, OrbitSnapUsesRuntimeOrthogonalSnap) {
   camera.set_view_direction({0.02f, 0.0f, -1.0f});
 
   camera.begin_drag({100.0f, 100.0f}, ViewportDragMode::OrbitSnap);
-  camera.update_drag({100.0f, 100.0f});
+  camera.update_drag({101.0f, 100.0f});
   camera.end_drag();
 
   const ViewportCameraPose pose = camera.pose();
@@ -8375,6 +9046,73 @@ TEST(ViewportCameraTests, OrbitFromUnlockedOrthographicPreservesZoomLevel) {
 }
 
 TEST(ViewportCameraTests,
+     OrbitFromMinimumOrthographicZoomPreservesVisibleScale) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(30.0f);
+  camera.view_axis(ViewportViewAxis::Z, 1, ViewportAxisLock::Unlocked);
+  camera.scroll(128.0f);
+  const float orthographic_size = camera.state().orthographic_size;
+  ASSERT_LE(orthographic_size,
+            static_cast<float>(
+                quader_editor_core::kNavigationMinOrthographicSize));
+  ASSERT_GT(orthographic_size,
+            static_cast<float>(
+                quader_editor_core::kNavigationMinOrthographicSize /
+                quader_editor_core::kNavigationZoomStepFactor));
+
+  camera.begin_drag({100.0f, 100.0f}, ViewportDragMode::Orbit);
+  camera.update_drag_delta({8.0f, 0.0f});
+  camera.end_drag();
+  camera.set_clip_planes(0.05f, 1000.0f);
+
+  const float visible_height =
+      2.0f * camera.state().distance *
+      std::tan(camera.state().fov_degrees *
+               static_cast<float>(std::acos(-1.0)) / 360.0f);
+  EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+  EXPECT_LT(camera.state().distance,
+            static_cast<float>(
+                quader_editor_core::kNavigationMinCameraDistance));
+  EXPECT_LT(camera.state().near_plane, camera.state().distance);
+  EXPECT_NEAR(visible_height, orthographic_size, 0.000001f);
+  EXPECT_TRUE(camera.project_world_point(camera.state().target).visible);
+}
+
+TEST(ViewportCameraTests,
+     OrbitFromMaximumOrthographicZoomKeepsTargetInsideFarPlane) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.set_clip_planes(0.05f, 1000.0f);
+  camera.focus_origin(30.0f);
+  camera.view_axis(ViewportViewAxis::Z, 1, ViewportAxisLock::Unlocked);
+  camera.scroll(-128.0f);
+  const float orthographic_size = camera.state().orthographic_size;
+  ASSERT_GE(orthographic_size,
+            static_cast<float>(
+                quader_editor_core::kNavigationMaxOrthographicZoomOutSize));
+  ASSERT_LT(orthographic_size,
+            static_cast<float>(
+                quader_editor_core::kNavigationMaxOrthographicZoomOutSize *
+                quader_editor_core::kNavigationZoomStepFactor));
+
+  camera.begin_drag({100.0f, 100.0f}, ViewportDragMode::Orbit);
+  camera.update_drag_delta({8.0f, 0.0f});
+  camera.end_drag();
+  camera.set_clip_planes(0.05f, 1000.0f);
+
+  const float visible_height =
+      2.0f * camera.state().distance *
+      std::tan(camera.state().fov_degrees *
+               static_cast<float>(std::acos(-1.0)) / 360.0f);
+  EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+  EXPECT_GT(camera.state().distance, 1000.0f);
+  EXPECT_GT(camera.state().far_plane, camera.state().distance);
+  EXPECT_NEAR(visible_height, orthographic_size, 0.001f);
+  EXPECT_TRUE(camera.project_world_point(camera.state().target).visible);
+}
+
+TEST(ViewportCameraTests,
      OffCenterCursorZoomAndPanKeepOrbitOnTheVisibleTarget) {
   ViewportCameraController camera;
   camera.set_viewport_size(800.0f, 600.0f);
@@ -8418,7 +9156,7 @@ TEST(ViewportCameraTests,
   camera.end_drag();
 
   camera.begin_drag({300.0f, 220.0f}, ViewportDragMode::OrbitSnap);
-  camera.update_drag({300.0f, 220.0f});
+  camera.update_drag({301.0f, 220.0f});
   camera.end_drag();
   ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
 
@@ -8439,7 +9177,7 @@ TEST(ViewportCameraTests, OrbitSnapUsesBlenderDiagonalAxisTargets) {
   camera.set_view_direction({-0.63f, 0.02f, -0.78f});
 
   camera.begin_drag({100.0f, 100.0f}, ViewportDragMode::OrbitSnap);
-  camera.update_drag({100.0f, 100.0f});
+  camera.update_drag({101.0f, 100.0f});
   camera.end_drag();
 
   const ViewportCameraPose pose = camera.pose();
@@ -8567,6 +9305,7 @@ TEST(ViewportInputRouterTests, ImplementedToolHotkeysMatchViewportContract) {
 TEST(ViewportInputRouterTests, ResolvedNavigationBindingsDriveMouseNavigation) {
   ViewportInputRouter router;
   ViewportCameraController camera;
+  camera.set_view_direction({0.0f, 0.0f, -1.0f});
   ViewportInputFrame input;
   input.viewport_hovered = true;
   input.viewport_focused = true;
@@ -8582,11 +9321,22 @@ TEST(ViewportInputRouterTests, ResolvedNavigationBindingsDriveMouseNavigation) {
   EXPECT_TRUE(result.navigation_active);
   EXPECT_TRUE(result.consumed);
 
+  const ViewportCameraPose before_orbit = camera.pose();
   set_navigation_down(input, ViewportInputActionKind::Orbit);
   input.mouse_screen = {220.0f, 165.0f};
+  input.mouse_delta = {20.0f, 0.0f};
   result = router.handle_frame(input, camera);
   EXPECT_TRUE(result.camera_changed);
   EXPECT_TRUE(result.navigation_active);
+  const ViewportCameraPose after_orbit = camera.pose();
+  EXPECT_NEAR(
+      std::acos(std::clamp(
+          dot(normalize(before_orbit.target - before_orbit.eye),
+              normalize(after_orbit.target - after_orbit.eye)),
+          -1.0f, 1.0f)),
+      20.0f *
+          static_cast<float>(viewport_host_defaults().orbit_radians_per_pixel),
+      0.0001f);
 
   set_navigation_released(input, ViewportInputActionKind::Orbit);
   result = router.handle_frame(input, camera);
@@ -8607,6 +9357,7 @@ TEST(ViewportInputRouterTests,
   input.viewport_focused = true;
   input.viewport_size = {800.0f, 600.0f};
   input.mouse_screen = {100.0f, 100.0f};
+  input.navigation_anchor = QVec3{0.0f, 0.0f, -5.0f};
   set_navigation_pressed(input, ViewportInputActionKind::Orbit);
 
   ViewportInputResult result = router.handle_frame(input, camera);
@@ -8617,6 +9368,7 @@ TEST(ViewportInputRouterTests,
   set_navigation_down(input, ViewportInputActionKind::Orbit);
   input.modifiers.alt = true;
   input.mouse_screen = {220.0f, 100.0f};
+  input.mouse_delta = {120.0f, 0.0f};
   result = router.handle_frame(input, camera);
 
   EXPECT_TRUE(result.camera_changed);
@@ -8625,6 +9377,7 @@ TEST(ViewportInputRouterTests,
 
   input.modifiers.alt = false;
   input.mouse_screen = {116.0f, 100.0f};
+  input.mouse_delta = {-104.0f, 0.0f};
   result = router.handle_frame(input, camera);
 
   EXPECT_TRUE(result.camera_changed);
@@ -8656,6 +9409,111 @@ TEST(ViewportInputRouterTests, ResolvedWheelBindingsDriveViewportZoom) {
   result = router.handle_frame(input, camera);
   EXPECT_TRUE(result.camera_changed);
   EXPECT_TRUE(result.zoomed_to_cursor);
+}
+
+TEST(ViewportInputRouterTests,
+     OrderedWheelEventsDoNotCancelAtPerspectiveMaximum) {
+  ViewportInputRouter router;
+  ViewportCameraController camera;
+  camera.focus_origin(static_cast<float>(
+      quader_editor_core::kNavigationMaxCameraDistance));
+
+  ViewportInputFrame input;
+  input.viewport_hovered = true;
+  input.viewport_focused = true;
+  input.viewport_size = {800.0f, 600.0f};
+  input.mouse_local = {400.0f, 300.0f};
+  input.navigation_bindings.zoom_wheel = true;
+  input.navigation_bindings.wheel_events = {
+      {
+          .action = ViewportInputActionKind::Zoom,
+          .steps = -1.0f,
+          .local = input.mouse_local,
+      },
+      {
+          .action = ViewportInputActionKind::Zoom,
+          .steps = 1.0f,
+          .local = input.mouse_local,
+      },
+  };
+
+  const ViewportInputResult result = router.handle_frame(input, camera);
+
+  EXPECT_TRUE(result.consumed);
+  EXPECT_TRUE(result.camera_changed);
+  EXPECT_NEAR(
+      camera.state().distance,
+      static_cast<float>(
+          quader_editor_core::kNavigationMaxCameraDistance /
+          quader_editor_core::kNavigationZoomStepFactor),
+      0.001f);
+}
+
+TEST(ViewportInputRouterTests,
+     OrderedWheelEventsDoNotCancelAtPerspectiveMinimum) {
+  ViewportInputRouter router;
+  ViewportCameraController camera;
+  camera.focus_origin(static_cast<float>(
+      quader_editor_core::kNavigationMinCameraDistance));
+
+  ViewportInputFrame input;
+  input.viewport_hovered = true;
+  input.viewport_focused = true;
+  input.viewport_size = {800.0f, 600.0f};
+  input.mouse_local = {400.0f, 300.0f};
+  input.navigation_bindings.zoom_wheel = true;
+  input.navigation_bindings.wheel_events = {
+      {
+          .action = ViewportInputActionKind::Zoom,
+          .steps = 1.0f,
+          .local = input.mouse_local,
+      },
+      {
+          .action = ViewportInputActionKind::Zoom,
+          .steps = -1.0f,
+          .local = input.mouse_local,
+      },
+  };
+
+  const ViewportInputResult result = router.handle_frame(input, camera);
+
+  EXPECT_TRUE(result.consumed);
+  EXPECT_TRUE(result.camera_changed);
+  EXPECT_NEAR(
+      camera.state().distance,
+      static_cast<float>(
+          quader_editor_core::kNavigationMinCameraDistance *
+          quader_editor_core::kNavigationZoomStepFactor),
+      0.00001f);
+}
+
+TEST(ViewportInputRouterTests,
+     AcceptedOrderedWheelEventSurvivesHoverLossBeforeFrameDrain) {
+  ViewportInputRouter router;
+  ViewportCameraController camera;
+
+  ViewportInputFrame input;
+  input.viewport_hovered = false;
+  input.viewport_focused = true;
+  input.viewport_size = {800.0f, 600.0f};
+  input.mouse_local = {400.0f, 300.0f};
+  input.navigation_bindings.zoom_wheel = true;
+  input.navigation_bindings.wheel_events = {{
+      .action = ViewportInputActionKind::Zoom,
+      .steps = 1.0f,
+      .local = input.mouse_local,
+  }};
+
+  const float distance_before = camera.state().distance;
+  const ViewportInputResult result = router.handle_frame(input, camera);
+
+  EXPECT_TRUE(result.consumed);
+  EXPECT_TRUE(result.camera_changed);
+  EXPECT_NEAR(
+      camera.state().distance,
+      distance_before /
+          static_cast<float>(quader_editor_core::kNavigationZoomStepFactor),
+      0.00001f);
 }
 
 TEST(ViewportInputRouterTests,
@@ -9259,10 +10117,15 @@ TEST(ViewportInputRouterTests, MiddleMouseNavigationAndWheelAreViewportGated) {
   EXPECT_TRUE(result.consumed);
   EXPECT_TRUE(router.navigating());
 
+  const ViewportCameraPose before_orbit = camera.pose();
   input.mouse_screen = {160.0f, 120.0f};
+  input.mouse_delta = {60.0f, 0.0f};
   set_navigation_down(input, ViewportInputActionKind::Orbit);
   result = router.handle_frame(input, camera);
   EXPECT_TRUE(result.camera_changed);
+  EXPECT_LT(dot(normalize(before_orbit.target - before_orbit.eye),
+                normalize(camera.pose().target - camera.pose().eye)),
+            0.999f);
 
   set_navigation_released(input, ViewportInputActionKind::Orbit);
   result = router.handle_frame(input, camera);
@@ -9276,6 +10139,389 @@ TEST(ViewportInputRouterTests, MiddleMouseNavigationAndWheelAreViewportGated) {
   result = router.handle_frame(input, camera);
   EXPECT_FALSE(result.consumed);
   EXPECT_FLOAT_EQ(camera.state().distance, distance_before_ignored_wheel);
+}
+
+TEST(ViewportInputRouterTests,
+     CoalescedPressAndReleaseFramesKeepOnlyGestureMotion) {
+  ViewportInputRouter router;
+  ViewportCameraController camera;
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -5.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  ViewportInputFrame input;
+  input.viewport_hovered = true;
+  input.viewport_focused = true;
+  input.viewport_size = {800.0f, 600.0f};
+  input.mouse_local = {105.0f, 100.0f};
+  input.mouse_screen = {105.0f, 100.0f};
+  input.mouse_delta = {905.0f, -700.0f};
+  set_navigation_pressed(input, ViewportInputActionKind::Orbit);
+  input.navigation_bindings.orbit_pressed_pointer_edge =
+      ViewportPointerButtonEdge{
+          .button = QuaderMouseButton::Middle,
+          .local = {100.0f, 100.0f},
+          .sequence = 17u,
+      };
+  const ViewportCameraPose before = camera.pose();
+
+  ViewportInputResult result = router.handle_frame(input, camera);
+  ASSERT_TRUE(result.camera_changed);
+  ASSERT_TRUE(router.navigating());
+
+  input = {};
+  input.viewport_hovered = true;
+  input.viewport_focused = true;
+  input.viewport_size = {800.0f, 600.0f};
+  input.mouse_local = {900.0f, 100.0f};
+  input.mouse_delta = {795.0f, 0.0f};
+  set_navigation_released(input, ViewportInputActionKind::Orbit);
+  input.navigation_bindings.orbit_released_pointer_edge =
+      ViewportPointerButtonEdge{
+          .button = QuaderMouseButton::Middle,
+          .local = {110.0f, 100.0f},
+          .sequence = 18u,
+      };
+  result = router.handle_frame(input, camera);
+
+  EXPECT_TRUE(result.camera_changed);
+  EXPECT_FALSE(router.navigating());
+  const float orbit_angle = std::acos(std::clamp(
+      dot(normalize(before.target - before.eye),
+          normalize(camera.pose().target - camera.pose().eye)),
+      -1.0f, 1.0f));
+  EXPECT_NEAR(
+      orbit_angle,
+      10.0f * static_cast<float>(
+                  viewport_host_defaults().orbit_radians_per_pixel),
+      0.0001f);
+}
+
+TEST(ViewportInputRouterTests,
+     NavigationPressUsesPhysicalOrderBeforeActionPriority) {
+  ViewportNavigationInput navigation;
+  navigation.fly_pressed = true;
+  navigation.fly_pressed_pointer_edge = ViewportPointerButtonEdge{
+      .button = QuaderMouseButton::Right,
+      .local = {40.0f, 0.0f},
+      .sequence = 40u,
+  };
+  navigation.pan_pressed = true;
+  navigation.pan_pressed_pointer_edge = ViewportPointerButtonEdge{
+      .button = QuaderMouseButton::Middle,
+      .local = {20.0f, 0.0f},
+      .sequence = 20u,
+  };
+  navigation.orbit_pressed = true;
+  navigation.orbit_pressed_pointer_edge = ViewportPointerButtonEdge{
+      .button = QuaderMouseButton::Back,
+      .local = {10.0f, 0.0f},
+      .sequence = 10u,
+  };
+
+  ViewportNavigationPress press = viewport_navigation_press(navigation);
+  EXPECT_EQ(press.action, ViewportInputActionKind::Orbit);
+  ASSERT_TRUE(press.pointer_edge.has_value());
+  EXPECT_EQ(press.pointer_edge->sequence, 10u);
+
+  navigation.orbit_released = true;
+  navigation.orbit_released_pointer_edge = ViewportPointerButtonEdge{
+      .button = QuaderMouseButton::Back,
+      .local = {15.0f, 0.0f},
+      .sequence = 15u,
+  };
+  press = viewport_navigation_press(navigation);
+  EXPECT_EQ(press.action, ViewportInputActionKind::Pan);
+  ASSERT_TRUE(press.pointer_edge.has_value());
+  EXPECT_EQ(press.pointer_edge->sequence, 20u);
+  navigation.orbit_released = false;
+  navigation.orbit_released_pointer_edge.reset();
+
+  navigation.fly_pressed_pointer_edge->sequence = 20u;
+  navigation.fly_released = true;
+  navigation.fly_released_pointer_edge = ViewportPointerButtonEdge{
+      .button = QuaderMouseButton::Right,
+      .local = {30.0f, 0.0f},
+      .sequence = 30u,
+  };
+  navigation.pan_pressed_pointer_edge->sequence = 40u;
+  navigation.orbit_pressed_pointer_edge->sequence = 10u;
+  press = viewport_navigation_press(navigation);
+  EXPECT_EQ(press.action, ViewportInputActionKind::Orbit);
+  ASSERT_TRUE(press.pointer_edge.has_value());
+  EXPECT_EQ(press.pointer_edge->sequence, 10u);
+  navigation.fly_released = false;
+  navigation.fly_released_pointer_edge.reset();
+
+  navigation.fly_pressed_pointer_edge->sequence = 40u;
+  navigation.pan_pressed_pointer_edge->sequence = 20u;
+  navigation.orbit_pressed_pointer_edge->sequence = 20u;
+  press = viewport_navigation_press(navigation);
+  EXPECT_EQ(press.action, ViewportInputActionKind::Pan);
+
+  navigation.fly_pressed_pointer_edge->sequence = 0u;
+  navigation.pan_pressed_pointer_edge->sequence = 0u;
+  navigation.orbit_pressed_pointer_edge->sequence = 0u;
+  press = viewport_navigation_press(navigation);
+  EXPECT_EQ(press.action, ViewportInputActionKind::Fly);
+}
+
+TEST(ViewportInputRouterTests,
+     ActiveReleaseThenRepressAppliesOnlyTheCompletedGestureAndRestarts) {
+  ViewportInputRouter router;
+  ViewportCameraController camera;
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -5.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const ViewportCameraPose before = camera.pose();
+
+  ViewportInputFrame input;
+  input.viewport_hovered = true;
+  input.viewport_focused = true;
+  input.viewport_size = {800.0f, 600.0f};
+  input.mouse_local = {100.0f, 100.0f};
+  input.mouse_screen = {100.0f, 100.0f};
+  set_navigation_pressed(input, ViewportInputActionKind::Orbit);
+  input.navigation_bindings.orbit_pressed_pointer_edge =
+      ViewportPointerButtonEdge{
+          .button = QuaderMouseButton::Middle,
+          .local = {100.0f, 100.0f},
+          .sequence = 1u,
+      };
+  ASSERT_FALSE(router.handle_frame(input, camera).camera_changed);
+  ASSERT_TRUE(router.navigating());
+
+  input = {};
+  input.viewport_hovered = true;
+  input.viewport_focused = true;
+  input.viewport_size = {800.0f, 600.0f};
+  input.mouse_local = {2005.0f, 100.0f};
+  input.mouse_screen = {2005.0f, 100.0f};
+  input.mouse_delta = {1905.0f, 0.0f};
+  // An ignored competing press before the active release must not mask the
+  // valid re-press that follows that release.
+  input.navigation_bindings.pan_pressed = true;
+  input.navigation_bindings.pan_down = true;
+  input.navigation_bindings.pan_pressed_pointer_edge =
+      ViewportPointerButtonEdge{
+          .button = QuaderMouseButton::Right,
+          .local = {500.0f, 100.0f},
+          .sequence = 2u,
+      };
+  input.navigation_bindings.orbit_pressed = true;
+  input.navigation_bindings.orbit_down = true;
+  input.navigation_bindings.orbit_released = true;
+  input.navigation_bindings.orbit_released_pointer_edge =
+      ViewportPointerButtonEdge{
+          .button = QuaderMouseButton::Middle,
+          .local = {1010.0f, 100.0f},
+          .sequence = 5u,
+      };
+  input.navigation_bindings.orbit_pressed_pointer_edge =
+      ViewportPointerButtonEdge{
+          .button = QuaderMouseButton::Middle,
+          .local = {2000.0f, 100.0f},
+          .sequence = 6u,
+      };
+  input.navigation_bindings.pointer_transitions = {
+      {
+          .kind = ViewportNavigationPointerTransitionKind::Pressed,
+          .action = ViewportInputActionKind::Pan,
+          .pointer_edge = *input.navigation_bindings.pan_pressed_pointer_edge,
+      },
+      {
+          .kind = ViewportNavigationPointerTransitionKind::Released,
+          .action = ViewportInputActionKind::Orbit,
+          .pointer_edge = {
+              .button = QuaderMouseButton::Middle,
+              .local = {110.0f, 100.0f},
+              .sequence = 3u,
+          },
+      },
+      {
+          .kind = ViewportNavigationPointerTransitionKind::Pressed,
+          .action = ViewportInputActionKind::Orbit,
+          .pointer_edge = {
+              .button = QuaderMouseButton::Middle,
+              .local = {1000.0f, 100.0f},
+              .sequence = 4u,
+          },
+      },
+      {
+          .kind = ViewportNavigationPointerTransitionKind::Released,
+          .action = ViewportInputActionKind::Orbit,
+          .pointer_edge =
+              *input.navigation_bindings.orbit_released_pointer_edge,
+      },
+      {
+          .kind = ViewportNavigationPointerTransitionKind::Pressed,
+          .action = ViewportInputActionKind::Orbit,
+          .pointer_edge = *input.navigation_bindings.orbit_pressed_pointer_edge,
+      },
+  };
+
+  const ViewportInputResult result = router.handle_frame(input, camera);
+
+  EXPECT_TRUE(result.camera_changed);
+  EXPECT_TRUE(result.navigation_active);
+  EXPECT_TRUE(router.navigating());
+  const float orbit_angle = std::acos(std::clamp(
+      dot(normalize(before.target - before.eye),
+          normalize(camera.pose().target - camera.pose().eye)),
+      -1.0f, 1.0f));
+  EXPECT_NEAR(
+      orbit_angle,
+      15.0f * static_cast<float>(
+                  viewport_host_defaults().orbit_radians_per_pixel),
+      0.0001f);
+}
+
+TEST(ViewportInputRouterTests,
+     PointerCancellationDiscardsCoalescedOrbitAndFlyMotion) {
+  for (const ViewportInputActionKind action : {
+           ViewportInputActionKind::Orbit,
+           ViewportInputActionKind::Fly,
+       }) {
+    SCOPED_TRACE(static_cast<int>(action));
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    ASSERT_TRUE(camera.restore_perspective_pose({
+        .eye = {0.0f, 0.0f, 0.0f},
+        .target = {0.0f, 0.0f, -5.0f},
+        .up = {0.0f, 1.0f, 0.0f},
+    }));
+    ViewportInputFrame input;
+    input.viewport_hovered = true;
+    input.viewport_focused = true;
+    input.viewport_size = {800.0f, 600.0f};
+    input.mouse_local = {100.0f, 100.0f};
+    input.mouse_screen = {100.0f, 100.0f};
+    set_navigation_pressed(input, action);
+    ASSERT_TRUE(router.handle_frame(input, camera).navigation_active);
+    const std::uint64_t before =
+        viewport_camera_pose_persistence_signature(camera.pose());
+
+    input = {};
+    input.viewport_hovered = true;
+    input.viewport_focused = true;
+    input.viewport_size = {800.0f, 600.0f};
+    input.mouse_local = {900.0f, 700.0f};
+    input.mouse_screen = {900.0f, 700.0f};
+    input.mouse_delta = {800.0f, 600.0f};
+    input.fly_local_direction = {1.0f, 0.0f, 1.0f};
+    input.delta_seconds = 1.0f;
+    set_navigation_down(input, action);
+    input.pointer_interaction_canceled = true;
+
+    const ViewportInputResult result = router.handle_frame(input, camera);
+
+    EXPECT_TRUE(result.consumed);
+    EXPECT_FALSE(result.camera_changed);
+    EXPECT_FALSE(result.navigation_active);
+    EXPECT_FALSE(result.fly_navigation_active);
+    EXPECT_FALSE(result.fly_cursor_capture_active);
+    EXPECT_FALSE(router.navigating());
+    EXPECT_EQ(viewport_camera_pose_persistence_signature(camera.pose()),
+              before);
+  }
+}
+
+TEST(ViewportInputRouterTests,
+     PanWheelOrbitSequenceUsesRelativeDpiInvariantMotion) {
+  struct NavigationSequenceResult {
+    ViewportCameraPose pose;
+    float distance = 0.0f;
+    float orbit_angle = 0.0f;
+  };
+  const auto run_sequence = [](float device_scale) {
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    EXPECT_TRUE(camera.restore_perspective_pose({
+        .eye = {0.0f, 0.0f, 0.0f},
+        .target = {0.0f, 0.0f, -158.0f},
+        .up = {0.0f, 1.0f, 0.0f},
+    }));
+    constexpr QVec3 kSceneAnchor{2.0f, 0.5f, -5.0f};
+
+    ViewportInputFrame input;
+    input.viewport_hovered = true;
+    input.viewport_focused = true;
+    input.viewport_size = {800.0f * device_scale,
+                           600.0f * device_scale};
+    input.device_pixel_ratio = device_scale;
+    input.mouse_screen = {300.0f, 240.0f};
+    input.mouse_delta = {900.0f * device_scale, -700.0f * device_scale};
+    input.navigation_anchor = kSceneAnchor;
+    set_navigation_pressed(input, ViewportInputActionKind::Pan);
+    (void)router.handle_frame(input, camera);
+
+    input.mouse_delta = {30.0f * device_scale, 10.0f * device_scale};
+    set_navigation_down(input, ViewportInputActionKind::Pan);
+    (void)router.handle_frame(input, camera);
+    set_navigation_released(input, ViewportInputActionKind::Pan);
+    (void)router.handle_frame(input, camera);
+
+    input = {};
+    input.viewport_hovered = true;
+    input.viewport_focused = true;
+    input.viewport_size = {800.0f * device_scale,
+                           600.0f * device_scale};
+    input.device_pixel_ratio = device_scale;
+    input.mouse_wheel = -1.0f;
+    input.navigation_bindings.zoom_wheel = true;
+    input.navigation_anchor = kSceneAnchor;
+    (void)router.handle_frame(input, camera);
+
+    input = {};
+    input.viewport_hovered = true;
+    input.viewport_focused = true;
+    input.viewport_size = {800.0f * device_scale,
+                           600.0f * device_scale};
+    input.device_pixel_ratio = device_scale;
+    input.mouse_screen = {50.0f, 50.0f};
+    input.mouse_delta = {-1200.0f * device_scale, 800.0f * device_scale};
+    input.navigation_anchor = kSceneAnchor;
+    set_navigation_pressed(input, ViewportInputActionKind::Orbit);
+    (void)router.handle_frame(input, camera);
+
+    const ViewportCameraPose before_orbit = camera.pose();
+    input.mouse_delta = {5.0f * device_scale, 0.0f};
+    set_navigation_down(input, ViewportInputActionKind::Orbit);
+    (void)router.handle_frame(input, camera);
+    input.mouse_delta = {5.0f * device_scale, 0.0f};
+    set_navigation_down(input, ViewportInputActionKind::Orbit);
+    (void)router.handle_frame(input, camera);
+    input.mouse_delta = {};
+    set_navigation_released(input, ViewportInputActionKind::Orbit);
+    (void)router.handle_frame(input, camera);
+
+    const ViewportCameraPose after_orbit = camera.pose();
+    const float orbit_angle = std::acos(std::clamp(
+        dot(normalize(before_orbit.target - before_orbit.eye),
+            normalize(after_orbit.target - after_orbit.eye)),
+        -1.0f, 1.0f));
+    return NavigationSequenceResult{
+        .pose = after_orbit,
+        .distance = camera.state().distance,
+        .orbit_angle = orbit_angle,
+    };
+  };
+
+  const NavigationSequenceResult scale_one = run_sequence(1.0f);
+  const NavigationSequenceResult scale_two = run_sequence(2.0f);
+  const float expected_angle =
+      10.0f *
+      static_cast<float>(viewport_host_defaults().orbit_radians_per_pixel);
+
+  EXPECT_NEAR(scale_one.orbit_angle, expected_angle, 0.0001f);
+  EXPECT_NEAR(scale_two.orbit_angle, expected_angle, 0.0001f);
+  expect_vec3_near(scale_two.pose.eye, scale_one.pose.eye);
+  expect_vec3_near(scale_two.pose.target, scale_one.pose.target);
+  expect_vec3_near(scale_two.pose.up, scale_one.pose.up);
+  EXPECT_NEAR(scale_two.distance, scale_one.distance, 0.001f);
 }
 
 TEST(ViewportInputRouterTests, AltMiddleMouseStartsOrbitSnapNavigation) {
@@ -9297,7 +10543,8 @@ TEST(ViewportInputRouterTests, AltMiddleMouseStartsOrbitSnapNavigation) {
   EXPECT_TRUE(result.consumed);
   EXPECT_TRUE(router.navigating());
 
-  input.mouse_screen = {100.0f, 100.0f};
+  input.mouse_screen = {101.0f, 100.0f};
+  input.mouse_delta = {1.0f, 0.0f};
   set_navigation_down(input, ViewportInputActionKind::OrbitSnap);
   result = router.handle_frame(input, camera);
   EXPECT_TRUE(result.camera_changed);
@@ -9369,7 +10616,8 @@ TEST(ViewportInputRouterTests, PlainMiddleOrbitAfterAltSnapDoesNotSnap) {
 
   auto result = router.handle_frame(input, camera);
   ASSERT_TRUE(result.consumed);
-  input.mouse_screen = {100.0f, 100.0f};
+  input.mouse_screen = {101.0f, 100.0f};
+  input.mouse_delta = {1.0f, 0.0f};
   set_navigation_down(input, ViewportInputActionKind::OrbitSnap);
   result = router.handle_frame(input, camera);
   ASSERT_TRUE(result.camera_changed);
@@ -9390,6 +10638,15 @@ TEST(ViewportInputRouterTests, PlainMiddleOrbitAfterAltSnapDoesNotSnap) {
 
   EXPECT_TRUE(result.consumed);
   EXPECT_TRUE(router.navigating());
+  EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+  EXPECT_FALSE(camera.orthographic_view_locked());
+
+  input.mouse_screen = {101.0f, 100.0f};
+  input.mouse_delta = {1.0f, 0.0f};
+  set_navigation_down(input, ViewportInputActionKind::Orbit);
+  result = router.handle_frame(input, camera);
+
+  EXPECT_TRUE(result.camera_changed);
   EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
   EXPECT_FALSE(camera.orthographic_view_locked());
 }
@@ -9411,7 +10668,8 @@ TEST(ViewportInputRouterTests, RightMouseAfterAltSnapPansOrthographicView) {
 
   auto result = router.handle_frame(input, camera);
   ASSERT_TRUE(result.consumed);
-  input.mouse_screen = {100.0f, 100.0f};
+  input.mouse_screen = {101.0f, 100.0f};
+  input.mouse_delta = {1.0f, 0.0f};
   set_navigation_down(input, ViewportInputActionKind::OrbitSnap);
   result = router.handle_frame(input, camera);
   ASSERT_TRUE(result.camera_changed);
@@ -9469,6 +10727,7 @@ TEST(ViewportInputRouterTests,
   EXPECT_NEAR(camera.state().target.z, before.target.z, 0.001f);
   EXPECT_NEAR(camera.state().yaw_radians, before.yaw_radians, 0.001f);
   EXPECT_NEAR(camera.state().pitch_radians, before.pitch_radians, 0.001f);
+  EXPECT_NEAR(camera.state().distance, before.distance, 0.001f);
   EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
 
   set_navigation_released(input, ViewportInputActionKind::Orbit);
@@ -9499,6 +10758,7 @@ TEST(ViewportInputRouterTests, ShiftMiddleMousePansLockedOrthographicView) {
   EXPECT_TRUE(router.navigating());
 
   input.mouse_screen = {180.0f, 140.0f};
+  input.mouse_delta = {80.0f, 40.0f};
   set_navigation_down(input, ViewportInputActionKind::Pan);
   result = router.handle_frame(input, camera);
 
@@ -9529,6 +10789,7 @@ TEST(ViewportInputRouterTests, RightMousePansOrthographicViewInsteadOfFlying) {
   EXPECT_TRUE(router.navigating());
 
   input.mouse_screen = {310.0f, 210.0f};
+  input.mouse_delta = {70.0f, 30.0f};
   input.fly_local_direction = {0.0f, 0.0f, 1.0f};
   input.delta_seconds = 0.25f;
   set_navigation_down(input, ViewportInputActionKind::Fly);
@@ -9692,6 +10953,48 @@ TEST(ViewportInputRouterTests, FlyWheelAdjustsNavigationSpeedInsteadOfZooming) {
   result = router.handle_frame(input, camera);
   EXPECT_TRUE(result.fly_speed_changed);
   EXPECT_NEAR(camera.fly_speed(), speed_before_wheel - 1.0f, 0.001f);
+}
+
+TEST(ViewportInputRouterTests,
+     OrderedFlyWheelEventsReverseImmediatelyAtBothSpeedBounds) {
+  const auto run_reversal = [](float initial_adjustment,
+                               float outward_step,
+                               float reverse_step,
+                               float expected_speed) {
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    camera.adjust_fly_speed(initial_adjustment);
+
+    ViewportInputFrame input;
+    input.viewport_hovered = true;
+    input.viewport_focused = true;
+    input.viewport_size = {800.0f, 600.0f};
+    input.mouse_screen = {300.0f, 240.0f};
+    set_navigation_pressed(input, ViewportInputActionKind::Fly);
+    ASSERT_TRUE(router.handle_frame(input, camera).fly_navigation_active);
+
+    input.mouse_wheel = outward_step + reverse_step;
+    input.mouse_delta = {};
+    set_navigation_down(input, ViewportInputActionKind::Fly);
+    input.navigation_bindings.zoom_wheel = true;
+    input.navigation_bindings.wheel_events = {
+        {ViewportInputActionKind::Zoom, outward_step, {}},
+        {ViewportInputActionKind::Zoom, reverse_step, {}},
+    };
+
+    const float distance_before = camera.state().distance;
+    const ViewportInputResult result = router.handle_frame(input, camera);
+
+    EXPECT_TRUE(result.consumed);
+    EXPECT_TRUE(result.fly_navigation_active);
+    EXPECT_TRUE(result.fly_speed_changed);
+    EXPECT_NEAR(result.fly_speed, expected_speed, 0.001f);
+    EXPECT_NEAR(camera.fly_speed(), expected_speed, 0.001f);
+    EXPECT_NEAR(camera.state().distance, distance_before, 0.001f);
+  };
+
+  run_reversal(2000.0f, 1.0f, -1.0f, 999.0f);
+  run_reversal(-2000.0f, -1.0f, 1.0f, 2.0f);
 }
 
 TEST(ViewportInputRouterTests, MiddleMouseResetsFlyNavigationSpeed) {

@@ -165,6 +165,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kApplyMaterial,
                Fixture::SingleFaceSelection, kTopologyDomains,
                Outcome::SuccessRequired, UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kUiSearchCommands, Fixture::ExternalRuntime,
+               Domain::ExternalRuntime, Outcome::MayReject, UndoRepeat::None,
+               kExternal),
 #ifndef NDEBUG
       contract(quader_command::kDevCopySelectionJson,
                Fixture::ExternalRuntime,
@@ -288,6 +291,15 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                Domain::Preferences | Domain::Viewport | Domain::Overlay |
                    Domain::Revisions,
                Outcome::ChangeRequired),
+      contract(quader_command::kViewportToggleInfo, Fixture::Viewport,
+               Domain::Preferences | Domain::Viewport | Domain::Overlay |
+                   Domain::Revisions,
+               Outcome::ChangeRequired),
+      contract(quader_command::kViewportToggleNavigationGizmo,
+               Fixture::Viewport,
+               Domain::Preferences | Domain::Viewport | Domain::Overlay |
+                   Domain::Revisions,
+               Outcome::ChangeRequired),
       contract(quader_command::kViewportToggleTextureLock, Fixture::Viewport,
                Domain::Preferences, Outcome::ChangeRequired, UndoRepeat::None),
       contract(quader_command::kViewportToggleTextureLockScale, Fixture::Viewport,
@@ -304,6 +316,18 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                Fixture::Viewport, kViewportDomains,
                Outcome::ChangeRequired),
       contract(quader_command::kViewportLayoutTwoHorizontal,
+               Fixture::Viewport, kViewportDomains,
+               Outcome::ChangeRequired),
+      contract(quader_command::kViewportLayoutThreePrimaryRight,
+               Fixture::Viewport, kViewportDomains,
+               Outcome::ChangeRequired),
+      contract(quader_command::kViewportLayoutThreePrimaryLeft,
+               Fixture::Viewport, kViewportDomains,
+               Outcome::ChangeRequired),
+      contract(quader_command::kViewportLayoutThreePrimaryBottom,
+               Fixture::Viewport, kViewportDomains,
+               Outcome::ChangeRequired),
+      contract(quader_command::kViewportLayoutThreePrimaryTop,
                Fixture::Viewport, kViewportDomains,
                Outcome::ChangeRequired),
       contract(quader_command::kViewportLayoutFourQuad, Fixture::Viewport,
@@ -705,9 +729,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 190U);
+  static_assert(std::size(kContracts) == 197U);
 #else
-  static_assert(std::size(kContracts) == 191U);
+  static_assert(std::size(kContracts) == 198U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

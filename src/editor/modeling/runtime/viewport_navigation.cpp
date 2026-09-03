@@ -213,6 +213,7 @@ quader_poly::Transform3 orthogonal_camera_basis_for_offset_axis(quader::QVec3 ax
  * Distinguishes snap targets that should enter a locked orthographic projection from diagonal orbit snap targets.
  */
 struct ViewportAxisSnapTransformResult {
+	bool snapped = false;
 	bool orthographic_axis = false;
 };
 
@@ -285,28 +286,147 @@ ViewportNavigationResult navigation_result(const quader_poly::Transform3& transf
 	return result;
 }
 
-double capped_orthographic_zoom_size(double current_size, double factor, double steps)
+struct EffectiveZoomRange {
+	double minimum = 0.0;
+	double maximum = 0.0;
+};
+
+EffectiveZoomRange effective_zoom_range(
+	double current_value,
+	double requested_minimum,
+	double requested_maximum,
+	double default_minimum,
+	double default_maximum)
 {
-  const double safe_current_size =
-      std::max(kNavigationMinOrthographicSize, current_size);
-  const double requested_size = safe_current_size / factor;
-  if (steps < 0.0) {
-    if (safe_current_size >= kNavigationMaxOrthographicZoomOutSize) {
-      return safe_current_size;
-    }
-    return std::clamp(requested_size, kNavigationMinOrthographicSize,
-                      kNavigationMaxOrthographicZoomOutSize);
-  }
-  return std::max(kNavigationMinOrthographicSize, requested_size);
+	const double minimum =
+		std::isfinite(requested_minimum) && requested_minimum > 0.0
+			? requested_minimum
+			: default_minimum;
+	const double maximum =
+		std::isfinite(requested_maximum) && requested_maximum >= minimum
+			? requested_maximum
+			: std::max(default_maximum, minimum);
+	const double current =
+		std::isfinite(current_value) && current_value > 0.0
+			? current_value
+			: minimum;
+	return {
+		std::min(minimum, current),
+		std::max(maximum, current),
+	};
+}
+
+double capped_multiplicative_zoom(
+	double current_value,
+	double steps,
+	double requested_minimum,
+	double requested_maximum,
+	double default_minimum,
+	double default_maximum)
+{
+	const EffectiveZoomRange range = effective_zoom_range(
+		current_value, requested_minimum, requested_maximum,
+		default_minimum, default_maximum);
+	const double current = std::clamp(
+		std::isfinite(current_value) && current_value > 0.0
+			? current_value
+			: range.minimum,
+		range.minimum, range.maximum);
+	if (!std::isfinite(steps) || std::abs(steps) <= kToolEpsilon) {
+		return current;
+	}
+
+	// Treat an aggregate as ordered detents. A soft limit rejects the next
+	// same-direction detent only after a preceding detent has crossed it; it
+	// never truncates an accepted detent. That makes every accepted step exactly
+	// reciprocal when the user reverses the wheel direction.
+	double result = current;
+	double remaining_steps = steps;
+	const auto boundary_tolerance = [](double boundary) {
+		return std::max(
+			kToolEpsilon,
+			std::abs(boundary) *
+				static_cast<double>(std::numeric_limits<float>::epsilon()) * 8.0);
+	};
+	while (std::abs(remaining_steps) > kToolEpsilon) {
+		const double step = std::copysign(
+			std::min(1.0, std::abs(remaining_steps)), remaining_steps);
+		const bool zooming_in = step > 0.0;
+		const double boundary = zooming_in ? range.minimum : range.maximum;
+		const double tolerance = boundary_tolerance(boundary);
+		if ((zooming_in && result <= boundary + tolerance) ||
+			(!zooming_in && result >= boundary - tolerance)) {
+			break;
+		}
+
+		double next =
+			result / std::pow(kNavigationZoomStepFactor, step);
+		if (!std::isfinite(next) || next <= 0.0) {
+			break;
+		}
+		if (std::abs(next - range.minimum) <=
+			boundary_tolerance(range.minimum)) {
+			next = range.minimum;
+		} else if (std::abs(next - range.maximum) <=
+			boundary_tolerance(range.maximum)) {
+			next = range.maximum;
+		}
+		result = next;
+		remaining_steps -= step;
+	}
+	return result;
+}
+
+double capped_orthographic_zoom_size(
+	double current_size,
+	double steps,
+	const ViewportZoomLimits& limits)
+{
+	return capped_multiplicative_zoom(
+		current_size, steps,
+		limits.minimum_orthographic_size,
+		limits.maximum_orthographic_size,
+		kNavigationMinOrthographicSize,
+		kNavigationMaxOrthographicZoomOutSize);
+}
+
+double capped_perspective_zoom_distance(
+	double current_distance,
+	double steps,
+	const ViewportZoomLimits& limits)
+{
+	return capped_multiplicative_zoom(
+		current_distance, steps,
+		limits.minimum_perspective_distance,
+		limits.maximum_perspective_distance,
+		kNavigationMinCameraDistance,
+		kNavigationMaxCameraDistance);
+}
+
+quader::QVec3 rotate_between_camera_bases(
+	const quader_poly::Transform3& source_basis,
+	const quader_poly::Transform3& destination_basis,
+	quader::QVec3 vector)
+{
+	const quader_poly::Transform3 source =
+		orthonormalized_basis(source_basis);
+	const quader_poly::Transform3 destination =
+		orthonormalized_basis(destination_basis);
+	const quader::QVec3 source_local{
+		static_cast<float>(geometry_dot(vector, source.x_axis)),
+		static_cast<float>(geometry_dot(vector, source.y_axis)),
+		static_cast<float>(geometry_dot(vector, source.z_axis)),
+	};
+	return geometry_transform_vector(destination, source_local);
 }
 
 ViewportAxisSnapTransformResult axis_snap_transform(const quader_poly::Transform3& unsnapped_transform, quader::QVec3 pivot, quader_poly::Transform3& snapped_transform)
 {
 	const quader::QVec3 offset = unsnapped_transform.origin - pivot;
 	const double distance = geometry_length(offset);
-        if (distance <= kNavigationMinCameraDistance) {
-          return {};
-        }
+	if (distance <= kToolEpsilon) {
+		return {};
+	}
 
         const quader::QVec3 direction = geometry_is_tiny(unsnapped_transform.z_axis)
 		? offset / static_cast<float>(distance)
@@ -340,13 +460,15 @@ ViewportAxisSnapTransformResult axis_snap_transform(const quader_poly::Transform
         }
 
         snapped_transform = unsnapped_transform;
-	snapped_transform.origin = pivot + geometry_scale(best_axis, distance);
 	const ViewportAxisSnapBasisResult snapped_basis =
 		closest_blender_axis_snap_camera_basis(best_axis, best_axis_components, unsnapped_transform);
 	snapped_transform.x_axis = snapped_basis.basis.x_axis;
 	snapped_transform.y_axis = snapped_basis.basis.y_axis;
 	snapped_transform.z_axis = snapped_basis.basis.z_axis;
-	return { snapped_basis.canonical_axis_view };
+	snapped_transform.origin =
+		pivot + rotate_between_camera_bases(
+			unsnapped_transform, snapped_transform, offset);
+	return { true, snapped_basis.canonical_axis_view };
 }
 
 /**
@@ -756,11 +878,13 @@ double viewport_distance_to_pivot(const quader_poly::Transform3& camera_transfor
 {
 	const quader::QVec3 to_pivot = pivot - camera_transform.origin;
 	const double forward_distance = geometry_dot(to_pivot, viewport_camera_forward(camera_transform));
-        if (forward_distance > kNavigationMinCameraDistance) {
-          return forward_distance;
-        }
-        return std::max(kNavigationMinCameraDistance,
-                        geometry_length(to_pivot));
+	if (std::isfinite(forward_distance) && forward_distance > kToolEpsilon) {
+		return forward_distance;
+	}
+	const double radial_distance = geometry_length(to_pivot);
+	return std::isfinite(radial_distance) && radial_distance > kToolEpsilon
+		? radial_distance
+		: kNavigationMinCameraDistance;
 }
 
 double viewport_aspect_for_size(quader::QVec2 viewport_size)
@@ -891,10 +1015,16 @@ ViewportNavigationResult viewport_orbit(const ViewportOrbitInput& input)
 	const quader::QVec3 right = geometry_normalized_axis(geometry_transform_vector(yaw_rotation, viewport_camera_right(input.camera_transform)));
 	const quader_poly::Transform3 pitch_rotation = rotation_basis(geometry_is_tiny(right) ? quader::QVec3 { 1.0F, 0.0F, 0.0F } : right, pitch);
 	const quader_poly::Transform3 rotation = clamped_rotation_to_upright(input.camera_transform, basis_multiply(pitch_rotation, yaw_rotation));
+	const quader::QVec3 orbit_anchor =
+		input.has_orbit_anchor ? input.orbit_anchor : input.pivot;
 
 	quader_poly::Transform3 unsnapped_result = input.camera_transform;
-	const quader::QVec3 rotated_offset = geometry_transform_vector(rotation, input.camera_transform.origin - input.pivot);
-	unsnapped_result.origin = input.pivot + rotated_offset;
+	const quader::QVec3 rotated_offset = geometry_transform_vector(
+		rotation, input.camera_transform.origin - orbit_anchor);
+	unsnapped_result.origin = orbit_anchor + rotated_offset;
+	const quader::QVec3 unsnapped_pivot =
+		orbit_anchor + geometry_transform_vector(
+			rotation, input.pivot - orbit_anchor);
 	const quader_poly::Transform3 rotated_basis = rotated_camera_basis(input.camera_transform, rotation);
 	unsnapped_result.x_axis = rotated_basis.x_axis;
 	unsnapped_result.y_axis = rotated_basis.y_axis;
@@ -902,8 +1032,14 @@ ViewportNavigationResult viewport_orbit(const ViewportOrbitInput& input)
 
 	quader_poly::Transform3 visible_result = unsnapped_result;
 	const ViewportAxisSnapTransformResult snap =
-		input.snap_to_orthogonal ? axis_snap_transform(unsnapped_result, input.pivot, visible_result) : ViewportAxisSnapTransformResult {};
-	ViewportNavigationResult result = navigation_result(visible_result, input.pivot);
+		input.snap_to_orthogonal
+			? axis_snap_transform(unsnapped_result, orbit_anchor, visible_result)
+			: ViewportAxisSnapTransformResult {};
+	const quader::QVec3 visible_pivot = snap.snapped
+		? orbit_anchor + rotate_between_camera_bases(
+			unsnapped_result, visible_result, unsnapped_pivot - orbit_anchor)
+		: unsnapped_pivot;
+	ViewportNavigationResult result = navigation_result(visible_result, visible_pivot);
 	result.orthogonal_snap = snap.orthographic_axis;
 	result.unsnapped_camera_transform = unsnapped_result;
 	return result;
@@ -914,13 +1050,12 @@ ViewportNavigationResult viewport_pan(const ViewportPanInput& input)
 	QDR_PROFILE_SCOPE("qdr_editor_core.viewport_pan");
 	const double viewport_height = std::max(1.0, static_cast<double>(input.camera.viewport_size.y));
 	double world_per_pixel = 0.01;
-        if (input.camera.projection == CameraProjection::Orthographic) {
+	if (input.camera.projection == CameraProjection::Orthographic) {
           world_per_pixel = std::max(0.0001, input.camera.orthographic_size) /
                             viewport_height;
-        } else {
-          const double distance = std::max(
-              kNavigationMinCameraDistance,
-              viewport_distance_to_pivot(input.camera.transform, input.pivot));
+	} else {
+		const double distance =
+			viewport_distance_to_pivot(input.camera.transform, input.pivot);
           const double vertical_span =
               2.0 * distance *
               std::tan(viewport_vertical_fov_radians(input.camera.fov_degrees) *
@@ -943,20 +1078,22 @@ ViewportNavigationResult viewport_zoom(const ViewportZoomInput& input)
 		return navigation_result(input.camera.transform, input.pivot);
 	}
 
-        const double factor = std::pow(kNavigationZoomStepFactor, input.steps);
         if (input.camera.projection == CameraProjection::Orthographic) {
           const double new_size = capped_orthographic_zoom_size(
-              input.camera.orthographic_size, factor, input.steps);
+              input.camera.orthographic_size, input.steps, input.limits);
           return navigation_result(input.camera.transform, input.pivot,
                                    new_size);
         }
 
         const quader::QVec3 forward = viewport_camera_forward(input.camera.transform);
-        const double distance = std::max(
-            kNavigationMinCameraDistance,
-            viewport_distance_to_pivot(input.camera.transform, input.pivot));
+	const double distance =
+		viewport_distance_to_pivot(input.camera.transform, input.pivot);
         const double new_distance =
-            std::max(kNavigationMinCameraDistance, distance / factor);
+            capped_perspective_zoom_distance(distance, input.steps,
+                                             input.limits);
+        if (new_distance == distance) {
+          return navigation_result(input.camera.transform, input.pivot);
+        }
         quader_poly::Transform3 result_transform = input.camera.transform;
 	result_transform.origin += geometry_scale(forward, distance - new_distance);
 	return navigation_result(result_transform, input.pivot);
@@ -969,18 +1106,24 @@ ViewportNavigationResult viewport_zoom_to_cursor(const ViewportZoomToCursorInput
 		return navigation_result(input.camera.transform, input.pivot);
 	}
 
-        const double factor = std::pow(kNavigationZoomStepFactor, input.steps);
         const quader::QVec3 ray_direction = geometry_is_tiny(input.ray_direction) ? viewport_camera_forward(input.camera.transform) : geometry_normalized_axis(input.ray_direction);
-        const double fallback_distance = std::max(
-            kNavigationMinCameraDistance,
-            viewport_distance_to_pivot(input.camera.transform, input.pivot));
+	const double fallback_distance =
+		viewport_distance_to_pivot(input.camera.transform, input.pivot);
         quader::QVec3 cursor_target = input.has_cursor_target ? input.cursor_target : input.ray_origin + geometry_scale(ray_direction, fallback_distance);
 
         if (input.camera.projection == CameraProjection::Orthographic) {
-          const double current_size = std::max(kNavigationMinOrthographicSize,
-                                               input.camera.orthographic_size);
+          const double current_size =
+              std::isfinite(input.camera.orthographic_size) &&
+                      input.camera.orthographic_size > 0.0
+                  ? input.camera.orthographic_size
+                  : kNavigationMinOrthographicSize;
           const double new_size =
-              capped_orthographic_zoom_size(current_size, factor, input.steps);
+              capped_orthographic_zoom_size(current_size, input.steps,
+                                            input.limits);
+          if (new_size == current_size) {
+            return navigation_result(input.camera.transform, input.pivot,
+                                     current_size);
+          }
           quader::QVec3 cursor_offset =
               input.ray_origin - input.camera.transform.origin;
           cursor_offset =
@@ -993,17 +1136,44 @@ ViewportNavigationResult viewport_zoom_to_cursor(const ViewportZoomToCursorInput
           return navigation_result(result_transform, cursor_target, new_size);
         }
 
-        double target_distance = geometry_dot(cursor_target - input.ray_origin, ray_direction);
-        if (target_distance <= kNavigationMinCameraDistance) {
-          target_distance = fallback_distance;
-          cursor_target =
-              input.ray_origin + geometry_scale(ray_direction, target_distance);
-        }
+        const quader::QVec3 forward =
+            viewport_camera_forward(input.camera.transform);
+        const double current_distance = fallback_distance;
         const double new_distance =
-            std::max(kNavigationMinCameraDistance, target_distance / factor);
+            capped_perspective_zoom_distance(current_distance, input.steps,
+                                             input.limits);
+        if (new_distance == current_distance) {
+          return navigation_result(input.camera.transform, input.pivot);
+        }
+
+        if (!input.has_cursor_target) {
+          const double ray_plane_dot = geometry_dot(ray_direction, forward);
+          const double pivot_plane_distance =
+              geometry_dot(input.pivot - input.ray_origin, forward);
+		if (std::abs(ray_plane_dot) > kToolEpsilon &&
+			pivot_plane_distance / ray_plane_dot > kToolEpsilon) {
+            cursor_target =
+                input.ray_origin +
+                geometry_scale(ray_direction,
+                               pivot_plane_distance / ray_plane_dot);
+          } else {
+            cursor_target = input.pivot;
+          }
+        }
+
+        // Scaling both the eye and visible target around the same cursor
+        // anchor preserves the screen-space point while keeping the target,
+        // forward axis, and camera distance as one coherent orbit state.
+        const double distance_ratio = new_distance / current_distance;
         quader_poly::Transform3 result_transform = input.camera.transform;
-	result_transform.origin += geometry_scale(ray_direction, target_distance - new_distance);
-	return navigation_result(result_transform, cursor_target);
+	result_transform.origin =
+            cursor_target +
+            geometry_scale(input.camera.transform.origin - cursor_target,
+                           distance_ratio);
+        const quader::QVec3 result_pivot =
+            cursor_target +
+            geometry_scale(input.pivot - cursor_target, distance_ratio);
+	return navigation_result(result_transform, result_pivot);
 }
 
 ViewportNavigationResult viewport_fly_look(const ViewportFlyLookInput& input)
@@ -1065,11 +1235,12 @@ ViewportNavigationResult viewport_frame_bounds(const ViewportFrameBoundsInput& i
           const double size = std::clamp(
               std::max(needed_height, radius * 2.0) * margin,
               kNavigationMinOrthographicSize, kNavigationMaxOrthographicSize);
+          const double distance = std::max(
+              kNavigationDefaultFrameDistance, radius * 2.0);
           result_transform.origin =
-              center -
-              geometry_scale(
-                  viewport_camera_forward(input.camera.transform),
-                  std::max(kNavigationDefaultFrameDistance, radius * 2.0));
+              center - geometry_scale(
+                           viewport_camera_forward(input.camera.transform),
+                           distance);
           return navigation_result(result_transform, center, size);
         }
 
@@ -1077,9 +1248,9 @@ ViewportNavigationResult viewport_frame_bounds(const ViewportFrameBoundsInput& i
 	const double vertical_fov = viewport_vertical_fov_radians(input.camera.fov_degrees);
 	const double horizontal_fov = 2.0 * std::atan(std::tan(vertical_fov * 0.5) * aspect);
 	const double fitting_fov = std::max(0.01, std::min(vertical_fov, horizontal_fov));
-        const double distance =
-            std::max(kNavigationMinCameraDistance,
-                     (radius * margin) / std::sin(fitting_fov * 0.5));
+        const double distance = std::max(
+            kNavigationMinCameraDistance,
+            (radius * margin) / std::sin(fitting_fov * 0.5));
         result_transform.origin = center - geometry_scale(viewport_camera_forward(input.camera.transform), distance);
 	return navigation_result(result_transform, center);
 }

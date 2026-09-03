@@ -1610,7 +1610,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(menu, "QStringLiteral(\"command_%1\")");
   expect_contains(menu, "QStringLiteral(\"panel_%1\")");
   expect_contains(menu, "QStringLiteral(\"layout_%1\")");
-  expect_contains(menu, "viewport_layout_stable_id(option.id)");
+  expect_contains(menu, "viewport_layout_stable_id(*layout)");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -2264,17 +2264,21 @@ TEST(UiLayoutGuardrailTests, QtViewportSupportsOneThroughFourPaneLayouts) {
   expect_contains(panel, "panes_[index].frame->setVisible(");
   expect_contains(panel, "visible && !startup_presentation_blocked_");
   expect_contains(panel, "active[index] = true");
-  expect_contains(menu, "viewport_layout_options()");
+  expect_contains(menu, "layout_for_command(presentation.command_id)");
   for (std::string_view command : {
            "kViewportLayoutSingle", "kViewportLayoutTwoVertical",
-           "kViewportLayoutTwoHorizontal", "kViewportLayoutFourQuad"}) {
+           "kViewportLayoutTwoHorizontal",
+           "kViewportLayoutThreePrimaryRight",
+           "kViewportLayoutThreePrimaryLeft",
+           "kViewportLayoutThreePrimaryBottom",
+           "kViewportLayoutThreePrimaryTop", "kViewportLayoutFourQuad"}) {
     expect_contains(menu, command);
   }
   expect_contains(menu, "context.editor.get().commands().execute(");
   expect_contains(menu,
-                  "context.editor.get().commands().descriptor(*entry.command_id)");
-  expect_contains(menu,
-                  "context.editor.get().viewports().set_layout(layout)");
+                  "context.editor.get().commands().descriptor(entry.command_id)");
+  expect_missing(menu,
+                 "context.editor.get().viewports().set_layout(layout)");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -2296,7 +2300,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(gizmo,
                   "quader_editor_core::build_view_cube_primitives(");
   expect_contains(gizmo, "quader_editor_core::pick_view_cube(");
-  expect_contains(gizmo, "camera.update_drag_delta(delta)");
+  expect_contains(gizmo, "camera.update_drag_delta(camera_delta)");
   expect_contains(gizmo, "camera.view_axis(");
   expect_contains(gizmo, "ViewportAxisLock::Unlocked");
   expect_contains(gizmo, "grabMouse()");
@@ -2454,6 +2458,81 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(surface, "swap_chain_.reset()");
   expect_missing(surface, "ImGui");
   expect_missing(surface, "SDL");
+}
+
+TEST(UiLayoutGuardrailTests,
+     NavigationDepthSamplingStaysGestureGatedAndDpiMotionIsRebased) {
+  const std::string panel =
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string surface =
+      read_source_file("src/ui/qt_viewport_surface.cpp");
+  const std::string navigation_gizmo =
+      read_source_file("src/ui/qt_navigation_gizmo.cpp");
+
+  const std::size_t resolver =
+      panel.find("ViewportKeybindingResolver::resolve(");
+  const std::size_t navigation_press = panel.find(
+      "const ViewportNavigationPress navigation_press =", resolver);
+  const std::size_t orbit_gate = panel.find(
+      "if (navigation_press.action == ViewportInputActionKind::Orbit",
+      navigation_press);
+  const std::size_t surface_anchor = panel.find(
+      "surface_navigation_anchor(navigation_press_local)", orbit_gate);
+  const std::size_t selection_anchor =
+      panel.find("visible_selection_anchor(navigation_press_local)",
+                 surface_anchor);
+  const std::size_t router =
+      panel.find("input_router_.handle_frame(input, camera)", selection_anchor);
+  ASSERT_NE(resolver, std::string::npos);
+  ASSERT_NE(navigation_press, std::string::npos);
+  ASSERT_NE(orbit_gate, std::string::npos);
+  ASSERT_NE(selection_anchor, std::string::npos);
+  ASSERT_NE(surface_anchor, std::string::npos);
+  ASSERT_NE(router, std::string::npos);
+  EXPECT_LT(resolver, orbit_gate);
+  EXPECT_LT(navigation_press, orbit_gate);
+  EXPECT_LT(orbit_gate, surface_anchor);
+  EXPECT_LT(surface_anchor, selection_anchor);
+  EXPECT_LT(selection_anchor, router);
+  expect_contains(panel,
+                  "navigation_press.action == ViewportInputActionKind::Pan");
+  expect_contains(panel, "input.mouse_wheel != 0.0f");
+  expect_contains(panel, "point_placement->surface_snapshot(document, assets)");
+  expect_contains(panel, "SceneSurfaceEligibility::RenderVisible");
+  expect_contains(panel, ".include_backfaces = false");
+  expect_contains(panel, "kSelectionAnchorLogicalRadius");
+  EXPECT_EQ(count_occurrences(
+                panel, "input.navigation_anchor_repair_only ="),
+            2u);
+
+  const std::size_t dpi_event =
+      surface.find("event->type() == QEvent::DevicePixelRatioChange");
+  const std::size_t delta_reset =
+      surface.find("input_->mouse_delta = {};", dpi_event);
+  const std::size_t pressed_edge_reset =
+      surface.find("input_->pointer_pressed_edges.clear();", delta_reset);
+  const std::size_t released_edge_reset =
+      surface.find("input_->pointer_released_edges.clear();",
+                   pressed_edge_reset);
+  const std::size_t render_size_sync =
+      surface.find("synchronize_render_size();", released_edge_reset);
+  ASSERT_NE(dpi_event, std::string::npos);
+  ASSERT_NE(delta_reset, std::string::npos);
+  ASSERT_NE(pressed_edge_reset, std::string::npos);
+  ASSERT_NE(released_edge_reset, std::string::npos);
+  ASSERT_NE(render_size_sync, std::string::npos);
+  EXPECT_LT(dpi_event, delta_reset);
+  EXPECT_LT(delta_reset, pressed_edge_reset);
+  EXPECT_LT(pressed_edge_reset, released_edge_reset);
+  EXPECT_LT(released_edge_reset, render_size_sync);
+  expect_contains(navigation_gizmo,
+                  "const QPointF logical_delta = event->position() -");
+  expect_contains(navigation_gizmo,
+                  "static_cast<float>(logical_delta.x())");
+  expect_missing(navigation_gizmo, "logical_delta.x() * scale");
+  expect_contains(navigation_gizmo, "event->type() == QEvent::UngrabMouse");
+  expect_contains(navigation_gizmo,
+                  "event->type() == QEvent::WindowDeactivate");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -3257,7 +3336,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(outliner, "struct OutlinerRuntimeBindingToken final");
   expect_contains(outliner, "*generation == expected");
   const std::string group = source_slice(
-      outliner, "void group_selection(", "void ungroup_entity(");
+      outliner, "void group_selection(", "void ungroup_selection(");
   const std::size_t group_dispatch =
       group.find("editor.commands().execute(quader_command::kGroupSelection)");
   const std::size_t group_generation = group.find("binding.current()");
@@ -3270,7 +3349,7 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(group_generation, group_old_document);
 
   const std::string ungroup = source_slice(
-      outliner, "void ungroup_entity(", "void delete_selection(");
+      outliner, "void ungroup_selection(", "void delete_selection(");
   const std::size_t ungroup_dispatch = ungroup.find(
       "editor.commands().execute(quader_command::kUngroupSelection)");
   const std::size_t ungroup_post_dispatch_generation =
@@ -3290,7 +3369,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(menu, "if (!binding.current())");
   expect_contains(menu, "group_selection(*editor_, *document_, binding)");
   expect_contains(menu,
-                  "ungroup_entity(*editor_, *document_, entity, binding)");
+                  "ungroup_selection(*editor_, *document_, binding)");
   expect_contains(menu, "delete_selection(*editor_, *document_, binding)");
   EXPECT_GE(count_occurrences(
                 outliner,
@@ -3303,6 +3382,15 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_GE(count_occurrences(
                 layer, "runtime_binding_generation_ != menu_generation"),
             2u);
+  expect_contains(layer,
+                  "const std::uint64_t menu_layer_revision =");
+  expect_contains(layer,
+                  "editor_->layers().revision() != menu_layer_revision");
+  expect_contains(
+      layer,
+      "document_->selection_revision() != menu_scene_selection_revision");
+  expect_contains(layer, "selected_layer_ids() != selected");
+  expect_contains(layer, "layer_id(tree_->currentIndex()) != id");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -3391,9 +3479,11 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(presenter, "available_action_set(");
   expect_contains(
       presenter,
-      "std::string key = \"ui.viewport.context_menu.action.\";");
-  expect_contains(presenter, "localization.text(key, action.label)");
-  expect_missing(presenter, "std::string key = \"modeling.action.\";");
+      "std::string popup_key = \"ui.viewport.context_menu.action.\";");
+  expect_contains(presenter,
+                  "localization.text(popup_key, action.label)");
+  expect_contains(presenter,
+                  "std::string operation_key = \"modeling.action.\";");
   expect_contains(presenter,
                   "editor.commands().command_id_for_tool_activation(");
   expect_contains(presenter,
@@ -3402,6 +3492,13 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(presenter, "editor.commands().available()");
   expect_contains(presenter, "editor.commands().descriptor(command_id)");
   expect_contains(presenter, "editor.commands().shortcut_for(command_id)");
+  expect_contains(
+      presenter,
+      "const QuaderRevisionStamp presented_context = editor.revisions()");
+  expect_contains(presenter,
+                  "same_context_revision(presented_context, editor.revisions())");
+  expect_contains(presenter,
+                  "editor.commands().descriptor(selected->command_id)");
   expect_contains(presenter, "QLatin1Char('\\t')");
   expect_contains(presenter, "QStringLiteral(\"RightMouseClick\")");
   expect_contains(presenter, "QStringLiteral(\"LeftMouseClick\")");
@@ -3409,10 +3506,14 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(presenter, "QStringLiteral(\"LMouse\")");
   expect_missing(presenter, "setShortcut(");
   expect_contains(presenter, "menu.addMenu(");
-  expect_contains(presenter, "viewport_context_modeling_submenu");
-  expect_contains(presenter, "viewport_context_object_submenu");
+  expect_contains(presenter, "viewport_context_mesh_data_submenu");
+  expect_contains(presenter, "viewport_context_topology_submenu");
+  expect_contains(presenter, "viewport_context_merge_submenu");
+  expect_contains(presenter, "viewport_context_normals_submenu");
+  expect_contains(presenter, "viewport_context_arrange_submenu");
   expect_contains(presenter,
-                  "viewport_context_menu_action_bucket(selection_mode");
+                  "viewport_context_menu_action_disposition(mode,");
+  expect_contains(presenter, "find_command_presentation(command_id)");
   expect_contains(presenter, "QuaderSelectionMode::Group");
   expect_contains(presenter,
                   "quader_command::kSceneLayersRemoveSelection");
@@ -3466,8 +3567,6 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(menu, "editor.commands().available()");
   expect_contains(
       menu, "context.editor.get().commands().descriptor(entry.command_id)");
-  expect_contains(menu,
-                  "context.editor.get().commands().descriptor(*entry.command_id)");
   expect_contains(menu, "command->shortcut");
   expect_contains(menu, "command_id_for_tool_activation(");
   expect_contains(menu,
@@ -3481,8 +3580,8 @@ TEST(UiLayoutGuardrailTests,
         "ui.menu.align.axis_z"}) {
     expect_contains(menu, axis_key);
   }
-  expect_contains(
-      menu, "align_menu->addMenu(qtext(context.localization, key, fallback))");
+  expect_contains(menu,
+                  "arrangement_menu->addMenu(qtext(context.localization, key, fallback))");
 
   for (std::string_view forbidden :
        {"setShortcut(", "setShortcuts(", "setShortcutContext(",
@@ -3694,9 +3793,21 @@ TEST(UiLayoutGuardrailTests,
   const std::string external_loss_source =
       surface.substr(external_loss, next_method - external_loss);
   expect_contains(external_loss_source,
+                  "input_->released.push_back(*input_->middle_drag)");
+  expect_contains(external_loss_source,
                   "input_->released.push_back(*input_->right_drag)");
-  expect_contains(external_loss_source, "input_->right_down = false");
-  expect_missing(external_loss_source, "input_->right_released =");
+  expect_contains(
+      external_loss_source,
+      "release_button_state(QuaderMouseButton::Left, input_->left_down,");
+  expect_contains(
+      external_loss_source,
+      "release_button_state(QuaderMouseButton::Middle, input_->middle_down,");
+  expect_contains(
+      external_loss_source,
+      "release_button_state(QuaderMouseButton::Right, input_->right_down,");
+  expect_contains(external_loss_source,
+                  "input_->abandoned_pointer_releases.insert(button_id)");
+  expect_contains(external_loss_source, "relative_pointer_input_.clear();");
 }
 
 TEST(UiLayoutGuardrailTests,

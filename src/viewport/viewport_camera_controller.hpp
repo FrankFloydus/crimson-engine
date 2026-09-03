@@ -122,12 +122,17 @@ public:
     ViewportCameraController();
 
     void set_viewport_size(float width, float height);
-    void begin_drag(QVec2 mouse, ViewportDragMode mode);
+    void begin_drag(QVec2 mouse, ViewportDragMode mode,
+                    std::optional<QVec3> navigation_anchor = std::nullopt,
+                    bool navigation_anchor_repair_only = false);
     void update_drag(QVec2 mouse);
     void update_drag(QVec2 mouse, ViewportDragMode mode);
     void end_drag();
-    void scroll(float wheel_delta);
-    void scroll_to_cursor(float wheel_delta, QVec2 local_mouse);
+    void scroll(float wheel_delta,
+                std::optional<QVec3> navigation_anchor = std::nullopt);
+    void scroll_to_cursor(
+        float wheel_delta, QVec2 local_mouse,
+        std::optional<QVec3> navigation_anchor = std::nullopt);
     void focus_origin(float distance = 64.0f);
     void focus_bounds(QVec3 min_bounds, QVec3 max_bounds, float margin = 1.25f);
     [[nodiscard]] bool focus_optional_bounds(
@@ -140,10 +145,13 @@ public:
     void unlock_orthographic_view();
     void set_view_direction(QVec3 forward_direction);
     void update_drag_delta(QVec2 delta);
+    void update_drag_delta(QVec2 delta, ViewportDragMode mode);
     void fly_move(QVec3 local_direction, float delta_seconds);
     void adjust_fly_speed(float wheel_steps);
     bool set_default_fly_speed(float speed);
     void reset_fly_speed();
+    /// Applies scene-authored clips while retaining any same-framing safety
+    /// constraints owned by the camera controller.
     void set_clip_planes(float near_plane, float far_plane);
     bool restore_perspective_pose(const ViewportCameraPose &pose);
 
@@ -162,19 +170,36 @@ public:
     bool orthographic_view_locked() const { return orthographic_view_locked_; }
 
   private:
-    float zoomed_distance(float wheel_delta) const;
     QVec3 forward() const;
     QVec3 right() const;
     QVec3 up() const;
     void set_camera_basis(QVec3 forward_direction, QVec3 up_direction);
     void sync_basis_from_angles();
     void sync_angles_from_basis();
+    void establish_zoom_envelope_from_current_view();
+    void extend_zoom_envelope_to_current_view();
+    void ensure_perspective_target_within_clip_range();
+    void apply_clip_plane_constraints();
+    std::optional<QVec3> rebase_navigation_depth(QVec3 navigation_anchor);
+    std::optional<QVec3>
+    repair_navigation_depth(QVec3 navigation_anchor);
+    std::optional<QVec3> accept_pending_navigation_anchor();
     void clear_orbit_snap_source();
 
     ViewportCameraState state_;
+    float configured_near_plane_ = 0.05f;
+    float configured_far_plane_ = 1000.0f;
+    float transient_far_plane_floor_ = 0.0f;
+    float minimum_perspective_zoom_distance_ = 0.0f;
+    float maximum_perspective_zoom_distance_ = 0.0f;
+    float minimum_orthographic_zoom_size_ = 0.0f;
+    float maximum_orthographic_zoom_size_ = 0.0f;
     QVec3 camera_forward_ = {0.0f, 0.0f, -1.0f};
     QVec3 camera_up_ = {0.0f, 1.0f, 0.0f};
     QVec3 pivot_ = {};
+    std::optional<QVec3> pending_navigation_anchor_;
+    bool pending_navigation_anchor_repair_only_ = false;
+    std::optional<QVec3> orbit_anchor_;
     float viewport_width_ = 1.0f;
     float viewport_height_ = 1.0f;
     float fly_speed_ = kDefaultViewportFlyNavigationSpeed;

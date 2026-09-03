@@ -19,6 +19,7 @@
 
 #include <QAbstractItemModel>
 #include <QAbstractItemView>
+#include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QContextMenuEvent>
@@ -39,6 +40,7 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <functional>
 #include <span>
 #include <string>
 #include <vector>
@@ -521,6 +523,49 @@ TEST(OutlinerPanelTests,
         QStringLiteral("outliner.context_menu"));
     if (menu != nullptr) {
       keyboard_menu_opened = true;
+      const QList<QAction *> actions = menu->actions();
+      if (actions.size() != 11) {
+        ADD_FAILURE() << "Unexpected outliner context-menu action count: "
+                      << actions.size();
+        menu->close();
+        return;
+      }
+      EXPECT_EQ(actions.back()->objectName(),
+                QStringLiteral("outliner.action.delete"));
+      EXPECT_TRUE(actions[2]->isSeparator());
+      EXPECT_TRUE(actions[5]->isSeparator());
+      EXPECT_TRUE(actions[9]->isSeparator());
+
+      auto *hide_action = menu->findChild<QAction *>(
+          QStringLiteral("outliner.action.hide_selected"));
+      auto *duplicate_action = menu->findChild<QAction *>(
+          QStringLiteral("outliner.action.duplicate"));
+      auto *group_action = menu->findChild<QAction *>(
+          QStringLiteral("outliner.action.group"));
+      EXPECT_NE(hide_action, nullptr);
+      EXPECT_NE(duplicate_action, nullptr);
+      EXPECT_NE(group_action, nullptr);
+      if (hide_action != nullptr) {
+        EXPECT_TRUE(hide_action->text().endsWith(
+            QStringLiteral("\t") + QString::fromStdString(
+                                       editor.commands().shortcut_for(
+                                           quader::quader_command::
+                                               kSceneHideSelection))));
+      }
+      if (duplicate_action != nullptr) {
+        EXPECT_TRUE(duplicate_action->text().endsWith(
+            QStringLiteral("\t") + QString::fromStdString(
+                                       editor.commands().shortcut_for(
+                                           quader::quader_command::
+                                               kDuplicateSelection))));
+      }
+      if (group_action != nullptr) {
+        EXPECT_TRUE(group_action->text().endsWith(
+            QStringLiteral("\t") + QString::fromStdString(
+                                       editor.commands().shortcut_for(
+                                           quader::quader_command::
+                                               kGroupSelection))));
+      }
       menu->close();
     }
   });
@@ -638,6 +683,183 @@ TEST(OutlinerPanelTests,
             QString::fromStdString(other_name));
   EXPECT_NE(other_index.data().toString(), QStringLiteral("First"))
       << "equal revisions from different documents must not reuse a tree";
+}
+
+TEST(OutlinerPanelTests,
+     ContextMenuAppliesVisibilityAndLockStateToTheSelectedSet) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-outliner-context-state-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto first = editor.scene().create_entity({
+      .name = "First",
+      .kind = quader::QuaderEntityKind::Empty,
+  });
+  const auto second = editor.scene().create_entity({
+      .name = "Second",
+      .kind = quader::QuaderEntityKind::Empty,
+  });
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(editor.scene().set_visible(second.value().id, false).ok());
+  const std::array selected{first.value().id, second.value().id};
+  ASSERT_TRUE(editor.selection()
+                  .select_objects_for_inspection(selected, first.value().id)
+                  .ok());
+  ASSERT_TRUE(editor.commands()
+                  .set_shortcut(quader::quader_command::kDuplicateSelection,
+                                "Ctrl+Alt+D")
+                  .ok());
+
+  quader::UISettings ui_settings = quader::UISettings::defaults();
+  quader::ViewportSettings viewport_settings =
+      quader::ViewportSettings::defaults();
+  quader::LocalizationService localization = loaded_localization();
+  quader::UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+
+  quader::OutlinerPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.resize(460, 560);
+  panel.show();
+  panel.refresh(context);
+  QCoreApplication::processEvents();
+  auto *tree = panel.findChild<QTreeView *>(QStringLiteral("outliner.tree"));
+  ASSERT_NE(tree, nullptr);
+  tree->expandAll();
+  QCoreApplication::processEvents();
+
+  const auto invoke_action =
+      [&](const QString &object_name,
+          const std::function<void(const QMenu &, const QAction &)> &inspect =
+              {}) {
+        bool invoked = false;
+        QTimer::singleShot(0, &panel, [&]() {
+          auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+          if (menu == nullptr ||
+              menu->objectName() != QStringLiteral("outliner.context_menu")) {
+            ADD_FAILURE() << "Expected the outliner context menu to open.";
+            if (QWidget *popup = QApplication::activePopupWidget()) {
+              popup->close();
+            }
+            return;
+          }
+          auto *action = menu->findChild<QAction *>(object_name);
+          if (action == nullptr || !action->isEnabled()) {
+            ADD_FAILURE() << "Expected enabled action "
+                          << object_name.toStdString();
+            menu->close();
+            return;
+          }
+          EXPECT_EQ(menu->actions().back()->objectName(),
+                    QStringLiteral("outliner.action.delete"));
+          if (inspect) {
+            inspect(*menu, *action);
+          }
+          invoked = true;
+          menu->setActiveAction(action);
+          QKeyEvent accept_action(QEvent::KeyPress, Qt::Key_Return,
+                                  Qt::NoModifier);
+          QApplication::sendEvent(menu, &accept_action);
+          if (menu->isVisible()) {
+            menu->close();
+          }
+        });
+
+        const QModelIndex target =
+            find_entity_index(*tree->model(), first.value().id);
+        ASSERT_TRUE(target.isValid());
+        const QPoint position = tree->visualRect(target).center();
+        QContextMenuEvent event(QContextMenuEvent::Mouse, position,
+                                tree->viewport()->mapToGlobal(position));
+        QCoreApplication::sendEvent(tree->viewport(), &event);
+        QCoreApplication::processEvents();
+        EXPECT_TRUE(invoked);
+        panel.refresh(context);
+        QCoreApplication::processEvents();
+      };
+
+  invoke_action(
+      QStringLiteral("outliner.action.show_selected"),
+      [&](const QMenu &menu, const QAction &) {
+        auto *duplicate_action = menu.findChild<QAction *>(
+            QStringLiteral("outliner.action.duplicate"));
+        ASSERT_NE(duplicate_action, nullptr);
+        EXPECT_TRUE(duplicate_action->text().endsWith(
+            QStringLiteral("\tCtrl+Alt+D")));
+        EXPECT_TRUE(duplicate_action->shortcut().isEmpty())
+            << "context rows display effective shortcuts but must not own "
+               "a second Qt shortcut route";
+      });
+  ASSERT_NE(session.scene().visibility(first.value().id), nullptr);
+  ASSERT_NE(session.scene().visibility(second.value().id), nullptr);
+  EXPECT_TRUE(session.scene().visibility(first.value().id)->visible);
+  EXPECT_TRUE(session.scene().visibility(second.value().id)->visible);
+  EXPECT_EQ(sorted_entities(session.scene().selected_entities()),
+            sorted_entities({first.value().id, second.value().id}));
+
+  invoke_action(
+      QStringLiteral("outliner.action.hide_selected"),
+      [&](const QMenu &, const QAction &action) {
+        EXPECT_TRUE(action.text().endsWith(
+            QStringLiteral("\t") + QString::fromStdString(
+                                       editor.commands().shortcut_for(
+                                           quader::quader_command::
+                                               kSceneHideSelection))));
+      });
+  EXPECT_FALSE(session.scene().visibility(first.value().id)->visible);
+  EXPECT_FALSE(session.scene().visibility(second.value().id)->visible);
+  EXPECT_TRUE(session.scene().selected_entities().empty())
+      << "the context route must preserve Hide Selection command side effects";
+
+  ASSERT_TRUE(editor.selection()
+                  .select_objects_for_inspection(selected, first.value().id)
+                  .ok());
+  panel.refresh(context);
+  invoke_action(QStringLiteral("outliner.action.show_selected"));
+  invoke_action(QStringLiteral("outliner.action.lock_selected"));
+  ASSERT_NE(session.scene().lock(first.value().id), nullptr);
+  ASSERT_NE(session.scene().lock(second.value().id), nullptr);
+  EXPECT_TRUE(session.scene().lock(first.value().id)->locked);
+  EXPECT_TRUE(session.scene().lock(second.value().id)->locked);
+  EXPECT_TRUE(session.scene().selected_entities().empty());
+
+  ASSERT_TRUE(editor.selection()
+                  .select_objects_for_inspection(selected, first.value().id)
+                  .ok());
+  panel.refresh(context);
+  invoke_action(QStringLiteral("outliner.action.unlock_selected"));
+  EXPECT_FALSE(session.scene().lock(first.value().id)->locked);
+  EXPECT_FALSE(session.scene().lock(second.value().id)->locked);
+
+  invoke_action(
+      QStringLiteral("outliner.action.delete"),
+      [&](const QMenu &, const QAction &) {
+        ASSERT_TRUE(editor.selection()
+                        .select_objects_for_inspection(
+                            {second.value().id}, second.value().id)
+                        .ok());
+      });
+  EXPECT_TRUE(session.scene().exists(first.value().id));
+  EXPECT_TRUE(session.scene().exists(second.value().id));
+  EXPECT_EQ(session.scene().selected_entities(),
+            std::vector<quader::EntityId>{second.value().id})
+      << "a menu must not apply its Selected Objects command to a newer "
+         "selection created while the popup was open";
 }
 
 TEST(OutlinerPanelTests,

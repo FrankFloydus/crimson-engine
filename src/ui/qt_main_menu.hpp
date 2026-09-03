@@ -32,6 +32,7 @@ struct QtMainMenuContext {
   LocalizationService &localization;
   std::function<void()> request_quit;
   std::function<void()> show_settings;
+  std::function<void()> show_about;
   std::function<bool(UIPanelId)> panel_visible;
   std::function<void(UIPanelId, bool)> set_panel_visible;
   std::function<bool()> selection_toolbar_visible;

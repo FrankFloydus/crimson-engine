@@ -11,6 +11,16 @@
 
 namespace quader {
 
+/** Identifies the selected navigation action and its exact event-time press. */
+struct ViewportNavigationPress {
+  ViewportInputActionKind action = ViewportInputActionKind::None;
+  std::optional<ViewportPointerButtonEdge> pointer_edge;
+};
+
+/** Selects one navigation press and its matching pointer provenance. */
+[[nodiscard]] ViewportNavigationPress
+viewport_navigation_press(const ViewportNavigationInput &navigation);
+
 /**
  * Owns Viewport Input Router behavior within the viewport input, layout, and camera layer.
  */

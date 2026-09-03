@@ -82,6 +82,8 @@ struct ViewportOrbitInput {
 	quader::QVec2 screen_delta;
         double sensitivity = kNavigationOrbitRadiansPerPixel;
         bool snap_to_orthogonal = false;
+	quader::QVec3 orbit_anchor;
+	bool has_orbit_anchor = false;
 };
 
 /**
@@ -94,11 +96,28 @@ struct ViewportPanInput {
 };
 
 /**
+ * Defines the reversible soft envelope applied to viewport wheel zoom.
+ *
+ * A controller may widen the ordinary limits when framing, restoring, or a
+ * projection transition establishes a valid exceptional view. Keeping that
+ * envelope across wheel events lets the opposite event return to the exact
+ * authored view without permitting zoom farther beyond it.
+ */
+struct ViewportZoomLimits {
+	double minimum_perspective_distance = kNavigationMinCameraDistance;
+	double maximum_perspective_distance = kNavigationMaxCameraDistance;
+	double minimum_orthographic_size = kNavigationMinOrthographicSize;
+	double maximum_orthographic_size =
+		kNavigationMaxOrthographicZoomOutSize;
+};
+
+/**
  * Represents a Viewport Zoom Input value used by the modal modeling interaction layer.
  */
 struct ViewportZoomInput {
 	ViewportCameraState camera;
 	quader::QVec3 pivot;
+	ViewportZoomLimits limits;
 	double steps = 0.0;
 };
 
@@ -112,6 +131,7 @@ struct ViewportZoomToCursorInput {
 	quader::QVec3 ray_direction;
 	quader::QVec3 cursor_target;
 	bool has_cursor_target = false;
+	ViewportZoomLimits limits;
 	double steps = 0.0;
 };
 

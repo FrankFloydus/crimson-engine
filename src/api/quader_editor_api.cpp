@@ -61,12 +61,14 @@ public:
 #ifndef NDEBUG
         , dev_tools(session)
         , preferences()
+        , ui()
         , commands(api, project, scene_documents, viewports, tools,
-                   preferences, dev_tools)
+                   preferences, ui, dev_tools)
 #else
         , preferences()
+        , ui()
         , commands(api, project, scene_documents, viewports, tools,
-                   preferences)
+                   preferences, ui)
 #endif
         , render(session, api) {
       attach_document_lifecycle();
@@ -86,12 +88,14 @@ public:
 #ifndef NDEBUG
         , dev_tools(project_api_session(project_session))
         , preferences()
+        , ui()
         , commands(api, project, scene_documents, viewports, tools,
-                   preferences, dev_tools)
+                   preferences, ui, dev_tools)
 #else
         , preferences()
+        , ui()
         , commands(api, project, scene_documents, viewports, tools,
-                   preferences)
+                   preferences, ui)
 #endif
         , render(project_api_session(project_session), api) {
       attach_document_lifecycle();
@@ -250,8 +254,8 @@ public:
     QuaderDevToolsApi dev_tools;
 #endif
     QuaderPreferencesApi preferences;
-    QuaderCommandsApi commands;
     QuaderUIApi ui;
+    QuaderCommandsApi commands;
     QuaderEventsApi events;
     QuaderEventSubscription dirty_sync_subscription;
     QuaderEventSubscription project_assets_sync_subscription;

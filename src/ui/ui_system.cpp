@@ -28,6 +28,7 @@
 #include "ui/outliner_panel.hpp"
 #include "ui/qt_active_material_panel.hpp"
 #include "ui/qt_command_event_filter.hpp"
+#include "ui/qt_command_palette.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
 #include "ui/qt_main_window.hpp"
 #include "ui/qt_material_browser_window.hpp"
@@ -742,6 +743,18 @@ void UISystem::install_runtime_hooks(
   native_tools_ = &native_tools;
   point_placement_ = &point_placement;
   default_material_ = default_material;
+  if (command_palette_ == nullptr && main_window_ != nullptr) {
+    command_palette_ =
+        new QtCommandPalette(editor.commands(), localization_,
+                             main_window_.get());
+    QObject::connect(command_palette_, &QDialog::finished, command_palette_,
+                     [this](int) {
+                       command_palette_open_pending_ = false;
+                     });
+    command_palette_->hide();
+  } else if (command_palette_ != nullptr) {
+    command_palette_->rebind_commands(editor.commands());
+  }
   invalidate_material_presentation_cache();
   outliner_presenter_.invalidate();
   layers_presenter_.invalidate();
@@ -878,6 +891,47 @@ void UISystem::install_runtime_hooks(
           .localization = localization_,
           .request_quit = [this]() { main_window_->close(); },
           .show_settings = [this]() { show_settings_dialog(); },
+          .show_about =
+              [this]() {
+                if (lifecycle_message_box_ == nullptr) {
+                  return;
+                }
+                const QString version =
+                    QString::fromUtf8(kQuaderAppVersionDisplay);
+                (void)lifecycle_message_box_->present(
+                    QtRetainedMessageBoxPresentation{
+                        .icon = QMessageBox::Information,
+                        .object_name =
+                            QStringLiteral("about_quader_message_box"),
+                        .title = QString::fromStdString(localization_.text(
+                            "ui.about.title", "About Quader")),
+                        .text =
+                            QString::fromStdString(localization_.text(
+                                "ui.about.version", "Quader %1"))
+                                .arg(version),
+                        .informative_text = QString::fromStdString(
+                            localization_.text(
+                                "ui.about.description",
+                                "A native polygon modeling editor for "
+                                "Windows.")),
+                        .buttons =
+                            {{
+                                .button =
+                                    QtRetainedMessageBoxButton::Primary,
+                                .object_name = QStringLiteral(
+                                    "aboutQuaderMessageBox.ok"),
+                                .label = QString::fromStdString(
+                                    localization_.text("ui.action.ok", "OK")),
+                                .role = QMessageBox::AcceptRole,
+                            }},
+                        .default_button =
+                            QtRetainedMessageBoxButton::Primary,
+                        .escape_button =
+                            QtRetainedMessageBoxButton::Primary,
+                        .close_button =
+                            QtRetainedMessageBoxButton::Primary,
+                    });
+              },
           .panel_visible = [this](UIPanelId id) { return panel_visible(id); },
           .set_panel_visible =
               [this](UIPanelId id, bool visible) {
@@ -1028,6 +1082,17 @@ void UISystem::install_runtime_hooks(
                                     viewport_panel_->focus_active_pane());
             }
             return runtime_status(panels_.focus(*id));
+          },
+      .show_command_search =
+          [this]() {
+            if (command_palette_ == nullptr) {
+              return runtime_failure(localization_.text(
+                  "ui.runtime.command_search_unavailable",
+                  "Command Search is not available."));
+            }
+            command_palette_open_pending_ = true;
+            command_palette_->open_palette();
+            return runtime_status(false);
           },
       .notify =
           [this](QuaderNotification notification) {
@@ -1232,6 +1297,19 @@ void UISystem::install_runtime_hooks(
             }
             return runtime_status(changed);
           },
+      .viewport_info_visible = [this]() {
+        return viewport_settings_.bool_value(ViewportBoolSettingId::ShowInfo);
+      },
+      .set_viewport_info_visible =
+          [this](bool visible) {
+            const bool changed = viewport_settings_.set_bool_value(
+                ViewportBoolSettingId::ShowInfo, visible);
+            if (changed) {
+              (void)save_viewport_settings();
+              synchronize_settings_surfaces(true);
+            }
+            return runtime_status(changed);
+          },
       .navigation_gizmo_visible =
           [this]() { return settings_.navigation_gizmo_visible(); },
       .set_navigation_gizmo_visible =
@@ -1254,7 +1332,9 @@ void UISystem::install_runtime_hooks(
                                             : ViewportToolState{};
         });
     command_event_filter_->set_command_input_owner_provider([this]() {
-      return qt_window_owns_command_input(settings_dialog_) ||
+      return command_palette_open_pending_ ||
+             qt_window_owns_command_input(command_palette_) ||
+             qt_window_owns_command_input(settings_dialog_) ||
              qt_window_owns_command_input(material_browser_window_) ||
              qt_window_owns_command_input(material_picker_window_) ||
              qt_window_owns_command_input(material_find_replace_dialog_) ||
@@ -2157,8 +2237,13 @@ void UISystem::shutdown() {
   }
   panels_.set_visibility_changed_callback({});
   panels_.set_presentation_changed_callback({});
+  if (command_palette_ != nullptr) {
+    command_palette_->hide();
+  }
   main_menu_.reset();
   main_window_.reset();
+  command_palette_ = nullptr;
+  command_palette_open_pending_ = false;
   startup_presentation_ = {};
   startup_presentation_started_ = {};
   startup_expected_maximized_ = false;
@@ -3658,6 +3743,9 @@ void UISystem::refresh_localized_chrome() {
           ui_panel_localization_key(id), ui_panel_key(id))));
     }
   };
+  if (command_palette_ != nullptr) {
+    command_palette_->refresh_localization();
+  }
   update_title(UIPanelId::Outliner);
   update_title(UIPanelId::Inspector);
   update_title(UIPanelId::Layers);

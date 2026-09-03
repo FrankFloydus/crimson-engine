@@ -167,6 +167,7 @@ private:
   void update_pane_geometry();
   void update_pane_overlay_geometry(Pane &pane);
   void update_focused_pane_indicator();
+  void cancel_navigation();
   void request_pane_focus(ViewportPaneId pane_id,
                           ViewportPaneFocusTrigger trigger);
   [[nodiscard]] bool viewport_surface_has_keyboard_focus() const;
@@ -222,6 +223,9 @@ private:
   ViewportLayoutId displayed_layout_ = ViewportLayoutId::Single;
   std::vector<ViewportPanePlacement> displayed_placements_;
   ViewportInputRouter input_router_;
+  // The retained router is shared, but an active gesture always belongs to
+  // exactly one workspace camera until release or explicit cancellation.
+  std::optional<ViewportPaneId> navigation_camera_owner_;
   ViewportShortcutController shortcut_controller_;
   ViewportHoverController hover_controller_;
   ViewportInteractionController interaction_controller_;

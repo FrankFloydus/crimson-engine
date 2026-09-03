@@ -7,6 +7,8 @@
 #include <gtest/gtest.h>
 
 #include "editor/input/quader_input_binding.hpp"
+#include "editor/input/viewport_keybinding_resolver.hpp"
+#include "editor/interactions/viewport_navigation.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
@@ -22,6 +24,7 @@
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
 #include "viewport/viewport_input_router.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <QApplication>
@@ -38,6 +41,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cmath>
 #include <filesystem>
 #include <initializer_list>
 #include <optional>
@@ -51,6 +55,8 @@ using quader::QuaderInputDevice;
 using quader::QuaderInputGesture;
 using quader::QuaderKeyCode;
 using quader::QuaderMouseButton;
+using quader::QtWheelDeltaSource;
+using quader::QtWheelInputAccumulator;
 using quader::quader_input_chord_from_qt_key;
 using quader::quader_input_format_chord;
 using quader::quader_input_parse_chord;
@@ -1175,6 +1181,10 @@ TEST(QtViewportSurfaceInputTests,
   EXPECT_EQ(session.viewport_workspace().grid_preset(), default_preset);
 
   ASSERT_TRUE(session.viewport_workspace().set_grid_preset(2));
+  const quader::ViewportCameraPose camera_before_click =
+      session.viewport_workspace()
+          .camera(quader::ViewportPaneId::Perspective)
+          .pose();
   QMouseEvent middle_press(QEvent::MouseButtonPress, local, global,
                            Qt::MiddleButton, Qt::MiddleButton,
                            Qt::AltModifier);
@@ -1187,6 +1197,500 @@ TEST(QtViewportSurfaceInputTests,
   QApplication::sendEvent(surface, &middle_release);
   process_input();
   EXPECT_EQ(session.viewport_workspace().grid_preset(), default_preset);
+  const quader::ViewportCameraPose camera_after_click =
+      session.viewport_workspace()
+          .camera(quader::ViewportPaneId::Perspective)
+          .pose();
+  EXPECT_EQ(quader::viewport_camera_pose_persistence_signature(
+                camera_after_click),
+            quader::viewport_camera_pose_persistence_signature(
+                camera_before_click));
+}
+
+TEST(QtViewportSurfaceInputTests,
+     PhysicalWheelAndMiddleDragRepairStaleDepthThroughProductionPanel) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-navigation-depth-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -6.0f}, .max = {1.0f, 1.0f, -4.0f}});
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().clear().ok());
+
+  quader::QtViewportPanel panel;
+  panel.attach_workspace(session.viewport_workspace());
+  quader::QtViewportSurface *surface =
+      panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+  const QPointF center{400.0, 300.0};
+  const QPointF center_global{500.0, 400.0};
+  QEnterEvent enter(center, center, center_global);
+  QApplication::sendEvent(surface, &enter);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &focus);
+
+  const auto process_input = [&]() {
+    panel.process_input(
+        editor, session.scene(), session.assets(), session.modeling(), {},
+        session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+  };
+  quader::ViewportCameraController &camera =
+      session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+  const auto restore_stale_pose = [&]() {
+    ASSERT_TRUE(camera.restore_perspective_pose({
+        .eye = {0.0f, 0.0f, 0.0f},
+        .target = {0.0f, 0.0f, -158.0f},
+        .up = {0.0f, 1.0f, 0.0f},
+    }));
+  };
+  restore_stale_pose();
+  process_input();
+
+  // Plain wheel repair uses the complete scene depth (the scene-root origin
+  // plus this box produces a depth of three), rather than either the surface
+  // under the cursor or the stale target 158 units away.
+  QWheelEvent wheel_in(center, center_global, {}, QPoint{0, 120}, Qt::NoButton,
+                       Qt::NoModifier, Qt::NoScrollPhase, false);
+  QApplication::sendEvent(surface, &wheel_in);
+  process_input();
+  EXPECT_NEAR(camera.state().distance, 3.0f / 1.18f, 0.01f);
+
+  restore_stale_pose();
+  const quader::ViewportScreenPoint anchor_before =
+      camera.project_world_point({0.0f, 0.0f, -4.0f});
+  ASSERT_TRUE(anchor_before.visible);
+
+  QMouseEvent middle_press(QEvent::MouseButtonPress, center, center_global,
+                           Qt::MiddleButton, Qt::MiddleButton,
+                           Qt::NoModifier);
+  QApplication::sendEvent(surface, &middle_press);
+  process_input();
+  const quader::ViewportCameraPose before_orbit = camera.pose();
+  EXPECT_NEAR(camera.state().distance, 158.0f, 0.01f);
+
+  const QPointF moved{405.0, 300.0};
+  const QPointF moved_global{505.0, 400.0};
+  QMouseEvent middle_move(QEvent::MouseMove, moved, moved_global, Qt::NoButton,
+                          Qt::MiddleButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &middle_move);
+  process_input();
+
+  const QPointF moved_again{410.0, 300.0};
+  const QPointF moved_again_global{510.0, 400.0};
+  QMouseEvent middle_move_again(QEvent::MouseMove, moved_again,
+                                moved_again_global, Qt::NoButton,
+                                Qt::MiddleButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &middle_move_again);
+  QMouseEvent middle_release(QEvent::MouseButtonRelease, moved_again,
+                             moved_again_global, Qt::MiddleButton,
+                             Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &middle_release);
+  const QPointF post_release{700.0, 300.0};
+  const QPointF post_release_global{800.0, 400.0};
+  QMouseEvent post_release_move(QEvent::MouseMove, post_release,
+                                post_release_global, Qt::NoButton,
+                                Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &post_release_move);
+  process_input();
+
+  const quader::ViewportCameraPose after_orbit = camera.pose();
+  EXPECT_NEAR(camera.state().distance, 4.0f, 0.01f);
+  const quader::ViewportScreenPoint anchor_after =
+      camera.project_world_point({0.0f, 0.0f, -4.0f});
+  ASSERT_TRUE(anchor_after.visible);
+  EXPECT_NEAR(anchor_after.position.x, anchor_before.position.x, 0.05f);
+  EXPECT_NEAR(anchor_after.position.y, anchor_before.position.y, 0.05f);
+  EXPECT_NEAR(
+      std::acos(std::clamp(
+          quader::dot(quader::normalize(before_orbit.target - before_orbit.eye),
+                      quader::normalize(after_orbit.target - after_orbit.eye)),
+          -1.0f, 1.0f)),
+      10.0f * static_cast<float>(
+                 quader::viewport_host_defaults().orbit_radians_per_pixel),
+      0.0005f);
+  const float expected_orbit_angle =
+      10.0f * static_cast<float>(
+                  quader::viewport_host_defaults().orbit_radians_per_pixel);
+  EXPECT_LE(quader::length(after_orbit.eye - before_orbit.eye),
+            2.0f * quader::length(before_orbit.eye -
+                                  quader::QVec3{0.0f, 0.0f, -4.0f}) *
+                    std::sin(expected_orbit_angle * 0.5f) +
+                0.001f);
+
+  // Exercise the user's exact production sequence: Shift+MMB pan, reciprocal
+  // wheel zoom, then a fresh small MMB orbit. Every gesture must use its own
+  // pointer baseline and the visible depth at its press.
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -5.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const quader::ViewportCameraPose before_pan = camera.pose();
+  QMouseEvent pan_press(QEvent::MouseButtonPress, center, center_global,
+                        Qt::MiddleButton, Qt::MiddleButton,
+                        Qt::ShiftModifier);
+  QApplication::sendEvent(surface, &pan_press);
+  process_input();
+  const QPointF panned{430.0, 310.0};
+  const QPointF panned_global{530.0, 410.0};
+  QMouseEvent pan_move(QEvent::MouseMove, panned, panned_global, Qt::NoButton,
+                       Qt::MiddleButton, Qt::ShiftModifier);
+  QApplication::sendEvent(surface, &pan_move);
+  process_input();
+  QMouseEvent pan_release(QEvent::MouseButtonRelease, panned, panned_global,
+                          Qt::MiddleButton, Qt::NoButton,
+                          Qt::ShiftModifier);
+  QApplication::sendEvent(surface, &pan_release);
+  process_input();
+  const quader::ViewportCameraPose after_pan = camera.pose();
+  EXPECT_GT(quader::length(after_pan.target - before_pan.target), 0.01f);
+
+  const float distance_before_wheel = camera.state().distance;
+  const quader::QVec3 target_before_wheel = camera.state().target;
+  QWheelEvent wheel_out(panned, panned_global, {}, QPoint{0, -120},
+                        Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase,
+                        false);
+  QApplication::sendEvent(surface, &wheel_out);
+  process_input();
+  EXPECT_NEAR(camera.state().distance, distance_before_wheel * 1.18f,
+              0.001f);
+  QWheelEvent wheel_back_in(panned, panned_global, {}, QPoint{0, 120},
+                            Qt::NoButton, Qt::NoModifier,
+                            Qt::NoScrollPhase, false);
+  QApplication::sendEvent(surface, &wheel_back_in);
+  process_input();
+  EXPECT_NEAR(camera.state().distance, distance_before_wheel, 0.001f);
+  EXPECT_NEAR(quader::length(camera.state().target - target_before_wheel),
+              0.0f, 0.0001f);
+
+  const quader::QVec3 visible_orbit_anchor{0.0f, 0.0f, -4.0f};
+  const quader::ViewportScreenPoint visible_anchor_before =
+      camera.project_world_point(visible_orbit_anchor);
+  ASSERT_TRUE(visible_anchor_before.visible);
+  const QPointF orbit_press_local{visible_anchor_before.position.x,
+                                  visible_anchor_before.position.y};
+  const QPointF orbit_press_global{orbit_press_local.x() + 100.0,
+                                   orbit_press_local.y() + 100.0};
+  QMouseEvent fresh_orbit_press(
+      QEvent::MouseButtonPress, orbit_press_local, orbit_press_global,
+      Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &fresh_orbit_press);
+  process_input();
+  const quader::ViewportCameraPose pan_zoom_pose = camera.pose();
+  const QPointF fresh_orbit_moved{orbit_press_local.x() + 5.0,
+                                  orbit_press_local.y()};
+  const QPointF fresh_orbit_moved_global{orbit_press_global.x() + 5.0,
+                                         orbit_press_global.y()};
+  QMouseEvent fresh_orbit_move(
+      QEvent::MouseMove, fresh_orbit_moved, fresh_orbit_moved_global,
+      Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &fresh_orbit_move);
+  process_input();
+  QMouseEvent fresh_orbit_release(
+      QEvent::MouseButtonRelease, fresh_orbit_moved,
+      fresh_orbit_moved_global, Qt::MiddleButton, Qt::NoButton,
+      Qt::NoModifier);
+  QApplication::sendEvent(surface, &fresh_orbit_release);
+  process_input();
+  const quader::ViewportCameraPose pan_zoom_orbit_pose = camera.pose();
+  const float fresh_orbit_angle = std::acos(std::clamp(
+      quader::dot(
+          quader::normalize(pan_zoom_pose.target - pan_zoom_pose.eye),
+          quader::normalize(pan_zoom_orbit_pose.target -
+                            pan_zoom_orbit_pose.eye)),
+      -1.0f, 1.0f));
+  const float expected_fresh_orbit_angle =
+      5.0f * static_cast<float>(
+                 quader::viewport_host_defaults().orbit_radians_per_pixel);
+  EXPECT_NEAR(fresh_orbit_angle, expected_fresh_orbit_angle, 0.0005f);
+  EXPECT_LE(quader::length(pan_zoom_orbit_pose.eye - pan_zoom_pose.eye),
+            2.0f * quader::length(pan_zoom_pose.eye - visible_orbit_anchor) *
+                    std::sin(expected_fresh_orbit_angle * 0.5f) +
+                0.001f);
+  const quader::ViewportScreenPoint visible_anchor_after =
+      camera.project_world_point(visible_orbit_anchor);
+  ASSERT_TRUE(visible_anchor_after.visible);
+  EXPECT_NEAR(visible_anchor_after.position.x,
+              visible_anchor_before.position.x, 0.05f);
+  EXPECT_NEAR(visible_anchor_after.position.y,
+              visible_anchor_before.position.y, 0.05f);
+
+  // A selected object can be in front of the camera yet far outside the
+  // viewport. It must not override the render-visible surface under the exact
+  // MMB press, or a small drag would orbit around a kilometre-wide radius.
+  const auto offscreen = editor.modeling().create_box(
+      {.min = {9999.0f, -1.0f, -6.0f},
+       .max = {10001.0f, 1.0f, -4.0f}});
+  ASSERT_TRUE(offscreen.ok()) << offscreen.error_message();
+  ASSERT_TRUE(editor.selection().clear().ok());
+  ASSERT_TRUE(editor.selection().select_object(offscreen.value()).ok());
+  restore_stale_pose();
+  const std::optional<quader::QVec3> selected_center =
+      editor.query().selection_center();
+  ASSERT_TRUE(selected_center.has_value());
+  const quader::ViewportScreenPoint selected_projection =
+      camera.project_world_point(*selected_center);
+  ASSERT_TRUE(selected_projection.visible);
+  ASSERT_GT(selected_projection.position.x, 800.0f);
+  const quader::ViewportScreenPoint fallback_before =
+      camera.project_world_point({0.0f, 0.0f, -4.0f});
+
+  QMouseEvent fallback_press(QEvent::MouseButtonPress, center, center_global,
+                             Qt::MiddleButton, Qt::MiddleButton,
+                             Qt::NoModifier);
+  QApplication::sendEvent(surface, &fallback_press);
+  process_input();
+  QMouseEvent fallback_move(QEvent::MouseMove, moved, moved_global,
+                            Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &fallback_move);
+  process_input();
+
+  EXPECT_NEAR(camera.state().distance, 4.0f, 0.01f);
+  const quader::ViewportScreenPoint fallback_after =
+      camera.project_world_point({0.0f, 0.0f, -4.0f});
+  ASSERT_TRUE(fallback_after.visible);
+  EXPECT_NEAR(fallback_after.position.x, fallback_before.position.x, 0.05f);
+  EXPECT_NEAR(fallback_after.position.y, fallback_before.position.y, 0.05f);
+
+  QMouseEvent fallback_release(QEvent::MouseButtonRelease, moved,
+                               moved_global, Qt::MiddleButton, Qt::NoButton,
+                               Qt::NoModifier);
+  QApplication::sendEvent(surface, &fallback_release);
+  process_input();
+
+  // A locally isolated selected object can still exist in scene selection.
+  // It must not override the actually rendered surface at the MMB press.
+  const auto locally_hidden = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -102.0f},
+       .max = {1.0f, 1.0f, -100.0f}});
+  ASSERT_TRUE(locally_hidden.ok()) << locally_hidden.error_message();
+  ASSERT_TRUE(editor.selection().clear().ok());
+  ASSERT_TRUE(editor.selection().select_object(locally_hidden.value()).ok());
+  const std::array<quader::ViewportLocalVisibilityEntityId, 3u> baseline{
+      box.value().entity, offscreen.value().entity,
+      locally_hidden.value().entity};
+  const std::array<quader::ViewportLocalVisibilityEntityId, 1u> members{
+      box.value().entity};
+  ASSERT_TRUE(session.viewport_workspace().enter_local_visibility(baseline,
+                                                                  members));
+  restore_stale_pose();
+  const std::optional<quader::QVec3> locally_hidden_center =
+      editor.query().selection_center();
+  ASSERT_TRUE(locally_hidden_center.has_value());
+  const quader::ViewportScreenPoint hidden_projection =
+      camera.project_world_point(*locally_hidden_center);
+  ASSERT_TRUE(hidden_projection.visible);
+  EXPECT_NEAR(hidden_projection.position.x, center.x(), 0.01f);
+  EXPECT_NEAR(hidden_projection.position.y, center.y(), 0.01f);
+  const quader::ViewportScreenPoint visible_before =
+      camera.project_world_point({0.0f, 0.0f, -4.0f});
+
+  QMouseEvent isolated_press(QEvent::MouseButtonPress, center, center_global,
+                             Qt::MiddleButton, Qt::MiddleButton,
+                             Qt::NoModifier);
+  QApplication::sendEvent(surface, &isolated_press);
+  process_input();
+  QMouseEvent isolated_move(QEvent::MouseMove, moved, moved_global,
+                            Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &isolated_move);
+  process_input();
+
+  EXPECT_NEAR(camera.state().distance, 4.0f, 0.01f);
+  const quader::ViewportScreenPoint visible_after =
+      camera.project_world_point({0.0f, 0.0f, -4.0f});
+  ASSERT_TRUE(visible_after.visible);
+  EXPECT_NEAR(visible_after.position.x, visible_before.position.x, 0.05f);
+  EXPECT_NEAR(visible_after.position.y, visible_before.position.y, 0.05f);
+
+  QMouseEvent isolated_release(QEvent::MouseButtonRelease, moved, moved_global,
+                               Qt::MiddleButton, Qt::NoButton,
+                               Qt::NoModifier);
+  QApplication::sendEvent(surface, &isolated_release);
+  process_input();
+  ASSERT_TRUE(session.viewport_workspace().exit_local_visibility());
+  process_input();
+
+  // The selected object is now visible again but sits far behind the box
+  // under MMB. The pressed render surface must win over that occluded,
+  // on-screen selection or the orbit radius would jump from four to 101.
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -4.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const std::optional<quader::QVec3> occluded_selected_center =
+      editor.query().selection_center();
+  ASSERT_TRUE(occluded_selected_center.has_value());
+  const quader::ViewportScreenPoint occluded_projection =
+      camera.project_world_point(*occluded_selected_center);
+  ASSERT_TRUE(occluded_projection.visible);
+  EXPECT_NEAR(occluded_projection.position.x, center.x(), 0.01f);
+  EXPECT_NEAR(occluded_projection.position.y, center.y(), 0.01f);
+  const quader::ViewportScreenPoint pressed_surface_before =
+      camera.project_world_point({0.0f, 0.0f, -4.0f});
+
+  QMouseEvent occluded_press(QEvent::MouseButtonPress, center, center_global,
+                             Qt::MiddleButton, Qt::MiddleButton,
+                             Qt::NoModifier);
+  QApplication::sendEvent(surface, &occluded_press);
+  process_input();
+  QMouseEvent occluded_move(QEvent::MouseMove, moved, moved_global,
+                            Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &occluded_move);
+  process_input();
+
+  EXPECT_NEAR(camera.state().distance, 4.0f, 0.01f);
+  const quader::ViewportScreenPoint pressed_surface_after =
+      camera.project_world_point({0.0f, 0.0f, -4.0f});
+  ASSERT_TRUE(pressed_surface_after.visible);
+  EXPECT_NEAR(pressed_surface_after.position.x,
+              pressed_surface_before.position.x, 0.05f);
+  EXPECT_NEAR(pressed_surface_after.position.y,
+              pressed_surface_before.position.y, 0.05f);
+
+  QMouseEvent occluded_release(QEvent::MouseButtonRelease, moved,
+                               moved_global, Qt::MiddleButton, Qt::NoButton,
+                               Qt::NoModifier);
+  QApplication::sendEvent(surface, &occluded_release);
+  process_input();
+
+  // An on-screen selection is not an unconditional global pivot. When MMB is
+  // pressed far away on empty background, keep the valid view-center radius
+  // instead of jumping out to that distant selected object.
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -4.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const QPointF far_selection_blank{20.0, 20.0};
+  const QPointF far_selection_blank_global{120.0, 120.0};
+  QMouseEvent far_selection_press(
+      QEvent::MouseButtonPress, far_selection_blank,
+      far_selection_blank_global, Qt::MiddleButton, Qt::MiddleButton,
+      Qt::NoModifier);
+  QApplication::sendEvent(surface, &far_selection_press);
+  process_input();
+  const QPointF far_selection_moved{25.0, 20.0};
+  const QPointF far_selection_moved_global{125.0, 120.0};
+  QMouseEvent far_selection_move(
+      QEvent::MouseMove, far_selection_moved,
+      far_selection_moved_global, Qt::NoButton, Qt::MiddleButton,
+      Qt::NoModifier);
+  QApplication::sendEvent(surface, &far_selection_move);
+  process_input();
+  EXPECT_NEAR(camera.state().distance, 4.0f, 0.0001f);
+  QMouseEvent far_selection_release(
+      QEvent::MouseButtonRelease, far_selection_moved,
+      far_selection_moved_global, Qt::MiddleButton, Qt::NoButton,
+      Qt::NoModifier);
+  QApplication::sendEvent(surface, &far_selection_release);
+  process_input();
+
+  // A selected child whose own visibility flag is enabled is still absent
+  // from the viewport when one of its parents is hidden. Effective hierarchy
+  // visibility must therefore reject its center as an orbit anchor too.
+  const quader::EntityId hidden_parent =
+      session.scene().create_empty("Hidden navigation parent");
+  const auto hidden_child = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -102.0f},
+       .max = {1.0f, 1.0f, -100.0f}});
+  ASSERT_TRUE(hidden_child.ok()) << hidden_child.error_message();
+  ASSERT_TRUE(session.scene().set_parent(hidden_child.value().entity,
+                                         hidden_parent, false));
+  ASSERT_TRUE(editor.selection().clear().ok());
+  ASSERT_TRUE(editor.selection().select_object(hidden_child.value()).ok());
+  ASSERT_TRUE(session.scene().set_visible(hidden_parent, false));
+  ASSERT_TRUE(session.scene().visibility(hidden_child.value().entity)->visible);
+  ASSERT_FALSE(
+      session.scene().is_effectively_visible(hidden_child.value().entity));
+  restore_stale_pose();
+  const std::optional<quader::QVec3> hidden_child_center =
+      editor.query().selection_center();
+  ASSERT_FALSE(hidden_child_center.has_value());
+  const quader::ViewportScreenPoint hidden_child_projection =
+      camera.project_world_point({0.0f, 0.0f, -101.0f});
+  ASSERT_TRUE(hidden_child_projection.visible);
+  EXPECT_NEAR(hidden_child_projection.position.x, center.x(), 0.01f);
+  EXPECT_NEAR(hidden_child_projection.position.y, center.y(), 0.01f);
+  const quader::ViewportScreenPoint hierarchy_visible_before =
+      camera.project_world_point({0.0f, 0.0f, -4.0f});
+
+  QMouseEvent hierarchy_press(QEvent::MouseButtonPress, center, center_global,
+                              Qt::MiddleButton, Qt::MiddleButton,
+                              Qt::NoModifier);
+  QApplication::sendEvent(surface, &hierarchy_press);
+  process_input();
+  QMouseEvent hierarchy_move(QEvent::MouseMove, moved, moved_global,
+                             Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &hierarchy_move);
+  process_input();
+
+  EXPECT_NEAR(camera.state().distance, 4.0f, 0.01f);
+  const quader::ViewportScreenPoint hierarchy_visible_after =
+      camera.project_world_point({0.0f, 0.0f, -4.0f});
+  ASSERT_TRUE(hierarchy_visible_after.visible);
+  EXPECT_NEAR(hierarchy_visible_after.position.x,
+              hierarchy_visible_before.position.x, 0.05f);
+  EXPECT_NEAR(hierarchy_visible_after.position.y,
+              hierarchy_visible_before.position.y, 0.05f);
+
+  QMouseEvent hierarchy_release(QEvent::MouseButtonRelease, moved,
+                                moved_global, Qt::MiddleButton, Qt::NoButton,
+                                Qt::NoModifier);
+  QApplication::sendEvent(surface, &hierarchy_release);
+  process_input();
+
+  // Empty-background orbit falls back to whole-scene depth. That fallback may
+  // repair a poisoned far target, but distant bounds must never inflate an
+  // already valid nearby orbit radius.
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -5.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const quader::ViewportCameraPose blank_before = camera.pose();
+  const QPointF blank{20.0, 20.0};
+  const QPointF blank_global{120.0, 120.0};
+  QMouseEvent blank_press(QEvent::MouseButtonPress, blank, blank_global,
+                          Qt::MiddleButton, Qt::MiddleButton,
+                          Qt::NoModifier);
+  QApplication::sendEvent(surface, &blank_press);
+  process_input();
+  EXPECT_EQ(quader::viewport_camera_pose_persistence_signature(camera.pose()),
+            quader::viewport_camera_pose_persistence_signature(blank_before));
+
+  const QPointF blank_moved{25.0, 20.0};
+  const QPointF blank_moved_global{125.0, 120.0};
+  QMouseEvent blank_move(QEvent::MouseMove, blank_moved, blank_moved_global,
+                         Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &blank_move);
+  process_input();
+
+  EXPECT_NEAR(camera.state().distance, 5.0f, 0.0001f);
+  EXPECT_NEAR(
+      std::acos(std::clamp(
+          quader::dot(
+              quader::normalize(blank_before.target - blank_before.eye),
+              quader::normalize(camera.pose().target - camera.pose().eye)),
+          -1.0f, 1.0f)),
+      5.0f * static_cast<float>(
+                 quader::viewport_host_defaults().orbit_radians_per_pixel),
+      0.0005f);
+
+  QMouseEvent blank_release(QEvent::MouseButtonRelease, blank_moved,
+                            blank_moved_global, Qt::MiddleButton,
+                            Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &blank_release);
+  process_input();
 }
 
 TEST(QtViewportSurfaceInputTests,
@@ -1252,6 +1756,86 @@ TEST(QtViewportSurfaceInputTests,
   ASSERT_EQ(fresh.input.released_input_chords.size(), 1u);
   EXPECT_EQ(fresh.input.pressed_input_chords.front(),
             fresh.input.released_input_chords.front());
+}
+
+TEST(QtViewportSurfaceInputTests,
+     NavigationOwnerIsCanceledBeforePaneOrWorkspaceChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-navigation-owner-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession first_session;
+  quader::SceneSession second_session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(
+          first_session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(first_session.viewport_workspace().set_layout(
+      quader::ViewportLayoutId::FourQuad));
+
+  quader::QtViewportPanel panel;
+  panel.attach_workspace(first_session.viewport_workspace());
+  quader::QtViewportSurface *top_surface =
+      panel.surface(quader::ViewportPaneId::Top);
+  ASSERT_NE(top_surface, nullptr);
+  top_surface->resize(800, 600);
+  const QPointF center{400.0, 300.0};
+  const QPointF center_global{500.0, 400.0};
+  QEnterEvent top_enter(center, center, center_global);
+  QApplication::sendEvent(top_surface, &top_enter);
+  QFocusEvent top_focus(QEvent::FocusIn);
+  QApplication::sendEvent(top_surface, &top_focus);
+
+  const auto process_first = [&]() {
+    panel.process_input(
+        editor, first_session.scene(), first_session.assets(),
+        first_session.modeling(), {}, first_session.native_tools(), nullptr,
+        1.0 / 60.0);
+  };
+  process_first();
+  QMouseEvent top_press(QEvent::MouseButtonPress, center, center_global,
+                        Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+  QApplication::sendEvent(top_surface, &top_press);
+  process_first();
+  ASSERT_TRUE(first_session.viewport_workspace()
+                  .camera(quader::ViewportPaneId::Top)
+                  .is_dragging());
+
+  ASSERT_TRUE(first_session.viewport_workspace().set_layout(
+      quader::ViewportLayoutId::Single));
+  panel.refresh_workspace_layout();
+  EXPECT_FALSE(first_session.viewport_workspace()
+                   .camera(quader::ViewportPaneId::Top)
+                   .is_dragging());
+
+  quader::QtViewportSurface *perspective_surface =
+      panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(perspective_surface, nullptr);
+  perspective_surface->resize(800, 600);
+  QEnterEvent perspective_enter(center, center, center_global);
+  QApplication::sendEvent(perspective_surface, &perspective_enter);
+  QFocusEvent perspective_focus(QEvent::FocusIn);
+  QApplication::sendEvent(perspective_surface, &perspective_focus);
+  process_first();
+  QMouseEvent perspective_press(
+      QEvent::MouseButtonPress, center, center_global, Qt::MiddleButton,
+      Qt::MiddleButton, Qt::NoModifier);
+  QApplication::sendEvent(perspective_surface, &perspective_press);
+  process_first();
+  ASSERT_TRUE(first_session.viewport_workspace()
+                  .camera(quader::ViewportPaneId::Perspective)
+                  .is_dragging());
+
+  panel.attach_workspace(second_session.viewport_workspace());
+  EXPECT_FALSE(first_session.viewport_workspace()
+                   .camera(quader::ViewportPaneId::Perspective)
+                   .is_dragging());
+  EXPECT_FALSE(second_session.viewport_workspace()
+                   .camera(quader::ViewportPaneId::Perspective)
+                   .is_dragging());
 }
 
 TEST(QtViewportSurfaceInputTests,
@@ -1451,6 +2035,8 @@ TEST(QtInputAdapterTests,
   const quader::QtWheelInputTranslation translation =
       quader_wheel_input_from_qt_event(event);
 
+  EXPECT_EQ(translation.delta_source, QtWheelDeltaSource::Angle);
+  EXPECT_EQ(translation.source_delta, 120);
   EXPECT_FLOAT_EQ(translation.mouse_wheel, 1.0f);
   ASSERT_EQ(translation.wheel_input_edges.size(), 2u);
   expect_mouse_chord(translation.wheel_input_edges[0].chord,
@@ -1465,14 +2051,16 @@ TEST(QtInputAdapterTests,
   const QWheelEvent smooth = wheel_event(QPoint{0, -9}, {});
   const quader::QtWheelInputTranslation smooth_translation =
       quader_wheel_input_from_qt_event(smooth);
-  EXPECT_FLOAT_EQ(smooth_translation.mouse_wheel, -0.075f);
+  EXPECT_EQ(smooth_translation.delta_source, QtWheelDeltaSource::Pixel);
+  EXPECT_EQ(smooth_translation.source_delta, -9);
+  EXPECT_FLOAT_EQ(smooth_translation.mouse_wheel, -0.225f);
   ASSERT_EQ(smooth_translation.wheel_input_edges.size(), 2u);
   EXPECT_EQ(smooth_translation.wheel_input_edges[1].chord.gesture,
             QuaderInputGesture::WheelDown);
   EXPECT_DOUBLE_EQ(smooth_translation.wheel_input_edges[0].step_delta,
-                   -0.075);
+                   -0.225);
   EXPECT_DOUBLE_EQ(smooth_translation.wheel_input_edges[1].step_delta,
-                   -0.075);
+                   -0.225);
 
   const QWheelEvent two_notches = wheel_event({}, QPoint{0, 240});
   const quader::QtWheelInputTranslation two_notch_translation =
@@ -1483,4 +2071,309 @@ TEST(QtInputAdapterTests,
                    2.0);
   EXPECT_DOUBLE_EQ(two_notch_translation.wheel_input_edges[1].step_delta,
                    2.0);
+}
+
+TEST(QtInputAdapterTests,
+     StatefulAngleWheelRetainsPartialDetentsAndResetsOnReversal) {
+  QtWheelInputAccumulator accumulator;
+  const QWheelEvent first_half =
+      wheel_event({}, QPoint{0, 60}, Qt::ShiftModifier);
+  const quader::QtWheelInputTranslation first =
+      quader_wheel_input_from_qt_event(first_half, accumulator);
+  EXPECT_EQ(first.delta_source, QtWheelDeltaSource::Angle);
+  EXPECT_EQ(first.source_delta, 60);
+  EXPECT_FLOAT_EQ(first.mouse_wheel, 0.0f);
+  EXPECT_TRUE(first.wheel_input_edges.empty());
+  EXPECT_EQ(accumulator.angle_delta_remainder, 60);
+
+  const QWheelEvent second_half =
+      wheel_event({}, QPoint{0, 60}, Qt::ControlModifier);
+  const quader::QtWheelInputTranslation complete =
+      quader_wheel_input_from_qt_event(second_half, accumulator);
+  EXPECT_FLOAT_EQ(complete.mouse_wheel, 1.0f);
+  ASSERT_EQ(complete.wheel_input_edges.size(), 2u);
+  EXPECT_TRUE(complete.wheel_input_edges[0].chord.primary);
+  EXPECT_TRUE(complete.wheel_input_edges[1].chord.primary);
+  EXPECT_FALSE(complete.wheel_input_edges[0].chord.shift);
+  EXPECT_DOUBLE_EQ(complete.wheel_input_edges[0].step_delta, 1.0);
+  EXPECT_DOUBLE_EQ(complete.wheel_input_edges[1].step_delta, 1.0);
+  EXPECT_EQ(accumulator.angle_delta_remainder, 0);
+
+  const quader::QtWheelInputTranslation pending =
+      quader_wheel_input_from_qt_event(first_half, accumulator);
+  EXPECT_TRUE(pending.wheel_input_edges.empty());
+  EXPECT_EQ(accumulator.angle_delta_remainder, 60);
+
+  const QWheelEvent reverse = wheel_event({}, QPoint{0, -120});
+  const quader::QtWheelInputTranslation reversed =
+      quader_wheel_input_from_qt_event(reverse, accumulator);
+  EXPECT_FLOAT_EQ(reversed.mouse_wheel, -1.0f);
+  ASSERT_EQ(reversed.wheel_input_edges.size(), 2u);
+  EXPECT_EQ(reversed.wheel_input_edges[1].chord.gesture,
+            QuaderInputGesture::WheelDown);
+  EXPECT_DOUBLE_EQ(reversed.wheel_input_edges[0].step_delta, -1.0);
+  EXPECT_DOUBLE_EQ(reversed.wheel_input_edges[1].step_delta, -1.0);
+  EXPECT_EQ(accumulator.angle_delta_remainder, 0);
+}
+
+TEST(QtInputAdapterTests,
+     StatefulAngleWheelEmitsMultipleOrderedIntegralNotches) {
+  QtWheelInputAccumulator accumulator;
+  const QWheelEvent event =
+      wheel_event({}, QPoint{0, 300}, Qt::AltModifier);
+  const quader::QtWheelInputTranslation translation =
+      quader_wheel_input_from_qt_event(event, accumulator);
+
+  EXPECT_FLOAT_EQ(translation.mouse_wheel, 2.0f);
+  ASSERT_EQ(translation.wheel_input_edges.size(), 4u);
+  for (std::size_t index = 0; index < 4u; ++index) {
+    EXPECT_TRUE(translation.wheel_input_edges[index].chord.alt);
+    EXPECT_DOUBLE_EQ(translation.wheel_input_edges[index].step_delta, 1.0);
+    EXPECT_EQ(translation.wheel_input_edges[index].chord.gesture,
+              index % 2u == 0u ? QuaderInputGesture::Wheel
+                               : QuaderInputGesture::WheelUp);
+  }
+  EXPECT_EQ(accumulator.angle_delta_remainder, 60);
+}
+
+TEST(QtInputAdapterTests,
+     StatefulPixelWheelUsesIndependentContinuousPixelCalibration) {
+  QtWheelInputAccumulator accumulator{
+      .angle_delta_remainder = 60,
+      .angle_delta_axis = QtWheelInputAccumulator::Axis::Vertical,
+  };
+  const QWheelEvent event =
+      wheel_event(QPoint{0, -10}, {}, Qt::ShiftModifier);
+  const quader::QtWheelInputTranslation translation =
+      quader_wheel_input_from_qt_event(event, accumulator);
+
+  EXPECT_EQ(translation.delta_source, QtWheelDeltaSource::Pixel);
+  EXPECT_EQ(translation.source_delta, -10);
+  EXPECT_FLOAT_EQ(translation.mouse_wheel, -0.25f);
+  ASSERT_EQ(translation.wheel_input_edges.size(), 2u);
+  EXPECT_TRUE(translation.wheel_input_edges[0].chord.shift);
+  EXPECT_TRUE(translation.wheel_input_edges[1].chord.shift);
+  EXPECT_DOUBLE_EQ(translation.wheel_input_edges[0].step_delta, -0.25);
+  EXPECT_DOUBLE_EQ(translation.wheel_input_edges[1].step_delta, -0.25);
+  EXPECT_EQ(accumulator.angle_delta_remainder, 0);
+  EXPECT_EQ(accumulator.angle_delta_axis,
+            QtWheelInputAccumulator::Axis::None);
+
+  const QWheelEvent precise =
+      wheel_event(QPoint{0, 10}, QPoint{0, 120});
+  const quader::QtWheelInputTranslation preferred_pixel =
+      quader_wheel_input_from_qt_event(precise, accumulator);
+  EXPECT_EQ(preferred_pixel.delta_source, QtWheelDeltaSource::Pixel);
+  EXPECT_EQ(preferred_pixel.source_delta, 10);
+  EXPECT_FLOAT_EQ(preferred_pixel.mouse_wheel, 0.25f);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     CanonicalizesAngleWheelAcrossFramesAndKeepsPixelMotionContinuous) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-wheel-canonicalization-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  QWheelEvent half_up = wheel_event({}, QPoint{0, 60});
+  QApplication::sendEvent(&surface, &half_up);
+  const quader::QtViewportInputFrame pending =
+      surface.take_input_frame(0.0f, false);
+  EXPECT_FLOAT_EQ(pending.input.mouse_wheel, 0.0f);
+  EXPECT_TRUE(pending.input.wheel_input_edges.empty());
+
+  QWheelEvent reverse =
+      wheel_event({}, QPoint{0, -120}, Qt::ControlModifier);
+  QApplication::sendEvent(&surface, &reverse);
+  const quader::QtViewportInputFrame reversed =
+      surface.take_input_frame(0.0f, false);
+  EXPECT_FLOAT_EQ(reversed.input.mouse_wheel, -1.0f);
+  ASSERT_EQ(reversed.input.wheel_input_edges.size(), 2u);
+  EXPECT_TRUE(reversed.input.wheel_input_edges[0].chord.primary);
+  EXPECT_DOUBLE_EQ(reversed.input.wheel_input_edges[0].step_delta, -1.0);
+
+  QWheelEvent multiple = wheel_event({}, QPoint{0, 240});
+  QApplication::sendEvent(&surface, &multiple);
+  const quader::QtViewportInputFrame multiple_frame =
+      surface.take_input_frame(0.0f, false);
+  EXPECT_FLOAT_EQ(multiple_frame.input.mouse_wheel, 2.0f);
+  ASSERT_EQ(multiple_frame.input.wheel_input_edges.size(), 4u);
+  for (const quader::QuaderWheelInputEdge &edge :
+       multiple_frame.input.wheel_input_edges) {
+    EXPECT_DOUBLE_EQ(edge.step_delta, 1.0);
+  }
+
+  QWheelEvent pixels = wheel_event(QPoint{0, -10}, {});
+  QApplication::sendEvent(&surface, &pixels);
+  const quader::QtViewportInputFrame pixel_frame =
+      surface.take_input_frame(0.0f, false);
+  EXPECT_FLOAT_EQ(pixel_frame.input.mouse_wheel, -0.25f);
+  ASSERT_EQ(pixel_frame.input.wheel_input_edges.size(), 2u);
+  EXPECT_DOUBLE_EQ(pixel_frame.input.wheel_input_edges[0].step_delta, -0.25);
+  EXPECT_DOUBLE_EQ(pixel_frame.input.wheel_input_edges[1].step_delta, -0.25);
+
+  QWheelEvent pending_before_abandon = wheel_event({}, QPoint{0, 60});
+  QApplication::sendEvent(&surface, &pending_before_abandon);
+  EXPECT_TRUE(surface.take_input_frame(0.0f, false)
+                  .input.wheel_input_edges.empty());
+  surface.abandon_input();
+  QWheelEvent after_abandon = wheel_event({}, QPoint{0, 60});
+  QApplication::sendEvent(&surface, &after_abandon);
+  EXPECT_TRUE(surface.take_input_frame(0.0f, false)
+                  .input.wheel_input_edges.empty());
+
+  QFocusEvent focus_out(QEvent::FocusOut);
+  QApplication::sendEvent(&surface, &focus_out);
+  QWheelEvent after_focus_loss = wheel_event({}, QPoint{0, 60});
+  QApplication::sendEvent(&surface, &after_focus_loss);
+  const quader::QtViewportInputFrame focus_reset =
+      surface.take_input_frame(0.0f, false);
+  EXPECT_FLOAT_EQ(focus_reset.input.mouse_wheel, 0.0f);
+  EXPECT_TRUE(focus_reset.input.wheel_input_edges.empty());
+}
+
+TEST(QtViewportSurfaceInputTests,
+     CoalescedZoomToCursorPacketsRetainTheirEventTimeLocalPositions) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-wheel-position-provenance-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  surface.resize(800, 600);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(&surface, &focus);
+
+  const QPointF first_local{80.0, 120.0};
+  const QPointF second_local{620.0, 430.0};
+  QWheelEvent first(
+      first_local, QPointF{180.0, 220.0}, {}, QPoint{0, 120},
+      Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
+  QWheelEvent second(
+      second_local, QPointF{720.0, 530.0}, {}, QPoint{0, -120},
+      Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
+  QApplication::sendEvent(&surface, &first);
+  QApplication::sendEvent(&surface, &second);
+
+  quader::QtViewportInputFrame frame =
+      surface.take_input_frame(0.0f, false);
+  ASSERT_EQ(frame.input.wheel_input_edges.size(), 4u);
+  EXPECT_TRUE(frame.input.wheel_input_edges[0].has_local_position);
+  EXPECT_TRUE(frame.input.wheel_input_edges[1].has_local_position);
+  EXPECT_TRUE(frame.input.wheel_input_edges[2].has_local_position);
+  EXPECT_TRUE(frame.input.wheel_input_edges[3].has_local_position);
+  EXPECT_FLOAT_EQ(frame.input.wheel_input_edges[0].local.x,
+                  frame.input.wheel_input_edges[1].local.x);
+  EXPECT_FLOAT_EQ(frame.input.wheel_input_edges[0].local.y,
+                  frame.input.wheel_input_edges[1].local.y);
+  EXPECT_FLOAT_EQ(frame.input.wheel_input_edges[2].local.x,
+                  frame.input.wheel_input_edges[3].local.x);
+  EXPECT_FLOAT_EQ(frame.input.wheel_input_edges[2].local.y,
+                  frame.input.wheel_input_edges[3].local.y);
+  EXPECT_NE(frame.input.wheel_input_edges[0].local.x,
+            frame.input.wheel_input_edges[2].local.x);
+  EXPECT_NE(frame.input.wheel_input_edges[0].local.y,
+            frame.input.wheel_input_edges[2].local.y);
+
+  std::vector<QuaderInputChord> suppressed;
+  double linear_array_wheel_remainder = 0.0;
+  double radial_array_wheel_remainder = 0.0;
+  quader::ViewportKeybindingResolver::resolve(
+      editor, quader::ViewportToolState{}, frame.input, suppressed,
+      linear_array_wheel_remainder, radial_array_wheel_remainder);
+
+  const auto &wheel_events = frame.input.navigation_bindings.wheel_events;
+  ASSERT_EQ(wheel_events.size(), 2u);
+  EXPECT_EQ(wheel_events[0].action,
+            quader::ViewportInputActionKind::ZoomToCursor);
+  EXPECT_EQ(wheel_events[1].action,
+            quader::ViewportInputActionKind::ZoomToCursor);
+  const float scale = static_cast<float>(surface.devicePixelRatio());
+  EXPECT_FLOAT_EQ(wheel_events[0].local.x,
+                  static_cast<float>(first_local.x()) * scale);
+  EXPECT_FLOAT_EQ(wheel_events[0].local.y,
+                  static_cast<float>(first_local.y()) * scale);
+  EXPECT_FLOAT_EQ(wheel_events[1].local.x,
+                  static_cast<float>(second_local.x()) * scale);
+  EXPECT_FLOAT_EQ(wheel_events[1].local.y,
+                  static_cast<float>(second_local.y()) * scale);
+  EXPECT_FLOAT_EQ(wheel_events[0].steps, 1.0f);
+  EXPECT_FLOAT_EQ(wheel_events[1].steps, -1.0f);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     OppositeWheelPacketsRemainOrderedThroughProductionPanel) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-ordered-wheel-panel-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+
+  quader::QtViewportPanel panel;
+  panel.attach_workspace(session.viewport_workspace());
+  quader::QtViewportSurface *surface =
+      panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+  const QPointF local{400.0, 300.0};
+  const QPointF global{500.0, 400.0};
+  QEnterEvent enter(local, local, global);
+  QApplication::sendEvent(surface, &enter);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &focus);
+
+  const auto process_input = [&]() {
+    panel.process_input(
+        editor, session.scene(), session.assets(), session.modeling(), {},
+        session.native_tools(), nullptr, 1.0 / 60.0);
+  };
+  process_input();
+
+  quader::ViewportCameraController &camera =
+      session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+  camera.focus_origin(static_cast<float>(
+      quader_editor_core::kNavigationMaxCameraDistance));
+  QWheelEvent blocked_out(local, global, {}, QPoint{0, -120}, Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+  QWheelEvent reverse_in(local, global, {}, QPoint{0, 120}, Qt::NoButton,
+                         Qt::NoModifier, Qt::NoScrollPhase, false);
+  QApplication::sendEvent(surface, &blocked_out);
+  QApplication::sendEvent(surface, &reverse_in);
+  process_input();
+  EXPECT_NEAR(
+      camera.state().distance,
+      static_cast<float>(quader_editor_core::kNavigationMaxCameraDistance /
+                         quader_editor_core::kNavigationZoomStepFactor),
+      0.001f);
+
+  camera.focus_origin(static_cast<float>(
+      quader_editor_core::kNavigationMinCameraDistance));
+  QWheelEvent blocked_in(local, global, {}, QPoint{0, 120}, Qt::NoButton,
+                         Qt::NoModifier, Qt::NoScrollPhase, false);
+  QWheelEvent reverse_out(local, global, {}, QPoint{0, -120}, Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+  QApplication::sendEvent(surface, &blocked_in);
+  QApplication::sendEvent(surface, &reverse_out);
+  process_input();
+  EXPECT_NEAR(
+      camera.state().distance,
+      static_cast<float>(quader_editor_core::kNavigationMinCameraDistance *
+                         quader_editor_core::kNavigationZoomStepFactor),
+      0.00001f);
 }

@@ -86,6 +86,7 @@ private:
   bool dragging_ = false;
   bool drag_started_ = false;
   ViewportPaneId pane_id_ = ViewportPaneId::Perspective;
+  QVec2 press_position_ = {};
   QVec2 accumulated_drag_ = {};
   quader_editor_core::ViewCubeHit pressed_hit_ = {};
 };
@@ -116,6 +117,7 @@ public:
   [[nodiscard]] bool take_interaction_activity();
 
 protected:
+  bool event(QEvent *event) override;
   void paintEvent(QPaintEvent *event) override;
   void mousePressEvent(QMouseEvent *event) override;
   void mouseMoveEvent(QMouseEvent *event) override;

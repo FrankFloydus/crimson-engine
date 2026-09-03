@@ -30,6 +30,7 @@ class QuaderProjectApi;
 class QuaderSceneDocumentsApi;
 class QuaderPreferencesApi;
 class QuaderToolsApi;
+class QuaderUIApi;
 class QuaderViewportApi;
 
 /**
@@ -113,13 +114,13 @@ public:
     QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project,
                       QuaderSceneDocumentsApi &scene_documents,
                       QuaderViewportApi& viewports, QuaderToolsApi& tools,
-                      QuaderPreferencesApi& preferences,
+                      QuaderPreferencesApi& preferences, QuaderUIApi &ui,
                       QuaderDevToolsApi& dev_tools);
 #else
     QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project,
                       QuaderSceneDocumentsApi &scene_documents,
                       QuaderViewportApi& viewports, QuaderToolsApi& tools,
-                      QuaderPreferencesApi& preferences);
+                      QuaderPreferencesApi& preferences, QuaderUIApi &ui);
 #endif
     ~QuaderCommandsApi();
 

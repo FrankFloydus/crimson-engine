@@ -10,6 +10,7 @@
 
 #include <QtCore/Qt>
 
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -19,6 +20,40 @@ class QWheelEvent;
 
 namespace quader {
 
+/// Identifies which Qt wheel payload supplied the canonical motion.
+enum class QtWheelDeltaSource : std::uint8_t {
+  None,
+  Angle,
+  Pixel,
+};
+
+/// Qt specifies one conventional wheel step as 120 angle-delta units.
+inline constexpr int kQtWheelAngleUnitsPerStep = 120;
+
+/**
+ * Calibrates continuous touchpad scrolling independently from angle units.
+ * Forty logical pixels is one viewport zoom step; unlike an angle wheel,
+ * pixel motion is intentionally not quantized.
+ */
+inline constexpr double kQtWheelPixelsPerStep = 40.0;
+
+/**
+ * Retains high-resolution angle-wheel motion for one input surface. A change
+ * of axis or direction clears an incomplete detent so stale motion cannot
+ * weaken the first notch after the user reverses direction.
+ */
+struct QtWheelInputAccumulator {
+  /// Identifies the angle-wheel axis whose incomplete detent is retained.
+  enum class Axis : std::uint8_t {
+    None,
+    Horizontal,
+    Vertical,
+  };
+
+  int angle_delta_remainder = 0;
+  Axis angle_delta_axis = Axis::None;
+};
+
 /**
  * Stores the semantic input produced by one Qt wheel event. Horizontal wheel
  * events intentionally carry only their directional binding chord; vertical
@@ -27,6 +62,8 @@ namespace quader {
 struct QtWheelInputTranslation {
   float mouse_wheel = 0.0f;
   std::vector<QuaderWheelInputEdge> wheel_input_edges;
+  QtWheelDeltaSource delta_source = QtWheelDeltaSource::None;
+  int source_delta = 0;
 };
 
 /**
@@ -68,15 +105,26 @@ quader_mouse_input_chord_from_qt_event(const QMouseEvent &event,
 
 /**
  * Converts a Qt wheel event into one directional canonical wheel chord.
- * Smooth-scroll pixel deltas are used when no angle delta is available.
+ * Smooth-scroll pixel deltas take precedence when Qt provides both payloads.
  */
 [[nodiscard]] std::optional<QuaderInputChord>
 quader_wheel_input_chord_from_qt_event(const QWheelEvent &event);
 
 /**
- * Converts one Qt wheel event into its complete semantic viewport input.
+ * Converts one Qt wheel event without retained state. This compatibility path
+ * keeps angle motion continuous for consumers such as material previews.
  */
 [[nodiscard]] QtWheelInputTranslation
 quader_wheel_input_from_qt_event(const QWheelEvent &event);
+
+/**
+ * Converts one Qt wheel event using persistent per-surface angle-wheel state.
+ * Complete angle detents are emitted as ordered integral +/-1 events. Pixel
+ * deltas bypass that detent accumulator and remain continuous. The coordinate
+ * scale maps Qt's logical event position into the consumer's local units.
+ */
+[[nodiscard]] QtWheelInputTranslation quader_wheel_input_from_qt_event(
+    const QWheelEvent &event, QtWheelInputAccumulator &accumulator,
+    double local_coordinate_scale = 1.0);
 
 } // namespace quader

@@ -1621,6 +1621,8 @@ std::string capture_preferences(const CaptureData &data) {
               bool_text(preferences.rotation_snap_enabled()));
   writer.line("preferences.rotation_snap_degrees",
               double_bits(preferences.rotation_snap_degrees()));
+  writer.line("preferences.viewport_info_visible",
+              bool_text(preferences.viewport_info_visible()));
   writer.line("preferences.navigation_gizmo_visible",
               bool_text(preferences.navigation_gizmo_visible()));
 

@@ -240,6 +240,17 @@ double QuaderPreferencesApi::rotation_snap_degrees() const {
 }
 
 QuaderApiVoidResult
+QuaderPreferencesApi::set_viewport_info_visible(bool visible) {
+  return hooks_.set_viewport_info_visible
+             ? hooks_.set_viewport_info_visible(visible)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::viewport_info_visible() const {
+  return hooks_.viewport_info_visible ? hooks_.viewport_info_visible() : false;
+}
+
+QuaderApiVoidResult
 QuaderPreferencesApi::set_navigation_gizmo_visible(bool visible) {
   return hooks_.set_navigation_gizmo_visible
              ? hooks_.set_navigation_gizmo_visible(visible)

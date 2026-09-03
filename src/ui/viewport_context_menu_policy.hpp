@@ -8,6 +8,7 @@
 
 #include "math/types.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <string_view>
 
@@ -27,6 +28,29 @@ enum class ViewportContextMenuModelingSection {
 enum class ViewportContextMenuActionBucket {
   Modeling,
   Object,
+  Suppressed,
+};
+
+/// Names the semantic destination of one catalog action inside the compact
+/// viewport context menu. Primary actions stay at the first level; secondary
+/// actions live in deliberately named submenus; destructive intent is always
+/// presented last.
+enum class ViewportContextMenuActionSection {
+  Primary,
+  MeshData,
+  Topology,
+  Merge,
+  Normals,
+  Arrange,
+  Destructive,
+  Suppressed,
+};
+
+/// Keeps only mode-specific projection policy outside the shared command
+/// presentation catalog.
+enum class ViewportContextMenuActionDisposition {
+  Catalog,
+  Primary,
   Suppressed,
 };
 
@@ -68,6 +92,12 @@ viewport_context_menu_modeling_section(QuaderSelectionMode mode);
 [[nodiscard]] ViewportContextMenuActionBucket
 viewport_context_menu_action_bucket(QuaderSelectionMode mode,
                                     std::string_view action_id);
+[[nodiscard]] ViewportContextMenuActionDisposition
+viewport_context_menu_action_disposition(QuaderSelectionMode mode,
+                                         std::string_view action_id);
+[[nodiscard]] std::uint32_t
+viewport_context_menu_primary_rank(QuaderSelectionMode mode,
+                                   std::string_view action_id);
 [[nodiscard]] bool should_open_viewport_context_menu(
     const ViewportContextMenuOpenRequest &request);
 [[nodiscard]] bool should_preserve_viewport_context_menu_hover(

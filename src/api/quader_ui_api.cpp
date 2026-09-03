@@ -40,6 +40,16 @@ QuaderApiVoidResult QuaderUIApi::focus_panel(std::string_view panel) {
                             : unavailable("UI runtime is not attached.");
 }
 
+QuaderApiVoidResult QuaderUIApi::show_command_search() {
+  return hooks_.show_command_search
+             ? hooks_.show_command_search()
+             : unavailable("Command Search is not available.");
+}
+
+bool QuaderUIApi::command_search_available() const noexcept {
+  return static_cast<bool>(hooks_.show_command_search);
+}
+
 bool QuaderUIApi::panel_visible(std::string_view panel) const {
   return hooks_.is_panel_visible ? hooks_.is_panel_visible(panel) : false;
 }

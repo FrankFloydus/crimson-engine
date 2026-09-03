@@ -256,6 +256,10 @@ example, `Align X Center`, `Activate Move Tool`, and `Bridge Selected Edges`).
 
 Current compiled defaults added with the scoped editor are:
 
+- `Ctrl+Shift+P` opens Search Commands from the canonical
+  `ui.search_commands` command. The palette does not install a private Qt
+  shortcut, and the global binding continues to yield while native text input
+  owns focus.
 - `T` toggles transform tools between global and local orientation while the
   viewport is focused and no navigation, modal tool, transform drag, or
   operation preview owns the interaction. `Shift+T` remains Apply Active
@@ -273,7 +277,10 @@ Current compiled defaults added with the scoped editor are:
   Orthographic panes start in Wireframe. Each pane remembers its orthographic and perspective
   choices for the current session only; restarting the app restores the defaults.
 - `Ctrl+1`, `Ctrl+2`, `Ctrl+3`, and `Ctrl+4` select Single, Two Vertical, Two Horizontal, and Four
-  Quad viewport layouts.
+  Quad viewport layouts. The four three-pane variants are also canonical
+  commands, but are deliberately unassigned by default.
+- Viewport Info and Navigation Gizmo visibility are canonical viewport
+  commands and deliberately unassigned by default.
 - `Alt+WheelUp` and `Alt+WheelDown` increase and decrease the grid preset;
   `Alt+MiddleMouseClick` restores the default 32-unit preset.
 - `LeftMouseDoubleClick` cycles mesh selection depth only in orthographic Mesh selection mode
@@ -308,6 +315,17 @@ the event reaches Quader. `src/ui/qt_input_adapter.*` must reverse that platform
 before canonical wheel-direction and step classification. Production-path regression coverage must
 send the Windows-shaped X delta through `QtViewportSurface` and `QtViewportPanel`; an idealized Y
 delta alone does not cover the native failure.
+
+Angle-wheel input is accumulated per viewport in Qt's native 120-unit detents. Incomplete motion is
+retained, but changing axis or reversing direction discards the old partial detent so it cannot make
+the first operation in the new direction abnormally small. Every completed detent remains a
+separate ordered semantic event through keybinding resolution and camera routing; same-frame
+opposite events must not be reduced to one net scalar because each event observes zoom limits in
+its own order. Each accepted event retains its event-time local cursor position, remains valid if a
+later leave event changes the current hover state before the frame is drained, and feeds both
+ordinary camera zoom and active Fly speed through the same ordered stream. `pixelDelta` is
+continuous touchpad motion measured in screen pixels and follows its own calibrated path; it must
+never be divided by 120 or merged into the angle-wheel accumulator.
 
 Grid preset rows no longer own any `F1`-`F10` shortcut. Redo has one compiled mapping,
 `Ctrl+Shift+Z`.

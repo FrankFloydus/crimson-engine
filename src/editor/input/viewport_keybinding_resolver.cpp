@@ -22,24 +22,53 @@
 namespace quader {
 namespace {
 
+bool ordered_pointer_navigation_action(ViewportInputActionKind action) {
+  return action == ViewportInputActionKind::Orbit ||
+         action == ViewportInputActionKind::OrbitSnap ||
+         action == ViewportInputActionKind::Pan ||
+         action == ViewportInputActionKind::Fly;
+}
+
+void record_navigation_pointer_transition(
+    ViewportNavigationInput &navigation,
+    ViewportNavigationPointerTransitionKind kind,
+    ViewportInputActionKind action,
+    const std::optional<ViewportPointerButtonEdge> &pointer_edge) {
+  if (!ordered_pointer_navigation_action(action) ||
+      !pointer_edge.has_value()) {
+    return;
+  }
+  navigation.pointer_transitions.push_back({
+      .kind = kind,
+      .action = action,
+      .pointer_edge = *pointer_edge,
+  });
+}
+
 void mark_navigation_pressed(ViewportNavigationInput &navigation,
-                             ViewportInputActionKind action) {
+                             ViewportInputActionKind action,
+                             std::optional<ViewportPointerButtonEdge>
+                                 pointer_edge) {
   switch (action) {
   case ViewportInputActionKind::Orbit:
     navigation.orbit_pressed = true;
     navigation.orbit_down = true;
+    navigation.orbit_pressed_pointer_edge = pointer_edge;
     break;
   case ViewportInputActionKind::OrbitSnap:
     navigation.orbit_snap_pressed = true;
     navigation.orbit_snap_down = true;
+    navigation.orbit_snap_pressed_pointer_edge = pointer_edge;
     break;
   case ViewportInputActionKind::Pan:
     navigation.pan_pressed = true;
     navigation.pan_down = true;
+    navigation.pan_pressed_pointer_edge = pointer_edge;
     break;
   case ViewportInputActionKind::Fly:
     navigation.fly_pressed = true;
     navigation.fly_down = true;
+    navigation.fly_pressed_pointer_edge = pointer_edge;
     break;
   case ViewportInputActionKind::ResetFlySpeed:
     navigation.reset_fly_speed_pressed = true;
@@ -62,10 +91,15 @@ void mark_navigation_pressed(ViewportNavigationInput &navigation,
   default:
     break;
   }
+  record_navigation_pointer_transition(
+      navigation, ViewportNavigationPointerTransitionKind::Pressed, action,
+      pointer_edge);
 }
 
 void mark_action_pressed(ViewportInputFrame &input,
-                         ViewportInputActionKind action) {
+                         ViewportInputActionKind action,
+                         std::optional<ViewportPointerButtonEdge>
+                             pointer_edge) {
   switch (action) {
   case ViewportInputActionKind::ModalToolFinalize:
     input.modal_tool_finalize_pressed = true;
@@ -127,7 +161,7 @@ void mark_action_pressed(ViewportInputFrame &input,
     input.cycle_selection_depth_modifiers = {.primary = true};
     break;
   default:
-    mark_navigation_pressed(input.navigation_bindings, action);
+    mark_navigation_pressed(input.navigation_bindings, action, pointer_edge);
     break;
   }
 }
@@ -180,31 +214,43 @@ void mark_action_down(ViewportInputFrame &input,
 }
 
 void mark_navigation_released(ViewportNavigationInput &navigation,
-                              ViewportInputActionKind action) {
+                              ViewportInputActionKind action,
+                              std::optional<ViewportPointerButtonEdge>
+                                  pointer_edge) {
   switch (action) {
   case ViewportInputActionKind::Orbit:
     navigation.orbit_released = true;
+    navigation.orbit_released_pointer_edge = pointer_edge;
     break;
   case ViewportInputActionKind::OrbitSnap:
     navigation.orbit_snap_released = true;
+    navigation.orbit_snap_released_pointer_edge = pointer_edge;
     break;
   case ViewportInputActionKind::Pan:
     navigation.pan_released = true;
+    navigation.pan_released_pointer_edge = pointer_edge;
     break;
   case ViewportInputActionKind::Fly:
     navigation.fly_released = true;
+    navigation.fly_released_pointer_edge = pointer_edge;
     break;
   default:
     break;
   }
+  record_navigation_pointer_transition(
+      navigation, ViewportNavigationPointerTransitionKind::Released, action,
+      pointer_edge);
 }
 
 void mark_action_released(ViewportInputFrame &input,
-                          ViewportInputActionKind action) {
+                          ViewportInputActionKind action,
+                          std::optional<ViewportPointerButtonEdge>
+                              pointer_edge) {
   if (action == ViewportInputActionKind::QuickPivot) {
     input.quick_pivot_released = true;
   } else {
-    mark_navigation_released(input.navigation_bindings, action);
+    mark_navigation_released(input.navigation_bindings, action,
+                             pointer_edge);
   }
 }
 
@@ -401,12 +447,12 @@ void reserve_deferred_action_pointer(
                                              pointer_edge);
         suppress_owned_pointer_navigation_drag(action, candidate,
                                                suppressed_chords);
-        mark_action_pressed(input, action);
+        mark_action_pressed(input, action, pointer_edge);
         return;
       }
       if (reserve_action_pointer(input, action, candidate, pointer_edge)) {
         if (gesture == QuaderInputGesture::Press) {
-          mark_action_pressed(input, action);
+          mark_action_pressed(input, action, pointer_edge);
         }
         return;
       }
@@ -437,6 +483,10 @@ constexpr std::size_t kMouseButtonCount =
 struct PointerEdgeProvenanceCursor {
   std::array<std::size_t, kMouseButtonCount> pressed_scan{};
   std::array<std::size_t, kMouseButtonCount> released_scan{};
+  // Released semantic actions are dispatched after pressed Click actions.
+  // Keep an independent scan so both phases can reference the same physical
+  // release edge without stealing provenance from one another.
+  std::array<std::size_t, kMouseButtonCount> released_action_scan{};
   std::array<std::optional<ViewportPointerButtonEdge>, kMouseButtonCount>
       last_press{};
 };
@@ -491,6 +541,18 @@ std::optional<ViewportPointerButtonEdge> pointer_edge_provenance(
   default:
     return std::nullopt;
   }
+}
+
+std::optional<ViewportPointerButtonEdge> released_pointer_edge_provenance(
+    const ViewportInputFrame &input, const QuaderInputChord &chord,
+    PointerEdgeProvenanceCursor &cursor) {
+  if (chord.device != QuaderInputDevice::Mouse ||
+      chord.mouse_button == QuaderMouseButton::None) {
+    return std::nullopt;
+  }
+  return consume_pointer_edge(input.pointer_released_edges,
+                              chord.mouse_button,
+                              cursor.released_action_scan);
 }
 
 bool has_left_mouse_depth_double_click_binding(
@@ -690,6 +752,7 @@ void ViewportKeybindingResolver::resolve(
 
   bool wheel_event_resolved_linear_array_action = false;
   bool wheel_event_resolved_radial_array_action = false;
+  std::size_t wheel_input_edge_offset = 0u;
   bool dispatch_continues = runtime_binding.current();
   PointerEdgeProvenanceCursor pointer_edge_cursor;
   dispatch_ordered_viewport_input_edges(
@@ -753,8 +816,26 @@ void ViewportKeybindingResolver::resolve(
                   mark_navigation_down(input.navigation_bindings, action);
                   if (action == ViewportInputActionKind::Zoom ||
                       action == ViewportInputActionKind::ZoomToCursor) {
-                    input.mouse_wheel +=
+                    const float wheel_steps =
                         static_cast<float>(wheel_step_delta);
+                    QVec2 event_local = input.mouse_local;
+                    if (wheel_input_edge_offset <
+                        input.wheel_input_edges.size()) {
+                      const QuaderWheelInputEdge &physical_edge =
+                          input.wheel_input_edges[wheel_input_edge_offset];
+                      if (physical_edge.has_local_position) {
+                        event_local = {
+                            physical_edge.local.x,
+                            physical_edge.local.y,
+                        };
+                      }
+                    }
+                    input.mouse_wheel += wheel_steps;
+                    input.navigation_bindings.wheel_events.push_back({
+                        .action = action,
+                        .steps = wheel_steps,
+                        .local = event_local,
+                    });
                   }
                 }
               } else {
@@ -766,7 +847,7 @@ void ViewportKeybindingResolver::resolve(
                                                 pointer_edge);
                 suppress_owned_pointer_navigation_drag(action, candidate,
                                                        suppressed_chords);
-                mark_action_pressed(input, action);
+                mark_action_pressed(input, action, pointer_edge);
               }
               return true;
             };
@@ -818,7 +899,8 @@ void ViewportKeybindingResolver::resolve(
         }
         return handled;
       },
-      [&](std::span<const QuaderWheelInputEdge>) {
+      [&](std::span<const QuaderWheelInputEdge> physical_event) {
+        wheel_input_edge_offset += physical_event.size();
         if (!dispatch_continues) {
           return;
         }
@@ -849,14 +931,29 @@ void ViewportKeybindingResolver::resolve(
     }
   }
   for (const QuaderInputChord &chord : input.released_input_chords) {
+    const auto pointer_edge =
+        released_pointer_edge_provenance(input, chord,
+                                         pointer_edge_cursor);
     if (release_suppressed_input_chord(suppressed_chords, chord)) {
       continue;
     }
     ViewportInputActionKind action = ViewportInputActionKind::None;
     if (resolve_action(editor, state, input, chord, action)) {
-      mark_action_released(input, action);
+      mark_action_released(input, action, pointer_edge);
     }
   }
+  std::stable_sort(
+      input.navigation_bindings.pointer_transitions.begin(),
+      input.navigation_bindings.pointer_transitions.end(),
+      [](const ViewportNavigationPointerTransition &lhs,
+         const ViewportNavigationPointerTransition &rhs) {
+        const std::uint64_t lhs_sequence = lhs.pointer_edge.sequence;
+        const std::uint64_t rhs_sequence = rhs.pointer_edge.sequence;
+        if (lhs_sequence == 0u || rhs_sequence == 0u) {
+          return lhs_sequence != 0u && rhs_sequence == 0u;
+        }
+        return lhs_sequence < rhs_sequence;
+      });
   sync_fly_direction(input);
 }
 

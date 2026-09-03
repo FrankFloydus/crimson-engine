@@ -38,6 +38,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <initializer_list>
 #include <string>
 
 #ifndef QUADER_SOURCE_DIR
@@ -385,12 +386,69 @@ TEST(LayerPanelTests,
       return;
     }
     menu_opened = true;
+    const QList<QAction *> actions = menu->actions();
+    if (actions.size() != 11) {
+      ADD_FAILURE() << "Unexpected layer context-menu action count: "
+                    << actions.size();
+      menu->close();
+      return;
+    }
+    EXPECT_TRUE(actions[2]->isSeparator());
+    EXPECT_TRUE(actions[5]->isSeparator());
+    EXPECT_TRUE(actions[8]->isSeparator());
+    EXPECT_EQ(actions.back()->objectName(),
+              QStringLiteral("layers.action.delete"));
+
+    auto *rename_action = menu->findChild<QAction *>(
+        QStringLiteral("layers.action.rename"));
+    auto *color_action = menu->findChild<QAction *>(
+        QStringLiteral("layers.action.choose_color"));
+    auto *visibility_action = menu->findChild<QAction *>(
+        QStringLiteral("layers.action.hide"));
+    auto *lock_action = menu->findChild<QAction *>(
+        QStringLiteral("layers.action.lock"));
+    auto *add_action = menu->findChild<QAction *>(
+        QStringLiteral("layers.action.add_selection"));
+    auto *remove_action = menu->findChild<QAction *>(
+        QStringLiteral("layers.action.remove_selection"));
+    auto *empty_action = menu->findChild<QAction *>(
+        QStringLiteral("layers.action.empty"));
     auto *delete_action = menu->findChild<QAction *>(
         QStringLiteral("layers.action.delete"));
-    ASSERT_NE(delete_action, nullptr);
-    EXPECT_EQ(delete_action->text(), QStringLiteral("Delete Layers"));
+    EXPECT_NE(rename_action, nullptr);
+    EXPECT_NE(color_action, nullptr);
+    EXPECT_NE(visibility_action, nullptr);
+    EXPECT_NE(lock_action, nullptr);
+    EXPECT_NE(add_action, nullptr);
+    EXPECT_NE(remove_action, nullptr);
+    EXPECT_NE(empty_action, nullptr);
+    EXPECT_NE(delete_action, nullptr);
+    if (rename_action == nullptr || color_action == nullptr ||
+        visibility_action == nullptr || lock_action == nullptr ||
+        add_action == nullptr || remove_action == nullptr ||
+        empty_action == nullptr || delete_action == nullptr) {
+      menu->close();
+      return;
+    }
+    EXPECT_EQ(rename_action->text(), QStringLiteral("Rename Layer"));
+    EXPECT_EQ(color_action->text(), QStringLiteral("Choose Layer Color"));
+    EXPECT_EQ(visibility_action->text(), QStringLiteral("Hide This Layer"));
+    EXPECT_EQ(lock_action->text(), QStringLiteral("Lock This Layer"));
+    EXPECT_EQ(add_action->text(),
+              QStringLiteral("Add Selected Objects to This Layer"));
+    EXPECT_EQ(remove_action->text(),
+              QStringLiteral("Remove Selected Objects from This Layer"));
+    EXPECT_EQ(empty_action->text(), QStringLiteral("Empty This Layer"));
+    EXPECT_EQ(delete_action->text(),
+              QStringLiteral("Delete Selected Layers"));
     EXPECT_EQ(tree->selectionModel()->selectedRows(1).size(), 2);
-    menu->close();
+    menu->setActiveAction(visibility_action);
+    QKeyEvent accept_action(QEvent::KeyPress, Qt::Key_Return,
+                            Qt::NoModifier);
+    QApplication::sendEvent(menu, &accept_action);
+    if (menu->isVisible()) {
+      menu->close();
+    }
   });
   QContextMenuEvent context_event(
       QContextMenuEvent::Mouse, first_name_position,
@@ -398,6 +456,12 @@ TEST(LayerPanelTests,
   QCoreApplication::sendEvent(tree->viewport(), &context_event);
   EXPECT_TRUE(menu_opened);
   EXPECT_EQ(editor.layers().all().size(), 2u);
+  ASSERT_TRUE(editor.layers().layer(first_layer).has_value());
+  ASSERT_TRUE(editor.layers().layer(second_layer).has_value());
+  EXPECT_FALSE(editor.layers().layer(first_layer)->visible)
+      << "target-specific layer actions must affect only This Layer";
+  EXPECT_TRUE(editor.layers().layer(second_layer)->visible);
+  EXPECT_EQ(tree->selectionModel()->selectedRows(1).size(), 2);
 
   bool keyboard_menu_opened = false;
   QTimer::singleShot(0, &panel, [&]() {
@@ -441,6 +505,163 @@ TEST(LayerPanelTests,
   EXPECT_TRUE(tree->selectionModel()->selectedRows(1).isEmpty());
   EXPECT_EQ(tree->currentIndex(), current_before_blank)
       << "Qt keeps currentIndex independent from the cleared selection";
+}
+
+TEST(LayerPanelTests,
+     ContextMenuRejectsLayerSceneSelectionAndTargetChangesDuringNestedLoop) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-layer-panel-context-fence-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto first_entity = editor.scene().create_entity(
+      quader::QuaderCreateEntityArgs{
+          .name = "First Layer Context Entity",
+          .kind = quader::QuaderEntityKind::Mesh,
+      });
+  const auto second_entity = editor.scene().create_entity(
+      quader::QuaderCreateEntityArgs{
+          .name = "Second Layer Context Entity",
+          .kind = quader::QuaderEntityKind::Mesh,
+      });
+  ASSERT_TRUE(first_entity.ok()) << first_entity.error_message();
+  ASSERT_TRUE(second_entity.ok()) << second_entity.error_message();
+  ASSERT_TRUE(editor.scene().select(first_entity.value().id).ok());
+
+  const auto first_layer_result = editor.layers().create("First Layer");
+  const auto second_layer_result = editor.layers().create("Second Layer");
+  ASSERT_TRUE(first_layer_result.ok()) << first_layer_result.error_message();
+  ASSERT_TRUE(second_layer_result.ok()) << second_layer_result.error_message();
+  const quader::QuaderLayerId first_layer = first_layer_result.value().id;
+  const quader::QuaderLayerId second_layer = second_layer_result.value().id;
+
+  quader::UISettings ui_settings = quader::UISettings::defaults();
+  quader::ViewportSettings viewport_settings =
+      quader::ViewportSettings::defaults();
+  quader::LocalizationService localization = loaded_localization();
+  quader::UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+
+  quader::LayerPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.resize(360, 480);
+  panel.show();
+  panel.refresh(context);
+  QCoreApplication::processEvents();
+
+  auto *tree =
+      panel.findChild<QTreeView *>(QStringLiteral("layers.tree"));
+  ASSERT_NE(tree, nullptr);
+  ASSERT_EQ(tree->model()->rowCount(), 2);
+  ASSERT_NE(tree->selectionModel(), nullptr);
+
+  const auto select_rows = [&](std::initializer_list<int> rows,
+                               int current_row) {
+    QItemSelection selection;
+    for (const int row : rows) {
+      const QModelIndex index = tree->model()->index(row, 1);
+      selection.select(index, index);
+    }
+    tree->selectionModel()->clearSelection();
+    tree->selectionModel()->select(
+        selection, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+    tree->selectionModel()->setCurrentIndex(
+        tree->model()->index(current_row, 1),
+        QItemSelectionModel::NoUpdate);
+  };
+
+  const auto invoke_context_action =
+      [&](int target_row, const QString &action_name,
+          const std::function<void()> &mutate_while_open) {
+        bool menu_opened = false;
+        QTimer::singleShot(0, &panel, [&]() {
+          auto *menu = panel.findChild<QMenu *>(
+              QStringLiteral("layers.context_menu"));
+          if (menu == nullptr) {
+            ADD_FAILURE() << "Expected the layer context menu to open.";
+            if (QWidget *popup = QApplication::activePopupWidget()) {
+              popup->close();
+            }
+            return;
+          }
+          menu_opened = true;
+          auto *action = menu->findChild<QAction *>(action_name);
+          if (action == nullptr) {
+            ADD_FAILURE() << "Expected layer context action "
+                          << action_name.toStdString();
+            menu->close();
+            return;
+          }
+          mutate_while_open();
+          menu->setActiveAction(action);
+          QKeyEvent accept_action(QEvent::KeyPress, Qt::Key_Return,
+                                  Qt::NoModifier);
+          QApplication::sendEvent(menu, &accept_action);
+          if (menu->isVisible()) {
+            menu->close();
+          }
+        });
+
+        const QModelIndex target = tree->model()->index(target_row, 1);
+        const QPoint position = tree->visualRect(target).center();
+        QContextMenuEvent context_event(
+            QContextMenuEvent::Mouse, position,
+            tree->viewport()->mapToGlobal(position));
+        QCoreApplication::sendEvent(tree->viewport(), &context_event);
+        EXPECT_TRUE(menu_opened);
+        QCoreApplication::processEvents();
+      };
+
+  select_rows({0}, 0);
+  invoke_context_action(
+      0, QStringLiteral("layers.action.delete"), [&]() {
+        const auto renamed =
+            editor.layers().rename(second_layer, "Changed While Menu Open");
+        EXPECT_TRUE(renamed.ok()) << renamed.error_message();
+      });
+  ASSERT_TRUE(editor.layers().layer(first_layer).has_value());
+  ASSERT_TRUE(editor.layers().layer(second_layer).has_value());
+  EXPECT_EQ(editor.layers().layer(second_layer)->name,
+            "Changed While Menu Open");
+
+  select_rows({0, 1}, 0);
+  invoke_context_action(
+      0, QStringLiteral("layers.action.delete"), [&]() {
+        select_rows({1}, 1);
+      });
+  EXPECT_TRUE(editor.layers().layer(first_layer).has_value());
+  EXPECT_TRUE(editor.layers().layer(second_layer).has_value());
+
+  select_rows({0, 1}, 0);
+  invoke_context_action(
+      0, QStringLiteral("layers.action.hide"), [&]() {
+        tree->selectionModel()->setCurrentIndex(
+            tree->model()->index(1, 1), QItemSelectionModel::NoUpdate);
+      });
+  ASSERT_TRUE(editor.layers().layer(first_layer).has_value());
+  EXPECT_TRUE(editor.layers().layer(first_layer)->visible);
+
+  select_rows({0}, 0);
+  invoke_context_action(
+      0, QStringLiteral("layers.action.add_selection"), [&]() {
+        const auto selected = editor.scene().select(second_entity.value().id);
+        EXPECT_TRUE(selected.ok()) << selected.error_message();
+      });
+  ASSERT_TRUE(editor.layers().layer(first_layer).has_value());
+  EXPECT_TRUE(editor.layers().layer(first_layer)->members.empty());
 }
 
 TEST(LayerPanelTests,

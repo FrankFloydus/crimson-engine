@@ -193,6 +193,7 @@ target_link_libraries(quader_modeling_runtime
         quader_modeling_profile)
 
 add_library(quader_editor_metadata STATIC
+    src/editor/metadata/command_presentation_catalog.cpp
     src/editor/metadata/host_contract.cpp
     src/editor/tools/base/viewport_tool_descriptor_catalog.cpp)
 add_library(quader::editor_metadata ALIAS quader_editor_metadata)
@@ -474,6 +475,7 @@ if(QUADER_BUILD_TESTS AND QUADER_BUILD_NATIVE_APP)
     quader_add_modeling_domain_test_source(runtime qdr_modeling_runtime_picking_tests tests/modeling_domain/qdr_modeling_runtime_picking_tests.cpp)
     quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_operation_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_operation_catalog_tests.cpp)
     quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_action_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_action_catalog_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_command_presentation_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_command_presentation_catalog_tests.cpp)
     quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_panel_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_panel_catalog_tests.cpp)
     quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_ui_placement_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_ui_placement_tests.cpp)
     quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_consumer_smoke_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_consumer_smoke_tests.cpp)

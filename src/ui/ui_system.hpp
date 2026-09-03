@@ -56,6 +56,7 @@ class OutlinerPanel;
 class ViewportPointPlacementService;
 class QtSettingsDialog;
 class QtCommandEventFilter;
+class QtCommandPalette;
 class QtMaterialFindReplaceDialog;
 class QtMaterialBrowserWindow;
 class QtActiveMaterialPanel;
@@ -220,6 +221,8 @@ private:
   std::unique_ptr<QMainWindow> main_window_;
   std::unique_ptr<QtMainMenu> main_menu_;
   std::unique_ptr<QtCommandEventFilter> command_event_filter_;
+  QtCommandPalette *command_palette_ = nullptr;
+  bool command_palette_open_pending_ = false;
   QStackedWidget *central_stack_ = nullptr;
   QtProjectHomePage *project_home_page_ = nullptr;
   QtSceneWorkspace *scene_workspace_ = nullptr;

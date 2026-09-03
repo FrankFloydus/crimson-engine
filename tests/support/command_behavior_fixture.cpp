@@ -357,7 +357,8 @@ QuaderApiVoidResult runtime_result(bool changed, std::string message = {}) {
       .ok = true,
       .changed = changed,
       .message = std::move(message),
-      .mutation_kind = QuaderMutationKind::Runtime,
+      .mutation_kind =
+          changed ? QuaderMutationKind::Runtime : QuaderMutationKind::None,
   };
 }
 
@@ -434,6 +435,7 @@ private:
   void install_runtime_hooks() {
     install_preferences_hooks();
     install_viewport_hooks();
+    install_ui_hooks();
     install_project_hooks();
     install_scene_document_hooks();
 #ifndef NDEBUG
@@ -447,6 +449,16 @@ private:
             },
     });
 #endif
+  }
+
+  void install_ui_hooks() {
+    editor().ui().set_runtime_hooks(QuaderUIRuntimeHooks{
+        .show_command_search =
+            [this] {
+              ++external_calls_;
+              return runtime_result(false, "Command Search test hook");
+            },
+    });
   }
 
   void install_preferences_hooks() {
@@ -524,6 +536,11 @@ private:
               const bool changed = rotation_snap_degrees_ != value;
               rotation_snap_degrees_ = value;
               return runtime_result(changed);
+            },
+        .viewport_info_visible = [this] { return viewport_info_visible_; },
+        .set_viewport_info_visible =
+            [this](bool value) {
+              return set_preference(viewport_info_visible_, value);
             },
         .navigation_gizmo_visible =
             [this] { return navigation_gizmo_visible_; },
@@ -1270,6 +1287,7 @@ private:
   bool grid_snap_enabled_ = true;
   bool vertex_snap_enabled_ = true;
   bool rotation_snap_enabled_ = true;
+  bool viewport_info_visible_ = true;
   bool navigation_gizmo_visible_ = true;
   double rotation_snap_degrees_ = 15.0;
 };

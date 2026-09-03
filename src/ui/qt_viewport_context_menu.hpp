@@ -32,7 +32,7 @@ public:
             QuaderEditorApi &editor, ViewportInputRouter &input_router,
             LocalizationService &localization,
             const QuaderActionSet &action_set,
-            QuaderSelectionMode selection_mode,
+            const QuaderSelectionSummary &selection, bool target_hit,
             const std::optional<ProjectAssetId> &material_under_mouse,
             const std::function<void(ProjectAssetId)> &open_material_editor,
             ViewportRuntimeBindingToken runtime_binding = {}) const;

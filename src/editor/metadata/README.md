@@ -40,6 +40,9 @@ Owns:
 - editor/viewport/preview/input interaction descriptors
 - tool group descriptors
 - non-operation panel descriptors
+- stable command presentation and discoverability descriptors, including
+  operand-first Mesh, Vertex, Edge, and Face domains plus a dedicated UV
+  workflow domain
 
 Does not own:
 
@@ -75,6 +78,7 @@ Current public entry points:
 - `interaction_catalog()`
 - `tool_group_catalog()`
 - `panel_catalog()`
+- `command_presentation_catalog()`
 
 Custom hosts should consume app-owned modeling domain and host-contract descriptors instead of
 workflow-shaped editor adapters.

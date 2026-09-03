@@ -85,6 +85,8 @@ std::set<std::string> literal_localization_keys_referenced_by_ui_source() {
   const std::filesystem::path ui_root = source_path({"src", "ui"});
   const std::regex direct_localization_call(
       R"regex((?:[A-Za-z_][A-Za-z0-9_]*\.)?localization_?\.(?:text|format)\(\s*"([^"]+)")regex");
+  const std::regex qtext_localization_call(
+      R"regex(\bqtext\(\s*(?:(?:[A-Za-z_][A-Za-z0-9_]*)\.)?localization_?\s*,\s*"([^"]+)")regex");
   std::set<std::string> keys;
 
   for (const std::filesystem::path &file : source_files_under(ui_root)) {
@@ -102,6 +104,12 @@ std::set<std::string> literal_localization_keys_referenced_by_ui_source() {
       if (next < source.size() && source[next] == '+') {
         continue;
       }
+      keys.insert((*it)[1].str());
+    }
+    for (std::sregex_iterator
+             it(source.begin(), source.end(), qtext_localization_call),
+         end;
+         it != end; ++it) {
       keys.insert((*it)[1].str());
     }
   }
@@ -254,8 +262,46 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
 
     EXPECT_EQ(localization.current_locale(), "it-IT");
     EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "&Modifica");
-    EXPECT_EQ(localization.text("ui.menu.edit.find_replace", "Find/Replace..."),
-              "Trova/Sostituisci…");
+    EXPECT_EQ(localization.text("ui.menu.object.materials.find_replace",
+                                "Find/Replace Materials..."),
+              "Trova/Sostituisci materiali…");
+    EXPECT_EQ(localization.text("ui.menu.mesh", "Mesh"), "Me&sh");
+    EXPECT_EQ(localization.text("ui.menu.vertex", "Vertex"), "Ver&tice");
+    EXPECT_EQ(localization.text("ui.menu.edge", "Edge"), "Spi&golo");
+    EXPECT_EQ(localization.text("ui.menu.face", "Face"), "Facc&ia");
+    EXPECT_EQ(localization.text("ui.menu.uv", "UV"), "&UV");
+    EXPECT_EQ(localization.text("ui.menu.uv.align", "Align"), "Allinea");
+    EXPECT_EQ(localization.text("ui.menu.uv.align.to_grid", "To Grid"),
+              "Alla griglia");
+    EXPECT_EQ(localization.text("ui.menu.uv.align.to_face", "To Face"),
+              "Alla faccia");
+    EXPECT_EQ(localization.text("ui.menu.uv.align.to_view", "To View"),
+              "Alla vista");
+    EXPECT_EQ(localization.text("ui.menu.uv.rotate_cw", "Rotate CW"),
+              "Ruota in senso orario");
+    EXPECT_EQ(localization.text("ui.menu.uv.rotate_ccw", "Rotate CCW"),
+              "Ruota in senso antiorario");
+    EXPECT_EQ(localization.text("ui.menu.uv.flip", "Flip"), "Ribalta");
+    EXPECT_EQ(localization.text("ui.menu.uv.flip.horizontal", "Horizontal"),
+              "Orizzontale");
+    EXPECT_EQ(localization.text("ui.menu.uv.flip.vertical", "Vertical"),
+              "Verticale");
+    EXPECT_EQ(localization.text("ui.menu.uv.fit", "Fit"), "Adatta");
+    EXPECT_EQ(localization.text("ui.menu.uv.fit.both", "Both"),
+              "Entrambi gli assi");
+    EXPECT_EQ(localization.text("ui.menu.uv.fit.x", "X"), "Asse X");
+    EXPECT_EQ(localization.text("ui.menu.uv.fit.y", "Y"), "Asse Y");
+    EXPECT_EQ(localization.text("ui.menu.uv.justify", "Justify"),
+              "Giustifica");
+    EXPECT_EQ(localization.text("ui.menu.uv.justify.left", "Left"),
+              "Sinistra");
+    EXPECT_EQ(localization.text("ui.menu.uv.justify.right", "Right"),
+              "Destra");
+    EXPECT_EQ(localization.text("ui.menu.uv.justify.top", "Top"), "Alto");
+    EXPECT_EQ(localization.text("ui.menu.uv.justify.bottom", "Bottom"),
+              "Basso");
+    EXPECT_EQ(localization.text("ui.menu.uv.justify.center", "Center"),
+              "Centro");
     EXPECT_EQ(localization.text("ui.material_browser.accept", "Accept"),
               "Accetta");
     EXPECT_EQ(localization.text("ui.material_find_replace.title",
@@ -291,7 +337,7 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.panel.layers", "Layers"), "Livelli");
     EXPECT_EQ(localization.text("ui.layers.add_selection",
                                 "Add Selection to Layer"),
-              "Aggiungi selezione al livello");
+              "Aggiungi gli oggetti selezionati a questo livello");
     EXPECT_EQ(localization.text("ui.layers.locked", "Locked"),
               "Bloccato");
     EXPECT_EQ(localization.text("ui.layers.lock_state_unlocked",
@@ -317,8 +363,44 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.action.cancel", "Cancel"), "Annulla");
     EXPECT_TRUE(localization.select_locale("en-US"));
     EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "&Edit");
-    EXPECT_EQ(localization.text("ui.menu.edit.find_replace", "Find/Replace..."),
-              "Find/Replace…");
+    EXPECT_EQ(localization.text("ui.menu.object.materials.find_replace",
+                                "Find/Replace Materials..."),
+              "Find/Replace Materials…");
+    EXPECT_EQ(localization.text("ui.menu.mesh", "Mesh"), "&Mesh");
+    EXPECT_EQ(localization.text("ui.menu.vertex", "Vertex"), "&Vertex");
+    EXPECT_EQ(localization.text("ui.menu.edge", "Edge"), "Ed&ge");
+    EXPECT_EQ(localization.text("ui.menu.face", "Face"), "Fa&ce");
+    EXPECT_EQ(localization.text("ui.menu.uv", "UV"), "&UV");
+    EXPECT_EQ(localization.text("ui.menu.uv.align", "Align"), "Align");
+    EXPECT_EQ(localization.text("ui.menu.uv.align.to_grid", "To Grid"),
+              "To Grid");
+    EXPECT_EQ(localization.text("ui.menu.uv.align.to_face", "To Face"),
+              "To Face");
+    EXPECT_EQ(localization.text("ui.menu.uv.align.to_view", "To View"),
+              "To View");
+    EXPECT_EQ(localization.text("ui.menu.uv.rotate_cw", "Rotate CW"),
+              "Rotate CW");
+    EXPECT_EQ(localization.text("ui.menu.uv.rotate_ccw", "Rotate CCW"),
+              "Rotate CCW");
+    EXPECT_EQ(localization.text("ui.menu.uv.flip", "Flip"), "Flip");
+    EXPECT_EQ(localization.text("ui.menu.uv.flip.horizontal", "Horizontal"),
+              "Horizontal");
+    EXPECT_EQ(localization.text("ui.menu.uv.flip.vertical", "Vertical"),
+              "Vertical");
+    EXPECT_EQ(localization.text("ui.menu.uv.fit", "Fit"), "Fit");
+    EXPECT_EQ(localization.text("ui.menu.uv.fit.both", "Both"), "Both");
+    EXPECT_EQ(localization.text("ui.menu.uv.fit.x", "X"), "X");
+    EXPECT_EQ(localization.text("ui.menu.uv.fit.y", "Y"), "Y");
+    EXPECT_EQ(localization.text("ui.menu.uv.justify", "Justify"),
+              "Justify");
+    EXPECT_EQ(localization.text("ui.menu.uv.justify.left", "Left"), "Left");
+    EXPECT_EQ(localization.text("ui.menu.uv.justify.right", "Right"),
+              "Right");
+    EXPECT_EQ(localization.text("ui.menu.uv.justify.top", "Top"), "Top");
+    EXPECT_EQ(localization.text("ui.menu.uv.justify.bottom", "Bottom"),
+              "Bottom");
+    EXPECT_EQ(localization.text("ui.menu.uv.justify.center", "Center"),
+              "Center");
     EXPECT_EQ(localization.text("ui.material_browser.accept", "Accept"),
               "Accept");
     EXPECT_EQ(localization.text("ui.material_find_replace.title",
@@ -368,10 +450,12 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
 }
 
 TEST(LocalizationResourceTests, TopLevelMenusExposeUniqueQtMnemonics) {
-  constexpr std::array<std::string_view, 9> kTopLevelMenuKeys = {
-      "ui.menu.file",    "ui.menu.edit",   "ui.menu.select",
-      "ui.menu.align",   "ui.menu.cleanup", "ui.menu.tools",
-      "ui.menu.create",  "ui.menu.view",   "ui.menu.layout",
+  constexpr std::array<std::string_view, 13> kTopLevelMenuKeys = {
+      "ui.menu.file",   "ui.menu.edit",   "ui.menu.select",
+      "ui.menu.create", "ui.menu.object", "ui.menu.mesh",
+      "ui.menu.vertex", "ui.menu.edge",   "ui.menu.face",
+      "ui.menu.uv",     "ui.menu.view",   "ui.menu.window",
+      "ui.menu.help",
   };
 
   for (const auto &[locale, catalog] : load_resource_locale_catalogs()) {
@@ -470,26 +554,26 @@ TEST(LocalizationResourceTests,
       {"invert_mesh", "Flip Mesh Normals", "Inverti normali mesh"},
       {"shade_smooth_mesh", "Shade Smooth", "Ombreggiatura morbida"},
       {"shade_flat_mesh", "Shade Flat", "Ombreggiatura piatta"},
-      {"combine_mesh", "Combine Mesh", "Combina mesh"},
+      {"combine_mesh", "Combine Meshes", "Combina mesh"},
       {"half_cut", "Half-Cut", "Taglio a metà"},
       {"create_outer_hull", "Create Outer Hull", "Crea guscio esterno"},
       {"copy_pivot_from_active", "Copy Pivot From Active",
-       "Copia pivot dall'elemento attivo"},
+       "Copia pivot dall'oggetto attivo"},
       {"snap_vertices_to_active", "Snap to Vertex", "Aggancia al vertice"},
       {"snap_vertices_to_floor", "Snap to Floor",
        "Aggancia al pavimento"},
       {"merge_vertices", "Merge", "Unisci"},
       {"merge_vertices_at_center", "Merge at Center", "Unisci al centro"},
       {"merge_by_distance", "Merge by Distance", "Unisci per distanza"},
-      {"bevel_vertices", "Bevel Vertex", "Smussa vertice"},
+      {"bevel_vertices", "Bevel Vertices", "Smussa vertici"},
       {"connect_vertices", "Connect", "Connetti"},
-      {"dissolve_vertices", "Dissolve Vertex", "Dissolvi vertice"},
+      {"dissolve_vertices", "Dissolve Vertices", "Dissolvi vertici"},
       {"radial_align_vertices", "Radial Align", "Allinea radialmente"},
       {"snap_edges_to_active", "Snap to Edge", "Aggancia allo spigolo"},
       {"connect_edges", "Connect Edges", "Connetti spigoli"},
-      {"split_edges", "Edge Split", "Dividi spigolo"},
-      {"harden_edge_normals", "Hard Normal", "Normale dura"},
-      {"soften_edge_normals", "Soft Normal", "Normale morbida"},
+      {"split_edges", "Edge Split", "Dividi spigoli"},
+      {"harden_edge_normals", "Harden Normals", "Indurisci normali"},
+      {"soften_edge_normals", "Soften Normals", "Ammorbidisci normali"},
       {"bevel_edges", "Bevel Edges", "Smussa spigoli"},
       {"bridge_edges", "Bridge", "Bridge"},
       {"interpolated_bridge_edges", "Interpolated Bridge",
@@ -502,7 +586,7 @@ TEST(LocalizationResourceTests,
       {"bridge_faces", "Bridge Faces", "Bridge facce"},
       {"interpolated_bridge_faces", "Interpolated Bridge",
        "Bridge interpolato"},
-      {"invert_faces", "Invert Face", "Inverti faccia"},
+      {"invert_faces", "Flip Face Normals", "Inverti normali facce"},
       {"combine_faces", "Combine Faces", "Combina facce"},
       {"collapse_faces", "Collapse Faces", "Collassa facce"},
       {"radial_align_faces", "Radial Align", "Allinea radialmente"},

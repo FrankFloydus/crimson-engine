@@ -16,6 +16,36 @@
 
 namespace quader {
 
+/// Carries one canonical mouse-button edge with its event-time pane position.
+struct ViewportPointerButtonEdge {
+  QuaderMouseButton button = QuaderMouseButton::None;
+  QVec2 local = {};
+  // Monotonic at the production Qt boundary. Zero is reserved for synthetic
+  // callers that do not need to distinguish coalesced event ordering.
+  std::uint64_t sequence = 0u;
+};
+
+/// Distinguishes ordered semantic pointer presses from releases.
+enum class ViewportNavigationPointerTransitionKind {
+  Pressed,
+  Released,
+};
+
+/// Preserves semantic navigation ordering when several button cycles coalesce.
+struct ViewportNavigationPointerTransition {
+  ViewportNavigationPointerTransitionKind kind =
+      ViewportNavigationPointerTransitionKind::Pressed;
+  ViewportInputActionKind action = ViewportInputActionKind::None;
+  ViewportPointerButtonEdge pointer_edge = {};
+};
+
+/// Preserves one resolved physical wheel event through camera dispatch.
+struct ViewportNavigationWheelEvent {
+  ViewportInputActionKind action = ViewportInputActionKind::None;
+  float steps = 0.0f;
+  QVec2 local = {};
+};
+
 /**
  * Stores per-frame semantic viewport navigation input resolved from raw bindings.
  */
@@ -40,15 +70,24 @@ struct ViewportNavigationInput {
   bool fly_backward_down = false;
   bool fly_right_down = false;
   bool fly_left_down = false;
-};
-
-/// Carries one canonical mouse-button edge with its event-time pane position.
-struct ViewportPointerButtonEdge {
-  QuaderMouseButton button = QuaderMouseButton::None;
-  QVec2 local = {};
-  // Monotonic at the production Qt boundary. Zero is reserved for synthetic
-  // callers that do not need to distinguish coalesced event ordering.
-  std::uint64_t sequence = 0u;
+  // Each navigation action retains the physical edge that produced it. More
+  // than one semantic action can resolve in a coalesced frame, so the shared
+  // navigation-press selector chooses the winner without losing provenance;
+  // release provenance bounds the final delta before unrelated motion.
+  std::optional<ViewportPointerButtonEdge> orbit_pressed_pointer_edge;
+  std::optional<ViewportPointerButtonEdge> orbit_snap_pressed_pointer_edge;
+  std::optional<ViewportPointerButtonEdge> pan_pressed_pointer_edge;
+  std::optional<ViewportPointerButtonEdge> fly_pressed_pointer_edge;
+  std::optional<ViewportPointerButtonEdge> orbit_released_pointer_edge;
+  std::optional<ViewportPointerButtonEdge> orbit_snap_released_pointer_edge;
+  std::optional<ViewportPointerButtonEdge> pan_released_pointer_edge;
+  std::optional<ViewportPointerButtonEdge> fly_released_pointer_edge;
+  // Production entries are sorted by nonzero pointer sequence. Aggregate
+  // fields above remain the lightweight fallback for synthetic callers.
+  std::vector<ViewportNavigationPointerTransition> pointer_transitions;
+  // Production wheel input remains ordered so opposing packets cannot cancel
+  // before each packet observes the camera's current zoom boundary.
+  std::vector<ViewportNavigationWheelEvent> wheel_events;
 };
 
 /// Describes one ordered semantic action that owns a physical pointer press.
@@ -131,6 +170,17 @@ struct ViewportInputFrame {
   QVec2 mouse_delta = {};
   QVec2 mouse_local = {};
   QVec2 viewport_size = {};
+  // Qt reports local motion in physical pixels so pan remains proportional to
+  // the physical render surface. Orbit is defined in logical pixels and uses
+  // this scale to remain stable across Windows display scaling.
+  float device_pixel_ratio = 1.0f;
+  // A gesture-local world-space depth/pivot hint. The UI samples it only when
+  // navigation starts; the camera owns the resulting navigation state.
+  std::optional<QVec3> navigation_anchor;
+  // Whole-scene depth is only a legacy-state repair fallback. It may pull a
+  // severely poisoned target inward, but must never replace a valid nearer
+  // orbit/pan target with distant scene bounds.
+  bool navigation_anchor_repair_only = false;
   int grid_preset = 6;
   ViewportModifiers modifiers = {};
   QVec3 fly_local_direction = {};

@@ -8224,3 +8224,141 @@ smoke check, screenshot, or visual test was launched.
 Verification: the C++ style gate passes all 599 translation units. The mandatory regression gate
 passes all six CTest targets, and canonical Debug/Profile and Release `quader` builds pass in the
 required order.
+
+## 2026-09-02 - Command presentation and modeling menu overhaul
+
+- `CommandPresentationCatalog` is the exhaustive, data-only owner for command placement,
+  palette search terms, ordering, activation style, danger, and surface eligibility. Runtime
+  labels, availability, effective shortcuts, and execution remain owned by the command API.
+- The native menu taxonomy is `File`, `Edit`, `Select`, `Create`, `Object`, `Mesh`, `Vertex`,
+  `Edge`, `Face`, `UV`, `View`, `Window`, and `Help`. Creation intent is consolidated under
+  Create; object arrangement and hierarchy actions live under Object; component and topology
+  work lives under the operand menus; layouts, toolbars, panels, and auxiliary windows live under
+  Window.
+- `ui.search_commands` opens a retained asynchronous command palette with Ctrl+Shift+P. It takes
+  one command snapshot per opening, filters that snapshot locally, and queues execution after
+  closing so command discovery never becomes frame-loop enumeration or nested-dialog dispatch.
+- Viewport, Layers, and Outliner RMB menus select the clicked target before presentation, expose
+  only context-relevant high-value actions, and keep destructive actions last. Because
+  `QMenu::exec()` runs a nested event loop, every popup captures the relevant revision/target
+  state and cancels dispatch if project, content, selection, layer, asset, or target context
+  changes while the menu is open; command-backed viewport rows are also revalidated narrowly.
+- All eight viewport layouts and the Info/Navigation Gizmo display toggles are canonical commands.
+  The six newly command-backed display/layout rows are deliberately unassigned, while command
+  search owns Ctrl+Shift+P through the keybinding service.
+
+Verification: the focused UI/menu/palette/context/API/behavior selection passes 53 tests, the
+editor-metadata loop passes 57 tests, and the complete guardrail executable passes 431 tests. The
+affected workflow and mandatory regression gate each pass all six registered CTest targets,
+including the isolated installed-SDK build. Version sources remain unchanged. No Quader window,
+GPU smoke check, screenshot, or manual visual test was launched. Canonical Debug/Profile and
+Release `quader` builds pass in the required order.
+
+## 2026-09-02 - Operand-first modeling menus
+
+- The stable main-menu taxonomy exposes sibling `Mesh`, `Vertex`, `Edge`, `Face`, and `UV` menus,
+  following Blender's discoverability pattern instead of hiding component or UV operations under
+  another operand menu. `CommandPresentationCatalog` remains the sole placement and ordering
+  owner.
+- All 37 canonical host modeling operations have an explicit operand presentation domain. Legacy
+  compatibility aliases remain absent from the main menu, preventing duplicate routes with
+  different names.
+- `Vertex`, `Edge`, `Face`, and `UV` remain visible as stable landmarks. Operand rows are enabled
+  only in their valid selection mode and still obey canonical command availability; the UV menu
+  supports both its edge-only peel operation and face-only texture-coordinate operations without
+  duplicating either in Edge or Face. `Mesh` keeps general edit/object workflows governed by
+  command availability.
+- The top-level UV menu is deliberately curated rather than exhaustive: UV Peel, Rotate CW, and
+  Rotate CCW are direct rows; Align, Flip, Fit, and Justify are one-level submenus. Align uses
+  To Grid/Face/View, and Flip exposes only Horizontal/Vertical texture flips. Texture Scale,
+  Texture Shift, and Face Flip variants remain searchable but stay out of the main menu.
+- Retained menu refresh samples the modeling selection mode once per refresh and avoids broad
+  catalog enumeration or redundant owner queries in the frame loop.
+- Regression coverage requires every main-menu catalog descriptor to project exactly once, keeps
+  compatibility aliases palette-only, and scans literal `qtext` uses for EN/IT locale coverage.
+
+Verification: focused menu/palette/localization tests pass 23 tests and editor-metadata catalog
+tests pass 8 tests. The affected workflow passes its 635-test UI/viewport selection and 61-test
+metadata selection; the mandatory regression gate passes all six registered CTest targets.
+Canonical Debug/Profile plus Release builds pass. Version 0.1.66 remains unchanged. No Quader
+window, GPU smoke check, screenshot, or manual visual test was launched.
+
+## 2026-09-02 - Stable viewport pivot and reversible perspective zoom
+
+- Perspective camera navigation maintains one coherent `target + orientation + distance` state.
+  Pan translates eye and target together, orbit preserves that target and radius, and wheel zoom
+  changes distance without silently rebasing the target.
+- Perspective zoom uses a Blender-style soft pre-boundary gate. Every accepted detent applies the
+  complete reciprocal zoom factor; after a detent crosses the near or far envelope, further input
+  in that direction is a no-op and the first reverse detent exactly undoes the accepted move.
+  Never truncate an accepted detent at a hard clamp because the reverse factor then cannot restore
+  the previous distance.
+- The prior post-motion far clamp let each extra zoom-out notch move the eye while retaining a
+  reported distance of 500. This ratcheted the target away from the model, so zoom-in approached
+  the wrong point and the next MMB gesture orbited a huge, displaced radius.
+- Centered wheel zoom remains reciprocal and multiplicative. Cursor zoom scales both eye and
+  visible target by the same ratio around the cursor ray's target-depth-plane anchor, preserving
+  that screen-space anchor while keeping the orbit state canonical and reversible.
+- Qt angle-wheel input is retained per surface in native 120-unit detents. Partial motion is
+  discarded when axis or sign reverses; pixel-delta touchpad motion uses a separate continuous
+  calibration. Physical wheel packets remain ordered through resolution and routing, including
+  active Fly speed, and an accepted packet is not invalidated by a later leave event. Each packet
+  retains its event-time local cursor position so coalesced Ctrl+Wheel events do not all zoom toward
+  the frame-final cursor.
+- Perspective focus-bounds and restored camera poses may retain distances beyond the interactive
+  500-unit zoom-out cap when that distance is required to preserve the exact framed or saved view.
+  Inward wheel input recovers those views multiplicatively until they re-enter the interactive
+  range; it must not snap them to 500 on the first tick. Otherwise-valid restored poses whose
+  target would be on or behind the minimum projection near plane preserve the authored target and
+  orientation while repairing eye distance to twice that near-plane floor.
+- Legacy QDR camera poses can already contain a valid but badly displaced target produced by the
+  old far-limit ratchet. The reproduced `q-test/Scenes/room.qdr` pose had a 158.297-unit camera
+  radius while the visible Curve Mesh was only about 4.475 units in front of the eye; a normal
+  five-pixel orbit therefore swept the visible mesh hundreds of screen pixels. Treat finite pose
+  validity and usable navigation depth as separate concerns.
+- Orbit and pan sample navigation depth once at the semantic gesture edge. The render-visible
+  surface under the exact press wins, then an on-screen projected selection center close to that
+  press, then the scene-bounds depth on the current view axis; an occluded far selection, a
+  selection elsewhere in the pane, an off-screen selection, or a scene-hidden or locally isolated
+  selection cannot override the surface actually rendered under MMB. Whole-scene depth is a
+  repair-only fallback: it may replace a
+  severely poisoned far target with nearer content, but it cannot pull a valid close orbit or pan
+  outward toward distant bounds. Pan prefers the pressed surface so its world-per-pixel scale
+  matches the content being moved. The snapshot is lazy, shared with later interaction picking,
+  and never rebuilt as per-frame navigation work.
+- Rebasing depth must preserve the exact visible eye and orientation and is deferred until the
+  first accepted motion, so a press, click, cancel, or grid-reset chord is camera-neutral.
+  Off-axis orbit anchors stay gesture-local; runtime orbit rotates the eye, camera basis, and
+  canonical visible target rigidly around that anchor, then discards it when the gesture ends.
+  This keeps the chosen point fixed on screen without persisting an off-axis or stale target.
+- Plain wheel uses the complete scene depth when the stored camera distance is severely larger
+  than that nearby depth, consistently for both live and restored poses. The inverse mismatch is
+  not repaired: distant scene bounds must never pull an intentionally close camera outward.
+  Zoom-to-cursor may prefer the render-visible surface or visible selection. This repairs an old
+  poisoned project before its first MMB drag without making ordinary wheel speed depend on
+  whichever surface happens to be under the cursor.
+- MMB navigation consumes accumulated relative motion, uses the exact semantic press edge to
+  discard only pre-gesture delta, and retains post-press or pre-release movement even when Qt
+  coalesces those events into one frame. It normalizes orbit radians by display scale and rebases
+  the Qt pointer accumulator when a window changes DPI/screen. Pan remains in physical pixels
+  paired with the physical viewport size. The navigation gizmo already receives logical Qt pixels
+  and must not multiply them by display scale; it defers a locked-orthographic conversion until a
+  real drag begins, then converts visible height to the equivalent perspective distance. Capture
+  loss cancels its retained lock.
+- Preserve ordered semantic pointer transitions through the router. A release followed by a new
+  press in one frame is two gesture boundaries, not one final held-button state; cancellation must
+  discard queued movement and synthetic trailing releases. Latch the pane camera that accepted a
+  navigation gesture and end that exact owner before a pane disappears or the workspace changes.
+- A focused or restored perspective pose may need a transient far-clip floor to keep its target
+  visible. Reapplying the unchanged scene clip range each frame must retain that floor; an actual
+  authored clip change clears it. Near-clip selection remains dynamic enough for subminimum but
+  otherwise valid target depths.
+
+Verification: 147 focused camera/router/Qt tests and 13 portable runtime navigation tests pass,
+covering detent accumulation and reversal, ordered same-frame opposite packets, soft-boundary
+crossing, Ctrl+Wheel cursor provenance, Fly speed reversal, hover transitions, subminimum
+orthographic zoom, and ordinary plus exceptional restored perspective distances. The broader
+affected-owner workflow passes. The mandatory regression gate passes all six registered CTest
+entries, including the 2,112-test app suite and SDK-only isolation build. A physical Qt panel test
+drives wheel and MMB events through the production input path and proves the repaired world anchor
+stays screen-stationary. Canonical build artifacts are recorded in the task handoff.

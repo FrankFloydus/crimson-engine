@@ -11,10 +11,16 @@
 #include <QPoint>
 #include <QWheelEvent>
 
+#include <cmath>
 #include <cstdlib>
 
 namespace quader {
 namespace {
+
+struct WheelDelta {
+  QPoint value;
+  QtWheelDeltaSource source = QtWheelDeltaSource::None;
+};
 
 bool has_modifier(Qt::KeyboardModifiers modifiers,
                   Qt::KeyboardModifier modifier) {
@@ -83,21 +89,78 @@ std::optional<QuaderInputGesture> directional_wheel_gesture(QPoint delta) {
   return std::nullopt;
 }
 
-QPoint wheel_delta(const QWheelEvent &event) {
+WheelDelta wheel_delta(const QWheelEvent &event) {
+  const QPoint pixel = event.pixelDelta();
   const QPoint angle = event.angleDelta();
-  QPoint delta = angle.isNull() ? event.pixelDelta() : angle;
+  WheelDelta result{
+      .value = pixel.isNull() ? angle : pixel,
+      .source = pixel.isNull() ? QtWheelDeltaSource::Angle
+                               : QtWheelDeltaSource::Pixel,
+  };
+  if (result.value.isNull()) {
+    result.source = QtWheelDeltaSource::None;
+  }
 #ifdef _WIN32
   // Qt's Windows pointer handler represents a vertical wheel as horizontal
   // whenever Alt is held. Restore the physical direction before canonical
   // gesture classification so Alt+WheelUp/Down remains bindable. A genuine
   // horizontal wheel cannot be distinguished after that QPA rewrite, and the
   // Alt-modified vertical binding deliberately owns this representation.
-  if (event.modifiers().testFlag(Qt::AltModifier) && delta.y() == 0 &&
-      delta.x() != 0) {
-    delta = {0, delta.x()};
+  if (event.modifiers().testFlag(Qt::AltModifier) && result.value.y() == 0 &&
+      result.value.x() != 0) {
+    result.value = {0, result.value.x()};
   }
 #endif
-  return delta;
+  return result;
+}
+
+void append_wheel_event(QtWheelInputTranslation &translation,
+                        const QuaderInputChord &directional,
+                        double step_delta, QuaderInputPosition local) {
+  const bool vertical =
+      directional.gesture == QuaderInputGesture::WheelUp ||
+      directional.gesture == QuaderInputGesture::WheelDown;
+  if (vertical) {
+    translation.mouse_wheel += static_cast<float>(step_delta);
+    QuaderInputChord generic = directional;
+    generic.gesture = QuaderInputGesture::Wheel;
+    translation.wheel_input_edges.push_back({
+        .chord = generic,
+        .step_delta = step_delta,
+        .local = local,
+        .has_local_position = true,
+    });
+  }
+  translation.wheel_input_edges.push_back({
+      .chord = directional,
+      .step_delta = step_delta,
+      .local = local,
+      .has_local_position = true,
+  });
+}
+
+QuaderInputPosition wheel_local_position(const QWheelEvent &event,
+                                         double coordinate_scale) {
+  const double safe_scale =
+      std::isfinite(coordinate_scale) && coordinate_scale > 0.0
+          ? coordinate_scale
+          : 1.0;
+  return {
+      .x = static_cast<float>(event.position().x() * safe_scale),
+      .y = static_cast<float>(event.position().y() * safe_scale),
+  };
+}
+
+bool opposite_sign(int left, int right) {
+  return (left < 0 && right > 0) || (left > 0 && right < 0);
+}
+
+QtWheelInputAccumulator::Axis wheel_axis(QuaderInputGesture gesture) {
+  if (gesture == QuaderInputGesture::WheelUp ||
+      gesture == QuaderInputGesture::WheelDown) {
+    return QtWheelInputAccumulator::Axis::Vertical;
+  }
+  return QtWheelInputAccumulator::Axis::Horizontal;
 }
 
 } // namespace
@@ -311,7 +374,7 @@ quader_mouse_input_chord_from_qt_event(const QMouseEvent &event,
 std::optional<QuaderInputChord>
 quader_wheel_input_chord_from_qt_event(const QWheelEvent &event) {
   const std::optional<QuaderInputGesture> gesture =
-      directional_wheel_gesture(wheel_delta(event));
+      directional_wheel_gesture(wheel_delta(event).value);
   if (!gesture.has_value()) {
     return std::nullopt;
   }
@@ -327,25 +390,69 @@ quader_wheel_input_from_qt_event(const QWheelEvent &event) {
     return translation;
   }
 
-  const QPoint delta = wheel_delta(event);
+  const WheelDelta delta = wheel_delta(event);
+  translation.delta_source = delta.source;
   const bool vertical =
       directional->gesture == QuaderInputGesture::WheelUp ||
       directional->gesture == QuaderInputGesture::WheelDown;
+  translation.source_delta = vertical ? delta.value.y() : delta.value.x();
+  const double units_per_step =
+      delta.source == QtWheelDeltaSource::Pixel
+          ? kQtWheelPixelsPerStep
+          : static_cast<double>(kQtWheelAngleUnitsPerStep);
   const double step_delta =
-      static_cast<double>(vertical ? delta.y() : delta.x()) / 120.0;
-  if (vertical) {
-    translation.mouse_wheel = static_cast<float>(step_delta);
-    QuaderInputChord generic = *directional;
-    generic.gesture = QuaderInputGesture::Wheel;
-    translation.wheel_input_edges.push_back({
-        .chord = generic,
-        .step_delta = step_delta,
-    });
+      static_cast<double>(translation.source_delta) / units_per_step;
+  append_wheel_event(translation, *directional, step_delta,
+                     wheel_local_position(event, 1.0f));
+  return translation;
+}
+
+QtWheelInputTranslation quader_wheel_input_from_qt_event(
+    const QWheelEvent &event, QtWheelInputAccumulator &accumulator,
+    double local_coordinate_scale) {
+  QtWheelInputTranslation translation;
+  const std::optional<QuaderInputChord> directional =
+      quader_wheel_input_chord_from_qt_event(event);
+  if (!directional.has_value()) {
+    return translation;
   }
-  translation.wheel_input_edges.push_back({
-      .chord = *directional,
-      .step_delta = step_delta,
-  });
+
+  const WheelDelta delta = wheel_delta(event);
+  translation.delta_source = delta.source;
+  const bool vertical =
+      directional->gesture == QuaderInputGesture::WheelUp ||
+      directional->gesture == QuaderInputGesture::WheelDown;
+  translation.source_delta = vertical ? delta.value.y() : delta.value.x();
+
+  if (delta.source == QtWheelDeltaSource::Pixel) {
+    accumulator = {};
+    append_wheel_event(
+        translation, *directional,
+        static_cast<double>(translation.source_delta) /
+            kQtWheelPixelsPerStep,
+        wheel_local_position(event, local_coordinate_scale));
+    return translation;
+  }
+
+  const QtWheelInputAccumulator::Axis axis =
+      wheel_axis(directional->gesture);
+  if (accumulator.angle_delta_axis != axis ||
+      opposite_sign(accumulator.angle_delta_remainder,
+                    translation.source_delta)) {
+    accumulator.angle_delta_remainder = 0;
+  }
+  accumulator.angle_delta_axis = axis;
+  accumulator.angle_delta_remainder += translation.source_delta;
+
+  const int whole_steps =
+      accumulator.angle_delta_remainder / kQtWheelAngleUnitsPerStep;
+  accumulator.angle_delta_remainder -=
+      whole_steps * kQtWheelAngleUnitsPerStep;
+  const double signed_step = whole_steps < 0 ? -1.0 : 1.0;
+  for (int index = 0; index < std::abs(whole_steps); ++index) {
+    append_wheel_event(translation, *directional, signed_step,
+                       wheel_local_position(event, local_coordinate_scale));
+  }
   return translation;
 }
 

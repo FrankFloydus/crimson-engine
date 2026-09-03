@@ -21,6 +21,7 @@ inline constexpr int kExtrudeCapFaceIndex = 1;
 inline constexpr double kMinBoxSize = 0.001;
 inline constexpr double kBoxHeightPixelsPerGridStep = 48.0;
 inline constexpr double kNavigationMinCameraDistance = 0.05;
+inline constexpr double kNavigationMaxCameraDistance = 500.0;
 inline constexpr double kNavigationDefaultFrameDistance = 8.0;
 inline constexpr double kNavigationZoomStepFactor = 1.18;
 inline constexpr double kNavigationMinOrthographicSize = 0.01;

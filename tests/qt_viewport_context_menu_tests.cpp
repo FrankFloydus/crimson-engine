@@ -29,6 +29,7 @@
 #include <QWidget>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -46,6 +47,7 @@ struct ContextActionSnapshot final {
   QString text;
   QString object_name;
   QString submenu_object_name;
+  QString tool_tip;
   bool separator = false;
   bool enabled = false;
   bool shortcut_empty = true;
@@ -62,9 +64,9 @@ struct ContextMenuSnapshot final {
 
 quader::LocalizationService loaded_localization() {
   quader::LocalizationService localization;
-  EXPECT_TRUE(localization.load(
-      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales",
-      "en-US"));
+  EXPECT_TRUE(localization.load(std::filesystem::path(QUADER_SOURCE_DIR) /
+                                    "resources" / "locales",
+                                "en-US"));
   return localization;
 }
 
@@ -72,6 +74,7 @@ ContextActionSnapshot snapshot_action(const QAction &action) {
   ContextActionSnapshot snapshot{
       .text = action.text(),
       .object_name = action.objectName(),
+      .tool_tip = action.toolTip(),
       .separator = action.isSeparator(),
       .enabled = action.isEnabled(),
       .shortcut_empty = action.shortcut().isEmpty(),
@@ -89,11 +92,10 @@ ContextActionSnapshot snapshot_action(const QAction &action) {
 
 ContextMenuSnapshot show_and_snapshot(
     QWidget &owner, quader::QtViewportContextMenuPresenter &presenter,
-    quader::QuaderEditorApi &editor,
-    quader::ViewportInputRouter &input_router,
+    quader::QuaderEditorApi &editor, quader::ViewportInputRouter &input_router,
     quader::LocalizationService &localization,
     const quader::QuaderActionSet &action_set,
-    quader::QuaderSelectionMode selection_mode,
+    const quader::QuaderSelectionSummary &selection, bool target_hit,
     std::optional<quader::ProjectAssetId> material_under_mouse = std::nullopt,
     std::function<void(quader::ProjectAssetId)> open_material_editor = {},
     bool trigger_material_editor = false) {
@@ -143,8 +145,8 @@ ContextMenuSnapshot show_and_snapshot(
       QAction *edit_action = nullptr;
       for (QAction *action : menu->actions()) {
         if (action != nullptr &&
-            action->objectName() == QStringLiteral(
-                                        "viewport.material.edit_under_mouse")) {
+            action->objectName() ==
+                QStringLiteral("viewport.material.edit_under_mouse")) {
           edit_action = action;
           break;
         }
@@ -166,7 +168,7 @@ ContextMenuSnapshot show_and_snapshot(
   });
 
   presenter.show(owner, owner.mapToGlobal(owner.rect().center()), editor,
-                 input_router, localization, action_set, selection_mode,
+                 input_router, localization, action_set, selection, target_hit,
                  material_under_mouse, open_material_editor);
   return snapshot;
 }
@@ -180,20 +182,50 @@ quader::QuaderActionItem enabled_action(std::string action_id,
   };
 }
 
-const ContextActionSnapshot *find_child(
-    const ContextActionSnapshot &submenu, const QString &object_name) {
-  const auto found = std::find_if(
-      submenu.children.begin(), submenu.children.end(),
-      [&object_name](const ContextActionSnapshot &action) {
-        return action.object_name == object_name;
-      });
+quader::QuaderActionItem
+disabled_action(std::string action_id, std::string label, std::string reason) {
+  return quader::QuaderActionItem{
+      .action_id = std::move(action_id),
+      .label = std::move(label),
+      .visibility = quader::QuaderActionVisibility::Disabled,
+      .disabled_reason = std::move(reason),
+  };
+}
+
+const ContextActionSnapshot *find_child(const ContextActionSnapshot &submenu,
+                                        const QString &object_name) {
+  const auto found =
+      std::find_if(submenu.children.begin(), submenu.children.end(),
+                   [&object_name](const ContextActionSnapshot &action) {
+                     return action.object_name == object_name;
+                   });
   return found == submenu.children.end() ? nullptr : &*found;
+}
+
+const ContextActionSnapshot *find_top_level(const ContextMenuSnapshot &menu,
+                                            const QString &object_name) {
+  const auto found =
+      std::find_if(menu.actions.begin(), menu.actions.end(),
+                   [&object_name](const ContextActionSnapshot &action) {
+                     return action.object_name == object_name;
+                   });
+  return found == menu.actions.end() ? nullptr : &*found;
+}
+
+const ContextActionSnapshot *find_submenu(const ContextMenuSnapshot &menu,
+                                          const QString &submenu_object_name) {
+  const auto found =
+      std::find_if(menu.actions.begin(), menu.actions.end(),
+                   [&submenu_object_name](const ContextActionSnapshot &action) {
+                     return action.submenu_object_name == submenu_object_name;
+                   });
+  return found == menu.actions.end() ? nullptr : &*found;
 }
 
 } // namespace
 
 TEST(QtViewportContextMenuTests,
-     StructuresModeObjectAndUtilityCommandsWithDisplayOnlyShortcuts) {
+     BuildsDeliberateEmptyObjectGroupAndComponentMenus) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-viewport-context-menu-tests";
@@ -217,124 +249,374 @@ TEST(QtViewportContextMenuTests,
   owner.show();
   QCoreApplication::processEvents();
 
+  const auto action_set = [](std::string mode,
+                             std::vector<quader::QuaderActionItem> actions) {
+    quader::QuaderActionSet result;
+    result.surface = quader::QuaderActionSurface::ViewportContextMenu;
+    result.panels.push_back(quader::QuaderActionPanel{
+        .panel_id = "viewport_context_menu",
+        .label = "Context Actions",
+        .selection_mode_id = std::move(mode),
+        .visibility = quader::QuaderActionVisibility::Enabled,
+        .actions = std::move(actions),
+    });
+    return result;
+  };
+  const auto selection = [](quader::QuaderSelectionMode mode) {
+    quader::QuaderSelectionSummary summary;
+    summary.mode = mode;
+    summary.has_selection = true;
+    summary.selected_object_count = 2;
+    summary.selected_vertex_count = 4;
+    summary.selected_edge_count = 4;
+    summary.selected_face_count = 2;
+    return summary;
+  };
+
+  const ContextMenuSnapshot empty_menu =
+      show_and_snapshot(owner, presenter, editor, input_router, localization,
+                        {}, quader::QuaderSelectionSummary{}, false);
+  ASSERT_TRUE(empty_menu.opened);
+  EXPECT_EQ(empty_menu.separator_count, 0u);
+  EXPECT_NE(find_top_level(empty_menu, QStringLiteral("select.all")), nullptr);
+  EXPECT_NE(find_top_level(empty_menu, QStringLiteral("viewport.focus_all")),
+            nullptr);
+  EXPECT_EQ(find_top_level(empty_menu, QStringLiteral("edit.cut")), nullptr);
+  EXPECT_EQ(find_top_level(empty_menu, QStringLiteral("edit.copy")), nullptr);
+  EXPECT_EQ(find_top_level(empty_menu, QStringLiteral("edit.duplicate")),
+            nullptr);
+  EXPECT_EQ(
+      find_top_level(empty_menu, QStringLiteral("viewport.frame_selection")),
+      nullptr);
+  for (const ContextActionSnapshot &action : empty_menu.actions) {
+    EXPECT_TRUE(action.enabled) << action.text.toStdString();
+    EXPECT_TRUE(action.children.empty());
+  }
+
   quader::QuaderActionSet object_actions;
-  object_actions.surface = quader::QuaderActionSurface::ViewportContextMenu;
-  object_actions.panels.push_back(quader::QuaderActionPanel{
-      .panel_id = "mesh",
-      .label = "Mesh",
-      .selection_mode_id = "object",
-      .visibility = quader::QuaderActionVisibility::Enabled,
-      .actions = {enabled_action("duplicate_meshes", "Duplicate"),
-                  enabled_action("invert_mesh", "Flip Mesh Normals"),
-                  enabled_action("copy_pivot_from_active",
-                                 "Copy Pivot From Active")},
-  });
+  object_actions = action_set(
+      "object",
+      {enabled_action("duplicate_meshes", "Duplicate Selected Meshes"),
+       enabled_action("invert_mesh", "Flip Selected Mesh Normals"),
+       enabled_action("shade_smooth_mesh",
+                      "Set Selected Meshes to Smooth Shading"),
+       enabled_action("copy_pivot_from_active", "Copy Pivot From Active"),
+       enabled_action("snap_meshes_to_floor", "Snap Meshes to Floor"),
+       enabled_action("combine_mesh", "Combine Selected Meshes"),
+       enabled_action("half_cut", "Half-Cut Selected Meshes"),
+       enabled_action("delete_selection", "Delete Selection")});
 
   const std::optional<quader::ProjectAssetId> hovered_material =
-      quader::ProjectAssetId::parse(
-          "11111111-1111-4111-8111-111111111111");
+      quader::ProjectAssetId::parse("11111111-1111-4111-8111-111111111111");
   ASSERT_TRUE(hovered_material.has_value());
   std::optional<quader::ProjectAssetId> opened_material;
 
   const ContextMenuSnapshot object_menu = show_and_snapshot(
       owner, presenter, editor, input_router, localization, object_actions,
-      quader::QuaderSelectionMode::Object, hovered_material,
+      selection(quader::QuaderSelectionMode::Object), true, hovered_material,
       [&opened_material](quader::ProjectAssetId id) { opened_material = id; },
       true);
   ASSERT_TRUE(object_menu.opened);
-  ASSERT_EQ(object_menu.actions.size(), 10u);
   EXPECT_EQ(opened_material, hovered_material);
-  EXPECT_EQ(object_menu.separator_count, 2u);
-  EXPECT_EQ(object_menu.visible_separator_count, 2u);
-  EXPECT_TRUE(object_menu.style_sheet.contains(QStringLiteral(
-      "QMenu#viewport_operations_context_menu::separator")));
-  EXPECT_TRUE(
-      object_menu.style_sheet.contains(QStringLiteral("palette(mid)")));
+  EXPECT_GT(object_menu.separator_count, 0u);
+  EXPECT_EQ(object_menu.visible_separator_count, object_menu.separator_count);
+  EXPECT_TRUE(object_menu.style_sheet.contains(
+      QStringLiteral("QMenu#viewport_operations_context_menu::separator")));
+  EXPECT_TRUE(object_menu.style_sheet.contains(QStringLiteral("palette(mid)")));
 
-  const ContextActionSnapshot &mesh_submenu = object_menu.actions[0];
-  const ContextActionSnapshot &object_submenu = object_menu.actions[1];
-  EXPECT_EQ(mesh_submenu.text, QStringLiteral("Mesh"));
-  EXPECT_EQ(mesh_submenu.submenu_object_name,
-            QStringLiteral("viewport_context_modeling_submenu"));
-  EXPECT_EQ(object_submenu.text, QStringLiteral("Object"));
-  EXPECT_EQ(object_submenu.submenu_object_name,
-            QStringLiteral("viewport_context_object_submenu"));
-  EXPECT_TRUE(object_menu.actions[2].separator);
-
-  const ContextActionSnapshot *mesh_duplicate =
-      find_child(mesh_submenu, QStringLiteral("duplicate_meshes"));
-  const ContextActionSnapshot *object_duplicate =
-      find_child(object_submenu, QStringLiteral("edit.duplicate"));
-  ASSERT_NE(mesh_duplicate, nullptr);
-  ASSERT_NE(object_duplicate, nullptr);
-  EXPECT_EQ(mesh_duplicate->text, QStringLiteral("Duplicate"));
-  EXPECT_TRUE(object_duplicate->text.startsWith(
+  ASSERT_GE(object_menu.actions.size(), 4u);
+  EXPECT_EQ(object_menu.actions[0].object_name,
+            QStringLiteral("edit.duplicate"));
+  EXPECT_TRUE(object_menu.actions[0].text.startsWith(
       QStringLiteral("Duplicate Object")));
-  EXPECT_NE(mesh_duplicate->object_name, object_duplicate->object_name);
-  EXPECT_NE(find_child(mesh_submenu, QStringLiteral("invert_mesh")), nullptr);
-  EXPECT_NE(find_child(object_submenu,
-                       QStringLiteral("copy_pivot_from_active")),
+  EXPECT_EQ(object_menu.actions[1].object_name,
+            QStringLiteral("edit.create_instance"));
+  EXPECT_EQ(object_menu.actions[2].object_name, QStringLiteral("edit.group"));
+  EXPECT_TRUE(object_menu.actions[3].separator);
+
+  const ContextActionSnapshot *mesh_data = find_submenu(
+      object_menu, QStringLiteral("viewport_context_mesh_data_submenu"));
+  const ContextActionSnapshot *normals = find_submenu(
+      object_menu, QStringLiteral("viewport_context_normals_submenu"));
+  const ContextActionSnapshot *arrange = find_submenu(
+      object_menu, QStringLiteral("viewport_context_arrange_submenu"));
+  ASSERT_NE(mesh_data, nullptr);
+  ASSERT_NE(normals, nullptr);
+  ASSERT_NE(arrange, nullptr);
+  const ContextActionSnapshot *mesh_duplicate =
+      find_child(*mesh_data, QStringLiteral("duplicate_meshes"));
+  ASSERT_NE(mesh_duplicate, nullptr);
+  EXPECT_EQ(mesh_duplicate->text, QStringLiteral("Duplicate Mesh Data"));
+  EXPECT_NE(find_child(*normals, QStringLiteral("invert_mesh")), nullptr);
+  EXPECT_NE(find_child(*normals, QStringLiteral("shade_smooth_mesh")), nullptr);
+  EXPECT_NE(find_child(*arrange, QStringLiteral("copy_pivot_from_active")),
             nullptr);
 
-  for (const ContextActionSnapshot &top_level : object_menu.actions) {
-    EXPECT_NE(top_level.object_name, QStringLiteral("duplicate_meshes"));
-    EXPECT_NE(top_level.object_name, QStringLiteral("invert_mesh"));
-    EXPECT_NE(top_level.object_name,
-              QStringLiteral("copy_pivot_from_active"));
-  }
+  EXPECT_NE(find_top_level(object_menu, QStringLiteral("snap_meshes_to_floor")),
+            nullptr);
+  EXPECT_NE(find_top_level(object_menu, QStringLiteral("combine_mesh")),
+            nullptr);
+  EXPECT_NE(find_top_level(object_menu, QStringLiteral("half_cut")), nullptr);
+  const ContextActionSnapshot *sample_material = find_top_level(
+      object_menu, QStringLiteral("viewport.material.sample_face"));
+  ASSERT_NE(sample_material, nullptr);
+  EXPECT_EQ(sample_material->text,
+            QStringLiteral("Set Material under Mouse as Active\tShift+RMouse"));
+  EXPECT_TRUE(sample_material->enabled);
+  EXPECT_TRUE(sample_material->shortcut_empty);
+  EXPECT_NE(
+      find_top_level(object_menu,
+                     QStringLiteral("viewport.material.edit_under_mouse")),
+      nullptr);
+  EXPECT_NE(find_top_level(object_menu, QStringLiteral("edit.cut")), nullptr);
+  EXPECT_NE(find_top_level(object_menu, QStringLiteral("edit.copy")), nullptr);
+  ASSERT_FALSE(object_menu.actions.empty());
+  EXPECT_EQ(object_menu.actions.back().object_name,
+            QStringLiteral("delete_selection"));
+  EXPECT_EQ(object_menu.actions.back().text,
+            QStringLiteral("Delete Objects\tDelete"));
 
-  EXPECT_EQ(object_menu.actions[3].object_name,
-            QStringLiteral("viewport.frame_selection"));
-  EXPECT_EQ(object_menu.actions[4].object_name,
-            QStringLiteral("viewport.material.sample_face"));
-  EXPECT_EQ(object_menu.actions[4].text,
-            QStringLiteral(
-                "Set Material under Mouse as Active\tShift+RMouse"));
-  EXPECT_TRUE(object_menu.actions[4].enabled);
-  EXPECT_TRUE(object_menu.actions[4].shortcut_empty);
-  EXPECT_EQ(object_menu.actions[5].object_name,
-            QStringLiteral("viewport.material.edit_under_mouse"));
-  EXPECT_TRUE(object_menu.actions[5].enabled);
-  EXPECT_TRUE(object_menu.actions[6].separator);
+  const quader::QuaderActionSet group_actions = action_set(
+      "group", {enabled_action("delete_selection", "Delete Selection")});
+  const ContextMenuSnapshot group_menu = show_and_snapshot(
+      owner, presenter, editor, input_router, localization, group_actions,
+      selection(quader::QuaderSelectionMode::Group), true);
+  ASSERT_TRUE(group_menu.opened);
+  ASSERT_FALSE(group_menu.actions.empty());
+  EXPECT_TRUE(group_menu.actions.front().text.startsWith(
+      QStringLiteral("Duplicate Group")));
+  EXPECT_EQ(group_menu.actions.front().object_name,
+            QStringLiteral("edit.duplicate"));
+  EXPECT_NE(find_top_level(group_menu, QStringLiteral("edit.ungroup")),
+            nullptr);
+  EXPECT_EQ(group_menu.actions.back().text,
+            QStringLiteral("Delete Groups\tDelete"));
 
-  const std::vector<std::pair<QString, QString>> clipboard_actions = {
-      {QStringLiteral("edit.cut"), QStringLiteral("Cut\tCtrl+X")},
-      {QStringLiteral("edit.copy"), QStringLiteral("Copy\tCtrl+C")},
-      {QStringLiteral("edit.paste"), QStringLiteral("Paste\tCtrl+V")},
-  };
-  for (std::size_t index = 0; index < clipboard_actions.size(); ++index) {
-    const ContextActionSnapshot &action = object_menu.actions[7u + index];
-    EXPECT_EQ(action.object_name, clipboard_actions[index].first);
-    EXPECT_EQ(action.text, clipboard_actions[index].second);
-    EXPECT_TRUE(action.shortcut_empty)
-        << "Context-menu labels display shortcuts without installing a "
-           "second QAction shortcut route.";
-  }
+  const quader::QuaderActionSet vertex_actions = action_set(
+      "vertex",
+      {enabled_action("radial_align_vertices",
+                      "Radially Align Selected Vertices"),
+       enabled_action("dissolve_vertices", "Dissolve Selected Vertices"),
+       enabled_action("connect_vertices", "Connect Selected Vertices"),
+       enabled_action("snap_vertices_to_active",
+                      "Snap Selected Vertices to Active Vertex"),
+       enabled_action("merge_vertices", "Merge Vertices to Active"),
+       enabled_action("bevel_vertices", "Bevel Selected Vertices"),
+       enabled_action("merge_vertices_at_center",
+                      "Merge Selected Vertices at Center"),
+       enabled_action("merge_by_distance",
+                      "Merge Selected Vertices by Distance"),
+       enabled_action("snap_vertices_to_floor", "Snap Vertices to Floor"),
+       enabled_action("delete_selection", "Delete Selection")});
+  const ContextMenuSnapshot vertex_menu = show_and_snapshot(
+      owner, presenter, editor, input_router, localization, vertex_actions,
+      selection(quader::QuaderSelectionMode::Vertex), true);
+  ASSERT_TRUE(vertex_menu.opened);
+  ASSERT_GE(vertex_menu.actions.size(), 5u);
+  EXPECT_EQ(vertex_menu.actions[0].object_name,
+            QStringLiteral("merge_vertices_at_center"));
+  EXPECT_EQ(vertex_menu.actions[1].object_name,
+            QStringLiteral("bevel_vertices"));
+  EXPECT_EQ(vertex_menu.actions[2].object_name,
+            QStringLiteral("connect_vertices"));
+  const ContextActionSnapshot *vertex_topology = find_submenu(
+      vertex_menu, QStringLiteral("viewport_context_topology_submenu"));
+  const ContextActionSnapshot *vertex_merge = find_submenu(
+      vertex_menu, QStringLiteral("viewport_context_merge_submenu"));
+  const ContextActionSnapshot *vertex_arrange = find_submenu(
+      vertex_menu, QStringLiteral("viewport_context_arrange_submenu"));
+  ASSERT_NE(vertex_topology, nullptr);
+  ASSERT_NE(vertex_merge, nullptr);
+  ASSERT_NE(vertex_arrange, nullptr);
+  EXPECT_NE(find_child(*vertex_merge, QStringLiteral("merge_vertices")),
+            nullptr);
+  EXPECT_NE(find_child(*vertex_merge, QStringLiteral("merge_by_distance")),
+            nullptr);
+  EXPECT_NE(find_child(*vertex_topology, QStringLiteral("dissolve_vertices")),
+            nullptr);
+  EXPECT_NE(
+      find_child(*vertex_arrange, QStringLiteral("snap_vertices_to_active")),
+      nullptr);
+  EXPECT_EQ(vertex_menu.actions.back().text,
+            QStringLiteral("Delete Vertices\tDelete"));
 
-  quader::QuaderActionSet face_actions;
-  face_actions.surface = quader::QuaderActionSurface::ViewportContextMenu;
-  face_actions.panels.push_back(quader::QuaderActionPanel{
-      .panel_id = "face",
-      .label = "Face",
-      .selection_mode_id = "face",
-      .visibility = quader::QuaderActionVisibility::Enabled,
-      .actions = {enabled_action("invert_faces", "Invert Face")},
-  });
+  const quader::QuaderActionSet edge_actions = action_set(
+      "edge",
+      {enabled_action("collapse_edges", "Collapse Selected Edges"),
+       enabled_action("soften_edge_normals", "Soften Selected Edge Normals"),
+       enabled_action("connect_edges", "Connect Selected Edges"),
+       enabled_action("bridge_edges", "Bridge Selected Edges"),
+       enabled_action("snap_edges_to_active",
+                      "Snap Selected Edges to Active Edge"),
+       disabled_action("fill_hole", "Fill Hole from Selected Edges",
+                       "Select a closed boundary."),
+       enabled_action("bevel_edges", "Bevel Selected Edges"),
+       enabled_action("interpolated_bridge_edges",
+                      "Bridge Selected Edges with Interpolation"),
+       enabled_action("split_edges", "Split Selected Edges"),
+       enabled_action("harden_edge_normals", "Harden Selected Edge Normals"),
+       enabled_action("dissolve_edges", "Dissolve Selected Edges"),
+       enabled_action("merge_edges", "Merge Selected Edges"),
+       enabled_action("radial_align_edges", "Radially Align Selected Edges"),
+       enabled_action("delete_selection", "Delete Selection")});
+  const ContextMenuSnapshot edge_menu = show_and_snapshot(
+      owner, presenter, editor, input_router, localization, edge_actions,
+      selection(quader::QuaderSelectionMode::Edge), true);
+  ASSERT_TRUE(edge_menu.opened);
+  ASSERT_GE(edge_menu.actions.size(), 6u);
+  EXPECT_EQ(edge_menu.actions[0].object_name, QStringLiteral("bevel_edges"));
+  EXPECT_EQ(edge_menu.actions[1].object_name, QStringLiteral("bridge_edges"));
+  EXPECT_EQ(edge_menu.actions[2].object_name, QStringLiteral("connect_edges"));
+  EXPECT_EQ(edge_menu.actions[3].object_name, QStringLiteral("fill_hole"));
+  EXPECT_FALSE(edge_menu.actions[3].enabled);
+  EXPECT_EQ(edge_menu.actions[3].tool_tip,
+            QStringLiteral("Select a closed boundary."));
+  const ContextActionSnapshot *edge_topology = find_submenu(
+      edge_menu, QStringLiteral("viewport_context_topology_submenu"));
+  const ContextActionSnapshot *edge_merge =
+      find_submenu(edge_menu, QStringLiteral("viewport_context_merge_submenu"));
+  const ContextActionSnapshot *edge_normals = find_submenu(
+      edge_menu, QStringLiteral("viewport_context_normals_submenu"));
+  ASSERT_NE(edge_topology, nullptr);
+  ASSERT_NE(edge_merge, nullptr);
+  ASSERT_NE(edge_normals, nullptr);
+  EXPECT_NE(find_child(*edge_topology, QStringLiteral("split_edges")), nullptr);
+  EXPECT_NE(find_child(*edge_merge, QStringLiteral("merge_edges")), nullptr);
+  EXPECT_NE(find_child(*edge_normals, QStringLiteral("harden_edge_normals")),
+            nullptr);
+  EXPECT_EQ(edge_menu.actions.back().text,
+            QStringLiteral("Delete Edges\tDelete"));
+
+  const quader::QuaderActionSet face_actions = action_set(
+      "face",
+      {enabled_action("detach_faces", "Detach Selected Faces"),
+       enabled_action("invert_faces", "Flip Selected Face Normals"),
+       enabled_action("extract_faces", "Extract Selected Faces"),
+       enabled_action("combine_faces", "Combine Selected Faces"),
+       enabled_action("bridge_faces", "Bridge Selected Faces"),
+       enabled_action("slice_quad", "Slice Selected Quad Face"),
+       enabled_action("thicken_faces", "Thicken Selected Faces"),
+       enabled_action("interpolated_bridge_faces",
+                      "Bridge Selected Faces with Interpolation"),
+       enabled_action("collapse_faces", "Collapse Selected Faces"),
+       enabled_action("radial_align_faces", "Radially Align Selected Faces"),
+       enabled_action("delete_selection", "Delete Selection")});
 
   const ContextMenuSnapshot face_menu = show_and_snapshot(
       owner, presenter, editor, input_router, localization, face_actions,
-      quader::QuaderSelectionMode::Face);
+      selection(quader::QuaderSelectionMode::Face), true);
   ASSERT_TRUE(face_menu.opened);
-  ASSERT_EQ(face_menu.actions.size(), 9u);
-  EXPECT_EQ(face_menu.actions[0].text, QStringLiteral("Face"));
-  EXPECT_EQ(face_menu.actions[0].submenu_object_name,
-            QStringLiteral("viewport_context_modeling_submenu"));
-  EXPECT_NE(find_child(face_menu.actions[0], QStringLiteral("invert_faces")),
+  ASSERT_GE(face_menu.actions.size(), 6u);
+  EXPECT_EQ(face_menu.actions[0].object_name, QStringLiteral("thicken_faces"));
+  EXPECT_EQ(face_menu.actions[1].object_name, QStringLiteral("bridge_faces"));
+  EXPECT_EQ(face_menu.actions[2].object_name, QStringLiteral("combine_faces"));
+  EXPECT_EQ(face_menu.actions[3].object_name, QStringLiteral("extract_faces"));
+  const ContextActionSnapshot *face_topology = find_submenu(
+      face_menu, QStringLiteral("viewport_context_topology_submenu"));
+  const ContextActionSnapshot *face_normals = find_submenu(
+      face_menu, QStringLiteral("viewport_context_normals_submenu"));
+  ASSERT_NE(face_topology, nullptr);
+  ASSERT_NE(face_normals, nullptr);
+  EXPECT_NE(find_child(*face_topology, QStringLiteral("detach_faces")),
             nullptr);
-  EXPECT_TRUE(face_menu.actions[1].separator);
-  for (const ContextActionSnapshot &top_level : face_menu.actions) {
-    EXPECT_NE(top_level.text, QStringLiteral("Mesh"));
-    EXPECT_NE(top_level.text, QStringLiteral("Object"));
-    EXPECT_NE(top_level.object_name, QStringLiteral("invert_faces"));
+  EXPECT_NE(find_child(*face_normals, QStringLiteral("invert_faces")), nullptr);
+  EXPECT_EQ(face_menu.actions.back().text,
+            QStringLiteral("Delete Faces\tDelete"));
+
+  const std::array<const ContextMenuSnapshot *, 6> menus{
+      &empty_menu,  &object_menu, &group_menu,
+      &vertex_menu, &edge_menu,   &face_menu};
+  const std::function<void(const std::vector<ContextActionSnapshot> &)>
+      expect_display_only_shortcuts =
+          [&](const std::vector<ContextActionSnapshot> &actions) {
+            for (const ContextActionSnapshot &action : actions) {
+              EXPECT_TRUE(action.shortcut_empty)
+                  << action.object_name.toStdString()
+                  << " must display shortcut text without installing a "
+                     "second QAction shortcut route.";
+              expect_display_only_shortcuts(action.children);
+            }
+          };
+  for (const ContextMenuSnapshot *snapshot : menus) {
+    ASSERT_NE(snapshot, nullptr);
+    expect_display_only_shortcuts(snapshot->actions);
+    EXPECT_EQ(find_submenu(*snapshot,
+                           QStringLiteral("viewport_context_modeling_submenu")),
+              nullptr);
+    EXPECT_EQ(find_submenu(*snapshot,
+                           QStringLiteral("viewport_context_object_submenu")),
+              nullptr);
   }
+
+  const auto first = editor.modeling().create_box(
+      quader::QuaderBounds{.min = {-2.0f, -1.0f, -1.0f},
+                           .max = {0.0f, 1.0f, 1.0f}},
+      "Context Fence First");
+  const auto second = editor.modeling().create_box(
+      quader::QuaderBounds{.min = {1.0f, -1.0f, -1.0f},
+                           .max = {3.0f, 1.0f, 1.0f}},
+      "Context Fence Second");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(editor.selection().select_object(first.value()).ok());
+  const quader::QuaderSelectionSummary presented_selection =
+      editor.selection().summary();
+  const std::uint64_t presented_selection_revision =
+      presented_selection.selection_revision;
+  const std::uint64_t command_status_revision =
+      editor.commands().last_status_revision();
+  bool frame_action_activated = false;
+
+  QTimer::singleShot(0, &owner, [&]() {
+    auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+    if (menu == nullptr) {
+      ADD_FAILURE() << "Expected the viewport context menu to open.";
+      if (QWidget *popup = QApplication::activePopupWidget()) {
+        popup->close();
+      }
+      return;
+    }
+    QAction *frame_action = nullptr;
+    for (QAction *action : menu->actions()) {
+      if (action != nullptr &&
+          action->objectName() == QStringLiteral("viewport.frame_selection")) {
+        frame_action = action;
+        break;
+      }
+    }
+    if (frame_action == nullptr || !frame_action->isEnabled()) {
+      ADD_FAILURE() << "Expected enabled Frame Selection context action.";
+      menu->close();
+      return;
+    }
+    QObject::connect(frame_action, &QAction::triggered, &owner,
+                     [&frame_action_activated]() {
+                       frame_action_activated = true;
+                     });
+
+    const quader::QuaderApiVoidResult changed_selection =
+        editor.selection().select_object(second.value());
+    if (!changed_selection.ok()) {
+      ADD_FAILURE() << changed_selection.error_message();
+      menu->close();
+      return;
+    }
+    EXPECT_GT(editor.selection().summary().selection_revision,
+              presented_selection_revision);
+
+    menu->setActiveAction(frame_action);
+    QKeyEvent accept_action(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(menu, &accept_action);
+    if (menu->isVisible()) {
+      menu->close();
+    }
+  });
+
+  presenter.show(owner, owner.mapToGlobal(owner.rect().center()), editor,
+                 input_router, localization, {}, presented_selection, true,
+                 std::nullopt, {});
+  EXPECT_TRUE(frame_action_activated);
+  EXPECT_EQ(editor.commands().last_status_revision(), command_status_revision)
+      << "A context-menu action must not execute after the selection used to "
+         "build the menu changes inside QMenu's nested event loop.";
 }

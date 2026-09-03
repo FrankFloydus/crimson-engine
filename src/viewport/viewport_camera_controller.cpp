@@ -18,26 +18,39 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <numbers>
 #include <optional>
 
 namespace quader {
 namespace {
 
-constexpr float kNavigationZoomStepFactor = 1.18f;
 constexpr float kFlyMaxDeltaSeconds = 0.25f;
 constexpr float kFlySpeedWheelStep = 1.0f;
-constexpr float kMinCameraDistance = 0.05f;
-constexpr float kMaxCameraDistance = 500.0f;
+constexpr float kMinCameraDistance = static_cast<float>(
+    quader_editor_core::kNavigationMinCameraDistance);
+constexpr float kMaxCameraDistance = static_cast<float>(
+    quader_editor_core::kNavigationMaxCameraDistance);
+constexpr float kMinOrthographicZoomSize = static_cast<float>(
+    quader_editor_core::kNavigationMinOrthographicSize);
+constexpr float kMaxOrthographicZoomSize = static_cast<float>(
+    quader_editor_core::kNavigationMaxOrthographicZoomOutSize);
+constexpr float kMinimumRenderablePerspectiveDistance =
+    kViewportCameraMinimumNearPlane * 2.0f;
+constexpr float kSevereDepthRepairRatio = 16.0f;
 
 float vertical_fov_radians(float fov_degrees) {
   return fov_degrees * std::numbers::pi_v<float> / 180.0f;
 }
 
 float perspective_visible_height(const ViewportCameraState &state) {
-  return std::max(0.0001f,
-                  2.0f * std::max(kMinCameraDistance, state.distance) *
-                      std::tan(vertical_fov_radians(state.fov_degrees) * 0.5f));
+  const float distance = std::isfinite(state.distance) && state.distance > 0.0f
+                             ? state.distance
+                             : kMinCameraDistance;
+  return std::max(
+      0.0001f,
+      2.0f * distance *
+          std::tan(vertical_fov_radians(state.fov_degrees) * 0.5f));
 }
 
 float perspective_distance_for_visible_height(float visible_height,
@@ -47,8 +60,7 @@ float perspective_distance_for_visible_height(float visible_height,
   if (half_fov_tangent <= 0.000001f) {
     return kMinCameraDistance;
   }
-  return std::max(kMinCameraDistance, std::max(0.0001f, visible_height) /
-                                          (2.0f * half_fov_tangent));
+  return std::max(0.0001f, visible_height) / (2.0f * half_fov_tangent);
 }
 
 float current_visible_height(const ViewportCameraState &state) {
@@ -60,10 +72,8 @@ float current_visible_height(const ViewportCameraState &state) {
 void sync_perspective_distance_from_orthographic_zoom(
     ViewportCameraState &state) {
   if (state.projection == ViewportProjection::Orthographic) {
-    state.distance =
-        clamp(perspective_distance_for_visible_height(
-                  state.orthographic_size, state.fov_degrees),
-              kMinCameraDistance, kMaxCameraDistance);
+    state.distance = perspective_distance_for_visible_height(
+        state.orthographic_size, state.fov_degrees);
   }
 }
 
@@ -224,10 +234,13 @@ make_runtime_camera(const ViewportCameraPose &pose,
 float distance_along_forward_to_pivot(QVec3 origin, QVec3 forward,
                                       QVec3 pivot) {
   const float forward_distance = dot(pivot - origin, forward);
-  if (forward_distance > kMinCameraDistance) {
+  if (std::isfinite(forward_distance) && forward_distance > 0.0f) {
     return forward_distance;
   }
-  return std::max(kMinCameraDistance, length(pivot - origin));
+  const float radial_distance = length(pivot - origin);
+  return std::isfinite(radial_distance) && radial_distance > 0.0f
+             ? radial_distance
+             : kMinCameraDistance;
 }
 
 void apply_runtime_transform(
@@ -249,17 +262,17 @@ void apply_runtime_transform(
       forward, from_runtime(result.camera_transform.y_axis), camera_forward);
 
   pivot = from_runtime(result.pivot);
-  const float view_distance =
-      std::max(kMinCameraDistance,
-               preserved_view_distance.value_or(distance_along_forward_to_pivot(
-                   origin, basis.forward, pivot)));
-  const float clamped_view_distance =
-      clamp(view_distance, kMinCameraDistance, kMaxCameraDistance);
+  const float requested_view_distance = preserved_view_distance.value_or(
+      distance_along_forward_to_pivot(origin, basis.forward, pivot));
+  const float view_distance = std::isfinite(requested_view_distance) &&
+                                      requested_view_distance > 0.0f
+                                  ? requested_view_distance
+                                  : kMinCameraDistance;
 
   camera_forward = basis.forward;
   camera_up = basis.up;
-  state.target = origin + camera_forward * clamped_view_distance;
-  state.distance = clamped_view_distance;
+  state.target = origin + camera_forward * view_distance;
+  state.distance = view_distance;
   // ViewportCameraState::target is the visible center of the camera and is
   // the controller's canonical navigation pivot. Runtime operations may
   // return an off-axis cursor target or retain the pre-fly-look pivot; never
@@ -313,7 +326,11 @@ ViewportCameraController::ViewportCameraController() {
       viewport_sanitize_fly_navigation_speed(
           static_cast<float>(defaults.fly_base_speed));
   fly_speed_ = default_fly_speed_;
+  configured_near_plane_ = state_.near_plane;
+  configured_far_plane_ = state_.far_plane;
   sync_basis_from_angles();
+  establish_zoom_envelope_from_current_view();
+  apply_clip_plane_constraints();
 }
 
 void ViewportCameraController::set_viewport_size(float width, float height) {
@@ -321,19 +338,39 @@ void ViewportCameraController::set_viewport_size(float width, float height) {
   viewport_height_ = std::max(1.0f, height);
 }
 
-void ViewportCameraController::begin_drag(QVec2 mouse, ViewportDragMode mode) {
-  // Every pointer-navigation gesture starts from the point currently centered
-  // by the camera. Cursor zoom and fly look can otherwise leave the runtime
-  // pivot off-axis while state_.target continues to describe the visible
-  // view. Reusing that hidden pivot makes pan scale against the wrong depth
-  // and makes the next orbit jump around a point outside the view.
+void ViewportCameraController::begin_drag(
+    QVec2 mouse, ViewportDragMode mode,
+    std::optional<QVec3> navigation_anchor,
+    bool navigation_anchor_repair_only) {
+  // Latch the scene depth sampled at gesture start. The first accepted motion
+  // rebases the canonical target without changing eye or orientation, so a
+  // click/cancel remains state-neutral. Off-axis orbit anchors stay separate
+  // and gesture-local.
   pivot_ = state_.target;
+  pending_navigation_anchor_.reset();
+  pending_navigation_anchor_repair_only_ = false;
+  orbit_anchor_.reset();
+  if (navigation_anchor.has_value() &&
+      (mode == ViewportDragMode::Orbit ||
+       mode == ViewportDragMode::OrbitSnap || mode == ViewportDragMode::Pan)) {
+    pending_navigation_anchor_ = navigation_anchor;
+    pending_navigation_anchor_repair_only_ =
+        navigation_anchor_repair_only;
+  }
   drag_mode_ = mode;
   last_mouse_ = mouse;
   clear_orbit_snap_source();
   if (mode == ViewportDragMode::Fly) {
+    const bool converting_from_orthographic =
+        state_.projection == ViewportProjection::Orthographic;
+    sync_perspective_distance_from_orthographic_zoom(state_);
     state_.projection = ViewportProjection::Perspective;
     orthographic_view_locked_ = false;
+    if (converting_from_orthographic) {
+      ensure_perspective_target_within_clip_range();
+      establish_zoom_envelope_from_current_view();
+    }
+    apply_clip_plane_constraints();
   }
 }
 
@@ -342,14 +379,42 @@ void ViewportCameraController::update_drag(QVec2 mouse) {
 }
 
 void ViewportCameraController::update_drag(QVec2 mouse, ViewportDragMode mode) {
+  const QVec2 delta{mouse.x - last_mouse_.x, mouse.y - last_mouse_.y};
+  last_mouse_ = mouse;
+  update_drag_delta(delta, mode);
+}
+
+void ViewportCameraController::update_drag_delta(QVec2 delta,
+                                                 ViewportDragMode mode) {
   const ViewportDragMode previous_mode = drag_mode_;
+  if (orthographic_view_locked_ &&
+      (mode == ViewportDragMode::Orbit ||
+       mode == ViewportDragMode::OrbitSnap)) {
+    // Locked orthographic panes reject orbit as a whole. In particular, do
+    // not accept a pending scene-depth anchor before discovering the lock,
+    // because that would move the camera even though no orbit is allowed.
+    drag_mode_ = mode;
+    state_.projection = ViewportProjection::Orthographic;
+    pending_navigation_anchor_.reset();
+    pending_navigation_anchor_repair_only_ = false;
+    orbit_anchor_.reset();
+    clear_orbit_snap_source();
+    return;
+  }
   const bool entering_orbit_snap =
       previous_mode != ViewportDragMode::OrbitSnap &&
       mode == ViewportDragMode::OrbitSnap;
-  const QVec2 delta = entering_orbit_snap ? QVec2{}
-                                          : QVec2{mouse.x - last_mouse_.x,
-                                                  mouse.y - last_mouse_.y};
-  last_mouse_ = mouse;
+  const bool input_has_motion = std::abs(delta.x) > 0.000001f ||
+                                std::abs(delta.y) > 0.000001f;
+  if (!input_has_motion && previous_mode == mode) {
+    return;
+  }
+  if (entering_orbit_snap) {
+    if (input_has_motion && pending_navigation_anchor_.has_value()) {
+      orbit_anchor_ = accept_pending_navigation_anchor();
+    }
+    delta = {};
+  }
   if (previous_mode == ViewportDragMode::OrbitSnap &&
       mode != ViewportDragMode::OrbitSnap) {
     clear_orbit_snap_source();
@@ -359,27 +424,60 @@ void ViewportCameraController::update_drag(QVec2 mouse, ViewportDragMode mode) {
 }
 
 void ViewportCameraController::update_drag_delta(QVec2 delta) {
+  const bool pointer_navigation =
+      drag_mode_ == ViewportDragMode::Orbit ||
+      drag_mode_ == ViewportDragMode::OrbitSnap ||
+      drag_mode_ == ViewportDragMode::Pan;
+  const bool has_motion = std::abs(delta.x) > 0.000001f ||
+                          std::abs(delta.y) > 0.000001f;
+  if (orthographic_view_locked_ &&
+      (drag_mode_ == ViewportDragMode::Orbit ||
+       drag_mode_ == ViewportDragMode::OrbitSnap)) {
+    state_.projection = ViewportProjection::Orthographic;
+    pending_navigation_anchor_.reset();
+    pending_navigation_anchor_repair_only_ = false;
+    orbit_anchor_.reset();
+    clear_orbit_snap_source();
+    return;
+  }
+  if (pointer_navigation && !has_motion &&
+      pending_navigation_anchor_.has_value()) {
+    return;
+  }
+  if (pointer_navigation && has_motion &&
+      pending_navigation_anchor_.has_value()) {
+    const std::optional<QVec3> accepted_anchor =
+        accept_pending_navigation_anchor();
+    if (accepted_anchor.has_value() &&
+        (drag_mode_ == ViewportDragMode::Orbit ||
+         drag_mode_ == ViewportDragMode::OrbitSnap)) {
+      orbit_anchor_ = accepted_anchor;
+    }
+  }
+
   if (drag_mode_ == ViewportDragMode::Orbit ||
       drag_mode_ == ViewportDragMode::OrbitSnap) {
     QDR_PROFILE_SCOPE("Viewport camera orbit");
     const ViewportHostDefaults defaults = viewport_host_defaults();
-    if (orthographic_view_locked_) {
-      state_.projection = ViewportProjection::Orthographic;
-      clear_orbit_snap_source();
-      return;
-    }
     quader_editor_core::ViewportOrbitInput input;
     const bool snap_to_orthographic = drag_mode_ == ViewportDragMode::OrbitSnap;
     if (!snap_to_orthographic) {
       clear_orbit_snap_source();
     }
+    const bool converting_from_orthographic =
+        state_.projection == ViewportProjection::Orthographic;
     const float snapped_orthographic_size = current_visible_height(state_);
     sync_perspective_distance_from_orthographic_zoom(state_);
-    input.camera_transform =
+    const ViewportCameraPose orbit_input_pose =
         snap_to_orthographic && has_orbit_snap_source_
-            ? make_runtime_transform(orbit_snap_source_pose_)
-            : make_runtime_transform(pose());
-    input.pivot = to_runtime(pivot_);
+            ? orbit_snap_source_pose_
+            : pose();
+    input.camera_transform = make_runtime_transform(orbit_input_pose);
+    input.pivot = to_runtime(orbit_input_pose.target);
+    if (orbit_anchor_.has_value()) {
+      input.has_orbit_anchor = true;
+      input.orbit_anchor = to_runtime(*orbit_anchor_);
+    }
     input.screen_delta = to_runtime(delta);
     input.sensitivity = defaults.orbit_radians_per_pixel;
     input.snap_to_orthogonal = snap_to_orthographic;
@@ -401,6 +499,14 @@ void ViewportCameraController::update_drag_delta(QVec2 delta) {
     } else {
       state_.projection = ViewportProjection::Perspective;
       orthographic_view_locked_ = false;
+    }
+    if (converting_from_orthographic &&
+        state_.projection == ViewportProjection::Perspective) {
+      ensure_perspective_target_within_clip_range();
+    }
+    if (converting_from_orthographic ||
+        (snap_to_orthographic && orbit_result.orthogonal_snap)) {
+      establish_zoom_envelope_from_current_view();
     }
   } else if (drag_mode_ == ViewportDragMode::Pan) {
     QDR_PROFILE_SCOPE("Viewport camera pan");
@@ -426,6 +532,7 @@ void ViewportCameraController::update_drag_delta(QVec2 delta) {
     orthographic_view_locked_ = false;
     clear_orbit_snap_source();
   }
+  apply_clip_plane_constraints();
 }
 
 void ViewportCameraController::end_drag() {
@@ -433,24 +540,49 @@ void ViewportCameraController::end_drag() {
   // Fly look changes the visible target without rotating its runtime pivot.
   // Make the completed camera pose the sole source for the next gesture.
   pivot_ = state_.target;
+  pending_navigation_anchor_.reset();
+  pending_navigation_anchor_repair_only_ = false;
+  orbit_anchor_.reset();
   clear_orbit_snap_source();
 }
 
-void ViewportCameraController::scroll(float wheel_delta) {
+void ViewportCameraController::scroll(
+    float wheel_delta, std::optional<QVec3> navigation_anchor) {
+  if (std::abs(wheel_delta) <= 0.000001f) {
+    return;
+  }
+  if (navigation_anchor.has_value()) {
+    (void)repair_navigation_depth(*navigation_anchor);
+  }
   QDR_PROFILE_SCOPE("Viewport camera zoom");
   quader_editor_core::ViewportZoomInput input;
   input.camera =
       make_runtime_camera(pose(), state_, viewport_width_, viewport_height_);
   input.pivot = to_runtime(pivot_);
+  input.limits.minimum_perspective_distance =
+      minimum_perspective_zoom_distance_;
+  input.limits.maximum_perspective_distance =
+      maximum_perspective_zoom_distance_;
+  input.limits.minimum_orthographic_size =
+      minimum_orthographic_zoom_size_;
+  input.limits.maximum_orthographic_size =
+      maximum_orthographic_zoom_size_;
   input.steps = wheel_delta;
   apply_runtime_transform(state_, pivot_, camera_forward_, camera_up_,
                           quader_editor_core::viewport_zoom(input));
+  extend_zoom_envelope_to_current_view();
+  apply_clip_plane_constraints();
 }
 
 void ViewportCameraController::scroll_to_cursor(float wheel_delta,
-                                                QVec2 local_mouse) {
+                                                QVec2 local_mouse,
+                                                std::optional<QVec3>
+                                                    navigation_anchor) {
   if (std::abs(wheel_delta) <= 0.000001f) {
     return;
+  }
+  if (navigation_anchor.has_value()) {
+    (void)repair_navigation_depth(*navigation_anchor);
   }
 
   QDR_PROFILE_SCOPE("Viewport camera zoom to cursor");
@@ -462,13 +594,27 @@ void ViewportCameraController::scroll_to_cursor(float wheel_delta,
   input.ray_origin = to_runtime(ray.origin);
   input.ray_direction = to_runtime(ray.direction);
   input.has_cursor_target = false;
+  input.limits.minimum_perspective_distance =
+      minimum_perspective_zoom_distance_;
+  input.limits.maximum_perspective_distance =
+      maximum_perspective_zoom_distance_;
+  input.limits.minimum_orthographic_size =
+      minimum_orthographic_zoom_size_;
+  input.limits.maximum_orthographic_size =
+      maximum_orthographic_zoom_size_;
   input.steps = wheel_delta;
   apply_runtime_transform(state_, pivot_, camera_forward_, camera_up_,
                           quader_editor_core::viewport_zoom_to_cursor(input));
+  extend_zoom_envelope_to_current_view();
+  apply_clip_plane_constraints();
 }
 
 void ViewportCameraController::focus_origin(float distance) {
   clear_orbit_snap_source();
+  pending_navigation_anchor_.reset();
+  pending_navigation_anchor_repair_only_ = false;
+  orbit_anchor_.reset();
+  transient_far_plane_floor_ = 0.0f;
   pivot_ = {};
   state_.target = {};
   state_.distance =
@@ -476,19 +622,60 @@ void ViewportCameraController::focus_origin(float distance) {
   if (state_.projection == ViewportProjection::Orthographic) {
     state_.orthographic_size = std::max(0.0001f, state_.distance);
   }
+  establish_zoom_envelope_from_current_view();
+  apply_clip_plane_constraints();
 }
 
 void ViewportCameraController::focus_bounds(QVec3 min_bounds, QVec3 max_bounds,
-                                            float margin) {
+                                             float margin) {
   clear_orbit_snap_source();
+  pending_navigation_anchor_.reset();
+  pending_navigation_anchor_repair_only_ = false;
+  orbit_anchor_.reset();
   quader_editor_core::ViewportFrameBoundsInput input;
   input.camera =
       make_runtime_camera(pose(), state_, viewport_width_, viewport_height_);
   input.min_bounds = to_runtime(min_bounds);
   input.max_bounds = to_runtime(max_bounds);
   input.margin = margin;
-  apply_runtime_transform(state_, pivot_, camera_forward_, camera_up_,
-                          quader_editor_core::viewport_frame_bounds(input));
+  const quader_editor_core::ViewportNavigationResult result =
+      quader_editor_core::viewport_frame_bounds(input);
+  apply_runtime_transform(state_, pivot_, camera_forward_, camera_up_, result);
+  if (!result.ok) {
+    return;
+  }
+  establish_zoom_envelope_from_current_view();
+
+  // Framing is allowed to place the eye beyond the interactive wheel cap, but
+  // the clip range used to remain at its old value. Expand it to include every
+  // framed corner so a successful Focus Bounds cannot produce a blank or
+  // partially clipped view for a large document.
+  const ViewportCameraPose framed_pose = pose();
+  const QVec3 framed_forward =
+      normalize(framed_pose.target - framed_pose.eye);
+  double maximum_depth = 0.0;
+  for (const float x : {min_bounds.x, max_bounds.x}) {
+    for (const float y : {min_bounds.y, max_bounds.y}) {
+      for (const float z : {min_bounds.z, max_bounds.z}) {
+        const QVec3 offset = QVec3{x, y, z} - framed_pose.eye;
+        const double depth =
+            static_cast<double>(offset.x) * framed_forward.x +
+            static_cast<double>(offset.y) * framed_forward.y +
+            static_cast<double>(offset.z) * framed_forward.z;
+        if (std::isfinite(depth)) {
+          maximum_depth = std::max(maximum_depth, depth);
+        }
+      }
+    }
+  }
+  const double padding = std::max(1.0, maximum_depth * 0.01);
+  const double float_limit =
+      static_cast<double>(std::numeric_limits<float>::max());
+  transient_far_plane_floor_ = maximum_depth > 0.0
+                                   ? static_cast<float>(std::min(
+                                         float_limit, maximum_depth + padding))
+                                   : 0.0f;
+  apply_clip_plane_constraints();
 }
 
 bool ViewportCameraController::focus_optional_bounds(
@@ -506,8 +693,11 @@ bool ViewportCameraController::focus_optional_bounds(
 }
 
 void ViewportCameraController::view_axis(ViewportViewAxis axis, int sign,
-                                         ViewportAxisLock lock) {
+                                          ViewportAxisLock lock) {
   clear_orbit_snap_source();
+  pending_navigation_anchor_.reset();
+  pending_navigation_anchor_repair_only_ = false;
+  orbit_anchor_.reset();
   pivot_ = state_.target;
   const quader_editor_core::ViewportCameraState camera =
       make_runtime_camera(pose(), state_, viewport_width_, viewport_height_);
@@ -517,18 +707,27 @@ void ViewportCameraController::view_axis(ViewportViewAxis axis, int sign,
                                              to_runtime(axis), sign));
   state_.projection = ViewportProjection::Orthographic;
   orthographic_view_locked_ = lock == ViewportAxisLock::Locked;
+  establish_zoom_envelope_from_current_view();
+  apply_clip_plane_constraints();
 }
 
 void ViewportCameraController::unlock_orthographic_view() {
   clear_orbit_snap_source();
   orthographic_view_locked_ = false;
   if (state_.projection == ViewportProjection::Orthographic) {
+    sync_perspective_distance_from_orthographic_zoom(state_);
     state_.projection = ViewportProjection::Perspective;
+    ensure_perspective_target_within_clip_range();
+    establish_zoom_envelope_from_current_view();
+    apply_clip_plane_constraints();
   }
 }
 
 void ViewportCameraController::set_view_direction(QVec3 forward_direction) {
   clear_orbit_snap_source();
+  pending_navigation_anchor_.reset();
+  pending_navigation_anchor_repair_only_ = false;
+  orbit_anchor_.reset();
   const QVec3 direction = normalize(forward_direction);
   if (length(direction) <= 0.000001f) {
     return;
@@ -559,6 +758,7 @@ void ViewportCameraController::fly_move(QVec3 local_direction,
   apply_runtime_transform(state_, pivot_, camera_forward_, camera_up_,
                           quader_editor_core::viewport_fly_move(input),
                           state_.distance);
+  apply_clip_plane_constraints();
 }
 
 void ViewportCameraController::adjust_fly_speed(float wheel_steps) {
@@ -592,8 +792,18 @@ void ViewportCameraController::set_clip_planes(float near_plane,
                                                float far_plane) {
   const ViewportCameraClipPlanes clip_planes =
       sanitize_viewport_camera_clip_planes(near_plane, far_plane);
-  state_.near_plane = clip_planes.near_plane;
-  state_.far_plane = clip_planes.far_plane;
+  const bool authored_far_plane_changed =
+      clip_planes.far_plane != configured_far_plane_;
+  configured_near_plane_ = clip_planes.near_plane;
+  configured_far_plane_ = clip_planes.far_plane;
+  if (authored_far_plane_changed) {
+    // Automatic framing/projection expansions are transient guarantees for
+    // the current view, not hidden edits to scene settings. Reapplying the
+    // same authored values each frame preserves them; an actual far-clip
+    // settings change deliberately starts a new clip policy.
+    transient_far_plane_floor_ = 0.0f;
+  }
+  apply_clip_plane_constraints();
 }
 
 bool ViewportCameraController::restore_perspective_pose(
@@ -610,7 +820,13 @@ bool ViewportCameraController::restore_perspective_pose(
   const double distance_double =
       std::sqrt(forward_x * forward_x + forward_y * forward_y +
                 forward_z * forward_z);
-  const float distance = static_cast<float>(distance_double);
+  // The shared projection contract cannot represent a near plane below
+  // kViewportCameraMinimumNearPlane. Preserve the authored target and camera
+  // basis, but move the eye back for the narrow set of otherwise-valid poses
+  // whose target would land on or behind that plane.
+  const float distance = std::max(
+      static_cast<float>(distance_double),
+      kMinimumRenderablePerspectiveDistance);
   const QVec3 forward_direction{
       static_cast<float>(forward_x / distance_double),
       static_cast<float>(forward_y / distance_double),
@@ -630,11 +846,18 @@ bool ViewportCameraController::restore_perspective_pose(
   state_.target = camera_pose.target;
   state_.distance = distance;
   state_.projection = ViewportProjection::Perspective;
-  pivot_ = camera_pose.target;
+  transient_far_plane_floor_ = 0.0f;
+  pivot_ = state_.target;
+  pending_navigation_anchor_.reset();
+  pending_navigation_anchor_repair_only_ = false;
+  orbit_anchor_.reset();
   set_camera_basis(forward_direction, up_direction);
   drag_mode_ = ViewportDragMode::None;
   orthographic_view_locked_ = false;
   clear_orbit_snap_source();
+  ensure_perspective_target_within_clip_range();
+  establish_zoom_envelope_from_current_view();
+  apply_clip_plane_constraints();
   return true;
 }
 
@@ -687,12 +910,6 @@ ViewportCameraController::project_visible_world_segment(QVec3 start,
       start, end, state_.near_plane, state_.far_plane);
 }
 
-float ViewportCameraController::zoomed_distance(float wheel_delta) const {
-  const float zoom_factor = std::pow(kNavigationZoomStepFactor, wheel_delta);
-  return clamp(state_.distance / zoom_factor, kMinCameraDistance,
-               kMaxCameraDistance);
-}
-
 QVec3 ViewportCameraController::forward() const { return camera_forward_; }
 
 QVec3 ViewportCameraController::right() const {
@@ -729,6 +946,132 @@ void ViewportCameraController::sync_basis_from_angles() {
 
 void ViewportCameraController::sync_angles_from_basis() {
   sync_angles_for_forward(state_, camera_forward_);
+}
+
+void ViewportCameraController::establish_zoom_envelope_from_current_view() {
+  const float perspective_distance =
+      std::isfinite(state_.distance) && state_.distance > 0.0f
+          ? state_.distance
+          : kMinCameraDistance;
+  minimum_perspective_zoom_distance_ =
+      std::min(kMinCameraDistance, perspective_distance);
+  maximum_perspective_zoom_distance_ =
+      std::max(kMaxCameraDistance, perspective_distance);
+
+  const float orthographic_size =
+      std::isfinite(state_.orthographic_size) &&
+              state_.orthographic_size > 0.0f
+          ? state_.orthographic_size
+          : kMinOrthographicZoomSize;
+  minimum_orthographic_zoom_size_ =
+      std::min(kMinOrthographicZoomSize, orthographic_size);
+  maximum_orthographic_zoom_size_ =
+      std::max(kMaxOrthographicZoomSize, orthographic_size);
+}
+
+void ViewportCameraController::extend_zoom_envelope_to_current_view() {
+  if (std::isfinite(state_.distance) && state_.distance > 0.0f) {
+    minimum_perspective_zoom_distance_ =
+        std::min(minimum_perspective_zoom_distance_, state_.distance);
+    maximum_perspective_zoom_distance_ =
+        std::max(maximum_perspective_zoom_distance_, state_.distance);
+  }
+  if (std::isfinite(state_.orthographic_size) &&
+      state_.orthographic_size > 0.0f) {
+    minimum_orthographic_zoom_size_ =
+        std::min(minimum_orthographic_zoom_size_, state_.orthographic_size);
+    maximum_orthographic_zoom_size_ =
+        std::max(maximum_orthographic_zoom_size_, state_.orthographic_size);
+  }
+}
+
+void ViewportCameraController::ensure_perspective_target_within_clip_range() {
+  if (state_.projection != ViewportProjection::Perspective ||
+      !std::isfinite(state_.distance) || state_.distance <= 0.0f) {
+    return;
+  }
+  const double distance = state_.distance;
+  const double padding = std::max(1.0, distance * 0.01);
+  const double float_limit =
+      static_cast<double>(std::numeric_limits<float>::max());
+  transient_far_plane_floor_ = std::max(
+      transient_far_plane_floor_,
+      static_cast<float>(std::min(float_limit, distance + padding)));
+}
+
+void ViewportCameraController::apply_clip_plane_constraints() {
+  float effective_near_plane = configured_near_plane_;
+  if (state_.projection == ViewportProjection::Perspective &&
+      std::isfinite(state_.distance) && state_.distance > 0.0f &&
+      state_.distance <= effective_near_plane) {
+    // Orthographic views can legitimately have a visible scale below the
+    // interactive perspective distance floor. When orbit unlocks such a view,
+    // keep its target in front of the near plane without changing eye/target.
+    effective_near_plane = std::max(kViewportCameraMinimumNearPlane,
+                                    state_.distance * 0.5f);
+  }
+  const ViewportCameraClipPlanes effective_clips =
+      sanitize_viewport_camera_clip_planes(
+          effective_near_plane,
+          std::max(configured_far_plane_, transient_far_plane_floor_));
+  state_.near_plane = effective_clips.near_plane;
+  state_.far_plane = effective_clips.far_plane;
+}
+
+std::optional<QVec3> ViewportCameraController::rebase_navigation_depth(
+    QVec3 navigation_anchor) {
+  const ViewportCameraPose current_pose = pose();
+  const float anchor_depth =
+      dot(navigation_anchor - current_pose.eye, camera_forward_);
+  if (!std::isfinite(anchor_depth) || anchor_depth <= kMinCameraDistance) {
+    return std::nullopt;
+  }
+
+  const ViewportScreenPoint projected = project_world_point(navigation_anchor);
+  if (!projected.visible || !std::isfinite(projected.position.x) ||
+      !std::isfinite(projected.position.y)) {
+    return std::nullopt;
+  }
+
+  state_.target = current_pose.eye + camera_forward_ * anchor_depth;
+  state_.distance = anchor_depth;
+  pivot_ = state_.target;
+  establish_zoom_envelope_from_current_view();
+  const bool anchor_is_on_screen =
+      projected.position.x >= 0.0f && projected.position.y >= 0.0f &&
+      projected.position.x <= viewport_width_ &&
+      projected.position.y <= viewport_height_;
+  return anchor_is_on_screen ? navigation_anchor : state_.target;
+}
+
+std::optional<QVec3> ViewportCameraController::repair_navigation_depth(
+    QVec3 navigation_anchor) {
+  const ViewportCameraPose current_pose = pose();
+  const float anchor_depth =
+      dot(navigation_anchor - current_pose.eye, camera_forward_);
+  if (!std::isfinite(anchor_depth) || anchor_depth <= kMinCameraDistance) {
+    return std::nullopt;
+  }
+  // The legacy defect only poisoned cameras by ratcheting their stored target
+  // far behind nearby visible content. A legitimately close view of a scene
+  // with distant bounds must not be pulled outward to that distant depth.
+  if (state_.distance / anchor_depth >= kSevereDepthRepairRatio) {
+    return rebase_navigation_depth(navigation_anchor);
+  }
+  return std::nullopt;
+}
+
+std::optional<QVec3>
+ViewportCameraController::accept_pending_navigation_anchor() {
+  if (!pending_navigation_anchor_.has_value()) {
+    return std::nullopt;
+  }
+  const QVec3 navigation_anchor = *pending_navigation_anchor_;
+  const bool repair_only = pending_navigation_anchor_repair_only_;
+  pending_navigation_anchor_.reset();
+  pending_navigation_anchor_repair_only_ = false;
+  return repair_only ? repair_navigation_depth(navigation_anchor)
+                     : rebase_navigation_depth(navigation_anchor);
 }
 
 void ViewportCameraController::clear_orbit_snap_source() {

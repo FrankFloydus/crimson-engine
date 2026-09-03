@@ -549,7 +549,7 @@ private:
     synchronize(true);
   }
 
-  void toggle_visibility(QuaderLayerId id) {
+  void set_visibility(QuaderLayerId id, bool visible) {
     if (editor_ == nullptr) {
       return;
     }
@@ -559,7 +559,33 @@ private:
     }
     const std::uint64_t mutation_generation = runtime_binding_generation_;
     const QuaderApiVoidResult result =
-        editor_->layers().set_visible(id, !found->second.visible);
+        editor_->layers().set_visible(id, visible);
+    if (runtime_binding_generation_ != mutation_generation) {
+      return;
+    }
+    if (result.ok() && result.changed()) {
+      synchronize(true);
+    }
+  }
+
+  void toggle_visibility(QuaderLayerId id) {
+    const auto found = layer_by_id_.find(id);
+    if (found != layer_by_id_.end()) {
+      set_visibility(id, !found->second.visible);
+    }
+  }
+
+  void set_locked(QuaderLayerId id, bool locked) {
+    if (editor_ == nullptr) {
+      return;
+    }
+    const auto found = layer_by_id_.find(id);
+    if (found == layer_by_id_.end()) {
+      return;
+    }
+    const std::uint64_t mutation_generation = runtime_binding_generation_;
+    const QuaderApiVoidResult result =
+        editor_->layers().set_locked(id, locked);
     if (runtime_binding_generation_ != mutation_generation) {
       return;
     }
@@ -569,21 +595,9 @@ private:
   }
 
   void toggle_lock(QuaderLayerId id) {
-    if (editor_ == nullptr) {
-      return;
-    }
     const auto found = layer_by_id_.find(id);
-    if (found == layer_by_id_.end()) {
-      return;
-    }
-    const std::uint64_t mutation_generation = runtime_binding_generation_;
-    const QuaderApiVoidResult result =
-        editor_->layers().set_locked(id, !found->second.locked);
-    if (runtime_binding_generation_ != mutation_generation) {
-      return;
-    }
-    if (result.ok() && result.changed()) {
-      synchronize(true);
+    if (found != layer_by_id_.end()) {
+      set_locked(id, !found->second.locked);
     }
   }
 
@@ -612,6 +626,19 @@ private:
       return;
     }
     synchronize(true);
+  }
+
+  void begin_rename(QuaderLayerId id) {
+    const auto found = name_item_by_id_.find(id);
+    if (found == name_item_by_id_.end() || found->second == nullptr ||
+        tree_->selectionModel() == nullptr) {
+      return;
+    }
+    const QModelIndex index = found->second->index();
+    tree_->selectionModel()->setCurrentIndex(index,
+                                             QItemSelectionModel::NoUpdate);
+    tree_->scrollTo(index);
+    tree_->edit(index);
   }
 
   void choose_color(QuaderLayerId id, QtColorSwatchButton &button) {
@@ -667,17 +694,33 @@ private:
 
   void show_context_menu(QuaderLayerId id, QPoint global_position) {
     QDR_PROFILE_SCOPE("Qt layers context menu show");
-    if (editor_ == nullptr || !layer_by_id_.contains(id)) {
+    if (editor_ == nullptr || document_ == nullptr) {
+      return;
+    }
+    synchronize(false);
+    if (!layer_by_id_.contains(id)) {
       return;
     }
     const auto name_item = name_item_by_id_.find(id);
     if (name_item != name_item_by_id_.end() &&
         tree_->selectionModel() != nullptr) {
+      const QModelIndex name_index = name_item->second->index();
+      if (!tree_->selectionModel()->isRowSelected(name_index.row(),
+                                                   name_index.parent())) {
+        tree_->selectionModel()->select(
+            name_index, QItemSelectionModel::ClearAndSelect |
+                            QItemSelectionModel::Rows);
+      }
       tree_->selectionModel()->setCurrentIndex(
-          name_item->second->index(), QItemSelectionModel::NoUpdate);
+          name_index, QItemSelectionModel::NoUpdate);
     }
 
+    const QuaderLayerSnapshot target_layer = layer_by_id_.at(id);
     QMenu menu(tree_);
+    QAction *rename_action = nullptr;
+    QAction *color_action = nullptr;
+    QAction *visibility_action = nullptr;
+    QAction *lock_action = nullptr;
     QAction *add_selection_action = nullptr;
     QAction *remove_selection_action = nullptr;
     QAction *empty_action = nullptr;
@@ -687,18 +730,49 @@ private:
       QDR_PROFILE_SCOPE("Qt layers context menu query state");
       selected = selected_layer_ids();
     }
+    const std::uint64_t menu_layer_revision = editor_->layers().revision();
+    const std::uint64_t menu_scene_selection_revision =
+        document_->selection_revision();
     {
       QDR_PROFILE_SCOPE("Qt layers context menu build");
       menu.setObjectName(QStringLiteral("layers.context_menu"));
+
+      rename_action =
+          menu.addAction(localized("ui.layers.rename", "Rename Layer"));
+      rename_action->setObjectName(QStringLiteral("layers.action.rename"));
+
+      color_action = menu.addAction(
+          localized("ui.layers.choose_color", "Choose Layer Color"));
+      color_action->setObjectName(
+          QStringLiteral("layers.action.choose_color"));
+      menu.addSeparator();
+
+      visibility_action = menu.addAction(localized(
+          target_layer.visible ? "ui.layers.hide" : "ui.layers.show",
+          target_layer.visible ? "Hide This Layer" : "Show This Layer"));
+      visibility_action->setObjectName(
+          target_layer.visible ? QStringLiteral("layers.action.hide")
+                               : QStringLiteral("layers.action.show"));
+
+      lock_action = menu.addAction(localized(
+          target_layer.locked ? "ui.layers.unlock" : "ui.layers.lock",
+          target_layer.locked ? "Unlock This Layer" : "Lock This Layer"));
+      lock_action->setObjectName(
+          target_layer.locked ? QStringLiteral("layers.action.unlock")
+                              : QStringLiteral("layers.action.lock"));
+      menu.addSeparator();
+
       add_selection_action = menu.addAction(localized(
-          "ui.layers.add_selection", "Add Selection to Layer"));
+          "ui.layers.add_selection",
+          "Add Selected Objects to This Layer"));
       add_selection_action->setObjectName(
           QStringLiteral("layers.action.add_selection"));
       add_selection_action->setEnabled(
           editor_->layers().can_add_selection_to(id));
 
       remove_selection_action = menu.addAction(localized(
-          "ui.layers.remove_selection", "Remove Object from Layer"));
+          "ui.layers.remove_selection",
+          "Remove Selected Objects from This Layer"));
       remove_selection_action->setObjectName(
           QStringLiteral("layers.action.remove_selection"));
       remove_selection_action->setEnabled(
@@ -706,14 +780,15 @@ private:
       menu.addSeparator();
 
       empty_action =
-          menu.addAction(localized("ui.layers.empty", "Empty Layer"));
+          menu.addAction(localized("ui.layers.empty", "Empty This Layer"));
       empty_action->setObjectName(QStringLiteral("layers.action.empty"));
       empty_action->setEnabled(!layer_by_id_.at(id).members.empty());
 
       delete_action = menu.addAction(
           selected.size() > 1
-              ? localized("ui.layers.delete_multiple", "Delete Layers")
-              : localized("ui.layers.delete", "Delete Layer"));
+              ? localized("ui.layers.delete_multiple",
+                          "Delete Selected Layers")
+              : localized("ui.layers.delete", "Delete Selected Layer"));
       delete_action->setObjectName(QStringLiteral("layers.action.delete"));
       delete_action->setEnabled(!selected.empty());
     }
@@ -727,10 +802,41 @@ private:
     if (runtime_binding_generation_ != menu_generation) {
       return;
     }
+    const bool layer_context_changed =
+        editor_->layers().revision() != menu_layer_revision;
+    const bool scene_selection_changed =
+        document_->selection_revision() != menu_scene_selection_revision;
+    const bool selected_layers_changed = selected_layer_ids() != selected;
+    const bool target_layer_changed = layer_id(tree_->currentIndex()) != id;
+    if (layer_context_changed || scene_selection_changed ||
+        selected_layers_changed || target_layer_changed) {
+      synchronize(true);
+      return;
+    }
     QuaderApiVoidResult result;
     {
       QDR_PROFILE_SCOPE("Qt layers context menu dispatch action");
-      if (chosen == add_selection_action) {
+      if (chosen == rename_action) {
+        begin_rename(id);
+        return;
+      } else if (chosen == color_action) {
+        const auto found = name_item_by_id_.find(id);
+        if (found != name_item_by_id_.end() && found->second != nullptr) {
+          const QModelIndex color_index = found->second->index().siblingAtColumn(
+              column_index(LayerColumn::Color));
+          if (auto *swatch = dynamic_cast<QtColorSwatchButton *>(
+                  tree_->indexWidget(color_index))) {
+            choose_color(id, *swatch);
+          }
+        }
+        return;
+      } else if (chosen == visibility_action) {
+        set_visibility(id, !target_layer.visible);
+        return;
+      } else if (chosen == lock_action) {
+        set_locked(id, !target_layer.locked);
+        return;
+      } else if (chosen == add_selection_action) {
         result = editor_->layers().add_selection(id);
       } else if (chosen == remove_selection_action) {
         result = editor_->layers().remove_selection(id);

@@ -16,9 +16,11 @@ using quader::QVec3;
 using quader::QtNavigationGizmoInteraction;
 using quader::ViewportCameraController;
 using quader::ViewportCameraPose;
+using quader::ViewportAxisLock;
 using quader::ViewportDragMode;
 using quader::ViewportPaneId;
 using quader::ViewportProjection;
+using quader::ViewportViewAxis;
 
 constexpr QVec2 kGizmoSize{96.0f, 96.0f};
 
@@ -157,7 +159,7 @@ TEST(QtNavigationGizmoInteractionTests,
                                 face.screen_position));
   EXPECT_TRUE(interaction.input_locked());
   EXPECT_EQ(interaction.locked_pane_id(), ViewportPaneId::Front);
-  EXPECT_TRUE(camera.is_dragging());
+  EXPECT_FALSE(camera.is_dragging());
 
   ASSERT_TRUE(interaction.release(camera, ViewportPaneId::Front));
   EXPECT_FALSE(interaction.input_locked());
@@ -193,6 +195,109 @@ TEST(QtNavigationGizmoInteractionTests,
   EXPECT_GT(length(after.eye - before.eye), 0.001f);
   EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
   EXPECT_FALSE(camera.orthographic_view_locked());
+  EXPECT_FALSE(interaction.input_locked());
+}
+
+TEST(QtNavigationGizmoInteractionTests,
+     DragThresholdPreservesMotionAcrossEquivalentEventChunking) {
+  const auto run_drag = [](bool split_motion) {
+    ViewportCameraController camera;
+    camera.set_viewport_size(800.0f, 600.0f);
+    QtNavigationGizmoInteraction interaction;
+    const quader_editor_core::ViewCubePrimitives primitives =
+        interaction.primitives(camera, kGizmoSize);
+    EXPECT_FALSE(primitives.faces.empty());
+    if (primitives.faces.empty()) {
+      return camera.pose();
+    }
+    EXPECT_TRUE(interaction.press(camera, ViewportPaneId::Perspective,
+                                  kGizmoSize,
+                                  primitives.faces.front().screen_position));
+    if (split_motion) {
+      EXPECT_TRUE(interaction.drag(camera, ViewportPaneId::Perspective,
+                                   {3.0f, 0.0f}));
+      EXPECT_FALSE(interaction.drag_started());
+      EXPECT_TRUE(interaction.drag(camera, ViewportPaneId::Perspective,
+                                   {3.0f, 0.0f}));
+    } else {
+      EXPECT_TRUE(interaction.drag(camera, ViewportPaneId::Perspective,
+                                   {6.0f, 0.0f}));
+    }
+    EXPECT_TRUE(interaction.drag_started());
+    EXPECT_TRUE(interaction.release(camera, ViewportPaneId::Perspective));
+    return camera.pose();
+  };
+
+  const ViewportCameraPose single_event = run_drag(false);
+  const ViewportCameraPose split_events = run_drag(true);
+  const auto expect_vector_near = [](QVec3 actual, QVec3 expected) {
+    EXPECT_NEAR(actual.x, expected.x, 0.000001f);
+    EXPECT_NEAR(actual.y, expected.y, 0.000001f);
+    EXPECT_NEAR(actual.z, expected.z, 0.000001f);
+  };
+  expect_vector_near(split_events.eye, single_event.eye);
+  expect_vector_near(split_events.target, single_event.target);
+  expect_vector_near(split_events.up, single_event.up);
+}
+
+TEST(QtNavigationGizmoInteractionTests,
+     OrthographicZoomConvertsToEquivalentPerspectiveScaleWhenDragStarts) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(30.0f);
+  camera.view_axis(ViewportViewAxis::Z, 1, ViewportAxisLock::Unlocked);
+  camera.scroll(-64.0f);
+  const float orthographic_size = camera.state().orthographic_size;
+  ASSERT_GT(orthographic_size, 1200.0f);
+  ASSERT_LE(orthographic_size, 1200.0f * 1.18f + 0.001f);
+
+  QtNavigationGizmoInteraction interaction;
+  const quader_editor_core::ViewCubePrimitives primitives =
+      interaction.primitives(camera, kGizmoSize);
+  ASSERT_FALSE(primitives.faces.empty());
+  ASSERT_TRUE(interaction.press(camera, ViewportPaneId::Perspective,
+                                kGizmoSize,
+                                primitives.faces.front().screen_position));
+
+  ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+  EXPECT_FALSE(camera.is_dragging());
+  ASSERT_TRUE(interaction.drag(camera, ViewportPaneId::Perspective,
+                               {12.0f, 6.0f}));
+  ASSERT_EQ(camera.state().projection, ViewportProjection::Perspective);
+  const float perspective_visible_height =
+      2.0f * camera.state().distance *
+      std::tan(camera.state().fov_degrees *
+               static_cast<float>(std::acos(-1.0)) / 360.0f);
+  EXPECT_NEAR(perspective_visible_height, orthographic_size, 0.001f);
+  EXPECT_GT(camera.state().distance, 500.0f);
+
+  interaction.cancel(camera);
+}
+
+TEST(QtNavigationGizmoInteractionTests,
+     CanceledOrthographicPressIsCameraNeutral) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(30.0f);
+  camera.view_axis(ViewportViewAxis::Z, 1, ViewportAxisLock::Unlocked);
+  camera.scroll(-4.0f);
+  const ViewportCameraPose before = camera.pose();
+  const float size_before = camera.state().orthographic_size;
+
+  QtNavigationGizmoInteraction interaction;
+  const quader_editor_core::ViewCubePrimitives primitives =
+      interaction.primitives(camera, kGizmoSize);
+  ASSERT_FALSE(primitives.faces.empty());
+  ASSERT_TRUE(interaction.press(camera, ViewportPaneId::Perspective,
+                                kGizmoSize,
+                                primitives.faces.front().screen_position));
+  interaction.cancel(camera);
+
+  EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+  EXPECT_FLOAT_EQ(camera.state().orthographic_size, size_before);
+  EXPECT_EQ(quader::viewport_camera_pose_persistence_signature(camera.pose()),
+            quader::viewport_camera_pose_persistence_signature(before));
+  EXPECT_FALSE(camera.is_dragging());
   EXPECT_FALSE(interaction.input_locked());
 }
 
@@ -242,6 +347,8 @@ TEST(QtNavigationGizmoInteractionTests,
                                 kGizmoSize,
                                 primitives.faces.front().screen_position));
   ASSERT_TRUE(interaction.input_locked());
+  ASSERT_TRUE(interaction.drag(camera, ViewportPaneId::Perspective,
+                               {20.0f, 0.0f}));
   ASSERT_TRUE(camera.is_dragging());
 
   interaction.abandon();

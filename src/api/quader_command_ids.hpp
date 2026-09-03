@@ -44,6 +44,8 @@ inline constexpr QuaderCommandId kGroupSelection{"edit.group"};
 inline constexpr QuaderCommandId kUngroupSelection{"edit.ungroup"};
 inline constexpr QuaderCommandId kApplyMaterial{"edit.apply_material"};
 
+inline constexpr QuaderCommandId kUiSearchCommands{"ui.search_commands"};
+
 #ifndef NDEBUG
 inline constexpr QuaderCommandId kDevCopySelectionJson{
     "dev.copy_selection_json"};
@@ -129,6 +131,10 @@ inline constexpr QuaderCommandId kViewportToggleMeshGrid{
     "viewport.toggle_mesh_grid"};
 inline constexpr QuaderCommandId kViewportToggleOverlays{
     "viewport.toggle_overlays"};
+inline constexpr QuaderCommandId kViewportToggleInfo{
+    "viewport.toggle_info"};
+inline constexpr QuaderCommandId kViewportToggleNavigationGizmo{
+    "viewport.toggle_navigation_gizmo"};
 inline constexpr QuaderCommandId kViewportToggleTextureLock{
     "viewport.toggle_texture_lock"};
 inline constexpr QuaderCommandId kViewportToggleTextureLockScale{
@@ -145,6 +151,14 @@ inline constexpr QuaderCommandId kViewportLayoutTwoVertical{
     "viewport.layout.two_vertical"};
 inline constexpr QuaderCommandId kViewportLayoutTwoHorizontal{
     "viewport.layout.two_horizontal"};
+inline constexpr QuaderCommandId kViewportLayoutThreePrimaryRight{
+    "viewport.layout.three_primary_right"};
+inline constexpr QuaderCommandId kViewportLayoutThreePrimaryLeft{
+    "viewport.layout.three_primary_left"};
+inline constexpr QuaderCommandId kViewportLayoutThreePrimaryBottom{
+    "viewport.layout.three_primary_bottom"};
+inline constexpr QuaderCommandId kViewportLayoutThreePrimaryTop{
+    "viewport.layout.three_primary_top"};
 inline constexpr QuaderCommandId kViewportLayoutFourQuad{
     "viewport.layout.four_quad"};
 inline constexpr QuaderCommandId kViewportGridIncrement{
@@ -393,6 +407,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kGroupSelection,
     kUngroupSelection,
     kApplyMaterial,
+    kUiSearchCommands,
 #ifndef NDEBUG
     kDevCopySelectionJson,
 #endif
@@ -430,6 +445,8 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportToggleGizmos,
     kViewportToggleMeshGrid,
     kViewportToggleOverlays,
+    kViewportToggleInfo,
+    kViewportToggleNavigationGizmo,
     kViewportToggleTextureLock,
     kViewportToggleTextureLockScale,
     kViewportShadingWireframe,
@@ -438,6 +455,10 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportLayoutSingle,
     kViewportLayoutTwoVertical,
     kViewportLayoutTwoHorizontal,
+    kViewportLayoutThreePrimaryRight,
+    kViewportLayoutThreePrimaryLeft,
+    kViewportLayoutThreePrimaryBottom,
+    kViewportLayoutThreePrimaryTop,
     kViewportLayoutFourQuad,
     kViewportGridIncrement,
     kViewportGridDecrement,

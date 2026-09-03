@@ -859,6 +859,7 @@ add_library(quader_ui STATIC
     src/ui/qt_active_material_panel.cpp
     src/ui/qt_application_theme.cpp
     src/ui/qt_command_event_filter.cpp
+    src/ui/qt_command_palette.cpp
     src/ui/qt_color_swatch_button.cpp
     src/ui/qt_dock_title_presentation.cpp
     src/ui/qt_input_adapter.cpp
@@ -913,6 +914,7 @@ target_link_libraries(quader_ui
         quader_render
         Qt6::Widgets
     PRIVATE
+        quader_editor_metadata
         quader_platform
         quader_modeling_profile)
 target_compile_features(quader_ui PUBLIC cxx_std_20)
@@ -1426,6 +1428,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_auxiliary_window_state_tests.cpp
         tests/qt_application_theme_tests.cpp
         tests/qt_command_event_filter_tests.cpp
+        tests/qt_command_palette_tests.cpp
         tests/qt_input_adapter_tests.cpp
         tests/qt_material_browser_window_tests.cpp
         tests/qt_material_find_replace_dialog_tests.cpp

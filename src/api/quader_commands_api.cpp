@@ -15,6 +15,7 @@
 #include "api/quader_scene_documents_api.hpp"
 #include "api/quader_preferences_api.hpp"
 #include "api/quader_tools_api.hpp"
+#include "api/quader_ui_api.hpp"
 #include "api/quader_viewport_api.hpp"
 #include "core/public_command_targets.hpp"
 #include "diagnostics/profile.hpp"
@@ -533,6 +534,12 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kViewportToggleOverlays)) {
     return "Toggle Viewport Overlays";
   }
+  if (is(quader_command::kViewportToggleInfo)) {
+    return "Toggle Viewport Info";
+  }
+  if (is(quader_command::kViewportToggleNavigationGizmo)) {
+    return "Toggle Navigation Gizmo";
+  }
   if (is(quader_command::kViewportToggleTextureLock)) {
     return "Toggle Texture Lock";
   }
@@ -556,6 +563,18 @@ std::string explicit_keybinding_label(std::string_view command_id,
   }
   if (is(quader_command::kViewportLayoutTwoHorizontal)) {
     return "Switch to Two-View Horizontal Layout";
+  }
+  if (is(quader_command::kViewportLayoutThreePrimaryRight)) {
+    return "Switch to Three-View Layout with the Primary View on the Right";
+  }
+  if (is(quader_command::kViewportLayoutThreePrimaryLeft)) {
+    return "Switch to Three-View Layout with the Primary View on the Left";
+  }
+  if (is(quader_command::kViewportLayoutThreePrimaryBottom)) {
+    return "Switch to Three-View Layout with the Primary View on the Bottom";
+  }
+  if (is(quader_command::kViewportLayoutThreePrimaryTop)) {
+    return "Switch to Three-View Layout with the Primary View on the Top";
   }
   if (is(quader_command::kViewportLayoutFourQuad)) {
     return "Switch to Four-View Quad Layout";
@@ -710,6 +729,13 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
   if (command_id == quader_command::kViewportToggleOverlays.string()) {
     return stable();
   }
+  if (command_id == quader_command::kViewportToggleInfo.string()) {
+    return stable();
+  }
+  if (command_id ==
+      quader_command::kViewportToggleNavigationGizmo.string()) {
+    return stable();
+  }
   if (command_id == quader_command::kViewportToggleTextureLock.string()) {
     return stable();
   }
@@ -732,6 +758,21 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
     return stable();
   }
   if (command_id == quader_command::kViewportLayoutTwoHorizontal.string()) {
+    return stable();
+  }
+  if (command_id ==
+      quader_command::kViewportLayoutThreePrimaryRight.string()) {
+    return stable();
+  }
+  if (command_id ==
+      quader_command::kViewportLayoutThreePrimaryLeft.string()) {
+    return stable();
+  }
+  if (command_id ==
+      quader_command::kViewportLayoutThreePrimaryBottom.string()) {
+    return stable();
+  }
+  if (command_id == quader_command::kViewportLayoutThreePrimaryTop.string()) {
     return stable();
   }
   if (command_id == quader_command::kViewportLayoutFourQuad.string()) {
@@ -808,12 +849,13 @@ public:
     Impl(QuaderApi& api, QuaderProjectApi& project,
          QuaderSceneDocumentsApi &scene_documents,
          QuaderViewportApi& viewports, QuaderToolsApi& tools,
-         QuaderPreferencesApi& preferences, QuaderDevToolsApi& dev_tools);
+         QuaderPreferencesApi& preferences, QuaderUIApi &ui,
+         QuaderDevToolsApi& dev_tools);
 #else
     Impl(QuaderApi& api, QuaderProjectApi& project,
          QuaderSceneDocumentsApi &scene_documents,
          QuaderViewportApi& viewports, QuaderToolsApi& tools,
-         QuaderPreferencesApi& preferences);
+         QuaderPreferencesApi& preferences, QuaderUIApi &ui);
 #endif
 
     QuaderApiVoidResult execute(std::string_view command_id);
@@ -950,6 +992,7 @@ public:
     QuaderViewportApi& viewports_;
     QuaderToolsApi& tools_;
     QuaderPreferencesApi& preferences_;
+    QuaderUIApi &ui_;
 #ifndef NDEBUG
     QuaderDevToolsApi& dev_tools_;
 #endif
@@ -963,7 +1006,7 @@ public:
 QuaderCommandsApi::Impl::Impl(
     QuaderApi &api, QuaderProjectApi &project,
     QuaderSceneDocumentsApi &scene_documents, QuaderViewportApi &viewports,
-    QuaderToolsApi &tools, QuaderPreferencesApi &preferences
+    QuaderToolsApi &tools, QuaderPreferencesApi &preferences, QuaderUIApi &ui
 #ifndef NDEBUG
     ,
     QuaderDevToolsApi &dev_tools
@@ -975,6 +1018,7 @@ QuaderCommandsApi::Impl::Impl(
     , viewports_(viewports)
     , tools_(tools)
     , preferences_(preferences)
+    , ui_(ui)
 #ifndef NDEBUG
     , dev_tools_(dev_tools)
 #endif
@@ -1917,6 +1961,10 @@ void QuaderCommandsApi::Impl::register_commands() {
   register_command(quader_command::kEditClearSelection, "Clear Selection",
                    [this] { return api_.selection().clear(); });
   register_command(
+      quader_command::kUiSearchCommands, "Search Commands",
+      [this] { return ui_.show_command_search(); }, "Ctrl+Shift+P",
+      [this] { return ui_.command_search_available(); });
+  register_command(
       quader_command::kSelectAll, "Select All",
       [this] { return api_.selection().select_all(); }, "Ctrl+A");
   set_keybinding_selection_modes(quader_command::kSelectAll.string(),
@@ -2404,6 +2452,30 @@ void QuaderCommandsApi::Impl::register_commands() {
       [this] { return viewports_.set_layout(ViewportLayoutId::TwoHorizontal); },
       "Ctrl+3");
   register_command(
+      quader_command::kViewportLayoutThreePrimaryRight,
+      "Three Viewports, Primary Right",
+      [this] {
+        return viewports_.set_layout(ViewportLayoutId::ThreePrimaryRight);
+      });
+  register_command(
+      quader_command::kViewportLayoutThreePrimaryLeft,
+      "Three Viewports, Primary Left",
+      [this] {
+        return viewports_.set_layout(ViewportLayoutId::ThreePrimaryLeft);
+      });
+  register_command(
+      quader_command::kViewportLayoutThreePrimaryBottom,
+      "Three Viewports, Primary Bottom",
+      [this] {
+        return viewports_.set_layout(ViewportLayoutId::ThreePrimaryBottom);
+      });
+  register_command(
+      quader_command::kViewportLayoutThreePrimaryTop,
+      "Three Viewports, Primary Top",
+      [this] {
+        return viewports_.set_layout(ViewportLayoutId::ThreePrimaryTop);
+      });
+  register_command(
       quader_command::kViewportLayoutFourQuad, "Four Viewports",
       [this] { return viewports_.set_layout(ViewportLayoutId::FourQuad); },
       "Ctrl+4");
@@ -2426,6 +2498,18 @@ void QuaderCommandsApi::Impl::register_commands() {
                    "Toggle Overlays", [this] {
                      return preferences_.set_overlays_visible(
                          !preferences_.overlays_visible());
+                   });
+  // These display switches are bindable commands, deliberately unassigned by
+  // default. Menus and other retained controls dispatch through these routes.
+  register_command(quader_command::kViewportToggleInfo,
+                   "Toggle Viewport Info", [this] {
+                     return preferences_.set_viewport_info_visible(
+                         !preferences_.viewport_info_visible());
+                   });
+  register_command(quader_command::kViewportToggleNavigationGizmo,
+                   "Toggle Navigation Gizmo", [this] {
+                     return preferences_.set_navigation_gizmo_visible(
+                         !preferences_.navigation_gizmo_visible());
                    });
   // Texture-lock switches are bindable viewport actions, deliberately unassigned
   // by default so adding the controls does not claim existing user shortcuts.
@@ -2956,18 +3040,20 @@ QuaderCommandsApi::QuaderCommandsApi(QuaderApi &api,
                                      QuaderViewportApi &viewports,
                                      QuaderToolsApi &tools,
                                      QuaderPreferencesApi &preferences,
+                                     QuaderUIApi &ui,
                                      QuaderDevToolsApi &dev_tools)
     : impl_(std::make_unique<Impl>(api, project, scene_documents, viewports,
-                                   tools, preferences, dev_tools)) {}
+                                   tools, preferences, ui, dev_tools)) {}
 #else
 QuaderCommandsApi::QuaderCommandsApi(QuaderApi &api,
                                      QuaderProjectApi &project,
                                      QuaderSceneDocumentsApi &scene_documents,
                                      QuaderViewportApi &viewports,
                                      QuaderToolsApi &tools,
-                                     QuaderPreferencesApi &preferences)
+                                     QuaderPreferencesApi &preferences,
+                                     QuaderUIApi &ui)
     : impl_(std::make_unique<Impl>(api, project, scene_documents, viewports,
-                                   tools, preferences)) {}
+                                   tools, preferences, ui)) {}
 #endif
 
 QuaderCommandsApi::~QuaderCommandsApi() = default;

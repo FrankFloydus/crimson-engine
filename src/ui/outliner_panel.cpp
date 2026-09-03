@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/outliner_panel.hpp"
 
+#include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "diagnostics/profile.hpp"
@@ -45,6 +46,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -114,6 +116,15 @@ Qt::CheckState qt_check_state(OutlinerPropertyState state) {
 
 QString qt_text(std::string_view text) {
   return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+}
+
+QString with_shortcut(QString label, std::string_view shortcut) {
+  if (shortcut.empty()) {
+    return label;
+  }
+  label.append(QLatin1Char('\t'));
+  label.append(qt_text(shortcut));
+  return label;
 }
 
 EntityId entity_id(const QModelIndex &index) {
@@ -188,18 +199,16 @@ void group_selection(QuaderEditorApi &editor, const SceneDocument &document,
   }
 }
 
-void ungroup_entity(QuaderEditorApi &editor, const SceneDocument &document,
-                    EntityId group, OutlinerRuntimeBindingToken binding) {
-  if (!document.exists(group) || document.kind(group) != EntityKind::Empty ||
-      !document.has_children(group)) {
+void ungroup_selection(QuaderEditorApi &editor, const SceneDocument &document,
+                       OutlinerRuntimeBindingToken binding) {
+  const std::vector<EntityId> roots =
+      document_command_selected_root_entities(document);
+  const bool has_group = std::ranges::any_of(roots, [&](EntityId entity) {
+    return document.kind(entity) == EntityKind::Empty &&
+           document.has_children(entity);
+  });
+  if (!has_group) {
     return;
-  }
-
-  if (!contains_entity(document.selected_entities(), group)) {
-    (void)select_only(editor, {group}, group);
-    if (!binding.current()) {
-      return;
-    }
   }
   const QuaderApiVoidResult result =
       editor.commands().execute(quader_command::kUngroupSelection);
@@ -1034,10 +1043,16 @@ private:
     {
       QDR_PROFILE_SCOPE("Qt outliner context menu query state");
       refresh_model_if_needed();
-      if (!contains_entity(document_->selected_entities(), entity)) {
+      const std::vector<EntityId> selected = document_->selected_entities();
+      if (!contains_entity(selected, entity) ||
+          document_->primary_selection() != entity) {
         const std::uint64_t selection_generation =
             runtime_binding_generation_;
-        (void)select_only(*editor_, {entity}, entity);
+        (void)select_only(*editor_,
+                          contains_entity(selected, entity)
+                              ? selected
+                              : std::vector<EntityId>{entity},
+                          entity);
         if (runtime_binding_generation_ != selection_generation) {
           return;
         }
@@ -1049,14 +1064,41 @@ private:
       return;
     }
 
-    const bool can_mutate_hierarchy =
-        !entity_record->is_scene_root && !entity_record->effectively_locked;
-    const bool can_ungroup = can_mutate_hierarchy &&
-                             entity_record->kind == EntityKind::Empty &&
-                             entity_record->has_children;
+    const std::vector<EntityId> selected_entities =
+        document_->selected_entities();
+    const std::uint64_t menu_selection_revision =
+        document_->selection_revision();
+    std::vector<EntityId> selected_objects;
+    selected_objects.reserve(selected_entities.size());
+    bool all_selected_visible = true;
+    bool all_selected_locked = true;
+    for (const EntityId selected : selected_entities) {
+      const EntityRecord *selected_record = record(selected);
+      if (selected_record == nullptr || selected_record->is_scene_root) {
+        continue;
+      }
+      selected_objects.push_back(selected);
+      all_selected_visible =
+          all_selected_visible && selected_record->visible;
+      all_selected_locked = all_selected_locked && selected_record->locked;
+    }
+
+    const std::vector<EntityId> mutable_roots =
+        document_command_selected_root_entities(*document_);
+    const bool has_mutable_roots = !mutable_roots.empty();
+    const bool can_ungroup = std::ranges::any_of(
+        mutable_roots, [this](EntityId selected) {
+          const EntityRecord *selected_record = record(selected);
+          return selected_record != nullptr &&
+                 selected_record->kind == EntityKind::Empty &&
+                 selected_record->has_children;
+        });
 
     QMenu menu(tree_);
     QAction *rename_action = nullptr;
+    QAction *focus_action = nullptr;
+    QAction *visibility_action = nullptr;
+    QAction *lock_action = nullptr;
     QAction *delete_action = nullptr;
     QAction *duplicate_action = nullptr;
     QAction *group_action = nullptr;
@@ -1064,33 +1106,85 @@ private:
     {
       QDR_PROFILE_SCOPE("Qt outliner context menu build");
       menu.setObjectName(QStringLiteral("outliner.context_menu"));
+      menu.setToolTipsVisible(true);
+
+      const auto add_command_action =
+          [this, &menu](std::string_view localization_key,
+                        std::string_view fallback, QuaderCommandId command_id,
+                        std::string_view object_name, bool context_enabled,
+                        bool respect_command_availability = true) {
+            const std::optional<QuaderCommandDescriptor> descriptor =
+                editor_->commands().descriptor(command_id);
+            const std::string shortcut =
+                descriptor.has_value()
+                    ? descriptor->shortcut
+                    : editor_->commands().shortcut_for(command_id);
+            QAction *action = menu.addAction(with_shortcut(
+                localized(localization_key, fallback), shortcut));
+            action->setObjectName(qt_text(object_name));
+            action->setEnabled(
+                context_enabled && descriptor.has_value() &&
+                (!respect_command_availability || descriptor->enabled));
+            return action;
+          };
+
       rename_action =
           menu.addAction(localized("ui.outliner.rename", "Rename"));
       rename_action->setObjectName(QStringLiteral("outliner.action.rename"));
       rename_action->setEnabled(!entity_record->is_scene_root);
+
+      focus_action = add_command_action(
+          "ui.outliner.focus_selection", "Focus Selected Objects",
+          quader_command::kViewportFrameSelection,
+          "outliner.action.focus_selection", !selected_objects.empty());
       menu.addSeparator();
 
-      delete_action =
-          menu.addAction(localized("ui.outliner.delete", "Delete"));
-      delete_action->setObjectName(QStringLiteral("outliner.action.delete"));
-      delete_action->setEnabled(can_mutate_hierarchy);
+      const bool show_selected = !all_selected_visible;
+      if (show_selected) {
+        visibility_action = menu.addAction(localized(
+            "ui.outliner.show_selected", "Show Selected Objects"));
+        visibility_action->setObjectName(
+            QStringLiteral("outliner.action.show_selected"));
+        visibility_action->setEnabled(!selected_objects.empty());
+      } else {
+        visibility_action = add_command_action(
+            "ui.outliner.hide_selected", "Hide Selected Objects",
+            quader_command::kSceneHideSelection,
+            "outliner.action.hide_selected", !selected_objects.empty());
+      }
 
-      duplicate_action =
-          menu.addAction(localized("ui.outliner.duplicate", "Duplicate"));
-      duplicate_action->setObjectName(
-          QStringLiteral("outliner.action.duplicate"));
-      duplicate_action->setEnabled(can_mutate_hierarchy);
+      const bool lock_selected = !all_selected_locked;
+      lock_action = menu.addAction(localized(
+          lock_selected ? "ui.outliner.lock_selected"
+                        : "ui.outliner.unlock_selected",
+          lock_selected ? "Lock Selected Objects"
+                        : "Unlock Selected Objects"));
+      lock_action->setObjectName(
+          lock_selected ? QStringLiteral("outliner.action.lock_selected")
+                        : QStringLiteral("outliner.action.unlock_selected"));
+      lock_action->setEnabled(!selected_objects.empty());
+      menu.addSeparator();
 
-      group_action =
-          menu.addAction(localized("ui.outliner.group", "Group"));
-      group_action->setObjectName(QStringLiteral("outliner.action.group"));
-      group_action->setEnabled(can_mutate_hierarchy);
+      duplicate_action = add_command_action(
+          "ui.outliner.duplicate", "Duplicate Selected Objects",
+          quader_command::kDuplicateSelection, "outliner.action.duplicate",
+          has_mutable_roots);
 
-      ungroup_action =
-          menu.addAction(localized("ui.outliner.ungroup", "Ungroup"));
-      ungroup_action->setObjectName(
-          QStringLiteral("outliner.action.ungroup"));
-      ungroup_action->setEnabled(can_ungroup);
+      group_action = add_command_action(
+          "ui.outliner.group", "Group Selected Objects",
+          quader_command::kGroupSelection, "outliner.action.group",
+          has_mutable_roots);
+
+      ungroup_action = add_command_action(
+          "ui.outliner.ungroup", "Ungroup Selected Groups",
+          quader_command::kUngroupSelection, "outliner.action.ungroup",
+          can_ungroup);
+      menu.addSeparator();
+
+      delete_action = add_command_action(
+          "ui.outliner.delete", "Delete Selected Objects",
+          quader_command::kDeleteSelection, "outliner.action.delete",
+          has_mutable_roots, false);
     }
 
     const std::uint64_t menu_generation = runtime_binding_generation_;
@@ -1102,6 +1196,11 @@ private:
     if (runtime_binding_generation_ != menu_generation) {
       return;
     }
+    if (document_->selection_revision() != menu_selection_revision) {
+      refresh_model_if_needed();
+      sync_selection();
+      return;
+    }
     const OutlinerRuntimeBindingToken binding{
         .generation = &runtime_binding_generation_,
         .expected = menu_generation,
@@ -1111,6 +1210,43 @@ private:
       if (chosen == rename_action) {
         begin_rename(entity);
         return;
+      } else if (chosen == focus_action) {
+        (void)editor_->commands().execute(
+            quader_command::kViewportFrameSelection);
+      } else if (chosen == visibility_action) {
+        if (all_selected_visible) {
+          (void)editor_->commands().execute(
+              quader_command::kSceneHideSelection);
+        } else {
+          std::vector<QuaderSceneVisibilityEdit> edits;
+          edits.reserve(selected_objects.size());
+          for (const EntityId selected : selected_objects) {
+            const VisibilityComponent *visibility =
+                document_->visibility(selected);
+            if (visibility != nullptr && !visibility->visible) {
+              edits.push_back({
+                  .entity = selected,
+                  .before = false,
+                  .after = true,
+              });
+            }
+          }
+          (void)editor_->scene().set_visibility(edits);
+        }
+      } else if (chosen == lock_action) {
+        std::vector<QuaderSceneLockEdit> edits;
+        edits.reserve(selected_objects.size());
+        for (const EntityId selected : selected_objects) {
+          const LockComponent *lock = document_->lock(selected);
+          if (lock != nullptr && lock->locked != !all_selected_locked) {
+            edits.push_back({
+                .entity = selected,
+                .before = lock->locked,
+                .after = !all_selected_locked,
+            });
+          }
+        }
+        (void)editor_->scene().set_locks(edits);
       } else if (chosen == delete_action) {
         delete_selection(*editor_, *document_, binding);
       } else if (chosen == duplicate_action) {
@@ -1118,7 +1254,7 @@ private:
       } else if (chosen == group_action) {
         group_selection(*editor_, *document_, binding);
       } else if (chosen == ungroup_action) {
-        ungroup_entity(*editor_, *document_, entity, binding);
+        ungroup_selection(*editor_, *document_, binding);
       }
     }
 

@@ -153,10 +153,9 @@ bool QtNavigationGizmoInteraction::press(
   dragging_ = true;
   drag_started_ = false;
   pane_id_ = pane_id;
+  press_position_ = local_position;
   accumulated_drag_ = {};
   pressed_hit_ = hit;
-  camera.unlock_orthographic_view();
-  camera.begin_drag(local_position, ViewportDragMode::Orbit);
   return true;
 }
 
@@ -169,13 +168,25 @@ bool QtNavigationGizmoInteraction::drag(ViewportCameraController &camera,
   const float accumulated_length_squared =
       accumulated_drag_.x * accumulated_drag_.x +
       accumulated_drag_.y * accumulated_drag_.y;
-  if (accumulated_length_squared > kDragThresholdSquared) {
+  const bool drag_started_this_update =
+      !drag_started_ && accumulated_length_squared > kDragThresholdSquared;
+  if (drag_started_this_update) {
     drag_started_ = true;
+    // A press is only pointer capture. Commit projection conversion and the
+    // camera drag together once the user's motion clears the threshold so a
+    // click or canceled press remains camera-neutral.
+    camera.unlock_orthographic_view();
+    camera.begin_drag(press_position_, ViewportDragMode::Orbit);
   }
+  // The threshold is classification, not a dead zone. Apply the full motion
+  // since press on the crossing update so identical pointer endpoints produce
+  // identical orbit regardless of how Qt chunks its move events.
+  const QVec2 camera_delta =
+      drag_started_this_update ? accumulated_drag_ : delta;
   const float delta_length_squared =
-      delta.x * delta.x + delta.y * delta.y;
+      camera_delta.x * camera_delta.x + camera_delta.y * camera_delta.y;
   if (drag_started_ && delta_length_squared > 0.000001f) {
-    camera.update_drag_delta(delta);
+    camera.update_drag_delta(camera_delta);
   }
   return true;
 }
@@ -190,9 +201,12 @@ bool QtNavigationGizmoInteraction::release(ViewportCameraController &camera,
     camera.view_axis(viewport_axis(pressed_hit_.axis), pressed_hit_.sign,
                      ViewportAxisLock::Unlocked);
   }
-  camera.end_drag();
+  if (drag_started_) {
+    camera.end_drag();
+  }
   dragging_ = false;
   drag_started_ = false;
+  press_position_ = {};
   accumulated_drag_ = {};
   pressed_hit_ = {};
   return true;
@@ -203,9 +217,12 @@ void QtNavigationGizmoInteraction::cancel(
   if (!dragging_) {
     return;
   }
-  camera.end_drag();
+  if (drag_started_) {
+    camera.end_drag();
+  }
   dragging_ = false;
   drag_started_ = false;
+  press_position_ = {};
   accumulated_drag_ = {};
   pressed_hit_ = {};
 }
@@ -214,6 +231,7 @@ void QtNavigationGizmoInteraction::abandon() {
   dragging_ = false;
   drag_started_ = false;
   pane_id_ = ViewportPaneId::Perspective;
+  press_position_ = {};
   accumulated_drag_ = {};
   pressed_hit_ = {};
 }
@@ -290,6 +308,17 @@ bool QtNavigationGizmo::take_interaction_activity() {
   const bool activity = interaction_activity_;
   interaction_activity_ = false;
   return activity;
+}
+
+bool QtNavigationGizmo::event(QEvent *event) {
+  if (event != nullptr &&
+      (event->type() == QEvent::UngrabMouse ||
+       event->type() == QEvent::WindowDeactivate)) {
+    // Windows can revoke capture without delivering the matching release.
+    // Clear the retained gesture immediately so it cannot lock viewport input.
+    finish_interaction(true);
+  }
+  return QFrame::event(event);
 }
 
 void QtNavigationGizmo::paintEvent(QPaintEvent *event) {
@@ -428,9 +457,8 @@ void QtNavigationGizmo::mouseMoveEvent(QMouseEvent *event) {
   }
 
   const QPointF logical_delta = event->position() - last_pointer_position_;
-  const qreal scale = std::max<qreal>(devicePixelRatioF(), 1.0);
-  const QVec2 delta{static_cast<float>(logical_delta.x() * scale),
-                    static_cast<float>(logical_delta.y() * scale)};
+  const QVec2 delta{static_cast<float>(logical_delta.x()),
+                    static_cast<float>(logical_delta.y())};
   last_pointer_position_ = event->position();
   (void)interaction_.drag(*camera_, pane_id_, delta);
   camera_snapshot_ = qt_navigation_gizmo_camera_snapshot(camera_);

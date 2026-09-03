@@ -450,6 +450,7 @@ void QtViewportPanel::shutdown() {
   interaction_editor_ = nullptr;
   interaction_native_tools_ = nullptr;
   active_tool_revision_valid_ = false;
+  cancel_navigation();
   if (render_system_ == nullptr) {
     return;
   }
@@ -466,7 +467,6 @@ void QtViewportPanel::shutdown() {
       pane_state.surface->shutdown();
     }
   }
-  input_router_.reset();
   hide_fly_navigation_huds();
   focused_pane_frame_->hide();
   for (SplitHandleHost &handle : split_handles_) {
@@ -511,6 +511,11 @@ void QtViewportPanel::abandon_interactions() {
   ++runtime_binding_generation_;
   interaction_editor_ = nullptr;
   interaction_native_tools_ = nullptr;
+  // The previous scene may already have been destroyed by a synchronous
+  // project rebind, so this owner-free path must not dereference workspace_.
+  // A normal layout/workspace transition cancels the live camera first.
+  navigation_camera_owner_.reset();
+  input_router_.reset();
   workspace_ = nullptr;
   persisted_camera_signature_valid_ = false;
   active_tool_revision_valid_ = false;
@@ -529,7 +534,6 @@ void QtViewportPanel::abandon_interactions() {
     }
   }
   split_handle_dragging_ = false;
-  input_router_.reset();
   interaction_controller_.reset();
   interaction_controller_.clear_modal_tool_state();
   active_box_preview_ = {};
@@ -545,6 +549,7 @@ void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
   interaction_controller_.cancel_pending_material_interaction();
   interaction_controller_.cancel_pending_selection_click();
   if (workspace_ != &workspace) {
+    cancel_navigation();
     if (interaction_native_tools_ != nullptr) {
       interaction_controller_.reset(interaction_editor_,
                                     *interaction_native_tools_);
@@ -630,6 +635,13 @@ void QtViewportPanel::refresh_workspace_layout() {
   }
   const std::vector<ViewportPanePlacement> placements =
       workspace_->active_pane_placements();
+  if (navigation_camera_owner_.has_value() &&
+      std::none_of(placements.begin(), placements.end(),
+                   [&](const ViewportPanePlacement &placement) {
+                     return placement.pane_id == *navigation_camera_owner_;
+                   })) {
+    cancel_navigation();
+  }
   const bool geometry_changed =
       !same_pane_placements(displayed_placements_, placements);
   displayed_layout_ = workspace_->layout();
@@ -1757,6 +1769,23 @@ bool QtViewportPanel::pane_interaction_locked() const {
   });
 }
 
+void QtViewportPanel::cancel_navigation() {
+  if (input_router_.navigating() && workspace_ != nullptr) {
+    const ViewportPaneId owner =
+        navigation_camera_owner_.value_or(interaction_pane_id_);
+    workspace_->camera(owner).end_drag();
+    Pane &owner_pane = pane(owner);
+    if (owner_pane.surface != nullptr) {
+      owner_pane.surface->set_pointer_capture(false);
+      owner_pane.surface->abandon_input();
+    }
+  }
+  input_router_.reset();
+  navigation_camera_owner_.reset();
+  hide_fly_navigation_huds();
+  last_fly_navigation_active_ = false;
+}
+
 void QtViewportPanel::set_modal_tool_owns_viewport_snapshot(
     bool owns_viewport) {
   modal_tool_owns_viewport_snapshot_ = owns_viewport;
@@ -2104,6 +2133,24 @@ void QtViewportPanel::process_viewport_input(
   const float delta_seconds = static_cast<float>(
       std::clamp(frame_delta_seconds, 0.0, 0.1));
 
+  const std::vector<ViewportPanePlacement> active_placements =
+      workspace_->active_pane_placements();
+  if (input_router_.navigating()) {
+    if (!navigation_camera_owner_.has_value()) {
+      navigation_camera_owner_ = interaction_pane_id_;
+    }
+    const bool owner_is_active =
+        std::any_of(active_placements.begin(), active_placements.end(),
+                    [&](const ViewportPanePlacement &placement) {
+                      return placement.pane_id == *navigation_camera_owner_;
+                    });
+    if (!owner_is_active) {
+      cancel_navigation();
+    } else {
+      interaction_pane_id_ = *navigation_camera_owner_;
+    }
+  }
+
   const ModelingToolStatus current_tool_status = modeling.tool_status();
   const bool modal_dragging = current_tool_status.insert_edge_loop_dragging ||
                               current_tool_status.cut_dragging ||
@@ -2141,8 +2188,6 @@ void QtViewportPanel::process_viewport_input(
   }
 
   std::vector<ViewportPaneInputCandidate> pane_candidates;
-  const std::vector<ViewportPanePlacement> active_placements =
-      workspace_->active_pane_placements();
   pane_candidates.reserve(active_placements.size());
   for (const ViewportPanePlacement &placement : active_placements) {
     const QtViewportInputFrame &candidate =
@@ -2244,6 +2289,9 @@ void QtViewportPanel::process_viewport_input(
        passive_curve_controls_available);
   input.grid_preset = workspace_->grid_preset();
   ViewportCameraController &camera = workspace_->camera(*input_pane);
+  // Orbit/pan depth sampling happens before the router's normal camera sync.
+  // Keep the press-time ray correct on the first frame after a pane resize.
+  camera.set_viewport_size(input.viewport_size.x, input.viewport_size.y);
   input.orthographic_view =
       camera.state().projection == ViewportProjection::Orthographic;
   const bool keybinding_edge_can_change_tool =
@@ -2288,7 +2336,152 @@ void QtViewportPanel::process_viewport_input(
                                           input.modal_tool_active);
   }
 
+  // Navigation samples scene depth once, at gesture start. The render-visible
+  // surface under the exact press wins so an occluded distant selection cannot
+  // inflate the orbit or pan radius; an on-screen selection remains the stable
+  // fallback when the pointer is over empty space. Keep the snapshot lazy and
+  // share it with later interaction picking.
+  const ViewportLocalVisibilitySnapshot local_visibility =
+      workspace_->local_visibility_snapshot();
+  std::optional<SceneSurfaceQuerySnapshot> scene_surfaces;
+  const auto ensure_scene_surfaces = [&]()
+      -> const SceneSurfaceQuerySnapshot * {
+    if (point_placement == nullptr) {
+      return nullptr;
+    }
+    if (!scene_surfaces.has_value()) {
+      scene_surfaces = point_placement->surface_snapshot(document, assets);
+    }
+    return &(*scene_surfaces);
+  };
+  const auto surface_navigation_anchor =
+      [&](QVec2 local_position) -> std::optional<QVec3> {
+    const SceneSurfaceQuerySnapshot *surfaces = ensure_scene_surfaces();
+    if (surfaces == nullptr) {
+      return std::nullopt;
+    }
+    const ViewportRay ray = camera.ray_from_viewport_point(local_position);
+    const std::optional<SceneSurfaceHit> hit = surfaces->nearest_hit({
+        .world_origin = ray.origin,
+        .world_direction = ray.direction,
+        .include_backfaces = false,
+        .eligibility = SceneSurfaceEligibility::RenderVisible,
+    });
+    return hit.has_value() ? std::optional<QVec3>{hit->world_position}
+                           : std::nullopt;
+  };
+  const auto visible_selection_anchor =
+      [&](QVec2 local_position) -> std::optional<QVec3> {
+    const std::vector<EntityId> selected_entities =
+        document.selected_entities();
+    if (selected_entities.empty() ||
+        !std::all_of(selected_entities.begin(), selected_entities.end(),
+                     [&](EntityId entity) {
+                       return document.is_effectively_visible(entity) &&
+                              local_visibility.allows(
+                                  static_cast<
+                                      ViewportLocalVisibilityEntityId>(entity));
+                     })) {
+      return std::nullopt;
+    }
+    const std::optional<QVec3> center = editor.query().selection_center();
+    if (!center.has_value()) {
+      return std::nullopt;
+    }
+    const ViewportScreenPoint projected = camera.project_world_point(*center);
+    if (!projected.visible || !std::isfinite(projected.position.x) ||
+        !std::isfinite(projected.position.y) || projected.position.x < 0.0f ||
+        projected.position.y < 0.0f ||
+        projected.position.x > input.viewport_size.x ||
+        projected.position.y > input.viewport_size.y) {
+      return std::nullopt;
+    }
+    constexpr float kSelectionAnchorLogicalRadius = 64.0f;
+    const float device_scale =
+        std::isfinite(input.device_pixel_ratio) &&
+                input.device_pixel_ratio > 0.0f
+            ? input.device_pixel_ratio
+            : 1.0f;
+    const float maximum_distance =
+        kSelectionAnchorLogicalRadius * device_scale;
+    const QVec2 pointer_offset = projected.position - local_position;
+    if (pointer_offset.x * pointer_offset.x +
+            pointer_offset.y * pointer_offset.y >
+        maximum_distance * maximum_distance) {
+      return std::nullopt;
+    }
+    return center;
+  };
+  const auto scene_depth_navigation_anchor = [&]() -> std::optional<QVec3> {
+    const std::optional<ViewportFocusBounds> bounds =
+        ViewportSceneProjection::world_bounds(document, assets,
+                                              local_visibility);
+    if (!bounds.has_value()) {
+      return std::nullopt;
+    }
+    const QVec3 center = (bounds->min + bounds->max) * 0.5f;
+    const ViewportCameraPose camera_pose = camera.pose();
+    const QVec3 forward =
+        normalize(camera_pose.target - camera_pose.eye);
+    const float depth = dot(center - camera_pose.eye, forward);
+    if (!std::isfinite(depth) || depth <= 0.0001f) {
+      return std::nullopt;
+    }
+    return camera_pose.eye + forward * depth;
+  };
+  const ViewportNavigationPress navigation_press =
+      viewport_navigation_press(input.navigation_bindings);
+  const QVec2 navigation_press_local =
+      navigation_press.pointer_edge.has_value()
+          ? navigation_press.pointer_edge->local
+          : input.mouse_local;
+  if (navigation_press.action == ViewportInputActionKind::Orbit ||
+      navigation_press.action == ViewportInputActionKind::OrbitSnap) {
+    input.navigation_anchor =
+        surface_navigation_anchor(navigation_press_local);
+    if (!input.navigation_anchor.has_value()) {
+      input.navigation_anchor =
+          visible_selection_anchor(navigation_press_local);
+    }
+    if (!input.navigation_anchor.has_value()) {
+      input.navigation_anchor = scene_depth_navigation_anchor();
+      input.navigation_anchor_repair_only =
+          input.navigation_anchor.has_value();
+    }
+  } else if (navigation_press.action == ViewportInputActionKind::Pan) {
+    input.navigation_anchor = surface_navigation_anchor(navigation_press_local);
+    if (!input.navigation_anchor.has_value()) {
+      input.navigation_anchor =
+          visible_selection_anchor(navigation_press_local);
+    }
+    if (!input.navigation_anchor.has_value()) {
+      input.navigation_anchor = scene_depth_navigation_anchor();
+      input.navigation_anchor_repair_only =
+          input.navigation_anchor.has_value();
+    }
+  } else if (!input.fly_navigation_active &&
+             (input.mouse_wheel != 0.0f ||
+              !input.navigation_bindings.wheel_events.empty()) &&
+             (input.navigation_bindings.zoom_wheel ||
+              input.navigation_bindings.zoom_to_cursor_wheel)) {
+    if (input.navigation_bindings.zoom_to_cursor_wheel) {
+      input.navigation_anchor = surface_navigation_anchor(input.mouse_local);
+      if (!input.navigation_anchor.has_value()) {
+        input.navigation_anchor = visible_selection_anchor(input.mouse_local);
+      }
+    }
+    if (!input.navigation_anchor.has_value()) {
+      input.navigation_anchor = scene_depth_navigation_anchor();
+    }
+  }
+
+  const bool navigation_was_active = input_router_.navigating();
   const ViewportInputResult result = input_router_.handle_frame(input, camera);
+  if (!navigation_was_active && input_router_.navigating()) {
+    navigation_camera_owner_ = *input_pane;
+  } else if (navigation_was_active && !input_router_.navigating()) {
+    navigation_camera_owner_.reset();
+  }
   for (Pane &candidate : panes_) {
     if (candidate.id != *input_pane) {
       candidate.fly_navigation_hud->hide();
@@ -2415,8 +2608,6 @@ void QtViewportPanel::process_viewport_input(
                                   ViewportBoolSettingId::ShowGizmos) &&
       viewport_shading_shows_light_gizmos(
           workspace_->shading_mode(*input_pane));
-  const ViewportLocalVisibilitySnapshot local_visibility =
-      workspace_->local_visibility_snapshot();
   std::span<const ViewportSceneBillboardPickCandidate> billboards;
   if (point_lights_pickable) {
     const std::uint64_t scene_revision = document.revision();
@@ -2439,7 +2630,6 @@ void QtViewportPanel::process_viewport_input(
     }
     billboards = point_light_pick_cached_candidates_;
   }
-  std::optional<SceneSurfaceQuerySnapshot> scene_surfaces;
   ViewportInteractionFrame interaction_frame{
       .input_router = input_router_,
       .camera = camera,
@@ -2508,8 +2698,7 @@ void QtViewportPanel::process_viewport_input(
        sample.left_pressed || sample.left_down || sample.left_released ||
        pending_context_menu_click || !input.curve_conversion_edges.empty());
   if (scene_surface_pick_requested) {
-    scene_surfaces = point_placement->surface_snapshot(document, assets);
-    interaction_frame.scene_surfaces = &(*scene_surfaces);
+    interaction_frame.scene_surfaces = ensure_scene_surfaces();
   }
   interaction_frame.scene_mesh_snap_query =
       [&editor](const ViewportRay &ray, double vertex_radius,
@@ -2924,8 +3113,7 @@ void QtViewportPanel::process_viewport_input(
   bool show_context_menu = false;
   QPoint context_menu_global_point;
   QuaderActionSet context_menu_action_set;
-  QuaderSelectionMode context_menu_selection_mode =
-      QuaderSelectionMode::Object;
+  QuaderSelectionSummary context_menu_selection;
   std::optional<ProjectAssetId> context_menu_material_under_mouse;
   const bool selection_fallback_active =
       interaction_controller_.active_tool_allows_selection_fallback(
@@ -2964,13 +3152,12 @@ void QtViewportPanel::process_viewport_input(
         context_menu_material_under_mouse = material.value().id;
       }
     }
-    const QuaderSelectionSummary summary =
+    context_menu_selection =
         interaction_controller_.pick_context_menu_target(editor,
                                                          context_frame);
     if (runtime_binding_generation_ != input_binding_generation) {
       return;
     }
-    context_menu_selection_mode = summary.mode;
     const QuaderActionQuery query{
         .surface = QuaderActionSurface::ViewportContextMenu,
         .modal_tool_owns_viewport = modal_tool_owns_viewport(),
@@ -2989,16 +3176,17 @@ void QtViewportPanel::process_viewport_input(
               });
         });
     pending_context_menu_request.target_hit =
-        summary.has_selection || context_menu_material_under_mouse.has_value();
+        context_menu_selection.has_selection ||
+        context_menu_material_under_mouse.has_value();
     // Cut/Copy/Paste remain useful target-independent context actions. Keeping
     // this explicit also lets Paste open from an empty viewport.
     pending_context_menu_request.has_target_independent_actions = true;
     pending_context_menu_request.has_actions =
         viewport_context_menu_has_available_actions(
             has_modeling_actions,
-            summary.mode == QuaderSelectionMode::Object ||
-                summary.mode == QuaderSelectionMode::Group,
-            summary.has_selection,
+            context_menu_selection.mode == QuaderSelectionMode::Object ||
+                context_menu_selection.mode == QuaderSelectionMode::Group,
+            context_menu_selection.has_selection,
             context_menu_material_under_mouse.has_value(), true);
     show_context_menu =
         should_open_viewport_context_menu(pending_context_menu_request) &&
@@ -3030,7 +3218,8 @@ void QtViewportPanel::process_viewport_input(
     context_menu_presenter_.show(
         *pane_state.surface_container, context_menu_global_point, editor,
         input_router_, *localization_, context_menu_action_set,
-        context_menu_selection_mode, context_menu_material_under_mouse,
+        context_menu_selection, pending_context_menu_request.target_hit,
+        context_menu_material_under_mouse,
         open_material_editor_callback_,
         {.current_generation = &runtime_binding_generation_,
          .expected_generation = input_binding_generation});

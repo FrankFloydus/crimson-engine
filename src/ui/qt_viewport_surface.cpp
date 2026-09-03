@@ -127,6 +127,7 @@ struct QtViewportSurface::InputAccumulator {
   std::vector<ViewportPointerButtonEdge> pointer_released_edges;
   std::vector<ViewportPointerButtonEdge> pointer_drag_started_edges;
   std::vector<QuaderWheelInputEdge> wheel;
+  QtWheelInputAccumulator wheel_accumulator;
   std::unordered_map<int, QuaderInputChord> active_keys;
   std::unordered_set<int> abandoned_key_releases;
   std::unordered_set<int> abandoned_pointer_releases;
@@ -188,6 +189,9 @@ bool QtViewportSurface::initialize(RenderSystem &render_system,
 }
 
 void QtViewportSurface::shutdown() {
+  if (input_ != nullptr) {
+    input_->wheel_accumulator = {};
+  }
   if (!initialized_) {
     return;
   }
@@ -300,6 +304,8 @@ QtViewportSurface::take_input_frame(float delta_seconds,
                                 : input_->mouse_delta;
   frame.input.mouse_local = input_->mouse_local;
   frame.input.viewport_size = render_size_pixels();
+  frame.input.device_pixel_ratio =
+      static_cast<float>(std::max<qreal>(devicePixelRatio(), 0.01));
   frame.input.modifiers = input_->modifiers;
   frame.input.pressed_input_chords = std::move(input_->pressed);
   frame.input.released_input_chords = std::move(input_->released);
@@ -536,6 +542,32 @@ bool QtViewportSurface::event(QEvent *event) {
     if (event->type() == QEvent::WinIdChange) {
       recreate_swap_chain(true);
     }
+    if (event->type() == QEvent::DevicePixelRatioChange ||
+        event->type() == QEvent::ScreenChangeInternal) {
+      // Physical local coordinates change units with the screen DPR. Rebase
+      // the accumulator at the current cursor so the next MMB event cannot
+      // turn that unit change into a screen-sized navigation delta.
+      const QPoint global = QCursor::pos();
+      const QPoint local = mapFromGlobal(global);
+      const qreal scale = devicePixelRatio();
+      input_->mouse_local = {
+          static_cast<float>(local.x() * scale),
+          static_cast<float>(local.y() * scale),
+      };
+      input_->mouse_screen = {
+          static_cast<float>(global.x() * scale),
+          static_cast<float>(global.y() * scale),
+      };
+      input_->mouse_delta = {};
+      input_->has_mouse_position = true;
+      // Queued edge coordinates were sampled in the previous DPR units. Do
+      // not let a delayed press/release subtraction mix those units with the
+      // newly rebased pointer. Held navigation resumes from the next motion.
+      input_->pointer_pressed_edges.clear();
+      input_->pointer_released_edges.clear();
+      input_->pointer_drag_started_edges.clear();
+      relative_pointer_input_.clear();
+    }
     synchronize_render_size();
   } else if (event != nullptr && event->type() == QEvent::Enter) {
     const auto *enter_event = static_cast<QEnterEvent *>(event);
@@ -700,6 +732,7 @@ void QtViewportSurface::record_focus_in() { input_->focused = true; }
 
 void QtViewportSurface::record_focus_out() {
   input_->focused = false;
+  input_->wheel_accumulator = {};
   input_->pointer_interaction_canceled =
       input_->pointer_interaction_canceled || input_->left_down ||
       input_->middle_down || input_->right_down ||
@@ -993,28 +1026,56 @@ void QtViewportSurface::record_native_pointer_capture_lost() {
     return;
   }
   const bool capture_was_stolen = native_capture_loss_pending_;
+  if (capture_was_stolen) {
+    input_->wheel_accumulator = {};
+  }
   input_->pointer_interaction_canceled =
       input_->pointer_interaction_canceled ||
       (capture_was_stolen && (input_->left_down || input_->middle_down ||
                              input_->right_down ||
                              !input_->click_candidates.empty()));
   set_pointer_capture(false);
-  if (input_->right_drag.has_value()) {
-    input_->released.push_back(*input_->right_drag);
-    input_->right_drag.reset();
-  }
   // Capture theft cancels fly navigation, but it is not a physical button-up
   // and must not synthesize a click that can open the viewport context menu.
   if (capture_was_stolen) {
-    for (const auto &[button, candidate] : input_->click_candidates) {
-      (void)candidate;
-      input_->pointer_released_edges.push_back({
-          .button = static_cast<QuaderMouseButton>(button),
-          .local = input_->mouse_local,
-      });
+    if (input_->middle_drag.has_value()) {
+      input_->released.push_back(*input_->middle_drag);
     }
-    input_->right_down = false;
+    if (input_->right_drag.has_value()) {
+      input_->released.push_back(*input_->right_drag);
+    }
+    input_->middle_drag.reset();
+    input_->right_drag.reset();
+
+    const auto release_button_state =
+        [&](QuaderMouseButton button, bool &down, bool &released) {
+      const int button_id = static_cast<int>(button);
+      if (!down && !input_->click_candidates.contains(button_id)) {
+        return;
+      }
+      // The eventual native button-up belongs to the canceled owner. Record
+      // one semantic endpoint now, then suppress that trailing physical edge.
+      input_->abandoned_pointer_releases.insert(button_id);
+      input_->pointer_released_edges.push_back({
+          .button = button,
+          .local = input_->mouse_local,
+          .sequence = ++input_->pointer_event_sequence,
+      });
+      released = released || down;
+      down = false;
+    };
+    release_button_state(QuaderMouseButton::Left, input_->left_down,
+                         input_->left_released);
+    release_button_state(QuaderMouseButton::Middle, input_->middle_down,
+                         input_->middle_released);
+    release_button_state(QuaderMouseButton::Right, input_->right_down,
+                         input_->right_released);
+
+    input_->left_pressed = false;
+    input_->middle_pressed = false;
+    input_->right_pressed = false;
     input_->click_candidates.clear();
+    relative_pointer_input_.clear();
   }
 }
 
@@ -1074,7 +1135,8 @@ void QtViewportSurface::record_wheel(QWheelEvent &event) {
   input_->hovered = true;
   input_->modifiers = viewport_modifiers(event.modifiers());
   const QtWheelInputTranslation translation =
-      quader_wheel_input_from_qt_event(event);
+      quader_wheel_input_from_qt_event(
+          event, input_->wheel_accumulator, static_cast<double>(scale));
   input_->mouse_wheel += translation.mouse_wheel;
   input_->wheel.insert(input_->wheel.end(), translation.wheel_input_edges.begin(),
                        translation.wheel_input_edges.end());

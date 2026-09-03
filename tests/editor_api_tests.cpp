@@ -17,6 +17,7 @@
 #include "support/command_observable_state.hpp"
 #include "ui/viewport_shortcut_controller.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
+#include "viewport/viewport_input_router.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
@@ -1747,6 +1748,8 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   bool gizmos_visible = true;
   bool mesh_grid_visible = true;
   bool overlays_visible = true;
+  bool viewport_info_visible = true;
+  bool navigation_gizmo_visible = true;
   bool grid_snap_enabled = true;
   bool vertex_snap_enabled = true;
   bool rotation_snap_enabled = true;
@@ -1831,6 +1834,20 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
             rotation_snap_degrees = degrees;
             return runtime_result(changed);
           },
+      .viewport_info_visible = [&]() { return viewport_info_visible; },
+      .set_viewport_info_visible =
+          [&](bool visible) {
+            const bool changed = viewport_info_visible != visible;
+            viewport_info_visible = visible;
+            return runtime_result(changed);
+          },
+      .navigation_gizmo_visible = [&]() { return navigation_gizmo_visible; },
+      .set_navigation_gizmo_visible =
+          [&](bool visible) {
+            const bool changed = navigation_gizmo_visible != visible;
+            navigation_gizmo_visible = visible;
+            return runtime_result(changed);
+          },
   });
 
   EXPECT_TRUE(editor.preferences().snapping_enabled());
@@ -1839,6 +1856,8 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_TRUE(editor.preferences().gizmos_visible());
   EXPECT_TRUE(editor.preferences().mesh_grid_visible());
   EXPECT_TRUE(editor.preferences().overlays_visible());
+  EXPECT_TRUE(editor.preferences().viewport_info_visible());
+  EXPECT_TRUE(editor.preferences().navigation_gizmo_visible());
   EXPECT_TRUE(editor.preferences().grid_snap_enabled());
   EXPECT_TRUE(editor.preferences().vertex_snap_enabled());
   EXPECT_TRUE(editor.preferences().rotation_snap_enabled());
@@ -1852,6 +1871,9 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_TRUE(editor.preferences().set_gizmos_visible(false).changed());
   EXPECT_TRUE(editor.preferences().set_mesh_grid_visible(false).changed());
   EXPECT_TRUE(editor.preferences().set_overlays_visible(false).changed());
+  EXPECT_TRUE(editor.preferences().set_viewport_info_visible(false).changed());
+  EXPECT_TRUE(
+      editor.preferences().set_navigation_gizmo_visible(false).changed());
   EXPECT_TRUE(editor.preferences().set_grid_snap_enabled(false).changed());
   EXPECT_TRUE(editor.preferences().set_vertex_snap_enabled(false).changed());
   EXPECT_TRUE(editor.preferences().set_rotation_snap_enabled(false).changed());
@@ -1863,6 +1885,8 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_FALSE(editor.preferences().gizmos_visible());
   EXPECT_FALSE(editor.preferences().mesh_grid_visible());
   EXPECT_FALSE(editor.preferences().overlays_visible());
+  EXPECT_FALSE(editor.preferences().viewport_info_visible());
+  EXPECT_FALSE(editor.preferences().navigation_gizmo_visible());
   EXPECT_FALSE(editor.preferences().grid_snap_enabled());
   EXPECT_FALSE(editor.preferences().vertex_snap_enabled());
   EXPECT_FALSE(editor.preferences().rotation_snap_enabled());
@@ -1882,6 +1906,13 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
                   .execute(quader::quader_command::kViewportToggleOverlays)
                   .changed());
   EXPECT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kViewportToggleInfo)
+                  .changed());
+  EXPECT_TRUE(
+      editor.commands()
+          .execute(quader::quader_command::kViewportToggleNavigationGizmo)
+          .changed());
+  EXPECT_TRUE(editor.commands()
                   .execute(
                       quader::quader_command::kSelectToggleBackfaceSelection)
                   .changed());
@@ -1889,7 +1920,28 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_TRUE(editor.preferences().gizmos_visible());
   EXPECT_TRUE(editor.preferences().mesh_grid_visible());
   EXPECT_TRUE(editor.preferences().overlays_visible());
+  EXPECT_TRUE(editor.preferences().viewport_info_visible());
+  EXPECT_TRUE(editor.preferences().navigation_gizmo_visible());
   EXPECT_FALSE(editor.preferences().backface_selection_enabled());
+
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("viewport-display"))
+                  .ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  for (const quader::QuaderCommandId command : {
+           quader::quader_command::kViewportToggleInfo,
+           quader::quader_command::kViewportToggleNavigationGizmo,
+           quader::quader_command::kViewportLayoutThreePrimaryRight,
+           quader::quader_command::kViewportLayoutThreePrimaryLeft,
+           quader::quader_command::kViewportLayoutThreePrimaryBottom,
+           quader::quader_command::kViewportLayoutThreePrimaryTop,
+       }) {
+    const auto *entry = find_keybinding_catalog_entry(catalog, command.string());
+    ASSERT_NE(entry, nullptr);
+    EXPECT_TRUE(entry->default_shortcut.empty());
+    EXPECT_TRUE(entry->unassigned);
+  }
 }
 
 TEST(EditorApiTests, TextureLockPreferencesToggleIndependentlyAndRemainBindable) {
@@ -4859,6 +4911,174 @@ TEST(EditorApiTests, ViewportNavigationActionsUseMouseInputBindings) {
       *quader::quader_input_parse_chord("Alt+LeftMouseDrag"), state, true,
       false, action));
   EXPECT_EQ(action, quader::ViewportInputActionKind::Orbit);
+}
+
+TEST(EditorApiTests,
+     ViewportNavigationRetainsItsExactCoalescedPointerEdges) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("navigation-press-provenance"))
+                  .ok());
+
+  quader::ViewportInputFrame input;
+  input.viewport_focused = true;
+  input.pressed_input_chords = {
+      single_input_chord("MiddleMouse"),
+      single_input_chord("MiddleMouseDrag"),
+      single_input_chord("Mouse4"),
+  };
+  input.pointer_pressed_edges = {
+      {
+          .button = quader::QuaderMouseButton::Middle,
+          .local = {101.0f, 103.0f},
+          .sequence = 41u,
+      },
+      {
+          .button = quader::QuaderMouseButton::Back,
+          .local = {701.0f, 709.0f},
+          .sequence = 42u,
+      },
+  };
+  quader::ViewportToolState state;
+  std::vector<quader::QuaderInputChord> suppressed_chords;
+  double linear_array_wheel_remainder = 0.0;
+  double radial_array_wheel_remainder = 0.0;
+  quader::ViewportKeybindingResolver::resolve(
+      editor, state, input, suppressed_chords,
+      linear_array_wheel_remainder, radial_array_wheel_remainder);
+
+  ASSERT_TRUE(input.navigation_bindings.orbit_pressed);
+  const quader::ViewportNavigationPress press =
+      quader::viewport_navigation_press(input.navigation_bindings);
+  EXPECT_EQ(press.action, quader::ViewportInputActionKind::Orbit);
+  ASSERT_TRUE(press.pointer_edge.has_value());
+  EXPECT_EQ(press.pointer_edge->button, quader::QuaderMouseButton::Middle);
+  EXPECT_FLOAT_EQ(press.pointer_edge->local.x, 101.0f);
+  EXPECT_FLOAT_EQ(press.pointer_edge->local.y, 103.0f);
+  EXPECT_EQ(press.pointer_edge->sequence, 41u);
+
+  input = {};
+  input.viewport_focused = true;
+  input.released_input_chords = {
+      single_input_chord("MiddleMouseDrag"),
+  };
+  input.pointer_released_edges = {{
+      .button = quader::QuaderMouseButton::Middle,
+      .local = {109.0f, 107.0f},
+      .sequence = 43u,
+  }};
+  quader::ViewportKeybindingResolver::resolve(
+      editor, state, input, suppressed_chords,
+      linear_array_wheel_remainder, radial_array_wheel_remainder);
+
+  ASSERT_TRUE(input.navigation_bindings.orbit_released);
+  ASSERT_TRUE(
+      input.navigation_bindings.orbit_released_pointer_edge.has_value());
+  EXPECT_EQ(input.navigation_bindings.orbit_released_pointer_edge->button,
+            quader::QuaderMouseButton::Middle);
+  EXPECT_FLOAT_EQ(
+      input.navigation_bindings.orbit_released_pointer_edge->local.x,
+      109.0f);
+  EXPECT_FLOAT_EQ(
+      input.navigation_bindings.orbit_released_pointer_edge->local.y,
+      107.0f);
+  EXPECT_EQ(input.navigation_bindings.orbit_released_pointer_edge->sequence,
+            43u);
+}
+
+TEST(EditorApiTests,
+     CoalescedMiddleReleaseBeforeRepressKeepsTheLaterGestureActive) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("navigation-repress-order"))
+                  .ok());
+
+  quader::ViewportInputFrame input;
+  input.viewport_hovered = true;
+  input.viewport_focused = true;
+  input.viewport_size = {800.0f, 600.0f};
+  input.mouse_local = {1000.0f, 100.0f};
+  input.mouse_screen = {1000.0f, 100.0f};
+  input.mouse_delta = {900.0f, 0.0f};
+  input.pressed_input_chords = {
+      single_input_chord("MiddleMouse"),
+      single_input_chord("MiddleMouseDrag"),
+      single_input_chord("MiddleMouse"),
+      single_input_chord("MiddleMouseDrag"),
+  };
+  input.released_input_chords = {
+      single_input_chord("MiddleMouseDrag"),
+  };
+  input.pointer_pressed_edges = {
+      {
+          .button = quader::QuaderMouseButton::Middle,
+          .local = {100.0f, 100.0f},
+          .sequence = 1u,
+      },
+      {
+          .button = quader::QuaderMouseButton::Middle,
+          .local = {1000.0f, 100.0f},
+          .sequence = 3u,
+      },
+  };
+  input.pointer_released_edges = {{
+      .button = quader::QuaderMouseButton::Middle,
+      .local = {110.0f, 100.0f},
+      .sequence = 2u,
+  }};
+  quader::ViewportToolState state;
+  std::vector<quader::QuaderInputChord> suppressed_chords;
+  double linear_array_wheel_remainder = 0.0;
+  double radial_array_wheel_remainder = 0.0;
+  quader::ViewportKeybindingResolver::resolve(
+      editor, state, input, suppressed_chords,
+      linear_array_wheel_remainder, radial_array_wheel_remainder);
+
+  ASSERT_TRUE(input.navigation_bindings.orbit_pressed);
+  ASSERT_TRUE(input.navigation_bindings.orbit_down);
+  ASSERT_TRUE(input.navigation_bindings.orbit_released);
+  ASSERT_TRUE(
+      input.navigation_bindings.orbit_pressed_pointer_edge.has_value());
+  ASSERT_TRUE(
+      input.navigation_bindings.orbit_released_pointer_edge.has_value());
+  EXPECT_EQ(input.navigation_bindings.orbit_pressed_pointer_edge->sequence,
+            3u);
+  EXPECT_EQ(input.navigation_bindings.orbit_released_pointer_edge->sequence,
+            2u);
+  ASSERT_EQ(input.navigation_bindings.pointer_transitions.size(), 3u);
+  EXPECT_EQ(input.navigation_bindings.pointer_transitions[0].kind,
+            quader::ViewportNavigationPointerTransitionKind::Pressed);
+  EXPECT_EQ(input.navigation_bindings.pointer_transitions[0]
+                .pointer_edge.sequence,
+            1u);
+  EXPECT_EQ(input.navigation_bindings.pointer_transitions[1].kind,
+            quader::ViewportNavigationPointerTransitionKind::Released);
+  EXPECT_EQ(input.navigation_bindings.pointer_transitions[1]
+                .pointer_edge.sequence,
+            2u);
+  EXPECT_EQ(input.navigation_bindings.pointer_transitions[2].kind,
+            quader::ViewportNavigationPointerTransitionKind::Pressed);
+  EXPECT_EQ(input.navigation_bindings.pointer_transitions[2]
+                .pointer_edge.sequence,
+            3u);
+
+  quader::ViewportInputRouter router;
+  quader::ViewportCameraController camera;
+  const std::uint64_t before =
+      quader::viewport_camera_pose_persistence_signature(camera.pose());
+  const quader::ViewportInputResult result =
+      router.handle_frame(input, camera);
+
+  EXPECT_TRUE(result.consumed);
+  EXPECT_FALSE(result.camera_changed);
+  EXPECT_TRUE(result.navigation_active);
+  EXPECT_TRUE(router.orbit_navigating());
+  EXPECT_EQ(quader::viewport_camera_pose_persistence_signature(camera.pose()),
+            before);
 }
 
 TEST(EditorApiTests, ViewportKeyChordConversionUsesSharedInputAdapter) {
@@ -16749,9 +16969,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 190u);
+  EXPECT_EQ(commands.size(), 197u);
 #else
-  EXPECT_EQ(commands.size(), 191u);
+  EXPECT_EQ(commands.size(), 198u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
