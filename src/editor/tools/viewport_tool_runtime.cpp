@@ -330,6 +330,12 @@ ModelingCommandResult ViewportToolRuntime::activate_active_tool(
 
 bool ViewportToolRuntime::register_native_lifecycle(
     ViewportNativeToolLifecycleAdapter adapter) {
+  if (adapter.local_history &&
+      (adapter.local_history->label.empty() ||
+       !adapter.local_history->can_undo || !adapter.local_history->can_redo ||
+       !adapter.local_history->undo || !adapter.local_history->redo)) {
+    return false;
+  }
   const ViewportTool *tool = registry_.find(adapter.tool);
   if (tool == nullptr || !tool->descriptor().editor_owned_native_lifecycle ||
       native_lifecycle_registered(adapter.tool) || adapter.commit_label.empty() ||
@@ -419,14 +425,7 @@ bool ViewportToolRuntime::native_lifecycle_blocks_document_mutation(
 }
 
 std::string_view ViewportToolRuntime::active_native_lifecycle_id() const {
-  const ViewportNativeToolLifecycleAdapter *active = nullptr;
-  for (const ViewportNativeToolLifecycleAdapter &adapter : native_lifecycles_) {
-    if (adapter.active() &&
-        (active == nullptr ||
-         adapter.active_priority < active->active_priority)) {
-      active = &adapter;
-    }
-  }
+  const ViewportNativeToolLifecycleAdapter *active = active_native_lifecycle();
   if (active == nullptr) {
     return {};
   }
@@ -446,6 +445,20 @@ ViewportToolRuntime::active_native_lifecycle_commit_metadata() const {
   return ViewportNativeToolCommitMetadata{
       .label = found->commit_label,
       .domain = found->commit_domain,
+  };
+}
+
+std::optional<ViewportNativeToolHistoryState>
+ViewportToolRuntime::active_native_lifecycle_history_state() const {
+  const ViewportNativeToolLifecycleAdapter *active = active_native_lifecycle();
+  if (active == nullptr || !active->local_history) {
+    return std::nullopt;
+  }
+  const ViewportNativeToolHistoryAdapter &history = *active->local_history;
+  return ViewportNativeToolHistoryState{
+      .can_undo = history.can_undo(),
+      .can_redo = history.can_redo(),
+      .label = history.label,
   };
 }
 
@@ -485,6 +498,20 @@ CommandResult ViewportToolRuntime::commit_active_native_lifecycle() {
              : command_invalid_result("No active native tool preview.");
 }
 
+CommandResult ViewportToolRuntime::undo_active_native_lifecycle() {
+  const ViewportNativeToolLifecycleAdapter *active = active_native_lifecycle();
+  return active != nullptr && active->local_history
+             ? active->local_history->undo()
+             : command_invalid_result("No active native tool history.");
+}
+
+CommandResult ViewportToolRuntime::redo_active_native_lifecycle() {
+  const ViewportNativeToolLifecycleAdapter *active = active_native_lifecycle();
+  return active != nullptr && active->local_history
+             ? active->local_history->redo()
+             : command_invalid_result("No active native tool history.");
+}
+
 CommandResult ViewportToolRuntime::cancel_native_lifecycles() {
   bool changed = false;
   for (ViewportNativeToolLifecycleAdapter &adapter : native_lifecycles_) {
@@ -502,6 +529,19 @@ void ViewportToolRuntime::reset_native_lifecycles() {
   for (ViewportNativeToolLifecycleAdapter &adapter : native_lifecycles_) {
     adapter.reset();
   }
+}
+
+const ViewportNativeToolLifecycleAdapter *
+ViewportToolRuntime::active_native_lifecycle() const {
+  const ViewportNativeToolLifecycleAdapter *active = nullptr;
+  for (const ViewportNativeToolLifecycleAdapter &adapter : native_lifecycles_) {
+    if (adapter.active() &&
+        (active == nullptr ||
+         adapter.active_priority < active->active_priority)) {
+      active = &adapter;
+    }
+  }
+  return active;
 }
 
 ViewportNativeToolLifecycleAdapter *

@@ -87,6 +87,10 @@ public:
   active_commit_metadata() const {
     return runtime_.active_native_lifecycle_commit_metadata();
   }
+  [[nodiscard]] std::optional<ViewportNativeToolHistoryState>
+  active_history_state() const {
+    return runtime_.active_native_lifecycle_history_state();
+  }
   [[nodiscard]] const ViewportToolRuntime &runtime() const { return runtime_; }
 
   /** Refreshes every native viewport tool through its editor owner. */
@@ -115,6 +119,8 @@ public:
   CommandResult activate(std::string_view tool_id, double grid_world_size);
   CommandResult cancel_competing_state_for_tool_activation();
   CommandResult commit_active() override;
+  CommandResult undo_active();
+  CommandResult redo_active();
   CommandResult cancel_active();
   CommandResult accept_active_primitive(std::string name,
                                         MaterialReference material,

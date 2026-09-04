@@ -35,6 +35,22 @@ struct ViewportNativeToolCommitMetadata final {
       ViewportNativeToolCommitDomain::Modeling;
 };
 
+/** Lets a native tool own undo/redo inside its uncommitted lifecycle. */
+struct ViewportNativeToolHistoryAdapter final {
+  std::string label;
+  std::function<bool()> can_undo;
+  std::function<bool()> can_redo;
+  std::function<CommandResult()> undo;
+  std::function<CommandResult()> redo;
+};
+
+/** An engaged state reserves history routing even when both actions are empty. */
+struct ViewportNativeToolHistoryState final {
+  bool can_undo = false;
+  bool can_redo = false;
+  std::string_view label;
+};
+
 /**
  * Adapts one editor-owned native tool to the same lifecycle runtime used by
  * the canonical viewport tool catalog. Tool-specific services retain their
@@ -60,6 +76,7 @@ struct ViewportNativeToolLifecycleAdapter final {
   std::function<CommandResult()> commit;
   std::function<CommandResult()> cancel;
   std::function<void()> reset;
+  std::optional<ViewportNativeToolHistoryAdapter> local_history;
 };
 
 /**
@@ -198,14 +215,20 @@ public:
     [[nodiscard]] std::string_view active_native_lifecycle_id() const;
     [[nodiscard]] std::optional<ViewportNativeToolCommitMetadata>
     active_native_lifecycle_commit_metadata() const;
+    [[nodiscard]] std::optional<ViewportNativeToolHistoryState>
+    active_native_lifecycle_history_state() const;
     [[nodiscard]] CommandResult activate_native_lifecycle(
         std::string_view tool_id, double grid_world_size,
         const std::function<CommandResult()> &cancel_competing_state);
     [[nodiscard]] CommandResult commit_active_native_lifecycle();
+    [[nodiscard]] CommandResult undo_active_native_lifecycle();
+    [[nodiscard]] CommandResult redo_active_native_lifecycle();
     [[nodiscard]] CommandResult cancel_native_lifecycles();
     void reset_native_lifecycles();
 
   private:
+    [[nodiscard]] const ViewportNativeToolLifecycleAdapter *
+    active_native_lifecycle() const;
     [[nodiscard]] ViewportNativeToolLifecycleAdapter *
     find_native_lifecycle(std::string_view tool_id);
     [[nodiscard]] const ViewportNativeToolLifecycleAdapter *

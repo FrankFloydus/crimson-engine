@@ -122,11 +122,10 @@ struct TorusPrimitiveCreationSettings {
 };
 
 /**
- * Owns one modal multi-shape primitive transaction.
+ * Owns one modal primitive session with one history step per accepted shape.
  *
- * Accepted shapes are projected live for feedback, while one pre-session
- * memento remains the rollback boundary. Apply records the complete before /
- * after pair as one editor history command; Cancel and per-shape failures
+ * Accepted shapes can be undone and redone without leaving creation mode.
+ * Apply publishes those steps to editor history; Cancel and per-shape failures
  * restore the pre-session state. The newest accepted primitive remains
  * live-editable only while its sole active selection revision is unchanged.
  */
@@ -138,6 +137,8 @@ public:
 
   [[nodiscard]] bool active() const { return session_.has_value(); }
   [[nodiscard]] bool can_apply() const;
+  [[nodiscard]] bool can_undo() const;
+  [[nodiscard]] bool can_redo() const;
   [[nodiscard]] bool can_reset_settings() const;
   [[nodiscard]] std::size_t shape_count() const;
   [[nodiscard]] bool owns_created_object(int modeling_object_id) const;
@@ -172,16 +173,25 @@ public:
                                MaterialReference material = {});
   CommandResult apply();
   CommandResult cancel();
+  CommandResult undo();
+  CommandResult redo();
   CommandResult set_setting(std::string_view name, double value);
   CommandResult reset_settings();
 
 private:
+  /// Retains the final geometry of one shape, including its live settings edits.
+  struct ShapeHistory {
+    ModelingSessionMemento before;
+    ModelingSessionMemento after;
+  };
+
   /// Captures the rollback boundary and accepted-shape count for one session.
   struct Session {
     PrimitiveCreationKind kind = PrimitiveCreationKind::Box;
     ModelingSessionMemento before;
     std::size_t accepted_shapes = 0;
     std::vector<int> created_object_ids;
+    std::vector<ShapeHistory> shapes;
   };
 
   /// Keeps the newest accepted primitive editable while its selection is
@@ -197,6 +207,9 @@ private:
   [[nodiscard]] bool live_primitive_is_selected() const;
   [[nodiscard]] CommandResult update_live_primitive();
   void freeze_live_primitive_if_selection_changed();
+  [[nodiscard]] CommandResult reset_footprint();
+  [[nodiscard]] CommandResult restore_shape_history(
+      const ModelingSessionMemento &memento);
   void finish_checkpoint(bool restored_by_cancel);
 
   EditorHistoryService &history_;

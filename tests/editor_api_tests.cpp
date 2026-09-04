@@ -8704,8 +8704,45 @@ TEST(EditorApiTests,
 
   run(quader::ViewportToolId::Pivot, "Undo Pivot Preview Box");
   run(quader::ViewportToolId::LinearArray, "Undo Array Preview Box");
-  run(quader::ViewportToolId::CreatePrimitive,
-      "Undo Primitive Preview Box");
+}
+
+TEST(EditorApiTests,
+     EmptyPrimitiveHistoryReservesUndoUntilTheToolIsExplicitlyCanceled) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  constexpr std::string_view name = "Undo Primitive Preview Box";
+  create_selected_box(editor, std::string(name));
+  const quader::QuaderHistorySnapshot before = editor.query().history();
+  ASSERT_TRUE(before.can_undo);
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+
+  EXPECT_FALSE(editor.history().can_undo());
+  EXPECT_FALSE(editor.history().can_redo());
+  EXPECT_FALSE(editor.query().history().can_undo);
+  EXPECT_FALSE(editor.query().history().can_redo);
+  const quader::QuaderApiVoidResult rejected_command =
+      editor.commands().execute(quader::quader_command::kEditUndo);
+  EXPECT_FALSE(rejected_command.ok());
+  EXPECT_FALSE(rejected_command.changed());
+  const quader::QuaderApiVoidResult rejected_direct = editor.history().undo();
+  EXPECT_FALSE(rejected_direct.ok());
+  EXPECT_FALSE(rejected_direct.changed());
+  EXPECT_TRUE(editor.tools().active_settings().active);
+  EXPECT_TRUE(entity_named(editor, name).has_value());
+
+  const quader::QuaderApiVoidResult canceled =
+      editor.tools().cancel_active_tool_preview();
+  ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+  EXPECT_TRUE(canceled.changed());
+  EXPECT_FALSE(editor.tools().active_settings().active);
+  EXPECT_TRUE(entity_named(editor, name).has_value());
+  EXPECT_TRUE(editor.history().can_undo());
+  EXPECT_EQ(editor.query().history().undo_label, before.undo_label);
+  const quader::QuaderApiVoidResult undone =
+      editor.commands().execute(quader::quader_command::kEditUndo);
+  ASSERT_TRUE(undone.ok()) << undone.error_message();
+  EXPECT_FALSE(entity_named(editor, name).has_value());
 }
 
 TEST(EditorApiTests, HistoryUndoAfterSliceQuadFinalizeRestoresPreOperationMeshAndSelection) {

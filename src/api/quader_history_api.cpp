@@ -10,6 +10,7 @@
 #include "api/quader_api_mutation_runner.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 
 namespace quader {
 namespace {
@@ -42,14 +43,27 @@ bool QuaderHistoryApi::can_redo() const { return mutations_.can_redo(); }
 
 QuaderHistorySnapshot QuaderHistoryApi::snapshot() const {
     QuaderHistorySnapshot result;
+    const SceneSession &session = read_scene_session(session_);
+    if (const auto local_history =
+            session.native_tools().active_history_state()) {
+      result.can_undo = local_history->can_undo;
+      result.can_redo = local_history->can_redo;
+      if (result.can_undo) {
+        result.undo_label = local_history->label;
+      }
+      if (result.can_redo) {
+        result.redo_label = local_history->label;
+      }
+      return result;
+    }
     result.can_undo = can_undo();
     result.can_redo = can_redo();
     if (const std::string *label =
-            read_scene_session(session_).history().undo_label()) {
+            session.history().undo_label()) {
       result.undo_label = *label;
     }
     if (const std::string *label =
-            read_scene_session(session_).history().redo_label()) {
+            session.history().redo_label()) {
       result.redo_label = *label;
     }
     return result;

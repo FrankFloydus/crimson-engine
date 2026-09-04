@@ -150,6 +150,13 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
       .commit = [&] { return primitives_.apply(); },
       .cancel = [&] { return primitives_.cancel(); },
       .reset = [&] { (void)primitives_.cancel(); },
+      .local_history = ViewportNativeToolHistoryAdapter{
+          .label = "Create Primitive",
+          .can_undo = [&] { return primitives_.can_undo(); },
+          .can_redo = [&] { return primitives_.can_redo(); },
+          .undo = [&] { return primitives_.undo(); },
+          .redo = [&] { return primitives_.redo(); },
+      },
   });
   (void)runtime_.register_native_lifecycle({
       .tool = ViewportToolId::LinearArray,
@@ -383,6 +390,14 @@ NativeViewportToolCoordinator::cancel_competing_state_for_tool_activation() {
 
 CommandResult NativeViewportToolCoordinator::commit_active() {
   return runtime_.commit_active_native_lifecycle();
+}
+
+CommandResult NativeViewportToolCoordinator::undo_active() {
+  return runtime_.undo_active_native_lifecycle();
+}
+
+CommandResult NativeViewportToolCoordinator::redo_active() {
+  return runtime_.redo_active_native_lifecycle();
 }
 
 CommandResult NativeViewportToolCoordinator::cancel_active() {

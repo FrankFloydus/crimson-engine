@@ -218,6 +218,26 @@ public:
   int accept_count = 0;
 };
 
+/// Counts viewport cancellations while forwarding them to the real owner.
+class CountingPrimitiveCancelPort final : public ViewportToolCancelPort {
+public:
+  explicit CountingPrimitiveCancelPort(ViewportToolCancelPort &delegate)
+      : delegate_(delegate) {}
+
+  ModelingCommandResult cancel_box() override {
+    ++box_cancellations;
+    return delegate_.cancel_box();
+  }
+  ModelingCommandResult cancel_active_modal_tool() override {
+    return delegate_.cancel_active_modal_tool();
+  }
+
+  int box_cancellations = 0;
+
+private:
+  ViewportToolCancelPort &delegate_;
+};
+
 void expect_point_tool_click_uses_queued_press_coordinate(
     ViewportToolId tool_id, bool expected_dragging) {
   SceneDocument document;
@@ -518,6 +538,88 @@ TEST(ViewportToolRuntimeTests,
 }
 
 TEST(ViewportToolRuntimeTests,
+     NativeLocalHistoryRemainsOwnedWhenEmptyAndNeverCancelsTheLifecycle) {
+  ViewportToolRuntime runtime;
+  bool active = true;
+  bool redo_available = false;
+  bool fail_undo = false;
+  int accepted = 1;
+  int cancels = 0;
+  ViewportNativeToolLifecycleAdapter adapter{
+      .tool = ViewportToolId::CreatePrimitive,
+      .commit_label = "Apply test lifecycle",
+      .can_activate = [] { return true; },
+      .active = [&] { return active; },
+      .pending = [&] { return active; },
+      .pending_history_preview = [&] { return active; },
+      .activate = [](double) { return command_changed_result(); },
+      .commit = [] { return command_changed_result(); },
+      .cancel = [&] {
+        ++cancels;
+        active = false;
+        return command_changed_result();
+      },
+      .reset = [] {},
+      .local_history = ViewportNativeToolHistoryAdapter{
+          .label = "Accept test shape",
+          .can_undo = [&] { return accepted != 0; },
+          .can_redo = [&] { return redo_available; },
+          .undo = [&] {
+            if (fail_undo) {
+              return command_invalid_result("Forced local history failure.");
+            }
+            if (accepted == 0) {
+              return command_unchanged_result();
+            }
+            --accepted;
+            redo_available = true;
+            return command_changed_result();
+          },
+          .redo = [&] {
+            if (!redo_available) {
+              return command_unchanged_result();
+            }
+            ++accepted;
+            redo_available = false;
+            return command_changed_result();
+          },
+      },
+  };
+  ASSERT_TRUE(runtime.register_native_lifecycle(std::move(adapter)));
+  const auto initial = runtime.active_native_lifecycle_history_state();
+  ASSERT_TRUE(initial.has_value());
+  EXPECT_TRUE(initial->can_undo);
+  EXPECT_FALSE(initial->can_redo);
+  EXPECT_EQ(initial->label, "Accept test shape");
+
+  fail_undo = true;
+  const CommandResult failed = runtime.undo_active_native_lifecycle();
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  EXPECT_EQ(failed.message, "Forced local history failure.");
+  EXPECT_EQ(accepted, 1);
+  fail_undo = false;
+
+  EXPECT_TRUE(runtime.undo_active_native_lifecycle().changed);
+  const auto undone = runtime.active_native_lifecycle_history_state();
+  ASSERT_TRUE(undone.has_value());
+  EXPECT_FALSE(undone->can_undo);
+  EXPECT_TRUE(undone->can_redo);
+  EXPECT_FALSE(runtime.undo_active_native_lifecycle().changed);
+  EXPECT_EQ(cancels, 0);
+  EXPECT_TRUE(active);
+
+  EXPECT_TRUE(runtime.redo_active_native_lifecycle().changed);
+  EXPECT_EQ(accepted, 1);
+  EXPECT_FALSE(runtime.redo_active_native_lifecycle().changed);
+  EXPECT_TRUE(runtime.cancel_native_lifecycles().changed);
+  EXPECT_EQ(cancels, 1);
+  EXPECT_FALSE(runtime.active_native_lifecycle_history_state().has_value());
+  EXPECT_FALSE(runtime.undo_active_native_lifecycle().ok);
+  EXPECT_FALSE(runtime.redo_active_native_lifecycle().ok);
+}
+
+TEST(ViewportToolRuntimeTests,
      NativeCoordinatorActivatesAndCancelsEveryCatalogDeclaredLifecycle) {
   for (const ToolDescriptor &descriptor : viewport_tool_descriptors()) {
     if (!descriptor.editor_owned_native_lifecycle) {
@@ -560,6 +662,18 @@ TEST(ViewportToolRuntimeTests,
     EXPECT_TRUE(coordinator.has_pending_tool());
     EXPECT_EQ(coordinator.has_pending_history_preview(),
               descriptor.tool != ViewportToolId::Curve);
+    const auto local_history = coordinator.active_history_state();
+    EXPECT_EQ(local_history.has_value(),
+              descriptor.tool == ViewportToolId::CreatePrimitive);
+    if (local_history) {
+      EXPECT_FALSE(local_history->can_undo);
+      EXPECT_FALSE(local_history->can_redo);
+      const QuaderHistorySnapshot history = editor.history().snapshot();
+      EXPECT_FALSE(history.can_undo);
+      EXPECT_FALSE(history.can_redo);
+      EXPECT_TRUE(history.undo_label.empty());
+      EXPECT_TRUE(history.redo_label.empty());
+    }
 
     for (const ToolDescriptor &candidate : viewport_tool_descriptors()) {
       if (!candidate.editor_owned_native_lifecycle) {
@@ -591,6 +705,7 @@ TEST(ViewportToolRuntimeTests,
     EXPECT_FALSE(coordinator.has_pending_tool());
     EXPECT_TRUE(coordinator.active_tool_id().empty());
     EXPECT_FALSE(coordinator.active_commit_metadata().has_value());
+    EXPECT_FALSE(coordinator.active_history_state().has_value());
     for (const ToolDescriptor &candidate : viewport_tool_descriptors()) {
       if (!candidate.editor_owned_native_lifecycle) {
         continue;
@@ -1483,6 +1598,137 @@ TEST(ViewportToolRuntimeTests,
 }
 
 TEST(ViewportToolRuntimeTests,
+     PrimitiveUndoRetiresTheCurrentGestureAndAllowsTheNextDrag) {
+  enum class NextFrame { HeldThenRelease, Release, FreshPress };
+  for (const NextFrame next_frame : {NextFrame::HeldThenRelease,
+                                    NextFrame::Release,
+                                    NextFrame::FreshPress}) {
+    SCOPED_TRACE(static_cast<int>(next_frame));
+    PrimitivePointerHarness harness;
+    ASSERT_TRUE(harness.activated);
+    CountingPrimitiveCancelPort cancel_port(harness.tool_ports);
+    harness.context.ports.cancel = &cancel_port;
+    ViewportToolRuntime runtime;
+    runtime.sync_active_tool(ViewportToolId::CreatePrimitive);
+    std::uint64_t sequence = 600u;
+    const auto frame = [&](ViewportPointerToolEvent pointer) {
+      return runtime.handle_active_tool_event(
+          harness.state, harness.context,
+          ViewportToolEvent{
+              .kind = ViewportToolEventKind::Frame,
+              .tool = ViewportToolId::CreatePrimitive,
+              .pointer = pointer,
+          });
+    };
+    const auto press = [&](QVec2 local) {
+      const std::array edges{ViewportPointerButtonEdge{
+          .button = QuaderMouseButton::Left,
+          .local = local,
+          .sequence = sequence++,
+      }};
+      return frame({
+          .hovered = true,
+          .left_clicked = true,
+          .left_down = true,
+          .viewport_focused = true,
+          .mouse_local = local,
+          .mouse_screen = local,
+          .left_click_local = local,
+          .pointer_pressed_edges = edges,
+      });
+    };
+    const auto release = [&](QVec2 local) {
+      const std::array edges{ViewportPointerButtonEdge{
+          .button = QuaderMouseButton::Left,
+          .local = local,
+          .sequence = sequence++,
+      }};
+      return frame({
+          .hovered = true,
+          .left_released = true,
+          .viewport_focused = true,
+          .mouse_local = local,
+          .mouse_screen = local,
+          .pointer_released_edges = edges,
+      });
+    };
+
+    ASSERT_TRUE(press({20.0f, 20.0f}).consumed);
+    ASSERT_TRUE(release({48.0f, 48.0f}).consumed);
+    ASSERT_EQ(harness.accept_count, 1);
+    ASSERT_EQ(harness.session.primitive_creation().shape_count(), 1U);
+    const EntityId first_entity = harness.session.scene().primary_selection();
+
+    ASSERT_TRUE(press({60.0f, 60.0f}).consumed);
+    ASSERT_TRUE(frame({.hovered = true,
+                       .left_down = true,
+                       .viewport_focused = true,
+                       .mouse_local = {90.0f, 90.0f},
+                       .mouse_screen = {90.0f, 90.0f}}).handled);
+    ASSERT_EQ(harness.session.modeling().box_preview().drag_state,
+              ModelingBoxDragState::Footprint);
+    const QuaderApiVoidResult undone = harness.editor.history().undo();
+    ASSERT_TRUE(undone.ok()) << undone.error_message();
+    ASSERT_TRUE(undone.changed());
+    ASSERT_EQ(harness.session.modeling().box_preview().drag_state,
+              ModelingBoxDragState::Idle);
+    ASSERT_TRUE(harness.session.primitive_creation().active());
+    ASSERT_TRUE(harness.context.modal_state->primary_pointer_gesture);
+
+    if (next_frame == NextFrame::HeldThenRelease) {
+      EXPECT_TRUE(frame({.hovered = true,
+                         .left_down = true,
+                         .viewport_focused = true,
+                       .mouse_local = {90.0f, 90.0f},
+                       .mouse_screen = {90.0f, 90.0f}}).consumed);
+      EXPECT_FALSE(harness.context.modal_state->primary_pointer_gesture);
+      EXPECT_TRUE(
+          harness.context.modal_state->primary_release_suppression.active());
+    }
+    if (next_frame != NextFrame::FreshPress) {
+      EXPECT_TRUE(release({90.0f, 90.0f}).consumed);
+      EXPECT_FALSE(harness.context.modal_state->primary_pointer_gesture);
+      EXPECT_FALSE(
+          harness.context.modal_state->primary_release_suppression.active());
+      (void)frame({.hovered = true,
+                   .viewport_focused = true,
+                   .mouse_local = {90.0f, 90.0f},
+                   .mouse_screen = {90.0f, 90.0f}});
+      EXPECT_EQ(harness.editor.tools().active_tool(), "create_primitive");
+      EXPECT_EQ(cancel_port.box_cancellations, 0);
+    }
+    EXPECT_EQ(harness.accept_count, 1);
+    EXPECT_EQ(harness.session.primitive_creation().shape_count(), 1U);
+    EXPECT_TRUE(harness.session.scene().exists(first_entity));
+
+    ASSERT_TRUE(press({100.0f, 100.0f}).consumed);
+    ASSERT_TRUE(harness.context.modal_state->primary_pointer_gesture);
+    EXPECT_FALSE(
+        harness.context.modal_state->primary_release_suppression.active());
+    EXPECT_FLOAT_EQ(
+        harness.context.modal_state->primary_pointer_gesture->press.local.x,
+        100.0f);
+    EXPECT_FLOAT_EQ(
+        harness.context.modal_state->primary_pointer_gesture->press.local.y,
+        100.0f);
+    ASSERT_EQ(harness.session.modeling().box_preview().drag_state,
+              ModelingBoxDragState::Footprint);
+    ASSERT_TRUE(release({130.0f, 130.0f}).consumed);
+    EXPECT_EQ(harness.accept_count, 2);
+    EXPECT_EQ(harness.session.primitive_creation().shape_count(), 2U);
+    EXPECT_TRUE(harness.session.primitive_creation().active());
+    EXPECT_TRUE(harness.session.scene().exists(first_entity));
+    EXPECT_EQ(harness.editor.tools().active_tool(), "create_primitive");
+    EXPECT_EQ(runtime.active_tool()->viewport_tool(),
+              ViewportToolId::CreatePrimitive);
+    EXPECT_FALSE(harness.context.modal_state->primary_pointer_gesture);
+    EXPECT_FALSE(
+        harness.context.modal_state->primary_release_suppression.active());
+    EXPECT_EQ(cancel_port.box_cancellations, 0);
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
      PrimitivePointerInterruptionRollsBackAndSuppressesRelease) {
   enum class Interruption { FocusLoss, CaptureLoss, Navigation };
   for (const Interruption interruption :
@@ -1705,8 +1951,8 @@ TEST(ViewportToolRuntimeTests,
   EXPECT_TRUE(session.primitive_creation().active());
   EXPECT_EQ(session.primitive_creation().shape_count(), 1U);
   EXPECT_EQ(session.modeling().objects().size(), 1U);
-  // Public Undo remains available so it can cancel the pending native tool,
-  // even though the accepted live shape has not entered document history.
+  // Public Undo removes the accepted shape from the active lifecycle, even
+  // though that live shape has not entered document history.
   EXPECT_TRUE(editor.history().can_undo());
 
   current_event.ray.direction = {};

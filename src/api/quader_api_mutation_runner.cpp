@@ -406,6 +406,9 @@ bool QuaderApiMutationRunner::can_undo() const {
     return false;
   }
   SceneSession &session = scene_session();
+  if (const auto local_history = session.native_tools().active_history_state()) {
+    return local_history->can_undo;
+  }
   if (session.native_tools().has_pending_history_preview()) {
     return true;
   }
@@ -420,6 +423,9 @@ bool QuaderApiMutationRunner::can_redo() const {
     return false;
   }
   SceneSession &session = scene_session();
+  if (const auto local_history = session.native_tools().active_history_state()) {
+    return local_history->can_redo;
+  }
   if (session.native_tools().has_pending_history_preview()) {
     return false;
   }
@@ -434,6 +440,10 @@ QuaderApiVoidResult QuaderApiMutationRunner::undo() {
     return quader_api_failure_status(scene_session(), "No scene is active.");
   }
   SceneSession &session = scene_session();
+  if (session.native_tools().active_history_state()) {
+    return status_from(session.native_tools().undo_active(),
+                       QuaderMutationKind::Runtime, "Undo");
+  }
   if (session.native_tools().has_pending_history_preview()) {
     return status_from(session.native_tools().cancel_active(),
                        QuaderMutationKind::Runtime, "Undo");
@@ -453,6 +463,11 @@ QuaderApiVoidResult QuaderApiMutationRunner::undo() {
 QuaderApiVoidResult QuaderApiMutationRunner::redo() {
   if (!available()) {
     return quader_api_failure_status(scene_session(), "No scene is active.");
+  }
+  SceneSession &session = scene_session();
+  if (session.native_tools().active_history_state()) {
+    return status_from(session.native_tools().redo_active(),
+                       QuaderMutationKind::Runtime, "Redo");
   }
   if (!can_redo()) {
     return status_from(command_invalid_result("Redo is not available"),

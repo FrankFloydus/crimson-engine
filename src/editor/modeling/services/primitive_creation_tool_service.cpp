@@ -214,16 +214,31 @@ bool PrimitiveCreationToolService::can_apply() const {
   return session_.has_value() && session_->accepted_shapes > 0U;
 }
 
+bool PrimitiveCreationToolService::can_undo() const {
+  return session_.has_value() &&
+         (session_->accepted_shapes > 0U ||
+          modeling_.box_drag_state() != ModelingBoxDragState::Idle);
+}
+
+bool PrimitiveCreationToolService::can_redo() const {
+  return session_.has_value() &&
+         session_->accepted_shapes < session_->shapes.size() &&
+         modeling_.box_drag_state() == ModelingBoxDragState::Idle;
+}
+
 std::size_t PrimitiveCreationToolService::shape_count() const {
   return session_.has_value() ? session_->accepted_shapes : 0U;
 }
 
 bool PrimitiveCreationToolService::owns_created_object(
     int modeling_object_id) const {
-  return session_.has_value() &&
-         std::find(session_->created_object_ids.begin(),
-                   session_->created_object_ids.end(),
-                   modeling_object_id) != session_->created_object_ids.end();
+  if (!session_.has_value()) {
+    return false;
+  }
+  const auto end = session_->created_object_ids.begin() +
+                   session_->accepted_shapes;
+  return std::find(session_->created_object_ids.begin(), end,
+                   modeling_object_id) != end;
 }
 
 std::optional<PrimitiveCreationKind>
@@ -315,6 +330,15 @@ CommandResult PrimitiveCreationToolService::accept_preview(
 
   // Beginning another accepted shape is itself a selection transition: the
   // runtime will select the new object and deselect the prior live primitive.
+  const ModelingSessionMemento before = modeling_.capture_history_memento();
+  if (!before.valid()) {
+    return rollback_and_exit(
+        "Primitive tool could not capture the shape's history state.", true);
+  }
+  if (session_->accepted_shapes > 0U) {
+    // Seal the preceding shape after its final live settings edits.
+    session_->shapes[session_->accepted_shapes - 1U].after = before;
+  }
   live_primitive_.reset();
 
   quader_poly::Document document = build_primitive_document(
@@ -345,6 +369,9 @@ CommandResult PrimitiveCreationToolService::accept_preview(
                                 : created.message,
         true);
   }
+  session_->shapes.resize(session_->accepted_shapes);
+  session_->created_object_ids.resize(session_->accepted_shapes);
+  session_->shapes.push_back({.before = before});
   ++session_->accepted_shapes;
   ++tool_settings_revision_;
   session_->created_object_ids.push_back(created.object.modeling_object_id);
@@ -358,24 +385,18 @@ CommandResult PrimitiveCreationToolService::accept_preview(
     checkpoint_hooks_.record_after_projection();
   }
 
-  // Clear only the footprint brush. The native primitive session remains
-  // active, and the same Box runtime is immediately readied for the next
-  // footprint.
-  const ModelingCommandResult reset = modeling_.cancel_box();
+  const CommandResult reset = reset_footprint();
   if (!reset.ok) {
     return rollback_and_exit(
         reset.message.empty()
-            ? "Primitive shape was created, but its footprint could not reset."
+            ? "Primitive shape was created, but the next footprint could not start."
             : reset.message,
         true);
   }
-  const ModelingCommandResult reactivated = modeling_.activate_box_tool();
-  if (!reactivated.ok) {
+  session_->shapes.back().after = modeling_.capture_history_memento();
+  if (!session_->shapes.back().after.valid()) {
     return rollback_and_exit(
-        reactivated.message.empty()
-            ? "Primitive shape was created, but the next footprint could not start."
-            : reactivated.message,
-        true);
+        "Primitive tool could not capture the created shape.", true);
   }
   return command_changed_result();
 }
@@ -397,34 +418,119 @@ CommandResult PrimitiveCreationToolService::apply() {
         true);
   }
 
-  const ModelingSessionMemento before =
-      modeling_.capture_history_memento_without_objects(
-          session_->before, session_->created_object_ids);
-  const ModelingSessionMemento after = modeling_.capture_history_memento();
-  if (!before.valid() || !after.valid()) {
-    return rollback_and_exit(
-        "Primitive tool could not capture its applied state.", true);
+  session_->shapes[session_->accepted_shapes - 1U].after =
+      modeling_.capture_history_memento();
+  std::vector<std::unique_ptr<RecordedModelingMementoCommand>> commands;
+  commands.reserve(session_->accepted_shapes);
+  for (std::size_t index = 0; index < session_->accepted_shapes; ++index) {
+    const ShapeHistory &shape = session_->shapes[index];
+    // Each snapshot already contains exactly this step's objects. Rebase its
+    // host projection so unrelated edits made during creation stay before the
+    // primitive steps in document history.
+    const ModelingSessionMemento before =
+        modeling_.capture_history_memento_without_objects(shape.before, {});
+    const ModelingSessionMemento after =
+        modeling_.capture_history_memento_without_objects(shape.after, {});
+    if (!before.valid() || !after.valid()) {
+      return rollback_and_exit(
+          "Primitive tool could not capture its applied state.", true);
+    }
+    commands.push_back(std::make_unique<RecordedModelingMementoCommand>(
+        modeling_, "Create Primitive", before, after));
   }
-  const CommandResult recorded = history_.record_executed(
-      std::make_unique<RecordedModelingMementoCommand>(
-          modeling_, "Create Primitives", before, after));
-  if (!recorded.ok) {
-    return rollback_and_exit(
-        recorded.message.empty()
-            ? "Primitive tool could not record its history transaction."
-            : recorded.message,
-        true);
+  // Prepare every memento before publishing any history entry. Recording a
+  // non-null, already-executed command performs no further document mutation.
+  for (auto &command : commands) {
+    const CommandResult recorded = history_.record_executed(std::move(command));
+    if (!recorded.ok) {
+      return rollback_and_exit(
+          recorded.message.empty()
+              ? "Primitive tool could not record its history transaction."
+              : recorded.message,
+          true);
+    }
   }
 
   live_primitive_.reset();
   session_.reset();
   ++tool_settings_revision_;
   finish_checkpoint(false);
+  return command_changed_result();
+}
+
+CommandResult PrimitiveCreationToolService::undo() {
+  if (!can_undo()) {
+    return command_invalid_result("No primitive to undo.");
+  }
+  if (modeling_.box_drag_state() != ModelingBoxDragState::Idle) {
+    const CommandResult reset = reset_footprint();
+    if (reset.ok) {
+      ++tool_settings_revision_;
+    }
+    return reset;
+  }
+
+  ShapeHistory &shape = session_->shapes[session_->accepted_shapes - 1U];
+  const ModelingSessionMemento after = modeling_.capture_history_memento();
+  if (!after.valid()) {
+    return command_invalid_result("Primitive redo state could not be captured.");
+  }
+  const CommandResult restored = restore_shape_history(shape.before);
+  if (!restored.ok) {
+    return restored;
+  }
+  shape.after = after;
+  --session_->accepted_shapes;
+  return restored;
+}
+
+CommandResult PrimitiveCreationToolService::redo() {
+  if (!can_redo()) {
+    return command_invalid_result("No primitive to redo.");
+  }
+  const CommandResult restored = restore_shape_history(
+      session_->shapes[session_->accepted_shapes].after);
+  if (restored.ok) {
+    ++session_->accepted_shapes;
+  }
+  return restored;
+}
+
+CommandResult PrimitiveCreationToolService::reset_footprint() {
+  const ModelingCommandResult reset = modeling_.cancel_box();
+  if (!reset.ok) {
+    return modeling_memento_command_result(reset);
+  }
+  const ModelingCommandResult activated = modeling_.activate_box_tool();
   return {
-      .ok = true,
-      .changed = recorded.changed || reset.changed,
-      .message = recorded.message,
+      .ok = activated.ok,
+      .changed = reset.changed || activated.changed,
+      .message = activated.message,
   };
+}
+
+CommandResult PrimitiveCreationToolService::restore_shape_history(
+    const ModelingSessionMemento &memento) {
+  const ModelingSessionMemento rebased =
+      modeling_.capture_history_memento_without_objects(memento, {});
+  if (!rebased.valid()) {
+    return command_invalid_result("Primitive history state could not be captured.");
+  }
+  if (checkpoint_hooks_.observe_before_projection) {
+    checkpoint_hooks_.observe_before_projection();
+  }
+  const ModelingCommandResult restored =
+      modeling_.restore_history_memento(rebased);
+  if (checkpoint_hooks_.record_after_projection) {
+    checkpoint_hooks_.record_after_projection();
+  }
+  if (!restored.ok) {
+    return modeling_memento_command_result(restored);
+  }
+  // A history selection transition freezes all previously accepted primitives.
+  live_primitive_.reset();
+  ++tool_settings_revision_;
+  return modeling_memento_command_result(restored);
 }
 
 CommandResult PrimitiveCreationToolService::cancel() {

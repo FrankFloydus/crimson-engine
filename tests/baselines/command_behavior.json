@@ -22698,8 +22698,8 @@
           "modeling_selection": 2
         }
       },
-      "before": "a9b28988300f240403a7fd29dd5d885c",
-      "after": "a61628ad424045a43d54d24121517e50",
+      "before": "e26bbcbef1fc6f8097f7c72f8526d06b",
+      "after": "d940cc93663e1d084aa814ad9401ca60",
       "before_domains": {
         "documents": "bf55a0979f4e8f42bf6db8dff9e504ac",
         "scene": "9fda035648098793fc6832c510d89a13",
@@ -22707,7 +22707,7 @@
         "selection": "0e2b3cd725a20d7cb34b18bf2d7adf7a",
         "overlay": "96adbf7136966877820bd3966f8c56d3",
         "assets": "ea228d9c211686f9d952ad1257ae39ef",
-        "history": "6bba422f7bc39f8784b0e519a808b558",
+        "history": "c413cfeec85ac6c2ff4b0ff8c7b51400",
         "tools": "ea45a299a84933ec15f4eef834f4f808",
         "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
         "preferences": "77055b7667352d1d0da4abbe008dbc50",
@@ -22720,13 +22720,13 @@
         "selection": "0e2b3cd725a20d7cb34b18bf2d7adf7a",
         "overlay": "96adbf7136966877820bd3966f8c56d3",
         "assets": "ea228d9c211686f9d952ad1257ae39ef",
-        "history": "9468d3c4a2a832ce288639220994b441",
+        "history": "c413cfeec85ac6c2ff4b0ff8c7b51400",
         "tools": "4f6814a82d727def9299cc506ab85861",
         "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
         "preferences": "77055b7667352d1d0da4abbe008dbc50",
         "revisions": "a1a484530472543924f471e4bc96be8b"
       },
-      "changed_domains": 1217,
+      "changed_domains": 1153,
       "external_calls_before": 0,
       "external_calls_after": 0,
       "lifecycle": {}
@@ -22754,7 +22754,7 @@
           "modeling_selection": 3
         }
       },
-      "before": "a9b28988300f240403a7fd29dd5d885c",
+      "before": "e26bbcbef1fc6f8097f7c72f8526d06b",
       "after": "3736b8559bcf39132262782df2c29ef7",
       "before_domains": {
         "documents": "bf55a0979f4e8f42bf6db8dff9e504ac",
@@ -22763,7 +22763,7 @@
         "selection": "0e2b3cd725a20d7cb34b18bf2d7adf7a",
         "overlay": "96adbf7136966877820bd3966f8c56d3",
         "assets": "ea228d9c211686f9d952ad1257ae39ef",
-        "history": "6bba422f7bc39f8784b0e519a808b558",
+        "history": "c413cfeec85ac6c2ff4b0ff8c7b51400",
         "tools": "ea45a299a84933ec15f4eef834f4f808",
         "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
         "preferences": "77055b7667352d1d0da4abbe008dbc50",
@@ -23035,7 +23035,7 @@
         }
       },
       "before": "a0e7e6d7a601d9e6784059570bb7bc18",
-      "after": "b7c0b9e77e089eb247b0f91689b16b54",
+      "after": "0377afc9c092ed62b59b4f9e45514485",
       "before_domains": {
         "documents": "bf55a0979f4e8f42bf6db8dff9e504ac",
         "scene": "77986fe2a2151b40387a16471d2cc4f5",
@@ -23056,13 +23056,13 @@
         "selection": "2c2ea3d330d26152ee3c3862ea9e8e59",
         "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
         "assets": "b0d0663d16b55503bb28de1fc73164a9",
-        "history": "6bba422f7bc39f8784b0e519a808b558",
+        "history": "0147e55dc7a5afa94125bb23b5c6bd24",
         "tools": "22dd5956cfa4ac6a70ffc2a78e1c6e61",
         "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
         "preferences": "77055b7667352d1d0da4abbe008dbc50",
         "revisions": "ecf3cb38a54a3b6422dc855c8f1b77ff"
       },
-      "changed_domains": 1216,
+      "changed_domains": 1152,
       "external_calls_before": 0,
       "external_calls_after": 0,
       "lifecycle": {}
@@ -23684,5 +23684,5 @@
       "lifecycle": {}
     }
   },
-  "approved_change_reason": "Add mesh- and face-scoped cube, cylinder, and sphere UV projection commands"
+  "approved_change_reason": "Primitive creation now owns per-shape undo and redo while active and publishes individual Apply history entries; availability and labels reflect that local history."
 }

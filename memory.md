@@ -5592,6 +5592,9 @@ Verification:
 
 ## 2026-07-15 - Primitive Creation Is One Persistent Multi-Shape Transaction
 
+The grouped Undo/Apply behavior below is superseded by the 2026-09-05 per-primitive
+history correction. Explicit Cancel still restores the whole session.
+
 Invariant:
 
 - `Create Primitive` is the sole primitive viewport tool and activates with Shift+B. Its first
@@ -8750,3 +8753,38 @@ Selected icon rendering. Dock glyph tests request production `QIcon::pixmap()` o
 and fractional DPRs and require a transparent backing. All source and architecture guardrails, the
 repository-selected affected workflow, the mandatory regression gate, and the standalone full
 Debug CTest preset pass.
+
+## 2026-09-05 - Drawn primitives undo individually within the persistent tool
+
+- `PrimitiveCreationToolService` retains a before/after modeling memento for each accepted
+  footprint and a local history cursor. Ctrl+Z removes only the newest accepted primitive;
+  redo restores its final live-edited geometry, object/entity/mesh identities, and selection.
+  Undo/redo keeps creation active and freezes restored shapes. A new accepted shape drops
+  only the local redo branch. Undo during an unfinished footprint clears only that gesture.
+- `TwoStageBoxTool` reconciles a retained pointer gesture against an externally reset idle
+  footprint. It reserves the original held/release edges without canceling the footprint again,
+  and accepts a fresh press even if the old release was not delivered.
+- Native lifecycle registration optionally supplies local history actions and availability.
+  Public history APIs route through that owner before generic preview cancellation, including
+  when local history is empty, and report its labels instead of stale document-history labels.
+  Other native tools retain their existing history behavior.
+- Apply publishes one editor-history command per remaining accepted shape. Capture and validate
+  all rebased mementos before recording any commands. Rebasing preserves permitted unrelated
+  host edits and their existing history order; live setting changes belong to their shape's
+  final snapshot. Explicit Cancel and creation failures still restore the full session baseline
+  without inserting history entries or destroying a pre-existing document redo branch.
+- Local restore observes and records the scene preview checkpoint without finishing it; only
+  Apply or Cancel ends that checkpoint. Keep monotonic object allocation across retired redo
+  branches so new shapes cannot alias stale handles.
+
+Owners: the primitive service owns per-shape state and session rollback; native tool lifecycle
+adapters own history routing; the public history API delegates actions and projects labels;
+the shared two-stage interaction owns pointer gesture retirement and release suppression.
+
+Verification: 326 focused primitive/projection/runtime, editor API, and Qt slider tests pass.
+The mandatory regression gate passes all six registered CTest entries and builds the native
+Debug/Profile executable; the subsequent canonical Release build also succeeds. The intentional
+command baseline diff changes only primitive
+activation/Apply/Cancel history fingerprints and the documented reason. An earlier full run
+hit a Qt interaction assertion and another hit a fatal-child timeout; both isolated suites and
+the final complete gate pass. No UI smoke launch was needed for these headless behaviors.

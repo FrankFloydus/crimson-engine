@@ -34,6 +34,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -613,7 +614,13 @@ TEST(PrimitiveCreationToolServiceTests,
   };
   ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
   verify_created_members("after Apply");
-  ASSERT_TRUE(editor.history().undo().ok());
+  for (std::size_t remaining = created.size(); remaining > 0U; --remaining) {
+    ASSERT_TRUE(editor.history().undo().ok());
+    for (std::size_t index = 0; index < created.size(); ++index) {
+      EXPECT_EQ(session.scene().exists(created[index].entity),
+                index + 1U < remaining);
+    }
+  }
   ASSERT_TRUE(session.scene().exists(definition));
   ASSERT_TRUE(session.scene().is_instance_definition_entity(definition));
   ASSERT_TRUE(session.scene().exists(occurrence));
@@ -621,7 +628,9 @@ TEST(PrimitiveCreationToolServiceTests,
     SCOPED_TRACE(::testing::Message() << "after Undo: " << object.name);
     EXPECT_FALSE(session.scene().exists(object.entity));
   }
-  ASSERT_TRUE(editor.history().redo().ok());
+  for (std::size_t count = 0; count < created.size(); ++count) {
+    ASSERT_TRUE(editor.history().redo().ok());
+  }
   verify_created_members("after Redo");
   const auto restored_seed_mesh = session.modeling().compile_object_mesh(
       seed.value().modeling_object_id);
@@ -932,7 +941,7 @@ TEST(ModelingSdkProjectionCreationTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     LiveSettingsUpdateNewestShapeAndApplyAsOneHistoryTransaction) {
+     LiveSettingsUpdateNewestShapeAndApplyAsIndividualHistoryEntries) {
   PrimitiveCreationHarness harness;
 
   const CommandResult activated =
@@ -985,21 +994,295 @@ TEST(PrimitiveCreationToolServiceTests,
   EXPECT_EQ(harness.modeling.objects().size(), 2U);
   ASSERT_TRUE(harness.history.can_undo());
   ASSERT_NE(harness.history.undo_label(), nullptr);
-  EXPECT_EQ(*harness.history.undo_label(), "Create Primitives");
+  EXPECT_EQ(*harness.history.undo_label(), "Create Primitive");
 
   const CommandResult undone = harness.history.undo();
   ASSERT_TRUE(undone.ok) << undone.message;
+  ASSERT_EQ(harness.modeling.objects().size(), 1U);
+  EXPECT_EQ(compiled_index_count(harness.modeling, "Low Resolution Box"),
+            60U);
+  EXPECT_TRUE(harness.history.can_undo());
+  ASSERT_TRUE(harness.history.undo().ok);
   EXPECT_TRUE(harness.modeling.objects().empty());
   EXPECT_FALSE(harness.history.can_undo());
   EXPECT_TRUE(harness.history.can_redo());
 
   const CommandResult redone = harness.history.redo();
   ASSERT_TRUE(redone.ok) << redone.message;
+  ASSERT_EQ(harness.modeling.objects().size(), 1U);
+  EXPECT_EQ(compiled_index_count(harness.modeling, "Low Resolution Box"),
+            60U);
+  ASSERT_TRUE(harness.history.redo().ok);
   EXPECT_EQ(harness.modeling.objects().size(), 2U);
   EXPECT_EQ(compiled_index_count(harness.modeling, "Low Resolution Box"),
             60U);
   EXPECT_EQ(compiled_index_count(harness.modeling, "High Resolution Box"),
             newest_index_count);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     PublicUndoRemovesOnlyNewestDrawnPrimitiveAndRedoRestoresExactShapes) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const std::size_t baseline_mesh_count = session.assets().mesh_ids().size();
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  const std::array<std::string_view, 3> names{
+      "First Drawn Box", "Second Drawn Box", "Third Drawn Box"};
+  std::vector<ModelingObjectRecord> created;
+  for (std::size_t index = 0; index < names.size(); ++index) {
+    const CommandResult accepted = session.primitive_creation().accept_preview(
+        valid_primitive_preview(static_cast<float>(index) * 4.0f),
+        std::string(names[index]));
+    ASSERT_TRUE(accepted.ok) << accepted.message;
+    const auto objects = session.modeling().objects();
+    const ModelingObjectRecord *const object = find_object(objects, names[index]);
+    ASSERT_NE(object, nullptr);
+    created.push_back(*object);
+  }
+  ASSERT_TRUE(editor.tools()
+                  .set_setting(kCreatePrimitiveToolId,
+                               kBoxSubdivisionsXSetting, 3.0)
+                  .ok());
+  const std::array<std::uint64_t, 3> content_ids{
+      compiled_content_id(session.modeling(), names[0]),
+      compiled_content_id(session.modeling(), names[1]),
+      compiled_content_id(session.modeling(), names[2])};
+  EXPECT_EQ(compiled_index_count(session.modeling(), names[0]), 36U);
+  EXPECT_EQ(compiled_index_count(session.modeling(), names[1]), 36U);
+  EXPECT_NE(compiled_index_count(session.modeling(), names[2]), 36U);
+
+  const auto expect_prefix = [&](std::size_t count) {
+    const auto objects = session.modeling().objects();
+    EXPECT_EQ(objects.size(), count);
+    EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + count);
+    EXPECT_TRUE(session.primitive_creation().active());
+    EXPECT_EQ(editor.tools().active_tool(), kCreatePrimitiveToolId);
+    EXPECT_EQ(session.primitive_creation().shape_count(), count);
+    const QuaderSelectionSummary selection = editor.query().selection();
+    EXPECT_EQ(selection.selected_object_count, count == 0U ? 0U : 1U);
+    if (count > 0U) {
+      EXPECT_EQ(selection.active_object_id,
+                created[count - 1U].modeling_object_id);
+    }
+    for (std::size_t index = 0; index < created.size(); ++index) {
+      SCOPED_TRACE(names[index]);
+      EXPECT_EQ(session.scene().exists(created[index].entity), index < count);
+      const ModelingObjectRecord *const object = find_object(objects, names[index]);
+      if (index >= count) {
+        EXPECT_EQ(object, nullptr);
+        continue;
+      }
+      ASSERT_NE(object, nullptr);
+      EXPECT_EQ(object->entity, created[index].entity);
+      EXPECT_EQ(object->modeling_object_id, created[index].modeling_object_id);
+      EXPECT_EQ(object->mesh, created[index].mesh);
+      EXPECT_EQ(compiled_content_id(session.modeling(), names[index]),
+                content_ids[index]);
+    }
+  };
+
+  expect_prefix(3U);
+  for (std::size_t count = created.size(); count > 0U; --count) {
+    SCOPED_TRACE(::testing::Message() << "undo count=" << count);
+    ASSERT_TRUE(editor.history().can_undo());
+    const QuaderApiVoidResult undone =
+        editor.commands().execute(quader_command::kEditUndo);
+    ASSERT_TRUE(undone.ok()) << undone.error_message();
+    EXPECT_TRUE(undone.changed());
+    expect_prefix(count - 1U);
+    EXPECT_TRUE(editor.history().can_redo());
+  }
+  EXPECT_FALSE(session.primitive_creation().can_undo());
+  for (std::size_t count = 1U; count <= created.size(); ++count) {
+    SCOPED_TRACE(::testing::Message() << "redo count=" << count);
+    const QuaderApiVoidResult redone =
+        editor.commands().execute(quader_command::kEditRedo);
+    ASSERT_TRUE(redone.ok()) << redone.error_message();
+    EXPECT_TRUE(redone.changed());
+    expect_prefix(count);
+  }
+  EXPECT_FALSE(editor.history().can_redo());
+  // History restores accepted geometry without making a frozen shape live again.
+  ASSERT_TRUE(editor.tools()
+                  .set_setting(kCreatePrimitiveToolId,
+                               kBoxSubdivisionsXSetting, 4.0)
+                  .ok());
+  expect_prefix(3U);
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_FALSE(session.primitive_creation().active());
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditUndo).ok());
+  EXPECT_EQ(session.modeling().objects().size(), 2U);
+  EXPECT_TRUE(session.scene().exists(created[0].entity));
+  EXPECT_TRUE(session.scene().exists(created[1].entity));
+  EXPECT_FALSE(session.scene().exists(created[2].entity));
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditRedo).ok());
+  EXPECT_EQ(compiled_content_id(session.modeling(), names[2]), content_ids[2]);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CreatingAfterLocalUndoDropsRedoAndApplyKeepsIndividualHistoryEntries) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const std::size_t baseline_mesh_count = session.assets().mesh_ids().size();
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(valid_primitive_preview(), "Retained Box")
+                  .ok);
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(valid_primitive_preview(4.0f), "Retired Box")
+                  .ok);
+  const auto original = session.modeling().objects();
+  ASSERT_EQ(original.size(), 2U);
+  const ModelingObjectRecord *const retired = find_object(original, "Retired Box");
+  ASSERT_NE(retired, nullptr);
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditUndo).ok());
+  ASSERT_TRUE(editor.history().can_redo());
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(valid_primitive_preview(8.0f), "Branch Box")
+                  .ok);
+  EXPECT_FALSE(editor.history().can_redo());
+  const auto branched = session.modeling().objects();
+  ASSERT_EQ(branched.size(), 2U);
+  const ModelingObjectRecord *const replacement = find_object(branched, "Branch Box");
+  ASSERT_NE(replacement, nullptr);
+  EXPECT_GT(replacement->modeling_object_id, retired->modeling_object_id);
+  EXPECT_NE(replacement->entity, retired->entity);
+  EXPECT_FALSE(session.scene().exists(retired->entity));
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 2U);
+
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditUndo).ok());
+  ASSERT_EQ(session.modeling().objects().size(), 1U);
+  EXPECT_EQ(session.modeling().objects().front().name, "Retained Box");
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 1U);
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditUndo).ok());
+  EXPECT_TRUE(session.modeling().objects().empty());
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count);
+  EXPECT_FALSE(editor.history().can_undo());
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditRedo).ok());
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditRedo).ok());
+  const auto restored = session.modeling().objects();
+  ASSERT_EQ(restored.size(), 2U);
+  const ModelingObjectRecord *const restored_branch = find_object(restored, "Branch Box");
+  ASSERT_NE(restored_branch, nullptr);
+  EXPECT_EQ(restored_branch->modeling_object_id, replacement->modeling_object_id);
+  EXPECT_EQ(restored_branch->entity, replacement->entity);
+  EXPECT_EQ(restored_branch->mesh, replacement->mesh);
+  EXPECT_FALSE(session.scene().exists(retired->entity));
+  EXPECT_FALSE(editor.history().can_redo());
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     LocalPrimitiveUndoPreservesConcurrentSceneEditAndCancelDiscardsLocalRedo) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto baseline = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Concurrent Undo Baseline");
+  ASSERT_TRUE(baseline.ok()) << baseline.error_message();
+  const std::size_t baseline_mesh_count = session.assets().mesh_ids().size();
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(valid_primitive_preview(4.0f), "Retained Transient")
+                  .ok);
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(valid_primitive_preview(8.0f), "Undo Transient")
+                  .ok);
+  const auto expect_state = [&](std::size_t primitive_count, bool visible) {
+    EXPECT_TRUE(session.primitive_creation().active());
+    EXPECT_EQ(session.primitive_creation().shape_count(), primitive_count);
+    EXPECT_EQ(session.modeling().objects().size(), 1U + primitive_count);
+    EXPECT_EQ(session.assets().mesh_ids().size(),
+              baseline_mesh_count + primitive_count);
+    const auto current_baseline = editor.query().entity(baseline.value().entity);
+    ASSERT_TRUE(current_baseline.has_value());
+    EXPECT_EQ(current_baseline->visible, visible);
+  };
+  // Rebase every local history step against the current independent scene edit.
+  for (const bool visible : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "visible=" << visible);
+    ASSERT_TRUE(editor.scene().set_visible(baseline.value().entity, visible).ok());
+    for (std::size_t remaining = 2U; remaining > 0U; --remaining) {
+      ASSERT_TRUE(editor.commands().execute(quader_command::kEditUndo).ok());
+      expect_state(remaining - 1U, visible);
+      EXPECT_TRUE(editor.history().can_redo());
+    }
+    for (std::size_t count = 1U; count <= 2U; ++count) {
+      ASSERT_TRUE(editor.commands().execute(quader_command::kEditRedo).ok());
+      expect_state(count, visible);
+    }
+  }
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditUndo).ok());
+  expect_state(1U, true);
+  EXPECT_TRUE(editor.history().can_redo());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  ASSERT_EQ(session.modeling().objects().size(), 1U);
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count);
+  EXPECT_EQ(editor.query().selection().active_object_id,
+            baseline.value().modeling_object_id);
+  EXPECT_FALSE(editor.history().can_redo());
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditUndo).ok());
+  const auto after_visibility_undo = editor.query().entity(baseline.value().entity);
+  ASSERT_TRUE(after_visibility_undo.has_value());
+  EXPECT_FALSE(after_visibility_undo->visible);
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditUndo).ok());
+  const auto after_both_visibility_undos =
+      editor.query().entity(baseline.value().entity);
+  ASSERT_TRUE(after_both_visibility_undos.has_value());
+  EXPECT_TRUE(after_both_visibility_undos->visible);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     UndoDuringFootprintClearsOnlyTheGestureAndPreservesPrimitiveRedo) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(valid_primitive_preview(), "First Gesture Box")
+                  .ok);
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(valid_primitive_preview(4.0f), "Second Gesture Box")
+                  .ok);
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditUndo).ok());
+  ASSERT_TRUE(editor.history().can_redo());
+  const auto retained = session.modeling().objects();
+  ASSERT_EQ(retained.size(), 1U);
+  const auto mesh_ids = session.assets().mesh_ids();
+  const auto footprint = session.modeling().begin_box_footprint({
+      .screen_position = {400.0f, 300.0f},
+      .ray = {.origin = {12.0f, 4.0f, 0.0f},
+              .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+  });
+  ASSERT_TRUE(footprint.ok) << footprint.message;
+  ASSERT_EQ(footprint.drag_state, ModelingBoxDragState::Footprint);
+  const QuaderSelectionSummary footprint_selection = editor.query().selection();
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditUndo).ok());
+  EXPECT_TRUE(session.primitive_creation().active());
+  EXPECT_EQ(editor.tools().active_tool(), kCreatePrimitiveToolId);
+  EXPECT_EQ(session.primitive_creation().shape_count(), 1U);
+  EXPECT_EQ(session.modeling().box_preview(false).drag_state,
+            ModelingBoxDragState::Idle);
+  ASSERT_EQ(session.modeling().objects().size(), 1U);
+  EXPECT_EQ(session.modeling().objects().front().modeling_object_id,
+            retained.front().modeling_object_id);
+  EXPECT_EQ(session.assets().mesh_ids(), mesh_ids);
+  EXPECT_EQ(editor.query().selection().active_object_id,
+            footprint_selection.active_object_id);
+  EXPECT_EQ(editor.query().selection().selected_object_count,
+            footprint_selection.selected_object_count);
+  ASSERT_TRUE(editor.history().can_redo());
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditRedo).ok());
+  EXPECT_EQ(session.modeling().objects().size(), 2U);
+  EXPECT_TRUE(session.primitive_creation().active());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_TRUE(session.modeling().objects().empty());
+  EXPECT_FALSE(editor.history().can_undo());
+  EXPECT_FALSE(editor.history().can_redo());
 }
 
 TEST(PrimitiveCreationToolServiceTests,
@@ -1252,6 +1535,10 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_TRUE(applied.ok) << applied.message;
   ASSERT_TRUE(harness.history.can_undo());
   ASSERT_TRUE(harness.history.undo().ok);
+  ASSERT_EQ(harness.modeling.objects().size(), 1U);
+  EXPECT_EQ(compiled_content_id(harness.modeling, "Cone"),
+            frozen_cone_content);
+  ASSERT_TRUE(harness.history.undo().ok);
   EXPECT_TRUE(harness.modeling.objects().empty());
 
   ASSERT_TRUE(harness.tool.activate().ok);
@@ -1337,7 +1624,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     ApplyHistoryOrdersConcurrentEditsBeforeThePrimitiveDelta) {
+     ApplyHistoryOrdersConcurrentEditsBeforeEachPrimitiveDelta) {
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -1353,7 +1640,11 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
   ASSERT_TRUE(session.primitive_creation()
                   .accept_preview(valid_primitive_preview(4.0f),
-                                  "Applied Primitive")
+                                  "First Applied Primitive")
+                  .ok);
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(valid_primitive_preview(8.0f),
+                                  "Second Applied Primitive")
                   .ok);
   ASSERT_TRUE(editor.selection().clear().ok());
   ASSERT_FALSE(session.history().can_undo());
@@ -1361,55 +1652,75 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
   const std::vector<ModelingObjectRecord> applied_objects =
       session.modeling().objects();
-  ASSERT_EQ(applied_objects.size(), 2U);
-  const ModelingObjectRecord *const applied_primitive =
-      find_object(applied_objects, "Applied Primitive");
-  ASSERT_NE(applied_primitive, nullptr);
-  const AssetId applied_mesh = applied_primitive->mesh;
-  ASSERT_NE(applied_mesh, kInvalidAssetId);
-  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 1U);
+  ASSERT_EQ(applied_objects.size(), 3U);
+  const ModelingObjectRecord *const first_primitive =
+      find_object(applied_objects, "First Applied Primitive");
+  const ModelingObjectRecord *const second_primitive =
+      find_object(applied_objects, "Second Applied Primitive");
+  ASSERT_NE(first_primitive, nullptr);
+  ASSERT_NE(second_primitive, nullptr);
+  ASSERT_NE(first_primitive->mesh, kInvalidAssetId);
+  ASSERT_NE(second_primitive->mesh, kInvalidAssetId);
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 2U);
 
+  const auto expect_visibility = [&](bool visible) {
+    const auto current_baseline = editor.query().entity(baseline.object.entity);
+    ASSERT_TRUE(current_baseline.has_value());
+    EXPECT_EQ(current_baseline->visible, visible);
+  };
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_EQ(session.modeling().objects().size(), 2U);
+  EXPECT_TRUE(session.scene().exists(first_primitive->entity));
+  EXPECT_FALSE(session.scene().exists(second_primitive->entity));
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 1U);
+  expect_visibility(false);
   ASSERT_TRUE(editor.history().undo().ok());
   ASSERT_EQ(session.modeling().objects().size(), 1U);
   EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count);
   EXPECT_EQ(session.modeling().objects().front().modeling_object_id,
             baseline.object.modeling_object_id);
-  const std::optional<QuaderEntitySnapshot> after_primitive_undo =
-      editor.query().entity(baseline.object.entity);
-  ASSERT_TRUE(after_primitive_undo.has_value());
-  EXPECT_FALSE(after_primitive_undo->visible);
+  expect_visibility(false);
 
   ASSERT_TRUE(editor.history().undo().ok());
-  const std::optional<QuaderEntitySnapshot> after_visibility_undo =
-      editor.query().entity(baseline.object.entity);
-  ASSERT_TRUE(after_visibility_undo.has_value());
-  EXPECT_TRUE(after_visibility_undo->visible);
+  expect_visibility(true);
+  EXPECT_FALSE(editor.history().can_undo());
 
   ASSERT_TRUE(editor.history().redo().ok());
+  expect_visibility(false);
+  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_EQ(session.modeling().objects().size(), 2U);
+  EXPECT_TRUE(session.scene().exists(first_primitive->entity));
+  EXPECT_FALSE(session.scene().exists(second_primitive->entity));
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 1U);
+  expect_visibility(false);
   ASSERT_TRUE(editor.history().redo().ok());
   const std::vector<ModelingObjectRecord> redone_objects =
       session.modeling().objects();
-  ASSERT_EQ(redone_objects.size(), 2U);
-  const ModelingObjectRecord *const redone_primitive =
-      find_object(redone_objects, "Applied Primitive");
-  ASSERT_NE(redone_primitive, nullptr);
-  EXPECT_EQ(redone_primitive->mesh, applied_mesh);
-  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 1U);
-  const std::optional<QuaderEntitySnapshot> after_redo =
-      editor.query().entity(baseline.object.entity);
-  ASSERT_TRUE(after_redo.has_value());
-  EXPECT_FALSE(after_redo->visible);
+  ASSERT_EQ(redone_objects.size(), 3U);
+  for (const ModelingObjectRecord *const expected :
+       {first_primitive, second_primitive}) {
+    const ModelingObjectRecord *const redone =
+        find_object(redone_objects, expected->name);
+    ASSERT_NE(redone, nullptr);
+    EXPECT_EQ(redone->entity, expected->entity);
+    EXPECT_EQ(redone->modeling_object_id, expected->modeling_object_id);
+    EXPECT_EQ(redone->mesh, expected->mesh);
+  }
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 2U);
+  expect_visibility(false);
 
   ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count);
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 1U);
   ASSERT_TRUE(editor.history().redo().ok());
   const std::vector<ModelingObjectRecord> repeated_redo_objects =
       session.modeling().objects();
   const ModelingObjectRecord *const repeated_redo_primitive =
-      find_object(repeated_redo_objects, "Applied Primitive");
+      find_object(repeated_redo_objects, "Second Applied Primitive");
   ASSERT_NE(repeated_redo_primitive, nullptr);
-  EXPECT_EQ(repeated_redo_primitive->mesh, applied_mesh);
-  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 1U);
+  EXPECT_EQ(repeated_redo_primitive->mesh, second_primitive->mesh);
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 2U);
+  expect_visibility(false);
 }
 
 TEST(PrimitiveCreationToolServiceTests,

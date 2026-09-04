@@ -153,6 +153,26 @@ ViewportToolResult TwoStageBoxTool::handle_event(
     bool action_consumed = false;
     bool active_tool_sync_requested = false;
 
+    if (preview.ok && preview.drag_state == ModelingBoxDragState::Idle &&
+        modal_state.primary_pointer_gesture) {
+      // Public history can reset the footprint while the same creation tool
+      // stays active. Retire our old pointer gesture without canceling the
+      // already-reset owner, and keep its held/release edges reserved.
+      modal_state.primary_release_suppression.begin(
+          QuaderMouseButton::Left, true);
+      modal_state.primary_pointer_gesture.reset();
+      invalidate(context);
+      if (modal_state.primary_release_suppression.consume(
+              QuaderMouseButton::Left, pointer.left_clicked,
+              pointer.left_down, pointer.left_released)) {
+        return {
+            .handled = true,
+            .consumed = true,
+            .modal_state_changed = true,
+        };
+      }
+    }
+
     const auto cancel_pointer_gesture = [&]() {
       if (!modal_state.primary_pointer_gesture) {
         return true;
