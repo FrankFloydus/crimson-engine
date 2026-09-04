@@ -252,6 +252,7 @@ ResolvedSelectionHit resolved_modeling_hit(ModelingSelectionHit hit) {
           .edge_a = hit.edge_a,
           .edge_b = hit.edge_b,
           .face = hit.face_id,
+          .source_occurrence = hit.source_occurrence,
       },
       .ray_distance = hit.ray_distance,
       .pick_distance_pixels = hit.pick_distance,

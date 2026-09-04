@@ -452,7 +452,7 @@ void ViewportSelectionInteraction::reset() {
   if (box_state_.active || paint_selection_active_) {
     box_release_suppression_.begin(QuaderMouseButton::Left, true);
   }
-  hover_clear_issued_ = false;
+  hover_clear_state_ = HoverClearState::Armed;
   quader_editor_core::clear_selection_box(box_state_);
   box_pointer_.reset();
   box_edit_ = quader_editor_core::SelectionEditOperation::Replace;
@@ -867,17 +867,23 @@ void ViewportSelectionInteraction::handle_frame(
     tool_hover->invalidate();
   }
 
-  auto clear_hover = [&]() {
+  auto publish_empty_hover = [&](bool preserve_component_candidate) {
     const ModelingCommandResult clear_hover_result =
-        selection_owner(editor).preview_resolved_hover(std::nullopt);
+        preserve_component_candidate
+            ? selection_owner(editor).preview_spatial_hover(std::nullopt)
+            : selection_owner(editor).preview_resolved_hover(std::nullopt);
     if (!clear_hover_result.ok) {
       LOG_ERROR("Viewport hover clear failed: {}",
                 clear_hover_result.message.empty()
                     ? "Hover clear failed."
                     : clear_hover_result.message);
     }
-    hover_clear_issued_ = true;
+    hover_clear_state_ = preserve_component_candidate
+                             ? HoverClearState::SpatialCandidatePreserved
+                             : HoverClearState::FullyCleared;
   };
+  auto clear_hover = [&]() { publish_empty_hover(false); };
+  auto clear_spatial_hover = [&]() { publish_empty_hover(true); };
 
   auto suppress_hover_after_selection =
       [&](QVec2 local_mouse,
@@ -981,7 +987,7 @@ void ViewportSelectionInteraction::handle_frame(
                                       : cut.message);
       }
     }
-    hover_clear_issued_ = false;
+    hover_clear_state_ = HoverClearState::Armed;
     hover_suppressed_target_.reset();
     return;
   }
@@ -1039,7 +1045,7 @@ void ViewportSelectionInteraction::handle_frame(
       // Mouse motion only presents the marquee. Resolving and publishing a
       // selection here would synchronously rebuild SDK, scene, UI, and overlay
       // state for every changing hit set; the final rectangle commits below.
-      if (!hover_clear_issued_) {
+      if (hover_clear_state_ != HoverClearState::FullyCleared) {
         clear_hover();
       }
     }
@@ -1224,7 +1230,7 @@ void ViewportSelectionInteraction::handle_frame(
       LOG_ERROR("Viewport hover failed: {}",
                 hover.message.empty() ? "Hover failed." : hover.message);
     }
-    hover_clear_issued_ = false;
+    hover_clear_state_ = HoverClearState::Armed;
     return;
   }
 
@@ -1238,15 +1244,27 @@ void ViewportSelectionInteraction::handle_frame(
     // Knife owns component hover while its point resolver is eligible to run.
     // Re-arm clearing so a later suppressed frame or pointer leave cannot retain
     // the last Knife target.
-    hover_clear_issued_ = false;
+    hover_clear_state_ = HoverClearState::Armed;
     return;
   }
 
+  const bool requires_full_hover_clear =
+      !selection_fallback_active || frame.input.text_input_active ||
+      frame.input.modal_tool_active || frame.input.active_tool_owns_viewport ||
+      tool_result.handled;
   const bool should_clear_hover =
-      !frame.input.viewport_hovered || !selection_fallback_active ||
-      frame.input.text_input_active || frame.input.modal_tool_active ||
-      frame.input.active_tool_owns_viewport || tool_result.handled;
-  if (!hover_clear_issued_ && should_clear_hover) {
+      !frame.input.viewport_hovered || requires_full_hover_clear;
+  const bool ordinary_pointer_leave =
+      pointer_left_viewport && selection_fallback_active &&
+      !requires_full_hover_clear;
+  const bool needs_spatial_clear =
+      ordinary_pointer_leave && hover_clear_state_ == HoverClearState::Armed;
+  const bool needs_full_clear =
+      !ordinary_pointer_leave &&
+      (hover_clear_state_ == HoverClearState::Armed ||
+       (hover_clear_state_ == HoverClearState::SpatialCandidatePreserved &&
+        requires_full_hover_clear));
+  if (should_clear_hover && (needs_spatial_clear || needs_full_clear)) {
     hover_suppressed_target_.reset();
     if (tool_hover != nullptr &&
         frame.input_router.state().active_tool == ViewportToolId::Knife) {
@@ -1259,7 +1277,14 @@ void ViewportSelectionInteraction::handle_frame(
         tool_hover->invalidate();
       }
     }
-    clear_hover();
+    if (ordinary_pointer_leave) {
+      // Moving from the native viewport surface onto editor UI is an empty
+      // spatial sample, just like moving over the grid/background. Clear the
+      // immediate element hover without discarding the component mesh wire.
+      clear_spatial_hover();
+    } else {
+      clear_hover();
+    }
   }
 }
 
@@ -1274,7 +1299,7 @@ QuaderSelectionSummary ViewportSelectionInteraction::pick_context_menu_target(
   const QuaderSelectionSummary &summary = applied.selection;
   paint_selection_active_ =
       is_component_selection_mode(to_modeling_selection_mode(summary.mode));
-  hover_clear_issued_ = false;
+  hover_clear_state_ = HoverClearState::Armed;
   hover_suppressed_target_.reset();
   return summary;
 }

@@ -85,6 +85,13 @@ public:
     }
 
 private:
+  /// Distinguishes a UI-leave spatial miss from a terminal hover lifecycle.
+  enum class HoverClearState : std::uint8_t {
+    Armed,
+    SpatialCandidatePreserved,
+    FullyCleared,
+  };
+
   /// Preserves the first click's selection while its native double is pending.
   struct DepthClickBaseline {
     ViewportPointerGesture pointer;
@@ -142,7 +149,7 @@ private:
       bool curve_controls_only = false);
   void clear_curve_control_box();
 
-  bool hover_clear_issued_ = false;
+  HoverClearState hover_clear_state_ = HoverClearState::Armed;
   quader_editor_core::SelectionBoxState box_state_;
   std::optional<ViewportPointerGesture> box_pointer_;
   ViewportPointerReleaseSuppression box_release_suppression_;

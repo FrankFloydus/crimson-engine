@@ -1812,6 +1812,12 @@ public:
         break;
       }
     }
+    if (result.kind != ModelingActiveSelectionKind::Object) {
+      const ModelingInstanceEditScope edit_scope =
+          selection_service_.overlay_instance_edit_scope();
+      result.source_occurrence =
+          edit_scope.active() ? edit_scope.occurrence : result.entity;
+    }
     return result;
   }
 

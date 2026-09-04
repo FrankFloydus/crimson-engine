@@ -557,6 +557,10 @@ struct ModelingSelectionHit {
   std::optional<QVec3> world_position;
   std::vector<ModelingSelectionVisibilityWitness> visibility_witnesses;
   std::string signature;
+  /// Exact visible occurrence whose projected geometry produced this hit.
+  /// Standalone meshes use their own entity; instance editing uses the active
+  /// occurrence while `entity` remains the authored geometry member.
+  EntityId source_occurrence = kInvalidEntityId;
 };
 
 /**

@@ -9,6 +9,34 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-09-04 - Inward-Room Edge Radius Survives Same-Surface Arbitration
+
+Task/context: With Backface Selection disabled, the configured edge radius already found an
+inverted room's internal rear rim, but the viewport discarded that component hit unless the cursor
+was almost exactly on the line. Its second, topology-blind depth check treated the adjacent face of
+the same mesh as an occluder because the radius-expanded edge point sat slightly behind it.
+
+Invariant:
+
+- Viewport arbitration may preserve a behind-surface component hit only when it came from the exact
+  rendered geometry occurrence that produced the nearest surface. Ordinary object, face-facing,
+  and configured-radius picking rules remain unchanged.
+- Standalone meshes match when component entity, surface display entity, and surface geometry
+  entity identify the same mesh. Instance editing additionally carries the source occurrence and
+  requires both occurrence/display and geometry/member matches.
+- A different object, a different definition member, or a sibling occurrence that shares geometry
+  remains a real occluder. Exclusion filtering applies to both geometry entities and occurrences.
+
+Owners: `ModelingSessionService` and `ModelingSelectionHit` carry component occurrence identity;
+`EditorSelectionService` preserves it; `ViewportSceneHitPolicy` owns final surface arbitration;
+viewport interaction tests protect the complete hover and click workflow.
+
+Verification: a perspective inverted-box regression targets the rear ceiling/back-wall rim with
+Backface Selection off. A 6-pixel offset misses at radius 0.05, hovers and selects from both sides
+at radius 0.20, and a 14-pixel offset still misses. Separate-object and same-geometry sibling-
+instance blockers remain occluders, as does a locked foreground definition member inside the same
+occurrence; hiding the sibling restores the non-exact component hit.
+
 ## 2026-09-03 - Cross-Domain Component Hover Preserves Sticky Mesh Wire
 
 Task/context: Vertex, Edge, and Face hover lost the current mesh wire as soon as the pointer moved
@@ -20,20 +48,27 @@ Invariant:
 
 - `EditorSelectionService` distinguishes an empty spatial hover sample from `clear_hover()`.
   Component-mode spatial misses clear the immediate vertex/edge/face target but retain the current
-  candidate mesh; pointer/tool/session lifecycle clears still remove it.
+  candidate mesh. Moving from the viewport onto editor UI is also a spatial miss; explicit
+  tool/session lifecycle clears still remove the candidate.
 - With no selected component on mesh A, hovering mesh B replaces A's candidate wire. With selected
   current-mode components on A, A remains independently sticky while hovered B is additive. A
   following grid/background miss preserves both wires and never changes selection or its revision.
 - Mesh/Object mode hover never emits a mesh outline. Its selected wire remains click-owned.
+- A viewport-to-UI leave never changes component selection or its revision. Without selected
+  components, the last hovered mesh wire remains until another mesh replaces it. With selected
+  components on A and hovered B, both wires survive the UI transition; an explicit hover clear
+  removes only B's candidate wire. A later modal/tool lifecycle clear must supersede the preserved
+  spatial state even when the pointer remains over UI.
 
 Owners: `EditorSelectionService`, `ViewportSelectionInteraction`, and the viewport interaction
 regression suite. This extends the 2026-07-04 component source-wire invariant through the newer
 cross-domain selection owner.
 
-Verification: the end-to-end two-mesh viewport test passes for Vertex, Edge, and Face modes; the
-Mesh-mode hover/click test passes; 124 affected guardrails and 789 affected editor/viewport tests
-pass; the complete regression gate passes all six registered suites (including 2,123 app tests and
-the isolated SDK build); and both canonical Debug/Profile and Release executables build.
+Verification: four focused sticky-hover, leave, and re-entry tests pass, including the end-to-end
+two-mesh viewport-to-UI matrix for Vertex, Edge, and Face modes. The affected workflow passes 41
+viewport guardrails and 485 editor/viewport tests; the complete regression gate passes all six
+registered suites, including the isolated SDK build; and both canonical Debug/Profile and Release
+executables build.
 
 ## 2026-09-02 - Hidden-Aware Component Selection Inversion
 

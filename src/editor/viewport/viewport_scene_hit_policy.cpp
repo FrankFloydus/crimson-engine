@@ -213,7 +213,7 @@ struct SelectionIdentityKey final {
   return found != excluded.end() && *found == key;
 }
 
-[[nodiscard]] std::optional<double> render_surface_distance(
+[[nodiscard]] std::optional<SceneSurfaceHit> render_surface_hit(
     const SceneSurfaceQuerySnapshot *scene_surfaces, const ViewportRay &ray,
     SceneSurfaceQueryScratch *scratch,
     std::span<const EntityId> excluded_entities = {},
@@ -225,19 +225,16 @@ struct SelectionIdentityKey final {
   if (scratch == nullptr) {
     return std::nullopt;
   }
-  const std::optional<SceneSurfaceHit> hit =
-      scene_surfaces->nearest_hit(
-          {
-              .world_origin = ray.origin,
-              .world_direction = ray.direction,
-              .include_backfaces = false,
-              .eligibility = SceneSurfaceEligibility::RenderVisible,
-              .excluded_entities = excluded_entities,
-              .excluded_occurrences = excluded_occurrences,
-          },
-          *scratch);
-  return hit.has_value() ? std::optional<double>{hit->distance}
-                         : std::nullopt;
+  return scene_surfaces->nearest_hit(
+      {
+          .world_origin = ray.origin,
+          .world_direction = ray.direction,
+          .include_backfaces = false,
+          .eligibility = SceneSurfaceEligibility::RenderVisible,
+          .excluded_entities = excluded_entities,
+          .excluded_occurrences = excluded_occurrences,
+      },
+      *scratch);
 }
 
 [[nodiscard]] bool depth_is_visible(
@@ -535,13 +532,42 @@ void append_curve_control_hit(
 
 void append_resolved_selection_hits(
     std::span<const ResolvedSelectionHit> resolved_hits,
-    std::optional<double> visible_surface_distance,
+    const std::optional<SceneSurfaceHit> &visible_surface_hit,
     std::vector<ViewportSceneHitCandidate> &hits,
-    std::span<const EntityId> excluded_entities = {}) {
+    std::span<const EntityId> excluded_entities = {},
+    std::span<const ViewportSceneOccurrenceExclusion>
+        excluded_occurrences = {}) {
   for (const ResolvedSelectionHit &hit : resolved_hits) {
+    const EntityId occurrence =
+        hit.target.source_occurrence != kInvalidEntityId
+            ? hit.target.source_occurrence
+            : hit.target.entity;
     if (entity_is_excluded(excluded_entities, hit.target.entity) ||
-        !depth_is_visible(hit.ray_distance, visible_surface_distance)) {
+        entity_is_excluded(excluded_entities, occurrence) ||
+        occurrence_is_excluded(excluded_occurrences, hit.target.entity,
+                               occurrence)) {
       continue;
+    }
+
+    const bool depth_visible =
+        !visible_surface_hit.has_value() ||
+        depth_is_visible(hit.ray_distance, visible_surface_hit->distance);
+    if (!depth_visible) {
+      // The modeling owner has already tested component visibility against
+      // exact incident topology. A radius hit beside an edge can place its
+      // closest point slightly behind the adjacent wall or ceiling, so do not
+      // reject it a second time when that surface is the exact same geometry
+      // occurrence. Distinct objects and distinct instances remain occluders.
+      const SceneSurfaceParticipantId &surface =
+          visible_surface_hit->participant;
+      const bool same_modeling_participant =
+          hit.target.domain == ResolvedSelectionDomain::ModelingComponent &&
+          hit.target.entity != kInvalidEntityId &&
+          occurrence == surface.display_entity &&
+          hit.target.entity == surface.geometry_entity;
+      if (!same_modeling_participant) {
+        continue;
+      }
     }
     hits.push_back(viewport_scene_hit_candidate(hit));
   }
@@ -688,12 +714,16 @@ collect_viewport_scene_point_hits(const ViewportScenePointHitQuery &query) {
     return hits;
   }
   ray.direction = ray.direction / direction_length;
-  const std::optional<double> visible_surface_distance =
+  const std::optional<SceneSurfaceHit> visible_surface_hit =
       query.include_occluded
           ? std::nullopt
-          : render_surface_distance(query.scene_surfaces, ray,
-                                    surface_scratch, query.excluded_entities,
-                                    query.excluded_occurrences);
+          : render_surface_hit(query.scene_surfaces, ray, surface_scratch,
+                               query.excluded_entities,
+                               query.excluded_occurrences);
+  const std::optional<double> visible_surface_distance =
+      visible_surface_hit.has_value()
+          ? std::optional<double>{visible_surface_hit->distance}
+          : std::nullopt;
   if (query.include_mesh_surfaces) {
     append_mesh_hits(query.scene_surfaces, ray, visible_surface_distance,
                      query.collect_all_mesh_surfaces, query.select_backfaces,
@@ -704,8 +734,9 @@ collect_viewport_scene_point_hits(const ViewportScenePointHitQuery &query) {
   append_curve_entity_hits(query, visible_surface_distance, hits);
   append_curve_control_hit(query, visible_surface_distance, hits);
   append_resolved_selection_hits(query.resolved_selection_hits,
-                                 visible_surface_distance, hits,
-                                 query.excluded_entities);
+                                 visible_surface_hit, hits,
+                                 query.excluded_entities,
+                                 query.excluded_occurrences);
   return hits;
 }
 
@@ -734,18 +765,21 @@ collect_viewport_scene_ray_hits(const ViewportSceneRayHitQuery &query) {
     return hits;
   }
   ray.direction = ray.direction / direction_length;
-  const std::optional<double> visible_surface_distance =
+  const std::optional<SceneSurfaceHit> visible_surface_hit =
       query.include_occluded
           ? std::nullopt
-          : render_surface_distance(query.scene_surfaces, ray,
-                                    surface_scratch);
+          : render_surface_hit(query.scene_surfaces, ray, surface_scratch);
+  const std::optional<double> visible_surface_distance =
+      visible_surface_hit.has_value()
+          ? std::optional<double>{visible_surface_hit->distance}
+          : std::nullopt;
   if (query.include_mesh_surfaces) {
     append_mesh_hits(query.scene_surfaces, ray, visible_surface_distance,
                      query.collect_all_mesh_surfaces, query.select_backfaces,
                      {}, {}, surface_scratch, hits);
   }
   append_resolved_selection_hits(query.resolved_selection_hits,
-                                 visible_surface_distance, hits);
+                                 visible_surface_hit, hits);
   return hits;
 }
 

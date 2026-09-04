@@ -6632,6 +6632,383 @@ TEST(ViewportSelectionInteractionTests,
 }
 
 TEST(ViewportInteractionControllerTests,
+     InwardRoomInternalRearRimUsesConfiguredEdgeRadiusWithBackfacesOff) {
+  ViewportInteractionHarness harness;
+  ASSERT_TRUE(harness.camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 8.0f},
+      .target = {0.0f, 0.0f, 0.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const quader::QuaderModelingObjectRef room = create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection().select_object(room).ok());
+  ASSERT_TRUE(
+      harness.editor.commands()
+          .execute(quader::quader_command::kModelingFlipFaceNormals)
+          .ok());
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Edge)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+  (void)harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::BackfaceSelection, false);
+  ASSERT_FALSE(harness.settings.bool_value(
+      quader::ViewportBoolSettingId::BackfaceSelection));
+
+  // After flipping the unit box, edge (6, 7) is the visible internal rear top
+  // rim where the back wall meets the ceiling.
+  constexpr int kRearRimA = 6;
+  constexpr int kRearRimB = 7;
+  const quader::ViewportScreenPoint back_wall =
+      harness.camera.project_world_point({0.0f, 0.0f, -1.0f});
+  const quader::ViewportScreenPoint rear_rim =
+      harness.camera.project_world_point({0.0f, 1.0f, -1.0f});
+  ASSERT_TRUE(back_wall.visible);
+  ASSERT_TRUE(rear_rim.visible);
+
+  const auto dispatch_hover = [&](quader::QVec2 local) {
+    harness.input.mouse_local = local;
+    harness.input.mouse_screen = local;
+    harness.dispatch_frame(harness.frame());
+  };
+  const auto is_rear_rim = [](int edge_a, int edge_b) {
+    return (edge_a == kRearRimA && edge_b == kRearRimB) ||
+           (edge_a == kRearRimB && edge_b == kRearRimA);
+  };
+  const auto overlay_line_count = [&](quader::ViewportOverlayLayer layer) {
+    const quader::ViewportOverlayFrame overlay =
+        quader::test_support::visible_modeling_overlay_frame(
+            harness.session.modeling());
+    return std::count_if(
+        overlay.lines.begin(), overlay.lines.end(),
+        [&](const quader::ViewportOverlayLine &line) {
+          return line.layer == layer &&
+                 line.element.object_id == room.modeling_object_id &&
+                 (layer != quader::ViewportOverlayLayer::HoverEdge ||
+                  is_rear_rim(line.element.edge_a, line.element.edge_b));
+        });
+  };
+  const auto expect_rear_rim_hover = [&]() {
+    const quader::QuaderHoverSummary hover =
+        harness.editor.selection().hover_summary();
+    ASSERT_EQ(hover.target.kind, quader::QuaderActiveSelectionKind::Edge);
+    EXPECT_EQ(hover.target.object_id, room.modeling_object_id);
+    EXPECT_TRUE(is_rear_rim(hover.target.edge_a, hover.target.edge_b));
+    EXPECT_EQ(overlay_line_count(quader::ViewportOverlayLayer::HoverEdge), 1);
+  };
+
+  // Establish the component candidate on the exact rim, then move onto the
+  // back wall. This recreates the screenshot's already-sticky room wire
+  // before any non-exact edge-radius probe.
+  (void)harness.settings.set_float_value(
+      quader::ViewportFloatSettingId::PickEdgeRadius, 0.20f);
+  dispatch_hover(rear_rim.position);
+  expect_rear_rim_hover();
+  EXPECT_EQ(harness.session.modeling()
+                .selection_hover_summary()
+                .candidate_object_id,
+            room.modeling_object_id);
+  EXPECT_GT(overlay_line_count(quader::ViewportOverlayLayer::SourceWire), 0);
+
+  dispatch_hover(back_wall.position);
+  EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+            quader::QuaderActiveSelectionKind::None);
+  EXPECT_EQ(harness.session.modeling()
+                .selection_hover_summary()
+                .candidate_object_id,
+            room.modeling_object_id);
+  EXPECT_GT(overlay_line_count(quader::ViewportOverlayLayer::SourceWire), 0);
+
+  quader::QVec2 six_pixels_below = rear_rim.position;
+  six_pixels_below.y += 6.0f;
+  quader::QVec2 six_pixels_above = rear_rim.position;
+  six_pixels_above.y -= 6.0f;
+  quader::QVec2 fourteen_pixels_below = rear_rim.position;
+  fourteen_pixels_below.y += 14.0f;
+
+  // Six pixels is outside a deliberately tight world-space radius at this
+  // depth, but within the configured 0.20 edge radius.
+  ASSERT_TRUE(harness.settings.set_float_value(
+      quader::ViewportFloatSettingId::PickEdgeRadius, 0.05f));
+  dispatch_hover(six_pixels_below);
+  EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+            quader::QuaderActiveSelectionKind::None);
+  EXPECT_EQ(overlay_line_count(quader::ViewportOverlayLayer::HoverEdge), 0);
+  EXPECT_EQ(harness.session.modeling()
+                .selection_hover_summary()
+                .candidate_object_id,
+            room.modeling_object_id);
+
+  ASSERT_TRUE(harness.settings.set_float_value(
+      quader::ViewportFloatSettingId::PickEdgeRadius, 0.20f));
+  dispatch_hover(six_pixels_below);
+  expect_rear_rim_hover();
+  dispatch_hover(six_pixels_above);
+  expect_rear_rim_hover();
+
+  // A clearly farther probe must not accidentally turn the sticky source
+  // wire into an edge hover.
+  dispatch_hover(fourteen_pixels_below);
+  EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+            quader::QuaderActiveSelectionKind::None);
+  EXPECT_EQ(overlay_line_count(quader::ViewportOverlayLayer::HoverEdge), 0);
+  EXPECT_GT(overlay_line_count(quader::ViewportOverlayLayer::SourceWire), 0);
+
+  // Click through the same viewport interaction path used by the native
+  // surface, not through a direct selection-service request.
+  harness.click_selection(six_pixels_below);
+  const quader::QuaderSelectionSummary selected =
+      harness.editor.selection().summary();
+  ASSERT_EQ(selected.selected_edge_count, 1u);
+  EXPECT_EQ(selected.active_object_id, room.modeling_object_id);
+  EXPECT_TRUE(is_rear_rim(static_cast<int>(selected.active_edge_a),
+                          static_cast<int>(selected.active_edge_b)));
+
+  // The same-participant allowance must remain narrow. A different rendered
+  // mesh between the camera and room still occludes this otherwise-valid rim
+  // radius hit for both hover and click.
+  const quader::QuaderModelingObjectRef blocker =
+      create_box_at(harness, {0.0f, 0.0f, 4.0f});
+  ASSERT_NE(blocker.entity, room.entity);
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  dispatch_hover(six_pixels_below);
+  const quader::QuaderHoverSummary occluded_hover =
+      harness.editor.selection().hover_summary();
+  EXPECT_FALSE(occluded_hover.target.kind ==
+                       quader::QuaderActiveSelectionKind::Edge &&
+               occluded_hover.target.object_id == room.modeling_object_id &&
+               is_rear_rim(occluded_hover.target.edge_a,
+                           occluded_hover.target.edge_b));
+  EXPECT_EQ(overlay_line_count(quader::ViewportOverlayLayer::HoverEdge), 0);
+
+  harness.click_selection(six_pixels_below);
+  EXPECT_EQ(harness.editor.selection().summary().selected_edge_count, 0u);
+}
+
+TEST(ViewportInteractionControllerTests,
+     SiblingInstanceOccurrenceStillOccludesActiveComponentRadiusHit) {
+  ViewportInteractionHarness harness;
+  ASSERT_TRUE(harness.camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 8.0f},
+      .target = {0.0f, 0.0f, 0.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const quader::QuaderModelingObjectRef member = create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection().select_object(member).ok());
+  const auto instance =
+      harness.editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+  const quader::EntityId active_occurrence =
+      instance.value().occurrence.root.id;
+  ASSERT_NE(active_occurrence, quader::kInvalidEntityId);
+
+  ASSERT_TRUE(
+      harness.editor.selection().select_object(active_occurrence).ok());
+  const auto duplicated =
+      harness.editor.modeling().duplicate_selected_entity_hierarchy();
+  ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
+  const std::vector<quader::EntityId> duplicate_selection =
+      selected_entities(harness);
+  ASSERT_EQ(duplicate_selection.size(), 1u);
+  const quader::EntityId sibling_occurrence = duplicate_selection.front();
+  ASSERT_NE(sibling_occurrence, active_occurrence);
+
+  const auto active_snapshot =
+      harness.editor.query().entity(active_occurrence);
+  const auto sibling_snapshot =
+      harness.editor.query().entity(sibling_occurrence);
+  ASSERT_TRUE(active_snapshot.has_value());
+  ASSERT_TRUE(sibling_snapshot.has_value());
+  ASSERT_TRUE(active_snapshot->has_instance_occurrence);
+  ASSERT_TRUE(sibling_snapshot->has_instance_occurrence);
+  ASSERT_EQ(active_snapshot->instance_definition,
+            sibling_snapshot->instance_definition);
+
+  ASSERT_TRUE(harness.editor.scene()
+                  .set_transform(active_occurrence,
+                                 {.position = {0.0f, 0.0f, 0.0f}})
+                  .ok());
+  ASSERT_TRUE(harness.editor.scene()
+                  .set_transform(sibling_occurrence,
+                                 {.position = {0.0f, 0.0f, 4.0f}})
+                  .ok());
+  ASSERT_TRUE(
+      harness.editor.selection().select_object(active_occurrence).ok());
+  ASSERT_TRUE(
+      harness.editor.modeling().enter_instance_edit(active_occurrence).ok());
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Edge)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+  (void)harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::BackfaceSelection, false);
+  EXPECT_FALSE(harness.settings.bool_value(
+      quader::ViewportBoolSettingId::BackfaceSelection));
+  (void)harness.settings.set_float_value(
+      quader::ViewportFloatSettingId::PickEdgeRadius, 0.20f);
+  EXPECT_FLOAT_EQ(harness.settings.float_value(
+                      quader::ViewportFloatSettingId::PickEdgeRadius),
+                  0.20f);
+
+  const quader::ViewportScreenPoint edge_screen =
+      harness.camera.project_world_point({0.0f, 1.0f, 1.0f});
+  ASSERT_TRUE(edge_screen.visible);
+  quader::QVec2 probe = edge_screen.position;
+  probe.y += 6.0f;
+  const quader::ViewportRay ray =
+      harness.camera.ray_from_viewport_point(probe);
+
+  // Instance-edit modeling sees only the active occurrence, and therefore
+  // resolves the intended component before provider-neutral scene occlusion.
+  const quader::QuaderHoverSummary modeling_hit =
+      harness.editor.selection().preview_hover({
+          .ray = {.origin = ray.origin, .direction = ray.direction},
+          .edge_radius = 0.20,
+          .select_backfaces = false,
+      });
+  ASSERT_EQ(modeling_hit.target.kind,
+            quader::QuaderActiveSelectionKind::Edge);
+  EXPECT_EQ(modeling_hit.target.object_id, member.modeling_object_id);
+
+  // The render surface belongs to a different public occurrence of that same
+  // definition geometry. Geometry identity alone must never bypass it.
+  const quader::SceneSurfaceQuerySnapshot surfaces =
+      harness.session.scene_surface_query().snapshot();
+  quader::SceneSurfaceQueryScratch surface_scratch;
+  const std::optional<quader::SceneSurfaceHit> surface_hit =
+      surfaces.nearest_hit(
+          {
+              .world_origin = ray.origin,
+              .world_direction = ray.direction,
+              .include_backfaces = false,
+              .eligibility =
+                  quader::SceneSurfaceEligibility::RenderVisible,
+          },
+          surface_scratch);
+  ASSERT_TRUE(surface_hit.has_value());
+  EXPECT_EQ(surface_hit->participant.display_entity, sibling_occurrence);
+  EXPECT_EQ(surface_hit->participant.geometry_entity, member.entity);
+
+  const auto dispatch_hover = [&](quader::QVec2 local) {
+    harness.input.mouse_local = local;
+    harness.input.mouse_screen = local;
+    harness.dispatch_frame(harness.frame());
+  };
+  dispatch_hover(probe);
+  EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+            quader::QuaderActiveSelectionKind::None);
+  harness.click_selection(probe);
+  EXPECT_EQ(harness.editor.selection().summary().selected_edge_count, 0u);
+
+  // Once the sibling is hidden, the active occurrence is the matching render
+  // participant. The same non-exact radius probe must hover and select it.
+  ASSERT_TRUE(harness.editor.scene()
+                  .set_visible(sibling_occurrence, false)
+                  .ok());
+  dispatch_hover(probe);
+  const quader::QuaderHoverSummary visible_hover =
+      harness.editor.selection().hover_summary();
+  ASSERT_EQ(visible_hover.target.kind,
+            quader::QuaderActiveSelectionKind::Edge);
+  EXPECT_EQ(visible_hover.target.object_id, member.modeling_object_id);
+  harness.click_selection(probe);
+  EXPECT_EQ(harness.editor.selection().summary().selected_edge_count, 1u);
+}
+
+TEST(ViewportInteractionControllerTests,
+     ForegroundMemberInSameInstanceOccurrenceOccludesRearComponentRadiusHit) {
+  ViewportInteractionHarness harness;
+  ASSERT_TRUE(harness.camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 8.0f},
+      .target = {0.0f, 0.0f, 0.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  const quader::QuaderModelingObjectRef rear =
+      create_box_at(harness, {0.0f, 0.0f, 0.0f});
+  const quader::QuaderModelingObjectRef foreground =
+      create_box_at(harness, {0.0f, 0.0f, 4.0f});
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_objects({rear.entity, foreground.entity},
+                                  rear.entity)
+                  .ok());
+  const auto instance =
+      harness.editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+  ASSERT_EQ(instance.value().definition.members.size(), 2u);
+  const quader::EntityId occurrence = instance.value().occurrence.root.id;
+  ASSERT_NE(occurrence, quader::kInvalidEntityId);
+
+  // Keep the front member rendered while making its components ineligible.
+  // The rear member then remains a valid raw modeling-radius candidate.
+  ASSERT_TRUE(
+      harness.editor.scene().set_locked(foreground.entity, true).ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(occurrence).ok());
+  ASSERT_TRUE(harness.editor.modeling().enter_instance_edit(occurrence).ok());
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Edge)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+  (void)harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::BackfaceSelection, false);
+  EXPECT_FALSE(harness.settings.bool_value(
+      quader::ViewportBoolSettingId::BackfaceSelection));
+  (void)harness.settings.set_float_value(
+      quader::ViewportFloatSettingId::PickEdgeRadius, 0.20f);
+  EXPECT_FLOAT_EQ(harness.settings.float_value(
+                      quader::ViewportFloatSettingId::PickEdgeRadius),
+                  0.20f);
+
+  const quader::ViewportScreenPoint rear_edge_screen =
+      harness.camera.project_world_point({0.0f, 1.0f, 1.0f});
+  ASSERT_TRUE(rear_edge_screen.visible);
+  quader::QVec2 probe = rear_edge_screen.position;
+  probe.y += 6.0f;
+  const quader::ViewportRay ray =
+      harness.camera.ray_from_viewport_point(probe);
+
+  const quader::QuaderHoverSummary modeling_hit =
+      harness.editor.selection().preview_hover({
+          .ray = {.origin = ray.origin, .direction = ray.direction},
+          .edge_radius = 0.20,
+          .select_backfaces = false,
+      });
+  ASSERT_EQ(modeling_hit.target.kind,
+            quader::QuaderActiveSelectionKind::Edge);
+  EXPECT_EQ(modeling_hit.target.object_id, rear.modeling_object_id);
+
+  // Both surfaces have the same public occurrence, but the closest rendered
+  // geometry is the distinct foreground member. Occurrence identity alone
+  // must therefore not authorize the rear component through that surface.
+  const quader::SceneSurfaceQuerySnapshot surfaces =
+      harness.session.scene_surface_query().snapshot();
+  quader::SceneSurfaceQueryScratch surface_scratch;
+  const std::optional<quader::SceneSurfaceHit> surface_hit =
+      surfaces.nearest_hit(
+          {
+              .world_origin = ray.origin,
+              .world_direction = ray.direction,
+              .include_backfaces = false,
+              .eligibility =
+                  quader::SceneSurfaceEligibility::RenderVisible,
+          },
+          surface_scratch);
+  ASSERT_TRUE(surface_hit.has_value());
+  EXPECT_EQ(surface_hit->participant.display_entity, occurrence);
+  EXPECT_EQ(surface_hit->participant.geometry_entity, foreground.entity);
+  ASSERT_NE(surface_hit->participant.geometry_entity, rear.entity);
+
+  harness.input.mouse_local = probe;
+  harness.input.mouse_screen = probe;
+  harness.dispatch_frame(harness.frame());
+  EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+            quader::QuaderActiveSelectionKind::None);
+  harness.click_selection(probe);
+  EXPECT_EQ(harness.editor.selection().summary().selected_edge_count, 0u);
+}
+
+TEST(ViewportInteractionControllerTests,
      ComponentHoverWireSticksAcrossEmptySpaceAndSelectedMeshesStayAdditive) {
   /// Exercises the complete viewport-resolved hover publication path for each
   /// component mode. The lower-level polygon picker already preserves its
@@ -6781,6 +7158,163 @@ TEST(ViewportInteractionControllerTests,
     EXPECT_EQ(source_wire_count(left.modeling_object_id), left_wire_count);
     EXPECT_EQ(source_wire_count(right.modeling_object_id), right_wire_count);
     EXPECT_EQ(selected_component_count(), 1u);
+    EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+              selected_revision);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     ComponentHoverWireSurvivesPointerLeavingViewportForEditorUi) {
+  /// Qt surface Leave events publish viewport_hovered=false. Exercise that
+  /// complete controller path for every component mode, both with an empty
+  /// selection and with a selected mesh plus a different hovered candidate.
+  struct ModeCase final {
+    quader::QuaderSelectionMode api_mode;
+    quader::ViewportSelectionMode viewport_mode;
+    quader::QuaderActiveSelectionKind hover_kind;
+    quader::QVec3 left_target;
+    quader::QVec3 right_target;
+  };
+  constexpr std::array<ModeCase, 3> kCases{
+      ModeCase{quader::QuaderSelectionMode::Vertex,
+               quader::ViewportSelectionMode::Vertex,
+               quader::QuaderActiveSelectionKind::Vertex,
+               {-2.0f, 1.0f, 1.0f}, {4.0f, 1.0f, 1.0f}},
+      ModeCase{quader::QuaderSelectionMode::Edge,
+               quader::ViewportSelectionMode::Edge,
+               quader::QuaderActiveSelectionKind::Edge,
+               {-2.0f, 0.0f, 1.0f}, {4.0f, 0.0f, 1.0f}},
+      ModeCase{quader::QuaderSelectionMode::Face,
+               quader::ViewportSelectionMode::Face,
+               quader::QuaderActiveSelectionKind::Face,
+               {-3.0f, 0.0f, 1.0f}, {3.0f, 0.0f, 1.0f}},
+  };
+
+  for (const ModeCase &mode_case : kCases) {
+    SCOPED_TRACE(static_cast<int>(mode_case.api_mode));
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef left =
+        create_box_at(harness, {-3.0f, 0.0f, 0.0f});
+    const quader::QuaderModelingObjectRef right =
+        create_box_at(harness, {3.0f, 0.0f, 0.0f});
+    ASSERT_TRUE(harness.editor.selection().set_mode(mode_case.api_mode).ok());
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    harness.router.set_selection_mode(mode_case.viewport_mode);
+
+    const quader::ViewportScreenPoint left_screen =
+        harness.camera.project_world_point(mode_case.left_target);
+    const quader::ViewportScreenPoint right_screen =
+        harness.camera.project_world_point(mode_case.right_target);
+    ASSERT_TRUE(left_screen.visible);
+    ASSERT_TRUE(right_screen.visible);
+
+    const auto dispatch_frame = [&]() {
+      harness.dispatch_frame(harness.frame());
+    };
+    const auto point_at = [&](quader::QVec2 local) {
+      harness.input.mouse_local = local;
+      harness.input.mouse_screen = local;
+    };
+    const auto source_wire_count = [&](int object_id) {
+      const quader::ViewportOverlayFrame overlay =
+          quader::test_support::visible_modeling_overlay_frame(
+              harness.session.modeling());
+      return std::count_if(
+          overlay.lines.begin(), overlay.lines.end(),
+          [&](const quader::ViewportOverlayLine &line) {
+            return line.layer == quader::ViewportOverlayLayer::SourceWire &&
+                   line.element.object_id == object_id;
+          });
+    };
+    const auto select_one_left_component = [&]() {
+      switch (mode_case.api_mode) {
+      case quader::QuaderSelectionMode::Vertex:
+        return harness.editor.selection().select_vertex(left, 1);
+      case quader::QuaderSelectionMode::Edge:
+        return harness.editor.selection().select_edge(left, 1, 2);
+      case quader::QuaderSelectionMode::Face:
+        return harness.editor.selection().select_face(left, 1);
+      case quader::QuaderSelectionMode::Object:
+      case quader::QuaderSelectionMode::Group:
+        break;
+      }
+      quader::QuaderApiVoidResult unsupported;
+      unsupported.message = "Unsupported component hover test mode.";
+      return unsupported;
+    };
+
+    point_at(left_screen.position);
+    dispatch_frame();
+    ASSERT_EQ(harness.editor.selection().hover_summary().target.object_id,
+              left.modeling_object_id);
+    ASSERT_EQ(harness.editor.selection().hover_summary().target.kind,
+              mode_case.hover_kind);
+    const auto left_wire_count = source_wire_count(left.modeling_object_id);
+    ASSERT_GT(left_wire_count, 0);
+    EXPECT_EQ(source_wire_count(right.modeling_object_id), 0);
+    const std::uint64_t empty_selection_revision =
+        harness.editor.selection().summary().selection_revision;
+
+    // Crossing from the native surface onto a toolbar, panel, or other Qt UI
+    // clears the element highlight but must keep the last mesh wire sticky.
+    harness.input.viewport_hovered = false;
+    dispatch_frame();
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::None);
+    EXPECT_EQ(source_wire_count(left.modeling_object_id), left_wire_count);
+    EXPECT_EQ(source_wire_count(right.modeling_object_id), 0);
+    EXPECT_FALSE(harness.editor.selection().summary().has_selection);
+    EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+              empty_selection_revision);
+
+    // Remaining over UI for more frames must be stable and side-effect free.
+    dispatch_frame();
+    EXPECT_EQ(source_wire_count(left.modeling_object_id), left_wire_count);
+    EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+              empty_selection_revision);
+
+    // Re-enter directly over another mesh. With no selected component, its
+    // wire replaces the previously sticky candidate.
+    point_at(right_screen.position);
+    harness.input.viewport_hovered = true;
+    dispatch_frame();
+    ASSERT_EQ(harness.editor.selection().hover_summary().target.object_id,
+              right.modeling_object_id);
+    ASSERT_EQ(harness.editor.selection().hover_summary().target.kind,
+              mode_case.hover_kind);
+    EXPECT_EQ(source_wire_count(left.modeling_object_id), 0);
+    const auto right_wire_count = source_wire_count(right.modeling_object_id);
+    ASSERT_GT(right_wire_count, 0);
+
+    // A selected component makes the left wire selection-owned while the
+    // right wire remains hover-owned. Leaving for UI must retain both.
+    const quader::QuaderApiVoidResult selected = select_one_left_component();
+    ASSERT_TRUE(selected.ok()) << selected.error_message();
+    ASSERT_TRUE(selected.changed());
+    dispatch_frame();
+    ASSERT_EQ(source_wire_count(left.modeling_object_id), left_wire_count);
+    ASSERT_EQ(source_wire_count(right.modeling_object_id), right_wire_count);
+    const std::uint64_t selected_revision =
+        harness.editor.selection().summary().selection_revision;
+
+    harness.input.viewport_hovered = false;
+    dispatch_frame();
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::None);
+    EXPECT_EQ(source_wire_count(left.modeling_object_id), left_wire_count);
+    EXPECT_EQ(source_wire_count(right.modeling_object_id), right_wire_count);
+    EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+              selected_revision);
+
+    // A stronger lifecycle reason that starts while the pointer remains over
+    // UI must supersede the spatial leave. It removes only the hover-owned
+    // candidate while the real selected-component wire survives.
+    harness.input.modal_tool_active = true;
+    dispatch_frame();
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::None);
+    EXPECT_EQ(source_wire_count(left.modeling_object_id), left_wire_count);
+    EXPECT_EQ(source_wire_count(right.modeling_object_id), 0);
     EXPECT_EQ(harness.editor.selection().summary().selection_revision,
               selected_revision);
   }
