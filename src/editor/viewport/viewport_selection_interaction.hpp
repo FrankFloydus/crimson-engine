@@ -120,6 +120,7 @@ private:
     ViewportPointerGesture pointer;
     ModelingPickSelectRequest request;
     std::optional<ResolvedSelectionTarget> winner;
+    std::optional<ResolvedComponentBodyTarget> component_body_target;
     std::optional<ResolvedSelectionTarget> hovered_before_selection;
     EditorSubSelectionKind miss_sub_selection_kind =
         EditorSubSelectionKind::None;

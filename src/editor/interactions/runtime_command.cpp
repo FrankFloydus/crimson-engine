@@ -120,13 +120,24 @@ BoxToolStateResult set_box_construction_plane_from_ray(
 		EditorRuntime& runtime,
 		const BoxRayRuntimeCommandSettings& settings)
 {
+	constexpr quader::QVec3 kGroundNormal{0.0F, 1.0F, 0.0F};
+	constexpr float kGroundParallelCosine = 0.999F;
 	const std::optional<PickHitRecord> hit = resolved_or_runtime_surface_hit(
 		selection, settings.ray, settings.resolved_surface_hit,
 		settings.surface_hit_resolved);
-	if (hit.has_value() && quader::length_squared(hit->local_normal) > 0.000001F) {
-		return runtime.set_box_construction_plane(hit->local_position, hit->local_normal);
+	if (hit.has_value()) {
+		const float normal_length_squared =
+			quader::length_squared(hit->local_normal);
+		if (normal_length_squared > 0.000001F &&
+			std::abs(hit->local_normal.y) /
+					std::sqrt(normal_length_squared) >=
+				kGroundParallelCosine) {
+			return runtime.set_box_construction_plane(hit->local_position,
+			                                          kGroundNormal);
+		}
 	}
-	return runtime.set_box_construction_plane({ 0.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F });
+	return runtime.set_box_construction_plane({0.0F, 0.0F, 0.0F},
+	                                          kGroundNormal);
 }
 
 CommandResult box_state_result_to_command(
@@ -176,7 +187,7 @@ CommandResult update_box_hover(
 		return { true, box_runtime_status_changed(before, runtime.status()), "" };
 	}
 
-	const BoxToolStateResult result = runtime.update_box_hover_cell(point.position, settings.snap_enabled);
+	const BoxToolStateResult result = runtime.update_box_hover(point.position, settings.snap_enabled);
 	return box_state_result_to_command(before, runtime, result, "Box hover failed.");
 }
 

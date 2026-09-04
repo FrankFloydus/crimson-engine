@@ -249,9 +249,9 @@ public:
 	[[nodiscard]] BoxToolStateResult update_box_footprint(
 			quader::QVec3 raw_end,
 			bool grid_enabled);
-	[[nodiscard]] BoxToolStateResult update_box_hover_cell(
-			quader::QVec3 local_point,
-			bool grid_enabled);
+	[[nodiscard]] BoxToolStateResult update_box_hover(
+		quader::QVec3 local_point,
+		bool grid_enabled);
 	[[nodiscard]] double box_height_distance_for_ray(const quader_poly::Ray& ray) const;
 	[[nodiscard]] BoxToolStateResult begin_box_height(
 			quader::QVec2 screen_position,

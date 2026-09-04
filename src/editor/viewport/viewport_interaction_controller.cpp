@@ -924,6 +924,12 @@ bool ViewportInteractionController::active_tool_uses_editor_native_lifecycle(
   return tool_runtime_.tool_uses_editor_native_lifecycle(tool);
 }
 
+ViewportPointerCursor
+ViewportInteractionController::active_tool_pointer_cursor(
+    ViewportToolId tool) const {
+  return tool_runtime_.tool_pointer_cursor(tool);
+}
+
 bool ViewportInteractionController::has_active_modal_preview(
     const ViewportToolPreviewPort &preview, bool snap_enabled) const {
   return tool_runtime_.has_active_modal_preview(preview, snap_enabled);

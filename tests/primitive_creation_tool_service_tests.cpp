@@ -1517,6 +1517,61 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
+     FootprintPreviewStartsEmptyThenGrowsThroughLineAndRectangle) {
+  PrimitiveCreationHarness harness;
+  ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Box).ok);
+
+  const ModelingBoxToolEvent start{
+      .ray = {.origin = {2.0f, 4.0f, 3.0f},
+              .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+  };
+  const ModelingBoxPreview hover = harness.modeling.update_box_hover(start);
+  ASSERT_TRUE(hover.ok) << hover.message;
+  EXPECT_EQ(hover.drag_state, ModelingBoxDragState::Idle);
+  EXPECT_FALSE(hover.valid);
+  EXPECT_EQ(hover.footprint_count, 0U);
+
+  const ModelingBoxPreview pressed =
+      harness.modeling.begin_box_footprint(start);
+  ASSERT_TRUE(pressed.ok) << pressed.message;
+  EXPECT_EQ(pressed.drag_state, ModelingBoxDragState::Footprint);
+  EXPECT_FALSE(pressed.valid);
+  EXPECT_EQ(pressed.footprint_count, 0U);
+  EXPECT_FLOAT_EQ(pressed.footprint_size.x, 0.0f);
+  EXPECT_FLOAT_EQ(pressed.footprint_size.y, 0.0f);
+
+  const ModelingBoxPreview line = harness.modeling.update_box_footprint({
+      .ray = {.origin = {5.0f, 4.0f, 3.0f},
+              .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+  });
+  ASSERT_TRUE(line.ok) << line.message;
+  EXPECT_EQ(line.drag_state, ModelingBoxDragState::Footprint);
+  EXPECT_FALSE(line.valid);
+  ASSERT_EQ(line.footprint_count, 2U);
+  EXPECT_TRUE(near_point(line.footprint[0], {2.0f, 0.0f, 3.0f}));
+  EXPECT_TRUE(near_point(line.footprint[1], {5.0f, 0.0f, 3.0f}));
+  EXPECT_FLOAT_EQ(line.footprint_size.x, 3.0f);
+  EXPECT_FLOAT_EQ(line.footprint_size.y, 0.0f);
+
+  const ModelingBoxPreview rectangle = harness.modeling.update_box_footprint({
+      .ray = {.origin = {5.0f, 4.0f, 7.0f},
+              .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+  });
+  ASSERT_TRUE(rectangle.ok) << rectangle.message;
+  EXPECT_EQ(rectangle.drag_state, ModelingBoxDragState::Footprint);
+  ASSERT_TRUE(rectangle.valid);
+  ASSERT_EQ(rectangle.footprint_count, 4U);
+  EXPECT_TRUE(near_point(rectangle.footprint[0], {2.0f, 0.0f, 3.0f}));
+  EXPECT_TRUE(near_point(rectangle.footprint[2], {5.0f, 0.0f, 7.0f}));
+  EXPECT_FLOAT_EQ(rectangle.footprint_size.x, 3.0f);
+  EXPECT_FLOAT_EQ(rectangle.footprint_size.y, 4.0f);
+  EXPECT_TRUE(harness.tool.cancel().ok);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
      HiddenAppliedSphereDoesNotDriveTheNextConstructionPlane) {
   PrimitiveCreationHarness harness;
   ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Sphere).ok);
@@ -1544,29 +1599,38 @@ TEST(PrimitiveCreationToolServiceTests,
 
   const ModelingBoxPreview hover = harness.modeling.update_box_hover(event);
   ASSERT_TRUE(hover.ok) << hover.message;
-  ASSERT_TRUE(hover.valid);
+  EXPECT_FALSE(hover.valid);
   EXPECT_NEAR(hover.normal.x, 0.0f, 0.0001f);
   EXPECT_NEAR(hover.normal.y, 1.0f, 0.0001f);
   EXPECT_NEAR(hover.normal.z, 0.0f, 0.0001f);
-  ASSERT_EQ(hover.footprint_count, 4U);
-  for (std::size_t index = 0; index < hover.footprint_count; ++index) {
-    EXPECT_NEAR(hover.footprint[index].y, 0.0f, 0.0001f);
-  }
+  EXPECT_EQ(hover.footprint_count, 0U);
 
   const ModelingBoxPreview footprint =
       harness.modeling.begin_box_footprint(event);
   ASSERT_TRUE(footprint.ok) << footprint.message;
   EXPECT_EQ(footprint.drag_state, ModelingBoxDragState::Footprint);
   EXPECT_NEAR(footprint.normal.y, 1.0f, 0.0001f);
-  ASSERT_EQ(footprint.footprint_count, 4U);
-  for (std::size_t index = 0; index < footprint.footprint_count; ++index) {
-    EXPECT_NEAR(footprint.footprint[index].y, 0.0f, 0.0001f);
+  EXPECT_FALSE(footprint.valid);
+  EXPECT_EQ(footprint.footprint_count, 0U);
+
+  const ModelingBoxPreview dragged =
+      harness.modeling.update_box_footprint({
+          .ray = {.origin = {2.5f, 5.0f, 7.0f},
+                  .direction = {0.0f, -1.0f, -1.0f}},
+          .grid_size = 1.0,
+          .snap_enabled = false,
+      });
+  ASSERT_TRUE(dragged.ok) << dragged.message;
+  ASSERT_TRUE(dragged.valid);
+  ASSERT_EQ(dragged.footprint_count, 4U);
+  for (std::size_t index = 0; index < dragged.footprint_count; ++index) {
+    EXPECT_NEAR(dragged.footprint[index].y, 0.0f, 0.0001f);
   }
   EXPECT_TRUE(harness.tool.cancel().ok);
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     TranslatedVisibleMeshDrivesPlacementOnlyAtItsWorldPosition) {
+     TranslatedVisibleVerticalSurfaceIsPickedButCannotDrivePlacement) {
   PrimitiveCreationHarness harness;
   const ModelingCreateBoxResult box = harness.modeling.create_box_from_bounds({
       .bounds = {.min = {-1.0f, -1.0f, -1.0f},
@@ -1597,12 +1661,9 @@ TEST(PrimitiveCreationToolServiceTests,
   const ModelingBoxPreview old_hover =
       harness.modeling.update_box_hover(old_position);
   ASSERT_TRUE(old_hover.ok) << old_hover.message;
-  ASSERT_TRUE(old_hover.valid);
+  EXPECT_FALSE(old_hover.valid);
   EXPECT_NEAR(old_hover.normal.y, 1.0f, 0.0001f);
-  ASSERT_EQ(old_hover.footprint_count, 4U);
-  for (std::size_t index = 0; index < old_hover.footprint_count; ++index) {
-    EXPECT_NEAR(old_hover.footprint[index].y, 0.0f, 0.0001f);
-  }
+  EXPECT_EQ(old_hover.footprint_count, 0U);
 
   const ModelingBoxToolEvent world_position = event_at_x(10.0f);
   const std::optional<EntityId> world_hit =
@@ -1614,18 +1675,34 @@ TEST(PrimitiveCreationToolServiceTests,
   const ModelingBoxPreview world_hover =
       harness.modeling.update_box_hover(world_position);
   ASSERT_TRUE(world_hover.ok) << world_hover.message;
-  ASSERT_TRUE(world_hover.valid);
-  EXPECT_NEAR(world_hover.normal.y, 0.0f, 0.0001f);
-  EXPECT_NEAR(std::abs(world_hover.normal.z), 1.0f, 0.0001f);
-  ASSERT_EQ(world_hover.footprint_count, 4U);
-  for (std::size_t index = 0; index < world_hover.footprint_count; ++index) {
-    EXPECT_NEAR(world_hover.footprint[index].z, 1.0f, 0.0001f);
+  EXPECT_FALSE(world_hover.valid);
+  EXPECT_NEAR(world_hover.normal.x, 0.0f, 0.0001f);
+  EXPECT_NEAR(world_hover.normal.y, 1.0f, 0.0001f);
+  EXPECT_NEAR(world_hover.normal.z, 0.0f, 0.0001f);
+  EXPECT_EQ(world_hover.footprint_count, 0U);
+
+  const ModelingBoxPreview footprint =
+      harness.modeling.begin_box_footprint(world_position);
+  ASSERT_TRUE(footprint.ok) << footprint.message;
+  EXPECT_EQ(footprint.footprint_count, 0U);
+  const ModelingBoxPreview dragged =
+      harness.modeling.update_box_footprint({
+          .ray = {.origin = {12.0f, 2.0f, 7.0f},
+                  .direction = {0.0f, -1.5f, -4.0f}},
+          .grid_size = 1.0,
+          .snap_enabled = false,
+      });
+  ASSERT_TRUE(dragged.ok) << dragged.message;
+  ASSERT_TRUE(dragged.valid);
+  ASSERT_EQ(dragged.footprint_count, 4U);
+  for (std::size_t index = 0; index < dragged.footprint_count; ++index) {
+    EXPECT_NEAR(dragged.footprint[index].y, 0.0f, 0.0001f);
   }
   EXPECT_TRUE(harness.tool.cancel().ok);
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     BackFacingOpenMeshPlaneCanDrivePrimitivePlacement) {
+     GroundParallelBackFacingPlaneCanDrivePrimitivePlacement) {
   PrimitiveCreationHarness harness;
   quader_poly::Document plane;
   const quader_poly::ElementId a =
@@ -1660,10 +1737,88 @@ TEST(PrimitiveCreationToolServiceTests,
 
   const ModelingBoxPreview hover = harness.modeling.update_box_hover(event);
   ASSERT_TRUE(hover.ok) << hover.message;
-  ASSERT_TRUE(hover.valid);
-  ASSERT_EQ(hover.footprint_count, 4U);
-  for (std::size_t index = 0; index < hover.footprint_count; ++index) {
-    EXPECT_NEAR(hover.footprint[index].y, 2.0f, 0.0001f);
+  EXPECT_FALSE(hover.valid);
+  EXPECT_EQ(hover.footprint_count, 0U);
+  EXPECT_NEAR(hover.normal.y, 1.0f, 0.0001f);
+
+  const ModelingBoxPreview footprint =
+      harness.modeling.begin_box_footprint(event);
+  ASSERT_TRUE(footprint.ok) << footprint.message;
+  EXPECT_EQ(footprint.footprint_count, 0U);
+  const ModelingBoxPreview dragged =
+      harness.modeling.update_box_footprint({
+          .ray = {.origin = {0.75f, -2.0f, 0.75f},
+                  .direction = {0.0f, 1.0f, 0.0f}},
+          .grid_size = 1.0,
+          .snap_enabled = false,
+      });
+  ASSERT_TRUE(dragged.ok) << dragged.message;
+  ASSERT_TRUE(dragged.valid);
+  ASSERT_EQ(dragged.footprint_count, 4U);
+  for (std::size_t index = 0; index < dragged.footprint_count; ++index) {
+    EXPECT_NEAR(dragged.footprint[index].y, 2.0f, 0.0001f);
+  }
+  EXPECT_TRUE(harness.tool.cancel().ok);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     TiltedNaturalSurfaceFallsBackToTheGroundConstructionPlane) {
+  PrimitiveCreationHarness harness;
+  quader_poly::Document plane;
+  const quader_poly::ElementId a =
+      quader_poly::add_vertex(plane, {-2.0f, 1.0f, -2.0f});
+  const quader_poly::ElementId b =
+      quader_poly::add_vertex(plane, {-2.0f, 3.0f, 2.0f});
+  const quader_poly::ElementId c =
+      quader_poly::add_vertex(plane, {2.0f, 3.0f, 2.0f});
+  const quader_poly::ElementId d =
+      quader_poly::add_vertex(plane, {2.0f, 1.0f, -2.0f});
+  ASSERT_NE(quader_poly::add_face(plane, std::array{a, b, c, d}),
+            quader_poly::kInvalidElementId);
+  const ModelingCreateBoxResult created = harness.modeling.create_mesh({
+      .document = std::move(plane),
+      .name = "Tilted Plane",
+  });
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Box).ok);
+
+  const ModelingBoxToolEvent event{
+      .ray = {.origin = {0.0f, 5.0f, 0.0f},
+              .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+      .snap_enabled = false,
+  };
+  const std::optional<EntityId> hit =
+      harness.modeling.pick_object_entity(ModelingPickSelectRequest{
+          .ray = event.ray,
+      });
+  ASSERT_TRUE(hit.has_value());
+  EXPECT_EQ(*hit, created.object.entity);
+
+  const ModelingBoxPreview hover = harness.modeling.update_box_hover(event);
+  ASSERT_TRUE(hover.ok) << hover.message;
+  EXPECT_FALSE(hover.valid);
+  EXPECT_EQ(hover.footprint_count, 0U);
+  EXPECT_NEAR(hover.normal.x, 0.0f, 0.0001f);
+  EXPECT_NEAR(hover.normal.y, 1.0f, 0.0001f);
+  EXPECT_NEAR(hover.normal.z, 0.0f, 0.0001f);
+
+  const ModelingBoxPreview footprint =
+      harness.modeling.begin_box_footprint(event);
+  ASSERT_TRUE(footprint.ok) << footprint.message;
+  EXPECT_EQ(footprint.footprint_count, 0U);
+  const ModelingBoxPreview dragged =
+      harness.modeling.update_box_footprint({
+          .ray = {.origin = {1.0f, 5.0f, 1.0f},
+                  .direction = {0.0f, -1.0f, 0.0f}},
+          .grid_size = 1.0,
+          .snap_enabled = false,
+      });
+  ASSERT_TRUE(dragged.ok) << dragged.message;
+  ASSERT_TRUE(dragged.valid);
+  ASSERT_EQ(dragged.footprint_count, 4U);
+  for (std::size_t index = 0; index < dragged.footprint_count; ++index) {
+    EXPECT_NEAR(dragged.footprint[index].y, 0.0f, 0.0001f);
   }
   EXPECT_TRUE(harness.tool.cancel().ok);
 }

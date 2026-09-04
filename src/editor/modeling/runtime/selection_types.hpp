@@ -229,6 +229,17 @@ struct SelectionOverlayPoint {
 };
 
 /**
+ * Carries the local-space interior-side reference for the one hovered edge
+ * dimension represented by a selection overlay frame.
+ */
+struct SelectionHoverEdgeDimensionContext {
+  quader::QVec3 inside_reference;
+  int object_id = -1;
+  quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
+  quader_poly::Edge edge;
+};
+
+/**
  * Represents a Selection Overlay Style value used by the modeling runtime
  * domain.
  */
@@ -284,6 +295,8 @@ struct SelectionOverlayFrame {
   std::vector<SelectionOverlayTriangle> triangles;
   std::vector<SelectionOverlayLine> lines;
   std::vector<SelectionOverlayPoint> points;
+  std::optional<SelectionHoverEdgeDimensionContext>
+      hover_edge_dimension_context;
   bool hover_target_selected = false;
 };
 

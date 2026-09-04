@@ -903,6 +903,12 @@ add_library(quader_ui STATIC
     src/ui/viewport_shortcut_controller.cpp
 )
 
+qt_add_resources(quader_ui "quader_dimension_fonts"
+    PREFIX "/quader/fonts"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts"
+    FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/HomeVideo-Regular.ttf")
+
 quader_enable_common_pch(quader_ui)
 target_include_directories(quader_ui
     PUBLIC src

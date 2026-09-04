@@ -376,6 +376,78 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,
+     HoverEdgeDimensionContextFollowsTheVolatilePublicationRevision) {
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const ViewportSettings settings = ViewportSettings::defaults();
+  ViewportOverlayFrame selection;
+  StaticSelectionFrameProvider selection_provider{std::move(selection)};
+  RenderOverlaySelectionSnapshot scene;
+  ViewportOverlayFrame volatile_modeling;
+  volatile_modeling.lines.push_back(
+      test_line(ViewportOverlaySource::Hover, 4.0F));
+  volatile_modeling.hover_edge_dimension_context =
+      ViewportHoverEdgeDimensionContext{
+          .inside_reference = {4.5F, 0.5F, 0.0F},
+          .element = {
+              .object_id = 17,
+              .edge_a = 3,
+              .edge_b = 4,
+              .face_id = 8,
+          },
+      };
+  CurveToolPreviewState curve;
+
+  const ViewportOverlaySubmissionResult first = coordinator.submit(
+      submission_request(selection_provider, scene, volatile_modeling, curve),
+      settings, target);
+  ASSERT_TRUE(first.dynamic_submitted);
+  ASSERT_NE(first.edge_hud_frame, nullptr);
+  ASSERT_TRUE(first.edge_hud_frame->hover_edge_dimension_context.has_value());
+  ASSERT_TRUE(target.dynamic_frame.hover_edge_dimension_context.has_value());
+  EXPECT_FLOAT_EQ(first.edge_hud_frame->hover_edge_dimension_context
+                      ->inside_reference.y,
+                  0.5F);
+  EXPECT_EQ(target.dynamic_frame.hover_edge_dimension_context->element.face_id,
+            8);
+  const std::uint64_t first_source_signature = first.dynamic_source_signature;
+  const auto first_work = coordinator.work_counters();
+
+  volatile_modeling.hover_edge_dimension_context->inside_reference.y = 0.75F;
+  const ViewportOverlaySubmissionResult stale = coordinator.submit(
+      submission_request(selection_provider, scene, volatile_modeling, curve),
+      settings, target);
+  EXPECT_TRUE(stale.camera_only);
+  EXPECT_FALSE(stale.dynamic_submitted);
+  EXPECT_EQ(stale.dynamic_source_signature, first_source_signature);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            first_work.dynamic_source_compose_count);
+  EXPECT_FLOAT_EQ(target.dynamic_frame.hover_edge_dimension_context
+                      ->inside_reference.y,
+                  0.5F);
+
+  ViewportOverlaySubmissionRequest changed =
+      submission_request(selection_provider, scene, volatile_modeling, curve);
+  ++changed.volatile_modeling_source.publication_revision;
+  const ViewportOverlaySubmissionResult updated =
+      coordinator.submit(std::move(changed), settings, target);
+  EXPECT_TRUE(updated.dynamic_submitted);
+  EXPECT_NE(updated.dynamic_source_signature, first_source_signature);
+  ASSERT_NE(updated.edge_hud_frame, nullptr);
+  ASSERT_TRUE(
+      updated.edge_hud_frame->hover_edge_dimension_context.has_value());
+  EXPECT_FLOAT_EQ(updated.edge_hud_frame->hover_edge_dimension_context
+                      ->inside_reference.y,
+                  0.75F);
+  ASSERT_TRUE(target.dynamic_frame.hover_edge_dimension_context.has_value());
+  EXPECT_FLOAT_EQ(target.dynamic_frame.hover_edge_dimension_context
+                      ->inside_reference.y,
+                  0.75F);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            first_work.dynamic_source_compose_count + 1U);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
      UnchangedMultiPaneCutKnifeAndCurveSourcesDoNoBroadWork) {
   ViewportOverlaySubmissionCoordinator coordinator;
   RecordingOverlayTarget target;

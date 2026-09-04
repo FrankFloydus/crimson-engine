@@ -27,6 +27,7 @@ public:
     [[nodiscard]] bool rollback_failed_preview(
         ViewportBoxToolContext &box_context, const char *action,
         const ModelingBoxPreview &preview) const;
+    [[nodiscard]] ViewportPointerCursor pointer_cursor() const override;
     [[nodiscard]] ViewportToolResult
     handle_event(ViewportToolContext &context,
                  const ViewportToolEvent &event) const override;

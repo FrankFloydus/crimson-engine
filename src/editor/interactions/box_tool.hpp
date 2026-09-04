@@ -50,7 +50,6 @@ struct BoxToolState {
   double height_axis_start = std::numeric_limits<double>::infinity();
   int preview_brush_id = -1;
   bool preview_valid = false;
-  std::vector<quader::QVec3> hover_cell_points;
 };
 
 /**
@@ -112,7 +111,7 @@ BoxFootprintDescriptor box_footprint_descriptor(quader::QVec3 start_point, quade
 double snap_box_height_distance(double distance, bool grid_enabled, double grid_size);
 BoxToolStateResult begin_box_footprint(BoxToolState& state, quader::QVec3 raw_start, quader::QVec3 raw_end, bool grid_enabled, double grid_size);
 BoxToolStateResult update_box_footprint(BoxToolState& state, quader::QVec3 raw_end, bool grid_enabled, double grid_size);
-BoxToolStateResult update_box_hover_cell(BoxToolState& state, quader::QVec3 local_point, bool grid_enabled, double grid_size);
+BoxToolStateResult update_box_hover(BoxToolState& state, quader::QVec3 local_point, bool grid_enabled, double grid_size);
 BoxToolStateResult begin_box_height(BoxToolState& state, quader::QVec2 screen_position, double axis_distance, bool has_axis_distance, bool grid_enabled, double grid_size);
 double box_height_distance_for_ray(const BoxToolState& state, const quader_poly::Ray& ray, double grid_size);
 BoxToolStateResult update_box_height_preview(BoxToolState& state, double axis_distance, bool has_axis_distance, quader::QVec2 screen_position, bool grid_enabled, double grid_size);

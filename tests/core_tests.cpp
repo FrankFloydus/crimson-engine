@@ -1495,13 +1495,17 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::RotationSnapDegrees),
       15.0f);
+  EXPECT_FLOAT_EQ(
+      settings.float_value(ViewportFloatSettingId::DimensionFontSize), 12.0f);
   ASSERT_EQ(viewport_color_settings().size(), 23u);
-  ASSERT_EQ(viewport_float_settings().size(), 31u);
-  ASSERT_EQ(viewport_bool_settings().size(), 12u);
+  ASSERT_EQ(viewport_float_settings().size(), 32u);
+  ASSERT_EQ(viewport_bool_settings().size(), 13u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGizmos));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowOverlays));
+  EXPECT_TRUE(
+      settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowInfo));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::SnappingEnabled));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::GridSnap));
@@ -1517,6 +1521,66 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_EQ(backface_selection.section, ViewportSettingsSectionId::Selection);
   EXPECT_EQ(backface_selection.key, "BackfaceSelection");
   EXPECT_FALSE(backface_selection.default_value);
+  const ViewportFloatSettingDescriptor &dimension_font_size =
+      viewport_float_settings()[static_cast<std::size_t>(
+          ViewportFloatSettingId::DimensionFontSize)];
+  EXPECT_EQ(dimension_font_size.section, ViewportSettingsSectionId::Overlay);
+  EXPECT_EQ(dimension_font_size.label, "Dimension Font Size (pt)");
+  EXPECT_EQ(dimension_font_size.key, "DimensionFontSize");
+  EXPECT_FLOAT_EQ(dimension_font_size.minimum, 6.0f);
+  EXPECT_FLOAT_EQ(dimension_font_size.maximum, 24.0f);
+  EXPECT_FLOAT_EQ(dimension_font_size.default_value, 12.0f);
+  const ViewportBoolSettingDescriptor &show_hover_dimensions =
+      viewport_bool_settings()[static_cast<std::size_t>(
+          ViewportBoolSettingId::ShowHoverDimensions)];
+  EXPECT_EQ(show_hover_dimensions.section, ViewportSettingsSectionId::Overlay);
+  EXPECT_EQ(show_hover_dimensions.label, "Show Dimensions on Hover");
+  EXPECT_EQ(show_hover_dimensions.key, "ShowHoverDimensions");
+  EXPECT_TRUE(show_hover_dimensions.default_value);
+}
+
+TEST(ViewportSettingsTests,
+     DimensionPresentationPreferencesClampAndPersist) {
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() /
+      "quader_dimension_presentation_preferences.ini";
+  std::filesystem::remove(path);
+
+  ViewportSettings settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::DimensionFontSize, 12.5f));
+  ASSERT_TRUE(settings.set_bool_value(
+      ViewportBoolSettingId::ShowHoverDimensions, false));
+  ASSERT_TRUE(settings.save(path));
+
+  ViewportSettings loaded = ViewportSettings::load(path);
+  EXPECT_FLOAT_EQ(
+      loaded.float_value(ViewportFloatSettingId::DimensionFontSize), 12.5f);
+  EXPECT_FALSE(
+      loaded.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
+  {
+    std::ifstream file(path);
+    const std::string text{std::istreambuf_iterator<char>(file),
+                           std::istreambuf_iterator<char>()};
+    EXPECT_NE(text.find("QVertexWorks.Quader.Viewport.DimensionFontSize=12.5"),
+              std::string::npos);
+    EXPECT_NE(
+        text.find("QVertexWorks.Quader.Viewport.ShowHoverDimensions=false"),
+        std::string::npos);
+  }
+
+  {
+    std::ofstream file(path, std::ios::trunc);
+    ASSERT_TRUE(file.is_open());
+    file << "QVertexWorks.Quader.Viewport.DimensionFontSize=100\n"
+            "QVertexWorks.Quader.Viewport.ShowHoverDimensions=true\n";
+  }
+  loaded = ViewportSettings::load(path);
+  EXPECT_FLOAT_EQ(
+      loaded.float_value(ViewportFloatSettingId::DimensionFontSize), 24.0f);
+  EXPECT_TRUE(loaded.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
+
+  std::filesystem::remove(path);
 }
 
 TEST(ViewportSettingsTests,
@@ -4037,6 +4101,41 @@ TEST(RenderPresentationFrameTrackerTests,
   EXPECT_DOUBLE_EQ(stats.frames_per_second, 100.0);
   ASSERT_TRUE(stats.cpu_frame_ms_available);
   EXPECT_DOUBLE_EQ(stats.cpu_frame_ms, 10.0);
+}
+
+TEST(RenderPresentationFrameTrackerTests,
+     ReportsOneHundredTwentyFpsWithoutASixtyFpsCeiling) {
+  using Clock = RenderPresentationFrameTracker::Clock;
+  RenderPresentationFrameTracker tracker;
+  RenderFramePerformanceStats stats;
+  const Clock::time_point sample_begin{};
+  constexpr auto kFrameDuration = std::chrono::nanoseconds(8'333'334);
+
+  for (int frame = 0; frame < 60; ++frame) {
+    const Clock::time_point frame_begin =
+        sample_begin + kFrameDuration * frame;
+    tracker.begin_presentation_frame(frame_begin);
+    EXPECT_TRUE(tracker.complete_presentation_frame(
+        frame_begin + kFrameDuration, 1u, stats));
+  }
+
+  ASSERT_TRUE(stats.frames_per_second_available);
+  EXPECT_NEAR(stats.frames_per_second, 120.0, 0.01);
+}
+
+TEST(RenderSystemTests, NormalizesAndCachesThePresentationRefreshRate) {
+  RenderSystem render_system;
+  EXPECT_FLOAT_EQ(render_system.display_refresh_rate_hz(), 60.0f);
+
+  render_system.set_display_refresh_rate_hz(120.0f);
+  EXPECT_FLOAT_EQ(render_system.display_refresh_rate_hz(), 120.0f);
+
+  render_system.set_display_refresh_rate_hz(
+      std::numeric_limits<float>::quiet_NaN());
+  EXPECT_FLOAT_EQ(render_system.display_refresh_rate_hz(), 60.0f);
+
+  render_system.set_display_refresh_rate_hz(5000.0f);
+  EXPECT_FLOAT_EQ(render_system.display_refresh_rate_hz(), 1000.0f);
 }
 
 TEST(RenderPresentationFrameTrackerTests,
@@ -23313,6 +23412,15 @@ TEST(ModelingSessionServiceTests, SupportsRuntimeBoxPreviewLifecycle) {
           },
       .grid_size = 1.0,
   };
+  const ModelingBoxToolEvent footprint_line_end{
+      .screen_position = {400.0f, 300.0f},
+      .ray =
+          {
+              .origin = {6.0f, 4.0f, 4.0f},
+              .direction = {0.0f, -1.0f, 0.0f},
+          },
+      .grid_size = 1.0,
+  };
   const ModelingBoxToolEvent height_end{
       .screen_position = {400.0f, 360.0f},
       .ray = start.ray,
@@ -23323,19 +23431,37 @@ TEST(ModelingSessionServiceTests, SupportsRuntimeBoxPreviewLifecycle) {
 
   const ModelingBoxPreview hover = service.update_box_hover(start);
   EXPECT_TRUE(hover.ok);
-  EXPECT_TRUE(hover.valid);
+  EXPECT_FALSE(hover.valid);
   EXPECT_EQ(hover.drag_state, ModelingBoxDragState::Idle);
-  EXPECT_TRUE(service.box_preview().valid);
+  EXPECT_EQ(hover.footprint_count, 0U);
+  EXPECT_FLOAT_EQ(hover.footprint_size.x, 0.0F);
+  EXPECT_FLOAT_EQ(hover.footprint_size.y, 0.0F);
+  EXPECT_FALSE(service.box_preview().valid);
   EXPECT_EQ(service.box_preview().drag_state, ModelingBoxDragState::Idle);
   EXPECT_EQ(scene.primary_selection(), previous_selection);
   expect_preview_not_document_truth();
 
   const ModelingBoxPreview footprint_begin = service.begin_box_footprint(start);
   EXPECT_TRUE(footprint_begin.ok);
+  EXPECT_FALSE(footprint_begin.valid);
   EXPECT_EQ(footprint_begin.drag_state, ModelingBoxDragState::Footprint);
+  EXPECT_EQ(footprint_begin.footprint_count, 0U);
   EXPECT_EQ(service.box_preview().drag_state, ModelingBoxDragState::Footprint);
   EXPECT_TRUE(scene.selected_entities().empty());
   EXPECT_EQ(scene.primary_selection(), kInvalidEntityId);
+  expect_preview_not_document_truth();
+
+  const ModelingBoxPreview footprint_line =
+      service.update_box_footprint(footprint_line_end);
+  EXPECT_TRUE(footprint_line.ok);
+  EXPECT_FALSE(footprint_line.valid);
+  EXPECT_EQ(footprint_line.drag_state, ModelingBoxDragState::Footprint);
+  EXPECT_EQ(footprint_line.footprint_count, 2U);
+  EXPECT_FLOAT_EQ(footprint_line.footprint_size.x, 2.0F);
+  EXPECT_FLOAT_EQ(footprint_line.footprint_size.y, 0.0F);
+  EXPECT_FLOAT_EQ(footprint_line.signed_footprint_size.x, 2.0F);
+  EXPECT_FLOAT_EQ(footprint_line.signed_footprint_size.y, 0.0F);
+  EXPECT_FALSE(service.box_preview().valid);
   expect_preview_not_document_truth();
 
   const ModelingBoxPreview footprint_update =
@@ -23343,6 +23469,11 @@ TEST(ModelingSessionServiceTests, SupportsRuntimeBoxPreviewLifecycle) {
   EXPECT_TRUE(footprint_update.ok);
   EXPECT_TRUE(footprint_update.valid);
   EXPECT_EQ(footprint_update.drag_state, ModelingBoxDragState::Footprint);
+  EXPECT_EQ(footprint_update.footprint_count, 4U);
+  EXPECT_FLOAT_EQ(footprint_update.footprint_size.x, 2.0F);
+  EXPECT_FLOAT_EQ(footprint_update.footprint_size.y, 3.0F);
+  EXPECT_FLOAT_EQ(footprint_update.signed_footprint_size.x, 2.0F);
+  EXPECT_FLOAT_EQ(footprint_update.signed_footprint_size.y, -3.0F);
   EXPECT_TRUE(service.box_preview().valid);
   EXPECT_EQ(service.box_preview().drag_state, ModelingBoxDragState::Footprint);
   expect_preview_not_document_truth();

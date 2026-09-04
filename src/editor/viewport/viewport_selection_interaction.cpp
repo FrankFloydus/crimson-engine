@@ -216,7 +216,8 @@ std::vector<ViewportSceneHitCandidate> collect_selection_point_hits(
     const ViewportCurveInteractionPort *curve = nullptr,
     SceneSurfaceQueryScratch *surface_scratch = nullptr,
     bool include_occluded = false,
-    bool collect_all_mesh_surfaces = false) {
+    bool collect_all_mesh_surfaces = false,
+    bool include_component_body_surfaces = false) {
   const ViewportSelectionMode mode =
       frame.input_router.state().selection_mode;
   const bool scene_mode = mode == ViewportSelectionMode::Object ||
@@ -247,7 +248,8 @@ std::vector<ViewportSceneHitCandidate> collect_selection_point_hits(
       .scene_surfaces = frame.scene_surfaces,
       .curve_controls = curve_controls,
       .resolved_selection_hits = modeling_hits,
-      .include_mesh_surfaces = scene_mode,
+      .include_mesh_surfaces =
+          scene_mode || include_component_body_surfaces,
       .select_backfaces = request.select_backfaces,
       .include_curve_controls = curve_controls != nullptr,
       .include_occluded = include_occluded,
@@ -256,19 +258,83 @@ std::vector<ViewportSceneHitCandidate> collect_selection_point_hits(
   });
 }
 
+struct ResolvedSelectionPointPick final {
+  std::optional<ResolvedSelectionTarget> winner;
+  std::optional<ResolvedComponentBodyTarget> component_body_target;
+};
+
+ResolvedSelectionPointPick resolve_selection_point_pick(
+    const EditorSelectionService &selection,
+    const ViewportInteractionFrame &frame, QVec2 local_mouse,
+    const ModelingPickSelectRequest &request,
+    const ViewportCurveInteractionPort *curve = nullptr,
+    SceneSurfaceQueryScratch *surface_scratch = nullptr,
+    bool include_component_body = false) {
+  const ViewportSelectionMode mode =
+      frame.input_router.state().selection_mode;
+  const bool scene_mode = mode == ViewportSelectionMode::Object ||
+                          mode == ViewportSelectionMode::Group;
+  const bool component_body_enabled =
+      include_component_body && !scene_mode && request.click_count > 0;
+  const std::vector<ViewportSceneHitCandidate> hits =
+      collect_selection_point_hits(selection, frame, local_mouse, request,
+                                   curve, surface_scratch, false, false,
+                                   component_body_enabled);
+  if (!component_body_enabled) {
+    const std::optional<ViewportSceneHitCandidate> winner =
+        resolve_viewport_scene_hit(hits);
+    return {
+        .winner = winner.has_value() ? resolved_selection_target(*winner)
+                                     : std::nullopt,
+    };
+  }
+
+  std::vector<ViewportSceneHitCandidate> component_hits;
+  component_hits.reserve(hits.size());
+  std::optional<ViewportSceneHitCandidate> body_hit;
+  for (const ViewportSceneHitCandidate &hit : hits) {
+    const bool mesh_body = hit.kind == ViewportSceneHitKind::MeshSurface ||
+                           hit.kind == ViewportSceneHitKind::FormalInstance;
+    if (!mesh_body) {
+      component_hits.push_back(hit);
+      continue;
+    }
+    if (!body_hit.has_value() ||
+        viewport_scene_hit_precedes(hit, *body_hit)) {
+      body_hit = hit;
+    }
+  }
+
+  const std::optional<ViewportSceneHitCandidate> component_winner =
+      resolve_viewport_scene_hit(component_hits);
+  ResolvedSelectionPointPick resolved{
+      .winner = component_winner.has_value()
+                    ? resolved_selection_target(*component_winner)
+                    : std::nullopt,
+  };
+  if (!resolved.winner.has_value() && body_hit.has_value()) {
+    if (const auto *mesh =
+            std::get_if<ViewportSceneMeshHit>(&body_hit->source);
+        mesh != nullptr &&
+        mesh->participant.geometry_entity != kInvalidEntityId) {
+      resolved.component_body_target = ResolvedComponentBodyTarget{
+          .geometry_entity = mesh->participant.geometry_entity,
+          .source_occurrence = mesh->participant.display_entity,
+      };
+    }
+  }
+  return resolved;
+}
+
 std::optional<ResolvedSelectionTarget> resolve_selection_point_target(
     const EditorSelectionService &selection,
     const ViewportInteractionFrame &frame, QVec2 local_mouse,
     const ModelingPickSelectRequest &request,
     const ViewportCurveInteractionPort *curve = nullptr,
     SceneSurfaceQueryScratch *surface_scratch = nullptr) {
-  const std::vector<ViewportSceneHitCandidate> hits =
-      collect_selection_point_hits(selection, frame, local_mouse, request,
-                                   curve, surface_scratch);
-  const std::optional<ViewportSceneHitCandidate> winner =
-      resolve_viewport_scene_hit(hits);
-  return winner.has_value() ? resolved_selection_target(*winner)
-                            : std::nullopt;
+  return resolve_selection_point_pick(selection, frame, local_mouse, request,
+                                      curve, surface_scratch)
+      .winner;
 }
 
 QuaderSelectionSummary synchronize_selection_summary(
@@ -352,19 +418,23 @@ pick_selection(QuaderEditorApi &editor, ViewportInputRouter &input_router,
         }),
         "Viewport resolved depth selection");
   }
-  std::optional<ResolvedSelectionTarget> winner =
-      resolve_selection_point_target(selection, frame, local_mouse, request,
-                                     curve, surface_scratch);
+  ResolvedSelectionPointPick resolved = resolve_selection_point_pick(
+      selection, frame, local_mouse, request, curve, surface_scratch, true);
   if (curve_controls_only &&
-      (!winner.has_value() ||
-       winner->domain != ResolvedSelectionDomain::RegisteredSubElement ||
-       winner->sub_selection_kind != EditorSubSelectionKind::CurveControl)) {
-    winner.reset();
+      (!resolved.winner.has_value() ||
+       resolved.winner->domain !=
+           ResolvedSelectionDomain::RegisteredSubElement ||
+       resolved.winner->sub_selection_kind !=
+           EditorSubSelectionKind::CurveControl)) {
+    resolved.winner.reset();
+    resolved.component_body_target.reset();
   }
   return checked_selection_apply_result(
       input_router,
       selection.apply_resolved_click({
-          .winner = winner,
+          .winner = std::move(resolved.winner),
+          .component_body_target =
+              std::move(resolved.component_body_target),
           .policy = request,
           .baseline = baseline != nullptr
                           ? std::optional<EditorSelectionBoxBaseline>(*baseline)
@@ -639,6 +709,7 @@ ViewportSelectionApplyResult ViewportSelectionInteraction::commit_pending_pick(
       frame.input_router,
       selection_owner(editor).apply_resolved_click({
           .winner = pending.winner,
+          .component_body_target = pending.component_body_target,
           .policy = pending.request,
           .miss_sub_selection_kind = pending.miss_sub_selection_kind,
       }),
@@ -679,20 +750,24 @@ ViewportSelectionInteraction::commit_pick_selection(
         frame.camera, frame.settings, local_mouse, modifiers, click_count,
         preserve_selection_on_miss, preserve_selection_on_selected_hit,
         preserve_existing_component_selection_on_hit);
-    std::optional<ResolvedSelectionTarget> winner =
-        resolve_selection_point_target(selection_owner(editor), frame,
-                                       local_mouse, pending_request, curve,
-                                       &scene_surface_scratch_);
+    ResolvedSelectionPointPick resolved = resolve_selection_point_pick(
+        selection_owner(editor), frame, local_mouse, pending_request, curve,
+        &scene_surface_scratch_, true);
     if (curve_controls_only &&
-        (!winner.has_value() ||
-         winner->domain != ResolvedSelectionDomain::RegisteredSubElement ||
-         winner->sub_selection_kind != EditorSubSelectionKind::CurveControl)) {
-      winner.reset();
+        (!resolved.winner.has_value() ||
+         resolved.winner->domain !=
+             ResolvedSelectionDomain::RegisteredSubElement ||
+         resolved.winner->sub_selection_kind !=
+             EditorSubSelectionKind::CurveControl)) {
+      resolved.winner.reset();
+      resolved.component_body_target.reset();
     }
     pending_first_pick_ = PendingFirstPick{
         .pointer = pending_pointer,
         .request = pending_request,
-        .winner = std::move(winner),
+        .winner = std::move(resolved.winner),
+        .component_body_target =
+            std::move(resolved.component_body_target),
         .hovered_before_selection = hovered_before_selection,
         .miss_sub_selection_kind =
             curve_controls_only ? EditorSubSelectionKind::CurveControl

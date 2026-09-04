@@ -2766,6 +2766,16 @@ TEST(RenderOverlaySnapshotTests,
       .end = {1.0f, 0.0f, 0.0f},
       .source = ViewportOverlaySource::Tool,
   });
+  tool_frame.hover_edge_dimension_context =
+      ViewportHoverEdgeDimensionContext{
+          .inside_reference = {2.0F, 3.0F, 4.0F},
+          .element = {
+              .object_id = 44,
+              .edge_a = 8,
+              .edge_b = 9,
+              .face_id = 10,
+          },
+      };
 
   const RenderOverlaySelectionSnapshot snapshot =
       build_render_overlay_selection_snapshot(document, assets, tool_frame);
@@ -2781,6 +2791,8 @@ TEST(RenderOverlaySnapshotTests,
   ASSERT_EQ(snapshot.point_light_gizmos.size(), 1u);
   EXPECT_EQ(snapshot.point_light_gizmos.front().entity, point_light);
   EXPECT_EQ(snapshot.tool_overlays.lines.size(), 1u);
+  ASSERT_TRUE(
+      snapshot.tool_overlays.hover_edge_dimension_context.has_value());
 
   const ViewportOverlayFrame frame =
       ViewportSceneOverlayBuilder::build_selection_frame({}, snapshot);
@@ -2793,6 +2805,11 @@ TEST(RenderOverlaySnapshotTests,
   EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 5u);
   EXPECT_EQ(icon_count_for(frame, ViewportOverlayLayer::PointLightGizmo), 0u);
   EXPECT_EQ(line_source_count_for(frame, ViewportOverlaySource::Tool), 1u);
+  ASSERT_TRUE(frame.hover_edge_dimension_context.has_value());
+  EXPECT_FLOAT_EQ(frame.hover_edge_dimension_context->inside_reference.x,
+                  2.0F);
+  EXPECT_EQ(frame.hover_edge_dimension_context->element.object_id, 44);
+  EXPECT_EQ(frame.hover_edge_dimension_context->element.face_id, 10);
 
   const ViewportOverlayFrame gizmo_frame =
       ViewportSceneOverlayBuilder::build_selection_frame({}, snapshot, true);
@@ -7964,6 +7981,51 @@ TEST(RenderInstanceEditPresentationTests,
   EXPECT_FLOAT_EQ(in_edit.lines.front().end.x, 13.0f);
   EXPECT_EQ(in_edit.lines.front().source,
             ViewportOverlaySource::ComponentSelection);
+}
+
+TEST(RenderInstanceEditPresentationTests,
+     HoverEdgeDimensionContextProjectsThroughTheObjectWorldTransform) {
+  SceneDocument document;
+  const EntityId entity =
+      document.create_entity("Dimension Context Mesh", EntityKind::Mesh);
+  document.set_transform(
+      entity, TransformComponent{.position = {10.0F, 20.0F, 30.0F}});
+  constexpr int kObjectId = 77;
+  ModelingObjectRuntimeMap object_map;
+  ASSERT_TRUE(object_map.bind(kObjectId, entity));
+
+  quader_editor_core::SelectionOverlayFrame runtime_frame;
+  runtime_frame.lines.push_back({
+      .layer = quader_editor_core::SelectionOverlayLayer::HoverEdge,
+      .start = {1.0F, 2.0F, 3.0F},
+      .end = {3.0F, 2.0F, 3.0F},
+      .object_id = kObjectId,
+      .face_id = 9,
+      .edge = quader_poly::make_edge(4, 5),
+  });
+  runtime_frame.hover_edge_dimension_context =
+      quader_editor_core::SelectionHoverEdgeDimensionContext{
+          .inside_reference = {2.0F, 2.5F, 3.0F},
+          .object_id = kObjectId,
+          .face_id = 9,
+          .edge = quader_poly::make_edge(4, 5),
+      };
+
+  const ViewportOverlayFrame projected =
+      SelectionOverlayProjection::project_selection_overlay_frame(
+          runtime_frame, object_map, document,
+          quader_editor_core::SelectionMode::Edge);
+
+  ASSERT_TRUE(projected.hover_edge_dimension_context.has_value());
+  const ViewportHoverEdgeDimensionContext &context =
+      *projected.hover_edge_dimension_context;
+  EXPECT_FLOAT_EQ(context.inside_reference.x, 12.0F);
+  EXPECT_FLOAT_EQ(context.inside_reference.y, 22.5F);
+  EXPECT_FLOAT_EQ(context.inside_reference.z, 33.0F);
+  EXPECT_EQ(context.element.object_id, kObjectId);
+  EXPECT_EQ(context.element.edge_a, 4);
+  EXPECT_EQ(context.element.edge_b, 5);
+  EXPECT_EQ(context.element.face_id, 9);
 }
 
 TEST(RenderSceneExtractionScaleTests,

@@ -180,6 +180,7 @@ private:
   void update_fly_navigation_hud(Pane &pane, bool active,
                                  bool speed_is_default, float speed);
   void hide_fly_navigation_huds();
+  void update_pointer_cursor_presentation();
   void draw_viewport_info_overlay(Pane &pane,
                                   const SceneDocument &document,
                                   const AssetRegistry &assets,

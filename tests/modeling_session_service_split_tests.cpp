@@ -1844,6 +1844,40 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
+     DirectEdgeHoverRoundTripsItsPickedContextFace) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Hover Context Box",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  const ModelingDirectHoverRequest request{
+      .modeling_object_id = box.object.modeling_object_id,
+      .candidate_object_id = box.object.modeling_object_id,
+      .kind = ModelingActiveSelectionKind::Edge,
+      .edge = {1, 2},
+      .face_id = 6,
+  };
+  const ModelingCommandResult changed = service.set_selection_hover(request);
+  ASSERT_TRUE(changed.ok) << changed.message;
+  EXPECT_TRUE(changed.changed);
+  const ModelingHoverSummary summary = service.selection_hover_summary();
+  EXPECT_EQ(summary.target.kind, ModelingActiveSelectionKind::Edge);
+  EXPECT_EQ(summary.target.object_id, box.object.modeling_object_id);
+  EXPECT_EQ(summary.target.edge_a, 1);
+  EXPECT_EQ(summary.target.edge_b, 2);
+  EXPECT_EQ(summary.target.face_id, 6);
+
+  const ModelingCommandResult unchanged = service.set_selection_hover(request);
+  ASSERT_TRUE(unchanged.ok) << unchanged.message;
+  EXPECT_FALSE(unchanged.changed);
+}
+
+TEST(ModelingSessionServiceSplitTests,
      InvalidCreationInputsLeaveRuntimeSceneAssetsSelectionAndHistoryExact) {
   SceneDocument scene;
   AssetRegistry assets;
@@ -2002,6 +2036,61 @@ TEST(ModelingSessionServiceSplitTests,
       first_transient.object.modeling_object_id,
       second_transient.object.modeling_object_id);
   EXPECT_EQ(replacement.object.modeling_object_id, last_transient_id + 1);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     StrictMementoRestoreRejectsMissingNativeSiblingWithoutReportingMutation) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const EntityId scene_root = scene.create_empty("Scene");
+  ASSERT_NE(scene_root, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_scene_settings(scene_root, SceneSettingsComponent{}));
+
+  const ModelingCreateBoxResult first = service.create_box_from_bounds({
+      .bounds = {.min = {-2.0f, -1.0f, -1.0f},
+                 .max = {-1.0f, 1.0f, 1.0f}},
+      .name = "Strict Restore First",
+  });
+  ASSERT_TRUE(first.ok) << first.message;
+  const EntityId native_sibling = scene.create_empty("Strict Native Sibling");
+  ASSERT_NE(native_sibling, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_parent(native_sibling, scene_root, false));
+  const ModelingCreateBoxResult second = service.create_box_from_bounds({
+      .bounds = {.min = {1.0f, -1.0f, -1.0f},
+                 .max = {2.0f, 1.0f, 1.0f}},
+      .name = "Strict Restore Second",
+  });
+  ASSERT_TRUE(second.ok) << second.message;
+  EXPECT_EQ(scene.children(scene_root),
+            (std::vector<EntityId>{first.object.entity, native_sibling,
+                                   second.object.entity}));
+  const ModelingSessionMemento before = service.capture_history_memento();
+  ASSERT_TRUE(before.valid());
+
+  const std::array selected{first.object.entity, native_sibling,
+                            second.object.entity};
+  ASSERT_TRUE(scene.replace_selection(selected, second.object.entity));
+  std::unique_ptr<IUndoableCommand> delete_command =
+      service.create_delete_selection_command();
+  ASSERT_NE(delete_command, nullptr);
+  const CommandResult removed = delete_command->redo();
+  ASSERT_TRUE(removed.ok) << removed.message;
+  ASSERT_TRUE(removed.changed);
+  ASSERT_TRUE(scene.children(scene_root).empty());
+  const std::uint64_t scene_revision = scene.revision();
+  const std::uint64_t asset_revision = assets.revision();
+
+  const ModelingCommandResult restored = service.restore_history_memento(before);
+  EXPECT_FALSE(restored.ok);
+  EXPECT_FALSE(restored.changed);
+  EXPECT_NE(restored.message.find(
+                "SDK history scene identity sibling order could not be restored"),
+            std::string::npos);
+  EXPECT_TRUE(scene.children(scene_root).empty());
+  EXPECT_TRUE(service.objects().empty());
+  EXPECT_EQ(scene.revision(), scene_revision);
+  EXPECT_EQ(assets.revision(), asset_revision);
 }
 
 TEST(ModelingSessionServiceSplitTests,

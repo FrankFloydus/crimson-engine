@@ -154,6 +154,16 @@ frame; it does not enumerate concrete native tools or reconstruct editor precede
 activation, commit, cancel, reset, mutation blocking, and active presentation are registered once
 through the viewport tool descriptor lifecycle contract.
 
+Pointer-cursor feedback is toolkit-neutral tool intent, not a Qt-side tool branch.
+`ViewportTool::pointer_cursor()` flows through `ViewportToolRuntime` and
+`ViewportInteractionController`; the unified Create Primitive tool used by Box, Cylinder, and
+Sphere is the sole current `ViewportPointerCursor::PrecisionCross` requester, while other tools
+retain the default cursor. `QtViewportPanel` routes that intent generically to its surfaces. The
+precision cross appears only for a hovered, focused pane; focus or hover loss restores the default,
+pointer capture hides the cursor, and active viewport navigation temporarily suppresses the tool
+cursor until navigation ends. Cache the effective presentation so unchanged frames do not repeat
+Qt cursor updates.
+
 ## Viewport Navigation Rules
 
 Viewport navigation has semantic actions:

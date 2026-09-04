@@ -72,6 +72,13 @@ bool TwoStageBoxTool::rollback_failed_preview(
          (box_context.session_active && !box_context.session_active());
 }
 
+ViewportPointerCursor TwoStageBoxTool::pointer_cursor() const {
+  // The same precision target remains meaningful before, during, and after a
+  // footprint drag. Navigation and focus policy temporarily override it at
+  // the host boundary without making the tool aware of Qt cursors.
+  return ViewportPointerCursor::PrecisionCross;
+}
+
 ViewportToolResult TwoStageBoxTool::handle_event(
         ViewportToolContext& context,
         const ViewportToolEvent& event) const {
@@ -228,6 +235,20 @@ ViewportToolResult TwoStageBoxTool::handle_event(
                                   "Box footprint finalize update", preview)) {
         active_tool_sync_requested = true;
       }
+      if (preview.ok && !preview.valid) {
+        // A zero-area footprint is still useful draw feedback, but it cannot
+        // enter the height/commit phase. Retire only this pointer gesture so
+        // the primitive session stays ready for another footprint.
+        (void)cancel_pointer_gesture();
+        preview = {};
+        action_consumed = true;
+        return;
+      }
+      if (!preview.ok) {
+        modal_state.primary_release_suppression.begin(
+            QuaderMouseButton::Left, pointer.left_down);
+      }
+      modal_state.primary_pointer_gesture.reset();
       if (preview.ok) {
         preview = preview_port.begin_box_height(finish);
         if (rollback_failed_preview(box_context, "Box height begin",
@@ -310,7 +331,6 @@ ViewportToolResult TwoStageBoxTool::handle_event(
       if (viewport_pointer_drag_threshold_reached(
               *modal_state.primary_pointer_gesture, release_local)) {
         box_event = make_box_event(release_local);
-        modal_state.primary_pointer_gesture.reset();
         finish_footprint_and_accept(box_event);
       } else {
         (void)cancel_pointer_gesture();

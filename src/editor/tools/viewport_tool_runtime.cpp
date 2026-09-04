@@ -143,6 +143,13 @@ bool ViewportToolRuntime::tool_uses_editor_native_lifecycle(
          item->descriptor().editor_owned_native_lifecycle;
 }
 
+ViewportPointerCursor
+ViewportToolRuntime::tool_pointer_cursor(ViewportToolId tool) const {
+  const ViewportTool *item = registry_.find(tool);
+  return item != nullptr ? item->pointer_cursor()
+                         : ViewportPointerCursor::Default;
+}
+
 ModelingTransformTool
 ViewportToolRuntime::transform_tool(ViewportToolId tool) const {
   const ViewportTool *item = registry_.find(tool);

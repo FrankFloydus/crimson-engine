@@ -13,6 +13,7 @@
 #include <QRect>
 #include <QString>
 
+#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -22,10 +23,11 @@ class QWidget;
 namespace quader {
 
 class ViewportCameraController;
+struct ModelingBoxPreview;
 
 /**
- * Presents the world-space length of the current component hover edge in map
- * units. Borrows the small semantic overlay stream; never queries scene meshes.
+ * Presents compact world-space edge and active footprint dimensions in map
+ * units. Borrows existing semantic state; never queries scene meshes.
  */
 class QtViewportEdgeLengthHud final : public QObject {
 public:
@@ -38,7 +40,10 @@ public:
   /// Bounds are pane-local Qt logical pixels; camera coordinates are render pixels.
   void present(const ViewportOverlayFrame &frame, std::uint64_t frame_signature,
                const ViewportCameraController &camera,
-               const QRect &logical_viewport_bounds, bool enabled);
+               const QRect &logical_viewport_bounds, bool edge_enabled,
+               double font_size_points,
+               const ModelingBoxPreview *footprint_preview = nullptr,
+               bool footprint_enabled = false);
   void hide();
   void raise();
 
@@ -46,13 +51,22 @@ protected:
   bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
-  QLabel *label_ = nullptr;
-  std::optional<ViewportOverlayLine> hovered_edge_;
-  QString length_text_;
+  /// One full semantic span and the optional interior point it faces away from.
+  struct Dimension final {
+    QVec3 start;
+    QVec3 end;
+    std::optional<QVec3> outside_reference;
+  };
+
+  std::array<QLabel *, 3> labels_ = {};
+  std::array<std::optional<Dimension>, 3> dimensions_ = {};
+  std::array<QString, 3> dimension_texts_ = {};
   QRect logical_viewport_bounds_;
   std::uint64_t frame_signature_ = 0;
   std::uint64_t camera_signature_ = 0;
+  double font_size_points_ = 0.0;
   bool frame_signature_valid_ = false;
+  bool font_size_valid_ = false;
   bool view_valid_ = false;
 };
 

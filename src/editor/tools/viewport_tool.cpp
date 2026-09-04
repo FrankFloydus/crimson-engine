@@ -63,6 +63,10 @@ bool ViewportTool::allows_selection_fallback() const {
   return descriptor().allows_selection_fallback;
 }
 
+ViewportPointerCursor ViewportTool::pointer_cursor() const {
+  return ViewportPointerCursor::Default;
+}
+
 ViewportToolResult
 ViewportTool::handle_event(ViewportToolContext &context,
                            const ViewportToolEvent &event) const {

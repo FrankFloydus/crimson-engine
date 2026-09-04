@@ -436,6 +436,139 @@ TEST(QtViewportSurfaceInputTests,
   EXPECT_FALSE(surface.render_frame());
 }
 
+TEST(QtViewportSurfaceCursorPolicyTests,
+     FocusAndCapturePrecedenceAreToolkitNeutral) {
+  using Cursor = quader::ViewportPointerCursor;
+  using Presentation = quader::QtViewportCursorPresentation;
+
+  EXPECT_EQ(quader::qt_viewport_cursor_presentation(
+                Cursor::PrecisionCross, true, true, false),
+            Presentation::PrecisionCross);
+  EXPECT_EQ(quader::qt_viewport_cursor_presentation(
+                Cursor::PrecisionCross, false, true, false),
+            Presentation::Default);
+  EXPECT_EQ(quader::qt_viewport_cursor_presentation(
+                Cursor::PrecisionCross, true, false, false),
+            Presentation::Default);
+  EXPECT_EQ(quader::qt_viewport_cursor_presentation(
+                Cursor::PrecisionCross, true, true, true),
+            Presentation::Hidden);
+  EXPECT_EQ(quader::qt_viewport_cursor_presentation(
+                Cursor::Default, true, true, true),
+            Presentation::Hidden);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     PrecisionCursorCachesUpdatesAndClearsOnFocusOrHoverLoss) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-cursor-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  surface.resize(800, 600);
+  surface.set_interaction_cursor(
+      quader::ViewportPointerCursor::PrecisionCross);
+  EXPECT_EQ(surface.cursor().shape(), Qt::ArrowCursor);
+  EXPECT_EQ(surface.pointer_cursor_presentation_revision(), 0u);
+
+  const QPointF local{400.0, 300.0};
+  const QPointF global{500.0, 400.0};
+  QEnterEvent enter(local, local, global);
+  QApplication::sendEvent(&surface, &enter);
+  EXPECT_EQ(surface.cursor().shape(), Qt::ArrowCursor);
+  QFocusEvent focus_in(QEvent::FocusIn);
+  QApplication::sendEvent(&surface, &focus_in);
+  EXPECT_EQ(surface.cursor().shape(), Qt::CrossCursor);
+  const std::uint64_t stable_revision =
+      surface.pointer_cursor_presentation_revision();
+
+  surface.set_interaction_cursor(
+      quader::ViewportPointerCursor::PrecisionCross);
+  surface.set_interaction_cursor(
+      quader::ViewportPointerCursor::PrecisionCross);
+  EXPECT_EQ(surface.pointer_cursor_presentation_revision(), stable_revision);
+
+  QFocusEvent focus_out(QEvent::FocusOut);
+  QApplication::sendEvent(&surface, &focus_out);
+  EXPECT_EQ(surface.cursor().shape(), Qt::ArrowCursor);
+  QApplication::sendEvent(&surface, &focus_in);
+  EXPECT_EQ(surface.cursor().shape(), Qt::CrossCursor);
+
+  QEvent leave(QEvent::Leave);
+  QApplication::sendEvent(&surface, &leave);
+  EXPECT_EQ(surface.cursor().shape(), Qt::ArrowCursor);
+  QApplication::sendEvent(&surface, &enter);
+  EXPECT_EQ(surface.cursor().shape(), Qt::CrossCursor);
+
+  surface.set_interaction_cursor(quader::ViewportPointerCursor::Default);
+  EXPECT_EQ(surface.cursor().shape(), Qt::ArrowCursor);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     ProductionPanelRoutesPrimitiveCursorAndNavigationWithoutToolBranches) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-primitive-cursor-panel-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  quader::QtViewportPanel panel;
+  panel.attach_workspace(session.viewport_workspace());
+  quader::QtViewportSurface *surface =
+      panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+
+  const QPointF local{400.0, 300.0};
+  const QPointF global{500.0, 400.0};
+  QEnterEvent enter(local, local, global);
+  QApplication::sendEvent(surface, &enter);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &focus);
+  const auto process_input = [&]() {
+    panel.process_input(
+        editor, session.scene(), session.assets(), session.modeling(), {},
+        session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+  };
+
+  process_input();
+  EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  process_input();
+  EXPECT_EQ(surface->cursor().shape(), Qt::CrossCursor);
+  const std::uint64_t stable_revision =
+      surface->pointer_cursor_presentation_revision();
+  process_input();
+  EXPECT_EQ(surface->pointer_cursor_presentation_revision(), stable_revision);
+
+  QMouseEvent orbit_press(QEvent::MouseButtonPress, local, global,
+                          Qt::MiddleButton, Qt::MiddleButton,
+                          Qt::NoModifier);
+  QApplication::sendEvent(surface, &orbit_press);
+  process_input();
+  EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+
+  QMouseEvent orbit_release(QEvent::MouseButtonRelease, local, global,
+                            Qt::MiddleButton, Qt::NoButton,
+                            Qt::NoModifier);
+  QApplication::sendEvent(surface, &orbit_release);
+  process_input();
+  EXPECT_EQ(surface->cursor().shape(), Qt::CrossCursor);
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+  process_input();
+  EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+}
+
 TEST(QtViewportSurfaceInputTests,
      StationaryReleaseEmitsClickButPointerDragDoesNot) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);

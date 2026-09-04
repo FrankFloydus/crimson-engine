@@ -15,10 +15,14 @@
 #include "render/scene_render_bridge.hpp"
 #include "ui/ui_system.hpp"
 
+#include <QMetaObject>
+#include <QPointer>
+
 #include <filesystem>
 #include <memory>
 
 class QApplication;
+class QScreen;
 class QTimer;
 
 namespace quader {
@@ -44,6 +48,9 @@ public:
 
 private:
   void apply_window_settings();
+  void install_display_refresh_rate_sync();
+  void bind_display_refresh_rate_screen(QScreen *screen);
+  void synchronize_display_refresh_rate(QScreen *screen);
   void save_window_settings();
   void bind_active_scene(SceneSession &scene);
   bool render_frame(const FrameTiming &frame_timing);
@@ -51,6 +58,9 @@ private:
 
   QApplication *application_ = nullptr;
   std::unique_ptr<QTimer> frame_timer_;
+  QMetaObject::Connection window_screen_changed_connection_;
+  QMetaObject::Connection screen_refresh_rate_changed_connection_;
+  QPointer<QScreen> display_refresh_screen_;
   AppFrameClock frame_clock_;
   RenderSystem render_system_;
   SceneRenderBridge render_bridge_;

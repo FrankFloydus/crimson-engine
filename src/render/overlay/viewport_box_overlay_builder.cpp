@@ -94,19 +94,19 @@ void ViewportBoxOverlayBuilder::append(ViewportOverlayFrame &overlay_frame,
     return;
   }
 
-  if (preview.footprint_count < 4U) {
+  if (preview.footprint_count < 2U) {
     return;
   }
-  for (std::size_t index = 0; index < preview.footprint_count; ++index) {
-    const QVec3 world_start = preview.footprint[index];
-    const QVec3 world_end =
-        preview.footprint[(index + 1U) % preview.footprint_count];
+  const auto append_dashed_edge = [&](std::size_t start_index,
+                                      std::size_t end_index) {
+    const QVec3 world_start = preview.footprint[start_index];
+    const QVec3 world_end = preview.footprint[end_index];
     const OverlayScreenPoint screen_start =
         project_overlay_world_point(camera, world_start);
     const OverlayScreenPoint screen_end =
         project_overlay_world_point(camera, world_end);
     if (!screen_start.visible || !screen_end.visible) {
-      continue;
+      return;
     }
     const QVec3 world_delta = world_end - world_start;
     append_viewport_overlay_dashed_edge(
@@ -115,6 +115,14 @@ void ViewportBoxOverlayBuilder::append(ViewportOverlayFrame &overlay_frame,
           append_line(overlay_frame, world_start + world_delta * start_t,
                       world_start + world_delta * end_t);
         });
+  };
+  if (preview.footprint_count == 2U) {
+    append_dashed_edge(0U, 1U);
+    return;
+  }
+  for (std::size_t index = 0; index < preview.footprint_count; ++index) {
+    append_dashed_edge(index,
+                       (index + 1U) % preview.footprint_count);
   }
 }
 

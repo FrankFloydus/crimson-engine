@@ -121,9 +121,16 @@ struct EditorSelectionBoxBaseline {
     std::optional<EditorSubSelectionBaseline> sub_selection;
 };
 
+/** Identifies a selectable mesh body hit used by component-mode fallback. */
+struct ResolvedComponentBodyTarget {
+  EntityId geometry_entity = kInvalidEntityId;
+  EntityId source_occurrence = kInvalidEntityId;
+};
+
 /** Carries one resolved click and the canonical policy used to apply it. */
 struct ResolvedSelectionClickRequest {
   std::optional<ResolvedSelectionTarget> winner;
+  std::optional<ResolvedComponentBodyTarget> component_body_target;
   ModelingPickSelectRequest policy;
   std::optional<EditorSelectionBoxBaseline> baseline;
   /**

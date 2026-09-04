@@ -644,15 +644,8 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
 				closest.segment_point.y,
 				closest.segment_point.z,
 			};
-                        hit.face_id =
-                            pick_facts.best_edge_context_face_id(
-                                hit.edge, pick_ray);
-                        if (hit.face_id == quader_poly::kInvalidElementId) {
-                          hit.face_id =
-                              pick_facts.edge_pick_context_face_id(
-                                  hit.edge, pick_ray,
-                                  ensure_surface_hit());
-                        }
+                        hit.face_id = pick_facts.edge_pick_context_face_id(
+                            hit.edge, pick_ray, ensure_surface_hit());
                         const bool selected_target =
                             selection_index.contains(hit);
 			if (!selected_target &&
@@ -1104,7 +1097,6 @@ std::optional<PickHitRecord> pick_mesh_boundary(
         .hit = true,
         .kind = quader_poly::ElementKind::Edge,
         .edge = edge,
-        .face_id = facts.best_edge_context_face_id(edge, local_ray),
         .position = a->position +
                     (b->position - a->position) * closest.segment_factor,
     };
@@ -1120,6 +1112,13 @@ std::optional<PickHitRecord> pick_mesh_boundary(
          pick_hit_depth_less(record, *nearest))) {
       nearest = std::move(record);
     }
+  }
+  // This fallback is reached only after the authoritative surface picker
+  // missed. Do not repeat a full face traversal; resolve context only for the
+  // winning boundary edge from its incident faces.
+  if (nearest.has_value()) {
+    nearest->face_id =
+        facts.best_edge_context_face_id(nearest->edge, local_ray);
   }
   return nearest;
 }
@@ -2315,6 +2314,7 @@ SelectionHoverUpdateResult update_selection_hover(
               case quader_poly::ElementKind::Edge:
                 next.kind = SelectionHoverKind::Edge;
                 next.edge = hit.edge;
+                next.face_id = hit.face_id;
                 break;
               case quader_poly::ElementKind::Face:
                 next.kind = SelectionHoverKind::Face;

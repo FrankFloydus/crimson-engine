@@ -1797,6 +1797,8 @@ TEST(QdrModelingRuntimePickingTests,
       backfacing, {.ray = boundary_ray, .options = options});
   ASSERT_EQ(two_sided.size(), 1U);
   EXPECT_EQ(two_sided[0].kind, quader_poly::ElementKind::Edge);
+  EXPECT_EQ(two_sided[0].face_id,
+            backfacing[0].document.faces.front().id);
   options.pick_backfaces = false;
   const std::array reflected{scaled_pick_transform(7, -1.0F, 1.0F, 1.0F)};
   ASSERT_EQ(quader_editor_core::pick_mesh_depth_hits(
@@ -1989,4 +1991,24 @@ TEST(QdrModelingRuntimePickingTests,
   EXPECT_NEAR(uncached_hits[0].pick_distance, cached_hits[0].pick_distance,
               0.000001F);
   EXPECT_FLOAT_EQ(uncached_hits[0].ray_distance, cached_hits[0].ray_distance);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     EdgeHoverPreservesThePickedContextFace) {
+  const quader_editor_core::PolygonObject object =
+      single_quad_object(7, false);
+  ASSERT_EQ(object.document.faces.size(), 1U);
+  quader_poly::PickOptions options;
+  options.mode = quader_poly::SelectionMode::Edge;
+  options.edge_radius = 0.1F;
+
+  const quader_editor_core::SelectionHoverUpdateResult hover =
+      quader_editor_core::update_selection_hover(
+          {object}, quader_editor_core::SelectionMode::Edge, {},
+          {{0.0F, 0.95F, 5.0F}, {0.0F, 0.0F, -1.0F}}, false, options);
+
+  ASSERT_EQ(hover.hover.kind,
+            quader_editor_core::SelectionHoverKind::Edge);
+  EXPECT_EQ(hover.hover.object_id, object.id);
+  EXPECT_EQ(hover.hover.face_id, object.document.faces.front().id);
 }

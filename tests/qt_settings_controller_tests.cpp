@@ -105,6 +105,16 @@ TEST(QtSettingsControllerTests,
             "Backface Selection");
   EXPECT_EQ(italian.text("viewport.settings.BackfaceSelection.label", ""),
             "Selezione facce posteriori");
+  EXPECT_EQ(english.text("viewport.settings.DimensionFontSize.label", ""),
+            "Dimension Font Size (pt)");
+  EXPECT_EQ(italian.text("viewport.settings.DimensionFontSize.label", ""),
+            "Dimensione font quote (pt)");
+  EXPECT_EQ(
+      english.text("viewport.settings.ShowHoverDimensions.label", ""),
+      "Show Dimensions on Hover");
+  EXPECT_EQ(
+      italian.text("viewport.settings.ShowHoverDimensions.label", ""),
+      "Mostra quote al passaggio del mouse");
   EXPECT_EQ(english.text("ui.settings.color.opacity", ""), "Opacity: %1%");
   EXPECT_EQ(italian.text("ui.settings.color.opacity", ""), "Opacità: %1%");
 }
@@ -112,11 +122,11 @@ TEST(QtSettingsControllerTests,
 TEST(QtSettingsControllerTests,
      EveryControlMutatesItsOwnerAndNotifiesItsPhase) {
   static_assert(kViewportColorSettingCount == 23u);
-  static_assert(kViewportFloatSettingCount == 31u);
-  static_assert(kViewportBoolSettingCount == 12u);
+  static_assert(kViewportFloatSettingCount == 32u);
+  static_assert(kViewportBoolSettingCount == 13u);
   static_assert(1u + kViewportColorSettingCount + kViewportFloatSettingCount +
                     kViewportBoolSettingCount ==
-                67u);
+                69u);
 
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();

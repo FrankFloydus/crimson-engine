@@ -2245,6 +2245,29 @@ TEST(RenderSystemTests,
             std::string::npos);
 }
 
+TEST(RenderSystemTests, PropagatesDisplayRefreshRateToEveryRenderer) {
+  const std::string header = read_source_file("src/render/render_system.hpp");
+  const std::string source = read_source_file("src/render/render_system.cpp");
+
+  EXPECT_NE(header.find("set_display_refresh_rate_hz("), std::string::npos);
+  EXPECT_NE(header.find("display_refresh_rate_hz_ = 60.0f"),
+            std::string::npos);
+  EXPECT_NE(header.find("std::vector<filament::Renderer *> "
+                        "additional_renderers_"),
+            std::string::npos);
+  EXPECT_NE(source.find("normalized_display_refresh_rate_hz("),
+            std::string::npos);
+  EXPECT_NE(source.find("renderer.setDisplayInfo("), std::string::npos);
+  EXPECT_NE(source.find("renderer_->setDisplayInfo(display_info)"),
+            std::string::npos);
+  EXPECT_NE(source.find("renderer->setDisplayInfo(display_info)"),
+            std::string::npos);
+  EXPECT_NE(source.find("additional_renderers_.push_back(renderer)"),
+            std::string::npos);
+  EXPECT_NE(source.find("std::erase(additional_renderers_, renderer)"),
+            std::string::npos);
+}
+
 TEST(ViewportRendererTests,
      EnvironmentClearColorAndRenderedBackgroundPathsStaySceneOwned) {
   const std::string renderer =
@@ -3328,8 +3351,9 @@ TEST(ViewportRendererTests,
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
       "const bool tool_overlay_visible = pane_state.id == "
-      "interaction_pane_id_ && active_box_preview_.valid && "
-      "active_box_preview_.drag_state != ModelingBoxDragState::Height"));
+      "interaction_pane_id_ && active_box_preview_.ok && "
+      "active_box_preview_.footprint_count >= 2U && "
+      "active_box_preview_.drag_state == ModelingBoxDragState::Footprint"));
   EXPECT_NE(viewport_panel_source.find(
                 ".tool_overlay_visible = tool_overlay_visible"),
             std::string::npos);

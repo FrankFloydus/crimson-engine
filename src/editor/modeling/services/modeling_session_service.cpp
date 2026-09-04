@@ -1182,6 +1182,7 @@ from_runtime(const quader_editor_core::SelectionHoverState &hover) {
     target.kind = ModelingActiveSelectionKind::Edge;
     target.edge_a = static_cast<int>(hover.edge.a);
     target.edge_b = static_cast<int>(hover.edge.b);
+    target.face_id = static_cast<int>(hover.face_id);
     break;
   case quader_editor_core::SelectionHoverKind::Face:
     target.kind = ModelingActiveSelectionKind::Face;
@@ -1286,6 +1287,8 @@ from_runtime(const quader_editor_core::BoxPreviewDescriptor &preview,
                  !preview.bounds.empty;
   result.drag_state = from_runtime(preview.drag_state);
   result.message = preview.message;
+  result.footprint_size = preview.footprint.size;
+  result.signed_footprint_size = preview.footprint.signed_size;
   result.normal = from_runtime(preview.normal);
   result.distance = preview.distance;
   result.bounds_empty = preview.bounds.empty;
@@ -3025,8 +3028,9 @@ public:
     return {};
   }
 
-  ModelingCommandResult
-  restore_history_memento(const ModelingSessionMemento &memento) {
+  ModelingCommandResult restore_history_memento_impl(
+      const ModelingSessionMemento &memento,
+      bool defer_scene_hierarchy) {
     if (!memento.valid()) {
       return {
           .ok = false,
@@ -3036,12 +3040,15 @@ public:
     }
 
     const ModelingCommandResult sdk_restored =
-        sdk_projection_adapter_.restore_snapshot(
-            memento.impl_->sdk_projection);
+        defer_scene_hierarchy
+            ? sdk_projection_adapter_.restore_snapshot_deferred_scene_hierarchy(
+                  memento.impl_->sdk_projection)
+            : sdk_projection_adapter_.restore_snapshot(
+                  memento.impl_->sdk_projection);
     if (!sdk_restored.ok) {
       return {
           .ok = false,
-          .changed = true,
+          .changed = sdk_restored.changed,
           .message = sdk_restored.message.empty()
                          ? "SDK modeling history state could not be restored."
                          : sdk_restored.message,
@@ -3092,6 +3099,16 @@ public:
         .ok = true,
         .changed = true,
     };
+  }
+
+  ModelingCommandResult
+  restore_history_memento(const ModelingSessionMemento &memento) {
+    return restore_history_memento_impl(memento, false);
+  }
+
+  ModelingCommandResult restore_history_memento_deferred_scene_hierarchy(
+      const ModelingSessionMemento &memento) {
+    return restore_history_memento_impl(memento, true);
   }
 
   void clear_transient_state_for_document_replacement() {
@@ -3208,7 +3225,8 @@ public:
 
   ModelingCommandResult restore_history_memento_exact(
       const ModelingSessionMemento &memento,
-      bool preserve_scene_selection = false) {
+      bool preserve_scene_selection = false,
+      bool defer_scene_hierarchy = false) {
     if (!memento.valid()) {
       return {
           .ok = false,
@@ -3217,13 +3235,19 @@ public:
       };
     }
 
-    const ModelingCommandResult sdk_restored =
-        preserve_scene_selection
-            ? sdk_projection_adapter_
-                  .restore_snapshot_exact_preserving_scene_selection(
-                      memento.impl_->sdk_projection)
-            : sdk_projection_adapter_.restore_snapshot_exact(
-                  memento.impl_->sdk_projection);
+    ModelingCommandResult sdk_restored;
+    if (preserve_scene_selection) {
+      sdk_restored =
+          sdk_projection_adapter_.restore_snapshot_exact_preserving_scene_selection(
+              memento.impl_->sdk_projection);
+    } else if (defer_scene_hierarchy) {
+      sdk_restored =
+          sdk_projection_adapter_.restore_snapshot_exact_deferred_scene_hierarchy(
+              memento.impl_->sdk_projection);
+    } else {
+      sdk_restored = sdk_projection_adapter_.restore_snapshot_exact(
+          memento.impl_->sdk_projection);
+    }
     if (!sdk_restored.ok) {
       return {
           .ok = false,
@@ -3639,11 +3663,12 @@ public:
                 [&]() { return capture_history_memento(); },
             .restore_modeling_memento =
                 [&](const ModelingSessionMemento &memento) {
-                  return restore_history_memento(memento);
+                  return restore_history_memento_deferred_scene_hierarchy(
+                      memento);
                 },
             .restore_modeling_memento_exact =
                 [&](const ModelingSessionMemento &memento) {
-                  return restore_history_memento_exact(memento);
+                  return restore_history_memento_exact(memento, false, true);
                 },
             .app_selection_mode = [&]() { return app_selection_mode_; },
             .set_app_selection_mode =
@@ -8869,6 +8894,81 @@ public:
     return set_component_selection(component);
   }
 
+  [[nodiscard]] bool resolved_component_body_target_eligible(
+      int modeling_object_id, EntityId source_occurrence) const {
+    const std::optional<EntityId> entity =
+        object_registry_.entity_for_modeling_object(modeling_object_id);
+    if (!entity.has_value() || !scene_.exists(*entity)) {
+      return false;
+    }
+    const EntityId definition =
+        scene_.containing_instance_definition(*entity);
+    const ModelingInstanceEditScope edit_scope =
+        instance_edit_scope_provider_ ? instance_edit_scope_provider_()
+                                      : ModelingInstanceEditScope{};
+    const bool active_instance_edit =
+        edit_scope.occurrence != kInvalidEntityId &&
+        edit_scope.definition != kInvalidEntityId;
+    if (definition != kInvalidEntityId) {
+      return active_instance_edit && definition == edit_scope.definition &&
+             source_occurrence == edit_scope.occurrence;
+    }
+    return !active_instance_edit && source_occurrence == *entity;
+  }
+
+  ModelingCommandResult apply_resolved_component_body_selection(
+      const ModelingResolvedComponentBodySelectionRequest &request) {
+    const ModelingSelectionProjectionSnapshot &projection =
+        selection_projection_snapshot();
+    const auto object_it = std::find_if(
+        projection.objects().begin(), projection.objects().end(),
+        [&](const quader_editor_core::PolygonObject &object) {
+          return object.id == request.modeling_object_id;
+        });
+    if (object_it == projection.objects().end()) {
+      return {.ok = false,
+              .message = "Resolved component body owner is no longer live."};
+    }
+    if (request.mode == ModelingSelectionMode::Object ||
+        request.mode == ModelingSelectionMode::Group ||
+        request.mode != app_selection_mode_) {
+      return {
+          .ok = false,
+          .message =
+              "Resolved component body does not match the current selection mode.",
+      };
+    }
+    if (!resolved_component_body_target_eligible(
+            request.modeling_object_id, request.source_occurrence)) {
+      return {
+          .ok = false,
+          .message =
+              "Resolved component body is outside the active edit scope.",
+      };
+    }
+    if (request.edit == ModelingSelectionEdit::Remove ||
+        request.edit == ModelingSelectionEdit::Toggle) {
+      return {.ok = true, .changed = false};
+    }
+    if (request.preserve_existing_component_selection_on_hit &&
+        ModelingSelectionService::has_component_selection(
+            selection_summary())) {
+      return {.ok = true, .changed = false};
+    }
+    if (request.preserve_selection_on_selected_hit &&
+        (object_it->selected || object_it->component_edit_target)) {
+      return {.ok = true, .changed = false};
+    }
+
+    ModelingComponentSelectionRequest component{
+        .modeling_object_id = request.modeling_object_id,
+        .mode = request.mode,
+        .edit = request.edit,
+        .retain_component_edit_target = true,
+    };
+    return set_component_selection(component);
+  }
+
   ModelingCommandResult set_component_selections(
       std::span<const ModelingComponentSelectionRequest> requests) {
     const ModelingInstanceEditScope edit_scope =
@@ -9114,6 +9214,7 @@ public:
       hover.edge = quader_poly::make_edge(
           static_cast<quader_poly::ElementId>(request.edge.first),
           static_cast<quader_poly::ElementId>(request.edge.second));
+      hover.face_id = static_cast<quader_poly::ElementId>(request.face_id);
       break;
     case ModelingActiveSelectionKind::Face:
       hover.kind = quader_editor_core::SelectionHoverKind::Face;
@@ -10681,6 +10782,18 @@ ModelingCommandResult ModelingSessionService::set_component_selection(
 ModelingCommandResult ModelingSessionService::apply_resolved_component_selection(
     const ModelingResolvedComponentSelectionRequest &request) {
   return impl_->apply_resolved_component_selection(request);
+}
+
+bool ModelingSessionService::resolved_component_body_target_eligible(
+    int modeling_object_id, EntityId source_occurrence) const {
+  return impl_->resolved_component_body_target_eligible(modeling_object_id,
+                                                        source_occurrence);
+}
+
+ModelingCommandResult
+ModelingSessionService::apply_resolved_component_body_selection(
+    const ModelingResolvedComponentBodySelectionRequest &request) {
+  return impl_->apply_resolved_component_body_selection(request);
 }
 
 ModelingCommandResult ModelingSessionService::set_component_selections(

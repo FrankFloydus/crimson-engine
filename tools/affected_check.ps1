@@ -543,7 +543,7 @@ function Add-PathPlan {
         Add-BuildTarget "quader_guardrail_tests" "runtime resource changed"
         Add-BuildTarget "quader_tests" "runtime resource changed"
         Add-GuardrailTestsFilter "BuildGuardrailTests.QtWidgetsRuntimeAndLicenseEvidenceAreConfigured:BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime" "verify runtime resource packaging"
-        Add-QuaderTestsFilter "UI*:Ui*:Viewport*:GroundGridMaterialTests.*:QuaderMeshMaterialTests.*" "verify runtime resource behavior"
+        Add-QuaderTestsFilter "UI*:Ui*:Viewport*:QtViewportEdgeLengthHudTests.*:GroundGridMaterialTests.*:QuaderMeshMaterialTests.*" "verify runtime resource behavior"
         return
     }
 

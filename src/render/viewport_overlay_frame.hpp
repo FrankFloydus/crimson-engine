@@ -124,6 +124,15 @@ struct ViewportOverlayElementRef {
   int face_id = -1;
 };
 
+/**
+ * Carries the world-space interior-side reference for the one hovered edge
+ * dimension represented by a viewport overlay frame.
+ */
+struct ViewportHoverEdgeDimensionContext {
+    QVec3 inside_reference;
+    ViewportOverlayElementRef element;
+};
+
 constexpr std::uint32_t rgba8(std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a = 255u) {
     return static_cast<std::uint32_t>(r) |
             (static_cast<std::uint32_t>(g) << 8u) |
@@ -221,6 +230,8 @@ struct ViewportOverlayFrame {
     std::vector<ViewportOverlayTriangle> triangles;
     std::vector<ViewportOverlayPoint> points;
     std::vector<ViewportOverlayIcon> icons;
+    std::optional<ViewportHoverEdgeDimensionContext>
+        hover_edge_dimension_context;
     bool hover_target_selected = false;
 };
 

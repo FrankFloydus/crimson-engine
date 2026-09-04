@@ -441,6 +441,9 @@ bool QtViewportPanel::initialize(RenderSystem &render_system) {
 
 void QtViewportPanel::shutdown() {
   set_modal_tool_owns_viewport_snapshot(false);
+  for (Pane &pane_state : panes_) {
+    pane_state.surface->set_interaction_cursor(ViewportPointerCursor::Default);
+  }
   if (interaction_native_tools_ != nullptr) {
     interaction_controller_.reset(interaction_editor_,
                                   *interaction_native_tools_);
@@ -495,6 +498,9 @@ void QtViewportPanel::shutdown() {
 
 void QtViewportPanel::reset_interactions(QuaderEditorApi *editor,
     NativeViewportToolCoordinator *native_tools) {
+  for (Pane &pane_state : panes_) {
+    pane_state.surface->set_interaction_cursor(ViewportPointerCursor::Default);
+  }
   if (native_tools != nullptr) {
     interaction_controller_.reset(editor, *native_tools);
   } else {
@@ -525,6 +531,8 @@ void QtViewportPanel::abandon_interactions() {
       pane_state.navigation_gizmo->abandon_camera();
     }
     if (pane_state.surface != nullptr) {
+      pane_state.surface->set_interaction_cursor(
+          ViewportPointerCursor::Default);
       pane_state.surface->abandon_input();
     }
   }
@@ -667,6 +675,7 @@ void QtViewportPanel::process_input(
                           : ViewportProbeClock::time_point{};
   process_viewport_input(editor, document, assets, modeling, default_material,
                          native_tools, point_placement, delta_seconds);
+  update_pointer_cursor_presentation();
   observe_persisted_camera_change(editor);
   if (diagnostics_enabled) {
     g_viewport_probe.input_ms +=
@@ -759,6 +768,10 @@ void QtViewportPanel::prepare_viewports(
       settings.bool_value(ViewportBoolSettingId::ShowGrid);
   const bool overlays_visible =
       settings.bool_value(ViewportBoolSettingId::ShowOverlays);
+  const bool hover_dimensions_visible =
+      settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions);
+  const double dimension_font_size_points = static_cast<double>(
+      settings.float_value(ViewportFloatSettingId::DimensionFontSize));
   const bool gizmos_visible =
       settings.bool_value(ViewportBoolSettingId::ShowGizmos);
   const bool viewport_info_visible =
@@ -777,9 +790,17 @@ void QtViewportPanel::prepare_viewports(
         !pane_state.info_overlay->isHidden()) {
       pane_state.info_overlay->hide();
     }
-    if (!edge_length_hud_enabled_ || !overlays_visible ||
-        pane_state.id != interaction_pane_id_ ||
-        !pane_state.frame->isVisible()) {
+    const bool footprint_dimensions_visible =
+        overlays_visible && pane_state.frame->isVisible() &&
+        active_box_preview_.ok &&
+        active_box_preview_.drag_state == ModelingBoxDragState::Footprint &&
+        active_box_preview_.footprint_count >= 2U &&
+        pane_state.id == interaction_pane_id_;
+    if ((!edge_length_hud_enabled_ || !hover_dimensions_visible ||
+         !overlays_visible ||
+         pane_state.id != interaction_pane_id_ ||
+         !pane_state.frame->isVisible()) &&
+        !footprint_dimensions_visible) {
       pane_state.edge_length_hud->hide();
     }
   }
@@ -930,8 +951,10 @@ void QtViewportPanel::prepare_viewports(
         viewport_shading_uses_scene_lighting(shading));
     renderer.set_scene_visible(shading != ViewportShadingMode::Wireframe);
     const bool tool_overlay_visible =
-        pane_state.id == interaction_pane_id_ && active_box_preview_.valid &&
-        active_box_preview_.drag_state != ModelingBoxDragState::Height;
+        pane_state.id == interaction_pane_id_ &&
+        active_box_preview_.ok &&
+        active_box_preview_.footprint_count >= 2U &&
+        active_box_preview_.drag_state == ModelingBoxDragState::Footprint;
     const bool radial_array_center_visible =
         should_show_point_placement_overlay(
             radial_array_center.visible, radial_array_center.locked,
@@ -1024,10 +1047,13 @@ void QtViewportPanel::prepare_viewports(
             : empty_edge_hud_frame,
         overlay_submission.dynamic_source_signature,
         pane_workspace.camera, pane_state.surface_container->geometry(),
-        edge_length_hud_enabled_ && overlays_visible &&
+        edge_length_hud_enabled_ && hover_dimensions_visible &&
+            overlays_visible &&
             cached_overlay_mode == ModelingSelectionMode::Edge &&
             pane_state.id == interaction_pane_id_ &&
-            !viewport_interaction_active);
+            !viewport_interaction_active,
+        dimension_font_size_points,
+        &active_box_preview_, overlays_visible && tool_overlay_visible);
     sync_pane_control_selection(pane_state);
   }
   if (diagnostics_enabled) {
@@ -1861,6 +1887,17 @@ void QtViewportPanel::hide_fly_navigation_huds() {
     if (pane_state.fly_navigation_hud != nullptr) {
       pane_state.fly_navigation_hud->hide();
     }
+  }
+}
+
+void QtViewportPanel::update_pointer_cursor_presentation() {
+  ViewportPointerCursor cursor = ViewportPointerCursor::Default;
+  if (workspace_ != nullptr && !input_router_.navigating()) {
+    cursor = interaction_controller_.active_tool_pointer_cursor(
+        input_router_.state().active_tool);
+  }
+  for (Pane &pane_state : panes_) {
+    pane_state.surface->set_interaction_cursor(cursor);
   }
 }
 

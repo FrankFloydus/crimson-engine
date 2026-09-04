@@ -315,6 +315,26 @@ TEST(ViewportToolCatalogTests, CatalogContainsExpectedInteractiveToolContracts) 
   }
 }
 
+TEST(ViewportToolCatalogTests,
+     PrecisionCursorBelongsOnlyToUnifiedPrimitiveFootprintTool) {
+  ViewportToolRuntime runtime;
+  for (const ToolDescriptor &descriptor : viewport_tool_descriptors()) {
+    const ViewportPointerCursor expected =
+        descriptor.tool == ViewportToolId::CreatePrimitive
+            ? ViewportPointerCursor::PrecisionCross
+            : ViewportPointerCursor::Default;
+    EXPECT_EQ(runtime.tool_pointer_cursor(descriptor.tool), expected)
+        << descriptor.id;
+  }
+
+  EXPECT_EQ(viewport_tool_for_modeling(ModelingViewportTool::Box),
+            ViewportToolId::CreatePrimitive);
+  EXPECT_EQ(viewport_tool_for_modeling(ModelingViewportTool::Cylinder),
+            ViewportToolId::CreatePrimitive);
+  EXPECT_EQ(viewport_tool_for_modeling(ModelingViewportTool::Sphere),
+            ViewportToolId::CreatePrimitive);
+}
+
 TEST(ViewportToolCatalogTests, ExposesToolMetadataAndConversions) {
   const Tool *primitive = find_viewport_tool("create_primitive");
   ASSERT_NE(primitive, nullptr);
@@ -1261,8 +1281,11 @@ TEST(ViewportToolRuntimeTests, BoxToolAcceptUsesCommandOwnedTransaction) {
         .left_click_local = {400.0f, 300.0f},
     });
     ASSERT_TRUE(result.handled);
-    ASSERT_EQ(session.modeling().box_preview().drag_state,
-              ModelingBoxDragState::Footprint);
+    const ModelingBoxPreview pressed_preview =
+        session.modeling().box_preview();
+    ASSERT_EQ(pressed_preview.drag_state, ModelingBoxDragState::Footprint);
+    EXPECT_FALSE(pressed_preview.valid);
+    EXPECT_EQ(pressed_preview.footprint_count, 0U);
 
     current_event = footprint_end;
     result = dispatch_frame(ViewportPointerToolEvent{
@@ -1271,9 +1294,14 @@ TEST(ViewportToolRuntimeTests, BoxToolAcceptUsesCommandOwnedTransaction) {
         .mouse_local = {420.0f, 300.0f},
     });
     ASSERT_TRUE(result.handled);
-    ASSERT_TRUE(session.modeling().box_preview().valid);
-    ASSERT_EQ(session.modeling().box_preview().drag_state,
+    const ModelingBoxPreview footprint_preview =
+        session.modeling().box_preview();
+    ASSERT_TRUE(footprint_preview.valid);
+    ASSERT_EQ(footprint_preview.drag_state,
               ModelingBoxDragState::Footprint);
+    ASSERT_EQ(footprint_preview.footprint_count, 4U);
+    EXPECT_FLOAT_EQ(footprint_preview.footprint_size.x, 2.0f);
+    EXPECT_FLOAT_EQ(footprint_preview.footprint_size.y, 3.0f);
     EXPECT_EQ(commit_count, 0);
 
     current_event = footprint_end;
@@ -1387,6 +1415,71 @@ TEST(ViewportToolRuntimeTests,
   EXPECT_FALSE(harness.modal_state.primary_pointer_gesture.has_value());
   EXPECT_EQ(harness.accept_count, 1);
   EXPECT_EQ(harness.session.primitive_creation().shape_count(), 1u);
+}
+
+TEST(ViewportToolRuntimeTests,
+     PrimitiveOneAxisReleaseCancelsOnlyTheCurrentPointerGesture) {
+  PrimitivePointerHarness harness;
+  ASSERT_NE(harness.tool, nullptr);
+  ASSERT_TRUE(harness.activated);
+
+  constexpr QVec2 kPressLocal{20.0f, 20.0f};
+  constexpr QVec2 kLineEndLocal{50.0f, 20.0f};
+  const std::array press_edges{ViewportPointerButtonEdge{
+      .button = QuaderMouseButton::Left,
+      .local = kPressLocal,
+      .sequence = 500u,
+  }};
+  ASSERT_TRUE(harness.dispatch_direct({
+      .hovered = true,
+      .left_clicked = true,
+      .left_down = true,
+      .viewport_focused = true,
+      .mouse_local = kPressLocal,
+      .mouse_screen = kPressLocal,
+      .left_click_local = kPressLocal,
+      .pointer_pressed_edges = press_edges,
+  }).consumed);
+  ASSERT_TRUE(harness.modal_state.primary_pointer_gesture.has_value());
+  const ModelingBoxPreview pressed = harness.session.modeling().box_preview();
+  EXPECT_FALSE(pressed.valid);
+  EXPECT_EQ(pressed.footprint_count, 0U);
+
+  ASSERT_TRUE(harness.dispatch_direct({
+      .hovered = true,
+      .left_down = true,
+      .viewport_focused = true,
+      .mouse_local = kLineEndLocal,
+      .mouse_screen = kLineEndLocal,
+  }).handled);
+  const ModelingBoxPreview line = harness.session.modeling().box_preview();
+  EXPECT_EQ(line.drag_state, ModelingBoxDragState::Footprint);
+  EXPECT_FALSE(line.valid);
+  ASSERT_EQ(line.footprint_count, 2U);
+  EXPECT_FLOAT_EQ(line.footprint_size.x, 3.0f);
+  EXPECT_FLOAT_EQ(line.footprint_size.y, 0.0f);
+
+  const std::array release_edges{ViewportPointerButtonEdge{
+      .button = QuaderMouseButton::Left,
+      .local = kLineEndLocal,
+      .sequence = 501u,
+  }};
+  const ViewportToolResult released = harness.dispatch_direct({
+      .hovered = true,
+      .left_released = true,
+      .viewport_focused = true,
+      .mouse_local = kLineEndLocal,
+      .mouse_screen = kLineEndLocal,
+      .pointer_released_edges = release_edges,
+  });
+  EXPECT_TRUE(released.consumed);
+  EXPECT_FALSE(harness.modal_state.primary_pointer_gesture.has_value());
+  EXPECT_FALSE(harness.modal_state.primary_release_suppression.active());
+  EXPECT_EQ(harness.accept_count, 0);
+  EXPECT_TRUE(harness.session.primitive_creation().active());
+  EXPECT_EQ(harness.session.primitive_creation().shape_count(), 0U);
+  EXPECT_EQ(harness.session.modeling().box_preview().drag_state,
+            ModelingBoxDragState::Idle);
 }
 
 TEST(ViewportToolRuntimeTests,

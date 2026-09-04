@@ -1851,3 +1851,98 @@ TEST(QdrModelingRuntimeOverlayTests,
 	OverlayVisibilityOccluderPreservesFrontFaceFiltering) {
 	overlay_visibility_occluder_preserves_front_face_filtering();
 }
+
+TEST(QdrModelingRuntimeOverlayTests,
+     HoverEdgeDimensionContextUsesTheConcaveFacesLocalInteriorSide) {
+  quader_editor_core::PolygonObject object;
+  object.id = 19;
+  quader_poly::Document &document = object.document;
+  const quader_poly::ElementId bottom_left =
+      quader_poly::add_vertex(document, {0.0F, 0.0F, 0.0F});
+  const quader_poly::ElementId bottom_right =
+      quader_poly::add_vertex(document, {4.0F, 0.0F, 0.0F});
+  const quader_poly::ElementId top_right =
+      quader_poly::add_vertex(document, {4.0F, 4.0F, 0.0F});
+  const quader_poly::ElementId notch =
+      quader_poly::add_vertex(document, {2.0F, 2.0F, 0.0F});
+  const quader_poly::ElementId top_left =
+      quader_poly::add_vertex(document, {0.0F, 4.0F, 0.0F});
+  const quader_poly::ElementId face_id = quader_poly::add_face(
+      document,
+      std::array{bottom_left, bottom_right, top_right, notch, top_left});
+  ASSERT_NE(face_id, quader_poly::kInvalidElementId);
+  const quader_poly::Edge edge =
+      quader_poly::make_edge(top_right, notch);
+  const quader_editor_core::SelectionHoverState hover{
+      .object_id = object.id,
+      .kind = quader_editor_core::SelectionHoverKind::Edge,
+      .edge = edge,
+      .face_id = face_id,
+      .candidate_object_id = object.id,
+  };
+
+  const quader_editor_core::SelectionOverlayFrame frame =
+      quader_editor_core::build_selection_hover_overlay_frame(
+          std::vector<quader_editor_core::PolygonObject>{object},
+          quader_editor_core::SelectionMode::Edge, hover);
+
+  const auto hover_line = std::find_if(
+      frame.lines.begin(), frame.lines.end(),
+      [](const quader_editor_core::SelectionOverlayLine &line) {
+        return line.layer ==
+               quader_editor_core::SelectionOverlayLayer::HoverEdge;
+      });
+  ASSERT_NE(hover_line, frame.lines.end());
+  EXPECT_EQ(hover_line->face_id, face_id);
+  ASSERT_TRUE(frame.hover_edge_dimension_context.has_value());
+  const quader_editor_core::SelectionHoverEdgeDimensionContext &context =
+      *frame.hover_edge_dimension_context;
+  EXPECT_EQ(context.object_id, object.id);
+  EXPECT_EQ(context.face_id, face_id);
+  EXPECT_EQ(context.edge, edge);
+  // The mean of this concave face's vertices is (2, 2), which lies on the
+  // hovered notch edge. The winding-local interior reference is instead on
+  // the edge's lower-right interior half-plane.
+  EXPECT_NEAR(context.inside_reference.x, 3.5F, 0.0001F);
+  EXPECT_NEAR(context.inside_reference.y, 2.5F, 0.0001F);
+  EXPECT_NEAR(context.inside_reference.z, 0.0F, 0.0001F);
+
+  quader_editor_core::PolygonObject reversed;
+  reversed.id = 20;
+  quader_poly::Document &reversed_document = reversed.document;
+  const quader_poly::ElementId reversed_bottom_left =
+      quader_poly::add_vertex(reversed_document, {0.0F, 0.0F, 0.0F});
+  const quader_poly::ElementId reversed_bottom_right =
+      quader_poly::add_vertex(reversed_document, {4.0F, 0.0F, 0.0F});
+  const quader_poly::ElementId reversed_top_right =
+      quader_poly::add_vertex(reversed_document, {4.0F, 4.0F, 0.0F});
+  const quader_poly::ElementId reversed_notch =
+      quader_poly::add_vertex(reversed_document, {2.0F, 2.0F, 0.0F});
+  const quader_poly::ElementId reversed_top_left =
+      quader_poly::add_vertex(reversed_document, {0.0F, 4.0F, 0.0F});
+  const quader_poly::ElementId reversed_face_id = quader_poly::add_face(
+      reversed_document,
+      std::array{reversed_top_left, reversed_notch, reversed_top_right,
+                 reversed_bottom_right, reversed_bottom_left});
+  ASSERT_NE(reversed_face_id, quader_poly::kInvalidElementId);
+  const quader_poly::Edge reversed_edge =
+      quader_poly::make_edge(reversed_top_right, reversed_notch);
+  const quader_editor_core::SelectionOverlayFrame reversed_frame =
+      quader_editor_core::build_selection_hover_overlay_frame(
+          std::vector<quader_editor_core::PolygonObject>{reversed},
+          quader_editor_core::SelectionMode::Edge,
+          quader_editor_core::SelectionHoverState{
+              .object_id = reversed.id,
+              .kind = quader_editor_core::SelectionHoverKind::Edge,
+              .edge = reversed_edge,
+              .face_id = reversed_face_id,
+              .candidate_object_id = reversed.id,
+          });
+  ASSERT_TRUE(reversed_frame.hover_edge_dimension_context.has_value());
+  EXPECT_NEAR(reversed_frame.hover_edge_dimension_context->inside_reference.x,
+              3.5F, 0.0001F);
+  EXPECT_NEAR(reversed_frame.hover_edge_dimension_context->inside_reference.y,
+              2.5F, 0.0001F);
+  EXPECT_NEAR(reversed_frame.hover_edge_dimension_context->inside_reference.z,
+              0.0F, 0.0001F);
+}

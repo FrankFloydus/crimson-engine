@@ -978,6 +978,12 @@ TEST(ProjectMaterialWorkspaceTests,
   };
   ASSERT_TRUE(modeling.activate_box_tool().ok);
   ASSERT_TRUE(modeling.begin_box_footprint(start).ok);
+  ASSERT_TRUE(modeling.update_box_footprint({
+      .screen_position = {340.0f, 280.0f},
+      .ray = {.origin = {2.0f, 4.0f, 3.0f},
+              .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+  }).ok);
   const ModelingBoxPreview preview_before = modeling.box_preview();
   ASSERT_TRUE(preview_before.valid);
 

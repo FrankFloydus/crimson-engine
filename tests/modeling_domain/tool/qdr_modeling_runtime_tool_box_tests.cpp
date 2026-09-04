@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-TEST(QdrModelingRuntimeToolBoxTests, BoxFootprintSnapsDirectionalPairsAndPreservesSignedSize) {
+TEST(QdrModelingRuntimeToolBoxTests, BoxFootprintProgressesFromEmptyToLineToRectangle) {
 	quader_editor_core::BoxToolState state;
 	EXPECT_TRUE(quader_editor_core::set_box_construction_plane(state, { 0.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F }).ok);
 
@@ -26,22 +26,56 @@ TEST(QdrModelingRuntimeToolBoxTests, BoxFootprintSnapsDirectionalPairsAndPreserv
 		quader_editor_core::begin_box_footprint(
 			state,
 			{ 0.2F, 0.0F, 0.2F },
-			{ 1.2F, 0.0F, 2.8F },
+			{ 0.2F, 0.0F, 0.2F },
 			true,
 			1.0);
 	EXPECT_TRUE(begin.ok);
         EXPECT_TRUE(begin.state.drag_state ==
                     quader_editor_core::BoxDragState::Footprint);
 
-        const quader_editor_core::BoxPreviewDescriptor descriptor =
+        const quader_editor_core::BoxPreviewDescriptor zero_size =
 		quader_editor_core::box_preview_descriptor(begin.state, true, 1.0);
-	EXPECT_TRUE(descriptor.ok);
-	EXPECT_TRUE(descriptor.footprint.footprint.size() == 4);
-	EXPECT_NEAR(descriptor.footprint.size.x, 2.0F, 0.0001);
-	EXPECT_NEAR(descriptor.footprint.size.y, 3.0F, 0.0001);
-	EXPECT_FALSE(descriptor.bounds.empty);
-	EXPECT_NEAR(descriptor.bounds.min.y, 0.0F, 0.0001);
-	EXPECT_NEAR(descriptor.bounds.max.y, 0.0F, 0.0001);
+	EXPECT_TRUE(zero_size.ok);
+	EXPECT_TRUE(zero_size.footprint.footprint.empty());
+	EXPECT_NEAR(zero_size.footprint.size.x, 0.0F, 0.0001);
+	EXPECT_NEAR(zero_size.footprint.size.y, 0.0F, 0.0001);
+	EXPECT_TRUE(zero_size.bounds.empty);
+
+	const quader_editor_core::BoxToolStateResult line =
+		quader_editor_core::update_box_footprint(
+			state,
+			{ 2.4F, 0.0F, 0.2F },
+			true,
+			1.0);
+	EXPECT_TRUE(line.ok);
+	const quader_editor_core::BoxPreviewDescriptor one_axis =
+		quader_editor_core::box_preview_descriptor(line.state, true, 1.0);
+	EXPECT_TRUE(one_axis.ok);
+	ASSERT_EQ(one_axis.footprint.footprint.size(), 2U);
+	EXPECT_NEAR(one_axis.footprint.size.x, 2.0F, 0.0001);
+	EXPECT_NEAR(one_axis.footprint.size.y, 0.0F, 0.0001);
+	EXPECT_NEAR(one_axis.footprint.signed_size.x, 2.0F, 0.0001);
+	EXPECT_NEAR(one_axis.footprint.signed_size.y, 0.0F, 0.0001);
+	EXPECT_FALSE(one_axis.bounds.empty);
+
+	const quader_editor_core::BoxToolStateResult rectangle =
+		quader_editor_core::update_box_footprint(
+			state,
+			{ 2.4F, 0.0F, 3.2F },
+			true,
+			1.0);
+	EXPECT_TRUE(rectangle.ok);
+	const quader_editor_core::BoxPreviewDescriptor two_axis =
+		quader_editor_core::box_preview_descriptor(rectangle.state, true, 1.0);
+	EXPECT_TRUE(two_axis.ok);
+	ASSERT_EQ(two_axis.footprint.footprint.size(), 4U);
+	EXPECT_NEAR(two_axis.footprint.size.x, 2.0F, 0.0001);
+	EXPECT_NEAR(two_axis.footprint.size.y, 3.0F, 0.0001);
+	EXPECT_NEAR(two_axis.footprint.signed_size.x, 2.0F, 0.0001);
+	EXPECT_NEAR(two_axis.footprint.signed_size.y, -3.0F, 0.0001);
+	EXPECT_FALSE(two_axis.bounds.empty);
+	EXPECT_NEAR(two_axis.bounds.min.y, 0.0F, 0.0001);
+	EXPECT_NEAR(two_axis.bounds.max.y, 0.0F, 0.0001);
 }
 
 TEST(QdrModelingRuntimeToolBoxTests, BoxRuntimeResetHelperRestoresDefaultGridSize) {
@@ -156,10 +190,9 @@ TEST(QdrModelingRuntimeToolBoxTests, BoxPreviewStateAndResetClearTransientBrushI
         EXPECT_TRUE(state.drag_state == quader_editor_core::BoxDragState::Idle);
         EXPECT_TRUE(state.preview_brush_id == -1);
 	EXPECT_FALSE(state.preview_valid);
-	EXPECT_TRUE(state.hover_cell_points.empty());
 }
 
-TEST(QdrModelingRuntimeToolBoxTests, BoxConstructionRayHoverCellAndSyncPreservePreviewContract) {
+TEST(QdrModelingRuntimeToolBoxTests, BoxConstructionRayHoverAndSyncPreservePreviewContract) {
 	quader_editor_core::BoxToolState state;
 	EXPECT_TRUE(quader_editor_core::set_box_construction_plane(state, { 0.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F }).ok);
 
@@ -172,11 +205,17 @@ TEST(QdrModelingRuntimeToolBoxTests, BoxConstructionRayHoverCellAndSyncPreserveP
 	EXPECT_NEAR(point.distance, 64.0, 0.0001);
 
 	const quader_editor_core::BoxToolStateResult hover =
-		quader_editor_core::update_box_hover_cell(state, { 33.0F, 0.0F, 33.0F }, true, 16.0);
+		quader_editor_core::update_box_hover(state, { 33.0F, 0.0F, 33.0F }, true, 16.0);
 	EXPECT_TRUE(hover.ok);
-	EXPECT_TRUE(state.hover_cell_points.size() == 4);
-	EXPECT_NEAR(state.hover_cell_points[0].x, 32.0F, 0.0001);
-	EXPECT_NEAR(state.hover_cell_points[2].x, 48.0F, 0.0001);
+	EXPECT_NEAR(state.start_point.x, 32.0F, 0.0001);
+	EXPECT_NEAR(state.start_point.z, 32.0F, 0.0001);
+	EXPECT_NEAR(state.end_point.x, 32.0F, 0.0001);
+	EXPECT_NEAR(state.end_point.z, 32.0F, 0.0001);
+	const quader_editor_core::BoxPreviewDescriptor hover_preview =
+		quader_editor_core::box_preview_descriptor(state, true, 16.0);
+	EXPECT_TRUE(hover_preview.ok);
+	EXPECT_TRUE(hover_preview.footprint.footprint.empty());
+	EXPECT_TRUE(hover_preview.bounds.empty);
 
 	EXPECT_TRUE(quader_editor_core::begin_box_footprint(
 			state,

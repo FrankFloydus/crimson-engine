@@ -1657,15 +1657,19 @@ TEST(ProgrammaticApiGuardrailTests,
       hud, "void QtViewportEdgeLengthHud::present(",
       "void QtViewportEdgeLengthHud::hide()");
   const auto signature_gate = presentation.find(
-      "if (!frame_signature_valid_ || frame_signature_ != frame_signature)");
+      "!frame_signature_valid_ || frame_signature_ != frame_signature");
   const auto scan = presentation.find("std::find_if(");
   const auto geometry_gate =
-      presentation.find("if (!same_edge_geometry(hovered_edge_, edge))");
-  const auto formatting = presentation.find("edge_length_text(*edge)");
+      presentation.find("same_dimension_geometry(dimensions_[index]");
+  const auto formatting = presentation.find("dimension_length_text(");
   const auto view_gate = presentation.find("if (view_valid_");
   const auto projection =
       presentation.find("camera.project_visible_world_segment(");
-  const auto text_setter = presentation.find("label_->setText(");
+  const auto text_setter = presentation.find("label->setText(");
+  const auto resize_gate = presentation.find("const bool resized =");
+  const auto move_gate = presentation.find("label->move(", resize_gate);
+  const auto mask_refresh =
+      presentation.find("refresh_native_mask_if_needed()", move_gate);
   ASSERT_NE(signature_gate, std::string::npos);
   ASSERT_NE(scan, std::string::npos);
   ASSERT_NE(geometry_gate, std::string::npos);
@@ -1673,16 +1677,80 @@ TEST(ProgrammaticApiGuardrailTests,
   ASSERT_NE(view_gate, std::string::npos);
   ASSERT_NE(projection, std::string::npos);
   ASSERT_NE(text_setter, std::string::npos);
+  ASSERT_NE(resize_gate, std::string::npos);
+  ASSERT_NE(move_gate, std::string::npos);
+  ASSERT_NE(mask_refresh, std::string::npos);
   EXPECT_LT(signature_gate, scan);
   EXPECT_LT(geometry_gate, formatting);
   EXPECT_LT(view_gate, projection);
   EXPECT_LT(view_gate, text_setter);
+  EXPECT_LT(text_setter, resize_gate);
+  EXPECT_LT(resize_gate, move_gate);
+  EXPECT_LT(move_gate, mask_refresh);
+  EXPECT_EQ(presentation.find("label->setGeometry(geometry)"),
+            std::string::npos)
+      << "Position-only motion must not rebuild the native glyph mask.";
   EXPECT_NE(presentation.find("ViewportOverlaySource::ComponentHover"),
             std::string::npos);
   EXPECT_NE(presentation.find("ViewportOverlayLayer::HoverEdge"),
             std::string::npos);
   EXPECT_NE(hud.find("viewport_host_defaults().map_units_per_world_unit"),
             std::string::npos);
+  EXPECT_NE(hud.find("setFrameStyle(QFrame::NoFrame)"), std::string::npos);
+  EXPECT_NE(hud.find("setAutoFillBackground(false)"), std::string::npos);
+  EXPECT_EQ(hud.find("setAttribute(Qt::WA_TranslucentBackground)"),
+            std::string::npos)
+      << "Layered native children halve Vulkan presentation throughput on "
+         "some Windows compositors.";
+  EXPECT_NE(hud.find("setAttribute(Qt::WA_NoSystemBackground)"),
+            std::string::npos);
+  EXPECT_NE(hud.find("!font_size_valid_ ||"), std::string::npos);
+  EXPECT_NE(hud.find("font.setPointSizeF(point_size)"),
+            std::string::npos);
+  EXPECT_NE(hud.find(":/quader/fonts/HomeVideo-Regular.ttf"),
+            std::string::npos);
+  EXPECT_NE(hud.find("Q_INIT_RESOURCE(quader_dimension_fonts)"),
+            std::string::npos);
+  EXPECT_NE(hud.find("QFontDatabase::addApplicationFont("),
+            std::string::npos);
+  EXPECT_NE(hud.find("QFont::NoAntialias | QFont::NoFontMerging"),
+            std::string::npos);
+  EXPECT_NE(hud.find("QFont::PreferFullHinting"), std::string::npos);
+  EXPECT_NE(hud.find("tightBoundingRect(text)"), std::string::npos);
+  EXPECT_NE(hud.find("painter.drawText("), std::string::npos);
+  EXPECT_NE(
+      hud.find("setRenderHint(QPainter::TextAntialiasing, false)"),
+      std::string::npos);
+  EXPECT_NE(hud.find("kDimensionLabelGapPixels"), std::string::npos);
+  EXPECT_NE(hud.find("outside_reference"), std::string::npos);
+  EXPECT_NE(hud.find("frame.hover_edge_dimension_context"),
+            std::string::npos);
+  EXPECT_NE(hud.find("label_support_radius"), std::string::npos);
+  EXPECT_NE(hud.find("QBitmap glyph_mask(size())"), std::string::npos);
+  EXPECT_NE(hud.find("QRegion{glyph_mask}"), std::string::npos);
+  EXPECT_NE(hud.find("QImage::Format_ARGB32"), std::string::npos);
+  EXPECT_NE(hud.find("qRgba(0, 0, 0, 255)"), std::string::npos);
+  EXPECT_NE(hud.find("qRgba(255, 255, 255, 255)"), std::string::npos);
+  EXPECT_NE(hud.find("QPainter::CompositionMode_Source"),
+            std::string::npos);
+  EXPECT_NE(hud.find("QPainter::SmoothPixmapTransform, false"),
+            std::string::npos);
+  EXPECT_NE(hud.find("painter.drawImage(QPoint{}, raster_)"),
+            std::string::npos);
+  EXPECT_NE(hud.find("const QFont raster_font{font(), this}"),
+            std::string::npos);
+  EXPECT_NE(hud.find("mask_shape_revision_ == shape_revision_"),
+            std::string::npos);
+  EXPECT_NE(hud.find("QEvent::DevicePixelRatioChange"), std::string::npos);
+  EXPECT_NE(hud.find("QEvent::ScreenChangeInternal"), std::string::npos);
+  EXPECT_EQ(hud.find("QPainterPathStroker"), std::string::npos);
+  EXPECT_EQ(hud.find("addText("), std::string::npos);
+  EXPECT_EQ(
+      hud.find("setRenderHint(QPainter::Antialiasing, true)"),
+      std::string::npos);
+  EXPECT_NE(hud.find("setMask(outline_region_)"), std::string::npos);
+  EXPECT_EQ(hud.find("setAutoFillBackground(true)"), std::string::npos);
+  EXPECT_EQ(hud.find("QPalette::ToolTipBase"), std::string::npos);
   for (const std::string_view forbidden : {
            "SceneDocument", "AssetRegistry", "selection().summary()",
            "selection_overlay_frame()", "commands().available()",
@@ -1717,7 +1785,17 @@ TEST(ProgrammaticApiGuardrailTests,
             std::string::npos);
   EXPECT_NE(prepare.find("cached_overlay_mode == ModelingSelectionMode::Edge"),
             std::string::npos);
-  EXPECT_NE(prepare.find("edge_length_hud_enabled_ && overlays_visible"),
+  EXPECT_NE(prepare.find("ViewportBoolSettingId::ShowHoverDimensions"),
+            std::string::npos);
+  EXPECT_NE(prepare.find("ViewportFloatSettingId::DimensionFontSize"),
+            std::string::npos);
+  EXPECT_NE(prepare.find("edge_length_hud_enabled_ && hover_dimensions_visible"),
+            std::string::npos);
+  EXPECT_NE(prepare.find("active_box_preview_.footprint_count >= 2U"),
+            std::string::npos);
+  EXPECT_NE(prepare.find("&active_box_preview_, overlays_visible"),
+            std::string::npos);
+  EXPECT_NE(prepare.find("overlays_visible && tool_overlay_visible"),
             std::string::npos);
   EXPECT_EQ(prepare.find("ViewportOverlayStyleResolver::apply("),
             std::string::npos);
@@ -1739,6 +1817,23 @@ TEST(ProgrammaticApiGuardrailTests,
   EXPECT_LT(style_signature, dynamic_gate);
   EXPECT_NE(coordinator.find(".style_signature = style_signature"),
             std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests,
+     DimensionHoverDoesNotRepeatAMissedBoundarySurfaceTraversal) {
+  const std::string picking = read_file(
+      source_root() / "src/editor/modeling/runtime/session_picking.cpp");
+  const std::string boundary = source_slice(
+      picking, "std::optional<PickHitRecord> pick_mesh_boundary(",
+      "std::optional<PickHitRecord> nearest_surface_hit(");
+
+  EXPECT_EQ(boundary.find(".surface_hit("), std::string::npos)
+      << "The boundary fallback runs only after the authoritative surface "
+         "picker missed; repeating that traversal adds hover-frame work.";
+  EXPECT_NE(boundary.find(
+                "facts.best_edge_context_face_id(nearest->edge, local_ray)"),
+            std::string::npos)
+      << "Only the winning boundary edge needs an incident-face context.";
 }
 
 TEST(ProgrammaticApiGuardrailTests, OutlinerUsesDocumentCommandRootSelectionOwner) {

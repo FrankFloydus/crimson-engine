@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <vector>
 
 namespace filament {
 class Renderer;
@@ -102,6 +103,10 @@ public:
     [[nodiscard]] RenderFramePerformanceStats frame_performance_stats() const {
       return frame_performance_stats_;
     }
+    void set_display_refresh_rate_hz(float refresh_rate_hz);
+    [[nodiscard]] float display_refresh_rate_hz() const {
+      return display_refresh_rate_hz_;
+    }
     RenderAdditionalSwapChain
     create_additional_swap_chain(void *native_window,
                                  SwapChainPresentationColorSpace color_space =
@@ -147,7 +152,9 @@ public:
     TextureRegistry texture_registry_;
     RenderFramePerformanceStats frame_performance_stats_;
     RenderPresentationFrameTracker presentation_frame_tracker_;
+    std::vector<filament::Renderer *> additional_renderers_;
     std::array<double, 4> renderer_clear_color_ = {};
+    float display_refresh_rate_hz_ = 60.0f;
     std::filesystem::path resource_root_;
 };
 

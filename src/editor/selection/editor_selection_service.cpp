@@ -1188,6 +1188,29 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
     if (edge_traversal != ModelingEdgeSelectionTraversal::None) {
       return {.command = {.ok = true}, .selection = summary()};
     }
+    if (request.component_body_target.has_value()) {
+      const ResolvedComponentBodyTarget &body =
+          *request.component_body_target;
+      const std::optional<int> modeling_object =
+          modeling_.modeling_object_for_entity(body.geometry_entity);
+      if (modeling_object.has_value() &&
+          modeling_.resolved_component_body_target_eligible(
+              *modeling_object, body.source_occurrence)) {
+        ModelingCommandResult command =
+            modeling_.apply_resolved_component_body_selection({
+                .modeling_object_id = *modeling_object,
+                .source_occurrence = body.source_occurrence,
+                .mode = selection_mode,
+                .edit = click_selection_edit(request.policy),
+                .preserve_selection_on_selected_hit =
+                    request.policy.preserve_selection_on_selected_hit,
+                .preserve_existing_component_selection_on_hit =
+                    request.policy
+                        .preserve_existing_component_selection_on_hit,
+            });
+        return {.command = std::move(command), .selection = summary()};
+      }
+    }
     ModelingCommandResult command{.ok = true};
     if (!request.policy.preserve_selection_on_miss &&
         click_selection_edit(request.policy) ==

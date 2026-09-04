@@ -158,9 +158,26 @@ constexpr double kFallbackDisplayRefreshRateHz = 60.0;
 constexpr double kMinimumDisplayRefreshRateHz = 30.0;
 constexpr double kMaximumDisplayRefreshRateHz = 240.0;
 
+QScreen *active_display_screen(const QMainWindow *window) {
+  if (window != nullptr) {
+    if (QWindow *native_window = window->windowHandle();
+        native_window != nullptr && native_window->screen() != nullptr) {
+      return native_window->screen();
+    }
+    if (window->screen() != nullptr) {
+      return window->screen();
+    }
+  }
+  return QGuiApplication::primaryScreen();
+}
+
+float display_refresh_rate_hz(const QScreen *screen) {
+  return screen != nullptr ? static_cast<float>(screen->refreshRate())
+                           : static_cast<float>(kFallbackDisplayRefreshRateHz);
+}
+
 int presentation_frame_interval_ms(const QMainWindow *window) {
-  const QScreen *screen =
-      window != nullptr ? window->screen() : QGuiApplication::primaryScreen();
+  const QScreen *screen = active_display_screen(window);
   double refresh_rate =
       screen != nullptr ? screen->refreshRate() : kFallbackDisplayRefreshRateHz;
   if (!std::isfinite(refresh_rate) || refresh_rate <= 0.0) {
@@ -346,6 +363,7 @@ bool App::initialize(QApplication &application,
 
   apply_window_settings();
   ui_.show();
+  install_display_refresh_rate_sync();
   frame_timer_ = std::make_unique<QTimer>();
   frame_timer_->setTimerType(Qt::PreciseTimer);
   auto *frame_presentation_gate =
@@ -393,6 +411,9 @@ void App::shutdown() {
   if (frame_timer_) {
     frame_timer_->stop();
   }
+  QObject::disconnect(window_screen_changed_connection_);
+  QObject::disconnect(screen_refresh_rate_changed_connection_);
+  display_refresh_screen_ = nullptr;
   save_window_settings();
   ui_.shutdown();
   frame_timer_.reset();
@@ -420,6 +441,55 @@ void App::bind_active_scene(SceneSession &scene) {
         scene.selection(), scene.native_tools(), scene.point_placement(),
         default_material_);
   }
+}
+
+void App::install_display_refresh_rate_sync() {
+  QMainWindow *window = ui_.main_window();
+  QScreen *screen = active_display_screen(window);
+  synchronize_display_refresh_rate(screen);
+  bind_display_refresh_rate_screen(screen);
+  if (window == nullptr) {
+    return;
+  }
+
+  QObject::disconnect(window_screen_changed_connection_);
+  if (QWindow *native_window = window->windowHandle()) {
+    window_screen_changed_connection_ =
+        QObject::connect(native_window, &QWindow::screenChanged, window,
+                         [this](QScreen *screen) {
+                           synchronize_display_refresh_rate(screen);
+                           bind_display_refresh_rate_screen(screen);
+                         });
+  }
+}
+
+void App::bind_display_refresh_rate_screen(QScreen *screen) {
+  if (display_refresh_screen_ == screen) {
+    return;
+  }
+
+  QObject::disconnect(screen_refresh_rate_changed_connection_);
+  screen_refresh_rate_changed_connection_ = {};
+  display_refresh_screen_ = screen;
+
+  QMainWindow *window = ui_.main_window();
+  if (window == nullptr || screen == nullptr) {
+    return;
+  }
+  screen_refresh_rate_changed_connection_ =
+      QObject::connect(screen, &QScreen::refreshRateChanged, window,
+                       [this, screen](qreal) {
+                         if (display_refresh_screen_ == screen) {
+                           synchronize_display_refresh_rate(screen);
+                         }
+                       });
+}
+
+void App::synchronize_display_refresh_rate(QScreen *screen) {
+  render_system_.set_display_refresh_rate_hz(
+      display_refresh_rate_hz(screen != nullptr ? screen
+                                                : active_display_screen(
+                                                      ui_.main_window())));
 }
 
 void App::apply_window_settings() {
@@ -643,10 +713,9 @@ void App::schedule_next_frame() {
   if (!frame_timer_ || !running_) {
     return;
   }
-  const int interval =
-      ui_.needs_continuous_rendering()
-          ? presentation_frame_interval_ms(ui_.main_window())
-          : kIdleFrameIntervalMs;
+  const int interval = ui_.needs_continuous_rendering()
+                           ? presentation_frame_interval_ms(ui_.main_window())
+                           : kIdleFrameIntervalMs;
   if (frame_timer_->interval() != interval) {
     frame_timer_->setInterval(interval);
   }

@@ -92,8 +92,7 @@ bool discard_editor_transient_state(
 
 bool editor_runtime_box_active(const BoxToolState& box)
 {
-  return box.drag_state != BoxDragState::Idle || box.preview_valid ||
-         !box.hover_cell_points.empty();
+  return box.drag_state != BoxDragState::Idle || box.preview_valid;
 }
 
 EditorRuntimeStatus editor_runtime_status(const EditorRuntimeState& runtime)
@@ -818,11 +817,11 @@ BoxToolStateResult EditorRuntime::update_box_footprint(
 		state_.box_grid_size);
 }
 
-BoxToolStateResult EditorRuntime::update_box_hover_cell(
+BoxToolStateResult EditorRuntime::update_box_hover(
 		quader::QVec3 local_point,
 		bool grid_enabled)
 {
-	return quader_editor_core::update_box_hover_cell(state_.box, local_point, grid_enabled, state_.box_grid_size);
+	return quader_editor_core::update_box_hover(state_.box, local_point, grid_enabled, state_.box_grid_size);
 }
 
 double EditorRuntime::box_height_distance_for_ray(const quader_poly::Ray& ray) const

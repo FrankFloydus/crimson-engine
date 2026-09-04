@@ -17,13 +17,27 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstdint>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <string_view>
 #include <utility>
 
 namespace quader {
 namespace {
+
+constexpr float kFallbackDisplayRefreshRateHz = 60.0f;
+constexpr float kMinimumDisplayRefreshRateHz = 1.0f;
+constexpr float kMaximumDisplayRefreshRateHz = 1000.0f;
+constexpr float kDisplayRefreshRateComparisonEpsilonHz = 0.01f;
+
+float normalized_display_refresh_rate_hz(float refresh_rate_hz) {
+  if (!std::isfinite(refresh_rate_hz) || refresh_rate_hz <= 0.0f) {
+    return kFallbackDisplayRefreshRateHz;
+  }
+  return std::clamp(refresh_rate_hz, kMinimumDisplayRefreshRateHz,
+                    kMaximumDisplayRefreshRateHz);
+}
 
 filament::backend::Backend to_filament_backend(RendererBackend backend) {
   switch (backend) {
@@ -183,6 +197,7 @@ void RenderSystem::shutdown() {
     frame_performance_stats_ = {};
     presentation_frame_tracker_.reset();
     performance_renderer_ = nullptr;
+    additional_renderers_.clear();
     renderer_clear_color_ = {};
     resource_root_.clear();
     filament::Engine::destroy(&engine_);
@@ -229,6 +244,27 @@ void RenderSystem::complete_presentation_frame(
   }
 }
 
+void RenderSystem::set_display_refresh_rate_hz(float refresh_rate_hz) {
+  const float normalized =
+      normalized_display_refresh_rate_hz(refresh_rate_hz);
+  if (std::abs(display_refresh_rate_hz_ - normalized) <=
+      kDisplayRefreshRateComparisonEpsilonHz) {
+    return;
+  }
+
+  display_refresh_rate_hz_ = normalized;
+  const filament::Renderer::DisplayInfo display_info{
+      .refreshRate = display_refresh_rate_hz_};
+  if (renderer_ != nullptr) {
+    renderer_->setDisplayInfo(display_info);
+  }
+  for (filament::Renderer *renderer : additional_renderers_) {
+    if (renderer != nullptr) {
+      renderer->setDisplayInfo(display_info);
+    }
+  }
+}
+
 bool RenderSystem::begin_frame_with_swap_chain(
     filament::SwapChain *swap_chain) {
   return begin_frame_with_renderer(renderer_, swap_chain);
@@ -254,6 +290,9 @@ void RenderSystem::end_frame_with_renderer(filament::Renderer *renderer) {
 }
 
 void RenderSystem::configure_renderer(filament::Renderer &renderer) const {
+  renderer.setDisplayInfo(
+      filament::Renderer::DisplayInfo{.refreshRate =
+                                          display_refresh_rate_hz_});
   filament::Renderer::ClearOptions clear;
   clear.clear = true;
   clear.discard = false;
@@ -315,6 +354,7 @@ RenderAdditionalSwapChain RenderSystem::create_additional_swap_chain(
   LOG_INFO("Filament additional swapchain created for native window {} with "
            "flags {}",
            native_window, flags);
+  additional_renderers_.push_back(renderer);
   return RenderAdditionalSwapChain(*this, swap_chain, renderer);
 }
 
@@ -330,6 +370,7 @@ void RenderSystem::destroy_additional_swap_chain(
 void RenderSystem::destroy_additional_surface(
     filament::SwapChain *swap_chain, filament::Renderer *renderer) {
   destroy_additional_swap_chain(swap_chain);
+  std::erase(additional_renderers_, renderer);
   if (!engine_ || renderer == nullptr) {
     return;
   }

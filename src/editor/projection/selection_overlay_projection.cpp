@@ -444,6 +444,22 @@ SelectionOverlayProjection::project_selection_overlay_frame(
   result.hover_target_selected = frame.hover_target_selected;
   ProjectionObjectStateCache object_state_cache(instance_edit_scope,
                                                  entity_visible);
+  if (frame.hover_edge_dimension_context.has_value()) {
+    const quader_editor_core::SelectionHoverEdgeDimensionContext &context =
+        *frame.hover_edge_dimension_context;
+    const ProjectionObjectState &object_state = object_state_cache.state_for(
+        context.object_id, object_registry, scene);
+    if (object_state.visible) {
+      result.hover_edge_dimension_context =
+          ViewportHoverEdgeDimensionContext{
+              .inside_reference = transform_object_point(
+                  object_state, from_runtime(context.inside_reference)),
+              .element = runtime_element_ref(
+                  context.object_id, quader_poly::kInvalidElementId,
+                  context.edge, context.face_id),
+          };
+    }
+  }
 
   {
     QDR_PROFILE_SCOPE("Selection overlay project triangles");

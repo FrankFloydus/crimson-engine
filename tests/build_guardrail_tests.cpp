@@ -525,6 +525,7 @@ third_party_license_expectations() {
        true},
       {"", "Google Material Icons",
        "licenses/google-material-icons-Apache-2.0.txt", false},
+      {"", "Home Video font", "licenses/home-video-CC0-1.0.txt", false},
       {"zstd", "Zstandard",
        "licenses/zstd-BSD-3-Clause-OR-GPL-2.0-only.txt", true},
       {"entt", "EnTT", "licenses/entt-MIT.txt", true},
@@ -2621,6 +2622,69 @@ TEST(BuildGuardrailTests, QtWidgetsRuntimeAndLicenseEvidenceAreConfigured) {
   EXPECT_GT(std::filesystem::file_size(
                 source_path("resources/icons/point_light.png")),
             512u);
+}
+
+TEST(BuildGuardrailTests,
+     DimensionPixelFontIsNarrowlyEmbeddedAndHasPinnedLicenseEvidence) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string manifest =
+      read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
+  const std::string provenance =
+      read_source_file("thirdparty/home-video-font-PROVENANCE.md");
+  const std::string license =
+      read_source_file("thirdparty/licenses/home-video-CC0-1.0.txt");
+  const std::string resource_block = source_slice(
+      root_c_make,
+      "qt_add_resources(quader_ui \"quader_dimension_fonts\"",
+      "quader_enable_common_pch(quader_ui)");
+
+  expect_contains(resource_block, "PREFIX \"/quader/fonts\"");
+  expect_contains(resource_block,
+                  "BASE \"${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts\"");
+  expect_contains(
+      resource_block,
+      "\"${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/HomeVideo-Regular.ttf\"");
+  EXPECT_EQ(count_occurrences(resource_block, "HomeVideo-Regular.ttf"), 1U);
+  expect_missing(resource_block, "GLOB");
+  expect_missing(resource_block, "copy_directory");
+  EXPECT_EQ(count_occurrences(root_c_make, "HomeVideo-Regular.ttf"), 1U);
+
+  const std::filesystem::path font =
+      source_path("resources/fonts/HomeVideo-Regular.ttf");
+  ASSERT_TRUE(std::filesystem::is_regular_file(font));
+  EXPECT_EQ(std::filesystem::file_size(font), 93580U);
+
+  constexpr std::string_view kFontSha256 =
+      "E73D67F92457BD05D24C42F43156BC422E98982E9E62D267AD6D1A3CC595BB01";
+  for (const std::string &evidence : {manifest, provenance}) {
+    expect_contains(evidence, "https://ggbot.itch.io/home-video-font");
+    expect_contains(evidence, std::string(kFontSha256));
+    expect_contains(evidence, "home-video-CC0-1.0.txt");
+  }
+  expect_contains(manifest, "Home Video font");
+  expect_contains(manifest, "Regular v0.80");
+  expect_contains(manifest, "home-video-font-PROVENANCE.md");
+  expect_contains(provenance, "Home Video Regular v0.80");
+  expect_contains(provenance, "OpenType Name ID 5): `0.80`");
+  expect_contains(provenance, "OpenType Name IDs 9 and 8): `GGBotNet`");
+  expect_contains(
+      provenance,
+      "OpenType Name ID 13): `Creative Commons Zero v1.0 Universal`");
+  expect_contains(
+      provenance,
+      "OpenType Name ID 14): https://creativecommons.org/publicdomain/zero/1.0/");
+  expect_contains(license, "Creative Commons Legal Code");
+  expect_contains(license, "CC0 1.0 Universal");
+  expect_contains(license, "2. Waiver.");
+  expect_contains(license, "3. Public License Fallback.");
+
+  // This dedicated pixel font does not revive the retired global UI font
+  // package or the old loose-font deployment path.
+  expect_missing(root_c_make, "resources/fonts/Inter.ttf");
+  expect_missing(root_c_make, "resources/fonts/Phosphor.ttf");
+  expect_missing(
+      root_c_make,
+      "copy_directory\n            \"${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts\"");
 }
 
 TEST(BuildGuardrailTests,

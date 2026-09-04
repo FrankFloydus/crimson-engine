@@ -24,6 +24,17 @@ namespace quader {
 
 enum class ViewportPaneFocusTrigger;
 
+/** Resolved Qt presentation after focus and navigation-capture precedence. */
+enum class QtViewportCursorPresentation {
+  Default,
+  PrecisionCross,
+  Hidden,
+};
+
+[[nodiscard]] QtViewportCursorPresentation
+qt_viewport_cursor_presentation(ViewportPointerCursor requested,
+                                bool hovered, bool focused, bool captured);
+
 /**
  * One frame of toolkit input captured by a Qt viewport surface. Raw Qt events
  * are converted to Quader's canonical input vocabulary at this boundary so
@@ -90,6 +101,14 @@ public:
   void abandon_input();
   void set_pointer_capture(bool captured);
   [[nodiscard]] bool pointer_captured() const;
+  void set_interaction_cursor(ViewportPointerCursor cursor);
+  [[nodiscard]] ViewportPointerCursor interaction_cursor() const {
+    return interaction_cursor_;
+  }
+  /// Increments only when Qt receives a materially different cursor update.
+  [[nodiscard]] std::uint64_t pointer_cursor_presentation_revision() const {
+    return pointer_cursor_presentation_revision_;
+  }
 
   void set_surface_changed_callback(std::function<void()> callback) {
     surface_changed_callback_ = std::move(callback);
@@ -128,6 +147,7 @@ private:
   void record_native_pointer_capture_lost();
   [[nodiscard]] bool apply_native_mouse_grab(bool captured);
   void recenter_captured_pointer();
+  void synchronize_interaction_cursor();
 
   struct InputAccumulator;
 
@@ -146,6 +166,10 @@ private:
   bool pointer_capture_transition_active_ = false;
   bool native_capture_loss_pending_ = false;
   std::uint64_t pointer_capture_generation_ = 0u;
+  ViewportPointerCursor interaction_cursor_ = ViewportPointerCursor::Default;
+  QtViewportCursorPresentation presented_cursor_ =
+      QtViewportCursorPresentation::Default;
+  std::uint64_t pointer_cursor_presentation_revision_ = 0u;
   bool initialized_ = false;
   bool native_surface_available_ = false;
   bool swap_chain_creation_failed_ = false;

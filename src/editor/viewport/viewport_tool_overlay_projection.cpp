@@ -474,7 +474,7 @@ void ViewportToolOverlayProjection::append_box(
     const ModelingBoxPreview &preview) {
   ViewportBoxOverlayBuilder::append(
       frame, camera,
-      RenderBoxPreviewRecord{.valid = preview.valid,
+      RenderBoxPreviewRecord{.valid = preview.ok && preview.footprint_count >= 2U,
                              .footprint = preview.footprint,
                              .footprint_count = preview.footprint_count});
 }

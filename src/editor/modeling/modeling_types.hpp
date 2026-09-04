@@ -343,6 +343,8 @@ struct ModelingBoxPreview {
   std::string message;
   std::array<QVec3, 4> footprint = {};
   std::size_t footprint_count = 0;
+  QVec2 footprint_size = {};
+  QVec2 signed_footprint_size = {};
   std::array<QVec3, 8> corners = {};
   std::size_t corner_count = 0;
   QVec3 normal = {0.0f, 1.0f, 0.0f};
@@ -424,6 +426,9 @@ struct ModelingComponentSelectionRequest {
   int active_vertex = -1;
   std::pair<int, int> active_edge = {-1, -1};
   int active_face = -1;
+  /// Keeps the mesh selected as a component edit target even when this
+  /// request intentionally contains no selected components.
+  bool retain_component_edit_target = false;
 };
 
 /**
@@ -451,6 +456,16 @@ struct ModelingResolvedComponentSelectionRequest {
   int click_count = 1;
   ModelingEdgeSelectionTraversal edge_traversal =
       ModelingEdgeSelectionTraversal::None;
+  bool preserve_selection_on_selected_hit = false;
+  bool preserve_existing_component_selection_on_hit = false;
+};
+
+/** Applies component-mode policy to a mesh body hit with no component hit. */
+struct ModelingResolvedComponentBodySelectionRequest {
+  int modeling_object_id = -1;
+  EntityId source_occurrence = kInvalidEntityId;
+  ModelingSelectionMode mode = ModelingSelectionMode::Vertex;
+  ModelingSelectionEdit edit = ModelingSelectionEdit::Replace;
   bool preserve_selection_on_selected_hit = false;
   bool preserve_existing_component_selection_on_hit = false;
 };

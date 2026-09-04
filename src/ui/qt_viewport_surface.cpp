@@ -81,6 +81,20 @@ bool viewport_surface_diagnostics_enabled() {
 
 } // namespace
 
+QtViewportCursorPresentation
+qt_viewport_cursor_presentation(ViewportPointerCursor requested,
+                                bool hovered, bool focused, bool captured) {
+  if (captured) {
+    return QtViewportCursorPresentation::Hidden;
+  }
+  if (!hovered || !focused) {
+    return QtViewportCursorPresentation::Default;
+  }
+  return requested == ViewportPointerCursor::PrecisionCross
+             ? QtViewportCursorPresentation::PrecisionCross
+             : QtViewportCursorPresentation::Default;
+}
+
 /// Collects transient Qt input state until the panel consumes one frame.
 struct QtViewportSurface::InputAccumulator {
   /// Retains one physical press until release proves it was a click rather
@@ -136,6 +150,35 @@ struct QtViewportSurface::InputAccumulator {
   std::unordered_map<int, ClickCandidate> click_candidates;
 };
 
+void QtViewportSurface::synchronize_interaction_cursor() {
+  const QtViewportCursorPresentation next = qt_viewport_cursor_presentation(
+      interaction_cursor_, input_ != nullptr && input_->hovered,
+      input_ != nullptr && input_->focused, pointer_captured());
+  if (presented_cursor_ == next) {
+    return;
+  }
+
+  switch (next) {
+  case QtViewportCursorPresentation::Default:
+    unsetCursor();
+    break;
+  case QtViewportCursorPresentation::PrecisionCross:
+    setCursor(QCursor(Qt::CrossCursor));
+    break;
+  case QtViewportCursorPresentation::Hidden:
+    setCursor(QCursor(Qt::BlankCursor));
+    break;
+  }
+  presented_cursor_ = next;
+  ++pointer_cursor_presentation_revision_;
+}
+
+void QtViewportSurface::set_interaction_cursor(
+    ViewportPointerCursor cursor) {
+  interaction_cursor_ = cursor;
+  synchronize_interaction_cursor();
+}
+
 QtViewportSurface::QtViewportSurface(ViewportPaneId pane_id)
     : pane_id_(pane_id), input_(std::make_unique<InputAccumulator>()) {
   setObjectName(QStringLiteral("viewportSurface_%1")
@@ -189,6 +232,7 @@ bool QtViewportSurface::initialize(RenderSystem &render_system,
 }
 
 void QtViewportSurface::shutdown() {
+  set_interaction_cursor(ViewportPointerCursor::Default);
   if (input_ != nullptr) {
     input_->wheel_accumulator = {};
   }
@@ -450,7 +494,7 @@ void QtViewportSurface::set_pointer_capture(bool captured) {
             QtPointerCaptureFailure::Disable);
       }
       relative_pointer_input_.clear();
-      unsetCursor();
+      synchronize_interaction_cursor();
       return;
     }
     pointer_capture_warning_gate_.note_success(
@@ -474,7 +518,7 @@ void QtViewportSurface::set_pointer_capture(bool captured) {
     } else if (raw_input_active) {
       raw_input_warning_issued_ = false;
     }
-    setCursor(QCursor(Qt::BlankCursor));
+    synchronize_interaction_cursor();
     recenter_captured_pointer();
   } else {
     (void)relative_pointer_input_.stop_raw_input();
@@ -493,7 +537,7 @@ void QtViewportSurface::set_pointer_capture(bool captured) {
       pointer_capture_warning_gate_.note_success(
           QtPointerCaptureFailure::Disable);
     }
-    unsetCursor();
+    synchronize_interaction_cursor();
     const QPoint restore = input_->capture_restore_global;
     const QPoint local = mapFromGlobal(restore);
     const qreal scale = devicePixelRatio();
@@ -587,8 +631,10 @@ bool QtViewportSurface::event(QEvent *event) {
     if (focus_request_callback_) {
       focus_request_callback_(pane_id_, ViewportPaneFocusTrigger::Hover);
     }
+    synchronize_interaction_cursor();
   } else if (event != nullptr && event->type() == QEvent::Leave) {
     input_->hovered = pointer_captured();
+    synchronize_interaction_cursor();
   }
   return QWindow::event(event);
 }
@@ -728,7 +774,10 @@ void QtViewportSurface::wheelEvent(QWheelEvent *event) {
   }
 }
 
-void QtViewportSurface::record_focus_in() { input_->focused = true; }
+void QtViewportSurface::record_focus_in() {
+  input_->focused = true;
+  synchronize_interaction_cursor();
+}
 
 void QtViewportSurface::record_focus_out() {
   input_->focused = false;
@@ -770,6 +819,7 @@ void QtViewportSurface::record_focus_out() {
   input_->left_down = false;
   input_->middle_down = false;
   input_->right_down = false;
+  synchronize_interaction_cursor();
 }
 
 void QtViewportSurface::record_key_press(QKeyEvent &event) {
@@ -813,6 +863,7 @@ void QtViewportSurface::record_mouse_press(QMouseEvent &event,
   record_mouse_move(event);
   input_->hovered = true;
   input_->focused = true;
+  synchronize_interaction_cursor();
   input_->modifiers = viewport_modifiers(event.modifiers());
   const std::optional<QuaderMouseButton> button =
       quader_mouse_button_from_qt_button(event.button());
@@ -960,6 +1011,7 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
                           (event_local.x() >= 0 && event_local.y() >= 0 &&
                            event_local.x() < width() &&
                            event_local.y() < height());
+        synchronize_interaction_cursor();
       }
       input_->modifiers = viewport_modifiers(event.modifiers());
       for (auto &[button, candidate] : input_->click_candidates) {
@@ -1018,6 +1070,7 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
   input_->has_mouse_position = true;
   input_->hovered = true;
   input_->modifiers = viewport_modifiers(event.modifiers());
+  synchronize_interaction_cursor();
 }
 
 void QtViewportSurface::record_native_pointer_capture_lost() {
@@ -1134,6 +1187,7 @@ void QtViewportSurface::record_wheel(QWheelEvent &event) {
   input_->has_mouse_position = true;
   input_->hovered = true;
   input_->modifiers = viewport_modifiers(event.modifiers());
+  synchronize_interaction_cursor();
   const QtWheelInputTranslation translation =
       quader_wheel_input_from_qt_event(
           event, input_->wheel_accumulator, static_cast<double>(scale));

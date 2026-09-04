@@ -176,6 +176,9 @@ void append_overlay_frame(
                       source.lines.end());
   target.points.insert(target.points.end(), source.points.begin(),
                        source.points.end());
+  if (source.hover_edge_dimension_context.has_value()) {
+    target.hover_edge_dimension_context = source.hover_edge_dimension_context;
+  }
   target.hover_target_selected =
       target.hover_target_selected || source.hover_target_selected;
 }
@@ -393,6 +396,9 @@ void append_viewport_overlay_frame(ViewportOverlayFrame &target,
                        source.points.end());
   target.icons.insert(target.icons.end(), source.icons.begin(),
                       source.icons.end());
+  if (source.hover_edge_dimension_context.has_value()) {
+    target.hover_edge_dimension_context = source.hover_edge_dimension_context;
+  }
   target.hover_target_selected =
       target.hover_target_selected || source.hover_target_selected;
 }
@@ -433,6 +439,9 @@ void set_overlay_frame_object_id(
   }
   for (quader_editor_core::SelectionOverlayPoint &point : frame.points) {
     point.object_id = object_id;
+  }
+  if (frame.hover_edge_dimension_context.has_value()) {
+    frame.hover_edge_dimension_context->object_id = object_id;
   }
 }
 

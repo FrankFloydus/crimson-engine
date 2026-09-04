@@ -555,6 +555,10 @@ TEST(QtSettingsDialogTests,
       QStringLiteral("viewportSetting_ShowGrid"));
   auto *show_info = dialog.findChild<QCheckBox *>(
       QStringLiteral("viewportSetting_ShowInfo"));
+  auto *dimension_font_size = dialog.findChild<QDoubleSpinBox *>(
+      QStringLiteral("viewportSetting_DimensionFontSize"));
+  auto *show_hover_dimensions = dialog.findChild<QCheckBox *>(
+      QStringLiteral("viewportSetting_ShowHoverDimensions"));
   auto *locale_combo =
       dialog.findChild<QComboBox *>(QStringLiteral("settingsLocale"));
   auto *mesh_major_swatch = dialog.findChild<QPushButton *>(
@@ -597,6 +601,8 @@ TEST(QtSettingsDialogTests,
   ASSERT_NE(bounding_box_thickness, nullptr);
   ASSERT_NE(show_grid, nullptr);
   ASSERT_NE(show_info, nullptr);
+  ASSERT_NE(dimension_font_size, nullptr);
+  ASSERT_NE(show_hover_dimensions, nullptr);
   ASSERT_NE(locale_combo, nullptr);
   ASSERT_NE(mesh_major_swatch, nullptr);
   ASSERT_NE(instance_background_swatch, nullptr);
@@ -611,6 +617,14 @@ TEST(QtSettingsDialogTests,
   }
   EXPECT_DOUBLE_EQ(default_fly_speed->value(), 25.0);
   EXPECT_DOUBLE_EQ(bounding_box_thickness->value(), 1.5);
+  EXPECT_DOUBLE_EQ(dimension_font_size->minimum(), 6.0);
+  EXPECT_DOUBLE_EQ(dimension_font_size->maximum(), 24.0);
+  EXPECT_DOUBLE_EQ(dimension_font_size->value(), 12.0);
+  EXPECT_EQ(dimension_font_size->accessibleName(),
+            QStringLiteral("Dimension Font Size (pt)"));
+  EXPECT_TRUE(show_hover_dimensions->isChecked());
+  EXPECT_EQ(show_hover_dimensions->text(),
+            QStringLiteral("Show Dimensions on Hover"));
   EXPECT_EQ(bounding_box_swatch->accessibleName(),
             QStringLiteral("Bounding Box Wire Color"));
   EXPECT_EQ(dialog.findChild<QPushButton *>(
@@ -703,6 +717,8 @@ TEST(QtSettingsDialogTests,
   thickness->setValue(1.75);
   default_fly_speed->setValue(35.0);
   bounding_box_thickness->setValue(4.25);
+  dimension_font_size->setValue(13.0);
+  show_hover_dimensions->setChecked(false);
   show_grid->setChecked(false);
   locale_combo->setCurrentIndex(italian_index);
   EXPECT_TRUE(apply_button->isEnabled());
@@ -715,6 +731,11 @@ TEST(QtSettingsDialogTests,
   EXPECT_FLOAT_EQ(viewport_settings.float_value(
                       ViewportFloatSettingId::BoundingBoxWireThickness),
                   1.5f);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::DimensionFontSize),
+                  12.0f);
+  EXPECT_TRUE(
+      viewport_settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
   EXPECT_TRUE(viewport_settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_EQ(ui_settings.locale(), "en-US");
   EXPECT_EQ(localization.current_locale(), "en-US");
@@ -749,6 +770,11 @@ TEST(QtSettingsDialogTests,
   EXPECT_FLOAT_EQ(viewport_settings.float_value(
                       ViewportFloatSettingId::BoundingBoxWireThickness),
                   4.25f);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::DimensionFontSize),
+                  13.0f);
+  EXPECT_FALSE(
+      viewport_settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
   EXPECT_FALSE(viewport_settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_EQ(ui_settings.locale(), "it-IT");
   EXPECT_EQ(localization.current_locale(), "it-IT");
@@ -778,6 +804,8 @@ TEST(QtSettingsDialogTests,
   thickness->setValue(2.5);
   default_fly_speed->setValue(80.0);
   bounding_box_thickness->setValue(7.0);
+  dimension_font_size->setValue(18.0);
+  show_hover_dimensions->setChecked(true);
   show_grid->setChecked(true);
   locale_combo->setCurrentIndex(english_index);
   const QColor discarded_mesh_major = QColor::fromRgb(186, 130, 74, 105);
@@ -814,6 +842,11 @@ TEST(QtSettingsDialogTests,
   EXPECT_FLOAT_EQ(viewport_settings.float_value(
                       ViewportFloatSettingId::BoundingBoxWireThickness),
                   4.25f);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::DimensionFontSize),
+                  13.0f);
+  EXPECT_FALSE(
+      viewport_settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
   EXPECT_FALSE(viewport_settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_EQ(ui_settings.locale(), "it-IT");
   EXPECT_EQ(localization.current_locale(), "it-IT");
@@ -839,6 +872,8 @@ TEST(QtSettingsDialogTests,
   QCoreApplication::processEvents();
   EXPECT_DOUBLE_EQ(thickness->value(), 1.75);
   EXPECT_FALSE(show_grid->isChecked());
+  EXPECT_DOUBLE_EQ(dimension_font_size->value(), 13.0);
+  EXPECT_FALSE(show_hover_dimensions->isChecked());
   for (std::size_t index = 0; index < instance_controls.size(); ++index) {
     EXPECT_NEAR(instance_controls[index].second->value(),
                 0.3 + 0.1 * static_cast<double>(index), 0.000001);

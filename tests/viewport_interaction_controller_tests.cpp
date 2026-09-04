@@ -6583,6 +6583,50 @@ TEST(ViewportSelectionInteractionTests,
 }
 
 TEST(ViewportSelectionInteractionTests,
+     HeldEdgePaintDoesNotAdoptMeshBodyWithoutAnEdgeHit) {
+  ViewportInteractionHarness harness;
+  const quader::QuaderModelingObjectRef selected =
+      create_box_at(harness, {-3.0f, 0.0f, 0.0f});
+  const quader::QuaderModelingObjectRef body =
+      create_box_at(harness, {3.0f, 0.0f, 0.0f});
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Edge)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().select_edge(selected, 1, 2).ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+
+  quader::ViewportSelectionInteraction interaction;
+  harness.input.mouse_local = {20.0f, 20.0f};
+  harness.input.mouse_screen = harness.input.mouse_local;
+  const quader::QuaderSelectionSummary armed =
+      interaction.pick_context_menu_target(harness.editor, harness.frame());
+  ASSERT_EQ(armed.selected_object_count, 1u);
+  ASSERT_EQ(armed.active_object_id, selected.modeling_object_id);
+  ASSERT_EQ(armed.selected_edge_count, 1u);
+
+  const quader::ViewportScreenPoint body_interior =
+      harness.camera.project_world_point({3.0f, 0.0f, 1.0f});
+  ASSERT_TRUE(body_interior.visible);
+  harness.input.mouse_local = body_interior.position;
+  harness.input.mouse_screen = body_interior.position;
+  ViewportSelectionWorkGateHarness work_gate(harness);
+  interaction.handle_frame(
+      harness.editor, harness.frame(false, true, false),
+      quader::ViewportToolResult{},
+      quader::ViewportBeforeToolInteractionResult{}, work_gate.hover_port());
+
+  EXPECT_EQ(interaction.work_stats().paint_pick_count, 1u);
+  EXPECT_TRUE(interaction.last_selection_command_result().ok);
+  const quader::QuaderSelectionSummary after =
+      harness.editor.selection().summary();
+  EXPECT_EQ(after.selected_object_count, 1u);
+  EXPECT_EQ(after.active_object_id, selected.modeling_object_id);
+  EXPECT_EQ(after.selected_edge_count, 1u);
+  EXPECT_EQ(after.selection_revision, armed.selection_revision);
+  EXPECT_NE(after.active_object_id, body.modeling_object_id);
+}
+
+TEST(ViewportSelectionInteractionTests,
      MarqueeReleaseAtDifferentTargetRestoresHoverImmediately) {
   ViewportInteractionHarness harness;
   const quader::QuaderModelingObjectRef left =
@@ -7006,6 +7050,138 @@ TEST(ViewportInteractionControllerTests,
             quader::QuaderActiveSelectionKind::None);
   harness.click_selection(probe);
   EXPECT_EQ(harness.editor.selection().summary().selected_edge_count, 0u);
+}
+
+TEST(ViewportInteractionControllerTests,
+     EdgeModeFaceInteriorClickKeepsMeshEditTargetUntilBackgroundClick) {
+  ViewportInteractionHarness harness;
+  const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Edge)
+                  .ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+
+  const quader::ViewportScreenPoint face_interior =
+      harness.camera.project_world_point({0.0f, 0.0f, 1.0f});
+  ASSERT_TRUE(face_interior.visible);
+  const auto source_wire_count = [&]() {
+    const quader::ViewportOverlayFrame overlay =
+        quader::test_support::visible_modeling_overlay_frame(
+            harness.session.modeling());
+    return std::count_if(
+        overlay.lines.begin(), overlay.lines.end(),
+        [&](const quader::ViewportOverlayLine &line) {
+          return line.layer == quader::ViewportOverlayLayer::SourceWire &&
+                 line.element.object_id == box.modeling_object_id;
+        });
+  };
+
+  const quader::QuaderSelectionSummary edit_target =
+      harness.editor.selection().summary();
+  ASSERT_EQ(edit_target.mode, quader::QuaderSelectionMode::Edge);
+  ASSERT_EQ(edit_target.selected_object_count, 1u);
+  ASSERT_EQ(edit_target.active_object_id, box.modeling_object_id);
+  ASSERT_EQ(edit_target.selected_edge_count, 0u);
+  const auto edit_target_wire_count = source_wire_count();
+  ASSERT_GT(edit_target_wire_count, 0);
+
+  // A surface hit is still a hit on this editable mesh even when it is too
+  // far from an edge. It must not be treated as an empty-viewport miss.
+  harness.click_selection(face_interior.position);
+  const quader::QuaderSelectionSummary unchanged =
+      harness.editor.selection().summary();
+  EXPECT_EQ(unchanged.selected_object_count, 1u);
+  EXPECT_EQ(unchanged.active_object_id, box.modeling_object_id);
+  EXPECT_EQ(unchanged.selected_edge_count, 0u);
+  EXPECT_EQ(unchanged.selection_revision, edit_target.selection_revision);
+  EXPECT_EQ(source_wire_count(), edit_target_wire_count);
+
+  // Replacing an actual edge with the face-interior surface fallback clears
+  // only the component selection and keeps the mesh as the active edit target.
+  ASSERT_TRUE(harness.editor.selection().select_edge(box, 1, 2).ok());
+  ASSERT_EQ(harness.editor.selection().summary().selected_edge_count, 1u);
+  harness.click_selection(face_interior.position);
+  const quader::QuaderSelectionSummary component_cleared =
+      harness.editor.selection().summary();
+  EXPECT_EQ(component_cleared.selected_object_count, 1u);
+  EXPECT_EQ(component_cleared.active_object_id, box.modeling_object_id);
+  EXPECT_EQ(component_cleared.selected_edge_count, 0u);
+  EXPECT_GT(source_wire_count(), 0);
+
+  // A real background click retains the established replace-on-miss behavior.
+  harness.click_selection({20.0f, 20.0f});
+  const quader::QuaderSelectionSummary cleared =
+      harness.editor.selection().summary();
+  EXPECT_EQ(cleared.selected_object_count, 0u);
+  EXPECT_EQ(cleared.selected_edge_count, 0u);
+}
+
+TEST(ViewportSelectionInteractionTests,
+     FormalInstanceBodyDoesNotBecomeAComponentEditTargetOutsideInstanceEdit) {
+  ViewportInteractionHarness harness;
+  const quader::QuaderModelingObjectRef member = create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection().select_object(member).ok());
+  const auto instance =
+      harness.editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+  const quader::EntityId occurrence = instance.value().occurrence.root.id;
+  ASSERT_NE(occurrence, quader::kInvalidEntityId);
+
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Edge)
+                  .ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+  const quader::QuaderSelectionSummary before =
+      harness.editor.selection().summary();
+  ASSERT_EQ(before.selected_object_count, 0u);
+  ASSERT_EQ(before.selected_edge_count, 0u);
+
+  const quader::ViewportScreenPoint body_interior =
+      harness.camera.project_world_point({0.0f, 0.0f, 1.0f});
+  ASSERT_TRUE(body_interior.visible);
+  const quader::ViewportRay ray =
+      harness.camera.ray_from_viewport_point(body_interior.position);
+  const quader::SceneSurfaceQuerySnapshot surfaces =
+      harness.session.scene_surface_query().snapshot();
+  quader::SceneSurfaceQueryScratch surface_scratch;
+  const std::optional<quader::SceneSurfaceHit> formal_surface =
+      surfaces.nearest_hit(
+          {
+              .world_origin = ray.origin,
+              .world_direction = ray.direction,
+              .eligibility =
+                  quader::SceneSurfaceEligibility::SelectableUnlocked,
+          },
+          surface_scratch);
+  ASSERT_TRUE(formal_surface.has_value());
+  EXPECT_EQ(formal_surface->participant.display_entity, occurrence);
+  EXPECT_EQ(formal_surface->participant.geometry_entity, member.entity);
+  EXPECT_NE(formal_surface->participant.display_entity,
+            formal_surface->participant.geometry_entity);
+
+  harness.input.mouse_local = body_interior.position;
+  harness.input.mouse_screen = body_interior.position;
+  quader::ViewportSelectionInteraction interaction;
+  interaction.handle_frame(
+      harness.editor,
+      harness.frame(true, true, false, body_interior.position),
+      quader::ViewportToolResult{},
+      quader::ViewportBeforeToolInteractionResult{}, nullptr);
+  interaction.handle_frame(
+      harness.editor,
+      harness.frame(false, false, true, body_interior.position),
+      quader::ViewportToolResult{},
+      quader::ViewportBeforeToolInteractionResult{}, nullptr);
+
+  EXPECT_TRUE(interaction.last_selection_command_result().ok)
+      << interaction.last_selection_command_result().message;
+  const quader::QuaderSelectionSummary after =
+      harness.editor.selection().summary();
+  EXPECT_EQ(after.selected_object_count, 0u);
+  EXPECT_EQ(after.selected_edge_count, 0u);
+  EXPECT_EQ(after.selection_revision, before.selection_revision);
 }
 
 TEST(ViewportInteractionControllerTests,
@@ -9118,7 +9294,8 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedPoi
     }
 }
 
-TEST(ViewportBoxOverlayBuilderTests, EmitsDashedFootprintOutlineWithoutFill) {
+TEST(ViewportBoxOverlayBuilderTests,
+     EmitsNothingThenOneLineThenTheDashedFootprintPerimeterWithoutFill) {
     quader::ViewportOverlayCamera camera;
     camera.eye = {0.0f, 10.0f, 0.0f};
     camera.forward = {0.0f, -1.0f, 0.0f};
@@ -9128,10 +9305,50 @@ TEST(ViewportBoxOverlayBuilderTests, EmitsDashedFootprintOutlineWithoutFill) {
     camera.projection = quader::ViewportOverlayProjection::Orthographic;
     camera.orthographic_size = 8.0f;
 
-    quader::ModelingBoxPreview footprint;
-    footprint.ok = true;
+    quader::ModelingBoxPreview idle;
+    idle.ok = true;
+    idle.valid = false;
+    idle.drag_state = quader::ModelingBoxDragState::Idle;
+
+    quader::ViewportOverlayFrame idle_overlay;
+    quader::ViewportToolOverlayProjection::append_box(idle_overlay, camera,
+                                                      idle);
+    EXPECT_TRUE(idle_overlay.lines.empty());
+    EXPECT_TRUE(idle_overlay.triangles.empty());
+
+    quader::ModelingBoxPreview line = idle;
+    line.drag_state = quader::ModelingBoxDragState::Footprint;
+    line.footprint_count = 2u;
+    line.footprint[0] = {-1.0f, 0.0f, 0.0f};
+    line.footprint[1] = {1.0f, 0.0f, 0.0f};
+
+    quader::ViewportOverlayFrame line_overlay;
+    quader::ViewportToolOverlayProjection::append_box(line_overlay, camera,
+                                                      line);
+    ASSERT_GT(line_overlay.lines.size(), 1u)
+        << "a noncommittable one-axis footprint must remain visible";
+    EXPECT_TRUE(line_overlay.triangles.empty());
+    float line_segment_length = 0.0f;
+    float previous_segment_end = -std::numeric_limits<float>::infinity();
+    for (const quader::ViewportOverlayLine &segment : line_overlay.lines) {
+      EXPECT_FLOAT_EQ(segment.start.y, 0.0f);
+      EXPECT_FLOAT_EQ(segment.start.z, 0.0f);
+      EXPECT_FLOAT_EQ(segment.end.y, 0.0f);
+      EXPECT_FLOAT_EQ(segment.end.z, 0.0f);
+      EXPECT_GE(segment.start.x, -1.0f);
+      EXPECT_LE(segment.end.x, 1.0f);
+      EXPECT_LT(segment.start.x, segment.end.x);
+      EXPECT_GE(segment.start.x, previous_segment_end)
+          << "one footprint edge must produce one ordered dash stream";
+      previous_segment_end = segment.end.x;
+      line_segment_length += segment.end.x - segment.start.x;
+    }
+    EXPECT_GT(line_segment_length, 0.0f);
+    EXPECT_LE(line_segment_length, 2.0f)
+        << "the single footprint edge must not be emitted twice";
+
+    quader::ModelingBoxPreview footprint = line;
     footprint.valid = true;
-    footprint.drag_state = quader::ModelingBoxDragState::Idle;
     footprint.footprint_count = 4u;
     footprint.footprint = {{
             {-1.0f, 0.0f, -1.0f},
@@ -9143,14 +9360,29 @@ TEST(ViewportBoxOverlayBuilderTests, EmitsDashedFootprintOutlineWithoutFill) {
     quader::ViewportOverlayFrame footprint_overlay;
     quader::ViewportToolOverlayProjection::append_box(footprint_overlay, camera,
                                                       footprint);
-    ASSERT_GT(footprint_overlay.lines.size(), 4u);
+    ASSERT_EQ(footprint_overlay.lines.size(), line_overlay.lines.size() * 4u);
     EXPECT_TRUE(footprint_overlay.triangles.empty());
+    std::array<std::size_t, 4> perimeter_segment_counts{};
     for (const quader::ViewportOverlayLine &line : footprint_overlay.lines) {
       EXPECT_EQ(line.layer, quader::ViewportOverlayLayer::ToolPreviewLine);
       EXPECT_EQ(line.color, quader::kOverlayToolBoxPreviewLineColor);
       EXPECT_FLOAT_EQ(line.width_pixels, 2.0f);
       EXPECT_EQ(line.style_role,
                 quader::ViewportOverlayStyleRole::ExplicitColor);
+      if (line.start.z == -1.0f && line.end.z == -1.0f) {
+        ++perimeter_segment_counts[0];
+      } else if (line.start.x == 1.0f && line.end.x == 1.0f) {
+        ++perimeter_segment_counts[1];
+      } else if (line.start.z == 1.0f && line.end.z == 1.0f) {
+        ++perimeter_segment_counts[2];
+      } else if (line.start.x == -1.0f && line.end.x == -1.0f) {
+        ++perimeter_segment_counts[3];
+      } else {
+        ADD_FAILURE() << "footprint segment escaped the rectangle perimeter";
+      }
+    }
+    for (const std::size_t segment_count : perimeter_segment_counts) {
+      EXPECT_GT(segment_count, 0u);
     }
 
     quader::ModelingBoxPreview box = footprint;
@@ -9182,7 +9414,9 @@ TEST(ViewportToolOverlaySourceTests,
         quader::ViewportCameraAdapter::overlay_camera(viewport_camera,
                                                       {800.0f, 600.0f});
     quader::ModelingBoxPreview box;
+    box.ok = true;
     box.valid = true;
+    box.drag_state = quader::ModelingBoxDragState::Footprint;
     box.footprint_count = 4u;
     box.footprint = {{
         {-1.0f, 0.0f, -1.0f},

@@ -146,6 +146,7 @@ TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
           "ViewportFloatSettingId::HoverWireLineSize",
           "ViewportFloatSettingId::OpenEdgeLineSize",
           "ViewportFloatSettingId::DiagnosticEdgeLineSize",
+          "ViewportFloatSettingId::DimensionFontSize",
           "ViewportFloatSettingId::VertexSize",
           "ViewportFloatSettingId::SelectedVertexGrowth",
           "ViewportFloatSettingId::HoverVertexGrowth",
@@ -160,6 +161,7 @@ TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
           "ViewportBoolSettingId::ShowMeshGrid",
           "ViewportBoolSettingId::ShowGizmos",
           "ViewportBoolSettingId::ShowOverlays",
+          "ViewportBoolSettingId::ShowHoverDimensions",
           "ViewportBoolSettingId::ShowInfo",
           "ViewportBoolSettingId::SnappingEnabled",
           "ViewportBoolSettingId::GridSnap",
@@ -580,7 +582,20 @@ TEST(AppLoopTests, QtEventLoopKeepsViewportInputAtDisplayCadence) {
   EXPECT_NE(app_source.find("screen->refreshRate()"), std::string::npos);
   EXPECT_NE(app_source.find("kMaximumDisplayRefreshRateHz = 240.0"),
             std::string::npos);
+  EXPECT_NE(app_source.find("frame_timer_->setInterval(interval)"),
+            std::string::npos);
+  EXPECT_EQ(app_source.find("kContinuousFrameIntervalMs = 0"),
+            std::string::npos);
   EXPECT_EQ(app_source.find("kActiveFrameIntervalMs = 1"), std::string::npos);
+  EXPECT_NE(app_header.find("install_display_refresh_rate_sync()"),
+            std::string::npos);
+  EXPECT_NE(app_header.find("screen_refresh_rate_changed_connection_"),
+            std::string::npos);
+  EXPECT_NE(app_source.find("&QWindow::screenChanged"), std::string::npos);
+  EXPECT_NE(app_source.find("&QScreen::refreshRateChanged"),
+            std::string::npos);
+  EXPECT_NE(app_source.find("render_system_.set_display_refresh_rate_hz("),
+            std::string::npos);
   EXPECT_NE(app_source.find("ui_.needs_continuous_rendering()"),
             std::string::npos);
   EXPECT_EQ(app_source.find("SDL_"), std::string::npos);
@@ -589,6 +604,34 @@ TEST(AppLoopTests, QtEventLoopKeepsViewportInputAtDisplayCadence) {
   EXPECT_NE(
       ui_header.find("[[nodiscard]] bool needs_continuous_rendering() const"),
       std::string::npos);
+}
+
+TEST(SceneAwareDeleteSourcePolicyTests,
+     SceneOwnedRestoreDefersSdkHierarchyPlacement) {
+  const std::string adapter_header = read_source_file(
+      "src/editor/modeling/services/modeling_sdk_projection_adapter.hpp");
+  const std::string adapter_source = read_source_file(
+      "src/editor/modeling/services/modeling_sdk_projection_adapter.cpp");
+  const std::string service_source = read_source_file(
+      "src/editor/modeling/services/modeling_session_service.cpp");
+
+  EXPECT_NE(adapter_header.find("restore_snapshot_deferred_scene_hierarchy"),
+            std::string::npos);
+  EXPECT_NE(
+      adapter_header.find("restore_snapshot_exact_deferred_scene_hierarchy"),
+      std::string::npos);
+  EXPECT_NE(adapter_source.find("return restore_snapshot(snapshot, true, "
+                                "false, false);"),
+            std::string::npos);
+  EXPECT_NE(adapter_source.find("return restore_snapshot(snapshot, false, "
+                                "false, false);"),
+            std::string::npos);
+  EXPECT_NE(service_source.find(
+                "restore_history_memento_deferred_scene_hierarchy("),
+            std::string::npos);
+  EXPECT_NE(service_source.find(
+                "return restore_history_memento_exact(memento, false, true);"),
+            std::string::npos);
 }
 
 TEST(AppLoopTests,

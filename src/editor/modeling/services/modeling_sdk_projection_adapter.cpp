@@ -3873,7 +3873,7 @@ public:
         std::fill(selected_by_index.begin(), selected_by_index.end(), false);
       }
       selected_by_index[session_index->second] =
-          target_has_selection ||
+          target_has_selection || request.retain_component_edit_target ||
           (request.edit == ModelingSelectionEdit::Add && target_was_selected);
     }
 
@@ -5856,6 +5856,82 @@ public:
           entry.world_transform,
           entry.selected_vertices[found->second].preview_position);
     };
+    const auto hover_edge_inside_reference = [&preview_world](
+        const TransientTransformParticipant &entry,
+        const ViewportOverlayElementRef &element) -> std::optional<QVec3> {
+      if (element.face_id < 0 || element.edge_a < 0 || element.edge_b < 0) {
+        return std::nullopt;
+      }
+      const auto face =
+          entry.face_vertices.find(static_cast<std::uint32_t>(element.face_id));
+      if (face == entry.face_vertices.end() || face->second.size() < 3U) {
+        return std::nullopt;
+      }
+      const auto current_world_position = [&entry, &preview_world](
+                                                std::uint32_t vertex_id)
+          -> std::optional<QVec3> {
+        if (const std::optional<QVec3> preview =
+                preview_world(entry, static_cast<int>(vertex_id))) {
+          return preview;
+        }
+        const auto base = entry.base_positions.find(vertex_id);
+        return base == entry.base_positions.end()
+                   ? std::nullopt
+                   : std::optional<QVec3>{
+                         transform_point(entry.world_transform, base->second)};
+      };
+
+      QVec3 normal;
+      std::optional<QVec3> directed_start;
+      std::optional<QVec3> directed_end;
+      for (std::size_t index = 0U; index < face->second.size(); ++index) {
+        const std::uint32_t start_id = face->second[index];
+        const std::uint32_t end_id =
+            face->second[(index + 1U) % face->second.size()];
+        const std::optional<QVec3> start = current_world_position(start_id);
+        const std::optional<QVec3> end = current_world_position(end_id);
+        if (!start.has_value() || !end.has_value()) {
+          return std::nullopt;
+        }
+        normal += cross(*start, *end);
+        if ((static_cast<int>(start_id) == element.edge_a &&
+             static_cast<int>(end_id) == element.edge_b) ||
+            (static_cast<int>(start_id) == element.edge_b &&
+             static_cast<int>(end_id) == element.edge_a)) {
+          directed_start = *start;
+          directed_end = *end;
+        }
+      }
+      if (!directed_start.has_value() || !directed_end.has_value()) {
+        return std::nullopt;
+      }
+      constexpr float kDirectionEpsilonSquared = 1.0e-10F;
+      const QVec3 directed_edge = *directed_end - *directed_start;
+      const float edge_length = length(directed_edge);
+      if (edge_length * edge_length <= kDirectionEpsilonSquared ||
+          length_squared(normal) <= kDirectionEpsilonSquared) {
+        return std::nullopt;
+      }
+      const QVec3 inward =
+          normalize_or_zero(cross(normal, directed_edge / edge_length));
+      if (length_squared(inward) <= kDirectionEpsilonSquared) {
+        return std::nullopt;
+      }
+      return (*directed_start + *directed_end) * 0.5F +
+             inward * (edge_length * 0.25F);
+    };
+    if (frame.hover_edge_dimension_context.has_value()) {
+      ViewportHoverEdgeDimensionContext &context =
+          *frame.hover_edge_dimension_context;
+      const TransientTransformParticipant *participant =
+          participant_for(context.element.object_id);
+      if (participant != nullptr) {
+        if (const std::optional<QVec3> inside_reference =
+                hover_edge_inside_reference(*participant, context.element)) {
+          context.inside_reference = *inside_reference;
+        }
+      }
+    }
     for (ViewportOverlayPoint &point : frame.points) {
       const TransientTransformParticipant *participant =
           participant_for(point.element.object_id);
@@ -7394,29 +7470,42 @@ public:
 
   [[nodiscard]] ModelingCommandResult
   restore_snapshot(const ModelingSdkProjectionSnapshot &snapshot) {
-    return restore_snapshot(snapshot, true, false);
+    return restore_snapshot(snapshot, true, false, true);
+  }
+
+  [[nodiscard]] ModelingCommandResult
+  restore_snapshot_deferred_scene_hierarchy(
+      const ModelingSdkProjectionSnapshot &snapshot) {
+    return restore_snapshot(snapshot, true, false, false);
+  }
+
+  [[nodiscard]] ModelingCommandResult
+  restore_snapshot_exact_deferred_scene_hierarchy(
+      const ModelingSdkProjectionSnapshot &snapshot) {
+    return restore_snapshot(snapshot, false, false, false);
   }
 
   [[nodiscard]] ModelingCommandResult
   restore_snapshot_preserving_scene_selection(
       const ModelingSdkProjectionSnapshot &snapshot) {
-    return restore_snapshot(snapshot, true, true);
+    return restore_snapshot(snapshot, true, true, true);
   }
 
   [[nodiscard]] ModelingCommandResult
   restore_snapshot_exact(const ModelingSdkProjectionSnapshot &snapshot) {
-    return restore_snapshot(snapshot, false, false);
+    return restore_snapshot(snapshot, false, false, true);
   }
 
   [[nodiscard]] ModelingCommandResult
   restore_snapshot_exact_preserving_scene_selection(
       const ModelingSdkProjectionSnapshot &snapshot) {
-    return restore_snapshot(snapshot, false, true);
+    return restore_snapshot(snapshot, false, true, true);
   }
 
   [[nodiscard]] ModelingCommandResult
   restore_snapshot(const ModelingSdkProjectionSnapshot &snapshot,
-                   bool history_transition, bool preserve_scene_selection) {
+                   bool history_transition, bool preserve_scene_selection,
+                   bool restore_scene_hierarchy) {
     if (!snapshot.valid()) {
       return failure("SDK projection restore point is invalid.");
     }
@@ -7659,24 +7748,26 @@ public:
       });
     }
 
-    // Restore every captured parent before applying any captured sibling
-    // ordinal. Merely recreating every participant is insufficient: a later
-    // Bridge participant can exist at the scene root while an earlier
-    // participant's ordinal is validated against their eventual parent.
-    for (const RestoredSceneIdentity &restored :
-         restored_scene_identities) {
-      if (!mesh_sync_.apply_scene_identity_parent(
-              scene_, restored.entity, restored.identity)) {
-        return rollback(
-            "SDK history scene identity parent could not be restored.");
+    if (restore_scene_hierarchy) {
+      // Restore every captured parent before applying any captured sibling
+      // ordinal. Merely recreating every participant is insufficient: a later
+      // Bridge participant can exist at the scene root while an earlier
+      // participant's ordinal is validated against their eventual parent.
+      for (const RestoredSceneIdentity &restored :
+           restored_scene_identities) {
+        if (!mesh_sync_.apply_scene_identity_parent(
+                scene_, restored.entity, restored.identity)) {
+          return rollback(
+              "SDK history scene identity parent could not be restored.");
+        }
       }
-    }
-    for (const RestoredSceneIdentity &restored :
-         restored_scene_identities) {
-      if (!mesh_sync_.apply_scene_identity_sibling_ordinal(
-              scene_, restored.entity, restored.identity)) {
-        return rollback(
-            "SDK history scene identity sibling order could not be restored.");
+      for (const RestoredSceneIdentity &restored :
+           restored_scene_identities) {
+        if (!mesh_sync_.apply_scene_identity_sibling_ordinal(
+                scene_, restored.entity, restored.identity)) {
+          return rollback(
+              "SDK history scene identity sibling order could not be restored.");
+        }
       }
     }
     for (const RestoredSceneIdentity &restored :
@@ -12444,6 +12535,18 @@ ModelingSdkProjectionAdapter::rebase_snapshot_host_projection(
 ModelingCommandResult ModelingSdkProjectionAdapter::restore_snapshot(
     const ModelingSdkProjectionSnapshot &snapshot) {
   return impl_->restore_snapshot(snapshot);
+}
+
+ModelingCommandResult
+ModelingSdkProjectionAdapter::restore_snapshot_deferred_scene_hierarchy(
+    const ModelingSdkProjectionSnapshot &snapshot) {
+  return impl_->restore_snapshot_deferred_scene_hierarchy(snapshot);
+}
+
+ModelingCommandResult
+ModelingSdkProjectionAdapter::restore_snapshot_exact_deferred_scene_hierarchy(
+    const ModelingSdkProjectionSnapshot &snapshot) {
+  return impl_->restore_snapshot_exact_deferred_scene_hierarchy(snapshot);
 }
 
 ModelingCommandResult

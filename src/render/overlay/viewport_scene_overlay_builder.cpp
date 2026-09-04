@@ -544,6 +544,10 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
     base_frame.icons.insert(base_frame.icons.end(),
                             snapshot.tool_overlays.icons.begin(),
                             snapshot.tool_overlays.icons.end());
+    if (snapshot.tool_overlays.hover_edge_dimension_context.has_value()) {
+      base_frame.hover_edge_dimension_context =
+          snapshot.tool_overlays.hover_edge_dimension_context;
+    }
     base_frame.hover_target_selected =
         base_frame.hover_target_selected ||
         snapshot.tool_overlays.hover_target_selected;

@@ -16,6 +16,12 @@
 
 namespace quader {
 
+/** Selects toolkit-neutral pointer feedback requested by an active tool. */
+enum class ViewportPointerCursor {
+  Default,
+  PrecisionCross,
+};
+
 /// Carries one canonical mouse-button edge with its event-time pane position.
 struct ViewportPointerButtonEdge {
   QuaderMouseButton button = QuaderMouseButton::None;

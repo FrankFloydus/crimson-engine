@@ -150,6 +150,8 @@ public:
     tool_allows_selection_fallback(ViewportToolId tool) const;
     [[nodiscard]] bool
     tool_uses_editor_native_lifecycle(ViewportToolId tool) const;
+    [[nodiscard]] ViewportPointerCursor
+    tool_pointer_cursor(ViewportToolId tool) const;
     [[nodiscard]] ModelingTransformTool
     transform_tool(ViewportToolId tool) const;
     [[nodiscard]] bool

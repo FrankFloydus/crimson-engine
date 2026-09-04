@@ -28,6 +28,9 @@ void append_overlay_frame(ViewportOverlayFrame &target,
                        source.points.end());
   target.icons.insert(target.icons.end(), source.icons.begin(),
                       source.icons.end());
+  if (source.hover_edge_dimension_context.has_value()) {
+    target.hover_edge_dimension_context = source.hover_edge_dimension_context;
+  }
   target.hover_target_selected =
       target.hover_target_selected || source.hover_target_selected;
 }

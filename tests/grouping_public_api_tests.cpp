@@ -128,6 +128,22 @@ std::vector<EntityId> selected_entities(const QuaderApi &api) {
   return selected;
 }
 
+std::vector<std::string> root_entity_names(const QuaderApi &api) {
+  const std::vector<QuaderEntitySnapshot> entities = api.query().entity_tree();
+  const auto scene_root = std::ranges::find(
+      entities, true, &QuaderEntitySnapshot::is_scene_root);
+  if (scene_root == entities.end()) {
+    return {};
+  }
+  std::vector<std::string> names;
+  for (const QuaderEntitySnapshot &snapshot : entities) {
+    if (snapshot.parent == scene_root->id) {
+      names.push_back(snapshot.name);
+    }
+  }
+  return names;
+}
+
 EntityId selected_entity_excluding(const QuaderApi &api, EntityId excluded) {
   for (const EntityId entity : selected_entities(api)) {
     if (entity != excluded) {
@@ -910,4 +926,114 @@ TEST(GroupingPublicApiTests, DeleteMixedMeshAndLightHierarchyUndoRedoRestoresSce
   EXPECT_FALSE(entity_by_id(scenario.api(), group).has_value());
   EXPECT_FALSE(entity_by_id(scenario.api(), mesh).has_value());
   EXPECT_FALSE(entity_by_id(scenario.api(), light_entity).has_value());
+}
+
+TEST(GroupingPublicApiTests,
+     DeleteEveryMixedRootUndoRestoresExactSiblingOrderAndCanRepeat) {
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "first", "Delete All First", {-2.0f, 0.0f, 0.0f});
+
+  QuaderCreatePointLightArgs light_args;
+  light_args.name = "Delete All Light";
+  const QuaderApiResult<QuaderEntityRef> light =
+      scenario.api().scene().create_point_light(light_args);
+  ASSERT_TRUE(light.ok) << light.message;
+  scenario.remember("light", light.value);
+
+  given_box_at(scenario, "second", "Delete All Second", {2.0f, 0.0f, 0.0f});
+  const std::vector<std::string> expected_order = {
+      "Delete All First", "Delete All Light", "Delete All Second"};
+  EXPECT_EQ(root_entity_names(scenario.api()), expected_order);
+
+  scenario.given().selection_mode(QuaderSelectionMode::Object);
+  const QuaderApiVoidResult selected_all =
+      scenario.api().selection().select_all();
+  ASSERT_TRUE(selected_all.ok()) << selected_all.error_message();
+  const std::optional<QuaderEntitySnapshot> first_before =
+      entity_by_id(scenario.api(), scenario.entity("first"));
+  const std::optional<QuaderEntitySnapshot> light_before =
+      entity_by_id(scenario.api(), scenario.entity("light"));
+  const std::optional<QuaderEntitySnapshot> second_before =
+      entity_by_id(scenario.api(), scenario.entity("second"));
+  ASSERT_TRUE(first_before.has_value());
+  ASSERT_TRUE(light_before.has_value());
+  ASSERT_TRUE(second_before.has_value());
+  ASSERT_TRUE(first_before->has_mesh);
+  ASSERT_TRUE(first_before->has_modeling_object);
+  ASSERT_TRUE(light_before->has_light);
+  ASSERT_TRUE(second_before->has_mesh);
+  ASSERT_TRUE(second_before->has_modeling_object);
+
+  const auto expect_exact_restore = [&] {
+    const std::optional<QuaderEntitySnapshot> first =
+        entity_by_id(scenario.api(), first_before->id);
+    const std::optional<QuaderEntitySnapshot> restored_light =
+        entity_by_id(scenario.api(), light_before->id);
+    const std::optional<QuaderEntitySnapshot> second =
+        entity_by_id(scenario.api(), second_before->id);
+    ASSERT_TRUE(first.has_value());
+    ASSERT_TRUE(restored_light.has_value());
+    ASSERT_TRUE(second.has_value());
+    EXPECT_EQ(first->uuid, first_before->uuid);
+    EXPECT_EQ(first->editor_object_id, first_before->editor_object_id);
+    EXPECT_EQ(first->parent, first_before->parent);
+    EXPECT_EQ(first->modeling_object_id, first_before->modeling_object_id);
+    EXPECT_EQ(first->mesh, first_before->mesh);
+    EXPECT_EQ(restored_light->uuid, light_before->uuid);
+    EXPECT_EQ(restored_light->editor_object_id,
+              light_before->editor_object_id);
+    EXPECT_EQ(restored_light->parent, light_before->parent);
+    EXPECT_EQ(restored_light->light.type, light_before->light.type);
+    EXPECT_FLOAT_EQ(restored_light->light.color.x,
+                    light_before->light.color.x);
+    EXPECT_FLOAT_EQ(restored_light->light.color.y,
+                    light_before->light.color.y);
+    EXPECT_FLOAT_EQ(restored_light->light.color.z,
+                    light_before->light.color.z);
+    EXPECT_FLOAT_EQ(restored_light->light.intensity,
+                    light_before->light.intensity);
+    EXPECT_FLOAT_EQ(restored_light->light.range, light_before->light.range);
+    EXPECT_EQ(restored_light->light.casts_shadows,
+              light_before->light.casts_shadows);
+    EXPECT_EQ(second->uuid, second_before->uuid);
+    EXPECT_EQ(second->editor_object_id, second_before->editor_object_id);
+    EXPECT_EQ(second->parent, second_before->parent);
+    EXPECT_EQ(second->modeling_object_id, second_before->modeling_object_id);
+    EXPECT_EQ(second->mesh, second_before->mesh);
+    EXPECT_TRUE(scenario.api().query().mesh(first->mesh).has_value());
+    EXPECT_TRUE(scenario.api().query().mesh(second->mesh).has_value());
+    EXPECT_EQ(first->selected, first_before->selected);
+    EXPECT_EQ(restored_light->selected, light_before->selected);
+    EXPECT_EQ(second->selected, second_before->selected);
+    EXPECT_EQ(first->active, first_before->active);
+    EXPECT_EQ(restored_light->active, light_before->active);
+    EXPECT_EQ(second->active, second_before->active);
+    EXPECT_EQ(root_entity_names(scenario.api()), expected_order);
+  };
+
+  scenario.when().execute(quader_command::kDeleteSelection);
+  scenario.then().command().ok_changed();
+  EXPECT_TRUE(root_entity_names(scenario.api()).empty());
+  EXPECT_FALSE(entity_by_id(scenario.api(), first_before->id).has_value());
+  EXPECT_FALSE(entity_by_id(scenario.api(), light_before->id).has_value());
+  EXPECT_FALSE(entity_by_id(scenario.api(), second_before->id).has_value());
+
+  QuaderApiVoidResult undo = scenario.api().history().undo();
+  ASSERT_TRUE(undo.ok()) << undo.error_message();
+  EXPECT_TRUE(undo.changed());
+  expect_exact_restore();
+  EXPECT_EQ(selected_entities(scenario.api()),
+            (std::vector<EntityId>{scenario.entity("first"),
+                                   scenario.entity("light"),
+                                   scenario.entity("second")}));
+
+  const QuaderApiVoidResult redo = scenario.api().history().redo();
+  ASSERT_TRUE(redo.ok()) << redo.error_message();
+  EXPECT_TRUE(redo.changed());
+  EXPECT_TRUE(root_entity_names(scenario.api()).empty());
+
+  undo = scenario.api().history().undo();
+  ASSERT_TRUE(undo.ok()) << undo.error_message();
+  EXPECT_TRUE(undo.changed());
+  expect_exact_restore();
 }

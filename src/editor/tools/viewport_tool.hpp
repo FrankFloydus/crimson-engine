@@ -201,6 +201,7 @@ public:
 
   [[nodiscard]] operator ViewportToolId() const;
   [[nodiscard]] virtual bool allows_selection_fallback() const;
+  [[nodiscard]] virtual ViewportPointerCursor pointer_cursor() const;
   [[nodiscard]] virtual ViewportToolResult
   handle_event(ViewportToolContext &context,
                const ViewportToolEvent &event) const;

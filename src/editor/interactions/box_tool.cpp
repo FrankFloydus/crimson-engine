@@ -190,21 +190,13 @@ public:
 	[[nodiscard]] quader::QVec2 directional_snap_pair(double start_value, double end_value, double grid_size) const
 	{
 		const double grid = box_grid_or_default(grid_size);
-		if (end_value >= start_value) {
-			const double start_snap = std::floor(start_value / grid) * grid;
-			double end_snap = std::ceil(end_value / grid) * grid;
-                        if (end_snap - start_snap <= kMinBoxSize) {
-                          end_snap = start_snap + grid;
-                        }
-                        return { static_cast<float>(start_snap), static_cast<float>(end_snap) };
-		}
-
-		const double start_snap = std::ceil(start_value / grid) * grid;
-		double end_snap = std::floor(end_value / grid) * grid;
-                if (start_snap - end_snap <= kMinBoxSize) {
-                  end_snap = start_snap - grid;
-                }
-                return { static_cast<float>(start_snap), static_cast<float>(end_snap) };
+		const double snapped_start = std::round(start_value / grid) * grid;
+		const double snapped_delta =
+			std::round((end_value - start_value) / grid) * grid;
+		return {
+			static_cast<float>(snapped_start),
+			static_cast<float>(snapped_start + snapped_delta),
+		};
 	}
 
 	[[nodiscard]] quader::QVec2 footprint_signed_size(
@@ -214,17 +206,12 @@ public:
 			quader::QVec3 axis_v,
 			double grid_size) const
 	{
-		const double grid = box_grid_or_default(grid_size);
+		(void)grid_size;
 		const quader::QVec3 delta = end_point - start_point;
-		double u = vec3_dot(axis_u, delta);
-		double v = vec3_dot(axis_v, delta);
-                if (std::abs(u) <= kMinBoxSize) {
-                  u = u >= 0.0 ? grid : -grid;
-                }
-                if (std::abs(v) <= kMinBoxSize) {
-                  v = v >= 0.0 ? grid : -grid;
-                }
-                return { static_cast<float>(u), static_cast<float>(v) };
+		return {
+			static_cast<float>(vec3_dot(axis_u, delta)),
+			static_cast<float>(vec3_dot(axis_v, delta)),
+		};
 	}
 
 	[[nodiscard]] std::vector<quader::QVec3> footprint_points(
@@ -237,6 +224,17 @@ public:
 		const quader::QVec2 size = footprint_signed_size(start_point, end_point, axis_u, axis_v, grid_size);
 		const quader::QVec3 u = vec3_scale(axis_u, size.x);
 		const quader::QVec3 v = vec3_scale(axis_v, size.y);
+		const bool has_u = std::abs(size.x) > kMinBoxSize;
+		const bool has_v = std::abs(size.y) > kMinBoxSize;
+		if (!has_u && !has_v) {
+			return {};
+		}
+		if (!has_u) {
+			return {start_point, start_point + v};
+		}
+		if (!has_v) {
+			return {start_point, start_point + u};
+		}
 		return {
 			start_point,
 			start_point + v,
@@ -288,7 +286,6 @@ public:
           state.drag_state = BoxDragState::Footprint;
           state.raw_start_point = raw_start;
           state.raw_end_point = raw_end;
-          state.hover_cell_points.clear();
           state.preview_brush_id = -1;
           state.preview_valid = false;
           return update_footprint(state, raw_end, grid_enabled, grid_size);
@@ -322,7 +319,7 @@ public:
 		return box_result(state, box_ok_status(true));
 	}
 
-	[[nodiscard]] BoxToolStateResult update_hover_cell(
+	[[nodiscard]] BoxToolStateResult update_hover(
 			BoxToolState& state,
 			quader::QVec3 local_point,
 			bool grid_enabled,
@@ -336,7 +333,6 @@ public:
                 state.drag_state = previous_state == BoxDragState::Idle
                                        ? BoxDragState::Idle
                                        : previous_state;
-                state.hover_cell_points = footprint_points(state.start_point, state.end_point, state.plane.axis_u, state.plane.axis_v, grid_size);
 		result.state = state;
 		return result;
 	}
@@ -564,13 +560,13 @@ BoxToolStateResult update_box_footprint(
 	return box_tool_instance().update_footprint(state, raw_end, grid_enabled, grid_size);
 }
 
-BoxToolStateResult update_box_hover_cell(
+BoxToolStateResult update_box_hover(
 		BoxToolState& state,
 		quader::QVec3 local_point,
 		bool grid_enabled,
 		double grid_size)
 {
-	return box_tool_instance().update_hover_cell(state, local_point, grid_enabled, grid_size);
+	return box_tool_instance().update_hover(state, local_point, grid_enabled, grid_size);
 }
 
 BoxToolStateResult begin_box_height(

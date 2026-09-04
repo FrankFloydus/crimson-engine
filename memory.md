@@ -356,8 +356,12 @@ Both canonical Debug/Profile and Release app builds succeed.
   semantic frames: camera-only cache updates cannot recreate previously removed triangles.
   Keep the toggle in the settings style signature, computed once outside pane composition; the
   shared selected-geometry cache and persistent selection style remain projection-independent.
-- `QtViewportEdgeLengthHud` presents the hovered world-space edge length in map units at the
-  midpoint of the visible screen segment, keeping the entire label inside its pane. Never hide
+- `QtViewportEdgeLengthHud` presents the hovered world-space edge length in map units beside the
+  midpoint of the visible screen segment, offset perpendicular to the edge while keeping the
+  entire label inside its pane. Its compact native labels have no framed or filled backdrop and
+  use glyph-shaped native masks so a Windows child-window rectangle cannot cover the Filament
+  surface. The same retained presenter may show one or two active primitive-footprint dimensions;
+  those dimensions come from full semantic footprint spans, never dashed render fragments. Never hide
   the number just because the full edge's geometric midpoint is offscreen, and never measure only
   the clipped portion. `ViewportCameraController::project_visible_world_segment` clips near/far
   depth before canonical perspective/orthographic projection, then clips the screen rectangle.
@@ -5667,8 +5671,11 @@ Invariant:
 
 - Create Primitive hover and footprint-begin resolve surfaces through the
   native scene-aware picking projection. Hidden or non-selectable entities are
-  excluded, world and hierarchy transforms are applied, and back-facing/open
-  mesh planes remain valid construction surfaces.
+  excluded and world plus hierarchy transforms are applied. Natural primitive
+  construction accepts only ground-parallel mesh surfaces and always uses a
+  `+Y` plane normal at the hit elevation; vertical or tilted hits fall back to
+  the world ground plane. Generic arbitrary-plane box math remains available
+  for a future explicit construction-plane feature.
 - The runtime command receives both an optional resolved world-space hit and
   an explicit resolution flag. A host-resolved miss must fall back to the
   ground plane and must never re-query raw modeling geometry, which may still
@@ -8543,3 +8550,157 @@ provenance; the workspace owns perspective/orthographic shading selection.
 Verification: 77 focused command-filter, camera, and workspace tests pass. The affected workflow
 passes 1,302 app tests plus focused architecture guardrails, and the mandatory regression gate
 passes all six registered CTest entries, including the isolated SDK configure/build.
+
+## 2026-09-04 - Primitive footprints grow from a zero-size construction-plane anchor
+
+- Activating Create Primitive has no hover-tile preview. A pointer press captures one snapped
+  anchor on the construction plane; zero extent emits no footprint, one nonzero local span emits
+  one line, and two nonzero spans emit the four-corner footprint. Releasing the zero- or one-span
+  gesture clears only that gesture and keeps the primitive session active because neither state is
+  committable.
+- The unified Create Primitive tool used by Box, Cylinder, and Sphere is the sole current requester
+  of the toolkit-neutral `ViewportPointerCursor::PrecisionCross`. The tool runtime and interaction
+  controller carry that intent without a concrete-tool branch in Qt. A hovered, focused pane shows
+  the precision cross; focus or hover loss restores the default, pointer capture hides it, and
+  navigation temporarily suppresses it. The Qt surface caches the effective presentation so stable
+  frames do not repeat cursor setters.
+- Natural footprint placement accepts only ground-parallel surfaces and otherwise falls back to
+  the world ground plane. Horizontal mesh tops retain their elevation, while vertical or tilted
+  mesh hits cannot silently change the construction plane. The portable box interaction keeps its
+  arbitrary-plane math for a future explicit construction-plane owner.
+- `ModelingBoxPreview` owns the full signed and unsigned footprint spans. The dashed overlay is a
+  presentation of its zero/line/rectangle geometry; it is never a measurement source. The Qt HUD
+  uses those semantic spans to show one or two footprint labels beside the measured sides.
+- Dimension labels are compact, frameless, non-layered native child windows with glyph-shaped
+  transparent regions. Their Windows masks contain only painted glyphs, and their retained
+  signature gate precedes formatting, projection, geometry, mask, visibility, and stacking work.
+  Edge and footprint labels offset perpendicular to the measured segment and choose the exterior
+  side while remaining clipped to the pane.
+
+Owners: box interaction owns snapped spans, footprint topology, and the primitive cursor request;
+the viewport tool runtime and interaction controller carry toolkit-neutral cursor intent; the Qt
+viewport panel owns navigation suppression and generic surface fanout; the Qt viewport surface owns
+focus, hover, capture, and retained cursor presentation. Native runtime projection owns natural
+construction-plane eligibility; the modeling preview owns semantic dimensions; render owns dashed
+footprint geometry; the Qt HUD owns projected label placement and native presentation.
+
+Verification: all 8 focused box-runtime tests, 40 focused primitive/HUD/overlay tests, the 432-test
+guardrail suite, the affected app workflow, and its 206-test runtime selection pass. The mandatory
+regression gate passes all six registered CTest entries, including the full app suite and isolated
+SDK configure/build. Focused tool-catalog and Qt input tests protect sole-requester routing,
+navigation/focus/capture precedence, and unchanged-presentation caching.
+
+## 2026-09-04 - Hover dimensions retain the mesh exterior and avoid layered-window composition
+
+- Edge hover preserves its picked incident `face_id` from selection picking through the semantic
+  selection overlay, world/instance projection, transient transform preview, retained overlay
+  composition, and the Qt HUD. The runtime derives an interior reference from the face's authored
+  winding at the local edge; the HUD offsets the complete text rectangle away from that reference.
+  It never flips a referenced label back inside merely to fit a pane and hides it when no valid
+  exterior placement exists.
+- The HUD uses the narrowly embedded `Home Video Regular v0.80` font and a one-bit glyph occupancy
+  mask as its raster source of truth. It expands that mask by one pixel for the outline, then writes
+  only exact opaque white and pitch-black pixels into a cached image; Qt font-antialias flags alone
+  are not a crispness contract. Hover-edge and primitive-footprint values use intentional fixed
+  two-decimal map-unit formatting. `DimensionFontSize` persists a clamped 6-24 pt value (default
+  12), while `ShowHoverDimensions` independently gates hover dimensions (default enabled); active
+  primitive footprint measurements remain available while drawing.
+- Dimension HWNDs must not use `WA_TranslucentBackground`/`WS_EX_LAYERED` above the Vulkan child
+  surface. Their native mask comes from the same binary region as the visible raster. Raster and
+  mask caches use a shared shape revision, and font metrics plus the one-bit raster resolve against
+  the label's current screen; DPI/screen changes invalidate both without adding frame-loop work.
+  Position-only motion uses `move()` and never rebuilds the native region. Stable frames return
+  before formatting, projection, setters, masks, visibility, or stacking work.
+- Mesh-boundary fallback runs only after the authoritative surface picker missed, so it must not
+  repeat a full surface traversal. It chooses the winning edge first and resolves only that edge's
+  best incident face. Source-wire shared-edge picking retains its memoized surface-aware context
+  because the actually ray-hit incident face is required for correct exterior placement.
+
+Owners: modeling selection owns picked face context and the winding-derived interior reference;
+render overlay frames carry the presentation-only sidecar without adding it to geometry signatures;
+viewport settings own the two persisted preferences; the Qt HUD owns projected placement, outline,
+native mask caching, and hit-through presentation.
+
+Verification: the 17 focused HUD tests include an exact-pixel contract at 100%, 125%, 150%, and
+200% scaling, plus screen-change mask invalidation. Resource/license guardrails pin the exact font
+binary and its CC0 evidence. The affected workflow and mandatory six-entry regression gate pass.
+The app was not launched; viewport appearance and observed frame rate remain manual checks.
+
+## 2026-09-04 - Scene-aware delete undo defers mixed hierarchy placement
+
+- A scene-aware delete may remove modeled objects interleaved with native scene siblings. Restoring
+  SDK objects first cannot validate their captured absolute sibling ordinals against that temporary
+  modeling-only sibling set. The SDK projection adapter therefore has one explicit deferred-
+  hierarchy restore path used only by scene-aware delete; the enclosing scene history command
+  restores parentage and exact sibling order after every modeled and native entity exists again.
+- Ordinary and exact generic memento restore remain strict and atomic. They do not clamp invalid
+  ordinals or silently weaken hierarchy validation. Failed SDK restore paths propagate the actual
+  rollback `changed` state instead of claiming a mutation that did not occur.
+- The mixed-root regression preserves entity and modeling identities, components, selection, and
+  exact root order across delete, undo, redo, and a second undo. A separate generic-restore test
+  proves that a genuinely missing native sibling still fails without changing scene or asset state.
+
+Owners: the SDK projection adapter owns payload restoration modes; the scene-aware history command
+owns the complete mixed scene hierarchy; the modeling session service selects the narrow deferred
+path only for that command. The production fix performs no project-file IO.
+
+Verification: focused delete/restore regressions, the repository-selected affected workflow, and
+the mandatory six-entry regression gate pass. The inspected `room.qdr` remains unchanged at
+112,456 bytes with SHA-256
+`210D58D22D30E9A72BAAF5DE9521F8171015A22F7206B6AFA6E44C939A5EEF6A`.
+
+## 2026-09-04 - Viewport FPS reports accepted presentations and follows the active display
+
+- The status FPS sample counts frames with at least one accepted renderer submission; it has no
+  60 FPS clamp. A deterministic counter regression proves a 120 FPS sample. UI text formatting
+  does not manufacture the value.
+- Preserve the display-cadenced Qt frame timer from the existing performance invariant. Do not
+  reintroduce a continuously active 0/1 ms callback loop: the historical callback-spin regression
+  produced hundreds of callbacks for far fewer accepted submissions.
+- `App` synchronizes the active `QScreen::refreshRate()` into `RenderSystem` after the window is
+  shown and only on `screenChanged` or `refreshRateChanged`. `RenderSystem` normalizes and caches
+  that value, applies it to the primary renderer plus every live viewport renderer, and gives new
+  renderers the current value. There is no per-frame settings query or setter churn.
+- The last persisted Quader window position resolves to `DISPLAY2`, which Windows reports at
+  exactly 60 Hz; `DISPLAY1` reports 164 Hz. A scene-independent 60 FPS reading on that window is
+  therefore consistent with presentation cadence, not mesh load. Do not claim a measured GPU FPS
+  improvement without a same-build, same-scene runtime check.
+
+Owners: `RenderPresentationFrameTracker` owns the accepted-presentation counter; `App` owns the
+single display-cadenced scheduler and active-screen signals; `RenderSystem` owns renderer display
+metadata and multi-viewport propagation.
+
+Verification: the 120 FPS counter and refresh normalization tests, source-policy guardrails, the
+repository-selected affected workflow, and the mandatory six-entry regression gate pass. Quader
+was deliberately not launched, so active-display runtime behavior remains a manual check.
+
+## 2026-09-04 - Component-mode mesh-body clicks retain the edit target
+
+- In Vertex or Edge mode, a click on a visible selectable mesh body can be outside every component
+  pick radius. That is a typed mesh-body hit, not an empty-viewport miss. It retains or adopts the
+  mesh as the component edit target so the cyan source wire remains visible; a genuine grid or
+  background miss keeps the ordinary Replace behavior and clears selection.
+- Preserve the established component policy rather than making the body click a blanket no-op. A
+  plain Replace body hit clears any selected vertices or edges on the target while retaining the
+  mesh edit target. Shift/Add retains existing components and adopts the body target; Ctrl/Command
+  Remove is inert. Alt loop/ring misses remain inert, and gizmo/context-menu preservation flags
+  continue to protect existing component selection.
+- Component-mode point arbitration collects a selectable-unlocked mesh surface only for click
+  resolution, carries its geometry entity and occurrence separately from an actual component
+  winner, and never lets the surface candidate outrank an eligible component. The modeling owner
+  publishes an empty component selection with an explicit retained edit target; do not collapse
+  this case back into `winner == nullopt` or globally enable `preserve_selection_on_miss`.
+- Mesh-body fallback is click-only: held paint samples (`click_count == 0`) must continue to react
+  only to actual component hits. A formal-instance body is eligible only inside its matching active
+  instance-edit occurrence; definition topology must remain inaccessible outside that scope.
+
+Owners: viewport hit arbitration distinguishes component, mesh-body, and background results;
+`EditorSelectionService` maps the resolved body to its modeling object and applies click policy;
+`ModelingSessionService` plus the SDK projection adapter atomically retain the component edit
+target.
+
+Verification: the focused edge-mode face-interior regression covers an unchanged zero-edge source
+wire, replacement of an actual selected edge while keeping that wire, and true-background clear.
+Two boundary regressions cover held paint and formal instances outside instance edit. The
+neighboring click/miss, gizmo, loop/ring, and sticky-wire tests pass; the repository-selected
+affected workflow and mandatory six-entry regression gate pass. Quader was not launched.

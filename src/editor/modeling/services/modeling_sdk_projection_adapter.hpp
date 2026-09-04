@@ -486,6 +486,15 @@ public:
   capture_active_preview_base_snapshot() const;
   [[nodiscard]] ModelingCommandResult
   restore_snapshot(const ModelingSdkProjectionSnapshot &snapshot);
+  /**
+   * Restores SDK payloads and bindings while an enclosing Scene command owns
+   * exact parent and sibling placement for every recreated entity.
+   */
+  [[nodiscard]] ModelingCommandResult restore_snapshot_deferred_scene_hierarchy(
+      const ModelingSdkProjectionSnapshot &snapshot);
+  [[nodiscard]] ModelingCommandResult
+  restore_snapshot_exact_deferred_scene_hierarchy(
+      const ModelingSdkProjectionSnapshot &snapshot);
   /** Restores SDK-owned state without projecting its selection into Scene. */
   [[nodiscard]] ModelingCommandResult
   restore_snapshot_preserving_scene_selection(
