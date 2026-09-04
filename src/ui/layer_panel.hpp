@@ -10,8 +10,11 @@
 
 #include <memory>
 
+class QEvent;
+
 namespace quader {
 
+class QtUiScaleMetrics;
 struct UIContext;
 
 /**
@@ -24,7 +27,11 @@ public:
   ~LayerPanel() override;
 
   void abandon_runtime() noexcept;
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void refresh(UIContext &context);
+
+protected:
+  bool event(QEvent *event) override;
 
 private:
   struct Impl;

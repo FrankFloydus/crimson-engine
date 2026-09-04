@@ -7,6 +7,7 @@
 #pragma once
 
 #include "math/types.hpp"
+#include "render/viewport_overlay_policy.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -18,7 +19,8 @@ inline constexpr float kViewportOverlayDashGapPixels = 5.0f;
 
 template <typename AppendSegment>
 void append_viewport_overlay_dashed_edge(QVec2 start, QVec2 end, bool dashed,
-                                         AppendSegment append_segment) {
+                                         AppendSegment append_segment,
+                                         float raster_scale = 1.0f) {
   const QVec2 delta = end - start;
   const float edge_length = std::sqrt(delta.x * delta.x + delta.y * delta.y);
   if (edge_length <= 0.001f) {
@@ -29,10 +31,15 @@ void append_viewport_overlay_dashed_edge(QVec2 start, QVec2 end, bool dashed,
     return;
   }
 
+  const float resolved_raster_scale =
+      viewport_overlay_sanitized_raster_scale(raster_scale);
+  const float dash_pixels = kViewportOverlayDashPixels * resolved_raster_scale;
+  const float gap_pixels =
+      kViewportOverlayDashGapPixels * resolved_raster_scale;
   for (float offset = 0.0f; offset < edge_length;
-       offset += kViewportOverlayDashPixels + kViewportOverlayDashGapPixels) {
+       offset += dash_pixels + gap_pixels) {
     const float segment_end =
-        std::min(offset + kViewportOverlayDashPixels, edge_length);
+        std::min(offset + dash_pixels, edge_length);
     const float start_t = offset / edge_length;
     const float end_t = segment_end / edge_length;
     append_segment(start + delta * start_t, start + delta * end_t, start_t,

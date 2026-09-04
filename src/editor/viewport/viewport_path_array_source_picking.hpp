@@ -11,6 +11,7 @@
 #include "editor/tools/viewport_native_tool_interaction.hpp"
 #include "editor/viewport/viewport_interaction_frame.hpp"
 #include "editor/viewport/viewport_scene_hit_policy.hpp"
+#include "viewport/viewport_pixel_scale.hpp"
 
 #include <optional>
 #include <span>
@@ -85,14 +86,20 @@ public:
       const ViewportCameraController &camera,
       std::span<const ViewportSceneBillboardPickCandidate> billboards,
       std::span<const ViewportSceneCurvePickCandidate> curves,
-      const SceneSurfaceQuerySnapshot *scene_surfaces)
+      const SceneSurfaceQuerySnapshot *scene_surfaces,
+      float viewport_pixel_scale = 1.0f)
       : camera_(&camera), billboards_(billboards), curves_(curves),
-        scene_surfaces_(scene_surfaces) {}
+        scene_surfaces_(scene_surfaces),
+        viewport_pixel_scale_(viewport_pixel_scale) {}
 
   [[nodiscard]] std::optional<EntityId> pick(
       QVec2 mouse_local, std::span<const EntityId> excluded_entities,
       std::span<const SceneSurfaceOccurrenceExclusion> excluded_occurrences,
       bool select_backfaces) const override {
+    const float resolved_pixel_scale =
+        viewport_sanitized_pixel_scale(viewport_pixel_scale_);
+    const double curve_radius_pixels =
+        8.0 * static_cast<double>(resolved_pixel_scale);
     return resolve_path_array_source_hit({
         .camera = *camera_,
         .local_mouse = mouse_local,
@@ -102,6 +109,7 @@ public:
         .excluded_entities = excluded_entities,
         .excluded_occurrences = excluded_occurrences,
         .select_backfaces = select_backfaces,
+        .curve_radius_pixels = curve_radius_pixels,
         .surface_scratch = &surface_scratch_,
     });
   }
@@ -111,6 +119,7 @@ private:
   std::span<const ViewportSceneBillboardPickCandidate> billboards_;
   std::span<const ViewportSceneCurvePickCandidate> curves_;
   const SceneSurfaceQuerySnapshot *scene_surfaces_ = nullptr;
+  float viewport_pixel_scale_ = 1.0f;
   mutable SceneSurfaceQueryScratch surface_scratch_;
 };
 

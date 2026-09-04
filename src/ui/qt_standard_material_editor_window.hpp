@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "ui/qt_ui_scale_metrics.hpp"
+
 #include <QColor>
 #include <QImage>
 #include <QMainWindow>
@@ -25,6 +27,7 @@ class QCheckBox;
 class QCloseEvent;
 class QComboBox;
 class QDoubleSpinBox;
+class QEvent;
 class QGroupBox;
 class QLabel;
 class QLineEdit;
@@ -260,6 +263,9 @@ public:
       PresentationStateChangedCallback callback);
   void set_close_request_handler(CloseRequestHandler handler);
 
+  /// Reapplies retained chrome metrics without changing saved window geometry.
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
+
   void set_preview_environments(
       std::vector<QtStandardMaterialPreviewEnvironment> environments);
   void restore_presentation_state(
@@ -287,6 +293,7 @@ public:
   }
 
 protected:
+  bool event(QEvent *event) override;
   void closeEvent(QCloseEvent *event) override;
 
 private:
@@ -348,6 +355,8 @@ private:
                            QtStandardMaterialTextureAction action);
   void show_texture_inspector(QtStandardMaterialTextureSlot slot);
   void refresh_texture_inspector();
+  void invalidate_texture_preview_icons();
+  void refresh_texture_palette_icons();
 
   QtStandardMaterialEditorLabels labels_;
   QtStandardMaterialEditorDocument document_;
@@ -399,6 +408,7 @@ private:
       texture_transform_controls_{};
   QMainWindow *texture_inspector_window_ = nullptr;
   std::optional<QtStandardMaterialTextureSlot> inspected_texture_slot_;
+  QtUiScaleMetrics ui_scale_metrics_;
 
   FileActionCallback file_action_;
   NameEditedCallback name_edited_;

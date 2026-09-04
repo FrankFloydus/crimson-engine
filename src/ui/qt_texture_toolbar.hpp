@@ -23,6 +23,7 @@ namespace quader {
 
 class LocalizationService;
 class QuaderEditorApi;
+class QtUiScaleMetrics;
 
 /// Presents independent texture placement preferences as retained actions.
 class QtTextureToolbar final : public QToolBar {
@@ -30,6 +31,7 @@ public:
   explicit QtTextureToolbar(QWidget *parent = nullptr);
 
   [[nodiscard]] QSize minimumSizeHint() const override;
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void set_localization(const LocalizationService &localization);
   void synchronize(const QuaderEditorApi &editor, bool force = false);
   void set_command_requested_callback(

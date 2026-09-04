@@ -69,6 +69,7 @@
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/selected_object_overlay_cache.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
+#include "render/overlay/viewport_overlay_dash.hpp"
 #include "render/render_system.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/scene_render_sync_service.hpp"
@@ -1191,6 +1192,7 @@ TEST(UISettingsTests, DefaultsKeepPanelVisibilityLocaleAndNavigationGizmo) {
   const UISettings settings = UISettings::defaults();
 
   EXPECT_EQ(settings.locale(), "en-US");
+  EXPECT_FLOAT_EQ(settings.interface_scale(), 1.0F);
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Viewport));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Outliner));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Inspector));
@@ -1215,6 +1217,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   settings.set_panel_visible(UIPanelId::ActiveMaterial, false);
   settings.set_panel_visible(UIPanelId::Console, true);
   settings.set_navigation_gizmo_visible(false);
+  settings.set_interface_scale(1.75F);
 
   ASSERT_TRUE(settings.save(path));
   std::ifstream saved(path);
@@ -1232,6 +1235,8 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_EQ(saved_text.find("Layers="), std::string::npos);
   EXPECT_EQ(saved_text.find("Tool Settings="), std::string::npos);
   EXPECT_EQ(saved_text.find("Console="), std::string::npos);
+  EXPECT_NE(saved_text.find("[Interface]\nInterfaceScale=1.750000"),
+            std::string::npos);
   saved.close();
 
   const UISettings loaded = UISettings::load(path);
@@ -1244,6 +1249,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::ActiveMaterial));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
   EXPECT_FALSE(loaded.navigation_gizmo_visible());
+  EXPECT_FLOAT_EQ(loaded.interface_scale(), 1.75F);
 
   std::filesystem::remove(path);
 }
@@ -1311,6 +1317,8 @@ TEST(UISettingsTests, IgnoresMalformedPanelVisibilityAndEmptyLocale) {
     file << "NavigationGizmo=no\n";
     file << "[Localization]\n";
     file << "Locale=   \n";
+    file << "[Interface]\n";
+    file << "InterfaceScale=not-a-number\n";
   }
 
   const UISettings loaded = UISettings::load(path);
@@ -1322,8 +1330,53 @@ TEST(UISettingsTests, IgnoresMalformedPanelVisibilityAndEmptyLocale) {
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::ToolSettings));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
   EXPECT_FALSE(loaded.navigation_gizmo_visible());
+  EXPECT_FLOAT_EQ(loaded.interface_scale(), 1.0F);
 
   std::filesystem::remove(path);
+}
+
+TEST(UISettingsTests, ClampsFiniteInterfaceScaleAndRejectsNonFiniteValues) {
+  const std::filesystem::path low_path =
+      std::filesystem::temp_directory_path() /
+      "quader_ui_settings_low_interface_scale.ini";
+  const std::filesystem::path high_path =
+      std::filesystem::temp_directory_path() /
+      "quader_ui_settings_high_interface_scale.ini";
+  const std::filesystem::path non_finite_path =
+      std::filesystem::temp_directory_path() /
+      "quader_ui_settings_non_finite_interface_scale.ini";
+
+  const auto write_scale = [](const std::filesystem::path &path,
+                              std::string_view value) {
+    std::ofstream file(path, std::ios::trunc);
+    ASSERT_TRUE(file.is_open());
+    file << "[Interface]\nInterfaceScale=" << value << '\n';
+  };
+  write_scale(low_path, "0.25");
+  write_scale(high_path, "4.5");
+  write_scale(non_finite_path, "inf");
+
+  EXPECT_FLOAT_EQ(UISettings::load(low_path).interface_scale(),
+                  UISettings::kMinimumInterfaceScale);
+  EXPECT_FLOAT_EQ(UISettings::load(high_path).interface_scale(),
+                  UISettings::kMaximumInterfaceScale);
+  EXPECT_FLOAT_EQ(UISettings::load(non_finite_path).interface_scale(),
+                  UISettings::kDefaultInterfaceScale);
+
+  UISettings settings = UISettings::defaults();
+  settings.set_interface_scale(-10.0F);
+  EXPECT_FLOAT_EQ(settings.interface_scale(),
+                  UISettings::kMinimumInterfaceScale);
+  settings.set_interface_scale(10.0F);
+  EXPECT_FLOAT_EQ(settings.interface_scale(),
+                  UISettings::kMaximumInterfaceScale);
+  settings.set_interface_scale(std::numeric_limits<float>::quiet_NaN());
+  EXPECT_FLOAT_EQ(settings.interface_scale(),
+                  UISettings::kDefaultInterfaceScale);
+
+  std::filesystem::remove(low_path);
+  std::filesystem::remove(high_path);
+  std::filesystem::remove(non_finite_path);
 }
 
 TEST(WindowPlacementTests, RecoversPersistedFrameToAVisibleWorkArea) {
@@ -2324,6 +2377,13 @@ TEST(ViewportOverlayPolicyTests, MatchesNativeColorsAndRuntimePointSizes) {
   EXPECT_FLOAT_EQ(viewport_overlay_point_size_pixels(
                       ViewportOverlayLayer::ToolHandle, 8.0f),
                   8.0f);
+  EXPECT_FLOAT_EQ(viewport_overlay_point_size_pixels(
+                      ViewportOverlayLayer::ToolHandle, 1.0f),
+                  1.0f)
+      << "a resolved 50% raster size must not be mistaken for a sentinel";
+  EXPECT_FLOAT_EQ(viewport_overlay_point_size_pixels(
+                      ViewportOverlayLayer::ToolHandle, 0.0f),
+                  2.0f);
   EXPECT_FLOAT_EQ(
       viewport_overlay_point_size_pixels(ViewportOverlayLayer::PointLightGizmo,
                                          kOverlayPointLightGizmoSizePixels),
@@ -2339,6 +2399,22 @@ TEST(ViewportOverlayPolicyTests, MatchesNativeColorsAndRuntimePointSizes) {
   EXPECT_FLOAT_EQ(viewport_overlay_point_inner_radius(
                       ViewportOverlayLayer::SnapTargetVertex),
                   0.62f);
+}
+
+TEST(ViewportOverlayPolicyTests,
+     DashTopologyUsesTheSameLogicalPatternAtScaledRasterResolution) {
+  const auto segment_count = [](float edge_length, float raster_scale) {
+    std::size_t count = 0u;
+    append_viewport_overlay_dashed_edge(
+        QVec2{0.0f, 0.0f}, QVec2{edge_length, 0.0f}, true,
+        [&](QVec2, QVec2, float, float) { ++count; }, raster_scale);
+    return count;
+  };
+
+  EXPECT_EQ(segment_count(200.0f, 2.0f), segment_count(100.0f, 1.0f));
+  EXPECT_EQ(segment_count(100.0f,
+                          std::numeric_limits<float>::quiet_NaN()),
+            segment_count(100.0f, 1.0f));
 }
 
 TEST(ViewportOverlayPolicyTests,
@@ -2567,6 +2643,121 @@ TEST(ViewportOverlayStyleResolverTests,
   EXPECT_FLOAT_EQ(frame.points[1].size_pixels, 14.0f);
   ASSERT_TRUE(frame.points[1].outline_growth_pixels.has_value());
   EXPECT_FLOAT_EQ(*frame.points[1].outline_growth_pixels, 3.0f);
+}
+
+TEST(ViewportOverlayStyleResolverTests,
+     ResolvesThenScalesRasterMetricsWithoutChangingRenderSpacePolicy) {
+  ViewportSettings settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::SourceWireLineSize, 2.0f));
+  ASSERT_TRUE(
+      settings.set_float_value(ViewportFloatSettingId::VertexSize, 8.0f));
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::SelectedVertexGrowth, 1.0f));
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::VertexOutlineSize, 1.5f));
+
+  ViewportOverlayFrame frame;
+  frame.lines.push_back({
+      .layer = ViewportOverlayLayer::SourceWire,
+      .width_pixels = 0.0f,
+      .style_role = ViewportOverlayStyleRole::SourceWire,
+  });
+  frame.lines.push_back({
+      .layer = ViewportOverlayLayer::ToolPreviewLine,
+      .width_pixels = 0.0f,
+      .style_role = ViewportOverlayStyleRole::ExplicitColor,
+  });
+  frame.points.push_back({
+      .layer = ViewportOverlayLayer::SelectedVertex,
+      .size_pixels = 0.0f,
+      .style_role = ViewportOverlayStyleRole::SelectedVertex,
+  });
+  frame.icons.push_back({
+      .layer = ViewportOverlayLayer::PointLightGizmo,
+      .size_pixels = kOverlayPointLightGizmoSizePixels,
+  });
+
+  ViewportOverlayStyleResolver::apply(
+      frame, settings, {.raster_scale = 2.5f});
+
+  ASSERT_EQ(frame.lines.size(), 2u);
+  EXPECT_FLOAT_EQ(frame.lines[0].width_pixels, 5.0f);
+  EXPECT_FLOAT_EQ(frame.lines[1].width_pixels,
+                  kOverlayToolPreviewLineWidthPixels * 2.5f);
+  ASSERT_EQ(frame.points.size(), 1u);
+  EXPECT_FLOAT_EQ(frame.points[0].size_pixels, 22.5f);
+  ASSERT_TRUE(frame.points[0].outline_growth_pixels.has_value());
+  EXPECT_FLOAT_EQ(*frame.points[0].outline_growth_pixels, 3.75f);
+  ASSERT_EQ(frame.icons.size(), 1u);
+  EXPECT_FLOAT_EQ(frame.icons[0].size_pixels,
+                  kOverlayPointLightGizmoSizePixels * 2.5f);
+
+  EXPECT_FLOAT_EQ(kOverlayLineFeatherPixels, 1.0f);
+  EXPECT_FLOAT_EQ(
+      viewport_overlay_depth_bias(ViewportOverlayLayer::SourceWire,
+                                  ViewportOverlayGeometryKind::Lines),
+      0.0f);
+}
+
+TEST(ViewportOverlayStyleResolverTests,
+     SanitizesRasterScaleAndIncludesItInStyleInvalidation) {
+  const ViewportSettings settings = ViewportSettings::defaults();
+  const std::uint64_t baseline =
+      ViewportOverlayStyleResolver::style_signature(settings, 1.0f);
+  EXPECT_EQ(ViewportOverlayStyleResolver::style_signature(
+                settings, std::numeric_limits<float>::quiet_NaN()),
+            baseline);
+  EXPECT_EQ(ViewportOverlayStyleResolver::style_signature(settings, 0.0f),
+            baseline);
+  EXPECT_NE(ViewportOverlayStyleResolver::style_signature(settings, 2.0f),
+            baseline);
+
+  const ViewportPersistentOverlayStyleSnapshot baseline_persistent =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(settings, 1.0f);
+  const ViewportPersistentOverlayStyleSnapshot scaled_persistent =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(settings, 2.0f);
+  EXPECT_FLOAT_EQ(scaled_persistent.raster_scale, 2.0f);
+  EXPECT_FLOAT_EQ(scaled_persistent.selection_edge_line_width_pixels,
+                  baseline_persistent.selection_edge_line_width_pixels *
+                      2.0f);
+  EXPECT_EQ(scaled_persistent.face_signature,
+            baseline_persistent.face_signature);
+  EXPECT_NE(scaled_persistent.wire_signature,
+            baseline_persistent.wire_signature);
+}
+
+TEST(ViewportPersistentOverlayRasterGroupTests,
+     CoalescesEqualPaneStylesWithoutAliasingDistinctRasterScales) {
+  const ViewportSettings settings = ViewportSettings::defaults();
+  const ViewportPersistentOverlayStyleSnapshot scale_one =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(settings, 1.0f);
+  const ViewportPersistentOverlayStyleSnapshot scale_two =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(settings, 2.0f);
+
+  ViewportPersistentOverlayRasterGroupSet groups;
+  ASSERT_TRUE(groups.add(0x04u, scale_one));
+  ASSERT_TRUE(groups.add(0x08u, scale_one));
+  ASSERT_TRUE(groups.add(0x10u, scale_two));
+  ASSERT_EQ(groups.size(), 2u);
+  EXPECT_EQ(groups.groups()[0].layer_mask, 0x0cu);
+  EXPECT_EQ(groups.groups()[1].layer_mask, 0x10u);
+  EXPECT_FLOAT_EQ(groups.groups()[0].style.selection_edge_line_width_pixels,
+                  scale_one.selection_edge_line_width_pixels);
+  EXPECT_FLOAT_EQ(groups.groups()[1].style.selection_edge_line_width_pixels,
+                  scale_two.selection_edge_line_width_pixels);
+  EXPECT_NE(groups.groups()[0].style.wire_signature,
+            groups.groups()[1].style.wire_signature);
+
+  const ViewportPersistentOverlayRasterGroupSet identical = groups;
+  EXPECT_TRUE(viewport_persistent_overlay_raster_groups_match(groups,
+                                                              identical));
+  ViewportPersistentOverlayRasterGroupSet changed;
+  ASSERT_TRUE(changed.add(0x04u, scale_one));
+  ASSERT_TRUE(changed.add(0x08u, scale_two));
+  ASSERT_TRUE(changed.add(0x10u, scale_two));
+  EXPECT_FALSE(viewport_persistent_overlay_raster_groups_match(groups,
+                                                               changed));
 }
 
 TEST(ViewportOverlayStyleResolverTests,
@@ -2861,6 +3052,34 @@ TEST(ViewportOverlayStyleResolverTests,
   EXPECT_EQ(frame.lines[1].color, rgba8(255, 0, 0));
 }
 
+TEST(ViewportOverlayStyleResolverTests,
+     StylesOnlyNewlyAppendedIconsAfterCachedBase) {
+  ViewportOverlayFrame frame;
+  frame.icons.push_back({
+      .layer = ViewportOverlayLayer::PointLightGizmo,
+      .size_pixels = kOverlayPointLightGizmoSizePixels,
+  });
+  const ViewportOverlayStyleRange appended{
+      .triangle_begin = frame.triangles.size(),
+      .line_begin = frame.lines.size(),
+      .point_begin = frame.points.size(),
+      .icon_begin = frame.icons.size(),
+  };
+  frame.icons.push_back({
+      .layer = ViewportOverlayLayer::PointLightGizmo,
+      .size_pixels = kOverlayPointLightGizmoSizePixels,
+  });
+
+  ViewportOverlayStyleResolver::apply_from(
+      frame, ViewportSettings::defaults(), {.raster_scale = 2.0f}, appended);
+
+  ASSERT_EQ(frame.icons.size(), 2u);
+  EXPECT_FLOAT_EQ(frame.icons[0].size_pixels,
+                  kOverlayPointLightGizmoSizePixels);
+  EXPECT_FLOAT_EQ(frame.icons[1].size_pixels,
+                  kOverlayPointLightGizmoSizePixels * 2.0f);
+}
+
 TEST(ViewportPersistentOverlayStyleSnapshotTests,
      UsesNarrowFaceAndWireSignaturesForCacheInvalidation) {
   const ViewportPersistentOverlayStyleSnapshot defaults =
@@ -3144,6 +3363,59 @@ TEST(ViewportPointPlacementServiceTests,
   plane = viewport_active_grid_placement_plane(camera);
   expect_vec3_near(normalize(cross(plane.u_axis, plane.v_axis)),
                    {0.0f, 0.0f, 1.0f});
+}
+
+TEST(ViewportPointPlacementServiceTests,
+     PixelScaleAppliesOnceToTheAuthoredSnapRadius) {
+  AssetRegistry assets;
+  SceneDocument scene;
+  MeshAsset mesh;
+  mesh.name = "Scaled Snap Radius";
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = {
+      MeshVertex{.position = {0.0f, 0.0f, 0.0f}},
+      MeshVertex{.position = {-10.0f, -10.0f, 0.0f}},
+      MeshVertex{.position = {-10.0f, 10.0f, 0.0f}},
+  };
+  geometry.indices = {0u, 1u, 2u};
+  const AssetId mesh_id = assets.add_mesh(std::move(mesh));
+  ASSERT_NE(mesh_id, kInvalidAssetId);
+  const EntityId entity =
+      scene.create_entity("Scaled Snap Radius", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(entity, MeshComponent{.mesh = mesh_id}));
+
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.view_axis(ViewportViewAxis::Z, 1);
+  const ViewportScreenPoint target = camera.project_world_point({});
+  ASSERT_TRUE(target.visible);
+
+  ViewportPointPlacementPolicy policy;
+  policy.edge_midpoint = false;
+  policy.face_center = false;
+  policy.surface = false;
+  policy.grid = false;
+  policy.snap_radius_pixels = 14.0f;
+  ViewportPointPlacementRequest request{
+      .mouse_local = target.position + QVec2{20.0f, 0.0f},
+      .viewport_pixel_scale = 1.0f,
+      .policy = policy,
+  };
+  ViewportPointPlacementService placement;
+
+  EXPECT_FALSE(placement.resolve(scene, assets, camera, request).valid);
+
+  request.viewport_pixel_scale = 2.0f;
+  const ViewportPointPlacementResult scaled =
+      placement.resolve(scene, assets, camera, request);
+  ASSERT_TRUE(scaled.valid);
+  EXPECT_EQ(scaled.snap_kind, ViewportPointSnapKind::Vertex);
+  EXPECT_EQ(scaled.entity, entity);
+  expect_vec3_near(scaled.world_position, {});
+
+  request.mouse_local = target.position + QVec2{29.0f, 0.0f};
+  EXPECT_FALSE(placement.resolve(scene, assets, camera, request).valid)
+      << "14 authored pixels at 2x must remain a 28-pixel radius";
 }
 
 TEST(ViewportPointPlacementServiceTests,

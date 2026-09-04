@@ -71,6 +71,9 @@ struct ViewportPointPlacementPolicy {
  */
 struct ViewportPointPlacementRequest {
   QVec2 mouse_local = {};
+  /// Combined interface scale and native viewport-surface DPR. Only the
+  /// authored screen-space snap radius consumes this value.
+  float viewport_pixel_scale = 1.0f;
   ViewportPointPlacementPlane active_grid = {};
   float grid_size = 1.0f;
   ViewportPointPlacementPolicy policy = {};

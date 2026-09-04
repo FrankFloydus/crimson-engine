@@ -199,27 +199,27 @@ QtSceneWorkspace::QtSceneWorkspace(QWidget *parent) : QWidget(parent) {
   instance_edit_bar_ = new QWidget(this);
   instance_edit_bar_->setObjectName(
       QStringLiteral("sceneWorkspace.instanceBreadcrumb"));
-  auto *instance_edit_layout = new QHBoxLayout(instance_edit_bar_);
-  instance_edit_layout->setContentsMargins(6, 2, 6, 2);
-  instance_edit_layout->setSpacing(4);
+  instance_edit_layout_ = new QHBoxLayout(instance_edit_bar_);
+  instance_edit_layout_->setContentsMargins(6, 2, 6, 2);
+  instance_edit_layout_->setSpacing(4);
 
   instance_scene_crumb_ = new QToolButton(instance_edit_bar_);
   instance_scene_crumb_->setObjectName(
       QStringLiteral("sceneWorkspace.instanceBreadcrumb.scene"));
   instance_scene_crumb_->setAutoRaise(true);
-  instance_edit_layout->addWidget(instance_scene_crumb_);
+  instance_edit_layout_->addWidget(instance_scene_crumb_);
 
   instance_separator_ = new QLabel(QStringLiteral("\u203a"),
                                    instance_edit_bar_);
   instance_separator_->setObjectName(
       QStringLiteral("sceneWorkspace.instanceBreadcrumb.separator"));
-  instance_edit_layout->addWidget(instance_separator_);
+  instance_edit_layout_->addWidget(instance_separator_);
 
   instance_name_crumb_ = new QLabel(instance_edit_bar_);
   instance_name_crumb_->setObjectName(
       QStringLiteral("sceneWorkspace.instanceBreadcrumb.instance"));
-  instance_edit_layout->addWidget(instance_name_crumb_);
-  instance_edit_layout->addStretch(1);
+  instance_edit_layout_->addWidget(instance_name_crumb_);
+  instance_edit_layout_->addStretch(1);
   instance_edit_bar_->hide();
   root_layout->addWidget(instance_edit_bar_);
 
@@ -303,9 +303,25 @@ QtSceneWorkspace::QtSceneWorkspace(QWidget *parent) : QWidget(parent) {
                      }
                    });
 
+  apply_ui_scale(QtUiScaleMetrics{});
   refresh_labels();
   refresh_instance_edit_breadcrumb();
   refresh_content_page();
+}
+
+void QtSceneWorkspace::apply_ui_scale(
+    const QtUiScaleMetrics &metrics) {
+  if (applied_ui_scale_revision_ == metrics.revision() &&
+      applied_ui_scale_factor_ == metrics.factor()) {
+    return;
+  }
+  applied_ui_scale_revision_ = metrics.revision();
+  applied_ui_scale_factor_ = metrics.factor();
+  instance_edit_layout_->setContentsMargins(
+      metrics.margins(QMargins(6, 2, 6, 2)));
+  instance_edit_layout_->setSpacing(metrics.px(4));
+  instance_edit_layout_->invalidate();
+  updateGeometry();
 }
 
 void QtSceneWorkspace::set_labels(QtSceneWorkspaceLabels labels) {

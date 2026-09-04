@@ -7,7 +7,9 @@
 #include "ui/qt_selection_toolbar.hpp"
 
 #include "api/quader_editor_api.hpp"
+#include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 
 #include "core/localization_service.hpp"
 
@@ -77,8 +79,9 @@ QtSelectionToolbar::QtSelectionToolbar(QWidget *parent) : QToolBar(parent) {
   action_group->setExclusive(true);
   for (std::size_t index = 0; index < kSelectionModeSpecs.size(); ++index) {
     const SelectionModeSpec &spec = kSelectionModeSpecs[index];
-    QAction *action = addAction(QIcon(QString::fromUtf8(spec.icon_path)),
-                                QString::fromUtf8(spec.fallback.data()));
+    QAction *action = addAction(
+        qt_multiresolution_icon(QString::fromUtf8(spec.icon_path)),
+        QString::fromUtf8(spec.fallback.data()));
     action->setObjectName(QString::fromUtf8(spec.object_name));
     action->setCheckable(true);
     action_group->addAction(action);
@@ -106,6 +109,26 @@ QtSelectionToolbar::QtSelectionToolbar(QWidget *parent) : QToolBar(parent) {
     }
   }
   set_selection_mode(QuaderSelectionMode::Object);
+}
+
+void QtSelectionToolbar::apply_ui_scale(const QtUiScaleMetrics &metrics) {
+  constexpr QSize kToolbarIconSize(32, 32);
+  const QSize scaled_icon_size = metrics.size(kToolbarIconSize);
+  if (iconSize() != scaled_icon_size) {
+    setIconSize(scaled_icon_size);
+  }
+
+  const int scaled_button_height = metrics.px(kSelectionModeButtonHeight);
+  for (const ModeAction &entry : mode_actions_) {
+    apply_native_toolbar_button_face_ui_scale(*this, *entry.action, metrics);
+    if (auto *button =
+            qobject_cast<QToolButton *>(widgetForAction(entry.action));
+        button != nullptr &&
+        (button->minimumHeight() != scaled_button_height ||
+         button->maximumHeight() != scaled_button_height)) {
+      button->setFixedHeight(scaled_button_height);
+    }
+  }
 }
 
 void QtSelectionToolbar::set_localization(

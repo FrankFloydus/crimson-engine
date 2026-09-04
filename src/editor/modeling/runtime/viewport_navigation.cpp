@@ -1301,6 +1301,9 @@ ViewCubePrimitives build_view_cube_primitives(const ViewCubePrimitiveInput& inpu
       view_cube_center(input.viewport_size, input.margin);
   const double cube_scale = widget_size * kViewCubeHalfFactor;
   const double marker_radius = widget_size * kViewCubeAxisFactor;
+  const double axis_marker_radius = std::clamp(
+      std::isfinite(input.axis_marker_radius) ? input.axis_marker_radius : 8.0,
+      1.0, widget_size * 0.5);
 
   ViewCubePrimitives primitives;
   primitives.ok = true;
@@ -1311,6 +1314,7 @@ ViewCubePrimitives build_view_cube_primitives(const ViewCubePrimitiveInput& inpu
   };
   primitives.rect_size = {static_cast<float>(widget_size),
                           static_cast<float>(widget_size)};
+  primitives.axis_marker_radius = axis_marker_radius;
   primitives.faces = build_view_cube_faces_for_state(input.camera_transform,
                                                      center, cube_scale);
   primitives.edges = build_view_cube_edges_for_state(input.camera_transform,
@@ -1328,7 +1332,14 @@ ViewCubeHit pick_view_cube(const ViewCubePickInput& input)
                                         kViewCubeMinSize, kViewCubeMaxSize);
   const quader::QVec2 center =
       view_cube_center(input.primitives.viewport_size, input.primitives.margin);
-  const double radius = widget_size * 0.5;
+  const double axis_marker_radius = std::clamp(
+      std::isfinite(input.primitives.axis_marker_radius)
+          ? input.primitives.axis_marker_radius
+          : 8.0,
+      1.0, widget_size * 0.5);
+  const double radius =
+      std::max(widget_size * 0.5,
+               widget_size * kViewCubeAxisFactor + axis_marker_radius);
   const quader::QVec2 from_center = vec2_sub(input.screen_position, center);
 
   ViewCubeHit hit;

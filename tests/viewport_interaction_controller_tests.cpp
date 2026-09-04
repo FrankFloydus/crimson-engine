@@ -26,6 +26,7 @@
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
 #include "editor/viewport/viewport_curve_picking.hpp"
+#include "editor/viewport/viewport_scene_projection.hpp"
 #include "editor/viewport/viewport_selection_interaction.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "editor/session/scene_session.hpp"
@@ -39,6 +40,7 @@
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_input_router.hpp"
+#include "viewport/viewport_pixel_scale.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <gtest/gtest.h>
@@ -317,6 +319,7 @@ struct ViewportSelectionWorkGateHarness {
   ViewportInteractionHarness &harness;
   quader::ViewportHoverController controller;
   std::uint64_t local_visibility_revision = 0;
+  float viewport_pixel_scale = 1.0f;
   quader::ViewportModelingToolPortAdapter adapter;
 
   explicit ViewportSelectionWorkGateHarness(
@@ -335,6 +338,10 @@ private:
       const quader::QuaderSelectionSummary selection =
           harness.editor.selection().summary();
       const quader::ViewportSettings &settings = harness.settings;
+      const double vertex_radius = settings.float_value(
+          quader::ViewportFloatSettingId::PickVertexRadius);
+      const double edge_radius = settings.float_value(
+          quader::ViewportFloatSettingId::PickEdgeRadius);
       const quader::ViewportHoverWorkKey key = controller.make_key(
           harness.camera,
           quader::ViewportHoverWorkRequest{
@@ -346,12 +353,15 @@ private:
               .mouse_local = harness.input.mouse_local,
               .viewport_size = harness.input.viewport_size,
               .modifiers = harness.input.modifiers,
-              .vertex_radius =
-                  settings.float_value(
-                      quader::ViewportFloatSettingId::PickVertexRadius),
-              .edge_radius =
-                  settings.float_value(
-                      quader::ViewportFloatSettingId::PickEdgeRadius),
+              .viewport_pixel_scale = viewport_pixel_scale,
+              .vertex_radius = vertex_radius,
+              .edge_radius = edge_radius,
+              .vertex_world_radius = quader::viewport_scaled_world_pick_radius(
+                  vertex_radius,
+                  viewport_pixel_scale, harness.input.device_pixel_ratio),
+              .edge_world_radius = quader::viewport_scaled_world_pick_radius(
+                  edge_radius,
+                  viewport_pixel_scale, harness.input.device_pixel_ratio),
               .select_backfaces = settings.bool_value(
                   quader::ViewportBoolSettingId::BackfaceSelection),
               .scene_revision = harness.session.scene().revision(),
@@ -5307,6 +5317,51 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
+     SelectionMarqueeUsesTheHostProvidedPhysicalDragThreshold) {
+  ViewportInteractionHarness harness;
+  (void)create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Object)
+                  .ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+
+  const quader::QVec2 start{40.0f, 40.0f};
+  harness.input.mouse_local = start;
+  harness.input.mouse_screen = start;
+  quader::ViewportInteractionFrame press =
+      harness.frame(true, true, false, start);
+  press.pointer_drag_threshold_pixels = 20.0f;
+  const quader::ViewportBeforeToolInteractionResult before =
+      harness.controller.handle_before_active_tool(harness.editor, press);
+  harness.controller.handle_after_active_tool(harness.editor, press, {},
+                                              before);
+
+  harness.input.mouse_local = {52.0f, 40.0f};
+  harness.input.mouse_screen = harness.input.mouse_local;
+  quader::ViewportInteractionFrame below_threshold =
+      harness.frame(false, true, false, start);
+  below_threshold.pointer_drag_threshold_pixels = 20.0f;
+  harness.controller.handle_after_active_tool(
+      harness.editor, below_threshold, {}, {});
+  EXPECT_FALSE(harness.controller.selection_marquee().active);
+
+  harness.input.mouse_local = {61.0f, 40.0f};
+  harness.input.mouse_screen = harness.input.mouse_local;
+  quader::ViewportInteractionFrame above_threshold =
+      harness.frame(false, true, false, start);
+  above_threshold.pointer_drag_threshold_pixels = 20.0f;
+  harness.controller.handle_after_active_tool(
+      harness.editor, above_threshold, {}, {});
+  EXPECT_TRUE(harness.controller.selection_marquee().active);
+
+  quader::ViewportInteractionFrame release =
+      harness.frame(false, false, true, start);
+  release.pointer_drag_threshold_pixels = 20.0f;
+  harness.controller.handle_after_active_tool(harness.editor, release, {},
+                                              {});
+}
+
+TEST(ViewportInteractionControllerTests,
      ObjectMarqueeAppliesMeshCurveBillboardAndCurveControlsAtomically) {
   ViewportInteractionHarness harness;
   const quader::QuaderModelingObjectRef box =
@@ -9436,7 +9491,18 @@ TEST(ViewportToolOverlaySourceTests,
     const quader::ViewportToolOverlaySource initial{inputs};
     const quader::ViewportToolOverlaySource identical{inputs};
     EXPECT_EQ(identical.source_stamp(), initial.source_stamp());
-    EXPECT_FALSE(initial.build_dynamic_tool_overlay_frame().lines.empty());
+    const quader::ViewportOverlayFrame initial_frame =
+        initial.build_dynamic_tool_overlay_frame();
+    EXPECT_FALSE(initial_frame.lines.empty());
+
+    inputs.raster_scale = 2.0f;
+    const quader::ViewportToolOverlaySource scaled{inputs};
+    const quader::ViewportOverlayFrame scaled_frame =
+        scaled.build_dynamic_tool_overlay_frame();
+    EXPECT_NE(scaled.source_stamp(), initial.source_stamp());
+    EXPECT_LT(scaled_frame.lines.size(), initial_frame.lines.size())
+        << "larger dashes should rebuild into fewer semantic segments";
+    inputs.raster_scale = 1.0f;
 
     overlay_camera.eye.x += 1.0f;
     const quader::ViewportToolOverlaySource camera_changed{inputs};
@@ -9485,6 +9551,231 @@ TEST(ViewportToolOverlaySourceTests,
     snap_points[1].position.x += 1.0f;
     const quader::ViewportToolOverlaySource snap_after{inputs};
     EXPECT_NE(snap_after.source_stamp(), snap_before.source_stamp());
+}
+
+TEST(ViewportInteractionScaleTests,
+     TransformGizmoGeometryAndPickingUseTheSamePixelScale) {
+  ViewportInteractionHarness harness;
+  const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+  quader::ViewportInteractionFrame unit = harness.frame();
+  unit.viewport_pixel_scale = 1.0f;
+  (void)harness.controller.handle_before_active_tool(harness.editor, unit);
+  const quader_editor_core::TransformGizmoFrame *unit_gizmo =
+      harness.controller.transform_gizmo_frame();
+  ASSERT_NE(unit_gizmo, nullptr);
+  const quader_editor_core::TransformGizmoAxisPrimitive *unit_x =
+      find_axis(*unit_gizmo, quader_editor_core::TransformAxis::X);
+  ASSERT_NE(unit_x, nullptr);
+  const quader::QVec2 unit_delta =
+      unit_x->screen_tip - unit_gizmo->info.screen_pivot;
+  const float unit_extent = std::hypot(unit_delta.x, unit_delta.y);
+  const double unit_center_radius =
+      unit_gizmo->info.move_center_radius_pixels;
+
+  quader::ViewportInteractionFrame scaled = harness.frame();
+  scaled.viewport_pixel_scale = 2.0f;
+  (void)harness.controller.handle_before_active_tool(harness.editor, scaled);
+  const quader_editor_core::TransformGizmoFrame *scaled_gizmo =
+      harness.controller.transform_gizmo_frame();
+  ASSERT_NE(scaled_gizmo, nullptr);
+  const quader_editor_core::TransformGizmoAxisPrimitive *scaled_x =
+      find_axis(*scaled_gizmo, quader_editor_core::TransformAxis::X);
+  ASSERT_NE(scaled_x, nullptr);
+  const quader::QVec2 scaled_delta =
+      scaled_x->screen_tip - scaled_gizmo->info.screen_pivot;
+  const float scaled_extent = std::hypot(scaled_delta.x, scaled_delta.y);
+  EXPECT_NEAR(scaled_extent, unit_extent * 2.0f, 0.1f);
+  EXPECT_DOUBLE_EQ(scaled_gizmo->info.move_center_radius_pixels,
+                   unit_center_radius * 2.0);
+
+  const quader::QVec2 scaled_tip = scaled_x->screen_tip;
+  harness.input.mouse_local = scaled_tip;
+  quader::ViewportInteractionFrame unit_hover = harness.frame();
+  unit_hover.viewport_pixel_scale = 1.0f;
+  (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                     unit_hover);
+  ASSERT_NE(harness.controller.transform_gizmo_frame(), nullptr);
+  EXPECT_EQ(harness.controller.transform_gizmo_frame()->info.hover_axis,
+            quader_editor_core::TransformAxis::None);
+
+  quader::ViewportInteractionFrame scaled_hover = harness.frame();
+  scaled_hover.viewport_pixel_scale = 2.0f;
+  (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                     scaled_hover);
+  ASSERT_NE(harness.controller.transform_gizmo_frame(), nullptr);
+  EXPECT_EQ(harness.controller.transform_gizmo_frame()->info.hover_axis,
+            quader_editor_core::TransformAxis::X);
+}
+
+TEST(ViewportInteractionScaleTests,
+     TransformVertexSnapUsesInterfaceFactorAndReevaluatesStationaryDrag) {
+  ViewportInteractionHarness harness;
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  (void)harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::SnappingEnabled, true);
+  ASSERT_TRUE(harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::GridSnap, false));
+  (void)harness.settings.set_float_value(
+      quader::ViewportFloatSettingId::PickVertexRadius, 0.3f);
+  ASSERT_TRUE(harness.settings.bool_value(
+      quader::ViewportBoolSettingId::SnappingEnabled));
+  ASSERT_FLOAT_EQ(harness.settings.float_value(
+                      quader::ViewportFloatSettingId::PickVertexRadius),
+                  0.3f);
+  harness.input.transform_vertex_snap_down = true;
+  harness.input.device_pixel_ratio = 2.0f;
+
+  const quader::QuaderModelingObjectRef source =
+      create_box_at(harness, {-3.0f, 0.0f, 0.0f});
+  const quader::QuaderModelingObjectRef target =
+      create_box_at(harness, {3.0f, 2.0f, 2.0f});
+  const auto target_vertex =
+      vertex_snap_target_at(harness, {2.0f, 1.0f, 3.0f});
+  ASSERT_TRUE(target_vertex.has_value());
+  ASSERT_EQ(target_vertex->modeling_object_id, target.modeling_object_id);
+  ASSERT_TRUE(harness.editor.selection().select_object(source).ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+  quader::ViewportInteractionFrame warmup = harness.frame();
+  warmup.viewport_pixel_scale = 2.0f;
+  (void)harness.controller.handle_before_active_tool(harness.editor, warmup);
+  const quader_editor_core::TransformGizmoFrame *gizmo =
+      harness.controller.transform_gizmo_frame();
+  ASSERT_NE(gizmo, nullptr);
+  const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+  ASSERT_NE(axis, nullptr);
+  const quader::QVec2 start = axis_screen_point(*axis, 0.25f);
+
+  harness.input.mouse_local = start;
+  harness.input.mouse_screen = start;
+  quader::ViewportInteractionFrame press =
+      harness.frame(true, true, false, start);
+  press.viewport_pixel_scale = 2.0f;
+  ASSERT_TRUE(harness.controller
+                  .handle_before_active_tool(harness.editor, press)
+                  .gizmo_consumed);
+
+  const quader::ViewportScreenPoint scaled_only_probe =
+      harness.camera.project_world_point(target_vertex->world_position +
+                                         quader::QVec3{0.45f, 0.0f, 0.0f});
+  ASSERT_TRUE(scaled_only_probe.visible);
+  harness.input.mouse_local = scaled_only_probe.position;
+  harness.input.mouse_screen = scaled_only_probe.position;
+
+  quader::ViewportInteractionFrame authored_radius =
+      harness.frame(false, true, false, start);
+  authored_radius.viewport_pixel_scale = 2.0f;
+  ASSERT_TRUE(harness.controller
+                  .handle_before_active_tool(harness.editor, authored_radius)
+                  .gizmo_consumed);
+  ASSERT_TRUE(harness.controller.dragging());
+  const std::optional<quader::QVec3> unscaled_pivot =
+      harness.editor.query().selection_transform_pivot();
+  ASSERT_TRUE(unscaled_pivot.has_value());
+  EXPECT_GT(std::abs(unscaled_pivot->x - target_vertex->world_position.x),
+            0.1f)
+      << "combined 2x scale at 2x DPR must retain the authored world radius";
+
+  quader::ViewportInteractionFrame doubled_interface_scale =
+      harness.frame(false, true, false, start);
+  doubled_interface_scale.viewport_pixel_scale = 4.0f;
+  ASSERT_TRUE(harness.controller
+                  .handle_before_active_tool(harness.editor,
+                                             doubled_interface_scale)
+                  .gizmo_consumed);
+  const std::optional<quader::QVec3> scaled_pivot =
+      harness.editor.query().selection_transform_pivot();
+  ASSERT_TRUE(scaled_pivot.has_value());
+  EXPECT_NEAR(scaled_pivot->x, target_vertex->world_position.x, 0.001f);
+
+  const std::uint64_t revision_after_interface_scale =
+      harness.session.modeling().content_revision();
+  quader::ViewportInteractionFrame cached_scale =
+      harness.frame(false, true, false, start);
+  cached_scale.viewport_pixel_scale = 4.0f;
+  ASSERT_TRUE(harness.controller
+                  .handle_before_active_tool(harness.editor, cached_scale)
+                  .gizmo_consumed);
+  EXPECT_EQ(harness.session.modeling().content_revision(),
+            revision_after_interface_scale)
+      << "an unchanged effective radius must return to the retained fast path";
+  const std::optional<quader::QVec3> retained_pivot =
+      harness.editor.query().selection_transform_pivot();
+  ASSERT_TRUE(retained_pivot.has_value());
+  expect_vec3_near(*retained_pivot, *scaled_pivot);
+
+  quader::ViewportInteractionFrame release =
+      harness.frame(false, false, true, start);
+  release.viewport_pixel_scale = 4.0f;
+  EXPECT_TRUE(harness.controller
+                  .handle_before_active_tool(harness.editor, release)
+                  .gizmo_consumed);
+}
+
+TEST(ViewportInteractionScaleTests,
+     PointLightsAndNativeHandleHitTargetsScaleWithoutMovingTheirAnchors) {
+  ViewportInteractionHarness harness;
+  const auto created = harness.editor.scene().create_point_light();
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto &local_visibility =
+      harness.session.viewport_workspace().local_visibility_snapshot();
+  const std::vector<quader::ViewportSceneBillboardPickCandidate> unit =
+      quader::ViewportSceneProjection::point_light_pick_candidates(
+          harness.session.scene(), local_visibility, 1.0f);
+  const std::vector<quader::ViewportSceneBillboardPickCandidate> scaled =
+      quader::ViewportSceneProjection::point_light_pick_candidates(
+          harness.session.scene(), local_visibility, 2.0f);
+  ASSERT_EQ(unit.size(), 1u);
+  ASSERT_EQ(scaled.size(), 1u);
+  EXPECT_FLOAT_EQ(scaled.front().position.x, unit.front().position.x);
+  EXPECT_FLOAT_EQ(scaled.front().position.y, unit.front().position.y);
+  EXPECT_FLOAT_EQ(scaled.front().position.z, unit.front().position.z);
+  EXPECT_FLOAT_EQ(scaled.front().size_pixels, unit.front().size_pixels * 2.0f);
+
+  quader::PivotHandleState pivot{
+      .visible = true,
+      .world_position = unit.front().position,
+  };
+  const quader::ViewportScreenPoint screen =
+      harness.camera.project_world_point(pivot.world_position);
+  ASSERT_TRUE(screen.visible);
+  const quader::QVec2 outside_unit_radius =
+      screen.position + quader::QVec2{24.0f, 0.0f};
+  EXPECT_FALSE(quader::ViewportNativeToolInteraction::pivot_handle_hit(
+      harness.camera, pivot, outside_unit_radius, 1.0f));
+  EXPECT_TRUE(quader::ViewportNativeToolInteraction::pivot_handle_hit(
+      harness.camera, pivot, outside_unit_radius, 2.0f));
+  EXPECT_FALSE(quader::ViewportNativeToolInteraction::pivot_handle_hit(
+      harness.camera, pivot, outside_unit_radius,
+      std::numeric_limits<float>::quiet_NaN()));
+}
+
+TEST(ViewportInteractionScaleTests,
+     WorldPickRadiiUseInterfaceFactorWithoutApplyingMonitorDprTwice) {
+  constexpr double kAuthoredRadius = 0.125;
+  EXPECT_FLOAT_EQ(quader::viewport_user_interface_scale(2.0f, 2.0f),
+                  1.0f);
+  EXPECT_DOUBLE_EQ(quader::viewport_scaled_world_pick_radius(
+                       kAuthoredRadius, 2.0f, 2.0f),
+                   kAuthoredRadius);
+  EXPECT_DOUBLE_EQ(quader::viewport_scaled_world_pick_radius(
+                       kAuthoredRadius, 4.0f, 2.0f),
+                   kAuthoredRadius * 2.0);
+  EXPECT_DOUBLE_EQ(quader::viewport_scaled_world_pick_radius(
+                       kAuthoredRadius, 6.0f, 2.0f),
+                   kAuthoredRadius * 3.0);
+  EXPECT_DOUBLE_EQ(quader::viewport_scaled_world_pick_radius(
+                       kAuthoredRadius,
+                       std::numeric_limits<float>::quiet_NaN(), 2.0f),
+                   kAuthoredRadius);
 }
 
 TEST(ViewportSelectionMarqueeOverlayBuilderTests, EmitsFillAndRuleSpecificEdges) {
@@ -9909,10 +10200,16 @@ TEST(ViewportHoverControllerTests,
   EXPECT_FALSE(snapped.matches(unsnapped));
   EXPECT_TRUE(controller.claim(unsnapped));
 
+  request.viewport_pixel_scale = 2.0f;
+  const quader::ViewportHoverWorkKey scale_changed =
+      controller.make_key(camera, request);
+  EXPECT_FALSE(unsnapped.matches(scale_changed));
+  EXPECT_TRUE(controller.claim(scale_changed));
+
   request.local_visibility_revision = 12u;
   const quader::ViewportHoverWorkKey local_visibility_changed =
       controller.make_key(camera, request);
-  EXPECT_FALSE(unsnapped.matches(local_visibility_changed));
+  EXPECT_FALSE(scale_changed.matches(local_visibility_changed));
   EXPECT_TRUE(controller.claim(local_visibility_changed));
   EXPECT_FALSE(controller.claim(local_visibility_changed));
 }
@@ -9941,6 +10238,47 @@ TEST(ViewportHoverControllerTests,
   EXPECT_FALSE(front_only.matches(two_sided));
   EXPECT_TRUE(controller.claim(two_sided));
   EXPECT_FALSE(controller.claim(two_sided));
+}
+
+TEST(ViewportHoverControllerTests,
+     EffectiveWorldRadiiInvalidateWhenCombinedPixelScaleIsUnchanged) {
+  quader::ViewportHoverController controller;
+  quader::ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  constexpr double kVertexRadius = 0.3;
+  constexpr double kEdgeRadius = 0.2;
+  quader::ViewportHoverWorkRequest request{
+      .active_tool = quader::ViewportToolId::Select,
+      .selection_mode = quader::ViewportSelectionMode::Vertex,
+      .mouse_local = {320.0f, 240.0f},
+      .viewport_size = {800.0f, 600.0f},
+      .viewport_pixel_scale = 2.0f,
+      .vertex_radius = kVertexRadius,
+      .edge_radius = kEdgeRadius,
+      .vertex_world_radius = quader::viewport_scaled_world_pick_radius(
+          kVertexRadius, 2.0f, 2.0f),
+      .edge_world_radius = quader::viewport_scaled_world_pick_radius(
+          kEdgeRadius, 2.0f, 2.0f),
+  };
+
+  const quader::ViewportHoverWorkKey monitor_scaled =
+      controller.make_key(camera, request);
+  EXPECT_TRUE(controller.claim(monitor_scaled));
+  EXPECT_FALSE(controller.claim(monitor_scaled));
+
+  request.vertex_world_radius = quader::viewport_scaled_world_pick_radius(
+      kVertexRadius, 2.0f, 1.0f);
+  request.edge_world_radius = quader::viewport_scaled_world_pick_radius(
+      kEdgeRadius, 2.0f, 1.0f);
+  const quader::ViewportHoverWorkKey interface_scaled =
+      controller.make_key(camera, request);
+  EXPECT_EQ(monitor_scaled.viewport_pixel_scale,
+            interface_scaled.viewport_pixel_scale);
+  EXPECT_EQ(monitor_scaled.vertex_radius, interface_scaled.vertex_radius);
+  EXPECT_EQ(monitor_scaled.edge_radius, interface_scaled.edge_radius);
+  EXPECT_FALSE(monitor_scaled.matches(interface_scaled));
+  EXPECT_TRUE(controller.claim(interface_scaled));
+  EXPECT_FALSE(controller.claim(interface_scaled));
 }
 
 TEST(ViewportHostInteractionPolicyTests,

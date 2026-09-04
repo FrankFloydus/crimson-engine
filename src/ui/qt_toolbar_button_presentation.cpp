@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_toolbar_button_presentation.hpp"
 
+#include "ui/qt_ui_scale_metrics.hpp"
+
 #include <QAction>
 #include <QColor>
 #include <QPainter>
@@ -27,7 +29,7 @@ QColor blend(const QColor &from, const QColor &to, qreal amount) {
 }
 
 /**
- * Adapts only the semantic face state; the stock Fusion base style still draws
+ * Adapts only the semantic face state; the scale-aware Fusion base still draws
  * the complete button, label, focus rectangle, disabled state, and press.
  */
 class QtToolbarButtonPresentationStyle final : public QProxyStyle {
@@ -36,6 +38,20 @@ public:
       : QProxyStyle(QStringLiteral("fusion")) {
     setObjectName(QStringLiteral("quaderToolbarButtonPresentation"));
     setParent(parent);
+  }
+
+  bool set_ui_scale(const QtUiScaleMetrics &metrics) {
+    if (scaled_metrics_style_.metrics().factor() == metrics.factor() &&
+        scaled_metrics_style_.metrics().revision() == metrics.revision()) {
+      return false;
+    }
+    scaled_metrics_style_.set_metrics(metrics);
+    return true;
+  }
+
+  int pixelMetric(PixelMetric metric, const QStyleOption *option,
+                  const QWidget *widget) const override {
+    return scaled_metrics_style_.pixelMetric(metric, option, widget);
   }
 
   void drawPrimitive(PrimitiveElement element, const QStyleOption *option,
@@ -95,6 +111,9 @@ public:
                              1.0, 1.0);
     painter->restore();
   }
+
+private:
+  QtUiScaleProxyStyle scaled_metrics_style_;
 };
 
 void synchronize_accessibility(QToolButton &button, const QAction &action) {
@@ -135,6 +154,34 @@ void configure_native_toolbar_button_face(QToolBar &toolbar, QAction &action,
     synchronize_accessibility(*button, action);
     button->update();
   });
+}
+
+void apply_native_toolbar_button_face_ui_scale(
+    QToolBar &toolbar, QAction &action, const QtUiScaleMetrics &metrics) {
+  auto *button =
+      qobject_cast<QToolButton *>(toolbar.widgetForAction(&action));
+  if (button == nullptr) {
+    return;
+  }
+
+  bool presentation_changed = false;
+  if (auto *presentation =
+          dynamic_cast<QtToolbarButtonPresentationStyle *>(button->style());
+      presentation != nullptr) {
+    presentation_changed = presentation->set_ui_scale(metrics);
+  }
+
+  constexpr QSize kButtonMinimumSize(40, 40);
+  const QSize scaled_minimum = metrics.size(kButtonMinimumSize);
+  bool minimum_changed = false;
+  if (button->minimumSize() != scaled_minimum) {
+    button->setMinimumSize(scaled_minimum);
+    minimum_changed = true;
+  }
+  if (presentation_changed || minimum_changed) {
+    button->updateGeometry();
+    button->update();
+  }
 }
 
 } // namespace quader

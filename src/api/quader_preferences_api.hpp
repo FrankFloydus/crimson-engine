@@ -29,6 +29,8 @@ public:
 
     [[nodiscard]] std::string locale() const;
     QuaderApiVoidResult set_locale(std::string locale);
+    [[nodiscard]] double interface_scale() const;
+    QuaderApiVoidResult set_interface_scale(double scale);
     /** Cheap owner stamp; reads never enumerate or resolve shortcuts. */
     [[nodiscard]] std::uint64_t keybindings_revision() const noexcept;
     QuaderApiVoidResult set_shortcut(std::string_view command_id,

@@ -65,11 +65,13 @@ plan_scene_wireframe_overlay_batches(
 struct SceneWireframeOverlayCacheStats final {
   std::size_t participant_count = 0u;
   std::size_t chunk_count = 0u;
+  std::size_t raster_group_count = 0u;
   std::size_t unique_geometry_resource_count = 0u;
   std::uint64_t derived_vertex_bytes = 0u;
   std::uint64_t derived_index_bytes = 0u;
   std::uint64_t geometry_upload_count = 0u;
   std::uint64_t geometry_reuse_count = 0u;
+  std::uint64_t line_width_update_count = 0u;
   std::uint64_t rebuild_count = 0u;
   std::uint64_t transform_update_count = 0u;
   std::uint64_t plan_prepare_count = 0u;
@@ -112,28 +114,54 @@ private:
   struct PreparedPlan;
   using WireBatchProxy = InstancedWireRenderBackend::BatchProxy;
 
+  /** Per-pane-style proxies that share the cache's immutable wire geometry. */
+  struct RasterProxyGroup final {
+    std::uint8_t layer_mask = 0u;
+    ViewportPersistentOverlayStyleSnapshot style;
+    std::vector<WireBatchProxy> proxies;
+  };
+
   [[nodiscard]] PreparedPlan prepare(
       const RenderOverlaySceneWireframeSnapshot &snapshot) const;
   bool rebuild(const PreparedPlan &prepared,
                const RenderOverlaySceneWireframeSnapshot &snapshot);
   bool update_transforms(const PreparedPlan &prepared);
+  bool reconcile_raster_groups(
+      const PreparedPlan &prepared,
+      const RenderOverlaySceneWireframeSnapshot &snapshot,
+      const ViewportPersistentOverlayRasterGroupSet &raster_groups);
+  [[nodiscard]] bool create_raster_group(
+      const PreparedPlan &prepared,
+      const RenderOverlaySceneWireframeSnapshot &snapshot,
+      const ViewportPersistentOverlayRasterGroup &raster_group,
+      RasterProxyGroup &result);
+  [[nodiscard]] bool update_raster_group(
+      const PreparedPlan &prepared,
+      const RenderOverlaySceneWireframeSnapshot &snapshot,
+      const ViewportPersistentOverlayRasterGroup &raster_group,
+      RasterProxyGroup &proxy_group);
+  void destroy_raster_groups(std::span<RasterProxyGroup> proxy_groups);
+  void prune_unused_wire_geometry();
   void refresh_wire_resource_stats();
   void update_clip_planes(ViewportCameraClipPlanes clip_planes);
   void update_instance_edit_style(const InstanceEditStyle &style);
-  void set_layer_mask(std::uint8_t layer_mask);
+  void set_all_layer_masks(std::uint8_t layer_mask);
 
   InstancedWireRenderBackend wire_backend_;
   std::size_t max_instances_per_chunk_ = 1u;
   RenderInstanceBatchPlan plan_;
   /// Pins the exact authored inputs from the last successful synchronization.
   std::vector<RenderOverlayMeshSnapshot> synced_meshes_;
-  std::vector<WireBatchProxy> proxies_;
+  std::vector<RasterProxyGroup> raster_proxy_groups_;
+  ViewportPersistentOverlayRasterGroupSet synced_raster_groups_;
   RenderSourceStamp synced_source_stamp_;
   std::uint64_t synced_wire_style_signature_ = 0u;
+  ViewportPersistentOverlayStyleSnapshot synced_wire_style_;
   std::uint64_t synced_instance_edit_context_signature_ = 0u;
   bool synced_selected_mesh_wire_visible_ = true;
   ViewportCameraClipPlanes synced_clip_planes_;
-  std::uint8_t layer_mask_ = 0u;
+  std::uint8_t synced_layer_mask_ = 0u;
+  bool layer_masks_forced_hidden_ = false;
   bool has_synced_ = false;
   SceneWireframeOverlayCacheStats stats_;
 };

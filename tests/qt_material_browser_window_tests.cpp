@@ -21,6 +21,9 @@
 #include <QMainWindow>
 #include <QMetaObject>
 #include <QMenu>
+#include <QPalette>
+#include <QPixmap>
+#include <QProxyStyle>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSlider>
@@ -53,6 +56,22 @@ QByteArray encoded_wide_preview() {
   return encoded;
 }
 
+QByteArray encoded_high_resolution_preview() {
+  // 3072 backing pixels cover the largest 512px tile at 300% UI scale on a
+  // 2x-DPR display without making this focused test retain a square 36MiB
+  // raster.
+  QImage image(3072, 192, QImage::Format_RGBA8888);
+  image.fill(Qt::black);
+  for (int y = 0; y < image.height(); ++y) {
+    image.setPixelColor(1537, y, Qt::red);
+  }
+  QByteArray encoded;
+  QBuffer buffer(&encoded);
+  EXPECT_TRUE(buffer.open(QIODevice::WriteOnly));
+  EXPECT_TRUE(image.save(&buffer, "PNG"));
+  return encoded;
+}
+
 QByteArray encoded_tga_preview() {
   return QByteArray::fromBase64(
       "AAACAAAAAAAAAAAAAgACABgAv18fv18fv18fv18fAAAAAAAAAABUUlVFVklTSU9O"
@@ -64,6 +83,83 @@ ProjectAssetId required_project_id(std::string_view text) {
   const std::optional<ProjectAssetId> parsed = ProjectAssetId::parse(text);
   EXPECT_TRUE(parsed.has_value());
   return parsed.value_or(ProjectAssetId{});
+}
+
+class PaletteBrowserIconStyle final : public QProxyStyle {
+public:
+  PaletteBrowserIconStyle() : QProxyStyle(QStringLiteral("fusion")) {}
+
+  QIcon standardIcon(StandardPixmap standard_pixmap,
+                     const QStyleOption *option,
+                     const QWidget *widget) const override {
+    if (standard_pixmap == SP_FileDialogListView ||
+        standard_pixmap == SP_FileDialogDetailedView) {
+      const QPalette palette =
+          widget != nullptr ? widget->palette() : QApplication::palette();
+      QPixmap pixmap(16, 16);
+      pixmap.fill(palette.color(QPalette::ButtonText));
+      return QIcon(pixmap);
+    }
+    return QProxyStyle::standardIcon(standard_pixmap, option, widget);
+  }
+};
+
+QColor icon_center_color(const QIcon &icon) {
+  return icon.pixmap(QSize(16, 16)).toImage().pixelColor(8, 8);
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     RefreshesOnlyRetainedViewModeIconsOnPaletteChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-material-browser-palette-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  application.setStyle(new PaletteBrowserIconStyle());
+
+  QPalette palette = QApplication::palette();
+  const QColor initial_color(211, 37, 53);
+  palette.setColor(QPalette::ButtonText, initial_color);
+  QApplication::setPalette(palette);
+
+  QtMaterialBrowserWindow window;
+  auto *grid = window.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.grid"));
+  auto *list = window.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.list"));
+  auto *tile_size = window.findChild<QSlider *>(
+      QStringLiteral("materialBrowser.tileSize"));
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(list, nullptr);
+  ASSERT_NE(tile_size, nullptr);
+  const qint64 initial_grid_key = grid->icon().cacheKey();
+  const qint64 initial_list_key = list->icon().cacheKey();
+  const int retained_tile_size = tile_size->value();
+  EXPECT_EQ(icon_center_color(grid->icon()), initial_color);
+  EXPECT_EQ(icon_center_color(list->icon()), initial_color);
+
+  const QColor application_color(29, 197, 83);
+  palette.setColor(QPalette::ButtonText, application_color);
+  QApplication::setPalette(palette);
+  QCoreApplication::processEvents();
+  const qint64 application_grid_key = grid->icon().cacheKey();
+  const qint64 application_list_key = list->icon().cacheKey();
+  EXPECT_NE(application_grid_key, initial_grid_key);
+  EXPECT_NE(application_list_key, initial_list_key);
+  EXPECT_EQ(icon_center_color(grid->icon()), application_color);
+  EXPECT_EQ(icon_center_color(list->icon()), application_color);
+  EXPECT_EQ(tile_size->value(), retained_tile_size);
+
+  const QColor local_color(37, 89, 223);
+  palette.setColor(QPalette::ButtonText, local_color);
+  window.setPalette(palette);
+  QCoreApplication::processEvents();
+  EXPECT_NE(grid->icon().cacheKey(), application_grid_key);
+  EXPECT_NE(list->icon().cacheKey(), application_list_key);
+  EXPECT_EQ(icon_center_color(grid->icon()), local_color);
+  EXPECT_EQ(icon_center_color(list->icon()), local_color);
+  EXPECT_EQ(tile_size->value(), retained_tile_size);
 }
 
 TEST(QtMaterialBrowserWindowTests,
@@ -214,10 +310,7 @@ TEST(QtMaterialBrowserWindowTests,
                             .data(Qt::DecorationRole)
                             .value<QIcon>();
   EXPECT_FALSE(preview.isNull());
-  for (const int preset : {16, 32, 64, 128, 256, 512}) {
-    EXPECT_EQ(preview.actualSize(QSize(preset, preset)),
-              QSize(preset, preset / 2));
-  }
+  EXPECT_EQ(preview.actualSize(QSize(128, 128)), QSize(128, 64));
   const QIcon tga_preview = grid->model()
                                 ->index(1, 0)
                                 .data(Qt::DecorationRole)
@@ -295,6 +388,8 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_EQ(grid->model()->rowCount(), 0);
   EXPECT_EQ(stack->currentWidget(), empty);
   EXPECT_EQ(empty->text(), QStringLiteral("No matches"));
+  search->clear();
+  ASSERT_GT(grid->model()->rowCount(), 0);
 
   int state_changes = 0;
   window->set_presentation_state_changed_callback(
@@ -312,10 +407,90 @@ TEST(QtMaterialBrowserWindowTests,
     EXPECT_EQ(window->tile_size(), preset);
     EXPECT_EQ(grid->iconSize(), QSize(preset, preset));
     EXPECT_EQ(grid->gridSize(), QSize(preset + 16, preset + 50));
+    const QIcon current_preview = grid->model()
+                                      ->index(0, 0)
+                                      .data(Qt::DecorationRole)
+                                      .value<QIcon>();
+    EXPECT_EQ(current_preview.actualSize(QSize(preset, preset)),
+              QSize(preset, preset / 2));
     EXPECT_EQ(slider->toolTip(),
               QStringLiteral("Tile size = %1 pixels").arg(preset));
     EXPECT_EQ(slider->accessibleName(), slider->toolTip());
   }
+
+  window->restore_presentation_state(QtMaterialBrowserViewMode::Grid, 128);
+  const QSize unscaled_window_size = window->size();
+  const int changes_before_scale = state_changes;
+  window->apply_ui_scale(QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(window->tile_size(), 128)
+      << "interface scaling must not rewrite the authored tile preference";
+  EXPECT_EQ(grid->iconSize(), QSize(256, 256));
+  EXPECT_EQ(grid->gridSize(), QSize(288, 356));
+  EXPECT_EQ(grid->spacing(), 16);
+  EXPECT_EQ(slider->minimumWidth(), 300);
+  EXPECT_EQ(slider->maximumWidth(), 300);
+  EXPECT_EQ(window->size(), unscaled_window_size)
+      << "a live scale event must preserve retained top-level geometry";
+  EXPECT_EQ(state_changes, changes_before_scale)
+      << "presentation scaling is not a material-browser preference edit";
+  window->apply_ui_scale(QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(grid->gridSize(), QSize(288, 356))
+      << "reapplying one snapshot must never compound dimensions";
+  window->apply_ui_scale(QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(grid->iconSize(), QSize(128, 128));
+  EXPECT_EQ(grid->gridSize(), QSize(144, 178));
+  EXPECT_EQ(slider->minimumWidth(), 150);
+  int dpi_decoration_changes = 0;
+  QObject::connect(
+      grid->model(), &QAbstractItemModel::dataChanged, window,
+      [&dpi_decoration_changes](const QModelIndex &, const QModelIndex &,
+                                const QList<int> &roles) {
+        if (roles.contains(Qt::DecorationRole)) {
+          ++dpi_decoration_changes;
+        }
+      });
+  QEvent dpi_event(QEvent::DevicePixelRatioChange);
+  QCoreApplication::sendEvent(window, &dpi_event);
+  EXPECT_EQ(dpi_decoration_changes, 1)
+      << "a live DPR event must discard and republish retained icons";
+
+  QtMaterialBrowserItem high_resolution_material{
+      .reference = QuaderMaterialReference::project(required_project_id(
+          "cccccccc-cccc-cccc-cccc-cccccccccccc")),
+      .name = QStringLiteral("Detailed"),
+      .encoded_albedo = encoded_high_resolution_preview(),
+      .content_revision = 1,
+  };
+  high_resolution_material.stable_id = qt_material_reference_stable_id(
+      high_resolution_material.reference);
+  high_resolution_material.thumbnail =
+      make_qt_material_thumbnail(high_resolution_material);
+  ASSERT_EQ(high_resolution_material.thumbnail->image.size(),
+            QSize(512, 32));
+
+  const QPixmap direct_preview = qt_material_preview_pixmap(
+      high_resolution_material, QSize(1536, 1536), 2.0);
+  EXPECT_EQ(direct_preview.size(), QSize(3072, 192));
+  EXPECT_EQ(direct_preview.devicePixelRatio(), 2.0);
+  EXPECT_EQ(direct_preview.toImage().pixelColor(1537, 100), Qt::red)
+      << "a large-DPR preview must decode the source instead of enlarging "
+         "the retained 512px thumbnail";
+
+  QtMaterialBrowserModel high_resolution_model;
+  ASSERT_TRUE(high_resolution_model.set_items({high_resolution_material}));
+  EXPECT_TRUE(high_resolution_model.set_preview_raster_context(
+      QSize(1536, 1536), 2.0));
+  EXPECT_FALSE(high_resolution_model.set_preview_raster_context(
+      QSize(1536, 1536), 2.0));
+  const QIcon high_resolution_icon =
+      high_resolution_model.index(0, 0)
+          .data(Qt::DecorationRole)
+          .value<QIcon>();
+  const QPixmap high_resolution_icon_pixmap =
+      high_resolution_icon.pixmap(QSize(1536, 1536), 2.0);
+  EXPECT_EQ(high_resolution_icon_pixmap.size(), QSize(3072, 192));
+  EXPECT_EQ(high_resolution_icon_pixmap.toImage().pixelColor(1537, 100),
+            Qt::red);
 
   const int changes_before_restore = state_changes;
   window->restore_presentation_state(QtMaterialBrowserViewMode::Grid, 24);

@@ -22,6 +22,7 @@ namespace quader {
 
 class LocalizationService;
 class QuaderEditorApi;
+class QtUiScaleMetrics;
 
 /**
  * Presents viewport display switches as retained command-backed actions.
@@ -31,6 +32,7 @@ class QtViewportDisplayToolbar final : public QToolBar {
 public:
   explicit QtViewportDisplayToolbar(QWidget *parent = nullptr);
 
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void set_localization(const LocalizationService &localization);
   void synchronize(const QuaderEditorApi &editor, bool force = false);
   void set_command_requested_callback(

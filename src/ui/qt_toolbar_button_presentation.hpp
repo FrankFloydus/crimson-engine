@@ -14,6 +14,8 @@ class QToolBar;
 
 namespace quader {
 
+class QtUiScaleMetrics;
+
 /** Resolves the palette group used to paint one toolbar-button state. */
 [[nodiscard]] QPalette::ColorGroup
 qt_toolbar_button_color_group(QStyle::State state);
@@ -27,5 +29,9 @@ QStyle &install_native_toolbar_button_presentation(QToolBar &toolbar);
 /** Gives one action a persistent native face and accessible presentation. */
 void configure_native_toolbar_button_face(QToolBar &toolbar, QAction &action,
                                           QStyle &presentation);
+
+/** Recomputes one action button's logical hit target from 100% constants. */
+void apply_native_toolbar_button_face_ui_scale(
+    QToolBar &toolbar, QAction &action, const QtUiScaleMetrics &metrics);
 
 } // namespace quader

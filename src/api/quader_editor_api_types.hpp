@@ -261,6 +261,8 @@ struct QuaderToolsRuntimeHooks {
 struct QuaderPreferencesRuntimeHooks {
     std::function<std::string()> locale;
     std::function<QuaderApiVoidResult(std::string)> set_locale;
+    std::function<double()> interface_scale;
+    std::function<QuaderApiVoidResult(double)> set_interface_scale;
     std::function<QuaderApiVoidResult()> save;
     std::function<bool()> snapping_enabled;
     std::function<QuaderApiVoidResult(bool)> set_snapping_enabled;

@@ -82,6 +82,10 @@ struct ViewportInteractionFrame {
   bool right_down = false;
   bool right_released = false;
   float pointer_drag_threshold_pixels = 4.0f;
+  /// Combined interface scale and native viewport-surface DPR. This affects
+  /// screen-space editor affordances only; camera, pointer, and framebuffer
+  /// coordinates remain unchanged.
+  float viewport_pixel_scale = 1.0f;
   /// True when native pointer capture recenters the cursor this frame.
   bool pointer_capture_recentered = false;
   double double_click_interval_seconds = 0.5;

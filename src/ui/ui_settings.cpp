@@ -9,7 +9,10 @@
 #include "core/qstr.hpp"
 #include "core/user_config_paths.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <fstream>
+#include <iomanip>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -68,6 +71,11 @@ UISettings UISettings::load(const std::filesystem::path& path) {
             parse_bool(value, settings.navigation_gizmo_visible_);
       } else if (key == "Locale") {
         settings.set_locale(value);
+      } else if (key == "InterfaceScale") {
+        if (const std::optional<float> parsed =
+                QStr::parse_finite_float_token(value)) {
+          settings.set_interface_scale(*parsed);
+        }
       }
     }
 
@@ -105,6 +113,9 @@ bool UISettings::save(const std::filesystem::path& path) const {
          << '\n';
     file << "\n[Localization]\n";
     file << "Locale=" << locale_ << '\n';
+    file << "\n[Interface]\n";
+    file << std::fixed << std::setprecision(6);
+    file << "InterfaceScale=" << interface_scale_ << '\n';
     file.flush();
     return file.good();
 }
@@ -163,6 +174,15 @@ void UISettings::set_locale(std::string locale) {
   if (!locale.empty()) {
     locale_ = std::move(locale);
   }
+}
+
+void UISettings::set_interface_scale(float scale) {
+  if (!std::isfinite(scale)) {
+    interface_scale_ = kDefaultInterfaceScale;
+    return;
+  }
+  interface_scale_ =
+      std::clamp(scale, kMinimumInterfaceScale, kMaximumInterfaceScale);
 }
 
 } // namespace quader

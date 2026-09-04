@@ -15,6 +15,7 @@
 #include "render/viewport_info_stats.hpp"
 #include "ui/qt_navigation_gizmo.hpp"
 #include "ui/qt_startup_presentation.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_context_menu.hpp"
 #include "ui/qt_viewport_delete_popup.hpp"
 #include "ui/qt_viewport_surface.hpp"
@@ -90,6 +91,9 @@ public:
 
   void attach_workspace(ViewportWorkspaceService &workspace);
   void set_viewport_settings(const ViewportSettings &settings);
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
+  [[nodiscard]] float
+  viewport_raster_scale(ViewportPaneId pane_id) const;
   void set_render_performance_stats(RenderFramePerformanceStats stats);
   void set_localization(LocalizationService &localization);
   void set_open_material_editor_callback(
@@ -212,6 +216,7 @@ private:
   };
 
   std::array<Pane, kViewportPaneCount> panes_;
+  QtUiScaleMetrics ui_scale_metrics_;
   RenderSystem *render_system_ = nullptr;
   ViewportWorkspaceService *workspace_ = nullptr;
   std::uint64_t observed_persisted_camera_signature_ = 0u;
@@ -235,6 +240,7 @@ private:
   const SceneDocument *point_light_pick_cached_document_ = nullptr;
   std::uint64_t point_light_pick_cached_scene_revision_ = 0u;
   std::uint64_t point_light_pick_cached_local_visibility_revision_ = 0u;
+  float point_light_pick_cached_viewport_pixel_scale_ = 1.0F;
   std::vector<ViewportSceneBillboardPickCandidate>
       point_light_pick_cached_candidates_;
   bool point_light_pick_cache_valid_ = false;

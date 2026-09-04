@@ -17,6 +17,7 @@
 #include "scene/transform_pivot.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_continuous_edit_tracker.hpp"
 #include "ui/ui_panel.hpp"
@@ -27,6 +28,7 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDoubleSpinBox>
+#include <QEvent>
 #include <QFocusEvent>
 #include <QFrame>
 #include <QGridLayout>
@@ -78,6 +80,8 @@ constexpr int kInspectorMinimumValueColumnWidth = 96;
 constexpr int kInspectorMaterialPreviewSize = 56;
 constexpr int kInspectorMaterialActionSize = 24;
 constexpr int kInspectorMaterialActionIconSize = 16;
+constexpr std::array<int, 10> kInspectorMaterialActionRasterExtents = {
+    16, 24, 32, 48, 64, 96, 128, 192, 256, 384};
 
 QString qt_text(std::string_view text) {
   return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -285,13 +289,17 @@ private:
 enum class InspectorMaterialActionIcon { Edit, Replace };
 
 QPixmap material_action_pixmap(InspectorMaterialActionIcon action,
-                               const QColor &color) {
-  QPixmap pixmap(kInspectorMaterialActionIconSize,
-                 kInspectorMaterialActionIconSize);
+                               const QColor &color, int raster_extent) {
+  raster_extent = std::max(1, raster_extent);
+  QPixmap pixmap(raster_extent, raster_extent);
   pixmap.fill(Qt::transparent);
 
   QPainter painter(&pixmap);
   painter.setRenderHint(QPainter::Antialiasing, true);
+  const qreal design_scale =
+      static_cast<qreal>(raster_extent) /
+      static_cast<qreal>(kInspectorMaterialActionIconSize);
+  painter.scale(design_scale, design_scale);
   QPen pen(color);
   pen.setWidthF(1.6);
   pen.setCapStyle(Qt::RoundCap);
@@ -315,11 +323,15 @@ QPixmap material_action_pixmap(InspectorMaterialActionIcon action,
 QIcon material_action_icon(InspectorMaterialActionIcon action,
                             const QPalette &palette) {
   QIcon icon;
-  icon.addPixmap(material_action_pixmap(action,
-                                        palette.color(QPalette::ButtonText)),
-                 QIcon::Normal, QIcon::Off);
-  icon.addPixmap(material_action_pixmap(action, palette.color(QPalette::Mid)),
-                 QIcon::Disabled, QIcon::Off);
+  for (const int raster_extent : kInspectorMaterialActionRasterExtents) {
+    icon.addPixmap(material_action_pixmap(
+                       action, palette.color(QPalette::ButtonText),
+                       raster_extent),
+                   QIcon::Normal, QIcon::Off);
+    icon.addPixmap(material_action_pixmap(
+                       action, palette.color(QPalette::Mid), raster_extent),
+                   QIcon::Disabled, QIcon::Off);
+  }
   return icon;
 }
 
@@ -391,6 +403,17 @@ struct InspectorPanel::Impl {
   struct Section {
     QTreeWidgetItem *item = nullptr;
     QWidget *editor_parent = nullptr;
+  };
+
+  struct MaterialRow {
+    QTreeWidgetItem *item = nullptr;
+    QHBoxLayout *layout = nullptr;
+    QLabel *preview = nullptr;
+    QPushButton *edit = nullptr;
+    QPushButton *replace = nullptr;
+    QtMaterialPresentationItem material;
+    QSize preview_logical_bounds;
+    qreal preview_device_pixel_ratio = 0.0;
   };
 
   explicit Impl(InspectorPanel &panel) : panel_(panel) {
@@ -562,7 +585,91 @@ struct InspectorPanel::Impl {
     rebuild(summary);
   }
 
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    if (ui_scale_metrics_.revision() == metrics.revision() &&
+        qFuzzyCompare(static_cast<qreal>(ui_scale_metrics_.factor()),
+                      static_cast<qreal>(metrics.factor()))) {
+      return;
+    }
+
+    QHeaderView *header = tree_->header();
+    const bool label_column_uses_scaled_default =
+        header->sectionSize(0) == scaled_default_label_column_width_;
+    ui_scale_metrics_ = metrics;
+    header->setMinimumSectionSize(metrics.px(64));
+    scaled_default_label_column_width_ = metrics.px(140);
+    if (label_column_uses_scaled_default) {
+      header->resizeSection(0, scaled_default_label_column_width_);
+    }
+
+    const QSize preview_size = metrics.size(
+        QSize(kInspectorMaterialPreviewSize, kInspectorMaterialPreviewSize));
+    const QSize action_size = metrics.size(
+        QSize(kInspectorMaterialActionSize, kInspectorMaterialActionSize));
+    const QSize action_icon_size = metrics.size(QSize(
+        kInspectorMaterialActionIconSize, kInspectorMaterialActionIconSize));
+    for (MaterialRow &row : material_rows_) {
+      row.item->setSizeHint(
+          0, QSize(0, metrics.px(kInspectorMaterialPreviewSize + 8)));
+      row.layout->setContentsMargins(metrics.margins(QMargins(4, 4, 4, 4)));
+      row.layout->setSpacing(metrics.px(6));
+      row.preview->setFixedSize(preview_size);
+      row.edit->setFixedSize(action_size);
+      row.edit->setIconSize(action_icon_size);
+      row.replace->setFixedSize(action_size);
+      row.replace->setIconSize(action_icon_size);
+    }
+    refresh_material_preview_rasters();
+
+    clamp_label_column_width();
+    panel_.updateGeometry();
+    tree_->viewport()->update();
+  }
+
+  void refresh_material_preview_rasters() {
+    for (MaterialRow &row : material_rows_) {
+      refresh_material_preview_raster(row);
+    }
+  }
+
+  void refresh_material_action_icons() {
+    if (material_rows_.empty()) {
+      return;
+    }
+    const QIcon edit_icon = material_action_icon(
+        InspectorMaterialActionIcon::Edit, panel_.palette());
+    const QIcon replace_icon = material_action_icon(
+        InspectorMaterialActionIcon::Replace, panel_.palette());
+    for (MaterialRow &row : material_rows_) {
+      row.edit->setIcon(edit_icon);
+      row.replace->setIcon(replace_icon);
+    }
+    tree_->viewport()->update();
+  }
+
 private:
+  [[nodiscard]] int scaled_px(int baseline) const {
+    return ui_scale_metrics_.px(baseline);
+  }
+
+  void refresh_material_preview_raster(MaterialRow &row) {
+    const QSize logical_bounds = row.preview->size();
+    const qreal reported_device_pixel_ratio = row.preview->devicePixelRatioF();
+    const qreal device_pixel_ratio =
+        std::isfinite(reported_device_pixel_ratio) &&
+                reported_device_pixel_ratio > 0.0
+            ? std::max<qreal>(1.0, reported_device_pixel_ratio)
+            : 1.0;
+    if (row.preview_logical_bounds == logical_bounds &&
+        qFuzzyCompare(row.preview_device_pixel_ratio, device_pixel_ratio)) {
+      return;
+    }
+    row.preview->setPixmap(qt_material_preview_pixmap(
+        row.material, logical_bounds, device_pixel_ratio));
+    row.preview_logical_bounds = logical_bounds;
+    row.preview_device_pixel_ratio = device_pixel_ratio;
+  }
+
   void clamp_label_column_width() {
     if (adjusting_label_column_width_ || tree_ == nullptr ||
         !panel_.isVisible()) {
@@ -572,7 +679,7 @@ private:
     const int maximum_label_width =
         std::max(header->minimumSectionSize(),
                  tree_->viewport()->width() -
-                     kInspectorMinimumValueColumnWidth);
+                     scaled_px(kInspectorMinimumValueColumnWidth));
     if (header->sectionSize(0) <= maximum_label_width) {
       return;
     }
@@ -594,6 +701,7 @@ private:
   }
 
   void clear_content() {
+    material_rows_.clear();
     tree_->clear();
   }
 
@@ -753,6 +861,10 @@ private:
         "material", localized("ui.inspector.material", "Material"), true);
     std::vector<QuaderMaterialReference> presented_references;
     presented_references.reserve(material_presentation_.materials.size());
+    const QIcon edit_icon = material_action_icon(
+        InspectorMaterialActionIcon::Edit, panel_.palette());
+    const QIcon replace_icon = material_action_icon(
+        InspectorMaterialActionIcon::Replace, panel_.palette());
 
     std::size_t row_index = 0;
     for (const QtMaterialPresentationItem &material :
@@ -769,25 +881,27 @@ private:
       item->setData(0, Qt::UserRole, stable_name(stable_id));
       item->setFlags(Qt::ItemIsEnabled);
       item->setFirstColumnSpanned(true);
+      const int material_preview_size =
+          scaled_px(kInspectorMaterialPreviewSize);
+      const int material_action_size =
+          scaled_px(kInspectorMaterialActionSize);
+      const int material_action_icon_size =
+          scaled_px(kInspectorMaterialActionIconSize);
       item->setSizeHint(
-          0, QSize(0, kInspectorMaterialPreviewSize + 8));
+          0, QSize(0, scaled_px(kInspectorMaterialPreviewSize + 8)));
 
       auto *row = new QWidget(section.editor_parent);
       row->setObjectName(stable_name(stable_id + ".row"));
       auto *layout = new QHBoxLayout(row);
-      layout->setContentsMargins(4, 4, 4, 4);
-      layout->setSpacing(6);
+      layout->setContentsMargins(scaled_px(4), scaled_px(4), scaled_px(4),
+                                 scaled_px(4));
+      layout->setSpacing(scaled_px(6));
 
       auto *preview = new QLabel(row);
       preview->setObjectName(stable_name(stable_id + ".preview"));
-      preview->setFixedSize(kInspectorMaterialPreviewSize,
-                            kInspectorMaterialPreviewSize);
+      preview->setFixedSize(material_preview_size, material_preview_size);
       preview->setAlignment(Qt::AlignCenter);
       preview->setFrameShape(QFrame::StyledPanel);
-      preview->setPixmap(qt_material_preview_pixmap(
-          material, QSize(kInspectorMaterialPreviewSize,
-                          kInspectorMaterialPreviewSize),
-          preview->devicePixelRatioF()));
       layout->addWidget(preview);
 
       const QString display_name =
@@ -801,12 +915,10 @@ private:
 
       auto *edit = new QPushButton(row);
       edit->setObjectName(stable_name(stable_id + ".edit"));
-      edit->setFixedSize(kInspectorMaterialActionSize,
-                         kInspectorMaterialActionSize);
-      edit->setIcon(material_action_icon(InspectorMaterialActionIcon::Edit,
-                                         edit->palette()));
-      edit->setIconSize(QSize(kInspectorMaterialActionIconSize,
-                              kInspectorMaterialActionIconSize));
+      edit->setFixedSize(material_action_size, material_action_size);
+      edit->setIcon(edit_icon);
+      edit->setIconSize(
+          QSize(material_action_icon_size, material_action_icon_size));
       const QString edit_label =
           localized("ui.inspector.material.edit", "Edit material");
       edit->setAccessibleName(edit_label);
@@ -819,12 +931,10 @@ private:
 
       auto *replace = new QPushButton(row);
       replace->setObjectName(stable_name(stable_id + ".replace"));
-      replace->setFixedSize(kInspectorMaterialActionSize,
-                            kInspectorMaterialActionSize);
-      replace->setIcon(material_action_icon(
-          InspectorMaterialActionIcon::Replace, replace->palette()));
-      replace->setIconSize(QSize(kInspectorMaterialActionIconSize,
-                                 kInspectorMaterialActionIconSize));
+      replace->setFixedSize(material_action_size, material_action_size);
+      replace->setIcon(replace_icon);
+      replace->setIconSize(
+          QSize(material_action_icon_size, material_action_icon_size));
       const QString replace_label =
           localized("ui.inspector.material.replace", "Replace material");
       replace->setAccessibleName(replace_label);
@@ -848,6 +958,15 @@ private:
                          }
                        });
 
+      material_rows_.push_back(MaterialRow{
+          .item = item,
+          .layout = layout,
+          .preview = preview,
+          .edit = edit,
+          .replace = replace,
+          .material = material,
+      });
+      refresh_material_preview_raster(material_rows_.back());
       tree_->setItemWidget(item, 0, row);
     }
   }
@@ -1897,6 +2016,7 @@ private:
   SceneDocument *preview_document_ = nullptr;
   const AssetRegistry *preview_assets_ = nullptr;
   InspectorMaterialPresentationSnapshot material_presentation_;
+  std::vector<MaterialRow> material_rows_;
   SceneTransformDragService active_transform_preview_;
   std::optional<TransformEditState> active_transform_edit_;
   UIContinuousEditTracker active_continuous_edit_;
@@ -1913,6 +2033,8 @@ private:
   std::uint64_t built_material_presentation_revision_ =
       std::numeric_limits<std::uint64_t>::max();
   std::uint64_t runtime_binding_generation_ = 0;
+  QtUiScaleMetrics ui_scale_metrics_;
+  int scaled_default_label_column_width_ = 140;
   std::string built_locale_;
   std::string active_continuous_id_;
   bool continuous_edit_active_ = false;
@@ -1932,6 +2054,24 @@ void InspectorPanel::set_material_presentation(
 }
 
 void InspectorPanel::abandon_runtime() noexcept { impl_->abandon_runtime(); }
+
+void InspectorPanel::apply_ui_scale(const QtUiScaleMetrics &metrics) {
+  impl_->apply_ui_scale(metrics);
+}
+
+bool InspectorPanel::event(QEvent *event) {
+  const bool handled = QWidget::event(event);
+  if (impl_ != nullptr && event != nullptr) {
+    if (event->type() == QEvent::DevicePixelRatioChange ||
+        event->type() == QEvent::ScreenChangeInternal) {
+      impl_->refresh_material_preview_rasters();
+    } else if (event->type() == QEvent::PaletteChange ||
+               event->type() == QEvent::ApplicationPaletteChange) {
+      impl_->refresh_material_action_icons();
+    }
+  }
+  return handled;
+}
 
 void InspectorPanel::refresh(UIContext &context) { impl_->refresh(context); }
 

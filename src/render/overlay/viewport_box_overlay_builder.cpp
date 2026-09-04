@@ -89,7 +89,8 @@ project_overlay_world_point(const ViewportOverlayCamera &camera,
 
 void ViewportBoxOverlayBuilder::append(ViewportOverlayFrame &overlay_frame,
                                        const ViewportOverlayCamera &camera,
-                                       const RenderBoxPreviewRecord &preview) {
+                                       const RenderBoxPreviewRecord &preview,
+                                       float raster_scale) {
   if (!preview.valid) {
     return;
   }
@@ -114,7 +115,8 @@ void ViewportBoxOverlayBuilder::append(ViewportOverlayFrame &overlay_frame,
         [&](QVec2, QVec2, float start_t, float end_t) {
           append_line(overlay_frame, world_start + world_delta * start_t,
                       world_start + world_delta * end_t);
-        });
+        },
+        raster_scale);
   };
   if (preview.footprint_count == 2U) {
     append_dashed_edge(0U, 1U);

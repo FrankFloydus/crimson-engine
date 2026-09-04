@@ -7,12 +7,15 @@
 #pragma once
 
 #include "ui/qt_material_presentation.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QAbstractTableModel>
 #include <QIcon>
 #include <QMainWindow>
+#include <QSize>
 #include <QSortFilterProxyModel>
 #include <QString>
+#include <QtTypes>
 
 #include <cstdint>
 #include <functional>
@@ -20,6 +23,7 @@
 
 class QAction;
 class QCloseEvent;
+class QEvent;
 class QLabel;
 class QLineEdit;
 class QListView;
@@ -88,15 +92,33 @@ public:
 
   bool set_items(std::vector<QtMaterialBrowserItem> items);
   void set_labels(QtMaterialBrowserLabels labels);
+  /** Selects the logical tile extent and backing-pixel scale for icons. */
+  bool set_preview_raster_context(QSize logical_bounds,
+                                  qreal device_pixel_ratio);
+  void invalidate_preview_rasters();
   [[nodiscard]] const std::vector<QtMaterialBrowserItem> &items() const {
     return items_;
   }
 
 private:
+  /// One size/DPR-specific icon retained under the browser's bounded LRU.
+  struct PreviewIconCacheEntry final {
+    int row = -1;
+    QIcon icon;
+    std::uint64_t cost_bytes = 0;
+    std::uint64_t last_use = 0;
+  };
+
   [[nodiscard]] QIcon preview_icon(int row) const;
+  void clear_preview_icon_cache() const;
 
   std::vector<QtMaterialBrowserItem> items_;
   QtMaterialBrowserLabels labels_;
+  QSize preview_logical_bounds_{128, 128};
+  qreal preview_device_pixel_ratio_ = 1.0;
+  mutable std::vector<PreviewIconCacheEntry> preview_icon_cache_;
+  mutable std::uint64_t preview_icon_cache_cost_ = 0;
+  mutable std::uint64_t preview_icon_cache_clock_ = 0;
 };
 
 /// Case-insensitive name/path filter with deterministic typed sorting.
@@ -153,18 +175,25 @@ public:
   void set_presentation_state_changed_callback(
       PresentationStateChangedCallback callback);
 
+  /// Reapplies explicit retained metrics from their authored values.
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
+
   void restore_presentation_state(QtMaterialBrowserViewMode view_mode,
                                   int tile_size);
   [[nodiscard]] QtMaterialBrowserViewMode view_mode() const;
   [[nodiscard]] int tile_size() const;
 
 protected:
+  bool event(QEvent *event) override;
   void closeEvent(QCloseEvent *event) override;
   void showEvent(QShowEvent *event) override;
 
 private:
   void set_view_mode(QtMaterialBrowserViewMode mode, bool notify);
   void set_tile_size(int tile_size);
+  void apply_tile_metrics(int tile_size);
+  void refresh_preview_raster_context(bool force_refresh = false);
+  void refresh_view_mode_icons();
   void update_tile_size_text();
   void refresh_content_page();
   void update_purpose_presentation();
@@ -198,6 +227,7 @@ private:
   AcceptMaterialCallback accept_material_;
   ImportTexturesCallback import_textures_;
   PresentationStateChangedCallback presentation_state_changed_;
+  QtUiScaleMetrics ui_scale_metrics_;
 };
 
 } // namespace quader

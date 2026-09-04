@@ -7,6 +7,7 @@
 #pragma once
 
 #include "ui/qt_material_presentation.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QDialog>
 #include <QString>
@@ -17,6 +18,8 @@
 #include <utility>
 
 class QLabel;
+class QHBoxLayout;
+class QEvent;
 class QPushButton;
 
 namespace quader {
@@ -79,6 +82,12 @@ public:
   void set_browse_material_callback(BrowseMaterialCallback callback);
   void set_replace_materials_callback(ReplaceMaterialsCallback callback);
 
+  /// Reapplies fixed preview and column metrics from authored dimensions.
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
+
+protected:
+  bool event(QEvent *event) override;
+
 private:
   /** Groups widgets belonging to one material-reference column. */
   struct ColumnWidgets final {
@@ -100,11 +109,13 @@ private:
   ColumnWidgets replace_widgets_;
   std::optional<QtMaterialPresentationItem> find_material_;
   std::optional<QtMaterialPresentationItem> replacement_material_;
+  QHBoxLayout *columns_layout_ = nullptr;
   QPushButton *replace_button_ = nullptr;
   QPushButton *cancel_button_ = nullptr;
   QtMaterialFindReplaceLabels labels_;
   BrowseMaterialCallback browse_material_;
   ReplaceMaterialsCallback replace_materials_;
+  QtUiScaleMetrics ui_scale_metrics_;
 };
 
 } // namespace quader

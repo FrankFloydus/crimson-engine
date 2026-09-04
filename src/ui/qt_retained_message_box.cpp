@@ -7,6 +7,7 @@
 #include "ui/qt_retained_message_box.hpp"
 
 #include <QCloseEvent>
+#include <QEvent>
 #include <QLabel>
 #include <QLayout>
 #include <QPixmap>
@@ -14,6 +15,7 @@
 #include <QPushButton>
 #include <QStyle>
 
+#include <algorithm>
 #include <array>
 #include <limits>
 
@@ -159,19 +161,7 @@ void QtRetainedMessageBox::prewarm() {
     button->ensurePolished();
   }
 
-  if (QStyle *dialog_style = style()) {
-    message_icon_size_ = dialog_style->pixelMetric(
-        QStyle::PM_MessageBoxIconSize, nullptr, this);
-    for (std::size_t index = 0u; index < kStandardMessageIcons.size();
-         ++index) {
-      standard_icon_cache_[index] = dialog_style->standardIcon(
-          kStandardMessageIcons[index], nullptr, this);
-      if (message_icon_size_ > 0) {
-        (void)standard_icon_cache_[index].pixmap(message_icon_size_,
-                                                 message_icon_size_);
-      }
-    }
-  }
+  refresh_standard_icon_cache();
   prewarmed_ = true;
   apply_presented_icon();
   if (QLayout *dialog_layout = layout()) {
@@ -182,6 +172,28 @@ void QtRetainedMessageBox::prewarm() {
   // winId() creates the hidden platform window without mapping it or entering
   // a nested event loop. done() hides rather than closing this native owner.
   (void)winId();
+}
+
+void QtRetainedMessageBox::apply_ui_scale(
+    const QtUiScaleMetrics &metrics) {
+  if (ui_scale_metrics_.revision() == metrics.revision() &&
+      ui_scale_metrics_.factor() == metrics.factor()) {
+    return;
+  }
+  ui_scale_metrics_ = metrics;
+  if (!prewarmed_) {
+    return;
+  }
+  refresh_standard_icon_cache();
+  apply_presented_icon();
+  if (QLayout *dialog_layout = layout()) {
+    dialog_layout->invalidate();
+    (void)dialog_layout->activate();
+  }
+  if (isVisible()) {
+    adjustSize();
+  }
+  update();
 }
 
 void QtRetainedMessageBox::done(int result) {
@@ -227,6 +239,18 @@ void QtRetainedMessageBox::closeEvent(QCloseEvent *event) {
   selected_button_ = close_button_;
   done(QDialog::Rejected);
   event->ignore();
+}
+
+bool QtRetainedMessageBox::event(QEvent *event) {
+  const bool handled = QMessageBox::event(event);
+  if (prewarmed_ &&
+      (event->type() == QEvent::DevicePixelRatioChange ||
+       event->type() == QEvent::PaletteChange ||
+       event->type() == QEvent::ApplicationPaletteChange)) {
+    refresh_standard_icon_cache();
+    apply_presented_icon();
+  }
+  return handled;
 }
 
 std::size_t QtRetainedMessageBox::button_index(
@@ -298,6 +322,30 @@ void QtRetainedMessageBox::apply_informative_text(const QString &text) {
   }
 }
 
+void QtRetainedMessageBox::refresh_standard_icon_cache() {
+  QStyle *const dialog_style = style();
+  if (dialog_style == nullptr) {
+    message_icon_size_ = 0;
+    standard_icon_cache_.fill(QIcon{});
+    return;
+  }
+
+  message_icon_size_ = dialog_style->pixelMetric(
+      QStyle::PM_MessageBoxIconSize, nullptr, this);
+  message_icon_device_pixel_ratio_ =
+      std::max<qreal>(1.0, devicePixelRatioF());
+  for (std::size_t index = 0u; index < kStandardMessageIcons.size();
+       ++index) {
+    standard_icon_cache_[index] = dialog_style->standardIcon(
+        kStandardMessageIcons[index], nullptr, this);
+    if (message_icon_size_ > 0) {
+      (void)standard_icon_cache_[index].pixmap(
+          QSize(message_icon_size_, message_icon_size_),
+          message_icon_device_pixel_ratio_);
+    }
+  }
+}
+
 void QtRetainedMessageBox::apply_presented_icon() {
   QLabel *const icon_label = findChild<QLabel *>(
       QStringLiteral("qt_msgboxex_icon_label"));
@@ -312,9 +360,9 @@ void QtRetainedMessageBox::apply_presented_icon() {
     icon_label->setVisible(false);
     return;
   }
-  icon_label->setPixmap(
-      standard_icon_cache_[index].pixmap(message_icon_size_,
-                                         message_icon_size_));
+  icon_label->setPixmap(standard_icon_cache_[index].pixmap(
+      QSize(message_icon_size_, message_icon_size_),
+      message_icon_device_pixel_ratio_));
   icon_label->setVisible(true);
 }
 

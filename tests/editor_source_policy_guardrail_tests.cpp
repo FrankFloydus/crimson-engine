@@ -359,6 +359,25 @@ TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalToo
             std::string::npos);
   EXPECT_NE(viewport_panel.find("point_context.hit_drawn_plane_line"),
             std::string::npos);
+  const std::size_t captured_point_context =
+      viewport_panel.find("point_context.hit_drawn_plane_captured_point");
+  const std::size_t drawn_line_context =
+      viewport_panel.find("point_context.hit_drawn_plane_line");
+  const std::size_t tool_context =
+      viewport_panel.find("ViewportToolContext tool_context", drawn_line_context);
+  ASSERT_NE(captured_point_context, std::string::npos);
+  ASSERT_NE(drawn_line_context, std::string::npos);
+  ASSERT_NE(tool_context, std::string::npos);
+  EXPECT_NE(viewport_panel
+                .substr(captured_point_context,
+                        drawn_line_context - captured_point_context)
+                .find("viewport_pixel_scale"),
+            std::string::npos);
+  EXPECT_NE(viewport_panel
+                .substr(drawn_line_context,
+                        tool_context - drawn_line_context)
+                .find("viewport_pixel_scale"),
+            std::string::npos);
   EXPECT_NE(viewport_panel.find(".point = &point_context"),
             std::string::npos);
   EXPECT_NE(viewport_panel.find("make_tool_event_at"), std::string::npos);

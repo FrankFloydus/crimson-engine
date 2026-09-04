@@ -8,7 +8,9 @@
 
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_settings.hpp"
 
@@ -198,10 +200,10 @@ QtSnappingToolbar::QtSnappingToolbar(QWidget *parent) : QToolBar(parent) {
 
   for (std::size_t index = 0; index < kToggleSpecs.size(); ++index) {
     const ToggleSpec &spec = kToggleSpecs[index];
-    QAction *action = addAction(QIcon(QString::fromUtf8(spec.icon_path)),
-                                QString::fromUtf8(spec.fallback.data(),
-                                    static_cast<qsizetype>(
-                                        spec.fallback.size())));
+    QAction *action = addAction(
+        qt_multiresolution_icon(QString::fromUtf8(spec.icon_path)),
+        QString::fromUtf8(spec.fallback.data(),
+                          static_cast<qsizetype>(spec.fallback.size())));
     action->setObjectName(QString::fromUtf8(spec.object_name));
     action->setCheckable(true);
     QObject::connect(action, &QAction::triggered, this,
@@ -226,6 +228,34 @@ QtSnappingToolbar::QtSnappingToolbar(QWidget *parent) : QToolBar(parent) {
     if (auto *button =
             qobject_cast<QToolButton *>(widgetForAction(entry.action))) {
       button->setFixedHeight(kTopToolbarButtonHeight);
+    }
+  }
+}
+
+void QtSnappingToolbar::apply_ui_scale(const QtUiScaleMetrics &metrics) {
+  constexpr QSize kToolbarIconSize(32, 32);
+  const QSize scaled_icon_size = metrics.size(kToolbarIconSize);
+  if (iconSize() != scaled_icon_size) {
+    setIconSize(scaled_icon_size);
+  }
+
+  const int scaled_control_height = metrics.px(kTopToolbarButtonHeight);
+  if (grid_size_combo_->minimumHeight() != scaled_control_height ||
+      grid_size_combo_->maximumHeight() != scaled_control_height) {
+    grid_size_combo_->setFixedHeight(scaled_control_height);
+  }
+  if (angle_combo_->minimumHeight() != scaled_control_height ||
+      angle_combo_->maximumHeight() != scaled_control_height) {
+    angle_combo_->setFixedHeight(scaled_control_height);
+  }
+  for (const ToggleAction &entry : toggle_actions_) {
+    apply_native_toolbar_button_face_ui_scale(*this, *entry.action, metrics);
+    if (auto *button =
+            qobject_cast<QToolButton *>(widgetForAction(entry.action));
+        button != nullptr &&
+        (button->minimumHeight() != scaled_control_height ||
+         button->maximumHeight() != scaled_control_height)) {
+      button->setFixedHeight(scaled_control_height);
     }
   }
 }

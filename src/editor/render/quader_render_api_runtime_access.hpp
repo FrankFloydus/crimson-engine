@@ -31,6 +31,7 @@ struct QuaderRenderSceneOverlaySyncRequest {
   std::uint8_t scene_wireframe_layer_mask = 0u;
   bool selected_scene_wire_visible = true;
   ViewportPersistentOverlayStyleSnapshot style;
+  ViewportPersistentOverlayRasterGroupSet raster_groups;
 };
 
 /**

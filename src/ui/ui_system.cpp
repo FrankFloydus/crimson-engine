@@ -44,6 +44,7 @@
 #include "ui/qt_standard_material_editor_window.hpp"
 #include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_unsaved_confirmation_dialog.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
 #include "ui/qt_viewport_panel.hpp"
@@ -63,6 +64,7 @@
 #include <QMenuBar>
 #include <QPointer>
 #include <QRect>
+#include <QSize>
 #include <QStatusBar>
 #include <QStackedWidget>
 #include <QStringList>
@@ -73,6 +75,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
@@ -91,6 +94,15 @@ namespace quader {
 namespace {
 
 constexpr int kQtWindowStateVersion = 1;
+constexpr int kDockContentMinimumWidth = 220;
+
+void apply_dock_content_minimum_width(
+    QWidget &content, const QtUiScaleMetrics &metrics) {
+  const int minimum_width = metrics.px(kDockContentMinimumWidth);
+  if (content.minimumWidth() != minimum_width) {
+    content.setMinimumWidth(minimum_width);
+  }
+}
 
 constexpr std::array<QuaderStandardMaterialTextureSlot, 4>
     kMaterialTextureSlots{
@@ -323,6 +335,14 @@ bool UISystem::initialize(RenderSystem &render_system,
   std::error_code error;
   std::filesystem::create_directories(settings_paths_.directory, error);
   settings_ = UISettings::load(settings_paths_.settings_file);
+  auto *application =
+      qobject_cast<QApplication *>(QCoreApplication::instance());
+  if (application == nullptr) {
+    LOG_ERROR("Qt application is unavailable while initializing UI scale");
+    return false;
+  }
+  ui_scale_controller_ = std::make_unique<QtUiScaleApplicationController>(
+      *application, settings_.interface_scale());
   localization_.load(executable_dir / "locales", settings_.locale());
   if (settings_.locale() != localization_.current_locale()) {
     settings_.set_locale(localization_.current_locale());
@@ -478,8 +498,11 @@ bool UISystem::initialize(RenderSystem &render_system,
     refresh_project_workspace();
   });
   create_docks();
+  const QtUiScaleMetrics &initial_ui_metrics =
+      ui_scale_controller_->metrics();
 
   settings_dialog_ = new QtSettingsDialog(main_window_.get());
+  settings_dialog_->resize(initial_ui_metrics.size(QSize(720, 560)));
   QObject::connect(settings_dialog_, &QDialog::finished, settings_dialog_,
                    [this](int) {
                      if (auxiliary_window_state_.settings_dialog_visible) {
@@ -495,6 +518,8 @@ bool UISystem::initialize(RenderSystem &render_system,
                    [this]() { save_auxiliary_window_state(); });
   material_browser_window_ =
       new QtMaterialBrowserWindow(main_window_.get());
+  material_browser_window_->resize(
+      initial_ui_metrics.size(QSize(760, 520)));
   material_browser_window_->set_purpose(
       QtMaterialBrowserPurpose::ActiveMaterial);
   material_browser_window_->set_presentation_state_changed_callback(
@@ -523,6 +548,8 @@ bool UISystem::initialize(RenderSystem &render_system,
   material_browser_window_->hide();
   material_find_replace_dialog_ =
       new QtMaterialFindReplaceDialog(main_window_.get());
+  material_find_replace_dialog_->resize(
+      initial_ui_metrics.size(QSize(380, 300)));
   material_find_replace_dialog_->set_browse_material_callback(
       [this](QtMaterialFindReplaceColumn column) {
         show_material_picker(column ==
@@ -582,6 +609,8 @@ bool UISystem::initialize(RenderSystem &render_system,
   material_find_replace_dialog_->hide();
   material_picker_window_ =
       new QtMaterialBrowserWindow(material_find_replace_dialog_);
+  material_picker_window_->resize(
+      initial_ui_metrics.size(QSize(760, 520)));
   material_picker_window_->set_purpose(QtMaterialBrowserPurpose::Picker);
   material_picker_window_->setWindowModality(Qt::WindowModal);
   material_picker_window_->set_accept_material_callback(
@@ -608,6 +637,8 @@ bool UISystem::initialize(RenderSystem &render_system,
   material_picker_window_->hide();
   standard_material_editor_window_ =
       new QtStandardMaterialEditorWindow(main_window_.get());
+  standard_material_editor_window_->resize(
+      initial_ui_metrics.size(QSize(1040, 680)));
   standard_material_unsaved_confirmation_ =
       new QtUnsavedConfirmationDialog(standard_material_editor_window_);
   standard_material_error_message_box_ =
@@ -716,6 +747,7 @@ bool UISystem::initialize(RenderSystem &render_system,
   main_window_->statusBar()->addWidget(status_message_, 1);
   main_window_->statusBar()->addPermanentWidget(status_version_);
 
+  apply_ui_scale_to_retained_surfaces(ui_scale_controller_->metrics());
   refresh_localized_chrome();
   restore_window_state();
   panels_.apply_settings(settings_);
@@ -747,6 +779,8 @@ void UISystem::install_runtime_hooks(
     command_palette_ =
         new QtCommandPalette(editor.commands(), localization_,
                              main_window_.get());
+    command_palette_->resize(
+        ui_scale_controller_->metrics().size(QSize(760, 460)));
     QObject::connect(command_palette_, &QDialog::finished, command_palette_,
                      [this](int) {
                        command_palette_open_pending_ = false;
@@ -876,9 +910,10 @@ void UISystem::install_runtime_hooks(
   tool_settings_panel_->bind(editor);
   settings_dialog_->set_context(
       settings_, viewport_settings_, localization_, editor.commands(),
-      [this](QtSettingsChangeKind kind) {
-        handle_settings_dialog_change(kind);
-      });
+      [this](const QtSettingsChange &change) {
+        handle_settings_dialog_change(change);
+      },
+      [this]() { return save_settings(); });
 
   if (main_menu_ == nullptr) {
     main_menu_ = std::make_unique<QtMainMenu>();
@@ -1114,6 +1149,48 @@ void UISystem::install_runtime_hooks(
             settings_.set_locale(localization_.current_locale());
             if (changed) {
               (void)save_settings();
+              synchronize_settings_surfaces(true);
+            }
+            return runtime_status(changed);
+          },
+      .interface_scale =
+          [this]() { return static_cast<double>(settings_.interface_scale()); },
+      .set_interface_scale =
+          [this](double factor) {
+            if (!std::isfinite(factor)) {
+              return runtime_failure(localization_.text(
+                  "ui.runtime.interface_scale_invalid",
+                  "Interface scale must be finite."));
+            }
+            const float canonical = static_cast<float>(std::clamp(
+                factor,
+                static_cast<double>(UISettings::kMinimumInterfaceScale),
+                static_cast<double>(UISettings::kMaximumInterfaceScale)));
+            const bool persisted_changed =
+                settings_.interface_scale() != canonical;
+            const bool presented_changed =
+                ui_scale_controller_ != nullptr &&
+                ui_scale_controller_->metrics().factor() != canonical;
+            const bool changed = persisted_changed || presented_changed;
+            const float previous_persisted = settings_.interface_scale();
+            const float previous_presented =
+                ui_scale_controller_ != nullptr
+                    ? ui_scale_controller_->metrics().factor()
+                    : previous_persisted;
+            settings_.set_interface_scale(canonical);
+            if (changed) {
+              (void)apply_interface_scale(settings_.interface_scale());
+              if (!save_settings()) {
+                settings_.set_interface_scale(previous_persisted);
+                (void)apply_interface_scale(previous_presented);
+                return runtime_failure(localization_.text(
+                    "ui.runtime.preferences_save_failed",
+                    "Preferences could not be saved."));
+              }
+              if (settings_dialog_ != nullptr &&
+                  settings_dialog_->isVisible()) {
+                settings_dialog_->synchronize_interface_scale();
+              }
               synchronize_settings_surfaces(true);
             }
             return runtime_status(changed);
@@ -2277,6 +2354,7 @@ void UISystem::shutdown() {
   status_message_ = nullptr;
   status_version_ = nullptr;
   auxiliary_window_save_timer_ = nullptr;
+  ui_scale_controller_.reset();
   render_system_ = nullptr;
   editor_ = nullptr;
   document_ = nullptr;
@@ -2751,11 +2829,15 @@ void UISystem::create_docks() {
   main_window_->splitDockWidget(&inspector, &active_material, Qt::Vertical);
   main_window_->tabifyDockWidget(&inspector, &tool_settings);
   inspector.raise();
-  main_window_->resizeDocks({&outliner, &inspector}, {340, 340},
+  const QtUiScaleMetrics &metrics = ui_scale_controller_->metrics();
+  main_window_->resizeDocks({&outliner, &inspector},
+                            {metrics.px(340), metrics.px(340)},
                             Qt::Horizontal);
   main_window_->resizeDocks({&inspector, &active_material, &layers},
-                            {320, 320, 180}, Qt::Vertical);
-  main_window_->resizeDocks({&console}, {220}, Qt::Vertical);
+                            {metrics.px(320), metrics.px(320),
+                             metrics.px(180)},
+                            Qt::Vertical);
+  main_window_->resizeDocks({&console}, {metrics.px(220)}, Qt::Vertical);
 }
 
 QDockWidget &UISystem::create_dock(UIPanelId id, QWidget &content,
@@ -2769,7 +2851,8 @@ QDockWidget &UISystem::create_dock(UIPanelId id, QWidget &content,
                     QDockWidget::DockWidgetMovable |
                     QDockWidget::DockWidgetFloatable);
   install_palette_aware_dock_title_presentation(*dock);
-  content.setMinimumWidth(std::max(220, content.minimumWidth()));
+  apply_dock_content_minimum_width(content,
+                                   ui_scale_controller_->metrics());
   dock->setWidget(&content);
   main_window_->addDockWidget(static_cast<Qt::DockWidgetArea>(default_area),
                               dock);
@@ -4011,16 +4094,23 @@ void UISystem::refresh_localized_chrome() {
   }
 }
 
-void UISystem::handle_settings_dialog_change(QtSettingsChangeKind kind) {
-  switch (kind) {
+void UISystem::handle_settings_dialog_change(const QtSettingsChange &change) {
+  switch (change.kind) {
   case QtSettingsChangeKind::ViewportPreview:
     return;
   case QtSettingsChangeKind::ViewportCommit:
     apply_viewport_settings_to_workspace();
     (void)save_viewport_settings();
     break;
+  case QtSettingsChangeKind::InterfacePreview:
+    if (change.interface_scale.has_value()) {
+      (void)apply_interface_scale(*change.interface_scale);
+    }
+    return;
   case QtSettingsChangeKind::InterfaceCommit:
-    (void)save_settings();
+    if (change.interface_scale.has_value()) {
+      (void)apply_interface_scale(*change.interface_scale);
+    }
     break;
   case QtSettingsChangeKind::KeybindingsCommit:
     if (editor_ != nullptr) {
@@ -4048,6 +4138,97 @@ void UISystem::handle_settings_dialog_change(QtSettingsChangeKind kind) {
   }
   if (main_menu_ != nullptr) {
     main_menu_->refresh();
+  }
+}
+
+bool UISystem::apply_interface_scale(float factor) {
+  if (ui_scale_controller_ == nullptr ||
+      !ui_scale_controller_->apply_factor(factor)) {
+    return false;
+  }
+  apply_ui_scale_to_retained_surfaces(ui_scale_controller_->metrics());
+  return true;
+}
+
+void UISystem::apply_ui_scale_to_retained_surfaces(
+    const QtUiScaleMetrics &metrics) {
+  if (selection_toolbar_ != nullptr) {
+    selection_toolbar_->apply_ui_scale(metrics);
+  }
+  if (snapping_toolbar_ != nullptr) {
+    snapping_toolbar_->apply_ui_scale(metrics);
+  }
+  if (viewport_display_toolbar_ != nullptr) {
+    viewport_display_toolbar_->apply_ui_scale(metrics);
+  }
+  if (texture_toolbar_ != nullptr) {
+    texture_toolbar_->apply_ui_scale(metrics);
+  }
+  if (tool_toolbar_ != nullptr) {
+    tool_toolbar_->apply_ui_scale(metrics);
+  }
+  if (project_home_page_ != nullptr) {
+    project_home_page_->apply_ui_scale(metrics);
+  }
+  if (scene_workspace_ != nullptr) {
+    scene_workspace_->apply_ui_scale(metrics);
+  }
+  if (viewport_panel_ != nullptr) {
+    viewport_panel_->apply_ui_scale(metrics);
+  }
+  if (inspector_panel_ != nullptr) {
+    inspector_panel_->apply_ui_scale(metrics);
+  }
+  if (layer_panel_ != nullptr) {
+    layer_panel_->apply_ui_scale(metrics);
+  }
+  if (tool_settings_panel_ != nullptr) {
+    tool_settings_panel_->apply_ui_scale(metrics);
+  }
+  if (active_material_panel_ != nullptr) {
+    active_material_panel_->apply_ui_scale(metrics);
+  }
+  if (settings_dialog_ != nullptr) {
+    settings_dialog_->apply_ui_scale(metrics);
+  }
+  if (material_browser_window_ != nullptr) {
+    material_browser_window_->apply_ui_scale(metrics);
+  }
+  if (material_picker_window_ != nullptr) {
+    material_picker_window_->apply_ui_scale(metrics);
+  }
+  if (material_find_replace_dialog_ != nullptr) {
+    material_find_replace_dialog_->apply_ui_scale(metrics);
+  }
+  if (standard_material_editor_window_ != nullptr) {
+    standard_material_editor_window_->apply_ui_scale(metrics);
+  }
+  for (QWidget *widget : QApplication::allWidgets()) {
+    if (auto *message_box = dynamic_cast<QtRetainedMessageBox *>(widget)) {
+      message_box->apply_ui_scale(metrics);
+    }
+  }
+  for (UIPanelId id : kUiDockPanelIds) {
+    if (QDockWidget *dock = panels_.dock(id)) {
+      if (QWidget *content = dock->widget()) {
+        apply_dock_content_minimum_width(*content, metrics);
+      }
+    }
+  }
+  if (main_window_ != nullptr) {
+    const QList<QDockWidget *> docks =
+        main_window_->findChildren<QDockWidget *>();
+    for (QDockWidget *dock : docks) {
+      if (dock != nullptr) {
+        apply_ui_scale_to_palette_aware_dock_title_presentation(*dock,
+                                                                 metrics);
+      }
+    }
+    if (main_window_->layout() != nullptr) {
+      main_window_->layout()->invalidate();
+    }
+    main_window_->updateGeometry();
+    main_window_->update();
   }
 }
 

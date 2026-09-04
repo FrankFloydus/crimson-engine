@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_active_material_panel.hpp"
 
+#include "ui/qt_ui_scale_metrics.hpp"
+
 #include <QEvent>
 #include <QFrame>
 #include <QLabel>
@@ -89,7 +91,28 @@ void QtActiveMaterialPanel::set_browse_material_callback(
   browse_material_ = std::move(callback);
 }
 
-QSize QtActiveMaterialPanel::sizeHint() const { return QSize(240, 260); }
+void QtActiveMaterialPanel::apply_ui_scale(
+    const QtUiScaleMetrics &metrics) {
+  if (ui_scale_revision_ == metrics.revision() &&
+      qFuzzyCompare(ui_scale_factor_,
+                    static_cast<qreal>(metrics.factor()))) {
+    return;
+  }
+  ui_scale_revision_ = metrics.revision();
+  ui_scale_factor_ = metrics.factor();
+  scaled_size_hint_ = metrics.size(QSize(240, 260));
+  preview_->setMinimumSize(metrics.size(QSize(96, 96)));
+  preview_dirty_ = true;
+  preview_bounds_ = {};
+  preview_device_pixel_ratio_ = 0.0;
+  updateGeometry();
+  if (layout() != nullptr) {
+    layout()->invalidate();
+  }
+  refresh_preview();
+}
+
+QSize QtActiveMaterialPanel::sizeHint() const { return scaled_size_hint_; }
 
 bool QtActiveMaterialPanel::eventFilter(QObject *watched, QEvent *event) {
   if (watched == preview_ && event != nullptr &&

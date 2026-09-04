@@ -11,12 +11,17 @@
 #include "core/localization_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "ui/inspector_panel.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <QApplication>
+#include <QEvent>
+#include <QHeaderView>
+#include <QIcon>
 #include <QLabel>
+#include <QPalette>
 #include <QPushButton>
 #include <QTreeWidget>
 
@@ -63,6 +68,109 @@ QtMaterialPresentationItem material_item(QuaderMaterialReference reference,
       .available = true,
       .editable = editable,
   };
+}
+
+TEST(InspectorMaterialTests, AppliesInterfaceScaleToRetainedTreeMetrics) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-scale-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  InspectorPanel panel;
+  auto *tree = panel.findChild<QTreeWidget *>(QStringLiteral("inspector.tree"));
+  ASSERT_NE(tree, nullptr);
+
+  panel.apply_ui_scale(QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(tree->header()->minimumSectionSize(), 128);
+
+  panel.apply_ui_scale(QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(tree->header()->minimumSectionSize(), 64);
+}
+
+TEST(InspectorMaterialTests,
+     RefreshesOnlyPaletteBakedMaterialActionIconsOnPaletteChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-material-palette-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  application.setQuitOnLastWindowClosed(false);
+
+  QPalette palette = QApplication::palette();
+  palette.setColor(QPalette::ButtonText, QColor(211, 37, 53));
+  palette.setColor(QPalette::Mid, QColor(113, 23, 41));
+  QApplication::setPalette(palette);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto box = editor.modeling().create_box(
+      QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+      "Inspector Palette Material");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = inspector_localization();
+  UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+
+  InspectorPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.set_material_presentation({
+      .revision = 1u,
+      .section_visible = true,
+      .materials = {material_item(
+          QuaderMaterialReference::project(ProjectAssetId::generate()),
+          QStringLiteral("project:palette-material"),
+          QStringLiteral("Palette Material"), true)},
+  });
+  panel.refresh(context);
+  panel.show();
+  QCoreApplication::processEvents();
+
+  auto *preview = panel.findChild<QLabel *>(
+      QStringLiteral("inspector.material.0.preview"));
+  auto *edit = panel.findChild<QPushButton *>(
+      QStringLiteral("inspector.material.0.edit"));
+  auto *replace = panel.findChild<QPushButton *>(
+      QStringLiteral("inspector.material.0.replace"));
+  ASSERT_NE(preview, nullptr);
+  ASSERT_NE(edit, nullptr);
+  ASSERT_NE(replace, nullptr);
+  const qint64 preview_key = preview->pixmap().cacheKey();
+  const qint64 initial_edit_key = edit->icon().cacheKey();
+  const qint64 initial_replace_key = replace->icon().cacheKey();
+
+  palette.setColor(QPalette::ButtonText, QColor(29, 197, 83));
+  palette.setColor(QPalette::Mid, QColor(17, 97, 47));
+  QApplication::setPalette(palette);
+  QCoreApplication::processEvents();
+  const qint64 application_edit_key = edit->icon().cacheKey();
+  const qint64 application_replace_key = replace->icon().cacheKey();
+  EXPECT_NE(application_edit_key, initial_edit_key);
+  EXPECT_NE(application_replace_key, initial_replace_key);
+  EXPECT_EQ(preview->pixmap().cacheKey(), preview_key)
+      << "palette changes must not rebuild material preview rasters";
+
+  palette.setColor(QPalette::ButtonText, QColor(37, 89, 223));
+  palette.setColor(QPalette::Mid, QColor(21, 47, 127));
+  panel.setPalette(palette);
+  EXPECT_NE(edit->icon().cacheKey(), application_edit_key);
+  EXPECT_NE(replace->icon().cacheKey(), application_replace_key);
+  EXPECT_EQ(preview->pixmap().cacheKey(), preview_key);
 }
 
 TEST(InspectorMaterialTests,
@@ -128,6 +236,21 @@ TEST(InspectorMaterialTests,
       find_top_level_item(*tree, QStringLiteral("material"));
   ASSERT_NE(material, nullptr);
   EXPECT_TRUE(material->isExpanded());
+
+  auto *material_preview = panel.findChild<QLabel *>(
+      QStringLiteral("inspector.material.0.preview"));
+  auto *material_edit = panel.findChild<QPushButton *>(
+      QStringLiteral("inspector.material.0.edit"));
+  ASSERT_NE(material_preview, nullptr);
+  ASSERT_NE(material_edit, nullptr);
+  panel.apply_ui_scale(QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(material_preview->size(), QSize(112, 112));
+  EXPECT_EQ(material_edit->size(), QSize(48, 48));
+  EXPECT_EQ(material_edit->iconSize(), QSize(32, 32));
+  panel.apply_ui_scale(QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(material_preview->size(), QSize(56, 56));
+  EXPECT_EQ(material_edit->size(), QSize(24, 24));
+  EXPECT_EQ(material_edit->iconSize(), QSize(16, 16));
 
   ASSERT_TRUE(editor.selection()
                   .select_objects({first.value().entity, second.value().entity},
@@ -284,12 +407,27 @@ TEST(InspectorMaterialTests,
   EXPECT_FALSE(preview_label->pixmap().isNull());
   EXPECT_EQ(edit_button->width(), edit_button->height());
   EXPECT_EQ(replace_button->width(), replace_button->height());
+  const QList<QSize> edit_icon_sizes = edit_button->icon().availableSizes(
+      QIcon::Normal, QIcon::Off);
+  EXPECT_TRUE(edit_icon_sizes.contains(QSize(16, 16)));
+  EXPECT_TRUE(edit_icon_sizes.contains(QSize(384, 384)))
+      << "programmatic Inspector glyphs retain a true high-resolution source";
   EXPECT_TRUE(edit_button->isEnabled());
   EXPECT_TRUE(replace_button->isEnabled());
   EXPECT_FALSE(embedded_edit->isEnabled());
   EXPECT_FALSE(graph_edit->isEnabled());
   EXPECT_FALSE(missing_edit->isEnabled());
   EXPECT_TRUE(missing_replace->isEnabled());
+
+  const qint64 preview_cache_key = preview_label->pixmap().cacheKey();
+  QEvent device_pixel_ratio_event(QEvent::DevicePixelRatioChange);
+  QCoreApplication::sendEvent(&panel, &device_pixel_ratio_event);
+  EXPECT_EQ(preview_label->pixmap().cacheKey(), preview_cache_key)
+      << "an unchanged effective DPR must not rebuild the retained raster";
+  QEvent screen_change_event(QEvent::ScreenChangeInternal);
+  QCoreApplication::sendEvent(&panel, &screen_change_event);
+  EXPECT_EQ(preview_label->pixmap().cacheKey(), preview_cache_key)
+      << "screen notifications re-evaluate DPR behind the same cache gate";
 
   edit_button->click();
   replace_button->click();

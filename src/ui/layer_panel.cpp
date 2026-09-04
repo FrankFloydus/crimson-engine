@@ -11,6 +11,8 @@
 #include "diagnostics/profile.hpp"
 #include "scene/scene_document.hpp"
 #include "ui/qt_color_swatch_button.hpp"
+#include "ui/qt_multiresolution_icon.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_panel.hpp"
 
@@ -19,6 +21,7 @@
 #include <QColorDialog>
 #include <QContextMenuEvent>
 #include <QDialog>
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QIcon>
@@ -26,9 +29,7 @@
 #include <QItemSelectionModel>
 #include <QLineEdit>
 #include <QMenu>
-#include <QPainter>
 #include <QPalette>
-#include <QPixmap>
 #include <QPointer>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -98,31 +99,18 @@ bool same_color(const QColor &left, const QColor &right) {
   return left.toRgb().rgba() == right.toRgb().rgba();
 }
 
-QIcon palette_icon(const QString &resource, const QPalette &palette) {
-  QPixmap pixmap(resource);
-  if (pixmap.isNull()) {
-    return QIcon(resource);
-  }
-  QPainter painter(&pixmap);
-  painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
-  painter.fillRect(pixmap.rect(), palette.color(QPalette::Text));
-  painter.end();
-  return QIcon(pixmap);
-}
-
 QIcon layer_visibility_icon(bool visible, const QPalette &palette) {
-  return palette_icon(
-      visible ? QStringLiteral(":/quader/icons/material_visibility.png")
-              : QStringLiteral(
-                    ":/quader/icons/material_visibility_off.png"),
-      palette);
+  return qt_scalable_glyph_icon(
+      visible ? QtScalableGlyph::MaterialVisibility
+              : QtScalableGlyph::MaterialVisibilityOff,
+      palette.color(QPalette::Text));
 }
 
 QIcon layer_lock_icon(bool locked, const QPalette &palette) {
-  return palette_icon(
-      locked ? QStringLiteral(":/quader/icons/material_lock.png")
-             : QStringLiteral(":/quader/icons/material_lock_open.png"),
-      palette);
+  return qt_scalable_glyph_icon(
+      locked ? QtScalableGlyph::MaterialLock
+             : QtScalableGlyph::MaterialLockOpen,
+      palette.color(QPalette::Text));
 }
 
 /// Restricts in-place edits to layer-name constraints owned by the public API.
@@ -237,26 +225,26 @@ struct LayerPanel::Impl {
                                  QHeaderView::ResizeToContents);
     auto *actions = new QWidget(&panel_);
     actions->setObjectName(QStringLiteral("layers.actions"));
-    auto *actions_layout = new QHBoxLayout(actions);
-    actions_layout->setContentsMargins(4, 4, 4, 4);
-    actions_layout->setSpacing(4);
+    actions_layout_ = new QHBoxLayout(actions);
+    actions_layout_->setContentsMargins(4, 4, 4, 4);
+    actions_layout_->setSpacing(4);
 
     create_button_ = new QToolButton(actions);
     create_button_->setObjectName(QStringLiteral("layers.create"));
-    create_button_->setIcon(
-        QIcon(QStringLiteral(":/quader/icons/layer_add.png")));
+    create_button_->setIcon(qt_multiresolution_icon(
+        QStringLiteral(":/quader/icons/layer_add.png")));
     create_button_->setAccessibleName(QStringLiteral("Create Layer"));
     create_button_->setIconSize(QSize(20, 20));
     create_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
     create_button_->setAutoRaise(false);
     create_button_->setFixedSize(28, 28);
-    actions_layout->addWidget(create_button_);
+    actions_layout_->addWidget(create_button_);
 
     create_from_selection_button_ = new QToolButton(actions);
     create_from_selection_button_->setObjectName(
         QStringLiteral("layers.create_from_selection"));
-    create_from_selection_button_->setIcon(QIcon(QStringLiteral(
-        ":/quader/icons/layer_create_from_selection.png")));
+    create_from_selection_button_->setIcon(qt_multiresolution_icon(
+        QStringLiteral(":/quader/icons/layer_create_from_selection.png")));
     create_from_selection_button_->setAccessibleName(
         QStringLiteral("Create Layer from Selection"));
     create_from_selection_button_->setIconSize(QSize(20, 20));
@@ -264,8 +252,8 @@ struct LayerPanel::Impl {
     create_from_selection_button_->setAutoRaise(false);
     create_from_selection_button_->setFixedSize(28, 28);
     create_from_selection_button_->setEnabled(false);
-    actions_layout->addWidget(create_from_selection_button_);
-    actions_layout->addStretch(1);
+    actions_layout_->addWidget(create_from_selection_button_);
+    actions_layout_->addStretch(1);
     layout->addWidget(actions);
     layout->addWidget(tree_);
 
@@ -316,7 +304,72 @@ struct LayerPanel::Impl {
     synchronize(owner_changed);
   }
 
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    if (ui_scale_metrics_.revision() == metrics.revision() &&
+        qFuzzyCompare(static_cast<qreal>(ui_scale_metrics_.factor()),
+                      static_cast<qreal>(metrics.factor()))) {
+      return;
+    }
+    ui_scale_metrics_ = metrics;
+
+    tree_->setIconSize(metrics.size(QSize(18, 18)));
+    actions_layout_->setContentsMargins(metrics.margins(QMargins(4, 4, 4, 4)));
+    actions_layout_->setSpacing(metrics.px(4));
+    create_button_->setIconSize(metrics.size(QSize(20, 20)));
+    create_button_->setFixedSize(metrics.size(QSize(28, 28)));
+    create_from_selection_button_->setIconSize(
+        metrics.size(QSize(20, 20)));
+    create_from_selection_button_->setFixedSize(
+        metrics.size(QSize(28, 28)));
+
+    for (int row = 0; row < model_->rowCount(); ++row) {
+      if (auto *swatch = dynamic_cast<QtColorSwatchButton *>(
+              tree_->indexWidget(
+                  model_->index(row, column_index(LayerColumn::Color))))) {
+        swatch->setFixedSize(metrics.size(QSize(22, 22)));
+      }
+      if (auto *visibility = qobject_cast<QToolButton *>(
+              tree_->indexWidget(
+                  model_->index(row, column_index(LayerColumn::Visible))))) {
+        visibility->setIconSize(metrics.size(QSize(18, 18)));
+        visibility->setFixedSize(metrics.size(QSize(22, 22)));
+      }
+      if (auto *lock = qobject_cast<QToolButton *>(
+              tree_->indexWidget(
+                  model_->index(row, column_index(LayerColumn::Locked))))) {
+        lock->setIconSize(metrics.size(QSize(18, 18)));
+        lock->setFixedSize(metrics.size(QSize(22, 22)));
+      }
+    }
+    panel_.updateGeometry();
+    tree_->viewport()->update();
+  }
+
+  void refresh_palette_icons() {
+    const QPalette palette = tree_->palette();
+    for (const auto &[id, layer] : layer_by_id_) {
+      const auto name_item = name_item_by_id_.find(id);
+      if (name_item == name_item_by_id_.end() || name_item->second == nullptr) {
+        continue;
+      }
+      const QModelIndex name_index = name_item->second->index();
+      if (auto *visibility = qobject_cast<QToolButton *>(tree_->indexWidget(
+              name_index.siblingAtColumn(column_index(LayerColumn::Visible))))) {
+        visibility->setIcon(layer_visibility_icon(layer.visible, palette));
+      }
+      if (auto *lock = qobject_cast<QToolButton *>(tree_->indexWidget(
+              name_index.siblingAtColumn(column_index(LayerColumn::Locked))))) {
+        lock->setIcon(layer_lock_icon(layer.locked, palette));
+      }
+    }
+    tree_->viewport()->update();
+  }
+
 private:
+  [[nodiscard]] int scaled_px(int baseline) const {
+    return ui_scale_metrics_.px(baseline);
+  }
+
   QString localized(std::string_view key, std::string_view fallback) const {
     return localization_ != nullptr
                ? qt_text(localization_->text(key, fallback))
@@ -460,7 +513,7 @@ private:
       color_button->setObjectName(
           QStringLiteral("layers.color.%1")
               .arg(static_cast<qulonglong>(layer.id)));
-      color_button->setFixedSize(22, 22);
+      color_button->setFixedSize(scaled_px(22), scaled_px(22));
       color_button->setAccessibleName(
           localized("ui.layers.color", "Color"));
       color_button->set_swatch_color(qt_color(layer.wireframe_color));
@@ -476,10 +529,10 @@ private:
               .arg(static_cast<qulonglong>(layer.id)));
       visibility_button->setIcon(
           layer_visibility_icon(layer.visible, tree_->palette()));
-      visibility_button->setIconSize(QSize(18, 18));
+      visibility_button->setIconSize(QSize(scaled_px(18), scaled_px(18)));
       visibility_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
       visibility_button->setAutoRaise(true);
-      visibility_button->setFixedSize(22, 22);
+      visibility_button->setFixedSize(scaled_px(22), scaled_px(22));
       visibility_button->setFocusPolicy(Qt::StrongFocus);
       visibility_button->setToolTip(visibility_text);
       visibility_button->setAccessibleName(visibility_text);
@@ -493,10 +546,10 @@ private:
           QStringLiteral("layers.lock.%1")
               .arg(static_cast<qulonglong>(layer.id)));
       lock_button->setIcon(layer_lock_icon(layer.locked, tree_->palette()));
-      lock_button->setIconSize(QSize(18, 18));
+      lock_button->setIconSize(QSize(scaled_px(18), scaled_px(18)));
       lock_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
       lock_button->setAutoRaise(true);
-      lock_button->setFixedSize(22, 22);
+      lock_button->setFixedSize(scaled_px(22), scaled_px(22));
       lock_button->setFocusPolicy(Qt::StrongFocus);
       lock_button->setToolTip(locked_text);
       lock_button->setAccessibleName(locked_text);
@@ -861,6 +914,7 @@ private:
   LayerPanel &panel_;
   LayerTreeView *tree_ = nullptr;
   QStandardItemModel *model_ = nullptr;
+  QHBoxLayout *actions_layout_ = nullptr;
   QToolButton *create_button_ = nullptr;
   QToolButton *create_from_selection_button_ = nullptr;
   QuaderEditorApi *editor_ = nullptr;
@@ -872,6 +926,7 @@ private:
   std::uint64_t synchronized_layer_revision_ = 0;
   std::uint64_t synchronized_selection_revision_ = 0;
   std::uint64_t runtime_binding_generation_ = 0;
+  QtUiScaleMetrics ui_scale_metrics_;
   std::string synchronized_locale_;
   QColorDialog *active_color_dialog_ = nullptr;
   bool synchronization_valid_ = false;
@@ -884,6 +939,20 @@ LayerPanel::LayerPanel(QWidget *parent)
 LayerPanel::~LayerPanel() = default;
 
 void LayerPanel::abandon_runtime() noexcept { impl_->abandon_runtime(); }
+
+void LayerPanel::apply_ui_scale(const QtUiScaleMetrics &metrics) {
+  impl_->apply_ui_scale(metrics);
+}
+
+bool LayerPanel::event(QEvent *event) {
+  const bool handled = QWidget::event(event);
+  if (impl_ != nullptr && event != nullptr &&
+      (event->type() == QEvent::PaletteChange ||
+       event->type() == QEvent::ApplicationPaletteChange)) {
+    impl_->refresh_palette_icons();
+  }
+  return handled;
+}
 
 void LayerPanel::refresh(UIContext &context) { impl_->refresh(context); }
 

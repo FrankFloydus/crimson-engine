@@ -23,6 +23,7 @@ namespace quader {
 
 class LocalizationService;
 class QuaderEditorApi;
+class QtUiScaleMetrics;
 
 /**
  * Presents retained grid and snapping controls as one movable native toolbar.
@@ -32,6 +33,7 @@ class QtSnappingToolbar final : public QToolBar {
 public:
   explicit QtSnappingToolbar(QWidget *parent = nullptr);
 
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void set_localization(const LocalizationService &localization);
   void synchronize(const QuaderEditorApi &editor, bool force = false);
 

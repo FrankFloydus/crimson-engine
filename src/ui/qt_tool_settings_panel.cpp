@@ -12,6 +12,7 @@
 #include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/qt_tool_settings_drag_spinner.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_panel.hpp"
 
 #include <QApplication>
@@ -31,6 +32,7 @@
 #include <QLabel>
 #include <QLayoutItem>
 #include <QLineEdit>
+#include <QMargins>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
@@ -41,6 +43,7 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QVariant>
 #include <QWindow>
 
 #include <algorithm>
@@ -66,6 +69,91 @@ namespace {
 // Pointer drags publish the latest value at this bounded cadence; keyboard,
 // wheel, and spin edits use it as a trailing coalescing window.
 constexpr int kNumberDispatchIntervalMs = 50;
+
+constexpr char kUiScaleMarginsProperty[] =
+    "_quader_ui_scale_baseline_margins";
+constexpr char kUiScaleSpacingProperty[] =
+    "_quader_ui_scale_baseline_spacing";
+constexpr char kUiScaleHorizontalSpacingProperty[] =
+    "_quader_ui_scale_baseline_horizontal_spacing";
+constexpr char kUiScaleVerticalSpacingProperty[] =
+    "_quader_ui_scale_baseline_vertical_spacing";
+constexpr char kUiScaleMinimumWidthProperty[] =
+    "_quader_ui_scale_baseline_minimum_width";
+
+void set_scalable_margins(QLayout &layout, const QMargins &baseline) {
+  layout.setProperty(kUiScaleMarginsProperty, QVariant::fromValue(baseline));
+  layout.setContentsMargins(baseline);
+}
+
+void set_scalable_spacing(QLayout &layout, int baseline) {
+  layout.setProperty(kUiScaleSpacingProperty, baseline);
+  layout.setSpacing(baseline);
+}
+
+void set_scalable_grid_spacing(QGridLayout &layout, int horizontal,
+                               int vertical) {
+  layout.setProperty(kUiScaleHorizontalSpacingProperty, horizontal);
+  layout.setProperty(kUiScaleVerticalSpacingProperty, vertical);
+  layout.setHorizontalSpacing(horizontal);
+  layout.setVerticalSpacing(vertical);
+}
+
+void set_scalable_grid_horizontal_spacing(QGridLayout &layout,
+                                          int horizontal) {
+  layout.setProperty(kUiScaleHorizontalSpacingProperty, horizontal);
+  layout.setHorizontalSpacing(horizontal);
+}
+
+void set_scalable_minimum_width(QWidget &widget, int baseline) {
+  widget.setProperty(kUiScaleMinimumWidthProperty, baseline);
+  widget.setMinimumWidth(baseline);
+}
+
+void apply_scalable_layout_metrics(QObject &root,
+                                   const QtUiScaleMetrics &metrics) {
+  const QList<QLayout *> layouts = root.findChildren<QLayout *>();
+  for (QLayout *layout : layouts) {
+    const QVariant margins = layout->property(kUiScaleMarginsProperty);
+    if (margins.isValid()) {
+      layout->setContentsMargins(
+          metrics.margins(margins.value<QMargins>()));
+    }
+    const QVariant spacing = layout->property(kUiScaleSpacingProperty);
+    if (spacing.isValid()) {
+      layout->setSpacing(metrics.px(spacing.toInt()));
+    }
+    auto *grid = dynamic_cast<QGridLayout *>(layout);
+    if (grid == nullptr) {
+      continue;
+    }
+    const QVariant horizontal =
+        layout->property(kUiScaleHorizontalSpacingProperty);
+    if (horizontal.isValid()) {
+      grid->setHorizontalSpacing(metrics.px(horizontal.toInt()));
+    }
+    const QVariant vertical =
+        layout->property(kUiScaleVerticalSpacingProperty);
+    if (vertical.isValid()) {
+      grid->setVerticalSpacing(metrics.px(vertical.toInt()));
+    }
+  }
+}
+
+void apply_scalable_widget_metrics(QWidget &root,
+                                   const QtUiScaleMetrics &metrics) {
+  const auto apply_minimum_width = [&metrics](QWidget &widget) {
+    const QVariant width = widget.property(kUiScaleMinimumWidthProperty);
+    if (width.isValid()) {
+      widget.setMinimumWidth(metrics.px(width.toInt()));
+    }
+  };
+  apply_minimum_width(root);
+  const QList<QWidget *> widgets = root.findChildren<QWidget *>();
+  for (QWidget *widget : widgets) {
+    apply_minimum_width(*widget);
+  }
+}
 
 QString qtext(std::string_view text) {
   return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -324,8 +412,8 @@ public:
       : QWidget(parent) {
     setObjectName(stable_name);
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(4);
+    set_scalable_margins(*layout, QMargins(0, 0, 0, 0));
+    set_scalable_spacing(*layout, 4);
 
     header_ = new QToolButton(this);
     header_->setObjectName(stable_name + QStringLiteral(".header"));
@@ -389,7 +477,7 @@ public:
     setRange(-std::numeric_limits<float>::max(),
              std::numeric_limits<float>::max());
     setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-    setMinimumWidth(88);
+    set_scalable_minimum_width(*this, 88);
     QObject::connect(this, &QDoubleSpinBox::valueChanged, this,
                      [this](double value) {
                        const bool was_mixed = mixed_;
@@ -720,12 +808,16 @@ struct QtToolSettingsPanel::Impl {
   explicit Impl(QtToolSettingsPanel &panel) : panel_(panel) {
     panel_.setObjectName(QString::fromLatin1(
         ui_panel_stable_id(UIPanelId::ToolSettings)));
+    // This widget is the content of a user-resizable/restored dock. Keep the
+    // constraint in logical Qt units so a live interface-scale change cannot
+    // override the user's saved dock width. First-run dock sizing is scaled by
+    // UISystem before restoreState() instead.
     panel_.setMinimumWidth(240);
 
     auto *root_layout = new QVBoxLayout(&panel_);
     root_layout->setObjectName(QStringLiteral("tool_settings.layout"));
-    root_layout->setContentsMargins(8, 8, 8, 8);
-    root_layout->setSpacing(8);
+    set_scalable_margins(*root_layout, QMargins(8, 8, 8, 8));
+    set_scalable_spacing(*root_layout, 8);
 
     scroll_area_ = new QScrollArea(&panel_);
     scroll_area_->setObjectName(QStringLiteral("tool_settings.scroll"));
@@ -737,8 +829,8 @@ struct QtToolSettingsPanel::Impl {
     auto *scroll_content = new QWidget(scroll_area_);
     scroll_content->setObjectName(QStringLiteral("tool_settings.content"));
     auto *content_layout = new QVBoxLayout(scroll_content);
-    content_layout->setContentsMargins(0, 0, 0, 0);
-    content_layout->setSpacing(8);
+    set_scalable_margins(*content_layout, QMargins(0, 0, 0, 0));
+    set_scalable_spacing(*content_layout, 8);
 
     target_title_ = new QLabel(scroll_content);
     target_title_->setObjectName(QStringLiteral("tool_settings.target_title"));
@@ -759,7 +851,7 @@ struct QtToolSettingsPanel::Impl {
         scroll_content);
     auto *description_layout =
         new QVBoxLayout(description_section_->content());
-    description_layout->setContentsMargins(8, 6, 8, 6);
+    set_scalable_margins(*description_layout, QMargins(8, 6, 8, 6));
     description_label_ =
         new QLabel(description_section_->content());
     description_label_->setObjectName(
@@ -776,8 +868,8 @@ struct QtToolSettingsPanel::Impl {
     controls_container_->setObjectName(QStringLiteral(
         "tool_settings.section.settings.content"));
     controls_layout_ = new QVBoxLayout(controls_container_);
-    controls_layout_->setContentsMargins(8, 6, 8, 6);
-    controls_layout_->setSpacing(6);
+    set_scalable_margins(*controls_layout_, QMargins(8, 6, 8, 6));
+    set_scalable_spacing(*controls_layout_, 6);
     content_layout->addWidget(settings_section_);
     texture_section_ = new QtToolSettingsSection(
         QStringLiteral("tool_settings.section.texture"), scroll_content);
@@ -801,15 +893,15 @@ struct QtToolSettingsPanel::Impl {
     actions_container_ = new QWidget(&panel_);
     actions_container_->setObjectName(QStringLiteral("tool_settings.actions"));
     auto *actions_layout = new QVBoxLayout(actions_container_);
-    actions_layout->setContentsMargins(0, 0, 0, 0);
-    actions_layout->setSpacing(6);
+    set_scalable_margins(*actions_layout, QMargins(0, 0, 0, 0));
+    set_scalable_spacing(*actions_layout, 6);
 
     preview_actions_container_ = new QWidget(actions_container_);
     preview_actions_container_->setObjectName(
         QStringLiteral("tool_settings.preview_actions"));
     auto *preview_actions_layout =
         new QHBoxLayout(preview_actions_container_);
-    preview_actions_layout->setContentsMargins(0, 0, 0, 0);
+    set_scalable_margins(*preview_actions_layout, QMargins(0, 0, 0, 0));
     preview_actions_layout->addStretch(1);
 
     apply_button_ = new QPushButton(preview_actions_container_);
@@ -1195,12 +1287,33 @@ struct QtToolSettingsPanel::Impl {
         });
   }
 
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    if (ui_scale_metrics_.revision() == metrics.revision() &&
+        qFuzzyCompare(static_cast<qreal>(ui_scale_metrics_.factor()),
+                      static_cast<qreal>(metrics.factor()))) {
+      return;
+    }
+    ui_scale_metrics_ = metrics;
+    apply_current_ui_scale();
+  }
+
 private:
+  void apply_current_ui_scale() {
+    apply_scalable_layout_metrics(panel_, ui_scale_metrics_);
+    apply_scalable_widget_metrics(panel_, ui_scale_metrics_);
+    QFont target_font = QApplication::font(target_title_);
+    target_font.setBold(true);
+    target_title_->setFont(target_font);
+    panel_.updateGeometry();
+    if (scroll_area_->widget() != nullptr) {
+      scroll_area_->widget()->updateGeometry();
+    }
+  }
+
   void build_uv_peel_controls() {
     auto *layout = new QGridLayout(uv_peel_section_->content());
-    layout->setContentsMargins(8, 6, 8, 6);
-    layout->setHorizontalSpacing(8);
-    layout->setVerticalSpacing(6);
+    set_scalable_margins(*layout, QMargins(8, 6, 8, 6));
+    set_scalable_grid_spacing(*layout, 8, 6);
     layout->setColumnStretch(1, 1);
     uv_peel_help_ = new QLabel(uv_peel_section_->content());
     uv_peel_help_->setObjectName(QStringLiteral("tool_settings.uv_peel.help"));
@@ -1213,7 +1326,7 @@ private:
     uv_peel_axis_->setObjectName(QStringLiteral("tool_settings.uv_peel.axis"));
     uv_peel_axis_->addItems({QStringLiteral("U"), QStringLiteral("V")});
     uv_peel_axis_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-    uv_peel_axis_->setMinimumWidth(88);
+    set_scalable_minimum_width(*uv_peel_axis_, 88);
     uv_peel_axis_label_->setBuddy(uv_peel_axis_);
     layout->addWidget(uv_peel_axis_label_, 1, 0);
     layout->addWidget(uv_peel_axis_, 1, 1);
@@ -1432,8 +1545,8 @@ private:
 
   void build_texture_actions() {
     auto *layout = new QVBoxLayout(edit_texture_section_->content());
-    layout->setContentsMargins(8, 6, 8, 6);
-    layout->setSpacing(6);
+    set_scalable_margins(*layout, QMargins(8, 6, 8, 6));
+    set_scalable_spacing(*layout, 6);
     std::size_t action_index = 0;
     for (std::size_t group_index = 0;
          group_index < kTextureActionGroups.size(); ++group_index) {
@@ -1444,9 +1557,8 @@ private:
       texture_action_group_labels_[group_index] = label;
       layout->addWidget(label);
       auto *buttons = new QGridLayout;
-      buttons->setContentsMargins(0, 0, 0, 0);
-      buttons->setHorizontalSpacing(4);
-      buttons->setVerticalSpacing(4);
+      set_scalable_margins(*buttons, QMargins(0, 0, 0, 0));
+      set_scalable_grid_spacing(*buttons, 4, 4);
       for (std::size_t offset = 0; offset < group.count;
            ++offset, ++action_index) {
         const TextureActionDescription &description =
@@ -1541,9 +1653,8 @@ private:
 
   void build_texture_controls() {
     auto *layout = new QGridLayout(texture_section_->content());
-    layout->setContentsMargins(8, 6, 8, 6);
-    layout->setHorizontalSpacing(8);
-    layout->setVerticalSpacing(6);
+    set_scalable_margins(*layout, QMargins(8, 6, 8, 6));
+    set_scalable_grid_spacing(*layout, 8, 6);
     layout->setColumnStretch(1, 1);
     for (std::size_t index = 0; index < kTextureControls.size(); ++index) {
       const TextureControlDescription &description = kTextureControls[index];
@@ -1837,6 +1948,7 @@ private:
         localization_, "tool_settings.no_active.settings",
         "No tool settings are available."));
     controls_layout_->addStretch(1);
+    apply_current_ui_scale();
   }
 
   void begin_number_continuous_edit(std::size_t control_index) {
@@ -2342,8 +2454,8 @@ private:
       };
 
       auto *layout = new QVBoxLayout(section->content());
-      layout->setContentsMargins(8, 6, 8, 6);
-      layout->setSpacing(6);
+      set_scalable_margins(*layout, QMargins(8, 6, 8, 6));
+      set_scalable_spacing(*layout, 6);
       controls_layout_->addWidget(section);
       control_groups_.push_back(ControlGroupWidget{
           .id = group.id,
@@ -2377,6 +2489,7 @@ private:
     }
     controls_layout_->addStretch(1);
     synchronize_values(target);
+    apply_current_ui_scale();
   }
 
   void add_control(const QuaderToolSettingsTarget &target,
@@ -2662,8 +2775,8 @@ private:
       auto *row = new QWidget(control_parent);
       row->setObjectName(object_name + QStringLiteral(".row"));
       auto *row_layout = new QVBoxLayout(row);
-      row_layout->setContentsMargins(0, 0, 0, 0);
-      row_layout->setSpacing(3);
+      set_scalable_margins(*row_layout, QMargins(0, 0, 0, 0));
+      set_scalable_spacing(*row_layout, 3);
 
       auto *field_label = new QLabel(label, row);
       field_label->setObjectName(object_name + QStringLiteral(".label"));
@@ -2675,8 +2788,8 @@ private:
       fields->setMinimumWidth(0);
       fields->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
       auto *fields_layout = new QGridLayout(fields);
-      fields_layout->setContentsMargins(0, 0, 0, 0);
-      fields_layout->setHorizontalSpacing(4);
+      set_scalable_margins(*fields_layout, QMargins(0, 0, 0, 0));
+      set_scalable_grid_horizontal_spacing(*fields_layout, 4);
       constexpr std::array<const char *, 3> kAxisNames{{"X", "Y", "Z"}};
       constexpr std::array<quader_editor_core::ViewAxis, 3> kAxes{{
           quader_editor_core::ViewAxis::X,
@@ -3128,6 +3241,7 @@ private:
   }
 
   QtToolSettingsPanel &panel_;
+  QtUiScaleMetrics ui_scale_metrics_;
   const LocalizationService *localization_ = nullptr;
   QuaderEditorApi *editor_ = nullptr;
   QLabel *target_title_ = nullptr;
@@ -3195,6 +3309,11 @@ void QtToolSettingsPanel::bind(QuaderEditorApi &editor) {
 }
 
 void QtToolSettingsPanel::unbind() { impl_->unbind(); }
+
+void QtToolSettingsPanel::apply_ui_scale(
+    const QtUiScaleMetrics &metrics) {
+  impl_->apply_ui_scale(metrics);
+}
 
 void QtToolSettingsPanel::set_localization(
     const LocalizationService &localization) {

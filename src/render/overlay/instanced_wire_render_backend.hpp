@@ -58,6 +58,7 @@ struct InstancedWireRenderBackendStats final {
   std::uint64_t derived_index_bytes = 0u;
   std::uint64_t geometry_upload_count = 0u;
   std::uint64_t geometry_reuse_count = 0u;
+  std::uint64_t line_width_update_count = 0u;
 };
 
 /**
@@ -87,6 +88,7 @@ public:
     filament::InstanceBuffer *instance_buffer_ = nullptr;
     filament::MaterialInstance *material_instance_ = nullptr;
     GeometryResource *geometry_ = nullptr;
+    float line_width_pixels_ = 1.0f;
     bool dimmed_ = false;
   };
 
@@ -113,12 +115,15 @@ public:
   [[nodiscard]] bool valid(const BatchProxy &proxy) const;
   bool update_batch(BatchProxy &proxy,
                     const RenderInstanceBatchChunk &chunk);
+  bool update_line_width(BatchProxy &proxy, float line_width_pixels);
   void destroy_batch(BatchProxy &proxy);
   void destroy_batches(std::span<BatchProxy> proxies);
 
   void destroy_geometry_resources();
   void prune_unused_geometry_resources(
       std::span<const BatchProxy> live_proxies);
+  void prune_unused_geometry_resources(
+      std::span<const std::span<const BatchProxy>> live_proxy_groups);
   void update_clip_plane(std::span<BatchProxy> proxies, float near_plane);
   void update_instance_edit_style(std::span<BatchProxy> proxies,
                                   const InstanceEditStyle &style,

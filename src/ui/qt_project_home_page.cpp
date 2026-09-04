@@ -10,6 +10,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QDateTime>
+#include <QEvent>
 #include <QFrame>
 #include <QFont>
 #include <QHeaderView>
@@ -22,6 +23,7 @@
 #include <QPalette>
 #include <QPushButton>
 #include <QSizePolicy>
+#include <QSpacerItem>
 #include <QStackedWidget>
 #include <QTableView>
 #include <QVariant>
@@ -228,46 +230,51 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
   left_rail_->setFixedWidth(248);
   left_rail_->setBackgroundRole(QPalette::AlternateBase);
   left_rail_->setAutoFillBackground(true);
-  auto *rail_layout = new QVBoxLayout(left_rail_);
-  rail_layout->setContentsMargins(28, 32, 28, 28);
-  rail_layout->setSpacing(8);
+  rail_layout_ = new QVBoxLayout(left_rail_);
+  rail_layout_->setContentsMargins(28, 32, 28, 28);
+  rail_layout_->setSpacing(8);
 
-  auto *brand_layout = new QHBoxLayout();
-  brand_layout->setSpacing(12);
+  brand_layout_ = new QHBoxLayout();
+  brand_layout_->setSpacing(12);
   brand_icon_ = new QLabel(left_rail_);
   brand_icon_->setObjectName(QStringLiteral("projectHome.brand.icon"));
   brand_icon_->setFixedSize(44, 44);
   brand_icon_->setAlignment(Qt::AlignCenter);
   brand_icon_->setAccessibleName(QStringLiteral("Quader"));
+  brand_icon_->installEventFilter(this);
   const QIcon application_icon = QApplication::windowIcon();
   if (!application_icon.isNull()) {
     brand_icon_->setPixmap(application_icon.pixmap(40, 40));
   }
-  brand_layout->addWidget(brand_icon_);
+  brand_layout_->addWidget(brand_icon_);
 
   brand_name_ = new QLabel(QStringLiteral("QUADER"), left_rail_);
   brand_name_->setObjectName(QStringLiteral("projectHome.brand.name"));
-  QFont brand_font = brand_name_->font();
-  brand_font.setBold(true);
-  brand_font.setPointSize(15);
-  brand_name_->setFont(brand_font);
-  brand_layout->addWidget(brand_name_, 1);
-  rail_layout->addLayout(brand_layout);
-  rail_layout->addSpacing(28);
+  brand_font_baseline_ = brand_name_->font();
+  brand_font_baseline_.setBold(true);
+  brand_font_baseline_.setPointSize(15);
+  brand_name_->setFont(brand_font_baseline_);
+  brand_layout_->addWidget(brand_name_, 1);
+  rail_layout_->addLayout(brand_layout_);
+  brand_actions_spacer_ =
+      new QSpacerItem(0, 28, QSizePolicy::Minimum, QSizePolicy::Fixed);
+  rail_layout_->addSpacerItem(brand_actions_spacer_);
 
   new_project_button_ = new QPushButton(left_rail_);
   new_project_button_->setObjectName(
       QStringLiteral("projectHome.newProject"));
   new_project_button_->setDefault(true);
   new_project_button_->setMinimumHeight(32);
-  rail_layout->addWidget(new_project_button_);
+  rail_layout_->addWidget(new_project_button_);
 
   open_project_button_ = new QPushButton(left_rail_);
   open_project_button_->setObjectName(
       QStringLiteral("projectHome.openProject"));
   open_project_button_->setMinimumHeight(32);
-  rail_layout->addWidget(open_project_button_);
-  rail_layout->addSpacing(24);
+  rail_layout_->addWidget(open_project_button_);
+  project_recent_spacer_ =
+      new QSpacerItem(0, 24, QSizePolicy::Minimum, QSizePolicy::Fixed);
+  rail_layout_->addSpacerItem(project_recent_spacer_);
 
   recent_navigation_button_ = new QPushButton(left_rail_);
   recent_navigation_button_->setObjectName(
@@ -277,23 +284,23 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
   recent_navigation_button_->setChecked(true);
   recent_navigation_button_->setFlat(true);
   recent_navigation_button_->setMinimumHeight(32);
-  rail_layout->addWidget(recent_navigation_button_);
-  rail_layout->addStretch(1);
+  rail_layout_->addWidget(recent_navigation_button_);
+  rail_layout_->addStretch(1);
   root_layout->addWidget(left_rail_);
 
   auto *recent_content = new QWidget(this);
   recent_content->setObjectName(QStringLiteral("projectHome.recentContent"));
-  auto *recent_layout = new QVBoxLayout(recent_content);
-  recent_layout->setContentsMargins(48, 44, 48, 40);
-  recent_layout->setSpacing(14);
+  recent_layout_ = new QVBoxLayout(recent_content);
+  recent_layout_->setContentsMargins(48, 44, 48, 40);
+  recent_layout_->setSpacing(14);
 
   recent_projects_label_ = new QLabel(recent_content);
   recent_projects_label_->setObjectName(
       QStringLiteral("projectHome.recentProjects.label"));
-  QFont heading_font = recent_projects_label_->font();
-  heading_font.setPointSize(16);
-  recent_projects_label_->setFont(heading_font);
-  recent_layout->addWidget(recent_projects_label_);
+  recent_heading_font_baseline_ = recent_projects_label_->font();
+  recent_heading_font_baseline_.setPointSize(16);
+  recent_projects_label_->setFont(recent_heading_font_baseline_);
+  recent_layout_->addWidget(recent_projects_label_);
 
   recent_projects_stack_ = new QStackedWidget(recent_content);
   recent_projects_stack_->setObjectName(
@@ -341,7 +348,7 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
   no_recent_projects_label_->setSizePolicy(QSizePolicy::Expanding,
                                             QSizePolicy::Expanding);
   recent_projects_stack_->addWidget(no_recent_projects_label_);
-  recent_layout->addWidget(recent_projects_stack_, 1);
+  recent_layout_->addWidget(recent_projects_stack_, 1);
   root_layout->addWidget(recent_content, 1);
 
   recent_project_actions_menu_ = new QMenu(this);
@@ -417,8 +424,72 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
                          QtRecentProjectAction::RemoveFromRecent);
                    });
 
+  apply_ui_scale(QtUiScaleMetrics{});
   refresh_labels();
   refresh_recent_projects_page();
+}
+
+void QtProjectHomePage::apply_ui_scale(
+    const QtUiScaleMetrics &metrics) {
+  if (applied_ui_scale_revision_ == metrics.revision() &&
+      applied_ui_scale_factor_ == metrics.factor()) {
+    return;
+  }
+  applied_ui_scale_revision_ = metrics.revision();
+  applied_ui_scale_factor_ = metrics.factor();
+
+  left_rail_->setFixedWidth(metrics.px(248));
+  rail_layout_->setContentsMargins(metrics.margins(QMargins(28, 32, 28, 28)));
+  rail_layout_->setSpacing(metrics.px(8));
+  brand_layout_->setSpacing(metrics.px(12));
+  brand_icon_->setFixedSize(metrics.size(QSize(44, 44)));
+  refresh_brand_icon();
+  brand_name_->setFont(metrics.font(brand_font_baseline_));
+  brand_actions_spacer_->changeSize(
+      0, metrics.px(28), QSizePolicy::Minimum, QSizePolicy::Fixed);
+  new_project_button_->setMinimumHeight(metrics.px(32));
+  open_project_button_->setMinimumHeight(metrics.px(32));
+  project_recent_spacer_->changeSize(
+      0, metrics.px(24), QSizePolicy::Minimum, QSizePolicy::Fixed);
+  recent_navigation_button_->setMinimumHeight(metrics.px(32));
+  rail_layout_->invalidate();
+
+  recent_layout_->setContentsMargins(
+      metrics.margins(QMargins(48, 44, 48, 40)));
+  recent_layout_->setSpacing(metrics.px(14));
+  recent_projects_label_->setFont(
+      metrics.font(recent_heading_font_baseline_));
+  recent_projects_view_->verticalHeader()->setDefaultSectionSize(
+      metrics.px(48));
+  recent_projects_view_->setColumnWidth(
+      QtRecentProjectsModel::LastModifiedColumn, metrics.px(184));
+  recent_projects_view_->setColumnWidth(QtRecentProjectsModel::SizeColumn,
+                                        metrics.px(112));
+  recent_projects_view_->setColumnWidth(QtRecentProjectsModel::ActionsColumn,
+                                        metrics.px(72));
+  updateGeometry();
+}
+
+bool QtProjectHomePage::eventFilter(QObject *watched, QEvent *event) {
+  if (watched == brand_icon_ && event != nullptr &&
+      (event->type() == QEvent::Show ||
+       event->type() == QEvent::DevicePixelRatioChange ||
+       event->type() == QEvent::ScreenChangeInternal)) {
+    refresh_brand_icon();
+  }
+  return QWidget::eventFilter(watched, event);
+}
+
+void QtProjectHomePage::refresh_brand_icon() {
+  const QIcon application_icon = QApplication::windowIcon();
+  if (application_icon.isNull()) {
+    brand_icon_->clear();
+    return;
+  }
+  const QtUiScaleMetrics metrics(applied_ui_scale_factor_,
+                                 applied_ui_scale_revision_);
+  brand_icon_->setPixmap(application_icon.pixmap(
+      metrics.size(QSize(40, 40)), brand_icon_->devicePixelRatioF()));
 }
 
 void QtProjectHomePage::set_labels(QtProjectHomeLabels labels) {

@@ -19,6 +19,7 @@ namespace quader {
 
 class LocalizationService;
 class QuaderCommandsApi;
+class QtUiScaleMetrics;
 class UISettings;
 class ViewportSettings;
 
@@ -27,6 +28,8 @@ class ViewportSettings;
  * preferences.
  * Controls edit a per-field draft. Apply merges and persists the draft without
  * closing, OK applies and closes, and every reject path discards it.
+ * Interface scale previews immediately and rejection restores the last applied
+ * factor.
  * Keybinding edits are public-API mutations that persist immediately.
  */
 class QtSettingsDialog final : public QDialog {
@@ -40,7 +43,11 @@ public:
   void set_context(UISettings &ui_settings, ViewportSettings &viewport_settings,
                    LocalizationService &localization,
                    QuaderCommandsApi &commands,
-                   std::function<void(QtSettingsChangeKind)> settings_changed);
+                   QtSettingsController::ChangeCallback settings_changed,
+                   std::function<bool()> persist_interface_settings = {});
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
+  /** Reconciles only the interface-scale draft after an external API commit. */
+  void synchronize_interface_scale();
   void refresh();
   void accept() override;
   void reject() override;

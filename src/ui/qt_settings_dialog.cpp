@@ -12,6 +12,7 @@
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_retained_message_box.hpp"
 #include "ui/qt_settings_controller.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
 
@@ -38,6 +39,7 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QShowEvent>
+#include <QSpinBox>
 #include <QStackedWidget>
 #include <QStringList>
 #include <QTableView>
@@ -51,6 +53,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -945,10 +948,13 @@ struct QtSettingsDialog::Impl {
   LocalizationService *localization = nullptr;
   QuaderCommandsApi *commands = nullptr;
   QtSettingsController controller;
-  std::function<void(QtSettingsChangeKind)> settings_changed;
+  QtSettingsController::ChangeCallback settings_changed;
+  std::function<bool()> persist_interface_settings;
   std::array<bool, kViewportColorSettingCount> dirty_colors{};
   std::array<bool, kViewportFloatSettingCount> dirty_floats{};
   std::array<bool, kViewportBoolSettingCount> dirty_bools{};
+  bool interface_scale_dirty = false;
+  float interface_scale_target_baseline = 1.0f;
   bool locale_dirty = false;
   bool transaction_active = false;
   bool refreshing = false;
@@ -961,6 +967,8 @@ struct QtSettingsDialog::Impl {
   QListWidgetItem *keybindings_category_item = nullptr;
   QLabel *locale_label = nullptr;
   QComboBox *locale_combo = nullptr;
+  QLabel *interface_scale_label = nullptr;
+  QSpinBox *interface_scale_spin_box = nullptr;
   QLabel *keybindings_search_label = nullptr;
   QLineEdit *keybindings_search = nullptr;
   QLabel *keybindings_shortcut_label = nullptr;
@@ -981,6 +989,10 @@ struct QtSettingsDialog::Impl {
   std::vector<BoolWidgets> bool_controls;
   std::vector<KeybindingTableRow> keybinding_rows;
   QString keybinding_shortcut_text;
+  std::array<double, 3> keybinding_column_design_widths{
+      320.0, 180.0, 180.0};
+  float applied_ui_scale_factor = 1.0f;
+  bool applying_ui_scale_to_keybinding_columns = false;
 
   [[nodiscard]] bool has_context() const {
     return target_ui_settings != nullptr &&
@@ -992,11 +1004,12 @@ struct QtSettingsDialog::Impl {
     dirty_colors.fill(false);
     dirty_floats.fill(false);
     dirty_bools.fill(false);
+    interface_scale_dirty = false;
     locale_dirty = false;
   }
 
   [[nodiscard]] bool has_pending_changes() const {
-    return locale_dirty ||
+    return interface_scale_dirty || locale_dirty ||
            std::any_of(dirty_colors.begin(), dirty_colors.end(),
                        [](bool dirty) { return dirty; }) ||
            std::any_of(dirty_floats.begin(), dirty_floats.end(),
@@ -1072,6 +1085,25 @@ struct QtSettingsDialog::Impl {
       draft_ui_settings.set_locale(target_ui_settings->locale());
       locale_dirty = false;
     }
+    const float target_interface_scale =
+        target_ui_settings->interface_scale();
+    const bool interface_scale_changed_externally =
+        !force && transaction_active &&
+        std::fabs(target_interface_scale - interface_scale_target_baseline) >
+            0.0001f;
+    if (!force && !interface_scale_changed_externally &&
+        interface_scale_dirty) {
+      interface_scale_dirty =
+          std::fabs(draft_ui_settings.interface_scale() -
+                    target_interface_scale) >
+          0.0001f;
+    }
+    if (force || interface_scale_changed_externally ||
+        !interface_scale_dirty) {
+      draft_ui_settings.set_interface_scale(target_interface_scale);
+      interface_scale_dirty = false;
+      interface_scale_target_baseline = target_interface_scale;
+    }
     refresh_action_state();
   }
 
@@ -1107,6 +1139,17 @@ struct QtSettingsDialog::Impl {
     refresh_action_state();
   }
 
+  void mark_interface_scale_dirty() {
+    if (!has_context()) {
+      return;
+    }
+    interface_scale_dirty =
+        std::fabs(draft_ui_settings.interface_scale() -
+                  target_ui_settings->interface_scale()) >
+        0.0001f;
+    refresh_action_state();
+  }
+
   void begin_transaction() {
     if (!has_context() || transaction_active) {
       return;
@@ -1137,6 +1180,9 @@ struct QtSettingsDialog::Impl {
     }
     synchronize_draft_from_targets(false);
 
+    const UISettings previous_ui_settings = *target_ui_settings;
+    const ViewportSettings previous_viewport_settings =
+        *target_viewport_settings;
     if (locale_dirty &&
         (!localization->has_locale(draft_ui_settings.locale()) ||
          !localization->select_locale(draft_ui_settings.locale()))) {
@@ -1177,21 +1223,72 @@ struct QtSettingsDialog::Impl {
       }
     }
 
-    const bool interface_changed =
+    const bool locale_changed =
         locale_dirty &&
         target_ui_settings->locale() != localization->current_locale();
+    const bool scale_changed =
+        interface_scale_dirty &&
+        std::fabs(target_ui_settings->interface_scale() -
+                  draft_ui_settings.interface_scale()) >
+            0.0001f;
     if (locale_dirty) {
       target_ui_settings->set_locale(localization->current_locale());
+    }
+    if (interface_scale_dirty) {
+      target_ui_settings->set_interface_scale(
+          draft_ui_settings.interface_scale());
+    }
+    const float committed_interface_scale =
+        target_ui_settings->interface_scale();
+
+    if ((locale_changed || scale_changed) && persist_interface_settings &&
+        !persist_interface_settings()) {
+      *target_ui_settings = previous_ui_settings;
+      *target_viewport_settings = previous_viewport_settings;
+      (void)localization->select_locale(previous_ui_settings.locale());
+      if (settings_changed) {
+        settings_changed({.kind = QtSettingsChangeKind::InterfaceCommit,
+                          .interface_scale =
+                              previous_ui_settings.interface_scale()});
+      }
+      if (keybinding_message_box->set_presentation(
+              QtRetainedMessageBoxPresentation{
+              .icon = QMessageBox::Critical,
+              .object_name =
+                  QStringLiteral("settingsPersistenceErrorDialog"),
+              .title = qtext(localization, "ui.panel.settings", "Settings"),
+              .text = qtext(localization,
+                            "ui.runtime.preferences_save_failed",
+                            "Preferences could not be saved."),
+              .buttons =
+                  {{
+                      .button = QtRetainedMessageBoxButton::Primary,
+                      .object_name = QStringLiteral(
+                          "settingsPersistenceErrorDialog.ok"),
+                      .label = qtext(localization, "ui.action.ok", "OK"),
+                      .role = QMessageBox::AcceptRole,
+                  }},
+              .default_button = QtRetainedMessageBoxButton::Primary,
+              .escape_button = QtRetainedMessageBoxButton::Primary,
+                  .close_button = QtRetainedMessageBoxButton::Primary,
+              })) {
+        keybinding_message_box->prewarm();
+        keybinding_message_box->open();
+      }
+      refresh();
+      return false;
+    }
+
+    if (viewport_changed && settings_changed) {
+      settings_changed({.kind = QtSettingsChangeKind::ViewportCommit});
+    }
+    if ((locale_changed || scale_changed) && settings_changed) {
+      settings_changed({.kind = QtSettingsChangeKind::InterfaceCommit,
+                        .interface_scale = committed_interface_scale});
     }
 
     clear_dirty();
     synchronize_draft_from_targets(true);
-    if (viewport_changed && settings_changed) {
-      settings_changed(QtSettingsChangeKind::ViewportCommit);
-    }
-    if (interface_changed && settings_changed) {
-      settings_changed(QtSettingsChangeKind::InterfaceCommit);
-    }
     refresh();
     return true;
   }
@@ -1199,6 +1296,14 @@ struct QtSettingsDialog::Impl {
   void discard_changes() {
     if (!transaction_active) {
       return;
+    }
+    if (interface_scale_dirty && settings_changed &&
+        std::fabs(draft_ui_settings.interface_scale() -
+                  target_ui_settings->interface_scale()) >
+            0.0001f) {
+      settings_changed({.kind = QtSettingsChangeKind::InterfacePreview,
+                        .interface_scale =
+                            target_ui_settings->interface_scale()});
     }
     transaction_active = false;
     clear_dirty();
@@ -1374,6 +1479,26 @@ struct QtSettingsDialog::Impl {
     interface_category_item->setData(Qt::UserRole,
                                      QStringLiteral("interface"));
     const OptionsPageWidgets page = create_options_page("interface");
+    interface_scale_label = new QLabel(page.content);
+    interface_scale_spin_box = new QSpinBox(page.content);
+    interface_scale_spin_box->setObjectName(
+        QStringLiteral("settingsInterfaceScale"));
+    interface_scale_spin_box->setRange(50, 300);
+    interface_scale_spin_box->setSingleStep(5);
+    interface_scale_spin_box->setSuffix(QStringLiteral("%"));
+    interface_scale_spin_box->setAccelerated(true);
+    interface_scale_spin_box->setKeyboardTracking(true);
+    interface_scale_label->setBuddy(interface_scale_spin_box);
+    page.form->addRow(interface_scale_label, interface_scale_spin_box);
+    QObject::connect(interface_scale_spin_box, &QSpinBox::valueChanged,
+                     &owner, [this](int percent) {
+                       if (refreshing || ui_settings == nullptr) {
+                         return;
+                       }
+                       (void)controller.preview_interface_scale(
+                           static_cast<float>(percent) / 100.0f);
+                     });
+
     locale_label = new QLabel(page.content);
     locale_combo = new QComboBox(page.content);
     locale_combo->setObjectName(QStringLiteral("settingsLocale"));
@@ -1445,6 +1570,19 @@ struct QtSettingsDialog::Impl {
     header->resizeSection(QtKeybindingTableModel::CommandNameColumn, 320);
     header->resizeSection(QtKeybindingTableModel::ContextColumn, 180);
     header->resizeSection(QtKeybindingTableModel::InputMappingColumn, 180);
+    QObject::connect(
+        header, &QHeaderView::sectionResized, &owner,
+        [this](int logical_index, int, int new_size) {
+          if (applying_ui_scale_to_keybinding_columns || logical_index < 0 ||
+              logical_index >=
+                  static_cast<int>(keybinding_column_design_widths.size())) {
+            return;
+          }
+          const double factor = std::max(
+              0.0001, static_cast<double>(applied_ui_scale_factor));
+          keybinding_column_design_widths[static_cast<std::size_t>(
+              logical_index)] = static_cast<double>(new_size) / factor;
+        });
 
     QObject::connect(keybindings_search, &QLineEdit::textChanged, &owner,
                      [this]() { apply_keybinding_filters(); });
@@ -1646,7 +1784,7 @@ struct QtSettingsDialog::Impl {
       return false;
     }
     if (result.changed() && settings_changed) {
-      settings_changed(QtSettingsChangeKind::KeybindingsCommit);
+      settings_changed({.kind = QtSettingsChangeKind::KeybindingsCommit});
     }
     refresh_keybindings();
     select_keybinding_action(key);
@@ -1796,7 +1934,7 @@ struct QtSettingsDialog::Impl {
       return;
     }
     if (result.changed() && settings_changed) {
-      settings_changed(QtSettingsChangeKind::KeybindingsCommit);
+      settings_changed({.kind = QtSettingsChangeKind::KeybindingsCommit});
     }
     refresh_keybindings();
     if (selected) {
@@ -1826,8 +1964,12 @@ struct QtSettingsDialog::Impl {
                    ViewportSettings &new_viewport_settings,
                    LocalizationService &new_localization,
                    QuaderCommandsApi &new_commands,
-                   std::function<void(QtSettingsChangeKind)>
-                       new_settings_changed) {
+                   QtSettingsController::ChangeCallback new_settings_changed,
+                   std::function<bool()> new_persist_interface_settings) {
+    const bool restart_visible_transaction = owner.isVisible();
+    if (transaction_active) {
+      discard_changes();
+    }
     target_ui_settings = &new_ui_settings;
     target_viewport_settings = &new_viewport_settings;
     ui_settings = &draft_ui_settings;
@@ -1835,12 +1977,25 @@ struct QtSettingsDialog::Impl {
     localization = &new_localization;
     commands = &new_commands;
     settings_changed = std::move(new_settings_changed);
-    controller.bind(draft_ui_settings, draft_viewport_settings,
-                    new_localization, [](QtSettingsChangeKind) {});
+    persist_interface_settings =
+        std::move(new_persist_interface_settings);
+    controller.bind(
+        draft_ui_settings, draft_viewport_settings, new_localization,
+        [this](const QtSettingsChange &change) {
+          if (change.kind == QtSettingsChangeKind::InterfacePreview) {
+            mark_interface_scale_dirty();
+            if (settings_changed) {
+              settings_changed(change);
+            }
+          }
+        });
     transaction_active = false;
     clear_dirty();
     synchronize_draft_from_targets(true);
     refresh();
+    if (restart_visible_transaction) {
+      begin_transaction();
+    }
   }
 
   void refresh() {
@@ -1876,11 +2031,19 @@ struct QtSettingsDialog::Impl {
         "Reset All"));
     locale_label->setText(
         qtext(localization, "ui.settings.locale", "Language"));
+    interface_scale_label->setText(qtext(
+        localization, "ui.settings.interface_scale", "Interface Scale"));
+    const QString interface_scale_help = qtext(
+        localization, "ui.settings.interface_scale.help",
+        "Scales editor text, controls, icons, and interaction targets.");
+    interface_scale_label->setToolTip(interface_scale_help);
+    interface_scale_spin_box->setToolTip(interface_scale_help);
     apply_button->setText(qtext(localization, "ui.action.apply", "Apply"));
     ok_button->setText(qtext(localization, "ui.action.ok", "OK"));
     cancel_button->setText(
         qtext(localization, "ui.action.cancel", "Cancel"));
 
+    refresh_interface_scale();
     refresh_locale_combo();
     refresh_keybindings();
     refresh_keybinding_editor();
@@ -2062,6 +2225,58 @@ struct QtSettingsDialog::Impl {
                              locale_combo->count() > 0);
   }
 
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    category_list->setMinimumWidth(metrics.px(160));
+    category_list->setMaximumWidth(metrics.px(220));
+
+    QHeaderView *vertical_header = keybindings_table->verticalHeader();
+    vertical_header->setMinimumSectionSize(metrics.px(18));
+    vertical_header->setDefaultSectionSize(metrics.px(20));
+
+    QHeaderView *header = keybindings_table->horizontalHeader();
+    const float next_factor = metrics.factor();
+    if (std::fabs(next_factor - applied_ui_scale_factor) > 0.0001f) {
+      applying_ui_scale_to_keybinding_columns = true;
+      for (const int column : {
+               QtKeybindingTableModel::CommandNameColumn,
+               QtKeybindingTableModel::ContextColumn,
+               QtKeybindingTableModel::InputMappingColumn,
+           }) {
+        header->resizeSection(
+            column,
+            std::max(1, static_cast<int>(std::lround(
+                            keybinding_column_design_widths[
+                                static_cast<std::size_t>(column)] *
+                            static_cast<double>(next_factor)))));
+      }
+      applying_ui_scale_to_keybinding_columns = false;
+      applied_ui_scale_factor = next_factor;
+    }
+    header->setMinimumSectionSize(metrics.px(80));
+  }
+
+  void refresh_interface_scale() {
+    const QSignalBlocker blocker(interface_scale_spin_box);
+    const float scale = ui_settings != nullptr
+                            ? ui_settings->interface_scale()
+                            : 1.0f;
+    interface_scale_spin_box->setValue(
+        static_cast<int>(std::lround(scale * 100.0f)));
+    interface_scale_spin_box->setEnabled(ui_settings != nullptr);
+  }
+
+  void synchronize_interface_scale() {
+    if (!has_context()) {
+      return;
+    }
+    const float target_scale = target_ui_settings->interface_scale();
+    draft_ui_settings.set_interface_scale(target_scale);
+    interface_scale_target_baseline = target_scale;
+    interface_scale_dirty = false;
+    refresh_interface_scale();
+    refresh_action_state();
+  }
+
   void select_locale(int index) {
     if (refreshing || ui_settings == nullptr || target_ui_settings == nullptr ||
         localization == nullptr || index < 0) {
@@ -2142,10 +2357,21 @@ void QtSettingsDialog::set_context(UISettings &ui_settings,
                                    ViewportSettings &viewport_settings,
                                    LocalizationService &localization,
                                    QuaderCommandsApi &commands,
-                                   std::function<void(QtSettingsChangeKind)>
-                                       settings_changed) {
+                                   QtSettingsController::ChangeCallback
+                                       settings_changed,
+                                   std::function<bool()>
+                                       persist_interface_settings) {
   impl_->set_context(ui_settings, viewport_settings, localization, commands,
-                     std::move(settings_changed));
+                     std::move(settings_changed),
+                     std::move(persist_interface_settings));
+}
+
+void QtSettingsDialog::apply_ui_scale(const QtUiScaleMetrics &metrics) {
+  impl_->apply_ui_scale(metrics);
+}
+
+void QtSettingsDialog::synchronize_interface_scale() {
+  impl_->synchronize_interface_scale();
 }
 
 void QtSettingsDialog::refresh() { impl_->refresh(); }

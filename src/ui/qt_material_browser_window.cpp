@@ -9,6 +9,7 @@
 #include <QAction>
 #include <QButtonGroup>
 #include <QCloseEvent>
+#include <QEvent>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QItemSelectionModel>
@@ -32,6 +33,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <iterator>
 #include <utility>
 
@@ -42,6 +44,25 @@ constexpr std::array<int, 6> kTileSizes{16, 32, 64, 128, 256, 512};
 constexpr int kDefaultTileSize = 128;
 constexpr int kGridLabelHeight = 34;
 constexpr int kGridSpacing = 8;
+constexpr std::uint64_t kPreviewIconCacheBudgetBytes =
+    96ULL * 1024ULL * 1024ULL;
+
+qreal normalized_device_pixel_ratio(qreal value) {
+  return std::isfinite(value) && value >= 1.0 ? value : 1.0;
+}
+
+std::uint64_t pixmap_cost_bytes(const QPixmap &pixmap) {
+  if (pixmap.isNull()) {
+    return 0;
+  }
+  const std::uint64_t width =
+      static_cast<std::uint64_t>(std::max(1, pixmap.width()));
+  const std::uint64_t height =
+      static_cast<std::uint64_t>(std::max(1, pixmap.height()));
+  const std::uint64_t bytes_per_pixel = static_cast<std::uint64_t>(
+      std::max(1, (pixmap.depth() + 7) / 8));
+  return width * height * bytes_per_pixel;
+}
 
 int tile_size_for_index(int index) {
   return kTileSizes[static_cast<std::size_t>(
@@ -173,6 +194,7 @@ bool QtMaterialBrowserModel::set_items(
     return false;
   }
   beginResetModel();
+  clear_preview_icon_cache();
   items_ = std::move(items);
   endResetModel();
   return true;
@@ -188,16 +210,79 @@ void QtMaterialBrowserModel::set_labels(QtMaterialBrowserLabels labels) {
   emit headerDataChanged(Qt::Horizontal, NameColumn, SizeColumn);
 }
 
+bool QtMaterialBrowserModel::set_preview_raster_context(
+    QSize logical_bounds, qreal device_pixel_ratio) {
+  logical_bounds.setWidth(std::max(1, logical_bounds.width()));
+  logical_bounds.setHeight(std::max(1, logical_bounds.height()));
+  device_pixel_ratio = normalized_device_pixel_ratio(device_pixel_ratio);
+  if (preview_logical_bounds_ == logical_bounds &&
+      qFuzzyCompare(preview_device_pixel_ratio_, device_pixel_ratio)) {
+    return false;
+  }
+
+  preview_logical_bounds_ = logical_bounds;
+  preview_device_pixel_ratio_ = device_pixel_ratio;
+  invalidate_preview_rasters();
+  return true;
+}
+
+void QtMaterialBrowserModel::invalidate_preview_rasters() {
+  clear_preview_icon_cache();
+  if (rowCount() > 0) {
+    emit dataChanged(index(0, NameColumn), index(rowCount() - 1, NameColumn),
+                     {Qt::DecorationRole});
+  }
+}
+
 QIcon QtMaterialBrowserModel::preview_icon(int row) const {
   if (row < 0 || row >= static_cast<int>(items_.size())) {
     return {};
   }
-  const std::size_t offset = static_cast<std::size_t>(row);
-  const QtMaterialBrowserItem &item = items_[offset];
-  if (item.thumbnail) {
-    return item.thumbnail->icon;
+  ++preview_icon_cache_clock_;
+  const auto cached = std::find_if(
+      preview_icon_cache_.begin(), preview_icon_cache_.end(),
+      [row](const PreviewIconCacheEntry &entry) { return entry.row == row; });
+  if (cached != preview_icon_cache_.end()) {
+    cached->last_use = preview_icon_cache_clock_;
+    return cached->icon;
   }
-  return make_qt_material_thumbnail(item)->icon;
+
+  const QtMaterialBrowserItem &item =
+      items_[static_cast<std::size_t>(row)];
+  const QPixmap pixmap = qt_material_preview_pixmap(
+      item, preview_logical_bounds_, preview_device_pixel_ratio_);
+  QIcon icon(pixmap);
+  const std::uint64_t cost = pixmap_cost_bytes(pixmap);
+  if (cost > kPreviewIconCacheBudgetBytes) {
+    return icon;
+  }
+
+  while (!preview_icon_cache_.empty() &&
+         preview_icon_cache_cost_ + cost >
+             kPreviewIconCacheBudgetBytes) {
+    const auto oldest = std::min_element(
+        preview_icon_cache_.begin(), preview_icon_cache_.end(),
+        [](const PreviewIconCacheEntry &left,
+           const PreviewIconCacheEntry &right) {
+          return left.last_use < right.last_use;
+        });
+    preview_icon_cache_cost_ -= oldest->cost_bytes;
+    preview_icon_cache_.erase(oldest);
+  }
+  preview_icon_cache_.push_back(PreviewIconCacheEntry{
+      .row = row,
+      .icon = icon,
+      .cost_bytes = cost,
+      .last_use = preview_icon_cache_clock_,
+  });
+  preview_icon_cache_cost_ += cost;
+  return icon;
+}
+
+void QtMaterialBrowserModel::clear_preview_icon_cache() const {
+  preview_icon_cache_.clear();
+  preview_icon_cache_cost_ = 0;
+  preview_icon_cache_clock_ = 0;
 }
 
 QtMaterialBrowserProxyModel::QtMaterialBrowserProxyModel(QObject *parent)
@@ -298,16 +383,14 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   grid_button_ = new QToolButton(central_widget);
   grid_button_->setObjectName(QStringLiteral("materialBrowser.grid"));
   grid_button_->setCheckable(true);
-  grid_button_->setIcon(style()->standardIcon(QStyle::SP_FileDialogListView));
   grid_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
   toolbar->addWidget(grid_button_);
   list_button_ = new QToolButton(central_widget);
   list_button_->setObjectName(QStringLiteral("materialBrowser.list"));
   list_button_->setCheckable(true);
-  list_button_->setIcon(
-      style()->standardIcon(QStyle::SP_FileDialogDetailedView));
   list_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
   toolbar->addWidget(list_button_);
+  refresh_view_mode_icons();
   auto *view_group = new QButtonGroup(central_widget);
   view_group->setExclusive(true);
   view_group->addButton(grid_button_);
@@ -403,11 +486,7 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   QObject::connect(tile_slider_, &QSlider::valueChanged, this,
                    [this](int value) {
                      const int tile_size = tile_size_for_index(value);
-                     grid_view_->setIconSize(QSize(tile_size, tile_size));
-                     grid_view_->setGridSize(
-                         QSize(tile_size + kGridSpacing * 2,
-                               tile_size + kGridLabelHeight +
-                                   kGridSpacing * 2));
+                     apply_tile_metrics(tile_size);
                      update_tile_size_text();
                      if (presentation_state_changed_) {
                        presentation_state_changed_();
@@ -533,6 +612,19 @@ void QtMaterialBrowserWindow::set_presentation_state_changed_callback(
   presentation_state_changed_ = std::move(callback);
 }
 
+void QtMaterialBrowserWindow::apply_ui_scale(
+    const QtUiScaleMetrics &metrics) {
+  if (ui_scale_metrics_.revision() == metrics.revision() &&
+      ui_scale_metrics_.factor() == metrics.factor()) {
+    return;
+  }
+  ui_scale_metrics_ = metrics;
+  tile_slider_->setFixedWidth(metrics.px(150));
+  apply_tile_metrics(tile_size());
+  grid_view_->doItemsLayout();
+  grid_view_->viewport()->update();
+}
+
 void QtMaterialBrowserWindow::restore_presentation_state(
     QtMaterialBrowserViewMode view_mode, int tile_size) {
   set_view_mode(view_mode, false);
@@ -547,6 +639,31 @@ int QtMaterialBrowserWindow::tile_size() const {
   return tile_size_for_index(tile_slider_->value());
 }
 
+bool QtMaterialBrowserWindow::event(QEvent *event) {
+  const bool handled = QMainWindow::event(event);
+  if (event != nullptr) {
+    if (event->type() == QEvent::DevicePixelRatioChange ||
+        event->type() == QEvent::ScreenChangeInternal) {
+      refresh_preview_raster_context(true);
+    } else if (event->type() == QEvent::PaletteChange ||
+               event->type() == QEvent::ApplicationPaletteChange) {
+      refresh_view_mode_icons();
+    }
+  }
+  return handled;
+}
+
+void QtMaterialBrowserWindow::refresh_view_mode_icons() {
+  if (grid_button_ != nullptr) {
+    grid_button_->setIcon(style()->standardIcon(
+        QStyle::SP_FileDialogListView, nullptr, this));
+  }
+  if (list_button_ != nullptr) {
+    list_button_->setIcon(style()->standardIcon(
+        QStyle::SP_FileDialogDetailedView, nullptr, this));
+  }
+}
+
 void QtMaterialBrowserWindow::closeEvent(QCloseEvent *event) {
   if (presentation_state_changed_) {
     presentation_state_changed_();
@@ -558,6 +675,7 @@ void QtMaterialBrowserWindow::showEvent(QShowEvent *event) {
   // Search is deliberately session-transient: each reopening starts unfiltered.
   search_->clear();
   QMainWindow::showEvent(event);
+  refresh_preview_raster_context();
 }
 
 void QtMaterialBrowserWindow::set_view_mode(QtMaterialBrowserViewMode mode,
@@ -584,11 +702,38 @@ void QtMaterialBrowserWindow::set_tile_size(int tile_size) {
     const QSignalBlocker blocker(tile_slider_);
     tile_slider_->setValue(normalized_index);
   }
-  grid_view_->setIconSize(QSize(normalized_size, normalized_size));
-  grid_view_->setGridSize(
-      QSize(normalized_size + kGridSpacing * 2,
-            normalized_size + kGridLabelHeight + kGridSpacing * 2));
+  apply_tile_metrics(normalized_size);
   update_tile_size_text();
+}
+
+void QtMaterialBrowserWindow::apply_tile_metrics(int tile_size) {
+  const int presented_tile_size = ui_scale_metrics_.px(tile_size);
+  const int spacing = ui_scale_metrics_.px(kGridSpacing);
+  grid_view_->setSpacing(spacing);
+  grid_view_->setIconSize(
+      QSize(presented_tile_size, presented_tile_size));
+  grid_view_->setGridSize(
+      QSize(presented_tile_size + spacing * 2,
+            presented_tile_size + ui_scale_metrics_.px(kGridLabelHeight) +
+                spacing * 2));
+  refresh_preview_raster_context();
+}
+
+void QtMaterialBrowserWindow::refresh_preview_raster_context(
+    bool force_refresh) {
+  if (model_ == nullptr || grid_view_ == nullptr) {
+    return;
+  }
+  const qreal device_pixel_ratio = normalized_device_pixel_ratio(
+      grid_view_->viewport()->devicePixelRatioF());
+  const bool context_changed = model_->set_preview_raster_context(
+      grid_view_->iconSize(), device_pixel_ratio);
+  if (force_refresh && !context_changed) {
+    model_->invalidate_preview_rasters();
+  }
+  if (context_changed || force_refresh) {
+    grid_view_->viewport()->update();
+  }
 }
 
 void QtMaterialBrowserWindow::update_tile_size_text() {

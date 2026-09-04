@@ -23,7 +23,9 @@ struct QtViewportChromeLayout {
 
 inline QtViewportChromeLayout
 qt_viewport_chrome_layout(int pane_width, int desired_menu_width,
-                          int horizontal_inset) {
+                          int horizontal_inset,
+                          int minimum_menu_width =
+                              kQtViewportDisplayMenuMinimumWidth) {
   const int clamped_pane_width = std::max(0, pane_width);
   const int clamped_inset = std::max(0, horizontal_inset);
   const int available_width =
@@ -36,8 +38,8 @@ qt_viewport_chrome_layout(int pane_width, int desired_menu_width,
     return layout;
   }
 
-  const int resolved_menu_width = std::max(
-      kQtViewportDisplayMenuMinimumWidth, desired_menu_width);
+  const int resolved_menu_width =
+      std::max(std::max(1, minimum_menu_width), desired_menu_width);
   layout.menu_width = std::min(resolved_menu_width, available_width);
   layout.toolbar_width = layout.menu_width;
   layout.toolbar_x =

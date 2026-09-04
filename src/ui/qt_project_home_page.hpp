@@ -6,22 +6,30 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "ui/qt_ui_scale_metrics.hpp"
+
 #include <QAbstractTableModel>
+#include <QFont>
 #include <QString>
 #include <QWidget>
 
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <vector>
 
 class QLabel;
 class QAction;
+class QEvent;
 class QFrame;
+class QHBoxLayout;
 class QMenu;
 class QPushButton;
+class QSpacerItem;
 class QStackedWidget;
 class QTableView;
+class QVBoxLayout;
 
 namespace quader {
 
@@ -132,6 +140,9 @@ public:
 
   explicit QtProjectHomePage(QWidget *parent = nullptr);
 
+  /** Reflows retained Home chrome from immutable 100% design metrics. */
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
+
   void set_labels(QtProjectHomeLabels labels);
   void set_recent_projects(std::vector<QtRecentProjectItem> projects);
 
@@ -147,21 +158,32 @@ public:
     return *recent_projects_model_;
   }
 
+protected:
+  bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
   void dispatch_recent_project_open(const QModelIndex &index);
   void dispatch_recent_project_action(QtRecentProjectAction action);
   void show_recent_project_actions(const QModelIndex &index);
+  void refresh_brand_icon();
   void refresh_labels();
   void refresh_recent_projects_page();
 
   QtProjectHomeLabels labels_ = QtProjectHomeLabels::defaults();
   QFrame *left_rail_ = nullptr;
+  QVBoxLayout *rail_layout_ = nullptr;
+  QHBoxLayout *brand_layout_ = nullptr;
+  QSpacerItem *brand_actions_spacer_ = nullptr;
+  QSpacerItem *project_recent_spacer_ = nullptr;
   QLabel *brand_icon_ = nullptr;
   QLabel *brand_name_ = nullptr;
+  QFont brand_font_baseline_;
   QPushButton *new_project_button_ = nullptr;
   QPushButton *open_project_button_ = nullptr;
   QPushButton *recent_navigation_button_ = nullptr;
   QLabel *recent_projects_label_ = nullptr;
+  QFont recent_heading_font_baseline_;
+  QVBoxLayout *recent_layout_ = nullptr;
   QStackedWidget *recent_projects_stack_ = nullptr;
   QTableView *recent_projects_view_ = nullptr;
   QLabel *no_recent_projects_label_ = nullptr;
@@ -175,6 +197,9 @@ private:
   RequestCallback new_project_requested_;
   RequestCallback open_project_requested_;
   RecentProjectActionCallback recent_project_action_requested_;
+  float applied_ui_scale_factor_ = 0.0F;
+  std::uint64_t applied_ui_scale_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
 };
 
 } // namespace quader

@@ -25,14 +25,24 @@ bool selection_context_matches(ViewportOverlaySelectionContext override_mode,
 
 ViewportPersistentOverlayStyleSnapshot
 ViewportOverlayStyleResolver::persistent_style_snapshot(
-    const ViewportSettings &settings) {
+    const ViewportSettings &settings, float raster_scale) {
+  const float resolved_raster_scale =
+      viewport_overlay_sanitized_raster_scale(raster_scale);
+  const float selection_edge_logical_width_pixels =
+      viewport_overlay_line_width_pixels(
+          ViewportOverlayLayer::SelectedEdge,
+          settings.float_value(ViewportFloatSettingId::SelectionEdgeLineSize));
   ViewportPersistentOverlayStyleSnapshot snapshot{
+      .raster_scale = resolved_raster_scale,
       .selection_face_color =
           setting_color(settings, ViewportColorSettingId::SelectionFace),
       .selection_wire_color =
           setting_color(settings, ViewportColorSettingId::SelectionWire),
-      .selection_edge_line_width_pixels = settings.float_value(
-          ViewportFloatSettingId::SelectionEdgeLineSize),
+      .selection_edge_logical_width_pixels =
+          selection_edge_logical_width_pixels,
+      .selection_edge_line_width_pixels =
+          selection_edge_logical_width_pixels *
+          resolved_raster_scale,
       .instance_edit_style = InstanceEditStyle::from_settings(settings),
   };
   RenderSignatureBuilder face_signature;
@@ -41,7 +51,9 @@ ViewportOverlayStyleResolver::persistent_style_snapshot(
 
   RenderSignatureBuilder wire_signature;
   wire_signature.add_value(snapshot.selection_wire_color)
-      .add_float(snapshot.selection_edge_line_width_pixels);
+      .add_float(snapshot.selection_edge_logical_width_pixels)
+      .add_float(snapshot.selection_edge_line_width_pixels)
+      .add_float(snapshot.raster_scale);
   snapshot.wire_signature = wire_signature.value();
 
   const InstanceEditStyle &instance_edit_style = snapshot.instance_edit_style;
@@ -58,7 +70,7 @@ ViewportOverlayStyleResolver::persistent_style_snapshot(
 }
 
 std::uint64_t ViewportOverlayStyleResolver::style_signature(
-    const ViewportSettings &settings) {
+    const ViewportSettings &settings, float raster_scale) {
   RenderSignatureBuilder signature;
   for (std::size_t index = 0u; index < kViewportColorSettingCount; ++index) {
     const ViewportSettingColor color =
@@ -74,6 +86,8 @@ std::uint64_t ViewportOverlayStyleResolver::style_signature(
   }
   signature.add_bool(
       settings.bool_value(ViewportBoolSettingId::BackfaceSelection));
+  signature.add_float(
+      viewport_overlay_sanitized_raster_scale(raster_scale));
   return signature.value();
 }
 
@@ -103,6 +117,9 @@ void ViewportOverlayStyleResolver::apply_from(
     range.triangle_begin = std::min(range.triangle_begin, frame.triangles.size());
     range.line_begin = std::min(range.line_begin, frame.lines.size());
     range.point_begin = std::min(range.point_begin, frame.points.size());
+    range.icon_begin = std::min(range.icon_begin, frame.icons.size());
+    const float raster_scale =
+        viewport_overlay_sanitized_raster_scale(context.raster_scale);
     if (context.projection == ViewportOverlayProjection::Orthographic &&
         !settings.bool_value(ViewportBoolSettingId::BackfaceSelection)) {
       // Orthographic hover is outline-only here: transparent triangles would
@@ -141,7 +158,7 @@ void ViewportOverlayStyleResolver::apply_from(
       ViewportOverlayLine &line = *it;
       const ViewportOverlayStyleRole role = role_for(line);
       line.color = color_for(role, line.color, settings);
-      line.width_pixels =
+      float resolved_width_pixels =
           line_width_for(role, line.layer, line.width_pixels, settings);
       if (const ViewportOverlayStyleOverride *override =
               override_for(role, context);
@@ -150,9 +167,13 @@ void ViewportOverlayStyleResolver::apply_from(
           line.color = *override->color;
         }
         if (override->line_width_pixels.has_value()) {
-          line.width_pixels = *override->line_width_pixels;
+          resolved_width_pixels = *override->line_width_pixels;
         }
       }
+      line.width_pixels =
+          viewport_overlay_line_width_pixels(line.layer,
+                                             resolved_width_pixels) *
+          raster_scale;
     }
 
     for (auto it = frame.points.begin() +
@@ -161,8 +182,9 @@ void ViewportOverlayStyleResolver::apply_from(
       ViewportOverlayPoint &point = *it;
       const ViewportOverlayStyleRole role = role_for(point);
       point.color = color_for(role, point.color, settings);
-      point.size_pixels = point_size_for(role, point.size_pixels, settings);
-      point.outline_growth_pixels =
+      float resolved_size_pixels =
+          point_size_for(role, point.size_pixels, settings);
+      std::optional<float> resolved_outline_growth_pixels =
           point_outline_growth_for(role, point.outline_growth_pixels, settings);
       if (const ViewportOverlayStyleOverride *override =
               override_for(role, context);
@@ -171,12 +193,33 @@ void ViewportOverlayStyleResolver::apply_from(
           point.color = *override->color;
         }
         if (override->point_size_pixels.has_value()) {
-          point.size_pixels = *override->point_size_pixels;
+          resolved_size_pixels = *override->point_size_pixels;
         }
         if (override->outline_growth_pixels.has_value()) {
-          point.outline_growth_pixels = *override->outline_growth_pixels;
+          resolved_outline_growth_pixels = *override->outline_growth_pixels;
         }
       }
+      point.size_pixels =
+          viewport_overlay_point_size_pixels(point.layer,
+                                             resolved_size_pixels) *
+          raster_scale;
+      const float outline_growth_pixels =
+          resolved_outline_growth_pixels.value_or(
+              viewport_overlay_point_outline_growth_pixels(point.layer));
+      point.outline_growth_pixels =
+          resolved_outline_growth_pixels.has_value() ||
+                  outline_growth_pixels > 0.0f
+              ? std::optional<float>{outline_growth_pixels * raster_scale}
+              : std::nullopt;
+    }
+
+    for (auto it = frame.icons.begin() +
+                   static_cast<std::ptrdiff_t>(range.icon_begin);
+         it != frame.icons.end(); ++it) {
+      ViewportOverlayIcon &icon = *it;
+      icon.size_pixels =
+          viewport_overlay_point_size_pixels(icon.layer, icon.size_pixels) *
+          raster_scale;
     }
 }
 

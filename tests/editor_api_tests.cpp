@@ -1739,6 +1739,54 @@ TEST(EditorApiTests, PreferencesPersistAndResolveCustomCommandShortcuts) {
             "Ctrl+Z");
 }
 
+TEST(EditorApiTests, InterfaceScalePreferenceUsesValidatedRuntimeHooks) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  EXPECT_DOUBLE_EQ(editor.preferences().interface_scale(), 1.0);
+  EXPECT_FALSE(editor.preferences().set_interface_scale(1.5).ok());
+
+  double interface_scale = 1.0;
+  std::size_t setter_calls = 0u;
+  editor.preferences().set_runtime_hooks(quader::QuaderPreferencesRuntimeHooks{
+      .interface_scale = [&]() { return interface_scale; },
+      .set_interface_scale =
+          [&](double scale) {
+            ++setter_calls;
+            const bool changed = interface_scale != scale;
+            interface_scale = scale;
+            return quader::QuaderApiVoidResult{
+                .ok = true,
+                .changed = changed,
+                .mutation_kind = quader::QuaderMutationKind::Runtime,
+            };
+          },
+  });
+
+  const quader::QuaderApiVoidResult changed =
+      editor.preferences().set_interface_scale(1.5);
+  ASSERT_TRUE(changed.ok()) << changed.error_message();
+  EXPECT_TRUE(changed.changed());
+  EXPECT_DOUBLE_EQ(editor.preferences().interface_scale(), 1.5);
+  EXPECT_EQ(setter_calls, 1u);
+
+  EXPECT_FALSE(editor.preferences().set_interface_scale(1.5).changed());
+  EXPECT_EQ(setter_calls, 2u);
+  for (const double invalid : {
+           std::numeric_limits<double>::quiet_NaN(),
+           std::numeric_limits<double>::infinity(),
+           -std::numeric_limits<double>::infinity(),
+       }) {
+    const quader::QuaderApiVoidResult result =
+        editor.preferences().set_interface_scale(invalid);
+    EXPECT_FALSE(result.ok());
+    EXPECT_FALSE(result.changed());
+    EXPECT_EQ(result.mutation_kind, quader::QuaderMutationKind::None);
+    EXPECT_FALSE(result.error_message().empty());
+  }
+  EXPECT_EQ(setter_calls, 2u);
+  EXPECT_DOUBLE_EQ(editor.preferences().interface_scale(), 1.5);
+}
+
 TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;

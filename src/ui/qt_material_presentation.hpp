@@ -25,8 +25,9 @@ namespace quader {
 [[nodiscard]] QString qt_material_reference_stable_id(
     const QuaderMaterialReference &reference);
 
-/// Decoded presentation data cached once by UISystem and implicitly shared by
-/// every retained material consumer.
+/// Baseline presentation data cached once by UISystem and implicitly shared by
+/// retained consumers. Larger high-DPI rasters may be regenerated from the
+/// item's encoded source instead of enlarging this bounded thumbnail.
 struct QtMaterialThumbnail final {
   QImage image;
   QIcon icon;
@@ -65,9 +66,9 @@ struct QtMaterialPresentationItem final {
 make_qt_material_thumbnail(const QtMaterialPresentationItem &item,
                            int maximum_dimension = 512);
 
-/// Decodes a presentation thumbnail at most to `maximum_dimension`. Callers
-/// that maintain an event-driven presentation cache may store the result in
-/// `decoded_preview` so all retained consumers share Qt's implicit image data.
+/// Decodes a presentation thumbnail at most to `maximum_dimension`. When the
+/// retained thumbnail is smaller than the request, the encoded source is read
+/// again at the requested resolution instead of enlarging the cached raster.
 [[nodiscard]] QImage
 qt_material_preview_image(const QtMaterialPresentationItem &item,
                           int maximum_dimension = 512);

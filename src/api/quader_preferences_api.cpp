@@ -8,6 +8,7 @@
 
 #include "api/quader_commands_api.hpp"
 
+#include <cmath>
 #include <utility>
 
 namespace quader {
@@ -33,6 +34,25 @@ std::string QuaderPreferencesApi::locale() const {
 QuaderApiVoidResult QuaderPreferencesApi::set_locale(std::string locale) {
   return hooks_.set_locale
              ? hooks_.set_locale(std::move(locale))
+             : unavailable("Preferences runtime is not attached.");
+}
+
+double QuaderPreferencesApi::interface_scale() const {
+  return hooks_.interface_scale ? hooks_.interface_scale() : 1.0;
+}
+
+QuaderApiVoidResult
+QuaderPreferencesApi::set_interface_scale(double scale) {
+  if (!std::isfinite(scale)) {
+    return {
+        .ok = false,
+        .changed = false,
+        .message = "Interface scale must be finite.",
+        .mutation_kind = QuaderMutationKind::None,
+    };
+  }
+  return hooks_.set_interface_scale
+             ? hooks_.set_interface_scale(scale)
              : unavailable("Preferences runtime is not attached.");
 }
 

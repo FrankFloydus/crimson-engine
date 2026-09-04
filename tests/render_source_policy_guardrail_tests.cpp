@@ -1006,6 +1006,7 @@ TEST(ViewportOverlayPolicyTests,
         coordinator_header.substr(stamp_begin, stamp_end - stamp_begin);
     EXPECT_NE(stamp.find("ViewportOverlayProjection projection"),
               std::string::npos);
+    EXPECT_NE(stamp.find("float raster_scale"), std::string::npos);
     EXPECT_NE(stamp.find("default;"), std::string::npos);
   }
 
@@ -1043,6 +1044,10 @@ TEST(ViewportOverlayPolicyTests,
   ASSERT_NE(dynamic_style, std::string::npos);
   ASSERT_NE(dynamic_submit, std::string::npos);
   EXPECT_LT(dynamic_source_change, dynamic_source_gate);
+  EXPECT_NE(coordinator_source.find(
+                "pane.dynamic.raster_scale != dynamic_stamp.raster_scale",
+                dynamic_source_change),
+            std::string::npos);
   EXPECT_LT(dynamic_source_gate, dynamic_provider_build);
   EXPECT_LT(dynamic_provider_build, volatile_append);
   EXPECT_LT(dynamic_source_gate, volatile_append);
@@ -1201,6 +1206,10 @@ TEST(ViewportOverlayPolicyTests,
       "src/render/overlay/instanced_wire_render_backend.cpp");
   const std::string backend_header = read_source_file(
       "src/render/overlay/instanced_wire_render_backend.hpp");
+  const std::string overlay_snapshot_header =
+      read_source_file("src/render/overlay/render_overlay_snapshot.hpp");
+  const std::string persistent_style_header = read_source_file(
+      "src/render/overlay/viewport_persistent_overlay_style.hpp");
   const std::string cmake = read_source_file("CMakeLists.txt");
   EXPECT_NE(wireframe_cache.find(
                 "std::unordered_set<RenderInstancePrimitiveKey"),
@@ -1235,11 +1244,10 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_NE(backend.find(
                 "--stats_.unique_geometry_resource_count"),
             std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      wireframe_cache,
-      "wire_backend_.destroy_batches(created); "
-      "wire_backend_.prune_unused_geometry_resources(proxies_); "
-      "refresh_wire_resource_stats(); return false;"));
+  EXPECT_NE(wireframe_cache.find("destroy_raster_groups(created)"),
+            std::string::npos);
+  EXPECT_NE(wireframe_cache.find("prune_unused_wire_geometry()"),
+            std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       backend_acquire,
       "resource->wire_geometry->content_id == "
@@ -1248,14 +1256,26 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_TRUE(source_contains_compact(
       selection_cache,
       ".material_payload = std::bit_cast<std::uint32_t>("
-      "record.wire_width_pixels)"));
+      "record.logical_wire_width_pixels)"));
   EXPECT_NE(selection_cache.find(".index_offset = record.wire_color"),
+            std::string::npos);
+  EXPECT_NE(overlay_snapshot_header.find("float logical_wire_width_pixels"),
+            std::string::npos);
+  EXPECT_NE(persistent_style_header.find(
+                "float selection_edge_logical_width_pixels"),
+            std::string::npos);
+  EXPECT_NE(backend.find(
+                "setParameter(\"lineWidth\", line_width_pixels)"),
+            std::string::npos);
+  EXPECT_NE(selection_cache.find("reconcile_wire_raster_groups("),
+            std::string::npos);
+  EXPECT_NE(wireframe_cache.find("reconcile_raster_groups("),
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       selection_cache,
       "stats_.selected_member_count = "
       "snapshot.instance_selection_fills.size(); "
-      "wire_backend_.prune_unused_geometry_resources(wire_proxies_); "
+      "prune_unused_wire_geometry(); "
       "refresh_wire_resource_stats(); return true;"));
 
   for (const std::string *cache : {&wireframe_cache, &selection_cache}) {
@@ -1273,16 +1293,24 @@ TEST(ViewportOverlayPolicyTests,
       backend,
       ".layerMask(kViewportAllLayerMask, style.layer_mask)"));
   EXPECT_TRUE(source_contains_compact(
-      wireframe_cache, ".layer_mask = layer_mask"));
-  EXPECT_TRUE(source_contains_compact(
-      selection_cache, ".layer_mask = kViewportOverlayLayerMask"));
-  EXPECT_TRUE(source_contains_compact(
       wireframe_cache,
-      "wire_backend_.update_clip_plane(proxies_, clip_planes.near_plane)"));
+      "mesh.selected ? kViewportOverlayLayerMask : snapshot.layer_mask"));
   EXPECT_TRUE(source_contains_compact(
-      selection_cache,
-      "wire_backend_.update_clip_plane(wire_proxies_, "
-      "clip_planes.near_plane)"));
+      selection_cache, ".layer_mask = raster_group.layer_mask"));
+  EXPECT_TRUE(source_contains_compact(
+      wireframe_cache, "wire_backend_.update_clip_plane(proxy_group.proxies"));
+  EXPECT_TRUE(source_contains_compact(
+      selection_cache, "wire_backend_.update_clip_plane(proxy_group.proxies"));
+  EXPECT_NE(wireframe_header.find("std::vector<RasterProxyGroup>"),
+            std::string::npos);
+  EXPECT_NE(selection_header.find("std::vector<WireRasterProxyGroup>"),
+            std::string::npos);
+  EXPECT_NE(persistent_style_header.find(
+                "kMaxViewportPersistentOverlayRasterGroups = 4u"),
+            std::string::npos);
+  EXPECT_NE(backend_header.find(
+                "std::span<const std::span<const BatchProxy>>"),
+            std::string::npos);
   EXPECT_NE(backend_header.find("struct GeometryResource;"),
             std::string::npos);
   EXPECT_NE(wireframe_header.find(
@@ -1342,20 +1370,21 @@ TEST(ViewportOverlayPolicyTests,
       "src/render/overlay/scene_wireframe_overlay_cache.cpp");
   const std::size_t sync_begin =
       source.find("void SceneWireframeOverlayCache::sync(");
-  const std::size_t prepare =
-      source.find("const PreparedPlan prepared = prepare(snapshot);", sync_begin);
   ASSERT_NE(sync_begin, std::string::npos);
-  ASSERT_NE(prepare, std::string::npos);
-  const std::string before_prepare =
-      source.substr(sync_begin, prepare - sync_begin);
   EXPECT_TRUE(source_contains_compact(
-      before_prepare, "scene_wireframe_overlay_mesh_inputs_match("
-                      "synced_meshes_, snapshot.meshes)"));
+      source, "scene_wireframe_overlay_mesh_inputs_match("
+              "synced_meshes_, snapshot.meshes)"));
   EXPECT_TRUE(source_contains_compact(
-      before_prepare, "++stats_.mesh_input_reuse_count; } else { "
-                      "++stats_.plan_prepare_count;"));
+      source, "if (mesh_inputs_match)"));
   EXPECT_TRUE(source_contains_compact(
-      before_prepare,
+      source, "++stats_.mesh_input_reuse_count"));
+  EXPECT_TRUE(source_contains_compact(
+      source, "if (line_width_only_style_changed || "
+              "raster_groups_changed)"));
+  EXPECT_TRUE(source_contains_compact(
+      source, "reconcile_raster_groups(prepared, snapshot, raster_groups)"));
+  EXPECT_TRUE(source_contains_compact(
+      source,
       "if (has_synced_ && !render_source_dependencies_match("
       "synced_source_stamp_, snapshot, "
       "RenderSourceDependency::SceneBinding)) { clear();"));
@@ -1363,8 +1392,8 @@ TEST(ViewportOverlayPolicyTests,
       source, "prepare_wire_batches(snapshot, max_instances_per_chunk_, &plan_)"));
   EXPECT_TRUE(source_contains_compact(
       source, "synced_meshes_ = snapshot.meshes;"));
-  EXPECT_TRUE(source_contains_compact(
-      source, "synced_meshes_.clear(); has_synced_ = false;"));
+  EXPECT_NE(source.find("synced_meshes_.clear();"), std::string::npos);
+  EXPECT_NE(source.find("has_synced_ = false;"), std::string::npos);
 }
 
 TEST(ViewportOverlayPolicyTests,
@@ -1409,7 +1438,8 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_TRUE(source_contains_compact(
       selection_source.substr(selection_sync,
                               selection_prepare - selection_sync),
-      "!wire_style_changed && !clip_changed) { return false; }"));
+      "!wire_style_changed && !raster_groups_changed && !clip_changed) { "
+      "return false; }"));
 
   EXPECT_NE(wireframe_source.find(
                 "kRenderOverlaySceneWireframeCacheNoWorkDependencies"),
@@ -1453,7 +1483,9 @@ TEST(ViewportPersistentOverlayStyleSnapshotTests,
   EXPECT_TRUE(source_contains_compact(
       unchanged, "synced_instance_edit_context_signature_ != "
                  "snapshot.style.instance_edit_context_signature"));
-  EXPECT_TRUE(source_contains_compact(unchanged, "!clip_changed && !style_changed"));
+  EXPECT_TRUE(source_contains_compact(
+      unchanged, "!clip_changed && !raster_groups_changed && "
+                 "!layer_mask_changed && !style_changed"));
   EXPECT_TRUE(source_contains_compact(
       unchanged,
       "if (context_style_changed) { "
@@ -1464,13 +1496,16 @@ TEST(ViewportPersistentOverlayStyleSnapshotTests,
   const std::size_t update_begin =
       source.find("void SceneWireframeOverlayCache::update_instance_edit_style(");
   const std::size_t update_end =
-      source.find("void SceneWireframeOverlayCache::set_layer_mask(", update_begin);
+      source.find("void SceneWireframeOverlayCache::set_all_layer_masks(",
+                  update_begin);
   ASSERT_NE(update_begin, std::string::npos);
   ASSERT_NE(update_end, std::string::npos);
   const std::string update = source.substr(update_begin, update_end - update_begin);
   EXPECT_TRUE(source_contains_compact(
       update,
-      "wire_backend_.update_instance_edit_style(proxies_, style, true);"));
+      "for (RasterProxyGroup &proxy_group : raster_proxy_groups_) { "
+      "wire_backend_.update_instance_edit_style(proxy_group.proxies, style, "
+      "true); }"));
   for (const std::string_view geometry_work : {
            "prepare(", "rebuild(", "setBuffer", "instance_buffer",
            "getRenderableManager(", "create_batch("}) {
@@ -2011,6 +2046,19 @@ TEST(SceneRenderBridgeTests, UsesQuadMaterialsForSelectionLineAndPointOverlay) {
       point_light_icon_load_end - point_light_icon_load_start);
   EXPECT_NE(point_light_icon_load.find(".flip_y = false"), std::string::npos);
   EXPECT_EQ(point_light_icon_load.find(".flip_y = true"), std::string::npos);
+  EXPECT_NE(point_light_icon_load.find(".generate_mipmaps = true"),
+            std::string::npos);
+  EXPECT_NE(proxy_factory_source.find(
+                "kPointLightIconTextureExtent = 1024u"),
+            std::string::npos);
+  EXPECT_NE(proxy_factory_source.find("make_point_light_icon_rgba()"),
+            std::string::npos);
+  EXPECT_NE(proxy_factory_source.find("load_rgba_texture("),
+            std::string::npos);
+  EXPECT_EQ(count_occurrences(
+                proxy_factory_source,
+                "filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR"),
+            2u);
   EXPECT_NE(proxy_factory_source.find("OverlayRenderableProxyKind::Icon"),
             std::string::npos);
   EXPECT_NE(proxy_factory_source.find("filament::VertexAttribute::CUSTOM0"),

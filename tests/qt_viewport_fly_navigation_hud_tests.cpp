@@ -16,7 +16,9 @@
 #include <QObject>
 #include <QPoint>
 #include <QRegion>
+#include <QSize>
 #include <QString>
+#include <QVariant>
 #include <QWidget>
 
 #include <filesystem>
@@ -267,4 +269,40 @@ TEST(QtViewportFlyNavigationHudTests,
   EXPECT_TRUE(mask.contains(QPoint{14, 21}));
   EXPECT_LT(mask.boundingRect().width(), crosshair->width());
   EXPECT_LT(mask.boundingRect().height(), crosshair->height());
+}
+
+TEST(QtViewportFlyNavigationHudTests,
+     LiveInterfaceScaleRebuildsCrosshairMaskAndRestoresBaselineGeometry) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-fly-navigation-hud-scale-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QWidget parent;
+  parent.resize(400, 300);
+  parent.setAttribute(Qt::WA_DontShowOnScreen, true);
+  quader::QtViewportFlyNavigationHud hud(
+      parent, quader::ViewportPaneId::Perspective);
+  QWidget *crosshair = parent.findChild<QWidget *>(
+      QStringLiteral("viewportFlyCrosshair_perspective"));
+  QLabel *speed_label = parent.findChild<QLabel *>(
+      QStringLiteral("viewportFlySpeed_perspective"));
+  ASSERT_NE(crosshair, nullptr);
+  ASSERT_NE(speed_label, nullptr);
+  const int baseline_mask_revision =
+      crosshair->property("quaderFlyMaskRevision").toInt();
+
+  hud.apply_ui_scale(quader::QtUiScaleMetrics{2.0F, 1U});
+  EXPECT_EQ(crosshair->size(), QSize(56, 56));
+  EXPECT_EQ(speed_label->margin(), 12);
+  EXPECT_EQ(crosshair->property("quaderFlyMaskRevision").toInt(),
+            baseline_mask_revision + 1);
+
+  hud.apply_ui_scale(quader::QtUiScaleMetrics{1.0F, 2U});
+  EXPECT_EQ(crosshair->size(), QSize(28, 28));
+  EXPECT_EQ(speed_label->margin(), 6);
+  EXPECT_EQ(crosshair->property("quaderFlyMaskRevision").toInt(),
+            baseline_mask_revision + 2);
 }

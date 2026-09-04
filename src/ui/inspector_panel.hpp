@@ -15,8 +15,11 @@
 #include <memory>
 #include <vector>
 
+class QEvent;
+
 namespace quader {
 
+class QtUiScaleMetrics;
 struct UIContext;
 
 /**
@@ -46,7 +49,11 @@ public:
   void set_material_presentation(
       InspectorMaterialPresentationSnapshot snapshot);
   void abandon_runtime() noexcept;
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void refresh(UIContext &context);
+
+protected:
+  bool event(QEvent *event) override;
 
 private:
   struct Impl;

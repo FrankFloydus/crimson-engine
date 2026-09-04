@@ -32,8 +32,10 @@ class ViewportCurveControlPickingAdapter final
 public:
   ViewportCurveControlPickingAdapter(
       const ViewportCameraController &camera,
-      const SceneSurfaceQuerySnapshot *scene_surfaces)
-      : camera_(&camera), scene_surfaces_(scene_surfaces) {}
+      const SceneSurfaceQuerySnapshot *scene_surfaces,
+      float viewport_pixel_scale = 1.0f)
+      : camera_(&camera), scene_surfaces_(scene_surfaces),
+        viewport_pixel_scale_(viewport_pixel_scale) {}
 
   [[nodiscard]] std::optional<CurveControlTarget>
   pick(const CurveToolPreviewState &preview, QVec2 mouse_local,
@@ -42,6 +44,7 @@ public:
 private:
   const ViewportCameraController *camera_ = nullptr;
   const SceneSurfaceQuerySnapshot *scene_surfaces_ = nullptr;
+  float viewport_pixel_scale_ = 1.0f;
 };
 
 /// Reports one authored Curve control and its screen/ray-space pick metrics.

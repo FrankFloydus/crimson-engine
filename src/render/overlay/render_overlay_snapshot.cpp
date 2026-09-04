@@ -282,6 +282,8 @@ void append_instance_selection_fills(
         .wire_geometry_payload = wire_geometry_payload,
         .world_transform = placement.world_from_geometry,
         .wire_color = snapshot.style.selection_wire_color,
+        .logical_wire_width_pixels =
+            snapshot.style.selection_edge_logical_width_pixels,
         .wire_width_pixels =
             snapshot.style.selection_edge_line_width_pixels,
         .vertices = mesh_vertices(*mesh),
@@ -384,7 +386,7 @@ build_render_overlay_scene_wireframe_snapshot(
   snapshot.clip_planes = scene_camera_clip_planes(document);
   snapshot.layer_mask = layer_mask;
   snapshot.selected_mesh_wire_visible = selected_mesh_wire_visible;
-  if (layer_mask == 0u) {
+  if (layer_mask == 0u && !selected_mesh_wire_visible) {
     return snapshot;
   }
   const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
@@ -578,7 +580,8 @@ RenderOverlaySnapshotCache::update_persistent(
     RenderSceneBindingKey scene_binding,
     const ViewportLocalVisibilitySnapshot *local_visibility,
     bool selected_mesh_wire_visible,
-    RenderInstanceEditScope instance_edit_scope) {
+    RenderInstanceEditScope instance_edit_scope,
+    const ViewportPersistentOverlayRasterGroupSet &raster_groups) {
   QDR_PROFILE_FUNCTION();
   bind_sources(document, assets, scene_binding);
   const RenderSourceStamp current = capture_render_source_stamp(
@@ -614,8 +617,13 @@ RenderOverlaySnapshotCache::update_persistent(
       (selected_object_snapshot_.instance_selection_wires.empty() ||
        selected_object_snapshot_.style.wire_signature ==
            style.wire_signature);
-  const bool selected_object_changed = !selected_snapshot_matches;
-  if (selected_object_changed) {
+  const bool selected_raster_groups_changed =
+      !has_selected_object_snapshot_ ||
+      !viewport_persistent_overlay_raster_groups_match(
+          selected_object_snapshot_.raster_groups, raster_groups);
+  const bool selected_object_changed =
+      !selected_snapshot_matches || selected_raster_groups_changed;
+  if (!selected_snapshot_matches) {
     selected_object_snapshot_ = build_render_overlay_selected_object_snapshot(
         document, assets, selected_object_overlay_visible, style,
         scene_binding, local_visibility);
@@ -626,9 +634,11 @@ RenderOverlaySnapshotCache::update_persistent(
     selected_object_snapshot_.style = style;
     selected_object_snapshot_.clip_planes = current_clip_planes;
   }
+  selected_object_snapshot_.raster_groups = raster_groups;
 
   const bool wireframe_sources_are_relevant =
-      scene_wireframe_layer_mask != 0u;
+      scene_wireframe_layer_mask != 0u ||
+      selected_mesh_wire_visible;
   const bool wireframe_snapshot_matches =
       has_scene_wireframe_snapshot_ &&
       scene_wireframe_snapshot_.layer_mask == scene_wireframe_layer_mask &&
@@ -654,13 +664,18 @@ RenderOverlaySnapshotCache::update_persistent(
       scene_wireframe_snapshot_.style.instance_edit_context_signature !=
           style.instance_edit_context_signature ||
       scene_wireframe_snapshot_.clip_planes != current_clip_planes;
+  const bool wireframe_raster_groups_changed =
+      !has_scene_wireframe_snapshot_ ||
+      !viewport_persistent_overlay_raster_groups_match(
+          scene_wireframe_snapshot_.raster_groups, raster_groups);
   const bool curve_publication_reused =
       wireframe_sources_are_relevant && wireframe_snapshot_matches &&
       render_source_dependencies_advanced_together(
           scene_wireframe_snapshot_, current,
           kRenderOverlaySelectionCurveAdvanceDependencies);
   const bool scene_wireframe_changed =
-      !wireframe_snapshot_matches || wireframe_context_changed;
+      !wireframe_snapshot_matches || wireframe_context_changed ||
+      wireframe_raster_groups_changed;
   if (!wireframe_snapshot_matches) {
     scene_wireframe_snapshot_ = build_render_overlay_scene_wireframe_snapshot(
         document, assets, scene_wireframe_layer_mask, style, scene_binding,
@@ -677,6 +692,7 @@ RenderOverlaySnapshotCache::update_persistent(
       ++stats_.scene_wireframe_curve_publication_reuse_count;
     }
   }
+  scene_wireframe_snapshot_.raster_groups = raster_groups;
 
   return {
       .selected_object = &selected_object_snapshot_,

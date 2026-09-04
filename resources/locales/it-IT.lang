@@ -367,6 +367,7 @@ ui.runtime.panel_not_visible=Il pannello non e visibile nel layout principale.
 ui.runtime.unknown_panel=Pannello UI sconosciuto.
 ui.runtime.locale_selection_unavailable=La selezione della lingua non e ancora esposta nella shell dell'app.
 ui.runtime.unknown_locale=Lingua sconosciuta.
+ui.runtime.interface_scale_invalid=La scala dell'interfaccia deve essere un numero finito.
 ui.runtime.preferences_saved=Preferenze salvate.
 ui.runtime.preferences_save_failed=Impossibile salvare le preferenze.
 ui.runtime.navigation_gizmo_unavailable=Il gizmo di navigazione non e disponibile nella shell dell'app.
@@ -401,6 +402,8 @@ modeling.action.disabled.snap_vertices_to_floor_instance_edit=Esci dalla modific
 modeling.action.disabled.snap_to_floor_active_tool=Applica o annulla lo strumento attivo prima di agganciare al pavimento.
 
 ui.settings.interface=Interfaccia
+ui.settings.interface_scale=Scala interfaccia
+ui.settings.interface_scale.help=Ridimensiona testo, controlli, icone e aree di interazione dell'editor.
 ui.settings.locale=Lingua
 ui.settings.color.opacity=Opacità: %1%
 ui.settings.keybindings=Associazioni tasti

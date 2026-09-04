@@ -17,6 +17,7 @@
 #include "ui/qt_tool_settings_drag_spinner.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/ui_panel_manager.hpp"
 
@@ -91,6 +92,39 @@ void send_wheel_event(QWidget &target, QPoint position, QPoint angle_delta) {
   QWheelEvent event(QPointF(position), QPointF(global), {}, angle_delta,
                     Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
   QCoreApplication::sendEvent(&target, &event);
+}
+
+TEST(QtToolSettingsPanelTests,
+     AppliesInterfaceScaleToStaticAndDeferredControlMetrics) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-tool-settings-scale-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::QtToolSettingsPanel panel;
+  auto *axis = panel.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.uv_peel.axis"));
+  auto *texture_scale = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.texture.scale_x"));
+  ASSERT_NE(axis, nullptr);
+  ASSERT_NE(texture_scale, nullptr);
+  ASSERT_NE(panel.layout(), nullptr);
+
+  panel.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
+  // The panel is dock content: its minimum must not force a restored or
+  // user-resized dock wider when interface scale changes.
+  EXPECT_EQ(panel.minimumWidth(), 240);
+  EXPECT_EQ(axis->minimumWidth(), 176);
+  EXPECT_EQ(texture_scale->minimumWidth(), 176);
+  EXPECT_EQ(panel.layout()->contentsMargins(), QMargins(16, 16, 16, 16));
+
+  panel.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(panel.minimumWidth(), 240);
+  EXPECT_EQ(axis->minimumWidth(), 88);
+  EXPECT_EQ(texture_scale->minimumWidth(), 88);
+  EXPECT_EQ(panel.layout()->contentsMargins(), QMargins(8, 8, 8, 8));
 }
 
 quader::ModelingBoxPreview tool_settings_primitive_preview() {
@@ -825,6 +859,54 @@ TEST(QtToolSettingsDragSpinnerTests,
   EXPECT_EQ(spinner.value(), 8);
 
   spinner.hide();
+}
+
+TEST(QtToolSettingsDragSpinnerTests,
+     LiveInterfaceScaleUpdatesArrowHitTargetsWithoutDrift) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-drag-spinner-scale-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  quader::QtUiScaleApplicationController scale_controller(application);
+
+  quader::QtToolSettingsDragSpinner spinner;
+  auto *decrease = spinner.findChild<QToolButton *>(
+      QStringLiteral("drag_spinner.decrease"));
+  auto *increase = spinner.findChild<QToolButton *>(
+      QStringLiteral("drag_spinner.increase"));
+  ASSERT_NE(decrease, nullptr);
+  ASSERT_NE(increase, nullptr);
+
+  const auto expected_extent = [&spinner]() {
+    return std::max(
+        spinner.style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr,
+                                     &spinner),
+        spinner.spin_box()->sizeHint().height());
+  };
+  const int baseline_extent = expected_extent();
+  EXPECT_EQ(decrease->minimumWidth(), baseline_extent);
+  EXPECT_EQ(decrease->maximumWidth(), baseline_extent);
+  EXPECT_EQ(increase->minimumWidth(), baseline_extent);
+  EXPECT_EQ(increase->maximumWidth(), baseline_extent);
+
+  ASSERT_TRUE(scale_controller.apply_factor(2.0F));
+  QCoreApplication::processEvents();
+  const int doubled_extent = expected_extent();
+  EXPECT_GT(doubled_extent, baseline_extent);
+  EXPECT_EQ(decrease->minimumWidth(), doubled_extent);
+  EXPECT_EQ(decrease->maximumWidth(), doubled_extent);
+  EXPECT_EQ(increase->minimumWidth(), doubled_extent);
+  EXPECT_EQ(increase->maximumWidth(), doubled_extent);
+
+  ASSERT_TRUE(scale_controller.apply_factor(1.0F));
+  QCoreApplication::processEvents();
+  EXPECT_EQ(expected_extent(), baseline_extent);
+  EXPECT_EQ(decrease->minimumWidth(), baseline_extent);
+  EXPECT_EQ(decrease->maximumWidth(), baseline_extent);
+  EXPECT_EQ(increase->minimumWidth(), baseline_extent);
+  EXPECT_EQ(increase->maximumWidth(), baseline_extent);
 }
 
 TEST(QtToolSettingsDragSpinnerTests,

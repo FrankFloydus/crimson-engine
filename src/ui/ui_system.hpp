@@ -73,7 +73,9 @@ class QtSnappingToolbar;
 class QtTextureToolbar;
 class QtToolToolbar;
 class QtViewportDisplayToolbar;
-enum class QtSettingsChangeKind;
+struct QtSettingsChange;
+class QtUiScaleApplicationController;
+class QtUiScaleMetrics;
 enum class QtStandardMaterialEditorFileAction : std::uint8_t;
 enum class QtStandardMaterialScalar : std::uint8_t;
 enum class QtStandardMaterialTextureAction : std::uint8_t;
@@ -185,7 +187,9 @@ private:
       QtStandardMaterialTextureAction action);
   void handle_standard_material_texture_transform(
       QtStandardMaterialTextureTransformComponent component, double value);
-  void handle_settings_dialog_change(QtSettingsChangeKind kind);
+  void handle_settings_dialog_change(const QtSettingsChange &change);
+  bool apply_interface_scale(float factor);
+  void apply_ui_scale_to_retained_surfaces(const QtUiScaleMetrics &metrics);
   void apply_viewport_settings_to_workspace();
   void synchronize_settings_surfaces(bool refresh_dialog);
   void show_settings_dialog();
@@ -218,6 +222,7 @@ private:
   [[nodiscard]] bool panel_presented(UIPanelId id) const;
   void set_panel_visible(UIPanelId id, bool visible);
 
+  std::unique_ptr<QtUiScaleApplicationController> ui_scale_controller_;
   std::unique_ptr<QMainWindow> main_window_;
   std::unique_ptr<QtMainMenu> main_menu_;
   std::unique_ptr<QtCommandEventFilter> command_event_filter_;

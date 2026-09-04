@@ -10,6 +10,10 @@
 
 namespace quader {
 
+float viewport_overlay_sanitized_raster_scale(float raster_scale) {
+  return viewport_sanitized_pixel_scale(raster_scale);
+}
+
 int viewport_overlay_draw_order(ViewportOverlayLayer layer) {
   for (int index = 0;
        index < static_cast<int>(kViewportOverlayDrawOrder.size()); ++index) {
@@ -223,7 +227,7 @@ float viewport_overlay_line_width_pixels(ViewportOverlayLayer layer,
 
 float viewport_overlay_point_size_pixels(ViewportOverlayLayer layer,
                                          float native_size_pixels) {
-  if (native_size_pixels >= 2.0f) {
+  if (std::isfinite(native_size_pixels) && native_size_pixels > 0.0f) {
     return native_size_pixels;
   }
   switch (layer) {
@@ -236,7 +240,7 @@ float viewport_overlay_point_size_pixels(ViewportOverlayLayer layer,
   default:
     break;
   }
-  return native_size_pixels < 2.0f ? 2.0f : native_size_pixels;
+  return 2.0f;
 }
 
 float viewport_overlay_point_outline_growth_pixels(ViewportOverlayLayer layer) {

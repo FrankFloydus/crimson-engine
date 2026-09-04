@@ -44,8 +44,11 @@ struct ViewportHoverWorkKey {
     bool shift_modifier = false;
     bool alt_modifier = false;
     bool gizmo_consumed = false;
+    float viewport_pixel_scale = 1.0f;
     double vertex_radius = 0.3;
     double edge_radius = 0.2;
+    double vertex_world_radius = 0.3;
+    double edge_world_radius = 0.2;
     bool select_backfaces = false;
     std::uint64_t scene_revision = 0;
     std::uint64_t asset_revision = 0;
@@ -70,8 +73,11 @@ struct ViewportHoverWorkRequest {
   QVec2 viewport_size = {};
   ViewportModifiers modifiers = {};
   bool gizmo_consumed = false;
+  float viewport_pixel_scale = 1.0f;
   double vertex_radius = 0.3;
   double edge_radius = 0.2;
+  double vertex_world_radius = 0.3;
+  double edge_world_radius = 0.2;
   bool select_backfaces = false;
   std::uint64_t scene_revision = 0;
   std::uint64_t asset_revision = 0;

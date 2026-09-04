@@ -257,6 +257,14 @@ TEST_F(QtViewportEdgeLengthHudTests,
   EXPECT_EQ(label_->foregroundRole(), QPalette::WindowText);
   EXPECT_FALSE(label_->mask().isEmpty());
   EXPECT_FALSE(label_->mask() == QRegion(label_->rect()));
+  const qreal raster_dpr =
+      label_->property("quaderDimensionRasterDevicePixelRatio").toReal();
+  EXPECT_DOUBLE_EQ(raster_dpr, label_->devicePixelRatioF());
+  EXPECT_EQ(label_->property("quaderDimensionRasterPixelSize").toSize(),
+            QSize(std::max(1, static_cast<int>(
+                                  std::ceil(label_->width() * raster_dpr))),
+                  std::max(1, static_cast<int>(
+                                  std::ceil(label_->height() * raster_dpr)))));
   EXPECT_TRUE(QFile::exists(
       QStringLiteral(":/quader/fonts/HomeVideo-Regular.ttf")));
   EXPECT_EQ(QFontInfo(label_->font()).family(), QStringLiteral("Home Video"));
@@ -376,6 +384,26 @@ TEST_F(QtViewportEdgeLengthHudTests,
   }
   QCoreApplication::processEvents();
   EXPECT_EQ(events.counts(), configured);
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       AppliesInterfaceScaleAfterTheAuthoredDimensionFontPreference) {
+  const quader::ViewportOverlayFrame frame =
+      hover_edge_frame({-1.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f});
+  present(frame, true, nullptr, false, 12.0);
+  ASSERT_FALSE(label_->isHidden());
+  const QSize baseline_size = label_->size();
+
+  hud_->apply_ui_scale(quader::QtUiScaleMetrics{2.0F, 1U});
+  present(frame, true, nullptr, false, 12.0);
+  EXPECT_DOUBLE_EQ(label_->font().pointSizeF(), 24.0);
+  EXPECT_GT(label_->width(), baseline_size.width());
+  EXPECT_GT(label_->height(), baseline_size.height());
+
+  hud_->apply_ui_scale(quader::QtUiScaleMetrics{1.0F, 2U});
+  present(frame, true, nullptr, false, 12.0);
+  EXPECT_DOUBLE_EQ(label_->font().pointSizeF(), 12.0);
+  EXPECT_EQ(label_->size(), baseline_size);
 }
 
 TEST_F(QtViewportEdgeLengthHudTests, FormatsEveryMeasurementWithTwoDecimals) {

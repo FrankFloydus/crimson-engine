@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <array>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -236,15 +237,114 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
                                  {0.15f, 0.35f, 0.75f, 1.0f}));
   ViewportOverlaySubmissionRequest style_changed =
       submission_request(selection_provider, scene, volatile_modeling, curve);
+  ++style_changed.selection_source.selection_revision;
   const ViewportOverlaySubmissionResult style_result = coordinator.submit(
       std::move(style_changed), settings, target);
-  EXPECT_TRUE(style_result.selection_source_refreshed);
+  EXPECT_FALSE(style_result.selection_source_refreshed);
   EXPECT_TRUE(style_result.persistent_submitted);
   EXPECT_TRUE(style_result.dynamic_submitted);
   ASSERT_EQ(target.persistent_frame.lines.size(), 1u);
   EXPECT_NE(target.persistent_frame.lines.front().color,
             initial_styled_color);
-  EXPECT_EQ(selection_provider.build_count, 3);
+  EXPECT_EQ(selection_provider.build_count, 2);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     RasterScaleRestylesBothStreamsAndRebuildsDynamicTopologySource) {
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const ViewportSettings settings = ViewportSettings::defaults();
+
+  ViewportOverlayFrame selection;
+  selection.lines.push_back(test_line(ViewportOverlaySource::Selection));
+  StaticSelectionFrameProvider selection_provider{std::move(selection)};
+  RenderOverlaySelectionSnapshot scene;
+  ViewportOverlayFrame volatile_modeling;
+  CurveToolPreviewState curve;
+  const int dynamic_builds_before =
+      default_dynamic_tool_provider().build_count;
+
+  const ViewportOverlaySubmissionResult initial = coordinator.submit(
+      submission_request(selection_provider, scene, volatile_modeling, curve),
+      settings, target);
+  ASSERT_TRUE(initial.persistent_submitted);
+  ASSERT_TRUE(initial.dynamic_submitted);
+  ASSERT_EQ(target.persistent_frame.lines.size(), 1u);
+  ASSERT_EQ(target.dynamic_frame.points.size(), 1u);
+  const float initial_line_width =
+      target.persistent_frame.lines.front().width_pixels;
+  const float initial_point_size =
+      target.dynamic_frame.points.front().size_pixels;
+  const std::uint64_t initial_source_revision =
+      initial.dynamic_source_signature;
+
+  ViewportOverlaySubmissionRequest invalid =
+      submission_request(selection_provider, scene, volatile_modeling, curve);
+  invalid.raster_scale = std::numeric_limits<float>::quiet_NaN();
+  const ViewportOverlaySubmissionResult sanitized =
+      coordinator.submit(std::move(invalid), settings, target);
+  EXPECT_TRUE(sanitized.camera_only);
+
+  ViewportOverlaySubmissionRequest scaled =
+      submission_request(selection_provider, scene, volatile_modeling, curve);
+  scaled.raster_scale = 2.0f;
+  const ViewportOverlaySubmissionResult scaled_result =
+      coordinator.submit(std::move(scaled), settings, target);
+  EXPECT_FALSE(scaled_result.selection_source_refreshed);
+  EXPECT_TRUE(scaled_result.persistent_submitted);
+  EXPECT_TRUE(scaled_result.dynamic_submitted);
+  EXPECT_NE(scaled_result.dynamic_source_signature, initial_source_revision);
+  ASSERT_EQ(target.persistent_frame.lines.size(), 1u);
+  ASSERT_EQ(target.dynamic_frame.points.size(), 1u);
+  EXPECT_FLOAT_EQ(target.persistent_frame.lines.front().width_pixels,
+                  initial_line_width * 2.0f);
+  EXPECT_FLOAT_EQ(target.dynamic_frame.points.front().size_pixels,
+                  initial_point_size * 2.0f);
+  EXPECT_EQ(default_dynamic_tool_provider().build_count,
+            dynamic_builds_before + 2);
+  EXPECT_EQ(selection_provider.build_count, 1);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     MixedDpiPanesShareSemanticSelectionSourceAndReachFastPath) {
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const ViewportSettings settings = ViewportSettings::defaults();
+
+  ViewportOverlayFrame selection;
+  selection.lines.push_back(test_line(ViewportOverlaySource::Selection));
+  StaticSelectionFrameProvider selection_provider{std::move(selection)};
+  RenderOverlaySelectionSnapshot scene;
+  ViewportOverlayFrame volatile_modeling;
+  CurveToolPreviewState curve;
+
+  auto submit_pane = [&](std::size_t pane, float raster_scale) {
+    ViewportOverlaySubmissionRequest request = submission_request(
+        selection_provider, scene, volatile_modeling, curve);
+    request.viewport_index = pane;
+    request.raster_scale = raster_scale;
+    return coordinator.submit(std::move(request), settings, target);
+  };
+
+  const ViewportOverlaySubmissionResult pane_1x = submit_pane(0u, 1.0f);
+  ASSERT_TRUE(pane_1x.persistent_submitted);
+  ASSERT_EQ(target.persistent_frame.lines.size(), 1u);
+  const float width_1x = target.persistent_frame.lines.front().width_pixels;
+
+  const ViewportOverlaySubmissionResult pane_2x = submit_pane(1u, 2.0f);
+  ASSERT_TRUE(pane_2x.persistent_submitted);
+  ASSERT_EQ(target.persistent_frame.lines.size(), 1u);
+  EXPECT_FLOAT_EQ(target.persistent_frame.lines.front().width_pixels,
+                  width_1x * 2.0f);
+  EXPECT_EQ(selection_provider.build_count, 1);
+
+  const int persistent_submits = target.persistent_submit_count;
+  const int dynamic_submits = target.dynamic_submit_count;
+  EXPECT_TRUE(submit_pane(0u, 1.0f).camera_only);
+  EXPECT_TRUE(submit_pane(1u, 2.0f).camera_only);
+  EXPECT_EQ(selection_provider.build_count, 1);
+  EXPECT_EQ(target.persistent_submit_count, persistent_submits);
+  EXPECT_EQ(target.dynamic_submit_count, dynamic_submits);
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,

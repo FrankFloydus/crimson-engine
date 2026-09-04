@@ -20,6 +20,7 @@
 #include "ui/qt_main_window.hpp"
 #include "ui/qt_retained_message_box.hpp"
 #include "ui/qt_settings_dialog.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -49,6 +50,7 @@
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QStringList>
 #include <QTableView>
 #include <QTemporaryDir>
@@ -178,10 +180,13 @@ void send_key(QWidget &target, int key,
   process_animated_clicks();
 }
 
-std::size_t count_changes(const std::vector<QtSettingsChangeKind> &changes,
+std::size_t count_changes(const std::vector<QtSettingsChange> &changes,
                           QtSettingsChangeKind kind) {
   return static_cast<std::size_t>(
-      std::count(changes.begin(), changes.end(), kind));
+      std::count_if(changes.begin(), changes.end(),
+                    [kind](const QtSettingsChange &change) {
+                      return change.kind == kind;
+                    }));
 }
 
 std::string read_text_file(const std::filesystem::path &path) {
@@ -525,7 +530,7 @@ TEST(QtSettingsDialogTests,
   const float initial_thickness = viewport_settings.float_value(
       ViewportFloatSettingId::GridMajorLineSize);
 
-  std::vector<QtSettingsChangeKind> changes;
+  std::vector<QtSettingsChange> changes;
   QtSettingsDialog dialog;
   dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
   SceneSession settings_session;
@@ -533,7 +538,7 @@ TEST(QtSettingsDialogTests,
       QuaderApiSessionInternalAccess::from_scene_session(settings_session));
   dialog.set_context(
       ui_settings, viewport_settings, localization, settings_editor.commands(),
-      [&](QtSettingsChangeKind kind) { changes.push_back(kind); });
+      [&](const QtSettingsChange &change) { changes.push_back(change); });
 
   auto *category_list =
       dialog.findChild<QListWidget *>(QStringLiteral("settingsCategories"));
@@ -973,6 +978,316 @@ TEST(QtSettingsDialogTests,
 }
 
 TEST(QtSettingsDialogTests,
+     InterfaceScalePreviewsAppliesAndRollsBackToLastAppliedValue) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-interface-scale-settings-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  std::vector<QtSettingsChange> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) { changes.push_back(change); });
+
+  auto *scale = dialog.findChild<QSpinBox *>(
+      QStringLiteral("settingsInterfaceScale"));
+  auto *apply =
+      dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  auto *cancel =
+      dialog.findChild<QPushButton *>(QStringLiteral("settingsCancel"));
+  auto *ok = dialog.findChild<QPushButton *>(QStringLiteral("settingsOk"));
+  auto *categories =
+      dialog.findChild<QListWidget *>(QStringLiteral("settingsCategories"));
+  auto *keybindings_table = dialog.findChild<QTableView *>(
+      QStringLiteral("settingsKeybindingsTable"));
+  ASSERT_NE(scale, nullptr);
+  ASSERT_NE(apply, nullptr);
+  ASSERT_NE(cancel, nullptr);
+  ASSERT_NE(ok, nullptr);
+  ASSERT_NE(categories, nullptr);
+  ASSERT_NE(keybindings_table, nullptr);
+
+  QHeaderView *vertical_header = keybindings_table->verticalHeader();
+  QHeaderView *horizontal_header = keybindings_table->horizontalHeader();
+  horizontal_header->resizeSection(0, 350);
+  horizontal_header->resizeSection(1, 190);
+  horizontal_header->resizeSection(2, 170);
+  dialog.apply_ui_scale(QtUiScaleMetrics{2.0f, 1u});
+  EXPECT_EQ(categories->minimumWidth(), 320);
+  EXPECT_EQ(categories->maximumWidth(), 440);
+  EXPECT_EQ(vertical_header->minimumSectionSize(), 36);
+  EXPECT_EQ(vertical_header->defaultSectionSize(), 40);
+  EXPECT_EQ(horizontal_header->minimumSectionSize(), 160);
+  EXPECT_EQ(horizontal_header->sectionSize(0), 700);
+  EXPECT_EQ(horizontal_header->sectionSize(1), 380);
+  EXPECT_EQ(horizontal_header->sectionSize(2), 340);
+  dialog.apply_ui_scale(QtUiScaleMetrics{2.0f, 2u});
+  EXPECT_EQ(horizontal_header->sectionSize(0), 700);
+  horizontal_header->resizeSection(0, 750);
+  dialog.apply_ui_scale(QtUiScaleMetrics{1.0f, 3u});
+  EXPECT_EQ(horizontal_header->sectionSize(0), 375);
+  EXPECT_EQ(horizontal_header->sectionSize(1), 190);
+  EXPECT_EQ(horizontal_header->sectionSize(2), 170);
+
+  dialog.show();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(scale->minimum(), 50);
+  EXPECT_EQ(scale->maximum(), 300);
+  EXPECT_EQ(scale->singleStep(), 5);
+  EXPECT_EQ(scale->suffix(), QStringLiteral("%"));
+  EXPECT_EQ(scale->value(), 100);
+  EXPECT_FLOAT_EQ(ui_settings.interface_scale(), 1.0f);
+  EXPECT_FALSE(apply->isEnabled());
+
+  scale->setValue(150);
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes.back().kind, QtSettingsChangeKind::InterfacePreview);
+  ASSERT_TRUE(changes.back().interface_scale.has_value());
+  EXPECT_FLOAT_EQ(*changes.back().interface_scale, 1.5f);
+  EXPECT_FLOAT_EQ(ui_settings.interface_scale(), 1.0f);
+  EXPECT_TRUE(apply->isEnabled());
+
+  apply->click();
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(dialog.isVisible());
+  EXPECT_FLOAT_EQ(ui_settings.interface_scale(), 1.5f);
+  EXPECT_FALSE(apply->isEnabled());
+  ASSERT_EQ(changes.size(), 2u);
+  EXPECT_EQ(changes.back().kind, QtSettingsChangeKind::InterfaceCommit);
+  ASSERT_TRUE(changes.back().interface_scale.has_value());
+  EXPECT_FLOAT_EQ(*changes.back().interface_scale, 1.5f);
+
+  scale->setValue(200);
+  ASSERT_EQ(changes.size(), 3u);
+  EXPECT_EQ(changes.back().kind, QtSettingsChangeKind::InterfacePreview);
+  ASSERT_TRUE(changes.back().interface_scale.has_value());
+  EXPECT_FLOAT_EQ(*changes.back().interface_scale, 2.0f);
+  cancel->click();
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(dialog.isVisible());
+  EXPECT_FLOAT_EQ(ui_settings.interface_scale(), 1.5f);
+  ASSERT_EQ(changes.size(), 4u);
+  EXPECT_EQ(changes.back().kind, QtSettingsChangeKind::InterfacePreview);
+  ASSERT_TRUE(changes.back().interface_scale.has_value());
+  EXPECT_FLOAT_EQ(*changes.back().interface_scale, 1.5f);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::InterfaceCommit), 1u);
+
+  dialog.show();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(scale->value(), 150);
+  scale->setValue(200);
+  ASSERT_EQ(changes.back().kind, QtSettingsChangeKind::InterfacePreview);
+  ui_settings.set_interface_scale(1.25f);
+  dialog.refresh();
+  EXPECT_EQ(scale->value(), 125);
+  EXPECT_FALSE(apply->isEnabled());
+  scale->setValue(300);
+  ok->click();
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(dialog.isVisible());
+  EXPECT_EQ(dialog.result(), QDialog::Accepted);
+  EXPECT_FLOAT_EQ(ui_settings.interface_scale(), 3.0f);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::InterfaceCommit), 2u);
+  EXPECT_EQ(changes.back().kind, QtSettingsChangeKind::InterfaceCommit);
+  ASSERT_TRUE(changes.back().interface_scale.has_value());
+  EXPECT_FLOAT_EQ(*changes.back().interface_scale, 3.0f);
+}
+
+TEST(QtSettingsDialogTests,
+     VisibleContextRebindRollsBackTheOldPreviewAndStartsANewTransaction) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-interface-scale-rebind-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  UISettings old_ui_settings = UISettings::defaults();
+  old_ui_settings.set_interface_scale(1.25f);
+  ViewportSettings old_viewport_settings = ViewportSettings::defaults();
+  UISettings new_ui_settings = UISettings::defaults();
+  new_ui_settings.set_interface_scale(0.75f);
+  ViewportSettings new_viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  std::vector<QtSettingsChange> changes;
+  const auto record_change = [&](const QtSettingsChange &change) {
+    changes.push_back(change);
+  };
+
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(old_ui_settings, old_viewport_settings, localization,
+                     editor.commands(), record_change);
+  auto *scale = dialog.findChild<QSpinBox *>(
+      QStringLiteral("settingsInterfaceScale"));
+  auto *apply =
+      dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  auto *cancel =
+      dialog.findChild<QPushButton *>(QStringLiteral("settingsCancel"));
+  ASSERT_NE(scale, nullptr);
+  ASSERT_NE(apply, nullptr);
+  ASSERT_NE(cancel, nullptr);
+
+  dialog.show();
+  QCoreApplication::processEvents();
+  scale->setValue(200);
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_FLOAT_EQ(*changes.back().interface_scale, 2.0f);
+
+  dialog.set_context(new_ui_settings, new_viewport_settings, localization,
+                     editor.commands(), record_change);
+  ASSERT_TRUE(dialog.isVisible());
+  ASSERT_EQ(changes.size(), 2u);
+  EXPECT_EQ(changes.back().kind, QtSettingsChangeKind::InterfacePreview);
+  ASSERT_TRUE(changes.back().interface_scale.has_value());
+  EXPECT_FLOAT_EQ(*changes.back().interface_scale, 1.25f)
+      << "rebinding must first roll back the old owner's live preview";
+  EXPECT_EQ(scale->value(), 75);
+  EXPECT_FALSE(apply->isEnabled());
+
+  scale->setValue(100);
+  EXPECT_TRUE(apply->isEnabled());
+  cancel->click();
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(dialog.isVisible());
+  EXPECT_FLOAT_EQ(new_ui_settings.interface_scale(), 0.75f);
+  ASSERT_TRUE(changes.back().interface_scale.has_value());
+  EXPECT_FLOAT_EQ(*changes.back().interface_scale, 0.75f);
+}
+
+TEST(QtSettingsDialogTests,
+     ExternalScaleCommitMatchingRollbackBaselineClearsActivePreview) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-interface-scale-external-sync-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  std::vector<QtSettingsChange> changes;
+
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) { changes.push_back(change); });
+  auto *scale = dialog.findChild<QSpinBox *>(
+      QStringLiteral("settingsInterfaceScale"));
+  auto *apply =
+      dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  ASSERT_NE(scale, nullptr);
+  ASSERT_NE(apply, nullptr);
+
+  dialog.show();
+  QCoreApplication::processEvents();
+  scale->setValue(200);
+  ASSERT_TRUE(apply->isEnabled());
+  ASSERT_EQ(changes.size(), 1u);
+  ASSERT_FLOAT_EQ(*changes.back().interface_scale, 2.0f);
+
+  // The public API has reapplied the already-persisted 100% baseline. The
+  // dialog must drop only its stale scale draft even though the target value
+  // itself did not change.
+  dialog.synchronize_interface_scale();
+  EXPECT_EQ(scale->value(), 100);
+  EXPECT_FALSE(apply->isEnabled());
+  EXPECT_EQ(changes.size(), 1u);
+  EXPECT_FLOAT_EQ(ui_settings.interface_scale(), 1.0f);
+}
+
+TEST(QtSettingsDialogTests,
+     FailedInterfacePersistenceRollsBackCombinedApplyAndKeepsDraftForRetry) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-interface-scale-save-failure-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  std::vector<QtSettingsChange> changes;
+  int persistence_attempts = 0;
+
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) { changes.push_back(change); },
+      [&]() {
+        ++persistence_attempts;
+        return false;
+      });
+  auto *scale = dialog.findChild<QSpinBox *>(
+      QStringLiteral("settingsInterfaceScale"));
+  auto *grid_major_line_size = dialog.findChild<QDoubleSpinBox *>(
+      QStringLiteral("viewportSetting_GridMajorLineSize"));
+  auto *apply =
+      dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  ASSERT_NE(scale, nullptr);
+  ASSERT_NE(grid_major_line_size, nullptr);
+  ASSERT_NE(apply, nullptr);
+
+  const float initial_grid_major_line_size = viewport_settings.float_value(
+      ViewportFloatSettingId::GridMajorLineSize);
+
+  dialog.show();
+  QCoreApplication::processEvents();
+  scale->setValue(150);
+  grid_major_line_size->setValue(2.5);
+  apply->click();
+  QCoreApplication::processEvents();
+
+  EXPECT_TRUE(dialog.isVisible());
+  EXPECT_EQ(persistence_attempts, 1);
+  EXPECT_FLOAT_EQ(ui_settings.interface_scale(), 1.0f);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::GridMajorLineSize),
+                  initial_grid_major_line_size);
+  EXPECT_EQ(scale->value(), 150);
+  EXPECT_DOUBLE_EQ(grid_major_line_size->value(), 2.5);
+  EXPECT_TRUE(apply->isEnabled());
+  ASSERT_EQ(changes.size(), 2u);
+  EXPECT_EQ(changes[0].kind, QtSettingsChangeKind::InterfacePreview);
+  EXPECT_EQ(changes[1].kind, QtSettingsChangeKind::InterfaceCommit);
+  ASSERT_TRUE(changes[1].interface_scale.has_value());
+  EXPECT_FLOAT_EQ(*changes[1].interface_scale, 1.0f);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 0u)
+      << "a failed combined Apply must not publish or persist viewport state";
+
+  auto *error = dynamic_cast<QtRetainedMessageBox *>(
+      dialog.findChild<QWidget *>(
+          QStringLiteral("settingsPersistenceErrorDialog")));
+  ASSERT_NE(error, nullptr);
+  EXPECT_TRUE(error->isVisible());
+  error->done(QDialog::Accepted);
+  dialog.reject();
+}
+
+TEST(QtSettingsDialogTests,
      KeybindingEditorListsEveryCatalogRowByContext) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -998,12 +1313,12 @@ TEST(QtSettingsDialogTests,
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();
   LocalizationService localization = loaded_localization();
-  std::vector<QtSettingsChangeKind> changes;
+  std::vector<QtSettingsChange> changes;
   QtSettingsDialog dialog;
   dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
   dialog.set_context(
       ui_settings, viewport_settings, localization, editor.commands(),
-      [&](QtSettingsChangeKind kind) { changes.push_back(kind); });
+      [&](const QtSettingsChange &change) { changes.push_back(change); });
 
   auto *category_list =
       dialog.findChild<QListWidget *>(QStringLiteral("settingsCategories"));
@@ -1406,12 +1721,12 @@ TEST(QtSettingsDialogTests,
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();
   LocalizationService localization = loaded_localization();
-  std::vector<QtSettingsChangeKind> changes;
+  std::vector<QtSettingsChange> changes;
   QtSettingsDialog dialog;
   dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
   dialog.set_context(
       ui_settings, viewport_settings, localization, editor.commands(),
-      [&](QtSettingsChangeKind kind) { changes.push_back(kind); });
+      [&](const QtSettingsChange &change) { changes.push_back(change); });
   dialog.show();
   QCoreApplication::processEvents();
 
@@ -1643,12 +1958,12 @@ TEST(QtSettingsDialogTests,
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();
   LocalizationService localization = loaded_localization();
-  std::vector<QtSettingsChangeKind> changes;
+  std::vector<QtSettingsChange> changes;
   QtSettingsDialog dialog;
   dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
   dialog.set_context(
       ui_settings, viewport_settings, localization, editor.commands(),
-      [&](QtSettingsChangeKind kind) { changes.push_back(kind); });
+      [&](const QtSettingsChange &change) { changes.push_back(change); });
   dialog.show();
   QCoreApplication::processEvents();
 
@@ -1809,12 +2124,12 @@ TEST(QtSettingsDialogTests,
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();
   LocalizationService localization = loaded_localization();
-  std::vector<QtSettingsChangeKind> changes;
+  std::vector<QtSettingsChange> changes;
   QtSettingsDialog dialog;
   dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
   dialog.set_context(
       ui_settings, viewport_settings, localization, editor.commands(),
-      [&](QtSettingsChangeKind kind) { changes.push_back(kind); });
+      [&](const QtSettingsChange &change) { changes.push_back(change); });
   dialog.show();
   QCoreApplication::processEvents();
 

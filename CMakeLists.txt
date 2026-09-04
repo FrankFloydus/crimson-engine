@@ -867,6 +867,7 @@ add_library(quader_ui STATIC
     src/ui/qt_material_browser_window.cpp
     src/ui/qt_material_find_replace_dialog.cpp
     src/ui/qt_material_presentation.cpp
+    src/ui/qt_multiresolution_icon.cpp
     src/ui/qt_material_preview_surface.cpp
     src/ui/qt_standard_material_preview_image_cache.cpp
     src/ui/qt_standard_material_editor_window.cpp
@@ -882,6 +883,7 @@ add_library(quader_ui STATIC
     src/ui/qt_viewport_display_toolbar.cpp
     src/ui/qt_texture_toolbar.cpp
     src/ui/qt_toolbar_button_presentation.cpp
+    src/ui/qt_ui_scale_metrics.cpp
     src/ui/qt_semantic_axis_colors.hpp
     src/ui/qt_auxiliary_window_state.cpp
     src/ui/qt_settings_dialog.cpp

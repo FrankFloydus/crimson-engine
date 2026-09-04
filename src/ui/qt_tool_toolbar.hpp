@@ -18,12 +18,14 @@
 #include <string_view>
 
 class QAction;
+class QEvent;
 class QWidget;
 
 namespace quader {
 
 class LocalizationService;
 class QuaderEditorApi;
+class QtUiScaleMetrics;
 
 /**
  * Presents the primary modeling tools as one movable native Qt toolbar.
@@ -33,6 +35,7 @@ class QtToolToolbar final : public QToolBar {
 public:
   explicit QtToolToolbar(QWidget *parent = nullptr);
 
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void set_localization(const LocalizationService &localization);
   void synchronize(const QuaderEditorApi &editor,
                    const QuaderSelectionSummary &selection,
@@ -42,7 +45,12 @@ public:
   void set_transform_space_toggle_requested_callback(
       std::function<void()> callback);
 
+protected:
+  bool event(QEvent *event) override;
+
 private:
+  void refresh_curve_tool_icon();
+
   /// Binds one canonical viewport tool identity to its retained Qt action.
   struct ToolAction {
     QAction *action = nullptr;
@@ -51,6 +59,7 @@ private:
   };
 
   std::array<ToolAction, 16> tool_actions_{};
+  QAction *curve_action_ = nullptr;
   QAction *transform_space_action_ = nullptr;
   bool synchronization_valid_ = false;
   std::string synchronized_active_tool_;

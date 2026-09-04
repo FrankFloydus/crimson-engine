@@ -22,6 +22,7 @@
 #include "ui/qt_texture_toolbar.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_tool_toolbar.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
 #include "ui/ui_system.hpp"
@@ -51,11 +52,14 @@
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QImage>
+#include <QLayout>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPalette>
 #include <QPushButton>
 #include <QPixmap>
 #include <QScreen>
+#include <QSpinBox>
 #include <QStackedWidget>
 #include <QStyleOption>
 #include <QTableView>
@@ -63,8 +67,11 @@
 #include <QToolButton>
 
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -175,7 +182,104 @@ void expect_popup_restores_committed_combo_item(QComboBox &combo,
   combo.hidePopup();
 }
 
+bool set_local_app_data(const std::optional<std::string> &value) {
+#if defined(_WIN32)
+  return _putenv_s("LOCALAPPDATA", value ? value->c_str() : "") == 0;
+#else
+  return value ? ::setenv("LOCALAPPDATA", value->c_str(), 1) == 0
+               : ::unsetenv("LOCALAPPDATA") == 0;
+#endif
+}
+
+class ScopedIsolatedLocalAppData final {
+public:
+  explicit ScopedIsolatedLocalAppData(std::filesystem::path profile)
+      : profile_(std::move(profile)) {
+    if (const char *current = std::getenv("LOCALAPPDATA")) {
+      previous_ = current;
+    }
+    std::error_code error;
+    std::filesystem::remove_all(profile_, error);
+    error.clear();
+    if (!std::filesystem::create_directories(profile_, error) || error) {
+      return;
+    }
+    active_ = set_local_app_data(profile_.string());
+  }
+
+  ~ScopedIsolatedLocalAppData() {
+    (void)set_local_app_data(previous_);
+    std::error_code error;
+    std::filesystem::remove_all(profile_, error);
+  }
+
+  ScopedIsolatedLocalAppData(const ScopedIsolatedLocalAppData &) = delete;
+  ScopedIsolatedLocalAppData &
+  operator=(const ScopedIsolatedLocalAppData &) = delete;
+
+  [[nodiscard]] bool active() const noexcept { return active_; }
+  [[nodiscard]] const std::filesystem::path &profile() const noexcept {
+    return profile_;
+  }
+
+private:
+  std::filesystem::path profile_;
+  std::optional<std::string> previous_;
+  bool active_ = false;
+};
+
+std::optional<std::string>
+read_binary_file(const std::filesystem::path &path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input.is_open()) {
+    return std::nullopt;
+  }
+  return std::string(std::istreambuf_iterator<char>(input),
+                     std::istreambuf_iterator<char>());
+}
+
 } // namespace
+
+TEST(QtProjectWorkspaceTests,
+     RefreshesOnlyGeneratedCurveIconForPaletteChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader_tool_toolbar_palette_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  QPalette palette = QApplication::palette();
+  palette.setColor(QPalette::ButtonText, QColor(211, 37, 53));
+  palette.setColor(QPalette::Mid, QColor(113, 23, 41));
+  palette.setColor(QPalette::Highlight, QColor(241, 193, 17));
+  QApplication::setPalette(palette);
+
+  quader::QtToolToolbar toolbar;
+  auto *curve =
+      toolbar.findChild<QAction *>(QStringLiteral("tool_curve"));
+  auto *select =
+      toolbar.findChild<QAction *>(QStringLiteral("tool_select"));
+  ASSERT_NE(curve, nullptr);
+  ASSERT_NE(select, nullptr);
+  const qint64 initial_curve_key = curve->icon().cacheKey();
+  const qint64 initial_select_key = select->icon().cacheKey();
+
+  palette.setColor(QPalette::ButtonText, QColor(29, 197, 83));
+  palette.setColor(QPalette::Mid, QColor(17, 97, 47));
+  QApplication::setPalette(palette);
+  QCoreApplication::processEvents();
+  const qint64 application_curve_key = curve->icon().cacheKey();
+  EXPECT_NE(application_curve_key, initial_curve_key);
+  EXPECT_EQ(select->icon().cacheKey(), initial_select_key)
+      << "palette changes must not rebuild resource-backed tool icons";
+
+  palette.setColor(QPalette::ButtonText, QColor(37, 89, 223));
+  palette.setColor(QPalette::Highlight, QColor(173, 73, 229));
+  toolbar.setPalette(palette);
+  EXPECT_NE(curve->icon().cacheKey(), application_curve_key);
+  EXPECT_EQ(select->icon().cacheKey(), initial_select_key);
+}
 
 TEST(QtProjectWorkspaceTests,
      EditorToolbarsKeepNativeButtonFacesVisibleAtRest) {
@@ -195,6 +299,40 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
   EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 17);
+  QToolButton *scale_metric_probe = nullptr;
+  for (QToolButton *candidate :
+       selection_toolbar.findChildren<QToolButton *>()) {
+    if (candidate->defaultAction() != nullptr &&
+        candidate->defaultAction()->isCheckable()) {
+      scale_metric_probe = candidate;
+      break;
+    }
+  }
+  ASSERT_NE(scale_metric_probe, nullptr);
+  const int baseline_button_margin = scale_metric_probe->style()->pixelMetric(
+      QStyle::PM_ButtonMargin, nullptr, scale_metric_probe);
+
+  selection_toolbar.apply_ui_scale(
+      quader::QtUiScaleMetrics(2.0F, 1U));
+  tool_toolbar.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(selection_toolbar.iconSize(), QSize(64, 64));
+  EXPECT_EQ(tool_toolbar.iconSize(), QSize(64, 64));
+  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 60), 5);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 17);
+  EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
+                QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
+            baseline_button_margin * 2);
+
+  selection_toolbar.apply_ui_scale(
+      quader::QtUiScaleMetrics(1.0F, 2U));
+  tool_toolbar.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
+  EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
+  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 17);
+  EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
+                QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
+            baseline_button_margin);
   for (QToolButton *button :
        selection_toolbar.findChildren<QToolButton *>()) {
     if (button->defaultAction() != nullptr &&
@@ -346,6 +484,19 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(grid_combo->maximumHeight(), 30);
   EXPECT_EQ(angle_combo->minimumHeight(), 30);
   EXPECT_EQ(angle_combo->maximumHeight(), 30);
+
+  toolbar.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(toolbar.iconSize(), QSize(64, 64));
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 60), 4);
+  EXPECT_EQ(grid_combo->minimumHeight(), 60);
+  EXPECT_EQ(grid_combo->maximumHeight(), 60);
+  EXPECT_EQ(angle_combo->minimumHeight(), 60);
+  EXPECT_EQ(angle_combo->maximumHeight(), 60);
+  toolbar.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 4);
+  EXPECT_EQ(grid_combo->minimumHeight(), 30);
+  EXPECT_EQ(grid_combo->maximumHeight(), 30);
 
   const auto grid_catalog = quader::viewport_grid_preset_catalog();
   ASSERT_EQ(grid_combo->count(), static_cast<int>(grid_catalog.size()));
@@ -584,6 +735,12 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_TRUE(toolbar.isFloatable());
   EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 4);
+  toolbar.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(toolbar.iconSize(), QSize(64, 64));
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 60), 4);
+  toolbar.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 4);
 
   std::vector<QAction *> actions;
   for (QAction *action : toolbar.actions()) {
@@ -708,6 +865,12 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(toolbar.windowTitle(), QStringLiteral("Texturing"));
   EXPECT_TRUE(toolbar.isMovable());
   EXPECT_TRUE(toolbar.isFloatable());
+  EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 2);
+  toolbar.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(toolbar.iconSize(), QSize(64, 64));
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 60), 2);
+  toolbar.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
   EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 2);
   EXPECT_GE(toolbar.geometry().left(), display_toolbar.geometry().right());
@@ -1219,6 +1382,36 @@ TEST(QtProjectWorkspaceTests,
   auto *recent_view = home.findChild<QTableView *>(
       QStringLiteral("projectHome.recentProjects.view"));
   ASSERT_NE(recent_view, nullptr);
+  auto *brand_name = home.findChild<QLabel *>(
+      QStringLiteral("projectHome.brand.name"));
+  ASSERT_NE(brand_name, nullptr);
+
+  home.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(left_rail->minimumWidth(), 496);
+  EXPECT_EQ(left_rail->maximumWidth(), 496);
+  EXPECT_EQ(left_rail->layout()->contentsMargins(), QMargins(56, 64, 56, 56));
+  EXPECT_EQ(brand_icon->minimumSize(), QSize(88, 88));
+  EXPECT_EQ(brand_icon->maximumSize(), QSize(88, 88));
+  EXPECT_DOUBLE_EQ(brand_name->font().pointSizeF(), 30.0);
+  EXPECT_EQ(recent_view->verticalHeader()->defaultSectionSize(), 96);
+  EXPECT_EQ(recent_view->columnWidth(
+                quader::QtRecentProjectsModel::LastModifiedColumn),
+            368);
+  EXPECT_EQ(recent_view->columnWidth(
+                quader::QtRecentProjectsModel::SizeColumn),
+            224);
+  EXPECT_EQ(recent_view->columnWidth(
+                quader::QtRecentProjectsModel::ActionsColumn),
+            144);
+
+  home.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(left_rail->minimumWidth(), 248);
+  EXPECT_EQ(left_rail->maximumWidth(), 248);
+  EXPECT_EQ(left_rail->layout()->contentsMargins(), QMargins(28, 32, 28, 28));
+  EXPECT_EQ(brand_icon->minimumSize(), QSize(44, 44));
+  EXPECT_EQ(brand_icon->maximumSize(), QSize(44, 44));
+  EXPECT_DOUBLE_EQ(brand_name->font().pointSizeF(), 15.0);
+  EXPECT_EQ(recent_view->verticalHeader()->defaultSectionSize(), 48);
   ASSERT_EQ(recent_view->model()->columnCount(),
             quader::QtRecentProjectsModel::ColumnCount);
   EXPECT_EQ(recent_view->model()
@@ -1394,6 +1587,14 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_NE(breadcrumb_bar, nullptr);
   ASSERT_NE(scene_crumb, nullptr);
   ASSERT_NE(instance_crumb, nullptr);
+  workspace.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(breadcrumb_bar->layout()->contentsMargins(),
+            QMargins(12, 4, 12, 4));
+  EXPECT_EQ(breadcrumb_bar->layout()->spacing(), 8);
+  workspace.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(breadcrumb_bar->layout()->contentsMargins(),
+            QMargins(6, 2, 6, 2));
+  EXPECT_EQ(breadcrumb_bar->layout()->spacing(), 4);
   EXPECT_TRUE(breadcrumb_bar->isHidden());
   const int unchanged_tab_count = workspace.tab_bar().count();
   workspace.set_instance_edit_breadcrumb(quader::QtInstanceEditBreadcrumb{
@@ -1525,5 +1726,118 @@ TEST(QtProjectWorkspaceTests,
       bound_scene->modeling(), quader::kInvalidAssetId,
       bound_scene->native_tools(), &bound_scene->point_placement(), 1.0 / 60.0);
 
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
+     InterfaceScaleFlowsThroughTheRealUiSystemAndPublicPreferencesHook) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const std::filesystem::path isolated_profile =
+      std::filesystem::temp_directory_path() /
+      ("quader-ui-system-interface-scale-" +
+       std::to_string(std::chrono::steady_clock::now()
+                          .time_since_epoch()
+                          .count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+
+  int argc = 1;
+  char application_name[] = "quader-interface-scale-ui-system-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  const std::filesystem::path resource_root =
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const std::filesystem::path settings_path =
+      scoped_profile.profile() / "Quader" / "ui_settings.ini";
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ASSERT_NE(ui.main_window(), nullptr);
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+
+  quader::SceneSession &scene = project.fallback_scene();
+  ui.install_runtime_hooks(
+      editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(),
+      quader::kInvalidAssetId);
+
+  auto *scale_style =
+      dynamic_cast<quader::QtUiScaleProxyStyle *>(QApplication::style());
+  ASSERT_NE(scale_style, nullptr);
+  EXPECT_FLOAT_EQ(scale_style->metrics().factor(), 1.0F);
+
+  QAction *settings_action = ui.main_window()->findChild<QAction *>(
+      QStringLiteral("action_settings"));
+  QWidget *settings_dialog = ui.main_window()->findChild<QWidget *>(
+      QStringLiteral("settingsDialog"));
+  ASSERT_NE(settings_action, nullptr);
+  ASSERT_NE(settings_dialog, nullptr);
+  settings_dialog->setAttribute(Qt::WA_DontShowOnScreen, true);
+  settings_action->trigger();
+  QCoreApplication::processEvents();
+  ASSERT_TRUE(settings_dialog->isVisible());
+
+  auto *scale = settings_dialog->findChild<QSpinBox *>(
+      QStringLiteral("settingsInterfaceScale"));
+  auto *apply = settings_dialog->findChild<QPushButton *>(
+      QStringLiteral("settingsApply"));
+  ASSERT_NE(scale, nullptr);
+  ASSERT_NE(apply, nullptr);
+  EXPECT_EQ(scale->value(), 100);
+  EXPECT_FALSE(apply->isEnabled());
+
+  scale->setValue(150);
+  QCoreApplication::processEvents();
+  EXPECT_FLOAT_EQ(scale_style->metrics().factor(), 1.5F);
+  EXPECT_DOUBLE_EQ(editor.preferences().interface_scale(), 1.0);
+  EXPECT_TRUE(apply->isEnabled());
+
+  const quader::QuaderApiVoidResult committed =
+      editor.preferences().set_interface_scale(2.0);
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_TRUE(committed.changed());
+  QCoreApplication::processEvents();
+  EXPECT_FLOAT_EQ(scale_style->metrics().factor(), 2.0F);
+  EXPECT_DOUBLE_EQ(editor.preferences().interface_scale(), 2.0);
+  EXPECT_EQ(scale->value(), 200);
+  EXPECT_FALSE(apply->isEnabled());
+  ASSERT_TRUE(std::filesystem::exists(settings_path));
+  EXPECT_FLOAT_EQ(quader::UISettings::load(settings_path).interface_scale(),
+                  2.0F);
+
+  const std::optional<std::string> committed_contents =
+      read_binary_file(settings_path);
+  ASSERT_TRUE(committed_contents.has_value());
+  std::error_code timestamp_error;
+  const auto committed_write_time =
+      std::filesystem::last_write_time(settings_path, timestamp_error);
+  ASSERT_FALSE(timestamp_error);
+  std::filesystem::last_write_time(
+      settings_path, committed_write_time - std::chrono::hours(24),
+      timestamp_error);
+  ASSERT_FALSE(timestamp_error);
+  const auto no_op_write_time =
+      std::filesystem::last_write_time(settings_path, timestamp_error);
+  ASSERT_FALSE(timestamp_error);
+
+  const quader::QuaderApiVoidResult no_op =
+      editor.preferences().set_interface_scale(2.0);
+  ASSERT_TRUE(no_op.ok()) << no_op.error_message();
+  EXPECT_FALSE(no_op.changed());
+  EXPECT_EQ(read_binary_file(settings_path), committed_contents);
+  EXPECT_EQ(std::filesystem::last_write_time(settings_path, timestamp_error),
+            no_op_write_time);
+  EXPECT_FALSE(timestamp_error);
+  EXPECT_FLOAT_EQ(scale_style->metrics().factor(), 2.0F);
+  EXPECT_EQ(scale->value(), 200);
+  EXPECT_FALSE(apply->isEnabled());
+
+  settings_dialog->close();
+  QCoreApplication::processEvents();
   ui.shutdown();
 }

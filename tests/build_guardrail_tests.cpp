@@ -4094,13 +4094,19 @@ TEST(BuildGuardrailTests, RuntimeUiUsesQtWidgetsWithFusionBaseline) {
 
   EXPECT_EQ(count_occurrences(app_ui_source_text,
                               "QStyleFactory::create("),
-            1u);
+            2u);
+  EXPECT_NE(app_ui_source_text.find("design_metrics_style_"),
+            std::string::npos);
   EXPECT_EQ(count_occurrences(app_ui_source_text,
                                "QApplication::setStyle("),
-            1u);
+            2u);
   EXPECT_EQ(count_occurrences(app_ui_source_text,
                               "QApplication::setPalette("),
-            1u);
+            2u);
+  EXPECT_NE(app_ui_source_text.find("QtUiScaleProxyStyle"),
+            std::string::npos);
+  EXPECT_NE(app_ui_source_text.find("preserved_palette"),
+            std::string::npos);
   EXPECT_EQ(count_occurrences(main_source, "standardPalette()"), 1u);
   EXPECT_EQ(count_occurrences(theme_source, "standardPalette()"), 1u);
   EXPECT_EQ(count_occurrences(app_ui_source_text, "standardPalette()"), 2u);

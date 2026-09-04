@@ -21,6 +21,7 @@
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
+#include "viewport/viewport_pixel_scale.hpp"
 
 #include <algorithm>
 #include <array>
@@ -62,11 +63,13 @@ ViewportSelectionMarquee box_marquee(QVec2 start, QVec2 end) {
 }
 
 ModelingPickSelectRequest make_pick_select_request(
-    const ViewportCameraController &camera, const ViewportSettings &settings,
-    QVec2 local_mouse, ViewportModifiers modifiers, int click_count,
+    const ViewportInteractionFrame &frame, QVec2 local_mouse,
+    ViewportModifiers modifiers, int click_count,
     bool preserve_selection_on_miss, bool preserve_selection_on_selected_hit,
     bool preserve_existing_component_selection_on_hit = false,
     bool cycle_depth = false) {
+  const ViewportCameraController &camera = frame.camera;
+  const ViewportSettings &settings = frame.settings;
   const ViewportRay world_ray = camera.ray_from_viewport_point(local_mouse);
   return {
       .ray =
@@ -83,16 +86,18 @@ ModelingPickSelectRequest make_pick_select_request(
       .preserve_selection_on_selected_hit = preserve_selection_on_selected_hit,
       .preserve_existing_component_selection_on_hit =
           preserve_existing_component_selection_on_hit,
-      .vertex_radius =
+      .vertex_radius = viewport_scaled_world_pick_radius(
           settings.float_value(ViewportFloatSettingId::PickVertexRadius),
-      .edge_radius =
+          frame.viewport_pixel_scale, frame.input.device_pixel_ratio),
+      .edge_radius = viewport_scaled_world_pick_radius(
           settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
+          frame.viewport_pixel_scale, frame.input.device_pixel_ratio),
       .select_backfaces =
           settings.bool_value(ViewportBoolSettingId::BackfaceSelection),
       .cycle_depth = cycle_depth,
       .cycle_origin_tolerance =
           camera.state().projection == ViewportProjection::Orthographic
-              ? quader_editor_core::kSelectionBoxDefaultDragThreshold *
+              ? static_cast<double>(frame.pointer_drag_threshold_pixels) *
                     quader_editor_core::viewport_world_units_per_pixel(
                         ViewportCameraAdapter::runtime_camera(
                             camera, camera.viewport_size()),
@@ -101,10 +106,11 @@ ModelingPickSelectRequest make_pick_select_request(
   };
 }
 
-QuaderHoverRequest make_hover_request(const ViewportCameraController &camera,
-                                      const ViewportSettings &settings,
+QuaderHoverRequest make_hover_request(const ViewportInteractionFrame &frame,
                                       QVec2 local_mouse,
                                       ViewportModifiers modifiers) {
+  const ViewportCameraController &camera = frame.camera;
+  const ViewportSettings &settings = frame.settings;
   const ViewportRay world_ray = camera.ray_from_viewport_point(local_mouse);
   return {
       .ray =
@@ -114,10 +120,12 @@ QuaderHoverRequest make_hover_request(const ViewportCameraController &camera,
       },
       .selected_modifier_pressed = modifiers.primary,
       .face_plane_hover = kFacePlaneCutGestureEnabled && modifiers.alt,
-      .vertex_radius =
+      .vertex_radius = viewport_scaled_world_pick_radius(
           settings.float_value(ViewportFloatSettingId::PickVertexRadius),
-      .edge_radius =
+          frame.viewport_pixel_scale, frame.input.device_pixel_ratio),
+      .edge_radius = viewport_scaled_world_pick_radius(
           settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
+          frame.viewport_pixel_scale, frame.input.device_pixel_ratio),
       .select_backfaces =
           settings.bool_value(ViewportBoolSettingId::BackfaceSelection),
   };
@@ -236,6 +244,8 @@ std::vector<ViewportSceneHitCandidate> collect_selection_point_hits(
       curve != nullptr && curve->controls_editable()
           ? &curve->preview_state()
           : nullptr;
+  const double viewport_pixel_scale = static_cast<double>(
+      viewport_sanitized_pixel_scale(frame.viewport_pixel_scale));
   return collect_viewport_scene_point_hits({
       .camera = frame.camera,
       .local_mouse = local_mouse,
@@ -254,6 +264,8 @@ std::vector<ViewportSceneHitCandidate> collect_selection_point_hits(
       .include_curve_controls = curve_controls != nullptr,
       .include_occluded = include_occluded,
       .collect_all_mesh_surfaces = collect_all_mesh_surfaces,
+      .curve_radius_pixels = 8.0 * viewport_pixel_scale,
+      .curve_control_radius_pixels = 9.0 * viewport_pixel_scale,
       .surface_scratch = surface_scratch,
   });
 }
@@ -377,7 +389,7 @@ pick_selection(QuaderEditorApi &editor, ViewportInputRouter &input_router,
                bool curve_controls_only = false) {
   QDR_PROFILE_FUNCTION();
   const ModelingPickSelectRequest request = make_pick_select_request(
-          frame.camera, frame.settings, local_mouse,
+          frame, local_mouse,
           cycle_depth ? cycle_modifiers : click_modifiers,
           cycle_depth ? 1 : click_count, preserve_selection_on_miss,
           preserve_selection_on_selected_hit,
@@ -656,8 +668,7 @@ ViewportSelectionInteraction::prepare_frame(
             frame.input.selection_click_delay_for_double_click
                 ? frame.input.selection_click_modifiers
                 : frame.input.modifiers,
-            static_cast<float>(
-                quader_editor_core::kSelectionBoxDefaultDragThreshold),
+            frame.pointer_drag_threshold_pixels,
             frame.monotonic_time_seconds +
                 std::max(frame.double_click_interval_seconds, 0.0)),
         .selection = selection_owner(editor).capture_box_selection_baseline(),
@@ -691,10 +702,16 @@ bool ViewportSelectionInteraction::pending_click_matches_context(
   const ModelingPickSelectRequest &request = pending_first_pick_->request;
   return request.select_backfaces ==
              frame.settings.bool_value(ViewportBoolSettingId::BackfaceSelection) &&
-         request.vertex_radius ==
-             frame.settings.float_value(ViewportFloatSettingId::PickVertexRadius) &&
-         request.edge_radius ==
-             frame.settings.float_value(ViewportFloatSettingId::PickEdgeRadius);
+         request.vertex_radius == viewport_scaled_world_pick_radius(
+                                      frame.settings.float_value(
+                                          ViewportFloatSettingId::PickVertexRadius),
+                                      frame.viewport_pixel_scale,
+                                      frame.input.device_pixel_ratio) &&
+         request.edge_radius == viewport_scaled_world_pick_radius(
+                                    frame.settings.float_value(
+                                        ViewportFloatSettingId::PickEdgeRadius),
+                                    frame.viewport_pixel_scale,
+                                    frame.input.device_pixel_ratio);
 }
 
 ViewportSelectionApplyResult ViewportSelectionInteraction::commit_pending_pick(
@@ -747,7 +764,7 @@ ViewportSelectionInteraction::commit_pick_selection(
     pending_pointer.press.local = local_mouse;
     pending_pointer.modifiers = modifiers;
     const ModelingPickSelectRequest pending_request = make_pick_select_request(
-        frame.camera, frame.settings, local_mouse, modifiers, click_count,
+        frame, local_mouse, modifiers, click_count,
         preserve_selection_on_miss, preserve_selection_on_selected_hit,
         preserve_existing_component_selection_on_hit);
     ResolvedSelectionPointPick resolved = resolve_selection_point_pick(
@@ -968,7 +985,7 @@ void ViewportSelectionInteraction::handle_frame(
         } else {
           const ModelingPickSelectRequest hover_request =
               make_pick_select_request(
-                  frame.camera, frame.settings, local_mouse,
+                  frame, local_mouse,
                   frame.input.modifiers, 0, true, false);
           hover_suppressed_target_ = resolve_selection_point_target(
               selection_owner(editor), frame, local_mouse, hover_request,
@@ -1048,8 +1065,8 @@ void ViewportSelectionInteraction::handle_frame(
       frame.right_pressed) {
     QDR_PROFILE_SCOPE("Viewport face plane cut");
     const QuaderApiResult<QuaderHoverSummary> hover = editor.selection().hover(
-        make_hover_request(frame.camera, frame.settings,
-                           frame.right_click_local, frame.input.modifiers));
+        make_hover_request(frame, frame.right_click_local,
+                           frame.input.modifiers));
     if (!hover.ok) {
       LOG_ERROR("Viewport face-plane hover failed: {}",
                 hover.message.empty() ? "Hover failed." : hover.message);
@@ -1102,9 +1119,7 @@ void ViewportSelectionInteraction::handle_frame(
     box_pointer_ = viewport_pointer_gesture_from_latest_edge(
         frame.input.pointer_pressed_edges, QuaderMouseButton::Left,
         frame.left_click_local, frame.input.mouse_screen,
-        frame.input.modifiers,
-        static_cast<float>(
-            quader_editor_core::kSelectionBoxDefaultDragThreshold));
+        frame.input.modifiers, frame.pointer_drag_threshold_pixels);
     quader_editor_core::begin_selection_box(
         box_state_, box_pointer_->press.local, box_edit_);
   }
@@ -1115,7 +1130,7 @@ void ViewportSelectionInteraction::handle_frame(
         box_state_, frame.input.mouse_local,
         box_pointer_.has_value()
             ? static_cast<double>(box_pointer_->drag_threshold_pixels)
-            : quader_editor_core::kSelectionBoxDefaultDragThreshold);
+            : static_cast<double>(frame.pointer_drag_threshold_pixels));
     if (box_state_.dragging) {
       // Mouse motion only presents the marquee. Resolving and publishing a
       // selection here would synchronously rebuild SDK, scene, UI, and overlay
@@ -1158,7 +1173,7 @@ void ViewportSelectionInteraction::handle_frame(
             box_state_, frame.input.mouse_local, box_edit_,
             box_pointer_.has_value()
                 ? static_cast<double>(box_pointer_->drag_threshold_pixels)
-                 : quader_editor_core::kSelectionBoxDefaultDragThreshold);
+                : static_cast<double>(frame.pointer_drag_threshold_pixels));
     const ViewportModifiers click_modifiers =
         box_pointer_.has_value() ? box_pointer_->modifiers
                                  : frame.input.modifiers;
@@ -1273,7 +1288,7 @@ void ViewportSelectionInteraction::handle_frame(
   bool hover_suppressed_this_frame = false;
   if (can_hover && hover_suppressed_target_.has_value()) {
     const ModelingPickSelectRequest hover_request = make_pick_select_request(
-        frame.camera, frame.settings, frame.input.mouse_local,
+        frame, frame.input.mouse_local,
         frame.input.modifiers, 0, true, false);
     const std::optional<ResolvedSelectionTarget> hover =
         resolve_selection_point_target(selection_owner(editor), frame,
@@ -1293,7 +1308,7 @@ void ViewportSelectionInteraction::handle_frame(
     QDR_PROFILE_SCOPE("Viewport hover selection");
     ++work_stats_.hover_pick_count;
     const ModelingPickSelectRequest hover_request = make_pick_select_request(
-        frame.camera, frame.settings, frame.input.mouse_local,
+        frame, frame.input.mouse_local,
         frame.input.modifiers, 0, true, false);
     const std::optional<ResolvedSelectionTarget> hover_target =
         resolve_selection_point_target(selection_owner(editor), frame,

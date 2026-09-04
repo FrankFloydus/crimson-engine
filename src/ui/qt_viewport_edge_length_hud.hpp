@@ -8,6 +8,7 @@
 
 #include "api/quader_viewport_layout_types.hpp"
 #include "render/viewport_overlay_frame.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QObject>
 #include <QRect>
@@ -36,6 +37,8 @@ public:
   QtViewportEdgeLengthHud(const QtViewportEdgeLengthHud &) = delete;
   QtViewportEdgeLengthHud &operator=(const QtViewportEdgeLengthHud &) = delete;
 
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
+
   /// The signature is the caller's existing dynamic-overlay frame signature.
   /// Bounds are pane-local Qt logical pixels; camera coordinates are render pixels.
   void present(const ViewportOverlayFrame &frame, std::uint64_t frame_signature,
@@ -59,6 +62,7 @@ private:
   };
 
   std::array<QLabel *, 3> labels_ = {};
+  QtUiScaleMetrics ui_scale_metrics_;
   std::array<std::optional<Dimension>, 3> dimensions_ = {};
   std::array<QString, 3> dimension_texts_ = {};
   QRect logical_viewport_bounds_;

@@ -82,12 +82,20 @@ ViewportOverlayFrame build_persistent_frame(
   if (selection_overlay_visible && selection_overlay_frame != nullptr) {
     QDR_PROFILE_SCOPE("Viewport overlay copy cached selection frame");
     frame = *selection_overlay_frame;
+    ViewportOverlayStyleResolver::apply(
+        frame, settings,
+        ViewportOverlayStyleContext{
+            .selection_mode = request.selection_source.selection_context,
+            .projection = request.camera.projection,
+            .raster_scale = request.raster_scale,
+        });
   }
 
   const ViewportOverlayStyleRange scene_style_range{
       .triangle_begin = frame.triangles.size(),
       .line_begin = frame.lines.size(),
       .point_begin = frame.points.size(),
+      .icon_begin = frame.icons.size(),
   };
   if (request.scene_overlay_requested &&
       request.scene_overlay_snapshot != nullptr) {
@@ -105,6 +113,7 @@ ViewportOverlayFrame build_persistent_frame(
       ViewportOverlayStyleContext{
           .selection_mode = request.style_selection_context,
           .projection = request.camera.projection,
+          .raster_scale = request.raster_scale,
       },
       scene_style_range);
   return frame;
@@ -127,23 +136,19 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
                                        : empty_curve_preview;
   const CurveToolOverlaySourceStamp curve_source_stamp =
       CurveToolOverlayCache::source_stamp(curve_preview);
+  request.raster_scale =
+      viewport_overlay_sanitized_raster_scale(request.raster_scale);
   const std::uint64_t style_signature =
-      ViewportOverlayStyleResolver::style_signature(settings);
+      ViewportOverlayStyleResolver::style_signature(settings,
+                                                    request.raster_scale);
   const bool selection_overlay_visible =
       request.overlays_visible && request.selection_frame_provider != nullptr;
   if (selection_overlay_visible) {
-    const StyledSelectionSourceStamp source_stamp{
-        .source = request.selection_source,
-        .style_signature = style_signature,
-    };
+    const ViewportOverlaySelectionSourceStamp &source_stamp =
+        request.selection_source;
     if (!selection_source_.valid || selection_source_.stamp != source_stamp) {
       selection_source_.frame =
           request.selection_frame_provider->build_selection_overlay_frame();
-      ViewportOverlayStyleResolver::apply(
-          selection_source_.frame, settings,
-          ViewportOverlayStyleContext{
-              .selection_mode = request.selection_source.selection_context,
-          });
       selection_source_.stamp = source_stamp;
       ++selection_source_.publication_revision;
       selection_source_.valid = true;
@@ -158,6 +163,7 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
       .scene = scene_submission_stamp(request.scene_overlay_snapshot,
                                       request.scene_overlay_requested),
       .style_signature = style_signature,
+      .raster_scale = request.raster_scale,
       .scene_selection_mode = request.scene_selection_mode,
       .style_selection_context = request.style_selection_context,
       .projection = request.camera.projection,
@@ -181,6 +187,7 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
       .tool_preview_identity = request.tool_preview_overlay_identity,
       .tool_preview_revision = request.tool_preview_overlay_revision,
       .style_signature = style_signature,
+      .raster_scale = request.raster_scale,
       .style_selection_context = request.style_selection_context,
       .projection = request.camera.projection,
   };
@@ -196,7 +203,8 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
       pane.dynamic.tool_preview_identity !=
           dynamic_stamp.tool_preview_identity ||
       pane.dynamic.tool_preview_revision !=
-          dynamic_stamp.tool_preview_revision;
+          dynamic_stamp.tool_preview_revision ||
+      pane.dynamic.raster_scale != dynamic_stamp.raster_scale;
   bool dynamic_changed = !pane.dynamic_valid || pane.dynamic != dynamic_stamp;
   if (!persistent_changed || !dynamic_changed) {
     const ViewportOverlayCameraUpdate camera_update =
@@ -271,6 +279,7 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
         ViewportOverlayStyleContext{
             .selection_mode = request.style_selection_context,
             .projection = request.camera.projection,
+            .raster_scale = request.raster_scale,
         });
     target.submit_dynamic_overlay(request.viewport_index, request.layer_mask,
                                   std::move(dynamic_frame), request.camera);

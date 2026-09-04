@@ -69,7 +69,7 @@ void append_segment(ViewportOverlayFrame &frame,
 
 void ViewportSelectionMarqueeOverlayBuilder::append(
     ViewportOverlayFrame &overlay_frame, const ViewportOverlayCamera &camera,
-    const RenderSelectionMarqueeRecord &marquee) {
+    const RenderSelectionMarqueeRecord &marquee, float raster_scale) {
   if (!marquee.active) {
     return;
   }
@@ -119,7 +119,8 @@ void ViewportSelectionMarqueeOverlayBuilder::append(
         [&](QVec2 start, QVec2 end, float, float) {
           append_segment(overlay_frame, camera, start, end,
                          kOverlaySelectionMarqueeLineColor);
-        });
+        },
+        raster_scale);
   }
 }
 

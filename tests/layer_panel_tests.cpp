@@ -12,6 +12,7 @@
 #include "editor/session/scene_session.hpp"
 #include "ui/layer_panel.hpp"
 #include "ui/qt_color_swatch_button.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -137,6 +138,98 @@ TEST(LayerPanelTests, UsesCompactTopActionsAndEditableMultiSelectRows) {
   EXPECT_FALSE(create_from_selection->isEnabled());
 }
 
+TEST(LayerPanelTests, AppliesInterfaceScaleFromDesignBaselines) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-layer-panel-scale-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::LayerPanel panel;
+  auto *tree = panel.findChild<QTreeView *>(QStringLiteral("layers.tree"));
+  auto *create =
+      panel.findChild<QToolButton *>(QStringLiteral("layers.create"));
+  auto *actions =
+      panel.findChild<QWidget *>(QStringLiteral("layers.actions"));
+  ASSERT_NE(tree, nullptr);
+  ASSERT_NE(create, nullptr);
+  ASSERT_NE(actions, nullptr);
+  ASSERT_NE(actions->layout(), nullptr);
+
+  panel.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(tree->iconSize(), QSize(36, 36));
+  EXPECT_EQ(create->size(), QSize(56, 56));
+  EXPECT_EQ(create->iconSize(), QSize(40, 40));
+  EXPECT_EQ(actions->layout()->contentsMargins(), QMargins(8, 8, 8, 8));
+  EXPECT_EQ(actions->layout()->spacing(), 8);
+
+  panel.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(tree->iconSize(), QSize(18, 18));
+  EXPECT_EQ(create->size(), QSize(28, 28));
+  EXPECT_EQ(create->iconSize(), QSize(20, 20));
+  EXPECT_EQ(actions->layout()->contentsMargins(), QMargins(4, 4, 4, 4));
+  EXPECT_EQ(actions->layout()->spacing(), 4);
+}
+
+TEST(LayerPanelTests, RefreshesPaletteTintedRowIconsOnApplicationChange) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-layer-panel-palette-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  constexpr QColor kInitialTextColor(211, 37, 53);
+  constexpr QColor kUpdatedTextColor(29, 197, 83);
+  QPalette palette = QApplication::palette();
+  palette.setColor(QPalette::Text, kInitialTextColor);
+  QApplication::setPalette(palette);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto created = editor.layers().create();
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  quader::UISettings ui_settings = quader::UISettings::defaults();
+  quader::ViewportSettings viewport_settings =
+      quader::ViewportSettings::defaults();
+  quader::LocalizationService localization = loaded_localization();
+  quader::UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+
+  quader::LayerPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.show();
+  panel.refresh(context);
+  QCoreApplication::processEvents();
+
+  const QString id = QString::number(
+      static_cast<qulonglong>(created.value().id));
+  auto *visibility = panel.findChild<QToolButton *>(
+      QStringLiteral("layers.visibility.%1").arg(id));
+  auto *lock = panel.findChild<QToolButton *>(
+      QStringLiteral("layers.lock.%1").arg(id));
+  ASSERT_NE(visibility, nullptr);
+  ASSERT_NE(lock, nullptr);
+  const qint64 initial_visibility_key = visibility->icon().cacheKey();
+  const qint64 initial_lock_key = lock->icon().cacheKey();
+
+  palette.setColor(QPalette::Text, kUpdatedTextColor);
+  QApplication::setPalette(palette);
+  QCoreApplication::processEvents();
+
+  EXPECT_NE(visibility->icon().cacheKey(), initial_visibility_key);
+  EXPECT_NE(lock->icon().cacheKey(), initial_lock_key);
+}
+
 TEST(LayerPanelTests,
      RoutesCreateRenameColorVisibilityLockAndRightClickThroughOwners) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
@@ -251,6 +344,12 @@ TEST(LayerPanelTests,
   auto *visibility_button = qobject_cast<QToolButton *>(
       tree->indexWidget(tree->model()->index(0, 2)));
   ASSERT_NE(visibility_button, nullptr);
+  panel.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(visibility_button->size(), QSize(44, 44));
+  EXPECT_EQ(visibility_button->iconSize(), QSize(36, 36));
+  panel.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(visibility_button->size(), QSize(22, 22));
+  EXPECT_EQ(visibility_button->iconSize(), QSize(18, 18));
   QPointer<QToolButton> replaced_visibility_button(visibility_button);
   visibility_button->click();
   QCoreApplication::processEvents();

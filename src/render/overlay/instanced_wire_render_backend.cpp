@@ -28,6 +28,8 @@
 #include <utils/EntityManager.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <unordered_set>
 #include <utility>
 
@@ -152,6 +154,7 @@ InstancedWireRenderBackend::BatchProxy::BatchProxy(
       instance_buffer_(std::exchange(other.instance_buffer_, nullptr)),
       material_instance_(std::exchange(other.material_instance_, nullptr)),
       geometry_(std::exchange(other.geometry_, nullptr)),
+      line_width_pixels_(std::exchange(other.line_width_pixels_, 1.0f)),
       dimmed_(other.dimmed_) {
   other.entity_.clear();
 }
@@ -285,8 +288,9 @@ InstancedWireRenderBackend::create_batch(
                                          style.instance_edit_dim);
   bind_instance_edit_context_style(*proxy.material_instance_,
                                    style.instance_edit_style);
+  proxy.line_width_pixels_ = style.line_width_pixels;
   proxy.material_instance_->setParameter("lineWidth",
-                                         style.line_width_pixels);
+                                         proxy.line_width_pixels_);
   proxy.material_instance_->setParameter("featherPixels",
                                          kOverlayLineFeatherPixels);
   proxy.material_instance_->setParameter("nearPlane", style.near_plane);
@@ -322,7 +326,8 @@ InstancedWireRenderBackend::create_batch(
 }
 
 bool InstancedWireRenderBackend::valid(const BatchProxy &proxy) const {
-  return proxy.entity_ && proxy.instance_buffer_ != nullptr;
+  return proxy.entity_ && proxy.instance_buffer_ != nullptr &&
+         proxy.material_instance_ != nullptr;
 }
 
 bool InstancedWireRenderBackend::update_batch(
@@ -350,6 +355,21 @@ bool InstancedWireRenderBackend::update_batch(
   return true;
 }
 
+bool InstancedWireRenderBackend::update_line_width(
+    BatchProxy &proxy, float line_width_pixels) {
+  if (proxy.material_instance_ == nullptr ||
+      !std::isfinite(line_width_pixels) || line_width_pixels <= 0.0f) {
+    return false;
+  }
+  if (proxy.line_width_pixels_ == line_width_pixels) {
+    return true;
+  }
+  proxy.material_instance_->setParameter("lineWidth", line_width_pixels);
+  proxy.line_width_pixels_ = line_width_pixels;
+  ++stats_.line_width_update_count;
+  return true;
+}
+
 void InstancedWireRenderBackend::destroy_batch(BatchProxy &proxy) {
   if (engine_ == nullptr) {
     return;
@@ -374,6 +394,7 @@ void InstancedWireRenderBackend::destroy_batch(BatchProxy &proxy) {
     proxy.entity_.clear();
   }
   proxy.geometry_ = nullptr;
+  proxy.line_width_pixels_ = 1.0f;
 }
 
 void InstancedWireRenderBackend::destroy_batches(
@@ -405,11 +426,23 @@ void InstancedWireRenderBackend::destroy_geometry_resources() {
 
 void InstancedWireRenderBackend::prune_unused_geometry_resources(
     std::span<const BatchProxy> live_proxies) {
+  const std::array live_proxy_groups{live_proxies};
+  prune_unused_geometry_resources(live_proxy_groups);
+}
+
+void InstancedWireRenderBackend::prune_unused_geometry_resources(
+    std::span<const std::span<const BatchProxy>> live_proxy_groups) {
   std::unordered_set<const GeometryResource *> live;
-  live.reserve(live_proxies.size());
-  for (const BatchProxy &proxy : live_proxies) {
-    if (proxy.geometry_ != nullptr) {
-      live.insert(proxy.geometry_);
+  std::size_t live_proxy_count = 0u;
+  for (const std::span<const BatchProxy> group : live_proxy_groups) {
+    live_proxy_count += group.size();
+  }
+  live.reserve(live_proxy_count);
+  for (const std::span<const BatchProxy> group : live_proxy_groups) {
+    for (const BatchProxy &proxy : group) {
+      if (proxy.geometry_ != nullptr) {
+        live.insert(proxy.geometry_);
+      }
     }
   }
   for (auto bucket_it = geometry_resources_.begin();

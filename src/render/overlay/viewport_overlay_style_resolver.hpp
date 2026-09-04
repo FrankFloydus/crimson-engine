@@ -49,6 +49,8 @@ struct ViewportOverlayStyleContext {
   ViewportOverlaySelectionContext selection_mode =
       ViewportOverlaySelectionContext::Any;
   ViewportOverlayProjection projection = ViewportOverlayProjection::Perspective;
+  /** Combined app interface scale and destination native-surface DPR. */
+  float raster_scale = 1.0f;
   std::vector<ViewportOverlayStyleOverride> overrides;
 };
 
@@ -58,6 +60,7 @@ struct ViewportOverlayStyleRange {
   std::size_t triangle_begin = 0u;
   std::size_t line_begin = 0u;
   std::size_t point_begin = 0u;
+  std::size_t icon_begin = 0u;
 };
 
 /**
@@ -66,9 +69,11 @@ struct ViewportOverlayStyleRange {
 class ViewportOverlayStyleResolver {
 public:
     [[nodiscard]] static ViewportPersistentOverlayStyleSnapshot
-    persistent_style_snapshot(const ViewportSettings &settings);
+    persistent_style_snapshot(const ViewportSettings &settings,
+                              float raster_scale = 1.0f);
     [[nodiscard]] static std::uint64_t
-    style_signature(const ViewportSettings &settings);
+    style_signature(const ViewportSettings &settings,
+                    float raster_scale = 1.0f);
     static ViewportOverlayFrame resolve(
             ViewportOverlayFrame frame,
             const ViewportSettings& settings,

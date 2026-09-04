@@ -11,6 +11,7 @@
 #include <QSize>
 #include <QWidget>
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -19,6 +20,8 @@ class QLabel;
 class QPushButton;
 
 namespace quader {
+
+class QtUiScaleMetrics;
 
 /// Localized presentation supplied by the native shell for the active tile.
 struct QtActiveMaterialPanelLabels final {
@@ -49,6 +52,7 @@ public:
       const std::optional<QtMaterialPresentationItem> &material,
       bool browse_available);
   void set_browse_material_callback(BrowseMaterialCallback callback);
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
 
   [[nodiscard]] QSize sizeHint() const override;
 
@@ -68,6 +72,9 @@ private:
   BrowseMaterialCallback browse_material_;
   QSize preview_bounds_;
   qreal preview_device_pixel_ratio_ = 0.0;
+  QSize scaled_size_hint_{240, 260};
+  std::uint64_t ui_scale_revision_ = 0;
+  qreal ui_scale_factor_ = 1.0;
   bool preview_dirty_ = true;
   bool browse_available_ = false;
 };

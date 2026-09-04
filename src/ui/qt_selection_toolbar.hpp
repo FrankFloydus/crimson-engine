@@ -23,6 +23,7 @@ namespace quader {
 
 class LocalizationService;
 class QuaderEditorApi;
+class QtUiScaleMetrics;
 
 /**
  * Presents Quader's selection modes as one movable native Qt toolbar.
@@ -32,6 +33,7 @@ class QtSelectionToolbar final : public QToolBar {
 public:
   explicit QtSelectionToolbar(QWidget *parent = nullptr);
 
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void set_localization(const LocalizationService &localization);
   void synchronize(const QuaderEditorApi &editor, QuaderSelectionMode mode,
                    bool force = false);

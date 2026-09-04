@@ -27,7 +27,8 @@ class ViewportBoxOverlayBuilder {
 public:
   static void append(ViewportOverlayFrame &overlay_frame,
                       const ViewportOverlayCamera &camera,
-                      const RenderBoxPreviewRecord &preview);
+                      const RenderBoxPreviewRecord &preview,
+                      float raster_scale = 1.0f);
 };
 
 } // namespace quader

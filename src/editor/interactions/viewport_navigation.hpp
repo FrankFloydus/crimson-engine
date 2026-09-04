@@ -205,6 +205,7 @@ struct ViewCubePrimitiveInput {
 	quader_poly::Transform3 camera_transform;
 	quader::QVec2 viewport_size;
 	double widget_size = 76.0;
+	double axis_marker_radius = 8.0;
 	quader::QVec2 margin { 46.0F, 82.0F };
 };
 
@@ -216,6 +217,7 @@ struct ViewCubePrimitives {
 	quader::QVec2 screen_position;
 	quader::QVec2 rect_position;
 	quader::QVec2 rect_size;
+	double axis_marker_radius = 8.0;
 	std::vector<ViewCubeFacePrimitive> faces;
 	std::vector<ViewCubeEdgePrimitive> edges;
 	std::vector<ViewCubeEdgePrimitive> axis_edges;

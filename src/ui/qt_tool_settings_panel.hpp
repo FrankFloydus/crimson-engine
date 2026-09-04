@@ -17,6 +17,7 @@ namespace quader {
 
 class LocalizationService;
 class QuaderEditorApi;
+class QtUiScaleMetrics;
 
 /**
  * Presents active tool settings plus face and edge texture workflows as
@@ -34,6 +35,7 @@ public:
 
   void bind(QuaderEditorApi &editor);
   void unbind();
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void set_localization(const LocalizationService &localization);
   void refresh();
   /** Refreshes both face sections behind owner and preference revision gates. */

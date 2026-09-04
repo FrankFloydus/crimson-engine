@@ -10,6 +10,7 @@
 #include "viewport/viewport_layout.hpp"
 
 #include <QBitmap>
+#include <QEvent>
 #include <QFrame>
 #include <QLabel>
 #include <QPaintEvent>
@@ -17,6 +18,7 @@
 #include <QPen>
 #include <QRect>
 #include <QString>
+#include <QVariant>
 #include <QWidget>
 
 #include <algorithm>
@@ -30,28 +32,35 @@ namespace {
 constexpr qreal kCrosshairGap = 4.0;
 constexpr qreal kCrosshairLength = 9.0;
 
-void draw_crosshair_segments(QPainter &painter, QSize size, const QPen &pen) {
+void draw_crosshair_segments(QPainter &painter, QSize size, const QPen &pen,
+                             const QtUiScaleMetrics &metrics) {
   const qreal center_x = static_cast<qreal>(size.width()) * 0.5;
   const qreal center_y = static_cast<qreal>(size.height()) * 0.5;
+  const qreal scale = static_cast<qreal>(metrics.factor());
+  const qreal gap = kCrosshairGap * scale;
+  const qreal length = kCrosshairLength * scale;
   painter.setPen(pen);
-  painter.drawLine(QPointF{center_x - kCrosshairLength, center_y},
-                   QPointF{center_x - kCrosshairGap, center_y});
-  painter.drawLine(QPointF{center_x + kCrosshairGap, center_y},
-                   QPointF{center_x + kCrosshairLength, center_y});
-  painter.drawLine(QPointF{center_x, center_y - kCrosshairLength},
-                   QPointF{center_x, center_y - kCrosshairGap});
-  painter.drawLine(QPointF{center_x, center_y + kCrosshairGap},
-                   QPointF{center_x, center_y + kCrosshairLength});
+  painter.drawLine(QPointF{center_x - length, center_y},
+                   QPointF{center_x - gap, center_y});
+  painter.drawLine(QPointF{center_x + gap, center_y},
+                   QPointF{center_x + length, center_y});
+  painter.drawLine(QPointF{center_x, center_y - length},
+                   QPointF{center_x, center_y - gap});
+  painter.drawLine(QPointF{center_x, center_y + gap},
+                   QPointF{center_x, center_y + length});
 }
 
-QBitmap crosshair_window_mask(QSize size) {
+QBitmap crosshair_window_mask(QSize size, const QtUiScaleMetrics &metrics) {
   QBitmap mask(size);
   mask.clear();
   QPainter painter(&mask);
   painter.setRenderHint(QPainter::Antialiasing, false);
   draw_crosshair_segments(
       painter, size,
-      QPen(Qt::color1, 3.0, Qt::SolidLine, Qt::RoundCap));
+      QPen(Qt::color1,
+           std::max<qreal>(1.0, 3.0 * metrics.factor()), Qt::SolidLine,
+           Qt::RoundCap),
+      metrics);
   return mask;
 }
 
@@ -59,17 +68,35 @@ QBitmap crosshair_window_mask(QSize size) {
 class QtViewportFlyCrosshair final : public QWidget {
 public:
   explicit QtViewportFlyCrosshair(QWidget *parent) : QWidget(parent) {
-    setFixedSize(28, 28);
     setAttribute(Qt::WA_NativeWindow);
     setAttribute(Qt::WA_NoSystemBackground);
     setAttribute(Qt::WA_TransparentForMouseEvents);
     // Native child widgets are opaque on Windows even when their background is
     // not erased. Shape the native window to the painted arms so its untouched
     // rectangular backing surface cannot cover the Filament viewport.
-    setMask(crosshair_window_mask(size()));
+    refresh_scaled_geometry();
+  }
+
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    if (ui_scale_metrics_.revision() == metrics.revision() &&
+        ui_scale_metrics_.factor() == metrics.factor()) {
+      return;
+    }
+    ui_scale_metrics_ = metrics;
+    refresh_scaled_geometry();
+    update();
   }
 
 protected:
+  bool event(QEvent *event) override {
+    if (event != nullptr &&
+        (event->type() == QEvent::DevicePixelRatioChange ||
+         event->type() == QEvent::ScreenChangeInternal)) {
+      refresh_scaled_geometry();
+    }
+    return QWidget::event(event);
+  }
+
   void paintEvent(QPaintEvent *event) override {
     event->accept();
     QPainter painter(this);
@@ -78,12 +105,27 @@ protected:
     const auto colors = palette();
     draw_crosshair_segments(
         painter, size(),
-        QPen(colors.shadow().color(), 3.0, Qt::SolidLine, Qt::RoundCap));
+        QPen(colors.shadow().color(),
+             std::max<qreal>(1.0, 3.0 * ui_scale_metrics_.factor()),
+             Qt::SolidLine, Qt::RoundCap),
+        ui_scale_metrics_);
     draw_crosshair_segments(
         painter, size(),
-        QPen(colors.brightText().color(), 1.0, Qt::SolidLine,
-             Qt::RoundCap));
+        QPen(colors.brightText().color(),
+             std::max<qreal>(1.0, ui_scale_metrics_.factor()), Qt::SolidLine,
+             Qt::RoundCap),
+        ui_scale_metrics_);
   }
+
+private:
+  void refresh_scaled_geometry() {
+    setFixedSize(ui_scale_metrics_.size(QSize{28, 28}));
+    setMask(crosshair_window_mask(size(), ui_scale_metrics_));
+    setProperty("quaderFlyMaskRevision",
+                property("quaderFlyMaskRevision").toInt() + 1);
+  }
+
+  QtUiScaleMetrics ui_scale_metrics_;
 };
 
 QString pane_suffix(ViewportPaneId pane_id) {
@@ -134,12 +176,27 @@ QtViewportFlyNavigationHud::QtViewportFlyNavigationHud(
   speed_label_->setTextFormat(Qt::PlainText);
   speed_label_->setAlignment(Qt::AlignCenter);
   speed_label_->setFrameStyle(QFrame::StyledPanel | QFrame::Sunken);
-  speed_label_->setMargin(6);
+  speed_label_->setMargin(ui_scale_metrics_.px(6));
   speed_label_->setAutoFillBackground(true);
   speed_label_->setAttribute(Qt::WA_NativeWindow);
   speed_label_->setAttribute(Qt::WA_TransparentForMouseEvents);
   speed_label_->hide();
   set_bounds(bounds_);
+}
+
+void QtViewportFlyNavigationHud::apply_ui_scale(
+    const QtUiScaleMetrics &metrics) {
+  if (ui_scale_metrics_.revision() == metrics.revision() &&
+      ui_scale_metrics_.factor() == metrics.factor()) {
+    return;
+  }
+  ui_scale_metrics_ = metrics;
+  static_cast<QtViewportFlyCrosshair *>(crosshair_)->apply_ui_scale(metrics);
+  const int margin = metrics.px(6);
+  if (speed_label_->margin() != margin) {
+    speed_label_->setMargin(margin);
+  }
+  update_geometry();
 }
 
 void QtViewportFlyNavigationHud::set_bounds(const QRect &bounds) {
@@ -162,11 +219,11 @@ void QtViewportFlyNavigationHud::update_geometry() {
 
   speed_label_->adjustSize();
   const QSize speed_size = speed_label_->size();
-  constexpr int kBottomInset = 10;
+  const int bottom_inset = ui_scale_metrics_.px(10);
   speed_label_->move(
       bounds_.x() + (bounds_.width() - speed_size.width()) / 2,
       std::max(bounds_.y(), bounds_.bottom() - speed_size.height() -
-                                kBottomInset + 1));
+                                bottom_inset + 1));
 }
 
 void QtViewportFlyNavigationHud::present(

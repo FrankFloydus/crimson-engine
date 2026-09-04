@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "core/interface_scale_policy.hpp"
 #include "ui/ui_panel.hpp"
 
 #include <filesystem>
@@ -29,6 +30,10 @@ struct UISettingsPaths {
  */
 class UISettings {
 public:
+    static constexpr float kMinimumInterfaceScale = kInterfaceScaleMinimum;
+    static constexpr float kMaximumInterfaceScale = kInterfaceScaleMaximum;
+    static constexpr float kDefaultInterfaceScale = kInterfaceScaleDefault;
+
     static UISettings defaults();
     static UISettings load(const std::filesystem::path& path);
     static UISettingsPaths
@@ -44,9 +49,12 @@ public:
     }
     const std::string& locale() const { return locale_; }
     void set_locale(std::string locale);
+    float interface_scale() const { return interface_scale_; }
+    void set_interface_scale(float scale);
 
   private:
     std::string locale_ = "en-US";
+    float interface_scale_ = kDefaultInterfaceScale;
     bool outliner_visible_ = ui_panel_default_visible(UIPanelId::Outliner);
     bool inspector_visible_ = ui_panel_default_visible(UIPanelId::Inspector);
     bool console_visible_ = ui_panel_default_visible(UIPanelId::Console);

@@ -30,7 +30,7 @@ bool QtSettingsController::preview_color(ViewportColorSettingId id,
       !viewport_settings_->set_color(id, value)) {
     return false;
   }
-  notify(QtSettingsChangeKind::ViewportPreview);
+  notify({.kind = QtSettingsChangeKind::ViewportPreview});
   return true;
 }
 
@@ -40,7 +40,7 @@ bool QtSettingsController::rollback_color(
       !viewport_settings_->restore_color(id, initial_value)) {
     return false;
   }
-  notify(QtSettingsChangeKind::ViewportPreview);
+  notify({.kind = QtSettingsChangeKind::ViewportPreview});
   return true;
 }
 
@@ -54,7 +54,7 @@ bool QtSettingsController::commit_color(
       current.b == initial_value.b && current.a == initial_value.a) {
     return false;
   }
-  notify(QtSettingsChangeKind::ViewportCommit);
+  notify({.kind = QtSettingsChangeKind::ViewportCommit});
   return true;
 }
 
@@ -63,7 +63,7 @@ bool QtSettingsController::set_float(ViewportFloatSettingId id, float value) {
       !viewport_settings_->set_float_value(id, value)) {
     return false;
   }
-  notify(QtSettingsChangeKind::ViewportCommit);
+  notify({.kind = QtSettingsChangeKind::ViewportCommit});
   return true;
 }
 
@@ -72,7 +72,22 @@ bool QtSettingsController::set_bool(ViewportBoolSettingId id, bool value) {
       !viewport_settings_->set_bool_value(id, value)) {
     return false;
   }
-  notify(QtSettingsChangeKind::ViewportCommit);
+  notify({.kind = QtSettingsChangeKind::ViewportCommit});
+  return true;
+}
+
+bool QtSettingsController::preview_interface_scale(float scale) {
+  if (ui_settings_ == nullptr) {
+    return false;
+  }
+  const float previous_scale = ui_settings_->interface_scale();
+  ui_settings_->set_interface_scale(scale);
+  const float effective_scale = ui_settings_->interface_scale();
+  if (effective_scale == previous_scale) {
+    return false;
+  }
+  notify({.kind = QtSettingsChangeKind::InterfacePreview,
+          .interface_scale = effective_scale});
   return true;
 }
 
@@ -87,13 +102,14 @@ bool QtSettingsController::select_locale(std::string_view locale_id) {
   if (ui_settings_->locale() == previous_locale) {
     return false;
   }
-  notify(QtSettingsChangeKind::InterfaceCommit);
+  notify({.kind = QtSettingsChangeKind::InterfaceCommit,
+          .interface_scale = ui_settings_->interface_scale()});
   return true;
 }
 
-void QtSettingsController::notify(QtSettingsChangeKind kind) const {
+void QtSettingsController::notify(QtSettingsChange change) const {
   if (callback_) {
-    callback_(kind);
+    callback_(change);
   }
 }
 

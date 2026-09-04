@@ -27,7 +27,8 @@ public:
   [[nodiscard]] static std::vector<ViewportSceneBillboardPickCandidate>
   point_light_pick_candidates(
       const SceneDocument &document,
-      const ViewportLocalVisibilitySnapshot &local_visibility);
+      const ViewportLocalVisibilitySnapshot &local_visibility,
+      float viewport_pixel_scale = 1.0f);
   [[nodiscard]] static std::optional<ViewportFocusBounds> world_bounds(
       const SceneDocument &document, const AssetRegistry &assets,
       const ViewportLocalVisibilitySnapshot &local_visibility);

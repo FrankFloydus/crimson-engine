@@ -78,6 +78,7 @@ struct ViewportNativeToolInteractionFrame final {
   bool left_released = false;
   QVec2 left_click_local = {};
   float pointer_drag_threshold_pixels = 4.0f;
+  float viewport_pixel_scale = 1.0f;
   bool scene_snap_enabled = false;
   bool grid_snap_enabled = false;
   const ViewportCurveControlPickingPort *curve_control_picker = nullptr;
@@ -129,11 +130,13 @@ public:
 
   [[nodiscard]] static std::optional<int> hit_drawn_plane_captured_point(
       const std::array<QVec3, 3> &points, int captured_point_count,
-      QVec2 mouse_local, const ViewportCameraController &camera);
+      QVec2 mouse_local, const ViewportCameraController &camera,
+      float viewport_pixel_scale = 1.0f);
   [[nodiscard]] static bool hit_drawn_plane_line(
       const std::array<QVec3, 3> &points, int captured_point_count,
       bool has_line, QVec2 mouse_local,
-      const ViewportCameraController &camera);
+      const ViewportCameraController &camera,
+      float viewport_pixel_scale = 1.0f);
   [[nodiscard]] static ModelingBoxToolEvent
   modeling_box_event(const ViewportCameraController &camera,
                      QVec2 viewport_size, QVec2 mouse_local,
@@ -142,13 +145,15 @@ public:
       const ViewportCameraController &camera, QVec2 mouse_local,
       QVec3 current_position, const SceneDocument &document,
       const AssetRegistry &assets, ViewportPointPlacementService &placement,
-      PivotSnapSettings settings, float grid_size);
+      PivotSnapSettings settings, float grid_size,
+      float viewport_pixel_scale = 1.0f);
   [[nodiscard]] static bool pivot_handle_hit(
       const ViewportCameraController &camera, const PivotHandleState &handle,
-      QVec2 mouse_local);
+      QVec2 mouse_local, float viewport_pixel_scale = 1.0f);
   [[nodiscard]] static bool linear_array_handle_hit(
       const ViewportCameraController &camera,
-      const LinearArrayHandleState &handle, QVec2 mouse_local);
+      const LinearArrayHandleState &handle, QVec2 mouse_local,
+      float viewport_pixel_scale = 1.0f);
   [[nodiscard]] static QVec3 linear_array_drag_point(
       const ViewportCameraController &camera, QVec2 mouse_local,
       const LinearArrayHandleState &handle);

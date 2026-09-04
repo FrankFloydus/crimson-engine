@@ -108,9 +108,10 @@ QRect dimension_glyph_bounds(const QFont &font, const QString &text) {
   return QFontMetrics(font).tightBoundingRect(text);
 }
 
-QPoint dimension_glyph_baseline(const QRect &glyph_bounds) {
-  return {kDimensionOutlinePaddingPixels - glyph_bounds.left(),
-          kDimensionOutlinePaddingPixels - glyph_bounds.top()};
+QPoint dimension_glyph_baseline(const QRect &glyph_bounds,
+                                int outline_padding_pixels) {
+  return {outline_padding_pixels - glyph_bounds.left(),
+          outline_padding_pixels - glyph_bounds.top()};
 }
 
 void fill_dimension_region(QImage &image, const QRegion &region, QRgb color) {
@@ -128,14 +129,31 @@ class QtViewportEdgeLengthLabel final : public QLabel {
 public:
   explicit QtViewportEdgeLengthLabel(QWidget *parent) : QLabel(parent) {}
 
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    const int outline_radius =
+        std::max(1, metrics.px(kDimensionOutlineRadiusPixels));
+    const int outline_padding =
+        std::max(1, metrics.px(kDimensionOutlinePaddingPixels));
+    if (ui_scale_revision_ == metrics.revision() &&
+        ui_scale_factor_ == metrics.factor() &&
+        outline_radius_pixels_ == outline_radius &&
+        outline_padding_pixels_ == outline_padding) {
+      return;
+    }
+    ui_scale_revision_ = metrics.revision();
+    ui_scale_factor_ = metrics.factor();
+    outline_radius_pixels_ = outline_radius;
+    outline_padding_pixels_ = outline_padding;
+    invalidate_shape();
+    updateGeometry();
+  }
+
   [[nodiscard]] QSize sizeHint() const override {
     const QFont raster_font{font(), this};
     const QRect bounds = dimension_glyph_bounds(raster_font, text());
     return {
-        std::max(1, bounds.width() +
-                        2 * kDimensionOutlinePaddingPixels),
-        std::max(1, bounds.height() +
-                        2 * kDimensionOutlinePaddingPixels),
+        std::max(1, bounds.width() + 2 * outline_padding_pixels_),
+        std::max(1, bounds.height() + 2 * outline_padding_pixels_),
     };
   }
 
@@ -183,8 +201,13 @@ protected:
 
 private:
   void rebuild_layout_if_needed() {
+    const qreal raster_device_pixel_ratio =
+        std::isfinite(devicePixelRatioF()) && devicePixelRatioF() > 0.0
+            ? devicePixelRatioF()
+            : 1.0;
     if (shape_valid_ && shape_size_ == size() && shape_text_ == text() &&
-        shape_font_ == font()) {
+        shape_font_ == font() &&
+        shape_device_pixel_ratio_ == raster_device_pixel_ratio) {
       return;
     }
     // Resolve point size against this label's screen once, then use the same
@@ -193,7 +216,8 @@ private:
     // glyph after moving a viewport between mixed-DPI monitors.
     const QFont raster_font{font(), this};
     const QRect glyph_bounds = dimension_glyph_bounds(raster_font, text());
-    glyph_baseline_ = dimension_glyph_baseline(glyph_bounds);
+    glyph_baseline_ =
+        dimension_glyph_baseline(glyph_bounds, outline_padding_pixels_);
     QBitmap glyph_mask(size());
     glyph_mask.fill(Qt::color0);
     {
@@ -207,10 +231,10 @@ private:
 
     glyph_region_ = QRegion{glyph_mask};
     outline_region_ = glyph_region_;
-    for (int y = -kDimensionOutlineRadiusPixels;
-         y <= kDimensionOutlineRadiusPixels; ++y) {
-      for (int x = -kDimensionOutlineRadiusPixels;
-           x <= kDimensionOutlineRadiusPixels; ++x) {
+    for (int y = -outline_radius_pixels_;
+         y <= outline_radius_pixels_; ++y) {
+      for (int x = -outline_radius_pixels_;
+           x <= outline_radius_pixels_; ++x) {
         if (x != 0 || y != 0) {
           outline_region_ |= glyph_region_.translated(x, y);
         }
@@ -218,13 +242,53 @@ private:
     }
     outline_region_ &= QRegion{rect()};
 
-    raster_ = QImage(size(), QImage::Format_ARGB32);
+    const QSize physical_size{
+        std::max(1, static_cast<int>(
+                        std::ceil(size().width() * raster_device_pixel_ratio))),
+        std::max(1, static_cast<int>(std::ceil(
+                        size().height() * raster_device_pixel_ratio))),
+    };
+    QBitmap physical_glyph_mask(physical_size);
+    physical_glyph_mask.setDevicePixelRatio(raster_device_pixel_ratio);
+    physical_glyph_mask.fill(Qt::color0);
+    {
+      QPainter painter(&physical_glyph_mask);
+      painter.setRenderHint(QPainter::Antialiasing, false);
+      painter.setRenderHint(QPainter::TextAntialiasing, false);
+      painter.setFont(raster_font);
+      painter.setPen(Qt::color1);
+      painter.drawText(glyph_baseline_, text());
+    }
+    const QRegion physical_glyph_region{physical_glyph_mask};
+    QRegion physical_outline_region = physical_glyph_region;
+    const int physical_outline_radius = std::max(
+        1, static_cast<int>(std::ceil(outline_radius_pixels_ *
+                                      raster_device_pixel_ratio)));
+    for (int y = -physical_outline_radius; y <= physical_outline_radius;
+         ++y) {
+      for (int x = -physical_outline_radius; x <= physical_outline_radius;
+           ++x) {
+        if (x != 0 || y != 0) {
+          physical_outline_region |= physical_glyph_region.translated(x, y);
+        }
+      }
+    }
+    physical_outline_region &= QRegion{QRect(QPoint{}, physical_size)};
+
+    raster_ = QImage(physical_size, QImage::Format_ARGB32);
     raster_.fill(Qt::transparent);
-    fill_dimension_region(raster_, outline_region_, qRgba(0, 0, 0, 255));
-    fill_dimension_region(raster_, glyph_region_, qRgba(255, 255, 255, 255));
+    fill_dimension_region(raster_, physical_outline_region,
+                          qRgba(0, 0, 0, 255));
+    fill_dimension_region(raster_, physical_glyph_region,
+                          qRgba(255, 255, 255, 255));
+    raster_.setDevicePixelRatio(raster_device_pixel_ratio);
+    setProperty("quaderDimensionRasterPixelSize", physical_size);
+    setProperty("quaderDimensionRasterDevicePixelRatio",
+                raster_device_pixel_ratio);
     shape_size_ = size();
     shape_text_ = text();
     shape_font_ = font();
+    shape_device_pixel_ratio_ = raster_device_pixel_ratio;
     shape_valid_ = true;
     ++shape_revision_;
   }
@@ -236,8 +300,13 @@ private:
   QSize shape_size_;
   QString shape_text_;
   QFont shape_font_;
+  qreal shape_device_pixel_ratio_ = 0.0;
   std::uint64_t shape_revision_ = 0;
   std::uint64_t mask_shape_revision_ = 0;
+  std::uint64_t ui_scale_revision_ = 0;
+  float ui_scale_factor_ = 1.0F;
+  int outline_radius_pixels_ = kDimensionOutlineRadiusPixels;
+  int outline_padding_pixels_ = kDimensionOutlinePaddingPixels;
   bool shape_valid_ = false;
 };
 
@@ -343,6 +412,31 @@ QtViewportEdgeLengthHud::QtViewportEdgeLengthHud(
   }
 }
 
+void QtViewportEdgeLengthHud::apply_ui_scale(
+    const QtUiScaleMetrics &metrics) {
+  if (ui_scale_metrics_.revision() == metrics.revision() &&
+      ui_scale_metrics_.factor() == metrics.factor()) {
+    return;
+  }
+  ui_scale_metrics_ = metrics;
+  const double authored_font_size =
+      font_size_points_ > 0.0 ? font_size_points_
+                              : kDefaultDimensionFontSizePoints;
+  const QFont requested_font = dimension_font(
+      authored_font_size * static_cast<double>(metrics.factor()));
+  for (QLabel *label : labels_) {
+    auto *dimension_label =
+        static_cast<QtViewportEdgeLengthLabel *>(label);
+    dimension_label->apply_ui_scale(metrics);
+    if (label->font() != requested_font) {
+      label->setFont(requested_font);
+      dimension_label->invalidate_shape();
+    }
+  }
+  font_size_valid_ = font_size_points_ > 0.0;
+  view_valid_ = false;
+}
+
 void QtViewportEdgeLengthHud::present(
     const ViewportOverlayFrame &frame, std::uint64_t frame_signature,
     const ViewportCameraController &camera,
@@ -357,7 +451,9 @@ void QtViewportEdgeLengthHud::present(
   if (!font_size_valid_ || font_size_points_ != effective_font_size) {
     font_size_points_ = effective_font_size;
     for (QLabel *label : labels_) {
-      const QFont requested_font = dimension_font(effective_font_size);
+      const QFont requested_font = dimension_font(
+          effective_font_size *
+          static_cast<double>(ui_scale_metrics_.factor()));
       if (label->font() == requested_font) {
         continue;
       }
@@ -569,7 +665,9 @@ void QtViewportEdgeLengthHud::present(
         (std::abs(normal.x()) * static_cast<qreal>(size.width()) +
          std::abs(normal.y()) * static_cast<qreal>(size.height())) *
         0.5;
-    const qreal offset = label_support_radius + kDimensionLabelGapPixels;
+    const qreal offset =
+        label_support_radius +
+        ui_scale_metrics_.px(kDimensionLabelGapPixels);
     const QPointF preferred_center = midpoint + normal * offset;
     const QPointF alternate_center = midpoint - normal * offset;
     QRect geometry = centered_label_geometry(preferred_center, size);

@@ -14,7 +14,8 @@
 #include "render/viewport_overlay_policy.hpp"
 
 #include <algorithm>
-#include <bit>
+#include <array>
+#include <cmath>
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
@@ -45,7 +46,8 @@ float wire_width(const RenderOverlayMeshSnapshot &mesh,
                  const ViewportPersistentOverlayStyleSnapshot &style) {
   return mesh.selected
              ? style.selection_edge_line_width_pixels
-             : viewport_overlay_line_width_pixels(wire_layer(mesh), 0.0f);
+             : viewport_overlay_line_width_pixels(wire_layer(mesh), 0.0f) *
+                   style.raster_scale;
 }
 
 std::uint64_t wire_geometry_identity(const RenderOverlayMeshSnapshot &mesh) {
@@ -74,12 +76,12 @@ RenderInstancePrimitiveKey wire_key(
     const RenderInstanceEditScope &instance_edit_scope) {
   return {
       // These exact runtime tokens deliberately avoid grouping on a content
-      // hash. The remaining exact style fields distinguish the derived VB and
-      // its per-batch material state without scene or AssetId identity.
+      // hash. Baked color and geometry stay in identity; mutable material line
+      // width deliberately does not.
       .geometry_payload = wire_geometry_identity(mesh),
       .material_payload = wire_geometry_identity(mesh),
       .index_offset = wire_color(mesh, style),
-      .index_count = std::bit_cast<std::uint32_t>(wire_width(mesh, style)),
+      .index_count = static_cast<std::uint32_t>(mesh.wire_segments.size()),
       .layer_mask = static_cast<std::uint8_t>(wire_layer(mesh)),
       .channel = kViewportDefaultRenderableChannel,
       .presentation_flags = static_cast<std::uint8_t>(
@@ -157,7 +159,8 @@ SceneWireframeOccurrencePreparation prepare_wire_occurrences(
       local_bounds_by_geometry;
   local_bounds_by_geometry.reserve(snapshot.meshes.size());
   for (const RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
-    if (!mesh.has_wire_geometry()) {
+    if (!mesh.has_wire_geometry() ||
+        (!mesh.selected && snapshot.layer_mask == 0u)) {
       continue;
     }
     const RenderInstancePrimitiveKey key =
@@ -267,6 +270,52 @@ InstancedWireBatchStyle wire_batch_style(
   };
 }
 
+bool has_selected_scene_wire(
+    const RenderOverlaySceneWireframeSnapshot &snapshot) {
+  return std::ranges::any_of(snapshot.meshes,
+                             [](const RenderOverlayMeshSnapshot &mesh) {
+                               return mesh.selected &&
+                                      mesh.has_wire_geometry();
+                             });
+}
+
+ViewportPersistentOverlayRasterGroupSet scene_wire_raster_groups(
+    const RenderOverlaySceneWireframeSnapshot &snapshot) {
+  const bool selected_wire_present = has_selected_scene_wire(snapshot);
+  ViewportPersistentOverlayRasterGroupSet result;
+  if (snapshot.raster_groups.empty()) {
+    if (selected_wire_present || snapshot.layer_mask != 0u) {
+      const bool added =
+          result.add(kViewportOverlayLayerMask, snapshot.style);
+      (void)added;
+    }
+    return result;
+  }
+  for (const ViewportPersistentOverlayRasterGroup &raster_group :
+       snapshot.raster_groups.groups()) {
+    if (selected_wire_present ||
+        (raster_group.layer_mask & snapshot.layer_mask) != 0u) {
+      const bool added = result.add(raster_group.layer_mask,
+                                    raster_group.style);
+      (void)added;
+    }
+  }
+  return result;
+}
+
+std::uint8_t scene_wire_batch_layer_mask(
+    const RenderOverlayMeshSnapshot &mesh,
+    const RenderOverlaySceneWireframeSnapshot &snapshot,
+    const ViewportPersistentOverlayRasterGroup &raster_group) {
+  if (snapshot.raster_groups.empty()) {
+    return mesh.selected ? kViewportOverlayLayerMask : snapshot.layer_mask;
+  }
+  return mesh.selected
+             ? raster_group.layer_mask
+             : static_cast<std::uint8_t>(raster_group.layer_mask &
+                                         snapshot.layer_mask);
+}
+
 } // namespace
 
 /// Couples a full-scene wire batch plan with its source mesh records.
@@ -353,22 +402,27 @@ void SceneWireframeOverlayCache::shutdown() {
   max_instances_per_chunk_ = 1u;
   synced_source_stamp_ = {};
   synced_wire_style_signature_ = 0u;
+  synced_wire_style_ = {};
+  synced_raster_groups_ = {};
   synced_instance_edit_context_signature_ = 0u;
   synced_selected_mesh_wire_visible_ = true;
   synced_clip_planes_ = {};
-  layer_mask_ = 0u;
+  synced_layer_mask_ = 0u;
+  layer_masks_forced_hidden_ = false;
   has_synced_ = false;
   stats_ = {};
 }
 
 void SceneWireframeOverlayCache::clear() {
-  wire_backend_.destroy_batches(proxies_);
-  proxies_.clear();
+  destroy_raster_groups(raster_proxy_groups_);
+  raster_proxy_groups_.clear();
   plan_ = {};
   synced_meshes_.clear();
+  synced_raster_groups_ = {};
   has_synced_ = false;
   stats_.participant_count = 0u;
   stats_.chunk_count = 0u;
+  stats_.raster_group_count = 0u;
 }
 
 SceneWireframeOverlayCache::PreparedPlan
@@ -398,14 +452,39 @@ void SceneWireframeOverlayCache::sync(
     has_synced_ = false;
   }
 
-  set_layer_mask(snapshot.layer_mask);
-  if (snapshot.layer_mask == 0u) {
+  const bool selected_wire_present = has_selected_scene_wire(snapshot);
+  if (snapshot.layer_mask == 0u && !selected_wire_present) {
+    set_all_layer_masks(0u);
+    synced_layer_mask_ = 0u;
     return;
   }
+  const ViewportPersistentOverlayRasterGroupSet raster_groups =
+      scene_wire_raster_groups(snapshot);
   const bool clip_changed =
       !has_synced_ || synced_clip_planes_ != snapshot.clip_planes;
-  const bool style_changed = scene_wireframe_style_changed(
-      has_synced_, synced_wire_style_signature_, snapshot.style);
+  const bool style_signature_changed =
+      !has_synced_ ||
+      synced_wire_style_signature_ != snapshot.style.wire_signature;
+  const bool wire_color_changed =
+      !has_synced_ || synced_wire_style_.selection_wire_color !=
+                          snapshot.style.selection_wire_color;
+  const bool line_width_changed =
+      !has_synced_ || synced_wire_style_.raster_scale !=
+                          snapshot.style.raster_scale ||
+      synced_wire_style_.selection_edge_line_width_pixels !=
+          snapshot.style.selection_edge_line_width_pixels;
+  const bool style_changed = style_signature_changed || wire_color_changed ||
+                             line_width_changed;
+  const bool line_width_only_style_changed =
+      has_synced_ && style_changed && !wire_color_changed &&
+      line_width_changed;
+  const bool style_requires_rebuild =
+      style_changed && !line_width_only_style_changed;
+  const bool raster_groups_changed =
+      !has_synced_ || !viewport_persistent_overlay_raster_groups_match(
+                          synced_raster_groups_, raster_groups);
+  const bool layer_mask_changed =
+      !has_synced_ || synced_layer_mask_ != snapshot.layer_mask;
   const bool context_style_changed =
       !has_synced_ || synced_instance_edit_context_signature_ !=
                           snapshot.style.instance_edit_context_signature;
@@ -413,10 +492,10 @@ void SceneWireframeOverlayCache::sync(
       render_source_dependencies_match(
           synced_source_stamp_, snapshot,
           kRenderOverlaySceneWireframeCacheNoWorkDependencies) &&
-      synced_selected_mesh_wire_visible_ ==
-          snapshot.selected_mesh_wire_visible &&
-      !clip_changed &&
-      !style_changed) {
+       synced_selected_mesh_wire_visible_ ==
+           snapshot.selected_mesh_wire_visible &&
+       !clip_changed && !raster_groups_changed && !layer_mask_changed &&
+       !style_changed) {
     if (context_style_changed) {
       update_instance_edit_style(snapshot.style.instance_edit_style);
       synced_instance_edit_context_signature_ =
@@ -426,7 +505,7 @@ void SceneWireframeOverlayCache::sync(
   }
 
   const bool mesh_inputs_match =
-      has_synced_ && !style_changed &&
+      has_synced_ && !style_requires_rebuild && !layer_mask_changed &&
       synced_selected_mesh_wire_visible_ ==
           snapshot.selected_mesh_wire_visible &&
       render_source_dependencies_match(
@@ -438,25 +517,35 @@ void SceneWireframeOverlayCache::sync(
     // Global revisions also advance for curve edits and transforms. Their
     // unchanged mesh inputs must not rebuild a spatial plan or touch buffers.
     ++stats_.mesh_input_reuse_count;
+    if (line_width_only_style_changed || raster_groups_changed) {
+      ++stats_.plan_prepare_count;
+      const PreparedPlan prepared = prepare(snapshot);
+      if (!reconcile_raster_groups(prepared, snapshot, raster_groups)) {
+        has_synced_ = false;
+        return;
+      }
+    }
   } else {
     ++stats_.plan_prepare_count;
     const PreparedPlan prepared = prepare(snapshot);
     const RenderInstanceBatchUpdateKind update =
         classify_instance_batch_update(plan_, prepared.planned.batches);
     bool synchronized = false;
-    if (!style_changed &&
+    bool rebuilt = false;
+    if (!style_requires_rebuild &&
         update == RenderInstanceBatchUpdateKind::TransformsOnly) {
       synchronized = update_transforms(prepared);
       if (synchronized) {
         plan_ = prepared.planned.batches;
         ++stats_.transform_update_count;
       }
-    } else if (!style_changed &&
+    } else if (!style_requires_rebuild &&
                update == RenderInstanceBatchUpdateKind::Unchanged) {
       synchronized = true;
     }
     if (!synchronized) {
       synchronized = rebuild(prepared, snapshot);
+      rebuilt = synchronized;
     }
     if (!synchronized) {
       // A failed update can have changed earlier instance buffers already.
@@ -464,9 +553,16 @@ void SceneWireframeOverlayCache::sync(
       has_synced_ = false;
       return;
     }
+    if (!rebuilt &&
+        !reconcile_raster_groups(prepared, snapshot, raster_groups)) {
+      has_synced_ = false;
+      return;
+    }
     synced_meshes_ = snapshot.meshes;
     stats_.participant_count = prepared.planned.participant_count;
-    stats_.chunk_count = prepared.planned.batches.chunks.size();
+    stats_.chunk_count = prepared.planned.batches.chunks.size() *
+                         raster_proxy_groups_.size();
+    stats_.raster_group_count = raster_proxy_groups_.size();
   }
   if (clip_changed) {
     update_clip_planes(snapshot.clip_planes);
@@ -476,11 +572,15 @@ void SceneWireframeOverlayCache::sync(
   }
   synced_source_stamp_ = snapshot;
   synced_wire_style_signature_ = snapshot.style.wire_signature;
+  synced_wire_style_ = snapshot.style;
+  synced_raster_groups_ = raster_groups;
   synced_instance_edit_context_signature_ =
       snapshot.style.instance_edit_context_signature;
   synced_selected_mesh_wire_visible_ =
       snapshot.selected_mesh_wire_visible;
   synced_clip_planes_ = snapshot.clip_planes;
+  synced_layer_mask_ = snapshot.layer_mask;
+  layer_masks_forced_hidden_ = false;
   has_synced_ = true;
 }
 
@@ -488,56 +588,267 @@ bool SceneWireframeOverlayCache::rebuild(
     const PreparedPlan &prepared,
     const RenderOverlaySceneWireframeSnapshot &snapshot) {
   QDR_PROFILE_FUNCTION();
-  std::vector<WireBatchProxy> created;
-  created.reserve(prepared.planned.batches.chunks.size());
-  for (std::size_t index = 0u;
-       index < prepared.planned.batches.chunks.size(); ++index) {
-    const RenderOverlayMeshSnapshot *record = prepared.records[index];
-    if (record == nullptr) {
-      wire_backend_.destroy_batches(created);
-      wire_backend_.prune_unused_geometry_resources(proxies_);
-      refresh_wire_resource_stats();
-      return false;
+  const ViewportPersistentOverlayRasterGroupSet raster_groups =
+      scene_wire_raster_groups(snapshot);
+  std::vector<RasterProxyGroup> created;
+  created.reserve(raster_groups.size());
+  if (!prepared.planned.batches.chunks.empty()) {
+    for (const ViewportPersistentOverlayRasterGroup &raster_group :
+         raster_groups.groups()) {
+      RasterProxyGroup proxy_group;
+      if (!create_raster_group(prepared, snapshot, raster_group,
+                               proxy_group)) {
+        destroy_raster_groups(created);
+        prune_unused_wire_geometry();
+        refresh_wire_resource_stats();
+        return false;
+      }
+      created.push_back(std::move(proxy_group));
     }
-    const RenderInstanceBatchChunk &chunk =
-        prepared.planned.batches.chunks[index];
-    WireBatchProxy proxy = wire_backend_.create_batch(
-        wire_geometry_input(*record, snapshot.style), chunk,
-        wire_batch_style(*record, chunk, snapshot.style,
-                         snapshot.clip_planes, layer_mask_));
-    if (!wire_backend_.valid(proxy)) {
-      wire_backend_.destroy_batch(proxy);
-      wire_backend_.destroy_batches(created);
-      wire_backend_.prune_unused_geometry_resources(proxies_);
-      refresh_wire_resource_stats();
-      return false;
-    }
-    created.push_back(std::move(proxy));
   }
 
-  wire_backend_.destroy_batches(proxies_);
-  proxies_.swap(created);
+  destroy_raster_groups(raster_proxy_groups_);
+  raster_proxy_groups_.swap(created);
   plan_ = prepared.planned.batches;
   ++stats_.rebuild_count;
   stats_.participant_count = prepared.planned.participant_count;
-  stats_.chunk_count = proxies_.size();
-  wire_backend_.prune_unused_geometry_resources(proxies_);
+  stats_.chunk_count = prepared.planned.batches.chunks.size() *
+                       raster_proxy_groups_.size();
+  stats_.raster_group_count = raster_proxy_groups_.size();
+  synced_raster_groups_ = raster_groups;
+  layer_masks_forced_hidden_ = false;
+  prune_unused_wire_geometry();
   refresh_wire_resource_stats();
   return true;
 }
 
 bool SceneWireframeOverlayCache::update_transforms(
     const PreparedPlan &prepared) {
-  if (prepared.planned.batches.chunks.size() != proxies_.size()) {
-    return false;
-  }
-  for (std::size_t index = 0u; index < proxies_.size(); ++index) {
-    if (!wire_backend_.update_batch(
-            proxies_[index], prepared.planned.batches.chunks[index])) {
+  for (const RasterProxyGroup &proxy_group : raster_proxy_groups_) {
+    if (prepared.planned.batches.chunks.size() !=
+        proxy_group.proxies.size()) {
       return false;
     }
   }
+  for (RasterProxyGroup &proxy_group : raster_proxy_groups_) {
+    for (std::size_t index = 0u; index < proxy_group.proxies.size(); ++index) {
+      if (!wire_backend_.update_batch(
+              proxy_group.proxies[index],
+              prepared.planned.batches.chunks[index])) {
+        return false;
+      }
+    }
+  }
   return true;
+}
+
+bool SceneWireframeOverlayCache::reconcile_raster_groups(
+    const PreparedPlan &prepared,
+    const RenderOverlaySceneWireframeSnapshot &snapshot,
+    const ViewportPersistentOverlayRasterGroupSet &raster_groups) {
+  if (prepared.planned.batches.chunks.empty() || raster_groups.empty()) {
+    destroy_raster_groups(raster_proxy_groups_);
+    raster_proxy_groups_.clear();
+    stats_.chunk_count = 0u;
+    stats_.raster_group_count = 0u;
+    prune_unused_wire_geometry();
+    refresh_wire_resource_stats();
+    return true;
+  }
+
+  constexpr std::size_t kNoMatch =
+      kMaxViewportPersistentOverlayRasterGroups;
+  const std::span<const ViewportPersistentOverlayRasterGroup> targets =
+      raster_groups.groups();
+  std::array<std::size_t, kMaxViewportPersistentOverlayRasterGroups>
+      matched_indices{};
+  matched_indices.fill(kNoMatch);
+  std::array<bool, kMaxViewportPersistentOverlayRasterGroups> claimed{};
+  for (std::size_t target_index = 0u; target_index < targets.size();
+       ++target_index) {
+    int best_score = -1;
+    std::size_t best_index = kNoMatch;
+    for (std::size_t current_index = 0u;
+         current_index < raster_proxy_groups_.size(); ++current_index) {
+      if (claimed[current_index]) {
+        continue;
+      }
+      const RasterProxyGroup &current =
+          raster_proxy_groups_[current_index];
+      const bool same_style = viewport_persistent_overlay_wire_styles_match(
+          current.style, targets[target_index].style);
+      const bool same_mask =
+          current.layer_mask == targets[target_index].layer_mask;
+      const bool overlaps =
+          (current.layer_mask & targets[target_index].layer_mask) != 0u;
+      const int score = same_style ? 3 : same_mask ? 2 : overlaps ? 1 : 0;
+      if (score > best_score) {
+        best_score = score;
+        best_index = current_index;
+      }
+    }
+    if (best_index != kNoMatch) {
+      matched_indices[target_index] = best_index;
+      claimed[best_index] = true;
+    }
+  }
+
+  std::array<RasterProxyGroup,
+             kMaxViewportPersistentOverlayRasterGroups>
+      created{};
+  std::array<bool, kMaxViewportPersistentOverlayRasterGroups> has_created{};
+  for (std::size_t target_index = 0u; target_index < targets.size();
+       ++target_index) {
+    if (matched_indices[target_index] != kNoMatch) {
+      continue;
+    }
+    if (!create_raster_group(prepared, snapshot, targets[target_index],
+                             created[target_index])) {
+      destroy_raster_groups(created);
+      prune_unused_wire_geometry();
+      refresh_wire_resource_stats();
+      return false;
+    }
+    has_created[target_index] = true;
+  }
+
+  for (std::size_t target_index = 0u; target_index < targets.size();
+       ++target_index) {
+    if (matched_indices[target_index] == kNoMatch) {
+      continue;
+    }
+    if (!update_raster_group(
+            prepared, snapshot, targets[target_index],
+            raster_proxy_groups_[matched_indices[target_index]])) {
+      for (std::size_t index = 0u; index < created.size(); ++index) {
+        if (has_created[index]) {
+          wire_backend_.destroy_batches(created[index].proxies);
+        }
+      }
+      prune_unused_wire_geometry();
+      refresh_wire_resource_stats();
+      return false;
+    }
+  }
+
+  std::vector<RasterProxyGroup> next;
+  next.reserve(targets.size());
+  for (std::size_t target_index = 0u; target_index < targets.size();
+       ++target_index) {
+    if (matched_indices[target_index] != kNoMatch) {
+      next.push_back(
+          std::move(raster_proxy_groups_[matched_indices[target_index]]));
+    } else {
+      next.push_back(std::move(created[target_index]));
+    }
+  }
+  for (std::size_t current_index = 0u;
+       current_index < raster_proxy_groups_.size(); ++current_index) {
+    if (!claimed[current_index]) {
+      wire_backend_.destroy_batches(
+          raster_proxy_groups_[current_index].proxies);
+    }
+  }
+  raster_proxy_groups_ = std::move(next);
+  stats_.chunk_count = prepared.planned.batches.chunks.size() *
+                       raster_proxy_groups_.size();
+  stats_.raster_group_count = raster_proxy_groups_.size();
+  layer_masks_forced_hidden_ = false;
+  prune_unused_wire_geometry();
+  refresh_wire_resource_stats();
+  return true;
+}
+
+bool SceneWireframeOverlayCache::create_raster_group(
+    const PreparedPlan &prepared,
+    const RenderOverlaySceneWireframeSnapshot &snapshot,
+    const ViewportPersistentOverlayRasterGroup &raster_group,
+    RasterProxyGroup &result) {
+  result.layer_mask = raster_group.layer_mask;
+  result.style = raster_group.style;
+  result.proxies.reserve(prepared.planned.batches.chunks.size());
+  for (std::size_t index = 0u;
+       index < prepared.planned.batches.chunks.size(); ++index) {
+    const RenderOverlayMeshSnapshot *record = prepared.records[index];
+    const float line_width_pixels =
+        record == nullptr ? 0.0f : wire_width(*record, raster_group.style);
+    if (record == nullptr || !std::isfinite(line_width_pixels) ||
+        line_width_pixels <= 0.0f) {
+      wire_backend_.destroy_batches(result.proxies);
+      result.proxies.clear();
+      return false;
+    }
+    const RenderInstanceBatchChunk &chunk =
+        prepared.planned.batches.chunks[index];
+    WireBatchProxy proxy = wire_backend_.create_batch(
+        wire_geometry_input(*record, snapshot.style), chunk,
+        wire_batch_style(
+            *record, chunk, raster_group.style, snapshot.clip_planes,
+            scene_wire_batch_layer_mask(*record, snapshot, raster_group)));
+    if (!wire_backend_.valid(proxy)) {
+      wire_backend_.destroy_batch(proxy);
+      wire_backend_.destroy_batches(result.proxies);
+      result.proxies.clear();
+      return false;
+    }
+    result.proxies.push_back(std::move(proxy));
+  }
+  return true;
+}
+
+bool SceneWireframeOverlayCache::update_raster_group(
+    const PreparedPlan &prepared,
+    const RenderOverlaySceneWireframeSnapshot &snapshot,
+    const ViewportPersistentOverlayRasterGroup &raster_group,
+    RasterProxyGroup &proxy_group) {
+  if (prepared.records.size() != proxy_group.proxies.size()) {
+    return false;
+  }
+  for (std::size_t index = 0u; index < proxy_group.proxies.size(); ++index) {
+    const RenderOverlayMeshSnapshot *record = prepared.records[index];
+    const float line_width_pixels =
+        record == nullptr ? 0.0f : wire_width(*record, raster_group.style);
+    if (record == nullptr ||
+        !wire_backend_.valid(proxy_group.proxies[index]) ||
+        !std::isfinite(line_width_pixels) || line_width_pixels <= 0.0f) {
+      return false;
+    }
+  }
+  for (std::size_t index = 0u; index < proxy_group.proxies.size(); ++index) {
+    const RenderOverlayMeshSnapshot &record = *prepared.records[index];
+    const float line_width_pixels = wire_width(record, raster_group.style);
+    if (!wire_backend_.update_line_width(proxy_group.proxies[index],
+                                         line_width_pixels)) {
+      return false;
+    }
+    const std::uint8_t layer_mask =
+        scene_wire_batch_layer_mask(record, snapshot, raster_group);
+    wire_backend_.set_layer_mask(
+        std::span<const WireBatchProxy>(&proxy_group.proxies[index], 1u),
+        layer_mask);
+  }
+  proxy_group.layer_mask = raster_group.layer_mask;
+  proxy_group.style = raster_group.style;
+  return true;
+}
+
+void SceneWireframeOverlayCache::destroy_raster_groups(
+    std::span<RasterProxyGroup> proxy_groups) {
+  for (RasterProxyGroup &proxy_group : proxy_groups) {
+    wire_backend_.destroy_batches(proxy_group.proxies);
+  }
+}
+
+void SceneWireframeOverlayCache::prune_unused_wire_geometry() {
+  std::array<std::span<const WireBatchProxy>,
+             kMaxViewportPersistentOverlayRasterGroups>
+      live_groups{};
+  for (std::size_t index = 0u; index < raster_proxy_groups_.size(); ++index) {
+    live_groups[index] = raster_proxy_groups_[index].proxies;
+  }
+  wire_backend_.prune_unused_geometry_resources(
+      std::span<const std::span<const WireBatchProxy>>(live_groups)
+          .first(raster_proxy_groups_.size()));
 }
 
 void SceneWireframeOverlayCache::refresh_wire_resource_stats() {
@@ -548,24 +859,34 @@ void SceneWireframeOverlayCache::refresh_wire_resource_stats() {
   stats_.derived_index_bytes = wire_stats.derived_index_bytes;
   stats_.geometry_upload_count = wire_stats.geometry_upload_count;
   stats_.geometry_reuse_count = wire_stats.geometry_reuse_count;
+  stats_.line_width_update_count = wire_stats.line_width_update_count;
 }
 
 void SceneWireframeOverlayCache::update_clip_planes(
     ViewportCameraClipPlanes clip_planes) {
-  wire_backend_.update_clip_plane(proxies_, clip_planes.near_plane);
+  for (RasterProxyGroup &proxy_group : raster_proxy_groups_) {
+    wire_backend_.update_clip_plane(proxy_group.proxies,
+                                    clip_planes.near_plane);
+  }
 }
 
 void SceneWireframeOverlayCache::update_instance_edit_style(
     const InstanceEditStyle &style) {
-  wire_backend_.update_instance_edit_style(proxies_, style, true);
+  for (RasterProxyGroup &proxy_group : raster_proxy_groups_) {
+    wire_backend_.update_instance_edit_style(proxy_group.proxies, style,
+                                             true);
+  }
 }
 
-void SceneWireframeOverlayCache::set_layer_mask(std::uint8_t layer_mask) {
-  if (layer_mask_ == layer_mask) {
+void SceneWireframeOverlayCache::set_all_layer_masks(
+    std::uint8_t layer_mask) {
+  if (layer_mask == 0u && layer_masks_forced_hidden_) {
     return;
   }
-  layer_mask_ = layer_mask;
-  wire_backend_.set_layer_mask(proxies_, layer_mask_);
+  for (const RasterProxyGroup &proxy_group : raster_proxy_groups_) {
+    wire_backend_.set_layer_mask(proxy_group.proxies, layer_mask);
+  }
+  layer_masks_forced_hidden_ = layer_mask == 0u;
 }
 
 } // namespace quader

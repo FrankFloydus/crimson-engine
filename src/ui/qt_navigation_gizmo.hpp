@@ -8,6 +8,7 @@
 
 #include "api/quader_viewport_layout_types.hpp"
 #include "editor/interactions/viewport_navigation.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 
 #include <QFrame>
@@ -55,6 +56,8 @@ qt_navigation_gizmo_visibility_refresh_required(bool current,
  */
 class QtNavigationGizmoInteraction final {
 public:
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
+
   [[nodiscard]] quader_editor_core::ViewCubePrimitiveInput
   primitive_input(const ViewportCameraController &camera,
                   QVec2 viewport_size) const;
@@ -83,6 +86,7 @@ public:
   }
 
 private:
+  QtUiScaleMetrics ui_scale_metrics_;
   bool dragging_ = false;
   bool drag_started_ = false;
   ViewportPaneId pane_id_ = ViewportPaneId::Perspective;
@@ -103,6 +107,7 @@ public:
                              QWidget *parent = nullptr);
 
   void set_camera(ViewportCameraController *camera);
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
   // Detaches a potentially expired non-owning camera without dereferencing it.
   void abandon_camera();
   void set_gizmo_visible(bool visible);
@@ -132,6 +137,7 @@ private:
   void mark_interaction_activity();
 
   ViewportPaneId pane_id_ = ViewportPaneId::Perspective;
+  QtUiScaleMetrics ui_scale_metrics_;
   ViewportCameraController *camera_ = nullptr;
   std::optional<QtNavigationGizmoCameraSnapshot> camera_snapshot_;
   QtNavigationGizmoInteraction interaction_;

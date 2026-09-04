@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "ui/qt_ui_scale_metrics.hpp"
+
 #include <QIcon>
 #include <QMessageBox>
 #include <QString>
@@ -15,6 +17,7 @@
 #include <vector>
 
 class QCloseEvent;
+class QEvent;
 class QLabel;
 class QPushButton;
 class QWidget;
@@ -73,6 +76,9 @@ public:
   /// Resolves all standard icons once and ensures a hidden native window.
   void prewarm();
 
+  /// Refreshes retained style-owned resources after an interface-scale event.
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
+
   /// Hides instead of closing so the prewarmed native window remains alive.
   void done(int result) override;
 
@@ -83,6 +89,7 @@ public:
   }
 
 protected:
+  bool event(QEvent *event) override;
   void closeEvent(QCloseEvent *event) override;
 
 private:
@@ -96,6 +103,7 @@ private:
   presentation_is_valid(const QtRetainedMessageBoxPresentation &presentation)
       const noexcept;
   void apply_informative_text(const QString &text);
+  void refresh_standard_icon_cache();
   void apply_presented_icon();
 
   std::array<QPushButton *, kRetainedButtonCount> buttons_{};
@@ -107,7 +115,9 @@ private:
   QtRetainedMessageBoxButton close_button_ =
       QtRetainedMessageBoxButton::None;
   int message_icon_size_ = 0;
+  qreal message_icon_device_pixel_ratio_ = 1.0;
   bool prewarmed_ = false;
+  QtUiScaleMetrics ui_scale_metrics_;
 };
 
 } // namespace quader

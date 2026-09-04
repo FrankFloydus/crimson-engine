@@ -21,6 +21,7 @@
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_grid_placement_policy.hpp"
 #include "viewport/viewport_host_interaction_policy.hpp"
+#include "viewport/viewport_pixel_scale.hpp"
 
 #include <algorithm>
 #include <array>
@@ -565,6 +566,7 @@ ViewportNativeToolInteraction::handle_frame(
           document, assets, camera,
           ViewportPointPlacementRequest{
               .mouse_local = mouse_local,
+              .viewport_pixel_scale = frame.viewport_pixel_scale,
               .active_grid = plane,
               .grid_size = grid_size,
               .policy = ViewportPointPlacementPolicy{
@@ -781,6 +783,7 @@ ViewportNativeToolInteraction::handle_frame(
               document, assets, camera,
               ViewportPointPlacementRequest{
                   .mouse_local = mouse_local,
+                  .viewport_pixel_scale = frame.viewport_pixel_scale,
                   .active_grid = viewport_active_grid_placement_plane(camera),
                   .grid_size = grid_size,
                   .policy = ViewportPointPlacementPolicy::radial_array(),
@@ -853,7 +856,8 @@ ViewportNativeToolInteraction::handle_frame(
                                  !input.text_input_active;
       if (can_interact && frame.left_pressed && !canceled_left_release &&
           !linear_array_handle_press_ &&
-          linear_array_handle_hit(camera, handle, frame.left_click_local)) {
+          linear_array_handle_hit(camera, handle, frame.left_click_local,
+                                  frame.viewport_pixel_scale)) {
         linear_array_handle_press_ = LinearArrayHandlePress{
             .gesture = viewport_pointer_gesture_from_latest_edge(
                 input.pointer_pressed_edges, QuaderMouseButton::Left,
@@ -949,7 +953,8 @@ ViewportNativeToolInteraction::handle_frame(
                               !input.text_input_active;
     if (can_interact && frame.left_pressed && !canceled_left_release &&
         !pivot_handle_press_ &&
-        pivot_handle_hit(camera, handle, frame.left_click_local)) {
+        pivot_handle_hit(camera, handle, frame.left_click_local,
+                         frame.viewport_pixel_scale)) {
       pivot_handle_press_ = PivotHandlePress{
           .gesture = viewport_pointer_gesture_from_latest_edge(
               input.pointer_pressed_edges, QuaderMouseButton::Left,
@@ -993,7 +998,8 @@ ViewportNativeToolInteraction::handle_frame(
         const QVec3 position = resolved_pivot_drag_position(
             camera, input.mouse_local, handle.world_position, document, assets,
             *point_placement, snap_settings,
-            viewport_grid_world_size_for_preset(input.grid_preset));
+            viewport_grid_world_size_for_preset(input.grid_preset),
+            frame.viewport_pixel_scale);
         if (handle.persistent) {
           pivot->set_persistent_preview_position(position);
         } else {
@@ -1045,15 +1051,19 @@ bool ViewportNativeToolInteraction::dragging() const {
 
 std::optional<int> ViewportNativeToolInteraction::hit_drawn_plane_captured_point(
     const std::array<QVec3, 3> &points, int captured_point_count,
-    QVec2 mouse_local, const ViewportCameraController &camera) {
+    QVec2 mouse_local, const ViewportCameraController &camera,
+    float viewport_pixel_scale) {
   constexpr float kPointHitRadiusPixels = 10.0f;
+  const float hit_radius_pixels =
+      kPointHitRadiusPixels *
+      viewport_sanitized_pixel_scale(viewport_pixel_scale);
   const int count = std::min(captured_point_count, 2);
   for (int index = count - 1; index >= 0; --index) {
     const ViewportScreenPoint screen =
         camera.project_world_point(points[static_cast<std::size_t>(index)]);
     if (screen.visible &&
         screen_distance_squared(mouse_local, screen.position) <=
-            kPointHitRadiusPixels * kPointHitRadiusPixels) {
+            hit_radius_pixels * hit_radius_pixels) {
       return index;
     }
   }
@@ -1062,8 +1072,12 @@ std::optional<int> ViewportNativeToolInteraction::hit_drawn_plane_captured_point
 
 bool ViewportNativeToolInteraction::hit_drawn_plane_line(
     const std::array<QVec3, 3> &points, int captured_point_count, bool has_line,
-    QVec2 mouse_local, const ViewportCameraController &camera) {
+    QVec2 mouse_local, const ViewportCameraController &camera,
+    float viewport_pixel_scale) {
   constexpr float kLineHitRadiusPixels = 10.0f;
+  const float hit_radius_pixels =
+      kLineHitRadiusPixels *
+      viewport_sanitized_pixel_scale(viewport_pixel_scale);
   if (!has_line || captured_point_count < 2) {
     return false;
   }
@@ -1072,7 +1086,7 @@ bool ViewportNativeToolInteraction::hit_drawn_plane_line(
   return start.visible && end.visible &&
          distance_to_segment_squared(mouse_local, start.position,
                                      end.position) <=
-             kLineHitRadiusPixels * kLineHitRadiusPixels;
+             hit_radius_pixels * hit_radius_pixels;
 }
 
 ModelingBoxToolEvent ViewportNativeToolInteraction::modeling_box_event(
@@ -1094,11 +1108,13 @@ QVec3 ViewportNativeToolInteraction::resolved_pivot_drag_position(
     const ViewportCameraController &camera, QVec2 mouse_local,
     QVec3 current_position, const SceneDocument &document,
     const AssetRegistry &assets, ViewportPointPlacementService &placement,
-    PivotSnapSettings settings, float grid_size) {
+    PivotSnapSettings settings, float grid_size,
+    float viewport_pixel_scale) {
   const ViewportPointPlacementResult resolved = placement.resolve(
       document, assets, camera,
       ViewportPointPlacementRequest{
           .mouse_local = mouse_local,
+          .viewport_pixel_scale = viewport_pixel_scale,
           .active_grid = {},
           .grid_size = grid_size,
           .policy = ViewportPointPlacementPolicy::pivot(settings),
@@ -1111,30 +1127,37 @@ QVec3 ViewportNativeToolInteraction::resolved_pivot_drag_position(
 
 bool ViewportNativeToolInteraction::pivot_handle_hit(
     const ViewportCameraController &camera, const PivotHandleState &handle,
-    QVec2 mouse_local) {
+    QVec2 mouse_local, float viewport_pixel_scale) {
   if (!handle.visible) {
     return false;
   }
   const ViewportScreenPoint screen =
       camera.project_world_point(handle.world_position);
   constexpr float kPickRadiusPixels = 16.0f;
+  const float pick_radius_pixels =
+      kPickRadiusPixels *
+      viewport_sanitized_pixel_scale(viewport_pixel_scale);
   return screen.visible &&
          screen_distance_squared(screen.position, mouse_local) <=
-             kPickRadiusPixels * kPickRadiusPixels;
+             pick_radius_pixels * pick_radius_pixels;
 }
 
 bool ViewportNativeToolInteraction::linear_array_handle_hit(
     const ViewportCameraController &camera,
-    const LinearArrayHandleState &handle, QVec2 mouse_local) {
+    const LinearArrayHandleState &handle, QVec2 mouse_local,
+    float viewport_pixel_scale) {
   if (!handle.visible) {
     return false;
   }
   const ViewportScreenPoint screen =
       camera.project_world_point(handle.endpoint_world);
   constexpr float kPickRadiusPixels = 16.0f;
+  const float pick_radius_pixels =
+      kPickRadiusPixels *
+      viewport_sanitized_pixel_scale(viewport_pixel_scale);
   return screen.visible &&
          screen_distance_squared(screen.position, mouse_local) <=
-             kPickRadiusPixels * kPickRadiusPixels;
+             pick_radius_pixels * pick_radius_pixels;
 }
 
 QVec3 ViewportNativeToolInteraction::linear_array_drag_point(

@@ -9,6 +9,8 @@
 #include "ui/qt_navigation_gizmo.hpp"
 #include "ui/qt_viewport_chrome_layout.hpp"
 
+#include <cmath>
+
 namespace {
 
 using quader::QVec2;
@@ -80,6 +82,20 @@ TEST(QtViewportChromeLayoutTests,
   EXPECT_EQ(narrow.toolbar_x, kInset);
 }
 
+TEST(QtViewportChromeLayoutTests,
+     AcceptsAnExplicitScaledMenuMinimumWithoutScalingPaneCoordinates) {
+  const quader::QtUiScaleMetrics metrics{2.0F, 1U};
+  const int inset = metrics.px(6);
+  const int minimum_width =
+      metrics.px(quader::kQtViewportDisplayMenuMinimumWidth);
+  const quader::QtViewportChromeLayout layout =
+      quader::qt_viewport_chrome_layout(800, 220, inset, minimum_width);
+
+  EXPECT_EQ(layout.menu_width, 296);
+  EXPECT_EQ(layout.toolbar_width, 296);
+  EXPECT_EQ(layout.toolbar_x, 800 - inset - 296);
+}
+
 TEST(QtNavigationGizmoUpdatePolicyTests,
      CameraSnapshotSkipsPanAndDollyButTracksOrientation) {
   ViewportCameraController first_camera;
@@ -129,6 +145,59 @@ TEST(QtNavigationGizmoUpdatePolicyTests,
       quader::qt_navigation_gizmo_visibility_refresh_required(false, true));
   EXPECT_TRUE(
       quader::qt_navigation_gizmo_visibility_refresh_required(true, false));
+}
+
+TEST(QtNavigationGizmoInteractionTests,
+     InterfaceScaleChangesViewCubeVisualAndHitGeometryTogether) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  QtNavigationGizmoInteraction interaction;
+  constexpr QVec2 kLargeGizmoSize{400.0f, 400.0f};
+
+  const auto baseline = interaction.primitives(camera, kLargeGizmoSize);
+  ASSERT_TRUE(baseline.ok);
+  EXPECT_DOUBLE_EQ(
+      interaction.primitive_input(camera, kLargeGizmoSize).widget_size,
+      70.0);
+
+  interaction.apply_ui_scale(quader::QtUiScaleMetrics{2.0F, 1U});
+  const auto scaled = interaction.primitives(camera, kLargeGizmoSize);
+  ASSERT_TRUE(scaled.ok);
+  EXPECT_DOUBLE_EQ(
+      interaction.primitive_input(camera, kLargeGizmoSize).widget_size,
+      140.0);
+  ASSERT_FALSE(scaled.faces.empty());
+  EXPECT_TRUE(interaction.press(camera, ViewportPaneId::Perspective,
+                                kLargeGizmoSize,
+                                scaled.faces.front().screen_position));
+  interaction.cancel(camera);
+
+  interaction.apply_ui_scale(quader::QtUiScaleMetrics{3.0F, 2U});
+  const auto maximum = interaction.primitives(camera, kLargeGizmoSize);
+  ASSERT_TRUE(maximum.ok);
+  EXPECT_DOUBLE_EQ(
+      interaction.primitive_input(camera, kLargeGizmoSize).widget_size,
+      210.0);
+  EXPECT_DOUBLE_EQ(maximum.axis_marker_radius, 24.0);
+  ASSERT_FALSE(maximum.axis_markers.empty());
+  const QVec2 marker = maximum.axis_markers.front().screen_position;
+  const float dx = marker.x - maximum.screen_position.x;
+  const float dy = marker.y - maximum.screen_position.y;
+  const float distance = std::hypot(dx, dy);
+  ASSERT_GT(distance, 0.0f);
+  const QVec2 visible_marker_edge{
+      marker.x + dx / distance *
+                     static_cast<float>(maximum.axis_marker_radius * 0.9),
+      marker.y + dy / distance *
+                     static_cast<float>(maximum.axis_marker_radius * 0.9)};
+  EXPECT_TRUE(interaction.hit_test(camera, kLargeGizmoSize,
+                                   visible_marker_edge)
+                  .hit);
+
+  interaction.apply_ui_scale(quader::QtUiScaleMetrics{0.5F, 3U});
+  EXPECT_DOUBLE_EQ(
+      interaction.primitive_input(camera, kLargeGizmoSize).widget_size,
+      35.0);
 }
 
 TEST(QtNavigationGizmoUpdatePolicyTests,

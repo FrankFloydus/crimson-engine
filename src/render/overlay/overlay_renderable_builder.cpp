@@ -496,23 +496,40 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
     }
     if (!edit_wire_lines.empty()) {
       QDR_PROFILE_SCOPE("Overlay build edit wire batch");
-      const float width_pixels =
-          viewport_overlay_line_width_pixels(layer, 0.0f);
-      OverlayEditWireMesh mesh = OverlayLineMeshBuilder::build(
-          edit_wire_lines, camera, width_pixels, 0.0f);
-      if (!mesh.empty()) {
-        plan.edit_wire_batches.push_back({
-            .mesh = std::move(mesh),
-            .state = make_state_with_depth_mode(
-                layer, ViewportOverlayGeometryKind::Lines, blend_order++,
-                ViewportOverlayDepthMode::DepthTested),
-            .width_pixels = width_pixels,
-            .near_plane = sanitized_camera.near_plane,
-            .far_plane = sanitized_camera.far_plane,
-            .orthographic_projection =
-                sanitized_camera.projection ==
-                ViewportOverlayProjection::Orthographic,
-        });
+      std::vector<float> edit_wire_widths;
+      for (const ViewportOverlayLine *line : edit_wire_lines) {
+        const float resolved_width = viewport_overlay_line_width_pixels(
+            layer, line->width_pixels);
+        if (std::find(edit_wire_widths.begin(), edit_wire_widths.end(),
+                      resolved_width) == edit_wire_widths.end()) {
+          edit_wire_widths.push_back(resolved_width);
+        }
+      }
+      for (const float width_pixels : edit_wire_widths) {
+        std::vector<const ViewportOverlayLine *> batch_lines;
+        batch_lines.reserve(edit_wire_lines.size());
+        for (const ViewportOverlayLine *line : edit_wire_lines) {
+          if (viewport_overlay_line_width_pixels(layer, line->width_pixels) ==
+              width_pixels) {
+            batch_lines.push_back(line);
+          }
+        }
+        OverlayEditWireMesh mesh = OverlayLineMeshBuilder::build(
+            batch_lines, camera, width_pixels, 0.0f);
+        if (!mesh.empty()) {
+          plan.edit_wire_batches.push_back({
+              .mesh = std::move(mesh),
+              .state = make_state_with_depth_mode(
+                  layer, ViewportOverlayGeometryKind::Lines, blend_order++,
+                  ViewportOverlayDepthMode::DepthTested),
+              .width_pixels = width_pixels,
+              .near_plane = sanitized_camera.near_plane,
+              .far_plane = sanitized_camera.far_plane,
+              .orthographic_projection =
+                  sanitized_camera.projection ==
+                  ViewportOverlayProjection::Orthographic,
+          });
+        }
       }
     }
     const std::vector<LineBatchKey> line_keys =

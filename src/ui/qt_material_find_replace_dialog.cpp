@@ -8,6 +8,7 @@
 
 #include <QFontMetrics>
 #include <QFrame>
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
@@ -37,11 +38,11 @@ QtMaterialFindReplaceDialog::QtMaterialFindReplaceDialog(QWidget *parent)
   resize(380, 300);
 
   auto *root_layout = new QVBoxLayout(this);
-  auto *columns_layout = new QHBoxLayout();
-  columns_layout->setSpacing(28);
-  root_layout->addLayout(columns_layout, 1);
+  columns_layout_ = new QHBoxLayout();
+  columns_layout_->setSpacing(28);
+  root_layout->addLayout(columns_layout_, 1);
 
-  const auto build_column = [this, columns_layout](
+  const auto build_column = [this](
                                 QtMaterialFindReplaceColumn column,
                                 ColumnWidgets &result) {
     auto *column_layout = new QVBoxLayout();
@@ -75,7 +76,7 @@ QtMaterialFindReplaceDialog::QtMaterialFindReplaceDialog(QWidget *parent)
     QObject::connect(result.browse, &QPushButton::clicked, this,
                      [this, column]() { browse(column); });
 
-    columns_layout->addLayout(column_layout, 1);
+    columns_layout_->addLayout(column_layout, 1);
   };
   build_column(QtMaterialFindReplaceColumn::Find, find_widgets_);
   build_column(QtMaterialFindReplaceColumn::Replace, replace_widgets_);
@@ -178,6 +179,35 @@ void QtMaterialFindReplaceDialog::set_replace_materials_callback(
   replace_materials_ = std::move(callback);
 }
 
+void QtMaterialFindReplaceDialog::apply_ui_scale(
+    const QtUiScaleMetrics &metrics) {
+  if (ui_scale_metrics_.revision() == metrics.revision() &&
+      ui_scale_metrics_.factor() == metrics.factor()) {
+    return;
+  }
+  ui_scale_metrics_ = metrics;
+  const int preview_extent = metrics.px(kPreviewSize);
+  columns_layout_->setSpacing(metrics.px(28));
+  for (const QtMaterialFindReplaceColumn column :
+       {QtMaterialFindReplaceColumn::Find,
+        QtMaterialFindReplaceColumn::Replace}) {
+    ColumnWidgets &column_widgets = widgets(column);
+    column_widgets.preview->setFixedSize(preview_extent, preview_extent);
+    column_widgets.name->setFixedWidth(preview_extent);
+    refresh_column(column);
+  }
+  updateGeometry();
+}
+
+bool QtMaterialFindReplaceDialog::event(QEvent *event) {
+  const bool handled = QDialog::event(event);
+  if (event->type() == QEvent::DevicePixelRatioChange) {
+    refresh_column(QtMaterialFindReplaceColumn::Find);
+    refresh_column(QtMaterialFindReplaceColumn::Replace);
+  }
+  return handled;
+}
+
 QtMaterialFindReplaceDialog::ColumnWidgets &
 QtMaterialFindReplaceDialog::widgets(QtMaterialFindReplaceColumn column) {
   return column == QtMaterialFindReplaceColumn::Find ? find_widgets_
@@ -208,8 +238,9 @@ void QtMaterialFindReplaceDialog::refresh_column(
   }
 
   column_widgets.preview->setText(QString{});
+  const int preview_extent = ui_scale_metrics_.px(kPreviewSize);
   column_widgets.preview->setPixmap(qt_material_preview_pixmap(
-      *column_material, QSize(kPreviewSize, kPreviewSize),
+      *column_material, QSize(preview_extent, preview_extent),
       column_widgets.preview->devicePixelRatioF()));
   column_widgets.preview->setAccessibleName(
       column_widgets.heading->text() + QStringLiteral(": ") +

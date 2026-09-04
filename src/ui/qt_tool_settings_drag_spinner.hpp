@@ -64,6 +64,7 @@ private:
   void update_drag(double pointer_x);
   void finish_drag();
   void apply_value(int value);
+  void refresh_button_extents();
   void synchronize_buttons();
   void synchronize_editor_cursor();
 

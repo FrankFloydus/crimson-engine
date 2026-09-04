@@ -25,7 +25,8 @@ class ViewportSelectionMarqueeOverlayBuilder {
 public:
   static void append(ViewportOverlayFrame &overlay_frame,
                       const ViewportOverlayCamera &camera,
-                      const RenderSelectionMarqueeRecord &marquee);
+                      const RenderSelectionMarqueeRecord &marquee,
+                      float raster_scale = 1.0f);
 };
 
 } // namespace quader

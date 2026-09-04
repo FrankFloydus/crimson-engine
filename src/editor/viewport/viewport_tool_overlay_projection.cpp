@@ -18,6 +18,7 @@
 #include "render/render_signature_builder.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "viewport/viewport_camera_controller.hpp"
+#include "viewport/viewport_pixel_scale.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -175,8 +176,10 @@ void append_pivot_ring(ViewportOverlayFrame &frame, QVec3 center, QVec3 axis_a,
 }
 
 float pivot_handle_world_radius(const ViewportCameraController &camera,
-                                QVec3 position) {
+                                QVec3 position, float raster_scale) {
   constexpr float kRadiusPixels = 7.0f;
+  const float radius_pixels = kRadiusPixels *
+                              viewport_sanitized_pixel_scale(raster_scale);
   const ViewportScreenPoint screen = camera.project_world_point(position);
   if (!screen.visible) {
     return 0.08f;
@@ -190,7 +193,7 @@ float pivot_handle_world_radius(const ViewportCameraController &camera,
       camera.ray_from_viewport_point(screen.position), position, plane_normal);
   const std::optional<QVec3> edge = intersect_ray_plane(
       camera.ray_from_viewport_point(
-          {screen.position.x + kRadiusPixels, screen.position.y}),
+          {screen.position.x + radius_pixels, screen.position.y}),
       position, plane_normal);
   return center.has_value() && edge.has_value()
              ? std::clamp(length(*edge - *center), 0.025f, 100.0f)
@@ -371,7 +374,8 @@ std::uint64_t tool_overlay_publication_revision(
       .add_bool(inputs.gizmos_visible)
       .add_bool(inputs.pivot_handle_editing)
       .add_bool(inputs.overlays_visible)
-      .add_bool(inputs.radial_array_center_visible);
+      .add_bool(inputs.radial_array_center_visible)
+      .add_float(viewport_sanitized_pixel_scale(inputs.raster_scale));
   const bool transform_gizmo_visible =
       inputs.interaction_pane && inputs.gizmos_visible &&
       !inputs.pivot_handle_editing && inputs.transform_gizmo != nullptr;
@@ -435,7 +439,8 @@ ViewportToolOverlaySource::build_dynamic_tool_overlay_frame() const {
   if (inputs_.interaction_pane) {
     if (inputs_.tool_overlay_visible && inputs_.box_preview != nullptr) {
       ViewportToolOverlayProjection::append_box(
-          frame, *inputs_.overlay_camera, *inputs_.box_preview);
+          frame, *inputs_.overlay_camera, *inputs_.box_preview,
+          inputs_.raster_scale);
     }
     if (inputs_.gizmos_visible && !inputs_.pivot_handle_editing &&
         inputs_.transform_gizmo != nullptr) {
@@ -449,13 +454,15 @@ ViewportToolOverlaySource::build_dynamic_tool_overlay_frame() const {
       }
       if (inputs_.selection_marquee != nullptr) {
         ViewportToolOverlayProjection::append_selection_marquee(
-            frame, *inputs_.overlay_camera, *inputs_.selection_marquee);
+            frame, *inputs_.overlay_camera, *inputs_.selection_marquee,
+            inputs_.raster_scale);
       }
     }
   }
   if (inputs_.viewport_camera != nullptr && inputs_.pivot_handle != nullptr) {
     ViewportToolOverlayProjection::append_pivot_handle(
-        frame, *inputs_.viewport_camera, *inputs_.pivot_handle);
+        frame, *inputs_.viewport_camera, *inputs_.pivot_handle,
+        inputs_.raster_scale);
   }
   if (inputs_.linear_array_handle != nullptr) {
     ViewportToolOverlayProjection::append_linear_array_handle(
@@ -471,12 +478,13 @@ ViewportToolOverlaySource::build_dynamic_tool_overlay_frame() const {
 
 void ViewportToolOverlayProjection::append_box(
     ViewportOverlayFrame &frame, const ViewportOverlayCamera &camera,
-    const ModelingBoxPreview &preview) {
+    const ModelingBoxPreview &preview, float raster_scale) {
   ViewportBoxOverlayBuilder::append(
       frame, camera,
       RenderBoxPreviewRecord{.valid = preview.ok && preview.footprint_count >= 2U,
                              .footprint = preview.footprint,
-                             .footprint_count = preview.footprint_count});
+                             .footprint_count = preview.footprint_count},
+      raster_scale);
 }
 
 void ViewportToolOverlayProjection::append_transform_gizmo(
@@ -488,7 +496,7 @@ void ViewportToolOverlayProjection::append_transform_gizmo(
 
 void ViewportToolOverlayProjection::append_selection_marquee(
     ViewportOverlayFrame &frame, const ViewportOverlayCamera &camera,
-    const ViewportSelectionMarquee &marquee) {
+    const ViewportSelectionMarquee &marquee, float raster_scale) {
   ViewportSelectionMarqueeOverlayBuilder::append(
       frame, camera,
       RenderSelectionMarqueeRecord{
@@ -496,16 +504,18 @@ void ViewportToolOverlayProjection::append_selection_marquee(
           .crossing = marquee.rule == ModelingBoxSelectionRule::Crossing,
           .start = marquee.start,
           .end = marquee.end,
-      });
+      },
+      raster_scale);
 }
 
 void ViewportToolOverlayProjection::append_pivot_handle(
     ViewportOverlayFrame &frame, const ViewportCameraController &camera,
-    const PivotHandleState &handle) {
+    const PivotHandleState &handle, float raster_scale) {
   if (!handle.visible) {
     return;
   }
-  const float radius = pivot_handle_world_radius(camera, handle.world_position);
+  const float radius =
+      pivot_handle_world_radius(camera, handle.world_position, raster_scale);
   append_pivot_ring(frame, handle.world_position, {1.0f, 0.0f, 0.0f},
                     {0.0f, 1.0f, 0.0f}, radius);
   append_pivot_ring(frame, handle.world_position, {1.0f, 0.0f, 0.0f},

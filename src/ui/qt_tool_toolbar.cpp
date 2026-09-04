@@ -9,10 +9,13 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
+#include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QAction>
 #include <QActionGroup>
+#include <QEvent>
 #include <QIcon>
 #include <QPainter>
 #include <QPainterPath>
@@ -57,12 +60,17 @@ constexpr std::array<ToolIconSpec, 16> kToolIconSpecs{{
     {ViewportToolId::Curve, nullptr},
 }};
 
-// Keep the small curve glyph scalable and palette-aware without a bitmap asset.
-QIcon curve_tool_icon(const QPalette &palette) {
-  QPixmap pixmap(64, 64);
+// Keeps the small curve glyph scalable and palette-aware without a bitmap
+// asset. Multiple generated resolutions let QIcon select a sharp source for
+// the scaled logical size and the destination screen's device pixel ratio.
+QPixmap curve_tool_icon_pixmap(const QPalette &palette, int extent) {
+  QPixmap pixmap(extent, extent);
   pixmap.fill(Qt::transparent);
   QPainter painter(&pixmap);
   painter.setRenderHint(QPainter::Antialiasing);
+  constexpr qreal kDesignExtent = 64.0;
+  const qreal drawing_scale = static_cast<qreal>(extent) / kDesignExtent;
+  painter.scale(drawing_scale, drawing_scale);
   painter.setPen(QPen(palette.color(QPalette::Mid), 2.0));
   painter.drawLine(QPointF(10, 48), QPointF(16, 12));
   painter.drawLine(QPointF(48, 52), QPointF(54, 16));
@@ -77,7 +85,18 @@ QIcon curve_tool_icon(const QPalette &palette) {
   painter.setPen(Qt::NoPen);
   painter.drawEllipse(QPointF(16, 12), 3.5, 3.5);
   painter.drawEllipse(QPointF(48, 52), 3.5, 3.5);
-  return QIcon(pixmap);
+  return pixmap;
+}
+
+QIcon curve_tool_icon(const QPalette &palette) {
+  constexpr std::array<int, 9> kGeneratedExtents{
+      16, 24, 32, 48, 64, 96, 128, 192, 384,
+  };
+  QIcon icon;
+  for (const int extent : kGeneratedExtents) {
+    icon.addPixmap(curve_tool_icon_pixmap(palette, extent));
+  }
+  return icon;
 }
 
 QString localized_tool_text(const LocalizationService &localization,
@@ -109,9 +128,10 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
     }
     const std::string_view tool_id = viewport_tool_catalog_id(spec.tool);
     const std::string_view fallback = viewport_tool_label(spec.tool);
-    const QIcon icon = spec.tool == ViewportToolId::Curve
-                           ? curve_tool_icon(palette())
-                           : QIcon(QString::fromUtf8(spec.icon_path));
+    const QIcon icon =
+        spec.tool == ViewportToolId::Curve
+            ? curve_tool_icon(palette())
+            : qt_multiresolution_icon(QString::fromUtf8(spec.icon_path));
     QAction *action = addAction(icon,
                                 QString::fromUtf8(fallback.data()));
     action->setObjectName(
@@ -129,9 +149,13 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
         .tool = spec.tool,
         .tool_id = tool_id,
     };
+    if (spec.tool == ViewportToolId::Curve) {
+      curve_action_ = action;
+    }
     if (spec.tool == ViewportToolId::Pivot) {
       transform_space_action_ = addAction(
-          QIcon(QStringLiteral(":/quader/icons/tool_transform_local.png")),
+          qt_multiresolution_icon(
+              QStringLiteral(":/quader/icons/tool_transform_local.png")),
           QStringLiteral("Local Transforms"));
       transform_space_action_->setObjectName(
           QStringLiteral("toggle_transform_space"));
@@ -153,6 +177,36 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
   }
   configure_native_toolbar_button_face(
       *this, *transform_space_action_, button_presentation);
+}
+
+bool QtToolToolbar::event(QEvent *event) {
+  const bool handled = QToolBar::event(event);
+  if (event != nullptr &&
+      (event->type() == QEvent::PaletteChange ||
+       event->type() == QEvent::ApplicationPaletteChange)) {
+    refresh_curve_tool_icon();
+  }
+  return handled;
+}
+
+void QtToolToolbar::refresh_curve_tool_icon() {
+  if (curve_action_ != nullptr) {
+    curve_action_->setIcon(curve_tool_icon(palette()));
+  }
+}
+
+void QtToolToolbar::apply_ui_scale(const QtUiScaleMetrics &metrics) {
+  constexpr QSize kToolbarIconSize(32, 32);
+  const QSize scaled_icon_size = metrics.size(kToolbarIconSize);
+  if (iconSize() != scaled_icon_size) {
+    setIconSize(scaled_icon_size);
+  }
+
+  for (const ToolAction &entry : tool_actions_) {
+    apply_native_toolbar_button_face_ui_scale(*this, *entry.action, metrics);
+  }
+  apply_native_toolbar_button_face_ui_scale(
+      *this, *transform_space_action_, metrics);
 }
 
 void QtToolToolbar::set_localization(

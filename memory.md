@@ -6031,16 +6031,15 @@ Invariant:
 - A Qt stylesheet `color` declaration does not recolor Fusion's fixed dock-title raster glyphs.
   Fusion also shrinks a framed dock button's 16 px small-icon metric to 5/8, producing the
   unreadable 10 px default seen against Quader's dark dock title bars.
-- Dock title contrast is owned explicitly by app-authored, near-white close/float PNGs embedded
-  under `/quader/icons`. The scoped dock stylesheet uses Qt's `titlebar-close-icon` and
-  `titlebar-normal-icon` properties plus `icon-size: 24px`, yielding an approximately 15 px glyph
-  inside an 18 px control while preserving Qt's built-in drag, float, close, and accessibility
-  behavior.
+- Dock title contrast is owned explicitly by palette-aware `QIconEngine` close/float paths applied
+  to Qt's existing dock buttons. The scoped dock stylesheet owns only surfaces, interaction states,
+  and scale-derived control metrics; it does not bind fixed raster URLs. This preserves Qt's built-in
+  drag, float, close, and accessibility behavior while remaining sharp at arbitrary UI scale and DPR.
 - Default and active title colors remain distinct. Hover keeps the background transparent and
   adds a high-contrast outline; pressed uses a darker fill and brighter outline so neither state
   muddies the glyph.
 
-Owners: `UISystem::create_dock`, scoped dock-title QSS, embedded dock-chrome resources, and UI/build
+Owners: `UISystem::create_dock`, `qt_dock_title_presentation`, scoped dock-title QSS, and UI/build
 guardrails.
 
 Verification: focused dock-title presentation and resource-packaging guardrails pass, all affected
@@ -8704,3 +8703,50 @@ wire, replacement of an actual selected edge while keeping that wire, and true-b
 Two boundary regressions cover held paint and formal instances outside instance edit. The
 neighboring click/miss, gizmo, loop/ring, and sticky-wire tests pass; the repository-selected
 affected workflow and mandatory six-entry regression gate pass. Quader was not launched.
+
+## 2026-09-04 - Interface scaling composes with per-monitor DPI
+
+- `UISettings` persists one authored `0.5..3.0` interface factor as `[Interface]
+  InterfaceScale`; malformed or absent values use 1.0 and finite out-of-range values clamp. The
+  public preferences API rejects non-finite input, commits effective changes immediately, saves
+  once, and reconciles an open Settings transaction. Settings previews are live; Apply advances
+  the rollback baseline, and Cancel restores the last applied factor.
+- Qt owns the monitor DPI base. Quader multiplies logical widget/style/font metrics by the authored
+  factor from immutable 100% baselines, then lets Qt apply each screen's DPR. The application-wide
+  Fusion proxy, font update, retained-surface reflow, icon regeneration, and cache invalidation are
+  event/revision driven; `UISystem::refresh` must not poll or apply interface scale.
+- A pane's physical presentation metric is `interface_scale * actual_surface_DPR`. Resolve
+  authored/default overlay widths before multiplying once. Screen-space visuals and their pick
+  radii scale together, while authored preferences such as gizmo size and dimension font size
+  remain independent base values. World pick tolerances recover only the user factor because the
+  camera/input projection already uses physical pixels.
+- Persistent scene and selection wires share immutable geometry while fixed-capacity per-pane
+  raster groups own layer masks and line-width uniforms. A scale/DPR-only transition patches those
+  proxies in place and returns to the unchanged fast path. Hover identity includes the effective
+  world radii, so inverse user-scale/DPR changes cannot alias even when their combined raster scale
+  is equal.
+- Multiresolution raster icons render non-normal modes through the installed Qt style with a real
+  `QStyleOption` carrying the application palette. Never pass a null option to Fusion's
+  `generatedIconPixmap`: Qt dereferences its palette for Disabled and Selected modes, and the
+  resulting crash appears only when retained project toolbars are painted.
+- Stroke-only `QIconEngine` implementations must override `pixmap()` and explicitly clear their
+  raster to transparent before painting. Qt's default `QIconEngine::pixmap()` constructs an
+  uninitialized `QPixmap`; untouched dock-glyph pixels otherwise appear as opaque random tiles even
+  though direct `paint()` tests on a cleared `QImage` look correct.
+- Never multiply Qt DPR, native handles, swapchains, render targets, current/saved window or dock
+  geometry, camera projection, world geometry, grid scale, transforms, raw pointer coordinates,
+  navigation sensitivity, popup coordinate conversion, timers, or OS cursors. Framebuffer extent
+  remains `logical QWindow size * actual DPR`.
+
+Owners: `UISettings` and `QuaderPreferencesApi` own persistence/public intent;
+`QtUiScaleApplicationController` and `UISystem` own event-driven Qt presentation;
+`QtViewportPanel` derives per-pane raster scale; viewport interaction owners scale hit policy; the
+render style resolver, snapshot cache, and persistent overlay caches own physical-pixel styling and
+invalidation.
+
+Verification: focused scale/UI/viewport tests cover 50%, 100%, 125%, 200%, 300%, non-compounding
+round trips, real `UISystem` preview/commit/persistence/dialog synchronization, and Disabled plus
+Selected icon rendering. Dock glyph tests request production `QIcon::pixmap()` output at integral
+and fractional DPRs and require a transparent backing. All source and architecture guardrails, the
+repository-selected affected workflow, the mandatory regression gate, and the standalone full
+Debug CTest preset pass.

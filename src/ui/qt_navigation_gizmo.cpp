@@ -104,6 +104,11 @@ bool qt_navigation_gizmo_hits_match(
   return !left.hit || quader_editor_core::view_cube_hits_match(left, right);
 }
 
+void QtNavigationGizmoInteraction::apply_ui_scale(
+    const QtUiScaleMetrics &metrics) {
+  ui_scale_metrics_ = metrics;
+}
+
 quader_editor_core::ViewCubePrimitiveInput
 QtNavigationGizmoInteraction::primitive_input(
     const ViewportCameraController &camera, QVec2 viewport_size) const {
@@ -111,9 +116,11 @@ QtNavigationGizmoInteraction::primitive_input(
   input.camera_transform = runtime_camera_transform(camera);
   input.viewport_size = {std::max(viewport_size.x, 1.0f),
                          std::max(viewport_size.y, 1.0f)};
+  const double factor = static_cast<double>(ui_scale_metrics_.factor());
+  input.axis_marker_radius = kAxisMarkerRadius * factor;
   input.widget_size = std::min(
-      kPreferredWidgetSize,
-      std::max(48.0, static_cast<double>(
+      kPreferredWidgetSize * factor,
+      std::max(48.0 * factor, static_cast<double>(
                          std::min(input.viewport_size.x,
                                   input.viewport_size.y) *
                          0.72f)));
@@ -251,6 +258,26 @@ QtNavigationGizmo::QtNavigationGizmo(ViewportPaneId pane_id,
   hide();
 }
 
+void QtNavigationGizmo::apply_ui_scale(
+    const QtUiScaleMetrics &metrics) {
+  if (ui_scale_metrics_.revision() == metrics.revision() &&
+      ui_scale_metrics_.factor() == metrics.factor()) {
+    return;
+  }
+  const bool geometry_changed =
+      ui_scale_metrics_.factor() != metrics.factor();
+  if (geometry_changed) {
+    finish_interaction(true);
+  }
+  ui_scale_metrics_ = metrics;
+  interaction_.apply_ui_scale(metrics);
+  hover_hit_ = {};
+  if (geometry_changed) {
+    updateGeometry();
+  }
+  update();
+}
+
 void QtNavigationGizmo::set_camera(ViewportCameraController *camera) {
   const QtNavigationGizmoCameraSnapshot next_snapshot =
       qt_navigation_gizmo_camera_snapshot(camera);
@@ -318,6 +345,11 @@ bool QtNavigationGizmo::event(QEvent *event) {
     // Clear the retained gesture immediately so it cannot lock viewport input.
     finish_interaction(true);
   }
+  if (event != nullptr &&
+      (event->type() == QEvent::DevicePixelRatioChange ||
+       event->type() == QEvent::ScreenChangeInternal)) {
+    update();
+  }
   return QFrame::event(event);
 }
 
@@ -374,7 +406,8 @@ void QtNavigationGizmo::paintEvent(QPaintEvent *event) {
 
   QColor neutral_edge = colors.buttonText().color();
   neutral_edge.setAlpha(205);
-  painter.setPen(QPen(neutral_edge, 1.5));
+  const qreal ui_scale = static_cast<qreal>(ui_scale_metrics_.factor());
+  painter.setPen(QPen(neutral_edge, std::max<qreal>(1.0, 1.5 * ui_scale)));
   for (const quader_editor_core::ViewCubeEdgePrimitive &edge :
        primitives.edges) {
     painter.drawLine(painter_point(edge.screen_start),
@@ -383,7 +416,8 @@ void QtNavigationGizmo::paintEvent(QPaintEvent *event) {
 
   for (const quader_editor_core::ViewCubeEdgePrimitive &edge :
        primitives.axis_edges) {
-    painter.setPen(QPen(qt_semantic_axis_color(edge.axis), 2.8));
+    painter.setPen(QPen(qt_semantic_axis_color(edge.axis),
+                        std::max<qreal>(1.0, 2.8 * ui_scale)));
     painter.drawLine(painter_point(edge.screen_start),
                      painter_point(edge.screen_end));
   }
@@ -391,18 +425,20 @@ void QtNavigationGizmo::paintEvent(QPaintEvent *event) {
   for (const quader_editor_core::ViewCubeAxisMarkerPrimitive &marker :
        primitives.axis_markers) {
     const QPointF center = painter_point(marker.screen_position);
-    painter.setPen(QPen(colors.shadow().color(), 1.2));
+    painter.setPen(QPen(colors.shadow().color(),
+                        std::max<qreal>(1.0, 1.2 * ui_scale)));
     painter.setBrush(qt_semantic_axis_color(marker.axis));
-    painter.drawEllipse(center, kAxisMarkerRadius, kAxisMarkerRadius);
+    const qreal marker_radius = primitives.axis_marker_radius;
+    painter.drawEllipse(center, marker_radius, marker_radius);
     // Axis fills are deliberately bright semantic colors. The palette shadow
     // keeps their compact labels readable in both light and dark themes.
     painter.setPen(colors.shadow().color());
     const std::string_view label =
         quader_editor_core::view_axis_label(marker.axis, marker.sign);
-    const QRectF label_rect(center.x() - kAxisMarkerRadius,
-                            center.y() - kAxisMarkerRadius,
-                            kAxisMarkerRadius * 2.0,
-                            kAxisMarkerRadius * 2.0);
+    const QRectF label_rect(center.x() - marker_radius,
+                            center.y() - marker_radius,
+                            marker_radius * 2.0,
+                            marker_radius * 2.0);
     painter.drawText(label_rect, Qt::AlignCenter,
                      QString::fromUtf8(label.data(),
                                        static_cast<qsizetype>(label.size())));

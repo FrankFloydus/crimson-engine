@@ -6,16 +6,20 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "ui/qt_ui_scale_metrics.hpp"
+
 #include <QString>
 #include <QWidget>
 
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <span>
 #include <vector>
 
 class QLabel;
+class QHBoxLayout;
 class QPushButton;
 class QStackedWidget;
 class QTabBar;
@@ -85,6 +89,9 @@ public:
 
   explicit QtSceneWorkspace(QWidget *parent = nullptr);
 
+  /** Reflows retained scene chrome from immutable 100% design metrics. */
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
+
   void set_labels(QtSceneWorkspaceLabels labels);
   void set_viewport_widget(QWidget *viewport_widget);
   [[nodiscard]] QWidget *viewport_widget() const { return viewport_widget_; }
@@ -133,6 +140,7 @@ private:
   QTabBar *tab_bar_ = nullptr;
   QToolButton *new_scene_button_ = nullptr;
   QWidget *instance_edit_bar_ = nullptr;
+  QHBoxLayout *instance_edit_layout_ = nullptr;
   QToolButton *instance_scene_crumb_ = nullptr;
   QLabel *instance_separator_ = nullptr;
   QLabel *instance_name_crumb_ = nullptr;
@@ -151,6 +159,9 @@ private:
   SceneRequestCallback close_scene_requested_;
   RequestCallback exit_instance_edit_requested_;
   std::optional<QtInstanceEditBreadcrumb> instance_edit_breadcrumb_;
+  float applied_ui_scale_factor_ = 0.0F;
+  std::uint64_t applied_ui_scale_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
 };
 
 } // namespace quader

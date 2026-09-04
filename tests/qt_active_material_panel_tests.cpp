@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "ui/qt_active_material_panel.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -134,6 +135,26 @@ TEST_F(QtActiveMaterialPanelTests,
   panel_->set_presentation(material, false);
   browse_->click();
   EXPECT_EQ(browse_count, 2);
+}
+
+TEST_F(QtActiveMaterialPanelTests,
+       AppliesInterfaceScaleWithoutCompoundingPreviewGeometry) {
+  panel_->set_presentation(
+      active_material_item(45, QStringLiteral("Scaled material"),
+                           QColor(80, 120, 170)),
+      true);
+
+  panel_->apply_ui_scale(QtUiScaleMetrics(2.0F, 1U));
+  QCoreApplication::processEvents();
+  EXPECT_EQ(panel_->sizeHint(), QSize(480, 520));
+  EXPECT_EQ(preview_->minimumSize(), QSize(192, 192));
+  EXPECT_FALSE(preview_->pixmap().isNull());
+
+  panel_->apply_ui_scale(QtUiScaleMetrics(1.0F, 2U));
+  QCoreApplication::processEvents();
+  EXPECT_EQ(panel_->sizeHint(), QSize(240, 260));
+  EXPECT_EQ(preview_->minimumSize(), QSize(96, 96));
+  EXPECT_FALSE(preview_->pixmap().isNull());
 }
 
 TEST_F(QtActiveMaterialPanelTests,

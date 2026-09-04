@@ -7,6 +7,7 @@
 #pragma once
 
 #include "api/quader_api_types.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "viewport/viewport_runtime_binding_token.hpp"
 
 #include <functional>
@@ -28,6 +29,8 @@ class ViewportInputRouter;
  */
 class QtViewportContextMenuPresenter final {
 public:
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
+
   void show(QWidget &parent, const QPoint &global_point,
             QuaderEditorApi &editor, ViewportInputRouter &input_router,
             LocalizationService &localization,
@@ -36,6 +39,9 @@ public:
             const std::optional<ProjectAssetId> &material_under_mouse,
             const std::function<void(ProjectAssetId)> &open_material_editor,
             ViewportRuntimeBindingToken runtime_binding = {}) const;
+
+private:
+  QtUiScaleMetrics ui_scale_metrics_;
 };
 
 } // namespace quader

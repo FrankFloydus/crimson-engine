@@ -47,6 +47,7 @@
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_input_types.hpp"
 #include "viewport/viewport_layout.hpp"
+#include "viewport/viewport_pixel_scale.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <QApplication>
@@ -593,6 +594,37 @@ void QtViewportPanel::set_viewport_settings(const ViewportSettings &settings) {
   viewport_settings_ = &settings;
 }
 
+void QtViewportPanel::apply_ui_scale(const QtUiScaleMetrics &metrics) {
+  if (ui_scale_metrics_.revision() == metrics.revision() &&
+      ui_scale_metrics_.factor() == metrics.factor()) {
+    return;
+  }
+  ui_scale_metrics_ = metrics;
+  context_menu_presenter_.apply_ui_scale(metrics);
+  for (Pane &pane_state : panes_) {
+    pane_state.navigation_gizmo->apply_ui_scale(metrics);
+    pane_state.fly_navigation_hud->apply_ui_scale(metrics);
+    pane_state.edge_length_hud->apply_ui_scale(metrics);
+    pane_state.toolbar->adjustSize();
+    pane_state.overlay_stack_valid = false;
+    update_pane_overlay_geometry(pane_state);
+  }
+  update_split_handles();
+  update_focused_pane_indicator();
+}
+
+float QtViewportPanel::viewport_raster_scale(ViewportPaneId pane_id) const {
+  const QtViewportSurface *pane_surface = surface(pane_id);
+  const qreal device_pixel_ratio =
+      pane_surface != nullptr ? pane_surface->devicePixelRatio() : 1.0;
+  const qreal safe_device_pixel_ratio =
+      std::isfinite(device_pixel_ratio) && device_pixel_ratio > 0.0
+          ? device_pixel_ratio
+          : 1.0;
+  return ui_scale_metrics_.factor() *
+         static_cast<float>(safe_device_pixel_ratio);
+}
+
 void QtViewportPanel::set_render_performance_stats(
     RenderFramePerformanceStats stats) {
   render_performance_ = stats;
@@ -835,8 +867,22 @@ void QtViewportPanel::prepare_viewports(
   };
   const ModelingSelectionOverlayFrameProvider selection_frame_provider{
       modeling, selection_overlay_options};
+  ViewportPersistentOverlayRasterGroupSet persistent_raster_groups;
+  for (const ViewportPanePlacement &placement : active_placements) {
+    const std::uint8_t pane_layer_mask =
+        viewport_grid_layer_mask(viewport_pane_index(placement.pane_id));
+    const bool accepted = persistent_raster_groups.add(
+        pane_layer_mask,
+        ViewportOverlayStyleResolver::persistent_style_snapshot(
+            settings, viewport_raster_scale(placement.pane_id)));
+    Q_ASSERT(accepted);
+    (void)accepted;
+  }
+  // The shared snapshot keeps authored/color identity independent of a pane.
+  // Physical widths are bound by the per-pane raster groups below.
   const ViewportPersistentOverlayStyleSnapshot persistent_overlay_style =
-      ViewportOverlayStyleResolver::persistent_style_snapshot(settings);
+      ViewportOverlayStyleResolver::persistent_style_snapshot(
+          settings, 1.0f);
   std::uint8_t wireframe_layer_mask = 0u;
   for (const ViewportPanePlacement &placement : active_placements) {
     if (workspace_->shading_mode(placement.pane_id) ==
@@ -858,6 +904,7 @@ void QtViewportPanel::prepare_viewports(
               (cached_overlay_mode == ModelingSelectionMode::Object ||
                cached_overlay_mode == ModelingSelectionMode::Group),
           .style = persistent_overlay_style,
+          .raster_groups = persistent_raster_groups,
       });
 
   std::array<bool, kViewportPaneCount> scene_overlay_requests = {};
@@ -980,10 +1027,13 @@ void QtViewportPanel::prepare_viewports(
     }
     const bool point_light_gizmos_visible =
         gizmos_visible && viewport_shading_shows_light_gizmos(shading);
+    const float pane_viewport_pixel_scale =
+        viewport_raster_scale(pane_state.id);
     const ViewportToolOverlaySource dynamic_tool_frame_provider{
         ViewportToolOverlaySourceInputs{
             .source_identity = reinterpret_cast<std::uintptr_t>(
                 &interaction_controller_),
+            .raster_scale = pane_viewport_pixel_scale,
             .overlay_camera = &overlay_camera,
             .viewport_camera = &pane_workspace.camera,
             .box_preview = &active_box_preview_,
@@ -1012,6 +1062,7 @@ void QtViewportPanel::prepare_viewports(
             ViewportOverlaySubmissionRequest{
                 .viewport_index = viewport_index,
                 .layer_mask = layer_mask,
+                .raster_scale = pane_viewport_pixel_scale,
                 .camera = overlay_camera,
                 .selection_source = selection_source,
                 .selection_frame_provider = &selection_frame_provider,
@@ -1620,10 +1671,11 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
   if (pane_state.surface_container->geometry() != pane_bounds) {
     pane_state.surface_container->setGeometry(pane_bounds);
   }
-  constexpr int kOverlayInset = 6;
+  const int overlay_inset = ui_scale_metrics_.px(6);
   const QSize display_size = pane_state.display_button->sizeHint();
   const QtViewportChromeLayout chrome = qt_viewport_chrome_layout(
-      pane_state.frame->width(), display_size.width(), kOverlayInset);
+      pane_state.frame->width(), display_size.width(), overlay_inset,
+      ui_scale_metrics_.px(kQtViewportDisplayMenuMinimumWidth));
   if (pane_state.display_button->minimumWidth() != chrome.menu_width ||
       pane_state.display_button->maximumWidth() != chrome.menu_width) {
     pane_state.display_button->setFixedWidth(chrome.menu_width);
@@ -1632,26 +1684,26 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
     pane_state.display_menu->setMinimumWidth(chrome.menu_width);
   }
   const int toolbar_height = std::max(1, display_size.height());
-  const QRect toolbar_geometry{chrome.toolbar_x, kOverlayInset,
+  const QRect toolbar_geometry{chrome.toolbar_x, overlay_inset,
                                chrome.toolbar_width, toolbar_height};
   if (pane_state.toolbar->geometry() != toolbar_geometry) {
     pane_state.toolbar->setGeometry(toolbar_geometry);
   }
 
-  constexpr int kNavigationGizmoExtent = 96;
+  const int navigation_gizmo_extent = ui_scale_metrics_.px(96);
   const int navigation_top =
-      pane_state.toolbar->geometry().bottom() + kOverlayInset;
+      pane_state.toolbar->geometry().bottom() + overlay_inset;
   const int available_width =
-      std::max(1, pane_state.frame->width() - kOverlayInset * 2);
+      std::max(1, pane_state.frame->width() - overlay_inset * 2);
   const int available_height =
       std::max(1, pane_state.frame->height() - navigation_top -
-                      kOverlayInset);
+                      overlay_inset);
   const int navigation_extent =
-      std::min({kNavigationGizmoExtent, available_width, available_height});
+      std::min({navigation_gizmo_extent, available_width, available_height});
   const QRect navigation_geometry{
-      std::max(kOverlayInset,
+      std::max(overlay_inset,
                pane_state.frame->width() - navigation_extent -
-                   kOverlayInset),
+                   overlay_inset),
       navigation_top, navigation_extent, navigation_extent};
   if (pane_state.navigation_gizmo->geometry() != navigation_geometry) {
     pane_state.navigation_gizmo->setGeometry(navigation_geometry);
@@ -1661,10 +1713,11 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
 
   const QSize info_size = pane_state.info_overlay->sizeHint();
   const QRect info_geometry{
-      std::max(kOverlayInset,
-               pane_state.frame->width() - info_size.width() - kOverlayInset),
-      std::max(kOverlayInset,
-               pane_state.frame->height() - info_size.height() - kOverlayInset),
+      std::max(overlay_inset,
+               pane_state.frame->width() - info_size.width() - overlay_inset),
+      std::max(overlay_inset,
+               pane_state.frame->height() - info_size.height() -
+                   overlay_inset),
       info_size.width(), info_size.height()};
   if (pane_state.info_overlay->geometry() != info_geometry) {
     pane_state.info_overlay->setGeometry(info_geometry);
@@ -2055,15 +2108,15 @@ void QtViewportPanel::draw_viewport_info_overlay(
     pane_state.info_overlay->raise();
   }
   if (text_changed || overlay_was_hidden) {
-    constexpr int kOverlayInset = 6;
+    const int overlay_inset = ui_scale_metrics_.px(6);
     const QSize info_size = pane_state.info_overlay->sizeHint();
     const QRect geometry{
-        std::max(kOverlayInset,
+        std::max(overlay_inset,
                  pane_state.frame->width() - info_size.width() -
-                     kOverlayInset),
-        std::max(kOverlayInset,
+                     overlay_inset),
+        std::max(overlay_inset,
                  pane_state.frame->height() - info_size.height() -
-                     kOverlayInset),
+                     overlay_inset),
         info_size.width(),
         info_size.height(),
     };
@@ -2087,7 +2140,7 @@ void QtViewportPanel::update_split_handles() {
       workspace_->active_split_handles();
   const int full_width = std::max(1, width());
   const int full_height = std::max(1, height());
-  constexpr int kHitThickness = 10;
+  const int hit_thickness = ui_scale_metrics_.px(10);
   for (std::size_t index = 0; index < split_handles_.size(); ++index) {
     SplitHandleHost &host = split_handles_[index];
     if (index >= handles.size()) {
@@ -2109,7 +2162,7 @@ void QtViewportPanel::update_split_handles() {
           static_cast<int>(std::lround(host.descriptor.start * full_height));
       const int end =
           static_cast<int>(std::lround(host.descriptor.end * full_height));
-      geometry = {x - kHitThickness / 2, start, kHitThickness,
+      geometry = {x - hit_thickness / 2, start, hit_thickness,
                   std::max(1, end - start)};
     } else {
       cursor_shape = Qt::SplitVCursor;
@@ -2119,8 +2172,8 @@ void QtViewportPanel::update_split_handles() {
           static_cast<int>(std::lround(host.descriptor.start * full_width));
       const int end =
           static_cast<int>(std::lround(host.descriptor.end * full_width));
-      geometry = {start, y - kHitThickness / 2,
-                  std::max(1, end - start), kHitThickness};
+      geometry = {start, y - hit_thickness / 2,
+                  std::max(1, end - start), hit_thickness};
     }
     if (host.widget->geometry() != geometry) {
       host.widget->setGeometry(geometry);
@@ -2645,6 +2698,7 @@ void QtViewportPanel::process_viewport_input(
                                   ViewportBoolSettingId::ShowGizmos) &&
       viewport_shading_shows_light_gizmos(
           workspace_->shading_mode(*input_pane));
+  const float viewport_pixel_scale = viewport_raster_scale(*input_pane);
   std::span<const ViewportSceneBillboardPickCandidate> billboards;
   if (point_lights_pickable) {
     const std::uint64_t scene_revision = document.revision();
@@ -2654,15 +2708,18 @@ void QtViewportPanel::process_viewport_input(
         point_light_pick_cached_document_ != &document ||
         point_light_pick_cached_scene_revision_ != scene_revision ||
         point_light_pick_cached_local_visibility_revision_ !=
-            local_visibility_revision) {
+            local_visibility_revision ||
+        point_light_pick_cached_viewport_pixel_scale_ !=
+            viewport_pixel_scale) {
       QDR_PROFILE_SCOPE("Viewport rebuild point light pick candidates");
       point_light_pick_cached_candidates_ =
           ViewportSceneProjection::point_light_pick_candidates(
-              document, local_visibility);
+              document, local_visibility, viewport_pixel_scale);
       point_light_pick_cached_document_ = &document;
       point_light_pick_cached_scene_revision_ = scene_revision;
       point_light_pick_cached_local_visibility_revision_ =
           local_visibility_revision;
+      point_light_pick_cached_viewport_pixel_scale_ = viewport_pixel_scale;
       point_light_pick_cache_valid_ = true;
     }
     billboards = point_light_pick_cached_candidates_;
@@ -2686,7 +2743,9 @@ void QtViewportPanel::process_viewport_input(
       .right_down = sample.right_down,
       .right_released = sample.right_released,
       .pointer_drag_threshold_pixels =
-          static_cast<float>(QApplication::startDragDistance()),
+          static_cast<float>(QApplication::startDragDistance()) *
+          input.device_pixel_ratio,
+      .viewport_pixel_scale = viewport_pixel_scale,
       .pointer_capture_recentered = pane_state.surface->pointer_captured(),
       .double_click_interval_seconds =
           static_cast<double>(QApplication::doubleClickInterval()) / 1000.0,
@@ -2920,6 +2979,10 @@ void QtViewportPanel::process_viewport_input(
               : interaction_selection);
   auto make_hover_key = [&](bool gizmo_consumed) {
     const ViewportSettings &settings = active_viewport_settings();
+    const double vertex_radius =
+        settings.float_value(ViewportFloatSettingId::PickVertexRadius);
+    const double edge_radius =
+        settings.float_value(ViewportFloatSettingId::PickEdgeRadius);
     return hover_controller_.make_key(
         camera,
         ViewportHoverWorkRequest{
@@ -2937,10 +3000,14 @@ void QtViewportPanel::process_viewport_input(
             .viewport_size = input.viewport_size,
             .modifiers = input.modifiers,
             .gizmo_consumed = gizmo_consumed,
-            .vertex_radius =
-                settings.float_value(ViewportFloatSettingId::PickVertexRadius),
-            .edge_radius =
-                settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
+            .viewport_pixel_scale = viewport_pixel_scale,
+            .vertex_radius = vertex_radius,
+            .edge_radius = edge_radius,
+            .vertex_world_radius = viewport_scaled_world_pick_radius(
+                vertex_radius, viewport_pixel_scale, input.device_pixel_ratio),
+            .edge_world_radius = viewport_scaled_world_pick_radius(
+                edge_radius,
+                viewport_pixel_scale, input.device_pixel_ratio),
             .select_backfaces = settings.bool_value(
                 ViewportBoolSettingId::BackfaceSelection),
             .scene_revision = document.revision(),
@@ -2966,12 +3033,16 @@ void QtViewportPanel::process_viewport_input(
             std::max(static_cast<double>(viewport_grid_world_size_for_preset(
                          input_router_.state().grid_preset)),
                      0.0001),
-        .vertex_radius = vertex_radius,
-        .edge_radius = edge_radius,
+        .vertex_radius = viewport_scaled_world_pick_radius(
+            vertex_radius, viewport_pixel_scale, input.device_pixel_ratio),
+        .edge_radius = viewport_scaled_world_pick_radius(
+            edge_radius, viewport_pixel_scale, input.device_pixel_ratio),
         .vertex_screen_radius =
-            viewport_component_pick_radius_pixels(vertex_radius),
+            viewport_component_pick_radius_pixels(vertex_radius) *
+            static_cast<double>(viewport_pixel_scale),
         .edge_screen_radius =
-            viewport_component_pick_radius_pixels(edge_radius),
+            viewport_component_pick_radius_pixels(edge_radius) *
+            static_cast<double>(viewport_pixel_scale),
         .snap_enabled = resolved_grid_snap_enabled,
         .constrain_axis = input.modifiers.shift,
         .dragging = dragging,
@@ -3071,12 +3142,14 @@ void QtViewportPanel::process_viewport_input(
   point_context.hit_drawn_plane_captured_point =
       [&](const std::array<QVec3, 3> &points, int count) {
         return ViewportNativeToolInteraction::hit_drawn_plane_captured_point(
-            points, count, sample.left_click_local, camera);
+            points, count, sample.left_click_local, camera,
+            viewport_pixel_scale);
       };
   point_context.hit_drawn_plane_line = [&](const std::array<QVec3, 3> &points,
                                            int count, bool has_line) {
     return ViewportNativeToolInteraction::hit_drawn_plane_line(
-        points, count, has_line, sample.left_click_local, camera);
+        points, count, has_line, sample.left_click_local, camera,
+        viewport_pixel_scale);
   };
   ViewportToolContext tool_context{
       .state = input_router_.state(),
@@ -3166,6 +3239,7 @@ void QtViewportPanel::process_viewport_input(
         .input = context_input,
         .input_result = result,
         .right_click_local = pending_context_menu_local_mouse,
+        .viewport_pixel_scale = viewport_pixel_scale,
         .active_tool_allows_selection_fallback = selection_fallback_active,
         .scene_billboard_pick_candidates = billboards,
         .scene_curve_pick_candidates =

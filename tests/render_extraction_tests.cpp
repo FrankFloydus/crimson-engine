@@ -2866,6 +2866,7 @@ TEST(RenderOverlaySnapshotTests,
   const ViewportPersistentOverlayStyleSnapshot persistent_style{
       .selection_face_color = rgba8(12, 34, 56, 78),
       .selection_wire_color = rgba8(90, 87, 65, 43),
+      .selection_edge_logical_width_pixels = 4.5f,
       .selection_edge_line_width_pixels = 4.5f,
       .face_signature = 101u,
       .wire_signature = 202u,
@@ -2973,6 +2974,7 @@ TEST(RenderOverlaySnapshotTests,
   constexpr std::uint32_t kLayerWireColor = rgba8(255, 64, 0, 230);
   const ViewportPersistentOverlayStyleSnapshot style{
       .selection_wire_color = rgba8(12, 34, 56, 255),
+      .selection_edge_logical_width_pixels = 3.25f,
       .selection_edge_line_width_pixels = 3.25f,
       .wire_signature = 91u,
   };
@@ -3193,6 +3195,104 @@ TEST(RenderOverlaySnapshotCacheTests,
   EXPECT_EQ(cache.stats().scene_wireframe_build_count, 2u);
   EXPECT_EQ(cache.stats().selection_build_count, 1u);
   EXPECT_EQ(cache.stats().selection_transform_refresh_count, 1u);
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
+     DistinctPaneRasterGroupsInvalidateMetadataWithoutRebuildingGeometry) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId entity =
+      document.create_entity("Scaled Persistent Wire", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(entity, MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.set_selected(entity, true));
+
+  const ViewportSettings settings = ViewportSettings::defaults();
+  const ViewportPersistentOverlayStyleSnapshot semantic_style =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(settings, 1.0f);
+  const ViewportPersistentOverlayStyleSnapshot scale_one = semantic_style;
+  const ViewportPersistentOverlayStyleSnapshot scale_two =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(settings, 2.0f);
+  ViewportPersistentOverlayRasterGroupSet raster_groups;
+  ASSERT_TRUE(raster_groups.add(0x04u, scale_one));
+  ASSERT_TRUE(raster_groups.add(0x08u, scale_two));
+
+  RenderOverlaySnapshotCache cache;
+  const RenderOverlayPersistentSnapshotUpdate initial =
+      cache.update_persistent(document, assets, true, 0u, semantic_style, {},
+                              nullptr, true, {}, raster_groups);
+  ASSERT_TRUE(initial.selected_object_changed);
+  ASSERT_TRUE(initial.scene_wireframe_changed);
+  ASSERT_NE(initial.selected_object, nullptr);
+  ASSERT_NE(initial.scene_wireframe, nullptr);
+  ASSERT_EQ(initial.selected_object->raster_groups.size(), 2u);
+  ASSERT_EQ(initial.scene_wireframe->raster_groups.size(), 2u);
+  ASSERT_EQ(initial.scene_wireframe->meshes.size(), 1u);
+  EXPECT_TRUE(initial.scene_wireframe->meshes.front().selected)
+      << "selected whole-mesh wires remain relevant without a wireframe pane";
+  const auto *selected_mesh_storage = initial.selected_object->meshes.data();
+  const auto *wire_mesh_storage = initial.scene_wireframe->meshes.data();
+  EXPECT_EQ(cache.stats().selected_object_build_count, 1u);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 1u);
+
+  const RenderOverlayPersistentSnapshotUpdate stable =
+      cache.update_persistent(document, assets, true, 0u, semantic_style, {},
+                              nullptr, true, {}, raster_groups);
+  EXPECT_FALSE(stable.changed());
+  EXPECT_EQ(cache.stats().selected_object_build_count, 1u);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 1u);
+
+  ViewportPersistentOverlayRasterGroupSet changed_groups;
+  ASSERT_TRUE(changed_groups.add(0x04u, scale_one));
+  const ViewportPersistentOverlayStyleSnapshot scale_three =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(settings, 3.0f);
+  ASSERT_TRUE(changed_groups.add(0x08u, scale_three));
+  const RenderOverlayPersistentSnapshotUpdate scale_changed =
+      cache.update_persistent(document, assets, true, 0u, semantic_style, {},
+                              nullptr, true, {}, changed_groups);
+  EXPECT_TRUE(scale_changed.selected_object_changed);
+  EXPECT_TRUE(scale_changed.scene_wireframe_changed);
+  ASSERT_EQ(scale_changed.scene_wireframe->raster_groups.size(), 2u);
+  EXPECT_NE(scale_changed.scene_wireframe->raster_groups.groups()[0]
+                .style.wire_signature,
+            scale_changed.scene_wireframe->raster_groups.groups()[1]
+                .style.wire_signature);
+  EXPECT_EQ(scale_changed.selected_object->meshes.data(),
+            selected_mesh_storage);
+  EXPECT_EQ(scale_changed.scene_wireframe->meshes.data(), wire_mesh_storage);
+  EXPECT_EQ(cache.stats().selected_object_build_count, 1u);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 1u)
+      << "a pane-only raster change must preserve borrowed geometry storage";
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
+     GroupSelectionWireStaysCurrentWithoutASelectedFaceOrWireframePane) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId entity =
+      document.create_entity("Group Persistent Wire", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(entity, MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.set_selected(entity, true));
+
+  RenderOverlaySnapshotCache cache;
+  const RenderOverlayPersistentSnapshotUpdate selected =
+      cache.update_persistent(document, assets, false, 0u, {}, {}, nullptr,
+                              true);
+  ASSERT_TRUE(selected.scene_wireframe_changed);
+  ASSERT_NE(selected.scene_wireframe, nullptr);
+  ASSERT_EQ(selected.scene_wireframe->meshes.size(), 1u);
+  EXPECT_TRUE(selected.scene_wireframe->meshes.front().selected);
+
+  ASSERT_TRUE(document.set_selected(entity, false));
+  const RenderOverlayPersistentSnapshotUpdate deselected =
+      cache.update_persistent(document, assets, false, 0u, {}, {}, nullptr,
+                              true);
+  ASSERT_TRUE(deselected.scene_wireframe_changed);
+  ASSERT_NE(deselected.scene_wireframe, nullptr);
+  ASSERT_EQ(deselected.scene_wireframe->meshes.size(), 1u);
+  EXPECT_FALSE(deselected.scene_wireframe->meshes.front().selected);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 2u);
 }
 
 TEST(RenderOverlaySnapshotCacheTests,
@@ -5422,6 +5522,7 @@ TEST(OverlayLineMeshBuilderTests,
       frame, test_overlay_camera(), ViewportOverlayLayer::SelectedEdge);
 
   ASSERT_EQ(plan.edit_wire_batches.size(), 1u);
+  EXPECT_FLOAT_EQ(plan.edit_wire_batches.front().width_pixels, 2.0f);
   EXPECT_EQ(plan.edit_wire_batches.front().state.depth_func,
             OverlayDepthFunc::GreaterOrEqual);
   EXPECT_TRUE(plan.edit_wire_batches.front().state.depth_culling);
@@ -7190,6 +7291,7 @@ TEST(RenderSceneWireframeBatchPlannerTests,
   const std::uint32_t normal_color = rgba8(30, 70, 110);
   const ViewportPersistentOverlayStyleSnapshot style{
       .selection_wire_color = normal_color,
+      .selection_edge_logical_width_pixels = 3.5f,
       .selection_edge_line_width_pixels = 3.5f,
       .wire_signature = 17u,
   };
@@ -7216,6 +7318,69 @@ TEST(RenderSceneWireframeBatchPlannerTests,
         return line.style_role == ViewportOverlayStyleRole::SelectionWire &&
                line.color == normal_color && line.width_pixels == 3.5f;
       }));
+}
+
+TEST(RenderSceneWireframeBatchPlannerTests,
+     RasterScaleKeepsPersistentWireBatchIdentityWhileScalingWidth) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId entity =
+      document.create_entity("Raster-scaled wire", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(entity, MeshComponent{.mesh = mesh}));
+
+  const ViewportPersistentOverlayStyleSnapshot baseline_style =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(
+          ViewportSettings::defaults(), 1.0f);
+  const ViewportPersistentOverlayStyleSnapshot scaled_style =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(
+          ViewportSettings::defaults(), 2.0f);
+  const RenderOverlaySceneWireframeSnapshot baseline =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u,
+                                                     baseline_style);
+  const RenderOverlaySceneWireframeSnapshot scaled =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u,
+                                                     scaled_style);
+  const SceneWireframeOverlayBatchPlan baseline_plan =
+      plan_scene_wireframe_overlay_batches(baseline, 64u);
+  const SceneWireframeOverlayBatchPlan scaled_plan =
+      plan_scene_wireframe_overlay_batches(scaled, 64u);
+
+  ASSERT_EQ(baseline_plan.batches.chunks.size(), 1u);
+  ASSERT_EQ(scaled_plan.batches.chunks.size(), 1u);
+  EXPECT_EQ(baseline_plan.batches.chunks.front().key,
+            scaled_plan.batches.chunks.front().key);
+  EXPECT_EQ(classify_instance_batch_update(baseline_plan.batches,
+                                           scaled_plan.batches),
+            RenderInstanceBatchUpdateKind::Unchanged)
+      << "line width is a mutable material uniform, not proxy identity";
+  EXPECT_NE(baseline_style.wire_signature, scaled_style.wire_signature);
+
+  ViewportOverlayFrame baseline_frame =
+      ViewportSceneOverlayBuilder::build_wireframe_frame(
+          {}, RenderOverlaySelectionMode::Component, baseline);
+  ViewportOverlayFrame scaled_frame =
+      ViewportSceneOverlayBuilder::build_wireframe_frame(
+          {}, RenderOverlaySelectionMode::Component, scaled);
+  ViewportOverlayStyleResolver::apply(
+      baseline_frame, ViewportSettings::defaults(), {.raster_scale = 1.0f});
+  ViewportOverlayStyleResolver::apply(
+      scaled_frame, ViewportSettings::defaults(), {.raster_scale = 2.0f});
+  ASSERT_FALSE(baseline_frame.lines.empty());
+  ASSERT_EQ(scaled_frame.lines.size(), baseline_frame.lines.size());
+  EXPECT_FLOAT_EQ(baseline_frame.lines.front().width_pixels,
+                  kOverlayWireframeXrayLineWidthPixels);
+  EXPECT_FLOAT_EQ(scaled_frame.lines.front().width_pixels,
+                  kOverlayWireframeXrayLineWidthPixels * 2.0f);
+
+  RenderOverlaySceneWireframeSnapshot recolored = scaled;
+  recolored.meshes.front().wireframe_tint = {0.9f, 0.1f, 0.2f};
+  const SceneWireframeOverlayBatchPlan recolored_plan =
+      plan_scene_wireframe_overlay_batches(recolored, 64u);
+  EXPECT_EQ(classify_instance_batch_update(scaled_plan.batches,
+                                           recolored_plan.batches),
+            RenderInstanceBatchUpdateKind::Rebuild)
+      << "baked vertex color remains part of persistent proxy identity";
 }
 
 TEST(RenderSceneWireframeBatchPlannerTests,
@@ -7735,6 +7900,117 @@ TEST(RenderInstanceEditPresentationTests,
   EXPECT_EQ(batches.wires.chunks.front().occurrences.size(), 2u);
   EXPECT_EQ(batches.fills.occurrence_count, 2u);
   EXPECT_EQ(batches.wires.occurrence_count, 2u);
+}
+
+TEST(RenderInstanceEditPresentationTests,
+     SelectedInstanceWidthKeepsFillAndWireBatchIdentity) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId definition =
+      document.create_entity("Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member =
+      document.create_entity("Canonical Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(member, MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+  const EntityId occurrence =
+      document.create_entity("Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(
+      occurrence, InstanceOccurrenceComponent{.definition = definition}));
+  ASSERT_TRUE(document.set_selected(occurrence, true));
+
+  RenderOverlaySelectedObjectSnapshot baseline =
+      build_render_overlay_selected_object_snapshot(document, assets, true);
+  ASSERT_EQ(baseline.instance_selection_wires.size(), 1u);
+  ASSERT_NE(baseline.instance_selection_wires.front().wire_geometry_payload,
+            nullptr);
+  constexpr float kLogicalWidth = 0.257f;
+  constexpr float kBaselineRasterScale = 1.5f;
+  baseline.style.raster_scale = kBaselineRasterScale;
+  baseline.style.selection_edge_logical_width_pixels = kLogicalWidth;
+  baseline.style.selection_edge_line_width_pixels =
+      kLogicalWidth * kBaselineRasterScale;
+  baseline.instance_selection_wires.front().logical_wire_width_pixels =
+      kLogicalWidth;
+  baseline.instance_selection_wires.front().wire_width_pixels =
+      kLogicalWidth * kBaselineRasterScale;
+  const InstanceSelectionOverlayBatchPlans baseline_plans =
+      plan_instance_selection_overlay_batches(baseline, 64u);
+
+  RenderOverlaySelectedObjectSnapshot scaled = baseline;
+  constexpr float kScaledRasterScale = 3.9750001f;
+  scaled.style.raster_scale = kScaledRasterScale;
+  scaled.style.selection_edge_line_width_pixels =
+      kLogicalWidth * kScaledRasterScale;
+  ++scaled.style.wire_signature;
+  for (RenderOverlayInstanceSelectionWireRecord &wire :
+       scaled.instance_selection_wires) {
+    wire.wire_width_pixels =
+        wire.logical_wire_width_pixels * kScaledRasterScale;
+  }
+  const InstanceSelectionOverlayBatchPlans scaled_plans =
+      plan_instance_selection_overlay_batches(scaled, 64u);
+  EXPECT_EQ(classify_instance_batch_update(baseline_plans.fills,
+                                           scaled_plans.fills),
+            RenderInstanceBatchUpdateKind::Unchanged);
+  EXPECT_EQ(classify_instance_batch_update(baseline_plans.wires,
+                                           scaled_plans.wires),
+            RenderInstanceBatchUpdateKind::Unchanged)
+      << "a scale-only width update must retain both persistent proxy sets";
+
+  RenderOverlaySelectedObjectSnapshot scaled_and_moved = scaled;
+  scaled_and_moved.instance_selection_fills.front()
+      .world_transform.values[12] += 5.0f;
+  scaled_and_moved.instance_selection_wires.front()
+      .world_transform.values[12] += 5.0f;
+  const InstanceSelectionOverlayBatchPlans scaled_and_moved_plans =
+      plan_instance_selection_overlay_batches(scaled_and_moved, 64u);
+  EXPECT_EQ(classify_instance_batch_update(scaled_plans.fills,
+                                           scaled_and_moved_plans.fills),
+            RenderInstanceBatchUpdateKind::TransformsOnly);
+  EXPECT_EQ(classify_instance_batch_update(scaled_plans.wires,
+                                           scaled_and_moved_plans.wires),
+            RenderInstanceBatchUpdateKind::TransformsOnly)
+      << "a transform concurrent with scale must still use retained proxies";
+
+  RenderOverlaySelectedObjectSnapshot mixed_widths = scaled;
+  RenderOverlayInstanceSelectionWireRecord second_width =
+      mixed_widths.instance_selection_wires.front();
+  second_width.occurrence += 1u;
+  second_width.logical_wire_width_pixels += 0.125f;
+  second_width.wire_width_pixels =
+      second_width.logical_wire_width_pixels * kScaledRasterScale;
+  mixed_widths.instance_selection_wires.push_back(std::move(second_width));
+  const InstanceSelectionOverlayBatchPlans mixed_width_plans =
+      plan_instance_selection_overlay_batches(mixed_widths, 64u);
+  EXPECT_EQ(mixed_width_plans.wires.chunks.size(), 2u)
+      << "distinct logical widths must still receive distinct materials";
+
+  RenderOverlaySelectedObjectSnapshot recolored = scaled;
+  recolored.instance_selection_wires.front().wire_color ^= 0x00010101u;
+  const InstanceSelectionOverlayBatchPlans recolored_plans =
+      plan_instance_selection_overlay_batches(recolored, 64u);
+  EXPECT_EQ(classify_instance_batch_update(scaled_plans.wires,
+                                           recolored_plans.wires),
+            RenderInstanceBatchUpdateKind::Rebuild)
+      << "wire color is baked into derived geometry";
+
+  RenderOverlaySelectedObjectSnapshot changed_geometry = scaled;
+  auto replacement_wire_geometry = std::make_shared<MeshWireGeometryPayload>(
+      *changed_geometry.instance_selection_wires.front()
+           .wire_geometry_payload);
+  ++replacement_wire_geometry->content_id;
+  changed_geometry.instance_selection_wires.front().wire_geometry_payload =
+      replacement_wire_geometry;
+  changed_geometry.instance_selection_wires.front().wire_segments =
+      replacement_wire_geometry->segments;
+  const InstanceSelectionOverlayBatchPlans changed_geometry_plans =
+      plan_instance_selection_overlay_batches(changed_geometry, 64u);
+  EXPECT_EQ(classify_instance_batch_update(scaled_plans.wires,
+                                           changed_geometry_plans.wires),
+            RenderInstanceBatchUpdateKind::Rebuild);
 }
 
 TEST(RenderInstanceEditPresentationTests,

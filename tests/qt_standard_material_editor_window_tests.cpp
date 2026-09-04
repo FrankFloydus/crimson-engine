@@ -23,6 +23,9 @@
 #include <QLocale>
 #include <QMainWindow>
 #include <QMouseEvent>
+#include <QPalette>
+#include <QPixmap>
+#include <QProxyStyle>
 #include <QPushButton>
 #include <QSlider>
 #include <QStatusBar>
@@ -42,6 +45,131 @@ namespace {
 QAction *find_action(QtStandardMaterialEditorWindow &window,
                      const char *object_name) {
   return window.findChild<QAction *>(QString::fromUtf8(object_name));
+}
+
+class PaletteTextureIconStyle final : public QProxyStyle {
+public:
+  PaletteTextureIconStyle() : QProxyStyle(QStringLiteral("fusion")) {}
+
+  QIcon standardIcon(StandardPixmap standard_pixmap,
+                     const QStyleOption *option,
+                     const QWidget *widget) const override {
+    QPalette::ColorRole role = QPalette::NoRole;
+    switch (standard_pixmap) {
+    case SP_DialogOpenButton:
+      role = QPalette::ButtonText;
+      break;
+    case SP_DialogCancelButton:
+      role = QPalette::Text;
+      break;
+    case SP_FileIcon:
+      role = QPalette::Highlight;
+      break;
+    default:
+      return QProxyStyle::standardIcon(standard_pixmap, option, widget);
+    }
+    const QPalette palette =
+        widget != nullptr ? widget->palette() : QApplication::palette();
+    QPixmap pixmap(16, 16);
+    pixmap.fill(palette.color(role));
+    return QIcon(pixmap);
+  }
+};
+
+QColor icon_center_color(const QIcon &icon) {
+  return icon.pixmap(QSize(16, 16)).toImage().pixelColor(8, 8);
+}
+
+TEST(QtStandardMaterialEditorWindowTests,
+     RefreshesOnlyPaletteDerivedTextureIconsOnPaletteChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-standard-material-palette-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  application.setStyle(new PaletteTextureIconStyle());
+
+  QPalette palette = QApplication::palette();
+  const QColor initial_browse(211, 37, 53);
+  const QColor initial_clear(29, 197, 83);
+  const QColor initial_fallback(37, 89, 223);
+  palette.setColor(QPalette::ButtonText, initial_browse);
+  palette.setColor(QPalette::Text, initial_clear);
+  palette.setColor(QPalette::Highlight, initial_fallback);
+  QApplication::setPalette(palette);
+
+  QtStandardMaterialEditorWindow window;
+  QtStandardMaterialEditorDocument document;
+  document.stable_id = QStringLiteral("palette-material");
+  document.name = QStringLiteral("Palette Material");
+  document.textures[0].preview_image =
+      QImage(QSize(8, 8), QImage::Format_RGBA8888);
+  document.textures[0].preview_image.fill(QColor(101, 103, 107));
+  document.textures[0].pixel_size = QSize(8, 8);
+  document.textures[0].content_revision = 1u;
+  window.set_document(document);
+
+  auto *browse = window.findChild<QToolButton *>(
+      QStringLiteral("standardMaterialEditor.albedoTexture.browse"));
+  auto *clear = window.findChild<QToolButton *>(
+      QStringLiteral("standardMaterialEditor.albedoTexture.clear"));
+  auto *image_preview = window.findChild<QToolButton *>(
+      QStringLiteral("standardMaterialEditor.albedoTexture.preview"));
+  auto *fallback_preview = window.findChild<QToolButton *>(
+      QStringLiteral("standardMaterialEditor.roughnessTexture.preview"));
+  auto *name = window.findChild<QLineEdit *>(
+      QStringLiteral("standardMaterialEditor.name"));
+  ASSERT_NE(browse, nullptr);
+  ASSERT_NE(clear, nullptr);
+  ASSERT_NE(image_preview, nullptr);
+  ASSERT_NE(fallback_preview, nullptr);
+  ASSERT_NE(name, nullptr);
+  const qint64 initial_browse_key = browse->icon().cacheKey();
+  const qint64 initial_clear_key = clear->icon().cacheKey();
+  const qint64 initial_image_key = image_preview->icon().cacheKey();
+  const qint64 initial_fallback_key = fallback_preview->icon().cacheKey();
+  EXPECT_EQ(icon_center_color(browse->icon()), initial_browse);
+  EXPECT_EQ(icon_center_color(clear->icon()), initial_clear);
+  EXPECT_EQ(icon_center_color(fallback_preview->icon()), initial_fallback);
+
+  const QColor application_browse(233, 151, 31);
+  const QColor application_clear(53, 181, 229);
+  const QColor application_fallback(173, 73, 229);
+  palette.setColor(QPalette::ButtonText, application_browse);
+  palette.setColor(QPalette::Text, application_clear);
+  palette.setColor(QPalette::Highlight, application_fallback);
+  QApplication::setPalette(palette);
+  QCoreApplication::processEvents();
+  const qint64 application_browse_key = browse->icon().cacheKey();
+  const qint64 application_clear_key = clear->icon().cacheKey();
+  const qint64 application_fallback_key = fallback_preview->icon().cacheKey();
+  EXPECT_NE(application_browse_key, initial_browse_key);
+  EXPECT_NE(application_clear_key, initial_clear_key);
+  EXPECT_NE(application_fallback_key, initial_fallback_key);
+  EXPECT_EQ(image_preview->icon().cacheKey(), initial_image_key);
+  EXPECT_EQ(icon_center_color(browse->icon()), application_browse);
+  EXPECT_EQ(icon_center_color(clear->icon()), application_clear);
+  EXPECT_EQ(icon_center_color(fallback_preview->icon()),
+            application_fallback);
+  EXPECT_EQ(name->text(), document.name);
+
+  const QColor local_browse(83, 211, 127);
+  const QColor local_clear(229, 83, 97);
+  const QColor local_fallback(79, 131, 241);
+  palette.setColor(QPalette::ButtonText, local_browse);
+  palette.setColor(QPalette::Text, local_clear);
+  palette.setColor(QPalette::Highlight, local_fallback);
+  window.setPalette(palette);
+  QCoreApplication::processEvents();
+  EXPECT_NE(browse->icon().cacheKey(), application_browse_key);
+  EXPECT_NE(clear->icon().cacheKey(), application_clear_key);
+  EXPECT_NE(fallback_preview->icon().cacheKey(), application_fallback_key);
+  EXPECT_EQ(image_preview->icon().cacheKey(), initial_image_key);
+  EXPECT_EQ(icon_center_color(browse->icon()), local_browse);
+  EXPECT_EQ(icon_center_color(clear->icon()), local_clear);
+  EXPECT_EQ(icon_center_color(fallback_preview->icon()), local_fallback);
+  EXPECT_EQ(name->text(), document.name);
 }
 
 TEST(QtStandardMaterialEditorWindowTests,
@@ -437,6 +565,27 @@ TEST(QtStandardMaterialEditorWindowTests,
       QStringLiteral("standardMaterialEditor.albedoTexture.preview"));
   ASSERT_NE(albedo_texture_preview, nullptr);
   EXPECT_TRUE(albedo_texture_preview->isEnabled());
+  EXPECT_EQ(albedo_texture_preview->size(), QSize(64, 64));
+  EXPECT_EQ(albedo_texture_preview->iconSize(), QSize(56, 56));
+  const QSize unscaled_editor_size = window->size();
+  const qint64 unscaled_texture_icon_key =
+      albedo_texture_preview->icon().cacheKey();
+  window->apply_ui_scale(QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(albedo_texture_preview->size(), QSize(128, 128));
+  EXPECT_EQ(albedo_texture_preview->iconSize(), QSize(112, 112));
+  EXPECT_EQ(albedo_path->margin(), 6);
+  EXPECT_EQ(albedo_path->minimumWidth(), 96);
+  EXPECT_NE(albedo_texture_preview->icon().cacheKey(),
+            unscaled_texture_icon_key)
+      << "scale-dependent texture pixmaps must be regenerated";
+  EXPECT_EQ(window->size(), unscaled_editor_size)
+      << "scaling retained chrome must preserve the editor window geometry";
+  const qint64 scaled_texture_icon_key =
+      albedo_texture_preview->icon().cacheKey();
+  window->apply_ui_scale(QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(albedo_texture_preview->icon().cacheKey(),
+            scaled_texture_icon_key)
+      << "reapplying one revision must not churn raster caches";
   albedo_texture_preview->click();
   QCoreApplication::processEvents();
   auto *texture_inspector = window->findChild<QMainWindow *>(
@@ -452,6 +601,13 @@ TEST(QtStandardMaterialEditorWindowTests,
       QStringLiteral("standardMaterialEditor.textureInspector.canvas"));
   ASSERT_NE(texture_information, nullptr);
   ASSERT_NE(texture_canvas, nullptr);
+  EXPECT_EQ(texture_canvas->minimumSize(), QSize(480, 360))
+      << "a lazily created inspector must receive the current scale";
+  window->apply_ui_scale(QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(albedo_texture_preview->size(), QSize(64, 64));
+  EXPECT_EQ(albedo_texture_preview->iconSize(), QSize(56, 56));
+  EXPECT_EQ(albedo_path->margin(), 3);
+  EXPECT_EQ(texture_canvas->minimumSize(), QSize(240, 180));
   EXPECT_TRUE(texture_information->text().contains(
       QStringLiteral("bronze_albedo.png")));
   EXPECT_TRUE(texture_information->text().contains(QStringLiteral("RGBA8")));

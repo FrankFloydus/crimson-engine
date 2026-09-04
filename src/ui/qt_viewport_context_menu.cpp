@@ -226,6 +226,11 @@ void add_separator_after_content(QMenu &menu) {
 
 } // namespace
 
+void QtViewportContextMenuPresenter::apply_ui_scale(
+    const QtUiScaleMetrics &metrics) {
+  ui_scale_metrics_ = metrics;
+}
+
 void QtViewportContextMenuPresenter::show(
     QWidget &parent, const QPoint &global_point, QuaderEditorApi &editor,
     ViewportInputRouter &input_router, LocalizationService &localization,
@@ -303,7 +308,9 @@ void QtViewportContextMenuPresenter::show(
     menu.setObjectName(QStringLiteral("viewport_operations_context_menu"));
     menu.setStyleSheet(QStringLiteral(
         "QMenu#viewport_operations_context_menu::separator {"
-        "height: 1px; background: palette(mid); margin: 4px 8px; }"));
+        "height: 1px; background: palette(mid); margin: %1px %2px; }")
+                           .arg(ui_scale_metrics_.px(4))
+                           .arg(ui_scale_metrics_.px(8)));
     menu.setToolTipsVisible(true);
 
     const auto add_catalog_section =

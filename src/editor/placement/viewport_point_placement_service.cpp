@@ -9,6 +9,7 @@
 #include "assets/asset_registry.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_grid_placement_policy.hpp"
+#include "viewport/viewport_pixel_scale.hpp"
 
 #include <algorithm>
 #include <array>
@@ -432,7 +433,9 @@ ViewportPointPlacementResult ViewportPointPlacementService::resolve(
   ray.direction = normalize_or_zero(ray.direction);
   const QVec3 grid_normal =
       normalized_or(plane_normal(request.active_grid), {0.0f, 1.0f, 0.0f});
-  const float radius = std::max(request.policy.snap_radius_pixels, 0.0f);
+  const float radius =
+      std::max(request.policy.snap_radius_pixels, 0.0f) *
+      viewport_sanitized_pixel_scale(request.viewport_pixel_scale);
   const float radius_sq = radius * radius;
 
   std::optional<SceneSurfaceHit> render_surface;

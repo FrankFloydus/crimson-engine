@@ -9,6 +9,7 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QAction>
 #include <QIcon>
@@ -101,6 +102,26 @@ QSize QtTextureToolbar::minimumSizeHint() const {
   // Qt's stock minimum reserves only the first item, which is our divider.
   // Keep both locks visible when a restored neighbor prefers a wider row.
   return QToolBar::sizeHint();
+}
+
+void QtTextureToolbar::apply_ui_scale(const QtUiScaleMetrics &metrics) {
+  constexpr QSize kToolbarIconSize(32, 32);
+  const QSize scaled_icon_size = metrics.size(kToolbarIconSize);
+  if (iconSize() != scaled_icon_size) {
+    setIconSize(scaled_icon_size);
+  }
+
+  const int scaled_button_height = metrics.px(kTopToolbarButtonHeight);
+  for (const TextureAction &entry : texture_actions_) {
+    apply_native_toolbar_button_face_ui_scale(*this, *entry.action, metrics);
+    if (auto *button =
+            qobject_cast<QToolButton *>(widgetForAction(entry.action));
+        button != nullptr &&
+        (button->minimumHeight() != scaled_button_height ||
+         button->maximumHeight() != scaled_button_height)) {
+      button->setFixedHeight(scaled_button_height);
+    }
+  }
 }
 
 void QtTextureToolbar::set_localization(

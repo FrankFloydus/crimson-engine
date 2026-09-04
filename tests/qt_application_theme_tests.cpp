@@ -8,17 +8,24 @@
 
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
+#include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QAccessibilityHints>
+#include <QAbstractButton>
 #include <QApplication>
 #include <QColor>
 #include <QCoreApplication>
 #include <QDockWidget>
 #include <QEvent>
+#include <QFont>
 #include <QImage>
 #include <QMainWindow>
+#include <QMargins>
+#include <QObject>
 #include <QPalette>
+#include <QPainter>
 #include <QStyle>
 #include <QStyleFactory>
 #include <QStyleHints>
@@ -27,9 +34,8 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <filesystem>
+#include <limits>
 #include <memory>
-#include <string_view>
 
 namespace {
 
@@ -65,6 +71,21 @@ void expect_color(const QPalette &palette, QPalette::ColorGroup group,
   EXPECT_EQ(palette.color(group, role), rgb(expected));
 }
 
+void expect_palette_brushes_equal(const QPalette &actual,
+                                  const QPalette &expected) {
+  constexpr std::array<QPalette::ColorGroup, 3> kGroups{
+      QPalette::Active, QPalette::Inactive, QPalette::Disabled};
+  for (const QPalette::ColorGroup group : kGroups) {
+    for (int role = 0; role < static_cast<int>(QPalette::NColorRoles);
+         ++role) {
+      const auto color_role = static_cast<QPalette::ColorRole>(role);
+      EXPECT_EQ(actual.brush(group, color_role),
+                expected.brush(group, color_role))
+          << "group=" << static_cast<int>(group) << " role=" << role;
+    }
+  }
+}
+
 void expect_contrast(const QPalette &palette, QPalette::ColorGroup group,
                      QPalette::ColorRole foreground,
                      QPalette::ColorRole background, double minimum) {
@@ -87,13 +108,463 @@ QPalette dock_surface_palette(const QColor &surface,
 
 void expect_selected_dock_glyph_contrast(const QColor &surface) {
   const QColor selected_glyph =
-      quader::qt_dock_title_surface_uses_packaged_light_glyphs(surface)
+      quader::qt_dock_title_surface_uses_light_glyph(surface)
           ? QColor(242, 242, 242)
           : QColor(16, 16, 16);
   EXPECT_GE(contrast_ratio(selected_glyph, surface), 3.0);
 }
 
+QImage render_icon(const QIcon &icon, const QSize &logical_size, qreal dpr) {
+  QImage image(qRound(logical_size.width() * dpr),
+               qRound(logical_size.height() * dpr),
+               QImage::Format_ARGB32_Premultiplied);
+  image.setDevicePixelRatio(dpr);
+  image.fill(Qt::transparent);
+  {
+    QPainter painter(&image);
+    icon.paint(&painter, QRect(QPoint{}, logical_size));
+  }
+  return image;
+}
+
 } // namespace
+
+TEST(QtUiScaleMetricsTests, ScalesDesignValuesWithoutCompounding) {
+  const quader::QtUiScaleMetrics metrics(2.0F, 7U);
+
+  EXPECT_FLOAT_EQ(metrics.factor(), 2.0F);
+  EXPECT_EQ(metrics.revision(), 7U);
+  EXPECT_EQ(metrics.px(9), 18);
+  EXPECT_FLOAT_EQ(metrics.px(1.25F), 2.5F);
+  EXPECT_DOUBLE_EQ(metrics.px(2.5), 5.0);
+  EXPECT_EQ(metrics.size(QSize(12, 8)), QSize(24, 16));
+  EXPECT_EQ(metrics.size(QSize(-1, 8)), QSize(-1, 16));
+  EXPECT_EQ(metrics.margins(QMargins(1, 2, 3, 4)),
+            QMargins(2, 4, 6, 8));
+  EXPECT_EQ(metrics.device_pixels(10, 1.5), 30);
+
+  QFont point_font;
+  point_font.setPointSizeF(10.0);
+  EXPECT_DOUBLE_EQ(metrics.font(point_font).pointSizeF(), 20.0);
+
+  QFont pixel_font;
+  pixel_font.setPixelSize(11);
+  EXPECT_EQ(metrics.font(pixel_font).pixelSize(), 22);
+
+  const quader::QtUiScaleMetrics restored(1.0F, 8U);
+  EXPECT_EQ(restored.size(QSize(12, 8)), QSize(12, 8));
+  EXPECT_DOUBLE_EQ(restored.font(point_font).pointSizeF(), 10.0);
+}
+
+TEST(QtUiScaleMetricsTests, NormalizesInvalidFactorsAndDeviceRatios) {
+  EXPECT_FLOAT_EQ(quader::QtUiScaleMetrics(0.1F).factor(), 0.5F);
+  EXPECT_FLOAT_EQ(quader::QtUiScaleMetrics(5.0F).factor(), 3.0F);
+  EXPECT_FLOAT_EQ(
+      quader::QtUiScaleMetrics(std::numeric_limits<float>::infinity())
+          .factor(),
+      1.0F);
+  EXPECT_FLOAT_EQ(
+      quader::QtUiScaleMetrics(std::numeric_limits<float>::quiet_NaN())
+          .factor(),
+      1.0F);
+
+  const quader::QtUiScaleMetrics metrics(2.0F);
+  EXPECT_EQ(metrics.device_pixels(10, 0.0), 20);
+  EXPECT_EQ(metrics.device_pixels(10,
+                                  std::numeric_limits<qreal>::quiet_NaN()),
+            20);
+  EXPECT_EQ(metrics.device_pixels(-1, 2.0), -1);
+}
+
+TEST(QtUiScaleMetricsTests,
+     ControllerAppliesOneRevisionFromAnImmutableApplicationFont) {
+  if (QCoreApplication::instance() != nullptr) {
+    GTEST_SKIP() << "This test owns the QApplication style lifecycle";
+  }
+
+  int argc = 1;
+  char application_name[] = "quader_ui_scale_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  QFont baseline = QApplication::font();
+  baseline.setPointSizeF(10.0);
+  QApplication::setFont(baseline);
+  QPalette palette = QApplication::palette();
+  palette.setColor(QPalette::Active, QPalette::Window, QColor(17, 18, 19));
+  QApplication::setPalette(palette);
+  const QPalette applied_palette = QApplication::palette();
+
+  quader::QtUiScaleApplicationController controller(application);
+  expect_palette_brushes_equal(QApplication::palette(), applied_palette);
+  const int baseline_margin = controller.style().pixelMetric(
+      QStyle::PM_LayoutLeftMargin, nullptr, nullptr);
+  const int baseline_hairline = controller.style().pixelMetric(
+      QStyle::PM_DefaultFrameWidth, nullptr, nullptr);
+
+  QObject receiver;
+  int notification_count = 0;
+  std::uint64_t observed_revision = 99U;
+  const auto listener_id = controller.add_change_listener(
+      receiver, [&](const quader::QtUiScaleMetrics &metrics) {
+        ++notification_count;
+        observed_revision = metrics.revision();
+      });
+  EXPECT_NE(listener_id, 0U);
+  EXPECT_EQ(notification_count, 1);
+  EXPECT_EQ(observed_revision, 0U);
+
+  EXPECT_TRUE(controller.apply_factor(2.0F));
+  EXPECT_EQ(controller.metrics().revision(), 1U);
+  EXPECT_EQ(notification_count, 2);
+  EXPECT_DOUBLE_EQ(QApplication::font().pointSizeF(), 20.0);
+  EXPECT_EQ(controller.style().pixelMetric(QStyle::PM_LayoutLeftMargin,
+                                           nullptr, nullptr),
+            baseline_margin * 2);
+  EXPECT_EQ(controller.style().pixelMetric(QStyle::PM_DefaultFrameWidth,
+                                           nullptr, nullptr),
+            baseline_hairline);
+  expect_palette_brushes_equal(QApplication::palette(), applied_palette);
+
+  EXPECT_FALSE(controller.apply_factor(2.0F));
+  EXPECT_EQ(notification_count, 2);
+  EXPECT_TRUE(controller.apply_factor(1.0F));
+  EXPECT_EQ(controller.metrics().revision(), 2U);
+  EXPECT_EQ(notification_count, 3);
+  EXPECT_DOUBLE_EQ(QApplication::font().pointSizeF(), 10.0);
+  EXPECT_EQ(controller.style().pixelMetric(QStyle::PM_LayoutLeftMargin,
+                                           nullptr, nullptr),
+            baseline_margin);
+
+  controller.remove_change_listener(listener_id);
+  EXPECT_TRUE(controller.apply_factor(1.5F));
+  EXPECT_EQ(notification_count, 3);
+}
+
+TEST(QtUiScaleMetricsTests,
+     EveryDeclaredFusionPixelMetricReceivesTheUserFactorExactlyOnce) {
+  if (QCoreApplication::instance() != nullptr) {
+    GTEST_SKIP() << "This test owns the QApplication style lifecycle";
+  }
+
+  int argc = 1;
+  char application_name[] = "quader_ui_scale_proxy_metric_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  quader::QtUiScaleProxyStyle style;
+  constexpr std::array<QStyle::PixelMetric, 74> kScaledMetrics{
+      QStyle::PM_ButtonMargin,
+      QStyle::PM_ButtonDefaultIndicator,
+      QStyle::PM_MenuButtonIndicator,
+      QStyle::PM_ScrollBarExtent,
+      QStyle::PM_ScrollBarSliderMin,
+      QStyle::PM_SliderThickness,
+      QStyle::PM_SliderControlThickness,
+      QStyle::PM_SliderLength,
+      QStyle::PM_SliderTickmarkOffset,
+      QStyle::PM_DockWidgetSeparatorExtent,
+      QStyle::PM_DockWidgetHandleExtent,
+      QStyle::PM_TabBarTabOverlap,
+      QStyle::PM_TabBarTabHSpace,
+      QStyle::PM_TabBarTabVSpace,
+      QStyle::PM_TabBarBaseHeight,
+      QStyle::PM_TabBarBaseOverlap,
+      QStyle::PM_ProgressBarChunkWidth,
+      QStyle::PM_SplitterWidth,
+      QStyle::PM_TitleBarHeight,
+      QStyle::PM_MenuScrollerHeight,
+      QStyle::PM_MenuHMargin,
+      QStyle::PM_MenuVMargin,
+      QStyle::PM_MenuTearoffHeight,
+      QStyle::PM_MenuBarItemSpacing,
+      QStyle::PM_MenuBarVMargin,
+      QStyle::PM_MenuBarHMargin,
+      QStyle::PM_IndicatorWidth,
+      QStyle::PM_IndicatorHeight,
+      QStyle::PM_ExclusiveIndicatorWidth,
+      QStyle::PM_ExclusiveIndicatorHeight,
+      QStyle::PM_MdiSubWindowMinimizedWidth,
+      QStyle::PM_HeaderMargin,
+      QStyle::PM_HeaderMarkSize,
+      QStyle::PM_HeaderGripMargin,
+      QStyle::PM_TabBarScrollButtonWidth,
+      QStyle::PM_ToolBarHandleExtent,
+      QStyle::PM_ToolBarItemSpacing,
+      QStyle::PM_ToolBarItemMargin,
+      QStyle::PM_ToolBarSeparatorExtent,
+      QStyle::PM_ToolBarExtensionExtent,
+      QStyle::PM_SpinBoxSliderHeight,
+      QStyle::PM_ToolBarIconSize,
+      QStyle::PM_ListViewIconSize,
+      QStyle::PM_IconViewIconSize,
+      QStyle::PM_SmallIconSize,
+      QStyle::PM_LargeIconSize,
+      QStyle::PM_FocusFrameVMargin,
+      QStyle::PM_FocusFrameHMargin,
+      QStyle::PM_CheckBoxLabelSpacing,
+      QStyle::PM_TabBarIconSize,
+      QStyle::PM_SizeGripSize,
+      QStyle::PM_DockWidgetTitleMargin,
+      QStyle::PM_MessageBoxIconSize,
+      QStyle::PM_ButtonIconSize,
+      QStyle::PM_DockWidgetTitleBarButtonMargin,
+      QStyle::PM_RadioButtonLabelSpacing,
+      QStyle::PM_LayoutLeftMargin,
+      QStyle::PM_LayoutTopMargin,
+      QStyle::PM_LayoutRightMargin,
+      QStyle::PM_LayoutBottomMargin,
+      QStyle::PM_LayoutHorizontalSpacing,
+      QStyle::PM_LayoutVerticalSpacing,
+      QStyle::PM_TabBar_ScrollButtonOverlap,
+      QStyle::PM_TabCloseIndicatorWidth,
+      QStyle::PM_TabCloseIndicatorHeight,
+      QStyle::PM_ScrollView_ScrollBarSpacing,
+      QStyle::PM_SubMenuOverlap,
+      QStyle::PM_TreeViewIndentation,
+      QStyle::PM_HeaderDefaultSectionSizeHorizontal,
+      QStyle::PM_HeaderDefaultSectionSizeVertical,
+      QStyle::PM_TitleBarButtonIconSize,
+      QStyle::PM_TitleBarButtonSize,
+      QStyle::PM_LineEditIconSize,
+      QStyle::PM_LineEditIconMargin};
+  std::array<int, kScaledMetrics.size()> design_values{};
+  for (std::size_t index = 0; index < kScaledMetrics.size(); ++index) {
+    design_values[index] =
+        style.pixelMetric(kScaledMetrics[index], nullptr, nullptr);
+  }
+
+  for (const float factor : {0.5F, 1.0F, 1.25F, 2.0F, 3.0F}) {
+    const quader::QtUiScaleMetrics metrics(factor);
+    style.set_metrics(metrics);
+    for (std::size_t index = 0; index < kScaledMetrics.size(); ++index) {
+      const int expected = design_values[index] > 0
+                               ? std::max(1, metrics.px(design_values[index]))
+                               : design_values[index];
+      EXPECT_EQ(style.pixelMetric(kScaledMetrics[index], nullptr, nullptr),
+                expected)
+          << "metric=" << static_cast<int>(kScaledMetrics[index])
+          << " factor=" << factor;
+    }
+  }
+}
+
+TEST(QtUiScaleMetricsTests,
+     ControllerKeepsAnUnresolvedAccessibilityPalettePlatformOwned) {
+  if (QCoreApplication::instance() != nullptr) {
+    GTEST_SKIP() << "This test owns the QApplication style lifecycle";
+  }
+
+  int argc = 1;
+  char application_name[] = "quader_ui_scale_accessibility_palette_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  std::unique_ptr<QStyle> fusion_style(
+      QStyleFactory::create(QStringLiteral("Fusion")));
+  ASSERT_NE(fusion_style, nullptr);
+  QApplication::setStyle(fusion_style.release());
+  QApplication::setPalette(QPalette{});
+  ASSERT_EQ(QApplication::palette().resolveMask(), 0u);
+
+  quader::QtUiScaleApplicationController controller(application);
+  EXPECT_EQ(QApplication::palette().resolveMask(), 0u);
+  expect_palette_brushes_equal(QApplication::palette(), QPalette{});
+
+  ASSERT_TRUE(controller.apply_factor(2.0F));
+  EXPECT_EQ(QApplication::palette().resolveMask(), 0u);
+  expect_palette_brushes_equal(QApplication::palette(), QPalette{});
+}
+
+TEST(QtUiScaleMetricsTests,
+     ControllerRestoresItsBaselineBeforeASecondInitialization) {
+  if (QCoreApplication::instance() != nullptr) {
+    GTEST_SKIP() << "This test owns the QApplication style lifecycle";
+  }
+
+  int argc = 1;
+  char application_name[] = "quader_ui_scale_reinitialize_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QFont baseline = QApplication::font();
+  baseline.setPointSizeF(10.0);
+  QApplication::setFont(baseline);
+
+  {
+    quader::QtUiScaleApplicationController first(application, 2.0F);
+    EXPECT_DOUBLE_EQ(QApplication::font().pointSizeF(), 20.0);
+  }
+  EXPECT_DOUBLE_EQ(QApplication::font().pointSizeF(), 10.0);
+
+  {
+    quader::QtUiScaleApplicationController second(application, 2.0F);
+    EXPECT_DOUBLE_EQ(QApplication::font().pointSizeF(), 20.0)
+        << "reinitialization must derive from the unscaled baseline";
+  }
+  EXPECT_DOUBLE_EQ(QApplication::font().pointSizeF(), 10.0);
+}
+
+TEST(QtUiScaleMetricsTests,
+     MultiresolutionRasterIconsKeepLogicalSizeAndDprOutOfCacheIdentity) {
+  if (QCoreApplication::instance() != nullptr) {
+    GTEST_SKIP() << "This test owns the QApplication lifecycle";
+  }
+
+  int argc = 1;
+  char application_name[] = "quader_multiresolution_icon_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  QImage source(QSize(384, 192), QImage::Format_ARGB32_Premultiplied);
+  source.fill(QColor(0xad, 0x80, 0xf4));
+  const QIcon icon = quader::qt_multiresolution_icon(source);
+
+  const QPixmap at_four_x = icon.pixmap(QSize(96, 96), 4.0);
+  ASSERT_FALSE(at_four_x.isNull());
+  EXPECT_EQ(at_four_x.size(), QSize(384, 192));
+  EXPECT_DOUBLE_EQ(at_four_x.devicePixelRatio(), 4.0);
+  EXPECT_EQ(at_four_x.deviceIndependentSize(), QSizeF(96.0, 48.0));
+
+  const QPixmap at_two_x = icon.pixmap(QSize(192, 192), 2.0);
+  ASSERT_FALSE(at_two_x.isNull());
+  EXPECT_EQ(at_two_x.size(), QSize(384, 192));
+  EXPECT_DOUBLE_EQ(at_two_x.devicePixelRatio(), 2.0);
+  EXPECT_EQ(at_two_x.deviceIndependentSize(), QSizeF(192.0, 96.0));
+
+  constexpr qreal kFirstCloseDpr = 1.0001;
+  constexpr qreal kSecondCloseDpr = 1.0002;
+  const QString first_identity =
+      quader::qt_multiresolution_icon_dpr_cache_identity(kFirstCloseDpr);
+  const QString second_identity =
+      quader::qt_multiresolution_icon_dpr_cache_identity(kSecondCloseDpr);
+  EXPECT_NE(first_identity, second_identity)
+      << "distinct DPRs must not alias in the shared pixmap cache";
+  EXPECT_DOUBLE_EQ(first_identity.toDouble(), kFirstCloseDpr);
+  EXPECT_DOUBLE_EQ(second_identity.toDouble(), kSecondCloseDpr);
+}
+
+TEST(QtUiScaleMetricsTests,
+     MultiresolutionRasterIconsRenderDisabledModeThroughScaledFusion) {
+  if (QCoreApplication::instance() != nullptr) {
+    GTEST_SKIP() << "This test owns the QApplication lifecycle";
+  }
+
+  int argc = 1;
+  char application_name[] = "quader_multiresolution_disabled_icon_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::QtUiScaleApplicationController scale_controller(application, 2.0F);
+
+  QImage source(QSize(96, 96), QImage::Format_ARGB32_Premultiplied);
+  source.fill(QColor(0xad, 0x80, 0xf4));
+  const QIcon icon = quader::qt_multiresolution_icon(source);
+  const QPixmap disabled =
+      icon.pixmap(QSize(32, 32), 2.0, QIcon::Disabled, QIcon::Off);
+  const QPixmap selected =
+      icon.pixmap(QSize(32, 32), 2.0, QIcon::Selected, QIcon::On);
+
+  ASSERT_FALSE(disabled.isNull());
+  EXPECT_EQ(disabled.size(), QSize(64, 64));
+  EXPECT_DOUBLE_EQ(disabled.devicePixelRatio(), 2.0);
+  EXPECT_EQ(disabled.deviceIndependentSize(), QSizeF(32.0, 32.0));
+  ASSERT_FALSE(selected.isNull());
+  EXPECT_EQ(selected.size(), QSize(64, 64));
+  EXPECT_DOUBLE_EQ(selected.devicePixelRatio(), 2.0);
+  EXPECT_EQ(selected.deviceIndependentSize(), QSizeF(32.0, 32.0));
+}
+
+TEST(QtUiScaleMetricsTests,
+     MultiresolutionRasterUpsamplingKeepsPhysicalEdgesSharp) {
+  if (QCoreApplication::instance() != nullptr) {
+    GTEST_SKIP() << "This test owns the QApplication lifecycle";
+  }
+
+  int argc = 1;
+  char application_name[] = "quader_multiresolution_edge_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  QImage source(QSize(96, 96), QImage::Format_ARGB32);
+  source.fill(Qt::transparent);
+  for (int y = 0; y < source.height(); ++y) {
+    for (int x = y; x < source.width(); ++x) {
+      source.setPixelColor(x, y,
+                           x == 70 ? QColor(Qt::black)
+                                   : QColor(Qt::white));
+    }
+  }
+  const QIcon icon = quader::qt_multiresolution_icon(source);
+  const QImage baseline = icon.pixmap(QSize(32, 32), 1.0).toImage();
+
+  for (const qreal dpr : {2.0, 4.0}) {
+    const QPixmap pixmap = icon.pixmap(QSize(96, 96), dpr);
+    ASSERT_FALSE(pixmap.isNull());
+    EXPECT_EQ(pixmap.size(), QSize(qRound(96.0 * dpr),
+                                   qRound(96.0 * dpr)));
+    EXPECT_DOUBLE_EQ(pixmap.devicePixelRatio(), dpr);
+
+    const QImage image = pixmap.toImage().convertToFormat(
+        QImage::Format_ARGB32);
+    const int row = qRound(24.0 * dpr);
+    int intermediate_alpha_pixels = 0;
+    int intermediate_internal_edge_pixels = 0;
+    for (int x = 0; x < image.width(); ++x) {
+      const QColor pixel = image.pixelColor(x, row);
+      if (pixel.alpha() > 0 && pixel.alpha() < 255) {
+        ++intermediate_alpha_pixels;
+      }
+      if (x >= qRound(66.0 * dpr) && x <= qRound(74.0 * dpr) &&
+          pixel.alpha() == 255 && pixel.red() > 24 &&
+          pixel.red() < 231) {
+        ++intermediate_internal_edge_pixels;
+      }
+    }
+    EXPECT_LE(intermediate_alpha_pixels, 2)
+        << "the diagonal silhouette keeps a physical-pixel alpha fringe";
+    EXPECT_LE(intermediate_internal_edge_pixels, 4)
+        << "the opaque one-source-pixel stripe keeps bounded edge fringes";
+  }
+
+  EXPECT_EQ(icon.pixmap(QSize(32, 32), 1.0).toImage(), baseline)
+      << "a large-DPR request must not alter a later baseline request";
+}
+
+TEST(QtUiScaleMetricsTests,
+     SvgAuthoredMaterialGlyphsRenderAsScalablePainterGeometry) {
+  if (QCoreApplication::instance() != nullptr) {
+    GTEST_SKIP() << "This test owns the QApplication lifecycle";
+  }
+
+  int argc = 1;
+  char application_name[] = "quader_scalable_glyph_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  for (const quader::QtScalableGlyph glyph : {
+           quader::QtScalableGlyph::MaterialVisibility,
+           quader::QtScalableGlyph::MaterialVisibilityOff,
+           quader::QtScalableGlyph::MaterialLock,
+           quader::QtScalableGlyph::MaterialLockOpen}) {
+    const QIcon icon =
+        quader::qt_scalable_glyph_icon(glyph, QColor(0xad, 0x80, 0xf4));
+    ASSERT_FALSE(icon.isNull());
+    const QPixmap pixmap = icon.pixmap(QSize(96, 96), 4.0);
+    ASSERT_FALSE(pixmap.isNull());
+    EXPECT_EQ(pixmap.size(), QSize(384, 384));
+    EXPECT_DOUBLE_EQ(pixmap.devicePixelRatio(), 4.0);
+    EXPECT_EQ(pixmap.deviceIndependentSize(), QSizeF(96.0, 96.0));
+
+    const QImage image = pixmap.toImage();
+    std::size_t visible_pixels = 0;
+    for (int y = 0; y < image.height(); ++y) {
+      for (int x = 0; x < image.width(); ++x) {
+        if (image.pixelColor(x, y).alpha() != 0) {
+          ++visible_pixels;
+        }
+      }
+    }
+    EXPECT_GT(visible_pixels, 1000u);
+  }
+}
 
 TEST(QtApplicationThemeTests,
      DefinesLayeredSurfacesTextAndAmethystInteractionRoles) {
@@ -332,14 +803,14 @@ TEST(QtApplicationThemeTests,
   const QPalette high_contrast_light =
       dock_surface_palette(QColor(255, 255, 255), QColor(0, 0, 180));
 
-  EXPECT_TRUE(quader::qt_dock_title_surface_uses_packaged_light_glyphs(
+  EXPECT_TRUE(quader::qt_dock_title_surface_uses_light_glyph(
       obsidian.color(QPalette::Inactive, QPalette::AlternateBase)));
-  EXPECT_FALSE(quader::qt_dock_title_surface_uses_packaged_light_glyphs(
+  EXPECT_FALSE(quader::qt_dock_title_surface_uses_light_glyph(
       light.color(QPalette::Inactive, QPalette::AlternateBase)));
-  EXPECT_TRUE(quader::qt_dock_title_surface_uses_packaged_light_glyphs(
+  EXPECT_TRUE(quader::qt_dock_title_surface_uses_light_glyph(
       high_contrast_dark.color(QPalette::Inactive,
                                QPalette::AlternateBase)));
-  EXPECT_FALSE(quader::qt_dock_title_surface_uses_packaged_light_glyphs(
+  EXPECT_FALSE(quader::qt_dock_title_surface_uses_light_glyph(
       high_contrast_light.color(QPalette::Inactive,
                                 QPalette::AlternateBase)));
 
@@ -352,15 +823,13 @@ TEST(QtApplicationThemeTests,
   }
 
   const QString obsidian_style = quader::qt_dock_title_style_sheet(obsidian);
-  EXPECT_TRUE(obsidian_style.contains(
-      QStringLiteral(":/quader/icons/dock_close.png")));
-  EXPECT_TRUE(obsidian_style.contains(
-      QStringLiteral(":/quader/icons/dock_float.png")));
+  EXPECT_FALSE(obsidian_style.contains(QStringLiteral("url(")));
+  EXPECT_FALSE(
+      obsidian_style.contains(QStringLiteral("titlebar-close-icon")));
   const QString light_style = quader::qt_dock_title_style_sheet(light);
-  EXPECT_TRUE(light_style.contains(
-      QStringLiteral(":/quader/icons/dock_close_dark.png")));
-  EXPECT_TRUE(light_style.contains(
-      QStringLiteral(":/quader/icons/dock_float_dark.png")));
+  EXPECT_FALSE(light_style.contains(QStringLiteral("url(")));
+  EXPECT_FALSE(
+      light_style.contains(QStringLiteral("titlebar-normal-icon")));
 }
 
 TEST(QtApplicationThemeTests,
@@ -377,11 +846,26 @@ TEST(QtApplicationThemeTests,
   expect_selected_dock_glyph_contrast(active_surface);
 
   const QString style_sheet = quader::qt_dock_title_style_sheet(mixed);
-  EXPECT_TRUE(style_sheet.contains(
-      QStringLiteral(":/quader/icons/dock_close.png")));
+  EXPECT_FALSE(style_sheet.contains(QStringLiteral("url(")));
   EXPECT_TRUE(style_sheet.contains(QStringLiteral("background-color: #101010")));
   EXPECT_GE(contrast_ratio(QColor(242, 242, 242), QColor(16, 16, 16)),
             3.0);
+}
+
+TEST(QtApplicationThemeTests,
+     DockTitleScaleReflowsControlsButPreservesStateHairlines) {
+  const QPalette palette =
+      quader::qt_obsidian_application_palette(QPalette{});
+  const quader::QtUiScaleMetrics doubled(2.0F, 1U);
+
+  const QString style_sheet =
+      quader::qt_dock_title_style_sheet(palette, doubled);
+  EXPECT_TRUE(style_sheet.contains(QStringLiteral("padding: 0 8px")));
+  EXPECT_TRUE(style_sheet.contains(QStringLiteral("width: 36px")));
+  EXPECT_TRUE(style_sheet.contains(QStringLiteral("height: 36px")));
+  EXPECT_TRUE(style_sheet.contains(QStringLiteral("icon-size: 48px")));
+  EXPECT_TRUE(style_sheet.contains(QStringLiteral("border-bottom: 1px")));
+  EXPECT_TRUE(style_sheet.contains(QStringLiteral("border: 2px solid")));
 }
 
 TEST(QtApplicationThemeTests,
@@ -396,14 +880,15 @@ TEST(QtApplicationThemeTests,
   const QString style_sheet = quader::qt_dock_title_style_sheet(palette);
   EXPECT_TRUE(style_sheet.contains(QStringLiteral("background-color: #000000")));
   EXPECT_TRUE(style_sheet.contains(QStringLiteral("color: #e6e1eb")));
-  EXPECT_TRUE(style_sheet.contains(
-      QStringLiteral(":/quader/icons/dock_close.png")));
+  EXPECT_FALSE(style_sheet.contains(QStringLiteral("url(")));
 }
 
 TEST(QtApplicationThemeTests,
-     KeepsDockPressedOutlineDistinctAndPackagedGlyphsDecodable) {
+     KeepsDockPressedOutlineDistinctAndPaintsScalableGlyphGeometry) {
   const QPalette palette =
       quader::qt_obsidian_application_palette(QPalette{});
+  const QPalette light_palette =
+      dock_surface_palette(QColor(245, 245, 245), QColor(0, 90, 180));
   for (const QPalette::ColorGroup group :
        {QPalette::Active, QPalette::Inactive}) {
     expect_contrast(palette, group, QPalette::Highlight,
@@ -416,47 +901,89 @@ TEST(QtApplicationThemeTests,
   EXPECT_TRUE(style_sheet.contains(QStringLiteral("background-color: #29262f")));
   EXPECT_TRUE(style_sheet.contains(QStringLiteral("border: 2px solid #ad80f4")));
 
-  for (const char *icon_name : {"dock_close.png", "dock_float.png",
-                                "dock_close_dark.png",
-                                "dock_float_dark.png"}) {
-    const std::filesystem::path icon_path =
-        std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "icons" /
-        icon_name;
-    const QImage icon(QString::fromStdWString(icon_path.wstring()));
-    ASSERT_FALSE(icon.isNull()) << icon_path.string();
-    EXPECT_EQ(icon.width(), icon.height()) << icon_path.string();
-    EXPECT_GE(icon.width(), 24) << icon_path.string();
+  for (const QPalette *glyph_palette : {&palette, &light_palette}) {
+    for (const quader::QtDockTitleGlyph glyph : {
+             quader::QtDockTitleGlyph::Close,
+             quader::QtDockTitleGlyph::Float}) {
+      const QIcon icon =
+          quader::qt_dock_title_glyph_icon(glyph, *glyph_palette);
+      ASSERT_FALSE(icon.isNull());
+      EXPECT_TRUE(icon.availableSizes().isEmpty())
+          << "the icon engine must not expose fixed raster sizes";
 
-    std::size_t visible_pixels = 0;
-    for (int y = 0; y < icon.height(); ++y) {
-      for (int x = 0; x < icon.width(); ++x) {
-        const QColor pixel = icon.pixelColor(x, y);
-        if (pixel.alpha() >= 128) {
-          ++visible_pixels;
-          if (std::string_view(icon_name).find("_dark") ==
-              std::string_view::npos) {
-            EXPECT_GE(relative_luminance(pixel), 0.75) << icon_path.string();
-          } else {
-            EXPECT_LE(relative_luminance(pixel), 0.01) << icon_path.string();
+      const QImage image = render_icon(icon, QSize(96, 96), 4.0);
+      EXPECT_EQ(image.size(), QSize(384, 384));
+      EXPECT_DOUBLE_EQ(image.devicePixelRatio(), 4.0);
+      std::size_t visible_pixels = 0;
+      for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+          if (image.pixelColor(x, y).alpha() >= 128) {
+            ++visible_pixels;
           }
         }
       }
+      EXPECT_GT(visible_pixels, 1000u);
     }
-    EXPECT_GT(visible_pixels, 0u) << icon_path.string();
+  }
+}
+
+TEST(QtApplicationThemeTests,
+     DockGlyphPixmapsKeepTransparentBackingsAcrossMonitorScales) {
+  if (QCoreApplication::instance() != nullptr) {
+    GTEST_SKIP() << "This test owns the QApplication lifecycle";
   }
 
-  for (const char *icon_stem : {"dock_close", "dock_float"}) {
-    const std::filesystem::path icon_root =
-        std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "icons";
-    const QImage light(QString::fromStdWString(
-        (icon_root / (std::string(icon_stem) + ".png")).wstring()));
-    const QImage dark(QString::fromStdWString(
-        (icon_root / (std::string(icon_stem) + "_dark.png")).wstring()));
-    ASSERT_EQ(light.size(), dark.size());
-    for (int y = 0; y < light.height(); ++y) {
-      for (int x = 0; x < light.width(); ++x) {
-        EXPECT_EQ(light.pixelColor(x, y).alpha(),
-                  dark.pixelColor(x, y).alpha());
+  int argc = 1;
+  char application_name[] = "quader_dock_glyph_pixmap_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  const QPalette palette =
+      quader::qt_obsidian_application_palette(QPalette{});
+
+  for (const quader::QtDockTitleGlyph glyph : {
+           quader::QtDockTitleGlyph::Close,
+           quader::QtDockTitleGlyph::Float}) {
+    const QIcon icon = quader::qt_dock_title_glyph_icon(glyph, palette);
+    for (const qreal dpr : {1.0, 1.25, 2.0, 3.0}) {
+      for (const QIcon::Mode mode : {
+               QIcon::Normal, QIcon::Active, QIcon::Disabled}) {
+        SCOPED_TRACE(::testing::Message()
+                     << "glyph=" << static_cast<int>(glyph)
+                     << " dpr=" << dpr
+                     << " mode=" << static_cast<int>(mode));
+        const QPixmap pixmap =
+            icon.pixmap(QSize(24, 24), dpr, mode, QIcon::Off);
+        ASSERT_FALSE(pixmap.isNull());
+        EXPECT_EQ(pixmap.size(),
+                  QSize(qRound(24.0 * dpr), qRound(24.0 * dpr)));
+        EXPECT_DOUBLE_EQ(pixmap.devicePixelRatio(), dpr);
+        EXPECT_TRUE(pixmap.hasAlphaChannel());
+
+        const QImage image =
+            pixmap.toImage().convertToFormat(QImage::Format_ARGB32);
+        ASSERT_FALSE(image.isNull());
+        EXPECT_EQ(image.pixelColor(0, 0).alpha(), 0);
+        EXPECT_EQ(image.pixelColor(image.width() - 1, 0).alpha(), 0);
+        EXPECT_EQ(image.pixelColor(0, image.height() - 1).alpha(), 0);
+        EXPECT_EQ(image.pixelColor(image.width() - 1,
+                                   image.height() - 1)
+                      .alpha(),
+                  0);
+
+        std::size_t visible_pixels = 0;
+        std::size_t transparent_pixels = 0;
+        for (int y = 0; y < image.height(); ++y) {
+          for (int x = 0; x < image.width(); ++x) {
+            if (image.pixelColor(x, y).alpha() == 0) {
+              ++transparent_pixels;
+            } else {
+              ++visible_pixels;
+            }
+          }
+        }
+        EXPECT_GT(visible_pixels, 0u);
+        EXPECT_GT(transparent_pixels, visible_pixels)
+            << "the glyph must not acquire an opaque garbage tile";
       }
     }
   }
@@ -483,8 +1010,22 @@ TEST(QtApplicationThemeTests,
   QDockWidget dock(&main_window);
   main_window.addDockWidget(Qt::LeftDockWidgetArea, &dock);
   quader::install_palette_aware_dock_title_presentation(dock);
-  EXPECT_TRUE(dock.styleSheet().contains(
-      QStringLiteral(":/quader/icons/dock_close.png")));
+  EXPECT_FALSE(dock.styleSheet().contains(QStringLiteral("url(")));
+
+  QAbstractButton *const close_button = dock.findChild<QAbstractButton *>(
+      QStringLiteral("qt_dockwidget_closebutton"),
+      Qt::FindDirectChildrenOnly);
+  QAbstractButton *const float_button = dock.findChild<QAbstractButton *>(
+      QStringLiteral("qt_dockwidget_floatbutton"),
+      Qt::FindDirectChildrenOnly);
+  ASSERT_NE(close_button, nullptr);
+  ASSERT_NE(float_button, nullptr);
+  EXPECT_TRUE(close_button->icon().availableSizes().isEmpty());
+  EXPECT_TRUE(float_button->icon().availableSizes().isEmpty());
+  EXPECT_GT(render_icon(close_button->icon(), QSize(24, 24), 3.0)
+                .pixelColor(36, 36)
+                .alpha(),
+            0);
 
   const auto drain_palette_transition = []() {
     for (int event_turn = 0; event_turn < 2; ++event_turn) {
@@ -496,14 +1037,20 @@ TEST(QtApplicationThemeTests,
   QApplication::setPalette(light);
   drain_palette_transition();
   const QString light_style = dock.styleSheet();
-  EXPECT_TRUE(dock.styleSheet().contains(
-      QStringLiteral(":/quader/icons/dock_close_dark.png")));
+  EXPECT_FALSE(dock.styleSheet().contains(QStringLiteral("url(")));
+  EXPECT_LT(relative_luminance(
+                render_icon(close_button->icon(), QSize(24, 24), 3.0)
+                    .pixelColor(36, 36)),
+            0.05);
 
   QApplication::setPalette(dark);
   drain_palette_transition();
   EXPECT_NE(dock.styleSheet(), light_style);
-  EXPECT_TRUE(dock.styleSheet().contains(
-      QStringLiteral(":/quader/icons/dock_close.png")));
+  EXPECT_FALSE(dock.styleSheet().contains(QStringLiteral("url(")));
+  EXPECT_GT(relative_luminance(
+                render_icon(close_button->icon(), QSize(24, 24), 3.0)
+                    .pixelColor(36, 36)),
+            0.75);
 
   QPalette darker = dark;
   darker.setColor(QPalette::Active, QPalette::Button, QColor(8, 8, 8));
@@ -512,7 +1059,16 @@ TEST(QtApplicationThemeTests,
   drain_palette_transition();
   EXPECT_NE(dock.styleSheet(), first_dark_style);
   EXPECT_EQ(dock.styleSheet(), quader::qt_dock_title_style_sheet(darker));
-  EXPECT_TRUE(dock.styleSheet().contains(
-      QStringLiteral(":/quader/icons/dock_close.png")));
+  EXPECT_FALSE(dock.styleSheet().contains(QStringLiteral("url(")));
+
+  const quader::QtUiScaleMetrics doubled(2.0F, 9U);
+  quader::apply_ui_scale_to_palette_aware_dock_title_presentation(
+      dock, doubled);
+  EXPECT_TRUE(dock.styleSheet().contains(QStringLiteral("width: 36px")));
+  QApplication::setPalette(light);
+  drain_palette_transition();
+  EXPECT_EQ(dock.styleSheet(),
+            quader::qt_dock_title_style_sheet(light, doubled));
+  EXPECT_TRUE(dock.styleSheet().contains(QStringLiteral("width: 36px")));
   QApplication::setPalette(original_palette);
 }

@@ -1029,13 +1029,15 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
   }
 
   ViewportNativeToolInteractionFrame native_frame = frame.native_tool;
+  native_frame.viewport_pixel_scale = interaction.viewport_pixel_scale;
   native_frame.select_backfaces = interaction.settings.bool_value(
       ViewportBoolSettingId::BackfaceSelection);
   const ViewportCurveControlPickingAdapter curve_control_picker(
-      camera, interaction.scene_surfaces);
+      camera, interaction.scene_surfaces, interaction.viewport_pixel_scale);
   const ViewportPathArraySourcePickingAdapter path_array_source_picker(
       camera, interaction.scene_billboard_pick_candidates,
-      interaction.scene_curve_pick_candidates, interaction.scene_surfaces);
+      interaction.scene_curve_pick_candidates, interaction.scene_surfaces,
+      interaction.viewport_pixel_scale);
   native_frame.curve_control_picker = &curve_control_picker;
   native_frame.path_array_source_picker = &path_array_source_picker;
   native_frame.transform_gizmo_consumed =

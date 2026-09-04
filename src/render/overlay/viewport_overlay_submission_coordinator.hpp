@@ -85,6 +85,7 @@ struct ViewportOverlayPersistentSubmissionStamp final {
   std::uint64_t selection_overlay_revision = 0u;
   ViewportOverlaySceneSubmissionStamp scene;
   std::uint64_t style_signature = 0u;
+  float raster_scale = 1.0f;
   RenderOverlaySelectionMode scene_selection_mode =
       RenderOverlaySelectionMode::Object;
   ViewportOverlaySelectionContext style_selection_context =
@@ -118,6 +119,7 @@ struct ViewportOverlayDynamicSubmissionStamp final {
   std::uintptr_t tool_preview_identity = 0u;
   std::uint64_t tool_preview_revision = 0u;
   std::uint64_t style_signature = 0u;
+  float raster_scale = 1.0f;
   ViewportOverlaySelectionContext style_selection_context =
       ViewportOverlaySelectionContext::Any;
   ViewportOverlayProjection projection =
@@ -157,6 +159,8 @@ public:
 struct ViewportOverlaySubmissionRequest final {
   std::size_t viewport_index = 0u;
   std::uint8_t layer_mask = 0u;
+  /** Combined app interface scale and this pane's native-surface DPR. */
+  float raster_scale = 1.0f;
   ViewportOverlayCamera camera;
   ViewportOverlaySelectionSourceStamp selection_source;
   const ViewportOverlaySelectionFrameProvider *selection_frame_provider =
@@ -228,18 +232,9 @@ public:
   [[nodiscard]] ViewportOverlaySubmissionWorkCounters work_counters() const;
 
 private:
-  /** Keys one cached selection frame by owner publication and resolved style. */
-  struct StyledSelectionSourceStamp final {
-    ViewportOverlaySelectionSourceStamp source;
-    std::uint64_t style_signature = 0u;
-
-    friend bool operator==(const StyledSelectionSourceStamp &,
-                           const StyledSelectionSourceStamp &) = default;
-  };
-
-  /** Retains the compiled shared selection frame and its publication revision. */
+  /** Retains shared semantic selection geometry and its publication revision. */
   struct SelectionSourceState final {
-    StyledSelectionSourceStamp stamp;
+    ViewportOverlaySelectionSourceStamp stamp;
     ViewportOverlayFrame frame;
     std::uint64_t publication_revision = 0u;
     bool valid = false;

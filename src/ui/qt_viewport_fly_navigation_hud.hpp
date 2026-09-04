@@ -7,6 +7,7 @@
 #pragma once
 
 #include "api/quader_viewport_layout_types.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QObject>
 #include <QRect>
@@ -67,6 +68,7 @@ public:
   operator=(const QtViewportFlyNavigationHud &) = delete;
 
   void set_bounds(const QRect &bounds);
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void present(bool fly_hud_active, bool fly_speed_is_default,
                float fly_speed,
                const LocalizationService *localization);
@@ -80,6 +82,7 @@ private:
 
   QWidget *crosshair_ = nullptr;
   QLabel *speed_label_ = nullptr;
+  QtUiScaleMetrics ui_scale_metrics_;
   QRect bounds_;
   QtViewportFlyNavigationHudPresentation presentation_;
   const LocalizationService *input_localization_ = nullptr;

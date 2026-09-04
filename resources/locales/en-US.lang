@@ -367,6 +367,7 @@ ui.runtime.panel_not_visible=Panel is not visible in the main layout.
 ui.runtime.unknown_panel=Unknown UI panel.
 ui.runtime.locale_selection_unavailable=Locale selection is not exposed in the app shell yet.
 ui.runtime.unknown_locale=Unknown locale.
+ui.runtime.interface_scale_invalid=Interface scale must be finite.
 ui.runtime.preferences_saved=Preferences saved.
 ui.runtime.preferences_save_failed=Preferences could not be saved.
 ui.runtime.navigation_gizmo_unavailable=Navigation gizmo is not available in the app shell yet.
@@ -401,6 +402,8 @@ modeling.action.disabled.snap_vertices_to_floor_instance_edit=Exit linked-instan
 modeling.action.disabled.snap_to_floor_active_tool=Apply or cancel the active tool before snapping to floor.
 
 ui.settings.interface=Interface
+ui.settings.interface_scale=Interface Scale
+ui.settings.interface_scale.help=Scales editor text, controls, icons, and interaction targets.
 ui.settings.locale=Language
 ui.settings.color.opacity=Opacity: %1%
 ui.settings.keybindings=Keybindings

@@ -19,6 +19,7 @@
 #include "scene/scene_transform.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
+#include "viewport/viewport_pixel_scale.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <editor/interactions/selection_box.hpp>
@@ -91,6 +92,8 @@ make_gizmo_input(const ViewportInteractionFrame &frame, ViewportToolId tool,
                   QVec3 pivot, quader_poly::Transform3 orientation,
                   quader_editor_core::TransformAxis active_axis,
                   quader_editor_core::TransformAxis hover_axis) {
+  const float viewport_pixel_scale =
+      viewport_sanitized_pixel_scale(frame.viewport_pixel_scale);
   quader_editor_core::TransformGizmoFrameInput input;
   input.tool = viewport_tool_interaction_tool(tool);
   input.active_axis = active_axis;
@@ -103,10 +106,12 @@ make_gizmo_input(const ViewportInteractionFrame &frame, ViewportToolId tool,
       frame.camera, frame.input.viewport_size);
   input.grid_size =
       viewport_grid_world_size_for_preset(frame.input.grid_preset);
-  input.gizmo_size_pixels = kOverlayTransformGizmoSizePixels;
-  input.pick_radius_pixels = kOverlayTransformGizmoPickRadiusPixels;
+  input.gizmo_size_pixels =
+      kOverlayTransformGizmoSizePixels * viewport_pixel_scale;
+  input.pick_radius_pixels =
+      kOverlayTransformGizmoPickRadiusPixels * viewport_pixel_scale;
   input.move_center_radius_pixels =
-      kOverlayTransformGizmoMoveCenterRadiusPixels;
+      kOverlayTransformGizmoMoveCenterRadiusPixels * viewport_pixel_scale;
   input.gizmo_scale = std::max(
       frame.settings.float_value(ViewportFloatSettingId::GizmoSize), 0.1f);
   input.ring_segments = 64;
@@ -768,14 +773,18 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     }
     const bool conversion_press =
         !frame.input.curve_conversion_edges.empty();
+    const double control_pick_radius_pixels =
+        9.0 * static_cast<double>(
+                  viewport_sanitized_pixel_scale(frame.viewport_pixel_scale));
     const auto hit = frame.scene_surfaces != nullptr
                          ? pick_unoccluded_viewport_curve_control(
                                frame.camera, curve_tool->preview_state(),
                                frame.left_click_local, *frame.scene_surfaces,
-                               conversion_press)
+                               conversion_press, control_pick_radius_pixels)
                          : pick_viewport_curve_control(
                                frame.camera, curve_tool->preview_state(),
-                               frame.left_click_local, conversion_press);
+                               frame.left_click_local, conversion_press,
+                               control_pick_radius_pixels);
     return hit.has_value() &&
            (conversion_press || curve_tool->control_selection().empty() ||
             !curve_tool->control_selection().contains(hit->target));
@@ -843,9 +852,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
           .pointer = viewport_pointer_gesture_from_latest_edge(
               frame.input.pointer_pressed_edges, QuaderMouseButton::Left,
               frame.left_click_local, frame.input.mouse_screen,
-              frame.input.modifiers,
-              static_cast<float>(
-                  quader_editor_core::kSelectionBoxDefaultDragThreshold)),
+              frame.input.modifiers, frame.pointer_drag_threshold_pixels),
           .begin_request =
               {
                   .tool = api_transform_tool_for(tool),
@@ -963,8 +970,11 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
         .grid_preset = frame.input.grid_preset,
         .vertex_snap_radius =
             frame.input.transform_vertex_snap_down
-                ? frame.settings.float_value(
-                      ViewportFloatSettingId::PickVertexRadius)
+                ? static_cast<float>(viewport_scaled_world_pick_radius(
+                      frame.settings.float_value(
+                          ViewportFloatSettingId::PickVertexRadius),
+                      frame.viewport_pixel_scale,
+                      frame.input.device_pixel_ratio))
                 : 0.0f,
         .grid_snap_enabled = grid_snap_active,
         .rotation_snap_degrees = rotation_snap_degrees,

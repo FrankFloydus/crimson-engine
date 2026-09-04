@@ -46,6 +46,15 @@ float changed_float(const ViewportFloatSettingDescriptor &descriptor) {
                                                         : descriptor.maximum;
 }
 
+std::size_t count_changes(const std::vector<QtSettingsChange> &changes,
+                          QtSettingsChangeKind kind) {
+  return static_cast<std::size_t>(
+      std::count_if(changes.begin(), changes.end(),
+                    [kind](const QtSettingsChange &change) {
+                      return change.kind == kind;
+                    }));
+}
+
 LocalizationService loaded_localization(std::string_view locale = "en-US") {
   LocalizationService localization;
   EXPECT_TRUE(localization.load(
@@ -117,6 +126,16 @@ TEST(QtSettingsControllerTests,
       "Mostra quote al passaggio del mouse");
   EXPECT_EQ(english.text("ui.settings.color.opacity", ""), "Opacity: %1%");
   EXPECT_EQ(italian.text("ui.settings.color.opacity", ""), "Opacità: %1%");
+  EXPECT_EQ(english.text("ui.settings.interface_scale", ""),
+            "Interface Scale");
+  EXPECT_EQ(italian.text("ui.settings.interface_scale", ""),
+            "Scala interfaccia");
+  EXPECT_FALSE(english.text("ui.settings.interface_scale.help", "").empty());
+  EXPECT_FALSE(italian.text("ui.settings.interface_scale.help", "").empty());
+  EXPECT_EQ(english.text("ui.runtime.interface_scale_invalid", ""),
+            "Interface scale must be finite.");
+  EXPECT_EQ(italian.text("ui.runtime.interface_scale_invalid", ""),
+            "La scala dell'interfaccia deve essere un numero finito.");
 }
 
 TEST(QtSettingsControllerTests,
@@ -124,17 +143,19 @@ TEST(QtSettingsControllerTests,
   static_assert(kViewportColorSettingCount == 23u);
   static_assert(kViewportFloatSettingCount == 32u);
   static_assert(kViewportBoolSettingCount == 13u);
-  static_assert(1u + kViewportColorSettingCount + kViewportFloatSettingCount +
-                    kViewportBoolSettingCount ==
-                69u);
+  static_assert(2u + kViewportColorSettingCount + kViewportFloatSettingCount +
+                     kViewportBoolSettingCount ==
+                70u);
 
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();
   LocalizationService localization = loaded_localization();
-  std::vector<QtSettingsChangeKind> changes;
+  std::vector<QtSettingsChange> changes;
   QtSettingsController controller;
   controller.bind(ui_settings, viewport_settings, localization,
-                  [&](QtSettingsChangeKind kind) { changes.push_back(kind); });
+                  [&](const QtSettingsChange &change) {
+                    changes.push_back(change);
+                  });
 
   std::size_t expected_preview_count = 0u;
   std::size_t expected_viewport_commit_count = 0u;
@@ -169,22 +190,25 @@ TEST(QtSettingsControllerTests,
     ++expected_viewport_commit_count;
   }
 
+  ASSERT_TRUE(controller.preview_interface_scale(1.5f));
+  EXPECT_FLOAT_EQ(ui_settings.interface_scale(), 1.5f);
+  ASSERT_FALSE(controller.preview_interface_scale(1.5f));
+
   ASSERT_TRUE(controller.select_locale("it-IT"));
   EXPECT_EQ(ui_settings.locale(), "it-IT");
   EXPECT_EQ(localization.current_locale(), "en-US");
 
-  EXPECT_EQ(static_cast<std::size_t>(std::count(
-                changes.begin(), changes.end(),
-                QtSettingsChangeKind::ViewportPreview)),
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportPreview),
             expected_preview_count);
-  EXPECT_EQ(static_cast<std::size_t>(std::count(
-                changes.begin(), changes.end(),
-                QtSettingsChangeKind::ViewportCommit)),
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit),
             expected_viewport_commit_count);
-  EXPECT_EQ(static_cast<std::size_t>(std::count(
-                changes.begin(), changes.end(),
-                QtSettingsChangeKind::InterfaceCommit)),
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::InterfacePreview),
             1u);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::InterfaceCommit), 1u);
+  ASSERT_TRUE(changes[changes.size() - 2u].interface_scale.has_value());
+  EXPECT_FLOAT_EQ(*changes[changes.size() - 2u].interface_scale, 1.5f);
+  ASSERT_TRUE(changes.back().interface_scale.has_value());
+  EXPECT_FLOAT_EQ(*changes.back().interface_scale, 1.5f);
 }
 
 TEST(QtSettingsControllerTests,
@@ -192,10 +216,12 @@ TEST(QtSettingsControllerTests,
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();
   LocalizationService localization = loaded_localization();
-  std::vector<QtSettingsChangeKind> changes;
+  std::vector<QtSettingsChange> changes;
   QtSettingsController controller;
   controller.bind(ui_settings, viewport_settings, localization,
-                  [&](QtSettingsChangeKind kind) { changes.push_back(kind); });
+                  [&](const QtSettingsChange &change) {
+                    changes.push_back(change);
+                  });
 
   constexpr ViewportColorSettingId kSetting =
       ViewportColorSettingId::GridYAxis;
@@ -205,8 +231,8 @@ TEST(QtSettingsControllerTests,
 
   expect_color_exact(viewport_settings.color(kSetting), initial);
   ASSERT_EQ(changes.size(), 2u);
-  EXPECT_EQ(changes[0], QtSettingsChangeKind::ViewportPreview);
-  EXPECT_EQ(changes[1], QtSettingsChangeKind::ViewportPreview);
+  EXPECT_EQ(changes[0].kind, QtSettingsChangeKind::ViewportPreview);
+  EXPECT_EQ(changes[1].kind, QtSettingsChangeKind::ViewportPreview);
   EXPECT_FALSE(controller.commit_color(kSetting, initial));
 }
 

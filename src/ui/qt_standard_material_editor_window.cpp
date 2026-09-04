@@ -15,6 +15,7 @@
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QEvent>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
@@ -79,6 +80,12 @@ public:
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
   }
 
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    setMargin(metrics.px(3));
+    setMinimumWidth(metrics.px(48));
+    refresh_elision();
+  }
+
   void set_full_text(QString full_text, QString placeholder) {
     full_text_ = std::move(full_text);
     placeholder_ = std::move(placeholder);
@@ -113,6 +120,11 @@ public:
     setFocusPolicy(Qt::StrongFocus);
     setMinimumSize(240, 180);
     refresh_properties();
+  }
+
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    setMinimumSize(metrics.size(QSize(240, 180)));
+    updateGeometry();
   }
 
   void set_image(QImage image) {
@@ -211,19 +223,29 @@ private:
 /// Hosts the retained texture canvas and immutable file/format information.
 class TextureInspectorWindow final : public QMainWindow {
 public:
-  explicit TextureInspectorWindow(QWidget *parent)
+  TextureInspectorWindow(QWidget *parent, const QtUiScaleMetrics &metrics)
       : QMainWindow(parent, Qt::Tool),
         canvas_(new TextureInspectorCanvas(this)),
         information_(new QLabel(this)) {
     setObjectName(QStringLiteral("standardMaterialEditor.textureInspector"));
     setAttribute(Qt::WA_DeleteOnClose, false);
     setWindowFlag(Qt::WindowMaximizeButtonHint, false);
-    resize(kTextureInspectorWidth, kTextureInspectorHeight);
+    resize(metrics.size(
+        QSize(kTextureInspectorWidth, kTextureInspectorHeight)));
     setCentralWidget(canvas_);
     information_->setObjectName(
         QStringLiteral("standardMaterialEditor.textureInspector.info"));
     information_->setAlignment(Qt::AlignCenter);
     statusBar()->addPermanentWidget(information_, 1);
+    apply_ui_scale(metrics);
+  }
+
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    canvas_->apply_ui_scale(metrics);
+    if (centralWidget() != nullptr) {
+      centralWidget()->updateGeometry();
+    }
+    statusBar()->updateGeometry();
   }
 
   void present(const QtStandardMaterialTexturePresentation &texture,
@@ -437,12 +459,8 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   albedo_label_->setBuddy(albedo_button_);
   form->addRow(albedo_label_, albedo_button_);
 
-  const QIcon texture_browse_icon =
-      style()->standardIcon(QStyle::SP_DialogOpenButton);
-  const QIcon texture_clear_icon =
-      style()->standardIcon(QStyle::SP_DialogCancelButton);
   const auto create_texture_controls =
-      [this, form, texture_browse_icon, texture_clear_icon](
+      [this, form](
           QtStandardMaterialTextureSlot slot, const QString &stable_name) {
     TextureControls &controls = texture_controls_[texture_index(slot)];
     controls.label = new QLabel(properties_group_);
@@ -462,11 +480,9 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
     controls.browse = new QToolButton(row);
     controls.browse->setObjectName(
         QStringLiteral("standardMaterialEditor.%1.browse").arg(stable_name));
-    controls.browse->setIcon(texture_browse_icon);
     controls.clear = new QToolButton(row);
     controls.clear->setObjectName(
         QStringLiteral("standardMaterialEditor.%1.clear").arg(stable_name));
-    controls.clear->setIcon(texture_clear_icon);
     row_layout->addWidget(controls.preview);
     row_layout->addWidget(controls.path, 1);
     row_layout->addWidget(controls.browse);
@@ -556,6 +572,7 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   form->addRow(normal_strength_label_, normal_strength_row);
   create_texture_controls(QtStandardMaterialTextureSlot::Normal,
                           QStringLiteral("normalTexture"));
+  refresh_texture_palette_icons();
 
   direct_x_normal_ = new QCheckBox(properties_group_);
   direct_x_normal_->setObjectName(
@@ -1077,6 +1094,32 @@ void QtStandardMaterialEditorWindow::set_close_request_handler(
   close_request_handler_ = std::move(handler);
 }
 
+void QtStandardMaterialEditorWindow::apply_ui_scale(
+    const QtUiScaleMetrics &metrics) {
+  if (ui_scale_metrics_.revision() == metrics.revision() &&
+      ui_scale_metrics_.factor() == metrics.factor()) {
+    return;
+  }
+  ui_scale_metrics_ = metrics;
+  const QSize preview_extent =
+      metrics.size(QSize(kTexturePreviewExtent, kTexturePreviewExtent));
+  const QSize preview_icon_extent = metrics.size(
+      QSize(kTexturePreviewIconExtent, kTexturePreviewIconExtent));
+  for (TextureControls &controls : texture_controls_) {
+    controls.preview->setFixedSize(preview_extent);
+    controls.preview->setIconSize(preview_icon_extent);
+    static_cast<ElidedPathLabel *>(controls.path)->apply_ui_scale(metrics);
+  }
+  invalidate_texture_preview_icons();
+  refresh_document_controls();
+  if (texture_inspector_window_ != nullptr) {
+    static_cast<TextureInspectorWindow *>(texture_inspector_window_)
+        ->apply_ui_scale(metrics);
+  }
+  properties_group_->updateGeometry();
+  updateGeometry();
+}
+
 void QtStandardMaterialEditorWindow::restore_presentation_state(
     QtStandardMaterialPreviewMesh mesh,
     QtStandardMaterialPreviewShading shading, QString environment_id,
@@ -1107,6 +1150,20 @@ void QtStandardMaterialEditorWindow::install_preview_widget(QWidget *widget) {
   preview_surface_layout_->addWidget(preview_widget_, 1);
   preview_placeholder_->hide();
   preview_widget_->show();
+}
+
+bool QtStandardMaterialEditorWindow::event(QEvent *event) {
+  const bool handled = QMainWindow::event(event);
+  if (event != nullptr) {
+    if (event->type() == QEvent::DevicePixelRatioChange) {
+      invalidate_texture_preview_icons();
+      refresh_document_controls();
+    } else if (event->type() == QEvent::PaletteChange ||
+               event->type() == QEvent::ApplicationPaletteChange) {
+      refresh_texture_palette_icons();
+    }
+  }
+  return handled;
 }
 
 void QtStandardMaterialEditorWindow::closeEvent(QCloseEvent *event) {
@@ -1244,6 +1301,8 @@ void QtStandardMaterialEditorWindow::refresh_document_controls() {
   const QSignalBlocker normal_strength_blocker(normal_strength_spin_);
   const QSignalBlocker normal_strength_slider_blocker(normal_strength_slider_);
   const QSignalBlocker convention_blocker(direct_x_normal_);
+  const QIcon no_texture_icon =
+      style()->standardIcon(QStyle::SP_FileIcon, nullptr, this);
   name_edit_->setText(has_document_ ? document_.name : QString());
   albedo_button_->set_swatch_color(has_document_ ? document_.albedo
                                                  : QColor(Qt::white));
@@ -1283,12 +1342,19 @@ void QtStandardMaterialEditorWindow::refresh_document_controls() {
             presentation.content_revision ||
         controls.preview_icon_has_image != has_preview_image;
     if (preview_icon_changed) {
-      controls.preview->setIcon(
-          has_preview_image
-              ? QIcon(QPixmap::fromImage(presentation.preview_image.scaled(
-                    kTexturePreviewIconExtent, kTexturePreviewIconExtent,
-                    Qt::KeepAspectRatio, Qt::SmoothTransformation)))
-              : style()->standardIcon(QStyle::SP_FileIcon));
+      if (has_preview_image) {
+        const qreal device_pixel_ratio =
+            std::max<qreal>(1.0, controls.preview->devicePixelRatioF());
+        const int device_extent = ui_scale_metrics_.device_pixels(
+            kTexturePreviewIconExtent, device_pixel_ratio);
+        QPixmap pixmap = QPixmap::fromImage(presentation.preview_image.scaled(
+            device_extent, device_extent, Qt::KeepAspectRatio,
+            Qt::SmoothTransformation));
+        pixmap.setDevicePixelRatio(device_pixel_ratio);
+        controls.preview->setIcon(QIcon(pixmap));
+      } else {
+        controls.preview->setIcon(no_texture_icon);
+      }
       controls.preview_icon_document_id = document_.stable_id;
       controls.preview_icon_pixel_size = presentation.pixel_size;
       controls.preview_icon_content_revision = presentation.content_revision;
@@ -1482,7 +1548,8 @@ void QtStandardMaterialEditorWindow::show_texture_inspector(
     return;
   }
   if (texture_inspector_window_ == nullptr) {
-    texture_inspector_window_ = new TextureInspectorWindow(this);
+    texture_inspector_window_ =
+        new TextureInspectorWindow(this, ui_scale_metrics_);
   }
   inspected_texture_slot_ = slot;
   static_cast<TextureInspectorWindow *>(texture_inspector_window_)
@@ -1506,6 +1573,33 @@ void QtStandardMaterialEditorWindow::refresh_texture_inspector() {
   }
   static_cast<TextureInspectorWindow *>(texture_inspector_window_)
       ->present(document_.textures[index], labels_.texture_inspector);
+}
+
+void QtStandardMaterialEditorWindow::invalidate_texture_preview_icons() {
+  for (TextureControls &controls : texture_controls_) {
+    controls.preview_icon_initialized = false;
+  }
+}
+
+void QtStandardMaterialEditorWindow::refresh_texture_palette_icons() {
+  const QIcon browse_icon =
+      style()->standardIcon(QStyle::SP_DialogOpenButton, nullptr, this);
+  const QIcon clear_icon =
+      style()->standardIcon(QStyle::SP_DialogCancelButton, nullptr, this);
+  const QIcon no_texture_icon =
+      style()->standardIcon(QStyle::SP_FileIcon, nullptr, this);
+  for (TextureControls &controls : texture_controls_) {
+    if (controls.browse != nullptr) {
+      controls.browse->setIcon(browse_icon);
+    }
+    if (controls.clear != nullptr) {
+      controls.clear->setIcon(clear_icon);
+    }
+    if (controls.preview != nullptr && controls.preview_icon_initialized &&
+        !controls.preview_icon_has_image) {
+      controls.preview->setIcon(no_texture_icon);
+    }
+  }
 }
 
 } // namespace quader

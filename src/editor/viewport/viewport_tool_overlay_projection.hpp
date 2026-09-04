@@ -47,6 +47,8 @@ struct ViewportToolOverlaySourceRevisions final {
  */
 struct ViewportToolOverlaySourceInputs final {
   std::uintptr_t source_identity = 0u;
+  /// Combined interface scale and native viewport-surface DPR.
+  float raster_scale = 1.0f;
   const ViewportOverlayCamera *overlay_camera = nullptr;
   const ViewportCameraController *viewport_camera = nullptr;
   const ModelingBoxPreview *box_preview = nullptr;
@@ -94,16 +96,18 @@ class ViewportToolOverlayProjection final {
 public:
   static void append_box(ViewportOverlayFrame &frame,
                          const ViewportOverlayCamera &camera,
-                         const ModelingBoxPreview &preview);
+                         const ModelingBoxPreview &preview,
+                         float raster_scale = 1.0f);
   static void append_transform_gizmo(
       ViewportOverlayFrame &frame, const ViewportOverlayCamera &camera,
       const quader_editor_core::TransformGizmoFrame &gizmo);
   static void append_selection_marquee(
       ViewportOverlayFrame &frame, const ViewportOverlayCamera &camera,
-      const ViewportSelectionMarquee &marquee);
+      const ViewportSelectionMarquee &marquee, float raster_scale = 1.0f);
   static void append_pivot_handle(ViewportOverlayFrame &frame,
                                   const ViewportCameraController &camera,
-                                  const PivotHandleState &handle);
+                                  const PivotHandleState &handle,
+                                  float raster_scale = 1.0f);
   static void append_linear_array_handle(
       ViewportOverlayFrame &frame, const LinearArrayHandleState &handle);
   static void append_radial_array_center(

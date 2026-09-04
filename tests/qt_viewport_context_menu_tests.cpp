@@ -311,6 +311,7 @@ TEST(QtViewportContextMenuTests,
   ASSERT_TRUE(hovered_material.has_value());
   std::optional<quader::ProjectAssetId> opened_material;
 
+  presenter.apply_ui_scale(quader::QtUiScaleMetrics{2.0F, 1U});
   const ContextMenuSnapshot object_menu = show_and_snapshot(
       owner, presenter, editor, input_router, localization, object_actions,
       selection(quader::QuaderSelectionMode::Object), true, hovered_material,
@@ -323,6 +324,9 @@ TEST(QtViewportContextMenuTests,
   EXPECT_TRUE(object_menu.style_sheet.contains(
       QStringLiteral("QMenu#viewport_operations_context_menu::separator")));
   EXPECT_TRUE(object_menu.style_sheet.contains(QStringLiteral("palette(mid)")));
+  EXPECT_TRUE(
+      object_menu.style_sheet.contains(QStringLiteral("margin: 8px 16px")));
+  presenter.apply_ui_scale(quader::QtUiScaleMetrics{1.0F, 2U});
 
   ASSERT_GE(object_menu.actions.size(), 4u);
   EXPECT_EQ(object_menu.actions[0].object_name,

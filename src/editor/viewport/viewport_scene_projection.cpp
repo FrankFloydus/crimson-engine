@@ -15,13 +15,17 @@
 #include "scene/scene_hierarchy_visibility.hpp"
 #include "scene/scene_transform.hpp"
 #include "viewport/viewport_local_visibility.hpp"
+#include "viewport/viewport_pixel_scale.hpp"
 
 namespace quader {
 
 std::vector<ViewportSceneBillboardPickCandidate>
 ViewportSceneProjection::point_light_pick_candidates(
     const SceneDocument &document,
-    const ViewportLocalVisibilitySnapshot &local_visibility) {
+    const ViewportLocalVisibilitySnapshot &local_visibility,
+    float viewport_pixel_scale) {
+  const float resolved_pixel_scale =
+      viewport_sanitized_pixel_scale(viewport_pixel_scale);
   std::vector<ViewportSceneBillboardPickCandidate> candidates;
   const std::shared_ptr<const SceneHierarchyProjectionSnapshot> hierarchy =
       document.hierarchy_projection();
@@ -37,7 +41,8 @@ ViewportSceneProjection::point_light_pick_candidates(
     candidates.push_back({
         .entity = entity,
         .position = transform_point(state->world_transform, {}),
-        .size_pixels = kOverlayPointLightGizmoSizePixels,
+        .size_pixels =
+            kOverlayPointLightGizmoSizePixels * resolved_pixel_scale,
         .selectable =
             scene_hierarchy_segment_is_selectable_ignoring_visibility(
                 document, entity),

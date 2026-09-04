@@ -10,12 +10,42 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QLabel>
 #include <QLayout>
+#include <QPalette>
+#include <QPixmap>
+#include <QProxyStyle>
 #include <QPushButton>
 #include <QTimer>
 #include <QWidget>
 
 using namespace quader;
+
+namespace {
+
+class PaletteMessageIconStyle final : public QProxyStyle {
+public:
+  PaletteMessageIconStyle() : QProxyStyle(QStringLiteral("fusion")) {}
+
+  QIcon standardIcon(StandardPixmap standard_pixmap,
+                     const QStyleOption *option,
+                     const QWidget *widget) const override {
+    switch (standard_pixmap) {
+    case SP_MessageBoxCritical:
+    case SP_MessageBoxWarning:
+    case SP_MessageBoxQuestion:
+    case SP_MessageBoxInformation: {
+      QPixmap pixmap(24, 24);
+      pixmap.fill(QApplication::palette().color(QPalette::Text));
+      return QIcon(pixmap);
+    }
+    default:
+      return QProxyStyle::standardIcon(standard_pixmap, option, widget);
+    }
+  }
+};
+
+} // namespace
 
 TEST(QtRetainedMessageBoxTests,
      ReusesNativeWindowLayoutAndButtonsAcrossPresentations) {
@@ -26,6 +56,7 @@ TEST(QtRetainedMessageBoxTests,
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
   application.setStyle(QStringLiteral("Fusion"));
+  QtUiScaleApplicationController scale_controller(application);
 
   QWidget owner;
   owner.resize(640, 480);
@@ -80,6 +111,27 @@ TEST(QtRetainedMessageBoxTests,
   QLayout *const retained_layout = message_box.layout();
   ASSERT_NE(retained_layout, nullptr);
   const WId retained_window_id = message_box.winId();
+  auto *const icon_label = message_box.findChild<QLabel *>(
+      QStringLiteral("qt_msgboxex_icon_label"));
+  ASSERT_NE(icon_label, nullptr);
+  ASSERT_FALSE(icon_label->pixmap().isNull());
+  const QSizeF unscaled_icon_size =
+      icon_label->pixmap().deviceIndependentSize();
+  ASSERT_TRUE(scale_controller.apply_factor(2.0F));
+  message_box.apply_ui_scale(scale_controller.metrics());
+  EXPECT_EQ(message_box.winId(), retained_window_id);
+  EXPECT_EQ(message_box.layout(), retained_layout);
+  EXPECT_GT(icon_label->pixmap().deviceIndependentSize().width(),
+            unscaled_icon_size.width());
+  const qint64 scaled_icon_key = icon_label->pixmap().cacheKey();
+  EXPECT_FALSE(scale_controller.apply_factor(2.0F));
+  message_box.apply_ui_scale(scale_controller.metrics());
+  EXPECT_EQ(icon_label->pixmap().cacheKey(), scaled_icon_key)
+      << "one scale revision must not churn retained standard icons";
+  ASSERT_TRUE(scale_controller.apply_factor(1.0F));
+  message_box.apply_ui_scale(scale_controller.metrics());
+  EXPECT_EQ(icon_label->pixmap().deviceIndependentSize(), unscaled_icon_size);
+  EXPECT_EQ(message_box.winId(), retained_window_id);
 
   QTimer::singleShot(0, &message_box, [&]() {
     EXPECT_EQ(message_box.winId(), retained_window_id);
@@ -149,6 +201,61 @@ TEST(QtRetainedMessageBoxTests,
   EXPECT_EQ(message_box.present(second),
             QtRetainedMessageBoxButton::Secondary);
   EXPECT_TRUE(message_box.testAttribute(Qt::WA_WState_Created));
+  EXPECT_EQ(message_box.winId(), retained_window_id);
+  EXPECT_EQ(message_box.layout(), retained_layout);
+}
+
+TEST(QtRetainedMessageBoxTests,
+     RefreshesRetainedStyleIconsAcrossApplicationPaletteChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-retained-message-box-palette-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QApplication::setStyle(new PaletteMessageIconStyle);
+
+  QPalette palette = QApplication::palette();
+  palette.setColor(QPalette::Text, QColor(211, 37, 53));
+  QApplication::setPalette(palette);
+
+  QtRetainedMessageBox message_box;
+  ASSERT_TRUE(message_box.set_presentation(
+      QtRetainedMessageBoxPresentation{
+          .icon = QMessageBox::Critical,
+          .object_name = QStringLiteral("palette_message_box"),
+          .title = QStringLiteral("Palette"),
+          .text = QStringLiteral("Palette-aware icon"),
+          .buttons =
+              {{
+                  .button = QtRetainedMessageBoxButton::Primary,
+                  .object_name = QStringLiteral("palette_message_box.ok"),
+                  .label = QStringLiteral("OK"),
+                  .role = QMessageBox::AcceptRole,
+              }},
+          .default_button = QtRetainedMessageBoxButton::Primary,
+          .escape_button = QtRetainedMessageBoxButton::Primary,
+          .close_button = QtRetainedMessageBoxButton::Primary,
+      }));
+  message_box.prewarm();
+  auto *const icon_label = message_box.findChild<QLabel *>(
+      QStringLiteral("qt_msgboxex_icon_label"));
+  ASSERT_NE(icon_label, nullptr);
+  ASSERT_FALSE(icon_label->pixmap().isNull());
+  const WId retained_window_id = message_box.winId();
+  QLayout *const retained_layout = message_box.layout();
+  const qint64 original_icon_key = icon_label->pixmap().cacheKey();
+  EXPECT_EQ(icon_label->pixmap().toImage().pixelColor(0, 0),
+            QColor(211, 37, 53));
+
+  palette.setColor(QPalette::Text, QColor(29, 197, 83));
+  QApplication::setPalette(palette);
+  QCoreApplication::processEvents();
+
+  ASSERT_FALSE(icon_label->pixmap().isNull());
+  EXPECT_NE(icon_label->pixmap().cacheKey(), original_icon_key);
+  EXPECT_EQ(icon_label->pixmap().toImage().pixelColor(0, 0),
+            QColor(29, 197, 83));
   EXPECT_EQ(message_box.winId(), retained_window_id);
   EXPECT_EQ(message_box.layout(), retained_layout);
 }

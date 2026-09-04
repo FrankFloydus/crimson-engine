@@ -292,14 +292,21 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(dock_source,
                   "void install_palette_aware_dock_title_presentation("
                   "QDockWidget &dock)");
-  expect_contains(dock_source, "titlebar-close-icon: url(%1)");
-  expect_contains(dock_source, "titlebar-normal-icon: url(%2)");
-  expect_contains(dock_source, ":/quader/icons/dock_close.png");
-  expect_contains(dock_source, ":/quader/icons/dock_float.png");
-  expect_contains(dock_source, ":/quader/icons/dock_close_dark.png");
-  expect_contains(dock_source, ":/quader/icons/dock_float_dark.png");
+  expect_missing(dock_source, "titlebar-close-icon");
+  expect_missing(dock_source, "titlebar-normal-icon");
+  expect_missing(dock_source, "url(");
+  expect_missing(dock_source, ":/quader/icons/dock_");
   expect_contains(dock_source,
-                  "qt_dock_title_surface_uses_packaged_light_glyphs(");
+                  "qt_dock_title_surface_uses_light_glyph(");
+  expect_contains(dock_source, "QtDockTitleGlyphIconEngine");
+  expect_contains(dock_source, "QPainterPath path");
+  expect_contains(dock_source, "painter->drawLine(");
+  expect_contains(dock_source, "painter->drawPath(path)");
+  expect_contains(dock_source, "apply_programmatic_dock_title_glyphs(");
+  expect_contains(dock_source, "qt_dockwidget_closebutton");
+  expect_contains(dock_source, "qt_dockwidget_floatbutton");
+  expect_contains(dock_source, "close_button->setIcon(");
+  expect_contains(dock_source, "float_button->setIcon(");
   expect_contains(dock_source, "quader-dock-palette");
   expect_contains(dock_source, "QApplication::palette()");
   expect_contains(dock_source, "QDockWidget::title");
@@ -312,16 +319,18 @@ TEST(UiLayoutGuardrailTests,
                   "palette.color(QPalette::Active, QPalette::Button)");
   expect_contains(dock_source,
                   "palette.color(QPalette::Active, QPalette::ButtonText)");
-  expect_contains(dock_source, "width: 18px");
-  expect_contains(dock_source, "height: 18px");
-  expect_contains(dock_source, "icon-size: 24px");
+  expect_contains(dock_source, "width: %11px");
+  expect_contains(dock_source, "height: %11px");
+  expect_contains(dock_source, "icon-size: %12px");
+  expect_contains(dock_source, ".arg(metrics.px(18))");
+  expect_contains(dock_source, ".arg(metrics.px(24))");
   expect_contains(dock_source, "QDockWidget::close-button:hover");
   expect_contains(dock_source, "QDockWidget::float-button:hover");
   expect_contains(dock_source,
                   "palette.color(QPalette::Active, QPalette::Highlight)");
   expect_contains(dock_source, "QDockWidget::close-button:pressed");
   expect_contains(dock_source, "QDockWidget::float-button:pressed");
-  expect_contains(dock_source, "border: 2px solid %10");
+  expect_contains(dock_source, "border: 2px solid %8");
   expect_contains(create_dock,
                   "install_palette_aware_dock_title_presentation(*dock)");
   expect_contains(dock_source, "QGuiApplication::paletteChanged");
@@ -552,6 +561,8 @@ TEST(UiLayoutGuardrailTests,
   const std::string layer_header =
       read_source_file("src/ui/layer_panel.hpp");
   const std::string layer = read_source_file("src/ui/layer_panel.cpp");
+  const std::string multiresolution_icon =
+      read_source_file("src/ui/qt_multiresolution_icon.cpp");
   const std::string console_header =
       read_source_file("src/ui/console_panel.hpp");
   const std::string console = read_source_file("src/ui/console_panel.cpp");
@@ -644,10 +655,10 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(layer, "Name = 1");
   expect_contains(layer, "Visible = 2");
   expect_contains(layer, "Locked = 3");
-  expect_contains(layer, "material_visibility.png");
-  expect_contains(layer, "material_visibility_off.png");
-  expect_contains(layer, "material_lock.png");
-  expect_contains(layer, "material_lock_open.png");
+  expect_contains(layer, "QtScalableGlyph::MaterialVisibility");
+  expect_contains(layer, "QtScalableGlyph::MaterialVisibilityOff");
+  expect_contains(layer, "QtScalableGlyph::MaterialLock");
+  expect_contains(layer, "QtScalableGlyph::MaterialLockOpen");
   expect_contains(layer, "layer_add.png");
   expect_contains(layer, "clear_layer_selection()");
   expect_contains(layer, "editor_->layers().all()");
@@ -657,7 +668,11 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(layer, "QItemSelectionModel::NoUpdate");
   expect_missing(layer, "commands().available()");
   expect_missing(layer, "document_->set_");
-  expect_contains(layer, "QPainter::CompositionMode_SourceIn");
+  expect_contains(layer, "qt_multiresolution_icon(");
+  expect_contains(multiresolution_icon,
+                  "QPainter::CompositionMode_SourceIn");
+  expect_contains(multiresolution_icon, "edge_preserving_scale(");
+  expect_contains(multiresolution_icon, "QtScalableGlyphIconEngine");
   expect_missing(layer, "QPainterPath");
 
   expect_contains(console_header,
@@ -865,9 +880,21 @@ TEST(UiLayoutGuardrailTests,
       inspector, "QPixmap material_action_pixmap(",
       "QIcon material_action_icon(");
   ASSERT_FALSE(replacement_icon.empty());
+  expect_contains(inspector, "kInspectorMaterialActionRasterExtents");
+  expect_contains(inspector, "16, 24, 32, 48, 64, 96, 128, 192, 256, 384");
+  expect_contains(replacement_icon, "painter.scale(design_scale, design_scale)");
   expect_contains(replacement_icon, "drawRoundedRect(");
   expect_missing(replacement_icon, "drawPolygon(");
   expect_missing(replacement_icon, "drawPolyline(");
+
+  const std::string dpi_event = source_slice(
+      inspector, "bool InspectorPanel::event(QEvent *event)",
+      "void InspectorPanel::refresh(UIContext &context)");
+  ASSERT_FALSE(dpi_event.empty());
+  expect_contains(dpi_event, "QEvent::DevicePixelRatioChange");
+  expect_contains(dpi_event, "QEvent::ScreenChangeInternal");
+  expect_contains(dpi_event, "refresh_material_preview_rasters()");
+  expect_contains(inspector, "preview_device_pixel_ratio");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -1496,16 +1523,17 @@ TEST(UiLayoutGuardrailTests,
       read_source_file("src/viewport/viewport_settings.cpp");
 
   expect_contains(dialog_header,
-                  "std::function<void(QtSettingsChangeKind)>");
+                   "QtSettingsController::ChangeCallback settings_changed");
   expect_contains(menu_header, "viewport_settings_changed");
   expect_missing(menu_header, "std::function<void()> settings_changed");
   expect_contains(menu, "context.viewport_settings_changed()");
   expect_contains(menu, "&QMenu::aboutToShow");
 
   expect_contains(ui_system,
-                  "handle_settings_dialog_change(QtSettingsChangeKind kind)");
+                   "handle_settings_dialog_change(const QtSettingsChange &change)");
   expect_contains(ui_system, "QtSettingsChangeKind::ViewportPreview");
   expect_contains(ui_system, "QtSettingsChangeKind::ViewportCommit");
+  expect_contains(ui_system, "QtSettingsChangeKind::InterfacePreview");
   expect_contains(ui_system, "QtSettingsChangeKind::InterfaceCommit");
   expect_contains(ui_system, "QtSettingsChangeKind::KeybindingsCommit");
   expect_contains(ui_system,
@@ -4259,4 +4287,59 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(panel, "bool linear_array_handle_hit(");
   expect_missing(panel, "document_world_bounds(");
   expect_missing(panel, "point_light_pick_candidates(\n    const SceneDocument");
+}
+
+TEST(UiLayoutGuardrailTests,
+     InterfaceScaleApplicationIsEventDrivenAndAbsentFromTheFrameLoop) {
+  const std::string ui = read_source_file("src/ui/ui_system.cpp");
+  const std::string refresh = source_slice(
+      ui, "void UISystem::refresh(", "void UISystem::process_viewport_input(");
+  expect_missing(refresh, "interface_scale");
+  expect_missing(refresh, "apply_interface_scale");
+  expect_missing(refresh, "apply_ui_scale_to_retained_surfaces");
+
+  const std::string settings_change = source_slice(
+      ui, "void UISystem::handle_settings_dialog_change(",
+      "void UISystem::apply_viewport_settings_to_workspace(");
+  expect_contains(settings_change, "QtSettingsChangeKind::InterfacePreview");
+  expect_contains(settings_change, "apply_interface_scale(");
+  expect_contains(settings_change, "apply_ui_scale_to_retained_surfaces(");
+}
+
+TEST(UiLayoutGuardrailTests,
+     PublicInterfaceScaleRuntimeHookHasOneConditionalPersistenceSite) {
+  const std::string ui = read_source_file("src/ui/ui_system.cpp");
+  const std::string set_interface_scale_hook = source_slice(
+      ui, ".set_interface_scale =", ".save =");
+  ASSERT_FALSE(set_interface_scale_hook.empty());
+  expect_contains(set_interface_scale_hook, "const bool changed =");
+  expect_contains(set_interface_scale_hook, "if (changed)");
+  EXPECT_EQ(count_occurrences(set_interface_scale_hook, "save_settings()"),
+            1u)
+      << "an effective public scale commit persists exactly once, while a "
+         "no-op bypasses the changed branch";
+}
+
+TEST(UiLayoutGuardrailTests,
+     DockContentMinimumWidthUsesTheAuthoredBaselineForEveryScaleRevision) {
+  const std::string ui = read_source_file("src/ui/ui_system.cpp");
+  const std::string create_dock = source_slice(
+      ui, "QDockWidget &UISystem::create_dock(",
+      "void UISystem::restore_window_state()");
+  const std::string apply_retained = source_slice(
+      ui, "void UISystem::apply_ui_scale_to_retained_surfaces(",
+      "void UISystem::apply_viewport_settings_to_workspace()");
+  const std::string refresh = source_slice(
+      ui, "void UISystem::refresh(", "void UISystem::process_viewport_input(");
+
+  expect_contains(ui, "constexpr int kDockContentMinimumWidth = 220");
+  expect_contains(
+      ui, "const int minimum_width = metrics.px(kDockContentMinimumWidth)");
+  expect_contains(ui, "content.setMinimumWidth(minimum_width)");
+  expect_contains(create_dock, "apply_dock_content_minimum_width(content,");
+  expect_contains(create_dock, "ui_scale_controller_->metrics()");
+  expect_contains(apply_retained,
+                  "apply_dock_content_minimum_width(*content, metrics)");
+  expect_missing(create_dock, "std::max(220, content.minimumWidth())");
+  expect_missing(refresh, "apply_dock_content_minimum_width");
 }

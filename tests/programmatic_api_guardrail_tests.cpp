@@ -1809,13 +1809,15 @@ TEST(ProgrammaticApiGuardrailTests,
       source_root() /
       "src/render/overlay/viewport_overlay_submission_coordinator.cpp");
   const std::size_t style_signature = coordinator.find(
-      "ViewportOverlayStyleResolver::style_signature(settings)");
+      "ViewportOverlayStyleResolver::style_signature(settings,");
   const std::size_t dynamic_gate =
       coordinator.find("if (dynamic_changed)", style_signature);
   ASSERT_NE(style_signature, std::string::npos);
   ASSERT_NE(dynamic_gate, std::string::npos);
   EXPECT_LT(style_signature, dynamic_gate);
   EXPECT_NE(coordinator.find(".style_signature = style_signature"),
+            std::string::npos);
+  EXPECT_NE(coordinator.find(".raster_scale = request.raster_scale"),
             std::string::npos);
 }
 

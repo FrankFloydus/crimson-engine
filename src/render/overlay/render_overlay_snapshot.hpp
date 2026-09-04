@@ -116,6 +116,8 @@ struct RenderOverlayInstanceSelectionWireRecord final {
   std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload;
   QMat4 world_transform;
   std::uint32_t wire_color = kOverlaySelectionWireColor;
+  /** Exact logical width used for stable batch identity across raster scale. */
+  float logical_wire_width_pixels = kOverlaySelectionWireLineWidthPixels;
   float wire_width_pixels = kOverlaySelectionWireLineWidthPixels;
   std::span<const MeshVertex> vertices;
   std::span<const std::uint32_t> indices;
@@ -155,6 +157,7 @@ struct RenderOverlayLightMarkerSnapshot {
  */
 struct RenderOverlaySelectedObjectSnapshot : RenderSourceStamp {
   ViewportPersistentOverlayStyleSnapshot style;
+  ViewportPersistentOverlayRasterGroupSet raster_groups;
   ViewportCameraClipPlanes clip_planes;
   bool visible = true;
   std::vector<RenderOverlayMeshSnapshot> meshes;
@@ -170,6 +173,7 @@ struct RenderOverlaySelectedObjectSnapshot : RenderSourceStamp {
  */
 struct RenderOverlaySceneWireframeSnapshot : RenderSourceStamp {
   ViewportPersistentOverlayStyleSnapshot style;
+  ViewportPersistentOverlayRasterGroupSet raster_groups;
   ViewportCameraClipPlanes clip_planes;
   std::uint8_t layer_mask = 0u;
   /** Whole-mesh selected wire is an Object-mode presentation only. */
@@ -243,7 +247,8 @@ public:
       RenderSceneBindingKey scene_binding = {},
       const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
       bool selected_mesh_wire_visible = true,
-      RenderInstanceEditScope instance_edit_scope = {});
+      RenderInstanceEditScope instance_edit_scope = {},
+      const ViewportPersistentOverlayRasterGroupSet &raster_groups = {});
   [[nodiscard]] const RenderOverlaySelectionSnapshot &selection_snapshot(
       const SceneDocument &document, const AssetRegistry &assets,
       RenderSceneBindingKey scene_binding = {},

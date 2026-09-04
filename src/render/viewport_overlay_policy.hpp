@@ -7,6 +7,7 @@
 #pragma once
 
 #include "render/viewport_overlay_frame.hpp"
+#include "viewport/viewport_pixel_scale.hpp"
 
 #include <array>
 #include <cstddef>
@@ -163,6 +164,11 @@ inline constexpr float kOverlayVertexSizePixels = 7.0f;
 inline constexpr float kOverlaySelectedVertexGrowthPixels = 0.5f;
 inline constexpr float kOverlayHoverVertexGrowthPixels = 0.5f;
 inline constexpr float kOverlayVertexOutlineSizePixels = 1.0f;
+inline constexpr float kViewportOverlayRasterScaleMinimum =
+    kViewportPixelScaleMinimum;
+inline constexpr float kViewportOverlayRasterScaleMaximum =
+    kViewportPixelScaleMaximum;
+float viewport_overlay_sanitized_raster_scale(float raster_scale);
 int viewport_overlay_draw_order(ViewportOverlayLayer layer);
 bool viewport_overlay_layer_uses_depth_stamped_face_fill(
     ViewportOverlayLayer layer);

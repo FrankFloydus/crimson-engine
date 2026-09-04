@@ -86,11 +86,7 @@ QtToolSettingsDragSpinner::QtToolSettingsDragSpinner(QWidget *parent)
   increase_button_->setFocusPolicy(Qt::NoFocus);
   increase_button_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
 
-  const int button_extent =
-      std::max(style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, this),
-               spin_box_->sizeHint().height());
-  decrease_button_->setFixedWidth(button_extent);
-  increase_button_->setFixedWidth(button_extent);
+  refresh_button_extents();
 
   auto *layout = new QHBoxLayout(this);
   layout->setContentsMargins(0, 0, 0, 0);
@@ -178,6 +174,10 @@ bool QtToolSettingsDragSpinner::is_editing() const { return editing_; }
 bool QtToolSettingsDragSpinner::is_dragging() const { return dragging_; }
 
 bool QtToolSettingsDragSpinner::event(QEvent *event) {
+  const bool scale_dependent_metrics_changed =
+      event->type() == QEvent::StyleChange ||
+      event->type() == QEvent::FontChange ||
+      event->type() == QEvent::ApplicationFontChange;
   const bool interaction_interrupted =
       event->type() == QEvent::Hide ||
       event->type() == QEvent::WindowDeactivate ||
@@ -191,7 +191,14 @@ bool QtToolSettingsDragSpinner::event(QEvent *event) {
       commit_editing();
     }
   }
-  return QWidget::event(event);
+  const bool handled = QWidget::event(event);
+  if (scale_dependent_metrics_changed) {
+    // The application scale controller updates the proxy style and derives the
+    // font from its immutable baseline before broadcasting StyleChange. Query
+    // those current values directly so 1 -> 2 -> 1 never compounds a width.
+    refresh_button_extents();
+  }
+  return handled;
 }
 
 bool QtToolSettingsDragSpinner::eventFilter(QObject *watched, QEvent *event) {
@@ -391,6 +398,20 @@ void QtToolSettingsDragSpinner::finish_drag() {
 void QtToolSettingsDragSpinner::apply_value(int next_value) {
   if (next_value != value()) {
     spin_box_->setValue(next_value);
+  }
+}
+
+void QtToolSettingsDragSpinner::refresh_button_extents() {
+  const int button_extent =
+      std::max(style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, this),
+               spin_box_->sizeHint().height());
+  if (decrease_button_->minimumWidth() != button_extent ||
+      decrease_button_->maximumWidth() != button_extent) {
+    decrease_button_->setFixedWidth(button_extent);
+  }
+  if (increase_button_->minimumWidth() != button_extent ||
+      increase_button_->maximumWidth() != button_extent) {
+    increase_button_->setFixedWidth(button_extent);
   }
 }
 

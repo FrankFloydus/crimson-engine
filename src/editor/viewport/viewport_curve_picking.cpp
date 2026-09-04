@@ -14,6 +14,7 @@
 #include "editor/placement/scene_surface_query.hpp"
 #include "math/glm_bridge.hpp"
 #include "viewport/viewport_camera_controller.hpp"
+#include "viewport/viewport_pixel_scale.hpp"
 
 #include <algorithm>
 #include <array>
@@ -198,12 +199,17 @@ std::optional<CurveControlTarget> ViewportCurveControlPickingAdapter::pick(
   if (camera_ == nullptr) {
     return std::nullopt;
   }
+  const float resolved_pixel_scale =
+      viewport_sanitized_pixel_scale(viewport_pixel_scale_);
+  const double radius_pixels =
+      9.0 * static_cast<double>(resolved_pixel_scale);
   const std::optional<ViewportCurveControlPickHit> hit =
       scene_surfaces_ != nullptr
           ? pick_unoccluded_viewport_curve_control(
-                *camera_, preview, mouse_local, *scene_surfaces_, anchors_only)
+                *camera_, preview, mouse_local, *scene_surfaces_, anchors_only,
+                radius_pixels)
           : pick_viewport_curve_control(*camera_, preview, mouse_local,
-                                        anchors_only);
+                                        anchors_only, radius_pixels);
   return hit.has_value()
              ? std::optional<CurveControlTarget>{hit->target}
              : std::nullopt;

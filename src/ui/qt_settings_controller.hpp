@@ -9,6 +9,7 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <functional>
+#include <optional>
 #include <string_view>
 
 namespace quader {
@@ -20,8 +21,15 @@ class UISettings;
 enum class QtSettingsChangeKind {
   ViewportPreview,
   ViewportCommit,
+  InterfacePreview,
   InterfaceCommit,
   KeybindingsCommit,
+};
+
+/// Carries one Settings mutation phase and any value needed for live apply.
+struct QtSettingsChange final {
+  QtSettingsChangeKind kind = QtSettingsChangeKind::ViewportPreview;
+  std::optional<float> interface_scale;
 };
 
 /**
@@ -30,7 +38,7 @@ enum class QtSettingsChangeKind {
  */
 class QtSettingsController final {
 public:
-  using ChangeCallback = std::function<void(QtSettingsChangeKind)>;
+  using ChangeCallback = std::function<void(const QtSettingsChange &)>;
 
   void bind(UISettings &ui_settings, ViewportSettings &viewport_settings,
             LocalizationService &localization, ChangeCallback callback);
@@ -42,10 +50,11 @@ public:
                     ViewportSettingColor initial_value);
   bool set_float(ViewportFloatSettingId id, float value);
   bool set_bool(ViewportBoolSettingId id, bool value);
+  bool preview_interface_scale(float scale);
   bool select_locale(std::string_view locale_id);
 
 private:
-  void notify(QtSettingsChangeKind kind) const;
+  void notify(QtSettingsChange change) const;
 
   UISettings *ui_settings_ = nullptr;
   ViewportSettings *viewport_settings_ = nullptr;

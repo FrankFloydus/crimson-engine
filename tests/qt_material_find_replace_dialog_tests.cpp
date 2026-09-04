@@ -12,6 +12,7 @@
 #include <QCoreApplication>
 #include <QDialog>
 #include <QLabel>
+#include <QPixmap>
 #include <QPushButton>
 
 #include <optional>
@@ -163,6 +164,25 @@ TEST(QtMaterialFindReplaceDialogTests,
   EXPECT_EQ(replacement_name->toolTip(), QStringLiteral("Painted Steel"));
   EXPECT_TRUE(dialog->replace_available());
   EXPECT_TRUE(replace_button->isEnabled());
+
+  const qint64 unscaled_preview_key = replacement_preview->pixmap().cacheKey();
+  dialog->apply_ui_scale(QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(find_preview->size(), QSize(256, 256));
+  EXPECT_EQ(replacement_preview->size(), QSize(256, 256));
+  EXPECT_EQ(find_name->minimumWidth(), 256);
+  EXPECT_EQ(find_name->maximumWidth(), 256);
+  EXPECT_NE(replacement_preview->pixmap().cacheKey(), unscaled_preview_key);
+  EXPECT_EQ(replacement_preview->pixmap().deviceIndependentSize(),
+            QSizeF(256.0, 256.0));
+  const qint64 scaled_preview_key = replacement_preview->pixmap().cacheKey();
+  dialog->apply_ui_scale(QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(replacement_preview->pixmap().cacheKey(), scaled_preview_key)
+      << "one scale revision must not rebuild a retained preview twice";
+  dialog->apply_ui_scale(QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(find_preview->size(), QSize(128, 128));
+  EXPECT_EQ(replacement_name->minimumWidth(), 128);
+  EXPECT_EQ(replacement_preview->pixmap().deviceIndependentSize(),
+            QSizeF(128.0, 128.0));
 
   QtMaterialPresentationItem deleted_replacement = replacement_item;
   deleted_replacement.name = QStringLiteral("Missing replacement");
