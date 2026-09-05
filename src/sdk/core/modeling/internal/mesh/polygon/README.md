@@ -8,32 +8,25 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Polygon Document Package
 
-Canonical Quader polygon document model and operations.
+Canonical polygon document and operation implementation, compiled by both
+`quader_modeling_polygon` and `quader_modeling_sdk_polygon`. The `quader_poly` declarations live
+under `neutral/include/quader/modeling/neutral/polygon`; the public SDK facade uses
+`quader::modeling`.
 
-This package is the single implementation source for both `quader_modeling_polygon` and
-`quader_modeling_sdk_polygon`. It keeps the legacy-compatible `quader_poly` namespace/API behind
-the public SDK facade while the native host finishes adapting to SDK-owned modeling truth.
-
-Owns:
-
-- objects and polygon mesh documents;
-- vertices, edges, faces, and stable component IDs;
-- material slots and material references;
-- generated UV metadata and explicit loop UV overrides;
-- texture-lock state;
-- document snapshots and patches;
-- deterministic polygon operations and topology helpers;
-- document-local picking geometry and primitive overlay/preview data.
+Owns topology and stable component IDs, material slots, generated/explicit UVs and texture
+transforms, document snapshots/patches, operations, and document-local picking geometry.
 
 ## Internal Decomposition
 
-Both polygon targets are built from the same focused `.cpp` source list. Shared declarations and
-helper types live in private headers in this package.
+Both targets use `QUADER_CANONICAL_POLYGON_SOURCES` in root `cmake/QuaderModeling.cmake`.
+Helper declarations are under the neutral polygon `internal/` include directory, not beside
+these implementation files.
 
 Current owner slices:
 
 - `quader_poly_document_model_api.cpp`: public value helpers, vector math, and edge factor helpers.
 - `quader_poly_document_storage_api.cpp`: public document storage and lookup helpers.
+- `quader_poly_document_liveness.cpp` and `document_validation.cpp`: live component identity and validation.
 - `quader_poly_document_primitives.cpp`: primitive document construction.
 - `quader_poly_document_mesh_api.cpp`: public face-normal and mesh compilation API.
 - `quader_poly_document_mesh_internal.cpp`: private triangulation, generated-UV basis, and mesh/UV helpers.
@@ -44,5 +37,10 @@ Current owner slices:
 - `quader_poly_document_*_helpers.cpp`: private topology, hull, OpenMesh, knife, UV, picking, bridge,
   bevel, dissolve, copy, and surface-operation helpers.
 
-Future slices should keep adding normal `.cpp` files plus narrow internal headers. Do not add new
-permanent `.inc` implementation shards.
+Keep backend-neutral topology query/mutation declarations in
+`quader_poly_document_topology_backend.hpp`; OpenMesh implementation types stay in
+`quader_poly_document_openmesh_helpers.cpp`. OpenMesh-named shims support focused backend tests.
+
+Use normal `.cpp` files and narrow helper headers; do not add permanent `.inc` implementation
+shards. Document overlay APIs emit primitive geometry only. Semantic host projection belongs in
+`src/editor`; styling, layers, draw policy, and render resources belong in `src/render`.

@@ -23,6 +23,14 @@ enum class PolygonDocumentDiagnosticSeverity {
   Error,
 };
 
+/// Separates geometric diagnostics from lossless storage of editable topology.
+enum class PolygonDocumentValidationPolicy {
+  Strict,
+  // Coincident positions and untriangulatable faces remain authored geometry.
+  // Connectivity, face arity and attribute errors remain fatal.
+  AuthoredTopology,
+};
+
 /**
  * Enumerates polygon document validation diagnostic codes.
  */
@@ -63,6 +71,8 @@ struct PolygonDocumentValidationReport {
     [[nodiscard]] bool ok() const;
 };
 
-[[nodiscard]] PolygonDocumentValidationReport validate_polygon_document(const Document& document);
+[[nodiscard]] PolygonDocumentValidationReport validate_polygon_document(
+    const Document& document,
+    PolygonDocumentValidationPolicy policy = PolygonDocumentValidationPolicy::Strict);
 
 } // namespace quader_poly

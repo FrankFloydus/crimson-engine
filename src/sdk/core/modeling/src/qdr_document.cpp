@@ -593,7 +593,8 @@ void validate_polygon_document(const quader_poly::Document &document,
   };
 
   const quader_poly::PolygonDocumentValidationReport report =
-      quader_poly::validate_polygon_document(document);
+      quader_poly::validate_polygon_document(
+          document, quader_poly::PolygonDocumentValidationPolicy::AuthoredTopology);
   if (!report.ok()) {
     const auto issue = std::find_if(
         report.diagnostics.begin(), report.diagnostics.end(),

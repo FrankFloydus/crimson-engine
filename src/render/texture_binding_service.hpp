@@ -14,6 +14,7 @@
 #include "render/scene_render_extraction.hpp"
 
 #include <filament/Engine.h>
+#include <filament/MaterialInstance.h>
 #include <filament/Texture.h>
 
 #include <cstddef>
@@ -21,6 +22,7 @@
 #include <filesystem>
 #include <functional>
 #include <unordered_map>
+#include <vector>
 
 namespace quader {
 
@@ -62,13 +64,30 @@ public:
       return fallback_normal_texture_;
     }
 
-    filament::Texture *resolve_texture(const AssetRegistry &assets,
+    // Every non-fallback texture is pinned by the material instance that uses it.
+    // Release only after destroying that instance, including detached previews.
+    filament::Texture *resolve_texture(const filament::MaterialInstance &consumer,
+                                       const AssetRegistry &assets,
                                        const MaterialDocument *material,
                                        const char *slot_name,
                                        filament::Texture *fallback);
-    filament::Texture *resolve_texture(const RenderMaterialAssetSnapshot *material,
+    filament::Texture *resolve_texture(const filament::MaterialInstance &consumer,
+                                       const RenderMaterialAssetSnapshot *material,
                                        const char *slot_name,
                                        filament::Texture *fallback);
+
+    void retain_material_textures(const filament::MaterialInstance &source,
+                                  const filament::MaterialInstance &duplicate);
+    void release_material_textures(const filament::MaterialInstance *consumer);
+
+    /// Reports image allocations and material pins; permanent fallbacks excluded.
+    struct CacheStats final {
+      std::size_t resource_count = 0u;
+      std::size_t material_consumer_count = 0u;
+      std::uint64_t upload_count = 0u;
+      std::uint64_t destroy_count = 0u;
+    };
+    [[nodiscard]] CacheStats cache_stats() const;
 
   private:
     /**
@@ -113,6 +132,14 @@ public:
         }
     };
 
+    /// Keeps an image alive through its final live or retired material instance.
+    struct TextureCacheEntry final {
+      filament::Texture *texture = nullptr;
+      std::size_t consumer_count = 0u;
+    };
+    void retain_texture(const filament::MaterialInstance &consumer,
+                        const TextureCacheKey &key);
+
     filament::Texture *load_texture_asset(const TextureAsset &texture);
     filament::Texture *load_project_texture_asset(
         const RenderTextureAssetSnapshot &texture);
@@ -123,9 +150,13 @@ public:
 
     filament::Engine* engine_ = nullptr;
     std::filesystem::path resource_root_;
-    std::unordered_map<TextureCacheKey, filament::Texture *,
+    std::unordered_map<TextureCacheKey, TextureCacheEntry,
                        TextureCacheKeyHash>
         texture_cache_;
+    std::unordered_map<const filament::MaterialInstance *,
+                       std::vector<TextureCacheKey>> material_textures_;
+    std::uint64_t upload_count_ = 0u;
+    std::uint64_t destroy_count_ = 0u;
     RenderSceneBindingKey scene_binding_;
     filament::Texture *fallback_albedo_texture_ = nullptr;
     filament::Texture *fallback_roughness_texture_ = nullptr;

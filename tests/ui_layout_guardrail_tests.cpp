@@ -1333,11 +1333,13 @@ TEST(UiLayoutGuardrailTests,
 
   expect_contains(settings, "QListWidget::currentRowChanged");
   expect_contains(settings, "page_stack->setCurrentIndex(row)");
-  expect_contains(settings, "interface_category_item->setData(");
-  expect_contains(settings, "category_item->setData(");
+  expect_contains(settings, "OptionsPageWidgets create_category(");
+  expect_contains(settings, "item->setData(Qt::UserRole");
   expect_contains(settings, "Qt::UserRole");
-  expect_contains(settings, "create_options_page(\"interface\")");
-  expect_contains(settings, "create_viewport_section(descriptor)");
+  expect_contains(settings, "create_options_page(stable_id)");
+  expect_contains(settings, "create_viewport_section(*page, descriptor)");
+  expect_contains(settings, "new QGroupBox(page.content)");
+  expect_contains(settings, "QFormLayout::WrapLongRows");
 
   expect_contains(settings, "#include \"ui/qt_color_swatch_button.hpp\"");
   expect_contains(settings, "new QtColorSwatchButton(");
@@ -4002,7 +4004,8 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_system, "!standard_material_editor_window_");
   expect_contains(ui_system, "->isMinimized()");
   expect_contains(ui_system, "material_preview_surface_->needs_rendering()");
-  expect_contains(surface, "if (!render_pending_)");
+  expect_contains(surface,
+                  "if (!render_pending_ && !swap_chain_.needs_initial_frame())");
   expect_contains(surface, "render_pending_ = false");
   expect_contains(surface, "mark_render_pending()");
 
@@ -4310,7 +4313,7 @@ TEST(UiLayoutGuardrailTests,
      PublicInterfaceScaleRuntimeHookHasOneConditionalPersistenceSite) {
   const std::string ui = read_source_file("src/ui/ui_system.cpp");
   const std::string set_interface_scale_hook = source_slice(
-      ui, ".set_interface_scale =", ".save =");
+      ui, ".set_interface_scale =", ".vsync_enabled =");
   ASSERT_FALSE(set_interface_scale_hook.empty());
   expect_contains(set_interface_scale_hook, "const bool changed =");
   expect_contains(set_interface_scale_hook, "if (changed)");
@@ -4318,6 +4321,20 @@ TEST(UiLayoutGuardrailTests,
             1u)
       << "an effective public scale commit persists exactly once, while a "
          "no-op bypasses the changed branch";
+}
+
+TEST(UiLayoutGuardrailTests, VsyncChangesAreAppliedOutsideRetainedFrameRefresh) {
+  const std::string ui = read_source_file("src/ui/ui_system.cpp");
+  const std::string hook =
+      source_slice(ui, ".set_vsync_enabled =", ".session_settings =");
+  const std::string refresh = source_slice(
+      ui, "void UISystem::refresh(", "void UISystem::process_viewport_input(");
+  expect_contains(hook, "if (changed)");
+  EXPECT_EQ(count_occurrences(hook, "save_settings()"), 1u);
+  expect_missing(refresh, "set_vsync_enabled(");
+  expect_missing(refresh, "settings_dialog_->refresh()");
+  expect_contains(ui, "QtSettingsChangeKind::RenderingPreview");
+  expect_contains(ui, "QtSettingsChangeKind::RenderingCommit");
 }
 
 TEST(UiLayoutGuardrailTests,

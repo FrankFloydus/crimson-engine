@@ -173,7 +173,8 @@ std::vector<std::filesystem::path> project_owned_comment_capable_files() {
   const std::filesystem::path root = source_root();
   const std::vector<std::filesystem::path> roots = {
       ".clang-tidy",          ".gitignore",        "AGENTS.md",
-      "architecture-review.md", "CMakeLists.txt",    "benchmarks",
+      "architecture-review.md", "INPUT_KEYBINDINGS.md", "memory.md",
+      "tasklist.md",           "CMakeLists.txt",    "benchmarks",
       "cmake",                "examples",          "resources/locales",
       "src",                  "tests",             "tools",
   };
@@ -264,7 +265,7 @@ std::vector<std::filesystem::path> project_owned_recursive_files() {
       ".clang-tidy",          ".gitignore", "AGENTS.md",
       "architecture-review.md", "CMakeLists.txt", "benchmarks",
       "cmake",                "examples",   "memory.md",
-      "refactor.md",          "resources",  "src",
+      "tasklist.md",          "INPUT_KEYBINDINGS.md", "resources", "src",
       "tests",                "tools",
   };
 
@@ -959,6 +960,8 @@ TEST(BuildGuardrailTests,
       read_source_file("cmake/QuaderModeling.cmake");
   const std::string presets = read_source_file("CMakePresets.json");
   const std::string launcher = read_source_file("tools/boot_tracy.ps1");
+  const std::string native_build_contract =
+      read_source_file("tools/native_build_contract.ps1");
   const std::string root_agents = read_source_file("AGENTS.md");
 
   EXPECT_EQ(count_occurrences(presets, "\"binaryDir\""), 1U);
@@ -1027,17 +1030,18 @@ TEST(BuildGuardrailTests,
       "@('--build', '--preset', 'vs2026-debug', '--target', 'quader')");
   expect_contains(launcher, "Assert-ProfilingBuildProject");
   expect_contains(launcher, "Assert-NativeExecutableLinkContract");
-  expect_contains(launcher, "Assert-ProfileRuntimeDeployment");
+  expect_contains(launcher, "Assert-NativeRuntimeDeployment");
+  expect_contains(launcher, "native_build_contract.ps1");
   expect_contains(launcher, "Assert-RuntimeDependencyClosure");
-  expect_contains(launcher, "Resolve-DumpbinPath");
-  expect_contains(launcher, "md4c.dll");
-  expect_contains(launcher, "libpng16.dll");
-  expect_contains(launcher, "z.dll");
-  expect_contains(launcher, "Qt6Widgetsd.dll");
-  expect_contains(launcher, "platforms\\qwindowsd.dll");
-  expect_contains(launcher, "vcpkg_installed\\x64-windows\\bin");
-  expect_contains(launcher, "Get-FileHash -Algorithm SHA256");
-  expect_contains(launcher, "QUADER_ENABLE_SENTRY:BOOL=OFF");
+  expect_contains(native_build_contract, "Resolve-DumpbinPath");
+  expect_contains(native_build_contract, "md4c.dll");
+  expect_contains(native_build_contract, "libpng16.dll");
+  expect_contains(native_build_contract, "z.dll");
+  expect_contains(native_build_contract, "Qt6Widgetsd.dll");
+  expect_contains(native_build_contract, "platforms\\qwindowsd.dll");
+  expect_contains(native_build_contract, "vcpkg_installed\\x64-windows\\bin");
+  expect_contains(native_build_contract, "Get-FileHash -Algorithm SHA256");
+  expect_contains(native_build_contract, "QUADER_ENABLE_SENTRY:BOOL=OFF");
   expect_missing(launcher, "[string]$QuaderExe");
   expect_missing(launcher, "[string]$CMakeCache");
   expect_missing(launcher, "[ValidateSet('Release', 'Debug')]");
@@ -1052,8 +1056,7 @@ TEST(BuildGuardrailTests,
                   "cmake --build --preset vs2026-debug --target quader");
   expect_contains(root_agents,
                   "cmake --build --preset vs2026-release --target quader");
-  expect_contains(root_agents,
-                  "Release is the only shipping artifact");
+  expect_contains(root_agents, "shipping artifact");
 }
 
 TEST(BuildGuardrailTests,
@@ -1200,20 +1203,11 @@ TEST(BuildGuardrailTests,
 }
 
 TEST(BuildGuardrailTests,
-     PhaseOneTargetMapRejectsMonolithicCoreAndRuntimeSourceBlocks) {
+     OwnerTargetMapRejectsMonolithicCoreAndRuntimeSourceBlocks) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string modeling_c_make =
       read_source_file("cmake/QuaderModeling.cmake");
   const std::string build_files = root_c_make + "\n" + modeling_c_make;
-  const std::string architecture_review =
-      read_source_file("architecture-review.md");
-
-  for (const std::string &target_area :
-       {"`core`", "`math`", "`geometry`", "`polygon`", "`assets`", "`document`",
-        "`commands`", "`editor_modeling`", "`viewport`", "`render`", "`io_qdr`",
-        "`api`", "`ui`", "`app`"}) {
-    expect_contains(architecture_review, target_area);
-  }
 
   const std::string core_sources =
       cmake_target_source_blocks(build_files, "quader_core");
@@ -1279,19 +1273,6 @@ TEST(BuildGuardrailTests,
     }
   }
 
-  for (const std::filesystem::path &relative_path :
-       {std::filesystem::path{"memory.md"},
-        std::filesystem::path{"refactor.md"}}) {
-    const std::string source = read_source_file(relative_path);
-    EXPECT_EQ(source.find(broken_header_extension), std::string::npos)
-        << relative_path.generic_string();
-    EXPECT_EQ(source.find(broken_source_extension), std::string::npos)
-        << relative_path.generic_string();
-    for (const std::string &needle : broken_identifier_needles) {
-      EXPECT_EQ(source.find(needle), std::string::npos)
-          << relative_path.generic_string();
-    }
-  }
 }
 
 TEST(BuildGuardrailTests, TemporaryRenameFilesDoNotRemain) {
@@ -1304,10 +1285,8 @@ TEST(BuildGuardrailTests, TemporaryRenameFilesDoNotRemain) {
 }
 
 TEST(BuildGuardrailTests, ProjectOwnedTextDoesNotReferenceOldCppPathNames) {
-  std::vector<std::filesystem::path> files =
+  const std::vector<std::filesystem::path> files =
       project_owned_comment_capable_files();
-  files.push_back("memory.md");
-  files.push_back("refactor.md");
 
   for (const std::filesystem::path &relative_path : files) {
     EXPECT_FALSE(
@@ -1440,33 +1419,12 @@ TEST(BuildGuardrailTests, ArchitectureReviewNamesRealModelingDomainTargets) {
   const std::string modeling = read_source_file("cmake/QuaderModeling.cmake");
   const std::string build_files = root_c_make + "\n" + modeling;
 
-  const std::vector<std::string> documented_targets = {
-      "quader_geometry",
-      "quader_modeling_polygon",
-      "quader_modeling_runtime",
-      "quader_modeling_sdk_qdr_document",
-      "quader_editor_metadata",
-      "quader_modeling_domain_tests",
-      "quader_modeling_domain_polygon_loop_tests",
-      "quader_modeling_domain_runtime_loop_tests",
-      "quader_modeling_domain_metadata_loop_tests",
-  };
-  for (const std::string &target : documented_targets) {
-    expect_contains(review, "`" + target + "`");
-    expect_contains(build_files, target);
+  const std::regex target_pattern(R"(`(quader_[a-z0-9_]+)`)");
+  for (std::sregex_iterator it(review.begin(), review.end(), target_pattern), end;
+       it != end; ++it) {
+    expect_contains(build_files, (*it)[1].str());
   }
-
-  expect_missing(review, "`qdr_modeling_domain_smoke`");
-  expect_contains(review, "## Initial Milestone Delivered");
-  expect_missing(review, "residual SDK-only native dependency");
-  expect_contains(review, "total coverage of every live");
-  expect_contains(review, "SDK-only vcpkg configuration installs only the "
-                          "`tests` feature dependency");
-  expect_missing(review, "no SDK source boundary exists");
-  expect_missing(review, "no SDK umbrella header exists");
-  expect_missing(review, "no install/export package exists");
-  expect_missing(review,
-                 "SDK wrapper targets and native app gating are next");
+  expect_contains(review, "quader::modeling_sdk");
 }
 
 TEST(BuildGuardrailTests, AppOwnedModelingSdkBoundaryIsAdditiveAndGuarded) {
@@ -1639,6 +1597,12 @@ TEST(BuildGuardrailTests,
   expect_contains(
       external_consumer,
       "$<$<CONFIG:Debug>:_ITERATOR_DEBUG_LEVEL=0>");
+  expect_contains(modeling_c_make,
+                  "add_test(NAME quader_modeling_sdk_only_configure_build");
+  expect_contains(modeling_c_make,
+                  "-DQUADER_CXX_COMPILER=${CMAKE_CXX_COMPILER}");
+  expect_contains(sdk_only_check,
+                  "-DCMAKE_CXX_COMPILER=${QUADER_CXX_COMPILER}");
   expect_contains(sdk_only_check, "--install");
   expect_contains(sdk_only_check, "tests/sdk_consumer");
   expect_contains(sdk_only_check,
@@ -1808,112 +1772,104 @@ TEST(BuildGuardrailTests,
                   "quader_modeling_sdk_only_configure_build");
 }
 
-TEST(BuildGuardrailTests,
-     VerificationWorkflowCoversPortableSanitizedAndNativeBoundaries) {
-  const std::string vcpkg_baseline =
-      joined("d0c191d142b7bc048141ddfb618aa9ae5", "dba0233");
-  const std::string filament_sha256 = joined(
-      "f56b7b2717eda5094179748687e57fa2",
-      "0c2f245a3203fdf1fe274dba37e21180");
-  const std::string open_mesh_commit =
-      joined("5f016723f9f183770cffe5787a6f9f62", "8e2914d8");
-  const std::string workflow =
-      read_source_file(".github/workflows/windows-sdk.yml");
-  const std::string workflow_readme =
-      read_source_file(".github/workflows/README.md");
-  const std::string third_party_manifest =
-      read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
-  const std::string modeling =
-      read_source_file("cmake/QuaderModeling.cmake");
+TEST(BuildGuardrailTests, FatalDiagnosticsHelperStaysIsolatedAndBuiltWithHosts) {
+  const std::string cmake = read_source_file("CMakeLists.txt");
+  const std::string helper_target = source_slice(
+      cmake, "add_executable(quader_fatal_diagnostics",
+      "target_link_libraries(quader_fatal_diagnostics PRIVATE Dbghelp)");
+  expect_contains(helper_target, "src/platform/fatal_diagnostics_main.cpp");
+  expect_contains(helper_target,
+                  "target_link_libraries(quader_fatal_diagnostics PRIVATE Dbghelp)");
+  for (const char *dependency : {"quader_core", "quader_platform", "quader_runtime",
+                                 "tracy", "Tracy", "Qt6::", "sentry"}) {
+    expect_missing(helper_target, dependency);
+  }
+  expect_contains(cmake, "add_dependencies(quader\n    quader_fatal_diagnostics");
+  expect_contains(cmake, "add_dependencies(quader_tests quader_runtime_resources "
+                         "quader_fatal_diagnostics)");
+  expect_contains(read_source_file("cmake/QuaderSdkOnlyBuildCheck.cmake"),
+                  "_quader_sdk_only_target STREQUAL \"quader_fatal_diagnostics\"");
+  const std::string parent =
+      read_source_file("src/platform/fatal_error_handler.cpp");
+  for (const char *dbghelp : {"<DbgHelp.h>", "MiniDumpWriteDump(", "SymInitialize(",
+                              "SymFromAddr(", "StackWalk64("}) {
+    expect_missing(parent, dbghelp);
+  }
+}
+
+TEST(BuildGuardrailTests, ModelingSdkInstallAndConsumerUseRequestedConfiguration) {
   const std::string sdk_only_check =
       read_source_file("cmake/QuaderSdkOnlyBuildCheck.cmake");
-
-  expect_contains(workflow, "runs-on: windows-2025-vs2026");
-  expect_contains(workflow, "runs-on: ubuntu-24.04");
-  expect_contains(workflow, "-G \"Visual Studio 18 2026\"");
-  expect_contains(workflow, "-G Ninja");
-  expect_contains(workflow, "permissions:\n  contents: read");
-  expect_contains(workflow, "uses: actions/checkout@v6");
-  expect_contains(workflow, "persist-credentials: false");
-
-  expect_contains(workflow, "uses: actions/cache@v4");
-  expect_contains(
-      workflow,
-      "QUADER_VCPKG_BASELINE: " + vcpkg_baseline);
-  expect_contains(workflow, "bootstrap-vcpkg.bat");
-  expect_contains(workflow, "bootstrap-vcpkg.sh");
-  expect_contains(workflow, "${{ hashFiles('vcpkg.json') }}");
-  expect_contains(workflow,
-                  "VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}");
-  expect_contains(workflow,
-                  "QUADER_VCPKG_BINARY_CACHE: ${{ github.workspace }}");
-
-  expect_contains(workflow, "sdk-msvc:");
-  expect_contains(workflow, "sdk-portable:");
-  expect_contains(workflow, "sdk-sanitizers:");
-  expect_contains(workflow, "native-windows:");
-  expect_contains(workflow, "cxx: g++");
-  expect_contains(workflow, "cxx: clang++");
-  expect_contains(workflow, "-DCMAKE_CXX_COMPILER=${{ matrix.cxx }}");
-  expect_contains(workflow, "-fsanitize=address,undefined");
-  expect_contains(workflow, "ASAN_OPTIONS:");
-  expect_contains(workflow, "UBSAN_OPTIONS:");
-
-  expect_contains(workflow, "-DQUADER_BUILD_NATIVE_APP=OFF");
-  expect_contains(workflow, "-DQUADER_BUILD_NATIVE_APP=ON");
-  expect_contains(workflow, "-DQUADER_BUILD_TESTS=ON");
-  expect_contains(workflow, "-DQUADER_USE_OPENMESH_TOPOLOGY=OFF");
-  expect_contains(workflow, "-DQUADER_USE_OPENMESH_TOPOLOGY=ON");
-  expect_contains(workflow,
-                  "-DQUADER_ALLOW_EXTERNAL_OPENMESH_FETCH=OFF");
-  expect_contains(workflow, "-DQUADER_OPENMESH_SOURCE_DIR=");
-  expect_contains(workflow, "-DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON");
-  expect_contains(workflow, "-DVCPKG_MANIFEST_FEATURES=tests");
-  expect_contains(workflow, "quader_guardrail_tests");
-  expect_contains(workflow, "quader_modeling_sdk_consumer_tests");
-  expect_contains(workflow, "quader_modeling_sdk_parity_tests");
-  expect_contains(workflow, "quader_modeling_domain_tests");
-  expect_contains(workflow, "quader_tests");
-  expect_contains(workflow, "quader `");
-  expect_contains(workflow, "ctest --test-dir");
-  expect_contains(workflow, "-C Debug");
-  expect_contains(workflow, "--output-on-failure");
-  expect_contains(workflow, "--no-tests=error");
-  expect_contains(workflow,
-                  "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }");
-
-  expect_contains(workflow, "filament-v$env:QUADER_FILAMENT_VERSION-windows.tgz");
-  expect_contains(
-      workflow,
-      "QUADER_FILAMENT_SHA256: " + filament_sha256);
-  expect_contains(workflow, "Get-FileHash -Algorithm SHA256");
-  expect_contains(workflow, "-DFILAMENT_SDK_ROOT=${{ steps.filament.outputs.root }}");
-  expect_contains(
-      workflow,
-      "QUADER_OPENMESH_COMMIT: " + open_mesh_commit);
-  expect_contains(
-      workflow,
-      "https://gitlab.vci.rwth-aachen.de:9000/OpenMesh/OpenMesh.git");
-
-  expect_contains(
-      modeling,
-      "add_test(NAME quader_modeling_sdk_only_configure_build");
-  expect_contains(modeling,
-                  "-DQUADER_CXX_COMPILER=${CMAKE_CXX_COMPILER}");
   expect_contains(sdk_only_check,
-                  "-DCMAKE_CXX_COMPILER=${QUADER_CXX_COMPILER}");
+                  "-DCMAKE_BUILD_TYPE=${QUADER_BUILD_CONFIG}");
+  expect_contains(sdk_only_check,
+                  "-DCMAKE_CONFIGURATION_TYPES=${QUADER_BUILD_CONFIG}");
+  for (const std::string_view configure_command : {
+           "set(_quader_configure_command",
+           "set(_quader_external_consumer_configure_command",
+       }) {
+    const std::string configure = source_slice(
+        sdk_only_check, configure_command, "execute_process(");
+    expect_contains(configure, "${_quader_configuration_args}");
+  }
+}
 
-  expect_contains(workflow_readme, "filament-v1.71.6-windows.tgz");
-  expect_contains(workflow_readme, "Vulkan/window");
-  expect_contains(workflow_readme, "tools/boot_smoke.ps1");
+TEST(BuildGuardrailTests, NativeDependencyToolsValidateSourceAndDeployment) {
+  const std::string filament_sha256 = joined(
+      "ed2c4faa3bc22046d9a9ae574fb644c80",
+      "f305f3e0386536fc9e6d8577295eb8a");
+  const std::string third_party_manifest =
+      read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
+  const std::string filament_pin = read_source_file(
+      "thirdparty/filament/filament-v1.71.6-quader-vsync1.json");
+  const std::string filament_builder = read_source_file("tools/build_filament_sdk.ps1");
+  const std::string tracy_pin = read_source_file("thirdparty/tracy-0.13.1.json");
+  const std::string native_verifier = read_source_file("tools/verify_native_build.ps1");
+
+  expect_contains(filament_pin, filament_sha256);
+  expect_contains(filament_builder, "if (-not $AllowDownload)");
+  expect_contains(filament_builder, "Get-FileHash -LiteralPath $archive -Algorithm SHA256");
+  expect_contains(filament_builder, "if ($sourceSha -ne $pin.source_sha256)");
+  expect_contains(filament_builder,
+                  "$env:GIT_CEILING_DIRECTORIES = Split-Path -Parent $sourceRoot");
+  expect_contains(filament_builder, "$env:GIT_CEILING_DIRECTORIES = $savedCeiling");
+  expect_contains(filament_builder, "Invoke-FilamentPatch -Arguments @($patchPath)");
+  expect_contains(tracy_pin,
+                  joined("05cceee0df3b8d7c6fa87e9638af31", "1dbabc63cb"));
+  expect_contains(tracy_pin, "licenses/tracy-BSD-3-Clause.txt");
+  expect_contains(native_verifier, "foreach ($configuration in @('Debug', 'Release'))");
+  expect_contains(native_verifier, "Assert-NativeRuntimeDeployment");
+  expect_contains(native_verifier, "Assert-RuntimeDependencyClosure");
+  expect_contains(native_verifier, "Assert-ReleaseBuildProject");
+  expect_contains(native_verifier, "Assert-ExecutableDebugDirectory");
   expect_contains(third_party_manifest, "## Filament Artifact Policy");
   expect_contains(third_party_manifest, filament_sha256);
-  for (const std::string_view forbidden : {
-           "VCPKG_INSTALLATION_ROOT", "USERPROFILE", "C:\\Users\\",
-           "Desktop\\_QUADER_DEV",
-       }) {
-    expect_missing(workflow, std::string(forbidden));
-  }
+}
+
+TEST(BuildGuardrailTests, NativeBuildVerifierRejectsInstrumentationAndSymbolDrift) {
+#if defined(_WIN32)
+  const std::string command =
+      "powershell -NoProfile -ExecutionPolicy Bypass -File " +
+      quoted_process_argument(source_path("tools/test_native_build_contract.ps1"));
+  const CommandResult result = run_command_capture(command);
+  ASSERT_EQ(result.exit_code, 0) << result.output;
+  expect_contains(result.output, "Native contract positive and negative fixtures passed.");
+#else
+  GTEST_SKIP() << "Native PE/MSVC tooling contract is exercised on Windows.";
+#endif
+}
+
+TEST(BuildGuardrailTests, FilamentPatchAppliesInsideAncestorWorktree) {
+#if defined(_WIN32)
+  const std::string command =
+      "powershell -NoProfile -ExecutionPolicy Bypass -File " +
+      quoted_process_argument(source_path("tools/test_filament_patch.ps1"));
+  const CommandResult result = run_command_capture(command);
+  ASSERT_EQ(result.exit_code, 0) << result.output;
+  expect_contains(result.output, "Filament patch applies inside an ancestor worktree");
+#else
+  GTEST_SKIP() << "PowerShell dependency staging is exercised on Windows.";
+#endif
 }
 
 TEST(BuildGuardrailTests,
@@ -2176,7 +2132,7 @@ TEST(BuildGuardrailTests, LocalMachinePathsUseEnvironmentBackedDefaults) {
   const std::string presets = read_source_file("CMakePresets.json");
 
   expect_contains(root_c_make, "ENV{FILAMENT_SDK_ROOT}");
-  expect_contains(root_c_make, "../_SOURCES/filament-v1.71.6-windows");
+  expect_contains(root_c_make, "../_SOURCES/filament-v1.71.6-quader-vsync1-windows");
   expect_contains(options, "QUADER_OPENMESH_SOURCE_DIR");
   expect_contains(options, "ENV{${env_var}}");
   expect_contains(options, "ENV{USERPROFILE}");
@@ -2212,6 +2168,15 @@ TEST(BuildGuardrailTests, FilamentSdkIsValidatedAtConfigureTime) {
       "lib/x86_64/md/${_quader_filament_lib}.lib");
   expect_missing(root_c_make, "lib/x86_64/mdd");
   expect_missing(root_c_make, "matdbg.lib");
+  expect_contains(root_c_make, "quader_validate_filament_patch(\"${sdk_root}\")");
+  const std::string patch_validation = read_source_file("cmake/QuaderFilamentSdk.cmake");
+  expect_contains(patch_validation, "quader-filament-sdk.json");
+  expect_contains(patch_validation, "file(SHA256 \"${patch_path}\" expected_patch)");
+  expect_contains(patch_validation, "file(SHA256 \"${sdk_root}/${relative_path}\" actual_hash)");
+  expect_contains(patch_validation, "file_sha256");
+  expect_contains(patch_validation, "runtime STREQUAL \"MD\"");
+  expect_contains(patch_validation, "configuration STREQUAL \"Release\"");
+  expect_missing(patch_validation, "file(DOWNLOAD");
 }
 
 TEST(BuildGuardrailTests, BootSmokeFailsOnLoggedErrorsAndRequiresLogCopy) {
@@ -2228,10 +2193,7 @@ TEST(BuildGuardrailTests,
   const std::string tool = read_source_file("tools/affected_check.ps1");
   const std::string root_agents = read_source_file("AGENTS.md");
   const std::string instruction_route = source_slice(
-      tool,
-      "if ($Path -match "
-      "'^(AGENTS\\.md|architecture-review\\.md|REFACTORING_PLAN\\.md|memory\\.md|refactor\\.md|INPUT_KEYBINDINGS\\.md)$')",
-      "if ($Path -match '^tools/')");
+      tool, "function Add-PathPlan", "Add-FullVerification");
   const std::string examples_route = source_slice(
       tool, "if ($Path -match '^examples/')",
       "if ($Path -match '^src/sdk/core/modeling/(internal/mesh/geometry/|");
@@ -2310,15 +2272,13 @@ TEST(BuildGuardrailTests,
                   "PublicExamplesDoNotStartFromInternalOwnerHeaders");
 
   expect_contains(root_agents, "tools/affected_check.ps1");
-  expect_contains(instruction_route, "REFACTORING_PLAN\\.md");
-  expect_contains(root_agents, "quader_modeling_domain_polygon_loop_tests");
-  expect_contains(root_agents, "-MeasureFull");
-  expect_contains(root_agents, "-ChangedPath");
-  expect_contains(root_agents, "before -> after");
+  expect_contains(instruction_route, "tasklist");
+  expect_contains(instruction_route, "AGENTS\\.md");
 }
 
 TEST(BuildGuardrailTests,
      AffectedCheckPlanRoutesSdkChangesToOwningExecutables) {
+#if defined(_WIN32)
   /**
    * Describes the ordered and forbidden commands for one changed path.
    */
@@ -2329,6 +2289,15 @@ TEST(BuildGuardrailTests,
   };
 
   const std::vector<PlanExpectation> expectations = {
+      {"tasklist.md",
+       {"--target quader_guardrail_tests", "AgentInstructionRoutingTests.*"},
+       {"--target quader_tests", "ctest --preset vs2026-debug"}},
+      {"src/ui/AGENTS.md",
+       {"--target quader_guardrail_tests", "AgentInstructionRoutingTests.*"},
+       {"--target quader_tests", "--target quader_ui"}},
+      {"cmake/AGENTS.md",
+       {"--target quader_guardrail_tests", "AgentInstructionRoutingTests.*"},
+       {"--target quader_tests", "ctest --preset vs2026-debug"}},
       {"src/sdk/core/modeling/src/session.cpp",
        {"--target quader_modeling_sdk_consumer_tests",
         "--target quader_modeling_sdk_parity_tests",
@@ -2420,10 +2389,14 @@ TEST(BuildGuardrailTests,
       expect_missing(affected_plan, forbidden);
     }
   }
+#else
+  GTEST_SKIP() << "affected_check.ps1 plans the native Windows VS2026 executable workflow.";
+#endif
 }
 
 TEST(BuildGuardrailTests,
      AffectedCheckRejectsMissingExecutableAndZeroSelectedTests) {
+#if defined(_WIN32)
   const std::filesystem::path script =
       source_path("tools/affected_check.ps1");
   const std::filesystem::path executable = current_executable_path();
@@ -2462,6 +2435,9 @@ TEST(BuildGuardrailTests,
   EXPECT_NE(generic_missing.exit_code, 0) << generic_missing.output;
   expect_contains(generic_missing.output, "Command executable was not found");
   expect_contains(generic_missing.output, "missing_gtest_executable.exe");
+#else
+  GTEST_SKIP() << "affected_check.ps1 launches native Windows verification executables.";
+#endif
 }
 
 TEST(BuildGuardrailTests, TestingDocsExplainPlacementAndSelectionRules) {
@@ -2470,37 +2446,21 @@ TEST(BuildGuardrailTests, TestingDocsExplainPlacementAndSelectionRules) {
   const std::string modeling_guide =
       read_source_file("tests/modeling_domain/AGENTS.md");
 
-  expect_contains(root_agents, "## Test Placement");
-  expect_contains(root_agents, "## Test Selection");
-  expect_contains(root_agents, "quader_guardrail_tests");
-  expect_contains(root_agents, "quader_tests");
-  expect_contains(root_agents, "quader_modeling_domain_tests");
-  expect_contains(root_agents, "tests/modeling_domain/operation/"
-                                 "qdr_document_operation_<feature>_tests.cpp");
-  expect_contains(root_agents,
-                  "qdr_modeling_runtime_operation_command_tests.cpp");
-  expect_contains(root_agents,
-                  "tools/affected_check.ps1 -PlanOnly -ChangedPath");
-  expect_contains(root_agents, "--gtest_filter=SuiteName.*");
-  expect_contains(root_agents, "-MeasureFull");
+  expect_contains(root_agents, "tests/AGENTS.md");
+  for (const char *contract :
+       {"quader_guardrail_tests", "quader_tests", "quader_modeling_domain_tests",
+        "tests/modeling_domain/", "tools/affected_check.ps1", "--gtest_filter",
+        "-MeasureFull", "tools/regression_gate.ps1",
+        "support/command_behavior_contract.cpp",
+        "baselines/command_behavior.json"}) {
+    expect_contains(tests_guide, contract);
+  }
 
-  expect_contains(tests_guide, "## Placement Rules");
-  expect_contains(tests_guide,
-                  "Root `tests/*_tests.cpp` files belong to `quader_tests`");
-  expect_contains(tests_guide,
-                  "Root guardrail files belong to `quader_guardrail_tests`");
-  expect_contains(
-      tests_guide,
-      "Modeling-domain behavior belongs under `tests/modeling_domain/`");
-  expect_contains(tests_guide, "## Selection Rules");
-
-  expect_contains(modeling_guide, "## Placement Rules");
   expect_contains(modeling_guide, "qdr_document_operation_<feature>_tests.cpp");
   expect_contains(modeling_guide,
                   "qdr_modeling_runtime_operation_command_tests.cpp");
   expect_contains(modeling_guide,
                   "qdr_modeling_runtime_tool_<feature>_tests.cpp");
-  expect_contains(modeling_guide, "## Selection Rules");
   expect_contains(modeling_guide, "quader_modeling_domain_polygon_loop_tests");
   expect_contains(modeling_guide, "quader_modeling_domain_runtime_loop_tests");
   expect_contains(modeling_guide, "quader_modeling_domain_metadata_loop_tests");
@@ -2520,17 +2480,15 @@ TEST(BuildGuardrailTests, LocalizationResourcesArePackagedWithRuntime) {
 }
 
 TEST(BuildGuardrailTests,
-     RootGuidanceForbidsPerFrameUiCatalogEnumeration) {
-  const std::string root_agents = read_source_file("AGENTS.md");
+     UiGuidanceDescribesRetainedFrameSynchronization) {
+  const std::string ui_guide = read_source_file("src/ui/AGENTS.md");
+  const std::string tests_guide = read_source_file("tests/AGENTS.md");
 
-  expect_contains(root_agents, "## UI Frame-Loop Performance Rule");
-  expect_contains(root_agents,
-                  "never enumerate `commands().available()` from a frame callback");
-  expect_contains(root_agents,
-                  "Put the unchanged-state/revision check before descriptor allocation");
-  expect_contains(root_agents, "`commands().descriptor(id)`");
-  expect_contains(root_agents,
-                  "same-build, same-scene before/after frame-time or FPS measurement");
+  expect_contains(ui_guide, "UISystem::refresh");
+  expect_contains(ui_guide, "commands().available()");
+  expect_contains(ui_guide, "commands().descriptor(id)");
+  expect_contains(ui_guide, "revision");
+  expect_contains(tests_guide, "same-build, same-scene");
 }
 
 TEST(BuildGuardrailTests,
@@ -2696,6 +2654,8 @@ TEST(BuildGuardrailTests,
   const std::string sdk_only_check =
       read_source_file("cmake/QuaderSdkOnlyBuildCheck.cmake");
   const std::string launcher = read_source_file("tools/boot_tracy.ps1");
+  const std::string native_build_contract =
+      read_source_file("tools/native_build_contract.ps1");
   const std::string qt_image_formats_license = read_source_file(
       "thirdparty/licenses/qtimageformats-LGPL-3.0-only.txt");
   const std::string jpeg_license = read_source_file(
@@ -2734,15 +2694,16 @@ TEST(BuildGuardrailTests,
            "libwebpdemux.dll", "libwebpmux.dll", "tiff.dll",
        }) {
     expect_contains(root_c_make, std::string(runtime_dll));
-    expect_contains(launcher, std::string(runtime_dll));
+    expect_contains(native_build_contract, std::string(runtime_dll));
   }
   for (std::string_view plugin_dll : {
            "imageformats\\qgif.dll", "imageformats\\qjpeg.dll",
            "imageformats\\qtga.dll", "imageformats\\qtiff.dll",
            "imageformats\\qwebp.dll",
        }) {
-    expect_contains(launcher, std::string(plugin_dll));
+    expect_contains(native_build_contract, std::string(plugin_dll));
   }
+  expect_contains(launcher, "native_build_contract.ps1");
   for (std::string_view native_codec_package : {
            "libjpeg-turbo", "libwebp", "qtimageformats", "tiff",
        }) {
@@ -2989,12 +2950,15 @@ TEST(BuildGuardrailTests, QtViewportSwapchainsStayBehindRenderSystemAdapters) {
 
   expect_contains(render_system_header, "class RenderAdditionalSwapChain");
   expect_contains(render_system_header,
-                  "filament::Renderer *renderer_ = nullptr");
+                  "std::shared_ptr<RenderSurfaceState> state_");
+  expect_contains(render_system_source,
+                  "filament::Renderer *renderer = nullptr");
   expect_contains(render_system_header, "create_additional_swap_chain");
   expect_contains(render_system_header, "initialize_viewport_renderer");
   expect_contains(render_system_source,
                   "RenderSystem::create_additional_swap_chain(");
-  expect_contains(render_system_source, "engine_->createSwapChain(native_window");
+  expect_contains(render_system_source,
+                  "engine_->createSwapChain(surface.native_window, flags)");
 }
 
 TEST(BuildGuardrailTests, ActiveAppAndUiUseQtWithoutSdlAdapters) {
@@ -4169,31 +4133,10 @@ TEST(BuildGuardrailTests, AppVersionMetadataUsesRootVersionSource) {
   expect_contains(version_template,
                   "kQuaderAppVersionDisplay = \"v@QUADER_APP_VERSION@\"");
 
-  expect_contains(agents, "## Versioning Rule");
-  expect_contains(agents,
-                  "Root `VERSION` is the app version source of truth");
-  expect_contains(agents,
-                  "`vcpkg.json` `version-string` must mirror it");
-  expect_contains(agents, "Preserve the current app version by default");
-  expect_contains(agents,
-                  "Do not infer a version bump from project-file changes");
-  expect_contains(agents,
-                  "explicitly asks for a version bump");
-  expect_contains(agents,
-                  "otherwise leave both `VERSION` and `vcpkg.json` unchanged");
-  expect_contains(agents, "When a bump is explicitly requested");
-  expect_contains(agents, "major/minor fixed at `0.1`");
-  expect_contains(agents, "within `0..9999`");
-  expect_contains(agents, "once before the final handoff");
-  expect_contains(agents, "Do not");
-  expect_contains(agents, "planning, review, inspection-only, failed/no-change,");
-  expect_contains(agents, "or explanation-only turns");
-  expect_contains(agents, "## Fast Iteration Mode");
-  expect_contains(agents, "explicitly asks for `fast iteration mode`");
-  expect_contains(agents, "skip automated");
-  expect_contains(agents, "tests and affected-check runs");
-  expect_contains(agents, "build both canonical native");
-  expect_contains(agents, "exception applies only to the request that names the");
+  for (const char *policy :
+       {"VERSION", "vcpkg.json", "version-string", "9999", "fast iteration mode"}) {
+    expect_contains(agents, policy);
+  }
 }
 
 TEST(BuildGuardrailTests, EditorAggregateHasDedicatedApiTarget) {

@@ -13,6 +13,7 @@
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/render/standard_material_render_snapshot_adapter.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
+#include "editor/session/project_autosave_service.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "platform/platform_file_dialog.hpp"
 #include "assets/material_document.hpp"
@@ -153,7 +154,6 @@ void AppFramePresentationGate::forget_transient(const QObject *widget) {
 
 namespace {
 
-constexpr int kIdleFrameIntervalMs = 16;
 constexpr double kFallbackDisplayRefreshRateHz = 60.0;
 constexpr double kMinimumDisplayRefreshRateHz = 30.0;
 constexpr double kMaximumDisplayRefreshRateHz = 240.0;
@@ -298,6 +298,13 @@ bool App::initialize(QApplication &application,
     return false;
   }
 
+  ui_.set_session_settings_changed_callback(
+      [this](const SessionPreferences &settings) {
+        project_session_.set_history_max_steps(
+            static_cast<std::size_t>(settings.undo_steps));
+      });
+  project_session_.set_history_max_steps(
+      static_cast<std::size_t>(ui_.session_settings().undo_steps));
   editor_ = std::make_unique<QuaderEditorApi>(project_session_);
   QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
       *editor_, [this](SceneSession &scene) { bind_active_scene(scene); });
@@ -381,14 +388,48 @@ bool App::initialize(QApplication &application,
                          schedule_next_frame();
                          return;
                        }
-                       (void)render_frame(frame_clock_.tick());
-                       schedule_next_frame();
+                       if (!render_system_.presentation_is_synchronized() &&
+                           ui_.needs_continuous_rendering() &&
+                           !render_system_.ready_for_next_frame()) {
+                         schedule_next_frame(false);
+                         return;
+                       }
+                       const bool submitted =
+                           render_frame(frame_clock_.tick());
+                       schedule_next_frame(submitted);
                      }
                    });
   QObject::connect(application_, &QApplication::aboutToQuit, frame_timer_.get(),
                    [this]() { running_ = false; });
+  autosave_timer_ = std::make_unique<QTimer>();
+  autosave_timer_->setTimerType(Qt::CoarseTimer);
+  autosave_timer_->setInterval(1000);
+  QObject::connect(autosave_timer_.get(), &QTimer::timeout, application_,
+                   [this]() { poll_autosave(); });
   running_ = true;
   return true;
+}
+
+void App::poll_autosave() {
+  if (!running_ || shutdown_complete_) {
+    return;
+  }
+  // Autosave has its own coarse timer. Never serialize in the render loop or
+  // while a native gesture, popup, or modal operation owns the interaction.
+  const bool external_edit_active =
+      rendering_frame_ || QApplication::activeModalWidget() != nullptr ||
+      QApplication::activePopupWidget() != nullptr ||
+      QApplication::mouseButtons() != Qt::NoButton;
+  const ProjectAutosaveResult result = project_session_.autosave().poll(
+      project_session_, ui_.session_settings(),
+      std::chrono::steady_clock::now(), external_edit_active);
+  for (const std::string &warning : result.warnings) {
+    LOG_WARN("Autosave: {}", warning);
+    if (editor_ != nullptr) {
+      (void)editor_->ui().notify(
+          {.level = QuaderNotificationLevel::Warning, .message = warning});
+    }
+  }
 }
 
 int App::run() {
@@ -398,6 +439,7 @@ int App::run() {
   LOG_INFO("Entering Qt application event loop");
   frame_clock_.reset();
   frame_timer_->start(0);
+  autosave_timer_->start();
   return application_->exec();
 }
 
@@ -411,12 +453,17 @@ void App::shutdown() {
   if (frame_timer_) {
     frame_timer_->stop();
   }
+  if (autosave_timer_) {
+    autosave_timer_->stop();
+  }
+  ui_.set_session_settings_changed_callback({});
   QObject::disconnect(window_screen_changed_connection_);
   QObject::disconnect(screen_refresh_rate_changed_connection_);
   display_refresh_screen_ = nullptr;
   save_window_settings();
   ui_.shutdown();
   frame_timer_.reset();
+  autosave_timer_.reset();
   render_overlay_snapshot_cache_.reset();
   editor_.reset();
   render_bridge_.shutdown();
@@ -709,13 +756,17 @@ bool App::render_frame(const FrameTiming &frame_timing) {
   return submitted > 0u;
 }
 
-void App::schedule_next_frame() {
+void App::schedule_next_frame(bool submitted) {
   if (!frame_timer_ || !running_) {
     return;
   }
-  const int interval = ui_.needs_continuous_rendering()
-                           ? presentation_frame_interval_ms(ui_.main_window())
-                           : kIdleFrameIntervalMs;
+  const bool continuous = ui_.needs_continuous_rendering();
+  const bool synchronized = render_system_.presentation_is_synchronized();
+  const int display_interval = continuous && synchronized
+                                   ? presentation_frame_interval_ms(ui_.main_window())
+                                   : 0;
+  const int interval = frame_schedule_.next_interval_ms(
+      continuous, synchronized, display_interval, submitted);
   if (frame_timer_->interval() != interval) {
     frame_timer_->setInterval(interval);
   }

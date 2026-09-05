@@ -216,14 +216,36 @@ bool PrimitiveCreationToolService::can_apply() const {
 
 bool PrimitiveCreationToolService::can_undo() const {
   return session_.has_value() &&
-         (session_->accepted_shapes > 0U ||
+         ((history_.max_steps() > 0U && session_->history_cursor > 0U) ||
           modeling_.box_drag_state() != ModelingBoxDragState::Idle);
 }
 
 bool PrimitiveCreationToolService::can_redo() const {
   return session_.has_value() &&
-         session_->accepted_shapes < session_->shapes.size() &&
+         history_.max_steps() > 0U &&
+         session_->history_cursor < session_->shapes.size() &&
          modeling_.box_drag_state() == ModelingBoxDragState::Idle;
+}
+
+void PrimitiveCreationToolService::apply_history_limit() {
+  if (!session_.has_value() ||
+      session_->shapes.size() <= history_.max_steps()) {
+    return;
+  }
+  const std::size_t excess = session_->shapes.size() - history_.max_steps();
+  const std::size_t undo_removed =
+      std::min(excess, session_->history_cursor);
+  session_->shapes.erase(
+      session_->shapes.begin(),
+      session_->shapes.begin() + static_cast<std::ptrdiff_t>(undo_removed));
+  session_->history_cursor -= undo_removed;
+  // Preserve every applied object's identity, including shapes whose undo was
+  // evicted. Only the distant redo tail may lose identities along with history.
+  session_->shapes.resize(history_.max_steps());
+  session_->created_object_ids.resize(
+      session_->accepted_shapes +
+      session_->shapes.size() - session_->history_cursor);
+  ++tool_settings_revision_;
 }
 
 std::size_t PrimitiveCreationToolService::shape_count() const {
@@ -296,6 +318,7 @@ PrimitiveCreationToolService::activate(PrimitiveCreationKind kind) {
 
 CommandResult
 PrimitiveCreationToolService::set_kind(PrimitiveCreationKind kind) {
+  apply_history_limit();
   if (!session_.has_value()) {
     return command_invalid_result("No primitive tool is active.");
   }
@@ -318,6 +341,7 @@ PrimitiveCreationToolService::set_kind(PrimitiveCreationKind kind) {
 CommandResult PrimitiveCreationToolService::accept_preview(
     const ModelingBoxPreview &preview, std::string name,
     MaterialReference material) {
+  apply_history_limit();
   if (!session_.has_value()) {
     return command_invalid_result("No primitive tool is active.");
   }
@@ -335,9 +359,9 @@ CommandResult PrimitiveCreationToolService::accept_preview(
     return rollback_and_exit(
         "Primitive tool could not capture the shape's history state.", true);
   }
-  if (session_->accepted_shapes > 0U) {
+  if (session_->history_cursor > 0U) {
     // Seal the preceding shape after its final live settings edits.
-    session_->shapes[session_->accepted_shapes - 1U].after = before;
+    session_->shapes[session_->history_cursor - 1U].after = before;
   }
   live_primitive_.reset();
 
@@ -369,9 +393,12 @@ CommandResult PrimitiveCreationToolService::accept_preview(
                                 : created.message,
         true);
   }
-  session_->shapes.resize(session_->accepted_shapes);
+  session_->shapes.resize(session_->history_cursor);
   session_->created_object_ids.resize(session_->accepted_shapes);
-  session_->shapes.push_back({.before = before});
+  if (history_.max_steps() > 0U) {
+    session_->shapes.push_back({.before = before});
+    ++session_->history_cursor;
+  }
   ++session_->accepted_shapes;
   ++tool_settings_revision_;
   session_->created_object_ids.push_back(created.object.modeling_object_id);
@@ -393,15 +420,20 @@ CommandResult PrimitiveCreationToolService::accept_preview(
             : reset.message,
         true);
   }
-  session_->shapes.back().after = modeling_.capture_history_memento();
-  if (!session_->shapes.back().after.valid()) {
-    return rollback_and_exit(
-        "Primitive tool could not capture the created shape.", true);
+  if (session_->history_cursor > 0U) {
+    session_->shapes.back().after = modeling_.capture_history_memento();
+    if (!session_->shapes.back().after.valid()) {
+      return rollback_and_exit(
+          "Primitive tool could not capture the created shape.", true);
+    }
   }
+  apply_history_limit();
+  modeling_.release_redundant_sdk_history();
   return command_changed_result();
 }
 
 CommandResult PrimitiveCreationToolService::apply() {
+  apply_history_limit();
   if (!session_.has_value()) {
     return command_invalid_result("No primitive tool is active.");
   }
@@ -418,11 +450,13 @@ CommandResult PrimitiveCreationToolService::apply() {
         true);
   }
 
-  session_->shapes[session_->accepted_shapes - 1U].after =
-      modeling_.capture_history_memento();
+  if (session_->history_cursor > 0U) {
+    session_->shapes[session_->history_cursor - 1U].after =
+        modeling_.capture_history_memento();
+  }
   std::vector<std::unique_ptr<RecordedModelingMementoCommand>> commands;
-  commands.reserve(session_->accepted_shapes);
-  for (std::size_t index = 0; index < session_->accepted_shapes; ++index) {
+  commands.reserve(session_->history_cursor);
+  for (std::size_t index = 0; index < session_->history_cursor; ++index) {
     const ShapeHistory &shape = session_->shapes[index];
     // Each snapshot already contains exactly this step's objects. Rebase its
     // host projection so unrelated edits made during creation stay before the
@@ -440,6 +474,11 @@ CommandResult PrimitiveCreationToolService::apply() {
   }
   // Prepare every memento before publishing any history entry. Recording a
   // non-null, already-executed command performs no further document mutation.
+  if (session_->accepted_shapes > session_->history_cursor) {
+    // Evicted shapes become the new permanent baseline. Older native mementos
+    // predate those shapes and cannot safely remain reachable through Undo.
+    history_.clear();
+  }
   for (auto &command : commands) {
     const CommandResult recorded = history_.record_executed(std::move(command));
     if (!recorded.ok) {
@@ -459,6 +498,7 @@ CommandResult PrimitiveCreationToolService::apply() {
 }
 
 CommandResult PrimitiveCreationToolService::undo() {
+  apply_history_limit();
   if (!can_undo()) {
     return command_invalid_result("No primitive to undo.");
   }
@@ -470,7 +510,7 @@ CommandResult PrimitiveCreationToolService::undo() {
     return reset;
   }
 
-  ShapeHistory &shape = session_->shapes[session_->accepted_shapes - 1U];
+  ShapeHistory &shape = session_->shapes[session_->history_cursor - 1U];
   const ModelingSessionMemento after = modeling_.capture_history_memento();
   if (!after.valid()) {
     return command_invalid_result("Primitive redo state could not be captured.");
@@ -481,17 +521,20 @@ CommandResult PrimitiveCreationToolService::undo() {
   }
   shape.after = after;
   --session_->accepted_shapes;
+  --session_->history_cursor;
   return restored;
 }
 
 CommandResult PrimitiveCreationToolService::redo() {
+  apply_history_limit();
   if (!can_redo()) {
     return command_invalid_result("No primitive to redo.");
   }
   const CommandResult restored = restore_shape_history(
-      session_->shapes[session_->accepted_shapes].after);
+      session_->shapes[session_->history_cursor].after);
   if (restored.ok) {
     ++session_->accepted_shapes;
+    ++session_->history_cursor;
   }
   return restored;
 }
@@ -542,6 +585,7 @@ CommandResult PrimitiveCreationToolService::cancel() {
 
 CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
                                                         double value) {
+  apply_history_limit();
   if (!session_.has_value()) {
     return command_invalid_result("No primitive tool is active.");
   }
@@ -739,6 +783,7 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
 }
 
 CommandResult PrimitiveCreationToolService::reset_settings() {
+  apply_history_limit();
   if (!session_.has_value()) {
     return command_invalid_result("No primitive tool is active.");
   }
@@ -866,6 +911,7 @@ CommandResult PrimitiveCreationToolService::update_live_primitive() {
   }
   live_primitive_->selection_revision =
       modeling_.selection_summary().selection_revision;
+  modeling_.release_redundant_sdk_history();
   return command_changed_result();
 }
 

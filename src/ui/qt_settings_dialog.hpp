@@ -24,12 +24,11 @@ class UISettings;
 class ViewportSettings;
 
 /**
- * Qt Widgets presentation of Quader's interface, keybinding, and viewport
- * preferences.
+ * Qt Widgets presentation of task-oriented editor preference categories.
  * Controls edit a per-field draft. Apply merges and persists the draft without
  * closing, OK applies and closes, and every reject path discards it.
- * Interface scale previews immediately and rejection restores the last applied
- * factor.
+ * Interface scale and display synchronization preview immediately; rejection
+ * restores their last applied values.
  * Keybinding edits are public-API mutations that persist immediately.
  */
 class QtSettingsDialog final : public QDialog {
@@ -40,6 +39,7 @@ public:
   QtSettingsDialog(const QtSettingsDialog &) = delete;
   QtSettingsDialog &operator=(const QtSettingsDialog &) = delete;
 
+  /** Replacing only runtime command/callback owners preserves the active draft. */
   void set_context(UISettings &ui_settings, ViewportSettings &viewport_settings,
                    LocalizationService &localization,
                    QuaderCommandsApi &commands,
@@ -48,6 +48,10 @@ public:
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
   /** Reconciles only the interface-scale draft after an external API commit. */
   void synchronize_interface_scale();
+  /** Reconciles only the VSync draft after an external API commit. */
+  void synchronize_vsync_enabled();
+  /** Reconciles only history/autosave drafts after an external API commit. */
+  void synchronize_session_settings();
   void refresh();
   void accept() override;
   void reject() override;

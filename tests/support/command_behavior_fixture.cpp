@@ -471,6 +471,17 @@ private:
               locale_ = std::move(locale);
               return runtime_result(changed);
             },
+        .vsync_enabled = [this] { return vsync_enabled_; },
+        .set_vsync_enabled =
+            [this](bool value) { return set_preference(vsync_enabled_, value); },
+        .session_settings = [this] { return session_preferences_; },
+        .set_session_settings =
+            [this](SessionPreferences value) {
+              ++external_calls_;
+              const bool changed = session_preferences_ != value;
+              session_preferences_ = value;
+              return runtime_result(changed);
+            },
         .save =
             [this] {
               ++external_calls_;
@@ -1276,6 +1287,8 @@ private:
   std::uint64_t external_calls_ = 0u;
   std::string clipboard_text_;
   std::string locale_ = "en";
+  bool vsync_enabled_ = true;
+  SessionPreferences session_preferences_;
   bool snapping_enabled_ = true;
   bool backface_selection_enabled_ = false;
   bool texture_lock_enabled_ = true;

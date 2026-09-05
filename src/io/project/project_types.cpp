@@ -13,6 +13,7 @@
 #include <cwctype>
 #include <random>
 #include <string>
+#include <system_error>
 #include <utility>
 
 namespace quader {
@@ -140,11 +141,18 @@ ProjectRelativePath::parse(const std::filesystem::path &path) {
 
 ProjectIoResult<ProjectRelativePath>
 ProjectRelativePath::parse_portable(std::string_view path) {
-  return parse(std::filesystem::path(std::string(path)));
+  try {
+    return parse(std::filesystem::u8path(path.begin(), path.end()));
+  } catch (const std::system_error &) {
+    return ProjectIoResult<ProjectRelativePath>::failure(
+        ProjectIoErrorCode::InvalidRelativePath,
+        "Project-relative path is not valid UTF-8.");
+  }
 }
 
 std::string ProjectRelativePath::portable_string() const {
-  return path_.generic_string();
+  const std::u8string encoded = path_.generic_u8string();
+  return std::string(reinterpret_cast<const char *>(encoded.data()), encoded.size());
 }
 
 std::wstring ProjectRelativePath::portable_case_key() const {
@@ -153,6 +161,11 @@ std::wstring ProjectRelativePath::portable_case_key() const {
     return static_cast<wchar_t>(std::towlower(value));
   });
   return key;
+}
+
+bool is_project_autosave_path(const ProjectRelativePath &path) {
+  const std::wstring key = path.portable_case_key();
+  return key == L".quader/autosave" || key.starts_with(L".quader/autosave/");
 }
 
 } // namespace quader

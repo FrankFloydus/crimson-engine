@@ -6,17 +6,14 @@ No permission is granted to use, copy, modify, distribute, or sublicense this
 file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 -->
-# Assets Package Guide
+# Asset Ownership
 
-`src/assets` owns asset documents, revisions, registries, typed stores, and baking services.
-
-## Asset Rules
-
-- `AssetRegistry`, typed asset stores, and asset documents are asset truth.
-- UI/API code should request asset changes through public APIs, commands, or asset services instead
-  of mutating registry internals directly.
-- Keep asset revision semantics deterministic and explicit.
-- Do not let render caches become the source of asset truth; render resources derive from assets and
-  scene state.
-- If behavior affects material or mesh asset contracts, add/update focused tests and any public docs
-  that describe the contract.
+- `AssetRegistry`, `TypedAssetStore`, and asset documents own payloads, validation, IDs, and revisions.
+  Renderer resources are derived caches.
+- `mesh_asset_payload.hpp` and `modeling_mesh_payload_adapter.*` are the mesh payload boundary;
+  preserve immutable/shared payload and clone semantics when editing assets.
+- Scene-local `AssetId` and persistent `ProjectAssetId` are different identities. Project material
+  files and catalog resolution live in `src/io/project`, with project lifetime in
+  `src/editor/session/project_session.*`.
+- User edits route through asset command services/public APIs. Validate references before publication
+  and cover revision, undo/redo, and mesh/material contracts in the matching asset/API tests.

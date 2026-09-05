@@ -35,6 +35,7 @@
 #include <QApplication>
 #include <QBuffer>
 #include <QByteArray>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDataStream>
@@ -1730,7 +1731,7 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
-     InterfaceScaleFlowsThroughTheRealUiSystemAndPublicPreferencesHook) {
+     InterfaceScaleAndVSyncFlowThroughTheRealUiSystemAndPublicPreferencesHooks) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   const std::filesystem::path isolated_profile =
       std::filesystem::temp_directory_path() /
@@ -1837,7 +1838,72 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(scale->value(), 200);
   EXPECT_FALSE(apply->isEnabled());
 
+  auto *vsync = settings_dialog->findChild<QCheckBox *>(
+      QStringLiteral("settingsVSync"));
+  ASSERT_NE(vsync, nullptr);
+  EXPECT_TRUE(vsync->isChecked());
+  EXPECT_TRUE(editor.preferences().vsync_enabled());
+  EXPECT_TRUE(render_system.vsync_enabled());
+  vsync->setChecked(false);
+  EXPECT_FALSE(render_system.vsync_enabled());
+  EXPECT_TRUE(editor.preferences().vsync_enabled());
+  EXPECT_TRUE(apply->isEnabled());
+
+  // Reapplying the persisted value clears a different live Settings preview.
+  const quader::QuaderApiVoidResult restore_vsync =
+      editor.preferences().set_vsync_enabled(true);
+  ASSERT_TRUE(restore_vsync.ok()) << restore_vsync.error_message();
+  EXPECT_TRUE(restore_vsync.changed());
+  EXPECT_TRUE(vsync->isChecked());
+  EXPECT_TRUE(render_system.vsync_enabled());
+  EXPECT_FALSE(apply->isEnabled());
+
+  const quader::QuaderApiVoidResult disable_vsync =
+      editor.preferences().set_vsync_enabled(false);
+  ASSERT_TRUE(disable_vsync.ok()) << disable_vsync.error_message();
+  EXPECT_TRUE(disable_vsync.changed());
+  EXPECT_FALSE(editor.preferences().vsync_enabled());
+  EXPECT_FALSE(render_system.vsync_enabled());
+  EXPECT_FALSE(vsync->isChecked());
+  EXPECT_FALSE(quader::UISettings::load(settings_path).vsync_enabled());
+  EXPECT_FALSE(apply->isEnabled());
+
+  std::filesystem::last_write_time(settings_path, no_op_write_time,
+                                   timestamp_error);
+  ASSERT_FALSE(timestamp_error);
+  const std::optional<std::string> disabled_contents =
+      read_binary_file(settings_path);
+  const quader::QuaderApiVoidResult vsync_no_op =
+      editor.preferences().set_vsync_enabled(false);
+  EXPECT_TRUE(vsync_no_op.ok());
+  EXPECT_FALSE(vsync_no_op.changed());
+  EXPECT_EQ(read_binary_file(settings_path), disabled_contents);
+  EXPECT_EQ(std::filesystem::last_write_time(settings_path, timestamp_error),
+            no_op_write_time);
+  EXPECT_FALSE(timestamp_error);
+
+  vsync->setChecked(true);
+  EXPECT_TRUE(render_system.vsync_enabled());
+  EXPECT_FALSE(editor.preferences().vsync_enabled());
+  const std::filesystem::path backup_settings =
+      settings_path.parent_path() / "ui_settings_backup.ini";
+  std::filesystem::rename(settings_path, backup_settings);
+  ASSERT_TRUE(std::filesystem::create_directory(settings_path));
+  const quader::QuaderApiVoidResult failed_vsync =
+      editor.preferences().set_vsync_enabled(false);
+  EXPECT_FALSE(failed_vsync.ok());
+  EXPECT_FALSE(failed_vsync.changed());
+  EXPECT_FALSE(failed_vsync.error_message().empty());
+  EXPECT_FALSE(editor.preferences().vsync_enabled());
+  EXPECT_TRUE(render_system.vsync_enabled())
+      << "failed persistence restores the prior live preview";
+  EXPECT_TRUE(vsync->isChecked());
+  EXPECT_TRUE(apply->isEnabled());
+  ASSERT_TRUE(std::filesystem::remove(settings_path));
+  std::filesystem::rename(backup_settings, settings_path);
+
   settings_dialog->close();
   QCoreApplication::processEvents();
+  EXPECT_FALSE(render_system.vsync_enabled());
   ui.shutdown();
 }

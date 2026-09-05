@@ -74,7 +74,7 @@ void QtMaterialPreviewSurface::shutdown() {
 }
 
 bool QtMaterialPreviewSurface::render_frame() {
-  if (!render_pending_) {
+  if (!render_pending_ && !swap_chain_.needs_initial_frame()) {
     return false;
   }
   synchronize_render_size();
@@ -99,7 +99,8 @@ bool QtMaterialPreviewSurface::ready_to_render() const {
 }
 
 bool QtMaterialPreviewSurface::needs_rendering() const {
-  return render_pending_ && ready_to_render();
+  return (render_pending_ || swap_chain_.needs_initial_frame()) &&
+         ready_to_render();
 }
 
 void QtMaterialPreviewSurface::synchronize_render_size() {

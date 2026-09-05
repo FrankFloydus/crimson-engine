@@ -25,6 +25,7 @@
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QItemSelectionModel>
@@ -57,6 +58,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -902,11 +904,17 @@ private:
 
 /// Owns the retained settings controls and descriptor-to-widget bindings.
 struct QtSettingsDialog::Impl {
-  /// Holds one viewport category item and its right-hand options form.
-  struct SectionWidgets {
-    const ViewportSettingsSectionDescriptor *descriptor = nullptr;
-    QListWidgetItem *category_item = nullptr;
-    QFormLayout *form = nullptr;
+  /// Retains one user-facing category or group and its localization source.
+  struct CategoryWidgets {
+    QListWidgetItem *item = nullptr;
+    std::string localization_key;
+    std::string label;
+  };
+
+  struct GroupWidgets {
+    QGroupBox *box = nullptr;
+    std::string localization_key;
+    std::string label;
   };
 
   /// Holds the scrollable stock-Qt page created for one settings category.
@@ -955,7 +963,11 @@ struct QtSettingsDialog::Impl {
   std::array<bool, kViewportBoolSettingCount> dirty_bools{};
   bool interface_scale_dirty = false;
   float interface_scale_target_baseline = 1.0f;
+  bool vsync_dirty = false;
+  bool vsync_target_baseline = true;
   bool locale_dirty = false;
+  std::array<bool, 4> session_dirty{};
+  SessionPreferences session_target_baseline;
   bool transaction_active = false;
   bool refreshing = false;
   bool keybinding_message_box_prewarm_scheduled = false;
@@ -963,12 +975,21 @@ struct QtSettingsDialog::Impl {
   QtRetainedMessageBox *keybinding_message_box = nullptr;
   QListWidget *category_list = nullptr;
   QStackedWidget *page_stack = nullptr;
-  QListWidgetItem *interface_category_item = nullptr;
   QListWidgetItem *keybindings_category_item = nullptr;
   QLabel *locale_label = nullptr;
   QComboBox *locale_combo = nullptr;
   QLabel *interface_scale_label = nullptr;
   QSpinBox *interface_scale_spin_box = nullptr;
+  QCheckBox *vsync_check_box = nullptr;
+  QLabel *undo_steps_label = nullptr;
+  QSpinBox *undo_steps_spin_box = nullptr;
+  QLabel *undo_help_label = nullptr;
+  QCheckBox *autosave_check_box = nullptr;
+  QLabel *autosave_interval_label = nullptr;
+  QSpinBox *autosave_interval_spin_box = nullptr;
+  QLabel *autosave_max_files_label = nullptr;
+  QSpinBox *autosave_max_files_spin_box = nullptr;
+  QLabel *autosave_help_label = nullptr;
   QLabel *keybindings_search_label = nullptr;
   QLineEdit *keybindings_search = nullptr;
   QLabel *keybindings_shortcut_label = nullptr;
@@ -983,7 +1004,8 @@ struct QtSettingsDialog::Impl {
   QPushButton *apply_button = nullptr;
   QPushButton *ok_button = nullptr;
   QPushButton *cancel_button = nullptr;
-  std::vector<SectionWidgets> sections;
+  std::vector<CategoryWidgets> categories;
+  std::vector<GroupWidgets> groups;
   std::vector<ColorWidgets> color_controls;
   std::vector<FloatWidgets> float_controls;
   std::vector<BoolWidgets> bool_controls;
@@ -1005,11 +1027,15 @@ struct QtSettingsDialog::Impl {
     dirty_floats.fill(false);
     dirty_bools.fill(false);
     interface_scale_dirty = false;
+    vsync_dirty = false;
     locale_dirty = false;
+    session_dirty.fill(false);
   }
 
   [[nodiscard]] bool has_pending_changes() const {
-    return interface_scale_dirty || locale_dirty ||
+    return interface_scale_dirty || vsync_dirty || locale_dirty ||
+           std::any_of(session_dirty.begin(), session_dirty.end(),
+                       [](bool dirty) { return dirty; }) ||
            std::any_of(dirty_colors.begin(), dirty_colors.end(),
                        [](bool dirty) { return dirty; }) ||
            std::any_of(dirty_floats.begin(), dirty_floats.end(),
@@ -1104,6 +1130,63 @@ struct QtSettingsDialog::Impl {
       interface_scale_dirty = false;
       interface_scale_target_baseline = target_interface_scale;
     }
+    const bool target_vsync = target_ui_settings->vsync_enabled();
+    const bool vsync_changed_externally =
+        !force && transaction_active && target_vsync != vsync_target_baseline;
+    if (!force && !vsync_changed_externally && vsync_dirty) {
+      vsync_dirty = draft_ui_settings.vsync_enabled() != target_vsync;
+    }
+    if (force || vsync_changed_externally || !vsync_dirty) {
+      draft_ui_settings.set_vsync_enabled(target_vsync);
+      vsync_dirty = false;
+      vsync_target_baseline = target_vsync;
+    }
+    synchronize_session_draft(force);
+    refresh_action_state();
+  }
+
+  void synchronize_session_draft(bool force) {
+    SessionPreferences draft = draft_ui_settings.session_settings();
+    const SessionPreferences &target = target_ui_settings->session_settings();
+    const auto synchronize_field =
+        [this, force](auto &value, const auto target_value,
+                      const auto baseline_value, std::size_t index) {
+          const bool changed_externally = !force && transaction_active &&
+                                          target_value != baseline_value;
+          if (!force && !changed_externally && session_dirty[index]) {
+            session_dirty[index] = value != target_value;
+          }
+          if (force || changed_externally || !session_dirty[index]) {
+            value = target_value;
+            session_dirty[index] = false;
+          }
+        };
+    synchronize_field(draft.undo_steps, target.undo_steps,
+                      session_target_baseline.undo_steps, 0);
+    synchronize_field(draft.autosave_enabled, target.autosave_enabled,
+                      session_target_baseline.autosave_enabled, 1);
+    synchronize_field(draft.autosave_interval_minutes,
+                      target.autosave_interval_minutes,
+                      session_target_baseline.autosave_interval_minutes, 2);
+    synchronize_field(draft.autosave_max_files, target.autosave_max_files,
+                      session_target_baseline.autosave_max_files, 3);
+    (void)draft_ui_settings.set_session_settings(draft);
+    session_target_baseline = target;
+  }
+
+  template <typename Value>
+  void stage_session_field(Value SessionPreferences::*field, Value value,
+                           std::size_t index) {
+    if (refreshing || !has_context()) {
+      return;
+    }
+    SessionPreferences draft = draft_ui_settings.session_settings();
+    draft.*field = value;
+    if (!draft_ui_settings.set_session_settings(draft)) {
+      return;
+    }
+    const SessionPreferences &target = target_ui_settings->session_settings();
+    session_dirty[index] = draft.*field != target.*field;
     refresh_action_state();
   }
 
@@ -1231,6 +1314,29 @@ struct QtSettingsDialog::Impl {
         std::fabs(target_ui_settings->interface_scale() -
                   draft_ui_settings.interface_scale()) >
             0.0001f;
+    const bool vsync_changed =
+        vsync_dirty && target_ui_settings->vsync_enabled() !=
+                           draft_ui_settings.vsync_enabled();
+    SessionPreferences merged_session = target_ui_settings->session_settings();
+    const SessionPreferences &draft_session = draft_ui_settings.session_settings();
+    if (session_dirty[0]) {
+      merged_session.undo_steps = draft_session.undo_steps;
+    }
+    if (session_dirty[1]) {
+      merged_session.autosave_enabled = draft_session.autosave_enabled;
+    }
+    if (session_dirty[2]) {
+      merged_session.autosave_interval_minutes =
+          draft_session.autosave_interval_minutes;
+    }
+    if (session_dirty[3]) {
+      merged_session.autosave_max_files = draft_session.autosave_max_files;
+    }
+    const bool session_changed =
+        merged_session != target_ui_settings->session_settings();
+    if (session_changed) {
+      (void)target_ui_settings->set_session_settings(merged_session);
+    }
     if (locale_dirty) {
       target_ui_settings->set_locale(localization->current_locale());
     }
@@ -1238,18 +1344,29 @@ struct QtSettingsDialog::Impl {
       target_ui_settings->set_interface_scale(
           draft_ui_settings.interface_scale());
     }
+    if (vsync_dirty) {
+      target_ui_settings->set_vsync_enabled(draft_ui_settings.vsync_enabled());
+    }
     const float committed_interface_scale =
         target_ui_settings->interface_scale();
 
-    if ((locale_changed || scale_changed) && persist_interface_settings &&
+    if ((locale_changed || scale_changed || vsync_changed || session_changed) &&
+        persist_interface_settings &&
         !persist_interface_settings()) {
       *target_ui_settings = previous_ui_settings;
       *target_viewport_settings = previous_viewport_settings;
       (void)localization->select_locale(previous_ui_settings.locale());
       if (settings_changed) {
-        settings_changed({.kind = QtSettingsChangeKind::InterfaceCommit,
-                          .interface_scale =
-                              previous_ui_settings.interface_scale()});
+        if (locale_changed || scale_changed) {
+          settings_changed({.kind = QtSettingsChangeKind::InterfaceCommit,
+                            .interface_scale =
+                                previous_ui_settings.interface_scale()});
+        }
+        if (vsync_changed) {
+          settings_changed({.kind = QtSettingsChangeKind::RenderingCommit,
+                            .vsync_enabled =
+                                previous_ui_settings.vsync_enabled()});
+        }
       }
       if (keybinding_message_box->set_presentation(
               QtRetainedMessageBoxPresentation{
@@ -1286,6 +1403,14 @@ struct QtSettingsDialog::Impl {
       settings_changed({.kind = QtSettingsChangeKind::InterfaceCommit,
                         .interface_scale = committed_interface_scale});
     }
+    if (vsync_changed && settings_changed) {
+      settings_changed({.kind = QtSettingsChangeKind::RenderingCommit,
+                        .vsync_enabled = target_ui_settings->vsync_enabled()});
+    }
+    if (session_changed && settings_changed) {
+      settings_changed({.kind = QtSettingsChangeKind::SessionCommit,
+                        .session_settings = merged_session});
+    }
 
     clear_dirty();
     synchronize_draft_from_targets(true);
@@ -1304,6 +1429,12 @@ struct QtSettingsDialog::Impl {
       settings_changed({.kind = QtSettingsChangeKind::InterfacePreview,
                         .interface_scale =
                             target_ui_settings->interface_scale()});
+    }
+    if (vsync_dirty && settings_changed &&
+        draft_ui_settings.vsync_enabled() !=
+            target_ui_settings->vsync_enabled()) {
+      settings_changed({.kind = QtSettingsChangeKind::RenderingPreview,
+                        .vsync_enabled = target_ui_settings->vsync_enabled()});
     }
     transaction_active = false;
     clear_dirty();
@@ -1370,15 +1501,66 @@ struct QtSettingsDialog::Impl {
                      [this]() { owner.reject(); });
 
     create_interface_page();
+    const OptionsPageWidgets navigation_page = create_category(
+        "navigation", "ui.settings.navigation", "Navigation");
     create_keybindings_page();
+    const OptionsPageWidgets viewport_page = create_category(
+        "viewport", "ui.settings.viewport", "Viewport");
+    create_display_group(viewport_page);
+    const OptionsPageWidgets appearance_page = create_category(
+        "appearance", "ui.settings.appearance", "Colors & Overlays");
+    const OptionsPageWidgets editing_page = create_category(
+        "editing", "ui.settings.editing", "Editing");
+    create_undo_group(editing_page);
+    const OptionsPageWidgets recovery_page = create_category(
+        "save_recovery", "ui.settings.save_recovery", "Save & Recovery");
+    create_autosave_group(recovery_page);
 
     std::array<QFormLayout *, kViewportSettingsSectionCount> section_forms{};
-    sections.reserve(kViewportSettingsSectionCount);
     for (const ViewportSettingsSectionDescriptor &descriptor :
          viewport_settings_sections()) {
-      sections.push_back(create_viewport_section(descriptor));
+      const OptionsPageWidgets *page = &appearance_page;
+      switch (descriptor.id) {
+      case ViewportSettingsSectionId::Navigation:
+        page = &navigation_page;
+        break;
+      case ViewportSettingsSectionId::Shading:
+      case ViewportSettingsSectionId::Picking:
+      case ViewportSettingsSectionId::Gizmo:
+        page = &viewport_page;
+        break;
+      case ViewportSettingsSectionId::Texturing:
+        continue;
+      default:
+        break;
+      }
       section_forms[static_cast<std::size_t>(descriptor.id)] =
-          sections.back().form;
+          create_viewport_section(*page, descriptor);
+    }
+
+    bool_controls.reserve(1);
+    for (const ViewportBoolSettingDescriptor &descriptor :
+         viewport_bool_settings()) {
+      // Other toggles are workspace controls exposed by menus and toolbars.
+      if (descriptor.id != ViewportBoolSettingId::ShowHoverDimensions) {
+        continue;
+      }
+      QFormLayout *form =
+          section_forms[static_cast<std::size_t>(descriptor.section)];
+      auto *check_box = new QCheckBox(form->parentWidget());
+      check_box->setObjectName(setting_object_name(descriptor.key));
+      form->addRow(check_box);
+      bool_controls.push_back({&descriptor, check_box});
+
+      QObject::connect(check_box, &QCheckBox::toggled, &owner,
+                       [this, id = descriptor.id](bool checked) {
+                         if (refreshing || viewport_settings == nullptr) {
+                           return;
+                         }
+                         if (controller.set_bool(id, checked)) {
+                           mark_bool_dirty(id);
+                         }
+                       });
     }
 
     color_controls.reserve(kViewportColorSettingCount);
@@ -1404,6 +1586,9 @@ struct QtSettingsDialog::Impl {
     float_controls.reserve(kViewportFloatSettingCount);
     for (const ViewportFloatSettingDescriptor &descriptor :
          viewport_float_settings()) {
+      if (descriptor.id == ViewportFloatSettingId::RotationSnapDegrees) {
+        continue;
+      }
       QFormLayout *form =
           section_forms[static_cast<std::size_t>(descriptor.section)];
       auto *label = new QLabel(form->parentWidget());
@@ -1431,27 +1616,6 @@ struct QtSettingsDialog::Impl {
                        });
     }
 
-    bool_controls.reserve(kViewportBoolSettingCount);
-    for (const ViewportBoolSettingDescriptor &descriptor :
-         viewport_bool_settings()) {
-      QFormLayout *form =
-          section_forms[static_cast<std::size_t>(descriptor.section)];
-      auto *check_box = new QCheckBox(form->parentWidget());
-      check_box->setObjectName(setting_object_name(descriptor.key));
-      form->addRow(check_box);
-      bool_controls.push_back({&descriptor, check_box});
-
-      QObject::connect(check_box, &QCheckBox::toggled, &owner,
-                       [this, id = descriptor.id](bool checked) {
-                         if (refreshing || viewport_settings == nullptr) {
-                           return;
-                         }
-                         if (controller.set_bool(id, checked)) {
-                           mark_bool_dirty(id);
-                         }
-                       });
-    }
-
     category_list->setCurrentRow(0);
     refresh();
   }
@@ -1467,6 +1631,8 @@ struct QtSettingsDialog::Impl {
     content->setObjectName(QStringLiteral("settingsPageContent_%1").arg(id));
     auto *content_layout = new QVBoxLayout(content);
     auto *form = new QFormLayout();
+    form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     content_layout->addLayout(form);
     content_layout->addStretch(1);
     page->setWidget(content);
@@ -1474,13 +1640,51 @@ struct QtSettingsDialog::Impl {
     return {page, content, form};
   }
 
+  OptionsPageWidgets create_category(std::string_view stable_id,
+                                     std::string_view localization_key,
+                                     std::string_view label) {
+    auto *item = new QListWidgetItem(category_list);
+    item->setData(Qt::UserRole, QString::fromUtf8(
+        stable_id.data(), static_cast<qsizetype>(stable_id.size())));
+    categories.push_back(
+        {item, std::string(localization_key), std::string(label)});
+    return create_options_page(stable_id);
+  }
+
+  QFormLayout *create_group(const OptionsPageWidgets &page,
+                           std::string_view stable_id,
+                           std::string_view localization_key,
+                           std::string_view label) {
+    auto *box = new QGroupBox(page.content);
+    box->setObjectName(QStringLiteral("settingsGroup_%1").arg(
+        QString::fromUtf8(stable_id.data(),
+                          static_cast<qsizetype>(stable_id.size()))));
+    auto *form = new QFormLayout(box);
+    form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    page.form->addRow(box);
+    groups.push_back(
+        {box, std::string(localization_key), std::string(label)});
+    return form;
+  }
+
   void create_interface_page() {
-    interface_category_item = new QListWidgetItem(category_list);
-    interface_category_item->setData(Qt::UserRole,
-                                     QStringLiteral("interface"));
-    const OptionsPageWidgets page = create_options_page("interface");
-    interface_scale_label = new QLabel(page.content);
-    interface_scale_spin_box = new QSpinBox(page.content);
+    const OptionsPageWidgets page = create_category(
+        "interface", "ui.settings.interface", "Interface");
+    QFormLayout *language_form = create_group(page, "language",
+        "ui.settings.group.language", "Language");
+    locale_label = new QLabel(language_form->parentWidget());
+    locale_combo = new QComboBox(language_form->parentWidget());
+    locale_combo->setObjectName(QStringLiteral("settingsLocale"));
+    locale_label->setBuddy(locale_combo);
+    language_form->addRow(locale_label, locale_combo);
+    QObject::connect(locale_combo, &QComboBox::currentIndexChanged, &owner,
+                     [this](int index) { select_locale(index); });
+
+    QFormLayout *scale_form = create_group(page, "interface_scale",
+        "ui.settings.group.interface_scale", "Interface Scaling");
+    interface_scale_label = new QLabel(scale_form->parentWidget());
+    interface_scale_spin_box = new QSpinBox(scale_form->parentWidget());
     interface_scale_spin_box->setObjectName(
         QStringLiteral("settingsInterfaceScale"));
     interface_scale_spin_box->setRange(50, 300);
@@ -1489,7 +1693,7 @@ struct QtSettingsDialog::Impl {
     interface_scale_spin_box->setAccelerated(true);
     interface_scale_spin_box->setKeyboardTracking(true);
     interface_scale_label->setBuddy(interface_scale_spin_box);
-    page.form->addRow(interface_scale_label, interface_scale_spin_box);
+    scale_form->addRow(interface_scale_label, interface_scale_spin_box);
     QObject::connect(interface_scale_spin_box, &QSpinBox::valueChanged,
                      &owner, [this](int percent) {
                        if (refreshing || ui_settings == nullptr) {
@@ -1499,19 +1703,96 @@ struct QtSettingsDialog::Impl {
                            static_cast<float>(percent) / 100.0f);
                      });
 
-    locale_label = new QLabel(page.content);
-    locale_combo = new QComboBox(page.content);
-    locale_combo->setObjectName(QStringLiteral("settingsLocale"));
-    locale_label->setBuddy(locale_combo);
-    page.form->addRow(locale_label, locale_combo);
-    QObject::connect(locale_combo, &QComboBox::currentIndexChanged, &owner,
-                     [this](int index) { select_locale(index); });
+  }
+
+  void create_display_group(const OptionsPageWidgets &page) {
+    QFormLayout *form = create_group(page, "display",
+        "ui.settings.group.display", "Display");
+    vsync_check_box = new QCheckBox(form->parentWidget());
+    vsync_check_box->setObjectName(QStringLiteral("settingsVSync"));
+    form->addRow(vsync_check_box);
+    QObject::connect(vsync_check_box, &QCheckBox::toggled, &owner,
+                     [this](bool enabled) {
+                       if (!refreshing && ui_settings != nullptr) {
+                         (void)controller.preview_vsync_enabled(enabled);
+                       }
+                     });
+  }
+
+  void create_undo_group(const OptionsPageWidgets &page) {
+    QFormLayout *form = create_group(page, "undo",
+        "ui.settings.group.undo", "Undo History");
+    undo_steps_label = new QLabel(form->parentWidget());
+    undo_steps_spin_box = new QSpinBox(form->parentWidget());
+    undo_steps_spin_box->setObjectName(QStringLiteral("settingsUndoSteps"));
+    undo_steps_spin_box->setRange(SessionPreferences::kMinimumUndoSteps,
+                                  SessionPreferences::kMaximumUndoSteps);
+    undo_steps_spin_box->setAccelerated(true);
+    undo_steps_label->setBuddy(undo_steps_spin_box);
+    form->addRow(undo_steps_label, undo_steps_spin_box);
+    undo_help_label = new QLabel(form->parentWidget());
+    undo_help_label->setWordWrap(true);
+    form->addRow(undo_help_label);
+    QObject::connect(undo_steps_spin_box, &QSpinBox::valueChanged, &owner,
+                     [this](int steps) {
+                       stage_session_field(&SessionPreferences::undo_steps,
+                                           steps, 0);
+                     });
+  }
+
+  void create_autosave_group(const OptionsPageWidgets &page) {
+    QFormLayout *form = create_group(page, "autosave",
+        "ui.settings.group.autosave", "Autosave");
+    autosave_check_box = new QCheckBox(form->parentWidget());
+    autosave_check_box->setObjectName(QStringLiteral("settingsAutosaveEnabled"));
+    form->addRow(autosave_check_box);
+    autosave_interval_label = new QLabel(form->parentWidget());
+    autosave_interval_spin_box = new QSpinBox(form->parentWidget());
+    autosave_interval_spin_box->setObjectName(
+        QStringLiteral("settingsAutosaveInterval"));
+    autosave_interval_spin_box->setRange(
+        SessionPreferences::kMinimumAutoSaveIntervalMinutes,
+        SessionPreferences::kMaximumAutoSaveIntervalMinutes);
+    autosave_interval_label->setBuddy(autosave_interval_spin_box);
+    form->addRow(autosave_interval_label, autosave_interval_spin_box);
+    autosave_max_files_label = new QLabel(form->parentWidget());
+    autosave_max_files_spin_box = new QSpinBox(form->parentWidget());
+    autosave_max_files_spin_box->setObjectName(
+        QStringLiteral("settingsAutosaveMaxFiles"));
+    autosave_max_files_spin_box->setRange(
+        SessionPreferences::kMinimumAutoSaveMaxFiles,
+        SessionPreferences::kMaximumAutoSaveMaxFiles);
+    autosave_max_files_label->setBuddy(autosave_max_files_spin_box);
+    form->addRow(autosave_max_files_label, autosave_max_files_spin_box);
+    autosave_help_label = new QLabel(form->parentWidget());
+    autosave_help_label->setWordWrap(true);
+    form->addRow(autosave_help_label);
+    QObject::connect(autosave_check_box, &QCheckBox::toggled, &owner,
+                     [this](bool enabled) {
+                       stage_session_field(&SessionPreferences::autosave_enabled,
+                                           enabled, 1);
+                       refresh_session_controls();
+                     });
+    QObject::connect(autosave_interval_spin_box, &QSpinBox::valueChanged, &owner,
+                     [this](int minutes) {
+                       stage_session_field(
+                           &SessionPreferences::autosave_interval_minutes,
+                           minutes, 2);
+                     });
+    QObject::connect(autosave_max_files_spin_box, &QSpinBox::valueChanged, &owner,
+                     [this](int files) {
+                       stage_session_field(&SessionPreferences::autosave_max_files,
+                                           files, 3);
+                     });
+
   }
 
   void create_keybindings_page() {
     keybindings_category_item = new QListWidgetItem(category_list);
     keybindings_category_item->setData(Qt::UserRole,
                                        QStringLiteral("keybindings"));
+    categories.push_back({keybindings_category_item, "ui.settings.keybindings",
+                          "Keybindings"});
 
     auto *page = new QWidget(page_stack);
     page->setObjectName(QStringLiteral("settingsPage_keybindings"));
@@ -1948,16 +2229,28 @@ struct QtSettingsDialog::Impl {
                          : "Keybindings unchanged."));
   }
 
-  SectionWidgets
-  create_viewport_section(const ViewportSettingsSectionDescriptor &descriptor) {
-    const std::string_view stable_id = section_stable_id(descriptor.id);
-    auto *category_item = new QListWidgetItem(category_list);
-    category_item->setData(
-        Qt::UserRole,
-        QString::fromUtf8(stable_id.data(),
-                          static_cast<qsizetype>(stable_id.size())));
-    const OptionsPageWidgets page = create_options_page(stable_id);
-    return {&descriptor, category_item, page.form};
+  QFormLayout *create_viewport_section(
+      const OptionsPageWidgets &page,
+      const ViewportSettingsSectionDescriptor &descriptor) {
+    switch (descriptor.id) {
+    case ViewportSettingsSectionId::Navigation:
+      return create_group(page, "navigation",
+          "ui.settings.group.fly_navigation", "Fly Navigation");
+    case ViewportSettingsSectionId::Selection:
+      return create_group(page, "selection",
+          "ui.settings.group.selection_appearance", "Selection Appearance");
+    case ViewportSettingsSectionId::Gizmo:
+      return create_group(page, "gizmo",
+          "ui.settings.group.gizmo", "Transform Gizmos");
+    case ViewportSettingsSectionId::Overlay:
+      return create_group(page, "overlay",
+          "ui.settings.group.overlay", "Mesh Overlays");
+    default:
+      break;
+    }
+    return create_group(page, section_stable_id(descriptor.id),
+                        section_localization_key(descriptor.id),
+                        descriptor.label);
   }
 
   void set_context(UISettings &new_ui_settings,
@@ -1967,7 +2260,11 @@ struct QtSettingsDialog::Impl {
                    QtSettingsController::ChangeCallback new_settings_changed,
                    std::function<bool()> new_persist_interface_settings) {
     const bool restart_visible_transaction = owner.isVisible();
-    if (transaction_active) {
+    const bool preserve_transaction =
+        transaction_active && target_ui_settings == &new_ui_settings &&
+        target_viewport_settings == &new_viewport_settings &&
+        localization == &new_localization;
+    if (transaction_active && !preserve_transaction) {
       discard_changes();
     }
     target_ui_settings = &new_ui_settings;
@@ -1987,8 +2284,19 @@ struct QtSettingsDialog::Impl {
             if (settings_changed) {
               settings_changed(change);
             }
+          } else if (change.kind == QtSettingsChangeKind::RenderingPreview) {
+            vsync_dirty = draft_ui_settings.vsync_enabled() !=
+                          target_ui_settings->vsync_enabled();
+            refresh_action_state();
+            if (settings_changed) {
+              settings_changed(change);
+            }
           }
         });
+    if (preserve_transaction) {
+      refresh();
+      return;
+    }
     transaction_active = false;
     clear_dirty();
     synchronize_draft_from_targets(true);
@@ -2004,8 +2312,15 @@ struct QtSettingsDialog::Impl {
     synchronize_draft_from_targets(!transaction_active);
 
     owner.setWindowTitle(qtext(localization, "ui.panel.settings", "Settings"));
-    interface_category_item->setText(
-        qtext(localization, "ui.settings.interface", "Interface"));
+    for (const CategoryWidgets &category : categories) {
+      category.item->setText(qtext(localization, category.localization_key,
+                                  category.label));
+    }
+    for (const GroupWidgets &group : groups) {
+      group.box->setTitle(qtext(localization, group.localization_key,
+                               group.label)
+                              .replace(QLatin1Char('&'), QStringLiteral("&&")));
+    }
     const QString keybindings_text =
         qtext(localization, "ui.settings.keybindings", "Keybindings");
     keybindings_category_item->setText(keybindings_text);
@@ -2038,21 +2353,57 @@ struct QtSettingsDialog::Impl {
         "Scales editor text, controls, icons, and interaction targets.");
     interface_scale_label->setToolTip(interface_scale_help);
     interface_scale_spin_box->setToolTip(interface_scale_help);
+    vsync_check_box->setText(qtext(
+        localization, "ui.settings.vsync", "VSync (synchronize with display)"));
+    vsync_check_box->setToolTip(qtext(
+        localization, "ui.settings.vsync.help",
+        "Synchronizes presentation with the display refresh rate. Disable to "
+        "allow faster rendering; tearing may occur. Drivers without support "
+        "for immediate presentation keep synchronization enabled."));
+    undo_steps_label->setText(qtext(
+        localization, "ui.settings.undo_steps", "Undo Steps"));
+    undo_steps_spin_box->setSpecialValueText(qtext(
+        localization, "ui.settings.undo_disabled", "Disabled"));
+    undo_help_label->setText(qtext(
+        localization, "ui.settings.undo_steps.help",
+        "Keep up to this many undo steps. Applying a lower limit removes "
+        "older history. Set to 0 to disable undo history."));
+    autosave_check_box->setText(qtext(
+        localization, "ui.settings.autosave_enabled", "Enable Autosave"));
+    autosave_interval_label->setText(qtext(
+        localization, "ui.settings.autosave_interval", "Save Every (minutes)"));
+    autosave_max_files_label->setText(qtext(
+        localization, "ui.settings.autosave_max_files",
+        "Recovery Copies per Scene"));
+    autosave_help_label->setText(qtext(
+        localization, "ui.settings.autosave.help",
+        "Saves recovery copies of changed scenes without overwriting the "
+        "scene files. Choose File > Recover > Auto Save to recover a copy, then "
+        "use Save As to keep it."));
+    for (const auto &[label, control, help] :
+         {std::tuple<QLabel *, QSpinBox *, QLabel *>{
+              undo_steps_label, undo_steps_spin_box, undo_help_label},
+          {autosave_interval_label, autosave_interval_spin_box,
+           autosave_help_label},
+          {autosave_max_files_label, autosave_max_files_spin_box,
+           autosave_help_label}}) {
+      control->setAccessibleName(label->text());
+      control->setToolTip(help->text());
+      control->setAccessibleDescription(help->text());
+    }
+    autosave_check_box->setToolTip(autosave_help_label->text());
+    autosave_check_box->setAccessibleDescription(autosave_help_label->text());
     apply_button->setText(qtext(localization, "ui.action.apply", "Apply"));
     ok_button->setText(qtext(localization, "ui.action.ok", "OK"));
     cancel_button->setText(
         qtext(localization, "ui.action.cancel", "Cancel"));
 
     refresh_interface_scale();
+    refresh_vsync_enabled();
+    refresh_session_controls();
     refresh_locale_combo();
     refresh_keybindings();
     refresh_keybinding_editor();
-
-    for (const SectionWidgets &section : sections) {
-      const std::string key = section_localization_key(section.descriptor->id);
-      section.category_item->setText(
-          qtext(localization, key, section.descriptor->label));
-    }
 
     for (const ColorWidgets &control : color_controls) {
       const std::string key = setting_localization_key(control.descriptor->key);
@@ -2277,6 +2628,54 @@ struct QtSettingsDialog::Impl {
     refresh_action_state();
   }
 
+  void refresh_vsync_enabled() {
+    const QSignalBlocker blocker(vsync_check_box);
+    vsync_check_box->setChecked(ui_settings == nullptr ||
+                               ui_settings->vsync_enabled());
+    vsync_check_box->setEnabled(ui_settings != nullptr);
+  }
+
+  void refresh_session_controls() {
+    const SessionPreferences values = ui_settings != nullptr
+        ? ui_settings->session_settings() : SessionPreferences{};
+    const QSignalBlocker undo_blocker(undo_steps_spin_box);
+    const QSignalBlocker autosave_blocker(autosave_check_box);
+    const QSignalBlocker interval_blocker(autosave_interval_spin_box);
+    const QSignalBlocker files_blocker(autosave_max_files_spin_box);
+    undo_steps_spin_box->setValue(values.undo_steps);
+    autosave_check_box->setChecked(values.autosave_enabled);
+    autosave_interval_spin_box->setValue(values.autosave_interval_minutes);
+    autosave_max_files_spin_box->setValue(values.autosave_max_files);
+    undo_steps_spin_box->setEnabled(ui_settings != nullptr);
+    autosave_check_box->setEnabled(ui_settings != nullptr);
+    const bool autosave_active = ui_settings != nullptr && values.autosave_enabled;
+    autosave_interval_label->setEnabled(autosave_active);
+    autosave_interval_spin_box->setEnabled(autosave_active);
+    autosave_max_files_label->setEnabled(autosave_active);
+    autosave_max_files_spin_box->setEnabled(autosave_active);
+  }
+
+  void synchronize_session_settings() {
+    if (!has_context()) {
+      return;
+    }
+    synchronize_session_draft(false);
+    refresh_session_controls();
+    refresh_action_state();
+  }
+
+  void synchronize_vsync_enabled() {
+    if (!has_context()) {
+      return;
+    }
+    const bool target_vsync = target_ui_settings->vsync_enabled();
+    draft_ui_settings.set_vsync_enabled(target_vsync);
+    vsync_target_baseline = target_vsync;
+    vsync_dirty = false;
+    refresh_vsync_enabled();
+    refresh_action_state();
+  }
+
   void select_locale(int index) {
     if (refreshing || ui_settings == nullptr || target_ui_settings == nullptr ||
         localization == nullptr || index < 0) {
@@ -2372,6 +2771,14 @@ void QtSettingsDialog::apply_ui_scale(const QtUiScaleMetrics &metrics) {
 
 void QtSettingsDialog::synchronize_interface_scale() {
   impl_->synchronize_interface_scale();
+}
+
+void QtSettingsDialog::synchronize_vsync_enabled() {
+  impl_->synchronize_vsync_enabled();
+}
+
+void QtSettingsDialog::synchronize_session_settings() {
+  impl_->synchronize_session_settings();
 }
 
 void QtSettingsDialog::refresh() { impl_->refresh(); }

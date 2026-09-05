@@ -566,17 +566,18 @@ TEST(AppStartupTests, DelegatesDefaultAssetsAndUsesSessionReadView) {
             std::string::npos);
 }
 
-TEST(AppLoopTests, QtEventLoopKeepsViewportInputAtDisplayCadence) {
+TEST(AppLoopTests, QtEventLoopUsesEffectivePresentationCadenceAndGpuReadiness) {
   const std::string app_header = read_source_file("src/app/app.hpp");
   const std::string app_source = read_source_file("src/app/app.cpp");
   const std::string ui_header = read_source_file("src/ui/ui_system.hpp");
+  const std::string schedule = read_source_file("src/app/app_frame_schedule.hpp");
 
   EXPECT_NE(app_header.find("QApplication *application_"), std::string::npos);
   EXPECT_NE(app_header.find("std::unique_ptr<QTimer> frame_timer_"),
             std::string::npos);
   EXPECT_NE(app_source.find("return application_->exec()"), std::string::npos);
   EXPECT_NE(app_source.find("&QTimer::timeout"), std::string::npos);
-  EXPECT_NE(app_source.find("kIdleFrameIntervalMs = 16"), std::string::npos);
+  EXPECT_NE(schedule.find("kIdleFrameIntervalMs = 16"), std::string::npos);
   EXPECT_NE(app_source.find("presentation_frame_interval_ms"),
             std::string::npos);
   EXPECT_NE(app_source.find("screen->refreshRate()"), std::string::npos);
@@ -598,6 +599,19 @@ TEST(AppLoopTests, QtEventLoopKeepsViewportInputAtDisplayCadence) {
             std::string::npos);
   EXPECT_NE(app_source.find("ui_.needs_continuous_rendering()"),
             std::string::npos);
+  const std::string timeout = source_slice(
+      app_source, "QObject::connect(frame_timer_.get(), &QTimer::timeout",
+      "QObject::connect(application_, &QApplication::aboutToQuit");
+  const auto ready = timeout.find("ready_for_next_frame()");
+  const auto work = timeout.find("render_frame(frame_clock_.tick())");
+  ASSERT_NE(ready, std::string::npos);
+  ASSERT_NE(work, std::string::npos);
+  EXPECT_LT(ready, work);
+  EXPECT_NE(timeout.find("presentation_is_synchronized()"), std::string::npos);
+  EXPECT_NE(timeout.find("schedule_next_frame(false)"), std::string::npos);
+  EXPECT_NE(app_source.find("frame_schedule_.next_interval_ms("), std::string::npos);
+  EXPECT_EQ(timeout.find("commands().available()"), std::string::npos);
+  EXPECT_EQ(timeout.find("settings_."), std::string::npos);
   EXPECT_EQ(app_source.find("SDL_"), std::string::npos);
   EXPECT_EQ(app_source.find("platform_wait_for_event_timeout"),
             std::string::npos);
@@ -664,8 +678,10 @@ TEST(AppLoopTests,
       "QObject::connect(application_, &QApplication::aboutToQuit");
   EXPECT_LT(frame_timer_source.find("blocks_frame_submission()"),
             frame_timer_source.find("render_frame(frame_clock_.tick())"));
-  EXPECT_EQ(app_source.find("activeModalWidget"), std::string::npos);
-  EXPECT_EQ(app_source.find("activePopupWidget"), std::string::npos);
+  // Modal interaction defers autosave, but must not suppress rendering for the
+  // entire lifetime of a dialog or popup after its first paint.
+  EXPECT_EQ(frame_timer_source.find("activeModalWidget"), std::string::npos);
+  EXPECT_EQ(frame_timer_source.find("activePopupWidget"), std::string::npos);
 }
 
 TEST(AppLoopTests, UISystemRetainsAndPrewarmsEveryMessageBoxOwner) {

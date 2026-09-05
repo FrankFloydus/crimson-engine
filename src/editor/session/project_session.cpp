@@ -7,8 +7,11 @@
 #include "editor/session/project_session.hpp"
 
 #include "core/qstr.hpp"
+#include "core/user_config_paths.hpp"
 #include "editor/array/path_array_tool_service.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
+#include "editor/session/project_autosave_service.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/scene_viewport_camera_persistence.hpp"
 #include "editor/instances/project_clipboard_service.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
@@ -63,8 +66,13 @@ ProjectSessionResult success(bool changed, std::string message,
   };
 }
 
+std::string path_text_utf8(const std::filesystem::path &path) {
+  const std::u8string encoded = path.generic_u8string();
+  return {encoded.begin(), encoded.end()};
+}
+
 std::string display_name_for_path(const ProjectRelativePath &path) {
-  const std::string stem = path.native_path().stem().string();
+  const std::string stem = path_text_utf8(path.native_path().stem());
   return stem.empty() ? std::string("Untitled Scene") : stem;
 }
 
@@ -243,18 +251,101 @@ void rollback_new_project(
 
 } // namespace
 
-ProjectSession::ProjectSession()
+ProjectSession::ProjectSession(std::filesystem::path recent_scene_storage)
     : path_array_defaults_(std::make_shared<PathArraySessionDefaults>()),
-      fallback_scene_(path_array_defaults_) {
+      fallback_scene_(path_array_defaults_),
+      recent_scene_store_(recent_scene_storage.empty()
+                              ? quader_user_config_directory({}) /
+                                    "recent-scenes.json"
+                              : std::move(recent_scene_storage)) {
   resource_root_ = default_runtime_resource_root();
   (void)ProjectAssetBootstrapService{}.bootstrap_default_assets(fallback_scene_);
   fallback_scene_.mark_clean();
   standard_material_editor_ =
       std::make_unique<StandardMaterialEditSessionService>(*this);
   clipboard_ = std::make_unique<ProjectClipboardService>();
+  autosave_ = std::make_unique<ProjectAutosaveService>();
 }
 
 ProjectSession::~ProjectSession() = default;
+
+ProjectAutosaveService &ProjectSession::autosave() noexcept { return *autosave_; }
+
+const ProjectAutosaveService &ProjectSession::autosave() const noexcept {
+  return *autosave_;
+}
+
+ProjectSessionResult ProjectSession::write_scene_recovery(
+    SceneSessionId id, const ProjectRelativePath &path) const {
+  const OpenSceneSession *scene = find(id);
+  if (!workspace_ || scene == nullptr || scene->session == nullptr ||
+      !is_project_autosave_path(path) || !has_qdr_extension(path)) {
+    return failure("Autosave requires an open scene and a recovery destination.");
+  }
+  const SceneSession &session = *scene->session;
+  if (session.native_tools().has_pending_history_preview() ||
+      session.native_tools().pointer_dragging() ||
+      session.modeling().can_cancel_active_tool_or_preview() ||
+      session.modeling().curve_document_preview_active()) {
+    return success(false, "Autosave deferred until the active edit finishes.", id);
+  }
+  const auto absolute = workspace_->file_system.resolve_for_write(path);
+  if (!absolute.ok()) {
+    return failure(absolute.error().message);
+  }
+  std::error_code error;
+  if (std::filesystem::exists(absolute.value(), error) || error) {
+    return failure("Autosave destination already exists or is unavailable.");
+  }
+  SceneWriteSnapshotResult snapshot = scene_write_snapshot(session, material_catalog_);
+  if (!snapshot.ok) {
+    return failure(snapshot.message);
+  }
+  const QdrProjectWriteResult written =
+      QdrDocumentWriter::write_project_document_atomic(
+          absolute.value(), snapshot.snapshot, scene->scene_id.bytes());
+  if (!written.ok) {
+    return failure(written.message.empty() ? "Autosave failed." : written.message);
+  }
+  ProjectSessionResult result = success(true, "Recovery copy saved.", id);
+  if (!written.message.empty()) {
+    result.warnings.push_back(written.message);
+  }
+  return result;
+}
+
+ProjectSessionResult ProjectSession::recover_scene(
+    const ProjectRelativePath &path, std::string display_name) {
+  if (!workspace_ || !is_project_autosave_path(path) || !has_qdr_extension(path)) {
+    return failure("Recovery requires a recovery copy in the open project.");
+  }
+  const auto absolute = workspace_->file_system.resolve_existing_file(path);
+  if (!absolute.ok()) {
+    return failure(absolute.error().message);
+  }
+  QdrProjectReadResult read = QdrDocumentReader::read_project_document(absolute.value());
+  if (!read.ok) {
+    return failure(read.message.empty() ? "Recovery copy could not be read." : read.message);
+  }
+  if (const auto dependency_error = validate_scene_project_dependencies(
+          read.document, read.project_asset_dependencies, material_catalog_,
+          workspace_->file_system)) {
+    return failure(*dependency_error);
+  }
+  if (display_name.empty()) {
+    display_name = "Recovered Scene";
+  }
+  auto scene = make_scene(SceneId::generate(), std::move(display_name), std::nullopt,
+                          std::move(read.document),
+                          viewport_camera_pose_from_qdr(read.viewport_camera_pose));
+  scene->identity_dirty = true;
+  ProjectSessionResult result =
+      install_scene_and_activate(std::move(scene), workspace_->manifest);
+  if (result.ok) {
+    result.message = "Recovery copy opened as an unsaved scene. Use Save As to keep it.";
+  }
+  return result;
+}
 
 ProjectSessionResult ProjectSession::create(const std::filesystem::path &root,
                                             bool discard_existing_dirty) {
@@ -350,8 +441,26 @@ ProjectSessionResult ProjectSession::create(const std::filesystem::path &root,
 ProjectSessionResult
 ProjectSession::open(const std::filesystem::path &manifest_path,
                      bool discard_existing_dirty) {
+  return open_workspace(manifest_path, discard_existing_dirty, std::nullopt, {});
+}
+
+ProjectSessionResult ProjectSession::open_scene_project(
+    const std::filesystem::path &manifest_path, ProjectRelativePath scene_path,
+    const std::function<bool()> &prepare_replacement) {
+  if (!scene_path.valid() || !has_qdr_extension(scene_path) ||
+      is_project_autosave_path(scene_path)) {
+    return failure("Open Recent requires a saved project-relative .qdr scene.");
+  }
+  return open_workspace(manifest_path, false, std::move(scene_path),
+                        prepare_replacement);
+}
+
+ProjectSessionResult ProjectSession::open_workspace(
+    const std::filesystem::path &manifest_path, bool discard_existing_dirty,
+    std::optional<ProjectRelativePath> required_scene,
+    const std::function<bool()> &prepare_replacement) {
   if (has_project() && (has_dirty_scenes() || has_dirty_material()) &&
-      !discard_existing_dirty) {
+      !discard_existing_dirty && !prepare_replacement) {
     return failure("Project contains unsaved document changes.");
   }
   ProjectIoResult<ProjectWorkspaceStorage> opened =
@@ -361,6 +470,7 @@ ProjectSession::open(const std::filesystem::path &manifest_path,
   }
 
   ProjectWorkspaceStorage candidate = opened.take_value();
+  const ProjectManifest original_manifest = candidate.manifest;
   ProjectIoResult<ProjectMaterialCatalog> initial_catalog =
       ProjectMaterialCatalog::scan(candidate.file_system);
   if (!initial_catalog.ok()) {
@@ -401,18 +511,26 @@ ProjectSession::open(const std::filesystem::path &manifest_path,
     return failure(selected.error().message);
   }
   const std::optional<ProjectRelativePath> requested_active =
-      candidate.manifest.active_scene_path();
+      required_scene.has_value() ? required_scene
+                                 : candidate.manifest.active_scene_path();
   if (has_project() && (has_dirty_scenes() || has_dirty_material()) &&
-      !discard_existing_dirty) {
+      !discard_existing_dirty && !prepare_replacement) {
     ProjectMaterialProvisioner::rollback(material_changes);
     return failure("Project contains unsaved scene changes.");
   }
   std::vector<std::unique_ptr<OpenSceneSession>> scenes;
   std::vector<std::string> warnings(candidate_catalog.warnings().begin(),
                                     candidate_catalog.warnings().end());
-  scenes.reserve(candidate.manifest.open_scene_paths().size());
-  for (const ProjectRelativePath &path :
-       candidate.manifest.open_scene_paths()) {
+  std::vector<ProjectRelativePath> restore_paths(
+      candidate.manifest.open_scene_paths().begin(),
+      candidate.manifest.open_scene_paths().end());
+  if (required_scene.has_value() &&
+      std::find(restore_paths.begin(), restore_paths.end(), *required_scene) ==
+          restore_paths.end()) {
+    restore_paths.push_back(*required_scene);
+  }
+  scenes.reserve(restore_paths.size());
+  for (const ProjectRelativePath &path : restore_paths) {
     ProjectIoResult<std::filesystem::path> absolute =
         candidate.file_system.resolve_existing_file(path);
     if (!absolute.ok()) {
@@ -456,11 +574,34 @@ ProjectSession::open(const std::filesystem::path &manifest_path,
     }
     scenes.push_back(std::move(scene));
   }
+  const auto abandon_staged = [&] {
+    for (const auto &scene : scenes) {
+      release_session_id(scene->session_id);
+    }
+    ProjectMaterialProvisioner::rollback(material_changes);
+  };
+  if (required_scene.has_value() &&
+      std::none_of(scenes.begin(), scenes.end(), [&](const auto &scene) {
+        return scene->path == required_scene;
+      })) {
+    abandon_staged();
+    const std::string prefix = required_scene->portable_string() + ": ";
+    const auto warning = std::find_if(
+        warnings.begin(), warnings.end(), [&](const std::string &entry) {
+          return entry.starts_with(prefix);
+        });
+    return failure(warning == warnings.end()
+                       ? "The requested recent scene could not be opened."
+                       : *warning);
+  }
   ProjectSessionResult installed = install_workspace(
       std::move(candidate), std::move(candidate_catalog),
-      std::move(scenes), requested_active, std::move(warnings));
-  if (!installed.ok) {
+      std::move(scenes), requested_active, std::move(warnings),
+      prepare_replacement, original_manifest);
+  if (!installed.ok || !installed.changed) {
     ProjectMaterialProvisioner::rollback(material_changes);
+  } else if (active_scene_id_.valid()) {
+    remember_scene(active_scene_id_);
   }
   return installed;
 }
@@ -514,6 +655,9 @@ ProjectSessionResult ProjectSession::open_scene(ProjectRelativePath path) {
   if (!path.valid() || !has_qdr_extension(path)) {
     return failure("Scene path must be a project-relative .qdr file.");
   }
+  if (is_project_autosave_path(path)) {
+    return failure("Use Recover Auto Save to open a recovery copy safely.");
+  }
   ProjectIoResult<std::filesystem::path> absolute =
       workspace_->file_system.resolve_existing_file(path);
   if (!absolute.ok()) {
@@ -524,6 +668,7 @@ ProjectSessionResult ProjectSession::open_scene(ProjectRelativePath path) {
     ProjectSessionResult activated = activate(existing);
     if (activated.ok) {
       activated.message = "Scene is already open.";
+      remember_scene(existing);
     }
     return activated;
   }
@@ -575,6 +720,7 @@ ProjectSessionResult ProjectSession::open_scene(ProjectRelativePath path) {
     return result;
   }
   result.message = "Scene opened.";
+  remember_scene(active_scene_id_);
   if (reseeded_duplicate) {
     result.warnings.push_back(
         "The scene UUID duplicated another open scene and was reseeded. Save "
@@ -661,6 +807,7 @@ ProjectSessionResult ProjectSession::save(SceneSessionId id) {
   if (!written.message.empty()) {
     success_result.warnings.push_back(std::move(written.message));
   }
+  remember_scene(id);
   return success_result;
 }
 
@@ -672,6 +819,9 @@ ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
   }
   if (!workspace_ || !path.valid() || !has_qdr_extension(path)) {
     return failure("Save As requires a project-relative .qdr path.");
+  }
+  if (is_project_autosave_path(path)) {
+    return failure("Recovery storage is reserved for automatic scene copies.");
   }
   ProjectIoResult<std::filesystem::path> absolute =
       workspace_->file_system.resolve_for_write(path);
@@ -794,10 +944,10 @@ ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
 
   std::string preserved_scene_diagnostic =
       "Published scene remains at '" +
-      scene_file_transaction.target_path().string() + "'.";
+      path_text_utf8(scene_file_transaction.target_path()) + "'.";
   if (!scene_file_transaction.backup_path().empty()) {
     preserved_scene_diagnostic += " Prior destination backup remains at '" +
-                                  scene_file_transaction.backup_path().string() +
+                                  path_text_utf8(scene_file_transaction.backup_path()) +
                                   "'.";
   }
 
@@ -980,6 +1130,7 @@ ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
     scene->session->mark_clean_at(stamp);
   }
   scene->identity_dirty = false;
+  remember_scene(id);
   return success_result;
 }
 
@@ -1144,6 +1295,16 @@ bool ProjectSession::has_dirty_scenes() const {
                      [](const std::unique_ptr<OpenSceneSession> &scene) {
                        return scene && scene->dirty();
                      });
+}
+
+void ProjectSession::set_history_max_steps(std::size_t max_steps) {
+  fallback_scene_.set_history_max_steps(max_steps);
+  history_max_steps_ = fallback_scene_.history().max_steps();
+  for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
+    if (scene && scene->session) {
+      scene->session->set_history_max_steps(history_max_steps_);
+    }
+  }
 }
 
 bool ProjectSession::has_dirty_material() const {
@@ -1330,16 +1491,66 @@ std::unique_ptr<OpenSceneSession> ProjectSession::make_scene(
     std::optional<ViewportCameraPose> viewport_camera_pose) {
   auto session = std::make_unique<SceneSession>(path_array_defaults_,
                                                  std::move(document));
+  session->set_history_max_steps(history_max_steps_);
   (void)session->restore_persisted_viewport_camera_pose(
       viewport_camera_pose);
   session->mark_clean();
+  const SceneSessionId id = allocate_session_id();
+  const auto content_stamp = session->content_revision_stamp();
+  session->set_content_settled_observer(
+      [this, id](bool committed) { remember_edited_scene(id, committed); });
   return std::make_unique<OpenSceneSession>(OpenSceneSession{
-      .session_id = allocate_session_id(),
+      .session_id = id,
       .scene_id = std::move(scene_id),
       .display_name = std::move(display_name),
       .path = std::move(path),
       .session = std::move(session),
+      .recent_content_stamp = content_stamp,
   });
+}
+
+std::vector<RecentSceneEntry> ProjectSession::recent_scenes() const {
+  auto loaded = recent_scene_store_.load();
+  return loaded.ok() ? loaded.take_value() : std::vector<RecentSceneEntry>{};
+}
+
+void ProjectSession::remember_edited_scene(SceneSessionId id, bool committed) {
+  OpenSceneSession *scene = find(id);
+  if (scene == nullptr || scene->session == nullptr) {
+    return;
+  }
+  const auto stamp = scene->session->content_revision_stamp();
+  if (stamp == scene->recent_content_stamp) {
+    return;
+  }
+  scene->recent_content_stamp = stamp;
+  if (committed) {
+    remember_scene(id);
+  }
+}
+
+void ProjectSession::remember_scene(SceneSessionId id) noexcept {
+  // MRU bookkeeping must never turn an already committed edit/save into failure.
+  try {
+    OpenSceneSession *scene = find(id);
+    if (!workspace_ || scene == nullptr || !scene->path.has_value() ||
+        is_project_autosave_path(*scene->path)) {
+      return;
+    }
+    scene->recent_content_stamp = scene->session->content_revision_stamp();
+    if (recent_front_scene_ == id && recent_front_path_ == scene->path) {
+      return;
+    }
+    const auto remembered = recent_scene_store_.remember(
+        workspace_->manifest, workspace_->manifest_path, scene->scene_id,
+        scene->display_name, *scene->path);
+    if (remembered.ok()) {
+      recent_front_scene_ = id;
+      recent_front_path_ = scene->path;
+    }
+  } catch (...) {
+    // The saved scene remains usable even when the optional recent-list fails.
+  }
 }
 
 ProjectSessionResult ProjectSession::install_scene_and_activate(
@@ -1395,7 +1606,9 @@ ProjectSessionResult ProjectSession::install_workspace(
     ProjectMaterialCatalog material_catalog,
     std::vector<std::unique_ptr<OpenSceneSession>> scenes,
     std::optional<ProjectRelativePath> requested_active,
-    std::vector<std::string> warnings) {
+    std::vector<std::string> warnings,
+    const std::function<bool()> &prepare_replacement,
+    std::optional<ProjectManifest> original_manifest) {
   SceneSessionId candidate_active;
   if (requested_active.has_value()) {
     for (const std::unique_ptr<OpenSceneSession> &scene : scenes) {
@@ -1423,17 +1636,34 @@ ProjectSessionResult ProjectSession::install_workspace(
     return persisted;
   }
 
+  const auto abandon_workspace = [&](ProjectSessionResult result) {
+    for (const auto &scene : scenes) {
+      release_session_id(scene->session_id);
+    }
+    if (original_manifest.has_value()) {
+      const auto restored = ProjectManifestStore::save_atomic(
+          workspace.file_system, workspace.manifest_path, *original_manifest);
+      if (!restored.ok()) {
+        result.ok = false;
+        result.message += " Target workspace restoration failed: " +
+                          restored.error().message;
+      }
+    }
+    return result;
+  };
+  // Save/Discard can mutate the outgoing documents. Resolve every candidate
+  // load and manifest-write failure before invoking that host decision flow.
+  if (prepare_replacement && !prepare_replacement()) {
+    return abandon_workspace(success(false, "Open Recent canceled."));
+  }
+
   // Candidate loading, validation, and manifest persistence are complete.
   // Only now cross the destructive replacement boundary so a late candidate
   // failure cannot cancel transient state in the still-active workspace.
   for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
     if (scene && !cancel_transient_state(*scene)) {
-      for (const std::unique_ptr<OpenSceneSession> &candidate : scenes) {
-        if (candidate) {
-          release_session_id(candidate->session_id);
-        }
-      }
-      return failure("Could not cancel an open scene preview.");
+      return abandon_workspace(
+          failure("Could not cancel an open scene preview."));
     }
   }
 

@@ -975,11 +975,11 @@ TEST(QtToolSettingsDragSpinnerTests,
   increase->click();
   EXPECT_EQ(spinner->value(), 5);
   EXPECT_EQ(owner_count(), 4);
-  process_events_for(125);
+  ASSERT_TRUE(process_events_until([&] { return owner_count() == 5; }, 1000));
   EXPECT_EQ(owner_count(), 5);
   decrease->click();
   EXPECT_EQ(spinner->value(), 4);
-  process_events_for(125);
+  ASSERT_TRUE(process_events_until([&] { return owner_count() == 4; }, 1000));
   EXPECT_EQ(owner_count(), 4);
 
   const QPoint press = line_edit->rect().center();
@@ -1075,7 +1075,7 @@ TEST(QtToolSettingsDragSpinnerTests,
       << "an owner refresh must not move an actively dragged local value";
   send_mouse_event(*line_edit, QEvent::MouseButtonRelease, one_step,
                    Qt::LeftButton, Qt::NoButton);
-  process_events_for(10);
+  ASSERT_TRUE(process_events_until([&] { return spinner->value() == 40; }, 1000));
   EXPECT_EQ(spinner->value(), 40)
       << "the invalidated local dispatch must reconcile after release";
 
@@ -1107,7 +1107,8 @@ TEST(QtToolSettingsDragSpinnerTests,
   EXPECT_EQ(line_edit->text(), QStringLiteral("99"))
       << "an owner refresh must not replace active text input";
   send_key_event(*line_edit, Qt::Key_Escape);
-  process_events_for(10);
+  ASSERT_TRUE(process_events_until(
+      [&] { return !spinner->is_editing() && spinner->value() == 30; }, 1000));
   EXPECT_FALSE(spinner->is_editing());
   EXPECT_EQ(spinner->value(), 30)
       << "cancelled stale text input must reconcile to current owner state";
@@ -1184,9 +1185,15 @@ TEST(QtToolSettingsPanelTests,
   QPointer<QDoubleSpinBox> retained_rotation_x(rotation_x);
   rotation_x->setValue(12.5);
   EXPECT_TRUE(panel.numeric_interaction_active());
-  process_events_for(125);
+  ASSERT_TRUE(process_events_until([&] {
+    const auto target = editor.tools().active_settings();
+    const auto *component =
+        find_vector_component(target, "path_array.rotation_offset.x");
+    return component != nullptr && component->value == 12.5;
+  }, 1000));
+  const auto rotation_target = editor.tools().active_settings();
   const quader::QuaderToolSettingNumberComponent *owner_rotation_x =
-      find_vector_component(editor.tools().active_settings(),
+      find_vector_component(rotation_target,
                             "path_array.rotation_offset.x");
   ASSERT_NE(owner_rotation_x, nullptr);
   EXPECT_DOUBLE_EQ(owner_rotation_x->value, 12.5);
@@ -1385,8 +1392,9 @@ TEST(QtToolSettingsPanelTests,
 
   reset->click();
   QCoreApplication::processEvents();
+  const auto reset_target = editor.tools().active_settings();
   const quader::QuaderToolSettingControl *reset_copies =
-      find_setting(editor.tools().active_settings(), "radial_array.copies");
+      find_setting(reset_target, "radial_array.copies");
   ASSERT_NE(reset_copies, nullptr);
   EXPECT_DOUBLE_EQ(reset_copies->number_value, default_copies->number_value);
 
@@ -1586,7 +1594,10 @@ TEST(QtToolSettingsPanelTests,
   type_spin_text(*scale_y, QStringLiteral("0.5"));
   panel.refresh();
   EXPECT_EQ(scale_y->text(), QStringLiteral("0.5"));
-  process_events_for(75);
+  ASSERT_TRUE(process_events_until([&] {
+    return editor.modeling().face_texture_settings().scale_y ==
+           std::optional<double>(0.5);
+  }, 1000));
   settings = editor.modeling().face_texture_settings();
   EXPECT_EQ(settings.scale_x, std::optional<double>(5.0));
   EXPECT_EQ(settings.scale_y, std::optional<double>(0.5));
@@ -1846,9 +1857,13 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_FALSE(message->isHidden());
   EXPECT_FALSE(message->text().isEmpty());
   type_spin_text(*scale, QStringLiteral("1"));
-  process_events_for(75);
+  // The correction is dispatched by a timer even though the stored value is
+  // unchanged. Wait for its observable completion, not another timer's expiry.
+  ASSERT_TRUE(process_events_until([message] { return message->isHidden(); },
+                                  1000))
+      << message->text().toStdString();
   EXPECT_EQ(editor.revisions().modeling_content_revision, invalid_revision);
-  EXPECT_TRUE(message->isHidden());
+  EXPECT_TRUE(editor.history().can_redo());
   type_spin_text(*scale, QStringLiteral("-"));
   send_mouse_event(*up, QEvent::MouseButtonPress, up->rect().center(),
                    Qt::LeftButton, Qt::LeftButton);
@@ -1976,7 +1991,10 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_EQ(editor.history().snapshot().undo_label, before_toggle_history.undo_label);
   EXPECT_EQ(scale->text(), QStringLiteral("4.0"));
   EXPECT_TRUE(panel->numeric_interaction_active());
-  process_events_for(75);
+  ASSERT_TRUE(process_events_until([&] {
+    return editor.modeling().face_texture_settings().scale_x ==
+           std::optional<double>(4.0);
+  }, 1000));
   EXPECT_EQ(editor.modeling().face_texture_settings().scale_x,
             std::optional<double>(4.0));
   // A context-only toggle after the live numeric publication must preserve
@@ -2130,10 +2148,12 @@ TEST(QtToolSettingsPanelTests,
     EXPECT_DOUBLE_EQ(spins[index]->value(), index < 2 ? 1.0 : 0.0);
     spins[index]->setValue(kValues[index]);
   }
-  process_events_for(125);
   const quader::QuaderUvPeelOptions expected{
       .axis = quader::QuaderUvPeelAxis::V, .world_space = false,
       .u_repeat = 2.0, .v_repeat = 3.0, .u_offset = 0.25, .v_offset = -0.5};
+  ASSERT_TRUE(process_events_until([&] {
+    return editor.modeling().uv_peel_settings().options == expected;
+  }, 1000));
   EXPECT_EQ(editor.modeling().uv_peel_settings().options, expected);
   EXPECT_EQ(editor.revisions().modeling_content_revision, before.modeling_content_revision);
   EXPECT_EQ(editor.revisions().scene_revision, before.scene_revision);
@@ -2347,7 +2367,8 @@ TEST(QtToolSettingsPanelTests,
   // Accepting a correction to the stored value clears the validation message
   // even when the owner need not advance its settings revision.
   type_spin_text(*repeat, QStringLiteral("1"));
-  process_events_for(125);
+  ASSERT_TRUE(process_events_until([&] { return message->isHidden(); }, 1000))
+      << message->text().toStdString();
   EXPECT_TRUE(message->isHidden());
   finish_spin_edit(*repeat);
   repeat->setValue(3.0);
@@ -2481,11 +2502,15 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_DOUBLE_EQ(rotate->value(), 0.0);
 
   rotate->setValue(10.0);
-  process_events_for(75);
+  ASSERT_TRUE(process_events_until([&] {
+    return editor.modeling().face_texture_settings().rotation_degrees == 10.0;
+  }, 1000));
   EXPECT_DOUBLE_EQ(editor.modeling().face_texture_settings().rotation_degrees,
                    10.0);
   rotate->setValue(20.0);
-  process_events_for(75);
+  ASSERT_TRUE(process_events_until([&] {
+    return editor.modeling().face_texture_settings().rotation_degrees == 20.0;
+  }, 1000));
   EXPECT_DOUBLE_EQ(editor.modeling().face_texture_settings().rotation_degrees,
                    20.0);
   finish_spin_edit(*rotate);
@@ -2721,7 +2746,10 @@ TEST(QtToolSettingsPanelTests,
   const int circle_index = type->findData(QStringLiteral("circle"));
   ASSERT_GE(circle_index, 0);
   type->setCurrentIndex(circle_index);
-  process_events_for(75);
+  ASSERT_TRUE(process_events_until([&] {
+    return panel.findChild<QDoubleSpinBox *>(QStringLiteral(
+               "tool_settings.control.curve.radius")) != nullptr;
+  }, 1000));
   type = panel.findChild<QComboBox *>(
       QStringLiteral("tool_settings.control.curve.type"));
   auto *radius = panel.findChild<QDoubleSpinBox *>(
@@ -2743,7 +2771,10 @@ TEST(QtToolSettingsPanelTests,
   const int oval_index = type->findData(QStringLiteral("oval"));
   ASSERT_GE(oval_index, 0);
   type->setCurrentIndex(oval_index);
-  process_events_for(75);
+  ASSERT_TRUE(process_events_until([&] {
+    return panel.findChild<QDoubleSpinBox *>(QStringLiteral(
+               "tool_settings.control.curve.length")) != nullptr;
+  }, 1000));
   type = panel.findChild<QComboBox *>(
       QStringLiteral("tool_settings.control.curve.type"));
   radius = panel.findChild<QDoubleSpinBox *>(
@@ -2943,8 +2974,9 @@ TEST(QtToolSettingsPanelTests,
 
   session.history().clear();
   radius->setValue(0.75);
-  const quader::QuaderToolSettingControl *owner_radius = find_setting(
-      editor.tools().active_settings(), "curve.solidify.radius");
+  const auto radius_target = editor.tools().active_settings();
+  const quader::QuaderToolSettingControl *owner_radius =
+      find_setting(radius_target, "curve.solidify.radius");
   ASSERT_NE(owner_radius, nullptr);
   EXPECT_NEAR(owner_radius->number_value, 0.1, 1.0e-6)
       << "the coalesced edit must still be pending before the action";
@@ -3046,8 +3078,9 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_TRUE(radius_slider->isEnabled());
 
   const auto owner_number = [&editor](std::string_view id) {
+    const auto target = editor.tools().active_settings();
     const quader::QuaderToolSettingControl *setting =
-        find_setting(editor.tools().active_settings(), id);
+        find_setting(target, id);
     EXPECT_NE(setting, nullptr);
     return setting != nullptr ? setting->number_value : 0.0;
   };
@@ -3068,11 +3101,15 @@ TEST(QtToolSettingsPanelTests,
   send_mouse_event(*resolution_editor, QEvent::MouseMove, resolution_first,
                    Qt::NoButton, Qt::LeftButton);
   ASSERT_TRUE(resolution_spinner->is_dragging());
-  process_events_for(75);
+  ASSERT_TRUE(process_events_until([&] {
+    return owner_number("curve.solidify.resolution") == 9.0;
+  }, 1000));
   EXPECT_DOUBLE_EQ(owner_number("curve.solidify.resolution"), 9.0);
   send_mouse_event(*resolution_editor, QEvent::MouseMove, resolution_second,
                    Qt::NoButton, Qt::LeftButton);
-  process_events_for(75);
+  ASSERT_TRUE(process_events_until([&] {
+    return owner_number("curve.solidify.resolution") == 11.0;
+  }, 1000));
   EXPECT_DOUBLE_EQ(owner_number("curve.solidify.resolution"), 11.0);
   send_mouse_event(*resolution_editor, QEvent::MouseButtonRelease,
                    resolution_second, Qt::LeftButton, Qt::NoButton);
@@ -3085,7 +3122,9 @@ TEST(QtToolSettingsPanelTests,
   session.history().clear();
   resolution_increase->click();
   resolution_increase->click();
-  process_events_for(75);
+  ASSERT_TRUE(process_events_until([&] {
+    return owner_number("curve.solidify.resolution") == 10.0;
+  }, 1000));
   EXPECT_DOUBLE_EQ(owner_number("curve.solidify.resolution"), 10.0);
   ASSERT_TRUE(editor.history().undo().ok());
   panel.refresh();
@@ -3119,6 +3158,7 @@ TEST(QtToolSettingsPanelTests,
   session.history().clear();
   const QRect radius_groove = slider_groove(*radius_slider);
   const QRect radius_handle = slider_handle(*radius_slider);
+  const double radius_before_drag = owner_number("curve.solidify.radius");
   ASSERT_GT(radius_groove.width(), 20);
   const QPoint radius_press = radius_handle.center();
   const QPoint radius_first(radius_groove.left() + radius_groove.width() / 3,
@@ -3130,12 +3170,14 @@ TEST(QtToolSettingsPanelTests,
                    Qt::LeftButton, Qt::LeftButton);
   send_mouse_event(*radius_slider, QEvent::MouseMove, radius_first,
                    Qt::NoButton, Qt::LeftButton);
-  process_events_for(75);
+  ASSERT_TRUE(process_events_until([&] {
+    return owner_number("curve.solidify.radius") != radius_before_drag;
+  }, 1000));
   const double first_radius = owner_number("curve.solidify.radius");
-  EXPECT_NE(first_radius, 0.1);
+  EXPECT_NE(first_radius, radius_before_drag);
   send_mouse_event(*radius_slider, QEvent::MouseMove, radius_second,
                    Qt::NoButton, Qt::LeftButton);
-  EXPECT_TRUE(process_events_until(
+  ASSERT_TRUE(process_events_until(
       [&] { return owner_number("curve.solidify.radius") != first_radius; },
       1000));
   const double final_radius = owner_number("curve.solidify.radius");
@@ -3457,7 +3499,10 @@ TEST(QtToolSettingsNumberSliderTests,
 
   // Rapid pointer motion publishes one latest-value primitive rebuild at the
   // fixed preview cadence while the slider remains held.
-  process_events_for(75);
+  ASSERT_TRUE(process_events_until([&] {
+    return session.primitive_creation().box_settings().subdivisions_x ==
+           first_pending_subdivisions;
+  }, 1000));
   ASSERT_TRUE(subdivisions_slider->isSliderDown());
   EXPECT_EQ(session.primitive_creation().box_settings().subdivisions_x,
             first_pending_subdivisions);
@@ -3487,8 +3532,9 @@ TEST(QtToolSettingsNumberSliderTests,
   EXPECT_GT(mesh_after_live_tick->revision, mesh_before->revision);
   EXPECT_GT(mesh_after_live_tick->index_count, mesh_before->index_count);
 
-  const quader::QuaderToolSettingControl *live_setting = find_setting(
-      editor.tools().active_settings(), "primitive.box.subdivisions_x");
+  const auto live_target = editor.tools().active_settings();
+  const quader::QuaderToolSettingControl *live_setting =
+      find_setting(live_target, "primitive.box.subdivisions_x");
   ASSERT_NE(live_setting, nullptr);
   EXPECT_DOUBLE_EQ(live_setting->number_value,
                    static_cast<double>(first_pending_subdivisions));
@@ -3798,7 +3844,9 @@ TEST(QtToolSettingsNumberSliderTests,
   EXPECT_TRUE(segments_slider->isSliderDown());
   EXPECT_TRUE(window.numeric_interaction_active());
   EXPECT_EQ(segments_spin->value(), pending_segments);
-  process_events_for(100);
+  ASSERT_TRUE(process_events_until([&] {
+    return editor.revisions().asset_revision > segments_revisions_before.asset_revision;
+  }, 1000));
   const quader::QuaderRevisionStamp segments_revisions_after_live_update =
       editor.revisions();
   EXPECT_GT(segments_revisions_after_live_update.asset_revision,
@@ -3911,8 +3959,9 @@ TEST(QtToolSettingsNumberSliderTests,
   EXPECT_FALSE(window.numeric_interaction_active());
   EXPECT_GT(editor.revisions().asset_revision,
             spin_revisions_before.asset_revision);
-  const quader::QuaderToolSettingControl *spin_applied_setting = find_setting(
-      editor.tools().active_settings(), "operation.edge_bevel.segments");
+  const auto spin_applied_target = editor.tools().active_settings();
+  const quader::QuaderToolSettingControl *spin_applied_setting =
+      find_setting(spin_applied_target, "operation.edge_bevel.segments");
   ASSERT_NE(spin_applied_setting, nullptr);
   EXPECT_DOUBLE_EQ(spin_applied_setting->number_value,
                    static_cast<double>(spin_values.back()));
@@ -3952,13 +4001,15 @@ TEST(QtToolSettingsNumberSliderTests,
   EXPECT_TRUE(reset_button->hasFocus());
   QCoreApplication::processEvents();
   EXPECT_FALSE(window.numeric_interaction_active());
+  auto reset_segments_target = editor.tools().active_settings();
   const quader::QuaderToolSettingControl *reset_segments_setting =
-      find_setting(editor.tools().active_settings(),
+      find_setting(reset_segments_target,
                    "operation.edge_bevel.segments");
   ASSERT_NE(reset_segments_setting, nullptr);
   EXPECT_DOUBLE_EQ(reset_segments_setting->number_value, 1.0);
   process_events_for(75);
-  reset_segments_setting = find_setting(editor.tools().active_settings(),
+  reset_segments_target = editor.tools().active_settings();
+  reset_segments_setting = find_setting(reset_segments_target,
                                         "operation.edge_bevel.segments");
   ASSERT_NE(reset_segments_setting, nullptr);
   EXPECT_DOUBLE_EQ(reset_segments_setting->number_value, 1.0);
@@ -3977,6 +4028,17 @@ TEST(QtToolSettingsNumberSliderTests,
       editor.tools().active_settings_revision();
   const quader::QuaderRevisionStamp revisions_after_undo = editor.revisions();
   process_events_for(75);
+  // Rejection runs on the dispatch timer and schedules a separate refresh.
+  // Settle both before opening another preview with the retained spin editor.
+  ASSERT_TRUE(process_events_until([&] {
+    if (window.numeric_interaction_active()) {
+      return false;
+    }
+    const auto *settled_segments = window.findChild<QSpinBox *>(QStringLiteral(
+        "tool_settings.control.operation.edge_bevel.segments"));
+    return !window.has_active_target() ||
+           (settled_segments != nullptr && settled_segments->value() == 1);
+  }, 1000));
   EXPECT_FALSE(window.numeric_interaction_active());
   EXPECT_EQ(session.modeling().interaction_settings().edge_bevel_segments, 1);
   EXPECT_EQ(editor.tools().active_settings_revision(),

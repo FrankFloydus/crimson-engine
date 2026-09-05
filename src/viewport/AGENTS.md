@@ -8,15 +8,18 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Viewport Package Guide
 
-Follow root `AGENTS.md` viewport, input, public API, and testing rules before changing viewport
-behavior.
+- `ViewportWorkspaceService` owns layout, focused pane, camera controllers, projection-specific
+  shading, grid preset, local visibility, and render size/visibility bookkeeping. UI presents this
+  state; render owns draw resources. Expose user intent through `QuaderViewportApi`.
+- Read [INPUT_KEYBINDINGS.md](../../INPUT_KEYBINDINGS.md) for input changes. `ViewportInputRouter`
+  consumes semantic navigation and resolved shortcuts; raw Qt/Win32 events stay in host adapters.
+  Preserve explicit text-focus, navigation-capture, tool, viewport, and global shortcut contexts.
+- `ViewportRuntimeBindingToken` fences synchronous dispatch across scene/project replacement.
+  Check it after mutations and stop using old owner pointers or remaining sampled input on rebind.
+- Preserve the physical modifier chord captured at pointer press through deferred release. Tool
+  handling must account for navigation suppression, hover, selection fallback, gizmo consumption,
+  preview cancellation/commit, and undo/redo.
 
-## Viewport Rules
-
-- `ViewportWorkspaceService` owns viewport workspace state: layout, focused pane, pane view, shading,
-  grid preset, render size/visibility bookkeeping, and pane camera controllers.
-- Keep camera, input routing, grid placement, viewport layout, and workspace state here.
-- UI panels build context and delegate; they should not become long-lived owners of viewport state.
-- Render code owns draw resources; viewport code owns state and interaction-facing policy.
-- Expose user/editor viewport intent through `QuaderViewportApi`.
-- Add synthetic tests for camera, layout, pane, shading, and input-routing state when possible.
+Verification pointers: `tests/viewport_interaction_controller_tests.cpp`,
+`tests/qt_input_adapter_tests.cpp`, and the viewport tests selected by `tools/affected_check.ps1`.
+Use public APIs/`BehaviorScenario` for inspectable state and follow root build/test requirements.

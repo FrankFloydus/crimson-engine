@@ -6,13 +6,20 @@ No permission is granted to use, copy, modify, distribute, or sublicense this
 file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 -->
-# IO Package Guide
+# Native IO
 
-`src/io` owns storage format readers, writers, and compatibility adapters.
+| Format or contract | Owner |
+| --- | --- |
+| Binary scene container and atomic replacement | [qdr guide](qdr/AGENTS.md), [format overview](qdr/README.md) |
+| `.qproj` workspace manifest and contained paths | `project/project_manifest.*`, `project/project_file_system.*` |
+| External `.qmat` materials and dependency resolution | `project/qmat_codec.*`, `project/project_material_catalog.*`, `project/project_asset_resolver.*` |
+| OBJ export | `mesh/obj_writer.*` |
+| User save/open/close lifecycle | `src/editor/session/project_session.*`, `src/api/quader_scene_documents_api.*` |
 
-## IO Rules
+Keep format validation deterministic and version-aware. Parse/validate candidates before replacing
+live documents; failed writes must not silently replace valid on-disk state. Use `ProjectFileSystem`
+for project-relative containment, case-collision, and link-escape checks. Portable modeling document
+IO belongs to `src/sdk/core/modeling`.
 
-- Keep format semantics deterministic and version-aware.
-- IO code should preserve document/model invariants instead of repairing unrelated editor state.
-- Do not introduce editor save/load user workflows until the editor save/load surface exists.
-- When a format behavior changes, update focused IO tests and fixtures together.
+Update focused IO tests and compatibility fixtures with format changes; cover user save/load and
+project identity through the existing project-session/API tests. Root verification rules apply.

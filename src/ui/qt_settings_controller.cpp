@@ -91,6 +91,16 @@ bool QtSettingsController::preview_interface_scale(float scale) {
   return true;
 }
 
+bool QtSettingsController::preview_vsync_enabled(bool enabled) {
+  if (ui_settings_ == nullptr || ui_settings_->vsync_enabled() == enabled) {
+    return false;
+  }
+  ui_settings_->set_vsync_enabled(enabled);
+  notify({.kind = QtSettingsChangeKind::RenderingPreview,
+          .vsync_enabled = enabled});
+  return true;
+}
+
 bool QtSettingsController::select_locale(std::string_view locale_id) {
   if (ui_settings_ == nullptr || localization_ == nullptr ||
       locale_id.empty() || !localization_->has_locale(locale_id)) {

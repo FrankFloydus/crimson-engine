@@ -631,6 +631,121 @@ TEST(CommandBehaviorContractTests,
 }
 
 TEST(CommandBehaviorContractTests,
+     VSyncFingerprintChangesOnlyPreferencesAndRestoresExactDefaultSnapshot) {
+  const CommandBehaviorContract *contract =
+      find_command_behavior_contract(quader_command::kSelectAll.string());
+  ASSERT_NE(contract, nullptr);
+  auto fixture = CommandBehaviorFixture::create(*contract);
+  QuaderEditorApi &editor = fixture->editor();
+  ASSERT_TRUE(editor.preferences().vsync_enabled());
+  const CommandObservableState before =
+      capture_command_observable_state(editor);
+  EXPECT_EQ(before.domain(CommandObservableDomain::Preferences)
+                .canonical.find("preferences.vsync_enabled"),
+            std::string::npos)
+      << "absent VSync encodes the fixed true default in approved baselines";
+
+  const QuaderApiVoidResult disabled =
+      editor.preferences().set_vsync_enabled(false);
+  ASSERT_TRUE(disabled.ok()) << disabled.error_message();
+  ASSERT_TRUE(disabled.changed());
+  EXPECT_FALSE(editor.preferences().vsync_enabled());
+  const CommandObservableState after = capture_command_observable_state(editor);
+  const CommandObservableStateDiff difference =
+      diff_command_observable_state(before, after);
+  EXPECT_EQ(difference.changed_domains,
+            command_observable_domain_mask(CommandObservableDomain::Preferences))
+      << difference.summary;
+  EXPECT_NE(after.domain(CommandObservableDomain::Preferences)
+                .canonical.find("preferences.vsync_enabled=false\n"),
+            std::string::npos);
+
+  const QuaderApiVoidResult unchanged =
+      editor.preferences().set_vsync_enabled(false);
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(after, capture_command_observable_state(editor));
+
+  const QuaderApiVoidResult restored =
+      editor.preferences().set_vsync_enabled(true);
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  ASSERT_TRUE(restored.changed());
+  EXPECT_TRUE(editor.preferences().vsync_enabled());
+  EXPECT_EQ(before, capture_command_observable_state(editor));
+}
+
+TEST(CommandBehaviorContractTests,
+     SessionPreferenceFingerprintsDetectEachFieldAndRestoreExactDefaults) {
+  const CommandBehaviorContract *contract =
+      find_command_behavior_contract(quader_command::kSelectAll.string());
+  ASSERT_NE(contract, nullptr);
+  auto fixture = CommandBehaviorFixture::create(*contract);
+  QuaderEditorApi &editor = fixture->editor();
+  const SessionPreferences defaults;
+  ASSERT_EQ(editor.preferences().session_settings(), defaults);
+  const CommandObservableState before =
+      capture_command_observable_state(editor);
+  EXPECT_EQ(before.domain(CommandObservableDomain::Preferences)
+                .canonical.find("preferences.session."),
+            std::string::npos);
+
+  struct PreferenceChange {
+    SessionPreferences value;
+    std::string_view expected_line;
+  };
+  const std::array changes{
+      PreferenceChange{
+          {.undo_steps = 0}, "preferences.session.undo_steps=0\n"},
+      PreferenceChange{
+          {.autosave_enabled = false},
+          "preferences.session.autosave_enabled=false\n"},
+      PreferenceChange{
+          {.autosave_interval_minutes = 10},
+          "preferences.session.autosave_interval_minutes=10\n"},
+      PreferenceChange{
+          {.autosave_max_files = 7},
+          "preferences.session.autosave_max_files=7\n"},
+  };
+  for (const PreferenceChange &change : changes) {
+    SCOPED_TRACE(change.expected_line);
+    const QuaderApiVoidResult changed =
+        editor.preferences().set_session_settings(change.value);
+    ASSERT_TRUE(changed.ok()) << changed.error_message();
+    ASSERT_TRUE(changed.changed());
+    EXPECT_EQ(editor.preferences().session_settings(), change.value);
+    const CommandObservableState after =
+        capture_command_observable_state(editor);
+    const CommandObservableStateDiff difference =
+        diff_command_observable_state(before, after);
+    EXPECT_EQ(
+        difference.changed_domains,
+        command_observable_domain_mask(CommandObservableDomain::Preferences))
+        << difference.summary;
+    EXPECT_NE(after.domain(CommandObservableDomain::Preferences)
+                  .canonical.find(change.expected_line),
+              std::string::npos);
+
+    const QuaderApiVoidResult unchanged =
+        editor.preferences().set_session_settings(change.value);
+    ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+    EXPECT_FALSE(unchanged.changed());
+    EXPECT_EQ(after, capture_command_observable_state(editor));
+
+    const QuaderApiVoidResult restored =
+        editor.preferences().set_session_settings(defaults);
+    ASSERT_TRUE(restored.ok()) << restored.error_message();
+    ASSERT_TRUE(restored.changed());
+    EXPECT_EQ(before, capture_command_observable_state(editor));
+  }
+
+  const QuaderApiVoidResult invalid = editor.preferences().set_session_settings(
+      SessionPreferences{.undo_steps = -1, .autosave_enabled = false});
+  EXPECT_FALSE(invalid.ok());
+  EXPECT_FALSE(invalid.changed());
+  EXPECT_EQ(before, capture_command_observable_state(editor));
+}
+
+TEST(CommandBehaviorContractTests,
      CurveFingerprintsCaptureAuthoredHandlesClosureAndLivePreviews) {
   const auto *contract =
       find_command_behavior_contract(quader_command::kSelectAll.string());

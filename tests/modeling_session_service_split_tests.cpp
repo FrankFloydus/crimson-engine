@@ -2386,6 +2386,7 @@ TEST(ModelingSessionServiceSplitTests,
       initial_selection.content_revision;
 
   EditorHistoryService history;
+  history.set_max_steps(kHistoryDepth);
   for (std::size_t index = 0; index < kHistoryDepth; ++index) {
     const CommandResult moved = history.execute(
         std::make_unique<MoveSelectionHistoryCommand>(
@@ -2393,6 +2394,7 @@ TEST(ModelingSessionServiceSplitTests,
     ASSERT_TRUE(moved.ok) << moved.message;
     ASSERT_TRUE(moved.changed);
   }
+  ASSERT_EQ(history.undo_count(), kHistoryDepth);
   ASSERT_TRUE(history.can_undo());
   const MeshComponent *moved_binding = scene.mesh(box.object.entity);
   ASSERT_NE(moved_binding, nullptr);

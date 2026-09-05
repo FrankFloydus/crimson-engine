@@ -189,6 +189,8 @@ public:
   make_torus(const TorusSpec &spec);
   [[nodiscard]] static Result<PolygonDocument>
   make_face(std::span<const Vec3> points, MaterialId material = {});
+  /// Imports authored topology without removing finite collapsed faces.
+  /// Structural errors are rejected; validate() additionally diagnoses geometry.
   [[nodiscard]] static Result<PolygonDocument>
   from_authored_topology(const AuthoredTopology &topology);
 

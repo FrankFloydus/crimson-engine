@@ -178,6 +178,9 @@ TEST(QuaderEventsApiTests, PublishesDirtyTransitionsAcrossSaveCheckpoints) {
     std::error_code error;
     ASSERT_TRUE(std::filesystem::create_directory(root, error))
         << error.message();
+    const std::filesystem::path canonical_root =
+        std::filesystem::canonical(root, error);
+    ASSERT_FALSE(error) << error.message();
     /// Removes the event test's temporary project tree at scope exit.
     struct Cleanup final {
         std::filesystem::path path;
@@ -286,7 +289,7 @@ TEST(QuaderEventsApiTests, PublishesDirtyTransitionsAcrossSaveCheckpoints) {
     ASSERT_TRUE(last_project_closed_event.has_value());
     EXPECT_EQ(last_project_closed_event->project_id, project_id);
     EXPECT_EQ(last_project_closed_event->project_root,
-              std::optional<std::string>(root.generic_string()));
+              std::optional<std::string>(canonical_root.generic_string()));
 }
 
 } // namespace

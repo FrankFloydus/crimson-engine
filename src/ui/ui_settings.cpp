@@ -10,6 +10,7 @@
 #include "core/user_config_paths.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
@@ -24,6 +25,19 @@ namespace {
 bool parse_bool(std::string value, bool fallback) {
   const std::optional<bool> parsed = QStr::parse_bool_token(value);
   return parsed.value_or(fallback);
+}
+
+int parse_bounded_integer(std::string_view value, int minimum, int maximum,
+                          int fallback) {
+  int parsed = 0;
+  const auto result =
+      std::from_chars(value.data(), value.data() + value.size(), parsed);
+  if (result.ec != std::errc{} ||
+      result.ptr != value.data() + value.size() || parsed < minimum ||
+      parsed > maximum) {
+    return fallback;
+  }
+  return parsed;
 }
 
 std::optional<UIPanelId> panel_settings_id(std::string_view key) {
@@ -71,6 +85,27 @@ UISettings UISettings::load(const std::filesystem::path& path) {
             parse_bool(value, settings.navigation_gizmo_visible_);
       } else if (key == "Locale") {
         settings.set_locale(value);
+      } else if (key == "VSync") {
+        settings.set_vsync_enabled(parse_bool(value, settings.vsync_enabled()));
+      } else if (key == "UndoSteps") {
+        settings.session_settings_.undo_steps = parse_bounded_integer(
+            value, SessionPreferences::kMinimumUndoSteps,
+            SessionPreferences::kMaximumUndoSteps,
+            settings.session_settings_.undo_steps);
+      } else if (key == "AutoSaveEnabled") {
+        settings.session_settings_.autosave_enabled =
+            parse_bool(value, settings.session_settings_.autosave_enabled);
+      } else if (key == "AutoSaveIntervalMinutes") {
+        settings.session_settings_.autosave_interval_minutes =
+            parse_bounded_integer(
+                value, SessionPreferences::kMinimumAutoSaveIntervalMinutes,
+                SessionPreferences::kMaximumAutoSaveIntervalMinutes,
+                settings.session_settings_.autosave_interval_minutes);
+      } else if (key == "AutoSaveMaxFiles") {
+        settings.session_settings_.autosave_max_files = parse_bounded_integer(
+            value, SessionPreferences::kMinimumAutoSaveMaxFiles,
+            SessionPreferences::kMaximumAutoSaveMaxFiles,
+            settings.session_settings_.autosave_max_files);
       } else if (key == "InterfaceScale") {
         if (const std::optional<float> parsed =
                 QStr::parse_finite_float_token(value)) {
@@ -116,6 +151,16 @@ bool UISettings::save(const std::filesystem::path& path) const {
     file << "\n[Interface]\n";
     file << std::fixed << std::setprecision(6);
     file << "InterfaceScale=" << interface_scale_ << '\n';
+    file << "\n[Rendering]\n";
+    file << "VSync=" << (vsync_enabled_ ? "true" : "false") << '\n';
+    file << "\n[History]\n";
+    file << "UndoSteps=" << session_settings_.undo_steps << '\n';
+    file << "\n[AutoSave]\n";
+    file << "AutoSaveEnabled="
+         << (session_settings_.autosave_enabled ? "true" : "false") << '\n';
+    file << "AutoSaveIntervalMinutes="
+         << session_settings_.autosave_interval_minutes << '\n';
+    file << "AutoSaveMaxFiles=" << session_settings_.autosave_max_files << '\n';
     file.flush();
     return file.good();
 }
@@ -183,6 +228,14 @@ void UISettings::set_interface_scale(float scale) {
   }
   interface_scale_ =
       std::clamp(scale, kMinimumInterfaceScale, kMaximumInterfaceScale);
+}
+
+bool UISettings::set_session_settings(SessionPreferences settings) {
+  if (!settings.valid()) {
+    return false;
+  }
+  session_settings_ = settings;
+  return true;
 }
 
 } // namespace quader

@@ -19,6 +19,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QByteArray>
+#include <QDir>
 #include <QMenu>
 #include <QMenuBar>
 #include <QObject>
@@ -481,7 +482,9 @@ struct QtMainMenu::Impl {
     panel_actions.clear();
     tool_actions.clear();
     object_menu = nullptr;
+    file_menu = nullptr;
     window_menu = nullptr;
+    autosave_recovery_action = nullptr;
     material_browser_action = nullptr;
     material_find_replace_action = nullptr;
     selection_toolbar_action = nullptr;
@@ -515,7 +518,9 @@ struct QtMainMenu::Impl {
   std::unique_ptr<QObject> connection_context = std::make_unique<QObject>();
   std::vector<QPointer<QMenu>> top_level_menus;
   QMenu *object_menu = nullptr;
+  QMenu *file_menu = nullptr;
   QMenu *window_menu = nullptr;
+  QAction *autosave_recovery_action = nullptr;
   QAction *material_browser_action = nullptr;
   QAction *material_find_replace_action = nullptr;
   QAction *selection_toolbar_action = nullptr;
@@ -937,13 +942,124 @@ struct QtMainMenu::Impl {
     }
   }
 
+  void show_no_recent_scenes(QMenu &menu) {
+    QAction *empty = menu.addAction(qtext(
+        context.localization, "ui.menu.file.no_recent_scenes", "No recent scenes"));
+    empty->setObjectName(QStringLiteral("action_no_recent_scenes"));
+    empty->setEnabled(false);
+  }
+
+  void populate_recent_scenes(QMenu &menu) {
+    // File existence checks and history reads belong to the menu-open event,
+    // never the retained frame refresh.
+    const std::vector<QuaderRecentScene> recent =
+        context.editor.get().project().recent_scenes();
+    menu.clear();
+    const std::size_t count = std::min(recent.size(), std::size_t{5});
+    if (count == 0u) {
+      show_no_recent_scenes(menu);
+      return;
+    }
+    for (std::size_t index = 0; index < count; ++index) {
+      const QuaderRecentScene &entry = recent[index];
+      QString label = entry.scene_name.empty()
+                          ? QString::fromStdWString(
+                                entry.scene_path.native_path().filename().wstring())
+                          : QString::fromStdString(entry.scene_name);
+      if (!entry.project_name.empty()) {
+        label.append(QStringLiteral(" (%1)")
+                         .arg(QString::fromStdString(entry.project_name)));
+      }
+      label.replace(QLatin1Char('&'), QStringLiteral("&&"));
+      label.replace(QLatin1Char('\t'), QLatin1Char(' '));
+      label.replace(QLatin1Char('\n'), QLatin1Char(' '));
+      label.replace(QLatin1Char('\r'), QLatin1Char(' '));
+      QAction *action = menu.addAction(label);
+      action->setObjectName(QStringLiteral("action_open_recent_scene_%1")
+                                .arg(static_cast<qulonglong>(index)));
+      action->setEnabled(entry.available);
+      const std::filesystem::path scene_path =
+          entry.manifest_path.parent_path() / entry.scene_path.native_path();
+      action->setToolTip(
+          QDir::toNativeSeparators(QString::fromStdWString(scene_path.wstring())));
+      QObject::connect(
+          action, &QAction::triggered, connection_context.get(),
+          [this, entry]() {
+            // A project switch can synchronously rebind the retained menu or
+            // destroy its hierarchy. Keep the selected value alive independently.
+            const QuaderRecentScene selected = entry;
+            const QPointer<QObject> lifetime(connection_context.get());
+            const QuaderApiVoidResult result =
+                context.editor.get().project().open_recent_scene(selected);
+            if (lifetime.isNull() || result.ok()) {
+              return;
+            }
+            (void)context.editor.get().ui().notify({
+                .level = QuaderNotificationLevel::Error,
+                .message = result.error_message(),
+            });
+          });
+    }
+  }
+
+  void refresh_autosave_recovery() {
+    if (autosave_recovery_action != nullptr) {
+      present_enabled(*autosave_recovery_action,
+                      context.show_autosave_recovery &&
+                          context.autosave_recovery_available &&
+                          context.autosave_recovery_available());
+    }
+  }
+
   void build_file_menu() {
     QMenu *menu = add_top_level_menu("ui.menu.file", "&File");
+    file_menu = menu;
     menu->setObjectName(QStringLiteral("menu_file"));
     (void)add_presented_group(*menu, CommandPresentationDomain::File,
                               CommandPresentationGroup::Project);
     (void)append_presented_group(*menu, CommandPresentationDomain::File,
                                  CommandPresentationGroup::SceneDocument);
+
+    QMenu *recent_menu = menu->addMenu(
+        qtext(context.localization, "ui.menu.file.open_recent", "Open Recent"));
+    recent_menu->setObjectName(QStringLiteral("menu_file_open_recent"));
+    recent_menu->setToolTipsVisible(true);
+    // Place recent scenes directly after Open Scene while preserving the
+    // metadata-owned order of every command-backed row.
+    const QList<QAction *> file_actions = menu->actions();
+    for (qsizetype index = 0; index + 1 < file_actions.size(); ++index) {
+      if (file_actions[index]->objectName() ==
+          QStringLiteral("command_scene_document_open")) {
+        menu->insertMenu(file_actions[index + 1], recent_menu);
+        break;
+      }
+    }
+    show_no_recent_scenes(*recent_menu);
+    QObject::connect(recent_menu, &QMenu::aboutToShow, connection_context.get(),
+                     [this, recent_menu] { populate_recent_scenes(*recent_menu); });
+
+    menu->addSeparator();
+    QMenu *recover_menu = menu->addMenu(
+        qtext(context.localization, "ui.menu.file.recover", "Recover"));
+    recover_menu->setObjectName(QStringLiteral("menu_file_recover"));
+    autosave_recovery_action = recover_menu->addAction(qtext(
+        context.localization, "ui.menu.file.recover_autosave", "Auto Save..."));
+    autosave_recovery_action->setObjectName(
+        QStringLiteral("action_recover_autosave"));
+    refresh_autosave_recovery();
+    QObject::connect(recover_menu, &QMenu::aboutToShow, connection_context.get(),
+                     [this] { refresh_autosave_recovery(); });
+    QObject::connect(
+        autosave_recovery_action, &QAction::triggered, connection_context.get(),
+        [this] {
+          if (context.autosave_recovery_available &&
+              context.autosave_recovery_available()) {
+            const std::function<void()> recover = context.show_autosave_recovery;
+            if (recover) {
+              recover();
+            }
+          }
+        });
     if (!menu->actions().isEmpty()) {
       menu->addSeparator();
     }
@@ -1456,6 +1572,10 @@ struct QtMainMenu::Impl {
 
   void refresh_menu(QMenu &menu, ModelingSelectionMode selection_mode) {
     QDR_PROFILE_SCOPE("Qt main menu refresh owning menu");
+
+    if (&menu == file_menu) {
+      refresh_autosave_recovery();
+    }
 
     {
       QDR_PROFILE_SCOPE("Qt main menu sync command actions");

@@ -142,9 +142,8 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   filtered_scene_overlay_valid_ = false;
   tool_preview_overlay_suppression_dirty_ = true;
   overlay_submission_coordinator_.invalidate_all();
-  // Preview and viewport-overlay proxies may own material instances that
-  // still reference the outgoing scene's texture cache. Destroy them before
-  // the scene sync service invalidates those textures.
+  // Retire outgoing preview and viewport-overlay material consumers before
+  // switching the scene. Their texture pins drain alongside the scene proxies.
   tool_preview_cache_.clear();
   tool_preview_light_cache_.clear();
   mesh_cache_.set_preview_suppressed_entities({});

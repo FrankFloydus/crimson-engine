@@ -8,6 +8,7 @@
 
 #include "core/undo_redo_manager.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace quader {
@@ -304,6 +305,9 @@ CommandResult EditorTransaction::cancel() {
     if (changed && history->change_observer_) {
       history->change_observer_();
     }
+    if (changed && history->content_settled_observer_) {
+      history->content_settled_observer_(false);
+    }
     return changed ? command_changed_result() : command_unchanged_result();
 }
 
@@ -346,7 +350,9 @@ CommandResult EditorTransaction::discard() {
 }
 
 EditorHistoryService::EditorHistoryService()
-    : undo_redo_(std::make_unique<UndoRedoManager>()) {}
+    : undo_redo_(std::make_unique<UndoRedoManager>()) {
+  undo_redo_->set_max_steps(kDefaultMaxSteps);
+}
 
 EditorHistoryService::~EditorHistoryService() = default;
 
@@ -359,6 +365,7 @@ CommandResult EditorHistoryService::execute(std::unique_ptr<IUndoableCommand> co
 }
 
 CommandResult EditorHistoryService::execute(std::unique_ptr<IUndoableCommand> command, UndoRedoExecuteOptions options) {
+  const bool provisional = active_transaction_ != nullptr;
   CommandResult result;
   if (active_transaction_ != nullptr) {
     result =
@@ -369,11 +376,15 @@ CommandResult EditorHistoryService::execute(std::unique_ptr<IUndoableCommand> co
   if (result.ok && result.changed && change_observer_) {
     change_observer_();
   }
+  if (result.ok && result.changed && !provisional && content_settled_observer_) {
+    content_settled_observer_(true);
+  }
   return result;
 }
 
 CommandResult EditorHistoryService::record_executed(
     std::unique_ptr<IUndoableCommand> command) {
+  const bool provisional = active_transaction_ != nullptr;
   CommandResult result;
   if (active_transaction_ != nullptr) {
     result = active_transaction_->record_executed(std::move(command));
@@ -382,6 +393,9 @@ CommandResult EditorHistoryService::record_executed(
   }
   if (result.ok && result.changed && change_observer_) {
     change_observer_();
+  }
+  if (result.ok && result.changed && !provisional && content_settled_observer_) {
+    content_settled_observer_(true);
   }
   return result;
 }
@@ -395,6 +409,9 @@ CommandResult EditorHistoryService::undo() {
   if (result.ok && result.changed && change_observer_) {
     change_observer_();
   }
+  if (result.ok && result.changed && content_settled_observer_) {
+    content_settled_observer_(true);
+  }
   return result;
 }
 
@@ -406,6 +423,9 @@ CommandResult EditorHistoryService::redo() {
   CommandResult result = undo_redo_->redo();
   if (result.ok && result.changed && change_observer_) {
     change_observer_();
+  }
+  if (result.ok && result.changed && content_settled_observer_) {
+    content_settled_observer_(true);
   }
   return result;
 }
@@ -426,11 +446,32 @@ const std::string *EditorHistoryService::redo_label() const {
   return undo_redo_->redo_label();
 }
 
+std::size_t EditorHistoryService::undo_count() const {
+  return undo_redo_->undo_count();
+}
+
+std::size_t EditorHistoryService::redo_count() const {
+  return undo_redo_->redo_count();
+}
+
+std::size_t EditorHistoryService::max_steps() const {
+  return undo_redo_->max_steps();
+}
+
+void EditorHistoryService::set_max_steps(std::size_t max_steps) {
+  undo_redo_->set_max_steps(std::min(max_steps, kMaximumMaxSteps));
+}
+
 void EditorHistoryService::clear() { undo_redo_->clear(); }
 
 void EditorHistoryService::set_change_observer(
     std::function<void()> observer) {
   change_observer_ = std::move(observer);
+}
+
+void EditorHistoryService::set_content_settled_observer(
+    std::function<void(bool)> observer) {
+  content_settled_observer_ = std::move(observer);
 }
 
 EditorTransaction EditorHistoryService::begin_transaction(std::string label) {

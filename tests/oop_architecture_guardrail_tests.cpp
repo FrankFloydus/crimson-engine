@@ -447,7 +447,8 @@ TEST(OopArchitectureGuardrailTests, UiDoesNotBypassCommandAndPreviewBoundaries) 
 
 TEST(OopArchitectureGuardrailTests,
      DiagnosticsGlobalsStayInCoreAndPlatformOwners) {
-  const std::string root_agents = read_file(source_root() / "AGENTS.md");
+  const std::string architecture =
+      read_file(source_root() / "architecture-review.md");
   const std::string logger_header =
       read_file(source_root() / "src/core/logger.hpp");
   const std::string logger_source =
@@ -456,16 +457,10 @@ TEST(OopArchitectureGuardrailTests,
       read_file(source_root() / "src/platform/fatal_error_handler.cpp");
   const std::string main_source = read_file(source_root() / "src/main.cpp");
 
-  EXPECT_NE(root_agents.find("## Diagnostics And Fatal Errors"),
-            std::string::npos);
-  EXPECT_NE(root_agents.find("Logger"),
-            std::string::npos);
-  EXPECT_NE(root_agents.find("src/platform/fatal_error_handler.*"),
-            std::string::npos);
-  EXPECT_NE(root_agents.find("explicit shared-core diagnostics exceptions"),
-            std::string::npos);
-  EXPECT_NE(root_agents.find("Fatal-error handling is platform-owned"),
-            std::string::npos);
+  for (const char *owner :
+       {"src/core/logger", "src/platform/fatal_error_handler", "src/main.cpp"}) {
+    EXPECT_NE(architecture.find(owner), std::string::npos) << owner;
+  }
 
   EXPECT_NE(logger_header.find("class Logger"), std::string::npos);
   EXPECT_NE(logger_header.find("#define LOG_ERROR"), std::string::npos);
@@ -499,7 +494,6 @@ TEST(OopArchitectureGuardrailTests,
       "MessageBoxW(",
       "MessageBoxA(",
       "SDL_ShowSimpleMessageBox(",
-      "MiniDumpWriteDump(",
       "install_fatal_error_handler(",
       "report_fatal_error_and_exit(",
   };
@@ -529,6 +523,10 @@ TEST(OopArchitectureGuardrailTests,
       if (contains_any(line, fatal_runtime_hooks)) {
         EXPECT_TRUE(is_fatal_policy_owner_or_startup(relative))
             << relative << ": " << line;
+      }
+      if (line.find("MiniDumpWriteDump(") != std::string::npos) {
+        EXPECT_EQ(relative, "src/platform/fatal_diagnostics_main.cpp")
+            << "Only the isolated fatal helper may enter DbgHelp: " << line;
       }
     }
   }

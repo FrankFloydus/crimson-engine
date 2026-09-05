@@ -11,6 +11,7 @@
 #include "io/project/project_types.hpp"
 
 #include <filesystem>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -34,6 +35,15 @@ struct QuaderSceneDocumentInfo final {
   std::optional<ProjectRelativePath> path;
   bool dirty = false;
   bool active = false;
+};
+
+/// A project recovery copy; recovering opens an independent unsaved scene tab.
+struct QuaderAutosaveInfo final {
+  ProjectRelativePath path;
+  SceneId scene_id;
+  std::string name;
+  std::optional<ProjectRelativePath> source_path;
+  std::int64_t saved_at_unix_ms = 0;
 };
 
 /// Selects the user decision for a dirty-scene close prompt.
@@ -76,6 +86,13 @@ public:
   QuaderApiVoidResult save_as_native_path(
       SceneSessionId id, const std::filesystem::path &path);
   QuaderApiVoidResult save_all();
+  [[nodiscard]] QuaderApiResult<std::vector<QuaderAutosaveInfo>> autosaves() const;
+  /// Creates/resolves recovery storage for the native recovery file picker.
+  [[nodiscard]] QuaderApiResult<std::filesystem::path> autosave_directory() const;
+  QuaderApiResult<SceneSessionId>
+  recover_autosave(ProjectRelativePath path);
+  QuaderApiResult<SceneSessionId>
+  recover_autosave_native_path(const std::filesystem::path &path);
   QuaderApiVoidResult close(SceneSessionId id);
   QuaderApiVoidResult close_active();
   QuaderApiVoidResult activate_next();

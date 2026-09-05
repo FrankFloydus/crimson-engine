@@ -46,7 +46,7 @@ include(cmake/QuaderBuildOptions.cmake)
 # participate in the final executable's link-time optimization pass.
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 
-set(_QUADER_DEFAULT_FILAMENT_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/filament-v1.71.6-windows")
+set(_QUADER_DEFAULT_FILAMENT_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/filament-v1.71.6-quader-vsync1-windows")
 if(DEFINED ENV{FILAMENT_SDK_ROOT} AND NOT "$ENV{FILAMENT_SDK_ROOT}" STREQUAL "")
     file(TO_CMAKE_PATH "$ENV{FILAMENT_SDK_ROOT}" _QUADER_DEFAULT_FILAMENT_SDK_ROOT)
 endif()
@@ -395,6 +395,7 @@ add_library(quader_project_qdr_io STATIC
     src/io/project/project_material_provisioner.cpp
     src/io/project/qmat_codec.cpp
     src/io/project/recent_project_store.cpp
+    src/io/project/recent_scene_store.cpp
     src/io/qdr/qdr_atomic_write.cpp
     src/io/qdr/qdr_binary_container.cpp
     src/io/qdr/qdr_document_reader.cpp
@@ -469,8 +470,11 @@ add_library(quader_project_session STATIC
     src/editor/material/project_material_persistence.cpp
     src/editor/material/standard_material_edit_session_service.cpp
     src/editor/render/standard_material_render_snapshot_adapter.cpp
+    src/editor/session/project_autosave_service.cpp
     src/editor/session/project_session.cpp)
 quader_configure_core_module(quader_project_session)
+target_include_directories(quader_project_session PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
 target_link_libraries(quader_project_session
     PUBLIC
         quader_editor_services
@@ -598,6 +602,8 @@ function(quader_require_existing_path required_path description)
     endif()
 endfunction()
 
+include(cmake/QuaderFilamentSdk.cmake)
+
 function(quader_validate_filament_sdk sdk_root)
     if("${sdk_root}" STREQUAL "")
         message(FATAL_ERROR "FILAMENT_SDK_ROOT is empty. Set FILAMENT_SDK_ROOT or pass -DFILAMENT_SDK_ROOT=<path>.")
@@ -612,6 +618,7 @@ function(quader_validate_filament_sdk sdk_root)
             "${sdk_root}/lib/x86_64/md/${_quader_filament_lib}.lib"
             "Filament release-runtime library ${_quader_filament_lib}.lib")
     endforeach()
+    quader_validate_filament_patch("${sdk_root}")
 endfunction()
 
 quader_validate_filament_sdk("${FILAMENT_SDK_ROOT}")
@@ -693,6 +700,16 @@ quader_register_filament_material(quader_overlay_point_material resources/materi
 quader_register_filament_material(quader_overlay_icon_material resources/materials/quader_overlay_icon.mat quader_overlay_icon)
 quader_register_filament_material(ground_grid_material resources/materials/ground_grid.mat ground_grid)
 
+# DbgHelp must run outside the failing process and without Quader/Tracy state.
+# The parent launches this console-entry helper with CREATE_NO_WINDOW.
+set(_QUADER_SAVED_HELPER_APPLOCAL_DEPS "${VCPKG_APPLOCAL_DEPS}")
+set(VCPKG_APPLOCAL_DEPS OFF)
+add_executable(quader_fatal_diagnostics src/platform/fatal_diagnostics_main.cpp)
+set(VCPKG_APPLOCAL_DEPS "${_QUADER_SAVED_HELPER_APPLOCAL_DEPS}")
+unset(_QUADER_SAVED_HELPER_APPLOCAL_DEPS)
+target_compile_features(quader_fatal_diagnostics PRIVATE cxx_std_20)
+target_link_libraries(quader_fatal_diagnostics PRIVATE Dbghelp)
+
 add_library(quader_platform STATIC
     src/platform/fatal_error_handler.cpp
     src/platform/native_window_input.cpp
@@ -716,7 +733,6 @@ target_compile_features(quader_platform PUBLIC cxx_std_20)
 if(WIN32)
     target_link_libraries(quader_platform
         PRIVATE
-            Dbghelp
             Comdlg32
             Ole32
             Shell32
@@ -1132,6 +1148,7 @@ qt_add_resources(quader "quader_layer_panel_icons"
     FILES ${QUADER_LAYER_PANEL_ICON_FILES})
 target_link_libraries(quader PRIVATE quader_runtime)
 add_dependencies(quader
+    quader_fatal_diagnostics
     ${QUADER_FILAMENT_MATERIAL_TARGETS})
 
 if(WIN32)
@@ -1384,6 +1401,7 @@ if(QUADER_BUILD_TESTS)
 
     add_executable(quader_guardrail_tests
         tests/agent_instruction_routing_tests.cpp
+        tests/session_scheduling_guardrail_tests.cpp
         tests/build_guardrail_tests.cpp
         tests/cpp_style_guardrail_tests.cpp
         tests/dependency_matrix_guardrail_tests.cpp
@@ -1410,7 +1428,18 @@ if(QUADER_BUILD_TESTS)
         tests/quader_tests_main.cpp
         tests/app_frame_clock_tests.cpp
         tests/command_behavior_contract_tests.cpp
+        tests/component_transform_persistence_tests.cpp
         tests/core_tests.cpp
+        tests/editor_history_limit_tests.cpp
+        tests/editor_modeling_history_retention_tests.cpp
+        tests/project_autosave_tests.cpp
+        tests/recent_scene_store_tests.cpp
+        tests/project_recent_scenes_tests.cpp
+        tests/qt_main_menu_tests.cpp
+        tests/session_preferences_tests.cpp
+        tests/render_presentation_tests.cpp
+        tests/render_vsync_runtime_tests.cpp
+        tests/render_texture_lifetime_tests.cpp
         tests/curve_modeling_behavior_tests.cpp
         tests/curve_tool_service_tests.cpp
         tests/fatal_error_handler_behavior_tests.cpp
@@ -1515,7 +1544,7 @@ if(QUADER_BUILD_TESTS)
     if(WIN32)
         quader_deploy_windows_qt_runtime(quader_tests)
     endif()
-    add_dependencies(quader_tests quader_runtime_resources)
+    add_dependencies(quader_tests quader_runtime_resources quader_fatal_diagnostics)
     add_test(NAME quader_tests COMMAND quader_tests)
 
     add_executable(quader_modeling_sdk_parity_tests

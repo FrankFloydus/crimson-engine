@@ -18,10 +18,10 @@ Owns:
 - plane basis, projection, coordinate, and classified plane-intersection helpers;
 - triangulation wrappers and polygon predicates;
 - robust primitive distance/intersection helpers for picking, snapping, overlays, and tool math;
-- normals, barycentric predicates, bounds, and spatial broad-phase helpers;
-- future BVH or spatial index wrappers.
+- normals, barycentric predicates, bounds, BVH queries, and spatial broad-phase helpers.
 
-Geometry algorithms are Quader-owned. Public headers expose only Quader-owned types.
+Declarations live under `neutral/include/quader/modeling/neutral/geometry` and expose
+Quader-owned types. The public SDK geometry facade is under `include/quader/modeling`.
 
 ## Source Direction
 

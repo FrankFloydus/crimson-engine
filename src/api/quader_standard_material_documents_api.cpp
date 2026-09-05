@@ -522,7 +522,8 @@ void QuaderStandardMaterialDocumentsApi::publish(
   if (project != nullptr && project->has_project()) {
     event.project_id = project->manifest()->id();
     event.project_name = project->manifest()->name();
-    event.project_root = project->root().string();
+    const auto root_utf8 = project->root().u8string();
+    event.project_root.emplace(root_utf8.begin(), root_utf8.end());
   }
   if (document_override != nullptr) {
     event.project_asset_id = document_override->id;

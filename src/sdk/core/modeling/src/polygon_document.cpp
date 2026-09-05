@@ -794,6 +794,49 @@ native_knife_segment(KnifeStrokeSegment segment) {
   return x * x + y * y + z * z;
 }
 
+[[nodiscard]] Result<OperationResult> validate_document(
+    const PolygonDocumentImpl &impl,
+    quader_poly::PolygonDocumentValidationPolicy policy) {
+  const quader_poly::PolygonDocumentValidationReport document_report =
+      quader_poly::validate_polygon_document(*impl.document, policy);
+  const quader_poly::PolygonSelectionLivenessReport selection_report =
+      quader_poly::validate_polygon_selection_liveness(*impl.document,
+                                                       *impl.selection);
+
+  OperationResult result;
+  result.success = document_report.ok() && selection_report.ok();
+  result.error_code = result.success ? ErrorCode::Ok : ErrorCode::ValidationFailed;
+  result.message = result.success ? "Document is valid." : "Document validation failed.";
+
+  for (const quader_poly::PolygonDocumentDiagnostic &diagnostic :
+       document_report.diagnostics) {
+    result.diagnostics.push_back({
+        .code = "polygon.document",
+        .severity = diagnostic.severity ==
+                            quader_poly::PolygonDocumentDiagnosticSeverity::Error
+                        ? DiagnosticSeverity::Error
+                        : DiagnosticSeverity::Warning,
+        .message = diagnostic.message,
+    });
+  }
+  for (const quader_poly::PolygonSelectionLivenessIssue &issue :
+       selection_report.issues) {
+    result.diagnostics.push_back({
+        .code = "polygon.selection_liveness",
+        .severity = DiagnosticSeverity::Error,
+        .message = "Selection references stale polygon topology.",
+    });
+    static_cast<void>(issue);
+  }
+
+  if (!result.success) {
+    Error error = make_error(ErrorCode::ValidationFailed, result.message);
+    error.diagnostics = result.diagnostics;
+    return Result<OperationResult>::failure(std::move(error));
+  }
+  return operation_success(std::move(result));
+}
+
 template <typename Operation>
 [[nodiscard]] Result<OperationResult>
 apply_operation(PolygonDocumentImpl &impl, Operation operation,
@@ -1151,7 +1194,11 @@ PolygonDocument::from_authored_topology(const AuthoredTopology &topology) {
 
   PolygonDocument result = PolygonDocumentNativeAccess::from_native(
       std::move(document));
-  Result<OperationResult> validation = result.validate();
+  // Imports are lossless authored-state transfers, including finite collapsed
+  // faces produced by component edits. Geometric diagnostics remain available
+  // through the stricter public validate() operation.
+  Result<OperationResult> validation = validate_document(
+      *result.impl_, quader_poly::PolygonDocumentValidationPolicy::AuthoredTopology);
   if (!validation.ok()) {
     return Result<PolygonDocument>::failure(validation.error());
   }
@@ -1758,44 +1805,8 @@ Result<MeshPayload> PolygonDocument::compile_mesh() const {
 }
 
 Result<OperationResult> PolygonDocument::validate() const {
-  const quader_poly::PolygonDocumentValidationReport document_report =
-      quader_poly::validate_polygon_document(*impl_->document);
-  const quader_poly::PolygonSelectionLivenessReport selection_report =
-      quader_poly::validate_polygon_selection_liveness(*impl_->document,
-                                                       *impl_->selection);
-
-  OperationResult result;
-  result.success = document_report.ok() && selection_report.ok();
-  result.error_code = result.success ? ErrorCode::Ok : ErrorCode::ValidationFailed;
-  result.message = result.success ? "Document is valid." : "Document validation failed.";
-
-  for (const quader_poly::PolygonDocumentDiagnostic &diagnostic :
-       document_report.diagnostics) {
-    result.diagnostics.push_back({
-        .code = "polygon.document",
-        .severity = diagnostic.severity ==
-                            quader_poly::PolygonDocumentDiagnosticSeverity::Error
-                        ? DiagnosticSeverity::Error
-                        : DiagnosticSeverity::Warning,
-        .message = diagnostic.message,
-    });
-  }
-  for (const quader_poly::PolygonSelectionLivenessIssue &issue :
-       selection_report.issues) {
-    result.diagnostics.push_back({
-        .code = "polygon.selection_liveness",
-        .severity = DiagnosticSeverity::Error,
-        .message = "Selection references stale polygon topology.",
-    });
-    static_cast<void>(issue);
-  }
-
-  if (!result.success) {
-    Error error = make_error(ErrorCode::ValidationFailed, result.message);
-    error.diagnostics = result.diagnostics;
-    return Result<OperationResult>::failure(std::move(error));
-  }
-  return operation_success(std::move(result));
+  return validate_document(
+      *impl_, quader_poly::PolygonDocumentValidationPolicy::Strict);
 }
 
 Result<OperationResult>

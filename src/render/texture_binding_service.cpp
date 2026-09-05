@@ -11,6 +11,8 @@
 #include "render/png_texture_loader.hpp"
 
 #include <array>
+#include <algorithm>
+#include <cassert>
 #include <optional>
 #include <string>
 #include <utility>
@@ -26,6 +28,8 @@ void TextureBindingService::initialize(filament::Engine &engine,
                                        std::filesystem::path resource_root) {
   shutdown();
   engine_ = &engine;
+  upload_count_ = 0u;
+  destroy_count_ = 0u;
   resource_root_ = std::move(resource_root);
   fallback_albedo_texture_ =
       create_solid_texture(255, 255, 255, 255, TextureColorSpace::Srgb);
@@ -42,10 +46,16 @@ void TextureBindingService::shutdown() {
         return;
     }
 
-    for (auto &[id, texture] : texture_cache_) {
-      destroy_texture(texture);
+    // Proxy owners must destroy live and retired material instances first.
+    assert(material_textures_.empty());
+    for (auto &[id, entry] : texture_cache_) {
+      if (entry.texture != nullptr) {
+        ++destroy_count_;
+      }
+      destroy_texture(entry.texture);
     }
     texture_cache_.clear();
+    material_textures_.clear();
     destroy_texture(fallback_albedo_texture_);
     destroy_texture(fallback_roughness_texture_);
     destroy_texture(fallback_metallic_texture_);
@@ -60,16 +70,14 @@ void TextureBindingService::bind_scene(
   if (scene_binding_ == scene_binding) {
     return;
   }
-  for (auto &[key, texture] : texture_cache_) {
-    (void)key;
-    destroy_texture(texture);
-  }
-  texture_cache_.clear();
+  // Scene identity changes future lookups. An outgoing instance can still be
+  // alive in a paced retirement queue; its final release reclaims the texture.
   scene_binding_ = scene_binding;
 }
 
 filament::Texture *TextureBindingService::resolve_texture(
-    const AssetRegistry &assets, const MaterialDocument *material,
+    const filament::MaterialInstance &consumer, const AssetRegistry &assets,
+    const MaterialDocument *material,
     const char *slot_name, filament::Texture *fallback) {
   if (!material) {
     return fallback;
@@ -91,14 +99,18 @@ filament::Texture *TextureBindingService::resolve_texture(
   };
   if (const auto cached = texture_cache_.find(cache_key);
       cached != texture_cache_.end()) {
-    return cached->second ? cached->second : fallback;
+    retain_texture(consumer, cache_key);
+    return cached->second.texture ? cached->second.texture : fallback;
   }
   filament::Texture *loaded = load_texture_asset(*texture);
-  texture_cache_[cache_key] = loaded;
+  texture_cache_[cache_key] = {.texture = loaded};
+  upload_count_ += loaded != nullptr ? 1u : 0u;
+  retain_texture(consumer, cache_key);
   return loaded ? loaded : fallback;
 }
 
 filament::Texture *TextureBindingService::resolve_texture(
+    const filament::MaterialInstance &consumer,
     const RenderMaterialAssetSnapshot *material, const char *slot_name,
     filament::Texture *fallback) {
   if (!material || !material->present) {
@@ -119,13 +131,72 @@ filament::Texture *TextureBindingService::resolve_texture(
   };
   if (const auto cached = texture_cache_.find(cache_key);
       cached != texture_cache_.end()) {
-    return cached->second ? cached->second : fallback;
+    retain_texture(consumer, cache_key);
+    return cached->second.texture ? cached->second.texture : fallback;
   }
   filament::Texture *loaded = texture->project_owned()
                                   ? load_project_texture_asset(*texture)
                                   : load_texture_asset(texture->texture);
-  texture_cache_[cache_key] = loaded;
+  texture_cache_[cache_key] = {.texture = loaded};
+  upload_count_ += loaded != nullptr ? 1u : 0u;
+  retain_texture(consumer, cache_key);
   return loaded ? loaded : fallback;
+}
+
+void TextureBindingService::retain_texture(
+    const filament::MaterialInstance &consumer, const TextureCacheKey &key) {
+  auto &keys = material_textures_[&consumer];
+  if (std::find(keys.begin(), keys.end(), key) == keys.end()) {
+    keys.push_back(key);
+    ++texture_cache_.at(key).consumer_count;
+  }
+}
+
+void TextureBindingService::retain_material_textures(
+    const filament::MaterialInstance &source,
+    const filament::MaterialInstance &duplicate) {
+  const auto found = material_textures_.find(&source);
+  if (found == material_textures_.end()) {
+    return;
+  }
+  // Copy first: inserting the duplicate can rehash the consumer map.
+  const std::vector<TextureCacheKey> keys = found->second;
+  for (const TextureCacheKey &key : keys) {
+    retain_texture(duplicate, key);
+  }
+}
+
+void TextureBindingService::release_material_textures(
+    const filament::MaterialInstance *consumer) {
+  const auto found = material_textures_.find(consumer);
+  if (found == material_textures_.end()) {
+    return;
+  }
+  for (const TextureCacheKey &key : found->second) {
+    const auto cached = texture_cache_.find(key);
+    assert(cached != texture_cache_.end() &&
+           cached->second.consumer_count != 0u);
+    if (--cached->second.consumer_count == 0u) {
+      if (cached->second.texture != nullptr) {
+        ++destroy_count_;
+      }
+      destroy_texture(cached->second.texture);
+      texture_cache_.erase(cached);
+    }
+  }
+  material_textures_.erase(found);
+}
+
+TextureBindingService::CacheStats TextureBindingService::cache_stats() const {
+  std::size_t resource_count = 0u;
+  for (const auto &[key, entry] : texture_cache_) {
+    (void)key;
+    resource_count += entry.texture != nullptr ? 1u : 0u;
+  }
+  return {.resource_count = resource_count,
+          .material_consumer_count = material_textures_.size(),
+          .upload_count = upload_count_,
+          .destroy_count = destroy_count_};
 }
 
 filament::Texture *

@@ -13,6 +13,22 @@ endif()
 
 file(TO_CMAKE_PATH "${QUADER_SOURCE_DIR}" _quader_source_dir)
 file(TO_CMAKE_PATH "${QUADER_BINARY_DIR}" _quader_binary_dir)
+
+# The producer and installed consumer must use the configuration passed to
+# build/install. Otherwise Ninja exports NOCONFIG while --config Debug omits it.
+set(_quader_configuration_args)
+if(DEFINED QUADER_BUILD_CONFIG AND NOT "${QUADER_BUILD_CONFIG}" STREQUAL "")
+    if(DEFINED QUADER_CMAKE_GENERATOR AND
+            "${QUADER_CMAKE_GENERATOR}" MATCHES
+                "Visual Studio|Xcode|Multi-Config")
+        list(APPEND _quader_configuration_args
+            "-DCMAKE_CONFIGURATION_TYPES=${QUADER_BUILD_CONFIG}")
+    else()
+        list(APPEND _quader_configuration_args
+            "-DCMAKE_BUILD_TYPE=${QUADER_BUILD_CONFIG}")
+    endif()
+endif()
+
 if(_quader_binary_dir STREQUAL "" OR
         _quader_binary_dir STREQUAL _quader_source_dir OR
         NOT _quader_binary_dir MATCHES "/build/")
@@ -28,6 +44,7 @@ set(_quader_configure_command
     "${CMAKE_COMMAND}"
     -S "${QUADER_SOURCE_DIR}"
     -B "${QUADER_BINARY_DIR}"
+    ${_quader_configuration_args}
     -DQUADER_BUILD_NATIVE_APP=OFF
     -DQUADER_BUILD_TESTS=ON
     -DQUADER_USE_OPENMESH_TOPOLOGY=OFF
@@ -130,6 +147,7 @@ foreach(_quader_sdk_only_target IN LISTS _quader_sdk_only_targets)
             _quader_sdk_only_target MATCHES "^quader_modeling_domain_" OR
             _quader_sdk_only_target STREQUAL "qdr_performance_baseline" OR
             _quader_sdk_only_target STREQUAL "quader" OR
+            _quader_sdk_only_target STREQUAL "quader_fatal_diagnostics" OR
             _quader_sdk_only_target STREQUAL "quader_editor_metadata" OR
             _quader_sdk_only_target STREQUAL "quader_geometry" OR
             _quader_sdk_only_target STREQUAL "quader_modeling" OR
@@ -277,6 +295,7 @@ set(_quader_external_consumer_configure_command
     "${CMAKE_COMMAND}"
     -S "${_quader_source_dir}/tests/sdk_consumer"
     -B "${_quader_external_consumer_binary_dir}"
+    ${_quader_configuration_args}
     "-DCMAKE_PREFIX_PATH=${_quader_sdk_install_dir}")
 if(DEFINED QUADER_CMAKE_GENERATOR AND NOT "${QUADER_CMAKE_GENERATOR}" STREQUAL "")
     list(APPEND _quader_external_consumer_configure_command
@@ -298,18 +317,6 @@ if(DEFINED QUADER_VCPKG_TARGET_TRIPLET AND NOT "${QUADER_VCPKG_TARGET_TRIPLET}" 
     list(APPEND _quader_external_consumer_configure_command
         "-DVCPKG_TARGET_TRIPLET=${QUADER_VCPKG_TARGET_TRIPLET}")
 endif()
-if(DEFINED QUADER_BUILD_CONFIG AND NOT "${QUADER_BUILD_CONFIG}" STREQUAL "")
-    if(DEFINED QUADER_CMAKE_GENERATOR AND
-            "${QUADER_CMAKE_GENERATOR}" MATCHES
-                "Visual Studio|Xcode|Multi-Config")
-        list(APPEND _quader_external_consumer_configure_command
-            "-DCMAKE_CONFIGURATION_TYPES=${QUADER_BUILD_CONFIG}")
-    else()
-        list(APPEND _quader_external_consumer_configure_command
-            "-DCMAKE_BUILD_TYPE=${QUADER_BUILD_CONFIG}")
-    endif()
-endif()
-
 execute_process(
     COMMAND ${_quader_external_consumer_configure_command}
     RESULT_VARIABLE _quader_external_consumer_configure_result)

@@ -30,6 +30,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -144,6 +145,11 @@ public:
 
   [[nodiscard]] bool save_settings();
   [[nodiscard]] bool save_viewport_settings();
+  [[nodiscard]] const SessionPreferences &session_settings() const {
+    return settings_.session_settings();
+  }
+  void set_session_settings_changed_callback(
+      std::function<void(const SessionPreferences &)> callback);
   void save_window_state();
 
 private:
@@ -193,6 +199,7 @@ private:
   void apply_viewport_settings_to_workspace();
   void synchronize_settings_surfaces(bool refresh_dialog);
   void show_settings_dialog();
+  void show_autosave_recovery();
   void show_material_browser();
   void show_material_find_replace();
   void show_material_find_replace(QuaderMaterialReference source);
@@ -242,6 +249,7 @@ private:
   LayerPanel *layer_panel_ = nullptr;
   ConsolePanel *console_panel_ = nullptr;
   QtSettingsDialog *settings_dialog_ = nullptr;
+  std::uint64_t runtime_binding_generation_ = 0;
   QtMaterialBrowserWindow *material_browser_window_ = nullptr;
   QtActiveMaterialPanel *active_material_panel_ = nullptr;
   QtMaterialBrowserWindow *material_picker_window_ = nullptr;
@@ -261,6 +269,8 @@ private:
   UIPanelManager panels_;
   LocalizationService localization_;
   UISettings settings_;
+  std::function<void(const SessionPreferences &)>
+      session_settings_changed_;
   UISettingsPaths settings_paths_;
   QtAuxiliaryWindowState auxiliary_window_state_;
   ViewportSettings viewport_settings_;

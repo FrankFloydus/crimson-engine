@@ -8,11 +8,10 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Math Package Guide
 
-`src/math` owns math value types and conversion helpers.
-
-## Math Rules
+`types/` owns native math values; `types.hpp` gathers them and `glm_bridge.hpp` owns GLM conversion.
+Reusable geometry predicates belong to the modeling core's neutral geometry package.
 
 - Keep math types small, deterministic, and independent of editor, UI, render, and platform owners.
 - Use explicit conversion helpers for GLM bridging instead of scattering ad hoc casts.
-- Preserve coordinate-system and precision semantics when replacing legacy math types.
+- Preserve coordinate-system, quaternion ordering, matrix layout, and precision semantics.
 - Add targeted tests for value behavior, conversions, transforms, and edge cases.

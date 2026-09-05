@@ -179,7 +179,8 @@ void validate_faces(
     const Document& document,
     const std::set<ElementId>& vertex_ids,
     const VertexLookupIndex& vertex_lookup,
-    PolygonDocumentValidationReport& report)
+    PolygonDocumentValidationReport& report,
+    PolygonDocumentValidationPolicy policy)
 {
     for (const Face& face : document.faces) {
         const std::vector<ElementId> missing_ids = missing_face_vertex_ids(face, vertex_ids);
@@ -248,7 +249,10 @@ void validate_faces(
             add_diagnostic(
                 report,
                 PolygonDocumentDiagnosticCode::DegenerateFaceLoop,
-                PolygonDocumentDiagnosticSeverity::Error,
+                policy == PolygonDocumentValidationPolicy::AuthoredTopology &&
+                        face.vertices.size() >= 3U
+                    ? PolygonDocumentDiagnosticSeverity::Warning
+                    : PolygonDocumentDiagnosticSeverity::Error,
                 "Face " + std::to_string(face.id) + " has a degenerate loop.",
                 kInvalidElementId,
                 face.id,
@@ -264,7 +268,9 @@ void validate_faces(
             add_diagnostic(
                 report,
                 PolygonDocumentDiagnosticCode::TriangulationFailure,
-                PolygonDocumentDiagnosticSeverity::Error,
+                policy == PolygonDocumentValidationPolicy::AuthoredTopology
+                    ? PolygonDocumentDiagnosticSeverity::Warning
+                    : PolygonDocumentDiagnosticSeverity::Error,
                 "Face " + std::to_string(face.id) + " cannot be triangulated.",
                 kInvalidElementId,
                 face.id,
@@ -370,13 +376,15 @@ bool PolygonDocumentValidationReport::ok() const
     return !has_errors();
 }
 
-PolygonDocumentValidationReport validate_polygon_document(const Document& document)
+PolygonDocumentValidationReport validate_polygon_document(
+    const Document& document,
+    PolygonDocumentValidationPolicy policy)
 {
     PolygonDocumentValidationReport report;
     const VertexLookupIndex vertex_lookup(document);
     const std::set<ElementId> vertex_ids = collect_unique_vertex_ids(document, report);
     validate_face_ids(document, report);
-    validate_faces(document, vertex_ids, vertex_lookup, report);
+    validate_faces(document, vertex_ids, vertex_lookup, report, policy);
     const std::map<EdgeIdPair, int> edge_counts = edge_incidence_counts_for_valid_faces(document, vertex_ids);
     validate_nonmanifold_edges(edge_counts, report);
     validate_hard_normal_edges(document, vertex_ids, edge_counts, report);

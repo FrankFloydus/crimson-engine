@@ -56,6 +56,31 @@ QuaderPreferencesApi::set_interface_scale(double scale) {
              : unavailable("Preferences runtime is not attached.");
 }
 
+bool QuaderPreferencesApi::vsync_enabled() const {
+  return hooks_.vsync_enabled ? hooks_.vsync_enabled() : true;
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::set_vsync_enabled(bool enabled) {
+  return hooks_.set_vsync_enabled
+             ? hooks_.set_vsync_enabled(enabled)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+SessionPreferences QuaderPreferencesApi::session_settings() const {
+  return hooks_.session_settings ? hooks_.session_settings()
+                                 : SessionPreferences{};
+}
+
+QuaderApiVoidResult
+QuaderPreferencesApi::set_session_settings(SessionPreferences settings) {
+  if (!settings.valid()) {
+    return unavailable("Session preferences are outside their supported ranges.");
+  }
+  return hooks_.set_session_settings
+             ? hooks_.set_session_settings(settings)
+             : unavailable("Preferences runtime is not attached.");
+}
+
 std::uint64_t QuaderPreferencesApi::keybindings_revision() const noexcept {
   return commands_ != nullptr ? commands_->keybindings_revision() : 0;
 }

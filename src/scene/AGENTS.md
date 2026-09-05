@@ -6,16 +6,14 @@ No permission is granted to use, copy, modify, distribute, or sublicense this
 file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 -->
-# Scene Package Guide
+# Scene Ownership
 
-`src/scene` owns scene and project document truth.
-
-## Scene Rules
-
-- `SceneDocument`, `SceneContentDocument`, `SceneSession`, scene components, and scene bounds own scene
-  state and invariants.
-- User-triggered create, destroy, parent, select, rename, transform, visibility, lock, and material
-  changes should route through document commands, services, or public API batches.
-- Keep naming policy in scene-owned helpers such as `SceneEntityNaming`.
-- Do not let UI, render, or modeling runtime caches become scene truth.
-- Add behavior or document-command tests for scene state transitions and invariants.
+- `SceneDocument` owns entity identity, components, hierarchy, selection, layers, and scene revisions.
+  `SceneContentDocument` aggregates scene and assets and validates their references. Runtime session
+  and project workspace lifetime belong to `src/editor/session`.
+- `document/scene_entity_state.*` is the shared component inventory for persistence, history,
+  clipboard, and rollback. Do not add a second live object-record store or allocator.
+- Keep naming in `SceneEntityNaming`; retain scene-owned hierarchy/occurrence projections and their
+  revision gates. Render and UI caches derive from this state.
+- User mutations route through editor services/document commands/public API batches. Protect owner
+  invariants with scene/document tests and user workflows with public API behavior tests.

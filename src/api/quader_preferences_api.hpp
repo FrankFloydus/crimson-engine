@@ -31,6 +31,12 @@ public:
     QuaderApiVoidResult set_locale(std::string locale);
     [[nodiscard]] double interface_scale() const;
     QuaderApiVoidResult set_interface_scale(double scale);
+    /** Requested display synchronization; unsupported drivers retain VSync. */
+    [[nodiscard]] bool vsync_enabled() const;
+    QuaderApiVoidResult set_vsync_enabled(bool enabled);
+    [[nodiscard]] SessionPreferences session_settings() const;
+    /// Persists and applies the group atomically; reducing history is irreversible.
+    QuaderApiVoidResult set_session_settings(SessionPreferences settings);
     /** Cheap owner stamp; reads never enumerate or resolve shortcuts. */
     [[nodiscard]] std::uint64_t keybindings_revision() const noexcept;
     QuaderApiVoidResult set_shortcut(std::string_view command_id,

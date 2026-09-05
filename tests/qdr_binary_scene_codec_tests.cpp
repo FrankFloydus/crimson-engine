@@ -572,6 +572,85 @@ TEST(QdrBinarySceneCodecTests,
 }
 
 TEST(QdrBinarySceneCodecTests,
+     SlotOnlyEmbeddedMaterialsRoundTripWithExactSlotIds) {
+  SceneContentDocument document = simple_scene();
+  ASSERT_EQ(document.assets().add_material(
+                20u, make_default_quader_material("First Face Material")),
+            20u);
+  ASSERT_EQ(document.assets().add_material(
+                21u, make_default_quader_material("Second Face Material")),
+            21u);
+  const MaterialComponent expected{
+      .material_slots = {{7u, 20u}, {42u, 21u}},
+  };
+  ASSERT_TRUE(document.scene().set_material(100u, expected));
+  auto bytes = QdrDocumentWriter::serialize_project_document_bytes(
+      required_write_snapshot(document), test_uuid());
+  for (int pass = 0; pass < 2; ++pass) {
+    SCOPED_TRACE(pass);
+    const QdrProjectReadResult read =
+        QdrDocumentReader::deserialize_project_document(bytes);
+    ASSERT_TRUE(read.ok) << read.message;
+    const MaterialComponent *material = read.document.scene().material(100u);
+    ASSERT_NE(material, nullptr);
+    EXPECT_EQ(*material, expected);
+    EXPECT_FALSE(material->material_for_slot(0u).valid());
+    EXPECT_TRUE(read.document.validate_asset_references().ok());
+    bytes = QdrDocumentWriter::serialize_project_document_bytes(
+        required_write_snapshot(read.document), test_uuid());
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     SlotOnlyMaterialsStillRejectMissingAndInvalidEmbeddedReferences) {
+  SceneContentDocument document = simple_scene();
+  ASSERT_EQ(document.assets().add_material(
+                20u, make_default_quader_material("Face Material")),
+            20u);
+  ASSERT_TRUE(document.scene().set_material(
+      100u, MaterialComponent{.material_slots = {{7u, 20u}}}));
+  const auto bytes = QdrDocumentWriter::serialize_project_document_bytes(
+      required_write_snapshot(document), test_uuid());
+  const auto container = quader_io::read_qdr_binary_container(bytes);
+  ASSERT_TRUE(container.ok) << container.message;
+
+  for (const AssetId invalid_material : {kInvalidAssetId, AssetId{999u}}) {
+    SCOPED_TRACE(invalid_material);
+    auto chunks = copy_chunks(container);
+    auto metadata = std::ranges::find_if(chunks, [](const auto &chunk) {
+      return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+    });
+    ASSERT_NE(metadata, chunks.end());
+    const auto *payload = qdr_fb::GetScenePayload(metadata->bytes.data());
+    const qdr_fb::MaterialSlotBinding *slot = nullptr;
+    for (const qdr_fb::Entity *entity : *payload->entities()) {
+      if (entity->id() == 100u && entity->material() != nullptr) {
+        slot = entity->material()->material_slots()->Get(0u);
+      }
+    }
+    ASSERT_NE(slot, nullptr);
+    const auto offset = reinterpret_cast<const std::byte *>(slot) -
+                        metadata->bytes.data();
+    const qdr_fb::MaterialSlotBinding invalid_slot(slot->slot(),
+                                                  invalid_material);
+    std::memcpy(metadata->bytes.data() + offset, &invalid_slot,
+                sizeof(invalid_slot));
+    metadata->content_hash =
+        quader_io::qdr_binary_content_hash(metadata->bytes);
+
+    const QdrProjectReadResult read =
+        QdrDocumentReader::deserialize_project_document(
+            quader_io::build_qdr_binary_container(test_uuid(),
+                                                  std::move(chunks)));
+    EXPECT_FALSE(read.ok);
+    EXPECT_NE(read.message.find(
+                  "entity material slot references a missing material asset"),
+              std::string::npos)
+        << read.message;
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
      LegacyObjectRecordOnlySuppliesMissingIdentityWhileEntityStateWins) {
   const std::vector<std::byte> fixture =
       historical_legacy_object_record_fixture();

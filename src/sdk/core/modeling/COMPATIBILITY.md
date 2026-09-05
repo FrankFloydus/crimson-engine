@@ -19,7 +19,4 @@ owners or migration switches.
 | `PivotToolOptions`, `PivotTool`, and `ToolsApi::activate_pivot_tool()` | Preserves source compatibility without claiming portable pivot support. The call deterministically returns `UnsupportedOperation`; native pivot intent belongs to `QuaderEditorApi`. | SDK tools owner; `ModelingSdkConsumerTests.UnsupportedSdkPlaceholdersAreDeprecatedAndNotAdvertised` and catalog assertions. | Remove in 0.2.0; do not add it to the supported tool catalog. |
 | `ProfilingApi` and `ModelingApi::profiling()` | Preserves source compatibility without inventing a portable capture backend. Profiling data contracts remain supported; capture uses the benchmark harness or native diagnostics. | SDK API owner; `ModelingSdkConsumerTests.UnsupportedSdkPlaceholdersAreDeprecatedAndNotAdvertised`. | Remove the facade in 0.2.0; retain useful neutral data contracts independently. |
 
-Native `ModelingSdkProjectionAdapter`, viewport input/host adapters, and render projection adapters
-are final host boundaries and are not entries in this ledger. The expired direct box-commit
-fallback and the 29 native mesh header mirrors were removed once all production consumers used
-those final boundaries.
+Native projection and viewport adapters are permanent host boundaries, not compatibility debt.

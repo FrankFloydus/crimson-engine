@@ -70,12 +70,24 @@ SceneSession::SceneSession(
   mark_clean();
 }
 
-SceneSession::~SceneSession() = default;
+SceneSession::~SceneSession() {
+  // Modeling teardown may cancel an unfinished drag. Disconnect callbacks while
+  // viewport state and the enclosing project still have complete lifetimes.
+  content_settled_observer_ = {};
+  if (history_) {
+    history_->set_content_settled_observer({});
+    history_->set_change_observer({});
+  }
+  if (modeling_) {
+    modeling_->detach_preview_checkpoint_hooks();
+  }
+}
 
 void SceneSession::rebuild_services() {
   QDR_PROFILE_FUNCTION();
   instance_edit_context_.clear();
   history_ = std::make_unique<EditorHistoryService>();
+  history_->set_max_steps(history_max_steps_);
   document_commands_ = std::make_unique<DocumentCommandService>(
       document_.scene(), *history_, &document_.assets());
   asset_commands_ = std::make_unique<AssetCommandService>(
@@ -92,6 +104,12 @@ void SceneSession::rebuild_services() {
           },
           .finish = [this](bool restored_by_cancel) {
             finish_modeling_preview_checkpoint(restored_by_cancel);
+          },
+          .rollback_without_checkpoint = [this] {
+            if (!preview_content_checkpoint_.has_value() &&
+                content_settled_observer_) {
+              content_settled_observer_(false);
+            }
           },
       });
   selection_ = std::make_unique<EditorSelectionService>(
@@ -185,8 +203,16 @@ void SceneSession::rebuild_services() {
       *instances_, *native_tools_, *viewport_local_visibility_,
       *scene_surface_query_);
   history_->set_change_observer([this]() {
+    if (modeling_) {
+      modeling_->release_redundant_sdk_history();
+    }
     if (viewport_local_visibility_) {
       viewport_local_visibility_->synchronize_scene_lifecycle();
+    }
+  });
+  history_->set_content_settled_observer([this](bool committed) {
+    if (!preview_content_checkpoint_.has_value() && content_settled_observer_) {
+      content_settled_observer_(committed);
     }
   });
   modeling_->set_viewport_visibility_filter(
@@ -278,7 +304,13 @@ void SceneSession::finish_modeling_preview_checkpoint(
       !preview_content_checkpoint_->contaminated) {
     clean_stamp_ = current;
   }
+  const bool committed =
+      !restored_by_cancel || preview_content_checkpoint_->contaminated;
   preview_content_checkpoint_.reset();
+  modeling_->release_redundant_sdk_history();
+  if (content_settled_observer_) {
+    content_settled_observer_(committed);
+  }
 }
 
 SceneAssetMutationResult
@@ -365,6 +397,18 @@ void SceneSession::set_document_replacement_finalizer(
 void SceneSession::mark_clean() {
   clean_stamp_ = content_revision_stamp();
   preview_content_checkpoint_.reset();
+}
+
+void SceneSession::set_content_settled_observer(std::function<void(bool)> observer) {
+  content_settled_observer_ = std::move(observer);
+}
+
+void SceneSession::set_history_max_steps(std::size_t max_steps) {
+  history_->set_max_steps(max_steps);
+  history_max_steps_ = history_->max_steps();
+  if (primitive_creation_) {
+    primitive_creation_->apply_history_limit();
+  }
 }
 
 void SceneSession::mark_clean_at(SceneContentRevisionStamp stamp) noexcept {

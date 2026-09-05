@@ -56,7 +56,7 @@ try {
         & ctest --preset vs2026-debug --output-on-failure
     }
 
-    Invoke-RegressionStep 'Build the shipping native executable' {
+    Invoke-RegressionStep 'Build the Debug/Profile native executable' {
         & cmake --build --preset vs2026-debug --target quader
     }
 

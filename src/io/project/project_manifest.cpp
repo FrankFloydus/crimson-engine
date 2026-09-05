@@ -67,9 +67,15 @@ std::filesystem::path normalized_root_filename(
 
 std::filesystem::path expected_manifest_path(
     const ProjectFileSystem &file_system) {
-  const std::filesystem::path root_name =
+  std::filesystem::path root_name =
       normalized_root_filename(file_system.root());
-  return file_system.root() / (root_name.string() + ".qproj");
+  root_name += ".qproj";
+  return file_system.root() / root_name;
+}
+
+std::string utf8_project_name(const std::filesystem::path &root) {
+  const auto name = normalized_root_filename(root).u8string();
+  return {reinterpret_cast<const char *>(name.data()), name.size()};
 }
 
 bool same_portable_filesystem_path(const std::filesystem::path &left,
@@ -334,7 +340,8 @@ ProjectManifestStore::create_in_empty_directory(
   }
 
   ProjectIoResult<ProjectManifest> created_manifest =
-      ProjectManifest::create(ProjectId::generate(), project_name.string());
+      ProjectManifest::create(ProjectId::generate(),
+                              utf8_project_name(file_system.root()));
   if (!created_manifest.ok()) {
     return ProjectIoResult<ProjectWorkspaceStorage>::failure(
         created_manifest.error().code, created_manifest.error().message,
@@ -435,7 +442,7 @@ ProjectManifestStore::open(const std::filesystem::path &manifest_path) {
   ProjectManifest manifest = decoded.take_value();
   if (QStr::to_ascii_lower(manifest.name()) !=
       QStr::to_ascii_lower(
-          normalized_root_filename(file_system.root()).string())) {
+          utf8_project_name(file_system.root()))) {
     return ProjectIoResult<ProjectWorkspaceStorage>::failure(
         ProjectIoErrorCode::ManifestMalformed,
         "Project name must match its containing folder name.",

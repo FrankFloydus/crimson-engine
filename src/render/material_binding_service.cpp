@@ -277,7 +277,7 @@ MaterialBindingService::create_mesh_material_instance(
   material_instance->setParameter(
       material_texture_slot::kBaseColor,
       texture_binding_->resolve_texture(
-          assets, material, material_texture_slot::kBaseColor,
+          *material_instance, assets, material, material_texture_slot::kBaseColor,
           texture_binding_->fallback_albedo_texture()),
       sampler);
   const QVec3 base_color =
@@ -296,19 +296,19 @@ MaterialBindingService::create_mesh_material_instance(
     material_instance->setParameter(
         material_texture_slot::kRoughness,
         texture_binding_->resolve_texture(
-            assets, material, material_texture_slot::kRoughness,
+            *material_instance, assets, material, material_texture_slot::kRoughness,
             texture_binding_->fallback_roughness_texture()),
         sampler);
     material_instance->setParameter(
         material_texture_slot::kMetallic,
         texture_binding_->resolve_texture(
-            assets, material, material_texture_slot::kMetallic,
+            *material_instance, assets, material, material_texture_slot::kMetallic,
             texture_binding_->fallback_metallic_texture()),
         sampler);
     material_instance->setParameter(
         material_texture_slot::kNormal,
         texture_binding_->resolve_texture(
-            assets, material, material_texture_slot::kNormal,
+            *material_instance, assets, material, material_texture_slot::kNormal,
             texture_binding_->fallback_normal_texture()),
         sampler);
     material_instance->setParameter("metallicFactor",
@@ -346,7 +346,7 @@ MaterialBindingService::create_mesh_material_instance(
   material_instance->setParameter(
       material_texture_slot::kBaseColor,
       texture_binding_->resolve_texture(
-          material, material_texture_slot::kBaseColor,
+          *material_instance, material, material_texture_slot::kBaseColor,
           texture_binding_->fallback_albedo_texture()),
       sampler);
   const QVec3 base_color = material && material->present
@@ -369,19 +369,19 @@ MaterialBindingService::create_mesh_material_instance(
     material_instance->setParameter(
         material_texture_slot::kRoughness,
         texture_binding_->resolve_texture(
-            material, material_texture_slot::kRoughness,
+            *material_instance, material, material_texture_slot::kRoughness,
             texture_binding_->fallback_roughness_texture()),
         sampler);
     material_instance->setParameter(
         material_texture_slot::kMetallic,
         texture_binding_->resolve_texture(
-            material, material_texture_slot::kMetallic,
+            *material_instance, material, material_texture_slot::kMetallic,
             texture_binding_->fallback_metallic_texture()),
         sampler);
     material_instance->setParameter(
         material_texture_slot::kNormal,
         texture_binding_->resolve_texture(
-            material, material_texture_slot::kNormal,
+            *material_instance, material, material_texture_slot::kNormal,
             texture_binding_->fallback_normal_texture()),
         sampler);
     material_instance->setParameter(
@@ -399,6 +399,36 @@ MaterialBindingService::create_mesh_material_instance(
                                                                   : 1.0f);
   }
   return material_instance;
+}
+
+filament::MaterialInstance *
+MaterialBindingService::duplicate_mesh_material_instance(
+    const filament::MaterialInstance *source) const {
+  if (source == nullptr) {
+    return nullptr;
+  }
+  filament::MaterialInstance *duplicate =
+      filament::MaterialInstance::duplicate(source);
+  if (duplicate != nullptr && texture_binding_ != nullptr) {
+    texture_binding_->retain_material_textures(*source, *duplicate);
+  }
+  return duplicate;
+}
+
+void MaterialBindingService::destroy_mesh_material_instance(
+    filament::Engine &engine,
+    filament::MaterialInstance *&material_instance) const {
+  if (material_instance == nullptr) {
+    return;
+  }
+  // Filament prepares detached instances too. Queue their destruction before
+  // releasing the final references to their textures.
+  const filament::MaterialInstance *consumer = material_instance;
+  engine.destroy(material_instance);
+  material_instance = nullptr;
+  if (texture_binding_ != nullptr) {
+    texture_binding_->release_material_textures(consumer);
+  }
 }
 
 void MaterialBindingService::apply_mesh_surface_grid(

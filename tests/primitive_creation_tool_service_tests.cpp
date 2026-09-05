@@ -1021,6 +1021,253 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
+     UndoLimitRetainsNewestShapesWithoutLosingOlderAppliedObjects) {
+  PrimitiveCreationHarness harness;
+  harness.history.set_max_steps(2U);
+  ASSERT_TRUE(harness.tool.activate().ok);
+  const std::array<std::string_view, 3> names{
+      "Permanent Box", "Retained Box", "Newest Box"};
+  for (std::size_t index = 0; index < names.size(); ++index) {
+    ASSERT_TRUE(harness.tool
+                    .accept_preview(valid_primitive_preview(
+                                        static_cast<float>(index) * 4.0f),
+                                    std::string(names[index]))
+                    .ok);
+  }
+  ASSERT_TRUE(harness.tool.set_setting(kBoxSubdivisionsXSetting, 3.0).ok);
+  const auto objects = harness.modeling.objects();
+  const auto *const permanent = find_object(objects, names[0]);
+  const auto *const newest = find_object(objects, names[2]);
+  ASSERT_NE(permanent, nullptr);
+  ASSERT_NE(newest, nullptr);
+  const std::uint64_t newest_geometry =
+      compiled_content_id(harness.modeling, names[2]);
+
+  ASSERT_TRUE(harness.tool.undo().ok);
+  ASSERT_TRUE(harness.tool.undo().ok);
+  EXPECT_EQ(harness.tool.shape_count(), 1U);
+  EXPECT_FALSE(harness.tool.can_undo());
+  ASSERT_EQ(harness.modeling.objects().size(), 1U);
+  EXPECT_TRUE(harness.tool.owns_created_object(permanent->modeling_object_id));
+  EXPECT_FALSE(harness.tool.owns_created_object(newest->modeling_object_id));
+  ASSERT_TRUE(harness.tool.redo().ok);
+  ASSERT_TRUE(harness.tool.redo().ok);
+  EXPECT_EQ(harness.tool.shape_count(), 3U);
+  EXPECT_FALSE(harness.tool.can_redo());
+  EXPECT_EQ(compiled_content_id(harness.modeling, names[2]), newest_geometry);
+  EXPECT_TRUE(harness.tool.owns_created_object(newest->modeling_object_id));
+
+  ASSERT_TRUE(harness.tool.apply().ok);
+  EXPECT_EQ(harness.history.undo_count(), 2U);
+  ASSERT_TRUE(harness.history.undo().ok);
+  ASSERT_TRUE(harness.history.undo().ok);
+  EXPECT_FALSE(harness.history.can_undo());
+  ASSERT_EQ(harness.modeling.objects().size(), 1U);
+  EXPECT_EQ(harness.modeling.objects().front().modeling_object_id,
+            permanent->modeling_object_id);
+  ASSERT_TRUE(harness.history.redo().ok);
+  ASSERT_TRUE(harness.history.redo().ok);
+  EXPECT_EQ(compiled_content_id(harness.modeling, names[2]), newest_geometry);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     BranchAfterLimitedUndoKeepsPermanentPrefixAndRetiresRedo) {
+  PrimitiveCreationHarness harness;
+  harness.history.set_max_steps(2U);
+  ASSERT_TRUE(harness.tool.activate().ok);
+  ASSERT_TRUE(harness.tool
+                  .accept_preview(valid_primitive_preview(), "Permanent Box")
+                  .ok);
+  ASSERT_TRUE(harness.tool
+                  .accept_preview(valid_primitive_preview(4.0f), "Retained Box")
+                  .ok);
+  ASSERT_TRUE(harness.tool
+                  .accept_preview(valid_primitive_preview(8.0f), "Retired Box")
+                  .ok);
+  const auto original = harness.modeling.objects();
+  const auto *const retired = find_object(original, "Retired Box");
+  ASSERT_NE(retired, nullptr);
+  ASSERT_TRUE(harness.tool.undo().ok);
+  ASSERT_TRUE(harness.tool
+                  .accept_preview(valid_primitive_preview(12.0f), "Branch Box")
+                  .ok);
+  EXPECT_FALSE(harness.tool.can_redo());
+  EXPECT_EQ(harness.tool.shape_count(), 3U);
+  EXPECT_FALSE(harness.tool.owns_created_object(retired->modeling_object_id));
+  const auto branched = harness.modeling.objects();
+  ASSERT_NE(find_object(branched, "Branch Box"), nullptr);
+  EXPECT_EQ(find_object(branched, "Retired Box"), nullptr);
+  ASSERT_TRUE(harness.tool.apply().ok);
+  EXPECT_EQ(harness.history.undo_count(), 2U);
+  ASSERT_TRUE(harness.history.undo().ok);
+  ASSERT_TRUE(harness.history.undo().ok);
+  ASSERT_EQ(harness.modeling.objects().size(), 1U);
+  EXPECT_EQ(harness.modeling.objects().front().name, "Permanent Box");
+  EXPECT_FALSE(harness.history.can_undo());
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CancelRestoresWholeSessionAfterOldShapeHistoryWasEvicted) {
+  PrimitiveCreationHarness harness;
+  harness.history.set_max_steps(1U);
+  const std::size_t baseline_meshes = harness.assets.mesh_ids().size();
+  ASSERT_TRUE(harness.tool.activate().ok);
+  for (int index = 0; index < 4; ++index) {
+    ASSERT_TRUE(harness.tool
+                    .accept_preview(valid_primitive_preview(
+                                        static_cast<float>(index) * 4.0f),
+                                    "Transient Box " + std::to_string(index))
+                    .ok);
+  }
+  ASSERT_TRUE(harness.tool.undo().ok);
+  EXPECT_EQ(harness.tool.shape_count(), 3U);
+  EXPECT_FALSE(harness.tool.can_undo());
+  ASSERT_TRUE(harness.tool.cancel().ok);
+  EXPECT_FALSE(harness.tool.active());
+  EXPECT_TRUE(harness.modeling.objects().empty());
+  EXPECT_EQ(harness.assets.mesh_ids().size(), baseline_meshes);
+  EXPECT_FALSE(harness.history.can_undo());
+  EXPECT_FALSE(harness.history.can_redo());
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CancelAfterEvictionPreservesPreSessionNativeHistory) {
+  SceneSession session;
+  session.history().set_max_steps(1U);
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto baseline = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Baseline Box");
+  ASSERT_TRUE(baseline.ok()) << baseline.error_message();
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(valid_primitive_preview(4.0f), "Evicted Box")
+                  .ok);
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(valid_primitive_preview(8.0f), "Retained Box")
+                  .ok);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(session.history().undo_count(), 1U);
+  ASSERT_EQ(session.modeling().objects().size(), 1U);
+  EXPECT_EQ(session.modeling().objects().front().name, "Baseline Box");
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(session.modeling().objects().empty());
+  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_EQ(session.modeling().objects().size(), 1U);
+  EXPECT_EQ(session.modeling().objects().front().modeling_object_id,
+            baseline.value().modeling_object_id);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     DecreasingLimitKeepsContiguousNearestRedoAndCorrectOwnership) {
+  PrimitiveCreationHarness harness;
+  harness.history.set_max_steps(4U);
+  ASSERT_TRUE(harness.tool.activate().ok);
+  for (int index = 0; index < 4; ++index) {
+    ASSERT_TRUE(harness.tool
+                    .accept_preview(valid_primitive_preview(
+                                        static_cast<float>(index) * 4.0f),
+                                    "Limited Box " + std::to_string(index))
+                    .ok);
+  }
+  ASSERT_TRUE(harness.tool.undo().ok);
+  ASSERT_TRUE(harness.tool.undo().ok);
+  ASSERT_TRUE(harness.tool.undo().ok);
+  harness.history.set_max_steps(1U);
+  harness.tool.apply_history_limit();
+  EXPECT_EQ(harness.tool.shape_count(), 1U);
+  EXPECT_FALSE(harness.tool.can_undo());
+  ASSERT_TRUE(harness.tool.can_redo());
+  ASSERT_TRUE(harness.tool.redo().ok);
+  EXPECT_EQ(harness.tool.shape_count(), 2U);
+  EXPECT_FALSE(harness.tool.can_redo());
+  EXPECT_NE(find_object(harness.modeling.objects(), "Limited Box 1"), nullptr);
+  EXPECT_EQ(find_object(harness.modeling.objects(), "Limited Box 2"), nullptr);
+  ASSERT_TRUE(harness.tool.apply().ok);
+  EXPECT_EQ(harness.history.undo_count(), 1U);
+  ASSERT_TRUE(harness.history.undo().ok);
+  ASSERT_EQ(harness.modeling.objects().size(), 1U);
+  EXPECT_EQ(harness.modeling.objects().front().name, "Limited Box 0");
+  EXPECT_FALSE(harness.history.can_undo());
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     ApplyingAfterUndoingAllRetainedShapesRetiresOlderNativeSnapshots) {
+  SceneSession session;
+  session.history().set_max_steps(2U);
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto baseline = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Baseline Box");
+  ASSERT_TRUE(baseline.ok()) << baseline.error_message();
+  ASSERT_TRUE(session.history().can_undo());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  for (int index = 0; index < 3; ++index) {
+    ASSERT_TRUE(session.primitive_creation()
+                    .accept_preview(valid_primitive_preview(
+                                        static_cast<float>(index + 1) * 4.0f),
+                                    "New Box " + std::to_string(index))
+                    .ok);
+  }
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(session.primitive_creation().shape_count(), 1U);
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_FALSE(editor.history().can_undo());
+  EXPECT_FALSE(editor.history().can_redo());
+  EXPECT_EQ(session.modeling().objects().size(), 2U);
+  EXPECT_NE(find_object(session.modeling().objects(), "Baseline Box"), nullptr);
+  EXPECT_NE(find_object(session.modeling().objects(), "New Box 0"), nullptr);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     ZeroUndoLimitPreservesLiveEditingGestureCancellationAndApply) {
+  PrimitiveCreationHarness harness;
+  harness.history.set_max_steps(0U);
+  ASSERT_TRUE(harness.tool.activate().ok);
+  ASSERT_TRUE(harness.tool
+                  .accept_preview(valid_primitive_preview(), "First Box")
+                  .ok);
+  ASSERT_TRUE(harness.tool
+                  .accept_preview(valid_primitive_preview(4.0f), "Live Box")
+                  .ok);
+  ASSERT_TRUE(harness.tool.set_setting(kBoxSubdivisionsXSetting, 3.0).ok);
+  EXPECT_NE(compiled_index_count(harness.modeling, "Live Box"), 36U);
+  EXPECT_EQ(compiled_index_count(harness.modeling, "First Box"), 36U);
+  EXPECT_EQ(harness.tool.shape_count(), 2U);
+  EXPECT_TRUE(harness.tool.can_apply());
+  EXPECT_FALSE(harness.tool.can_undo());
+  EXPECT_FALSE(harness.tool.can_redo());
+  EXPECT_FALSE(harness.tool.undo().ok);
+  const auto footprint = harness.modeling.begin_box_footprint({
+      .screen_position = {400.0f, 300.0f},
+      .ray = {.origin = {12.0f, 4.0f, 0.0f},
+              .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+  });
+  ASSERT_TRUE(footprint.ok) << footprint.message;
+  ASSERT_TRUE(harness.tool.can_undo());
+  ASSERT_TRUE(harness.tool.undo().ok);
+  EXPECT_EQ(harness.modeling.box_drag_state(), ModelingBoxDragState::Idle);
+  EXPECT_FALSE(harness.tool.can_undo());
+  EXPECT_EQ(harness.tool.shape_count(), 2U);
+  ASSERT_TRUE(harness.tool.apply().ok);
+  EXPECT_EQ(harness.modeling.objects().size(), 2U);
+  EXPECT_FALSE(harness.history.can_undo());
+
+  ASSERT_TRUE(harness.tool.activate().ok);
+  ASSERT_TRUE(harness.tool
+                  .accept_preview(valid_primitive_preview(8.0f), "Canceled Box")
+                  .ok);
+  ASSERT_TRUE(harness.tool.cancel().ok);
+  EXPECT_EQ(harness.modeling.objects().size(), 2U);
+  EXPECT_NE(find_object(harness.modeling.objects(), "First Box"), nullptr);
+  EXPECT_NE(find_object(harness.modeling.objects(), "Live Box"), nullptr);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
      PublicUndoRemovesOnlyNewestDrawnPrimitiveAndRedoRestoresExactShapes) {
   SceneSession session;
   QuaderEditorApi editor(

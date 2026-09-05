@@ -6,40 +6,19 @@ No permission is granted to use, copy, modify, distribute, or sublicense this
 file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 -->
-# Modeling Runtime Projection Package
+# Native Modeling Runtime Projections
 
-Native host interaction and short-lived modeling projection behavior.
+This package works on ephemeral `quader_poly::Document` views projected from the portable core.
+The local `quader_editor_core` namespace does not make it the SDK boundary.
 
-This package operates on ephemeral `quader_poly::Document` views projected from the portable SDK.
-It is part of the native app, not an external engine adapter or SDK boundary. The historical
-`quader_editor_core` namespace remains for compatibility, but `quader::modeling` owns every durable
-modeling document, selection, operation, preview, and history transition.
+- Owns native picking/hover, rectangle selection and pick cycling, selection summaries and semantic
+  overlays, transform-drag/tool input state, and native command-to-operation mapping.
+- `quader::modeling` owns durable modeling documents, component selection, operations, previews,
+  and modeling history. Scene identity/hierarchy and ordered editor history stay with native owners;
+  render owns overlay styling/GPU resources, and viewport owns workspace/navigation state.
+- Production picking, overlay, bounds, and input helpers consume immutable snapshots or narrow
+  `EditorRuntimeSelectionView` values. Do not retain/materialize full `EditorSession` instances as
+  production selection projections; that compatibility surface serves local mutating algorithms/tests.
 
-Owns:
-
-- transient polygon-object projection records and selection summaries;
-- component and object hover/picking result projection;
-- source-wire and surface picking policy;
-- host transform-drag input state and preview routing;
-- native command metadata and portable-operation mapping;
-- selection overlay frame generation as runtime primitives;
-- rectangle selection, pick cycling, and selection-mode conversion helpers;
-- tool state data for move, rotate, scale, cut, box, knife, and related modeling workflows;
-- portable viewport math that does not own UI, render resources, or platform input capture.
-
-Does not own:
-
-- durable mesh documents, modeling-object/component selection, operations,
-  preview transactions, or modeling undo/redo;
-- public API intent or command palette routing;
-- scene identity, grouping, hierarchy, or document command history;
-- render overlay style, Filament resources, or GPU submission;
-- viewport workspace state, native windows, swapchains, or physical input capture;
-- UI layout, runtime UI resources, localization, or panel behavior.
-
-Production picking, overlay, bounds, and input helpers consume immutable polygon snapshots or
-narrow `EditorRuntimeSelectionView` values. `EditorSession` remains only as a local compatibility
-surface for runtime-owned mutating algorithms and tests; native services do not materialize or
-retain full sessions as selection projections. Selection and hover behavior stays inspectable with
-headless modeling-domain tests. Real window, GPU, and pixel-output behavior belongs to render/UI
-smoke checks until render readback coverage exists.
+Use the matching `tests/modeling_domain/tool` and runtime suites for host interaction, and SDK
+consumer/parity tests for portable behavior. Real window/GPU output follows the root smoke workflow.

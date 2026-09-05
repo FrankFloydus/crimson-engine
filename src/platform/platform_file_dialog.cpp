@@ -82,7 +82,8 @@ OPENFILENAMEW base_open_file_name(const PlatformFileDialogOptions &options,
 }
 
 std::optional<std::filesystem::path>
-choose_folder(const PlatformFileDialogOptions &options) {
+choose_filesystem_entry(const PlatformFileDialogOptions &options,
+                        bool folders_only) {
   const HRESULT initialized =
       CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
   const bool uninitialize = SUCCEEDED(initialized);
@@ -103,22 +104,31 @@ choose_folder(const PlatformFileDialogOptions &options) {
 
   FILEOPENDIALOGOPTIONS flags = {};
   if (SUCCEEDED(dialog->GetOptions(&flags))) {
-    (void)dialog->SetOptions(flags | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM |
+    (void)dialog->SetOptions(flags |
+                             (folders_only ? FOS_PICKFOLDERS : FOS_FILEMUSTEXIST) |
+                             FOS_FORCEFILESYSTEM |
                              FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR);
   }
+  if (!folders_only) {
+    constexpr COMDLG_FILTERSPEC kFilters[] = {{L"Quader Scenes (*.qdr)", L"*.qdr"}};
+    (void)dialog->SetFileTypes(1, kFilters);
+    (void)dialog->SetDefaultExtension(L"qdr");
+  }
+  bool folder_selected = false;
   if (!options.initial_directory.empty()) {
     IShellItem *initial = nullptr;
     if (SUCCEEDED(SHCreateItemFromParsingName(
             options.initial_directory.c_str(), nullptr,
             IID_PPV_ARGS(&initial))) &&
         initial != nullptr) {
-      (void)dialog->SetFolder(initial);
+      folder_selected = SUCCEEDED(dialog->SetFolder(initial));
       initial->Release();
     }
   }
 
   std::optional<std::filesystem::path> selected;
-  if (SUCCEEDED(dialog->Show(static_cast<HWND>(options.owner_window_handle)))) {
+  if ((folders_only || folder_selected) &&
+      SUCCEEDED(dialog->Show(static_cast<HWND>(options.owner_window_handle)))) {
     IShellItem *item = nullptr;
     if (SUCCEEDED(dialog->GetResult(&item)) && item != nullptr) {
       PWSTR value = nullptr;
@@ -232,7 +242,7 @@ platform_open_project_file_dialog(const PlatformFileDialogOptions &options) {
 std::optional<std::filesystem::path>
 platform_choose_project_folder_dialog(const PlatformFileDialogOptions &options) {
 #if defined(_WIN32)
-  return choose_folder(options);
+  return choose_filesystem_entry(options, true);
 #else
   (void)options;
   return std::nullopt;
@@ -271,6 +281,16 @@ platform_open_scene_file_dialog(const PlatformFileDialogOptions &options) {
     return std::nullopt;
   }
   return std::filesystem::path(buffer.data());
+#else
+  (void)options;
+  return std::nullopt;
+#endif
+}
+
+std::optional<std::filesystem::path>
+platform_open_scene_recovery_file_dialog(const PlatformFileDialogOptions &options) {
+#if defined(_WIN32)
+  return choose_filesystem_entry(options, false);
 #else
   (void)options;
   return std::nullopt;

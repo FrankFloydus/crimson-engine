@@ -7,6 +7,7 @@
 #pragma once
 
 #include "app/app_frame_clock.hpp"
+#include "app/app_frame_schedule.hpp"
 #include "app/app_window_settings.hpp"
 #include "core/types.hpp"
 #include "editor/session/project_session.hpp"
@@ -54,14 +55,17 @@ private:
   void save_window_settings();
   void bind_active_scene(SceneSession &scene);
   bool render_frame(const FrameTiming &frame_timing);
-  void schedule_next_frame();
+  void schedule_next_frame(bool submitted = false);
+  void poll_autosave();
 
   QApplication *application_ = nullptr;
   std::unique_ptr<QTimer> frame_timer_;
+  std::unique_ptr<QTimer> autosave_timer_;
   QMetaObject::Connection window_screen_changed_connection_;
   QMetaObject::Connection screen_refresh_rate_changed_connection_;
   QPointer<QScreen> display_refresh_screen_;
   AppFrameClock frame_clock_;
+  AppFrameSchedule frame_schedule_;
   RenderSystem render_system_;
   SceneRenderBridge render_bridge_;
   std::unique_ptr<RenderProjectMaterialResolver> project_material_resolver_;

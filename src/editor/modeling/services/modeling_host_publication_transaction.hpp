@@ -240,6 +240,11 @@ public:
   [[nodiscard]] bool ready() const noexcept;
   [[nodiscard]] const ModelingHostPublicationWork &work() const noexcept;
 
+  /// Reports the existing owner lease so idle maintenance cannot invalidate
+  /// rollback marks during native publication.
+  [[nodiscard]] static bool
+  is_session_publishing(const modeling::ModelingSession &session) noexcept;
+
   void track_created_entity(EntityId entity);
   void track_created_entities(std::span<const EntityId> entities);
   void track_created_asset(AssetId asset);

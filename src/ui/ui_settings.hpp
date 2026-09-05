@@ -7,6 +7,7 @@
 #pragma once
 
 #include "core/interface_scale_policy.hpp"
+#include "core/session_preferences.hpp"
 #include "ui/ui_panel.hpp"
 
 #include <filesystem>
@@ -51,10 +52,19 @@ public:
     void set_locale(std::string locale);
     float interface_scale() const { return interface_scale_; }
     void set_interface_scale(float scale);
+    bool vsync_enabled() const { return vsync_enabled_; }
+    void set_vsync_enabled(bool enabled) { vsync_enabled_ = enabled; }
+    const SessionPreferences &session_settings() const {
+      return session_settings_;
+    }
+    /// Rejects an invalid group without changing any stored preference.
+    bool set_session_settings(SessionPreferences settings);
 
   private:
     std::string locale_ = "en-US";
     float interface_scale_ = kDefaultInterfaceScale;
+    bool vsync_enabled_ = true;
+    SessionPreferences session_settings_;
     bool outliner_visible_ = ui_panel_default_visible(UIPanelId::Outliner);
     bool inspector_visible_ = ui_panel_default_visible(UIPanelId::Inspector);
     bool console_visible_ = ui_panel_default_visible(UIPanelId::Console);

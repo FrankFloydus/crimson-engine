@@ -8,9 +8,8 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Diagnostics Package Guide
 
-`src/diagnostics` is for profiling and diagnostic hooks.
-
-## Diagnostics Rules
+`profile.hpp` owns native `QDR_PROFILE_*` hooks. Root build instructions define the Debug/Profile
+and Release instrumentation contract; this package does not select configurations.
 
 - Diagnostic hooks must not change observable editor behavior when disabled.
 - Keep dependencies lightweight and gated behind existing build options such as Tracy support.

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "core/session_preferences.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <functional>
@@ -23,6 +24,9 @@ enum class QtSettingsChangeKind {
   ViewportCommit,
   InterfacePreview,
   InterfaceCommit,
+  RenderingPreview,
+  RenderingCommit,
+  SessionCommit,
   KeybindingsCommit,
 };
 
@@ -30,6 +34,8 @@ enum class QtSettingsChangeKind {
 struct QtSettingsChange final {
   QtSettingsChangeKind kind = QtSettingsChangeKind::ViewportPreview;
   std::optional<float> interface_scale;
+  std::optional<bool> vsync_enabled;
+  std::optional<SessionPreferences> session_settings;
 };
 
 /**
@@ -51,6 +57,7 @@ public:
   bool set_float(ViewportFloatSettingId id, float value);
   bool set_bool(ViewportBoolSettingId id, bool value);
   bool preview_interface_scale(float scale);
+  bool preview_vsync_enabled(bool enabled);
   bool select_locale(std::string_view locale_id);
 
 private:

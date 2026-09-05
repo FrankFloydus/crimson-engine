@@ -90,12 +90,9 @@ void SceneRenderSyncService::bind_scene(
   instance_cache_->clear();
   light_cache_.set_preview_suppressed_entities({});
   light_cache_.remove_except(no_scene_entities);
-  // Material instances retain their bound texture pointers even after their
-  // renderables leave the Filament scene. A scene switch invalidates the
-  // scene-qualified texture cache, so every retired mesh proxy must release
-  // its material instances before MaterialBindingService destroys those
-  // textures. The normal paced retirement budget remains appropriate for
-  // same-scene rebuilds, but cannot cross this ownership boundary.
+  // Finish the outgoing scene's retirement now. Each destroyed material
+  // releases its texture pins, so images disappear when their final consumer
+  // drains. Same-scene rebuilds keep the normal paced destruction budget.
   mesh_cache_->drain_retired_destroy_queue(
       mesh_cache_->retired_proxy_count());
   material_binding_->bind_scene(scene_binding);

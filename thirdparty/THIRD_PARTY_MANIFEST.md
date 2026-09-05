@@ -6,14 +6,14 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | --- | --- | --- | --- | --- |
 | OpenMesh | https://gitlab.vci.rwth-aachen.de:9000/OpenMesh/OpenMesh.git | `5f016723f9f183770cffe5787a6f9f628e2914d8` | BSD 3-Clause, see `licenses/openmesh-BSD-3-Clause.txt` | Topology-backed polygon edit operations when `QUADER_USE_OPENMESH_TOPOLOGY=ON`. |
 | earcut.hpp | https://github.com/mapbox/earcut.hpp | vendored header | ISC, see `licenses/earcut-hpp-ISC.txt` | Polygon triangulation. |
-| nlohmann/json | https://github.com/nlohmann/json | `v3.12.0` single header | MIT, see `licenses/nlohmann-json-MIT.txt` | Human-readable `.qproj` manifests and the per-user recent-project index. |
+| nlohmann/json | https://github.com/nlohmann/json | `v3.12.0` single header | MIT, see `licenses/nlohmann-json-MIT.txt` | Human-readable `.qproj` manifests, recovery metadata, and the per-user recent-project index. |
 | FlatBuffers | https://github.com/google/flatbuffers | vcpkg `25.12.19` | Apache-2.0, see `licenses/flatbuffers-Apache-2.0.txt` | Typed binary `.qdr` chunk payloads, schema verification, and build-time private-header generation with `flatc`. |
 | Google Material Icons | https://github.com/google/material-design-icons | commit `abd7f5c0e179c83f068c770650bd14ebac5d5a09` | Apache-2.0, see `licenses/google-material-icons-Apache-2.0.txt` and `google-material-icons-PROVENANCE.md` | Layer visibility and lock-state UI icon artwork. |
 | Home Video font | https://ggbot.itch.io/home-video-font | Regular v0.80, SHA-256 `E73D67F92457BD05D24C42F43156BC422E98982E9E62D267AD6D1A3CC595BB01` | CC0 1.0 Universal, see `licenses/home-video-CC0-1.0.txt` and `home-video-font-PROVENANCE.md` | Pixel-style viewport dimension labels. |
 | Zstandard | https://github.com/facebook/zstd | vcpkg `1.5.7` | BSD-3-Clause OR GPL-2.0-only; Quader uses the BSD-3-Clause option, see `licenses/zstd-BSD-3-Clause-OR-GPL-2.0-only.txt` | Adaptive level-1 compression for sufficiently large binary `.qdr` geometry chunks. |
 | EnTT | https://github.com/skypjack/entt | vcpkg `3.16.0` | MIT, see `licenses/entt-MIT.txt` | Entity-component storage for scene/runtime data. |
 | OpenGL Mathematics (GLM) | https://glm.g-truc.net | vcpkg `1.0.3` | MIT or Happy Bunny License (Modified MIT), see `licenses/glm-MIT.txt` | Vector, matrix, and transform math. |
-| Filament SDK and bundled IBL assets | https://github.com/google/filament | `filament-v1.71.6-windows.tgz`, SHA-256 `f56b7b2717eda5094179748687e57fa20c2f245a3203fdf1fe274dba37e21180` | Apache-2.0, see `licenses/filament-Apache-2.0.txt` | Vulkan renderer, materials, KTX IBL loading, default `lightroom_14b` viewport environment, and checksum-pinned native CI. |
+| Filament SDK and bundled IBL assets | https://github.com/google/filament | v1.71.6 commit `ab65c099438ead4fabf496706da4aa3e0a272472`, source SHA-256 `ed2c4faa3bc22046d9a9ae574fb644c80f305f3e0386536fc9e6d8577295eb8a`, Quader patch `quader-vsync1` | Apache-2.0, see `licenses/filament-Apache-2.0.txt` and `filament/README.md` | Vulkan renderer with explicit VSync control, materials, KTX IBL loading, and default `lightroom_14b` viewport environment. |
 | Qt Base | https://code.qt.io/cgit/qt/qtbase.git | vcpkg `6.10.3` | LGPL-3.0-only for the dynamically linked distribution path, see `licenses/qtbase-LGPL-3.0-only.txt` | Qt Core, GUI, and Widgets support for the retained-mode editor shell. |
 | Qt Image Formats | https://code.qt.io/cgit/qt/qtimageformats.git | vcpkg `6.10.3` | LGPL-3.0-only for the dynamically loaded plugin distribution path, see `licenses/qtimageformats-LGPL-3.0-only.txt` | TGA, TIFF, and WebP image plugins used by project texture import; Jasper/JP2 support is deliberately disabled. |
 | libjpeg-turbo | https://github.com/libjpeg-turbo/libjpeg-turbo | vcpkg `3.1.4.1` | IJG and BSD-3-Clause, see `licenses/libjpeg-turbo-BSD-3-Clause-IJG.txt` | JPEG decoding through Qt's dynamically loaded `qjpeg` image plugin. |
@@ -21,12 +21,12 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | libwebp | https://chromium.googlesource.com/webm/libwebp | vcpkg `1.6.0#2` | BSD-3-Clause with an additional patent grant, see `licenses/libwebp-BSD-3-Clause-and-PATENTS.txt` | Still WebP decoding and animation detection through Qt's dynamically loaded `qwebp` image plugin. |
 | GoogleTest | https://github.com/google/googletest | vcpkg `1.17.0` | BSD 3-Clause, see `licenses/gtest-BSD-3-Clause.txt` | Native C++ tests. |
 | lodepng | https://github.com/lvandeve/lodepng | vcpkg `2021-12-04` | zlib license, see `licenses/lodepng-Zlib.txt` | PNG image loading support. |
-| Sentry Native SDK | https://github.com/getsentry/sentry-native | vcpkg `0.14.0` | MIT, see `licenses/sentry-native-MIT.txt` | Native crash and event reporting through Sentry. |
-| zlib | https://www.zlib.net | vcpkg `1.3.2` | Zlib, see `licenses/zlib-Zlib.txt` | Compression runtime dependency for the Sentry crashpad handler. |
+| Sentry Native SDK | https://github.com/getsentry/sentry-native | vcpkg `0.14.0` | MIT, see `licenses/sentry-native-MIT.txt` | Optional native crash/event reporting; disabled in the canonical native preset. |
+| zlib | https://www.zlib.net | vcpkg `1.3.2` | Zlib, see `licenses/zlib-Zlib.txt` | Compression runtime used by Qt dependencies and the optional Sentry crashpad handler. |
 | spdlog | https://github.com/gabime/spdlog | vcpkg `1.17.0` | MIT, see `licenses/spdlog-MIT.txt` | Runtime logging. |
 | {fmt} | https://github.com/fmtlib/fmt | vcpkg `12.1.0` | MIT, see `licenses/fmt-MIT.txt` | spdlog default formatting backend. |
 | stduuid | https://github.com/mariusbancila/stduuid | vcpkg `1.2.3` | MIT, see `licenses/stduuid-MIT.txt` | Stable UUID generation and parsing for scene entity identity. |
-| Tracy Profiler | https://github.com/wolfpld/tracy | external checkout when `QUADER_ENABLE_TRACY=ON` | BSD 3-Clause, see `licenses/tracy-BSD-3-Clause.txt` | Optional diagnostic instrumentation for local performance captures. |
+| Tracy Profiler | https://github.com/wolfpld/tracy | `0.13.1`, commit `05cceee0df3b8d7c6fa87e9638af311dbabc63cb`; pin in `tracy-0.13.1.json` | BSD 3-Clause, exact upstream text in `licenses/tracy-BSD-3-Clause.txt` | Required Debug/Profile on-demand instrumentation; absent from Release. |
 
 ## OpenMesh Source Policy
 
@@ -46,19 +46,35 @@ If a local source snapshot is checked into a release workspace, place it at `thi
 
 ## Filament Artifact Policy
 
-Filament is not vendored. Local and release builds provide a binary SDK with
-`FILAMENT_SDK_ROOT`. Clean native CI downloads the official v1.71.6 Windows release archive and
-verifies its SHA-256 before extraction or configure. Updating Filament requires one atomic change
-to the CMake default version, this manifest row, the workflow URL/digest/cache key, license evidence
-when applicable, and the configure-time SDK layout checks. An unversioned URL or a checksum bypass
-is not a supported fallback.
+Filament is not vendored. `tools/build_filament_sdk.ps1` builds the pinned upstream source with
+the reviewed patch under `thirdparty/filament`, producing one matching set of headers, tools,
+and Release /MD libraries. Downloads require `-AllowDownload` and must match the source digest
+before extraction. The default install is the sibling `_SOURCES/filament-v1.71.6-quader-vsync1-windows`;
+`FILAMENT_SDK_ROOT` may select another validated install. The generated `quader-filament-sdk.json`
+records upstream and patch identities plus the installed header/library hashes. Native configure
+rejects missing, unpatched, or mismatched SDK artifacts. The original official SDK and unversioned
+local source checkouts are never modified.
+
+Updating Filament requires one atomic change to the source pin, patch, build script, CMake default
+and artifact validation, this manifest row, license evidence when applicable,
+and guardrails. The patch retains the upstream Apache-2.0 license. An unversioned URL, checksum
+bypass, header-only patch, or mixture of rebuilt and official libraries is unsupported.
 
 ## Tracy Source Policy
 
-Tracy is optional and not vendored. Local diagnostic builds may enable it with:
+Native configuration requires a local Tracy source checkout. The canonical preset uses the
+sibling `_SOURCES/tracy-0.13.1`; select another compatible checkout explicitly with:
 
 ```powershell
-cmake --preset vs2026 -DQUADER_ENABLE_TRACY=ON -DQUADER_TRACY_SOURCE_DIR=C:\path\to\tracy
+cmake --preset vs2026 -DQUADER_TRACY_SOURCE_DIR=C:\path\to\tracy
 ```
 
-Builds with Tracy enabled must use a checkout that contains `public/tracy/Tracy.hpp` and `LICENSE`. Do not ship Tracy-enabled diagnostic packages without also including that license text.
+The checkout must contain `public/tracy/Tracy.hpp` and `LICENSE`. Native CMake forces Tracy
+availability on, then restricts definitions and linkage to Debug/Profile; `QUADER_ENABLE_TRACY=OFF`
+does not disable that contract. Release is the sole shipping configuration and carries no Tracy.
+SDK-only builds do not require this native dependency. Preserve the license with distributed
+diagnostic artifacts.
+
+[`tracy-0.13.1.json`](tracy-0.13.1.json) records the upstream revision and license digest.
+The retained license is the original text at that revision. Configure uses the local checkout
+without fetching dependencies.

@@ -8,8 +8,10 @@
 
 #include "core/command_result.hpp"
 #include "core/i_undoable_command.hpp"
+#include "core/session_preferences.hpp"
 #include "core/undo_redo_execute_options.hpp"
 
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
@@ -68,6 +70,11 @@ private:
  */
 class EditorHistoryService final {
 public:
+    static constexpr std::size_t kDefaultMaxSteps =
+        SessionPreferences::kDefaultUndoSteps;
+    static constexpr std::size_t kMaximumMaxSteps =
+        SessionPreferences::kMaximumUndoSteps;
+
     EditorHistoryService();
     ~EditorHistoryService();
 
@@ -86,9 +93,18 @@ public:
     [[nodiscard]] bool can_redo() const;
     [[nodiscard]] const std::string *undo_label() const;
     [[nodiscard]] const std::string *redo_label() const;
+    [[nodiscard]] std::size_t undo_count() const;
+    [[nodiscard]] std::size_t redo_count() const;
+    [[nodiscard]] std::size_t max_steps() const;
+
+    // A committed transaction counts as one step. Its provisional children stay
+    // available for rollback even when retention is disabled during a gesture.
+    void set_max_steps(std::size_t max_steps);
 
     void clear();
     void set_change_observer(std::function<void()> observer);
+    /// True for committed edits/undo/redo; false after a transaction rolls back.
+    void set_content_settled_observer(std::function<void(bool)> observer);
 
     [[nodiscard]] EditorTransaction begin_transaction(std::string label);
 
@@ -102,6 +118,7 @@ public:
     std::unique_ptr<UndoRedoManager> undo_redo_;
     EditorTransaction *active_transaction_ = nullptr;
     std::function<void()> change_observer_;
+    std::function<void(bool)> content_settled_observer_;
 };
 
 } // namespace quader

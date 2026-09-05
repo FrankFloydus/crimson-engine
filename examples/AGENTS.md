@@ -8,13 +8,13 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Examples Guide
 
-Follow root `AGENTS.md` public API and examples rules before changing examples.
+Native public examples live here; `sdk/` examples link only the portable SDK and `lua/` documents
+the currently unavailable scripting surface. Follow root [AGENTS.md](../AGENTS.md) public API rules.
 
 ## Example Rules
 
 - Public examples should begin from public APIs, not internal owners.
-- Prefer typed command IDs, result helpers, object handles, scene batches, and behavior-scenario
-  patterns where relevant.
+- Prefer typed command IDs, result helpers, object handles, and scene batches where relevant.
 - Do not demonstrate direct access to `SceneDocument`, `AssetRegistry`, `ModelingSessionService`,
   UI/render/platform backend internals, or raw platform state.
 - Examples should compile or be clearly marked as documentation-only.

@@ -50,6 +50,8 @@ struct QtMainMenuContext {
   std::function<bool()> material_browser_available;
   std::function<void()> show_material_find_replace;
   std::function<bool()> material_find_replace_available;
+  std::function<void()> show_autosave_recovery;
+  std::function<bool()> autosave_recovery_available;
 };
 
 /**

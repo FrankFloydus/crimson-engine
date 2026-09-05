@@ -1985,7 +1985,7 @@ decode_entity_state(const SceneContentDocument &document,
   }
   if (const fb::MaterialComponent *value = stored.material()) {
     MaterialComponent material = decode_material_component(*value);
-    if (material.material.valid()) {
+    if (material.material.valid() || !material.material_slots.empty()) {
       state.material = std::move(material);
     }
   }

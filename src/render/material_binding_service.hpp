@@ -89,6 +89,11 @@ public:
     filament::MaterialInstance *create_mesh_material_instance(
         const RenderMaterialAssetSnapshot *material, bool double_sided,
         bool editor_unlit = false) const;
+    filament::MaterialInstance *duplicate_mesh_material_instance(
+        const filament::MaterialInstance *source) const;
+    void destroy_mesh_material_instance(
+        filament::Engine &engine,
+        filament::MaterialInstance *&material_instance) const;
     void apply_mesh_surface_grid(filament::MaterialInstance &material_instance,
                                  float grid_world_spacing,
                                  const ViewportSettings &settings) const;

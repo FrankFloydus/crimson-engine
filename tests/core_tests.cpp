@@ -7,6 +7,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
+#include "app/app_frame_schedule.hpp"
 #include "app/app_window_settings.hpp"
 #include "assets/asset_registry.hpp"
 #include "assets/bake_service.hpp"
@@ -1188,6 +1189,37 @@ TEST(AppWindowSettingsTests, IgnoresIncompleteWindowPlacementFiles) {
   EXPECT_FALSE(loaded.placement().has_value());
 }
 
+TEST(AppFrameScheduleTests, PreservesSynchronizedAndIdleCadence) {
+  AppFrameSchedule schedule;
+  EXPECT_EQ(schedule.next_interval_ms(true, true, 17, true), 17);
+  EXPECT_EQ(schedule.next_interval_ms(true, true, 6, true), 6);
+  EXPECT_EQ(schedule.next_interval_ms(true, true, 17, false), 17);
+  EXPECT_EQ(schedule.next_interval_ms(false, false, 0, true), 16);
+}
+
+TEST(AppFrameScheduleTests, UncappedFramesYieldWhenRendererCannotProgress) {
+  AppFrameSchedule schedule;
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, true), 0);
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, false), 1);
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, false), 2);
+  for (int attempt = 0; attempt < 10; ++attempt) {
+    EXPECT_EQ(schedule.next_interval_ms(true, false, 0, false), 4);
+  }
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, true), 0);
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, false), 1);
+}
+
+TEST(AppFrameScheduleTests, FallbackAndIdleClearBackoffForNextActivation) {
+  AppFrameSchedule schedule;
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    (void)schedule.next_interval_ms(true, false, 0, false);
+  }
+  EXPECT_EQ(schedule.next_interval_ms(true, true, 17, false), 17);
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, false), 1);
+  EXPECT_EQ(schedule.next_interval_ms(false, false, 0, false), 16);
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, false), 1);
+}
+
 TEST(UISettingsTests, DefaultsKeepPanelVisibilityLocaleAndNavigationGizmo) {
   const UISettings settings = UISettings::defaults();
 
@@ -1201,6 +1233,33 @@ TEST(UISettingsTests, DefaultsKeepPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::ActiveMaterial));
   EXPECT_FALSE(settings.is_panel_visible(UIPanelId::Console));
   EXPECT_TRUE(settings.navigation_gizmo_visible());
+  EXPECT_TRUE(settings.vsync_enabled());
+}
+
+TEST(UISettingsTests, VsyncDefaultsSurviveLegacyAndMalformedPreferences) {
+  const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                     "quader_ui_settings_vsync.ini";
+  for (const std::string_view content : {
+           "[Localization]\nLocale=it-IT\n",
+           "[Rendering]\nVSync=invalid\n",
+           "[Rendering]\nVSync=\n"}) {
+    {
+      std::ofstream file(path, std::ios::trunc);
+      ASSERT_TRUE(file.is_open());
+      file << content;
+    }
+    EXPECT_TRUE(UISettings::load(path).vsync_enabled()) << content;
+  }
+  for (const bool enabled : {false, true}) {
+    UISettings settings = UISettings::defaults();
+    settings.set_vsync_enabled(enabled);
+    settings.set_interface_scale(1.5F);
+    ASSERT_TRUE(settings.save(path));
+    const UISettings loaded = UISettings::load(path);
+    EXPECT_EQ(loaded.vsync_enabled(), enabled);
+    EXPECT_FLOAT_EQ(loaded.interface_scale(), 1.5F);
+  }
+  std::filesystem::remove(path);
 }
 
 TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {

@@ -6,8 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "platform/fatal_error_handler.hpp"
 
-#include "core/logger.hpp"
-
+#include <algorithm>
 #include <atomic>
 #include <array>
 #include <chrono>
@@ -20,15 +19,15 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
-#include <mutex>
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
-#include <DbgHelp.h>
 #endif
 
 #if defined(_MSC_VER)
@@ -39,6 +38,7 @@ namespace quader {
 namespace {
 
 std::filesystem::path g_log_path;
+FatalDiagnosticsOptions g_diagnostics;
 std::atomic_bool g_handling_fatal_error{false};
 
 /**
@@ -57,9 +57,6 @@ using FatalExceptionPointers = void;
 #endif
 
 #if defined(_WIN32)
-std::mutex g_symbol_mutex;
-bool g_symbols_initialized = false;
-
 std::uint32_t current_process_id() {
   return static_cast<std::uint32_t>(GetCurrentProcessId());
 }
@@ -279,268 +276,213 @@ std::string hex_value(std::uintptr_t value) {
   return stream.str();
 }
 
+/// Captures addresses without loading symbols or entering DbgHelp.
+struct FatalStack {
+  std::array<std::uintptr_t, 64> addresses{};
+  std::uint32_t count = 0;
+};
+
+FatalStack capture_raw_stack() {
+  FatalStack stack;
 #if defined(_WIN32)
-std::string module_description_for_address(std::uintptr_t address) {
-  HMODULE module = nullptr;
-  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                         reinterpret_cast<LPCSTR>(address), &module) == FALSE ||
-      module == nullptr) {
-    return {};
+  std::array<void *, 64> frames{};
+  const USHORT count = CaptureStackBackTrace(
+      2U, static_cast<DWORD>(frames.size()), frames.data(), nullptr);
+  stack.count = count;
+  for (std::size_t index = 0; index < count; ++index) {
+    stack.addresses[index] = reinterpret_cast<std::uintptr_t>(frames[index]);
   }
-
-  std::array<char, MAX_PATH> path{};
-  const DWORD length =
-      GetModuleFileNameA(module, path.data(), static_cast<DWORD>(path.size()));
-  const std::filesystem::path module_path =
-      length > 0u ? std::filesystem::path(std::string(path.data(), length))
-                  : std::filesystem::path("<module>");
-  const auto base = reinterpret_cast<std::uintptr_t>(module);
-
-  std::ostringstream stream;
-  stream << "module=" << module_path.filename().string()
-         << " rva=" << hex_value(address - base);
-  return stream.str();
+#endif
+  return stack;
 }
 
-void initialize_symbols_locked() {
-  if (g_symbols_initialized) {
-    return;
-  }
-
-  SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
-  g_symbols_initialized =
-      SymInitialize(GetCurrentProcess(), nullptr, TRUE) == TRUE;
-}
-
-std::string describe_address_locked(std::uintptr_t address) {
+std::string format_raw_stack(const FatalStack &stack) {
   std::ostringstream stream;
-  stream << hex_value(address);
-  if (std::string module = module_description_for_address(address);
-      !module.empty()) {
-    stream << " [" << module << "]";
+  stream << "Stack trace (raw addresses; symbolization is optional):";
+  if (stack.count == 0U) {
+    stream << "\n  No stack frames available.";
   }
-
-  initialize_symbols_locked();
-  if (!g_symbols_initialized) {
-    return stream.str();
-  }
-
-  std::array<char, sizeof(SYMBOL_INFO) + MAX_SYM_NAME> symbol_buffer{};
-  auto *symbol = reinterpret_cast<SYMBOL_INFO *>(symbol_buffer.data());
-  symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
-  symbol->MaxNameLen = MAX_SYM_NAME;
-
-  DWORD64 displacement = 0;
-  if (SymFromAddr(GetCurrentProcess(), static_cast<DWORD64>(address),
-                  &displacement, symbol) == TRUE) {
-    stream << " " << symbol->Name;
-    if (displacement != 0u) {
-      stream << "+" << hex_value(static_cast<std::uintptr_t>(displacement));
-    }
-  }
-
-  IMAGEHLP_LINE64 line{};
-  line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
-  DWORD line_displacement = 0;
-  if (SymGetLineFromAddr64(GetCurrentProcess(), static_cast<DWORD64>(address),
-                           &line_displacement, &line) == TRUE) {
-    stream << " (" << line.FileName << ":" << line.LineNumber << ")";
-  }
-
-  return stream.str();
-}
-
-std::string format_stack_frame_locked(std::size_t index,
-                                      std::uintptr_t address) {
-  std::ostringstream stream;
-  stream << "  #" << std::setw(2) << std::setfill('0') << index << " "
-         << describe_address_locked(address);
-  return stream.str();
-}
-
-std::string capture_current_stack_trace(std::uint32_t skip_frames = 0) {
-  constexpr USHORT kMaxFrames = 64;
-  std::array<void *, kMaxFrames> frames{};
-  const USHORT frame_count = CaptureStackBackTrace(skip_frames + 1u, kMaxFrames,
-                                                   frames.data(), nullptr);
-  if (frame_count == 0u) {
-    return "Stack trace unavailable: CaptureStackBackTrace returned no frames.";
-  }
-
-  std::lock_guard<std::mutex> lock(g_symbol_mutex);
-  std::ostringstream stream;
-  stream << "Stack trace (most recent call first):";
-  for (USHORT index = 0; index < frame_count; ++index) {
-    stream << "\n"
-           << format_stack_frame_locked(
-                  index, reinterpret_cast<std::uintptr_t>(frames[index]));
+  for (std::uint32_t index = 0; index < stack.count; ++index) {
+    stream << "\n  #" << std::setw(2) << std::setfill('0') << index
+           << " " << hex_value(stack.addresses[index]);
   }
   return stream.str();
 }
 
 std::string describe_exception_record(FatalExceptionPointers *exception_pointers) {
-  if (exception_pointers == nullptr ||
-      exception_pointers->ExceptionRecord == nullptr) {
-    return "Exception record: unavailable.";
-  }
-
-  const EXCEPTION_RECORD *record = exception_pointers->ExceptionRecord;
-  std::ostringstream stream;
-  stream << "Exception record:\n";
-  stream << "  Code: "
-         << hex_value(static_cast<std::uintptr_t>(record->ExceptionCode))
-         << "\n";
-  stream << "  Flags: "
-         << hex_value(static_cast<std::uintptr_t>(record->ExceptionFlags))
-         << "\n";
-  stream << "  Address: ";
-  {
-    std::lock_guard<std::mutex> lock(g_symbol_mutex);
-    stream << describe_address_locked(
-        reinterpret_cast<std::uintptr_t>(record->ExceptionAddress));
-  }
-  if (record->NumberParameters > 0u) {
-    stream << "\n  Parameters:";
-    for (DWORD index = 0; index < record->NumberParameters; ++index) {
-      stream << "\n    [" << index << "] "
-             << hex_value(static_cast<std::uintptr_t>(
-                    record->ExceptionInformation[index]));
+#if defined(_WIN32)
+  if (exception_pointers != nullptr && exception_pointers->ExceptionRecord != nullptr) {
+    const EXCEPTION_RECORD &record = *exception_pointers->ExceptionRecord;
+    std::ostringstream stream;
+    stream << "Exception record:\n  Code: " << hex_value(record.ExceptionCode)
+           << "\n  Flags: " << hex_value(record.ExceptionFlags)
+           << "\n  Address: "
+           << hex_value(reinterpret_cast<std::uintptr_t>(record.ExceptionAddress));
+    const DWORD count = (std::min)(record.NumberParameters,
+                                   static_cast<DWORD>(EXCEPTION_MAXIMUM_PARAMETERS));
+    for (DWORD index = 0; index < count; ++index) {
+      stream << "\n  Parameter[" << index << "]: "
+             << hex_value(record.ExceptionInformation[index]);
     }
+    return stream.str();
   }
-  return stream.str();
-}
-
-std::string windows_error_status(const char *action, DWORD error) {
-  std::ostringstream stream;
-  stream << action << " failed with Win32 error " << error << " ("
-         << hex_value(static_cast<std::uintptr_t>(error)) << ").";
-  return stream.str();
-}
-
-std::string write_mini_dump(const std::filesystem::path &dump_path,
-                            FatalExceptionPointers *exception_pointers) {
-  if (dump_path.empty()) {
-    return "Minidump skipped: no dump path.";
-  }
-
-  HANDLE file =
-      CreateFileW(dump_path.wstring().c_str(), GENERIC_WRITE, 0, nullptr,
-                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE) {
-    return windows_error_status("CreateFileW for minidump", GetLastError());
-  }
-
-  MINIDUMP_EXCEPTION_INFORMATION exception_parameters{};
-  MINIDUMP_EXCEPTION_INFORMATION *exception_parameter_ptr = nullptr;
-  if (exception_pointers != nullptr) {
-    exception_parameters.ThreadId = GetCurrentThreadId();
-    exception_parameters.ExceptionPointers = exception_pointers;
-    exception_parameters.ClientPointers = FALSE;
-    exception_parameter_ptr = &exception_parameters;
-  }
-
-  const auto dump_type = static_cast<MINIDUMP_TYPE>(
-      MiniDumpNormal | MiniDumpWithHandleData | MiniDumpWithUnloadedModules |
-      MiniDumpWithProcessThreadData | MiniDumpWithThreadInfo |
-      MiniDumpWithFullMemoryInfo | MiniDumpWithIndirectlyReferencedMemory);
-
-  const BOOL wrote_dump =
-      MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
-                        dump_type, exception_parameter_ptr, nullptr, nullptr);
-  const DWORD error = wrote_dump == TRUE ? ERROR_SUCCESS : GetLastError();
-  CloseHandle(file);
-  if (wrote_dump != TRUE) {
-    return windows_error_status("MiniDumpWriteDump", error);
-  }
-  return "Minidump written.";
-}
-
-std::string
-capture_exception_stack_trace(FatalExceptionPointers *exception_pointers) {
-  if (exception_pointers == nullptr ||
-      exception_pointers->ContextRecord == nullptr) {
-    return capture_current_stack_trace();
-  }
-
-  CONTEXT context = *exception_pointers->ContextRecord;
-  STACKFRAME64 frame{};
-  DWORD machine_type = 0;
-
-#if defined(_M_X64)
-  machine_type = IMAGE_FILE_MACHINE_AMD64;
-  frame.AddrPC.Offset = context.Rip;
-  frame.AddrFrame.Offset = context.Rbp;
-  frame.AddrStack.Offset = context.Rsp;
-#elif defined(_M_IX86)
-  machine_type = IMAGE_FILE_MACHINE_I386;
-  frame.AddrPC.Offset = context.Eip;
-  frame.AddrFrame.Offset = context.Ebp;
-  frame.AddrStack.Offset = context.Esp;
-#elif defined(_M_ARM64)
-  machine_type = IMAGE_FILE_MACHINE_ARM64;
-  frame.AddrPC.Offset = context.Pc;
-  frame.AddrFrame.Offset = context.Fp;
-  frame.AddrStack.Offset = context.Sp;
 #else
-  return capture_current_stack_trace();
+  (void)exception_pointers;
+#endif
+  return "Exception record: unavailable.";
+}
+
+/// Carries optional results while the initial text report remains durable.
+struct FatalDiagnosticsResult {
+  std::string status;
+  std::string symbolized_stack;
+  bool dump_written = false;
+};
+
+#if defined(_WIN32)
+std::filesystem::path diagnostic_helper_path() {
+  if (!g_diagnostics.helper_path.empty()) {
+    return g_diagnostics.helper_path;
+  }
+  std::vector<wchar_t> buffer(32768U, L'\0');
+  const DWORD length = GetModuleFileNameW(nullptr, buffer.data(),
+                                           static_cast<DWORD>(buffer.size()));
+  if (length == 0U || length >= buffer.size()) {
+    return {};
+  }
+  return std::filesystem::path(std::wstring(buffer.data(), length)).parent_path() /
+         L"quader_fatal_diagnostics.exe";
+}
+
+std::wstring quote_process_argument(std::wstring_view argument) {
+  std::wstring quoted = L"\"";
+  std::size_t backslashes = 0;
+  for (wchar_t character : argument) {
+    if (character == L'\\') {
+      ++backslashes;
+      continue;
+    }
+    quoted.append(character == L'"' ? backslashes * 2U + 1U : backslashes, L'\\');
+    backslashes = 0;
+    quoted.push_back(character);
+  }
+  quoted.append(backslashes * 2U, L'\\');
+  quoted.push_back(L'"');
+  return quoted;
+}
+
+std::string read_symbolized_stack(const std::filesystem::path &path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input.is_open()) {
+    return {};
+  }
+  constexpr std::size_t kMaximumStackBytes = 64U * 1024U;
+  std::string text(kMaximumStackBytes, '\0');
+  input.read(text.data(), static_cast<std::streamsize>(text.size()));
+  text.resize(static_cast<std::size_t>(input.gcount()));
+  if (input.peek() != std::char_traits<char>::eof()) {
+    text += "\n[Symbolized stack truncated.]";
+  }
+  return text;
+}
 #endif
 
-  frame.AddrPC.Mode = AddrModeFlat;
-  frame.AddrFrame.Mode = AddrModeFlat;
-  frame.AddrStack.Mode = AddrModeFlat;
+FatalDiagnosticsResult collect_optional_diagnostics(
+    const std::filesystem::path &dump_path, const FatalStack &stack,
+    FatalExceptionPointers *exception_pointers) {
+#if defined(_WIN32)
+  const auto helper = diagnostic_helper_path();
+  std::error_code error;
+  if (helper.empty() || !std::filesystem::is_regular_file(helper, error)) {
+    return {.status = "Detailed diagnostics unavailable: helper executable is missing: " +
+                       helper.string()};
+  }
+  std::filesystem::path symbols_path = dump_path;
+  symbols_path += L".symbols";
+  std::wstring command = quote_process_argument(helper.wstring()) +
+      L" --quader-fatal-diagnostics " + std::to_wstring(GetCurrentProcessId()) +
+      L" " + std::to_wstring(GetCurrentThreadId()) +
+      L" " + std::to_wstring(reinterpret_cast<std::uintptr_t>(exception_pointers)) +
+      L" " + std::to_wstring(reinterpret_cast<std::uintptr_t>(stack.addresses.data())) +
+      L" " + std::to_wstring(stack.count) +
+      L" " + quote_process_argument(dump_path.wstring()) +
+      L" " + quote_process_argument(symbols_path.wstring());
+  std::vector<wchar_t> command_buffer(command.begin(), command.end());
+  command_buffer.push_back(L'\0');
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process{};
+  if (!CreateProcessW(helper.wstring().c_str(), command_buffer.data(), nullptr,
+                       nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
+                       &startup, &process)) {
+    return {.status = "Detailed diagnostics helper launch failed with Win32 error " +
+                       std::to_string(GetLastError()) + "."};
+  }
 
-  std::lock_guard<std::mutex> lock(g_symbol_mutex);
-  initialize_symbols_locked();
-
-  constexpr std::size_t kMaxFrames = 64;
-  std::ostringstream stream;
-  stream << "Stack trace (fault context):";
-  std::size_t frame_index = 0;
-  while (frame_index < kMaxFrames &&
-         StackWalk64(machine_type, GetCurrentProcess(), GetCurrentThread(),
-                     &frame, &context, nullptr, SymFunctionTableAccess64,
-                     SymGetModuleBase64, nullptr) == TRUE) {
-    if (frame.AddrPC.Offset == 0u) {
-      break;
+  FatalDiagnosticsResult result;
+  const DWORD deadline = (std::clamp)(g_diagnostics.timeout_ms, 1U, 10'000U);
+  const DWORD wait = WaitForSingleObject(process.hProcess, deadline);
+  if (wait == WAIT_OBJECT_0) {
+    DWORD exit_code = 0;
+    if (GetExitCodeProcess(process.hProcess, &exit_code)) {
+      result.status = exit_code == 0U
+          ? "Detailed diagnostics helper completed."
+          : "Detailed diagnostics helper failed with exit code " +
+                std::to_string(exit_code) + ".";
+    } else {
+      result.status = "Detailed diagnostics helper exit status is unavailable.";
     }
-    stream << "\n"
-           << format_stack_frame_locked(
-                  frame_index,
-                  static_cast<std::uintptr_t>(frame.AddrPC.Offset));
-    ++frame_index;
+  } else {
+    const DWORD wait_error = wait == WAIT_FAILED ? GetLastError() : 0U;
+    result.status = wait == WAIT_TIMEOUT
+        ? "Detailed diagnostics timed out after " + std::to_string(deadline) +
+              " ms; the initial report and raw stack were preserved."
+        : "Waiting for detailed diagnostics failed with Win32 error " +
+              std::to_string(wait_error) + ".";
+    // The helper only observes this process. Terminating it cannot damage the
+    // target or its initial report. Reap within a second, never wait indefinitely.
+    if (!TerminateProcess(process.hProcess, 0xDEADU)) {
+      result.status += " Helper termination failed with Win32 error " +
+                       std::to_string(GetLastError()) + ".";
+    } else if (WaitForSingleObject(process.hProcess, 1000U) != WAIT_OBJECT_0) {
+      result.status += " Helper termination did not complete within the cleanup deadline.";
+    }
   }
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
 
-  if (frame_index == 0u) {
-    return "Stack trace unavailable: StackWalk64 returned no frames.";
+  // The helper renames complete artifacts from .part files. A published dump
+  // remains useful even when later symbol loading exceeds the deadline.
+  error.clear();
+  result.dump_written = std::filesystem::is_regular_file(dump_path, error);
+  if (result.dump_written) {
+    result.status += " Minidump written.";
+  } else {
+    result.status += " Minidump unavailable.";
   }
-  return stream.str();
-}
+  result.symbolized_stack = read_symbolized_stack(symbols_path);
+  if (result.symbolized_stack.empty()) {
+    result.status += " Symbolized stack unavailable; use the recorded raw stack.";
+  }
+  for (const auto &path : {symbols_path, std::filesystem::path(symbols_path.wstring() + L".part"),
+                           std::filesystem::path(dump_path.wstring() + L".part")}) {
+    error.clear();
+    std::filesystem::remove(path, error);
+  }
+  return result;
 #else
-void show_fatal_message_box(FatalErrorInfo, const std::string &,
-                            const CrashArtifacts &) {}
-std::string capture_current_stack_trace(std::uint32_t = 0) {
-  return "Stack trace unavailable on this platform.";
-}
-
-std::string capture_exception_stack_trace(FatalExceptionPointers *) {
-  return capture_current_stack_trace();
-}
-
-std::string describe_exception_record(FatalExceptionPointers *) {
-  return "Exception record: unavailable on this platform.";
-}
-
-std::string write_mini_dump(const std::filesystem::path &,
-                            FatalExceptionPointers *) {
-  return "Minidump unavailable on this platform.";
-}
+  (void)dump_path;
+  (void)stack;
+  (void)exception_pointers;
+  return {.status = "Detailed diagnostics unavailable on this platform."};
 #endif
+}
 
 CrashArtifacts write_crash_artifacts(FatalErrorInfo info,
                                      const std::string &detail,
-                                     const std::string &stack_trace,
-                                     FatalExceptionPointers *exception_pointers) {
+                                     const FatalStack &stack,
+                                     FatalExceptionPointers *exception_pointers,
+                                     bool captured_context) {
   CrashArtifacts artifacts;
   const FatalArtifactPaths paths = make_fatal_artifact_paths(
       crash_report_directory(), timestamp_for_crash_file(),
@@ -552,13 +494,7 @@ CrashArtifacts write_crash_artifacts(FatalErrorInfo info,
 #endif
   artifacts.report_path = paths.report_path;
   artifacts.dump_path = paths.dump_path;
-#if defined(_WIN32)
-  artifacts.dump_status =
-      write_mini_dump(artifacts.dump_path, exception_pointers);
-#else
-  artifacts.dump_status = write_mini_dump({}, exception_pointers);
-#endif
-
+  artifacts.dump_status = "Detailed diagnostics pending; the initial report is saved first.";
   FatalReportData report_data{
       .generated_at = timestamp_for_crash_report(),
       .process_id = current_process_id(),
@@ -570,8 +506,11 @@ CrashArtifacts write_crash_artifacts(FatalErrorInfo info,
       .report_path = artifacts.report_path,
       .dump_path = artifacts.dump_path,
       .dump_status = artifacts.dump_status,
-      .exception_record = describe_exception_record(exception_pointers),
-      .stack_trace = stack_trace,
+      .exception_record =
+          (captured_context ? std::string{"Captured fatal-report context (synthetic exception):\n"}
+                            : std::string{}) +
+          describe_exception_record(exception_pointers),
+      .stack_trace = format_raw_stack(stack),
   };
   std::string text = format_fatal_error_report(report_data);
   const FatalReportWriteResult write = write_fatal_error_report(
@@ -580,35 +519,75 @@ CrashArtifacts write_crash_artifacts(FatalErrorInfo info,
   if (write.written) {
     artifacts.report_path = write.path;
     if (write.used_fallback) {
-      report_data.report_path = write.path;
-      text = format_fatal_error_report(report_data);
-      (void)write_fatal_error_report(write.path, write.path, text);
+      append_text_file(write.path, "\nReport recovered to fallback path: " +
+                                       write.path.string() + "\n");
+      if (!artifacts.dump_path.empty()) {
+        artifacts.dump_path = write.path;
+        artifacts.dump_path.replace_extension(".dmp");
+      }
     }
   }
+  // Fatal reporting must not wait for Logger's process-wide or sink mutexes.
+  // Direct append preserves the essential report even during a logging failure.
   append_text_file(g_log_path, "\n" + text);
+#if defined(_WIN32)
+  OutputDebugStringA(text.c_str());
+#endif
+
+  const FatalDiagnosticsResult diagnostics =
+      collect_optional_diagnostics(artifacts.dump_path, stack, exception_pointers);
+  artifacts.dump_status = diagnostics.status;
+  if (!diagnostics.dump_written) {
+    artifacts.dump_path.clear();
+  }
+  std::string supplement = "\nDetailed diagnostics result:\n" + diagnostics.status +
+      "\nDump file: " + (artifacts.dump_path.empty() ? std::string{"<none>"}
+                                                     : artifacts.dump_path.string()) +
+      "\n";
+  if (!diagnostics.symbolized_stack.empty()) {
+    supplement += diagnostics.symbolized_stack + "\n";
+  }
+  append_text_file(artifacts.report_path, supplement);
+  append_text_file(g_log_path, supplement);
   return artifacts;
 }
 
 [[noreturn]] void
 handle_fatal_error(FatalErrorCode code, const std::string &detail,
-                   int exit_code, std::string stack_trace = {},
+                   int exit_code,
                    FatalExceptionPointers *exception_pointers = nullptr) {
   const FatalErrorInfo info = fatal_error_info(code);
   const bool already_handling = g_handling_fatal_error.exchange(true);
   if (!already_handling) {
-    if (stack_trace.empty()) {
-      stack_trace = capture_current_stack_trace(1u);
+    // Keep this address array and the exception context alive while the helper
+    // reads the target process. No DbgHelp API executes in the failing process.
+    bool captured_context = false;
+#if defined(_WIN32)
+    CONTEXT context{};
+    EXCEPTION_RECORD record{};
+    EXCEPTION_POINTERS pointers{};
+    if (exception_pointers == nullptr) {
+      // Manual/abort/terminate paths need a real register context and stack in
+      // the dump too. Capture in this never-returning frame so it remains live.
+      RtlCaptureContext(&context);
+      record.ExceptionCode = 0xE0514400U | static_cast<DWORD>(code);
+      record.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
+#if defined(_M_X64)
+      record.ExceptionAddress = reinterpret_cast<void *>(context.Rip);
+#elif defined(_M_IX86)
+      record.ExceptionAddress = reinterpret_cast<void *>(context.Eip);
+#elif defined(_M_ARM64)
+      record.ExceptionAddress = reinterpret_cast<void *>(context.Pc);
+#endif
+      pointers.ExceptionRecord = &record;
+      pointers.ContextRecord = &context;
+      exception_pointers = &pointers;
+      captured_context = true;
     }
+#endif
+    const FatalStack stack = capture_raw_stack();
     const CrashArtifacts artifacts =
-        write_crash_artifacts(info, detail, stack_trace, exception_pointers);
-    LOG_CRITICAL("Fatal error {}: {}\nDetail: {}\nLog file: {}\nCrash report: "
-                 "{}\nMinidump: {}\nDump status: {}\n{}",
-                 info.code, info.quick_message, detail, g_log_path.string(),
-                 artifacts.report_path.string(), artifacts.dump_path.string(),
-                 artifacts.dump_status, stack_trace);
-    if (auto logger = Logger::instance()) {
-      logger->flush();
-    }
+        write_crash_artifacts(info, detail, stack, exception_pointers, captured_context);
     show_fatal_message_box(info, detail, artifacts);
   }
   std::_Exit(exit_code);
@@ -654,7 +633,6 @@ windows_unhandled_exception_filter(EXCEPTION_POINTERS *exception_pointers) {
         hex_value(reinterpret_cast<std::uintptr_t>(record->ExceptionAddress));
   }
   handle_fatal_error(FatalErrorCode::WindowsUnhandledException, reason, 1,
-                     capture_exception_stack_trace(exception_pointers),
                      exception_pointers);
 }
 #endif
@@ -706,8 +684,11 @@ FatalErrorInfo fatal_error_info(FatalErrorCode code) {
   }
 }
 
-void install_fatal_error_handler(std::filesystem::path log_path) {
+void install_fatal_error_handler(std::filesystem::path log_path,
+                                  FatalDiagnosticsOptions diagnostics) {
   g_log_path = std::move(log_path);
+  g_diagnostics = std::move(diagnostics);
+  g_diagnostics.timeout_ms = (std::clamp)(g_diagnostics.timeout_ms, 1U, 10'000U);
   std::set_terminate(terminate_handler);
   std::signal(SIGABRT, abort_signal_handler);
 #if defined(_WIN32)

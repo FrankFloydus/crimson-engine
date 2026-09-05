@@ -481,14 +481,14 @@ function Add-TestFilePlan {
 function Add-PathPlan {
     param([string]$Path)
 
-    if ($Path -match '^(CMakeLists\.txt|CMakePresets\.json|cmake/|vcpkg\.json|thirdparty/)') {
-        Add-FullVerification "build-system or dependency policy changed"
+    if ($Path -match '(^|/)AGENTS\.md$|^(architecture-review|INPUT_KEYBINDINGS|memory|tasklist)\.md$') {
+        Add-BuildTarget "quader_guardrail_tests" "repository guidance changed"
+        Add-GuardrailTestsFilter "AgentInstructionRoutingTests.*:BuildGuardrailTests.ProjectOwnedCommentCapableFilesCarryProprietaryBanner:BuildGuardrailTests.ArchitectureReviewNamesRealModelingDomainTargets:BuildGuardrailTests.TestingDocsExplainPlacementAndSelectionRules:BuildGuardrailTests.AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogleTestRuns" "guard instruction routing"
         return
     }
 
-    if ($Path -match '^(AGENTS\.md|architecture-review\.md|REFACTORING_PLAN\.md|memory\.md|refactor\.md|INPUT_KEYBINDINGS\.md)$') {
-        Add-BuildTarget "quader_guardrail_tests" "root guidance or architecture changed"
-        Add-GuardrailTestsFilter "AgentInstructionRoutingTests.*:BuildGuardrailTests.ProjectOwnedCommentCapableFilesCarryProprietaryBanner:BuildGuardrailTests.ArchitectureReviewNamesRealModelingDomainTargets:BuildGuardrailTests.TestingDocsExplainPlacementAndSelectionRules:BuildGuardrailTests.AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogleTestRuns" "guard instruction routing"
+    if ($Path -match '^(CMakeLists\.txt|CMakePresets\.json|cmake/|vcpkg\.json|thirdparty/)') {
+        Add-FullVerification "build-system or dependency policy changed"
         return
     }
 

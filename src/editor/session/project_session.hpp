@@ -9,9 +9,11 @@
 #include "editor/session/scene_session.hpp"
 #include "io/project/project_manifest.hpp"
 #include "io/project/project_material_catalog.hpp"
+#include "io/project/recent_scene_store.hpp"
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -24,6 +26,7 @@ namespace quader {
 
 class StandardMaterialEditSessionService;
 class ProjectClipboardService;
+class ProjectAutosaveService;
 struct ProjectMaterialTextureSnapshot;
 
 /// Owns one heap-stable scene document resident in the project workspace.
@@ -34,6 +37,7 @@ struct OpenSceneSession final {
   std::optional<ProjectRelativePath> path;
   std::unique_ptr<SceneSession> session;
   bool identity_dirty = false;
+  SceneContentRevisionStamp recent_content_stamp;
 
   [[nodiscard]] bool saved() const noexcept { return path.has_value(); }
   [[nodiscard]] bool dirty() const {
@@ -56,7 +60,7 @@ struct ProjectSessionResult final {
  */
 class ProjectSession final {
 public:
-  ProjectSession();
+  explicit ProjectSession(std::filesystem::path recent_scene_storage = {});
   ~ProjectSession();
 
   ProjectSession(const ProjectSession &) = delete;
@@ -70,6 +74,11 @@ public:
   [[nodiscard]] ProjectSessionResult
   open(const std::filesystem::path &manifest_path,
        bool discard_existing_dirty = false);
+  /// Stages the requested scene before asking the host to replace its workspace.
+  [[nodiscard]] ProjectSessionResult open_scene_project(
+      const std::filesystem::path &manifest_path, ProjectRelativePath scene_path,
+      const std::function<bool()> &prepare_replacement);
+  [[nodiscard]] std::vector<RecentSceneEntry> recent_scenes() const;
   [[nodiscard]] ProjectSessionResult close(bool discard_dirty = false);
 
   [[nodiscard]] ProjectSessionResult new_scene();
@@ -79,6 +88,14 @@ public:
   [[nodiscard]] ProjectSessionResult save_as(SceneSessionId id,
                                              ProjectRelativePath path);
   [[nodiscard]] ProjectSessionResult save_all();
+  /// Writes an independent recovery copy without committing previews or marking clean.
+  [[nodiscard]] ProjectSessionResult
+  write_scene_recovery(SceneSessionId id, const ProjectRelativePath &path) const;
+  /// Imports a validated recovery copy as a new, dirty, unsaved scene tab.
+  [[nodiscard]] ProjectSessionResult
+  recover_scene(const ProjectRelativePath &path, std::string display_name);
+  [[nodiscard]] ProjectAutosaveService &autosave() noexcept;
+  [[nodiscard]] const ProjectAutosaveService &autosave() const noexcept;
   [[nodiscard]] ProjectSessionResult close_scene(SceneSessionId id,
                                                  bool discard_dirty = false);
   [[nodiscard]] ProjectSessionResult
@@ -88,6 +105,8 @@ public:
       std::optional<ProjectAssetId> active_material = std::nullopt);
 
   void set_resource_root(std::filesystem::path resource_root);
+  // Applies the user policy to every resident scene and future scene sessions.
+  void set_history_max_steps(std::size_t max_steps);
 
   [[nodiscard]] bool has_project() const noexcept {
     return workspace_.has_value();
@@ -148,6 +167,12 @@ public:
   }
 
 private:
+  [[nodiscard]] ProjectSessionResult open_workspace(
+      const std::filesystem::path &manifest_path, bool discard_existing_dirty,
+      std::optional<ProjectRelativePath> required_scene,
+      const std::function<bool()> &prepare_replacement);
+  void remember_scene(SceneSessionId id) noexcept;
+  void remember_edited_scene(SceneSessionId id, bool committed);
   void invalidate_material_textures();
   [[nodiscard]] SceneSessionId allocate_session_id();
   void release_session_id(SceneSessionId id);
@@ -166,7 +191,9 @@ private:
       ProjectMaterialCatalog material_catalog,
       std::vector<std::unique_ptr<OpenSceneSession>> scenes,
       std::optional<ProjectRelativePath> requested_active,
-      std::vector<std::string> warnings);
+      std::vector<std::string> warnings,
+      const std::function<bool()> &prepare_replacement = {},
+      std::optional<ProjectManifest> original_manifest = std::nullopt);
   [[nodiscard]] ProjectSessionResult persist_workspace();
   [[nodiscard]] ProjectSessionResult persist_manifest(
       ProjectWorkspaceStorage &workspace, ProjectManifest manifest,
@@ -191,6 +218,7 @@ private:
   std::unordered_set<std::uint32_t> free_slot_membership_;
   SceneSessionId active_scene_id_;
   std::uint64_t activation_generation_ = 0u;
+  std::size_t history_max_steps_ = EditorHistoryService::kDefaultMaxSteps;
   std::shared_ptr<PathArraySessionDefaults> path_array_defaults_;
   SceneSession fallback_scene_;
   ProjectMaterialCatalog material_catalog_;
@@ -201,8 +229,12 @@ private:
   std::unique_ptr<StandardMaterialEditSessionService>
       standard_material_editor_;
   std::unique_ptr<ProjectClipboardService> clipboard_;
+  std::unique_ptr<ProjectAutosaveService> autosave_;
   std::filesystem::path resource_root_;
   std::filesystem::path empty_path_;
+  RecentSceneStore recent_scene_store_;
+  SceneSessionId recent_front_scene_;
+  std::optional<ProjectRelativePath> recent_front_path_;
 };
 
 } // namespace quader

@@ -41,6 +41,11 @@
 namespace quader_io {
 namespace {
 
+[[nodiscard]] std::string diagnostic_path(const std::filesystem::path &path) {
+  const auto encoded = path.u8string();
+  return {reinterpret_cast<const char *>(encoded.data()), encoded.size()};
+}
+
 [[nodiscard]] std::string
 system_error_message(const std::string &action, const std::error_code &error) {
   if (!error) {
@@ -611,22 +616,22 @@ write_file(const std::filesystem::path &temp_path, std::string_view bytes) {
                        std::ios::out | std::ios::binary | std::ios::trunc);
   if (!stream.is_open()) {
     return {false,
-            "Could not create temporary QDR file: " + temp_path.string()};
+            "Could not create temporary QDR file: " + diagnostic_path(temp_path)};
   }
   stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
   if (!stream.good()) {
     return {false,
-            "Could not write temporary QDR file: " + temp_path.string()};
+            "Could not write temporary QDR file: " + diagnostic_path(temp_path)};
   }
   stream.flush();
   if (!stream.good()) {
     return {false,
-            "Could not flush temporary QDR file: " + temp_path.string()};
+            "Could not flush temporary QDR file: " + diagnostic_path(temp_path)};
   }
   stream.close();
   if (!stream.good()) {
     return {false,
-            "Could not close temporary QDR file: " + temp_path.string()};
+            "Could not close temporary QDR file: " + diagnostic_path(temp_path)};
   }
   return flush_file_to_storage(temp_path);
 }
@@ -742,7 +747,7 @@ QdrAtomicWriteResult QdrAtomicFileTransaction::publish() {
       backup_cleanup_failure_message_ =
           "The QDR file was committed, but its obsolete rollback backup "
           "could not be removed: " +
-          backup_.string();
+          diagnostic_path(backup_);
     } catch (...) {
       backup_.clear();
       return {false,
@@ -935,10 +940,10 @@ QdrAtomicWriteResult QdrAtomicFileTransaction::rollback() {
           reversed.ok
               ? "QDR destination changed during rollback; the conflicting "
                 "destination was restored and the prior file remains at " +
-                    backup_.string()
+                    diagnostic_path(backup_)
               : "QDR destination changed during rollback; recovery files "
                 "remain at " +
-                    backup_.string() + " and " + recovery_.string()};
+                    diagnostic_path(backup_) + " and " + diagnostic_path(recovery_)};
     }
 
     backup_.clear();
@@ -983,7 +988,7 @@ QdrAtomicWriteResult QdrAtomicFileTransaction::rollback() {
                   "destination was restored and transaction state retained."
                 : "QDR destination changed during rollback; its recovery path "
                   "was retained at " +
-                      recovery_.string()};
+                      diagnostic_path(recovery_)};
   }
 
   published_ = false;

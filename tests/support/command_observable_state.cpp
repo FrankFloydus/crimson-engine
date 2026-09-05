@@ -1597,6 +1597,39 @@ std::string capture_preferences(const CaptureData &data) {
   const QuaderPreferencesApi &preferences = data.editor.preferences();
   // Locale and localized labels are intentionally absent so behavior
   // baselines remain identical across developer machines.
+  // Sparse VSync encoding: an absent key canonically means the fixed default
+  // true. This preserves existing approved fingerprints while still detecting
+  // every transition away from, or back to, synchronized presentation.
+  if (!preferences.vsync_enabled()) {
+    writer.line("preferences.vsync_enabled", "false");
+  }
+  // Omitted session keys encode these fixed defaults in approved baselines.
+  // Keep them independent of product defaults so changing a future default
+  // still produces an observable fingerprint change.
+  constexpr SessionPreferences kBaselineSession{
+      .undo_steps = 32,
+      .autosave_enabled = true,
+      .autosave_interval_minutes = 2,
+      .autosave_max_files = 3,
+  };
+  const SessionPreferences session = preferences.session_settings();
+  if (session.undo_steps != kBaselineSession.undo_steps) {
+    writer.line("preferences.session.undo_steps",
+                std::to_string(session.undo_steps));
+  }
+  if (session.autosave_enabled != kBaselineSession.autosave_enabled) {
+    writer.line("preferences.session.autosave_enabled",
+                bool_text(session.autosave_enabled));
+  }
+  if (session.autosave_interval_minutes !=
+      kBaselineSession.autosave_interval_minutes) {
+    writer.line("preferences.session.autosave_interval_minutes",
+                std::to_string(session.autosave_interval_minutes));
+  }
+  if (session.autosave_max_files != kBaselineSession.autosave_max_files) {
+    writer.line("preferences.session.autosave_max_files",
+                std::to_string(session.autosave_max_files));
+  }
   writer.line("preferences.snapping",
               bool_text(preferences.snapping_enabled()));
   writer.line("preferences.backface_selection",

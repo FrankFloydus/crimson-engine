@@ -6,21 +6,25 @@ No permission is granted to use, copy, modify, distribute, or sublicense this
 file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 -->
-# Editor Package Guide
+# Native Editor Services
 
-Follow root `AGENTS.md` domain ownership, public API, modeling, viewport/input, and testing rules
-before editor work.
+| Responsibility | Start here |
+| --- | --- |
+| Project workspace and scene lifetime | `session/project_session.*`, `session/scene_session.*` |
+| Ordered scene, asset, and modeling undo/redo | `history/editor_history_service.*` |
+| Recovery copies, interval/dirty gates, retention | `session/project_autosave_service.*` |
+| Duplicate, destroy, group, ungroup across owners | `commands/scene_structural_lifecycle_service.*` |
+| Scene/component selection and provider publication | `selection/editor_selection_service.*` |
+| SDK/scene/asset/binding publication rollback | `modeling/services/modeling_host_publication_transaction.*` |
+| Native modeling projection and picking | [runtime guide](modeling/runtime/README.md) |
+| Descriptor catalogs | [metadata guide](metadata/README.md) |
+| Native tool lifecycle and semantic input | `tools/`, then [input guide](../../INPUT_KEYBINDINGS.md) |
 
-## Editor Rules
-
-- User-triggered mutations belong in command services, editor services, or public API entry points.
-- Document mutations should be undoable through document commands or `QuaderSceneBatch` when grouped.
-- Modeling operations execute through modeling command/runtime services; do not call raw polygon
-  operations from UI/test/script code to bypass missing editor behavior.
-- `ModelingSessionService` remains a thin adapter over real owners.
-- `delete_selection` is a split-route command. Component deletion goes through
-  `DeleteSelectionTool` and `ModelingSessionService::deleteComponentSelection()`. Object/group
-  deletion and any selected non-scene-root root entity go through the scene-aware document command route.
-- Tool state machines belong under editor tools/interactions, not UI panels.
-- Add synthetic behavior coverage for selection, history, tools, transform previews, overlays, and
-  modeling workflows whenever those states can be inspected headlessly.
+- `ModelingSessionService` adapts the portable core; it must not become another modeling owner.
+- Structural actions must preserve scene state, SDK bindings, component selection, and chronological
+  history together. Failed publication rolls back all participating owners. Normal undo/redo keeps
+  monotonic revisions; exact revision restoration is for failure compensation.
+- `delete_selection` uses `DeleteSelectionTool`/`deleteComponentSelection()` for components and the
+  scene-aware document route for objects, groups, and selected roots other than the scene root.
+- Tools own state machines; UI dispatches intent. Cover preview cancel/commit, selection, overlays,
+  and undo/redo with focused synthetic behavior tests under the root verification contract.

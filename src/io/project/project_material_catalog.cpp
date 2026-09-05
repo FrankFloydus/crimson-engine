@@ -501,13 +501,16 @@ ProjectMaterialCatalog::read_texture(
   }
   const std::string_view byte_view(
       reinterpret_cast<const char *>(bytes.data()), bytes.size());
+  // Texture storage depends on image content and its interpretation, not QMAT
+  // scalars, UV transforms or names. Those edits only update material bindings.
+  const std::uint64_t texture_revision = append_hash(
+      append_hash(14'695'981'039'346'656'037ull, byte_view),
+      static_cast<std::uint64_t>((*slot)->color_space));
   return ProjectIoResult<ProjectMaterialTextureData>::success({
       .id = (*slot)->id,
       .color_space = (*slot)->color_space,
       .encoded_bytes = std::move(bytes),
-      .content_revision = append_hash(
-          append_hash(14'695'981'039'346'656'037ull, byte_view),
-          entry->content_revision),
+      .content_revision = texture_revision,
   });
 }
 

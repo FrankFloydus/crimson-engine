@@ -325,7 +325,13 @@ ProjectFileSystem::relative_from_absolute(
         "Selected path is outside the project root.", path);
   }
 
-  const std::filesystem::path relative = absolute_path.lexically_relative(root_);
+  // Dialog paths can reach the canonical root through a Windows short name or
+  // another ancestor alias. Keep in-project spelling when it is already
+  // relative to this root, including intentional internal links and casing.
+  std::filesystem::path relative = absolute_path.lexically_relative(root_);
+  if (relative.empty() || *relative.begin() == "..") {
+    relative = resolved.lexically_relative(root_);
+  }
   ProjectIoResult<ProjectRelativePath> parsed =
       ProjectRelativePath::parse(relative);
   if (!parsed.ok()) {

@@ -41,6 +41,8 @@ class RenderSystem;
 class MaterialPreviewRenderer;
 class SceneRenderBridge;
 class ViewportRenderer;
+class RenderVulkanPlatform;
+struct RenderSurfaceState;
 enum class ViewportRenderSurface;
 
 /**
@@ -57,22 +59,18 @@ public:
     RenderAdditionalSwapChain& operator=(RenderAdditionalSwapChain&& other) noexcept;
     ~RenderAdditionalSwapChain();
 
-    [[nodiscard]] filament::SwapChain *get() const { return swap_chain_; }
-    [[nodiscard]] explicit operator bool() const {
-      return swap_chain_ != nullptr && renderer_ != nullptr;
-    }
+    [[nodiscard]] filament::SwapChain *get() const;
+    [[nodiscard]] explicit operator bool() const;
+    // Recreated swapchains have no retained pixels, even if their view is clean.
+    [[nodiscard]] bool needs_initial_frame() const;
     void reset();
 
 private:
     friend class RenderSystem;
 
-    RenderAdditionalSwapChain(RenderSystem &owner,
-                              filament::SwapChain *swap_chain,
-                              filament::Renderer *renderer);
+    explicit RenderAdditionalSwapChain(std::shared_ptr<RenderSurfaceState> state);
 
-    RenderSystem* owner_ = nullptr;
-    filament::SwapChain *swap_chain_ = nullptr;
-    filament::Renderer *renderer_ = nullptr;
+    std::shared_ptr<RenderSurfaceState> state_;
 };
 
 /**
@@ -80,7 +78,7 @@ private:
  */
 class RenderSystem {
 public:
-    RenderSystem() = default;
+    RenderSystem();
     RenderSystem(const RenderSystem&) = delete;
     RenderSystem& operator=(const RenderSystem&) = delete;
     RenderSystem(RenderSystem&&) = delete;
@@ -107,11 +105,18 @@ public:
     [[nodiscard]] float display_refresh_rate_hz() const {
       return display_refresh_rate_hz_;
     }
+    void set_vsync_enabled(bool enabled);
+    [[nodiscard]] bool vsync_enabled() const { return vsync_enabled_; }
+    // Uses the backend-confirmed mode. Unknown surfaces conservatively use
+    // display cadence until their first swapchain has been created.
+    [[nodiscard]] bool presentation_is_synchronized() const;
+    // Nonblocking GPU readiness check, before input/modeling/UI preparation.
+    // Filament retains its own two-frame maximum latency and beginFrame gate.
+    [[nodiscard]] bool ready_for_next_frame() const;
     RenderAdditionalSwapChain
     create_additional_swap_chain(void *native_window,
                                  SwapChainPresentationColorSpace color_space =
                                      SwapChainPresentationColorSpace::Native);
-    void destroy_additional_swap_chain(filament::SwapChain *swap_chain);
 
     void initialize_scene_render_bridge(
         SceneRenderBridge &render_bridge,
@@ -135,26 +140,31 @@ public:
 
     bool begin_frame_with_swap_chain(filament::SwapChain *swap_chain);
     bool begin_frame_with_renderer(filament::Renderer *renderer,
-                                   filament::SwapChain *swap_chain);
+                                   filament::SwapChain *swap_chain,
+                                   RenderSurfaceState *surface = nullptr);
     void end_frame_with_renderer(filament::Renderer *renderer);
     void configure_renderer(filament::Renderer &renderer) const;
-    void destroy_additional_surface(filament::SwapChain *swap_chain,
-                                    filament::Renderer *renderer);
+    void destroy_additional_surface(RenderSurfaceState &surface);
+    void destroy_surface_swap_chain(RenderSurfaceState &surface);
+    void create_surface_swap_chain(RenderSurfaceState &surface);
+    void synchronize_surface_presentation(RenderSurfaceState &surface);
     void update_gpu_frame_performance_stats();
 
     filament::Engine* engine_ = nullptr;
     filament::Renderer* renderer_ = nullptr;
     filament::Renderer *performance_renderer_ = nullptr;
-    filament::SwapChain *swap_chain_ = nullptr;
+    std::shared_ptr<RenderSurfaceState> primary_surface_;
+    std::unique_ptr<RenderVulkanPlatform> vulkan_platform_;
     filament::Scene* scene_ = nullptr;
     FilamentEnvironmentLibrary environment_library_;
     FilamentMaterialLibrary material_library_;
     TextureRegistry texture_registry_;
     RenderFramePerformanceStats frame_performance_stats_;
     RenderPresentationFrameTracker presentation_frame_tracker_;
-    std::vector<filament::Renderer *> additional_renderers_;
+    std::vector<std::shared_ptr<RenderSurfaceState>> additional_surfaces_;
     std::array<double, 4> renderer_clear_color_ = {};
     float display_refresh_rate_hz_ = 60.0f;
+    bool vsync_enabled_ = true;
     std::filesystem::path resource_root_;
 };
 

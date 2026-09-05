@@ -8,18 +8,15 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Source Package Guide
 
-This file adds source-wide routing for code under `src/`. Also read the nearest package
-`AGENTS.md` under the specific source directory you are editing.
+Read the nearest package `AGENTS.md` before editing source. The
+[architecture map](../architecture-review.md) links every package owner; root
+[AGENTS.md](../AGENTS.md) owns shared policy, build requirements and verification.
 
 ## Source Rules
 
-- Treat the first directory under `src/` as a package boundary unless a narrower owner already
-  exists.
-- Keep user/editor intent behind public APIs, command services, or editor services.
-- Keep low-level math, mesh, render, asset, storage, and platform invariants in their owner packages.
-- Do not add cross-package shortcuts because a caller is missing a convenience method; add the owner
-  behavior and expose it cleanly.
+- Trace the public entry point through its state owner, transaction/publication and consumer before
+  changing behavior. Reuse the existing owner; do not add cross-package mutation shortcuts.
 - When adding or moving `.cpp` files, update the owning CMake target in `CMakeLists.txt` or
   `cmake/QuaderModeling.cmake`.
-- Prefer focused headless tests for source behavior. Use manual smoke checks only for window, GPU,
-  driver, and pixel-output behavior that cannot be inspected programmatically yet.
+- Update the nearest owner guide only when its contracts or navigation change; do not duplicate
+  root policy or copy the source's method catalog.

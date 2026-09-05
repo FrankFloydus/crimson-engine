@@ -60,6 +60,7 @@
 #include <QImage>
 #include <QLabel>
 #include <QLayout>
+#include <QLocale>
 #include <QMainWindow>
 #include <QMenuBar>
 #include <QPointer>
@@ -335,6 +336,7 @@ bool UISystem::initialize(RenderSystem &render_system,
   std::error_code error;
   std::filesystem::create_directories(settings_paths_.directory, error);
   settings_ = UISettings::load(settings_paths_.settings_file);
+  render_system_->set_vsync_enabled(settings_.vsync_enabled());
   auto *application =
       qobject_cast<QApplication *>(QCoreApplication::instance());
   if (application == nullptr) {
@@ -761,6 +763,7 @@ void UISystem::install_runtime_hooks(
     ModelingSessionService &modeling, EditorSelectionService &selection,
     NativeViewportToolCoordinator &native_tools,
     ViewportPointPlacementService &point_placement, AssetId default_material) {
+  ++runtime_binding_generation_;
   abandon_scene_backed_panels();
   if (viewport_panel_ != nullptr) {
     // Project rebinding can release the previous SceneSession before this
@@ -1044,6 +1047,10 @@ void UISystem::install_runtime_hooks(
                        editor_->project().has_project() &&
                        editor_->scene_documents().has_active_scene();
               },
+          .show_autosave_recovery = [this]() { show_autosave_recovery(); },
+          .autosave_recovery_available = [this]() {
+            return editor_ != nullptr && editor_->project().has_project();
+          },
         });
   } else {
     // A close command can synchronously rebind the active SceneSession from a
@@ -1195,6 +1202,61 @@ void UISystem::install_runtime_hooks(
             }
             return runtime_status(changed);
           },
+      .vsync_enabled = [this]() { return settings_.vsync_enabled(); },
+      .set_vsync_enabled =
+          [this](bool enabled) {
+            if (render_system_ == nullptr) {
+              return runtime_failure(localization_.text(
+                  "ui.runtime.renderer_unavailable",
+                  "Renderer runtime is not attached."));
+            }
+            const bool previous_persisted = settings_.vsync_enabled();
+            const bool previous_presented = render_system_->vsync_enabled();
+            const bool changed = previous_persisted != enabled ||
+                                 previous_presented != enabled;
+            if (changed) {
+              settings_.set_vsync_enabled(enabled);
+              render_system_->set_vsync_enabled(enabled);
+              if (!save_settings()) {
+                settings_.set_vsync_enabled(previous_persisted);
+                render_system_->set_vsync_enabled(previous_presented);
+                return runtime_failure(localization_.text(
+                    "ui.runtime.preferences_save_failed",
+                    "Preferences could not be saved."));
+              }
+              if (settings_dialog_ != nullptr &&
+                  settings_dialog_->isVisible()) {
+                settings_dialog_->synchronize_vsync_enabled();
+              }
+            }
+            return runtime_status(changed);
+          },
+      .session_settings = [this]() { return settings_.session_settings(); },
+      .set_session_settings = [this](SessionPreferences value) {
+        const SessionPreferences previous = settings_.session_settings();
+        if (!value.valid()) {
+          return runtime_failure(localization_.text(
+              "ui.runtime.session_preferences_invalid",
+              "Undo or autosave settings are outside the supported range."));
+        }
+        if (previous == value) {
+          return runtime_status(false);
+        }
+        (void)settings_.set_session_settings(value);
+        if (!save_settings()) {
+          (void)settings_.set_session_settings(previous);
+          return runtime_failure(localization_.text(
+              "ui.runtime.preferences_save_failed",
+              "Preferences could not be saved."));
+        }
+        if (session_settings_changed_) {
+          session_settings_changed_(value);
+        }
+        if (settings_dialog_ != nullptr && settings_dialog_->isVisible()) {
+          settings_dialog_->synchronize_session_settings();
+        }
+        return runtime_status(true);
+      },
       .save =
           [this]() {
             const bool ui_saved = save_settings();
@@ -4094,6 +4156,11 @@ void UISystem::refresh_localized_chrome() {
   }
 }
 
+void UISystem::set_session_settings_changed_callback(
+    std::function<void(const SessionPreferences &)> callback) {
+  session_settings_changed_ = std::move(callback);
+}
+
 void UISystem::handle_settings_dialog_change(const QtSettingsChange &change) {
   switch (change.kind) {
   case QtSettingsChangeKind::ViewportPreview:
@@ -4112,6 +4179,12 @@ void UISystem::handle_settings_dialog_change(const QtSettingsChange &change) {
       (void)apply_interface_scale(*change.interface_scale);
     }
     break;
+  case QtSettingsChangeKind::RenderingPreview:
+  case QtSettingsChangeKind::RenderingCommit:
+    if (render_system_ != nullptr && change.vsync_enabled.has_value()) {
+      render_system_->set_vsync_enabled(*change.vsync_enabled);
+    }
+    return;
   case QtSettingsChangeKind::KeybindingsCommit:
     if (editor_ != nullptr) {
       const QuaderSelectionSummary selection = editor_->selection().summary();
@@ -4135,6 +4208,11 @@ void UISystem::handle_settings_dialog_change(const QtSettingsChange &change) {
       }
     }
     break;
+  case QtSettingsChangeKind::SessionCommit:
+    if (change.session_settings.has_value() && session_settings_changed_) {
+      session_settings_changed_(*change.session_settings);
+    }
+    return;
   }
   if (main_menu_ != nullptr) {
     main_menu_->refresh();
@@ -4263,6 +4341,33 @@ void UISystem::synchronize_settings_surfaces(bool refresh_dialog) {
       settings_dialog_->isVisible()) {
     settings_dialog_->refresh();
   }
+}
+
+void UISystem::show_autosave_recovery() {
+  if (editor_ == nullptr || !editor_->project().has_project()) {
+    return;
+  }
+  const auto directory = editor_->scene_documents().autosave_directory();
+  if (!directory.ok()) {
+    present_lifecycle_result(directory);
+    return;
+  }
+  // Native dialogs run a nested message loop. Resolve through the current API
+  // after it closes, and reject a selection if that loop replaced the project.
+  const auto project_root = editor_->project().root();
+  const auto binding_generation = runtime_binding_generation_;
+  PlatformFileDialogOptions options;
+  options.owner_window_handle = native_window_handle();
+  options.initial_directory = directory.value();
+  const auto selected = platform_open_scene_recovery_file_dialog(options);
+  if (!selected || editor_ == nullptr ||
+      binding_generation != runtime_binding_generation_ ||
+      !editor_->project().has_project() ||
+      editor_->project().root() != project_root) {
+    return;
+  }
+  present_lifecycle_result(
+      editor_->scene_documents().recover_autosave_native_path(*selected));
 }
 
 void UISystem::show_settings_dialog() {

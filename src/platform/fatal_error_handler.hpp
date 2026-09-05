@@ -69,6 +69,14 @@ struct FatalReportWriteResult {
   bool used_fallback = false;
 };
 
+/// Bounds optional out-of-process diagnostics; the text report is written first.
+struct FatalDiagnosticsOptions {
+  // Empty selects quader_fatal_diagnostics.exe beside the current executable.
+  std::filesystem::path helper_path;
+  // Clamped to 1..10000 ms so a helper can never indefinitely block fatal exit.
+  std::uint32_t timeout_ms = 10'000U;
+};
+
 FatalErrorInfo fatal_error_info(FatalErrorCode code);
 [[nodiscard]] FatalArtifactPaths make_fatal_artifact_paths(
     const std::filesystem::path &directory, std::string_view timestamp,
@@ -82,7 +90,8 @@ format_fatal_error_report(const FatalReportData &data);
 /** Converts UTF-8 text into the native wide string used by fatal presentation. */
 [[nodiscard]] std::wstring
 platform_utf8_to_wide(std::string_view value);
-void install_fatal_error_handler(std::filesystem::path log_path);
+void install_fatal_error_handler(std::filesystem::path log_path,
+                                  FatalDiagnosticsOptions diagnostics = {});
 [[noreturn]] void report_fatal_error_and_exit(FatalErrorCode code,
                                               const char *detail = nullptr,
                                               int exit_code = 1);

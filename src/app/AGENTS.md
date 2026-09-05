@@ -8,19 +8,24 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # App Package Guide
 
-`src/app` is runtime composition and application lifecycle glue.
+- `App` composes services and owns startup/shutdown, persisted top-level placement, and frame flow.
+  Domain behavior remains in its owner; `UISystem` constructs/composes the retained `QMainWindow`.
+- `QApplication` owns the only event loop. The app `QTimer` schedules UI refresh, semantic input,
+  scene synchronization, viewport preparation, and visible native-surface submission.
+- Autosave uses a separate coarse timer and `ProjectAutosaveService`; never serialize scenes in
+  frame callbacks. Defer while modal/popup/pointer interactions or owner previews are active.
+- `AppFramePresentationGate` yields submission until newly shown modal/tool/popup windows receive
+  their first paint. Nested Qt event loops then retain live rendering; avoid starving first paint
+  or suppressing rendering for an entire dialog lifetime.
+- `AppFrameSchedule` retains display cadence with VSync, tests GPU readiness before expensive
+  uncapped frame work, backs off rejected submissions, and uses an idle interval when appropriate.
+  Actual VSync and surface lifetimes belong to `RenderSystem`; timer changes cannot implement it.
+- Scene/project replacement must install the new UI binding before publishing lifecycle events.
+  `render_frame()` reacquires the active scene after synchronous input dispatch. Do not retain
+  scene/session pointers across commands or nested event loops.
+- Shutdown stops scheduling, clears UI runtime hooks while callback owners live, destroys native
+  surfaces before the renderer, and keeps render material resolvers alive through bridge teardown.
 
-## App Rules
-
-- Keep domain behavior in editor, scene, asset, render, viewport, UI, or platform owners.
-- App code wires services, startup/shutdown, frame flow, and top-level orchestration.
-- User/editor mutations should route through `QuaderEditorApi`, command services, or owner services.
-- Do not hide modeling, rendering, selection, or document logic in app startup code.
-- `QApplication` owns the event loop. The app-owned `QTimer` schedules refresh work, scene/render
-  synchronization, viewport preparation, and submission to each visible native-child Filament
-  surface; do not create a competing event or frame loop.
-- `QMainWindow` construction and retained-widget composition belong to `UISystem`, not app
-  startup. App code owns only lifecycle, service wiring, persisted top-level placement, and frame
-  orchestration.
-- Changes to window lifecycle, backend startup, or frame orchestration need a manual smoke check when
-  they cannot be covered by headless tests.
+Verification pointers: `tests/app_frame_clock_tests.cpp`, `tests/qt_project_workspace_tests.cpp`,
+`tests/qt_startup_presentation_tests.cpp`, and `tests/render_presentation_tests.cpp`. Window/backend
+changes also need `tools/boot_smoke.ps1` when headless tests cannot inspect them; follow root builds.

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "core/undo_redo_manager.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace quader {
@@ -60,6 +61,7 @@ UndoRedoResult UndoRedoManager::execute(std::unique_ptr<IUndoableCommand> comman
         .merge_key = std::move(options.merge_key),
     });
     redo_stack_.clear();
+    trim_to_limit();
     return result;
 }
 
@@ -78,6 +80,7 @@ UndoRedoManager::record_executed(std::unique_ptr<IUndoableCommand> command) {
       .merge_key = {},
   });
   redo_stack_.clear();
+  trim_to_limit();
   return command_changed_result();
 }
 
@@ -127,6 +130,31 @@ const std::string *UndoRedoManager::redo_label() const {
     return nullptr;
   }
   return &redo_stack_.back().command->label();
+}
+
+void UndoRedoManager::set_max_steps(std::size_t max_steps) {
+  max_steps_ = max_steps;
+  trim_to_limit();
+}
+
+void UndoRedoManager::trim_to_limit() {
+  const std::size_t count = undo_stack_.size() + redo_stack_.size();
+  if (count <= max_steps_) {
+    return;
+  }
+
+  // Keep transitions contiguous around the current state: retire the oldest
+  // applied commands first, then the most distant redo commands if necessary.
+  // Never evict a command between the current state and a retained transition.
+  const std::size_t excess = count - max_steps_;
+  const std::size_t undo_removed = std::min(excess, undo_stack_.size());
+  undo_stack_.erase(undo_stack_.begin(),
+                    undo_stack_.begin() +
+                        static_cast<std::ptrdiff_t>(undo_removed));
+  const std::size_t redo_removed = excess - undo_removed;
+  redo_stack_.erase(redo_stack_.begin(),
+                    redo_stack_.begin() +
+                        static_cast<std::ptrdiff_t>(redo_removed));
 }
 
 void UndoRedoManager::clear() {

@@ -34,9 +34,11 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QDoubleSpinBox>
 #include <QEventLoop>
 #include <QFocusEvent>
+#include <QGroupBox>
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
@@ -49,8 +51,10 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPointer>
+#include <QPixmap>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QStackedWidget>
 #include <QStringList>
 #include <QTableView>
 #include <QTemporaryDir>
@@ -516,6 +520,434 @@ bool capture_keybinding_and_expect_error(
 }
 
 TEST(QtSettingsDialogTests,
+     CategoriesContainOnlyPreferencesWithoutDuplicateEditorControls) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-category-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(ui_settings, viewport_settings, localization,
+                     editor.commands(), {});
+
+  auto *categories = dialog.findChild<QListWidget *>(
+      QStringLiteral("settingsCategories"));
+  auto *pages = dialog.findChild<QStackedWidget *>(
+      QStringLiteral("settingsPages"));
+  ASSERT_NE(categories, nullptr);
+  ASSERT_NE(pages, nullptr);
+  const QStringList expected_ids = {
+      QStringLiteral("interface"), QStringLiteral("navigation"),
+      QStringLiteral("keybindings"), QStringLiteral("viewport"),
+      QStringLiteral("appearance"), QStringLiteral("editing"),
+      QStringLiteral("save_recovery"),
+  };
+  const QString capture_directory = QString::fromUtf8(
+      qgetenv("QUADER_SETTINGS_CAPTURE_DIR"));
+  const auto capture_pages = [&](const QString &locale) {
+    if (capture_directory.isEmpty()) {
+      return;
+    }
+    ASSERT_TRUE(QDir().mkpath(capture_directory));
+    const QDir output(capture_directory);
+    dialog.show();
+    for (int index = 0; index < categories->count(); ++index) {
+      categories->setCurrentRow(index);
+      QCoreApplication::processEvents();
+      const QString path = output.filePath(
+          locale + QStringLiteral("_") + expected_ids[index] +
+          QStringLiteral(".png"));
+      EXPECT_TRUE(dialog.grab().save(path)) << path.toStdString();
+    }
+  };
+  ASSERT_EQ(categories->count(), expected_ids.size());
+  ASSERT_EQ(pages->count(), categories->count());
+  for (int index = 0; index < categories->count(); ++index) {
+    EXPECT_EQ(categories->item(index)->data(Qt::UserRole).toString(),
+              expected_ids[index]);
+    categories->setCurrentRow(index);
+    EXPECT_EQ(pages->currentWidget()->objectName(),
+              QStringLiteral("settingsPage_%1").arg(expected_ids[index]));
+  }
+
+  const auto expect_group = [&](const char *control_name,
+                                const char *group_name,
+                                const char *page_name) {
+    auto *control = dialog.findChild<QWidget *>(QString::fromUtf8(control_name));
+    auto *group = dialog.findChild<QGroupBox *>(QString::fromUtf8(group_name));
+    auto *page = dialog.findChild<QWidget *>(QString::fromUtf8(page_name));
+    ASSERT_NE(control, nullptr) << control_name;
+    ASSERT_NE(group, nullptr) << group_name;
+    ASSERT_NE(page, nullptr) << page_name;
+    EXPECT_TRUE(group->isAncestorOf(control)) << control_name;
+    EXPECT_TRUE(page->isAncestorOf(group)) << group_name;
+  };
+  expect_group("settingsVSync", "settingsGroup_display",
+                "settingsPage_viewport");
+  expect_group("settingsUndoSteps", "settingsGroup_undo",
+                "settingsPage_editing");
+  expect_group("settingsAutosaveEnabled", "settingsGroup_autosave",
+                "settingsPage_save_recovery");
+  expect_group("viewportSetting_DefaultFlyNavigationSpeed",
+                "settingsGroup_navigation", "settingsPage_navigation");
+  expect_group("viewportSetting_GridMajorLineSize", "settingsGroup_grid",
+                "settingsPage_appearance");
+  expect_group("viewportSetting_SelectionFaceColor", "settingsGroup_selection",
+                "settingsPage_appearance");
+  expect_group("viewportSetting_PickVertexRadius", "settingsGroup_picking",
+                "settingsPage_viewport");
+  expect_group("viewportSetting_GizmoSize", "settingsGroup_gizmo",
+                "settingsPage_viewport");
+  expect_group("settingsLocale", "settingsGroup_language",
+                "settingsPage_interface");
+  expect_group("settingsInterfaceScale", "settingsGroup_interface_scale",
+                "settingsPage_interface");
+  auto *language_group = dialog.findChild<QGroupBox *>(
+      QStringLiteral("settingsGroup_language"));
+  auto *scale_group = dialog.findChild<QGroupBox *>(
+      QStringLiteral("settingsGroup_interface_scale"));
+  auto *picking_group = dialog.findChild<QGroupBox *>(
+      QStringLiteral("settingsGroup_picking"));
+  auto *navigation_group = dialog.findChild<QGroupBox *>(
+      QStringLiteral("settingsGroup_navigation"));
+  auto *selection_group = dialog.findChild<QGroupBox *>(
+      QStringLiteral("settingsGroup_selection"));
+  ASSERT_NE(language_group, nullptr);
+  ASSERT_NE(scale_group, nullptr);
+  ASSERT_NE(picking_group, nullptr);
+  ASSERT_NE(navigation_group, nullptr);
+  ASSERT_NE(selection_group, nullptr);
+  EXPECT_EQ(language_group->title(), QStringLiteral("Language"));
+  EXPECT_EQ(scale_group->title(), QStringLiteral("Interface Scaling"));
+  EXPECT_EQ(picking_group->title(), QStringLiteral("Picking"));
+  EXPECT_EQ(navigation_group->title(), QStringLiteral("Fly Navigation"));
+  EXPECT_EQ(selection_group->title(), QStringLiteral("Selection Appearance"));
+  EXPECT_EQ(dialog.findChild<QGroupBox *>(
+                QStringLiteral("settingsGroup_snapping")),
+            nullptr);
+  EXPECT_EQ(dialog.findChild<QGroupBox *>(
+                QStringLiteral("settingsGroup_texturing")),
+            nullptr);
+  auto *editing_page = dialog.findChild<QWidget *>(
+      QStringLiteral("settingsPage_editing"));
+  ASSERT_NE(editing_page, nullptr);
+  const auto editing_groups = editing_page->findChildren<QGroupBox *>();
+  ASSERT_EQ(editing_groups.size(), 1);
+  EXPECT_EQ(editing_groups.front()->objectName(),
+            QStringLiteral("settingsGroup_undo"));
+  for (auto *group : dialog.findChildren<QGroupBox *>()) {
+    EXPECT_TRUE(group->findChild<QCheckBox *>() != nullptr ||
+                group->findChild<QSpinBox *>() != nullptr ||
+                group->findChild<QDoubleSpinBox *>() != nullptr ||
+                group->findChild<QComboBox *>() != nullptr ||
+                group->findChild<QPushButton *>() != nullptr ||
+                group->findChild<QTableView *>() != nullptr)
+        << "Settings must not retain an empty group: "
+        << group->objectName().toStdString();
+  }
+
+  const auto expect_control_count = [&](const auto &descriptor,
+                                       qsizetype expected_count) {
+    const QString name = QStringLiteral("viewportSetting_%1").arg(
+        QString::fromUtf8(descriptor.key.data(),
+                          static_cast<qsizetype>(descriptor.key.size())));
+    EXPECT_EQ(dialog.findChildren<QWidget *>(name).size(), expected_count)
+        << descriptor.key;
+  };
+  for (const auto &descriptor : viewport_color_settings()) {
+    expect_control_count(descriptor, 1);
+  }
+  for (const auto &descriptor : viewport_float_settings()) {
+    expect_control_count(
+        descriptor,
+        descriptor.id == ViewportFloatSettingId::RotationSnapDegrees ? 0 : 1);
+  }
+  for (const auto &descriptor : viewport_bool_settings()) {
+    expect_control_count(
+        descriptor,
+        descriptor.id == ViewportBoolSettingId::ShowHoverDimensions ? 1 : 0);
+  }
+  capture_pages(QStringLiteral("en-US"));
+
+  const auto original_pages = pages->findChildren<QWidget *>();
+  auto *undo_group = dialog.findChild<QGroupBox *>(
+      QStringLiteral("settingsGroup_undo"));
+  ASSERT_NE(undo_group, nullptr);
+  ASSERT_TRUE(localization.select_locale("it-IT"));
+  ui_settings.set_locale("it-IT");
+  dialog.refresh();
+  EXPECT_EQ(categories->item(5)->text(), QStringLiteral("Modifica"));
+  EXPECT_EQ(undo_group->title(), QStringLiteral("Cronologia annullamenti"));
+  EXPECT_EQ(selection_group->title(),
+            QStringLiteral("Aspetto della selezione"));
+  EXPECT_EQ(pages->findChildren<QWidget *>(), original_pages)
+      << "localization must update the retained pages in place";
+  capture_pages(QStringLiteral("it-IT"));
+  dialog.reject();
+}
+
+TEST(QtSettingsDialogTests,
+     ExternalViewportControlsSurviveApplyAndCancelOfPreferenceDrafts) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-external-controls-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  const ViewportSettings initial_viewport_settings = viewport_settings;
+  LocalizationService localization = loaded_localization();
+  std::vector<QtSettingsChange> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) { changes.push_back(change); });
+  auto *hover_dimensions = dialog.findChild<QCheckBox *>(
+      QStringLiteral("viewportSetting_ShowHoverDimensions"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  ASSERT_NE(hover_dimensions, nullptr);
+  ASSERT_NE(apply, nullptr);
+  dialog.show();
+  QCoreApplication::processEvents();
+  ASSERT_TRUE(hover_dimensions->isChecked());
+  hover_dimensions->setChecked(false);
+
+  // Menu and toolbar actions publish directly to this shared settings owner.
+  // Applying an unrelated dialog draft must preserve even unrefreshed changes.
+  for (const auto &descriptor : viewport_bool_settings()) {
+    if (descriptor.id != ViewportBoolSettingId::ShowHoverDimensions) {
+      ASSERT_TRUE(viewport_settings.set_bool_value(
+          descriptor.id, !initial_viewport_settings.bool_value(descriptor.id)));
+    }
+  }
+  ASSERT_TRUE(viewport_settings.set_float_value(
+      ViewportFloatSettingId::RotationSnapDegrees, 45.0f));
+  apply->click();
+  EXPECT_FALSE(viewport_settings.bool_value(
+      ViewportBoolSettingId::ShowHoverDimensions));
+  for (const auto &descriptor : viewport_bool_settings()) {
+    if (descriptor.id != ViewportBoolSettingId::ShowHoverDimensions) {
+      EXPECT_EQ(viewport_settings.bool_value(descriptor.id),
+                !initial_viewport_settings.bool_value(descriptor.id))
+          << descriptor.key;
+    }
+  }
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::RotationSnapDegrees),
+                  45.0f);
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes.front().kind, QtSettingsChangeKind::ViewportCommit);
+  EXPECT_FALSE(apply->isEnabled());
+
+  hover_dimensions->setChecked(true);
+  for (const auto &descriptor : viewport_bool_settings()) {
+    if (descriptor.id != ViewportBoolSettingId::ShowHoverDimensions) {
+      ASSERT_TRUE(viewport_settings.set_bool_value(
+          descriptor.id, initial_viewport_settings.bool_value(descriptor.id)));
+    }
+  }
+  ASSERT_TRUE(viewport_settings.set_float_value(
+      ViewportFloatSettingId::RotationSnapDegrees, 90.0f));
+  dialog.refresh();
+  EXPECT_TRUE(hover_dimensions->isChecked());
+  EXPECT_TRUE(apply->isEnabled());
+  dialog.reject();
+  EXPECT_FALSE(viewport_settings.bool_value(
+      ViewportBoolSettingId::ShowHoverDimensions));
+  for (const auto &descriptor : viewport_bool_settings()) {
+    if (descriptor.id != ViewportBoolSettingId::ShowHoverDimensions) {
+      EXPECT_EQ(viewport_settings.bool_value(descriptor.id),
+                initial_viewport_settings.bool_value(descriptor.id))
+          << descriptor.key;
+    }
+  }
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::RotationSnapDegrees),
+                  90.0f);
+  EXPECT_EQ(changes.size(), 1u);
+}
+
+TEST(QtSettingsDialogTests,
+     UndoAndAutosaveStageApplyCancelAndMergeUntouchedExternalValues) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-session-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  std::vector<QtSettingsChange> changes;
+  std::vector<SessionPreferences> persisted;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) { changes.push_back(change); },
+      [&]() {
+        persisted.push_back(ui_settings.session_settings());
+        return true;
+      });
+  auto *undo = dialog.findChild<QSpinBox *>(QStringLiteral("settingsUndoSteps"));
+  auto *enabled = dialog.findChild<QCheckBox *>(
+      QStringLiteral("settingsAutosaveEnabled"));
+  auto *interval = dialog.findChild<QSpinBox *>(
+      QStringLiteral("settingsAutosaveInterval"));
+  auto *copies = dialog.findChild<QSpinBox *>(
+      QStringLiteral("settingsAutosaveMaxFiles"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  ASSERT_NE(undo, nullptr);
+  ASSERT_NE(enabled, nullptr);
+  ASSERT_NE(interval, nullptr);
+  ASSERT_NE(copies, nullptr);
+  ASSERT_NE(apply, nullptr);
+  EXPECT_EQ(dialog.findChild<QPushButton *>(
+                QStringLiteral("settingsRecoverAutosave")), nullptr);
+  EXPECT_EQ(dialog.findChild<QGroupBox *>(
+                QStringLiteral("settingsGroup_recovery")), nullptr);
+  EXPECT_EQ(undo->value(), 32);
+  EXPECT_EQ(undo->minimum(), 0);
+  EXPECT_EQ(undo->maximum(), 256);
+  EXPECT_TRUE(enabled->isChecked());
+  EXPECT_EQ(interval->value(), 2);
+  EXPECT_EQ(interval->minimum(), 1);
+  EXPECT_EQ(interval->maximum(), 60);
+  EXPECT_EQ(copies->value(), 3);
+  EXPECT_EQ(copies->maximum(), 20);
+  EXPECT_FALSE(undo->accessibleName().isEmpty());
+  EXPECT_EQ(undo->accessibleDescription(), undo->toolTip());
+  dialog.show();
+  QCoreApplication::processEvents();
+
+  undo->setValue(8);
+  interval->setValue(5);
+  copies->setValue(4);
+  enabled->setChecked(false);
+  EXPECT_FALSE(interval->isEnabled());
+  EXPECT_FALSE(copies->isEnabled());
+  EXPECT_TRUE(changes.empty());
+  EXPECT_TRUE(persisted.empty());
+  EXPECT_EQ(ui_settings.session_settings(), SessionPreferences{});
+  EXPECT_TRUE(apply->isEnabled());
+
+  apply->click();
+  const SessionPreferences applied{.undo_steps = 8,
+                                   .autosave_enabled = false,
+                                   .autosave_interval_minutes = 5,
+                                   .autosave_max_files = 4};
+  EXPECT_EQ(ui_settings.session_settings(), applied);
+  ASSERT_EQ(persisted.size(), 1u);
+  EXPECT_EQ(persisted.back(), applied);
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes.back().kind, QtSettingsChangeKind::SessionCommit);
+  EXPECT_EQ(changes.back().session_settings, applied);
+  EXPECT_FALSE(apply->isEnabled());
+  undo->setValue(0);
+  enabled->setChecked(true);
+  EXPECT_TRUE(interval->isEnabled());
+  dialog.reject();
+  EXPECT_EQ(ui_settings.session_settings(), applied);
+  EXPECT_EQ(changes.size(), 1u);
+
+  dialog.show();
+  QCoreApplication::processEvents();
+  undo->setValue(4);
+  SessionPreferences externally_changed = applied;
+  externally_changed.autosave_max_files = 7;
+  ASSERT_TRUE(ui_settings.set_session_settings(externally_changed));
+  dialog.refresh();
+  EXPECT_EQ(undo->value(), 4);
+  EXPECT_EQ(copies->value(), 7);
+  apply->click();
+  EXPECT_EQ(ui_settings.session_settings().undo_steps, 4);
+  EXPECT_EQ(ui_settings.session_settings().autosave_max_files, 7);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::SessionCommit), 2u);
+
+  undo->setValue(0);
+  externally_changed = ui_settings.session_settings();
+  externally_changed.autosave_interval_minutes = 9;
+  ASSERT_TRUE(ui_settings.set_session_settings(externally_changed));
+  dialog.synchronize_session_settings();
+  EXPECT_EQ(undo->value(), 0)
+      << "an external autosave commit must preserve a staged undo limit";
+  EXPECT_EQ(interval->value(), 9);
+  EXPECT_TRUE(apply->isEnabled());
+  externally_changed.undo_steps = 16;
+  ASSERT_TRUE(ui_settings.set_session_settings(externally_changed));
+  dialog.synchronize_session_settings();
+  EXPECT_EQ(undo->value(), 16);
+  EXPECT_FALSE(apply->isEnabled());
+  dialog.reject();
+}
+
+TEST(QtSettingsDialogTests,
+     FailedSessionPreferencePersistenceKeepsRuntimeHistoryUntouched) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-session-persistence-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  bool persistence_succeeds = false;
+  std::vector<QtSettingsChange> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) { changes.push_back(change); },
+      [&]() { return persistence_succeeds; });
+  auto *undo = dialog.findChild<QSpinBox *>(QStringLiteral("settingsUndoSteps"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  ASSERT_NE(undo, nullptr);
+  ASSERT_NE(apply, nullptr);
+  dialog.show();
+  QCoreApplication::processEvents();
+  undo->setValue(0);
+  apply->click();
+  EXPECT_EQ(ui_settings.session_settings(), SessionPreferences{});
+  EXPECT_TRUE(changes.empty());
+  EXPECT_EQ(undo->value(), 0);
+  EXPECT_TRUE(apply->isEnabled());
+  auto *error = dynamic_cast<QtRetainedMessageBox *>(
+      dialog.findChild<QWidget *>(QStringLiteral("settingsPersistenceErrorDialog")));
+  ASSERT_NE(error, nullptr);
+  EXPECT_TRUE(error->isVisible());
+  error->done(QDialog::Accepted);
+  persistence_succeeds = true;
+  apply->click();
+  EXPECT_EQ(ui_settings.session_settings().undo_steps, 0);
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes.back().kind, QtSettingsChangeKind::SessionCommit);
+  dialog.reject();
+}
+
+TEST(QtSettingsDialogTests,
      ApplyOkAndCancelOwnOneStagedSettingsTransaction) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -556,10 +988,6 @@ TEST(QtSettingsDialogTests,
       QStringLiteral("viewportSetting_DefaultFlyNavigationSpeed"));
   auto *bounding_box_thickness = dialog.findChild<QDoubleSpinBox *>(
       QStringLiteral("viewportSetting_BoundingBoxWireThickness"));
-  auto *show_grid = dialog.findChild<QCheckBox *>(
-      QStringLiteral("viewportSetting_ShowGrid"));
-  auto *show_info = dialog.findChild<QCheckBox *>(
-      QStringLiteral("viewportSetting_ShowInfo"));
   auto *dimension_font_size = dialog.findChild<QDoubleSpinBox *>(
       QStringLiteral("viewportSetting_DimensionFontSize"));
   auto *show_hover_dimensions = dialog.findChild<QCheckBox *>(
@@ -604,8 +1032,6 @@ TEST(QtSettingsDialogTests,
   ASSERT_NE(thickness, nullptr);
   ASSERT_NE(default_fly_speed, nullptr);
   ASSERT_NE(bounding_box_thickness, nullptr);
-  ASSERT_NE(show_grid, nullptr);
-  ASSERT_NE(show_info, nullptr);
   ASSERT_NE(dimension_font_size, nullptr);
   ASSERT_NE(show_hover_dimensions, nullptr);
   ASSERT_NE(locale_combo, nullptr);
@@ -641,7 +1067,7 @@ TEST(QtSettingsDialogTests,
   for (int row = 0; row < category_list->count(); ++row) {
     const QString stable_id =
         category_list->item(row)->data(Qt::UserRole).toString();
-    if (stable_id == QStringLiteral("grid")) {
+    if (stable_id == QStringLiteral("appearance")) {
       grid_row = row;
     } else if (stable_id == QStringLiteral("navigation")) {
       navigation_row = row;
@@ -724,7 +1150,6 @@ TEST(QtSettingsDialogTests,
   bounding_box_thickness->setValue(4.25);
   dimension_font_size->setValue(13.0);
   show_hover_dimensions->setChecked(false);
-  show_grid->setChecked(false);
   locale_combo->setCurrentIndex(italian_index);
   EXPECT_TRUE(apply_button->isEnabled());
   EXPECT_FLOAT_EQ(viewport_settings.float_value(
@@ -741,7 +1166,6 @@ TEST(QtSettingsDialogTests,
                   12.0f);
   EXPECT_TRUE(
       viewport_settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
-  EXPECT_TRUE(viewport_settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_EQ(ui_settings.locale(), "en-US");
   EXPECT_EQ(localization.current_locale(), "en-US");
   EXPECT_TRUE(viewport_setting_colors_approximately(
@@ -780,7 +1204,6 @@ TEST(QtSettingsDialogTests,
                   13.0f);
   EXPECT_FALSE(
       viewport_settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
-  EXPECT_FALSE(viewport_settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_EQ(ui_settings.locale(), "it-IT");
   EXPECT_EQ(localization.current_locale(), "it-IT");
   EXPECT_TRUE(viewport_setting_colors_approximately(
@@ -811,7 +1234,6 @@ TEST(QtSettingsDialogTests,
   bounding_box_thickness->setValue(7.0);
   dimension_font_size->setValue(18.0);
   show_hover_dimensions->setChecked(true);
-  show_grid->setChecked(true);
   locale_combo->setCurrentIndex(english_index);
   const QColor discarded_mesh_major = QColor::fromRgb(186, 130, 74, 105);
   ASSERT_TRUE(accept_color_picker(
@@ -852,7 +1274,6 @@ TEST(QtSettingsDialogTests,
                   13.0f);
   EXPECT_FALSE(
       viewport_settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
-  EXPECT_FALSE(viewport_settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_EQ(ui_settings.locale(), "it-IT");
   EXPECT_EQ(localization.current_locale(), "it-IT");
   EXPECT_TRUE(viewport_setting_colors_approximately(
@@ -876,7 +1297,6 @@ TEST(QtSettingsDialogTests,
   dialog.show();
   QCoreApplication::processEvents();
   EXPECT_DOUBLE_EQ(thickness->value(), 1.75);
-  EXPECT_FALSE(show_grid->isChecked());
   EXPECT_DOUBLE_EQ(dimension_font_size->value(), 13.0);
   EXPECT_FALSE(show_hover_dimensions->isChecked());
   for (std::size_t index = 0; index < instance_controls.size(); ++index) {
@@ -899,7 +1319,9 @@ TEST(QtSettingsDialogTests,
       ViewportBoolSettingId::ShowInfo, true));
   thickness->setValue(3.0);
   dialog.refresh();
-  EXPECT_TRUE(show_info->isChecked());
+  EXPECT_EQ(dialog.findChild<QCheckBox *>(
+                QStringLiteral("viewportSetting_ShowInfo")),
+            nullptr);
   ok_button->click();
   QCoreApplication::processEvents();
   EXPECT_FALSE(dialog.isVisible());
@@ -1104,6 +1526,208 @@ TEST(QtSettingsDialogTests,
 }
 
 TEST(QtSettingsDialogTests,
+     VSyncPreviewsPersistsOnceAndRollsBackToLastAppliedValue) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-vsync-settings-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QTemporaryDir profile;
+  ASSERT_TRUE(profile.isValid());
+  const std::filesystem::path settings_path =
+      std::filesystem::path(profile.path().toStdWString()) / "ui_settings.ini";
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  std::vector<QtSettingsChange> changes;
+  int saves = 0;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) { changes.push_back(change); },
+      [&]() {
+        ++saves;
+        return ui_settings.save(settings_path);
+      });
+  auto *vsync = dialog.findChild<QCheckBox *>(QStringLiteral("settingsVSync"));
+  auto *scale = dialog.findChild<QSpinBox *>(
+      QStringLiteral("settingsInterfaceScale"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  auto *cancel = dialog.findChild<QPushButton *>(QStringLiteral("settingsCancel"));
+  ASSERT_NE(vsync, nullptr);
+  ASSERT_NE(scale, nullptr);
+  ASSERT_NE(apply, nullptr);
+  ASSERT_NE(cancel, nullptr);
+
+  dialog.show();
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(vsync->isChecked());
+  EXPECT_FALSE(vsync->toolTip().isEmpty());
+  EXPECT_FALSE(apply->isEnabled());
+  vsync->setChecked(false);
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes.back().kind, QtSettingsChangeKind::RenderingPreview);
+  ASSERT_TRUE(changes.back().vsync_enabled.has_value());
+  EXPECT_FALSE(*changes.back().vsync_enabled);
+  EXPECT_TRUE(ui_settings.vsync_enabled());
+  EXPECT_EQ(saves, 0);
+  EXPECT_TRUE(apply->isEnabled());
+
+  scale->setValue(150);
+  apply->click();
+  EXPECT_TRUE(dialog.isVisible());
+  EXPECT_FALSE(ui_settings.vsync_enabled());
+  EXPECT_FLOAT_EQ(ui_settings.interface_scale(), 1.5f);
+  EXPECT_FALSE(UISettings::load(settings_path).vsync_enabled());
+  EXPECT_FLOAT_EQ(UISettings::load(settings_path).interface_scale(), 1.5f);
+  EXPECT_EQ(saves, 1) << "combined settings share one persisted UI owner";
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::RenderingCommit), 1u);
+  EXPECT_FALSE(apply->isEnabled());
+
+  vsync->setChecked(true);
+  cancel->click();
+  EXPECT_FALSE(dialog.isVisible());
+  EXPECT_FALSE(ui_settings.vsync_enabled());
+  EXPECT_EQ(changes.back().kind, QtSettingsChangeKind::RenderingPreview);
+  ASSERT_TRUE(changes.back().vsync_enabled.has_value());
+  EXPECT_FALSE(*changes.back().vsync_enabled);
+  EXPECT_EQ(saves, 1);
+
+  dialog.show();
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(vsync->isChecked());
+  vsync->setChecked(true);
+  scale->setValue(200);
+  dialog.synchronize_vsync_enabled();
+  EXPECT_FALSE(vsync->isChecked());
+  EXPECT_EQ(scale->value(), 200) << "external VSync intent preserves other drafts";
+  EXPECT_TRUE(apply->isEnabled());
+  dialog.reject();
+  EXPECT_EQ(saves, 1);
+
+  dialog.show();
+  QCoreApplication::processEvents();
+  ui_settings.set_vsync_enabled(true);
+  dialog.refresh();
+  EXPECT_TRUE(vsync->isChecked());
+  EXPECT_FALSE(apply->isEnabled());
+  dialog.accept();
+  EXPECT_EQ(saves, 1) << "clean OK does not rewrite settings";
+}
+
+TEST(QtSettingsDialogTests,
+     RuntimeRebindPreservesDraftAndUsesReplacementCallbacks) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-runtime-rebind-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  SceneSession old_session;
+  SceneSession replacement_session;
+  QuaderEditorApi old_editor(
+      QuaderApiSessionInternalAccess::from_scene_session(old_session));
+  QuaderEditorApi replacement_editor(
+      QuaderApiSessionInternalAccess::from_scene_session(replacement_session));
+  std::vector<QtSettingsChange> old_changes;
+  std::vector<QtSettingsChange> new_changes;
+  int old_persist_count = 0;
+  int new_persist_count = 0;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, old_editor.commands(),
+      [&](const QtSettingsChange &change) { old_changes.push_back(change); },
+      [&]() {
+        ++old_persist_count;
+        return true;
+      });
+  auto *undo = dialog.findChild<QSpinBox *>(QStringLiteral("settingsUndoSteps"));
+  auto *interval = dialog.findChild<QSpinBox *>(
+      QStringLiteral("settingsAutosaveInterval"));
+  auto *scale = dialog.findChild<QSpinBox *>(
+      QStringLiteral("settingsInterfaceScale"));
+  auto *vsync = dialog.findChild<QCheckBox *>(QStringLiteral("settingsVSync"));
+  auto *show_hover_dimensions = dialog.findChild<QCheckBox *>(
+      QStringLiteral("viewportSetting_ShowHoverDimensions"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  ASSERT_NE(undo, nullptr);
+  ASSERT_NE(interval, nullptr);
+  ASSERT_NE(scale, nullptr);
+  ASSERT_NE(vsync, nullptr);
+  ASSERT_NE(show_hover_dimensions, nullptr);
+  ASSERT_NE(apply, nullptr);
+  dialog.show();
+  QCoreApplication::processEvents();
+  undo->setValue(8);
+  interval->setValue(5);
+  scale->setValue(150);
+  vsync->setChecked(false);
+  show_hover_dimensions->setChecked(false);
+  ASSERT_EQ(old_changes.size(), 2u);
+  ASSERT_TRUE(apply->isEnabled());
+
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, replacement_editor.commands(),
+      [&](const QtSettingsChange &change) { new_changes.push_back(change); },
+      [&]() {
+        ++new_persist_count;
+        return true;
+      });
+  EXPECT_TRUE(dialog.isVisible());
+  EXPECT_EQ(undo->value(), 8);
+  EXPECT_EQ(interval->value(), 5);
+  EXPECT_EQ(scale->value(), 150);
+  EXPECT_FALSE(vsync->isChecked());
+  EXPECT_FALSE(show_hover_dimensions->isChecked());
+  EXPECT_TRUE(apply->isEnabled());
+  EXPECT_EQ(old_changes.size(), 2u)
+      << "runtime replacement must not roll back previews owned by the same preferences";
+  EXPECT_TRUE(new_changes.empty());
+  EXPECT_EQ(ui_settings.session_settings(), SessionPreferences{});
+  EXPECT_FLOAT_EQ(ui_settings.interface_scale(), 1.0f);
+  EXPECT_TRUE(ui_settings.vsync_enabled());
+  EXPECT_TRUE(viewport_settings.bool_value(
+      ViewportBoolSettingId::ShowHoverDimensions));
+
+  apply->click();
+  EXPECT_EQ(old_persist_count, 0);
+  EXPECT_EQ(new_persist_count, 1);
+  EXPECT_EQ(old_changes.size(), 2u);
+  EXPECT_EQ(count_changes(new_changes, QtSettingsChangeKind::SessionCommit), 1u);
+  EXPECT_EQ(count_changes(new_changes, QtSettingsChangeKind::InterfaceCommit), 1u);
+  EXPECT_EQ(count_changes(new_changes, QtSettingsChangeKind::RenderingCommit), 1u);
+  EXPECT_EQ(count_changes(new_changes, QtSettingsChangeKind::ViewportCommit), 1u);
+  EXPECT_EQ(ui_settings.session_settings().undo_steps, 8);
+  EXPECT_EQ(ui_settings.session_settings().autosave_interval_minutes, 5);
+  EXPECT_FLOAT_EQ(ui_settings.interface_scale(), 1.5f);
+  EXPECT_FALSE(ui_settings.vsync_enabled());
+  EXPECT_FALSE(viewport_settings.bool_value(
+      ViewportBoolSettingId::ShowHoverDimensions));
+  EXPECT_FALSE(apply->isEnabled());
+
+  undo->setValue(0);
+  scale->setValue(200);
+  dialog.reject();
+  EXPECT_EQ(ui_settings.session_settings().undo_steps, 8);
+  EXPECT_FLOAT_EQ(ui_settings.interface_scale(), 1.5f);
+  ASSERT_FALSE(new_changes.empty());
+  EXPECT_EQ(new_changes.back().kind, QtSettingsChangeKind::InterfacePreview);
+  EXPECT_EQ(new_changes.back().interface_scale, 1.5f);
+  EXPECT_EQ(old_changes.size(), 2u);
+}
+
+TEST(QtSettingsDialogTests,
      VisibleContextRebindRollsBackTheOldPreviewAndStartsANewTransaction) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -1117,6 +1741,9 @@ TEST(QtSettingsDialogTests,
   ViewportSettings old_viewport_settings = ViewportSettings::defaults();
   UISettings new_ui_settings = UISettings::defaults();
   new_ui_settings.set_interface_scale(0.75f);
+  SessionPreferences new_session_settings;
+  new_session_settings.undo_steps = 64;
+  ASSERT_TRUE(new_ui_settings.set_session_settings(new_session_settings));
   ViewportSettings new_viewport_settings = ViewportSettings::defaults();
   LocalizationService localization = loaded_localization();
   SceneSession session;
@@ -1131,6 +1758,7 @@ TEST(QtSettingsDialogTests,
   dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
   dialog.set_context(old_ui_settings, old_viewport_settings, localization,
                      editor.commands(), record_change);
+  auto *undo = dialog.findChild<QSpinBox *>(QStringLiteral("settingsUndoSteps"));
   auto *scale = dialog.findChild<QSpinBox *>(
       QStringLiteral("settingsInterfaceScale"));
   auto *apply =
@@ -1138,12 +1766,14 @@ TEST(QtSettingsDialogTests,
   auto *cancel =
       dialog.findChild<QPushButton *>(QStringLiteral("settingsCancel"));
   ASSERT_NE(scale, nullptr);
+  ASSERT_NE(undo, nullptr);
   ASSERT_NE(apply, nullptr);
   ASSERT_NE(cancel, nullptr);
 
   dialog.show();
   QCoreApplication::processEvents();
   scale->setValue(200);
+  undo->setValue(8);
   ASSERT_EQ(changes.size(), 1u);
   EXPECT_FLOAT_EQ(*changes.back().interface_scale, 2.0f);
 
@@ -1156,6 +1786,8 @@ TEST(QtSettingsDialogTests,
   EXPECT_FLOAT_EQ(*changes.back().interface_scale, 1.25f)
       << "rebinding must first roll back the old owner's live preview";
   EXPECT_EQ(scale->value(), 75);
+  EXPECT_EQ(undo->value(), 64);
+  EXPECT_EQ(old_ui_settings.session_settings(), SessionPreferences{});
   EXPECT_FALSE(apply->isEnabled());
 
   scale->setValue(100);
@@ -1243,11 +1875,13 @@ TEST(QtSettingsDialogTests,
       });
   auto *scale = dialog.findChild<QSpinBox *>(
       QStringLiteral("settingsInterfaceScale"));
+  auto *vsync = dialog.findChild<QCheckBox *>(QStringLiteral("settingsVSync"));
   auto *grid_major_line_size = dialog.findChild<QDoubleSpinBox *>(
       QStringLiteral("viewportSetting_GridMajorLineSize"));
   auto *apply =
       dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
   ASSERT_NE(scale, nullptr);
+  ASSERT_NE(vsync, nullptr);
   ASSERT_NE(grid_major_line_size, nullptr);
   ASSERT_NE(apply, nullptr);
 
@@ -1257,6 +1891,7 @@ TEST(QtSettingsDialogTests,
   dialog.show();
   QCoreApplication::processEvents();
   scale->setValue(150);
+  vsync->setChecked(false);
   grid_major_line_size->setValue(2.5);
   apply->click();
   QCoreApplication::processEvents();
@@ -1264,17 +1899,23 @@ TEST(QtSettingsDialogTests,
   EXPECT_TRUE(dialog.isVisible());
   EXPECT_EQ(persistence_attempts, 1);
   EXPECT_FLOAT_EQ(ui_settings.interface_scale(), 1.0f);
+  EXPECT_TRUE(ui_settings.vsync_enabled());
+  EXPECT_FALSE(vsync->isChecked());
   EXPECT_FLOAT_EQ(viewport_settings.float_value(
                       ViewportFloatSettingId::GridMajorLineSize),
                   initial_grid_major_line_size);
   EXPECT_EQ(scale->value(), 150);
   EXPECT_DOUBLE_EQ(grid_major_line_size->value(), 2.5);
   EXPECT_TRUE(apply->isEnabled());
-  ASSERT_EQ(changes.size(), 2u);
+  ASSERT_EQ(changes.size(), 4u);
   EXPECT_EQ(changes[0].kind, QtSettingsChangeKind::InterfacePreview);
-  EXPECT_EQ(changes[1].kind, QtSettingsChangeKind::InterfaceCommit);
-  ASSERT_TRUE(changes[1].interface_scale.has_value());
-  EXPECT_FLOAT_EQ(*changes[1].interface_scale, 1.0f);
+  EXPECT_EQ(changes[1].kind, QtSettingsChangeKind::RenderingPreview);
+  EXPECT_EQ(changes[2].kind, QtSettingsChangeKind::InterfaceCommit);
+  ASSERT_TRUE(changes[2].interface_scale.has_value());
+  EXPECT_FLOAT_EQ(*changes[2].interface_scale, 1.0f);
+  EXPECT_EQ(changes[3].kind, QtSettingsChangeKind::RenderingCommit);
+  ASSERT_TRUE(changes[3].vsync_enabled.has_value());
+  EXPECT_TRUE(*changes[3].vsync_enabled);
   EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 0u)
       << "a failed combined Apply must not publish or persist viewport state";
 

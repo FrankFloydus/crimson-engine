@@ -44,6 +44,8 @@ struct ModelingOperationPreviewCheckpointHooks {
   std::function<void()> observe_before_projection;
   std::function<void()> record_after_projection;
   std::function<void(bool restored_by_cancel)> finish;
+  /// Portable transform cancellation advances revisions without a dirty checkpoint.
+  std::function<void()> rollback_without_checkpoint;
 };
 
 /// Returns one face's resolved project-owned material without mutating state.
@@ -138,6 +140,8 @@ public:
       SceneDocument &scene, AssetRegistry &assets,
       ModelingOperationPreviewCheckpointHooks preview_checkpoint_hooks = {});
   ~ModelingSessionService();
+  /// Disconnects scene-owned callbacks before the scene begins member teardown.
+  void detach_preview_checkpoint_hooks();
 
   ModelingSessionService(const ModelingSessionService &) = delete;
   ModelingSessionService &operator=(const ModelingSessionService &) = delete;
@@ -265,6 +269,9 @@ public:
       ModelingSdkProjectionFailurePoint point);
   [[nodiscard]] ModelingSdkProjectionStats
   modeling_sdk_projection_stats_for_tests() const;
+  /// Called after native history captures a completed edit, including a modal
+  /// tool's local history. Defers while preview/publication rollback is active.
+  void release_redundant_sdk_history();
   /// Material batches opt in to retaining exact scene-owned Group selection.
   /// Other modeling history continues to capture only the SDK projection.
   [[nodiscard]] ModelingSessionMemento capture_history_memento(

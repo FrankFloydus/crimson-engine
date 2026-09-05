@@ -714,6 +714,11 @@ ModelingHostPublicationTransaction::work() const noexcept {
   return work_;
 }
 
+bool ModelingHostPublicationTransaction::is_session_publishing(
+    const modeling::ModelingSession &session) noexcept {
+  return active_publication_modeling_sessions.contains(&session);
+}
+
 void ModelingHostPublicationTransaction::track_created_entity(EntityId entity) {
   if (active_ && entity != kInvalidEntityId) {
     created_entities_.push_back(entity);

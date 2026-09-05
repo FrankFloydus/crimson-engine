@@ -8,26 +8,24 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Resources Guide
 
-Follow root `AGENTS.md` UI, localization, rendering, overlay, dependency, and build/test rules
-before changing resources.
+Runtime resources belong here. Root [AGENTS.md](../AGENTS.md) owns the build contract;
+[src/ui/AGENTS.md](../src/ui/AGENTS.md) and [src/render/AGENTS.md](../src/render/AGENTS.md) own
+presentation and rendering integration.
 
 ## Resource Rules
 
 - User-facing UI text belongs in `resources/locales/*.lang`.
-- The Qt Widgets shell currently starts from `Fusion` and standard Qt controls. Theme resources,
-  custom fonts, palettes, stylesheets, and icon sets may be added or changed when the user's
-  current request explicitly directs that styling work; keep ownership, packaging, and licensing
-  evidence explicit.
-- Runtime presentation resources are normally limited to localization plus assets with non-theme
-  purposes, such as the application logo and renderer-owned overlay icons. An explicitly requested
-  theme may add a narrow app-owned asset when Qt cannot express that state accessibly; document the
-  scope and keep platform-owned alternatives for accessibility modes. After changing resources,
-  rebuild `quader`; tests alone do not refresh `build/vs2026/Debug`.
-- If the running UI differs from source, inspect copied runtime files under `build/vs2026/Debug`.
+- Qt starts from Fusion; explicitly requested styling can change fonts, palettes, stylesheets, and
+  icons. Keep assets scoped and verify their readable, focused, selected, and disabled states.
+- Resource changes need both canonical app builds: tests alone do not refresh deployed files.
+  If runtime differs from source, inspect the selected executable's resource directory. Some
+  resources, including the dimension font, are embedded through Qt rather than copied loose.
 - Keep logos, renderer-owned icons, textures, and material assets license-backed. Do not add
   third-party assets without license evidence under `thirdparty/`.
 - Material source changes under `resources/materials` must compile through configured Filament
   `matc.exe`.
+- In `quader_mesh_lit.mat`, assign tangent-space `material.normal` before `prepareMaterial`;
+  assigning it afterward silently bypasses the intended normal-map lighting input.
 - Keep default material assets under the app-owned resources tree and preserve post-build copy
   paths.
 - Update localization, render, or resource tests when resource contracts change.

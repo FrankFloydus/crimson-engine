@@ -426,6 +426,37 @@ TEST(QdrAtomicFileTransactionTests,
 }
 
 TEST(QdrAtomicFileTransactionTests,
+     UnicodePathsSupportReplacementAndRollbackWithoutDiagnosticConversionFailure) {
+#if defined(_WIN32)
+  ScopedTempDirectory directory("unicode-transaction");
+  const auto target = directory.path() / L"Sc\u00e8ne_\u6a21\u578b.qdr";
+  write_text_file(target, "original");
+  const auto replaced = quader_io::write_qdr_text_atomic(target, "saved");
+  ASSERT_TRUE(replaced.ok) << replaced.message;
+  EXPECT_EQ(read_file(target), "saved");
+
+  quader_io::QdrAtomicFileTransaction transaction;
+  ASSERT_TRUE(transaction.prepare(target).ok);
+  ASSERT_TRUE(quader_io::write_qdr_text_atomic(transaction.staging_path(),
+                                               "candidate").ok);
+  const auto published = transaction.publish();
+  ASSERT_TRUE(published.ok) << published.message;
+  EXPECT_EQ(read_file(target), "candidate");
+  const auto rolled_back = transaction.rollback();
+  ASSERT_TRUE(rolled_back.ok) << rolled_back.message;
+  EXPECT_EQ(read_file(target), "saved");
+  std::size_t remaining = 0;
+  for (const auto &entry : std::filesystem::directory_iterator(directory.path())) {
+    EXPECT_EQ(entry.path(), target);
+    ++remaining;
+  }
+  EXPECT_EQ(remaining, 1u);
+#else
+  GTEST_SKIP() << "Exercises Windows UTF-16 filesystem paths.";
+#endif
+}
+
+TEST(QdrAtomicFileTransactionTests,
      PublishNeverReplacesAConcurrentCreatorForAnInitiallyAbsentTarget) {
   ScopedTempDirectory directory("staged-publish-conflict");
   const std::filesystem::path target = directory.path() / "scene.qdr";

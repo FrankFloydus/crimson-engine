@@ -8,29 +8,56 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # UI Package Guide
 
-Also follow root `AGENTS.md` UI, localization, API, input, and test rules.
+## Owners and presentation
 
-## UI Rules
+- `UISystem` composes `QMainWindow`, docks, tool windows, localization, and retained presentation.
+  `UIPanelManager` maps public panels to docks. Widgets dispatch editor intent through public APIs
+  and commands; they own only presentation state.
+- `QtViewportPanel` hosts one to four native-child `QtViewportSurface` panes. Workspace state and
+  cameras belong to `ViewportWorkspaceService`; Filament resources belong to render.
+- `main.cpp` selects Fusion; `qt_application_theme.*` supplies the Obsidian palette and live system
+  High Contrast fallback. Preserve native control behavior and accessible default, hover, selected,
+  pressed, focused, inactive, and disabled states when styling.
+- Reuse localization, settings descriptors, models, delegates, and signals. Call base event handlers
+  on unhandled paths. Input follows [INPUT_KEYBINDINGS.md](../../INPUT_KEYBINDINGS.md): Qt adaptation,
+  canonical keybindings, then semantic viewport frames. Do not add a parallel `QAction` shortcut map.
+- Settings categories group existing descriptors by user purpose. Undo/autosave share
+  `SessionPreferences`: stage changes, merge per field, persist, then publish SessionCommit.
+  File > Recover > Auto Save opens the native file picker in the owner-provided autosave folder;
+  use `scene_documents().recover_autosave_native_path()` and reject stale runtime bindings.
+  File > Open Recent loads its five scene records on menu opening, never during frame refresh.
+  Give each group one purpose: language and interface scaling are separate groups; do not join
+  unrelated controls under a combined heading merely because they share a page.
+  Settings contains preferences without equivalent controls in other menus, panels, or toolbars.
+  Workspace toggles for snapping, backface selection, texture locks, and display visibility belong
+  in their menus/toolbars. Appearance values, picking tolerances, and gizmo size are separate
+  preferences and remain in Settings when no other surface edits them.
 
-- `UISystem` composes the retained Qt shell: `QMainWindow`, native chrome, docks, tool windows, and
-  the central `QtViewportPanel`.
-- `main.cpp` selects `Fusion` with `standardPalette()` as the baseline. Explicitly requested style,
-  palette, font, icon, or chrome changes stay narrowly scoped and cover accessibility/control states.
-- `UISystem` owns composition, dock registration, window-state persistence, localization, and
-  top-level presentation actions, never editor/domain behavior.
-- `QtViewportPanel` hosts one to four `QtViewportSurface` native-child panes and owns only Qt event
-  adaptation, presentation, render coordination, and interaction routing.
-- `UIPanelManager` owns public-panel-to-`QDockWidget` mapping and visibility; widgets own only local
-  presentation state.
-- User/editor intent routes through `QuaderEditorApi`, `QuaderApi`, commands, or owner services.
-- Preserve Qt defaults for focus, navigation, selection, editing, activation, context menus, and
-  gestures. Prefer configuration, models, delegates, selection models, and signals. Override events
-  only for explicit Quader behavior; call the base for unhandled paths and add an interaction test.
-- `ViewportWorkspaceService` owns layout, focused pane, view, shading, grid preset, render
-  size/visibility, and camera state. Do not mirror them in widgets.
-- Route Qt input through `qt_input_adapter.*`, canonical keybindings, and `ViewportInputFrame`.
-  Never add a second command map with `QAction` shortcuts or ad-hoc widget key checks.
-- User-facing labels, menu text, panel titles, settings names, and status text use localization.
-- Update owner tests for changed chrome, panels, layouts, input, settings, or resources.
-- Rebuild `quader` and tests for runtime logos, overlay icons, locales, or materials. Stock Qt
-  visuals use no theme assets except a documented, palette-aware widget-local accessibility fix.
+## Retained frame performance
+
+- Build static controls once. In `UISystem::refresh` and viewport callbacks, check owner revisions
+  before descriptors, predicates, shortcut resolution, formatting, snapshots, or widget setters.
+  `RetainedUiPresenter` and the existing presentation stamps are the retained synchronization path.
+- Query fixed commands with `commands().descriptor(id)`; never enumerate `commands().available()`
+  in a frame callback. Share cheap owner observations and skip unchanged Qt setters.
+- Explicitly invalidate on rebind, localization, keybinding, and other non-revision transitions.
+  Do not compensate for UI polling by reducing render cadence or input responsiveness.
+- Frame synchronization changes require a regression test for the gate and focused UI tests.
+  Reported performance regressions also require same-build, same-scene before/after measurements.
+
+## Runtime replacement and nested events
+
+- `install_runtime_hooks()` abandons outgoing panel/interactor state before binding replacements.
+  Rebind abandonment must not call old runtime owners; normal shutdown may cancel through live
+  owners and must clear runtime hooks before destroying callback owners.
+- `QtViewportPanel::abandon_interactions()` invalidates `ViewportRuntimeBindingToken`, drops raw
+  owners/cameras, and clears queued/held surface input plus trailing releases. After synchronous
+  commands, tool phases, public mutations, and nested presenters, check the token before using
+  previously sampled state. Stop remaining same-frame input after a rebind.
+- Retained menus and command filters rebind in place. Outliner, Inspector, and Layers use owner-free
+  abandonment and generation fences around mutations and nested event loops.
+
+Verification pointers: `tests/qt_input_adapter_tests.cpp`, `tests/qt_project_workspace_tests.cpp`,
+the affected `tests/qt_*_tests.cpp`, `tests/ui_layout_guardrail_tests.cpp`, and
+`tests/qt_application_theme_tests.cpp`. Follow root build/test requirements; use
+`tools/boot_smoke.ps1` for native layout, GPU, and pixel behavior.

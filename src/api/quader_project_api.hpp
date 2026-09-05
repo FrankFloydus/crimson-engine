@@ -39,6 +39,8 @@ public:
     [[nodiscard]] const std::filesystem::path &root() const;
     [[nodiscard]] const std::filesystem::path &manifest_path() const;
     [[nodiscard]] std::vector<QuaderRecentProject> recent_projects() const;
+    [[nodiscard]] std::vector<QuaderRecentScene> recent_scenes() const;
+    QuaderApiVoidResult open_recent_scene(const QuaderRecentScene &entry);
     QuaderApiVoidResult remove_recent_project(
         const std::filesystem::path &manifest_path);
     [[nodiscard]] const std::filesystem::path& path() const;

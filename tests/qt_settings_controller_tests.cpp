@@ -132,6 +132,12 @@ TEST(QtSettingsControllerTests,
             "Scala interfaccia");
   EXPECT_FALSE(english.text("ui.settings.interface_scale.help", "").empty());
   EXPECT_FALSE(italian.text("ui.settings.interface_scale.help", "").empty());
+  EXPECT_EQ(english.text("ui.settings.vsync", ""),
+            "VSync (synchronize with display)");
+  EXPECT_EQ(italian.text("ui.settings.vsync", ""),
+            "VSync (sincronizza con lo schermo)");
+  EXPECT_FALSE(english.text("ui.settings.vsync.help", "").empty());
+  EXPECT_FALSE(italian.text("ui.settings.vsync.help", "").empty());
   EXPECT_EQ(english.text("ui.runtime.interface_scale_invalid", ""),
             "Interface scale must be finite.");
   EXPECT_EQ(italian.text("ui.runtime.interface_scale_invalid", ""),
@@ -143,9 +149,9 @@ TEST(QtSettingsControllerTests,
   static_assert(kViewportColorSettingCount == 23u);
   static_assert(kViewportFloatSettingCount == 32u);
   static_assert(kViewportBoolSettingCount == 13u);
-  static_assert(2u + kViewportColorSettingCount + kViewportFloatSettingCount +
+  static_assert(3u + kViewportColorSettingCount + kViewportFloatSettingCount +
                      kViewportBoolSettingCount ==
-                70u);
+                71u);
 
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();
@@ -190,6 +196,15 @@ TEST(QtSettingsControllerTests,
     ++expected_viewport_commit_count;
   }
 
+  EXPECT_TRUE(ui_settings.vsync_enabled());
+  ASSERT_FALSE(controller.preview_vsync_enabled(true));
+  ASSERT_TRUE(controller.preview_vsync_enabled(false));
+  EXPECT_FALSE(ui_settings.vsync_enabled());
+  ASSERT_FALSE(controller.preview_vsync_enabled(false));
+  ASSERT_EQ(changes.back().kind, QtSettingsChangeKind::RenderingPreview);
+  ASSERT_TRUE(changes.back().vsync_enabled.has_value());
+  EXPECT_FALSE(*changes.back().vsync_enabled);
+
   ASSERT_TRUE(controller.preview_interface_scale(1.5f));
   EXPECT_FLOAT_EQ(ui_settings.interface_scale(), 1.5f);
   ASSERT_FALSE(controller.preview_interface_scale(1.5f));
@@ -205,6 +220,7 @@ TEST(QtSettingsControllerTests,
   EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::InterfacePreview),
             1u);
   EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::InterfaceCommit), 1u);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::RenderingPreview), 1u);
   ASSERT_TRUE(changes[changes.size() - 2u].interface_scale.has_value());
   EXPECT_FLOAT_EQ(*changes[changes.size() - 2u].interface_scale, 1.5f);
   ASSERT_TRUE(changes.back().interface_scale.has_value());

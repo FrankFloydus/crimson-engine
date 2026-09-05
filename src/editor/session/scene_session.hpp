@@ -101,6 +101,9 @@ public:
 
   EditorHistoryService &history() { return *history_; }
   const EditorHistoryService &history() const { return *history_; }
+  void set_history_max_steps(std::size_t max_steps);
+  /// Reports committed content or a rollback whose revision baseline needs syncing.
+  void set_content_settled_observer(std::function<void(bool)> observer);
 
   DocumentCommandService &document_commands() { return *document_commands_; }
   AssetCommandService &asset_commands() { return *asset_commands_; }
@@ -201,8 +204,10 @@ private:
       const std::optional<ViewportCameraPose> &camera_pose);
 
   SceneContentDocument document_;
+  std::function<void(bool)> content_settled_observer_;
   SceneContentRevisionStamp clean_stamp_;
   std::optional<PreviewContentCheckpoint> preview_content_checkpoint_;
+  std::size_t history_max_steps_ = EditorHistoryService::kDefaultMaxSteps;
   std::unique_ptr<EditorHistoryService> history_;
   std::unique_ptr<DocumentCommandService> document_commands_;
   std::unique_ptr<AssetCommandService> asset_commands_;

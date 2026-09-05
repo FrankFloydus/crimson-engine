@@ -634,8 +634,10 @@ TEST(ProjectMaterialPublicApiTests,
   EXPECT_FALSE(harness.editor().project().dirty());
   ASSERT_EQ(active_events.size(), 1u);
   EXPECT_EQ(active_events.back().project_asset_id, amber.material.id);
+  const std::filesystem::path canonical_root =
+      std::filesystem::canonical(harness.root());
   EXPECT_EQ(active_events.back().project_root,
-            std::optional<std::string>(harness.root().string()));
+            std::optional<std::string>(canonical_root.string()));
 
   const QuaderApiVoidResult unchanged =
       harness.editor().project_assets().set_active_material(amber.material.id);
@@ -4197,6 +4199,97 @@ TEST(ProjectMaterialReferenceBehaviorTests,
   ASSERT_TRUE(harness.editor().history().redo().ok());
   EXPECT_EQ(scene_material(harness.project(), box.value().entity)->material,
             MaterialReference(replacement.value().id));
+}
+
+TEST(ProjectMaterialPersistenceTests,
+     FaceOnlyMaterialsSurvivePublicSaveReopenAndResave) {
+  ProjectMaterialBehaviorHarness harness("face-only-material-roundtrip");
+  harness.create();
+  const InstalledMaterial amber{
+      .path = project_path("Materials/amber.qmat"),
+      .material = project_material(kAmberMaterialId, "Amber",
+                                   {1.0f, 0.5f, 0.1f}),
+  };
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue",
+                                   {0.1f, 0.25f, 1.0f}),
+  };
+  const std::array installed{amber, blue};
+  harness.install_and_reopen(installed);
+  QuaderEditorApi &editor = harness.editor();
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Face Materials Without Primary");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const EntityId entity = box.value().entity;
+  const auto original_slots = face_slot_snapshot(harness.project(), entity);
+  ASSERT_EQ(original_slots.size(), 6u);
+
+  // Only the unassigned starting state needs low-level fixture setup. All
+  // assignments and persistence below exercise the public editor workflow.
+  ASSERT_TRUE(ProjectMaterialFixture(harness.project()).clear_material(entity));
+  for (std::size_t index = 0u; index < installed.size(); ++index) {
+    ASSERT_TRUE(editor.project_assets()
+                    .set_active_material(installed[index].material.id)
+                    .ok());
+    const auto assigned = editor.modeling().apply_active_material_to_face(
+        box.value().modeling_object_id, original_slots[index].first);
+    ASSERT_TRUE(assigned.ok()) << assigned.error_message();
+    ASSERT_TRUE(assigned.changed());
+  }
+  const MaterialComponent *material = scene_material(harness.project(), entity);
+  ASSERT_NE(material, nullptr);
+  const MaterialComponent expected_material = *material;
+  EXPECT_FALSE(expected_material.material.valid());
+  ASSERT_EQ(expected_material.material_slots.size(), 2u);
+  const auto expected_slots = face_slot_snapshot(harness.project(), entity);
+  EXPECT_NE(expected_slots[0].second, 0u);
+  EXPECT_NE(expected_slots[1].second, 0u);
+  EXPECT_NE(expected_slots[0].second, expected_slots[1].second);
+  EXPECT_EQ(expected_material.material_for_slot(expected_slots[0].second),
+            MaterialReference::project(amber.material.id));
+  EXPECT_EQ(expected_material.material_for_slot(expected_slots[1].second),
+            MaterialReference::project(blue.material.id));
+  for (std::size_t index = installed.size(); index < expected_slots.size();
+       ++index) {
+    EXPECT_EQ(expected_slots[index], original_slots[index]);
+    EXPECT_FALSE(expected_material.material_for_slot(expected_slots[index].second)
+                     .valid());
+  }
+
+  const auto scene_id = editor.scene_documents().active_scene_id();
+  ASSERT_TRUE(scene_id.has_value());
+  const ProjectRelativePath path = project_path("Scenes/face_materials.qdr");
+  const auto saved = editor.scene_documents().save_as(*scene_id, path);
+  ASSERT_TRUE(saved.ok()) << saved.error_message();
+  ASSERT_TRUE(editor.scene_documents().close(*scene_id).ok());
+
+  // The second pass reads bytes produced by saving an already reopened scene.
+  // Both the component bindings and every authored face-slot ID must survive.
+  for (int pass = 0; pass < 2; ++pass) {
+    SCOPED_TRACE(pass);
+    const auto reopened = editor.scene_documents().open(path);
+    ASSERT_TRUE(reopened.ok()) << reopened.error_message();
+    material = scene_material(harness.project(), entity);
+    ASSERT_NE(material, nullptr);
+    EXPECT_EQ(*material, expected_material);
+    EXPECT_EQ(face_slot_snapshot(harness.project(), entity), expected_slots);
+    for (std::size_t index = 0u; index < installed.size(); ++index) {
+      const auto resolved = editor.modeling().project_material_for_face(
+          box.value().modeling_object_id, expected_slots[index].first);
+      ASSERT_TRUE(resolved.ok()) << resolved.error_message();
+      EXPECT_EQ(resolved.value().id, installed[index].material.id);
+    }
+    for (std::size_t index = installed.size(); index < expected_slots.size();
+         ++index) {
+      EXPECT_FALSE(material->material_for_slot(expected_slots[index].second)
+                       .valid());
+    }
+    const auto resaved = editor.scene_documents().save(reopened.value());
+    ASSERT_TRUE(resaved.ok()) << resaved.error_message();
+    ASSERT_TRUE(editor.scene_documents().close(reopened.value()).ok());
+  }
 }
 
 TEST(ProjectMaterialPersistenceTests,

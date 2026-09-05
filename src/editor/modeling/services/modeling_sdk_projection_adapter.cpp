@@ -7220,6 +7220,21 @@ public:
     return session_.selection_revision() + mode_revision_;
   }
 
+  void release_redundant_sdk_history() {
+    if (session_.preview_active() || session_.mutation_checkpoint_active() ||
+        ModelingHostPublicationTransaction::is_session_publishing(session_) ||
+        mesh_preview_host_baseline_.has_value() ||
+        structural_preview_host_state_.has_value() ||
+        committed_transform_history_delta_.valid() ||
+        committed_transform_undo_mark_.has_value()) {
+      return;
+    }
+    // Native commands own history-free workspace mementos or sparse deltas.
+    // SDK undo entries exist only to compensate an in-flight publication;
+    // retaining them after native publication pins otherwise expired meshes.
+    session_.clear_history();
+  }
+
   // Internal preview/rollback snapshots can retain SDK-local history. The
   // public host memento path passes false so each history item owns only one
   // semantic workspace checkpoint.
@@ -12514,6 +12529,10 @@ std::uint64_t ModelingSdkProjectionAdapter::content_revision() const {
 
 std::uint64_t ModelingSdkProjectionAdapter::selection_revision() const {
   return impl_->selection_revision();
+}
+
+void ModelingSdkProjectionAdapter::release_redundant_sdk_history() {
+  impl_->release_redundant_sdk_history();
 }
 
 ModelingSdkProjectionSnapshot

@@ -8,6 +8,7 @@
 
 #include "api/quader_api_result.hpp"
 #include "api/quader_viewport_layout_types.hpp"
+#include "core/session_preferences.hpp"
 
 #include <array>
 #include <cstdint>
@@ -62,6 +63,16 @@ struct QuaderRecentProject final {
   bool available = false;
   std::optional<std::uint64_t> manifest_last_modified_unix_ms;
   std::optional<std::uintmax_t> manifest_size_bytes;
+};
+
+/// Describes one saved scene in the application-wide Open Recent menu.
+struct QuaderRecentScene final {
+  SceneId scene_id;
+  std::string scene_name;
+  std::string project_name;
+  std::filesystem::path manifest_path;
+  ProjectRelativePath scene_path;
+  bool available = false;
 };
 
 /**
@@ -263,6 +274,10 @@ struct QuaderPreferencesRuntimeHooks {
     std::function<QuaderApiVoidResult(std::string)> set_locale;
     std::function<double()> interface_scale;
     std::function<QuaderApiVoidResult(double)> set_interface_scale;
+    std::function<bool()> vsync_enabled;
+    std::function<QuaderApiVoidResult(bool)> set_vsync_enabled;
+    std::function<SessionPreferences()> session_settings;
+    std::function<QuaderApiVoidResult(SessionPreferences)> set_session_settings;
     std::function<QuaderApiVoidResult()> save;
     std::function<bool()> snapping_enabled;
     std::function<QuaderApiVoidResult(bool)> set_snapping_enabled;

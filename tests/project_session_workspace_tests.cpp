@@ -1749,6 +1749,7 @@ TEST(ProjectSessionWorkspace,
   ProjectSession project;
   QuaderEditorApi editor(project);
   ASSERT_TRUE(editor.project().create(original_root).ok());
+  const std::filesystem::path root_before = editor.project().root();
   const std::optional<SceneSessionId> scene_id =
       editor.scene_documents().active_scene_id();
   ASSERT_TRUE(scene_id.has_value());
@@ -1776,7 +1777,7 @@ TEST(ProjectSessionWorkspace,
   ASSERT_TRUE(replaced.ok()) << replaced.error_message();
   EXPECT_FALSE(replaced.changed());
   EXPECT_EQ(save_path_requests, 1);
-  EXPECT_EQ(editor.project().root(), original_root);
+  EXPECT_EQ(editor.project().root(), root_before);
   EXPECT_TRUE(editor.project().dirty());
   ASSERT_EQ(editor.scene_documents().open_scenes().size(), 1u);
   EXPECT_EQ(editor.scene_documents().open_scenes().front().session_id,

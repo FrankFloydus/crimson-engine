@@ -1,0 +1,179 @@
+diff --git a/filament/backend/include/backend/DriverEnums.h b/filament/backend/include/backend/DriverEnums.h
+index 6aeb05c..c79c8a7 100644
+--- a/filament/backend/include/backend/DriverEnums.h
++++ b/filament/backend/include/backend/DriverEnums.h
+@@ -19,6 +19,9 @@
+ #ifndef TNT_FILAMENT_BACKEND_DRIVERENUMS_H
+ #define TNT_FILAMENT_BACKEND_DRIVERENUMS_H
+ 
++// Quader's pinned Vulkan presentation extension; rebuild headers and libraries together.
++#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 1
++
+ #include <utils/unwindows.h> // Because we define ERROR in the FenceStatus enum.
+ 
+ #include <backend/Platform.h>
+@@ -111,6 +114,9 @@ static constexpr uint64_t SWAP_CHAIN_CONFIG_PROTECTED_CONTENT   = 0x40;
+  */
+ static constexpr uint64_t SWAP_CHAIN_CONFIG_MSAA_4_SAMPLES      = 0x80;
+ 
++/** Requests immediate Vulkan presentation when supported; otherwise falls back to FIFO. */
++static constexpr uint64_t SWAP_CHAIN_CONFIG_UNSYNCHRONIZED      = 0x100;
++
+ static constexpr size_t MAX_VERTEX_ATTRIBUTE_COUNT  = 16;   // This is guaranteed by OpenGL ES.
+ static constexpr size_t MAX_SAMPLER_COUNT           = 62;   // Maximum needed at feature level 3.
+ static constexpr size_t MAX_VERTEX_BUFFER_COUNT     = 16;   // Max number of bound buffer objects.
+diff --git a/filament/backend/include/backend/platforms/VulkanPlatform.h b/filament/backend/include/backend/platforms/VulkanPlatform.h
+index 6d6fd46..c10c394 100644
+--- a/filament/backend/include/backend/platforms/VulkanPlatform.h
++++ b/filament/backend/include/backend/platforms/VulkanPlatform.h
+@@ -481,6 +481,15 @@ public:
+     }
+ 
+ protected:
++    /**
++     * Called after a native surface swapchain has been created or recreated successfully.
++     * unsynchronized is true only when VK_PRESENT_MODE_IMMEDIATE_KHR was selected.
++     * Runs on the backend thread; overrides must not call Engine or UI APIs and must
++     * synchronize any state read by another thread. The platform must outlive the Engine.
++     */
++    virtual void onSwapChainPresentModeSelected(void* nativeWindow,
++            bool unsynchronized) noexcept {}
++
+     struct VulkanSync : public Platform::Sync {
+         std::shared_ptr<VulkanCmdFence> fenceStatus;
+     };
+@@ -589,6 +598,7 @@ private:
+             MiscDeviceFeatures const& requestedFeatures) noexcept;
+ 
+     friend struct VulkanPlatformPrivate;
++    friend struct VulkanPlatformSurfaceSwapChain;
+ };
+ 
+ }// namespace filament::backend
+diff --git a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp b/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
+index 3404b9c..9a9e171 100644
+--- a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
++++ b/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
+@@ -778,7 +778,7 @@ SwapChainPtr VulkanPlatform::createSwapChain(void* nativeWindow, uint64_t flags,
+ 
+     auto [surface, fallbackExtent] = createVkSurfaceKHR(nativeWindow, mImpl->mInstance, flags);
+     // The VulkanPlatformSurfaceSwapChain now `owns` the surface.
+-    VulkanPlatformSurfaceSwapChain* swapchain = new VulkanPlatformSurfaceSwapChain(mImpl->mContext,
++    VulkanPlatformSurfaceSwapChain* swapchain = new VulkanPlatformSurfaceSwapChain(*this, mImpl->mContext,
+             mImpl->mPhysicalDevice, mImpl->mDevice, mImpl->mGraphicsQueue, mImpl->mInstance,
+             surface, fallbackExtent, nativeWindow, flags);
+     return swapchain;
+diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
+index fc6192e..2a5fda3 100644
+--- a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
++++ b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
+@@ -141,10 +141,12 @@ bool VulkanPlatformSwapChainBase::queryFrameTimestamps(uint64_t frameId,
+     return false;
+ }
+ 
+-VulkanPlatformSurfaceSwapChain::VulkanPlatformSurfaceSwapChain(VulkanContext const& context,
++VulkanPlatformSurfaceSwapChain::VulkanPlatformSurfaceSwapChain(VulkanPlatform& platform,
++        VulkanContext const& context,
+         VkPhysicalDevice physicalDevice, VkDevice device, VkQueue queue, VkInstance instance,
+         VkSurfaceKHR surface, VkExtent2D fallbackExtent, void* nativeWindow, uint64_t flags)
+     : VulkanPlatformSwapChainBase(context, device, queue),
++      mPlatform(platform),
+       mInstance(instance),
+       mPhysicalDevice(physicalDevice),
+       mSurface(surface),
+@@ -152,6 +154,7 @@ VulkanPlatformSurfaceSwapChain::VulkanPlatformSurfaceSwapChain(VulkanContext con
+       mUsesRGB((flags & backend::SWAP_CHAIN_CONFIG_SRGB_COLORSPACE) != 0),
+       mHasStencil((flags & backend::SWAP_CHAIN_HAS_STENCIL_BUFFER) != 0),
+       mIsProtected((flags & backend::SWAP_CHAIN_CONFIG_PROTECTED_CONTENT) != 0),
++      mUnsynchronized((flags & backend::SWAP_CHAIN_CONFIG_UNSYNCHRONIZED) != 0),
+       mNativeWindow(nativeWindow) {
+     assert_invariant(surface);
+     create();
+@@ -216,11 +219,13 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
+     FILAMENT_CHECK_POSTCONDITION(surfaceFormat.format != VK_FORMAT_UNDEFINED)
+             << "Cannot find suitable swapchain format";
+ 
+-    // Verify that our chosen present mode is supported. In practice all devices support the FIFO
+-    // mode, but we check for it anyway for completeness.  (and to avoid validation warnings)
+-    VkPresentModeKHR const desiredPresentMode = VK_PRESENT_MODE_FIFO_KHR;
++    // FIFO remains the default and required fallback. Immediate is opt-in and surface-specific.
+     FixedCapacityVector<VkPresentModeKHR> presentModes = fvkutils::enumerate(
+             vkGetPhysicalDeviceSurfacePresentModesKHR, mPhysicalDevice, mSurface);
++    bool const supportsImmediate = std::find(presentModes.begin(), presentModes.end(),
++            VK_PRESENT_MODE_IMMEDIATE_KHR) != presentModes.end();
++    VkPresentModeKHR const desiredPresentMode = mUnsynchronized && supportsImmediate
++            ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_FIFO_KHR;
+ 
+     bool const foundSuitablePresentMode = std::find(presentModes.begin(), presentModes.end(),
+                                             desiredPresentMode) != presentModes.end();
+@@ -287,7 +292,10 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
+            << "swapchain-size=" << mSwapChainBundle.colors.size() << ", "
+            << "identity-transform=" << (caps.currentTransform == 1) << ", "
+            << "depth=" << mSwapChainBundle.depthFormat << ", "
+-           << "protected=" << mSwapChainBundle.isProtected;
++           << "protected=" << mSwapChainBundle.isProtected << ", "
++           << "requested-present-mode=" << (mUnsynchronized ? "IMMEDIATE" : "FIFO") << ", "
++           << "actual-present-mode="
++           << (desiredPresentMode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "IMMEDIATE" : "FIFO");
+ 
+     VkSemaphoreCreateInfo const semaphoreCreateInfo = {
+             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+@@ -301,6 +309,8 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
+                 << " error=" << static_cast<int32_t>(result);
+     }
+ 
++    mPlatform.onSwapChainPresentModeSelected(mNativeWindow,
++            desiredPresentMode == VK_PRESENT_MODE_IMMEDIATE_KHR);
+     return result;
+ }
+ 
+diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
+index db94e28..821337f 100644
+--- a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
++++ b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
+@@ -76,7 +76,8 @@ protected:
+ };
+ 
+ struct VulkanPlatformSurfaceSwapChain : public VulkanPlatformSwapChainBase {
+-    VulkanPlatformSurfaceSwapChain(VulkanContext const& context, VkPhysicalDevice physicalDevice,
++    VulkanPlatformSurfaceSwapChain(VulkanPlatform& platform, VulkanContext const& context,
++            VkPhysicalDevice physicalDevice,
+             VkDevice device, VkQueue queue, VkInstance instance, VkSurfaceKHR surface,
+             VkExtent2D fallbackExtent, void* nativeWindow, uint64_t flags);
+ 
+@@ -106,6 +107,7 @@ private:
+ 
+     VkResult create();
+ 
++    VulkanPlatform& mPlatform;
+     VkInstance mInstance;
+     VkPhysicalDevice mPhysicalDevice;
+     // This class takes ownership of the surface.
+@@ -118,6 +120,7 @@ private:
+     bool const mUsesRGB = false;
+     bool const mHasStencil = false;
+     bool const mIsProtected = false;
++    bool const mUnsynchronized = false;
+     bool mSuboptimal;
+     UTILS_UNUSED void* mNativeWindow = nullptr;
+ 
+diff --git a/filament/include/filament/SwapChain.h b/filament/include/filament/SwapChain.h
+index 94721c0..c81fcd4 100644
+--- a/filament/include/filament/SwapChain.h
++++ b/filament/include/filament/SwapChain.h
+@@ -248,6 +248,15 @@ public:
+      */
+     static constexpr uint64_t CONFIG_MSAA_4_SAMPLES = backend::SWAP_CHAIN_CONFIG_MSAA_4_SAMPLES;
+ 
++    /**
++     * Requests unsynchronized Vulkan presentation (VK_PRESENT_MODE_IMMEDIATE_KHR).
++     * This can tear. If immediate presentation is unavailable, the surface uses FIFO.
++     * The VulkanPlatform presentation callback reports the mode actually selected.
++     * Other backends ignore this flag. Omit it to preserve synchronized presentation.
++     */
++    static constexpr uint64_t CONFIG_UNSYNCHRONIZED =
++            backend::SWAP_CHAIN_CONFIG_UNSYNCHRONIZED;
++
+     /**
+      * Return whether createSwapChain supports the CONFIG_PROTECTED_CONTENT flag.
+      * The default implementation returns false.

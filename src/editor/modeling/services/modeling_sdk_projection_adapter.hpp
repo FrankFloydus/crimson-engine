@@ -479,6 +479,9 @@ public:
 
   [[nodiscard]] std::uint64_t content_revision() const;
   [[nodiscard]] std::uint64_t selection_revision() const;
+  /// Releases SDK-local rollback history after the native history owner has
+  /// captured the completed edit. Active publication and previews defer it.
+  void release_redundant_sdk_history();
   [[nodiscard]] ModelingSdkProjectionSnapshot capture_snapshot() const;
   [[nodiscard]] ModelingSdkProjectionSnapshot rebase_snapshot_host_projection(
       const ModelingSdkProjectionSnapshot &snapshot) const;

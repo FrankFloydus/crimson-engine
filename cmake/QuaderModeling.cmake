@@ -281,7 +281,8 @@ quader_configure_modeling_sdk_target(quader_modeling_sdk_runtime)
 target_link_libraries(quader_modeling_sdk_runtime
     PUBLIC
         quader_modeling_sdk_curves
-        quader_modeling_sdk_polygon)
+        quader_modeling_sdk_polygon
+        quader_modeling_sdk_qdr_document)
 if(TARGET quader_modeling_profile)
     target_link_libraries(quader_modeling_sdk_runtime
         PRIVATE
@@ -612,6 +613,7 @@ if(QUADER_BUILD_TESTS)
         tests/sdk/headers/selection_header_compile.cpp
         tests/sdk/headers/tools_header_compile.cpp
         tests/sdk/modeling_curve_arc_length_path_tests.cpp
+        tests/sdk/modeling_component_persistence_tests.cpp
         tests/sdk/modeling_curve_document_tests.cpp
         tests/sdk/modeling_curve_session_tests.cpp
         tests/sdk/modeling_curve_tube_tests.cpp

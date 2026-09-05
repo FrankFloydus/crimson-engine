@@ -1501,6 +1501,10 @@ public:
     }
   }
 
+  void detach_preview_checkpoint_hooks() {
+    preview_checkpoint_hooks_ = {};
+  }
+
   [[nodiscard]] ModelingCommandDescriptor box_tool_command() const {
     return make_box_tool_descriptor();
   }
@@ -2986,6 +2990,10 @@ public:
   [[nodiscard]] ModelingSdkProjectionStats
   modeling_sdk_projection_stats_for_tests() const {
     return sdk_projection_adapter_.stats();
+  }
+
+  void release_redundant_sdk_history() {
+    sdk_projection_adapter_.release_redundant_sdk_history();
   }
 
   [[nodiscard]] ModelingSessionMemento capture_history_memento() const override {
@@ -6026,6 +6034,10 @@ public:
           sdk_projection_adapter_.cancel_translate_preview();
       if (result.ok) {
         invalidate_selection_overlay_caches();
+        if (result.changed &&
+            preview_checkpoint_hooks_.rollback_without_checkpoint) {
+          preview_checkpoint_hooks_.rollback_without_checkpoint();
+        }
       }
       return result;
     }
@@ -6220,6 +6232,7 @@ public:
 
   ModelingCommandResult cancel_transform_drag() {
     const bool drag_was_active = transform_drag_active();
+    const bool had_checkpoint = structural_drag_checkpoint_active_;
     observe_preview_content_checkpoint(structural_drag_checkpoint_active_);
     ModelingCommandResult result =
         transform_drag_service_.cancel_transform_drag(
@@ -6227,6 +6240,10 @@ public:
     record_preview_content_checkpoint(structural_drag_checkpoint_active_);
     finish_preview_content_checkpoint(structural_drag_checkpoint_active_,
                                       result.ok);
+    if (!had_checkpoint && result.ok && result.changed &&
+        preview_checkpoint_hooks_.rollback_without_checkpoint) {
+      preview_checkpoint_hooks_.rollback_without_checkpoint();
+    }
     clear_transform_drag_caches();
     if (drag_was_active || result.changed) {
       invalidate_volatile_overlay_cache();
@@ -9426,7 +9443,13 @@ private:
   }
 
   ModelingCommandResult cancel_portable_translate_preview() override {
-    return sdk_projection_adapter_.cancel_translate_preview();
+    ModelingCommandResult result =
+        sdk_projection_adapter_.cancel_translate_preview();
+    if (result.ok && result.changed &&
+        preview_checkpoint_hooks_.rollback_without_checkpoint) {
+      preview_checkpoint_hooks_.rollback_without_checkpoint();
+    }
+    return result;
   }
 
   [[nodiscard]] ModelingSdkTransformHistoryDelta
@@ -9721,6 +9744,9 @@ ModelingSessionService::ModelingSessionService(
                                   std::move(preview_checkpoint_hooks))) {}
 
 ModelingSessionService::~ModelingSessionService() = default;
+void ModelingSessionService::detach_preview_checkpoint_hooks() {
+  impl_->detach_preview_checkpoint_hooks();
+}
 ModelingSessionService::ModelingSessionService(
     ModelingSessionService &&) noexcept = default;
 ModelingSessionService &
@@ -10057,6 +10083,10 @@ void ModelingSessionService::set_modeling_sdk_projection_failure_for_tests(
 ModelingSdkProjectionStats
 ModelingSessionService::modeling_sdk_projection_stats_for_tests() const {
   return impl_->modeling_sdk_projection_stats_for_tests();
+}
+
+void ModelingSessionService::release_redundant_sdk_history() {
+  impl_->release_redundant_sdk_history();
 }
 
 ModelingSessionMemento ModelingSessionService::capture_history_memento(

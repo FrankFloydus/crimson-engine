@@ -1,0 +1,8 @@
+{
+  "upstream_version": "0.13.1",
+  "repository": "https://github.com/wolfpld/tracy.git",
+  "upstream_commit": "05cceee0df3b8d7c6fa87e9638af311dbabc63cb",
+  "license": "BSD-3-Clause",
+  "license_file": "licenses/tracy-BSD-3-Clause.txt",
+  "license_sha256_lf": "16f7df4828bd89c880c17dd2f45e834b754b6d5e8c9a9ee886af1be4b89475ca"
+}

@@ -13,6 +13,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -540,6 +541,116 @@ TEST(ProjectMaterialCatalogTests,
 }
 
 TEST(ProjectMaterialCatalogTests,
+     MaterialParameterSavesPreserveEveryTextureContentRevision) {
+  ScopedMaterialTestDirectory temporary("texture-revisions");
+  const std::filesystem::path root =
+      temporary.make_empty_project("TextureRevisions");
+  ProjectIoResult<ProjectWorkspaceStorage> workspace =
+      ProjectManifestStore::create_in_empty_directory(root);
+  ASSERT_TRUE(workspace.ok()) << workspace.error().message;
+  ASSERT_TRUE(std::filesystem::create_directory(root / "Materials"));
+  ASSERT_TRUE(std::filesystem::create_directory(root / "Textures"));
+  write_text(root / "Textures" / "albedo.png", "encoded-image-content");
+  ProjectMaterialDocument material = material_definition(
+      "d8671059-5b37-45c5-a59c-54c97e604715", "Paint",
+      "b1a49a62-812b-48b2-9fc5-fd6558aef5c2");
+  ProjectStandardMaterialDefinition &standard = standard_material(material);
+  constexpr std::array kSlots{
+      StandardMaterialTextureSlot::Albedo,
+      StandardMaterialTextureSlot::Roughness,
+      StandardMaterialTextureSlot::Metallic,
+      StandardMaterialTextureSlot::Normal,
+  };
+  for (const StandardMaterialTextureSlot slot : kSlots) {
+    if (slot != StandardMaterialTextureSlot::Albedo) {
+      *standard.texture(slot) = ProjectMaterialTextureSlot{
+          .id = ProjectAssetId::generate(),
+          .project_relative_path = "Textures/albedo.png",
+          .color_space = ProjectTextureColorSpace::Linear,
+      };
+    }
+  }
+  const ProjectRelativePath material_path = project_path("Materials/paint.qmat");
+  std::array<std::uint64_t, kSlots.size()> original_revisions{};
+  std::uint64_t previous_material_revision = 0u;
+  for (int edit = 0; edit < 8; ++edit) {
+    SCOPED_TRACE(edit);
+    standard.roughness = 0.1f * static_cast<float>(edit);
+    standard.metallic = 0.05f * static_cast<float>(edit);
+    standard.normal_strength = 1.0f + static_cast<float>(edit);
+    standard.texture_transform.rotation_degrees = 10.0f * static_cast<float>(edit);
+    material.name = "Paint " + std::to_string(edit);
+    ASSERT_TRUE(QmatCodec::write_atomic(workspace.value().file_system,
+                                       material_path, material).ok());
+    ProjectIoResult<ProjectMaterialCatalog> catalog =
+        ProjectMaterialCatalog::scan(workspace.value().file_system);
+    ASSERT_TRUE(catalog.ok()) << catalog.error().message;
+    ASSERT_NE(catalog.value().find(material.id), nullptr);
+    const std::uint64_t material_revision =
+        catalog.value().find(material.id)->content_revision;
+    EXPECT_NE(material_revision, previous_material_revision);
+    previous_material_revision = material_revision;
+    for (std::size_t index = 0u; index < kSlots.size(); ++index) {
+      const auto texture = catalog.value().read_texture(
+          workspace.value().file_system, material.id, kSlots[index]);
+      ASSERT_TRUE(texture.ok()) << texture.error().message;
+      if (edit == 0) {
+        original_revisions[index] = texture.value().content_revision;
+      } else {
+        EXPECT_EQ(texture.value().content_revision, original_revisions[index]);
+      }
+    }
+  }
+  EXPECT_NE(original_revisions[0], original_revisions[1])
+      << "identical encoded bytes still distinguish sRGB from linear storage";
+}
+
+TEST(ProjectMaterialCatalogTests,
+     TextureRevisionTracksReplacementBytesWithoutMaterialOrTimestampChanges) {
+  ScopedMaterialTestDirectory temporary("texture-replacement");
+  const std::filesystem::path root =
+      temporary.make_empty_project("TextureReplacement");
+  ProjectIoResult<ProjectWorkspaceStorage> workspace =
+      ProjectManifestStore::create_in_empty_directory(root);
+  ASSERT_TRUE(workspace.ok()) << workspace.error().message;
+  ASSERT_TRUE(std::filesystem::create_directory(root / "Materials"));
+  ASSERT_TRUE(std::filesystem::create_directory(root / "Textures"));
+  const std::filesystem::path image_path = root / "Textures" / "albedo.png";
+  write_text(image_path, "encoded-image-1");
+  const auto original_write_time = std::filesystem::last_write_time(image_path);
+  const ProjectMaterialDocument material = material_definition(
+      "8e4d09e0-bbfb-4021-8e82-647dcf7d02ba", "Paint",
+      "e676f351-f9f1-4eb8-9640-5a8e560347c7");
+  ASSERT_TRUE(QmatCodec::write_atomic(workspace.value().file_system,
+                                     project_path("Materials/paint.qmat"),
+                                     material).ok());
+  const auto catalog = ProjectMaterialCatalog::scan(workspace.value().file_system);
+  ASSERT_TRUE(catalog.ok()) << catalog.error().message;
+  const auto original = catalog.value().read_texture(
+      workspace.value().file_system, material.id,
+      StandardMaterialTextureSlot::Albedo);
+  ASSERT_TRUE(original.ok()) << original.error().message;
+
+  write_text(image_path, "encoded-image-2");
+  std::filesystem::last_write_time(image_path, original_write_time);
+  const auto replacement = catalog.value().read_texture(
+      workspace.value().file_system, material.id,
+      StandardMaterialTextureSlot::Albedo);
+  ASSERT_TRUE(replacement.ok()) << replacement.error().message;
+  EXPECT_EQ(replacement.value().id, original.value().id);
+  EXPECT_EQ(replacement.value().encoded_bytes.size(), original.value().encoded_bytes.size());
+  EXPECT_NE(replacement.value().encoded_bytes, original.value().encoded_bytes);
+  EXPECT_NE(replacement.value().content_revision, original.value().content_revision);
+
+  write_text(image_path, "encoded-image-1");
+  const auto restored = catalog.value().read_texture(
+      workspace.value().file_system, material.id,
+      StandardMaterialTextureSlot::Albedo);
+  ASSERT_TRUE(restored.ok()) << restored.error().message;
+  EXPECT_EQ(restored.value().content_revision, original.value().content_revision);
+}
+
+TEST(ProjectMaterialCatalogTests,
      RejectsDuplicateIdsCaseCollisionsAndPhysicalAliases) {
   ScopedMaterialTestDirectory temporary("catalog-collisions");
 
@@ -965,6 +1076,7 @@ TEST(ProjectMaterialWorkspaceTests,
   ProjectSession project;
   project.set_resource_root(source_resource_root());
   ASSERT_TRUE(project.create(current_root).ok);
+  const std::filesystem::path root_before = project.root();
   ASSERT_NE(project.active_scene(), nullptr);
   ASSERT_NE(project.active_scene()->session, nullptr);
 
@@ -993,7 +1105,7 @@ TEST(ProjectMaterialWorkspaceTests,
   const ProjectSessionResult rejected = project.create(rejected_root);
 
   EXPECT_FALSE(rejected.ok);
-  EXPECT_EQ(project.root(), current_root);
+  EXPECT_EQ(project.root(), root_before);
   const ModelingBoxPreview preview_after = modeling.box_preview();
   EXPECT_TRUE(preview_after.valid);
   EXPECT_EQ(preview_after.drag_state, preview_before.drag_state);

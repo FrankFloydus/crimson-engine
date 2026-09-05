@@ -161,7 +161,7 @@ RecentProjectStore::load() const {
       ProjectIoResult<ProjectId> id =
           ProjectId::parse(entry_json["projectId"].get<std::string>());
       const std::filesystem::path manifest_path =
-          std::filesystem::path(entry_json["manifestPath"].get<std::string>());
+          std::filesystem::u8path(entry_json["manifestPath"].get<std::string>());
       if (!id.ok() || manifest_path.empty() || !manifest_path.is_absolute()) {
         return ProjectIoResult<std::vector<RecentProjectEntry>>::failure(
             ProjectIoErrorCode::ManifestMalformed,
@@ -329,10 +329,13 @@ RecentProjectStore::save(std::span<const RecentProjectEntry> entries) const {
           "Cannot persist an invalid recent project entry.",
           entry.manifest_path);
     }
+    const std::u8string manifest_path_utf8 = entry.manifest_path.generic_u8string();
     projects.push_back(Json{
         {"projectId", std::string(entry.project_id.str())},
         {"name", entry.name},
-        {"manifestPath", entry.manifest_path.generic_string()},
+        {"manifestPath", std::string(
+            reinterpret_cast<const char *>(manifest_path_utf8.data()),
+            manifest_path_utf8.size())},
         {"lastOpenedUnixMs", entry.last_opened_unix_ms},
     });
   }

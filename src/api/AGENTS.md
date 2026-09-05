@@ -6,23 +6,15 @@ No permission is granted to use, copy, modify, distribute, or sublicense this
 file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 -->
-# API Package Guide
+# Native API
 
-Follow root `AGENTS.md` public API, SDK-boundary, scripting, and testing rules before changing this
-package.
-
-## API Rules
-
-- `QuaderEditorApi` is the whole-editor API for runtime/editor intent.
-- `QuaderApi` is for document/modeling workflows that do not need runtime editor domains.
-- Public API code delegates to owner services; it must not become the owner of document, render,
-  asset, UI, viewport, or platform invariants.
-- Public headers must avoid backend/internal owner headers such as Qt/UI backend, Filament, Win32,
-  EnTT internals, and mutable service pointers.
-- Prefer `quader_command::*`, `QuaderObjectHandle`, `QuaderSceneBatch`, and
-  `QuaderApiResult`/`QuaderApiVoidResult` helpers in public-facing surfaces and examples.
-- Command execution should use typed `QuaderCommand` values or canonical command IDs returned by
-  `QuaderCommandsApi` helpers. Do not reintroduce legacy command aliases or registry
-  canonicalization for `history.*`, `modeling.action.*`, or `modeling.*` routes.
-- When changing public behavior, update API/behavior guardrail tests and public examples when the
-  user-facing contract changes.
+- Start with `QuaderEditorApi` for whole-editor intent and `QuaderApi` for document/modeling
+  workflows. Facades delegate to owner services; public headers do not expose Qt, Filament,
+  Win32, EnTT, or mutable internal service pointers.
+- Use typed `quader_command::*` IDs, `QuaderObjectHandle`, `QuaderSceneBatch`, and result helpers
+  (`ok()`, `changed()`, `value()`, `error_message()`). Do not restore `history.*`,
+  `modeling.action.*`, or legacy `modeling.*` command aliases.
+- Session-bound references must reject stale scene generations. Preserve those checks when adding
+  handles, batches, previews, or rebinding API facades across scene activation.
+- Add public behavior coverage in `tests/editor_api_tests.cpp` or the matching focused API suite;
+  update examples when the public contract changes. Root verification rules apply.

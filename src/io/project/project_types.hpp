@@ -270,6 +270,9 @@ private:
   std::filesystem::path path_;
 };
 
+/// Reserved recovery storage, never an authored scene destination.
+[[nodiscard]] bool is_project_autosave_path(const ProjectRelativePath &path);
+
 /// Hashes persistent project identities for unordered containers.
 struct ProjectIdHash {
   [[nodiscard]] std::size_t operator()(const ProjectId &id) const noexcept {

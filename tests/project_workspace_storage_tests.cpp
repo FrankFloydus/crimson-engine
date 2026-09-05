@@ -20,6 +20,13 @@
 #include <string_view>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 using namespace quader;
 
 namespace {
@@ -103,6 +110,39 @@ TEST(ProjectWorkspaceTypes, EnforcesUuidAndGenerationalIdentities) {
   EXPECT_EQ(normalized.value().portable_string(), "Scenes/room.qdr");
 }
 
+TEST(ProjectWorkspaceTypes, UnicodeNativePathsRoundTripThroughPortableUtf8AndManifest) {
+  const std::filesystem::path native(L"Scenes/Caf\u00e9 \u6771\u4eac.qdr");
+  const std::string expected_utf8 = "Scenes/Caf\xc3\xa9 \xe6\x9d\xb1\xe4\xba\xac.qdr";
+  const auto relative = ProjectRelativePath::parse(native);
+  ASSERT_TRUE(relative.ok()) << relative.error().message;
+  EXPECT_EQ(relative.value().portable_string(), expected_utf8);
+  const auto decoded = ProjectRelativePath::parse_portable(expected_utf8);
+  ASSERT_TRUE(decoded.ok()) << decoded.error().message;
+  EXPECT_EQ(decoded.value().native_path(), native);
+  EXPECT_EQ(decoded.value(), relative.value());
+
+  auto manifest = ProjectManifest::create(ProjectId::generate(), "Unicode Scenes");
+  ASSERT_TRUE(manifest.ok()) << manifest.error().message;
+  const SceneId scene_id = SceneId::generate();
+  ASSERT_TRUE(manifest.value().register_scene({scene_id, relative.value()}).ok());
+  ASSERT_TRUE(manifest.value().set_workspace({relative.value()}, relative.value()).ok());
+  const auto restored = ProjectManifestStore::deserialize(
+      ProjectManifestStore::serialize(manifest.value()));
+  ASSERT_TRUE(restored.ok()) << restored.error().message;
+  const auto *scene = restored.value().find_scene(scene_id);
+  ASSERT_NE(scene, nullptr);
+  EXPECT_EQ(scene->path.native_path(), native);
+  EXPECT_EQ(restored.value().active_scene_path(), relative.value());
+}
+
+TEST(ProjectWorkspaceTypes, InvalidPortableUtf8ReturnsAnError) {
+  ProjectIoResult<ProjectRelativePath> result =
+      ProjectIoResult<ProjectRelativePath>::success({});
+  ASSERT_NO_THROW(result = ProjectRelativePath::parse_portable("Scenes/invalid\xff.qdr"));
+  EXPECT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ProjectIoErrorCode::InvalidRelativePath);
+}
+
 TEST(ProjectManifestStore, CreatesOnlyInsideAnExactlyEmptyFolder) {
   ScopedProjectTestDirectory temporary("create");
   const std::filesystem::path project_root = temporary.path() / "Museum";
@@ -152,6 +192,12 @@ TEST(ProjectFileSystem, RejectsPortableCaseCollisionsAndLinkEscapes) {
       created.value().file_system.resolve(mismatched_case.value());
   ASSERT_FALSE(case_result.ok());
   EXPECT_EQ(case_result.error().code, ProjectIoErrorCode::PathCaseCollision);
+  const ProjectIoResult<ProjectRelativePath> absolute_case_result =
+      created.value().file_system.relative_from_absolute(
+          created.value().file_system.root() / "Scenes" / "scene.qdr");
+  ASSERT_FALSE(absolute_case_result.ok());
+  EXPECT_EQ(absolute_case_result.error().code,
+            ProjectIoErrorCode::PathCaseCollision);
 
   ProjectIoResult<ProjectRelativePath> first =
       ProjectRelativePath::parse("Scenes/Room.qdr");
@@ -168,6 +214,10 @@ TEST(ProjectFileSystem, RejectsPortableCaseCollisionsAndLinkEscapes) {
 
   const std::filesystem::path outside = temporary.path() / "Outside";
   ASSERT_TRUE(std::filesystem::create_directory(outside));
+  const ProjectIoResult<ProjectRelativePath> outside_result =
+      created.value().file_system.relative_from_absolute(outside / "escape.qdr");
+  ASSERT_FALSE(outside_result.ok());
+  EXPECT_EQ(outside_result.error().code, ProjectIoErrorCode::PathOutsideProject);
   const std::filesystem::path link =
       created.value().file_system.root() / "Scenes" / "External";
   std::error_code link_error;
@@ -180,6 +230,11 @@ TEST(ProjectFileSystem, RejectsPortableCaseCollisionsAndLinkEscapes) {
         created.value().file_system.resolve(escaped.value());
     ASSERT_FALSE(escape_result.ok());
     EXPECT_EQ(escape_result.error().code, ProjectIoErrorCode::SymlinkEscape);
+    const ProjectIoResult<ProjectRelativePath> absolute_escape_result =
+        created.value().file_system.relative_from_absolute(link / "escape.qdr");
+    ASSERT_FALSE(absolute_escape_result.ok());
+    EXPECT_EQ(absolute_escape_result.error().code,
+              ProjectIoErrorCode::PathOutsideProject);
   }
 
   const std::filesystem::path internal_link =
@@ -189,6 +244,11 @@ TEST(ProjectFileSystem, RejectsPortableCaseCollisionsAndLinkEscapes) {
       created.value().file_system.root() / "Scenes", internal_link,
       link_error);
   if (!link_error) {
+    const ProjectIoResult<ProjectRelativePath> relative_alias =
+        created.value().file_system.relative_from_absolute(
+            internal_link / "Scene.qdr");
+    ASSERT_TRUE(relative_alias.ok()) << relative_alias.error().message;
+    EXPECT_EQ(relative_alias.value().portable_string(), "SceneAlias/Scene.qdr");
     ProjectIoResult<ProjectRelativePath> original =
         ProjectRelativePath::parse("Scenes/Scene.qdr");
     ProjectIoResult<ProjectRelativePath> alias =
@@ -209,6 +269,55 @@ TEST(ProjectFileSystem, RejectsPortableCaseCollisionsAndLinkEscapes) {
               ProjectIoErrorCode::PathCaseCollision);
   }
 }
+
+#ifdef _WIN32
+TEST(ProjectFileSystem, ConvertsShortRootAliasesForExistingAndUnsavedScenes) {
+  ScopedProjectTestDirectory temporary("short-root-alias");
+  const std::filesystem::path project_root =
+      temporary.path() / "Long Project Directory";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  ProjectIoResult<ProjectWorkspaceStorage> created =
+      ProjectManifestStore::create_in_empty_directory(project_root);
+  ASSERT_TRUE(created.ok()) << created.error().message;
+  const ProjectFileSystem &files = created.value().file_system;
+
+  const DWORD required = GetShortPathNameW(files.root().c_str(), nullptr, 0);
+  ASSERT_NE(required, 0u) << GetLastError();
+  std::wstring short_name(required, L'\0');
+  const DWORD written =
+      GetShortPathNameW(files.root().c_str(), short_name.data(), required);
+  ASSERT_NE(written, 0u) << GetLastError();
+  ASSERT_LT(written, required);
+  short_name.resize(written);
+  const std::filesystem::path alias_root(short_name);
+  if (alias_root == files.root()) {
+    GTEST_SKIP() << "The temporary volume does not generate short path aliases.";
+  }
+  ASSERT_TRUE(std::filesystem::equivalent(alias_root, files.root()));
+
+  const std::filesystem::path opened = files.root() / "Scenes" / "Opened.qdr";
+  write_text_file(opened, "QDRB");
+  const ProjectIoResult<ProjectRelativePath> existing =
+      files.relative_from_absolute(alias_root / "Scenes" / "Opened.qdr");
+  ASSERT_TRUE(existing.ok()) << existing.error().message;
+  EXPECT_EQ(existing.value().portable_string(), "Scenes/Opened.qdr");
+  const ProjectIoResult<std::filesystem::path> resolved_existing =
+      files.resolve_existing_file(existing.value());
+  ASSERT_TRUE(resolved_existing.ok()) << resolved_existing.error().message;
+  EXPECT_TRUE(std::filesystem::equivalent(resolved_existing.value(), opened));
+
+  const std::filesystem::path unsaved = files.root() / "Scenes" / "Saved.qdr";
+  ASSERT_FALSE(std::filesystem::exists(unsaved));
+  const ProjectIoResult<ProjectRelativePath> destination =
+      files.relative_from_absolute(alias_root / "Scenes" / "Saved.qdr");
+  ASSERT_TRUE(destination.ok()) << destination.error().message;
+  EXPECT_EQ(destination.value().portable_string(), "Scenes/Saved.qdr");
+  const ProjectIoResult<std::filesystem::path> resolved_destination =
+      files.resolve_for_write(destination.value());
+  ASSERT_TRUE(resolved_destination.ok()) << resolved_destination.error().message;
+  EXPECT_EQ(resolved_destination.value(), unsaved);
+}
+#endif
 
 TEST(ProjectFileSystem,
      ResolutionBatchEnumeratesOneLargeSceneDirectoryOnlyOnce) {
@@ -293,6 +402,31 @@ TEST(ProjectManifestStore, RoundTripsCatalogTabOrderAndMissingScenes) {
   // remains successful so the session layer can skip and report them together.
   EXPECT_FALSE(std::filesystem::exists(
       reopened.value().file_system.root() / second_path.value().native_path()));
+}
+
+TEST(RecentProjectStore, UnicodeProjectRootsRemainAvailableAcrossStoreReload) {
+  ScopedProjectTestDirectory temporary("recent-unicode");
+  const std::filesystem::path project_root =
+      temporary.path() / std::filesystem::path(L"Caf\u00e9 \u6771\u4eac");
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  const auto project = ProjectManifestStore::create_in_empty_directory(project_root);
+  ASSERT_TRUE(project.ok()) << project.error().message;
+  const auto storage_path = temporary.path() / "Config" / "recent-projects.json";
+  const RecentProjectStore store(storage_path);
+  const auto remembered = store.remember(project.value().manifest,
+                                         project.value().manifest_path);
+  ASSERT_TRUE(remembered.ok()) << remembered.error().message;
+
+  const RecentProjectStore reopened_store(storage_path);
+  const auto loaded = reopened_store.load();
+  ASSERT_TRUE(loaded.ok()) << loaded.error().message;
+  ASSERT_EQ(loaded.value().size(), 1u);
+  const auto &entry = loaded.value().front();
+  EXPECT_TRUE(entry.available);
+  EXPECT_EQ(entry.project_id, project.value().manifest.id());
+  EXPECT_EQ(entry.name, "Caf\xc3\xa9 \xe6\x9d\xb1\xe4\xba\xac");
+  EXPECT_EQ(entry.manifest_path, project.value().manifest_path);
+  EXPECT_TRUE(std::filesystem::is_regular_file(entry.manifest_path));
 }
 
 TEST(RecentProjectStore, DeduplicatesAndRetainsUnavailableEntries) {

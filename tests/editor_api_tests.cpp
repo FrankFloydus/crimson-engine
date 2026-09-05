@@ -1787,6 +1787,60 @@ TEST(EditorApiTests, InterfaceScalePreferenceUsesValidatedRuntimeHooks) {
   EXPECT_DOUBLE_EQ(editor.preferences().interface_scale(), 1.5);
 }
 
+TEST(EditorApiTests, VSyncPreferenceUsesRuntimeHooksAndPreservesFailure) {
+  CommandTestHarness harness;
+  quader::QuaderPreferencesApi &preferences = harness.editor.preferences();
+  EXPECT_TRUE(preferences.vsync_enabled());
+  const quader::QuaderApiVoidResult unavailable =
+      preferences.set_vsync_enabled(false);
+  EXPECT_FALSE(unavailable.ok());
+  EXPECT_FALSE(unavailable.changed());
+  EXPECT_EQ(unavailable.mutation_kind, quader::QuaderMutationKind::None);
+  EXPECT_TRUE(preferences.vsync_enabled());
+
+  bool enabled = true;
+  bool reject = false;
+  preferences.set_runtime_hooks(quader::QuaderPreferencesRuntimeHooks{
+      .vsync_enabled = [&]() { return enabled; },
+      .set_vsync_enabled =
+          [&](bool requested) {
+            if (reject) {
+              return quader::QuaderApiVoidResult{
+                  .ok = false,
+                  .changed = false,
+                  .message = "Preferences could not be saved.",
+                  .mutation_kind = quader::QuaderMutationKind::None,
+              };
+            }
+            const bool changed = enabled != requested;
+            enabled = requested;
+            return quader::QuaderApiVoidResult{
+                .ok = true,
+                .changed = changed,
+                .mutation_kind = quader::QuaderMutationKind::Runtime,
+            };
+          },
+  });
+  const quader::QuaderApiVoidResult changed =
+      preferences.set_vsync_enabled(false);
+  EXPECT_TRUE(changed.ok());
+  EXPECT_TRUE(changed.changed());
+  EXPECT_FALSE(preferences.vsync_enabled());
+  const quader::QuaderApiVoidResult no_op =
+      preferences.set_vsync_enabled(false);
+  EXPECT_TRUE(no_op.ok());
+  EXPECT_FALSE(no_op.changed());
+
+  reject = true;
+  const quader::QuaderApiVoidResult failed =
+      preferences.set_vsync_enabled(true);
+  EXPECT_FALSE(failed.ok());
+  EXPECT_FALSE(failed.changed());
+  EXPECT_EQ(failed.error_message(), "Preferences could not be saved.");
+  EXPECT_EQ(failed.mutation_kind, quader::QuaderMutationKind::None);
+  EXPECT_FALSE(preferences.vsync_enabled());
+}
+
 TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
@@ -8710,8 +8764,8 @@ TEST(EditorApiTests,
      EmptyPrimitiveHistoryReservesUndoUntilTheToolIsExplicitlyCanceled) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
-  constexpr std::string_view name = "Undo Primitive Preview Box";
-  create_selected_box(editor, std::string(name));
+  constexpr std::string_view kName = "Undo Primitive Preview Box";
+  create_selected_box(editor, std::string(kName));
   const quader::QuaderHistorySnapshot before = editor.query().history();
   ASSERT_TRUE(before.can_undo);
   ASSERT_TRUE(
@@ -8729,20 +8783,20 @@ TEST(EditorApiTests,
   EXPECT_FALSE(rejected_direct.ok());
   EXPECT_FALSE(rejected_direct.changed());
   EXPECT_TRUE(editor.tools().active_settings().active);
-  EXPECT_TRUE(entity_named(editor, name).has_value());
+  EXPECT_TRUE(entity_named(editor, kName).has_value());
 
   const quader::QuaderApiVoidResult canceled =
       editor.tools().cancel_active_tool_preview();
   ASSERT_TRUE(canceled.ok()) << canceled.error_message();
   EXPECT_TRUE(canceled.changed());
   EXPECT_FALSE(editor.tools().active_settings().active);
-  EXPECT_TRUE(entity_named(editor, name).has_value());
+  EXPECT_TRUE(entity_named(editor, kName).has_value());
   EXPECT_TRUE(editor.history().can_undo());
   EXPECT_EQ(editor.query().history().undo_label, before.undo_label);
   const quader::QuaderApiVoidResult undone =
       editor.commands().execute(quader::quader_command::kEditUndo);
   ASSERT_TRUE(undone.ok()) << undone.error_message();
-  EXPECT_FALSE(entity_named(editor, name).has_value());
+  EXPECT_FALSE(entity_named(editor, kName).has_value());
 }
 
 TEST(EditorApiTests, HistoryUndoAfterSliceQuadFinalizeRestoresPreOperationMeshAndSelection) {

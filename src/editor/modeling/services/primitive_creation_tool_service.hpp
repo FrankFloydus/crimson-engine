@@ -122,7 +122,7 @@ struct TorusPrimitiveCreationSettings {
 };
 
 /**
- * Owns one modal primitive session with one history step per accepted shape.
+ * Owns one modal primitive session with bounded per-shape undo history.
  *
  * Accepted shapes can be undone and redone without leaving creation mode.
  * Apply publishes those steps to editor history; Cancel and per-shape failures
@@ -140,6 +140,9 @@ public:
   [[nodiscard]] bool can_undo() const;
   [[nodiscard]] bool can_redo() const;
   [[nodiscard]] bool can_reset_settings() const;
+  /// Retires local undo payloads using the editor's current retention limit.
+  /// The complete session baseline remains available to Cancel.
+  void apply_history_limit();
   [[nodiscard]] std::size_t shape_count() const;
   [[nodiscard]] bool owns_created_object(int modeling_object_id) const;
   [[nodiscard]] std::optional<PrimitiveCreationKind> active_kind() const;
@@ -185,13 +188,14 @@ private:
     ModelingSessionMemento after;
   };
 
-  /// Captures the rollback boundary and accepted-shape count for one session.
+  /// Keeps complete rollback/ownership separately from bounded local history.
   struct Session {
     PrimitiveCreationKind kind = PrimitiveCreationKind::Box;
     ModelingSessionMemento before;
     std::size_t accepted_shapes = 0;
     std::vector<int> created_object_ids;
     std::vector<ShapeHistory> shapes;
+    std::size_t history_cursor = 0;
   };
 
   /// Keeps the newest accepted primitive editable while its selection is

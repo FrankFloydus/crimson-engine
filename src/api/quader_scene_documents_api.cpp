@@ -12,6 +12,7 @@
 #include "api/quader_events_api_internal_access.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/session/project_autosave_service.hpp"
 #include "editor/session/scene_viewport_camera_persistence.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
@@ -94,7 +95,8 @@ public:
       if (const ProjectManifest *manifest = project_session->manifest()) {
         event.project_id = manifest->id();
         event.project_name = manifest->name();
-        event.project_root = project_session->root().generic_string();
+        const auto root_utf8 = project_session->root().generic_u8string();
+        event.project_root.emplace(root_utf8.begin(), root_utf8.end());
       }
       const SceneSessionId target =
           scene_id.value_or(project_session->active_scene_id());
@@ -115,7 +117,8 @@ public:
     event.scene_id = standalone_scene_id;
     event.scene_name = status_session().document().name();
     if (!standalone_path.empty()) {
-      event.scene_path = standalone_path.generic_string();
+      const auto path_utf8 = standalone_path.generic_u8string();
+      event.scene_path.emplace(path_utf8.begin(), path_utf8.end());
     }
     event.scene_dirty = status_session().dirty();
     event.scene_active = true;
@@ -164,6 +167,76 @@ QuaderSceneDocumentsApi::QuaderSceneDocumentsApi(ProjectSession &project_session
     : impl_(std::make_unique<Impl>(project_session)) {}
 
 QuaderSceneDocumentsApi::~QuaderSceneDocumentsApi() = default;
+
+QuaderApiResult<std::vector<QuaderAutosaveInfo>>
+QuaderSceneDocumentsApi::autosaves() const {
+  std::vector<QuaderAutosaveInfo> copies;
+  if (impl_->project_session == nullptr) {
+    return quader_api_result_from_status(
+        status_for(impl_->status_session(), false, false,
+                   "Recovery copies require an open project."), std::move(copies));
+  }
+  auto result = impl_->project_session->autosave().entries(*impl_->project_session);
+  if (!result.ok()) {
+    return quader_api_result_from_status(
+        status_for(impl_->status_session(), false, false, result.error().message),
+        std::move(copies));
+  }
+  copies.reserve(result.value().size());
+  for (const ProjectAutosaveEntry &entry : result.value()) {
+    copies.push_back({.path = entry.path, .scene_id = entry.scene_id,
+                      .name = entry.scene_name, .source_path = entry.source_path,
+                      .saved_at_unix_ms = entry.saved_at_unix_ms});
+  }
+  return quader_api_result_from_status(
+      status_for(impl_->status_session(), true, false, {}), std::move(copies));
+}
+
+QuaderApiResult<SceneSessionId>
+QuaderSceneDocumentsApi::recover_autosave_native_path(
+    const std::filesystem::path &path) {
+  const auto relative = impl_->relative_dialog_path(path);
+  if (!relative) {
+    return quader_api_result_from_status(
+        status_for(impl_->status_session(), false, false,
+                   "Choose an autosave inside the current project's recovery folder."),
+        SceneSessionId{});
+  }
+  return recover_autosave(*relative);
+}
+
+QuaderApiResult<std::filesystem::path>
+QuaderSceneDocumentsApi::autosave_directory() const {
+  if (impl_->project_session == nullptr) {
+    return quader_api_result_from_status(
+        status_for(impl_->status_session(), false, false,
+                   "Recovery copies require an open project."),
+        std::filesystem::path{});
+  }
+  auto result = impl_->project_session->autosave().directory(*impl_->project_session);
+  return quader_api_result_from_status(
+      status_for(impl_->status_session(), result.ok(), false,
+                 result.ok() ? std::string{} : result.error().message),
+      result.ok() ? result.take_value() : std::filesystem::path{});
+}
+
+QuaderApiResult<SceneSessionId>
+QuaderSceneDocumentsApi::recover_autosave(ProjectRelativePath path) {
+  if (impl_->project_session == nullptr) {
+    return quader_api_result_from_status(
+        status_for(impl_->status_session(), false, false,
+                   "Recovery copies require an open project."), SceneSessionId{});
+  }
+  const ProjectSessionResult result = impl_->project_session->autosave().recover(
+      *impl_->project_session, path);
+  if (result.ok && result.changed) {
+    impl_->notify_binding_changed();
+    impl_->publish(quader_event::kSceneOpened);
+    impl_->publish(quader_event::kActiveSceneChanged);
+    impl_->publish(quader_event::kSceneDirtyChanged);
+  }
+  return scene_result(impl_->status_session(), result);
+}
 
 QuaderApiResult<SceneSessionId> QuaderSceneDocumentsApi::new_scene() {
   if (impl_->project_session == nullptr) {

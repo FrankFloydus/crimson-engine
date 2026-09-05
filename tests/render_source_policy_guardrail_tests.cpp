@@ -17,6 +17,7 @@ namespace quader {
 namespace {
 
 using test::guardrail::read_source_file;
+using test::guardrail::source_slice;
 
 std::size_t count_occurrences(std::string_view haystack,
                               std::string_view needle) {
@@ -2300,19 +2301,50 @@ TEST(RenderSystemTests, PropagatesDisplayRefreshRateToEveryRenderer) {
   EXPECT_NE(header.find("set_display_refresh_rate_hz("), std::string::npos);
   EXPECT_NE(header.find("display_refresh_rate_hz_ = 60.0f"),
             std::string::npos);
-  EXPECT_NE(header.find("std::vector<filament::Renderer *> "
-                        "additional_renderers_"),
+  EXPECT_NE(header.find("std::vector<std::shared_ptr<RenderSurfaceState>> "
+                        "additional_surfaces_"),
             std::string::npos);
   EXPECT_NE(source.find("normalized_display_refresh_rate_hz("),
             std::string::npos);
   EXPECT_NE(source.find("renderer.setDisplayInfo("), std::string::npos);
   EXPECT_NE(source.find("renderer_->setDisplayInfo(display_info)"),
             std::string::npos);
-  EXPECT_NE(source.find("renderer->setDisplayInfo(display_info)"),
+  EXPECT_NE(source.find("surface->renderer->setDisplayInfo(display_info)"),
             std::string::npos);
-  EXPECT_NE(source.find("additional_renderers_.push_back(renderer)"),
+  EXPECT_NE(source.find("additional_surfaces_.push_back(surface)"),
             std::string::npos);
-  EXPECT_NE(source.find("std::erase(additional_renderers_, renderer)"),
+  EXPECT_NE(source.find("std::erase_if(additional_surfaces_"),
+            std::string::npos);
+}
+
+TEST(RenderSystemTests, VsyncUsesBackendModeAndNonblockingGpuReadiness) {
+  const std::string source = read_source_file("src/render/render_system.cpp");
+  const std::string synchronize = source_slice(
+      source, "void RenderSystem::synchronize_surface_presentation(",
+      "void RenderSystem::destroy_additional_surface(");
+  const std::string readiness = source_slice(
+      source, "bool RenderSystem::ready_for_next_frame()",
+      "bool RenderSystem::begin_frame_with_swap_chain(");
+  const std::string toggle = source_slice(
+      source, "void RenderSystem::set_vsync_enabled(",
+      "bool RenderSystem::presentation_is_synchronized()");
+  EXPECT_NE(source.find("VulkanPlatformWindows"), std::string::npos);
+  EXPECT_NE(source.find("onSwapChainPresentModeSelected("), std::string::npos);
+  EXPECT_NE(source.find("CONFIG_UNSYNCHRONIZED"), std::string::npos);
+  EXPECT_NE(readiness.find("shouldRenderFrame()"), std::string::npos);
+  EXPECT_NE(readiness.find("submitted_last_frame"), std::string::npos);
+  EXPECT_EQ(readiness.find("flushAndWait"), std::string::npos);
+  EXPECT_LT(synchronize.find("surface.renderer_synchronized == synchronized"),
+            synchronize.find("setDisplayInfo("));
+  EXPECT_LT(toggle.find("vsync_enabled_ == enabled"),
+            toggle.find("flushAndWait()"));
+  EXPECT_EQ(toggle.find("createRenderer()"), std::string::npos);
+  const std::string preview = read_source_file("src/ui/qt_material_preview_surface.cpp");
+  const std::string preview_render = source_slice(
+      preview, "bool QtMaterialPreviewSurface::render_frame()",
+      "void QtMaterialPreviewSurface::synchronize_render_size()");
+  EXPECT_NE(preview_render.find("needs_initial_frame()"), std::string::npos);
+  EXPECT_NE(preview_render.find("render_pending_ || swap_chain_.needs_initial_frame()"),
             std::string::npos);
 }
 
@@ -2355,13 +2387,13 @@ TEST(RenderSystemTests, InitializeUnwindsPartialFilamentStateOnFailure) {
   EXPECT_NE(source.find("const auto fail = [&](std::string_view message)"),
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(source, "shutdown(); return false;"));
-  EXPECT_NE(source.find("if (!swap_chain_)"), std::string::npos);
+  EXPECT_NE(source.find("if (!primary_surface_->swap_chain)"), std::string::npos);
   EXPECT_NE(source.find("if (!renderer_)"), std::string::npos);
   EXPECT_NE(source.find("if (!scene_)"), std::string::npos);
   EXPECT_NE(source.find(
                 "if (!material_library_.initialize(*engine_, executable_dir))"),
             std::string::npos);
-  EXPECT_NE(source.find("return begin_frame_with_swap_chain(swap_chain_)"),
+  EXPECT_NE(source.find("primary_surface_ != nullptr ? primary_surface_->swap_chain : nullptr"),
             std::string::npos);
   EXPECT_NE(source.find("if (!renderer->beginFrame(swap_chain))"),
             std::string::npos);
@@ -2374,7 +2406,7 @@ TEST(RenderSystemTests,
   const std::string surface =
       read_source_file("src/ui/qt_viewport_surface.cpp");
 
-  EXPECT_NE(header.find("filament::Renderer *renderer_ = nullptr"),
+  EXPECT_NE(source.find("filament::Renderer *renderer = nullptr"),
             std::string::npos);
   EXPECT_NE(header.find("bool begin_frame(RenderAdditionalSwapChain &surface)"),
             std::string::npos);
@@ -2385,14 +2417,14 @@ TEST(RenderSystemTests,
             std::string::npos);
   EXPECT_NE(source.find("configure_renderer(*renderer)"), std::string::npos);
   EXPECT_NE(source.find(
-                "RenderAdditionalSwapChain(*this, swap_chain, renderer)"),
+                "RenderAdditionalSwapChain(std::move(surface))"),
             std::string::npos);
-  EXPECT_NE(source.find("begin_frame_with_renderer(surface.renderer_, "
-                        "surface.swap_chain_)"),
+  EXPECT_TRUE(source_contains_compact(source,
+      "begin_frame_with_renderer(surface.state_->renderer, "
+      "surface.state_->swap_chain, surface.state_.get())"));
+  EXPECT_NE(source.find("viewport_renderer.render(*surface.state_->renderer)"),
             std::string::npos);
-  EXPECT_NE(source.find("viewport_renderer.render(*surface.renderer_)"),
-            std::string::npos);
-  EXPECT_NE(source.find("end_frame_with_renderer(surface.renderer_)"),
+  EXPECT_NE(source.find("end_frame_with_renderer(surface.state_->renderer)"),
             std::string::npos);
   EXPECT_NE(surface.find("render_system_->begin_frame(swap_chain_)"),
             std::string::npos);
@@ -2578,18 +2610,32 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
 }
 
 TEST(SceneRenderBridgeTests,
-     TextureBindingServiceRetainsRevisionsUntilSceneCacheRelease) {
+     TextureBindingServiceReclaimsOnlyAfterFinalMaterialConsumer) {
   const std::string texture_header =
       read_source_file("src/render/texture_binding_service.hpp");
   const std::string texture_source =
       read_source_file("src/render/texture_binding_service.cpp");
 
-  EXPECT_EQ(texture_header.find("evict_obsolete_texture_revisions"),
+  const std::string material_source =
+      read_source_file("src/render/material_binding_service.cpp");
+  const std::string factory_source =
+      read_source_file("src/render/mesh_renderable_factory.cpp");
+  EXPECT_NE(texture_header.find("consumer_count"), std::string::npos);
+  EXPECT_NE(texture_source.find("--cached->second.consumer_count == 0u"),
             std::string::npos);
-  EXPECT_EQ(texture_source.find("evict_obsolete_texture_revisions"),
-            std::string::npos)
-      << "A replaced texture revision can remain referenced by a paced, "
-         "retired material instance.";
+  EXPECT_NE(material_source.find("retain_material_textures(*source, *duplicate)"),
+            std::string::npos);
+  EXPECT_NE(factory_source.find("duplicate_mesh_material_instance(instance)"),
+            std::string::npos);
+  EXPECT_NE(factory_source.find("destroy_mesh_material_instance(engine, material_instance)"),
+            std::string::npos);
+  const std::size_t instance_destroy =
+      material_source.find("engine.destroy(material_instance)");
+  const std::size_t texture_release =
+      material_source.find("release_material_textures(consumer)");
+  ASSERT_NE(instance_destroy, std::string::npos);
+  ASSERT_NE(texture_release, std::string::npos);
+  EXPECT_LT(instance_destroy, texture_release);
 
   const std::size_t bind_scene =
       texture_source.find("void TextureBindingService::bind_scene(");
@@ -2600,12 +2646,11 @@ TEST(SceneRenderBridgeTests,
   ASSERT_LT(bind_scene, resolve_texture);
   const std::string binding_release =
       texture_source.substr(bind_scene, resolve_texture - bind_scene);
-  EXPECT_NE(binding_release.find("destroy_texture(texture)"),
+  EXPECT_EQ(binding_release.find("destroy_texture("),
             std::string::npos);
-  EXPECT_NE(binding_release.find("texture_cache_.clear()"),
+  EXPECT_EQ(binding_release.find("texture_cache_.clear()"),
             std::string::npos)
-      << "Retained revisions must still be reclaimed at the safe scene "
-         "ownership boundary.";
+      << "Scene switching must not invalidate a still-live retired consumer.";
 }
 
 TEST(SceneRenderBridgeTests,

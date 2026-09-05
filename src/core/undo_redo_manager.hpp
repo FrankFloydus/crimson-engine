@@ -10,6 +10,8 @@
 #include "core/i_undoable_command.hpp"
 #include "core/undo_redo_execute_options.hpp"
 
+#include <cstddef>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -32,6 +34,13 @@ public:
     [[nodiscard]] bool can_redo() const { return !redo_stack_.empty(); }
     [[nodiscard]] const std::string *undo_label() const;
     [[nodiscard]] const std::string *redo_label() const;
+    [[nodiscard]] std::size_t undo_count() const { return undo_stack_.size(); }
+    [[nodiscard]] std::size_t redo_count() const { return redo_stack_.size(); }
+    [[nodiscard]] std::size_t max_steps() const { return max_steps_; }
+
+    // Bounds the combined retained undo/redo chain. Zero disables retention.
+    // Pruning releases commands without executing them or changing live state.
+    void set_max_steps(std::size_t max_steps);
 
     void clear();
 
@@ -46,6 +55,9 @@ private:
 
     std::vector<StackEntry> undo_stack_;
     std::vector<StackEntry> redo_stack_;
+    std::size_t max_steps_ = std::numeric_limits<std::size_t>::max();
+
+    void trim_to_limit();
 };
 
 } // namespace quader

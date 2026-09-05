@@ -168,13 +168,14 @@ QuaderProjectAssetsApi::set_active_material(ProjectAssetId material_id) {
   QuaderApiVoidResult result =
       status(session_, changed.ok, changed.changed, changed.message);
   if (changed.ok && changed.changed && events_ != nullptr) {
+    const auto root_utf8 = project->root().u8string();
     (void)QuaderEventsApiInternalAccess::publish(
         *events_, QuaderEvent{
                       .name = std::string(
                           quader_event::kActiveProjectMaterialChanged),
                       .project_id = project->manifest()->id(),
                       .project_name = project->manifest()->name(),
-                      .project_root = project->root().string(),
+                      .project_root = std::string(root_utf8.begin(), root_utf8.end()),
                       .project_asset_id = material_id,
                   });
   }
@@ -303,7 +304,8 @@ void QuaderProjectAssetsApi::publish_assets_changed() {
   if (project != nullptr && project->has_project()) {
     event.project_id = project->manifest()->id();
     event.project_name = project->manifest()->name();
-    event.project_root = project->root().string();
+    const auto root_utf8 = project->root().u8string();
+    event.project_root.emplace(root_utf8.begin(), root_utf8.end());
     event.project_asset_id = project->active_material_id();
   }
   (void)QuaderEventsApiInternalAccess::publish(*events_, std::move(event));

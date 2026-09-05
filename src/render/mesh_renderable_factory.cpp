@@ -364,6 +364,7 @@ filament::Box filament_bounds(const RenderInstanceBounds &bounds) {
 
 void destroy_renderable_component_resources(filament::Engine &engine,
                                             filament::Scene *scene,
+                                            MaterialBindingService &materials,
                                             MeshRenderableProxy &proxy,
                                             bool remove_from_scene) {
   if (proxy.entity) {
@@ -381,8 +382,7 @@ void destroy_renderable_component_resources(filament::Engine &engine,
     for (filament::MaterialInstance *&material_instance :
          proxy.material_instances) {
       if (material_instance) {
-        engine.destroy(material_instance);
-        material_instance = nullptr;
+        materials.destroy_mesh_material_instance(engine, material_instance);
       }
     }
   }
@@ -1041,8 +1041,7 @@ MeshRenderableProxy MeshRenderableFactory::create_shared_instance(
   proxy.material_instances.reserve(prototype.material_instances.size());
   for (const filament::MaterialInstance *instance : prototype.material_instances) {
     proxy.material_instances.push_back(
-        instance != nullptr ? filament::MaterialInstance::duplicate(instance)
-                            : nullptr);
+        material_binding_->duplicate_mesh_material_instance(instance));
   }
 
   const std::vector<MeshPrimitiveSpan> primitive_spans =
@@ -1582,7 +1581,8 @@ void MeshRenderableFactory::destroy(MeshRenderableProxy& proxy) {
         return;
     }
 
-    destroy_renderable_component_resources(*engine_, scene_, proxy, true);
+    destroy_renderable_component_resources(*engine_, scene_, *material_binding_,
+                                           proxy, true);
     release_geometry(proxy);
 }
 
@@ -1591,7 +1591,8 @@ void MeshRenderableFactory::destroy_detached(MeshRenderableProxy &proxy) {
     return;
   }
 
-  destroy_renderable_component_resources(*engine_, nullptr, proxy, false);
+  destroy_renderable_component_resources(*engine_, nullptr, *material_binding_,
+                                         proxy, false);
   release_geometry(proxy);
 }
 

@@ -242,7 +242,8 @@ QuaderEvent project_lifecycle_event(std::string_view name,
   if (const ProjectManifest *manifest = project.manifest()) {
     event.project_id = manifest->id();
     event.project_name = manifest->name();
-    event.project_root = project.root().generic_string();
+    const std::u8string root_utf8 = project.root().generic_u8string();
+    event.project_root.emplace(root_utf8.begin(), root_utf8.end());
   }
   return event;
 }
@@ -661,6 +662,84 @@ std::vector<QuaderRecentProject> QuaderProjectApi::recent_projects() const {
     });
   }
   return result;
+}
+
+std::vector<QuaderRecentScene> QuaderProjectApi::recent_scenes() const {
+  std::vector<QuaderRecentScene> result;
+  if (project_session_ == nullptr) {
+    return result;
+  }
+  for (const RecentSceneEntry &entry : project_session_->recent_scenes()) {
+    result.push_back({
+        .scene_id = entry.scene_id,
+        .scene_name = entry.scene_name,
+        .project_name = entry.project_name,
+        .manifest_path = entry.manifest_path,
+        .scene_path = entry.scene_path,
+        .available = entry.available,
+    });
+  }
+  return result;
+}
+
+QuaderApiVoidResult QuaderProjectApi::open_recent_scene(
+    const QuaderRecentScene &entry) {
+  if (project_session_ == nullptr || scene_documents_ == nullptr) {
+    return unsupported("Open Recent requires the project workspace.");
+  }
+  std::error_code path_error;
+  if (project_session_->has_project() &&
+      std::filesystem::equivalent(entry.manifest_path, manifest_path(),
+                                  path_error) && !path_error) {
+    return quader_api_status_from_result(scene_documents_->open(entry.scene_path));
+  }
+
+  std::optional<SceneClosePreparationResult> prepared;
+  ProjectCloseLifecycleEvents close_events;
+  ProjectSessionResult opened = project_session_->open_scene_project(
+      entry.manifest_path, entry.scene_path, [&] {
+        prepared = close_open_scenes("project.open_recent_scene");
+        if (!prepared->status.ok() || !prepared->proceed) {
+          return false;
+        }
+        close_events = capture_project_close_events(*project_session_);
+        return true;
+      });
+  if (!opened.ok) {
+    return quader_api_failure_status(scene_session(session_), opened.message);
+  }
+  if (prepared.has_value() &&
+      (!prepared->status.ok() || !prepared->proceed)) {
+    return prepared->status;
+  }
+  if (!opened.changed) {
+    return project_runtime_status(scene_session(session_), false, opened.message);
+  }
+  if (binding_changed_) {
+    binding_changed_(session_);
+  }
+  remember_open_project();
+  if (events_ != nullptr) {
+    publish_project_close_events(*events_, std::move(close_events));
+    (void)QuaderEventsApiInternalAccess::publish(
+        *events_, project_lifecycle_event(quader_event::kProjectOpened,
+                                          *project_session_));
+    for (const auto &scene : project_session_->open_scenes()) {
+      (void)QuaderEventsApiInternalAccess::publish(
+          *events_, scene_lifecycle_event(quader_event::kSceneOpened,
+                                          *project_session_, *scene));
+    }
+    if (const auto *scene = project_session_->active_scene()) {
+      (void)QuaderEventsApiInternalAccess::publish(
+          *events_, scene_lifecycle_event(quader_event::kActiveSceneChanged,
+                                          *project_session_, *scene));
+    }
+  }
+  for (const std::string &warning : opened.warnings) {
+    opened.message += " " + warning;
+  }
+  return project_runtime_status(scene_session(session_), true,
+                                std::move(opened.message));
 }
 
 QuaderApiVoidResult QuaderProjectApi::remove_recent_project(
