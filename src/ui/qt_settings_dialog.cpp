@@ -1625,6 +1625,7 @@ struct QtSettingsDialog::Impl {
         stable_id.data(), static_cast<qsizetype>(stable_id.size()));
     auto *page = new QScrollArea(page_stack);
     page->setObjectName(QStringLiteral("settingsPage_%1").arg(id));
+    page->setFrameShape(QFrame::NoFrame);
     page->setWidgetResizable(true);
 
     auto *content = new QWidget(page);

@@ -63,7 +63,8 @@ public:
       return;
     }
 
-    QStyleOption face = *option;
+    QStyleOptionButton face;
+    face.QStyleOption::operator=(*option);
     const bool selected = face.state.testFlag(State_On);
     const bool hovered = face.state.testFlag(State_MouseOver);
     const bool physically_pressed = face.state.testFlag(State_Sunken);
@@ -74,9 +75,15 @@ public:
     const QColor accent =
         face.palette.color(color_group, QPalette::Highlight);
 
+    // Fusion's Flat feature removes only the idle face while preserving its
+    // native rendering for hover, selection, keyboard focus, and press.
+    face.features.setFlag(QStyleOptionButton::Flat,
+                          !selected && !hovered && !physically_pressed &&
+                              !keyboard_focused);
+
     if (selected) {
-      constexpr qreal kSelectedAccentMix = 0.30;
-      constexpr qreal kSelectedHoverAccentMix = 0.40;
+      constexpr qreal kSelectedAccentMix = 0.20;
+      constexpr qreal kSelectedHoverAccentMix = 0.28;
       face.palette.setColor(
           QPalette::Button,
           blend(face.palette.color(color_group, QPalette::Button), accent,
@@ -85,7 +92,7 @@ public:
       face.state.setFlag(State_Raised, !physically_pressed);
     } else if (hovered && face.state.testFlag(State_Enabled) &&
                !physically_pressed) {
-      constexpr qreal kHoverHighlightMix = 0.22;
+      constexpr qreal kHoverHighlightMix = 0.10;
       face.palette.setColor(
           QPalette::Button,
           blend(face.palette.color(color_group, QPalette::Button), accent,

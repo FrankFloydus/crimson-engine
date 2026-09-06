@@ -226,7 +226,7 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
 
   left_rail_ = new QFrame(this);
   left_rail_->setObjectName(QStringLiteral("projectHome.leftRail"));
-  left_rail_->setFrameShape(QFrame::StyledPanel);
+  left_rail_->setFrameShape(QFrame::NoFrame);
   left_rail_->setFixedWidth(248);
   left_rail_->setBackgroundRole(QPalette::AlternateBase);
   left_rail_->setAutoFillBackground(true);

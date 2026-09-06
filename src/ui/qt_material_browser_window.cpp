@@ -441,6 +441,9 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   list_view_->setObjectName(QStringLiteral("materialBrowser.listView"));
   list_view_->setModel(proxy_);
   list_view_->setSelectionModel(selection);
+  list_view_->setShowGrid(false);
+  list_view_->setWordWrap(false);
+  list_view_->setAlternatingRowColors(true);
   list_view_->setSelectionBehavior(QAbstractItemView::SelectRows);
   list_view_->setSelectionMode(QAbstractItemView::SingleSelection);
   list_view_->setSortingEnabled(true);

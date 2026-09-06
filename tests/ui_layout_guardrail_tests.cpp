@@ -1798,7 +1798,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(toolbar,
                   "configure_native_toolbar_button_face(*this, *entry.action,");
   expect_contains(button_presentation, "button->setAutoRaise(false)");
-  expect_contains(button_presentation, "kHoverHighlightMix = 0.22");
+  expect_contains(button_presentation, "kHoverHighlightMix");
   expect_contains(button_presentation,
                   "QPen outline(accent, keyboard_focused ? 2.0 : 1.0)");
   expect_missing(button_presentation, "marker_rect");

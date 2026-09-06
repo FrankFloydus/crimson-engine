@@ -329,7 +329,9 @@ QIcon material_action_icon(InspectorMaterialActionIcon action,
                        raster_extent),
                    QIcon::Normal, QIcon::Off);
     icon.addPixmap(material_action_pixmap(
-                       action, palette.color(QPalette::Mid), raster_extent),
+                       action,
+                       palette.color(QPalette::Disabled, QPalette::ButtonText),
+                       raster_extent),
                    QIcon::Disabled, QIcon::Off);
   }
   return icon;

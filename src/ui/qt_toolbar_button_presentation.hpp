@@ -26,7 +26,7 @@ qt_toolbar_button_color_group(QStyle::State state);
  */
 QStyle &install_native_toolbar_button_presentation(QToolBar &toolbar);
 
-/** Gives one action a persistent native face and accessible presentation. */
+/** Gives one action native interaction states and accessible presentation. */
 void configure_native_toolbar_button_face(QToolBar &toolbar, QAction &action,
                                           QStyle &presentation);
 

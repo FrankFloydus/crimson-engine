@@ -71,7 +71,7 @@ QPixmap curve_tool_icon_pixmap(const QPalette &palette, int extent) {
   constexpr qreal kDesignExtent = 64.0;
   const qreal drawing_scale = static_cast<qreal>(extent) / kDesignExtent;
   painter.scale(drawing_scale, drawing_scale);
-  painter.setPen(QPen(palette.color(QPalette::Mid), 2.0));
+  painter.setPen(QPen(palette.color(QPalette::PlaceholderText), 2.0));
   painter.drawLine(QPointF(10, 48), QPointF(16, 12));
   painter.drawLine(QPointF(48, 52), QPointF(54, 16));
   QPainterPath path(QPointF(10, 48));

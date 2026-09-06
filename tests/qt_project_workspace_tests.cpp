@@ -252,7 +252,7 @@ TEST(QtProjectWorkspaceTests,
 
   QPalette palette = QApplication::palette();
   palette.setColor(QPalette::ButtonText, QColor(211, 37, 53));
-  palette.setColor(QPalette::Mid, QColor(113, 23, 41));
+  palette.setColor(QPalette::PlaceholderText, QColor(113, 23, 41));
   palette.setColor(QPalette::Highlight, QColor(241, 193, 17));
   QApplication::setPalette(palette);
 
@@ -267,7 +267,7 @@ TEST(QtProjectWorkspaceTests,
   const qint64 initial_select_key = select->icon().cacheKey();
 
   palette.setColor(QPalette::ButtonText, QColor(29, 197, 83));
-  palette.setColor(QPalette::Mid, QColor(17, 97, 47));
+  palette.setColor(QPalette::PlaceholderText, QColor(17, 97, 47));
   QApplication::setPalette(palette);
   QCoreApplication::processEvents();
   const qint64 application_curve_key = curve->icon().cacheKey();
@@ -283,7 +283,7 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
-     EditorToolbarsKeepNativeButtonFacesVisibleAtRest) {
+     EditorToolbarsKeepIdleFacesQuietAndInteractionStatesVisible) {
   int argc = 1;
   char application_name[] = "quader_toolbar_test";
   char *argv[] = {application_name, nullptr};
@@ -366,6 +366,8 @@ TEST(QtProjectWorkspaceTests,
       *button, default_state | QStyle::State_MouseOver);
   const QImage selected_face = render_toolbar_button_face(
       *button, default_state | QStyle::State_On);
+  const QImage selected_hover_face = render_toolbar_button_face(
+      *button, default_state | QStyle::State_On | QStyle::State_MouseOver);
   const QImage focused_face = render_toolbar_button_face(
       *button, default_state | QStyle::State_HasFocus |
                    QStyle::State_KeyboardFocusChange);
@@ -378,10 +380,22 @@ TEST(QtProjectWorkspaceTests,
       *button, QStyle::State_Active | QStyle::State_Enabled |
                    QStyle::State_Sunken);
 
+  QImage transparent_face(default_face.size(), default_face.format());
+  transparent_face.fill(Qt::transparent);
+  EXPECT_EQ(default_face, transparent_face)
+      << "idle toolbar actions leave the shared toolbar surface visible";
+  const QPoint face_center = default_face.rect().center();
+  for (const QImage *interactive_face :
+       {&hover_face, &selected_face, &selected_hover_face, &focused_face,
+        &inactive_selected_face, &disabled_selected_face, &pressed_face}) {
+    EXPECT_EQ(interactive_face->pixelColor(face_center).alpha(), 255)
+        << "interactive and selected states retain a visible native face";
+  }
   EXPECT_NE(default_face, hover_face);
   EXPECT_NE(default_face, selected_face);
   EXPECT_NE(default_face, focused_face);
   EXPECT_NE(hover_face, selected_face);
+  EXPECT_NE(selected_face, selected_hover_face);
   EXPECT_NE(selected_face, inactive_selected_face);
   EXPECT_NE(selected_face, disabled_selected_face);
   EXPECT_NE(default_face, pressed_face);

@@ -19,73 +19,72 @@ namespace {
 void apply_shared_obsidian_roles(QPalette &palette) {
   constexpr QPalette::ColorGroup kAllGroups = QPalette::All;
 
-  // Near-black surfaces carry a restrained violet warmth. Each level remains
-  // visibly distinct so dense editor panels do not collapse into flat black.
-  palette.setColor(kAllGroups, QPalette::Window, QColor(24, 23, 28));
-  palette.setColor(kAllGroups, QPalette::Base, QColor(17, 16, 20));
-  palette.setColor(kAllGroups, QPalette::AlternateBase, QColor(32, 30, 37));
-  palette.setColor(kAllGroups, QPalette::Button, QColor(41, 38, 47));
-  palette.setColor(kAllGroups, QPalette::ToolTipBase, QColor(45, 41, 52));
+  // Charcoal surfaces keep dense content quiet. Alternating rows differ by only
+  // three channel values; panels and controls carry the stronger separation.
+  palette.setColor(kAllGroups, QPalette::Window, QColor(31, 32, 37));
+  palette.setColor(kAllGroups, QPalette::Base, QColor(24, 25, 29));
+  palette.setColor(kAllGroups, QPalette::AlternateBase, QColor(27, 28, 32));
+  palette.setColor(kAllGroups, QPalette::Button, QColor(43, 44, 51));
+  palette.setColor(kAllGroups, QPalette::ToolTipBase, QColor(47, 48, 56));
 
-  palette.setColor(kAllGroups, QPalette::WindowText, QColor(232, 227, 238));
-  palette.setColor(kAllGroups, QPalette::Text, QColor(227, 222, 233));
-  palette.setColor(kAllGroups, QPalette::ButtonText, QColor(232, 227, 238));
+  palette.setColor(kAllGroups, QPalette::WindowText, QColor(228, 230, 237));
+  palette.setColor(kAllGroups, QPalette::Text, QColor(218, 221, 229));
+  palette.setColor(kAllGroups, QPalette::ButtonText, QColor(228, 230, 237));
   palette.setColor(kAllGroups, QPalette::BrightText, QColor(255, 255, 255));
-  palette.setColor(kAllGroups, QPalette::ToolTipText, QColor(246, 240, 250));
+  palette.setColor(kAllGroups, QPalette::ToolTipText, QColor(238, 240, 246));
   palette.setColor(kAllGroups, QPalette::PlaceholderText,
-                   QColor(153, 146, 162));
+                   QColor(148, 152, 164));
 
-  palette.setColor(kAllGroups, QPalette::Light, QColor(69, 64, 77));
-  palette.setColor(kAllGroups, QPalette::Midlight, QColor(60, 55, 68));
-  palette.setColor(kAllGroups, QPalette::Mid, QColor(53, 49, 61));
-  palette.setColor(kAllGroups, QPalette::Dark, QColor(14, 13, 17));
-  palette.setColor(kAllGroups, QPalette::Shadow, QColor(8, 7, 10));
+  palette.setColor(kAllGroups, QPalette::Light, QColor(57, 59, 67));
+  palette.setColor(kAllGroups, QPalette::Midlight, QColor(50, 52, 60));
+  palette.setColor(kAllGroups, QPalette::Mid, QColor(35, 36, 42));
+  palette.setColor(kAllGroups, QPalette::Dark, QColor(22, 23, 27));
+  palette.setColor(kAllGroups, QPalette::Shadow, QColor(12, 13, 16));
 
-  // A clear amethyst is the sole interactive accent. Its darker Fusion-derived
-  // outlines remain distinguishable from controls, while dark selected text
-  // exceeds the WCAG AA contrast threshold.
-  palette.setColor(kAllGroups, QPalette::Highlight, QColor(173, 128, 244));
+  // Muted amethyst marks interaction without tinting ordinary content. Its
+  // Fusion-derived focus outline and selected text retain accessible contrast.
+  palette.setColor(kAllGroups, QPalette::Highlight, QColor(167, 148, 221));
   palette.setColor(kAllGroups, QPalette::HighlightedText,
-                   QColor(17, 16, 20));
-  palette.setColor(kAllGroups, QPalette::Accent, QColor(173, 128, 244));
-  palette.setColor(kAllGroups, QPalette::Link, QColor(182, 156, 255));
-  palette.setColor(kAllGroups, QPalette::LinkVisited, QColor(208, 162, 241));
+                   QColor(23, 24, 28));
+  palette.setColor(kAllGroups, QPalette::Accent, QColor(167, 148, 221));
+  palette.setColor(kAllGroups, QPalette::Link, QColor(185, 171, 231));
+  palette.setColor(kAllGroups, QPalette::LinkVisited, QColor(192, 167, 210));
 }
 
 void apply_inactive_obsidian_roles(QPalette &palette) {
   constexpr QPalette::ColorGroup kGroup = QPalette::Inactive;
-  palette.setColor(kGroup, QPalette::WindowText, QColor(211, 205, 217));
-  palette.setColor(kGroup, QPalette::Text, QColor(203, 196, 210));
-  palette.setColor(kGroup, QPalette::ButtonText, QColor(211, 205, 217));
-  palette.setColor(kGroup, QPalette::PlaceholderText, QColor(141, 134, 149));
-  palette.setColor(kGroup, QPalette::Button, QColor(37, 34, 43));
-  palette.setColor(kGroup, QPalette::Highlight, QColor(160, 131, 211));
-  palette.setColor(kGroup, QPalette::HighlightedText, QColor(23, 21, 26));
-  palette.setColor(kGroup, QPalette::Accent, QColor(160, 131, 211));
-  palette.setColor(kGroup, QPalette::Link, QColor(161, 138, 222));
-  palette.setColor(kGroup, QPalette::LinkVisited, QColor(182, 141, 208));
+  palette.setColor(kGroup, QPalette::WindowText, QColor(207, 211, 220));
+  palette.setColor(kGroup, QPalette::Text, QColor(201, 205, 215));
+  palette.setColor(kGroup, QPalette::ButtonText, QColor(207, 211, 220));
+  palette.setColor(kGroup, QPalette::PlaceholderText, QColor(143, 147, 158));
+  palette.setColor(kGroup, QPalette::Button, QColor(40, 41, 48));
+  palette.setColor(kGroup, QPalette::Highlight, QColor(153, 141, 191));
+  palette.setColor(kGroup, QPalette::HighlightedText, QColor(23, 24, 28));
+  palette.setColor(kGroup, QPalette::Accent, QColor(153, 141, 191));
+  palette.setColor(kGroup, QPalette::Link, QColor(172, 159, 214));
+  palette.setColor(kGroup, QPalette::LinkVisited, QColor(180, 157, 198));
 }
 
 void apply_disabled_obsidian_roles(QPalette &palette) {
   constexpr QPalette::ColorGroup kGroup = QPalette::Disabled;
-  palette.setColor(kGroup, QPalette::Base, QColor(21, 20, 25));
-  palette.setColor(kGroup, QPalette::AlternateBase, QColor(29, 27, 33));
-  palette.setColor(kGroup, QPalette::Button, QColor(23, 21, 26));
+  palette.setColor(kGroup, QPalette::Base, QColor(27, 28, 32));
+  palette.setColor(kGroup, QPalette::AlternateBase, QColor(30, 31, 35));
+  palette.setColor(kGroup, QPalette::Button, QColor(29, 30, 35));
 
-  palette.setColor(kGroup, QPalette::WindowText, QColor(141, 134, 149));
-  palette.setColor(kGroup, QPalette::Text, QColor(141, 134, 149));
-  palette.setColor(kGroup, QPalette::ButtonText, QColor(141, 134, 149));
-  palette.setColor(kGroup, QPalette::BrightText, QColor(179, 173, 185));
-  palette.setColor(kGroup, QPalette::PlaceholderText, QColor(116, 110, 122));
+  palette.setColor(kGroup, QPalette::WindowText, QColor(144, 147, 158));
+  palette.setColor(kGroup, QPalette::Text, QColor(144, 147, 158));
+  palette.setColor(kGroup, QPalette::ButtonText, QColor(144, 147, 158));
+  palette.setColor(kGroup, QPalette::BrightText, QColor(179, 182, 192));
+  palette.setColor(kGroup, QPalette::PlaceholderText, QColor(121, 125, 137));
 
-  palette.setColor(kGroup, QPalette::Light, QColor(49, 46, 55));
-  palette.setColor(kGroup, QPalette::Midlight, QColor(43, 41, 48));
-  palette.setColor(kGroup, QPalette::Mid, QColor(40, 37, 45));
-  palette.setColor(kGroup, QPalette::Highlight, QColor(144, 124, 158));
-  palette.setColor(kGroup, QPalette::HighlightedText, QColor(23, 21, 26));
-  palette.setColor(kGroup, QPalette::Accent, QColor(144, 124, 158));
-  palette.setColor(kGroup, QPalette::Link, QColor(141, 121, 172));
-  palette.setColor(kGroup, QPalette::LinkVisited, QColor(144, 114, 158));
+  palette.setColor(kGroup, QPalette::Light, QColor(43, 45, 52));
+  palette.setColor(kGroup, QPalette::Midlight, QColor(37, 39, 46));
+  palette.setColor(kGroup, QPalette::Mid, QColor(26, 27, 32));
+  palette.setColor(kGroup, QPalette::Highlight, QColor(139, 132, 160));
+  palette.setColor(kGroup, QPalette::HighlightedText, QColor(23, 24, 28));
+  palette.setColor(kGroup, QPalette::Accent, QColor(139, 132, 160));
+  palette.setColor(kGroup, QPalette::Link, QColor(151, 143, 172));
+  palette.setColor(kGroup, QPalette::LinkVisited, QColor(159, 140, 172));
 }
 
 void apply_application_palette_for_contrast(

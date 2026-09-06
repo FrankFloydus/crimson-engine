@@ -386,7 +386,7 @@ TEST(LocalStressTests, SceneDeleteAllUndoRedoRestoresInstancesAndMeshes) {
   using quader::test::capture_command_observable_state;
   using quader::test::command_observable_domain_mask;
   using quader::test::diff_command_observable_state;
-  constexpr auto restored_domains =
+  constexpr auto kRestoredDomains =
       CommandObservableDomain::Scene | CommandObservableDomain::Geometry |
       command_observable_domain_mask(CommandObservableDomain::Selection) |
       command_observable_domain_mask(CommandObservableDomain::Assets);
@@ -411,21 +411,21 @@ TEST(LocalStressTests, SceneDeleteAllUndoRedoRestoresInstancesAndMeshes) {
     ASSERT_TRUE(undone.ok()) << undone.error_message();
     ASSERT_TRUE(undone.changed());
     const auto undo_diff = diff_command_observable_state(
-        before, capture_command_observable_state(editor), restored_domains);
+        before, capture_command_observable_state(editor), kRestoredDomains);
     ASSERT_TRUE(undo_diff.empty()) << undo_diff.summary;
 
     const auto redone = editor.history().redo();
     ASSERT_TRUE(redone.ok()) << redone.error_message();
     ASSERT_TRUE(redone.changed());
     const auto redo_diff = diff_command_observable_state(
-        after_delete, capture_command_observable_state(editor), restored_domains);
+        after_delete, capture_command_observable_state(editor), kRestoredDomains);
     ASSERT_TRUE(redo_diff.empty()) << redo_diff.summary;
 
     const auto restored = editor.history().undo();
     ASSERT_TRUE(restored.ok()) << restored.error_message();
     ASSERT_TRUE(restored.changed());
     const auto restored_diff = diff_command_observable_state(
-        before, capture_command_observable_state(editor), restored_domains);
+        before, capture_command_observable_state(editor), kRestoredDomains);
     ASSERT_TRUE(restored_diff.empty()) << restored_diff.summary;
     std::cout << "[local-stress] delete_undo_redo_cycle=" << cycle + 1u
               << " restored_entities=" << editor.query().entities().size()
