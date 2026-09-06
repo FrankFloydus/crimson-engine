@@ -34,13 +34,13 @@ public:
 OperationResult detach_selected_faces_impl(Document& document, Selection& selection)
 {
   if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
-    return {false, "Select one or more faces to detach."};
+    return OperationResult::failure("Select one or more faces to detach.");
   }
 
     const ElementId active_face_id = active_face_or_invalid(selection);
     const std::vector<Face> selected_faces = selected_face_copies(document, selection);
     if (selected_faces.empty()) {
-        return { false, "No selected faces were found." };
+        return OperationResult::failure("No selected faces were found.");
     }
 
     std::set<ElementId> selected_face_ids;
@@ -74,8 +74,7 @@ OperationResult detach_selected_faces_impl(Document& document, Selection& select
 
             const ElementId duplicate_id = copied_vertex_id(document, candidate, duplicate_vertices, vertex_id);
             if (duplicate_id == kInvalidElementId) {
-              return {false,
-                      "Detach could not duplicate a selected face vertex."};
+              return OperationResult::failure("Detach could not duplicate a selected face vertex.");
             }
             vertex_id = duplicate_id;
             face_changed = true;
@@ -92,7 +91,7 @@ OperationResult detach_selected_faces_impl(Document& document, Selection& select
     }
 
     if (!every_face_triangulates(candidate)) {
-        return { false, "Detach would create invalid face geometry." };
+        return OperationResult::failure("Detach would create invalid face geometry.");
     }
 
     document = std::move(candidate);

@@ -12,9 +12,11 @@ namespace quader {
 namespace {
 
 void handle_result(ViewportToolContext &context, std::string_view label,
-                   const ModelingCommandResult &command) {
+                   const ModelingCommandResult &command,
+                   bool announce_failure = false) {
   if (context.ports.command_result != nullptr) {
-    context.ports.command_result->handle_tool_command_result(label, command);
+    context.ports.command_result->handle_tool_command_result(
+        label, command, announce_failure);
   }
 }
 
@@ -53,7 +55,7 @@ ViewportToolResult DragCommitTool::handle_event(
     const ModelingCommandResult begin_command =
         preview_port.begin_insert_edge_loop_drag(
             point_context.make_event_at(pointer.left_click_local, true));
-    handle_result(context, "Insert edge loop begin", begin_command);
+    handle_result(context, "Insert edge loop begin", begin_command, true);
     const bool can_commit =
         begin_command.ok &&
         preview_port.tool_status().insert_edge_loop_dragging;
@@ -61,7 +63,7 @@ ViewportToolResult DragCommitTool::handle_event(
     if (can_commit) {
       const ModelingCommandResult commit_command =
           commit_port.commit_insert_edge_loop_drag();
-      handle_result(context, "Insert edge loop commit", commit_command);
+      handle_result(context, "Insert edge loop commit", commit_command, true);
       if (context.ports.selection_mode != nullptr) {
         context.ports.selection_mode->set_viewport_selection_mode(
             app_selection_mode_to_viewport(
@@ -83,7 +85,7 @@ ViewportToolResult DragCommitTool::handle_event(
   if (pointer.left_released && dragging) {
     const ModelingCommandResult command =
         commit_port.commit_insert_edge_loop_drag();
-    handle_result(context, "Insert edge loop commit", command);
+    handle_result(context, "Insert edge loop commit", command, true);
     context.modal_state->insert_edge_loop_drag_active = false;
     if (context.ports.selection_mode != nullptr) {
       context.ports.selection_mode->set_viewport_selection_mode(

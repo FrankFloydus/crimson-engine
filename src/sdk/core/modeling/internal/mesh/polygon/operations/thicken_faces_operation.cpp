@@ -51,21 +51,26 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
 {
     (void)from_center;
     if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
-      return {false, "Select one or more open faces to thicken."};
+      return OperationResult::failure("Select one or more open faces to thicken.");
     }
-    if (!std::isfinite(thickness) || std::abs(thickness) <= kEpsilon) {
+    if (!std::isfinite(thickness)) {
+      return OperationResult::failure(
+          "Thicken Faces needs a non-zero finite thickness.");
+    }
+    if (std::abs(thickness) <= kEpsilon) {
       return {false, "Thicken Faces needs a non-zero finite thickness."};
     }
 
     const ElementId active_face_id = active_face_or_invalid(selection);
     const FacePerimeterInfo perimeter = selected_faces_perimeter_info(document, selection);
     if (perimeter.empty() || !perimeter.has_only_open_edges()) {
-        return { false, "Thicken Faces needs selected faces with an open outer perimeter." };
+        return OperationResult::failure(
+            "Thicken Faces needs selected faces with an open outer perimeter.");
     }
 
     const std::vector<Face> selected_faces = selected_face_copies(document, selection);
     if (selected_faces.empty()) {
-        return { false, "No selected faces were found." };
+        return OperationResult::failure("No selected faces were found.");
     }
 
     std::set<ElementId> selected_face_ids;
@@ -83,7 +88,8 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
         (void)normal_sum;
         const Vertex* vertex = find_vertex(document, vertex_id);
         if (vertex == nullptr) {
-            return { false, "Thicken Faces could not find selected face vertices." };
+            return OperationResult::failure(
+                "Thicken Faces could not find selected face vertices.");
         }
         source_positions[vertex_id] = vertex->position;
     }
@@ -136,7 +142,8 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
         for (const ElementId vertex_id : source_face.vertices) {
             const ElementId duplicate_id = duplicate_vertex(vertex_id);
             if (duplicate_id == kInvalidElementId) {
-              return {false, "Thicken Faces could not create offset vertices."};
+              return OperationResult::failure(
+                  "Thicken Faces could not create offset vertices.");
             }
             cap_face.vertices.push_back(duplicate_id);
         }
@@ -148,7 +155,8 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
             std::ranges::reverse(cap_face.uvs);
         }
         if (triangulate_face_local_indices(candidate, cap_face).empty()) {
-            return { false, "Thicken Faces would create invalid cap geometry." };
+            return OperationResult::failure(
+                "Thicken Faces would create invalid cap geometry.");
         }
         cap_face_ids.push_back(cap_face.id);
         created_cap_face_ids.push_back(cap_face.id);
@@ -170,7 +178,8 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
         const auto duplicate_a = duplicate_vertices.find(edge.a);
         const auto duplicate_b = duplicate_vertices.find(edge.b);
         if (duplicate_a == duplicate_vertices.end() || duplicate_b == duplicate_vertices.end()) {
-            return { false, "Thicken Faces could not create side wall vertices." };
+            return OperationResult::failure(
+                "Thicken Faces could not create side wall vertices.");
         }
 
         std::vector<ElementId> side_vertices = !flip_normals ?
@@ -187,14 +196,16 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
                 flip_normals ? side_outward_normal * -1.0F : side_outward_normal,
                 side_face_ids,
                 source_face == nullptr ? FaceTextureTransform{} : source_face->texture_transform)) {
-            return { false, "Thicken Faces could not create valid side wall geometry." };
+            return OperationResult::failure(
+                "Thicken Faces could not create valid side wall geometry.");
         }
     }
 
     prune_invalid_faces(candidate);
     prune_unused_vertices(candidate);
     if (cap_face_ids.empty() || !every_face_triangulates(candidate)) {
-        return { false, "Thicken Faces would create invalid face geometry." };
+        return OperationResult::failure(
+            "Thicken Faces would create invalid face geometry.");
     }
 
     result.affected.faces.assign(selected_face_ids.begin(), selected_face_ids.end());

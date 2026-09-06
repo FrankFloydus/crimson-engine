@@ -88,7 +88,7 @@ OperationElementDelta deleted_element_delta(
 OperationResult delete_selection_impl(Document& document, const Selection& selection)
 {
     if (selection.empty()) {
-        return { false, "No polygon elements are selected." };
+        return OperationResult::failure("No polygon elements are selected.");
     }
 
     const std::size_t original_face_count = document.faces.size();
@@ -119,12 +119,12 @@ OperationResult delete_selection_impl(Document& document, const Selection& selec
     prune_invalid_faces(document);
     prune_unused_vertices(document);
     const bool changed = original_face_count != document.faces.size() || original_vertex_count != document.vertices.size();
-    OperationResult result;
-    result.changed = changed;
-    result.message = changed ? std::string {} : "No selected polygon elements were found.";
-    if (changed) {
-        result.deleted = deleted_element_delta(before_elements, document_element_delta(document));
+    if (!changed) {
+        return OperationResult::failure("No selected polygon elements were found.");
     }
+    OperationResult result;
+    result.changed = true;
+    result.deleted = deleted_element_delta(before_elements, document_element_delta(document));
     return result;
 }
 

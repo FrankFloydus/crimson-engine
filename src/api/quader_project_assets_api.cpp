@@ -260,10 +260,6 @@ QuaderProjectAssetsApi::import_textures_as_materials(
   ProjectMaterialImportService importer(*project);
   ProjectMaterialImportReport imported =
       importer.import_textures_as_materials(source_paths);
-  if (!imported.ok) {
-    return quader_api_result_from_status<QuaderProjectMaterialImportReport>(
-        status(session_, false, false, std::move(imported.message)));
-  }
 
   QuaderProjectMaterialImportReport result;
   result.imported.reserve(imported.imported.size());
@@ -281,9 +277,9 @@ QuaderProjectAssetsApi::import_textures_as_materials(
     });
   }
 
-  const bool changed = !result.imported.empty();
+  const bool changed = imported.ok && !result.imported.empty();
   QuaderApiResult<QuaderProjectMaterialImportReport> api_result =
-      quader_api_result_from_status(status(session_, true, changed,
+      quader_api_result_from_status(status(session_, imported.ok, changed,
                                            std::move(imported.message)),
                                     std::move(result));
   if (changed) {

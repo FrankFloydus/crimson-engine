@@ -63,7 +63,8 @@ OperationResult TransformSelectionOperation::apply(Document& document, Selection
     QDR_PROFILE_SCOPE("qdr_document.TransformSelectionOperation.apply");
     const std::vector<ElementId> ids = selected_vertex_ids(document, selection);
     if (ids.empty()) {
-        return { false, "No polygon elements are selected." };
+        // Empty transform targets are a successful no-op for session replay.
+        return {false, "No polygon elements are selected."};
     }
 
     std::unordered_set<ElementId> selected_ids;

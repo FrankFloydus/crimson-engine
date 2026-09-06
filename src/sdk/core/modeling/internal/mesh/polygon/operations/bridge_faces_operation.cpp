@@ -44,12 +44,12 @@ BridgeFacesOperation::BridgeFacesOperation(int steps)
 OperationResult bridge_selected_faces_impl(Document& document, Selection& selection, int steps)
 {
   if (selection.mode != SelectionMode::Face || selection.faces.size() < 2) {
-    return {false, "Bridge Faces needs two selected faces or face islands."};
+    return OperationResult::failure("Bridge Faces needs two selected faces or face islands.");
   }
 
     const std::vector<Face> selected_faces = selected_face_copies(document, selection);
     if (selected_faces.size() < 2) {
-        return { false, "Bridge Faces needs two valid selected faces or face islands." };
+        return OperationResult::failure("Bridge Faces needs two valid selected faces or face islands.");
     }
 
     if (selected_faces.size() == 2U) {
@@ -58,12 +58,12 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
         const std::vector<ElementId> first_vertices = unique_valid_face_loop(first_face.vertices);
         const std::vector<ElementId> second_vertices = unique_valid_face_loop(second_face.vertices);
         if (first_vertices.size() < 3 || second_vertices.size() < 3 || first_vertices.size() != second_vertices.size()) {
-            return { false, "Bridge Faces needs the two selected faces to have the same edge count." };
+            return OperationResult::failure("Bridge Faces needs the two selected faces to have the same edge count.");
         }
 
         std::vector<ElementId> aligned_second_vertices = aligned_loop_vertices(document, first_vertices, second_vertices);
         if (aligned_second_vertices.size() != first_vertices.size()) {
-            return { false, "Bridge Faces could not align the selected faces." };
+            return OperationResult::failure("Bridge Faces could not align the selected faces.");
         }
 
         const FacePerimeterInfo first_perimeter = face_perimeter_info(document, first_face.id);
@@ -91,12 +91,12 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
                 bridge_face_ids,
                 true,
                 first_face.texture_transform)) {
-            return { false, "Bridge Faces could not create valid bridge geometry." };
+            return OperationResult::failure("Bridge Faces could not create valid bridge geometry.");
         }
 
         prune_unused_vertices(candidate);
         if (bridge_face_ids.empty() || !every_face_triangulates(candidate)) {
-            return { false, "Bridge Faces would create invalid face geometry." };
+            return OperationResult::failure("Bridge Faces would create invalid face geometry.");
         }
 
         document = std::move(candidate);
@@ -109,18 +109,18 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
 
     const std::vector<FaceIslandBoundary> islands = selected_face_island_boundaries(document, selected_faces);
     if (islands.size() != 2U) {
-        return { false, "Bridge Faces needs exactly two selected faces or two connected face selections." };
+        return OperationResult::failure("Bridge Faces needs exactly two selected faces or two connected face selections.");
     }
 
     const FaceIslandBoundary& first = islands[0];
     const FaceIslandBoundary& second = islands[1];
     if (first.vertices.size() < 3 || second.vertices.size() < 3 || first.edges.size() != second.edges.size()) {
-        return { false, "Bridge Faces needs selected face perimeters with the same edge count." };
+        return OperationResult::failure("Bridge Faces needs selected face perimeters with the same edge count.");
     }
 
     std::vector<ElementId> aligned_second_vertices = aligned_loop_vertices(document, first.vertices, second.vertices);
     if (aligned_second_vertices.size() != first.vertices.size()) {
-        return { false, "Bridge Faces could not align the selected face perimeters." };
+        return OperationResult::failure("Bridge Faces could not align the selected face perimeters.");
     }
 
     std::set<ElementId> selected_face_ids;
@@ -149,12 +149,12 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
             bridge_face_ids,
             false,
             first.texture_transform)) {
-        return { false, "Bridge Faces could not create valid bridge geometry." };
+        return OperationResult::failure("Bridge Faces could not create valid bridge geometry.");
     }
 
     prune_unused_vertices(candidate);
     if (bridge_face_ids.empty() || !every_face_triangulates(candidate)) {
-        return { false, "Bridge Faces would create invalid face geometry." };
+        return OperationResult::failure("Bridge Faces would create invalid face geometry.");
     }
 
     document = std::move(candidate);

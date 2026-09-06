@@ -318,13 +318,13 @@ OperationResult extrude_selected_faces_with_copied_vertices(
     std::string_view unchanged_message)
 {
   if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
-    return {false, std::string(empty_message)};
+    return OperationResult::failure(std::string(empty_message));
   }
 
     const ElementId active_face_id = active_face_or_invalid(selection);
     const std::vector<Face> faces = selected_face_copies(document, selection);
     if (faces.empty()) {
-        return { false, std::string(missing_message) };
+        return OperationResult::failure(std::string(missing_message));
     }
 
     std::map<std::pair<ElementId, ElementId>, int> selected_edge_counts;
@@ -390,7 +390,7 @@ OperationResult extrude_selected_faces_with_copied_vertices(
     }
 
     if (!changed) {
-        return { false, std::string(unchanged_message) };
+        return OperationResult::failure(std::string(unchanged_message));
     }
 
     for (const Face& original_face : faces) {
@@ -465,12 +465,12 @@ OperationResult extrude_selected_edges_with_copied_vertices(
     std::string_view unchanged_message)
 {
   if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
-    return {false, std::string(empty_message)};
+    return OperationResult::failure(std::string(empty_message));
   }
 
     const std::vector<Edge> edges = selected_valid_edges(document, selection);
     if (edges.empty()) {
-        return { false, std::string(missing_message) };
+        return OperationResult::failure(std::string(missing_message));
     }
 
     std::map<ElementId, ElementId> copied_vertices;
@@ -537,7 +537,7 @@ OperationResult extrude_selected_edges_with_copied_vertices(
     }
 
     if (!changed || selected_edges.empty()) {
-        return { false, std::string(unchanged_message) };
+        return OperationResult::failure(std::string(unchanged_message));
     }
 
     prune_invalid_faces(document);
@@ -585,7 +585,7 @@ OperationResult extrude_selected_elements_impl(Document& document, Selection& se
           "No selected edges were extruded.");
     }
 
-    return { false, "Extrude needs a face or edge selection." };
+    return OperationResult::failure("Extrude needs a face or edge selection.");
 }
 
 OperationResult transform_extrude_selected_elements_impl(Document& document, Selection& selection, const Transform3& transform, quader::QVec3 pivot)
@@ -619,7 +619,7 @@ OperationResult transform_extrude_selected_elements_impl(Document& document, Sel
           "No selected edges were extruded.");
     }
 
-    return { false, "Extrude needs a face or edge selection." };
+    return OperationResult::failure("Extrude needs a face or edge selection.");
 }
 
 OperationResult inset_selected_elements_impl(Document& document, Selection& selection, const Transform3& transform, quader::QVec3 pivot)
@@ -653,7 +653,7 @@ OperationResult inset_selected_elements_impl(Document& document, Selection& sele
           "No selected edges were inset.");
     }
 
-    return { false, "Inset needs a face or edge selection." };
+    return OperationResult::failure("Inset needs a face or edge selection.");
 }
 
 } // namespace document_internal

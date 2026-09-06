@@ -6,7 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/tools/base/drawn_plane_tool.hpp"
 
-#include "core/logger.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 
 #include <array>
@@ -18,9 +17,11 @@ namespace quader {
 namespace {
 
 void handle_result(ViewportToolContext &context, std::string_view label,
-                   const ModelingCommandResult &command) {
+                   const ModelingCommandResult &command,
+                   bool announce_failure = false) {
   if (context.ports.command_result != nullptr) {
-    context.ports.command_result->handle_tool_command_result(label, command);
+    context.ports.command_result->handle_tool_command_result(
+        label, command, announce_failure);
   }
 }
 
@@ -144,22 +145,15 @@ finalize_drawn_plane_tool(ViewportToolCommitPort &commit,
                                       : ModelingViewportTool::Mirror);
 }
 
-void log_drawn_plane_commit_blocked(DrawnPlaneToolKind kind, bool dragging) {
-  if (kind == DrawnPlaneToolKind::Cut) {
-    if (dragging) {
-      LOG_ERROR(
-          "Cut commit failed: finish the current drag before committing.");
-    } else {
-      LOG_ERROR("Cut commit failed: place a valid cut line first.");
-    }
-    return;
-  }
-  if (dragging) {
-    LOG_ERROR(
-        "Mirror commit failed: finish the current drag before committing.");
-  } else {
-    LOG_ERROR("Mirror commit failed: place a valid mirror line first.");
-  }
+void report_drawn_plane_commit_blocked(ViewportToolContext &context,
+                                       DrawnPlaneToolKind kind, bool dragging) {
+  const std::string message =
+      dragging ? "Finish the current drag before committing."
+               : kind == DrawnPlaneToolKind::Cut
+                     ? "Place a valid cut line first."
+                     : "Place a valid mirror line first.";
+  handle_result(context, std::string(drawn_plane_tool_name(kind)) + " commit",
+                {.ok = false, .message = message}, true);
 }
 
 ViewportToolResult handle_drawn_plane_lifecycle(
@@ -193,8 +187,9 @@ ViewportToolResult handle_drawn_plane_lifecycle(
                   drawn_plane_captured_point_count(before, kind))) {
         command =
             begin_drawn_plane_point_drag(preview_port, kind, *point_index);
+        // An empty unsuccessful point probe falls through to line/point input.
         handle_result(context, std::string(tool_name) + " point drag begin",
-                      command);
+                      command, !command.message.empty());
       }
     }
     if (!command.ok && command.message.empty() &&
@@ -207,12 +202,12 @@ ViewportToolResult handle_drawn_plane_lifecycle(
           preview_port, kind,
           point_context.make_event_at(pointer.left_click_local, true));
       handle_result(context, std::string(tool_name) + " line drag begin",
-                    command);
+                    command, true);
     } else if (!command.ok && command.message.empty()) {
       command = click_drawn_plane_point(
           preview_port, kind,
           point_context.make_event_at(pointer.left_click_local, false));
-      handle_result(context, std::string(tool_name) + " point", command);
+      handle_result(context, std::string(tool_name) + " point", command, true);
     }
     drag_active = command.ok &&
                   drawn_plane_dragging(preview_port.tool_status(), kind);
@@ -230,25 +225,25 @@ ViewportToolResult handle_drawn_plane_lifecycle(
        drawn_plane_dragging(preview_port.tool_status(), kind))) {
     const ModelingCommandResult command =
         end_drawn_plane_drag(preview_port, kind);
-    handle_result(context, std::string(tool_name) + " drag end", command);
+    handle_result(context, std::string(tool_name) + " drag end", command, true);
     drag_active = false;
   }
   if (kind == DrawnPlaneToolKind::Cut && pointer.mode_cycle_pressed) {
-    handle_result(context, "Cut mode", preview_port.cycle_cut_mode());
+    handle_result(context, "Cut mode", preview_port.cycle_cut_mode(), true);
   }
 
   bool committed = false;
   if (pointer.finalize_pressed) {
     const ModelingToolStatus status = preview_port.tool_status();
     if (drawn_plane_dragging(status, kind)) {
-      log_drawn_plane_commit_blocked(kind, true);
+      report_drawn_plane_commit_blocked(context, kind, true);
     } else if (!drawn_plane_can_preview(status, kind) ||
                !drawn_plane_preview_valid(status, kind)) {
-      log_drawn_plane_commit_blocked(kind, false);
+      report_drawn_plane_commit_blocked(context, kind, false);
     } else {
       const ModelingCommandResult command =
           finalize_drawn_plane_tool(commit_port, kind);
-      handle_result(context, std::string(tool_name) + " commit", command);
+      handle_result(context, std::string(tool_name) + " commit", command, true);
       if (command.ok) {
         finish_drawn_plane_tool(context);
         committed = true;

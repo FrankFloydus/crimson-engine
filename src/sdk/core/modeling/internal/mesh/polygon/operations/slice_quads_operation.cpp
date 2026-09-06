@@ -429,7 +429,7 @@ std::vector<ElementId> generated_face_selection(const Document& document, std::s
 OperationResult slice_selected_quads_impl(Document& document, Selection& selection, int x_slices, int y_slices)
 {
   if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
-    return {false, "Select faces before slicing."};
+    return OperationResult::failure("Select faces before slicing.");
   }
 
     x_slices = normalize_quad_slice_count(x_slices);
@@ -458,27 +458,33 @@ OperationResult slice_selected_quads_impl(Document& document, Selection& selecti
         found_selected_face = true;
         std::optional<SliceFaceFrame> frame = stable_slice_face_frame(document, *face);
         if (!frame.has_value()) {
-            return { false, "Slice Quad could not resolve the selected face plane." };
+            return OperationResult::failure(
+                "Slice Quad could not resolve the selected face plane.");
         }
         const std::size_t face_segment_count = append_grid_segments(*frame, x_slices, y_slices, targets, segments);
         if (face_segment_count == 0U) {
-            return { false, "Slice Quad did not create any face cuts." };
+            return OperationResult::failure(
+                "Slice Quad did not create any face cuts.");
         }
         source_frames.push_back(std::move(*frame));
     }
 
     if (!found_selected_face || targets.size() < 2U || segments.empty()) {
-        return { false, "Select faces before slicing." };
+        return OperationResult::failure("Select faces before slicing.");
     }
 
     KnifeStrokeCandidate candidate = build_knife_stroke_candidate(document, targets, segments);
     if (!candidate.changed) {
-        return { false, candidate.message.empty() ? std::string("Slice Quad could not split the selected faces.") : candidate.message };
+        return OperationResult::failure(
+            candidate.message.empty()
+                ? std::string("Slice Quad could not split the selected faces.")
+                : candidate.message);
     }
 
     std::vector<ElementId> generated_face_ids = generated_face_selection(candidate.document, source_frames);
     if (generated_face_ids.empty()) {
-        return { false, "Slice Quad could not resolve the generated face selection." };
+        return OperationResult::failure(
+            "Slice Quad could not resolve the generated face selection.");
     }
 
     document = std::move(candidate.document);

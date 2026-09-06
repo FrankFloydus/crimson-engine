@@ -46,17 +46,18 @@ public:
 OperationResult SnapVerticesToActiveOperation::apply(Document& document, Selection& selection) const
 {
   if (selection.mode != SelectionMode::Vertex) {
-    return {false, "Snap to Vertex needs vertex selection mode."};
+    return OperationResult::failure("Snap to Vertex needs vertex selection mode.");
   }
   if (!selection.has_active || selection.active_kind != ElementKind::Vertex ||
       selection.active_vertex == kInvalidElementId ||
       !contains_id(selection.vertices, selection.active_vertex)) {
-    return {false, "Snap to Vertex needs an active selected vertex."};
+    return OperationResult::failure(
+        "Snap to Vertex needs an active selected vertex.");
   }
 
     const Vertex* active_vertex = find_vertex(document, selection.active_vertex);
     if (active_vertex == nullptr) {
-        return { false, "Active vertex was not found." };
+        return OperationResult::failure("Active vertex was not found.");
     }
 
     const quader::QVec3 target_position = active_vertex->position;
@@ -85,7 +86,7 @@ OperationResult SnapVerticesToActiveOperation::apply(Document& document, Selecti
     }
 
     if (!has_other_vertex) {
-        return { false, "Select at least one other vertex to snap." };
+        return OperationResult::failure("Select at least one other vertex to snap.");
     }
     if (!changed) {
         return { false, "Selected vertices are already at the active vertex." };

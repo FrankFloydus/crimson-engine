@@ -121,8 +121,10 @@ class ViewportToolCommandResultPort {
 public:
   virtual ~ViewportToolCommandResultPort() = default;
 
+  /// Announce only discrete user actions; hover and continuous previews are silent.
   virtual void handle_tool_command_result(std::string_view label,
-                                          const ModelingCommandResult &result) = 0;
+                                          const ModelingCommandResult &result,
+                                          bool announce_failure = false) = 0;
   virtual void mark_overlay_dirty() = 0;
 };
 
@@ -148,7 +150,7 @@ struct ViewportModelingToolPortCallbacks {
   std::function<void(ViewportSelectionMode)> set_selection_mode;
   std::function<void(ModelingSelectionMode)> set_app_selection_mode;
   std::function<MaterialReference()> active_material;
-  std::function<void(std::string_view, const ModelingCommandResult &)>
+  std::function<void(std::string_view, const ModelingCommandResult &, bool)>
       handle_tool_command_result;
 };
 
@@ -229,7 +231,8 @@ public:
   void set_app_selection_mode(ModelingSelectionMode mode) override;
 
   void handle_tool_command_result(std::string_view label,
-                                  const ModelingCommandResult &result) override;
+                                  const ModelingCommandResult &result,
+                                  bool announce_failure = false) override;
   void mark_overlay_dirty() override;
 
 private:

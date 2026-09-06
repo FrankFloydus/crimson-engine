@@ -149,17 +149,17 @@ std::vector<std::vector<Edge>> connected_edge_components(std::vector<Edge> edges
 OperationResult FillHoleFromEdgesOperation::apply(Document& document, Selection& selection) const
 {
   if (selection.mode != SelectionMode::Edge || selection.edges.size() < 3) {
-    return {false, "Fill Hole needs at least three selected edges."};
+    return OperationResult::failure("Fill Hole needs at least three selected edges.");
   }
 
     const std::vector<Edge> selected_edges = selected_valid_edges(document, selection);
     if (selected_edges.size() < 3) {
-        return { false, "Fill Hole needs at least three valid selected edges." };
+        return OperationResult::failure("Fill Hole needs at least three valid selected edges.");
     }
 
     const std::vector<Edge> boundary_edges = selected_boundary_edges(document, selected_edges);
     if (boundary_edges.size() < 3) {
-        return { false, "Fill Hole needs at least three selected open boundary edges." };
+        return OperationResult::failure("Fill Hole needs at least three selected open boundary edges.");
     }
 
     std::vector<std::vector<Edge>> fill_components =
@@ -206,10 +206,10 @@ OperationResult FillHoleFromEdgesOperation::apply(Document& document, Selection&
         filled_faces.push_back(fill_face_id);
     }
     if (!found_closed_loop) {
-        return { false, "Fill Hole needs selected open boundary edges forming at least one closed loop." };
+        return OperationResult::failure("Fill Hole needs selected open boundary edges forming at least one closed loop.");
     }
     if (filled_faces.empty()) {
-        return { false, "Fill Hole would create invalid face geometry." };
+        return OperationResult::failure("Fill Hole would create invalid face geometry.");
     }
 
     document = std::move(candidate);

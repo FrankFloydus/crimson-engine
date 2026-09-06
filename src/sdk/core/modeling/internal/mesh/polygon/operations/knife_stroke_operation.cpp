@@ -61,7 +61,7 @@ OperationResult KnifeStrokeOperation::apply(Document& document, Selection& selec
     QDR_PROFILE_SCOPE("qdr_document.KnifeStrokeOperation.apply");
     KnifeStrokeCandidate candidate = build_knife_stroke_candidate(document, points_, segments_);
     if (!candidate.changed) {
-        return { false, candidate.message.empty() ? std::string("Knife stroke could not be applied.") : candidate.message };
+        return OperationResult::failure(candidate.message.empty() ? std::string("Knife stroke could not be applied.") : candidate.message);
     }
 
     document = std::move(candidate.document);

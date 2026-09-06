@@ -11,6 +11,8 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <algorithm>
+#include <array>
+#include <unordered_set>
 #include <utility>
 
 namespace quader {
@@ -36,6 +38,64 @@ void strip_mesh_selection_wires(ViewportOverlayFrame &frame) {
            (role == ViewportOverlayStyleRole::LayerDefault &&
             (line.layer == ViewportOverlayLayer::SourceWire ||
              line.layer == ViewportOverlayLayer::SelectedEdge));
+  });
+}
+
+struct ComponentWireKey {
+  std::array<int, 3u> element;
+  std::array<float, 3u> start;
+  std::array<float, 3u> end;
+
+  bool operator==(const ComponentWireKey &) const = default;
+};
+
+struct ComponentWireKeyHash {
+  std::size_t operator()(const ComponentWireKey &key) const {
+    return static_cast<std::size_t>(RenderSignatureBuilder()
+        .add_value(static_cast<std::uint32_t>(key.element[0]))
+        .add_value(static_cast<std::uint32_t>(key.element[1]))
+        .add_value(static_cast<std::uint32_t>(key.element[2]))
+        .value());
+  }
+};
+
+ComponentWireKey component_wire_key(const ViewportOverlayLine &line) {
+  ComponentWireKey key{
+      {line.element.object_id,
+       std::min(line.element.edge_a, line.element.edge_b),
+       std::max(line.element.edge_a, line.element.edge_b)},
+      {line.start.x, line.start.y, line.start.z},
+      {line.end.x, line.end.y, line.end.z},
+  };
+  if (key.end < key.start) std::swap(key.start, key.end);
+  return key;
+}
+
+void strip_component_source_wires_under_selection(ViewportOverlayFrame &frame) {
+  const auto has_component_edge = [](const ViewportOverlayLine &line) {
+    return line.source == ViewportOverlaySource::ComponentSelection &&
+           line.element.object_id > 0 && line.element.edge_a > 0 &&
+           line.element.edge_b > 0 &&
+           line.element.edge_a != line.element.edge_b;
+  };
+  std::unordered_set<ComponentWireKey, ComponentWireKeyHash> selected_edges;
+  for (const ViewportOverlayLine &line : frame.lines) {
+    if (has_component_edge(line) && (line.color >> 24u) == 255u &&
+        (line.layer == ViewportOverlayLayer::SelectedEdge ||
+         line.layer == ViewportOverlayLayer::SelectedFaceEdge)) {
+      selected_edges.insert(component_wire_key(line));
+    }
+  }
+  if (selected_edges.empty()) return;
+
+  // Both component wires use the same depth-tested ribbon. Drawing cyan
+  // beneath an opaque yellow selection contaminates its antialiased pixels,
+  // especially at one pixel wide. Keep the complete semantic source frame,
+  // but submit only the selected ribbon for this exact edge occurrence.
+  std::erase_if(frame.lines, [&](const ViewportOverlayLine &line) {
+    return line.layer == ViewportOverlayLayer::SourceWire &&
+           has_component_edge(line) &&
+           selected_edges.contains(component_wire_key(line));
   });
 }
 
@@ -144,6 +204,7 @@ ViewportOverlayFrame build_persistent_frame(
       },
       scene_style_range);
   if (uses_mesh_outlines(request)) strip_mesh_selection_wires(frame);
+  strip_component_source_wires_under_selection(frame);
   return frame;
 }
 

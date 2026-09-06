@@ -46,7 +46,7 @@ public:
 OperationResult MergeVerticesToCenterOperation::apply(Document& document, Selection& selection) const
 {
   if (selection.mode != SelectionMode::Vertex) {
-    return {false, "Merge needs vertex selection mode."};
+    return OperationResult::failure("Merge needs vertex selection mode.");
   }
 
     std::vector<ElementId> selected_vertices;
@@ -68,7 +68,7 @@ OperationResult MergeVerticesToCenterOperation::apply(Document& document, Select
     }
 
     if (selected_vertices.size() < 2) {
-        return { false, "Select at least two vertices to merge." };
+        return OperationResult::failure("Select at least two vertices to merge.");
     }
 
     center = center / static_cast<float>(selected_vertices.size());
@@ -89,7 +89,7 @@ OperationResult MergeVerticesToCenterOperation::apply(Document& document, Select
         }
     }
     if (merge_vertex_ids.empty()) {
-        return { false, "Select at least one other vertex to merge." };
+        return OperationResult::failure("Select at least one other vertex to merge.");
     }
 
     Document candidate;
@@ -99,7 +99,7 @@ OperationResult MergeVerticesToCenterOperation::apply(Document& document, Select
     }
 
     if (find_vertex(candidate, survivor_vertex_id) == nullptr) {
-        return { false, "Merge would remove the center vertex." };
+        return OperationResult::failure("Merge would remove the center vertex.");
     }
 
     document = std::move(candidate);

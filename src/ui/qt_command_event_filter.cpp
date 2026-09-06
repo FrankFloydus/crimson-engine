@@ -427,15 +427,26 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
             spin->interpretText();
           }
         }
+        QuaderEditorApi *const command_editor = editor_;
+        const std::uint64_t status_revision =
+            command_editor->commands().last_status_revision();
         const QuaderApiVoidResult result = [&]() {
           QDR_PROFILE_SCOPE("Qt command execute tool-settings lifecycle");
-          return editor_->commands().execute_native_tool_settings_intent(
+          return command_editor->commands().execute_native_tool_settings_intent(
               tool_settings_dispatch.intent);
         }();
         if (!result.ok) {
           LOG_ERROR("Qt Tool Settings lifecycle failed: {}",
                     result.message.empty() ? "Command failed."
                                            : result.message);
+          if (editor_ == command_editor &&
+              command_editor->commands().last_status_revision() ==
+                  status_revision) {
+            (void)command_editor->ui().notify(
+                {.level = QuaderNotificationLevel::Error,
+                 .message = result.message.empty() ? "Command failed."
+                                                   : result.message});
+          }
         }
         event->accept();
         return true;

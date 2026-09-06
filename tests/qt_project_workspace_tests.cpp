@@ -8,17 +8,21 @@
 
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
 #include "core/localization_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "render/render_system.hpp"
+#include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_main_menu.hpp"
+#include "ui/qt_operation_input_hints.hpp"
 #include "ui/qt_project_home_page.hpp"
 #include "ui/qt_scene_workspace.hpp"
 #include "ui/qt_selection_toolbar.hpp"
 #include "ui/qt_snapping_toolbar.hpp"
+#include "ui/qt_status_message.hpp"
 #include "ui/qt_texture_toolbar.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_tool_toolbar.hpp"
@@ -62,6 +66,7 @@
 #include <QScreen>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QStatusBar>
 #include <QStyleOption>
 #include <QTableView>
 #include <QToolBar>
@@ -1745,6 +1750,251 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
+     CommandErrorsRemainVisibleAndAnnounceOncePerFailureUntilSuccess) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const std::filesystem::path isolated_profile =
+      std::filesystem::temp_directory_path() /
+      ("quader-ui-system-status-errors-" +
+       std::to_string(std::chrono::steady_clock::now()
+                          .time_since_epoch()
+                          .count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+
+  int argc = 1;
+  char application_name[] = "quader-status-error-ui-system-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  const std::filesystem::path resource_root =
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const std::filesystem::path project_root =
+      scoped_profile.profile() / "Status Error Project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ASSERT_NE(ui.main_window(), nullptr);
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+  const auto created_project = editor.project().create(project_root);
+  ASSERT_TRUE(created_project.ok()) << created_project.error_message();
+  ASSERT_NE(project.active_scene(), nullptr);
+  quader::SceneSession &scene = *project.active_scene()->session;
+  ui.install_runtime_hooks(
+      editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(),
+      quader::kInvalidAssetId);
+
+  auto *message = dynamic_cast<quader::QtStatusMessage *>(
+      ui.main_window()->findChild<QLabel *>(QStringLiteral("statusMessage")));
+  auto *hints = dynamic_cast<quader::QtOperationInputHints *>(
+      ui.main_window()->findChild<QWidget *>(
+          QStringLiteral("operationInputHints")));
+  ASSERT_NE(message, nullptr);
+  ASSERT_NE(hints, nullptr);
+  int announcements = 0;
+  message->set_error_sound_callback([&]() { ++announcements; });
+  const QColor ordinary_background = message->palette().color(QPalette::Window);
+  const QColor ordinary_text = message->palette().color(QPalette::WindowText);
+
+  // Both faces are valid, but dissolving their shared boundary would enclose
+  // the rectangular opening and require a polygon with two boundary loops.
+  quader_poly::Document document;
+  const std::array vertices{
+      quader_poly::add_vertex(document, {0.0f, 0.0f, 0.0f}),
+      quader_poly::add_vertex(document, {3.0f, 0.0f, 0.0f}),
+      quader_poly::add_vertex(document, {3.0f, 2.0f, 0.0f}),
+      quader_poly::add_vertex(document, {2.0f, 2.0f, 0.0f}),
+      quader_poly::add_vertex(document, {2.0f, 3.0f, 0.0f}),
+      quader_poly::add_vertex(document, {3.0f, 3.0f, 0.0f}),
+      quader_poly::add_vertex(document, {3.0f, 8.0f, 0.0f}),
+      quader_poly::add_vertex(document, {0.0f, 8.0f, 0.0f}),
+      quader_poly::add_vertex(document, {6.0f, 0.0f, 0.0f}),
+      quader_poly::add_vertex(document, {6.0f, 8.0f, 0.0f}),
+  };
+  const auto notched_face = quader_poly::add_face(
+      document, std::array{vertices[0], vertices[1], vertices[2], vertices[3],
+                           vertices[4], vertices[5], vertices[6], vertices[7]});
+  const auto neighboring_face = quader_poly::add_face(
+      document, std::array{vertices[1], vertices[8], vertices[9], vertices[6],
+                           vertices[5], vertices[2]});
+  ASSERT_NE(notched_face, quader_poly::kInvalidElementId);
+  ASSERT_NE(neighboring_face, quader_poly::kInvalidElementId);
+  const auto mesh = editor.modeling().create_mesh(
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(
+          std::move(document)),
+      {.name = "Faces surrounding an opening"});
+  ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+  ASSERT_TRUE(editor.selection()
+                  .select_faces(
+                      mesh.value(),
+                      {static_cast<quader::QuaderElementId>(notched_face),
+                       static_cast<quader::QuaderElementId>(neighboring_face)})
+                  .ok());
+  ASSERT_EQ(editor.selection().summary().selected_face_count, 2u);
+
+  const auto combine = editor.commands().descriptor(
+      quader::quader_command::kModelingCombineFaces);
+  ASSERT_TRUE(combine.has_value());
+  ASSERT_TRUE(combine->enabled);
+  const auto invalid_geometry = editor.commands().execute(
+      quader::quader_command::kModelingCombineFaces);
+  ASSERT_FALSE(invalid_geometry.ok());
+  EXPECT_EQ(invalid_geometry.error_message(),
+            "Combine Faces would create invalid face geometry.");
+  EXPECT_FALSE(invalid_geometry.changed());
+  EXPECT_EQ(editor.selection().summary().selected_face_count, 2u);
+  ui.refresh({}, {});
+  EXPECT_TRUE(message->is_error());
+  EXPECT_FALSE(message->isHidden());
+  EXPECT_EQ(message->text(),
+            QString::fromStdString(invalid_geometry.error_message()));
+  EXPECT_EQ(message->palette().color(QPalette::Window), QColor("#B3261E"));
+  EXPECT_EQ(message->palette().color(QPalette::WindowText), QColor(Qt::white));
+  EXPECT_EQ(announcements, 1);
+  ui.refresh({}, {});
+  EXPECT_EQ(announcements, 1);
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kViewportToggleGrid)
+                  .ok());
+  ui.refresh({}, {});
+  EXPECT_FALSE(message->is_error());
+  announcements = 0;
+
+  ASSERT_TRUE(editor.tools()
+                  .activate(quader::ViewportToolId::CreatePrimitive)
+                  .ok());
+  ui.refresh({}, {});
+  ASSERT_FALSE(hints->hints().empty());
+  EXPECT_FALSE(hints->isHidden());
+  EXPECT_EQ(announcements, 0);
+
+  const auto failed = editor.commands().execute(
+      quader::quader_command::kModelingCombineFaces);
+  ASSERT_FALSE(failed.ok());
+  EXPECT_EQ(failed.error_message(), "Command is disabled.");
+  EXPECT_FALSE(failed.changed());
+  EXPECT_EQ(editor.selection().summary().selected_face_count, 2u);
+  ui.refresh({}, {});
+  EXPECT_TRUE(message->is_error());
+  EXPECT_FALSE(message->isHidden());
+  EXPECT_TRUE(message->autoFillBackground());
+  EXPECT_EQ(message->palette().color(QPalette::Window), QColor("#B3261E"));
+  EXPECT_EQ(message->palette().color(QPalette::WindowText), QColor(Qt::white));
+  EXPECT_EQ(message->text(), QString::fromStdString(failed.error_message()));
+  EXPECT_TRUE(hints->isHidden());
+  EXPECT_EQ(announcements, 1);
+
+  const auto hint_revision = hints->projection_revision();
+  for (int frame = 0; frame < 100; ++frame) {
+    ui.refresh({}, {});
+  }
+  EXPECT_EQ(announcements, 1);
+  EXPECT_EQ(hints->projection_revision(), hint_revision);
+  EXPECT_FALSE(message->isHidden());
+
+  ASSERT_TRUE(editor.preferences().set_locale("it-IT").ok());
+  ui.refresh({}, {});
+  EXPECT_TRUE(message->is_error());
+  EXPECT_FALSE(message->isHidden());
+  EXPECT_TRUE(hints->isHidden());
+  EXPECT_EQ(announcements, 1)
+      << "localization must not announce an already presented error";
+
+  const auto repeated = editor.commands().execute(
+      quader::quader_command::kModelingCombineFaces);
+  ASSERT_FALSE(repeated.ok());
+  EXPECT_EQ(repeated.error_message(), failed.error_message());
+  ui.refresh({}, {});
+  EXPECT_EQ(announcements, 2)
+      << "a new attempt must announce even when its error text is unchanged";
+
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kViewportToggleGrid)
+                  .ok());
+  ui.refresh({}, {});
+  EXPECT_FALSE(message->is_error());
+  EXPECT_FALSE(message->autoFillBackground());
+  EXPECT_EQ(message->palette().color(QPalette::Window), ordinary_background);
+  EXPECT_EQ(message->palette().color(QPalette::WindowText), ordinary_text);
+  EXPECT_FALSE(hints->hints().empty());
+  EXPECT_FALSE(hints->isHidden());
+  EXPECT_TRUE(message->isHidden());
+  EXPECT_EQ(announcements, 2);
+
+  const quader::QuaderNotification notification{
+      .level = quader::QuaderNotificationLevel::Error,
+      .message = "Unable to finish the requested operation.",
+  };
+  ASSERT_TRUE(editor.ui().notify(notification).ok());
+  EXPECT_TRUE(message->is_error());
+  EXPECT_FALSE(message->isHidden());
+  EXPECT_EQ(message->text(), QString::fromStdString(notification.message));
+  EXPECT_EQ(message->palette().color(QPalette::Window), QColor("#B3261E"));
+  EXPECT_EQ(message->palette().color(QPalette::WindowText), QColor(Qt::white));
+  EXPECT_TRUE(hints->isHidden());
+  EXPECT_EQ(announcements, 3);
+
+  ui.refresh({}, {});
+  ASSERT_TRUE(editor.preferences().set_locale("en-US").ok());
+  ui.refresh({}, {});
+  EXPECT_TRUE(message->is_error());
+  EXPECT_FALSE(message->isHidden());
+  EXPECT_EQ(message->text(), QString::fromStdString(notification.message));
+  EXPECT_EQ(announcements, 3)
+      << "refresh and localization must retain a direct error silently";
+
+  ASSERT_TRUE(editor.ui().notify(notification).ok());
+  ui.refresh({}, {});
+  EXPECT_EQ(announcements, 4);
+  ASSERT_TRUE(editor.ui()
+                  .notify({.level = quader::QuaderNotificationLevel::Warning,
+                           .message = "Some optional items were skipped."})
+                  .ok());
+  ui.refresh({}, {});
+  EXPECT_FALSE(message->is_error());
+  EXPECT_FALSE(message->autoFillBackground());
+  EXPECT_EQ(message->palette().color(QPalette::Window), ordinary_background);
+  EXPECT_EQ(message->palette().color(QPalette::WindowText), ordinary_text);
+  EXPECT_EQ(announcements, 4);
+
+  ASSERT_TRUE(editor.ui().notify(notification).ok());
+  EXPECT_EQ(announcements, 5);
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kViewportToggleGrid)
+                  .ok());
+  ui.refresh({}, {});
+  EXPECT_FALSE(message->is_error());
+  EXPECT_FALSE(message->autoFillBackground());
+  EXPECT_FALSE(hints->isHidden());
+  EXPECT_EQ(announcements, 5)
+      << "a subsequent successful command dismisses a direct error silently";
+  ASSERT_TRUE(editor.ui().notify(notification).ok());
+  EXPECT_EQ(announcements, 6);
+  const auto command_revision = editor.commands().last_status_revision();
+  auto *angle = ui.main_window()->findChild<QComboBox *>(
+      QStringLiteral("snappingAngleCombo"));
+  ASSERT_NE(angle, nullptr);
+  ASSERT_GT(angle->count(), 1);
+  const int next_angle = (angle->currentIndex() + 1) % angle->count();
+  angle->setCurrentIndex(next_angle);
+  ASSERT_TRUE(QMetaObject::invokeMethod(angle, "activated", Qt::DirectConnection,
+                                       Q_ARG(int, next_angle)));
+  EXPECT_EQ(editor.commands().last_status_revision(), command_revision);
+  ui.refresh({}, {});
+  EXPECT_FALSE(message->is_error())
+      << "a successful direct edit with an empty result must clear the error";
+  EXPECT_TRUE(message->text().isEmpty());
+  EXPECT_FALSE(hints->isHidden());
+  EXPECT_EQ(announcements, 6);
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
      InterfaceScaleAndVSyncFlowThroughTheRealUiSystemAndPublicPreferencesHooks) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   const std::filesystem::path isolated_profile =
@@ -1786,6 +2036,18 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_NE(scale_style, nullptr);
   EXPECT_FLOAT_EQ(scale_style->metrics().factor(), 1.0F);
 
+  QStatusBar *status_bar = ui.main_window()->statusBar();
+  const auto expect_status_padding = [&](int padding) {
+    const QMargins margins = status_bar->contentsMargins();
+    EXPECT_EQ(margins.top() + margins.bottom(), padding);
+    const int padded_height = status_bar->sizeHint().height();
+    status_bar->setContentsMargins(0, 0, 0, 0);
+    const int unpadded_height = status_bar->sizeHint().height();
+    status_bar->setContentsMargins(margins);
+    EXPECT_EQ(padded_height, unpadded_height + padding);
+  };
+  expect_status_padding(5);
+
   QAction *settings_action = ui.main_window()->findChild<QAction *>(
       QStringLiteral("action_settings"));
   QWidget *settings_dialog = ui.main_window()->findChild<QWidget *>(
@@ -1809,6 +2071,7 @@ TEST(QtProjectWorkspaceTests,
   scale->setValue(150);
   QCoreApplication::processEvents();
   EXPECT_FLOAT_EQ(scale_style->metrics().factor(), 1.5F);
+  expect_status_padding(8);
   EXPECT_DOUBLE_EQ(editor.preferences().interface_scale(), 1.0);
   EXPECT_TRUE(apply->isEnabled());
 
@@ -1818,6 +2081,8 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_TRUE(committed.changed());
   QCoreApplication::processEvents();
   EXPECT_FLOAT_EQ(scale_style->metrics().factor(), 2.0F);
+  expect_status_padding(10);
+  const QSize committed_status_size = status_bar->sizeHint();
   EXPECT_DOUBLE_EQ(editor.preferences().interface_scale(), 2.0);
   EXPECT_EQ(scale->value(), 200);
   EXPECT_FALSE(apply->isEnabled());
@@ -1849,6 +2114,8 @@ TEST(QtProjectWorkspaceTests,
             no_op_write_time);
   EXPECT_FALSE(timestamp_error);
   EXPECT_FLOAT_EQ(scale_style->metrics().factor(), 2.0F);
+  expect_status_padding(10);
+  EXPECT_EQ(status_bar->sizeHint(), committed_status_size);
   EXPECT_EQ(scale->value(), 200);
   EXPECT_FALSE(apply->isEnabled());
 

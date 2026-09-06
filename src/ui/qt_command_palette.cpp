@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_command_palette.hpp"
+#include "ui/qt_status_message.hpp"
 
 #include "api/quader_commands_api.hpp"
 #include "core/localization_service.hpp"
@@ -208,7 +209,7 @@ struct QtCommandPalette::Impl final {
   ExecutionObserver execution_observer;
   QLineEdit *search = nullptr;
   QTreeWidget *results = nullptr;
-  QLabel *status = nullptr;
+  QtStatusMessage *status = nullptr;
   std::vector<CommandPaletteCandidate> snapshot;
   std::vector<std::string> recent_command_ids;
   bool open_pending = false;
@@ -250,7 +251,7 @@ struct QtCommandPalette::Impl final {
     results->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     layout->addWidget(results, 1);
 
-    status = new QLabel(&owner);
+    status = new QtStatusMessage(&owner);
     status->setObjectName(QStringLiteral("commandPalette.status"));
     status->setWordWrap(true);
     status->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -447,10 +448,10 @@ struct QtCommandPalette::Impl final {
       results->setUpdatesEnabled(true);
       select_first_enabled();
       if (results->topLevelItemCount() == 0) {
-        status->setText(qtext(
+        status->present(qtext(
             localization, "ui.command_palette.empty_recents",
             "Type to search commands. Recently used commands will appear "
-            "here."));
+            "here."), false);
       } else {
         refresh_status();
       }
@@ -488,8 +489,8 @@ struct QtCommandPalette::Impl final {
     results->setUpdatesEnabled(true);
     select_first_enabled();
     if (matches.empty()) {
-      status->setText(qtext(localization, "ui.command_palette.no_matches",
-                            "No matching commands"));
+      status->present(qtext(localization, "ui.command_palette.no_matches",
+                            "No matching commands"), false);
     } else {
       refresh_status();
     }
@@ -499,16 +500,16 @@ struct QtCommandPalette::Impl final {
     const QTreeWidgetItem *item = results->currentItem();
     if (item == nullptr) {
       if (results->topLevelItemCount() > 0) {
-        status->setText(qtext(localization,
+        status->present(qtext(localization,
                               "ui.command_palette.no_available_matches",
-                              "No matching command is currently available"));
+                              "No matching command is currently available"), false);
       }
       return;
     }
 
     const QString command_id = item->data(0, kCommandIdRole).toString();
     if (item->data(0, kCommandEnabledRole).toBool()) {
-      status->setText(command_id);
+      status->present(command_id, false);
       return;
     }
     QString reason = item->data(0, kDisabledReasonRole).toString();
@@ -516,7 +517,7 @@ struct QtCommandPalette::Impl final {
       reason = qtext(localization, "ui.command_palette.unavailable",
                      "Unavailable in the current context");
     }
-    status->setText(command_id + QStringLiteral(" — ") + reason);
+    status->present(command_id + QStringLiteral(" — ") + reason, false);
   }
 
   void move_current(int delta) {
@@ -588,7 +589,8 @@ struct QtCommandPalette::Impl final {
         message.append(QStringLiteral(": "));
         message.append(QString::fromStdString(result.error_message()));
       }
-      status->setText(message);
+      // Command status owns the one failure announcement in the main window.
+      status->present(message, true);
     });
   }
 

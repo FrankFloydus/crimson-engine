@@ -46,20 +46,20 @@ public:
 OperationResult MergeVerticesToActiveOperation::apply(Document& document, Selection& selection) const
 {
   if (selection.mode != SelectionMode::Vertex) {
-    return {false, "Merge needs vertex selection mode."};
+    return OperationResult::failure("Merge needs vertex selection mode.");
   }
     if (selection.vertices.size() < 2) {
-        return { false, "Select at least two vertices to merge." };
+        return OperationResult::failure("Select at least two vertices to merge.");
     }
     if (!selection.has_active || selection.active_kind != ElementKind::Vertex ||
         selection.active_vertex == kInvalidElementId ||
         !contains_id(selection.vertices, selection.active_vertex)) {
-      return {false, "Merge needs an active selected vertex."};
+      return OperationResult::failure("Merge needs an active selected vertex.");
     }
 
     const ElementId active_vertex_id = selection.active_vertex;
     if (find_vertex(document, active_vertex_id) == nullptr) {
-        return { false, "Active vertex was not found." };
+        return OperationResult::failure("Active vertex was not found.");
     }
 
     std::set<ElementId> merge_vertex_ids;
@@ -71,7 +71,7 @@ OperationResult MergeVerticesToActiveOperation::apply(Document& document, Select
         merge_vertex_ids.insert(vertex_id);
     }
     if (merge_vertex_ids.empty()) {
-        return { false, "Select at least one other vertex to merge." };
+        return OperationResult::failure("Select at least one other vertex to merge.");
     }
 
 #if defined(QUADER_POLY_USE_OPENMESH)
@@ -80,7 +80,7 @@ OperationResult MergeVerticesToActiveOperation::apply(Document& document, Select
     Document candidate;
     const Vertex* active_vertex = find_vertex(document, active_vertex_id);
     if (active_vertex == nullptr) {
-        return { false, "Active vertex was not found." };
+        return OperationResult::failure("Active vertex was not found.");
     }
     const OperationResult candidate_result = build_vertex_merge_candidate(document, candidate, merge_vertex_ids, active_vertex_id, active_vertex->position);
     if (!candidate_result.changed) {
@@ -88,7 +88,7 @@ OperationResult MergeVerticesToActiveOperation::apply(Document& document, Select
     }
 
     if (find_vertex(candidate, active_vertex_id) == nullptr) {
-        return { false, "Merge would remove the active vertex." };
+        return OperationResult::failure("Merge would remove the active vertex.");
     }
     document = std::move(candidate);
     prune_unused_vertices(document);

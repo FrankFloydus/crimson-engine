@@ -53,7 +53,7 @@ namespace {
 OperationResult recalculate_selected_face_normals_impl(Document& document, const Selection& selection, bool outside)
 {
     if (selection.faces.empty()) {
-        return { false, "No modeler faces are selected." };
+        return OperationResult::failure("No modeler faces are selected.");
     }
 
     Document candidate = document;
@@ -85,13 +85,14 @@ OperationResult recalculate_selected_face_normals_impl(Document& document, const
     }
 
     if (!found_face) {
-        return { false, "No selected faces were found." };
+        return OperationResult::failure("No selected faces were found.");
     }
     if (!changed) {
         return { false, outside ? "Selected face normals already point outside." : "Selected face normals already point inside." };
     }
     if (!every_face_triangulates(candidate)) {
-        return { false, "Recalculate normals would create invalid face geometry." };
+        return OperationResult::failure(
+            "Recalculate normals would create invalid face geometry.");
     }
 
     document = std::move(candidate);

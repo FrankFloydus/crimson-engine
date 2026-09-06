@@ -42,6 +42,17 @@ struct OperationResult {
   OperationElementDelta created;
   OperationElementDelta deleted;
   OperationElementDelta affected;
+  // An unchanged operation can still succeed; rejected operations explicitly
+  // carry failure so adapters never infer severity from message text or changes.
+  bool success = true;
+
+  /// Creates a rejected operation without authored changes or element deltas.
+  [[nodiscard]] static OperationResult failure(std::string message) {
+    OperationResult result;
+    result.message = std::move(message);
+    result.success = false;
+    return result;
+  }
 };
 
 /**
@@ -147,6 +158,15 @@ struct ExtractFacesResult {
   OperationElementDelta created;
   OperationElementDelta deleted;
   OperationElementDelta affected;
+  bool success = true;
+
+  /// Creates a rejected extraction without authored changes or extracted data.
+  [[nodiscard]] static ExtractFacesResult failure(std::string message) {
+    ExtractFacesResult result;
+    result.message = std::move(message);
+    result.success = false;
+    return result;
+  }
 };
 
 void ensure_face_uvs(Document &document);

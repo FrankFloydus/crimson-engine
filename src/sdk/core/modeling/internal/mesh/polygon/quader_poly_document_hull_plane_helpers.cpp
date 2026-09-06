@@ -828,7 +828,7 @@ OperationResult build_topology_vertex_merge_candidate(
     candidate = document;
     Vertex* survivor_vertex = find_vertex(candidate, survivor_vertex_id);
     if (survivor_vertex == nullptr) {
-        return { false, "Merge would remove the survivor vertex." };
+        return OperationResult::failure("Merge would remove the survivor vertex.");
     }
 
     const bool survivor_vertex_moved =
@@ -910,13 +910,13 @@ OperationResult build_topology_vertex_merge_candidate(
 
     restore_source_face_orientation(document, candidate);
     if (find_vertex(candidate, survivor_vertex_id) == nullptr) {
-        return { false, "Merge would remove the survivor vertex." };
+        return OperationResult::failure("Merge would remove the survivor vertex.");
     }
     if (!every_face_triangulates(candidate)) {
-        return { false, "Merge would create a face that cannot be triangulated." };
+        return OperationResult::failure("Merge would create a face that cannot be triangulated.");
     }
     if (document_has_unreferenced_vertices(candidate)) {
-        return { false, "Merge would create a floating vertex." };
+        return OperationResult::failure("Merge would create a floating vertex.");
     }
 
     return { true, {} };

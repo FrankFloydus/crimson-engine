@@ -46,7 +46,7 @@ public:
 OperationResult DissolveEdgesOperation::apply(Document& document, Selection& selection) const
 {
   if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
-    return {false, "Select one or more edges to dissolve."};
+    return OperationResult::failure("Select one or more edges to dissolve.");
   }
 
     Document candidate = document;
@@ -70,7 +70,7 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
         }
 
         if (adjacent_faces.size() != 2) {
-            return { false, "Dissolve needs selected interior edges with exactly two adjacent faces." };
+            return OperationResult::failure("Dissolve needs selected interior edges with exactly two adjacent faces.");
         }
 
         const std::size_t first_index = adjacent_faces[0];
@@ -79,14 +79,14 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
         Face second_face = candidate.faces[second_index];
         const std::optional<std::pair<ElementId, ElementId>> first_edge = oriented_edge_in_face(first_face, edge);
         if (!first_edge.has_value()) {
-            return { false, "Selected edge was not found." };
+            return OperationResult::failure("Selected edge was not found.");
         }
 
         const ElementId from_id = first_edge->first;
         const ElementId to_id = first_edge->second;
         if (!directed_face_edge_index(second_face, to_id, from_id).has_value()) {
             if (!directed_face_edge_index(second_face, from_id, to_id).has_value()) {
-                return { false, "Selected edge adjacency is invalid." };
+                return OperationResult::failure("Selected edge adjacency is invalid.");
             }
             std::ranges::reverse(second_face.vertices);
             if (second_face.uvs.size() == second_face.vertices.size()) {
@@ -98,7 +98,7 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
 
         std::vector<ElementId> merged_loop = merged_face_loop_for_dissolved_edge(first_face, second_face, from_id, to_id);
         if (merged_loop.size() < 3) {
-            return { false, "Dissolve would create invalid face geometry." };
+            return OperationResult::failure("Dissolve would create invalid face geometry.");
         }
 
         Face merged_face = first_face;
@@ -116,10 +116,10 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
         if (Face* result_face = find_face(next_candidate, first_face.id);
             result_face != nullptr && !inherit_merged_face_texture(
                 candidate, std::array<ElementId, 2>{first_face.id, second_face.id}, *result_face)) {
-            return { false, "Dissolve could not preserve the source texture mapping." };
+            return OperationResult::failure("Dissolve could not preserve the source texture mapping.");
         }
         if (!every_face_triangulates(next_candidate)) {
-            return { false, "Dissolve would create invalid face geometry." };
+            return OperationResult::failure("Dissolve would create invalid face geometry.");
         }
 
         add_unique_id(merged_face_ids, first_face.id);
@@ -129,7 +129,7 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
     }
 
     if (!changed || merged_face_ids.empty()) {
-        return { false, "No dissolvable selected edges were found." };
+        return OperationResult::failure("No dissolvable selected edges were found.");
     }
 
     document = std::move(candidate);

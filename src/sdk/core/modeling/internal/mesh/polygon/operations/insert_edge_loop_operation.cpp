@@ -58,7 +58,7 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
 {
     QDR_PROFILE_SCOPE("qdr_document.InsertEdgeLoopOperation.apply");
     if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
-      return {false, "Select an edge to insert an edge loop."};
+      return OperationResult::failure("Select an edge to insert an edge loop.");
     }
 
     float factor = factor_;
@@ -67,7 +67,7 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
     const Edge seed = edge_exists(document, active_edge) ? active_edge : make_edge(selection.edges.front().a, selection.edges.front().b);
     const std::vector<EdgeLoopFaceSplit> splits = collect_edge_loop_splits(document, seed);
     if (splits.empty()) {
-        return { false, "Edge loop insertion needs at least one quad face." };
+        return OperationResult::failure("Edge loop insertion needs at least one quad face.");
     }
 
     Document candidate = document;
@@ -122,7 +122,7 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
     }
 
     if (split_faces.empty()) {
-        return { false, "No valid quad faces were found for edge loop insertion." };
+        return OperationResult::failure("No valid quad faces were found for edge loop insertion.");
     }
 
     const std::set<ElementId> split_face_ids = [&splits]() {
@@ -141,7 +141,7 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
     prune_unused_vertices(candidate);
     restore_source_face_orientation(document, candidate);
     if (!every_face_triangulates(candidate)) {
-        return { false, "Edge loop insertion would create invalid face geometry." };
+        return OperationResult::failure("Edge loop insertion would create invalid face geometry.");
     }
 
     document = std::move(candidate);

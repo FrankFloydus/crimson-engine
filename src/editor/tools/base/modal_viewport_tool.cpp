@@ -31,7 +31,12 @@ ModalViewportTool::cancel_active_modal_tool(ViewportToolContext &context,
   const ModelingCommandResult cancel =
       context.ports.cancel->cancel_active_modal_tool();
   if (!cancel.ok) {
-    LOG_ERROR("Modal tool cancel failed: {}", cancel.message);
+    if (context.ports.command_result != nullptr) {
+      context.ports.command_result->handle_tool_command_result(
+          "Modal tool cancel", cancel, true);
+    } else {
+      LOG_ERROR("Modal tool cancel failed: {}", cancel.message);
+    }
   }
   if (context.modal_state != nullptr) {
     context.modal_state->insert_edge_loop_drag_active = false;

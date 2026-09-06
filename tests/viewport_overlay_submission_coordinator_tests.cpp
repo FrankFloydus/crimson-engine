@@ -78,6 +78,8 @@ public:
     return frame_;
   }
 
+  void set_frame(ViewportOverlayFrame frame) { frame_ = std::move(frame); }
+
   mutable int build_count = 0;
 
 private:
@@ -252,6 +254,186 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   EXPECT_NE(target.persistent_frame.lines.front().color,
             initial_styled_color);
   EXPECT_EQ(selection_provider.build_count, 2);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     OpaqueComponentSelectionReplacesItsSourceWireAndPreservesUserStyle) {
+  for (const auto layer : {ViewportOverlayLayer::SelectedEdge,
+                           ViewportOverlayLayer::SelectedFaceEdge}) {
+    SCOPED_TRACE(static_cast<int>(layer));
+    ViewportOverlaySubmissionCoordinator coordinator;
+    RecordingOverlayTarget target;
+    ViewportSettings settings = ViewportSettings::defaults();
+    (void)settings.set_float_value(ViewportFloatSettingId::SelectionEdgeLineSize,
+                                   1.0f);
+    (void)settings.set_float_value(
+        ViewportFloatSettingId::SelectionFaceWireLineSize, 2.0f);
+    (void)settings.set_float_value(ViewportFloatSettingId::SourceWireLineSize,
+                                   1.5f);
+
+    auto source = test_line(ViewportOverlaySource::ComponentSelection);
+    source.element = {.object_id = 7, .edge_a = 3, .edge_b = 9};
+    auto selected = source;
+    selected.layer = layer;
+    std::swap(selected.start, selected.end);
+    std::swap(selected.element.edge_a, selected.element.edge_b);
+    auto unselected = test_line(ViewportOverlaySource::ComponentSelection, 2.0f);
+    unselected.element = {.object_id = 7, .edge_a = 9, .edge_b = 12};
+    ViewportOverlayFrame selection;
+    selection.lines = {source, selected, unselected};
+    StaticSelectionFrameProvider provider{selection};
+    RenderOverlaySelectionSnapshot scene;
+    ViewportOverlayFrame volatile_modeling;
+    CurveToolPreviewState curve;
+    auto request = submission_request(provider, scene, volatile_modeling, curve);
+    request.selection_source.selection_context =
+        layer == ViewportOverlayLayer::SelectedEdge
+            ? ViewportOverlaySelectionContext::Edge
+            : ViewportOverlaySelectionContext::Face;
+    request.style_selection_context = request.selection_source.selection_context;
+
+    EXPECT_TRUE(coordinator.submit(request, settings, target).persistent_submitted);
+    ASSERT_EQ(target.persistent_frame.lines.size(), 2u);
+    EXPECT_EQ(target.persistent_frame.lines[0].layer, layer);
+    EXPECT_EQ(target.persistent_frame.lines[0].color, rgba8(255, 211, 31));
+    EXPECT_FLOAT_EQ(target.persistent_frame.lines[0].width_pixels,
+                    layer == ViewportOverlayLayer::SelectedEdge ? 1.0f : 2.0f);
+    EXPECT_EQ(target.persistent_frame.lines[1].layer, ViewportOverlayLayer::SourceWire);
+    EXPECT_EQ(target.persistent_frame.lines[1].element.edge_b, 12);
+    EXPECT_FLOAT_EQ(target.persistent_frame.lines[1].width_pixels, 1.5f);
+    const auto source_color = target.persistent_frame.lines[1].color;
+
+    ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionWire,
+                                   {0.2f, 0.4f, 0.6f, 1.0f}));
+    const auto restyled = coordinator.submit(request, settings, target);
+    EXPECT_TRUE(restyled.persistent_submitted);
+    EXPECT_FALSE(restyled.selection_source_refreshed);
+    ASSERT_EQ(target.persistent_frame.lines.size(), 2u);
+    EXPECT_EQ(target.persistent_frame.lines[0].color, rgba8(51, 102, 153));
+    EXPECT_EQ(target.persistent_frame.lines[1].color, source_color);
+
+    // A translucent or hidden highlight still needs its ordinary source wire.
+    // Restyling the cached semantic frame must recover that wire without rebuilding it.
+    for (const float alpha : {0.5f, 0.0f}) {
+      ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionWire,
+                                     {0.2f, 0.4f, 0.6f, alpha}));
+      const auto translucent = coordinator.submit(request, settings, target);
+      EXPECT_TRUE(translucent.persistent_submitted);
+      EXPECT_FALSE(translucent.selection_source_refreshed);
+      ASSERT_EQ(target.persistent_frame.lines.size(), 3u);
+      EXPECT_EQ(target.persistent_frame.lines[0].layer, ViewportOverlayLayer::SourceWire);
+      EXPECT_EQ(target.persistent_frame.lines[0].color, source_color);
+    }
+    ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionWire,
+                                   {0.2f, 0.4f, 0.6f, 1.0f}));
+    EXPECT_TRUE(coordinator.submit(request, settings, target).persistent_submitted);
+    ASSERT_EQ(target.persistent_frame.lines.size(), 2u);
+    EXPECT_EQ(provider.build_count, 1);
+
+    const int submissions_before = target.persistent_submit_count;
+    const int dynamic_submissions_before = target.dynamic_submit_count;
+    const auto work_before = coordinator.work_counters();
+    request.camera.eye = {4.0f, 5.0f, 6.0f};
+    const auto camera_only = coordinator.submit(request, settings, target);
+    EXPECT_TRUE(camera_only.camera_only);
+    EXPECT_FALSE(camera_only.selection_source_refreshed);
+    EXPECT_FALSE(camera_only.persistent_submitted);
+    EXPECT_FALSE(camera_only.dynamic_submitted);
+    EXPECT_EQ(target.persistent_submit_count, submissions_before);
+    EXPECT_EQ(target.dynamic_submit_count, dynamic_submissions_before);
+    EXPECT_EQ(provider.build_count, 1);
+    EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+              work_before.dynamic_source_compose_count);
+
+    selection.lines = {source, unselected};
+    provider.set_frame(std::move(selection));
+    ++request.selection_source.selection_revision;
+    const auto deselected = coordinator.submit(request, settings, target);
+    EXPECT_TRUE(deselected.selection_source_refreshed);
+    EXPECT_TRUE(deselected.persistent_submitted);
+    EXPECT_FALSE(deselected.dynamic_submitted);
+    EXPECT_EQ(provider.build_count, 2);
+    ASSERT_EQ(target.persistent_frame.lines.size(), 2u);
+    for (const auto &line : target.persistent_frame.lines) {
+      EXPECT_EQ(line.layer, ViewportOverlayLayer::SourceWire);
+      EXPECT_EQ(line.color, source_color);
+      EXPECT_FLOAT_EQ(line.width_pixels, 1.5f);
+    }
+  }
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     SelectedWireReplacementRequiresTheSameKnownComponentEdgeOccurrence) {
+  for (const auto layer : {ViewportOverlayLayer::SelectedEdge,
+                           ViewportOverlayLayer::SelectedFaceEdge}) {
+    SCOPED_TRACE(static_cast<int>(layer));
+    auto source = test_line(ViewportOverlaySource::ComponentSelection);
+    source.element = {.object_id = 7, .edge_a = 3, .edge_b = 9};
+    auto selected = source;
+    selected.layer = layer;
+    ViewportOverlayFrame selection;
+    selection.lines = {selected, source};
+
+    auto other_object = source;
+    other_object.element.object_id = 8;
+    selection.lines.push_back(other_object);
+    auto coincident_edge = source;
+    coincident_edge.element.edge_b = 10;
+    selection.lines.push_back(coincident_edge);
+    auto other_occurrence = source;
+    other_occurrence.start.y = 2.0f;
+    other_occurrence.end.y = 2.0f;
+    selection.lines.push_back(other_occurrence);
+    auto nearby_endpoint = source;
+    nearby_endpoint.end.x += 0.0001f;
+    selection.lines.push_back(nearby_endpoint);
+    auto external_source = source;
+    external_source.source = ViewportOverlaySource::SceneWireframe;
+    selection.lines.push_back(external_source);
+
+    // Incomplete or degenerate identities cannot establish ownership, even when
+    // the selected line carries an identical reference and world-space segment.
+    for (const auto element : {
+             ViewportOverlayElementRef{.object_id = -1, .edge_a = 3, .edge_b = 9},
+             ViewportOverlayElementRef{.object_id = 7, .edge_a = -1, .edge_b = 9},
+             ViewportOverlayElementRef{.object_id = 7, .edge_a = 3, .edge_b = 3}}) {
+      auto unknown_source = source;
+      unknown_source.element = element;
+      selection.lines.push_back(unknown_source);
+      unknown_source.layer = layer;
+      selection.lines.push_back(unknown_source);
+    }
+    auto external_selected = source;
+    external_selected.element.edge_b = 14;
+    selection.lines.push_back(external_selected);
+    external_selected.layer = layer;
+    external_selected.source = ViewportOverlaySource::Selection;
+    selection.lines.push_back(external_selected);
+
+    const auto authored_lines = selection.lines;
+    StaticSelectionFrameProvider provider{std::move(selection)};
+    RenderOverlaySelectionSnapshot scene;
+    ViewportOverlayFrame volatile_modeling;
+    CurveToolPreviewState curve;
+    ViewportOverlaySubmissionCoordinator coordinator;
+    RecordingOverlayTarget target;
+    EXPECT_TRUE(coordinator.submit(
+        submission_request(provider, scene, volatile_modeling, curve),
+        ViewportSettings::defaults(), target).persistent_submitted);
+    ASSERT_EQ(target.persistent_frame.lines.size(), authored_lines.size() - 1u);
+    EXPECT_EQ(target.persistent_frame.lines.front().layer, layer);
+    for (std::size_t i = 1; i < target.persistent_frame.lines.size(); ++i) {
+      const auto &line = target.persistent_frame.lines[i];
+      const auto &authored = authored_lines[i + 1u];
+      EXPECT_EQ(line.layer, authored.layer);
+      EXPECT_EQ(line.source, authored.source);
+      EXPECT_EQ(line.element.object_id, authored.element.object_id);
+      EXPECT_EQ(line.element.edge_a, authored.element.edge_a);
+      EXPECT_EQ(line.element.edge_b, authored.element.edge_b);
+      EXPECT_FLOAT_EQ(line.start.y, authored.start.y);
+      EXPECT_FLOAT_EQ(line.end.x, authored.end.x);
+    }
+  }
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,

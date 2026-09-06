@@ -125,6 +125,40 @@ void expect_reversed_face_winding(const PolygonDocument &regular,
   };
 }
 
+[[nodiscard]] Result<PolygonDocument> make_coplanar_faces_enclosing_hole() {
+  AuthoredTopology topology;
+  topology.vertices = {
+      {make_id<VertexTag>(1U), {-2.0F, -2.0F, 0.0F}},
+      {make_id<VertexTag>(2U), {0.0F, -2.0F, 0.0F}},
+      {make_id<VertexTag>(3U), {2.0F, -2.0F, 0.0F}},
+      {make_id<VertexTag>(4U), {2.0F, 2.0F, 0.0F}},
+      {make_id<VertexTag>(5U), {0.0F, 2.0F, 0.0F}},
+      {make_id<VertexTag>(6U), {-2.0F, 2.0F, 0.0F}},
+      {make_id<VertexTag>(7U), {-1.0F, -1.0F, 0.0F}},
+      {make_id<VertexTag>(8U), {0.0F, -1.0F, 0.0F}},
+      {make_id<VertexTag>(9U), {1.0F, -1.0F, 0.0F}},
+      {make_id<VertexTag>(10U), {1.0F, 1.0F, 0.0F}},
+      {make_id<VertexTag>(11U), {0.0F, 1.0F, 0.0F}},
+      {make_id<VertexTag>(12U), {-1.0F, 1.0F, 0.0F}},
+  };
+  // Each U-shaped face is simple; their union has an inner boundary loop.
+  topology.faces = {
+      {.id = make_id<FaceTag>(1U),
+       .vertices = {make_id<VertexTag>(2U), make_id<VertexTag>(1U),
+                    make_id<VertexTag>(6U), make_id<VertexTag>(5U),
+                    make_id<VertexTag>(11U), make_id<VertexTag>(12U),
+                    make_id<VertexTag>(7U), make_id<VertexTag>(8U)}},
+      {.id = make_id<FaceTag>(2U),
+       .vertices = {make_id<VertexTag>(5U), make_id<VertexTag>(4U),
+                    make_id<VertexTag>(3U), make_id<VertexTag>(2U),
+                    make_id<VertexTag>(8U), make_id<VertexTag>(9U),
+                    make_id<VertexTag>(10U), make_id<VertexTag>(11U)}},
+  };
+  topology.next_vertex_id = 13U;
+  topology.next_face_id = 3U;
+  return PolygonDocument::from_authored_topology(topology);
+}
+
 void expect_session_face_selection(const ModelingSession &session,
                                    ObjectId object,
                                    std::optional<FaceId> expected_face) {
@@ -567,6 +601,117 @@ TEST(ModelingSdkConsumerTests,
   Result<std::string> obj = serialize_obj_mesh(mesh.value(), "SDK Mesh");
   ASSERT_TRUE(obj.ok()) << obj.error_message();
   EXPECT_NE(obj.value().find("o SDK_Mesh"), std::string::npos);
+}
+
+TEST(ModelingSdkConsumerTests,
+     CombineHoleRejectionPreservesDocumentSelectionAndRevisions) {
+  auto imported = make_coplanar_faces_enclosing_hole();
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  PolygonDocument document = std::move(imported).value();
+  ASSERT_TRUE(document.validate().ok());
+  ASSERT_TRUE(document.select_all_faces().ok());
+  const auto before = serialize_single_document_as_qdr(document);
+  ASSERT_TRUE(before.ok()) << before.error_message();
+  const auto content_identity = document.content_identity();
+  const auto content_revision = document.content_revision();
+  const auto selection_revision = document.selection_revision();
+  const auto selection = document.selection();
+
+  const auto result = document.combine_selected_faces();
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::ValidationFailed);
+  EXPECT_FALSE(result.error_message().empty());
+  EXPECT_EQ(document.content_identity(), content_identity);
+  EXPECT_EQ(document.content_revision(), content_revision);
+  EXPECT_EQ(document.selection_revision(), selection_revision);
+  EXPECT_EQ(document.selection().faces, selection.faces);
+  EXPECT_EQ(document.selection().active_face, selection.active_face);
+  EXPECT_EQ(document.selection().kind, selection.kind);
+  const auto after = serialize_single_document_as_qdr(document);
+  ASSERT_TRUE(after.ok()) << after.error_message();
+  EXPECT_EQ(after.value(), before.value());
+}
+
+TEST(ModelingSdkConsumerTests,
+     BridgeWithOneFaceReportsRejectionWithoutMutatingTheDocument) {
+  auto created = PolygonDocument::make_box({});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  PolygonDocument document = std::move(created).value();
+  ASSERT_TRUE(document.select_face(document.face_ids().front()).ok());
+  const auto before = serialize_single_document_as_qdr(document);
+  ASSERT_TRUE(before.ok()) << before.error_message();
+  const auto content_revision = document.content_revision();
+  const auto selection_revision = document.selection_revision();
+
+  const auto result = document.bridge_selected_faces(1);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::ValidationFailed);
+  EXPECT_FALSE(result.error_message().empty());
+  EXPECT_EQ(document.content_revision(), content_revision);
+  EXPECT_EQ(document.selection_revision(), selection_revision);
+  const auto after = serialize_single_document_as_qdr(document);
+  ASSERT_TRUE(after.ok()) << after.error_message();
+  EXPECT_EQ(after.value(), before.value());
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiDistinguishesRejectedCombineFromBenignNoOpWithoutAddingHistory) {
+  auto imported = make_coplanar_faces_enclosing_hole();
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  ModelingApi quader = ModelingApi::create({
+      .error_policy = ErrorPolicy::StoreLastError,
+  });
+  MeshHandle mesh = quader.add_document(std::move(imported).value(), "Ring");
+  ASSERT_TRUE(mesh.valid());
+  ASSERT_TRUE(mesh.faces().all().replace().success);
+  const auto shaded = mesh.faces().selected().shade_smooth();
+  ASSERT_TRUE(shaded.success) << shaded.error.message;
+  ASSERT_TRUE(shaded.changed);
+  const auto before = quader.io().serialize_qdr(mesh.id());
+  const auto revisions = quader.revisions();
+  const auto initial_selection = mesh.faces().selected();
+  const std::vector<FaceId> selected(initial_selection.faces().begin(),
+                                     initial_selection.faces().end());
+
+  const auto unchanged = mesh.faces().selected().shade_smooth();
+  EXPECT_TRUE(unchanged.success) << unchanged.error.message;
+  EXPECT_FALSE(unchanged.changed);
+  EXPECT_EQ(unchanged.error.code, ErrorCode::Ok);
+  EXPECT_EQ(quader.last_error(), nullptr);
+  EXPECT_EQ(quader.io().serialize_qdr(mesh.id()), before);
+
+  const auto rejected = mesh.faces().selected().combine();
+  EXPECT_FALSE(rejected.success);
+  EXPECT_FALSE(rejected.changed);
+  EXPECT_EQ(rejected.error.code, ErrorCode::ValidationFailed);
+  EXPECT_FALSE(rejected.error.message.empty());
+  ASSERT_NE(quader.last_error(), nullptr);
+  EXPECT_EQ(quader.last_error()->code, ErrorCode::ValidationFailed);
+  EXPECT_EQ(quader.revisions().content, revisions.content);
+  EXPECT_EQ(quader.revisions().selection, revisions.selection);
+  EXPECT_EQ(quader.revisions().scene, revisions.scene);
+  EXPECT_EQ(quader.revisions().assets, revisions.assets);
+  EXPECT_EQ(quader.io().serialize_qdr(mesh.id()), before);
+  const auto still_selected = mesh.faces().selected();
+  EXPECT_EQ(std::vector<FaceId>(still_selected.faces().begin(),
+                                still_selected.faces().end()), selected);
+
+  // The next undo must reverse shading, skipping both non-mutating attempts.
+  const auto undone = quader.undo();
+  ASSERT_TRUE(undone.success) << undone.error.message;
+  const auto restored = deserialize_qdr_document(
+      quader.io().serialize_qdr(mesh.id()));
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  ASSERT_EQ(restored.value().objects.size(), 1U);
+  const auto topology =
+      restored.value().objects.front().document.authored_topology();
+  ASSERT_TRUE(topology.ok()) << topology.error_message();
+  ASSERT_EQ(topology.value().faces.size(), 2U);
+  for (const auto &face : topology.value().faces) {
+    EXPECT_EQ(face.shading, AuthoredSurfaceShading::Flat);
+  }
 }
 
 TEST(ModelingSdkConsumerTests,

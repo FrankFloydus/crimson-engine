@@ -15,6 +15,7 @@
 #include "editor/session/scene_session.hpp"
 #include "ui/outliner_panel.hpp"
 #include "ui/qt_command_event_filter.hpp"
+#include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_settings.hpp"
@@ -38,6 +39,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -616,6 +619,56 @@ TEST(QtCommandEventFilterTests,
 
   application.removeEventFilter(&command_filter);
   editor_surface.hide();
+}
+
+TEST(QtCommandEventFilterTests,
+     RejectedDirectToolSettingsCommitNotifiesOncePerAttempt) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-tool-settings-failure-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Curve).ok());
+  ASSERT_TRUE(editor.tools().active_native_tool_lifecycle(
+      quader::ViewportToolId::Curve));
+
+  std::vector<quader::QuaderNotification> notifications;
+  editor.ui().set_runtime_hooks(
+      {.notify = [&](quader::QuaderNotification notification) {
+         notifications.push_back(std::move(notification));
+         return quader::QuaderApiVoidResult{.ok = true};
+       }});
+  quader::QtCommandEventFilter command_filter(editor, []() {
+    return quader::ViewportToolState{
+        .active_tool = quader::ViewportToolId::Curve};
+  });
+  application.installEventFilter(&command_filter);
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  QLineEdit edit(&panel);
+  panel.show();
+  panel.activateWindow();
+  edit.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::focusWidget(), &edit);
+  const auto command_revision = editor.commands().last_status_revision();
+
+  send_key_press(edit, Qt::Key_Space, Qt::NoModifier);
+  ASSERT_EQ(notifications.size(), 1u);
+  EXPECT_EQ(notifications.front().level, quader::QuaderNotificationLevel::Error);
+  EXPECT_FALSE(notifications.front().message.empty());
+  EXPECT_EQ(editor.commands().last_status_revision(), command_revision);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(notifications.size(), 1u);
+  send_key_press(edit, Qt::Key_Space, Qt::NoModifier);
+  ASSERT_EQ(notifications.size(), 2u);
+  EXPECT_EQ(notifications.back().message, notifications.front().message);
+  EXPECT_EQ(editor.commands().last_status_revision(), command_revision);
+  application.removeEventFilter(&command_filter);
 }
 
 } // namespace

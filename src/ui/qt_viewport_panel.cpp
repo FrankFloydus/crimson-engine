@@ -413,6 +413,15 @@ overlay_selection_context(ModelingSelectionMode mode) {
   return ViewportOverlaySelectionContext::Any;
 }
 
+void notify_command_failure(QuaderEditorApi &editor,
+                            const QuaderApiVoidResult &result) {
+  if (!result.ok()) {
+    (void)editor.ui().notify(
+        {.level = QuaderNotificationLevel::Error,
+         .message = result.message.empty() ? "Command failed." : result.message});
+  }
+}
+
 class ModelingSelectionOverlayFrameProvider final
     : public ViewportOverlaySelectionFrameProvider {
 public:
@@ -2729,13 +2738,19 @@ void QtViewportPanel::process_viewport_input(
   // Commands and pending sequences resolve first. The active tool may then
   // claim individual ordered packets before the remaining ones reach zoom.
   if (!input.navigation_bindings.wheel_events.empty()) {
+    std::optional<QuaderApiVoidResult> wheel_failure;
     ViewportBoxToolContext wheel_box;
     wheel_box.live_primitive = [&]() {
       return ViewportPrimitiveCreationApiAdapter::from_api(
           editor.tools().live_primitive_creation());
     };
     wheel_box.set_segments = [&](int axis, int count) {
-      return set_primitive_segments(editor, axis, count);
+      const auto result = set_primitive_segments(editor, axis, count);
+      if (!result.ok && !wheel_failure.has_value()) {
+        wheel_failure = QuaderApiVoidResult{.ok = false,
+                                            .message = result.message};
+      }
+      return result;
     };
     wheel_box.raster_scale = viewport_raster_scale(*input_pane);
     wheel_box.primitive_controls_visible = editor.preferences().gizmos_visible();
@@ -2770,6 +2785,10 @@ void QtViewportPanel::process_viewport_input(
              .modifiers = input.modifiers,
              .wheel_events = input.navigation_bindings.wheel_events}});
     if (runtime_binding_generation_ != input_binding_generation) return;
+    if (wheel_failure.has_value()) {
+      notify_command_failure(editor, *wheel_failure);
+      if (runtime_binding_generation_ != input_binding_generation) return;
+    }
     std::erase_if(input.navigation_bindings.wheel_events,
                   [](const auto &wheel) { return wheel.consumed; });
     input.mouse_wheel = 0.0f;
@@ -2979,6 +2998,10 @@ void QtViewportPanel::process_viewport_input(
       return;
     }
     log_command_failure("Selection mode change", mode_change);
+    notify_command_failure(editor, mode_change);
+    if (runtime_binding_generation_ != input_binding_generation) {
+      return;
+    }
     input_router_.set_selection_mode(app_selection_mode_to_viewport(
         to_modeling_selection_mode(editor.selection().summary().mode)));
     interaction_controller_.clear_modal_drag_state();
@@ -3009,6 +3032,10 @@ void QtViewportPanel::process_viewport_input(
       }
       if (!activation.ok) {
         log_command_failure("Viewport tool activation", activation);
+        notify_command_failure(editor, activation);
+        if (runtime_binding_generation_ != input_binding_generation) {
+          return;
+        }
         input_router_.set_active_tool(ViewportToolId::Select);
         (void)editor.tools().activate(ViewportToolId::Select);
         if (runtime_binding_generation_ != input_binding_generation) {
@@ -3193,6 +3220,10 @@ void QtViewportPanel::process_viewport_input(
         return false;
       }
       log_command_failure("Native viewport tool cancel", canceled);
+      notify_command_failure(editor, canceled);
+      if (runtime_binding_generation_ != input_binding_generation) {
+        return false;
+      }
       native_tools.clear_pointer_drag_state();
       sync_active_tool_from_editor(
           editor, modeling, native_tools,
@@ -3205,8 +3236,19 @@ void QtViewportPanel::process_viewport_input(
       hover_controller_.invalidate();
       return true;
     }
+    std::optional<QuaderApiVoidResult> cancel_failure;
     ViewportModelingToolPortCallbacks callbacks;
     callbacks.invalidate_hover = [&]() { hover_controller_.invalidate(); };
+    callbacks.handle_tool_command_result =
+        [&](std::string_view label, const ModelingCommandResult &command,
+            bool announce_failure) {
+          const QuaderApiVoidResult result{.ok = command.ok,
+                                           .message = command.message};
+          log_command_failure(label, result);
+          if (!command.ok && announce_failure) {
+            cancel_failure = result;
+          }
+        };
     ViewportModelingToolPortAdapter cancel_ports(modeling,
                                                  std::move(callbacks));
     ViewportToolContext cancel_context{
@@ -3224,6 +3266,12 @@ void QtViewportPanel::process_viewport_input(
                           .exit_active_modal_tool = exit_tool});
     if (runtime_binding_generation_ != input_binding_generation) {
       return false;
+    }
+    if (cancel_failure.has_value()) {
+      notify_command_failure(editor, *cancel_failure);
+      if (runtime_binding_generation_ != input_binding_generation) {
+        return false;
+      }
     }
     interaction_controller_.reset(&editor, native_tools);
     hover_controller_.invalidate();
@@ -3405,6 +3453,7 @@ void QtViewportPanel::process_viewport_input(
         .dragging = dragging,
     };
   };
+  std::optional<std::string> tool_error_notification;
   ViewportModelingToolPortCallbacks tool_callbacks;
   tool_callbacks.claim_hover = [&](ModelingBoxDragState) {
     return hover_controller_.claim(make_hover_key(before_tool.gizmo_consumed));
@@ -3418,9 +3467,16 @@ void QtViewportPanel::process_viewport_input(
     input_router_.set_selection_mode(mode);
   };
   tool_callbacks.set_app_selection_mode = [&](ModelingSelectionMode mode) {
-    log_command_failure(
-        "Selection mode change",
-        editor.selection().set_mode(to_api_selection_mode(mode)));
+    const QuaderApiVoidResult changed =
+        editor.selection().set_mode(to_api_selection_mode(mode));
+    if (runtime_binding_generation_ != input_binding_generation) {
+      return;
+    }
+    log_command_failure("Selection mode change", changed);
+    if (!changed.ok()) {
+      tool_error_notification = changed.message.empty() ? "Command failed."
+                                                         : changed.message;
+    }
     input_router_.set_selection_mode(app_selection_mode_to_viewport(
         to_modeling_selection_mode(editor.selection().summary().mode)));
   };
@@ -3431,11 +3487,17 @@ void QtViewportPanel::process_viewport_input(
                      : MaterialReference{};
   };
   tool_callbacks.handle_tool_command_result =
-      [&](std::string_view label, const ModelingCommandResult &command) {
+      [&](std::string_view label, const ModelingCommandResult &command,
+          bool announce_failure) {
         if (!command.ok) {
           LOG_ERROR("{} failed: {}", label,
                     command.message.empty() ? "Command failed."
                                             : command.message);
+          if (announce_failure && !tool_error_notification.has_value()) {
+            tool_error_notification = command.message.empty()
+                                          ? "Command failed."
+                                          : command.message;
+          }
         }
         // The claimed hover key also throttles deterministic failures. Retrying
         // an unchanged failed query every frame only floods the log and can
@@ -3448,6 +3510,12 @@ void QtViewportPanel::process_viewport_input(
       };
   ViewportModelingToolPortAdapter tool_ports(modeling,
                                              std::move(tool_callbacks));
+  const auto record_direct_tool_failure = [&](const QuaderApiVoidResult &result) {
+    if (!result.ok() && !tool_error_notification.has_value()) {
+      tool_error_notification = result.message.empty() ? "Command failed."
+                                                       : result.message;
+    }
+  };
   ViewportBoxToolContext box_context{.default_material = default_material};
   box_context.make_event_at = [&](QVec2 mouse_local) {
     return ViewportNativeToolInteraction::modeling_box_event(
@@ -3460,6 +3528,7 @@ void QtViewportPanel::process_viewport_input(
     const QuaderApiVoidResult result =
         editor.tools().accept_active_primitive(std::move(name), material,
                                                snap_enabled);
+    record_direct_tool_failure(result);
     return ModelingCommandResult{
         .ok = result.ok,
         .changed = result.changed,
@@ -3469,6 +3538,7 @@ void QtViewportPanel::process_viewport_input(
   box_context.apply_session = [&]() {
     const QuaderApiVoidResult result =
         editor.tools().commit_active_tool_preview();
+    record_direct_tool_failure(result);
     return ModelingCommandResult{
         .ok = result.ok,
         .changed = result.changed,
@@ -3478,6 +3548,7 @@ void QtViewportPanel::process_viewport_input(
   box_context.cancel_session = [&]() {
     const QuaderApiVoidResult result =
         editor.tools().cancel_active_tool_preview();
+    record_direct_tool_failure(result);
     return ModelingCommandResult{
         .ok = result.ok,
         .changed = result.changed,
@@ -3503,20 +3574,29 @@ void QtViewportPanel::process_viewport_input(
         editor.tools().live_primitive_creation());
   };
   box_context.begin_resize = [&](ViewportPrimitiveResizeControl control, QVec3 axis) {
-    return cube_result(editor.tools().begin_primitive_resize(
-        ViewportPrimitiveCreationApiAdapter::to_api(control), axis));
+    const auto result = editor.tools().begin_primitive_resize(
+        ViewportPrimitiveCreationApiAdapter::to_api(control), axis);
+    record_direct_tool_failure(result);
+    return cube_result(result);
   };
   box_context.update_resize = [&](double displacement) {
     return cube_result(editor.tools().update_primitive_resize(displacement));
   };
   box_context.end_resize = [&]() {
-    return cube_result(editor.tools().end_primitive_resize());
+    const auto result = editor.tools().end_primitive_resize();
+    record_direct_tool_failure(result);
+    return cube_result(result);
   };
   box_context.cancel_resize = [&]() {
-    return cube_result(editor.tools().cancel_primitive_resize());
+    const auto result = editor.tools().cancel_primitive_resize();
+    record_direct_tool_failure(result);
+    return cube_result(result);
   };
   box_context.set_segments = [&](int axis, int count) {
-    return set_primitive_segments(editor, axis, count);
+    const auto result = set_primitive_segments(editor, axis, count);
+    record_direct_tool_failure(
+        {.ok = result.ok, .changed = result.changed, .message = result.message});
+    return result;
   };
   box_context.raster_scale = viewport_pixel_scale;
   box_context.primitive_controls_visible = editor.preferences().gizmos_visible();
@@ -3552,6 +3632,8 @@ void QtViewportPanel::process_viewport_input(
       cancel_consumed || navigation_gizmo_consumed ||
       native_tool_result.consumed ||
       before_tool.gizmo_consumed;
+  const std::uint64_t tool_command_revision =
+      editor.commands().last_status_revision();
   const ViewportToolResult active_tool_result =
       interaction_controller_.handle_active_tool_event(
           input_router_.state(), tool_context,
@@ -3596,6 +3678,17 @@ void QtViewportPanel::process_viewport_input(
           });
   if (runtime_binding_generation_ != input_binding_generation) {
     return;
+  }
+  if (tool_error_notification.has_value() &&
+      editor.commands().last_status_revision() == tool_command_revision) {
+    // Present only after the tool has returned: notification hooks can replace
+    // its runtime owners. Hover and continuous preview failures stay silent.
+    (void)editor.ui().notify(
+        {.level = QuaderNotificationLevel::Error,
+         .message = std::move(*tool_error_notification)});
+    if (runtime_binding_generation_ != input_binding_generation) {
+      return;
+    }
   }
   active_box_preview_ = interaction_controller_.box_preview(
       *preview_ports.preview, resolved_grid_snap_enabled);

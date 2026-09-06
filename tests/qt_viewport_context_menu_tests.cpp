@@ -98,9 +98,9 @@ ContextMenuSnapshot show_and_snapshot(
     const quader::QuaderSelectionSummary &selection, bool target_hit,
     std::optional<quader::ProjectAssetId> material_under_mouse = std::nullopt,
     std::function<void(quader::ProjectAssetId)> open_material_editor = {},
-    bool trigger_material_editor = false) {
+    QString trigger_action_name = {}) {
   ContextMenuSnapshot snapshot;
-  QTimer::singleShot(0, &owner, [&snapshot, trigger_material_editor]() {
+  QTimer::singleShot(0, &owner, [&snapshot, trigger_action_name]() {
     auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
     if (menu == nullptr ||
         menu->objectName() !=
@@ -141,20 +141,20 @@ ContextMenuSnapshot show_and_snapshot(
         }
       }
     }
-    if (trigger_material_editor) {
-      QAction *edit_action = nullptr;
+    if (!trigger_action_name.isEmpty()) {
+      QAction *selected_action = nullptr;
       for (QAction *action : menu->actions()) {
         if (action != nullptr &&
-            action->objectName() ==
-                QStringLiteral("viewport.material.edit_under_mouse")) {
-          edit_action = action;
+            action->objectName() == trigger_action_name) {
+          selected_action = action;
           break;
         }
       }
-      if (edit_action == nullptr) {
-        ADD_FAILURE() << "Expected the material-editor action to exist.";
+      if (selected_action == nullptr) {
+        ADD_FAILURE() << "Expected context action: "
+                      << trigger_action_name.toStdString();
       } else {
-        menu->setActiveAction(edit_action);
+        menu->setActiveAction(selected_action);
         QKeyEvent accept_action(QEvent::KeyPress, Qt::Key_Return,
                                 Qt::NoModifier);
         QApplication::sendEvent(menu, &accept_action);
@@ -316,7 +316,7 @@ TEST(QtViewportContextMenuTests,
       owner, presenter, editor, input_router, localization, object_actions,
       selection(quader::QuaderSelectionMode::Object), true, hovered_material,
       [&opened_material](quader::ProjectAssetId id) { opened_material = id; },
-      true);
+      QStringLiteral("viewport.material.edit_under_mouse"));
   ASSERT_TRUE(object_menu.opened);
   EXPECT_EQ(opened_material, hovered_material);
   EXPECT_GT(object_menu.separator_count, 0u);
@@ -623,4 +623,49 @@ TEST(QtViewportContextMenuTests,
   EXPECT_EQ(editor.commands().last_status_revision(), command_status_revision)
       << "A context-menu action must not execute after the selection used to "
          "build the menu changes inside QMenu's nested event loop.";
+}
+
+TEST(QtViewportContextMenuTests, MaterialRejectionPublishesOneErrorPerAttempt) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-material-error-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  quader::ViewportInputRouter input_router;
+  quader::LocalizationService localization = loaded_localization();
+  quader::QtViewportContextMenuPresenter presenter;
+  std::vector<quader::QuaderNotification> notifications;
+  editor.ui().set_runtime_hooks({.notify = [&](quader::QuaderNotification value) {
+    notifications.push_back(std::move(value));
+    return quader::QuaderApiVoidResult{.ok = true};
+  }});
+
+  QWidget owner;
+  owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  owner.resize(320, 240);
+  owner.show();
+  QCoreApplication::processEvents();
+
+  const std::optional<quader::ProjectAssetId> hovered_material =
+      quader::ProjectAssetId::parse("11111111-1111-4111-8111-111111111111");
+  ASSERT_TRUE(hovered_material.has_value());
+  const std::uint64_t command_status_revision =
+      editor.commands().last_status_revision();
+  for (std::size_t attempt = 1; attempt <= 2; ++attempt) {
+    const ContextMenuSnapshot menu = show_and_snapshot(
+        owner, presenter, editor, input_router, localization, {}, {}, true,
+        hovered_material, {}, QStringLiteral("viewport.material.sample_face"));
+    ASSERT_TRUE(menu.opened);
+    ASSERT_EQ(notifications.size(), attempt);
+    EXPECT_EQ(notifications.back().level,
+              quader::QuaderNotificationLevel::Error);
+    EXPECT_EQ(notifications.back().message,
+              "Project materials are unavailable without an open project.");
+    EXPECT_EQ(editor.commands().last_status_revision(), command_status_revision);
+  }
 }

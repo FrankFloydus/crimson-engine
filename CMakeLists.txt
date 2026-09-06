@@ -894,6 +894,7 @@ add_library(quader_ui STATIC
     src/ui/standard_material_preview_render_snapshot_adapter.cpp
     src/ui/qt_navigation_gizmo.cpp
     src/ui/qt_operation_input_hints.cpp
+    src/ui/qt_status_message.cpp
     src/ui/qt_project_home_page.cpp
     src/ui/qt_relative_pointer_input.cpp
     src/ui/qt_retained_message_box.cpp
@@ -1494,6 +1495,7 @@ if(QUADER_BUILD_TESTS)
         tests/qstr_tests.cpp
         tests/editor_api_tests.cpp
         tests/operation_input_hint_tests.cpp
+        tests/qt_status_message_tests.cpp
         tests/quader_events_api_tests.cpp
         tests/programmatic_api_tests.cpp
         tests/programmatic_behavior_scenario_tests.cpp

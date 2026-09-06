@@ -59,7 +59,7 @@ OperationResult merge_endpoint_group(Document& working, const std::set<ElementId
 
     const Vertex* survivor_vertex = find_vertex(working, survivor_vertex_id);
     if (survivor_vertex == nullptr) {
-        return { false, "Merge Edges survivor vertex was not found." };
+        return OperationResult::failure("Merge Edges survivor vertex was not found.");
     }
 
     Document candidate;
@@ -74,7 +74,7 @@ OperationResult merge_endpoint_group(Document& working, const std::set<ElementId
     }
 
     if (find_vertex(candidate, survivor_vertex_id) == nullptr) {
-        return { false, "Merge Edges would remove the survivor vertex." };
+        return OperationResult::failure("Merge Edges would remove the survivor vertex.");
     }
 
     working = std::move(candidate);
@@ -85,7 +85,7 @@ OperationResult merge_endpoint_group(Document& working, const std::set<ElementId
 OperationResult MergeEdgesOperation::apply(Document& document, Selection& selection) const
 {
   if (selection.mode != SelectionMode::Edge) {
-    return {false, "Merge Edges needs edge selection mode."};
+    return OperationResult::failure("Merge Edges needs edge selection mode.");
   }
 
     std::vector<Edge> selected_edges;
@@ -97,7 +97,7 @@ OperationResult MergeEdgesOperation::apply(Document& document, Selection& select
         selected_edges.push_back(edge);
     }
     if (selected_edges.size() < 2) {
-        return { false, "Select at least two valid edges to merge." };
+        return OperationResult::failure("Select at least two valid edges to merge.");
     }
 
     Edge target_edge = selected_edges.front();
@@ -112,7 +112,7 @@ OperationResult MergeEdgesOperation::apply(Document& document, Selection& select
     const Vertex* target_a = find_vertex(document, target_edge.a);
     const Vertex* target_b = find_vertex(document, target_edge.b);
     if (target_a == nullptr || target_b == nullptr) {
-        return { false, "Merge Edges survivor edge vertices were not found." };
+        return OperationResult::failure("Merge Edges survivor edge vertices were not found.");
     }
 
     std::map<ElementId, ElementId> endpoint_targets;
@@ -141,18 +141,18 @@ OperationResult MergeEdgesOperation::apply(Document& document, Selection& select
 
         if (edge.a != target_edge.a && edge.a != target_edge.b) {
             if (std::optional<std::string> error = add_endpoint_target(endpoint_targets, edge.a, survivor_a)) {
-                return { false, *error };
+                return OperationResult::failure(*error);
             }
         }
         if (edge.b != target_edge.a && edge.b != target_edge.b) {
             if (std::optional<std::string> error = add_endpoint_target(endpoint_targets, edge.b, survivor_b)) {
-                return { false, *error };
+                return OperationResult::failure(*error);
             }
         }
     }
 
     if (!has_other_edge || endpoint_targets.empty()) {
-        return { false, "Select at least one other edge to merge." };
+        return OperationResult::failure("Select at least one other edge to merge.");
     }
 
     std::set<ElementId> merge_to_a;
@@ -163,7 +163,7 @@ OperationResult MergeEdgesOperation::apply(Document& document, Selection& select
         } else if (entry.second == target_edge.b) {
             merge_to_b.insert(entry.first);
         } else {
-            return { false, "Merge Edges endpoint target was invalid." };
+            return OperationResult::failure("Merge Edges endpoint target was invalid.");
         }
     }
 

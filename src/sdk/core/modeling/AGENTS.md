@@ -44,5 +44,8 @@ preview transactions, history, typed identities, neutral payloads, and binary QD
   substitute compiled triangles for authored topology or silently clean up faces during save.
 - Preserve allocation high-water marks across history and preview rollback; stale IDs must not
   alias newly authored elements. Failed and unchanged edits preserve authored state and history.
+- Polygon rejections use `OperationResult::failure()` (or the specialized result's failure
+  factory). Success is independent of `changed`; already-applied values remain successful no-ops.
+  Preserve failure through SDK and native adapters before publishing any candidate state.
 - Cover portable semantics in `tests/sdk/` consumer/parity suites and polygon mechanics in
   `tests/modeling_domain/operation/`; native tool and projection tests belong to their host owners.

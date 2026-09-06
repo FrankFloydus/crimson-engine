@@ -151,12 +151,12 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
 {
     QDR_PROFILE_SCOPE("qdr_document.bevel_selected_edges_impl");
     if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
-      return {false, {}};
+      return OperationResult::failure("Select one or more edges to bevel.");
     }
 
     const std::vector<Edge> selected_edges = selected_valid_edges(document, selection);
     if (selected_edges.empty()) {
-        return { false, {} };
+        return OperationResult::failure("Select one or more valid edges to bevel.");
     }
 
     const EdgeBevelSettings settings = sanitized_edge_bevel_settings(requested_settings);
@@ -176,7 +176,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         selected_neighbors_by_vertex[edge.b].push_back(edge.a);
     }
     if (selected_edge_keys.empty()) {
-        return { false, {} };
+        return OperationResult::failure("Bevel needs selected interior edges with exactly two adjacent faces.");
     }
 
     const std::vector<Edge> all_document_edges = document_edges(document);

@@ -41,6 +41,7 @@
 #include "ui/qt_selection_toolbar.hpp"
 #include "ui/qt_settings_dialog.hpp"
 #include "ui/qt_snapping_toolbar.hpp"
+#include "ui/qt_status_message.hpp"
 #include "ui/qt_texture_toolbar.hpp"
 #include "ui/qt_standard_material_editor_window.hpp"
 #include "ui/qt_tool_toolbar.hpp"
@@ -216,6 +217,11 @@ std::string status_bar_message(
     const ModelingLiveStatus &live_status,
     const LocalizationService &localization,
     const std::optional<QuaderApiStatus> &command_status) {
+  if (command_status.has_value() && !command_status->ok()) {
+    return command_status->message.empty()
+               ? localization.text("ui.status.command_failed", "Command failed.")
+               : command_status->message;
+  }
   if (live_status.kind ==
       ModelingLiveStatusKind::MergeByDistanceMergedVertices) {
     std::string message = localization.text(
@@ -231,9 +237,6 @@ std::string status_bar_message(
   }
   if (!command_status.has_value()) {
     return {};
-  }
-  if (!command_status->ok && command_status->message.empty()) {
-    return localization.text("ui.status.command_failed", "Command failed.");
   }
   return command_status->message;
 }
@@ -740,7 +743,7 @@ bool UISystem::initialize(RenderSystem &render_system,
   standard_material_editor_window_->set_close_request_handler(
       [this]() { return resolve_standard_material_document(true); });
   standard_material_editor_window_->hide();
-  status_message_ = new QLabel(main_window_.get());
+  status_message_ = new QtStatusMessage(main_window_.get());
   status_message_->setObjectName(QStringLiteral("statusMessage"));
   status_message_->setWordWrap(false);
   status_message_->hide();
@@ -814,6 +817,9 @@ void UISystem::install_runtime_hooks(
   uv_peel_presenter_.invalidate();
   standard_material_editor_presenter_.invalidate();
   status_presenter_.invalidate();
+  status_observed_command_revision_ = editor.commands().last_status_revision();
+  status_notification_.reset();
+  ++status_notification_generation_;
   project_workspace_instance_edit_revision_ = 0;
   project_workspace_instance_edit_revision_valid_ = false;
   bind_scene_backed_panels();
@@ -1146,8 +1152,10 @@ void UISystem::install_runtime_hooks(
           },
       .notify =
           [this](QuaderNotification notification) {
-            main_window_->statusBar()->showMessage(
-                QString::fromStdString(notification.message), 5000);
+            present_status_notification(
+                {.ok = notification.level != QuaderNotificationLevel::Error,
+                 .message = std::move(notification.message)},
+                5000);
             return runtime_status(false);
           },
   });
@@ -2482,6 +2490,9 @@ void UISystem::shutdown() {
   uv_peel_presenter_.invalidate();
   standard_material_editor_presenter_.invalidate();
   status_presenter_.invalidate();
+  status_observed_command_revision_ = 0u;
+  status_notification_.reset();
+  ++status_notification_generation_;
 }
 
 void UISystem::refresh(const FrameTiming &frame_timing,
@@ -3318,8 +3329,17 @@ void UISystem::refresh_status_bar() {
     operation_input_hints_->refresh(editor_->tools(), editor_->commands(), localization_);
   }
   const auto sync_message_visibility = [this]() {
+    const bool error = status_message_->is_error();
+    const bool message_priority = error ||
+        (status_notification_.has_value() && !status_message_->text().isEmpty());
+    const bool has_hints = operation_input_hints_ != nullptr &&
+                           !operation_input_hints_->hints().empty();
+    if (operation_input_hints_ != nullptr &&
+        operation_input_hints_->isHidden() == (has_hints && !message_priority)) {
+      operation_input_hints_->setVisible(has_hints && !message_priority);
+    }
     const bool visible = !status_message_->text().isEmpty() &&
-        (operation_input_hints_ == nullptr || operation_input_hints_->hints().empty());
+                         (message_priority || !has_hints);
     if (status_message_->isHidden() == visible) {
       status_message_->setVisible(visible);
     }
@@ -3333,6 +3353,11 @@ void UISystem::refresh_status_bar() {
     QDR_PROFILE_SCOPE("UI status bar query command status revision");
     return editor_->commands().last_status_revision();
   }();
+  if (status_notification_.has_value() &&
+      command_revision != status_notification_command_revision_) {
+    status_notification_.reset();
+    ++status_notification_generation_;
+  }
   const std::uint8_t live_kind =
       static_cast<std::uint8_t>(live_status.kind);
   const StatusPresentationStamp stamp{
@@ -3347,23 +3372,54 @@ void UISystem::refresh_status_bar() {
 
   {
     QDR_PROFILE_SCOPE("UI status bar present message");
+    const auto command_status = status_notification_.has_value()
+                                    ? status_notification_
+                                    : editor_->commands().last_status();
+    const bool error = command_status.has_value() && !command_status->ok();
     const QString message = QString::fromStdString(status_bar_message(
-        live_status, localization_, editor_->commands().last_status()));
-    if (status_message_->text() != message) {
-      status_message_->setText(message);
-      sync_message_visibility();
-    }
+        status_notification_.has_value() ? ModelingLiveStatus{} : live_status,
+        localization_, command_status));
+    const bool new_command =
+        status_observed_command_revision_ != command_revision;
+    status_observed_command_revision_ = command_revision;
+    status_message_->present(message, error, new_command && error);
+    sync_message_visibility();
   }
   status_presenter_.mark_presented(stamp);
 }
 
+void UISystem::present_status_notification(const QuaderApiStatus &result,
+                                           int timeout_ms) {
+  if (status_message_ == nullptr) return;
+  status_notification_ = result;
+  status_notification_command_revision_ =
+      editor_ != nullptr ? editor_->commands().last_status_revision() : 0u;
+  status_observed_command_revision_ = status_notification_command_revision_;
+  const std::uint64_t generation = ++status_notification_generation_;
+  const QString message = QString::fromStdString(
+      !result.ok() && result.message.empty()
+          ? localization_.text("ui.status.command_failed", "Command failed.")
+          : result.message);
+  status_message_->present(message, !result.ok(), !result.ok());
+  if (operation_input_hints_ != nullptr) {
+    operation_input_hints_->setVisible(
+        message.isEmpty() && !operation_input_hints_->hints().empty());
+  }
+  status_message_->setVisible(!message.isEmpty());
+  status_presenter_.invalidate();
+  if (timeout_ms > 0) {
+    QTimer::singleShot(timeout_ms, status_message_, [this, generation]() {
+      if (status_notification_generation_ == generation) {
+        status_notification_.reset();
+        status_presenter_.invalidate();
+      }
+    });
+  }
+}
+
 void UISystem::present_lifecycle_result(const QuaderApiStatus &result) {
   QDR_PROFILE_SCOPE("UI present lifecycle result");
-  if (status_message_ != nullptr && !result.message.empty()) {
-    status_message_->setText(QString::fromStdString(result.message));
-    status_message_->show();
-    status_presenter_.invalidate();
-  }
+  present_status_notification(result);
 
   const bool restored_scene_warning =
       result.ok() && result.message.find("restored scenes were skipped") !=
@@ -3409,6 +3465,7 @@ void UISystem::present_standard_material_error(std::string_view message) {
   if (message.empty()) {
     return;
   }
+  present_status_notification({.ok = false, .message = std::string(message)});
   if (standard_material_error_message_box_ == nullptr) {
     return;
   }
@@ -4266,6 +4323,10 @@ bool UISystem::apply_interface_scale(float factor) {
 
 void UISystem::apply_ui_scale_to_retained_surfaces(
     const QtUiScaleMetrics &metrics) {
+  if (main_window_ != nullptr) {
+    const int top = metrics.px(2);
+    main_window_->statusBar()->setContentsMargins(0, top, 0, metrics.px(5) - top);
+  }
   if (operation_input_hints_ != nullptr) {
     operation_input_hints_->apply_ui_scale(metrics);
   }
@@ -4615,9 +4676,9 @@ void UISystem::import_material_textures() {
         .arg(static_cast<qulonglong>(imported_count))
         .arg(static_cast<qulonglong>(failed_count));
   }();
-  if (main_window_ != nullptr && main_window_->statusBar() != nullptr) {
-    main_window_->statusBar()->showMessage(status, 5000);
-  }
+  present_status_notification(
+      {.ok = result.ok() && failed_count == 0u, .message = status.toStdString()},
+      5000);
 
   if (result.ok && failed_count == 0u) {
     return;

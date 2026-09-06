@@ -214,13 +214,15 @@ float normalized_angle_delta(float angle)
 OperationResult radial_align_selection_impl(Document& document, Selection& selection)
 {
     if (selection.empty()) {
-        return { false, "Radial Align needs selected vertices, edges, or faces." };
+        return OperationResult::failure(
+            "Radial Align needs selected vertices, edges, or faces.");
     }
 
     Document candidate = document;
     const std::vector<ElementId> selected_ids = selected_vertex_ids(document, selection);
     if (selected_ids.size() < 3U) {
-        return { false, "Radial Align needs at least three selected vertices." };
+        return OperationResult::failure(
+            "Radial Align needs at least three selected vertices.");
     }
     const RadialAlignDriverVertices driver_vertices = radial_align_driver_vertex_ids(document, selection, selected_ids);
     const std::vector<ElementId>& vertex_ids = driver_vertices.ids;
@@ -237,7 +239,8 @@ OperationResult radial_align_selection_impl(Document& document, Selection& selec
         center += vertex->position;
     }
     if (vertices.size() < 3U) {
-        return { false, "Radial Align needs at least three valid selected vertices." };
+        return OperationResult::failure(
+            "Radial Align needs at least three valid selected vertices.");
     }
     center = center / static_cast<float>(vertices.size());
 
@@ -317,7 +320,8 @@ OperationResult radial_align_selection_impl(Document& document, Selection& selec
 
     const float radius = radius_sum / static_cast<float>(radial_vertices.size());
     if (radius <= kEpsilon) {
-      return {false, "Radial Align needs vertices with a visible radius."};
+      return OperationResult::failure(
+          "Radial Align needs vertices with a visible radius.");
     }
 
     const float angle_step =
@@ -369,7 +373,8 @@ OperationResult radial_align_selection_impl(Document& document, Selection& selec
     }
     clear_face_uvs(candidate);
     if (!every_face_triangulates(candidate)) {
-        return { false, "Radial Align would create invalid face geometry." };
+        return OperationResult::failure(
+            "Radial Align would create invalid face geometry.");
     }
     document = std::move(candidate);
     return { true, {} };

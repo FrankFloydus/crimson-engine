@@ -46,19 +46,20 @@ public:
 OperationResult SplitEdgesOperation::apply(Document& document, Selection& selection) const
 {
   if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
-    return {false, "Select one or more edges to split."};
+    return OperationResult::failure("Select one or more edges to split.");
   }
 
     const std::vector<Edge> selected_edges = selected_valid_edges(document, selection);
     if (selected_edges.empty()) {
-        return { false, "Select one or more valid edges to split." };
+        return OperationResult::failure("Select one or more valid edges to split.");
     }
 
     std::map<ElementId, std::vector<Edge>> split_edges_by_face_id;
     for (const Edge& edge : selected_edges) {
         const std::vector<std::size_t> adjacent_faces = adjacent_face_indices_for_edge(document, edge);
         if (adjacent_faces.size() != 2) {
-            return { false, "Edge Split needs selected interior edges with exactly two adjacent faces." };
+            return OperationResult::failure(
+                "Edge Split needs selected interior edges with exactly two adjacent faces.");
         }
         split_edges_by_face_id[document.faces[adjacent_faces.front()].id].push_back(edge);
     }
@@ -85,8 +86,8 @@ OperationResult SplitEdgesOperation::apply(Document& document, Selection& select
             const ElementId duplicate_b = duplicate_vertex_for_face(candidate, duplicate_vertices, face.id, edge.b);
             if (duplicate_a == kInvalidElementId ||
                 duplicate_b == kInvalidElementId) {
-              return {false,
-                      "Edge Split could not duplicate selected edge vertices."};
+              return OperationResult::failure(
+                  "Edge Split could not duplicate selected edge vertices.");
             }
             if (creates_duplicate_a) {
                 result.created.vertices.push_back(duplicate_a);
@@ -121,14 +122,16 @@ OperationResult SplitEdgesOperation::apply(Document& document, Selection& select
     }
 
     if (!changed || split_open_edges.empty()) {
-        return { false, "No splittable selected edges were found." };
+        return OperationResult::failure(
+            "No splittable selected edges were found.");
     }
 
     prune_invalid_faces(candidate);
     prune_unused_vertices(candidate);
     restore_source_face_orientation(document, candidate);
     if (!every_face_triangulates(candidate)) {
-        return { false, "Edge Split would create invalid face geometry." };
+        return OperationResult::failure(
+            "Edge Split would create invalid face geometry.");
     }
 
     document = std::move(candidate);

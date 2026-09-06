@@ -56,7 +56,7 @@ BevelVerticesOperation::BevelVerticesOperation(float distance)
 OperationResult BevelVerticesOperation::apply(Document& document, Selection& selection) const
 {
   if (selection.mode != SelectionMode::Vertex) {
-    return {false, "Bevel needs vertex selection mode."};
+    return OperationResult::failure("Bevel needs vertex selection mode.");
   }
 
     std::set<ElementId> selected_vertices;
@@ -67,7 +67,7 @@ OperationResult BevelVerticesOperation::apply(Document& document, Selection& sel
       }
     }
     if (selected_vertices.empty()) {
-        return { false, "Select one or more vertices to bevel." };
+        return OperationResult::failure("Select one or more vertices to bevel.");
     }
 
     Document candidate = document;
@@ -118,7 +118,7 @@ OperationResult BevelVerticesOperation::apply(Document& document, Selection& sel
 
         rebuilt_loop = unique_valid_face_loop(std::move(rebuilt_loop));
         if (rebuilt_loop.size() < 3 && face_changed) {
-            return { false, "Bevel would create invalid face geometry." };
+            return OperationResult::failure("Bevel would create invalid face geometry.");
         }
         if (rebuilt_loop.size() < 3) {
             rebuilt_faces.push_back(face);
@@ -196,7 +196,7 @@ OperationResult BevelVerticesOperation::apply(Document& document, Selection& sel
     }
 
     if (!changed || new_selected_vertices.empty()) {
-        return { false, "No bevelable selected vertices were found." };
+        return OperationResult::failure("No bevelable selected vertices were found.");
     }
 
     candidate.faces = std::move(rebuilt_faces);
@@ -204,7 +204,7 @@ OperationResult BevelVerticesOperation::apply(Document& document, Selection& sel
     prune_unused_vertices(candidate);
     restore_source_face_orientation(document, candidate);
     if (!every_face_triangulates(candidate)) {
-        return { false, "Bevel would create invalid face geometry." };
+        return OperationResult::failure("Bevel would create invalid face geometry.");
     }
 
     document = std::move(candidate);

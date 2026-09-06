@@ -177,7 +177,7 @@ adapt_delta(const quader_poly::OperationElementDelta &delta) {
 [[nodiscard]] OperationResult
 adapt_operation_result(const quader_poly::OperationResult &result) {
   OperationResult sdk_result;
-  sdk_result.success = true;
+  sdk_result.success = result.success;
   sdk_result.changed = result.changed;
   sdk_result.message = result.message;
   sdk_result.created = adapt_delta(result.created);
@@ -846,6 +846,10 @@ apply_operation(PolygonDocumentImpl &impl, Operation operation,
   const quader_poly::Selection selection_before = selection;
   quader_poly::OperationResult native_result =
       operation(document, selection);
+  if (!native_result.success) {
+    return Result<OperationResult>::failure(
+        make_error(ErrorCode::ValidationFailed, std::move(native_result.message)));
+  }
   OperationResult result = adapt_operation_result(native_result);
   const bool selection_changed =
       result.changed && !same_native_selection(selection_before, selection);
@@ -2507,13 +2511,13 @@ Result<OperationResult> PolygonDocument::snap_selected_edges_to_active() {
   const quader_poly::Selection &selection = *impl_->selection;
   if (selection.mode != quader_poly::SelectionMode::Edge ||
       selection.edges.empty()) {
-    return operation_success(
-        selection_only_result(false, "Select edges before snapping."));
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument, "Select edges before snapping."));
   }
   if (!selection.has_active ||
       selection.active_kind != quader_poly::ElementKind::Edge) {
-    return operation_success(
-        selection_only_result(false, "Edge Snap needs an active selected edge."));
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument, "Edge Snap needs an active selected edge."));
   }
 
   const quader_poly::Edge target_edge =
@@ -2523,8 +2527,8 @@ Result<OperationResult> PolygonDocument::snap_selected_edges_to_active() {
         return quader_poly::make_edge(edge.a, edge.b) == target_edge;
       });
   if (!active_selected) {
-    return operation_success(
-        selection_only_result(false, "Edge Snap needs an active selected edge."));
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument, "Edge Snap needs an active selected edge."));
   }
 
   const quader_poly::Vertex *target_a =
@@ -2597,8 +2601,8 @@ Result<OperationResult> PolygonDocument::snap_selected_edges_to_active() {
   }
 
   if (!has_other_edge) {
-    return operation_success(selection_only_result(
-        false, "Select at least one other edge to snap."));
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument, "Select at least one other edge to snap."));
   }
 
   OperationResult result;
@@ -2873,6 +2877,10 @@ Result<ExtractedPolygonDocument> PolygonDocument::extract_selected_faces() {
   quader_poly::Selection source_selection = *impl_->selection;
   quader_poly::ExtractFacesResult native_result =
       quader_poly::extract_selected_faces(source_document, source_selection);
+  if (!native_result.success) {
+    return Result<ExtractedPolygonDocument>::failure(
+        make_error(ErrorCode::ValidationFailed, std::move(native_result.message)));
+  }
   OperationResult receipt;
   receipt.changed = native_result.changed;
   receipt.message = native_result.message;

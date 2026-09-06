@@ -46,12 +46,12 @@ public:
 OperationResult DissolveVerticesOperation::apply(Document& document, Selection& selection) const
 {
   if (selection.mode != SelectionMode::Vertex || selection.vertices.empty()) {
-    return {false, "Select one or more vertices to dissolve."};
+    return OperationResult::failure("Select one or more vertices to dissolve.");
   }
 
     const std::vector<ElementId> selected_vertices = selected_valid_vertices(document, selection);
     if (selected_vertices.empty()) {
-        return { false, "Select one or more valid vertices to dissolve." };
+        return OperationResult::failure("Select one or more valid vertices to dissolve.");
     }
 
     std::set<ElementId> selected_vertex_set(selected_vertices.begin(), selected_vertices.end());
@@ -64,12 +64,12 @@ OperationResult DissolveVerticesOperation::apply(Document& document, Selection& 
 
             used_by_face = true;
             if (!loop_vertex_is_redundant(document, face.vertices, vertex_id)) {
-                return { false, "Dissolve Vertex only removes redundant straight-line vertices." };
+                return OperationResult::failure("Dissolve Vertex only removes redundant straight-line vertices.");
             }
         }
 
         if (!used_by_face) {
-            return { false, "Dissolve Vertex needs vertices that belong to faces." };
+            return OperationResult::failure("Dissolve Vertex needs vertices that belong to faces.");
         }
     }
 
@@ -91,7 +91,7 @@ OperationResult DissolveVerticesOperation::apply(Document& document, Selection& 
             continue;
         }
         if (dissolved_loop.size() < 3U) {
-            return { false, "Dissolve Vertex would create invalid face geometry." };
+            return OperationResult::failure("Dissolve Vertex would create invalid face geometry.");
         }
 
         for (const ElementId vertex_id : removed_from_face) {
@@ -104,14 +104,14 @@ OperationResult DissolveVerticesOperation::apply(Document& document, Selection& 
     }
 
     if (!changed || dissolved_vertices.empty()) {
-        return { false, "No dissolvable selected vertices were found." };
+        return OperationResult::failure("No dissolvable selected vertices were found.");
     }
 
     prune_invalid_faces(candidate);
     prune_unused_vertices(candidate);
     restore_source_face_orientation(document, candidate);
     if (!every_face_triangulates(candidate)) {
-        return { false, "Dissolve Vertex would create invalid face geometry." };
+        return OperationResult::failure("Dissolve Vertex would create invalid face geometry.");
     }
 
     document = std::move(candidate);

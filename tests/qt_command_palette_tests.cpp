@@ -11,12 +11,14 @@
 #include "core/localization_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "ui/qt_command_palette.hpp"
+#include "ui/qt_status_message.hpp"
 
 #include <QApplication>
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QLabel>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -213,6 +215,56 @@ TEST(QtCommandPaletteTests,
 
   send_key(*search, Qt::Key_Escape);
   EXPECT_FALSE(palette.isVisible());
+}
+
+TEST(QtCommandPaletteTests,
+     RejectedExecutionShowsErrorWithoutDuplicatingTheCommandAnnouncement) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-command-palette-error-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Palette Failure");
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
+  LocalizationService localization = loaded_localization();
+  QtCommandPalette palette(editor.commands(), localization);
+  palette.setAttribute(Qt::WA_DontShowOnScreen, true);
+  palette.open_palette();
+  run_next_event_turn();
+  auto *search = palette.findChild<QLineEdit *>(QStringLiteral("commandPalette.search"));
+  auto *results = palette.findChild<QTreeWidget *>(QStringLiteral("commandPalette.results"));
+  auto *status = dynamic_cast<QtStatusMessage *>(
+      palette.findChild<QLabel *>(QStringLiteral("commandPalette.status")));
+  ASSERT_NE(search, nullptr);
+  ASSERT_NE(results, nullptr);
+  ASSERT_NE(status, nullptr);
+  int local_announcements = 0;
+  status->set_error_sound_callback([&] { ++local_announcements; });
+  search->setText(QString::fromStdString(
+      std::string(quader_command::kModelingTextureFlipFaceHorizontal.string())));
+  auto *flip = find_command_item(*results,
+      quader_command::kModelingTextureFlipFaceHorizontal.string());
+  ASSERT_NE(flip, nullptr);
+  results->setCurrentItem(flip);
+  send_key(*search, Qt::Key_Return);
+  run_next_event_turn();
+  ASSERT_TRUE(editor.commands().last_status().has_value());
+  EXPECT_FALSE(editor.commands().last_status()->ok());
+  EXPECT_TRUE(palette.isVisible());
+  EXPECT_TRUE(status->is_error());
+  EXPECT_FALSE(status->text().isEmpty());
+  EXPECT_EQ(local_announcements, 0);
+  search->setText(QStringLiteral("select.all"));
+  EXPECT_FALSE(status->is_error());
+  EXPECT_EQ(local_announcements, 0);
 }
 
 } // namespace

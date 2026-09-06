@@ -31,6 +31,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -48,13 +49,17 @@ TEST(ViewportToolCatalogTests, HostViewportAdapterUsesViewportToolDescriptors) {
       viewport_tool_allows_selection_fallback(ViewportToolId::Knife));
 }
 
-/// Injects deterministic Box preview failures into viewport-tool tests.
-class FailingBoxPreviewPorts final : public ViewportToolHoverPort,
-                                     public ViewportToolPreviewPort {
+/// Injects deterministic preview failures into viewport-tool tests.
+class FailingToolPreviewPorts final : public ViewportToolHoverPort,
+                                      public ViewportToolPreviewPort,
+                                      public ViewportToolCancelPort {
 public:
   bool fail_query = false;
+  bool fail_point_hover = false;
+  bool fail_edge_loop_begin = false;
   int hover_updates = 0;
   int invalidations = 0;
+  int cancellations = 0;
 
   bool claim(ModelingBoxDragState) override { return true; }
   void invalidate() override { ++invalidations; }
@@ -64,7 +69,7 @@ public:
   }
   ModelingCommandResult
   update_insert_edge_loop_hover(const ModelingToolRayEvent &) override {
-    return {.ok = true};
+    return point_hover_result();
   }
   ModelingCommandResult
   update_knife_hover(const ModelingToolRayEvent &) override {
@@ -73,12 +78,12 @@ public:
   ModelingCommandResult clear_knife_hover() override { return {.ok = true}; }
   ModelingCommandResult
   update_poly_hover(const ModelingToolRayEvent &) override {
-    return {.ok = true};
+    return point_hover_result();
   }
   ModelingCommandResult
   update_drawn_plane_hover(ModelingViewportTool,
                            const ModelingToolRayEvent &) override {
-    return {.ok = true};
+    return point_hover_result();
   }
 
   ModelingToolStatus tool_status() const override { return {}; }
@@ -106,7 +111,9 @@ public:
   }
   ModelingCommandResult
   begin_insert_edge_loop_drag(const ModelingToolRayEvent &) override {
-    return {.ok = true};
+    return {.ok = !fail_edge_loop_begin,
+            .message = fail_edge_loop_begin ? "Forced edge loop begin failure."
+                                            : ""};
   }
   ModelingCommandResult
   update_insert_edge_loop_drag(const ModelingToolRayEvent &) override {
@@ -138,6 +145,19 @@ public:
     return {.ok = true};
   }
   ModelingCommandResult cycle_cut_mode() override { return {.ok = true}; }
+  ModelingCommandResult cancel_box() override { return {.ok = true}; }
+  ModelingCommandResult cancel_active_modal_tool() override {
+    ++cancellations;
+    return {.ok = false, .message = "Forced modal cancel failure."};
+  }
+
+private:
+  ModelingCommandResult point_hover_result() const {
+    return {
+        .ok = !fail_point_hover,
+        .message = fail_point_hover ? "Forced tool hover failure." : "",
+    };
+  }
 };
 
 /// Drives the real persistent primitive owner through deterministic rays.
@@ -1970,6 +1990,121 @@ TEST(ViewportToolRuntimeTests,
 }
 
 TEST(ViewportToolRuntimeTests,
+     FailedHoverStaysSilentAndExplicitRejectionAnnouncesEachAttempt) {
+  for (const ViewportToolId tool_id :
+       {ViewportToolId::Poly, ViewportToolId::InsertEdgeLoop,
+        ViewportToolId::Cut, ViewportToolId::Mirror}) {
+    SCOPED_TRACE(static_cast<int>(tool_id));
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    const auto mesh = editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        "Tool Error Target");
+    ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+    ASSERT_TRUE(editor.selection().select_object(mesh.value()).ok());
+
+    struct ReportedResult {
+      ModelingCommandResult command;
+      bool announce_failure = false;
+    };
+    std::vector<ReportedResult> results;
+    ViewportModelingToolPortAdapter tool_ports(
+        session.modeling(),
+        {.handle_tool_command_result =
+             [&](std::string_view, const ModelingCommandResult &command,
+                 bool announce_failure) {
+               results.push_back({command, announce_failure});
+             }});
+    FailingToolPreviewPorts failing_hover;
+    failing_hover.fail_point_hover = true;
+    ViewportToolPorts ports = tool_ports.ports();
+    ports.hover = &failing_hover;
+    if (tool_id == ViewportToolId::InsertEdgeLoop) {
+      // Empty-space begin can legitimately succeed without a preview. Inject
+      // rejection at the preview port to exercise its error presentation.
+      failing_hover.fail_edge_loop_begin = true;
+      ports.preview = &failing_hover;
+    }
+    ViewportToolRuntime runtime;
+    ViewportToolState state;
+    ViewportCameraController camera;
+    ASSERT_TRUE(runtime.set_active_tool(state, tool_id));
+    const ModelingCommandResult activated =
+        runtime.activate_active_tool(session.modeling());
+    ASSERT_TRUE(activated.ok) << activated.message;
+
+    ViewportPointToolContext point_context;
+    point_context.make_event_at = [](QVec2, bool dragging) {
+      return ModelingToolRayEvent{
+          .ray = {.origin = {100.0f, 100.0f, 100.0f},
+                  .direction = {0.0f, 0.0f, -1.0f}},
+          .dragging = dragging,
+      };
+    };
+    ViewportToolContext context{
+        .state = state,
+        .camera = camera,
+        .ports = ports,
+        .point = &point_context,
+    };
+    const auto dispatch = [&](ViewportPointerToolEvent pointer) {
+      return runtime.handle_active_tool_event(
+          state, context,
+          {.kind = ViewportToolEventKind::Frame,
+           .tool = tool_id,
+           .pointer = pointer});
+    };
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      results.clear();
+      EXPECT_TRUE(dispatch({.can_interact = true}).handled);
+      ASSERT_EQ(results.size(), 1U);
+      EXPECT_FALSE(results.back().command.ok);
+      EXPECT_FALSE(results.back().announce_failure);
+      EXPECT_EQ(results.back().command.message, "Forced tool hover failure.");
+
+      results.clear();
+      const bool begin_drag = tool_id == ViewportToolId::InsertEdgeLoop;
+      const ViewportToolResult rejected = dispatch({
+          .left_clicked = begin_drag,
+          .can_interact = true,
+          .finalize_pressed = !begin_drag,
+          .suppress_hover_work = true,
+      });
+      EXPECT_TRUE(rejected.handled);
+      EXPECT_FALSE(rejected.active_tool_changed);
+      ASSERT_EQ(results.size(), 1U);
+      EXPECT_FALSE(results.back().command.ok);
+      EXPECT_FALSE(results.back().command.changed);
+      EXPECT_TRUE(results.back().announce_failure);
+      EXPECT_FALSE(results.back().command.message.empty());
+      EXPECT_EQ(state.active_tool, tool_id);
+    }
+
+    results.clear();
+    context.ports.cancel = &failing_hover;
+    const int invalidations_before = failing_hover.invalidations;
+    const ViewportToolResult canceled = runtime.handle_active_tool_event(
+        state, context,
+        {.kind = ViewportToolEventKind::Cancel,
+         .tool = tool_id,
+         .exit_active_modal_tool = true});
+    EXPECT_TRUE(canceled.handled);
+    EXPECT_TRUE(canceled.consumed);
+    EXPECT_TRUE(canceled.modal_state_changed);
+    EXPECT_TRUE(canceled.active_tool_changed);
+    EXPECT_TRUE(canceled.sync_active_tool_from_modeling);
+    EXPECT_EQ(failing_hover.cancellations, 1);
+    EXPECT_EQ(failing_hover.invalidations, invalidations_before + 1);
+    ASSERT_EQ(results.size(), 1U);
+    EXPECT_FALSE(results.back().command.ok);
+    EXPECT_TRUE(results.back().announce_failure);
+    EXPECT_EQ(results.back().command.message, "Forced modal cancel failure.");
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
      PersistentPrimitiveRollsBackOnQueryAndHoverPreviewFailures) {
   const ViewportTool *box_tool =
       find_viewport_tool(ViewportToolId::CreatePrimitive);
@@ -1977,7 +2112,7 @@ TEST(ViewportToolRuntimeTests,
 
   for (const bool fail_query : {true, false}) {
     SCOPED_TRACE(fail_query ? "query failure" : "hover failure");
-    FailingBoxPreviewPorts ports;
+    FailingToolPreviewPorts ports;
     ports.fail_query = fail_query;
     ViewportToolState state{
         .active_tool = ViewportToolId::CreatePrimitive};
@@ -2028,7 +2163,7 @@ TEST(ViewportToolRuntimeTests,
 
   for (const bool apply : {true, false}) {
     SCOPED_TRACE(apply ? "apply failure" : "cancel failure");
-    FailingBoxPreviewPorts ports;
+    FailingToolPreviewPorts ports;
     ViewportToolState state{
         .active_tool = ViewportToolId::CreatePrimitive};
     ViewportCameraController camera;

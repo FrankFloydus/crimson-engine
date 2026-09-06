@@ -243,9 +243,10 @@ void ViewportModelingToolPortAdapter::set_app_selection_mode(
 }
 
 void ViewportModelingToolPortAdapter::handle_tool_command_result(
-    std::string_view label, const ModelingCommandResult &result) {
+    std::string_view label, const ModelingCommandResult &result,
+    bool announce_failure) {
   if (callbacks_.handle_tool_command_result) {
-    callbacks_.handle_tool_command_result(label, result);
+    callbacks_.handle_tool_command_result(label, result, announce_failure);
   }
 }
 

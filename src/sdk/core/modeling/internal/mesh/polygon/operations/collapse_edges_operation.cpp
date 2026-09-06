@@ -46,7 +46,7 @@ public:
 OperationResult CollapseEdgesOperation::apply(Document& document, Selection& selection) const
 {
   if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
-    return {false, "Select one or more edges to collapse."};
+    return OperationResult::failure("Select one or more edges to collapse.");
   }
 
     Selection vertex_selection;
@@ -66,7 +66,7 @@ OperationResult CollapseEdgesOperation::apply(Document& document, Selection& sel
     }
 
     if (vertex_selection.vertices.size() < 2) {
-        return { false, "Collapse needs at least one valid selected edge." };
+        return OperationResult::failure("Collapse needs at least one valid selected edge.");
     }
 
     ElementId active_vertex_id = vertex_selection.vertices.front();

@@ -1520,7 +1520,7 @@ TEST(BuildGuardrailTests,
       "src/sdk/core/modeling/neutral/include/quader/modeling/neutral");
   const std::filesystem::path implementation_mesh =
       source_path("src/sdk/core/modeling/internal/mesh");
-  EXPECT_EQ(files_with_extension(neutral_mesh, ".hpp").size(), 31U);
+  EXPECT_EQ(files_with_extension(neutral_mesh, ".hpp").size(), 32U);
   EXPECT_TRUE(files_with_extension(implementation_mesh, ".hpp").empty());
 
   const std::string retired_include = joined("#include <me", "sh/");
@@ -3447,7 +3447,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   const std::size_t status_gate =
       status_refresh.find("if (!status_presenter_.needs_refresh(stamp))");
   const std::size_t status_copy = status_refresh.find("last_status()", 1u);
-  const std::size_t status_setter = status_refresh.find("setText(message)");
+  const std::size_t status_setter = status_refresh.find("status_message_->present(");
   ASSERT_NE(status_revision, std::string::npos);
   ASSERT_NE(status_gate, std::string::npos);
   ASSERT_NE(status_copy, std::string::npos);

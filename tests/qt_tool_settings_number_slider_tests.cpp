@@ -17,6 +17,7 @@
 #include "ui/qt_tool_settings_drag_spinner.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
+#include "ui/qt_status_message.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/ui_panel_manager.hpp"
@@ -2103,6 +2104,11 @@ TEST(QtToolSettingsPanelTests,
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
       "Edit Texture Drafts");
   ASSERT_TRUE(created.ok());
+  std::vector<quader::QuaderNotification> notifications;
+  editor.ui().set_runtime_hooks({.notify = [&](quader::QuaderNotification value) {
+    notifications.push_back(std::move(value));
+    return quader::QuaderApiVoidResult{.ok = true};
+  }});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
   quader::QtToolSettingsPanel panel;
@@ -2124,6 +2130,10 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_NE(down, nullptr);
   ASSERT_NE(flip, nullptr);
   ASSERT_NE(message, nullptr);
+  auto *error_message = dynamic_cast<quader::QtStatusMessage *>(message);
+  ASSERT_NE(error_message, nullptr);
+  int inline_announcements = 0;
+  error_message->set_error_sound_callback([&] { ++inline_announcements; });
 
   type_spin_text(*scale, QStringLiteral("2.0"));
   ASSERT_TRUE(panel.numeric_interaction_active());
@@ -2145,6 +2155,7 @@ TEST(QtToolSettingsPanelTests,
 
   // A real mouse click must not let Qt silently restore zero to the previous
   // value on focus-out and then execute an action the user could not see.
+  EXPECT_TRUE(notifications.empty());
   type_spin_text(*scale, QStringLiteral("0"));
   const auto invalid_revision = editor.revisions().modeling_content_revision;
   send_mouse_event(*up, QEvent::MouseButtonPress, up->rect().center(),
@@ -2156,6 +2167,14 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_TRUE(panel.numeric_interaction_active());
   EXPECT_FALSE(message->isHidden());
   EXPECT_FALSE(message->text().isEmpty());
+  EXPECT_TRUE(error_message->is_error());
+  ASSERT_EQ(notifications.size(), 1u);
+  EXPECT_EQ(notifications.back().level, quader::QuaderNotificationLevel::Error);
+  EXPECT_EQ(notifications.back().message, message->text().toStdString());
+  panel.refresh_texture_settings();
+  process_events_for(75);
+  EXPECT_EQ(notifications.size(), 1u);
+  EXPECT_EQ(inline_announcements, 0);
   type_spin_text(*scale, QStringLiteral("1"));
   // The correction is dispatched by a timer even though the stored value is
   // unchanged. Wait for its observable completion, not another timer's expiry.
@@ -2207,16 +2226,26 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_EQ(editor.modeling().face_texture_settings().scale_x,
             std::optional<double>(1.0 / 8192.0));
   EXPECT_TRUE(message->isHidden());
+  const auto notifications_before_failure = notifications.size();
   flip->click();
   EXPECT_EQ(editor.revisions().modeling_content_revision, failure_revision);
   EXPECT_FALSE(message->isHidden());
   EXPECT_FALSE(message->text().isEmpty());
+  EXPECT_TRUE(error_message->is_error());
+  ASSERT_EQ(notifications.size(), notifications_before_failure + 1u);
+  EXPECT_EQ(notifications.back().level, quader::QuaderNotificationLevel::Error);
+  EXPECT_EQ(notifications.back().message, message->text().toStdString());
+  panel.refresh_texture_settings();
+  process_events_for(75);
+  EXPECT_EQ(notifications.size(), notifications_before_failure + 1u);
+  EXPECT_EQ(inline_announcements, 0);
 
   ASSERT_TRUE(editor.modeling().begin_transform_preview().ok());
   panel.refresh_texture_settings();
   EXPECT_FALSE(up->isEnabled());
   EXPECT_FALSE(flip->isEnabled());
   EXPECT_FALSE(message->isHidden());
+  EXPECT_FALSE(error_message->is_error());
   ASSERT_TRUE(editor.modeling().cancel_transform_preview().ok());
   panel.refresh_texture_settings();
   EXPECT_TRUE(up->isEnabled());
@@ -2634,6 +2663,11 @@ TEST(QtToolSettingsPanelTests,
   QApplication::setStyle(QStringLiteral("Fusion"));
   auto standalone = quader::create_standalone_editor();
   auto &editor = standalone.editor();
+  std::vector<quader::QuaderNotification> notifications;
+  editor.ui().set_runtime_hooks({.notify = [&](quader::QuaderNotification value) {
+    notifications.push_back(std::move(value));
+    return quader::QuaderApiVoidResult{.ok = true};
+  }});
   const auto created = create_texture_action_surface(editor);
   ASSERT_TRUE(created.ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
@@ -2657,9 +2691,14 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_NE(apply, nullptr);
   ASSERT_NE(section, nullptr);
   ASSERT_NE(message, nullptr);
+  auto *error_message = dynamic_cast<quader::QtStatusMessage *>(message);
+  ASSERT_NE(error_message, nullptr);
+  int inline_announcements = 0;
+  error_message->set_error_sound_callback([&] { ++inline_announcements; });
   const auto before = editor.revisions().modeling_content_revision;
   const auto before_history = editor.history().snapshot();
   for (const QString &invalid : {QStringLiteral("0"), QStringLiteral("-")}) {
+    const auto announcements_before = notifications.size();
     type_spin_text(*repeat, invalid);
     send_mouse_event(*apply, QEvent::MouseButtonPress, apply->rect().center(),
                      Qt::LeftButton, Qt::LeftButton);
@@ -2671,6 +2710,10 @@ TEST(QtToolSettingsPanelTests,
     EXPECT_EQ(editor.history().snapshot().undo_label, before_history.undo_label);
     EXPECT_FALSE(message->isHidden());
     EXPECT_TRUE(panel.numeric_interaction_active());
+    EXPECT_TRUE(error_message->is_error());
+    ASSERT_EQ(notifications.size(), announcements_before + 1u);
+    EXPECT_EQ(notifications.back().level, quader::QuaderNotificationLevel::Error);
+    EXPECT_EQ(notifications.back().message, message->text().toStdString());
   }
   for (int toggle = 0; toggle < 2; ++toggle) {
     const QPoint indicator(7, world_space->height() / 2);
@@ -2725,6 +2768,7 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_FALSE(message->isHidden());
   process_events_for(125);
   EXPECT_EQ(editor.modeling().uv_peel_settings().options, external_options);
+  EXPECT_FALSE(error_message->is_error());
   ASSERT_TRUE(editor.modeling().cancel_transform_preview().ok());
   panel.refresh_uv_peel_settings();
   EXPECT_TRUE(apply->isEnabled());
@@ -2746,6 +2790,7 @@ TEST(QtToolSettingsPanelTests,
   const auto branched_revision = editor.revisions().modeling_content_revision;
   const auto branched_history = editor.history().snapshot();
   repeat->setValue(7.0);
+  const auto announcements_before = notifications.size();
   apply->click();
   quader::QuaderUvPeelOptions accepted_options = external_options;
   accepted_options.u_repeat = 7.0;
@@ -2754,6 +2799,14 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_EQ(editor.modeling().uv_peel_settings().options, accepted_options);
   EXPECT_FALSE(message->isHidden());
   EXPECT_FALSE(message->text().isEmpty());
+  EXPECT_TRUE(error_message->is_error());
+  ASSERT_EQ(notifications.size(), announcements_before + 1u);
+  EXPECT_EQ(notifications.back().level, quader::QuaderNotificationLevel::Error);
+  EXPECT_EQ(notifications.back().message, message->text().toStdString());
+  panel.refresh_uv_peel_settings();
+  process_events_for(125);
+  EXPECT_EQ(notifications.size(), announcements_before + 1u);
+  EXPECT_EQ(inline_announcements, 0);
   const auto branched_after = editor.modeling().mesh(box.value()).compiled_mesh();
   ASSERT_TRUE(branched_after.has_value());
   expect_same_texture_mesh(*branched_after, *branched_before);

@@ -39,8 +39,7 @@ OperationResult assign_material_slot_to_selection(
 {
 	QDR_PROFILE_SCOPE("qdr_document.assign_selected_face_material_slot");
         if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
-          return {false,
-                  "Select one or more faces before assigning a material slot."};
+          return OperationResult::failure("Select one or more faces before assigning a material slot.");
         }
 
         bool found = false;
@@ -59,7 +58,7 @@ OperationResult assign_material_slot_to_selection(
 	}
 
 	if (!found) {
-		return { false, "Selected faces were not found." };
+		return OperationResult::failure("Selected faces were not found.");
 	}
 	if (!changed) {
 		return { false, "Selected faces already use that material slot." };
@@ -85,7 +84,7 @@ OperationResult assign_face_material_slot(Document& document, ElementId face_id,
 	QDR_PROFILE_SCOPE("qdr_document.assign_face_material_slot");
 	Face* face = find_face(document, face_id);
 	if (face == nullptr) {
-		return { false, "Material target face was not found." };
+		return OperationResult::failure("Material target face was not found.");
 	}
 	if (face->material_slot == material_slot) {
 		return { false, "Face already uses that material slot." };

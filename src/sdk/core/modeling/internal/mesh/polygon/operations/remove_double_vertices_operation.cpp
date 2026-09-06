@@ -177,7 +177,8 @@ RemoveDoubleVerticesOperation::apply(Document &document,
     ElementId survivor_id = cluster.front();
     const Vertex *survivor = find_vertex(candidate, survivor_id);
     if (survivor == nullptr) {
-      return {false, "Remove Doubles could not find a survivor vertex."};
+      return OperationResult::failure(
+          "Remove Doubles could not find a survivor vertex.");
     }
 
     std::set<ElementId> merge_vertex_ids;
@@ -197,14 +198,15 @@ RemoveDoubleVerticesOperation::apply(Document &document,
         candidate, next_candidate, merge_vertex_ids, survivor_id,
         survivor->position);
     if (!merge_result.changed) {
-      return merge_result.message.empty()
-                 ? OperationResult{false, "Remove Doubles would create invalid "
-                                          "geometry."}
-                 : merge_result;
+      return OperationResult::failure(
+          merge_result.message.empty()
+              ? std::string("Remove Doubles would create invalid geometry.")
+              : merge_result.message);
     }
 
     if (!every_face_triangulates(next_candidate)) {
-      return {false, "Remove Doubles would create invalid face geometry."};
+      return OperationResult::failure(
+          "Remove Doubles would create invalid face geometry.");
     }
 
     for (const ElementId removed_id : merge_vertex_ids) {

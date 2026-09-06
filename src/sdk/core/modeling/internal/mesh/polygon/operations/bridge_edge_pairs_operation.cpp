@@ -186,7 +186,7 @@ private:
 OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection, const std::vector<std::pair<Edge, Edge>>& edge_pairs, int steps)
 {
     if (edge_pairs.empty()) {
-        return { false, "Bridge needs one or more selected edge pairs." };
+        return OperationResult::failure("Bridge needs one or more selected edge pairs.");
     }
 
     const std::map<std::pair<ElementId, ElementId>, int> incidence_counts = edge_incidence_counts(document);
@@ -203,15 +203,15 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
             find_vertex(document, first.b) == nullptr ||
             find_vertex(document, second.a) == nullptr ||
             find_vertex(document, second.b) == nullptr || first == second) {
-          return {false, "Bridge needs valid selected edge pairs."};
+          return OperationResult::failure("Bridge needs valid selected edge pairs.");
         }
         if (!used_edges.insert({ first.a, first.b }).second || !used_edges.insert({ second.a, second.b }).second) {
-            return { false, "Bridge cannot reuse the same edge in multiple pairs." };
+            return OperationResult::failure("Bridge cannot reuse the same edge in multiple pairs.");
         }
 
         const std::optional<BridgePairInfo> pair_info = bridge_edge_info_pair(document, first, second, incidence_counts);
         if (!pair_info.has_value()) {
-            return { false, "Bridge needs selected edges that belong to faces." };
+            return OperationResult::failure("Bridge needs selected edges that belong to faces.");
         }
         pair_infos.push_back(*pair_info);
     }
@@ -275,7 +275,7 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
         if (step_count == 1) {
             const std::optional<std::vector<ElementId>> bridge_loop = bridge_face_loop_from_open_edges(document, pair_info.first, pair_info.second);
             if (!bridge_loop.has_value() || !append_bridge_face(*bridge_loop, pair_info.first)) {
-                return { false, "Bridge could not create a valid triangle or quad from the selected edges." };
+                return OperationResult::failure("Bridge could not create a valid triangle or quad from the selected edges.");
             }
         } else {
             const ElementId first_a = pair_info.first.oriented_face_edge.second;
@@ -305,10 +305,10 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
             const bool rail_a_shared = first_a == second_for_a;
             const bool rail_b_shared = first_b == second_for_b;
             if (unique_vertices.size() == 3 && !rail_a_shared && !rail_b_shared) {
-                return { false, "Bridge could not find a consistent triangle fan between the selected edges." };
+                return OperationResult::failure("Bridge could not find a consistent triangle fan between the selected edges.");
             }
             if (unique_vertices.size() != 3 && unique_vertices.size() != 4) {
-                return { false, "Bridge needs selected edges that share one vertex or no vertices." };
+                return OperationResult::failure("Bridge needs selected edges that share one vertex or no vertices.");
             }
 
             const quader::QVec3 first_outward = bridge_edge_outward_direction(document, pair_info.first);
@@ -320,22 +320,20 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
                 const ElementId current_b = rail_b_shared ? first_b : interpolated_vertex(first_b, second_for_b, first_outward, second_outward, step_index);
                 if (current_a == kInvalidElementId ||
                     current_b == kInvalidElementId) {
-                  return {
-                      false,
-                      "Bridge could not create intermediate step vertices."};
+                  return OperationResult::failure("Bridge could not create intermediate step vertices.");
                 }
 
                 if (rail_a_shared) {
                     if (!append_bridge_face({ first_a, previous_b, current_b }, pair_info.first)) {
-                        return { false, "Bridge could not create a valid stepped triangle." };
+                        return OperationResult::failure("Bridge could not create a valid stepped triangle.");
                     }
                 } else if (rail_b_shared) {
                     if (!append_bridge_face({ previous_a, first_b, current_a }, pair_info.first)) {
-                        return { false, "Bridge could not create a valid stepped triangle." };
+                        return OperationResult::failure("Bridge could not create a valid stepped triangle.");
                     }
                 } else {
                     if (!append_bridge_face({ previous_a, previous_b, current_b, current_a }, pair_info.first)) {
-                        return { false, "Bridge could not create a valid stepped quad." };
+                        return OperationResult::failure("Bridge could not create a valid stepped quad.");
                     }
                 }
 
@@ -346,7 +344,7 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
     }
 
     if (bridged_face_ids.empty() || !every_face_triangulates(candidate)) {
-        return { false, "Bridge would create invalid face geometry." };
+        return OperationResult::failure("Bridge would create invalid face geometry.");
     }
 
     document = std::move(candidate);

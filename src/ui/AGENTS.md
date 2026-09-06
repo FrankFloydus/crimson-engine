@@ -25,6 +25,11 @@ file except through prior written authorization from Francesco Di Blasi.
 - Reuse localization, settings descriptors, models, delegates, and signals. Call base event handlers
   on unhandled paths. Input follows [INPUT_KEYBINDINGS.md](../../INPUT_KEYBINDINGS.md): Qt adaptation,
   canonical keybindings, then semantic viewport frames. Do not add a parallel `QAction` shortcut map.
+- `QtStatusMessage` owns error contrast and the portable Qt system alert. Announce new failures once;
+  unchanged frames, localization and runtime rebinding must not replay sounds. `UISystem` retains
+  direct notifications separately from command status, with errors taking priority over tool hints.
+  Direct user actions publish failures through `editor.ui().notify`; command dispatch already owns
+  its status. Tool result ports identify explicit attempts so hover/preview refreshes remain silent.
 - Floating numeric inputs use `QtDoubleSpinBox`; other numeric control text uses
   `qt_format_number`. Show at most four decimal places without trailing zeroes, while retaining
   owner-defined precision and ranges. Unedited rounded text must not change the stored value.

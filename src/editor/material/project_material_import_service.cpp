@@ -22,7 +22,7 @@ namespace {
 std::string completed_message(std::size_t imported, std::size_t failed) {
   if (imported == 0u) {
     return "No materials were imported; " + std::to_string(failed) +
-           " source file(s) failed validation.";
+           " source file(s) failed to import.";
   }
   std::string message = "Imported " + std::to_string(imported) +
                         " material(s).";
@@ -200,7 +200,7 @@ ProjectMaterialImportService::import_textures_as_materials(
 
   if (pending_successes.empty()) {
     rollback.commit();
-    report.ok = true;
+    report.ok = false;
     report.message = completed_message(0u, report.failed.size());
     return report;
   }

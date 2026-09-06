@@ -169,12 +169,12 @@ OperationResult bridge_edge_boundaries_impl(
     int steps)
 {
     if (first_vertices.size() != second_vertices.size()) {
-        return { false, "Bridge needs matching boundary vertex counts." };
+        return OperationResult::failure("Bridge needs matching boundary vertex counts.");
     }
     const std::size_t vertex_count = first_vertices.size();
     const std::size_t edge_count = closed ? vertex_count : (vertex_count > 0U ? vertex_count - 1U : 0U);
     if (vertex_count < 2U || edge_count == 0U || (!closed && vertex_count < 2U)) {
-        return { false, "Bridge needs two valid boundary edge chains." };
+        return OperationResult::failure("Bridge needs two valid boundary edge chains.");
     }
 
     auto [oriented_first_vertices, oriented_second_vertices] =
@@ -206,16 +206,16 @@ OperationResult bridge_edge_boundaries_impl(
             find_vertex(document, first_edge.b) == nullptr ||
             find_vertex(document, second_edge.a) == nullptr ||
             find_vertex(document, second_edge.b) == nullptr) {
-          return {false, "Bridge needs valid boundary vertices."};
+          return OperationResult::failure("Bridge needs valid boundary vertices.");
         }
         if (!used_edges.insert({ first_edge.a, first_edge.b }).second || !used_edges.insert({ second_edge.a, second_edge.b }).second) {
-            return { false, "Bridge cannot reuse the same edge in multiple boundary segments." };
+            return OperationResult::failure("Bridge cannot reuse the same edge in multiple boundary segments.");
         }
 
         const std::optional<OpenBridgeEdgeInfo> first_info = open_bridge_edge_info(document, first_edge, incidence_counts);
         const std::optional<OpenBridgeEdgeInfo> second_info = open_bridge_edge_info(document, second_edge, incidence_counts);
         if (!first_info.has_value() || !second_info.has_value()) {
-            return { false, "Bridge needs selected edges that belong to faces." };
+            return OperationResult::failure("Bridge needs selected edges that belong to faces.");
         }
 
         const quader::QVec3 first_outward = bridge_edge_outward_direction(document, *first_info);
@@ -247,7 +247,7 @@ OperationResult bridge_edge_boundaries_impl(
             const Vertex* first_vertex = find_vertex(document, oriented_first_vertices[vertex_index]);
             const Vertex* second_vertex = find_vertex(document, oriented_second_vertices[vertex_index]);
             if (first_vertex == nullptr || second_vertex == nullptr) {
-                return { false, "Bridge could not find boundary vertices." };
+                return OperationResult::failure("Bridge could not find boundary vertices.");
             }
             ring.push_back(add_vertex(candidate, curved_bridge_position(first_vertex->position, second_vertex->position, first_outwards[vertex_index], second_outwards[vertex_index], step_index, step_count)));
         }
@@ -270,14 +270,14 @@ OperationResult bridge_edge_boundaries_impl(
             expected_face.vertices = quad;
             const quader::QVec3 expected_normal = face_normal(candidate, expected_face);
             if (!append_bridge_face(candidate, std::move(quad), material_slots[edge_index], expected_normal, bridge_face_ids, texture_transforms[edge_index])) {
-                return { false, "Bridge could not create a valid stepped boundary face." };
+                return OperationResult::failure("Bridge could not create a valid stepped boundary face.");
             }
         }
     }
 
     prune_invalid_faces(candidate);
     if (bridge_face_ids.empty() || !every_face_triangulates(candidate)) {
-        return { false, "Bridge would create invalid boundary geometry." };
+        return OperationResult::failure("Bridge would create invalid boundary geometry.");
     }
 
     document = std::move(candidate);

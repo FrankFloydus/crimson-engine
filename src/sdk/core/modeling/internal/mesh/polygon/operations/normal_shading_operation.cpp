@@ -95,7 +95,8 @@ OperationResult set_selected_face_shading(Document& document, const Selection& s
 {
     QDR_PROFILE_SCOPE("qdr_document.set_selected_face_shading");
     if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
-      return {false, "Select one or more faces before changing shade mode."};
+      return OperationResult::failure(
+          "Select one or more faces before changing shade mode.");
     }
 
     bool changed = false;
@@ -165,8 +166,8 @@ OperationResult set_selected_edge_normal_hardness(Document& document, const Sele
 {
     QDR_PROFILE_SCOPE("qdr_document.set_selected_edge_normal_hardness");
     if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
-      return {false,
-              "Select one or more edges before changing normal hardness."};
+      return OperationResult::failure(
+          "Select one or more edges before changing normal hardness.");
     }
 
     const std::set<Edge, EdgeLess> valid_edges = document_edge_set(document);

@@ -927,7 +927,10 @@ OperationResult PlaneCutOperation::apply(Document& document, Selection& selectio
     QDR_PROFILE_SCOPE("qdr_document.PlaneCutOperation.apply");
     PlaneCutResult result = plane_cut_impl(document, request_);
     if (!result.changed) {
-        return { false, result.message.empty() ? std::string("Plane Cut could not split the document.") : std::move(result.message) };
+        return OperationResult::failure(
+            result.message.empty()
+                ? std::string("Plane Cut could not split the document.")
+                : std::move(result.message));
     }
 
     switch (request_.mode) {
@@ -940,12 +943,12 @@ OperationResult PlaneCutOperation::apply(Document& document, Selection& selectio
       selection = std::move(result.back_selection);
       return {true, {}};
     case PlaneCutMode::KeepBoth:
-      return {false,
-              "Plane Cut keep_both produces two documents; use plane_cut() or "
-              "choose keep_front/keep_back for single-document operations."};
+      return OperationResult::failure(
+          "Plane Cut keep_both produces two documents; use plane_cut() or "
+          "choose keep_front/keep_back for single-document operations.");
     }
 
-    return { false, "Plane Cut received an unsupported mode." };
+    return OperationResult::failure("Plane Cut received an unsupported mode.");
 }
 
 PlaneCutResult plane_cut(const Document& document, const PlaneCutRequest& request)
@@ -958,12 +961,12 @@ OperationResult plane_surface_cut(Document &document, Selection &selection,
                                   const PlaneCutRequest &request) {
   QDR_PROFILE_SCOPE("qdr_document.plane_surface_cut");
   if (document.faces.empty()) {
-    return {false, "Cut needs a mesh."};
+    return OperationResult::failure("Cut needs a mesh.");
   }
 
   const std::optional<PlaneCutPlane> plane = plane_from_request(request);
   if (!plane.has_value()) {
-    return {false, "Cut plane needs three non-collinear points."};
+    return OperationResult::failure("Cut plane needs three non-collinear points.");
   }
 
   PlaneCutWork work;
@@ -989,9 +992,9 @@ OperationResult plane_surface_cut(Document &document, Selection &selection,
             result.created.faces,
             result.affected.faces,
             message)) {
-      return {false,
-              message.empty() ? std::string("Cut could not split the mesh faces.")
-                              : std::move(message)};
+      return OperationResult::failure(
+          message.empty() ? std::string("Cut could not split the mesh faces.")
+                          : std::move(message));
     }
   }
 
@@ -1004,7 +1007,8 @@ OperationResult plane_surface_cut(Document &document, Selection &selection,
   prune_unused_vertices(builder.document);
   restore_source_face_orientation(document, builder.document);
   if (!every_face_triangulates(builder.document)) {
-    return {false, "Cut would create a face that cannot be triangulated."};
+    return OperationResult::failure(
+        "Cut would create a face that cannot be triangulated.");
   }
 
   for (const auto& [edge, intersection] : work.intersections) {

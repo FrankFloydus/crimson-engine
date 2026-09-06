@@ -35,19 +35,22 @@ public:
 OperationResult ExtractFacesOperation::apply(Document& document, Selection& selection) const
 {
     const ExtractFacesResult result = execute(document, selection);
+    if (!result.success) {
+        return OperationResult::failure(result.message);
+    }
     return { result.changed, result.message };
 }
 
 ExtractFacesResult extract_selected_faces_impl(Document& document, Selection& selection)
 {
   if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
-    return {false, {}, {}, "Select one or more faces to extract."};
+    return ExtractFacesResult::failure("Select one or more faces to extract.");
   }
 
     const ElementId active_face_id = active_face_or_invalid(selection);
     const std::vector<Face> selected_faces = selected_face_copies(document, selection);
     if (selected_faces.empty()) {
-        return { false, {}, {}, "No selected faces were found." };
+        return ExtractFacesResult::failure("No selected faces were found.");
     }
 
     Document extracted_document;
@@ -57,12 +60,12 @@ ExtractFacesResult extract_selected_faces_impl(Document& document, Selection& se
     std::map<ElementId, ElementId> face_map;
     for (const Face& face : selected_faces) {
         if (!append_copied_face(document, extracted_document, face, vertex_map, face_map, extracted_selection)) {
-            return { false, {}, {}, "Extract could not copy selected face geometry." };
+            return ExtractFacesResult::failure("Extract could not copy selected face geometry.");
         }
     }
 
     if (extracted_document.faces.empty() || !every_face_triangulates(extracted_document)) {
-        return { false, {}, {}, "Extract would create invalid face geometry." };
+        return ExtractFacesResult::failure("Extract would create invalid face geometry.");
     }
 
     std::set<ElementId> selected_face_ids;
@@ -76,7 +79,7 @@ ExtractFacesResult extract_selected_faces_impl(Document& document, Selection& se
     });
     prune_unused_vertices(candidate);
     if (!candidate.faces.empty() && !every_face_triangulates(candidate)) {
-        return { false, {}, {}, "Extract would leave invalid source face geometry." };
+        return ExtractFacesResult::failure("Extract would leave invalid source face geometry.");
     }
 
     document = std::move(candidate);

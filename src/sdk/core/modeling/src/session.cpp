@@ -956,6 +956,10 @@ void append_native_delta(ElementDelta &target,
                                                bridge_selection, steps)
           : quader_poly::bridge_selected_edges(survivor_document,
                                                bridge_selection, steps);
+  if (!native_result.success) {
+    return Result<SessionBridgePreviewCandidate>::failure(
+        make_error(ErrorCode::ValidationFailed, native_result.message));
+  }
   if (!native_result.changed) {
     OperationResult unchanged;
     unchanged.message = native_result.message;

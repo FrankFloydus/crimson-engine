@@ -46,19 +46,19 @@ public:
 OperationResult ConnectEdgesOperation::apply(Document& document, Selection& selection) const
 {
   if (selection.mode != SelectionMode::Edge) {
-    return {false, "Connect Edges needs edge selection mode."};
+    return OperationResult::failure("Connect Edges needs edge selection mode.");
   }
 
     const std::vector<Edge> selected_edges = selected_valid_edges(document, selection);
     if (selected_edges.size() < 2) {
-        return { false, "Select at least two valid edges to connect." };
+        return OperationResult::failure("Select at least two valid edges to connect.");
     }
 
     const std::map<std::pair<ElementId, ElementId>, std::vector<std::size_t>> indices_by_edge = face_indices_by_edge(document);
     for (const Edge& edge : selected_edges) {
         const auto found = indices_by_edge.find({ edge.a, edge.b });
         if (found == indices_by_edge.end() || found->second.empty()) {
-            return { false, "Connect Edges needs selected edges that belong to faces." };
+            return OperationResult::failure("Connect Edges needs selected edges that belong to faces.");
         }
     }
 
@@ -74,7 +74,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
     }
 
     if (cut_edges_by_face_id.empty()) {
-        return { false, "Connect Edges needs selected edges on connected mesh faces." };
+        return OperationResult::failure("Connect Edges needs selected edges on connected mesh faces.");
     }
 
     std::map<std::pair<ElementId, ElementId>, ElementId> split_vertices;
@@ -83,7 +83,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
         for (const Edge& edge : entry.second) {
             const ElementId split_vertex = split_vertex_for_edge(candidate, split_vertices, edge, 0.5F);
             if (split_vertex == kInvalidElementId) {
-              return {false, "Connect Edges could not split a selected edge."};
+              return OperationResult::failure("Connect Edges could not split a selected edge.");
             }
         }
     }
@@ -121,7 +121,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             continue;
         }
         if (expanded_loop.size() < 3 || has_repeated_vertex(expanded_loop)) {
-            return { false, "Connect Edges would create invalid face geometry." };
+            return OperationResult::failure("Connect Edges would create invalid face geometry.");
         }
 
         if (cut_indices.size() < 2) {
@@ -137,7 +137,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             std::vector<ElementId> first_loop = unique_valid_face_loop(loop_between_indices(expanded_loop, cut_indices[0], cut_indices[1]));
             std::vector<ElementId> second_loop = unique_valid_face_loop(loop_between_indices(expanded_loop, cut_indices[1], cut_indices[0]));
             if (first_loop.size() < 3 || second_loop.size() < 3) {
-                return { false, "Connect Edges would create invalid face geometry." };
+                return OperationResult::failure("Connect Edges would create invalid face geometry.");
             }
 
             Face first_face = face;
@@ -166,7 +166,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
         }
         center_face.vertices = unique_valid_face_loop(std::move(center_face.vertices));
         if (center_face.vertices.size() < 3) {
-            return { false, "Connect Edges would create invalid face geometry." };
+            return OperationResult::failure("Connect Edges would create invalid face geometry.");
         }
         rebuilt_faces.push_back(std::move(center_face));
 
@@ -190,14 +190,14 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
     }
 
     if (!changed || connected_edges.empty()) {
-        return { false, "No connectable selected edges were found." };
+        return OperationResult::failure("No connectable selected edges were found.");
     }
 
     candidate.faces = std::move(rebuilt_faces);
     prune_invalid_faces(candidate);
     restore_source_face_orientation(document, candidate);
     if (!every_face_triangulates(candidate)) {
-        return { false, "Connect Edges would create invalid face geometry." };
+        return OperationResult::failure("Connect Edges would create invalid face geometry.");
     }
 
     document = std::move(candidate);

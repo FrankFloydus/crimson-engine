@@ -931,7 +931,9 @@ TEST(ProjectMaterialPublicApiTests,
   const std::array sources{invalid};
   const QuaderApiResult<QuaderProjectMaterialImportReport> result =
       harness.editor().project_assets().import_textures_as_materials(sources);
-  ASSERT_TRUE(result.ok()) << result.error_message();
+  EXPECT_FALSE(result.ok());
+  EXPECT_NE(result.error_message().find("No materials were imported"),
+            std::string::npos);
   EXPECT_FALSE(result.changed());
   EXPECT_TRUE(result.value().imported.empty());
   ASSERT_EQ(result.value().failed.size(), 1u);

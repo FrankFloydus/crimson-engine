@@ -48,7 +48,7 @@ public:
 OperationResult collapse_selected_faces_impl(Document& document, Selection& selection)
 {
   if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
-    return {false, "Collapse Faces needs one or more selected faces."};
+    return OperationResult::failure("Collapse Faces needs one or more selected faces.");
   }
 
     Selection vertex_selection;
@@ -57,7 +57,7 @@ OperationResult collapse_selected_faces_impl(Document& document, Selection& sele
         add_unique_id(vertex_selection.vertices, vertex_id);
     }
     if (vertex_selection.vertices.size() < 2U) {
-        return { false, "Collapse Faces needs at least two valid face vertices." };
+        return OperationResult::failure("Collapse Faces needs at least two valid face vertices.");
     }
     activate_vertex_selection(vertex_selection, vertex_selection.vertices.front());
 

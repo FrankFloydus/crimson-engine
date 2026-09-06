@@ -11,6 +11,7 @@
 #include "core/logger.hpp"
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
+#include "ui/qt_status_message.hpp"
 #include "ui/qt_tool_settings_drag_spinner.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
@@ -378,13 +379,21 @@ bool choice_matches(std::string_view selected,
          std::abs(value - option.value) <= 0.000001;
 }
 
-void log_failure(const char *action, const QuaderApiVoidResult &result) {
+void present_failure(QuaderEditorApi *editor, const char *action,
+                     const QuaderApiVoidResult &result) {
   if (result.ok()) {
     return;
   }
   LOG_ERROR("{} failed: {}", action,
             result.error_message().empty() ? "Command failed."
                                            : result.error_message());
+  if (editor != nullptr) {
+    (void)editor->ui().notify({
+        .level = QuaderNotificationLevel::Error,
+        .message = result.error_message().empty() ? "Command failed."
+                                                : result.error_message(),
+    });
+  }
 }
 
 void clear_layout(QLayout &layout) {
@@ -396,10 +405,9 @@ void clear_layout(QLayout &layout) {
   }
 }
 
-void present_inline_message(QLabel &label, const QString &message) {
-  if (label.text() != message) {
-    label.setText(message);
-  }
+void present_inline_message(QtStatusMessage &label, const QString &message,
+                            bool error) {
+  label.present(message, error && !message.isEmpty());
   if (label.isHidden() == !message.isEmpty()) {
     label.setVisible(!message.isEmpty());
   }
@@ -977,7 +985,7 @@ struct QtToolSettingsPanel::Impl {
       }
       const QuaderApiVoidResult result =
           editor_->tools().reset_active_settings();
-      log_failure("Reset tool settings", result);
+      present_failure(editor_, "Reset tool settings", result);
       schedule_refresh();
     });
     QObject::connect(apply_button_, &QPushButton::clicked, &panel_, [this]() {
@@ -988,7 +996,7 @@ struct QtToolSettingsPanel::Impl {
       flush_pending_number_dispatches();
       const QuaderApiVoidResult result =
           editor_->tools().commit_active_tool_preview();
-      log_failure("Tool preview apply", result);
+      present_failure(editor_, "Tool preview apply", result);
       schedule_refresh();
     });
     QObject::connect(cancel_button_, &QPushButton::clicked, &panel_,
@@ -1001,7 +1009,7 @@ struct QtToolSettingsPanel::Impl {
                        }
                        const QuaderApiVoidResult result =
                            editor_->tools().cancel_active_tool_preview();
-                       log_failure("Tool preview cancel", result);
+                       present_failure(editor_, "Tool preview cancel", result);
                        schedule_refresh();
                      });
     QObject::connect(cancel_button_, &QPushButton::pressed, &panel_, [this]() {
@@ -1284,7 +1292,7 @@ struct QtToolSettingsPanel::Impl {
                           "The selected edges are unavailable, locked, hidden, "
                           "or outside the instance edit scope.");
     }
-    present_inline_message(*uv_peel_message_, message);
+    present_inline_message(*uv_peel_message_, message, settings.editable);
     QString tooltip = uv_peel_apply_->accessibleName();
     const std::string shortcut =
         editor_->commands().shortcut_for(quader_command::kModelingUvPeel);
@@ -1420,7 +1428,7 @@ private:
     layout->addWidget(uv_peel_apply_, 7, 0, 1, 2);
     QObject::connect(uv_peel_apply_, &QPushButton::clicked, &panel_,
                      [this]() { dispatch_uv_peel(); });
-    uv_peel_message_ = new QLabel(uv_peel_section_->content());
+    uv_peel_message_ = new QtStatusMessage(uv_peel_section_->content());
     uv_peel_message_->setObjectName(
         QStringLiteral("tool_settings.uv_peel.message"));
     uv_peel_message_->setWordWrap(true);
@@ -1515,7 +1523,7 @@ private:
     }
     const QuaderApiVoidResult result =
         editor_->modeling().set_uv_peel_options(*uv_peel_draft_);
-    log_failure("UV Peel options", result);
+    present_failure(editor_, "UV Peel options", result);
     if (result.ok()) {
       uv_peel_error_.clear();
       uv_peel_draft_revision_ =
@@ -1529,7 +1537,7 @@ private:
     refresh_uv_peel_settings(true);
     if (!result.ok()) {
       uv_peel_error_ = qtext(result.error_message());
-      present_inline_message(*uv_peel_message_, uv_peel_error_);
+      present_inline_message(*uv_peel_message_, uv_peel_error_, true);
     }
     return result.ok();
   }
@@ -1559,14 +1567,18 @@ private:
           localization_, "tool_settings.uv_peel.stale_selection",
           "The edge selection or UV Peel settings changed. Review the current "
           "selection and try again.");
-      present_inline_message(*uv_peel_message_, uv_peel_error_);
+      present_failure(editor_, "UV Peel",
+                      {.ok = false, .message = uv_peel_error_.toStdString()});
+      present_inline_message(*uv_peel_message_, uv_peel_error_, true);
       return;
     }
     if (uv_peel_invalid_draft()) {
       uv_peel_error_ = localized_text(
           localization_, "tool_settings.uv_peel.invalid_edit",
           "Repeat values must be positive and offsets must be finite.");
-      present_inline_message(*uv_peel_message_, uv_peel_error_);
+      present_failure(editor_, "UV Peel",
+                      {.ok = false, .message = uv_peel_error_.toStdString()});
+      present_inline_message(*uv_peel_message_, uv_peel_error_, true);
       return;
     }
     if (!flush_uv_peel_options()) {
@@ -1580,10 +1592,10 @@ private:
     const QuaderApiVoidResult result = editor_->modeling().peel_uv(
         QuaderUvPeelRequest{.options = uv_peel_settings_->options,
                             .selection_token = uv_peel_settings_->selection_token});
-    log_failure("UV Peel", result);
+    present_failure(editor_, "UV Peel", result);
     refresh_uv_peel_settings(true);
     uv_peel_error_ = result.ok() ? QString{} : qtext(result.error_message());
-    present_inline_message(*uv_peel_message_, uv_peel_error_);
+    present_inline_message(*uv_peel_message_, uv_peel_error_, true);
     uv_peel_apply_->setFocus(Qt::MouseFocusReason);
   }
 
@@ -1649,7 +1661,7 @@ private:
                        const QuaderApiVoidResult result =
                            editor_->modeling().set_face_texture_treat_as_one(
                                enabled);
-                       log_failure("Treat selected faces as one", result);
+                       present_failure(editor_, "Treat selected faces as one", result);
                        if (result.ok()) {
                          // This session option does not commit numeric drafts.
                          // Rebind only drafts from the same unchanged targets.
@@ -1663,7 +1675,7 @@ private:
                        }
                        refresh_texture_settings(true);
                      });
-    texture_action_message_ = new QLabel(edit_texture_section_->content());
+    texture_action_message_ = new QtStatusMessage(edit_texture_section_->content());
     texture_action_message_->setObjectName(
         QStringLiteral("tool_settings.edit_texture.message"));
     texture_action_message_->setWordWrap(true);
@@ -1672,7 +1684,7 @@ private:
   }
 
   void present_texture_action_message(const QString &message) {
-    present_inline_message(*texture_action_message_, message);
+    present_inline_message(*texture_action_message_, message, !texture_action_error_.isEmpty() && message == texture_action_error_);
   }
 
   void refresh_texture_action_tooltips(double rotation_step) {
@@ -1806,7 +1818,7 @@ private:
                                   .value = value,
                                   .selection_token = binding.selection_token,
                                   .merge_key = binding.merge_key});
-    log_failure("Face texture settings update", result);
+    present_failure(editor_, "Face texture settings update", result);
     if (result.ok()) {
       // Accepted corrections also dismiss a validation error when they restore
       // the already-stored value and therefore do not advance owner revisions.
@@ -1856,6 +1868,8 @@ private:
           localization_, "tool_settings.edit_texture.stale_selection",
           "The face selection or texture settings changed. Review the current "
           "selection and try again.");
+      present_failure(editor_, "Face texture action",
+                      {.ok = false, .message = texture_action_error_.toStdString()});
       present_texture_action_message(texture_action_error_);
       return false;
     }
@@ -1866,6 +1880,8 @@ private:
       texture_action_error_ = localized_text(
           localization_, "tool_settings.edit_texture.invalid_edit",
           "Finish a valid texture value before applying an action.");
+      present_failure(editor_, "Face texture action",
+                      {.ok = false, .message = texture_action_error_.toStdString()});
       present_texture_action_message(texture_action_error_);
       return false;
     }
@@ -1895,7 +1911,7 @@ private:
             QuaderFaceTextureActionRequest{
                 .action = kTextureActions[index].action,
                 .selection_token = selection_token});
-    log_failure("Face texture action", result);
+    present_failure(editor_, "Face texture action", result);
     refresh_texture_settings(true);
     texture_action_error_ = result.ok() ? QString{} : qtext(result.error_message());
     present_texture_action_message(texture_action_error_);
@@ -2584,7 +2600,7 @@ private:
                          const QuaderApiVoidResult result =
                              editor_->tools().set_setting(tool_id, control_id,
                                                           checked);
-                         log_failure("Tool settings update", result);
+                         present_failure(editor_, "Tool settings update", result);
                          if (!result.ok()) {
                            schedule_refresh();
                          }
@@ -2619,7 +2635,7 @@ private:
             const QuaderApiVoidResult result =
                 editor_->tools().set_setting(tool_id, control_id, value,
                                              std::move(options));
-            log_failure("Tool settings update", result);
+            present_failure(editor_, "Tool settings update", result);
             if (!result.ok()) {
               schedule_refresh();
             }
@@ -2917,7 +2933,7 @@ private:
               }
               const QuaderApiVoidResult result = editor_->tools().set_setting(
                   tool_id, component_id, value, std::move(options));
-              log_failure("Tool settings update", result);
+              present_failure(editor_, "Tool settings update", result);
               if (!result.ok()) {
                 schedule_refresh();
               }
@@ -2990,7 +3006,7 @@ private:
                   tool_id, control_id,
                   std::string_view(option_id.constData(),
                                    static_cast<std::size_t>(option_id.size())));
-              log_failure("Tool settings update", result);
+              present_failure(editor_, "Tool settings update", result);
               // The chosen primitive changes the descriptor itself. Refresh
               // after signal delivery so the old control tree can be safely
               // replaced with the fields for the newly selected kind.
@@ -3035,7 +3051,7 @@ private:
                            const QuaderApiVoidResult result =
                                editor_->tools().set_setting(tool_id, control_id,
                                                             value);
-                           log_failure("Tool settings update", result);
+                           present_failure(editor_, "Tool settings update", result);
                            if (!result.ok()) {
                              schedule_refresh();
                            }
@@ -3065,7 +3081,7 @@ private:
                          const QuaderApiVoidResult result =
                              editor_->tools().execute_action(tool_id,
                                                              action_id);
-                         log_failure("Tool settings action", result);
+                         present_failure(editor_, "Tool settings action", result);
                          schedule_refresh();
                        });
       control_layout.addWidget(button);
@@ -3318,7 +3334,7 @@ private:
   QtToolSettingsSection *texture_section_ = nullptr;
   QLabel *texture_disabled_reason_ = nullptr;
   QtToolSettingsSection *edit_texture_section_ = nullptr;
-  QLabel *texture_action_message_ = nullptr;
+  QtStatusMessage *texture_action_message_ = nullptr;
   QCheckBox *texture_treat_as_one_ = nullptr;
   QtToolSettingsSection *uv_peel_section_ = nullptr;
   QLabel *uv_peel_help_ = nullptr;
@@ -3326,7 +3342,7 @@ private:
   QComboBox *uv_peel_axis_ = nullptr;
   QCheckBox *uv_peel_world_space_ = nullptr;
   QPushButton *uv_peel_apply_ = nullptr;
-  QLabel *uv_peel_message_ = nullptr;
+  QtStatusMessage *uv_peel_message_ = nullptr;
   QTimer *uv_peel_dispatch_timer_ = nullptr;
   QWidget *controls_container_ = nullptr;
   QVBoxLayout *controls_layout_ = nullptr;

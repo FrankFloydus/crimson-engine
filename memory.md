@@ -152,6 +152,12 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
 
 ## Modeling publication and preview transactions
 
+- Polygon operation success and mutation are separate. A rejected operation must carry explicit
+  failure through `polygon_document.cpp` and native adapters; `changed=false` also describes valid
+  no-ops. Combine Faces around an opening exposed a lost failure that reached the UI as normal text.
+  SDK consumer and `QtProjectWorkspaceTests` cover that geometry, preserved state/history, and
+  one error announcement per attempt.
+
 - The portable session permits one active preview transaction, resolved exactly once. Checked batches
   reject forbidden nested/unscheduled mutations and roll back on reported failures or exceptions.
   Failed and unchanged operations preserve selection, redo, history, and observable revisions.
@@ -252,6 +258,12 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
 - An empty spatial hover sample differs from explicit lifecycle clear. Component misses and leaving
   the viewport retain the last candidate mesh wire; meshes with selected components remain sticky
   independently. Object-mode hover emits no mesh outline and never changes click-owned selection.
+- Component source topology remains complete in semantic overlays. The revision-gated
+  [submission coordinator](src/render/overlay/viewport_overlay_submission_coordinator.cpp) removes
+  a source-wire draw beneath an opaque selected edge or face boundary with matching object,
+  edge IDs and world endpoints. Otherwise cyan blends into antialiased yellow at thin widths.
+  Translucent user selection colors retain normal source-wire compositing. Coverage:
+  [submission tests](tests/viewport_overlay_submission_coordinator_tests.cpp).
 - A Vertex/Edge mesh-body click outside component radii is a typed edit-target hit. Replace clears
   target components but retains the mesh; Add adopts it; Remove is inert. Background misses keep
   ordinary Replace clearing. This fallback is click-only and respects active instance-edit scope.

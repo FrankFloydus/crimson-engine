@@ -48,13 +48,13 @@ public:
 OperationResult combine_selected_faces_impl(Document& document, Selection& selection)
 {
   if (selection.mode != SelectionMode::Face || selection.faces.size() < 2) {
-    return {false, "Combine Faces needs at least two selected faces."};
+    return OperationResult::failure("Combine Faces needs at least two selected faces.");
   }
 
     const ElementId active_face_id = active_face_or_invalid(selection);
     const std::vector<Face> selected_faces = selected_face_copies(document, selection);
     if (selected_faces.size() < 2U) {
-        return { false, "Combine Faces needs at least two valid selected faces." };
+        return OperationResult::failure("Combine Faces needs at least two valid selected faces.");
     }
 
     const std::vector<FaceIslandBoundary> islands = selected_face_island_boundaries(document, selected_faces);
@@ -71,7 +71,7 @@ OperationResult combine_selected_faces_impl(Document& document, Selection& selec
 
         std::vector<ElementId> merged_loop = unique_valid_face_loop(island.vertices);
         if (merged_loop.size() < 3U) {
-            return { false, "Combine Faces would create invalid face geometry." };
+            return OperationResult::failure("Combine Faces would create invalid face geometry.");
         }
 
         Face merged_face;
@@ -102,7 +102,7 @@ OperationResult combine_selected_faces_impl(Document& document, Selection& selec
     }
 
     if (merged_faces.empty()) {
-        return { false, "Combine Faces needs adjacent faces with shared interior edges." };
+        return OperationResult::failure("Combine Faces needs adjacent faces with shared interior edges.");
     }
 
     Document candidate = document;
@@ -122,18 +122,18 @@ OperationResult combine_selected_faces_impl(Document& document, Selection& selec
         }
         if (Face* merged_face = find_face(candidate, island.face_ids.front());
             merged_face != nullptr && !inherit_merged_face_texture(document, island.face_ids, *merged_face)) {
-            return { false, "Combine Faces could not preserve the source texture mapping." };
+            return OperationResult::failure("Combine Faces could not preserve the source texture mapping.");
         }
     }
     if (!every_face_triangulates(candidate)) {
-        return { false, "Combine Faces would create invalid face geometry." };
+        return OperationResult::failure("Combine Faces would create invalid face geometry.");
     }
 
     std::erase_if(merged_face_ids, [&candidate](ElementId face_id) {
         return find_face(candidate, face_id) == nullptr;
     });
     if (merged_face_ids.empty()) {
-        return { false, "Combine Faces would create invalid face geometry." };
+        return OperationResult::failure("Combine Faces would create invalid face geometry.");
     }
 
     document = std::move(candidate);

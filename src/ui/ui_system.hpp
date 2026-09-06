@@ -66,6 +66,7 @@ class QtRetainedMessageBox;
 class QtStandardMaterialEditorWindow;
 class QtToolSettingsPanel;
 class QtOperationInputHints;
+class QtStatusMessage;
 class QtUnsavedConfirmationDialog;
 class QtViewportPanel;
 class QtProjectHomePage;
@@ -175,6 +176,8 @@ private:
   void bind_project_workspace_events(QuaderEditorApi &editor);
   void clear_project_workspace_events();
   void refresh_status_bar();
+  void present_status_notification(const QuaderApiStatus &result,
+                                   int timeout_ms = 0);
   void present_lifecycle_result(const QuaderApiStatus &result);
   void present_standard_material_error(std::string_view message);
   void refresh_localized_chrome();
@@ -264,7 +267,7 @@ private:
   QtRetainedMessageBox *lifecycle_message_box_ = nullptr;
   QtRetainedMessageBox *standard_material_error_message_box_ = nullptr;
   QtRetainedMessageBox *material_browser_import_message_box_ = nullptr;
-  QLabel *status_message_ = nullptr;
+  QtStatusMessage *status_message_ = nullptr;
   QtOperationInputHints *operation_input_hints_ = nullptr;
   QLabel *status_version_ = nullptr;
   QTimer *auxiliary_window_save_timer_ = nullptr;
@@ -492,6 +495,10 @@ private:
                            const StatusPresentationStamp &) = default;
   };
   RetainedUiPresenter<StatusPresentationStamp> status_presenter_;
+  std::uint64_t status_observed_command_revision_ = 0u;
+  std::optional<QuaderApiStatus> status_notification_;
+  std::uint64_t status_notification_command_revision_ = 0u;
+  std::uint64_t status_notification_generation_ = 0u;
   bool home_visible_ = false;
   bool viewport_initialized_ = false;
   bool selection_toolbar_workspace_visible_ = true;

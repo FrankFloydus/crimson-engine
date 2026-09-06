@@ -62,7 +62,8 @@ OperationResult TranslateSelectionOperation::apply(Document& document, Selection
     QDR_PROFILE_SCOPE("qdr_document.TranslateSelectionOperation.apply");
     const std::vector<ElementId> ids = selected_vertex_ids(document, selection);
     if (ids.empty()) {
-        return { false, "No polygon elements are selected." };
+        // Empty transform targets are a successful no-op for session replay.
+        return {false, "No polygon elements are selected."};
     }
 
     // selected_vertex_ids is an ID set, while find_vertex is a linear scan.

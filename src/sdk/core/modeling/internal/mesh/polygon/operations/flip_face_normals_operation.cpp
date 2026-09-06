@@ -48,7 +48,7 @@ public:
 OperationResult flip_selected_face_normals_impl(Document& document, const Selection& selection)
 {
     if (selection.faces.empty()) {
-        return { false, "No modeler faces are selected." };
+        return OperationResult::failure("No modeler faces are selected.");
     }
 
     bool changed = false;
@@ -61,7 +61,10 @@ OperationResult flip_selected_face_normals_impl(Document& document, const Select
         reverse_face_winding(*face);
         changed = true;
     }
-    return { changed, changed ? std::string {} : "No selected faces were found." };
+    if (!changed) {
+        return OperationResult::failure("No selected faces were found.");
+    }
+    return { true, {} };
 }
 
 

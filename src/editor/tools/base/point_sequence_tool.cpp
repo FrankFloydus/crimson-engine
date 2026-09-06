@@ -12,9 +12,11 @@ namespace quader {
 namespace {
 
 void handle_result(ViewportToolContext &context, std::string_view label,
-                   const ModelingCommandResult &command) {
+                   const ModelingCommandResult &command,
+                   bool announce_failure = false) {
   if (context.ports.command_result != nullptr) {
-    context.ports.command_result->handle_tool_command_result(label, command);
+    context.ports.command_result->handle_tool_command_result(
+        label, command, announce_failure);
   }
 }
 
@@ -58,12 +60,13 @@ ViewportToolResult PointSequenceTool::handle_event(
       handle_result(
           context, "Knife point",
           preview_port->accept_knife_point(
-              point_context->make_event_at(pointer.left_click_local, false)));
+              point_context->make_event_at(pointer.left_click_local, false)),
+          true);
     }
     if (pointer.finalize_pressed && commit_port != nullptr) {
       const ModelingCommandResult command =
           commit_port->commit_knife_tool();
-      handle_result(context, "Knife commit", command);
+      handle_result(context, "Knife commit", command, true);
       if (command.ok) {
         finish_point_sequence_tool(context);
       }
@@ -91,11 +94,12 @@ ViewportToolResult PointSequenceTool::handle_event(
       handle_result(
           context, "Poly point",
           preview_port->accept_poly_point(
-              point_context->make_event_at(pointer.left_click_local, false)));
+              point_context->make_event_at(pointer.left_click_local, false)),
+          true);
     }
     if (pointer.finalize_pressed && commit_port != nullptr) {
       const ModelingCommandResult command = commit_port->commit_poly_tool();
-      handle_result(context, "Poly commit", command);
+      handle_result(context, "Poly commit", command, true);
       if (command.ok) {
         finish_point_sequence_tool(context);
       }

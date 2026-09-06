@@ -47,12 +47,12 @@ private:
 OperationResult bridge_selected_edges_impl(Document& document, Selection& selection, int steps)
 {
   if (selection.mode != SelectionMode::Edge || selection.edges.size() != 2) {
-    return {false, "Bridge needs exactly two selected edges."};
+    return OperationResult::failure("Bridge needs exactly two selected edges.");
   }
 
     const std::vector<Edge> selected_edges = selected_valid_edges(document, selection);
     if (selected_edges.size() != 2 || selected_edges[0] == selected_edges[1]) {
-        return { false, "Bridge needs exactly two valid selected edges." };
+        return OperationResult::failure("Bridge needs exactly two valid selected edges.");
     }
 
     const std::vector<std::pair<Edge, Edge>> edge_pairs {

@@ -61,7 +61,7 @@ OperationResult KnifeSegmentOperation::apply(Document& document, Selection& sele
     QDR_PROFILE_SCOPE("qdr_document.KnifeSegmentOperation.apply");
     KnifeSegmentCandidate candidate = build_knife_segment_candidate(document, previous_, current_);
     if (!candidate.changed) {
-        return { false, candidate.message.empty() ? std::string("Knife segment could not be applied.") : candidate.message };
+        return OperationResult::failure(candidate.message.empty() ? std::string("Knife segment could not be applied.") : candidate.message);
     }
 
     document = std::move(candidate.document);

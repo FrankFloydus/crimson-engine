@@ -6252,7 +6252,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -7153,7 +7153,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -7342,7 +7342,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -7531,7 +7531,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -8388,7 +8388,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -8577,7 +8577,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -9333,7 +9333,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -9522,7 +9522,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -9711,7 +9711,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -9900,7 +9900,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -10089,7 +10089,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -10278,7 +10278,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -14889,7 +14889,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -15078,7 +15078,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -15456,7 +15456,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -16023,7 +16023,7 @@
         },
         "repeat": {
           "result": {
-            "ok": true,
+            "ok": false,
             "changed": false,
             "mutation_kind": 0,
             "revisions": {
@@ -23852,5 +23852,5 @@
       "lifecycle": {}
     }
   },
-  "approved_change_reason": "Texture scale clicks now double or halve within binary limits; Align Grid resets world texel density to 0.125 using material dimensions."
+  "approved_change_reason": "Rejected polygon operations now preserve explicit failure status, including invalid repeat attempts, so UI errors render and announce correctly without changing geometry or history."
 }

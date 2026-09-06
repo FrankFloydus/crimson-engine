@@ -46,12 +46,12 @@ public:
 OperationResult ConnectVerticesOperation::apply(Document& document, Selection& selection) const
 {
   if (selection.mode != SelectionMode::Vertex) {
-    return {false, "Connect needs vertex selection mode."};
+    return OperationResult::failure("Connect needs vertex selection mode.");
   }
 
     const std::vector<ElementId> selected_vertices = selected_valid_vertices(document, selection);
     if (selected_vertices.size() < 2) {
-        return { false, "Select at least two vertices to connect." };
+        return OperationResult::failure("Select at least two vertices to connect.");
     }
 
     const Document source = document;
@@ -154,7 +154,7 @@ OperationResult ConnectVerticesOperation::apply(Document& document, Selection& s
         return { true, {} };
     }
 
-    return { false, "Connect needs selected vertices on the same face." };
+    return OperationResult::failure("Connect needs selected vertices on the same face.");
 }
 
 } // namespace

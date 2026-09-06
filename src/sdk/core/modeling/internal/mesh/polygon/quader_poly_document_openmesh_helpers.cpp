@@ -325,7 +325,7 @@ OperationResult merge_selected_vertices_to_active_with_topology_backend(
     Document candidate;
     const Vertex* active_vertex = find_vertex(document, active_vertex_id);
     if (active_vertex == nullptr) {
-        return { false, "Active vertex was not found." };
+        return OperationResult::failure("Active vertex was not found.");
     }
 
     const OperationResult candidate_result = build_vertex_merge_candidate(document, candidate, merge_vertex_ids, active_vertex_id, active_vertex->position);
@@ -357,7 +357,7 @@ OperationResult merge_selected_vertices_to_active_with_topology_backend(
     const std::set<ElementId>&,
     ElementId)
 {
-    return { false, "OpenMesh topology support is disabled." };
+    return OperationResult::failure("OpenMesh topology support is disabled.");
 }
 #endif
 

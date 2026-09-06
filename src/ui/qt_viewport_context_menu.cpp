@@ -502,10 +502,18 @@ void QtViewportContextMenuPresenter::show(
     }
     const QuaderApiVoidResult result =
         editor.project_assets().set_active_material(*material_under_mouse);
+    if (!runtime_binding.current()) {
+      return;
+    }
     if (!result.ok()) {
-      LOG_ERROR("Material-under-mouse action failed: {}",
-                result.error_message().empty() ? "Operation failed."
-                                               : result.error_message());
+      const std::string message = result.error_message().empty()
+                                      ? "Operation failed."
+                                      : result.error_message();
+      LOG_ERROR("Material-under-mouse action failed: {}", message);
+      (void)editor.ui().notify({
+          .level = QuaderNotificationLevel::Error,
+          .message = message,
+      });
       return;
     }
     return;

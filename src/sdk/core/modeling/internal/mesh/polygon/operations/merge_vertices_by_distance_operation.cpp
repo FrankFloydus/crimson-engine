@@ -157,15 +157,15 @@ MergeVerticesByDistanceOperation::MergeVerticesByDistanceOperation(float toleran
 OperationResult MergeVerticesByDistanceOperation::apply(Document& document, Selection& selection) const
 {
   if (selection.mode != SelectionMode::Vertex) {
-    return {false, "Merge by Distance needs vertex selection mode."};
+    return OperationResult::failure("Merge by Distance needs vertex selection mode.");
   }
     if (!std::isfinite(tolerance_) || tolerance_ < 0.0F) {
-        return { false, "Merge by Distance needs a finite non-negative tolerance." };
+        return OperationResult::failure("Merge by Distance needs a finite non-negative tolerance.");
     }
 
     const std::vector<ElementId> selected_vertices = selected_valid_vertices(document, selection);
     if (selected_vertices.size() < 2U) {
-        return { false, "Select at least two vertices to merge by distance." };
+        return OperationResult::failure("Select at least two vertices to merge by distance.");
     }
 
     const std::vector<DistanceMergeCluster> clusters = distance_merge_clusters(document, selected_vertices, tolerance_);
@@ -195,7 +195,7 @@ OperationResult MergeVerticesByDistanceOperation::apply(Document& document, Sele
             return merge_result;
         }
         if (find_vertex(next_candidate, cluster.survivor_id) == nullptr) {
-            return { false, "Merge by Distance would remove a survivor vertex." };
+            return OperationResult::failure("Merge by Distance would remove a survivor vertex.");
         }
 
         candidate = std::move(next_candidate);
@@ -207,7 +207,7 @@ OperationResult MergeVerticesByDistanceOperation::apply(Document& document, Sele
 
     prune_unused_vertices(candidate);
     if (!every_face_triangulates(candidate)) {
-        return { false, "Merge by Distance would create invalid face geometry." };
+        return OperationResult::failure("Merge by Distance would create invalid face geometry.");
     }
 
     document = std::move(candidate);
