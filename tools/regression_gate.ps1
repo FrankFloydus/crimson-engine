@@ -56,10 +56,7 @@ try {
         & ctest --preset vs2026-debug --output-on-failure
     }
 
-    Invoke-RegressionStep 'Build the Debug/Profile native executable' {
-        & cmake --build --preset vs2026-debug --target quader
-    }
-
+    # Native artifact handoff is separate: build Release once when app inputs change.
     Write-Host '[regression-gate] PASS'
 }
 finally {

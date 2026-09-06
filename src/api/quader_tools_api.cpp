@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_tools_api.hpp"
+#include "editor/metadata/operation_input_hint_catalog.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 
 #include "api/quader_api_status_internal.hpp"
@@ -12,6 +13,7 @@
 #include "editor/array/path_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/curve/curve_tool_service.hpp"
+#include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/operations/operation_schema.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
@@ -21,6 +23,7 @@
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "scene/scene_document.hpp"
+#include "math/glm_bridge.hpp"
 
 #include <editor/modeling/runtime/tool_runtime_policy.hpp>
 
@@ -36,6 +39,18 @@
 
 namespace quader {
 namespace {
+
+std::optional<QuaderPrimitiveCreationShape>
+primitive_creation_shape(PrimitiveCreationKind kind) {
+  switch (kind) {
+  case PrimitiveCreationKind::Box: return QuaderPrimitiveCreationShape::Box;
+  case PrimitiveCreationKind::Cylinder: return QuaderPrimitiveCreationShape::Cylinder;
+  case PrimitiveCreationKind::Cone: return QuaderPrimitiveCreationShape::Cone;
+  case PrimitiveCreationKind::Sphere: return QuaderPrimitiveCreationShape::Sphere;
+  case PrimitiveCreationKind::Torus: return QuaderPrimitiveCreationShape::Torus;
+  }
+  return std::nullopt;
+}
 
 /// Identifies the owner whose active tool-settings revision is exposed.
 enum class ActiveToolSettingsSourceKind : std::uint8_t {
@@ -1167,6 +1182,8 @@ void QuaderToolsApi::rebind_session(QuaderApiSession session) {
   session_ = session;
   active_settings_source_valid_ = false;
   active_tool_valid_ = false;
+  input_hints_source_valid_ = false;
+  primitive_creation_state_.reset();
 }
 
 QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
@@ -1294,6 +1311,37 @@ std::uint64_t QuaderToolsApi::active_tool_revision() const {
     ++active_tool_revision_;
   }
   return active_tool_revision_;
+}
+
+std::uint64_t QuaderToolsApi::active_input_hints_revision() const {
+  const SceneSession &session = scene_session(session_);
+  const auto &primitive = session.primitive_creation();
+  const bool active = primitive.active();
+  const std::array<std::uint64_t, 5> source{
+      active_tool_revision(), active_settings_revision(),
+      active ? session.scene().selection_revision() : 0u,
+      active ? session.modeling().selection_revision() : 0u,
+      active ? (static_cast<std::uint64_t>(session.modeling().box_drag_state()) << 1u) |
+                   static_cast<std::uint64_t>(primitive.can_apply()) : 0u};
+  if (!input_hints_source_valid_ || input_hints_source_ != source) {
+    input_hints_source_ = source;
+    input_hints_source_valid_ = true;
+    ++input_hints_revision_;
+  }
+  return input_hints_revision_;
+}
+
+std::vector<QuaderOperationInputHint> QuaderToolsApi::active_input_hints() const {
+  const auto &primitive = scene_session(session_).primitive_creation();
+  const auto kind = primitive.active_kind();
+  if (!kind) {
+    return {};
+  }
+  const auto shape = primitive_creation_shape(*kind);
+  if (!shape) {
+    return {};
+  }
+  return primitive_creation_input_hints(*shape, primitive.can_apply());
 }
 
 QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
@@ -1791,6 +1839,218 @@ std::string QuaderToolsApi::active_primitive_default_name() const {
   return kind.has_value()
              ? std::string(primitive_creation_default_name(*kind))
              : std::string{};
+}
+
+std::optional<QuaderPrimitiveCreationState>
+QuaderToolsApi::live_primitive_creation() const {
+  const SceneSession &session = scene_session(session_);
+  const std::optional<PrimitiveCreationState> primitive =
+      session.primitive_creation().live_primitive_creation();
+  if (!primitive.has_value()) {
+    primitive_creation_state_.reset();
+    return std::nullopt;
+  }
+  const std::uint64_t transform_revision = session.scene().transform_revision();
+  const std::uint64_t selection_revision =
+      session.scene().selection_revision() + session.modeling().selection_revision();
+  const std::uint64_t instance_revision =
+      session.instances().instance_edit_revision();
+  if (primitive_creation_state_.has_value() &&
+      primitive_creation_owner_revision_ == primitive->revision &&
+      primitive_creation_transform_revision_ == transform_revision &&
+      primitive_creation_selection_revision_ == selection_revision &&
+      primitive_creation_instance_revision_ == instance_revision) {
+    return primitive_creation_state_;
+  }
+  const std::optional<EntityId> entity =
+      session.modeling().entity_for_modeling_object(primitive->modeling_object_id);
+  if (!entity.has_value() || !session.scene().exists(*entity)) {
+    primitive_creation_state_.reset();
+    return std::nullopt;
+  }
+  const std::optional<QMat4> occurrence_world =
+      session.instances().effective_member_world_transform(*entity);
+  const QMat4 world = occurrence_world.has_value()
+                          ? *occurrence_world
+                          : session.scene().world_transform_matrix(*entity);
+  const auto shape = primitive_creation_shape(primitive->kind);
+  if (!shape) {
+    return std::nullopt;
+  }
+  primitive_creation_state_ = QuaderPrimitiveCreationState{
+      .object_id = primitive->modeling_object_id,
+      .shape = *shape,
+      .local_min = primitive->local_min,
+      .local_max = primitive->local_max,
+      .world_origin = transform_point(world, {}),
+      .world_x = transform_vector(world, {1.0f, 0.0f, 0.0f}),
+      .world_y = transform_vector(world, {0.0f, 1.0f, 0.0f}),
+      .world_z = transform_vector(world, {0.0f, 0.0f, 1.0f}),
+      .subdivisions = primitive->subdivisions,
+      .side_count = primitive->side_count,
+      .caps = primitive->caps,
+      .radial_segments = primitive->radial_segments,
+      .rings = primitive->rings,
+      .hemisphere = primitive->hemisphere,
+      .major_segments = primitive->major_segments,
+      .minor_segments = primitive->minor_segments,
+      .tube_radius_ratio = primitive->tube_radius_ratio,
+      .flip_faces = primitive->flip_faces,
+      .resizing = primitive->resizing,
+      .revision = ++primitive_creation_revision_,
+  };
+  primitive_creation_owner_revision_ = primitive->revision;
+  primitive_creation_transform_revision_ = transform_revision;
+  primitive_creation_selection_revision_ = selection_revision;
+  primitive_creation_instance_revision_ = instance_revision;
+  return primitive_creation_state_;
+}
+
+std::optional<QuaderPrimitiveCubeState>
+QuaderToolsApi::live_primitive_cube() const {
+  const auto primitive = live_primitive_creation();
+  if (!primitive || primitive->shape != QuaderPrimitiveCreationShape::Box) {
+    return std::nullopt;
+  }
+  return QuaderPrimitiveCubeState{
+      .object_id = primitive->object_id,
+      .local_min = primitive->local_min,
+      .local_max = primitive->local_max,
+      .world_origin = primitive->world_origin,
+      .world_x = primitive->world_x,
+      .world_y = primitive->world_y,
+      .world_z = primitive->world_z,
+      .subdivisions = primitive->subdivisions,
+      .flip_faces = primitive->flip_faces,
+      .resizing = primitive->resizing,
+      .revision = primitive->revision,
+  };
+}
+
+QuaderApiVoidResult QuaderToolsApi::begin_primitive_resize(
+    QuaderPrimitiveResizeControl control, QVec3 radial_axis) {
+  SceneSession &session = scene_session(session_);
+  PrimitiveResizeControl native_control;
+  switch (control) {
+  case QuaderPrimitiveResizeControl::PositiveX:
+    native_control = PrimitiveResizeControl::PositiveX;
+    break;
+  case QuaderPrimitiveResizeControl::NegativeX:
+    native_control = PrimitiveResizeControl::NegativeX;
+    break;
+  case QuaderPrimitiveResizeControl::PositiveY:
+    native_control = PrimitiveResizeControl::PositiveY;
+    break;
+  case QuaderPrimitiveResizeControl::NegativeY:
+    native_control = PrimitiveResizeControl::NegativeY;
+    break;
+  case QuaderPrimitiveResizeControl::PositiveZ:
+    native_control = PrimitiveResizeControl::PositiveZ;
+    break;
+  case QuaderPrimitiveResizeControl::NegativeZ:
+    native_control = PrimitiveResizeControl::NegativeZ;
+    break;
+  case QuaderPrimitiveResizeControl::Radius:
+    native_control = PrimitiveResizeControl::Radius;
+    break;
+  case QuaderPrimitiveResizeControl::OuterRadius:
+    native_control = PrimitiveResizeControl::OuterRadius;
+    break;
+  case QuaderPrimitiveResizeControl::InnerRadius:
+    native_control = PrimitiveResizeControl::InnerRadius;
+    break;
+  default:
+    return quader_api_failure_status(session, "Invalid primitive resize control.");
+  }
+  return api_status_from_command(
+      session, session.primitive_creation().begin_resize(native_control, radial_axis),
+      QuaderMutationKind::Runtime, "Begin Primitive Resize");
+}
+
+QuaderApiVoidResult QuaderToolsApi::update_primitive_resize(double displacement) {
+  SceneSession &session = scene_session(session_);
+  return api_status_from_command(
+      session, session.primitive_creation().update_resize(displacement),
+      QuaderMutationKind::Modeling, "Resize Primitive");
+}
+
+QuaderApiVoidResult QuaderToolsApi::end_primitive_resize() {
+  SceneSession &session = scene_session(session_);
+  return api_status_from_command(
+      session, session.primitive_creation().end_resize(),
+      QuaderMutationKind::Runtime, "End Primitive Resize");
+}
+
+QuaderApiVoidResult QuaderToolsApi::cancel_primitive_resize() {
+  SceneSession &session = scene_session(session_);
+  return api_status_from_command(
+      session, session.primitive_creation().cancel_resize(),
+      QuaderMutationKind::Modeling, "Cancel Primitive Resize");
+}
+
+QuaderApiVoidResult QuaderToolsApi::toggle_primitive_caps() {
+  SceneSession &session = scene_session(session_);
+  return api_status_from_command(
+      session, session.primitive_creation().toggle_caps(),
+      QuaderMutationKind::Runtime, "Toggle Primitive Caps");
+}
+
+QuaderApiVoidResult QuaderToolsApi::toggle_primitive_hemisphere() {
+  SceneSession &session = scene_session(session_);
+  return api_status_from_command(
+      session, session.primitive_creation().toggle_hemisphere(),
+      QuaderMutationKind::Runtime, "Toggle Primitive Hemisphere");
+}
+
+QuaderApiVoidResult QuaderToolsApi::begin_primitive_cube_resize(
+    QuaderPrimitiveCubeAxis axis, bool positive) {
+  SceneSession &session = scene_session(session_);
+  PrimitiveCubeAxis native_axis;
+  switch (axis) {
+  case QuaderPrimitiveCubeAxis::X:
+    native_axis = PrimitiveCubeAxis::X;
+    break;
+  case QuaderPrimitiveCubeAxis::Y:
+    native_axis = PrimitiveCubeAxis::Y;
+    break;
+  case QuaderPrimitiveCubeAxis::Z:
+    native_axis = PrimitiveCubeAxis::Z;
+    break;
+  default:
+    return quader_api_failure_status(session, "Invalid cube resize axis.");
+  }
+  return api_status_from_command(
+      session, session.primitive_creation().begin_cube_resize(native_axis, positive),
+      QuaderMutationKind::Runtime, "Begin Cube Resize");
+}
+
+QuaderApiVoidResult
+QuaderToolsApi::update_primitive_cube_resize(double displacement) {
+  SceneSession &session = scene_session(session_);
+  return api_status_from_command(
+      session, session.primitive_creation().update_cube_resize(displacement),
+      QuaderMutationKind::Modeling, "Resize Cube");
+}
+
+QuaderApiVoidResult QuaderToolsApi::end_primitive_cube_resize() {
+  SceneSession &session = scene_session(session_);
+  return api_status_from_command(
+      session, session.primitive_creation().end_cube_resize(),
+      QuaderMutationKind::Runtime, "End Cube Resize");
+}
+
+QuaderApiVoidResult QuaderToolsApi::cancel_primitive_cube_resize() {
+  SceneSession &session = scene_session(session_);
+  return api_status_from_command(
+      session, session.primitive_creation().cancel_cube_resize(),
+      QuaderMutationKind::Modeling, "Cancel Cube Resize");
+}
+
+QuaderApiVoidResult QuaderToolsApi::flip_primitive_faces() {
+  SceneSession &session = scene_session(session_);
+  return api_status_from_command(
+      session, session.primitive_creation().flip_faces(),
+      QuaderMutationKind::Runtime, "Flip Primitive Faces");
 }
 
 QuaderApiVoidResult QuaderToolsApi::commit_active_tool_preview() {

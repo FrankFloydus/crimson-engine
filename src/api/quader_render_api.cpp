@@ -465,7 +465,8 @@ QuaderApiVoidResult QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
           request.selected_object_overlay_visible,
           request.scene_wireframe_layer_mask, request.style, binding,
           &local_visibility, request.selected_scene_wire_visible,
-          instance_edit_render_scope(scene_session), request.raster_groups);
+          instance_edit_render_scope(scene_session), request.raster_groups,
+          request.selected_mesh_outline_only);
   if (update.changed() || bridge.scene_asset_overlay_sync_pending()) {
     bridge.sync_scene_asset_overlays(*update.selected_object,
                                      *update.scene_wireframe);

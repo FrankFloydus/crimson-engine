@@ -19,6 +19,7 @@
 #include "editor/placement/scene_surface_query.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
+#include "editor/viewport/primitive_creation_api_adapter.hpp"
 #include "editor/viewport/viewport_scene_projection.hpp"
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
@@ -28,6 +29,7 @@
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/tools/viewport_native_tool_interaction.hpp"
 #include "math/glm_bridge.hpp"
+#include "platform/native_window_input.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
 #include "render/render_layers.hpp"
 #include "render/scene_render_bridge.hpp"
@@ -53,11 +55,14 @@
 #include <QApplication>
 #include <QAction>
 #include <QActionGroup>
+#include <QByteArray>
 #include <QFrame>
 #include <QFocusFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLocale>
+#include <QPalette>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPoint>
@@ -73,6 +78,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <optional>
 #include <span>
@@ -85,6 +91,26 @@ namespace quader {
 namespace {
 
 using ViewportProbeClock = std::chrono::steady_clock;
+
+/// Passes native hit testing through feedback to the sibling viewport window.
+class QtViewportPrimitiveFeedbackLabel final : public QLabel {
+public:
+  explicit QtViewportPrimitiveFeedbackLabel(QWidget *parent) : QLabel(parent) {}
+
+protected:
+  bool nativeEvent(const QByteArray &event_type, void *message,
+                   qintptr *result) override {
+    if (result != nullptr &&
+        event_type == QByteArrayLiteral("windows_generic_MSG")) {
+      if (const std::optional<std::intptr_t> transparent_result =
+              platform_transparent_overlay_input_result(message)) {
+        *result = static_cast<qintptr>(*transparent_result);
+        return true;
+      }
+    }
+    return QLabel::nativeEvent(event_type, message, result);
+  }
+};
 
 /// Accumulates opt-in viewport cadence and interaction timing diagnostics.
 struct ViewportCadenceProbe {
@@ -100,6 +126,46 @@ struct ViewportCadenceProbe {
 };
 
 ViewportCadenceProbe g_viewport_probe;
+
+ModelingCommandResult set_primitive_segments(QuaderEditorApi &editor, int axis, int count) {
+  const auto primitive = editor.tools().live_primitive_creation();
+  if (!primitive || axis < 0) {
+    return ModelingCommandResult{.ok = false, .changed = false,
+                                 .message = "No editable primitive control."};
+  }
+  std::string_view setting;
+  switch (primitive->shape) {
+  case QuaderPrimitiveCreationShape::Box: {
+    constexpr std::array<std::string_view, 3> kSettings{
+        "primitive.box.subdivisions_x", "primitive.box.subdivisions_y",
+        "primitive.box.subdivisions_z"};
+    if (axis < static_cast<int>(kSettings.size())) setting = kSettings[axis];
+    break;
+  }
+  case QuaderPrimitiveCreationShape::Cylinder:
+    if (axis == 0) setting = "primitive.cylinder.side_count";
+    break;
+  case QuaderPrimitiveCreationShape::Cone:
+    if (axis == 0) setting = "primitive.cone.side_count";
+    break;
+  case QuaderPrimitiveCreationShape::Sphere:
+    if (axis == 0) setting = "primitive.sphere.radial_segments";
+    else if (axis == 1) setting = "primitive.sphere.rings";
+    break;
+  case QuaderPrimitiveCreationShape::Torus:
+    if (axis == 0) setting = "primitive.torus.major_segments";
+    else if (axis == 1) setting = "primitive.torus.minor_segments";
+    break;
+  }
+  if (setting.empty()) {
+    return ModelingCommandResult{.ok = false, .changed = false,
+                                 .message = "Invalid primitive segment control."};
+  }
+  const auto result = editor.tools().set_setting(
+      "create_primitive", setting, static_cast<double>(count));
+  return {.ok = result.ok(), .changed = result.changed(),
+          .message = std::string(result.error_message())};
+}
 
 double elapsed_milliseconds(ViewportProbeClock::time_point start,
                             ViewportProbeClock::time_point end) {
@@ -441,6 +507,7 @@ bool QtViewportPanel::initialize(RenderSystem &render_system) {
 }
 
 void QtViewportPanel::shutdown() {
+  hide_primitive_feedback();
   set_modal_tool_owns_viewport_snapshot(false);
   for (Pane &pane_state : panes_) {
     pane_state.surface->set_interaction_cursor(ViewportPointerCursor::Default);
@@ -499,6 +566,7 @@ void QtViewportPanel::shutdown() {
 
 void QtViewportPanel::reset_interactions(QuaderEditorApi *editor,
     NativeViewportToolCoordinator *native_tools) {
+  hide_primitive_feedback();
   for (Pane &pane_state : panes_) {
     pane_state.surface->set_interaction_cursor(ViewportPointerCursor::Default);
   }
@@ -515,6 +583,7 @@ void QtViewportPanel::reset_interactions(QuaderEditorApi *editor,
 }
 
 void QtViewportPanel::abandon_interactions() {
+  hide_primitive_feedback();
   ++runtime_binding_generation_;
   interaction_editor_ = nullptr;
   interaction_native_tools_ = nullptr;
@@ -550,6 +619,7 @@ void QtViewportPanel::abandon_interactions() {
   pending_external_pointer_event_ = false;
   pending_external_pointer_left_release_only_ = true;
   suppressed_keybinding_chords_.clear();
+  command_pointer_release_suppression_ = {};
   linear_array_wheel_remainder_ = 0.0;
   radial_array_wheel_remainder_ = 0.0;
 }
@@ -558,6 +628,7 @@ void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
   interaction_controller_.cancel_pending_material_interaction();
   interaction_controller_.cancel_pending_selection_click();
   if (workspace_ != &workspace) {
+    hide_primitive_feedback();
     cancel_navigation();
     if (interaction_native_tools_ != nullptr) {
       interaction_controller_.reset(interaction_editor_,
@@ -600,6 +671,7 @@ void QtViewportPanel::apply_ui_scale(const QtUiScaleMetrics &metrics) {
     return;
   }
   ui_scale_metrics_ = metrics;
+  hide_primitive_feedback();
   context_menu_presenter_.apply_ui_scale(metrics);
   for (Pane &pane_state : panes_) {
     pane_state.navigation_gizmo->apply_ui_scale(metrics);
@@ -631,6 +703,7 @@ void QtViewportPanel::set_render_performance_stats(
 }
 
 void QtViewportPanel::set_localization(LocalizationService &localization) {
+  hide_primitive_feedback();
   localization_ = &localization;
   viewport_info_last_text_refresh_ = {};
   for (Pane &pane_state : panes_) {
@@ -649,6 +722,7 @@ void QtViewportPanel::set_startup_presentation_blocked(bool blocked) {
   startup_presentation_blocked_ = blocked;
   native_surface_startup_ = {};
   if (blocked) {
+    hide_primitive_feedback();
     for (Pane &pane_state : panes_) {
       pane_state.surface_container->hide();
       pane_state.surface_presented = false;
@@ -705,8 +779,19 @@ void QtViewportPanel::process_input(
   const ViewportProbeClock::time_point input_start =
       diagnostics_enabled ? ViewportProbeClock::now()
                           : ViewportProbeClock::time_point{};
+  primitive_feedback_input_eligible_ = false;
   process_viewport_input(editor, document, assets, modeling, default_material,
                          native_tools, point_placement, delta_seconds);
+  if (primitive_feedback_input_eligible_ && workspace_ != nullptr) {
+    Pane &pane_state = pane(interaction_pane_id_);
+    present_primitive_feedback(pane_state,
+        interaction_controller_.primitive_creation_controls(
+            editor.tools().live_primitive_creation(),
+            workspace_->camera(interaction_pane_id_),
+            viewport_raster_scale(interaction_pane_id_)));
+  } else {
+    hide_primitive_feedback();
+  }
   update_pointer_cursor_presentation();
   observe_persisted_camera_change(editor);
   if (diagnostics_enabled) {
@@ -739,6 +824,96 @@ void QtViewportPanel::observe_persisted_camera_change(
   observed_persisted_camera_signature_ = current_signature;
   QuaderViewportApiRuntimeAccess::observe_persisted_camera_change(
       editor.viewports());
+}
+
+void QtViewportPanel::hide_primitive_feedback() {
+  for (Pane &pane_state : panes_) {
+    if (pane_state.primitive_feedback != nullptr &&
+        !pane_state.primitive_feedback->isHidden()) {
+      pane_state.primitive_feedback->hide();
+    }
+    pane_state.primitive_feedback_valid = false;
+  }
+}
+
+void QtViewportPanel::present_primitive_feedback(
+    Pane &pane_state, const PrimitiveCreationControlsFrame &controls) {
+  if (!controls.visible || controls.label_key.empty() ||
+      !std::isfinite(controls.label_value) ||
+      !std::isfinite(controls.label_position.x) ||
+      !std::isfinite(controls.label_position.y)) {
+    hide_primitive_feedback();
+    return;
+  }
+  const auto locale_revision = localization_ != nullptr ? localization_->revision() : 0u;
+  const QRect bounds = pane_state.surface_container->geometry();
+  const qreal raw_dpr = pane_state.surface->devicePixelRatio();
+  const qreal dpr = std::isfinite(raw_dpr) && raw_dpr > 0.0 ? raw_dpr : 1.0;
+  if (pane_state.primitive_feedback_valid &&
+      pane_state.primitive_feedback_revision == controls.revision &&
+      pane_state.primitive_feedback_locale_revision == locale_revision &&
+      pane_state.primitive_feedback_bounds == bounds &&
+      pane_state.primitive_feedback_dpr == dpr) {
+    return;
+  }
+  for (Pane &other : panes_) {
+    if (&other != &pane_state) {
+      if (!other.primitive_feedback->isHidden()) other.primitive_feedback->hide();
+      other.primitive_feedback_valid = false;
+    }
+  }
+  pane_state.primitive_feedback_valid = true;
+  pane_state.primitive_feedback_revision = controls.revision;
+  pane_state.primitive_feedback_locale_revision = locale_revision;
+  pane_state.primitive_feedback_bounds = bounds;
+  pane_state.primitive_feedback_dpr = dpr;
+  ++primitive_feedback_update_count_;
+
+  constexpr std::array<std::pair<std::string_view, std::string_view>, 12> kLabels{{
+      {"primitive.controls.width", "Width"},
+      {"primitive.controls.height", "Height"},
+      {"primitive.controls.depth", "Depth"},
+      {"primitive.controls.radius", "Radius"},
+      {"primitive.controls.sides", "Sides"},
+      {"primitive.controls.radial_segments", "Radial segments"},
+      {"primitive.controls.rings", "Rings"},
+      {"primitive.controls.outer_radius", "Outer radius"},
+      {"primitive.controls.inner_radius", "Inner radius"},
+      {"primitive.controls.tube_height", "Tube height"},
+      {"primitive.controls.major_segments", "Around Hole"},
+      {"primitive.controls.minor_segments", "Around Tube"},
+  }};
+  const auto found = std::find_if(kLabels.begin(), kLabels.end(), [&](const auto &label) {
+    return label.first == controls.label_key;
+  });
+  const std::string_view fallback = found != kLabels.end() ? found->second : controls.label_key;
+  const std::string label = localization_ != nullptr
+      ? localization_->text(controls.label_key, fallback) : std::string(fallback);
+  const QLocale locale = localization_ != nullptr
+      ? QLocale(QString::fromStdString(localization_->current_locale())) : QLocale::c();
+  const QString value = controls.label_is_count
+      ? locale.toString(static_cast<qlonglong>(std::llround(controls.label_value)))
+      : locale.toString(controls.label_value, 'g', 6);
+  const QString text = QStringLiteral("%1: %2").arg(QString::fromStdString(label), value);
+  QLabel &widget = *pane_state.primitive_feedback;
+  const int margin = ui_scale_metrics_.px(4);
+  const bool text_changed = widget.text() != text;
+  const bool margin_changed = widget.margin() != margin;
+  if (text_changed) widget.setText(text);
+  if (margin_changed) widget.setMargin(margin);
+  if (text_changed || margin_changed) widget.adjustSize();
+  // The shared label position is already offset from the control in physical
+  // pixels. Convert only DPR; interface scale is already in that position.
+  const QPoint position{
+      std::clamp(bounds.x() + static_cast<int>(std::lround(controls.label_position.x / dpr)),
+                 bounds.x(), std::max(bounds.x(), bounds.right() + 1 - widget.width())),
+      std::clamp(bounds.y() + static_cast<int>(std::lround(controls.label_position.y / dpr)),
+                 bounds.y(), std::max(bounds.y(), bounds.bottom() + 1 - widget.height()))};
+  if (widget.pos() != position) widget.move(position);
+  if (widget.isHidden()) {
+    widget.show();
+    widget.raise();
+  }
 }
 
 void QtViewportPanel::prepare_viewports(
@@ -848,6 +1023,7 @@ void QtViewportPanel::prepare_viewports(
   render_bridge.update_mesh_surface_grid(grid_world_size, settings);
 
   const ModelingSelectionMode cached_overlay_mode = modeling.selection_mode();
+  const auto live_primitive_creation = editor.tools().live_primitive_creation();
   const ModelingSelectionOverlayOptions selection_overlay_options{
       .suppress_persistent_object_selection =
           cached_overlay_mode == ModelingSelectionMode::Object,
@@ -892,17 +1068,17 @@ void QtViewportPanel::prepare_viewports(
           viewport_grid_layer_mask(viewport_pane_index(placement.pane_id)));
     }
   }
+  const bool selected_mesh_outline_only = !live_primitive_creation &&
+      (cached_overlay_mode == ModelingSelectionMode::Object ||
+       cached_overlay_mode == ModelingSelectionMode::Group);
   (void)QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
       editor.render(), render_bridge, snapshot_cache,
       QuaderRenderSceneOverlaySyncRequest{
           .selected_object_overlay_visible =
-              overlays_visible &&
-              cached_overlay_mode == ModelingSelectionMode::Object,
+              overlays_visible && selected_mesh_outline_only,
           .scene_wireframe_layer_mask = wireframe_layer_mask,
-          .selected_scene_wire_visible =
-              overlays_visible &&
-              (cached_overlay_mode == ModelingSelectionMode::Object ||
-               cached_overlay_mode == ModelingSelectionMode::Group),
+          .selected_scene_wire_visible = false,
+          .selected_mesh_outline_only = selected_mesh_outline_only,
           .style = persistent_overlay_style,
           .raster_groups = persistent_raster_groups,
       });
@@ -1006,6 +1182,8 @@ void QtViewportPanel::prepare_viewports(
         should_show_point_placement_overlay(
             radial_array_center.visible, radial_array_center.locked,
             pane_state.id == interaction_pane_id_);
+    const bool primitive_creation_visible = gizmos_visible && live_primitive_creation &&
+        pane_state.id == interaction_pane_id_;
     renderer.set_overlay_visible(should_enable_viewport_overlay_pass({
         .overlays_visible = overlays_visible,
         .gizmos_visible = gizmos_visible,
@@ -1016,7 +1194,7 @@ void QtViewportPanel::prepare_viewports(
             (native_presentation.curve_preview != nullptr &&
              native_presentation.curve_preview->active) ||
             assets.curve_count() != 0u,
-        .tool_overlay_visible = tool_overlay_visible,
+        .tool_overlay_visible = tool_overlay_visible || primitive_creation_visible,
     }));
 
     const ViewportOverlayCamera overlay_camera =
@@ -1029,6 +1207,15 @@ void QtViewportPanel::prepare_viewports(
         gizmos_visible && viewport_shading_shows_light_gizmos(shading);
     const float pane_viewport_pixel_scale =
         viewport_raster_scale(pane_state.id);
+    const PrimitiveCreationControlsFrame *primitive_creation_controls = nullptr;
+    if (pane_state.id == interaction_pane_id_) {
+      primitive_creation_controls = &interaction_controller_.primitive_creation_controls(
+          gizmos_visible ? live_primitive_creation : std::nullopt,
+          pane_workspace.camera, pane_viewport_pixel_scale);
+      if (primitive_feedback_input_eligible_) {
+        present_primitive_feedback(pane_state, *primitive_creation_controls);
+      }
+    }
     const ViewportToolOverlaySource dynamic_tool_frame_provider{
         ViewportToolOverlaySourceInputs{
             .source_identity = reinterpret_cast<std::uintptr_t>(
@@ -1037,6 +1224,7 @@ void QtViewportPanel::prepare_viewports(
             .overlay_camera = &overlay_camera,
             .viewport_camera = &pane_workspace.camera,
             .box_preview = &active_box_preview_,
+            .primitive_creation_controls = primitive_creation_controls,
             .transform_gizmo = transform_gizmo,
             .transform_snap_points = &transform_snap_points,
             .selection_marquee = &selection_marquee,
@@ -1063,10 +1251,15 @@ void QtViewportPanel::prepare_viewports(
                 .viewport_index = viewport_index,
                 .layer_mask = layer_mask,
                 .raster_scale = pane_viewport_pixel_scale,
+                .construction_object_id = live_primitive_creation
+                    ? live_primitive_creation->object_id : -1,
                 .camera = overlay_camera,
                 .selection_source = selection_source,
                 .selection_frame_provider = &selection_frame_provider,
                 .scene_overlay_snapshot = scene_overlay_snapshot,
+                .selected_mesh_outline_snapshot =
+                    selected_mesh_outline_only
+                        ? snapshot_cache.selected_object_snapshot() : nullptr,
                 .volatile_modeling_overlay_frame =
                     volatile_modeling_overlay.frame.get(),
                 .volatile_modeling_source = {
@@ -1279,6 +1472,19 @@ QtViewportPanel::surface(ViewportPaneId pane_id) const {
 }
 
 bool QtViewportPanel::eventFilter(QObject *watched, QEvent *event) {
+  if (event != nullptr) {
+    for (const Pane &candidate : panes_) {
+      if (watched == candidate.surface && candidate.id == interaction_pane_id_ &&
+          (event->type() == QEvent::FocusOut ||
+           event->type() == QEvent::Hide ||
+           (event->type() == QEvent::Leave &&
+            !interaction_controller_.primitive_creation_pointer_active()))) {
+        primitive_feedback_input_eligible_ = false;
+        hide_primitive_feedback();
+        break;
+      }
+    }
+  }
   const bool pointer_event =
       event != nullptr &&
       (event->type() == QEvent::MouseButtonPress ||
@@ -1385,6 +1591,7 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   pane_state.frame->hide();
 
   pane_state.surface = new QtViewportSurface(pane_state.id);
+  pane_state.surface->installEventFilter(this);
   pane_state.surface_container =
       QWidget::createWindowContainer(pane_state.surface, pane_state.frame);
   pane_state.surface_container->setObjectName(
@@ -1499,6 +1706,19 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   pane_state.info_overlay->setAttribute(Qt::WA_NativeWindow);
   pane_state.info_overlay->setAttribute(Qt::WA_TransparentForMouseEvents);
   pane_state.info_overlay->hide();
+
+  pane_state.primitive_feedback = new QtViewportPrimitiveFeedbackLabel(pane_state.frame);
+  pane_state.primitive_feedback->setObjectName(
+      QStringLiteral("viewportPrimitiveFeedback_%1")
+          .arg(QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
+  pane_state.primitive_feedback->setTextFormat(Qt::PlainText);
+  pane_state.primitive_feedback->setAttribute(Qt::WA_NativeWindow);
+  pane_state.primitive_feedback->setAttribute(Qt::WA_TransparentForMouseEvents);
+  pane_state.primitive_feedback->setFocusPolicy(Qt::NoFocus);
+  pane_state.primitive_feedback->setBackgroundRole(QPalette::ToolTipBase);
+  pane_state.primitive_feedback->setForegroundRole(QPalette::ToolTipText);
+  pane_state.primitive_feedback->setAutoFillBackground(true);
+  pane_state.primitive_feedback->hide();
 
   pane_state.fly_navigation_hud =
       new QtViewportFlyNavigationHud(*pane_state.frame, pane_state.id);
@@ -1728,6 +1948,9 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
     pane_state.toolbar->raise();
     pane_state.navigation_gizmo->raise();
     pane_state.info_overlay->raise();
+    if (!pane_state.primitive_feedback->isHidden()) {
+      pane_state.primitive_feedback->raise();
+    }
     pane_state.overlay_stack_valid = true;
   }
 }
@@ -1834,6 +2057,10 @@ bool QtViewportPanel::pane_surface_has_keyboard_focus(
 
 bool QtViewportPanel::pane_interaction_locked() const {
   if (input_router_.navigating() ||
+      std::any_of(command_pointer_release_suppression_.begin(),
+                  command_pointer_release_suppression_.end(),
+                  [](const auto &suppression) { return suppression.active(); }) ||
+      interaction_controller_.primitive_creation_pointer_active() ||
       interaction_controller_.transform_gizmo_pointer_active() ||
       (interaction_native_tools_ != nullptr &&
        interaction_native_tools_->pointer_dragging()) ||
@@ -2263,6 +2490,10 @@ void QtViewportPanel::process_viewport_input(
       navigation_gizmo_locked_pane.has_value() || navigation_gizmo_activity;
   const bool interaction_locked =
       input_router_.navigating() ||
+      std::any_of(command_pointer_release_suppression_.begin(),
+                  command_pointer_release_suppression_.end(),
+                  [](const auto &suppression) { return suppression.active(); }) ||
+      interaction_controller_.primitive_creation_pointer_active() ||
       interaction_controller_.transform_gizmo_pointer_active() ||
       native_tools.pointer_dragging() ||
       interaction_controller_.texture_transfer_pointer_active() ||
@@ -2277,6 +2508,10 @@ void QtViewportPanel::process_viewport_input(
                                              routes_locked_interaction);
   }
 
+  // Presentation follows held modifiers even if focus/hover routing below
+  // does not produce a tool frame. An active click keeps its captured glyph.
+  interaction_controller_.set_primitive_creation_decrement(
+      samples[viewport_pane_index(interaction_pane_id_)].input.modifiers.primary);
   std::vector<ViewportPaneInputCandidate> pane_candidates;
   pane_candidates.reserve(active_placements.size());
   for (const ViewportPanePlacement &placement : active_placements) {
@@ -2411,6 +2646,45 @@ void QtViewportPanel::process_viewport_input(
   if (runtime_binding_generation_ != input_binding_generation) {
     return;
   }
+  // Commands own only their originating mouse gesture. Keep the physical
+  // release reserved across frames/modifier changes without hiding keyboard
+  // commands (such as Flip Faces) from an otherwise active tool drag.
+  const auto consume_command_pointer = [&](std::size_t index,
+                                           QuaderMouseButton button,
+                                           bool &pressed, bool &down,
+                                           bool &released) {
+    auto &suppression = command_pointer_release_suppression_[index];
+    bool consumed = suppression.consume(button, pressed, down, released);
+    const auto *latest_press =
+        viewport_pointer_latest_edge(input.pointer_pressed_edges, button);
+    for (const auto &edge : input.command_pointer_edges) {
+      if (!edge.pointer_edge || edge.pointer_edge->button != button) continue;
+      // An earlier command in a coalesced frame must not reserve a newer,
+      // unrelated press of the same button.
+      if (latest_press && latest_press->sequence != 0 &&
+          edge.pointer_edge->sequence != 0 &&
+          edge.pointer_edge->sequence < latest_press->sequence) continue;
+      consumed = true;
+      suppression.begin(button, down);
+    }
+    if (!consumed) return;
+    pressed = down = released = false;
+    const auto matches = [button](const auto &edge) {
+      return edge.button == button;
+    };
+    std::erase_if(input.pointer_pressed_edges, matches);
+    std::erase_if(input.pointer_released_edges, matches);
+    std::erase_if(input.pointer_drag_started_edges, matches);
+  };
+  consume_command_pointer(0, QuaderMouseButton::Left, sample.left_pressed,
+                          sample.left_down, sample.left_released);
+  consume_command_pointer(1, QuaderMouseButton::Middle, input.middle_pressed,
+                          input.middle_down, input.middle_released);
+  consume_command_pointer(2, QuaderMouseButton::Right, sample.right_pressed,
+                          sample.right_down, sample.right_released);
+  input.right_pressed = sample.right_pressed;
+  input.right_down = sample.right_down;
+  input.right_released = sample.right_released;
   if (active_tool_changed) {
     input.modal_tool_active =
         interaction_controller_.has_active_modal_preview(
@@ -2424,6 +2698,63 @@ void QtViewportPanel::process_viewport_input(
             input_router_.state().active_tool);
     set_modal_tool_owns_viewport_snapshot(input.active_tool_owns_viewport ||
                                           input.modal_tool_active);
+  }
+
+  // Commands and pending sequences resolve first. The active tool may then
+  // claim individual ordered packets before the remaining ones reach zoom.
+  if (!input.navigation_bindings.wheel_events.empty()) {
+    ViewportBoxToolContext wheel_box;
+    wheel_box.live_primitive = [&]() {
+      return ViewportPrimitiveCreationApiAdapter::from_api(
+          editor.tools().live_primitive_creation());
+    };
+    wheel_box.set_segments = [&](int axis, int count) {
+      return set_primitive_segments(editor, axis, count);
+    };
+    wheel_box.raster_scale = viewport_raster_scale(*input_pane);
+    wheel_box.primitive_controls_visible = editor.preferences().gizmos_visible();
+    ViewportToolContext wheel_context{
+        .state = input_router_.state(), .camera = camera, .ports = preview_ports,
+        .box = &wheel_box,
+        .runtime_binding = {.current_generation = &runtime_binding_generation_,
+                            .expected_generation = input_binding_generation}};
+    const bool command_pointer_owned =
+        !input.command_pointer_edges.empty() ||
+        std::any_of(command_pointer_release_suppression_.begin(),
+                    command_pointer_release_suppression_.end(),
+                    [](const auto &owner) { return owner.active(); });
+    (void)interaction_controller_.handle_active_tool_event(
+        input_router_.state(), wheel_context,
+        {.kind = ViewportToolEventKind::Wheel,
+         .tool = input_router_.state().active_tool,
+         .pointer = {
+             .left_clicked = sample.left_pressed, .left_down = sample.left_down,
+             .left_released = sample.left_released,
+             .gizmo_consumed = command_pointer_owned || navigation_gizmo_consumed ||
+                 interaction_controller_.transform_gizmo_pointer_active() ||
+                 native_tools.pointer_dragging() || pane_state.surface->pointer_captured(),
+             .navigation_active = input.navigation_active || input.fly_navigation_active ||
+                 input.right_down || input.middle_down || input.right_pressed ||
+                 input.middle_pressed || input.right_released || input.middle_released ||
+                 viewport_navigation_press(input.navigation_bindings).action !=
+                     ViewportInputActionKind::None,
+             .text_input_active = input.text_input_active,
+             .viewport_focused = input.viewport_focused,
+             .pointer_interaction_canceled = input.pointer_interaction_canceled,
+             .modifiers = input.modifiers,
+             .wheel_events = input.navigation_bindings.wheel_events}});
+    if (runtime_binding_generation_ != input_binding_generation) return;
+    std::erase_if(input.navigation_bindings.wheel_events,
+                  [](const auto &wheel) { return wheel.consumed; });
+    input.mouse_wheel = 0.0f;
+    input.navigation_bindings.zoom_wheel = false;
+    input.navigation_bindings.zoom_to_cursor_wheel = false;
+    for (const auto &wheel : input.navigation_bindings.wheel_events) {
+      input.mouse_wheel += wheel.steps;
+      input.navigation_bindings.zoom_wheel |= wheel.action == ViewportInputActionKind::Zoom;
+      input.navigation_bindings.zoom_to_cursor_wheel |=
+          wheel.action == ViewportInputActionKind::ZoomToCursor;
+    }
   }
 
   // Navigation samples scene depth once, at gesture start. The render-visible
@@ -3137,6 +3468,32 @@ void QtViewportPanel::process_viewport_input(
         active_name.empty() ? std::string_view{"Mesh"} : active_name;
     return SceneEntityNaming::next_name(document, base_name);
   };
+  const auto cube_result = [](const QuaderApiVoidResult &result) {
+    return ModelingCommandResult{.ok = result.ok(), .changed = result.changed(),
+                                  .message = std::string(result.error_message())};
+  };
+  box_context.live_primitive = [&]() {
+    return ViewportPrimitiveCreationApiAdapter::from_api(
+        editor.tools().live_primitive_creation());
+  };
+  box_context.begin_resize = [&](ViewportPrimitiveResizeControl control, QVec3 axis) {
+    return cube_result(editor.tools().begin_primitive_resize(
+        ViewportPrimitiveCreationApiAdapter::to_api(control), axis));
+  };
+  box_context.update_resize = [&](double displacement) {
+    return cube_result(editor.tools().update_primitive_resize(displacement));
+  };
+  box_context.end_resize = [&]() {
+    return cube_result(editor.tools().end_primitive_resize());
+  };
+  box_context.cancel_resize = [&]() {
+    return cube_result(editor.tools().cancel_primitive_resize());
+  };
+  box_context.set_segments = [&](int axis, int count) {
+    return set_primitive_segments(editor, axis, count);
+  };
+  box_context.raster_scale = viewport_pixel_scale;
+  box_context.primitive_controls_visible = editor.preferences().gizmos_visible();
   ViewportPointToolContext point_context;
   point_context.make_event_at = make_tool_event_at;
   point_context.hit_drawn_plane_captured_point =
@@ -3159,6 +3516,8 @@ void QtViewportPanel::process_viewport_input(
       .settings = &active_viewport_settings(),
       .box = &box_context,
       .point = &point_context,
+      .runtime_binding = {.current_generation = &runtime_binding_generation_,
+                          .expected_generation = input_binding_generation},
   };
   tool_context.set_active_tool = [&](ViewportToolId tool) {
     input_router_.set_active_tool(tool);
@@ -3197,6 +3556,8 @@ void QtViewportPanel::process_viewport_input(
                                               ? sample.left_click_local
                                               : input.mouse_local,
                       .viewport_size = input.viewport_size,
+                      // Live modifiers drive hover UI/snapping. Press edges
+                      // carry their own modifiers for frozen click intent.
                       .modifiers = input.modifiers,
                       .pointer_pressed_edges = input.pointer_pressed_edges,
                       .pointer_released_edges = input.pointer_released_edges,
@@ -3204,6 +3565,7 @@ void QtViewportPanel::process_viewport_input(
                           interaction_frame.pointer_drag_threshold_pixels,
                       .monotonic_time_seconds =
                           interaction_frame.monotonic_time_seconds,
+                      .camera_changed = result.camera_changed,
                   },
           });
   if (runtime_binding_generation_ != input_binding_generation) {
@@ -3315,6 +3677,7 @@ void QtViewportPanel::process_viewport_input(
     hover_controller_.invalidate();
   }
   if (interaction_controller_.transform_gizmo_pointer_active() ||
+      interaction_controller_.primitive_creation_pointer_active() ||
       before_tool.gizmo_consumed ||
       has_input_activity(sample)) {
     interaction_pane_id_ = *input_pane;
@@ -3360,6 +3723,12 @@ void QtViewportPanel::process_viewport_input(
       !modal_tool_owns_viewport_snapshot_ && !modal_tool_dragging_ &&
       !interaction_controller_.transform_gizmo_pointer_active() &&
       !native_tools.pointer_dragging() &&
+      !show_context_menu && !show_delete_popup;
+  primitive_feedback_input_eligible_ =
+      input.viewport_focused && !input.text_input_active &&
+      !input.pointer_interaction_canceled && !result.navigation_active &&
+      (input.viewport_hovered || interaction_controller_.primitive_creation_pointer_active()) &&
+      editor.preferences().gizmos_visible() &&
       !show_context_menu && !show_delete_popup;
 }
 

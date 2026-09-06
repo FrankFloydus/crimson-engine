@@ -120,6 +120,23 @@ void ViewportOverlayStyleResolver::apply_from(
     range.icon_begin = std::min(range.icon_begin, frame.icons.size());
     const float raster_scale =
         viewport_overlay_sanitized_raster_scale(context.raster_scale);
+    if (context.construction_object_id >= 0) {
+      // Remove the records rather than making them transparent: selection and
+      // hover fills also write depth masks that can obscure other overlays.
+      const auto first = frame.triangles.begin() +
+                         static_cast<std::ptrdiff_t>(range.triangle_begin);
+      frame.triangles.erase(
+          std::remove_if(first, frame.triangles.end(),
+                         [&](const ViewportOverlayTriangle &triangle) {
+                           const auto role = role_for(triangle);
+                           return triangle.element.object_id ==
+                                      context.construction_object_id &&
+                                  (role == ViewportOverlayStyleRole::SelectionFace ||
+                                   role == ViewportOverlayStyleRole::HoverFace ||
+                                   role == ViewportOverlayStyleRole::RemoveSelectionFace);
+                         }),
+          frame.triangles.end());
+    }
     if (context.projection == ViewportOverlayProjection::Orthographic &&
         !settings.bool_value(ViewportBoolSettingId::BackfaceSelection)) {
       // Orthographic hover is outline-only here: transparent triangles would
@@ -174,6 +191,17 @@ void ViewportOverlayStyleResolver::apply_from(
           viewport_overlay_line_width_pixels(line.layer,
                                              resolved_width_pixels) *
           raster_scale;
+      if (context.construction_object_id >= 0 &&
+          line.element.object_id == context.construction_object_id &&
+          (role == ViewportOverlayStyleRole::SelectionWire ||
+           role == ViewportOverlayStyleRole::SelectedSourceWire ||
+           role == ViewportOverlayStyleRole::SourceWire ||
+           role == ViewportOverlayStyleRole::HoverWire ||
+           role == ViewportOverlayStyleRole::RemoveSelectionWire)) {
+        const std::uint32_t alpha = (line.color >> 24u) / 10u;
+        line.color = (line.color & 0x00ffffffu) | (alpha << 24u);
+        line.width_pixels = std::min(line.width_pixels, raster_scale);
+      }
     }
 
     for (auto it = frame.points.begin() +

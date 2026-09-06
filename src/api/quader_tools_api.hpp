@@ -8,10 +8,14 @@
 
 #include "api/quader_api_session.hpp"
 #include "api/quader_editor_api_types.hpp"
+#include "api/quader_operation_input_hint_types.hpp"
+#include "api/quader_primitive_creation_types.hpp"
 #include "api/quader_viewport_input_types.hpp"
 
 #include <cstdint>
+#include <array>
 #include <string>
+#include <vector>
 
 namespace quader {
 
@@ -43,6 +47,10 @@ public:
     [[nodiscard]] QuaderToolSettingsTarget active_settings() const;
     [[nodiscard]] std::uint64_t active_settings_revision() const;
     [[nodiscard]] std::uint64_t active_tool_revision() const;
+    /// Cheap gate for owner-selected operation hints, including lifecycle/rebind.
+    [[nodiscard]] std::uint64_t active_input_hints_revision() const;
+    /// Resolve only after the hint revision changes; key mappings remain command-owned.
+    [[nodiscard]] std::vector<QuaderOperationInputHint> active_input_hints() const;
     QuaderApiVoidResult set_setting(std::string_view tool_id,
                                     std::string_view name, double value,
                                     QuaderToolSettingEditOptions options = {});
@@ -64,6 +72,28 @@ public:
     [[nodiscard]] bool has_active_primitive_creation() const;
     [[nodiscard]] std::string active_primitive_type() const;
     [[nodiscard]] std::string active_primitive_default_name() const;
+    [[nodiscard]] std::optional<QuaderPrimitiveCreationState>
+    live_primitive_creation() const;
+    QuaderApiVoidResult begin_primitive_resize(
+        QuaderPrimitiveResizeControl control,
+        QVec3 radial_axis = {1.0f, 0.0f, 0.0f});
+    /// Signed displacement from the starting face or ellipse-ray intersection.
+    QuaderApiVoidResult update_primitive_resize(double displacement);
+    QuaderApiVoidResult end_primitive_resize();
+    QuaderApiVoidResult cancel_primitive_resize();
+    QuaderApiVoidResult toggle_primitive_caps();
+    /// Toggles Sphere hemisphere creation, including the pending footprint.
+    QuaderApiVoidResult toggle_primitive_hemisphere();
+    /// Box-only compatibility interface.
+    [[nodiscard]] std::optional<QuaderPrimitiveCubeState>
+    live_primitive_cube() const;
+    QuaderApiVoidResult
+    begin_primitive_cube_resize(QuaderPrimitiveCubeAxis axis, bool positive);
+    /// Signed local-axis displacement from the gesture's starting bounds.
+    QuaderApiVoidResult update_primitive_cube_resize(double displacement);
+    QuaderApiVoidResult end_primitive_cube_resize();
+    QuaderApiVoidResult cancel_primitive_cube_resize();
+    QuaderApiVoidResult flip_primitive_faces();
     QuaderApiVoidResult commit_active_tool_preview();
     QuaderApiVoidResult cancel_active_tool_preview();
     QuaderApiVoidResult cancel_modal_tool();
@@ -88,6 +118,15 @@ public:
     mutable std::string active_tool_id_;
     mutable std::uint64_t active_tool_revision_ = 0;
     mutable bool active_tool_valid_ = false;
+    mutable std::array<std::uint64_t, 5> input_hints_source_ = {};
+    mutable std::uint64_t input_hints_revision_ = 0;
+    mutable bool input_hints_source_valid_ = false;
+    mutable std::optional<QuaderPrimitiveCreationState> primitive_creation_state_;
+    mutable std::uint64_t primitive_creation_owner_revision_ = 0;
+    mutable std::uint64_t primitive_creation_transform_revision_ = 0;
+    mutable std::uint64_t primitive_creation_selection_revision_ = 0;
+    mutable std::uint64_t primitive_creation_instance_revision_ = 0;
+    mutable std::uint64_t primitive_creation_revision_ = 0;
 };
 
 } // namespace quader

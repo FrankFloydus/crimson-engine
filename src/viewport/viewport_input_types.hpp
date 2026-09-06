@@ -29,6 +29,9 @@ struct ViewportPointerButtonEdge {
   // Monotonic at the production Qt boundary. Zero is reserved for synthetic
   // callers that do not need to distinguish coalesced event ordering.
   std::uint64_t sequence = 0u;
+  // Hosts supply event-time modifiers; synthetic callers may retain the
+  // frame-modifier fallback by leaving this unset.
+  std::optional<ViewportModifiers> modifiers;
 };
 
 /// Distinguishes ordered semantic pointer presses from releases.
@@ -50,6 +53,8 @@ struct ViewportNavigationWheelEvent {
   ViewportInputActionKind action = ViewportInputActionKind::None;
   float steps = 0.0f;
   QVec2 local = {};
+  /// An active tool may claim this resolved packet before camera navigation.
+  bool consumed = false;
 };
 
 /**
@@ -206,6 +211,9 @@ struct ViewportInputFrame {
   bool pointer_interaction_canceled = false;
   // Retains Curve conversion reserves and triggers in physical dispatch order.
   std::vector<ViewportCurveConversionEdge> curve_conversion_edges;
+  // Commands and sequence prefixes retain the exact mouse edge they consumed.
+  // Keyboard commands intentionally leave this empty, including during drags.
+  std::vector<ViewportSemanticPointerEdge> command_pointer_edges;
 };
 
 /**

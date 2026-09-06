@@ -18,7 +18,7 @@ using quader::test::guardrail::read_source_file;
 } // namespace
 
 TEST(RegressionGateGuardrailTests,
-     GateBuildsEveryTestOwnerRunsFullCtestAndBuildsTheNativeAppLast) {
+     GateBuildsEveryTestOwnerRunsFullCtestWithoutBuildingAnApp) {
   const std::string gate = read_source_file("tools/regression_gate.ps1");
 
   EXPECT_TRUE(contains(gate, "cmake --preset vs2026"));
@@ -29,15 +29,10 @@ TEST(RegressionGateGuardrailTests,
   EXPECT_TRUE(contains(gate, "quader_modeling_sdk_parity_tests"));
   EXPECT_TRUE(
       contains(gate, "ctest --preset vs2026-debug --output-on-failure"));
-  EXPECT_TRUE(
+  EXPECT_FALSE(
       contains(gate, "cmake --build --preset vs2026-debug --target quader"));
-
-  const std::size_t ctest = gate.find("ctest --preset vs2026-debug");
-  const std::size_t native_build =
-      gate.find("cmake --build --preset vs2026-debug --target quader");
-  ASSERT_NE(ctest, std::string::npos);
-  ASSERT_NE(native_build, std::string::npos);
-  EXPECT_LT(ctest, native_build);
+  EXPECT_FALSE(
+      contains(gate, "cmake --build --preset vs2026-release --target quader"));
 }
 
 TEST(RegressionGateGuardrailTests,

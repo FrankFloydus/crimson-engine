@@ -406,6 +406,7 @@ void SceneWireframeOverlayCache::shutdown() {
   synced_raster_groups_ = {};
   synced_instance_edit_context_signature_ = 0u;
   synced_selected_mesh_wire_visible_ = true;
+  synced_selected_mesh_outline_only_ = false;
   synced_clip_planes_ = {};
   synced_layer_mask_ = 0u;
   layer_masks_forced_hidden_ = false;
@@ -488,12 +489,14 @@ void SceneWireframeOverlayCache::sync(
   const bool context_style_changed =
       !has_synced_ || synced_instance_edit_context_signature_ !=
                           snapshot.style.instance_edit_context_signature;
-  if (has_synced_ &&
+  if (has_synced_ && !layer_masks_forced_hidden_ &&
       render_source_dependencies_match(
           synced_source_stamp_, snapshot,
           kRenderOverlaySceneWireframeCacheNoWorkDependencies) &&
        synced_selected_mesh_wire_visible_ ==
            snapshot.selected_mesh_wire_visible &&
+       synced_selected_mesh_outline_only_ ==
+           snapshot.selected_mesh_outline_only &&
        !clip_changed && !raster_groups_changed && !layer_mask_changed &&
        !style_changed) {
     if (context_style_changed) {
@@ -505,9 +508,12 @@ void SceneWireframeOverlayCache::sync(
   }
 
   const bool mesh_inputs_match =
-      has_synced_ && !style_requires_rebuild && !layer_mask_changed &&
+      has_synced_ && !layer_masks_forced_hidden_ &&
+      !style_requires_rebuild && !layer_mask_changed &&
       synced_selected_mesh_wire_visible_ ==
           snapshot.selected_mesh_wire_visible &&
+      synced_selected_mesh_outline_only_ ==
+          snapshot.selected_mesh_outline_only &&
       render_source_dependencies_match(
           synced_source_stamp_, snapshot,
           RenderSourceDependency::InstanceEditScope) &&
@@ -578,6 +584,7 @@ void SceneWireframeOverlayCache::sync(
       snapshot.style.instance_edit_context_signature;
   synced_selected_mesh_wire_visible_ =
       snapshot.selected_mesh_wire_visible;
+  synced_selected_mesh_outline_only_ = snapshot.selected_mesh_outline_only;
   synced_clip_planes_ = snapshot.clip_planes;
   synced_layer_mask_ = snapshot.layer_mask;
   layer_masks_forced_hidden_ = false;

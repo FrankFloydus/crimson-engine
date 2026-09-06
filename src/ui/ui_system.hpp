@@ -65,6 +65,7 @@ class QtMaterialPreviewSurface;
 class QtRetainedMessageBox;
 class QtStandardMaterialEditorWindow;
 class QtToolSettingsPanel;
+class QtOperationInputHints;
 class QtUnsavedConfirmationDialog;
 class QtViewportPanel;
 class QtProjectHomePage;
@@ -264,6 +265,7 @@ private:
   QtRetainedMessageBox *standard_material_error_message_box_ = nullptr;
   QtRetainedMessageBox *material_browser_import_message_box_ = nullptr;
   QLabel *status_message_ = nullptr;
+  QtOperationInputHints *operation_input_hints_ = nullptr;
   QLabel *status_version_ = nullptr;
   QTimer *auxiliary_window_save_timer_ = nullptr;
   UIPanelManager panels_;

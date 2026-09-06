@@ -409,8 +409,8 @@ CommandResult NativeViewportToolCoordinator::accept_active_primitive(
   if (!primitives_.active()) {
     return command_invalid_result("No primitive creation tool is active.");
   }
-  return primitives_.accept_preview(modeling_.box_preview(snap_enabled),
-                                    std::move(name), material);
+  return primitives_.accept_footprint(modeling_.box_preview(snap_enabled),
+                                      std::move(name), material);
 }
 
 void NativeViewportToolCoordinator::reset_transient_state() {

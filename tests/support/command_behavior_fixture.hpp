@@ -36,6 +36,8 @@ public:
   [[nodiscard]] SceneSession &native_scene();
   [[nodiscard]] const SceneSession &native_scene() const;
   [[nodiscard]] std::uint64_t external_call_count() const;
+  /// Starts a second footprint while retaining the first accepted primitive.
+  void begin_primitive_footprint();
 
 private:
   class Impl;

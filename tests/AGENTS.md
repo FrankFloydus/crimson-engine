@@ -8,9 +8,8 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Tests Guide
 
-This is the detailed testing contract. Root [AGENTS.md](../AGENTS.md) owns mandatory final builds,
-versioning, and the explicit fast-iteration exception. Read the nearest local guide for the owner
-being tested.
+This guide owns test placement and selection. Root [AGENTS.md](../AGENTS.md) owns risk-based
+verification, Release-only default handoff, and versioning. Read the tested owner's local guide.
 
 ## Test Rules
 
@@ -40,21 +39,30 @@ being tested.
   in SDK consumer/parity tests under `tests/sdk` plus the matching document
   operation suite. `quader_modeling_sdk_consumer_tests` must link only SDK targets; native adapter
   workflows belong in root app tests. `tests/sdk_consumer` is the separate installed-SDK consumer.
-- Shared root test helpers belong under `tests/support/`. Keep helper changes small because they
-  intentionally force broader affected test runs.
+- Shared root test helpers belong under `tests/support/`. Run the consumers of changed helpers;
+  common fixture infrastructure warrants broad coverage, a command-specific fixture does not
+  automatically require every modeling and SDK test.
 
 ## Selection Rules
 
-- Use `tools/affected_check.ps1 -PlanOnly -ChangedPath <path>` before choosing a broad test set.
-  Run the selected affected workflow for public API, commands, scene, selection, history, viewport,
-  UI, render, resources, and app services. Instructions for the runner are in
-  [tools/AGENTS.md](../tools/AGENTS.md).
-- For a new or edited test file, first build the owning target and run its declared GoogleTest suite
-  with `--gtest_filter=SuiteName.*`.
-- Run full `ctest --preset vs2026-debug --output-on-failure` before pushing changes that touch
-  CMake, shared test support, dependency policy, affected-check routing, or multiple owners.
-- A compile/test speed claim requires `affected_check.ps1 -MeasureFull` and a recorded concrete
-  before -> after measurement. Do not substitute an estimate.
+- Choose one verification pass with `tools/affected_check.ps1 -PlanOnly -ChangedPath <path>` or a
+  directly selected owner suite (`--gtest_filter=SuiteName.*`). Include all suites declared by
+  new/edited test files in that pass. Build their targets first; do not require a separate focused
+  run if the selected broader run already includes them. Runner details: [tools/AGENTS.md](../tools/AGENTS.md).
+- Use current-task paths plus interacting unverified changes. A dirty worktree can contain already
+  verified work from earlier tasks. Omitting `-ChangedPath` intentionally checks the whole diff;
+  reserve that scope for integration or when the previous verification is unknown.
+- Treat the plan as conservative routing, not permission to skip known affected behavior. If it
+  expands to full CTest because of source registration or a command-specific fixture, inspect the
+  diff and choose the affected owners explicitly. Unknown impact requires the full gate.
+- A successful full `ctest --preset vs2026-debug --output-on-failure` satisfies all included owner
+  and command suites. Do not run affected checks and then the full gate on the same inputs just to
+  satisfy two checklist items. After a fix, rerun only tests affected by that fix; reuse the rest.
+- Documentation and source-comment edits need source/link checks only. Run applicable source-policy
+  checks before expensive compilation when their existing test binary is current. Test-only changes
+  need no app executable. Do not add source-text tests solely to freeze workflow paragraph wording.
+- Keep actual log timings for speed claims. `affected_check.ps1 -MeasureFull` is an optional controlled
+  benchmark; it deliberately runs additional work and is not part of normal iteration.
 - Allow at least ten minutes for build/test commands, or keep an asynchronous process alive and
   poll it without treating a tool yield as failure.
 
@@ -70,10 +78,13 @@ being tested.
 - `baselines/command_behavior.json` is read-only during ordinary testing. For an intentional
   behavior change, run `tools/update_command_behavior_baseline.ps1 -Reason "<behavior change>"`
   and review the complete diff. Never regenerate a baseline merely to silence a failure.
-- `tools/regression_gate.ps1` is mandatory final verification for command, selection, history,
-  instance, overlay, viewport, preference, project, scene-document, or cross-owner behavior work.
-  It has no skip-tests or baseline-update path. It builds the test owners, runs full CTest, and
-  builds Debug/Profile `quader`; the separate canonical Release build is still required.
+- Run `CommandBehaviorContractTests.*` when command behavior, defaults, or fixtures change, together
+  with the feature's affected suites. Adding a command through existing dispatch does not alone
+  require the isolated SDK fixture or every unrelated editor test.
+- `tools/regression_gate.ps1` remains the complete, read-only test path for broad risks listed in
+  root policy. It has no skip-tests or baseline-update path and builds no native app. Use it instead
+  of an equivalent affected run. Build Release once when app inputs changed; Debug/Profile is only
+  built on explicit request.
 
 ## Regression Coverage
 
@@ -82,6 +93,6 @@ being tested.
 - UI synchronization changes need a regression proving revision/unchanged-state gates precede
   expensive work and broad catalogs are absent from frame callbacks. A reported performance
   regression also requires a same-build, same-scene before/after frame-time or FPS measurement,
-  focused UI tests, and both native builds.
+  focused UI tests, and the Release build (Debug/Profile only if requested).
 - Keep compatibility fixture bytes stable; [fixtures/qdr/README.md](fixtures/qdr/README.md)
   documents the historical binary needed to verify the current reader.

@@ -31,6 +31,7 @@
 #include "ui/qt_command_palette.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
 #include "ui/qt_main_window.hpp"
+#include "ui/qt_operation_input_hints.hpp"
 #include "ui/qt_material_browser_window.hpp"
 #include "ui/qt_material_find_replace_dialog.hpp"
 #include "ui/qt_material_preview_surface.hpp"
@@ -741,12 +742,16 @@ bool UISystem::initialize(RenderSystem &render_system,
   standard_material_editor_window_->hide();
   status_message_ = new QLabel(main_window_.get());
   status_message_->setObjectName(QStringLiteral("statusMessage"));
+  status_message_->setWordWrap(false);
+  status_message_->hide();
+  operation_input_hints_ = new QtOperationInputHints(main_window_->statusBar());
   status_version_ = new QLabel(
       QStringLiteral("v%1").arg(QString::fromUtf8(kQuaderAppVersion)),
       main_window_.get());
   status_version_->setObjectName(QStringLiteral("statusVersion"));
   main_window_->statusBar()->setObjectName(QStringLiteral("statusBar"));
-  main_window_->statusBar()->addWidget(status_message_, 1);
+  main_window_->statusBar()->addPermanentWidget(operation_input_hints_, 1);
+  main_window_->statusBar()->addPermanentWidget(status_message_, 1);
   main_window_->statusBar()->addPermanentWidget(status_version_);
 
   apply_ui_scale_to_retained_surfaces(ui_scale_controller_->metrics());
@@ -771,6 +776,9 @@ void UISystem::install_runtime_hooks(
     viewport_panel_->abandon_interactions();
   }
   editor_ = &editor;
+  if (operation_input_hints_ != nullptr) {
+    operation_input_hints_->invalidate();
+  }
   document_ = &document;
   assets_ = &assets;
   modeling_ = &modeling;
@@ -2414,6 +2422,7 @@ void UISystem::shutdown() {
   standard_material_error_message_box_ = nullptr;
   material_browser_import_message_box_ = nullptr;
   status_message_ = nullptr;
+  operation_input_hints_ = nullptr;
   status_version_ = nullptr;
   auxiliary_window_save_timer_ = nullptr;
   ui_scale_controller_.reset();
@@ -3291,6 +3300,17 @@ void UISystem::refresh_status_bar() {
   if (status_message_ == nullptr || editor_ == nullptr || modeling_ == nullptr) {
     return;
   }
+  if (operation_input_hints_ != nullptr) {
+    operation_input_hints_->refresh(editor_->tools(), editor_->commands(), localization_);
+  }
+  const auto sync_message_visibility = [this]() {
+    const bool visible = !status_message_->text().isEmpty() &&
+        (operation_input_hints_ == nullptr || operation_input_hints_->hints().empty());
+    if (status_message_->isHidden() == visible) {
+      status_message_->setVisible(visible);
+    }
+  };
+  sync_message_visibility();
   const ModelingLiveStatus live_status = [&]() {
     QDR_PROFILE_SCOPE("UI status bar query live status");
     return modeling_->live_status();
@@ -3317,6 +3337,7 @@ void UISystem::refresh_status_bar() {
         live_status, localization_, editor_->commands().last_status()));
     if (status_message_->text() != message) {
       status_message_->setText(message);
+      sync_message_visibility();
     }
   }
   status_presenter_.mark_presented(stamp);
@@ -3326,6 +3347,7 @@ void UISystem::present_lifecycle_result(const QuaderApiStatus &result) {
   QDR_PROFILE_SCOPE("UI present lifecycle result");
   if (status_message_ != nullptr && !result.message.empty()) {
     status_message_->setText(QString::fromStdString(result.message));
+    status_message_->show();
     status_presenter_.invalidate();
   }
 
@@ -4230,6 +4252,9 @@ bool UISystem::apply_interface_scale(float factor) {
 
 void UISystem::apply_ui_scale_to_retained_surfaces(
     const QtUiScaleMetrics &metrics) {
+  if (operation_input_hints_ != nullptr) {
+    operation_input_hints_->apply_ui_scale(metrics);
+  }
   if (selection_toolbar_ != nullptr) {
     selection_toolbar_->apply_ui_scale(metrics);
   }

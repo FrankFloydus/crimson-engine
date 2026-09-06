@@ -23,6 +23,7 @@ namespace quader {
 
 struct LinearArrayHandleState;
 struct PivotHandleState;
+struct PrimitiveCreationControlsFrame;
 struct RadialArrayCenterState;
 class ViewportCameraController;
 struct ViewportSelectionMarquee;
@@ -52,6 +53,8 @@ struct ViewportToolOverlaySourceInputs final {
   const ViewportOverlayCamera *overlay_camera = nullptr;
   const ViewportCameraController *viewport_camera = nullptr;
   const ModelingBoxPreview *box_preview = nullptr;
+  /// Borrows the picking owner's physical-pixel layout and publication revision.
+  const PrimitiveCreationControlsFrame *primitive_creation_controls = nullptr;
   const quader_editor_core::TransformGizmoFrame *transform_gizmo = nullptr;
   const std::vector<quader_editor_core::SelectionOverlayPoint> *
       transform_snap_points = nullptr;
@@ -101,6 +104,9 @@ public:
   static void append_transform_gizmo(
       ViewportOverlayFrame &frame, const ViewportOverlayCamera &camera,
       const quader_editor_core::TransformGizmoFrame &gizmo);
+  static void append_primitive_creation_controls(
+      ViewportOverlayFrame &frame, const ViewportOverlayCamera &camera,
+      const PrimitiveCreationControlsFrame &controls);
   static void append_selection_marquee(
       ViewportOverlayFrame &frame, const ViewportOverlayCamera &camera,
       const ViewportSelectionMarquee &marquee, float raster_scale = 1.0f);

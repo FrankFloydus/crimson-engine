@@ -160,6 +160,8 @@ struct RenderOverlaySelectedObjectSnapshot : RenderSourceStamp {
   ViewportPersistentOverlayRasterGroupSet raster_groups;
   ViewportCameraClipPlanes clip_planes;
   bool visible = true;
+  /// Retain instance wire records, but suppress their topology-wire submission.
+  bool selected_mesh_outline_only = false;
   std::vector<RenderOverlayMeshSnapshot> meshes;
   std::vector<RenderOverlayInstanceSelectionFillRecord>
       instance_selection_fills;
@@ -178,6 +180,8 @@ struct RenderOverlaySceneWireframeSnapshot : RenderSourceStamp {
   std::uint8_t layer_mask = 0u;
   /** Whole-mesh selected wire is an Object-mode presentation only. */
   bool selected_mesh_wire_visible = true;
+  /// Selected placements are omitted; unselected wireframe records remain.
+  bool selected_mesh_outline_only = false;
   std::vector<RenderOverlayMeshSnapshot> meshes;
 };
 
@@ -248,7 +252,14 @@ public:
       const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
       bool selected_mesh_wire_visible = true,
       RenderInstanceEditScope instance_edit_scope = {},
-      const ViewportPersistentOverlayRasterGroupSet &raster_groups = {});
+      const ViewportPersistentOverlayRasterGroupSet &raster_groups = {},
+      bool selected_mesh_outline_only = false);
+  /// Null before update_persistent or after reset. Borrowed data is current only
+  /// until the next update/reset; immutable geometry payloads pin mesh storage.
+  [[nodiscard]] const RenderOverlaySelectedObjectSnapshot *
+  selected_object_snapshot() const {
+    return has_selected_object_snapshot_ ? &selected_object_snapshot_ : nullptr;
+  }
   [[nodiscard]] const RenderOverlaySelectionSnapshot &selection_snapshot(
       const SceneDocument &document, const AssetRegistry &assets,
       RenderSceneBindingKey scene_binding = {},
@@ -358,7 +369,8 @@ build_render_overlay_scene_wireframe_snapshot(
     RenderSceneBindingKey scene_binding = {},
     const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
     bool selected_mesh_wire_visible = true,
-    RenderInstanceEditScope instance_edit_scope = {});
+    RenderInstanceEditScope instance_edit_scope = {},
+    bool selected_mesh_outline_only = false);
 
 [[nodiscard]] RenderOverlaySelectionSnapshot
 build_render_overlay_selection_snapshot(

@@ -692,6 +692,17 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                kPreviewDomains | Domain::SceneGraph | Domain::History,
                Outcome::ChangeRequired, UndoRepeat::CancelPreview),
 
+      // Edits the existing creation step; API tests verify its undo/redo.
+      contract(quader_command::kToolsFlipPrimitiveFaces,
+               Fixture::PrimitivePreview, kTopologyDomains | Domain::Tool,
+               Outcome::ChangeRequired, UndoRepeat::None),
+      contract(quader_command::kToolsTogglePrimitiveCaps,
+               Fixture::PrimitivePreview, kTopologyDomains | Domain::Tool,
+               Outcome::ChangeRequired, UndoRepeat::None),
+      contract(quader_command::kToolsTogglePrimitiveHemisphere,
+               Fixture::PrimitivePreview, kTopologyDomains | Domain::Tool,
+               Outcome::ChangeRequired, UndoRepeat::None),
+
       contract(quader_command::kToolsActivateSelect, Fixture::Viewport,
                kToolDomains, Outcome::SuccessRequired),
       contract(quader_command::kToolsActivateMove,
@@ -741,9 +752,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 200U);
+  static_assert(std::size(kContracts) == 205U);
 #else
-  static_assert(std::size(kContracts) == 201U);
+  static_assert(std::size(kContracts) == 204U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

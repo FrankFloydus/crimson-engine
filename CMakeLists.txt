@@ -219,6 +219,8 @@ set(QUADER_EDITOR_VIEWPORT_TOOL_SOURCES
     src/editor/tools/base/modal_viewport_tool.cpp
     src/editor/tools/base/point_sequence_tool.cpp
     src/editor/tools/base/two_stage_box_tool.cpp
+    src/editor/tools/interactive/create_primitive_tool.cpp
+    src/editor/tools/primitive_creation_interaction.cpp
     src/editor/tools/base/viewport_tool_catalog.cpp
 )
 
@@ -772,6 +774,8 @@ add_library(quader_render STATIC
     src/render/overlay/scene_wireframe_overlay_cache.cpp
     src/render/overlay/selected_object_overlay_cache.cpp
     src/render/overlay/viewport_box_overlay_builder.cpp
+    src/render/overlay/viewport_primitive_creation_overlay_builder.cpp
+    src/render/overlay/selected_mesh_outline_cache.cpp
     src/render/overlay/viewport_selection_marquee_overlay_builder.cpp
     src/render/overlay/viewport_transform_gizmo_overlay_builder.cpp
     src/render/overlay/viewport_scene_overlay_builder.cpp
@@ -889,6 +893,7 @@ add_library(quader_ui STATIC
     src/ui/qt_standard_material_editor_window.cpp
     src/ui/standard_material_preview_render_snapshot_adapter.cpp
     src/ui/qt_navigation_gizmo.cpp
+    src/ui/qt_operation_input_hints.cpp
     src/ui/qt_project_home_page.cpp
     src/ui/qt_relative_pointer_input.cpp
     src/ui/qt_retained_message_box.cpp
@@ -1488,6 +1493,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_viewport_context_menu_tests.cpp
         tests/qstr_tests.cpp
         tests/editor_api_tests.cpp
+        tests/operation_input_hint_tests.cpp
         tests/quader_events_api_tests.cpp
         tests/programmatic_api_tests.cpp
         tests/programmatic_behavior_scenario_tests.cpp
@@ -1503,6 +1509,10 @@ if(QUADER_BUILD_TESTS)
         tests/project_workspace_storage_tests.cpp
         tests/project_session_workspace_tests.cpp
         tests/primitive_creation_tool_service_tests.cpp
+        tests/primitive_cube_interaction_tests.cpp
+        tests/primitive_cube_overlay_tests.cpp
+        tests/selected_mesh_outline_cache_tests.cpp
+        tests/selected_mesh_outline_presentation_tests.cpp
         tests/curve_solid_render_tests.cpp
         tests/qdr_binary_container_tests.cpp
         tests/qdr_binary_scene_codec_tests.cpp

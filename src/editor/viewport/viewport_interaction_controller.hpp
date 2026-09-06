@@ -20,6 +20,7 @@
 namespace quader {
 
 class QuaderEditorApi;
+struct QuaderPrimitiveCreationState;
 class ViewportToolHoverPort;
 
 /**
@@ -98,6 +99,14 @@ public:
                      NativeViewportToolCoordinator &native_tools);
   [[nodiscard]] bool dragging() const;
   [[nodiscard]] bool transform_gizmo_pointer_active() const;
+  [[nodiscard]] bool primitive_creation_pointer_active() const {
+    return tool_runtime_.primitive_creation_interaction().active() >= 0;
+  }
+  [[nodiscard]] const PrimitiveCreationControlsFrame &primitive_creation_controls(
+      const std::optional<QuaderPrimitiveCreationState> &cube,
+      const ViewportCameraController &camera, float raster_scale);
+  /// Synchronizes live glyph presentation even when no pane receives tool input.
+  void set_primitive_creation_decrement(bool decrement);
   /// Keeps a texture-transfer press and its release in the initiating pane.
   [[nodiscard]] bool texture_transfer_pointer_active() const {
     return transfer_face_texture_pointer_.has_value();

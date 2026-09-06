@@ -51,7 +51,8 @@ viewport_pointer_gesture_from_latest_edge(
                          .local = fallback_local,
                      },
       .press_screen = press_screen,
-      .modifiers = modifiers,
+      .modifiers = found != edges.rend() ? found->modifiers.value_or(modifiers)
+                                       : modifiers,
       .deadline_seconds = deadline_seconds,
       .drag_threshold_pixels = drag_threshold_pixels,
   };

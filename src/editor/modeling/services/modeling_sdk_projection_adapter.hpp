@@ -332,9 +332,12 @@ public:
       std::span<const ModelingObjectSceneIdentity> source_identities);
   [[nodiscard]] bool clipboard_available() const;
   [[nodiscard]] std::size_t clipboard_object_count() const;
+  /// Retaining selection preserves SDK components, object flags/active target,
+  /// and native scene selection through the existing publication transaction.
   [[nodiscard]] ModelingCommandResult
   replace_mesh_document(int modeling_object_id,
-                        const quader_poly::Document &document);
+                        const quader_poly::Document &document,
+                        bool preserve_selection = false);
   [[nodiscard]] ModelingCommandResult execute_operation(
       quader_editor_core::EditorOperationId operation,
       const quader_editor_core::EditorOperationSettings &settings);

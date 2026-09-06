@@ -1052,7 +1052,7 @@ TEST(BuildGuardrailTests,
                   "build/vs2026/Debug/quader.exe");
   expect_contains(root_agents,
                   "build/vs2026/Release/quader.exe");
-  expect_contains(root_agents,
+  expect_missing(root_agents,
                   "cmake --build --preset vs2026-debug --target quader");
   expect_contains(root_agents,
                   "cmake --build --preset vs2026-release --target quader");
@@ -1837,7 +1837,9 @@ TEST(BuildGuardrailTests, NativeDependencyToolsValidateSourceAndDeployment) {
   expect_contains(tracy_pin,
                   joined("05cceee0df3b8d7c6fa87e9638af31", "1dbabc63cb"));
   expect_contains(tracy_pin, "licenses/tracy-BSD-3-Clause.txt");
-  expect_contains(native_verifier, "foreach ($configuration in @('Debug', 'Release'))");
+  expect_contains(native_verifier, "[ValidateSet('Debug', 'Release')]");
+  expect_contains(native_verifier, "[string[]]$Configuration = @('Release')");
+  expect_contains(native_verifier, "foreach ($configurationName in $Configuration)");
   expect_contains(native_verifier, "Assert-NativeRuntimeDeployment");
   expect_contains(native_verifier, "Assert-RuntimeDependencyClosure");
   expect_contains(native_verifier, "Assert-ReleaseBuildProject");
@@ -2193,7 +2195,7 @@ TEST(BuildGuardrailTests,
   const std::string tool = read_source_file("tools/affected_check.ps1");
   const std::string root_agents = read_source_file("AGENTS.md");
   const std::string instruction_route = source_slice(
-      tool, "function Add-PathPlan", "Add-FullVerification");
+      tool, "if ($Path -match '(^|/)AGENTS", "# Prose must precede package rules");
   const std::string examples_route = source_slice(
       tool, "if ($Path -match '^examples/')",
       "if ($Path -match '^src/sdk/core/modeling/(internal/mesh/geometry/|");
@@ -2290,17 +2292,17 @@ TEST(BuildGuardrailTests,
 
   const std::vector<PlanExpectation> expectations = {
       {"tasklist.md",
-       {"--target quader_guardrail_tests", "AgentInstructionRoutingTests.*"},
-       {"--target quader_tests", "ctest --preset vs2026-debug"}},
+       {" quader_guardrail_tests", "AgentInstructionRoutingTests.*"},
+       {" quader_tests", "ctest --preset vs2026-debug"}},
       {"src/ui/AGENTS.md",
-       {"--target quader_guardrail_tests", "AgentInstructionRoutingTests.*"},
-       {"--target quader_tests", "--target quader_ui"}},
+       {" quader_guardrail_tests", "AgentInstructionRoutingTests.*"},
+       {" quader_tests", " quader_ui"}},
       {"cmake/AGENTS.md",
-       {"--target quader_guardrail_tests", "AgentInstructionRoutingTests.*"},
-       {"--target quader_tests", "ctest --preset vs2026-debug"}},
+       {" quader_guardrail_tests", "AgentInstructionRoutingTests.*"},
+       {" quader_tests", "ctest --preset vs2026-debug"}},
       {"src/sdk/core/modeling/src/session.cpp",
-       {"--target quader_modeling_sdk_consumer_tests",
-        "--target quader_modeling_sdk_parity_tests",
+       {" quader_modeling_sdk_consumer_tests",
+        " quader_modeling_sdk_parity_tests",
         "quader_modeling_sdk_consumer_tests.exe --gtest_color=no "
         "--gtest_filter=*",
         "quader_modeling_sdk_parity_tests.exe --gtest_color=no "
@@ -2308,9 +2310,9 @@ TEST(BuildGuardrailTests,
        {}},
       {"src/sdk/core/modeling/include/quader/modeling/session/"
        "modeling_session.hpp",
-       {"--target quader_guardrail_tests",
-        "--target quader_modeling_sdk_consumer_tests",
-        "--target quader_modeling_sdk_parity_tests",
+       {" quader_guardrail_tests",
+        " quader_modeling_sdk_consumer_tests",
+        " quader_modeling_sdk_parity_tests",
         "quader_guardrail_tests.exe --gtest_color=no "
         "--gtest_filter=BuildGuardrailTests."
         "ModelingSdkPublicHeadersStayNativeOwnerFree",
@@ -2320,28 +2322,28 @@ TEST(BuildGuardrailTests,
         "--gtest_filter=*"},
        {}},
       {"tests/sdk/modeling_sdk_consumer_tests.cpp",
-       {"--target quader_modeling_sdk_consumer_tests",
+       {" quader_modeling_sdk_consumer_tests",
         "quader_modeling_sdk_consumer_tests.exe --gtest_color=no "
         "--gtest_filter=ModelingSdkConsumerTests.*"},
-       {"--target quader_tests", "--target quader_modeling_sdk_parity_tests",
+       {" quader_tests", " quader_modeling_sdk_parity_tests",
         "quader_modeling_sdk_parity_tests.exe"}},
       {"tests/sdk/modeling_sdk_parity_tests.cpp",
-       {"--target quader_modeling_sdk_parity_tests",
+       {" quader_modeling_sdk_parity_tests",
          "quader_modeling_sdk_parity_tests.exe --gtest_color=no "
          "--gtest_filter=ModelingSdkParityHarnessTests.*:"
          "ModelingSdkParityTests.*"},
-       {"--target quader_tests", "--target quader_modeling_sdk_consumer_tests",
+       {" quader_tests", " quader_modeling_sdk_consumer_tests",
         "quader_modeling_sdk_consumer_tests.exe"}},
       {"src/ui/outliner_panel.cpp",
-       {"--target quader_guardrail_tests", "--target quader_tests",
-        "--target quader_ui", "UiLayoutGuardrailTests.*",
+       {" quader_guardrail_tests", " quader_tests",
+        " quader_ui", "UiLayoutGuardrailTests.*",
         "LayerPanelTests.*", "OutlinerPanelTests.*", "Qt*"},
        {"ctest --preset vs2026-debug"}},
       {"src/sdk/core/modeling/internal/mesh/polygon/"
        "document_validation.cpp",
-       {"--target quader_modeling_domain_polygon_loop_tests",
-        "--target quader_modeling_sdk_consumer_tests",
-        "--target quader_modeling_sdk_parity_tests",
+       {" quader_modeling_domain_polygon_loop_tests",
+        " quader_modeling_sdk_consumer_tests",
+        " quader_modeling_sdk_parity_tests",
         "quader_modeling_sdk_consumer_tests.exe --gtest_color=no "
         "--gtest_filter=*",
         "quader_modeling_sdk_parity_tests.exe --gtest_color=no "
@@ -2351,22 +2353,40 @@ TEST(BuildGuardrailTests,
        {}},
       {"CMakeLists.txt",
        {"cmake --preset vs2026",
-        "--target quader_guardrail_tests",
-        "--target quader_modeling_domain_tests",
-        "--target quader_modeling_sdk_consumer_tests",
-        "--target quader_modeling_sdk_parity_tests",
-        "--target quader_tests",
+        " quader_guardrail_tests",
+        " quader_modeling_domain_tests",
+        " quader_modeling_sdk_consumer_tests",
+        " quader_modeling_sdk_parity_tests",
+        " quader_tests",
         "ctest --preset vs2026-debug --output-on-failure"},
-       {"--target quader_modeling_sdk_only_configure_build"}},
+       {" quader_modeling_sdk_only_configure_build"}},
+      {"FEATURE_IDEAS.md",
+       {"<nothing to run>"}, {"cmake", "ctest", "--gtest_filter"}},
+      {"src/sdk/core/modeling/COMPATIBILITY.md",
+       {"<nothing to run>"}, {"cmake", "ctest", "--gtest_filter"}},
+      {"src/sdk/core/modeling/internal/mesh/polygon/README.md",
+       {"<nothing to run>"}, {"cmake", "ctest", "--gtest_filter"}},
+      {"thirdparty/filament/README.md",
+       {"<nothing to run>"}, {"cmake", "ctest", "--gtest_filter"}},
+      {"examples/lua/README.md",
+       {"<nothing to run>"}, {"cmake", "ctest", "--gtest_filter"}},
+      {"FEATURE_IDEAS.md, tests/sdk/modeling_sdk_consumer_tests.cpp ",
+       {" quader_modeling_sdk_consumer_tests",
+        "--gtest_filter=ModelingSdkConsumerTests.*"},
+       {" quader_tests", " quader_modeling_sdk_parity_tests", "ctest"}},
+      {"tests/affected-check-deleted-tests.cpp",
+       {"cmake --preset vs2026", "ctest --preset vs2026-debug"}, {}},
+      {"docs/affected-check-missing-document.md",
+       {"cmake --preset vs2026", "ctest --preset vs2026-debug"}, {}},
       {"unknown/affected_check_route.fixture",
        {"cmake --preset vs2026",
-        "--target quader_guardrail_tests",
-        "--target quader_modeling_domain_tests",
-        "--target quader_modeling_sdk_consumer_tests",
-        "--target quader_modeling_sdk_parity_tests",
-        "--target quader_tests",
+        " quader_guardrail_tests",
+        " quader_modeling_domain_tests",
+        " quader_modeling_sdk_consumer_tests",
+        " quader_modeling_sdk_parity_tests",
+        " quader_tests",
         "ctest --preset vs2026-debug --output-on-failure"},
-       {"--target quader_modeling_sdk_only_configure_build"}},
+       {" quader_modeling_sdk_only_configure_build"}},
   };
 
   const std::filesystem::path script =
@@ -2384,6 +2404,12 @@ TEST(BuildGuardrailTests,
     const std::size_t affected = result.output.find(marker);
     ASSERT_NE(affected, std::string::npos) << result.output;
     const std::string affected_plan = result.output.substr(affected);
+    // All selected test/library targets share one build invocation.
+    const auto build = affected_plan.find("cmake --build");
+    if (build != std::string::npos) {
+      EXPECT_EQ(affected_plan.find("cmake --build", build + 1), std::string::npos)
+          << affected_plan;
+    }
     expect_contains_in_order(affected_plan, expectation.expected_in_order);
     for (const std::string &forbidden : expectation.forbidden) {
       expect_missing(affected_plan, forbidden);
@@ -2391,6 +2417,103 @@ TEST(BuildGuardrailTests,
   }
 #else
   GTEST_SKIP() << "affected_check.ps1 plans the native Windows VS2026 executable workflow.";
+#endif
+}
+
+TEST(BuildGuardrailTests,
+     AffectedCheckAppBuildDefaultsToReleaseSeparatelyFromTestTargets) {
+#if defined(_WIN32)
+  struct Expectation {
+    std::string arguments;
+    std::string app_preset;
+    bool builds_tests;
+  };
+  const std::vector<Expectation> cases = {
+      {"-ChangedPath resources/locales/en-US.lang", "vs2026-release", true},
+      {"-ChangedPath FEATURE_IDEAS.md -IncludeApp", "vs2026-release", false},
+      {"-ChangedPath FEATURE_IDEAS.md -IncludeApp -AppBuildPreset vs2026-debug",
+       "vs2026-debug", false},
+  };
+  for (const auto &test_case : cases) {
+    SCOPED_TRACE(test_case.arguments);
+    const auto result = run_command_capture(
+        "powershell -NoProfile -ExecutionPolicy Bypass -File " +
+        quoted_process_argument(source_path("tools/affected_check.ps1")) +
+        " -PlanOnly " + test_case.arguments);
+    ASSERT_EQ(result.exit_code, 0) << result.output;
+    const auto marker = result.output.find("After affected workflow:");
+    ASSERT_NE(marker, std::string::npos) << result.output;
+    const auto plan = result.output.substr(marker);
+    expect_contains(plan, "cmake --build --preset " + test_case.app_preset +
+                              " --target quader");
+    const auto first_build = plan.find("cmake --build");
+    const auto second_build = plan.find("cmake --build", first_build + 1);
+    if (test_case.builds_tests) {
+      expect_contains_in_order(plan, {
+          "cmake --build --preset vs2026-debug --target quader_guardrail_tests quader_tests",
+          "cmake --build --preset vs2026-release --target quader",
+          "--gtest_filter=LocalizationTests.*"});
+      ASSERT_NE(second_build, std::string::npos);
+      EXPECT_EQ(plan.find("cmake --build", second_build + 1), std::string::npos);
+    } else {
+      EXPECT_EQ(second_build, std::string::npos);
+      expect_missing(plan, "--gtest_filter");
+    }
+    if (test_case.app_preset == "vs2026-release") {
+      EXPECT_FALSE(std::regex_search(plan, std::regex(
+          R"(cmake --build --preset vs2026-debug --target[^\r\n]*\bquader(?:\s|$))")))
+          << plan;
+    }
+    expect_missing(plan, "ctest --preset");
+  }
+#else
+  GTEST_SKIP() << "affected_check.ps1 plans native Windows builds.";
+#endif
+}
+
+TEST(BuildGuardrailTests,
+     AffectedCheckDefaultDiscoveryKeepsDeletedPathsAndExplicitScopeOverridesIt) {
+#if defined(_WIN32)
+  const auto script = powershell_literal(source_path("tools/affected_check.ps1"));
+  // Substitute only Git discovery. Route the emitted deleted/untracked paths
+  // through the real planner without modifying this shared checkout.
+  const std::string command =
+      "powershell -NoProfile -ExecutionPolicy Bypass -Command \""
+      "function git { $global:LASTEXITCODE = 0; "
+      "if ($args -contains 'diff') { "
+      "if ($args -notcontains '--diff-filter=ACDMRTUXB' -or "
+      "$args -notcontains '--no-renames') { throw 'Deletions/rename sources excluded' }; "
+      "'tests/affected-check-deleted-tests.cpp' "
+      "} elseif ($args -contains 'ls-files') { 'src/api/quader_tools_api.cpp' "
+      "} else { throw 'Unexpected Git discovery request' } }; "
+      "& " + script + " -PlanOnly; "
+      "function git { throw 'Explicit scope must not discover unrelated dirty paths' }; "
+      "& " + script + " -PlanOnly -ChangedPath 'FEATURE_IDEAS.md'\"";
+  const auto result = run_command_capture(command);
+  ASSERT_EQ(result.exit_code, 0) << result.output;
+  const auto explicit_scope = result.output.find("Scope: explicit ChangedPath override");
+  ASSERT_NE(explicit_scope, std::string::npos) << result.output;
+  const auto integration = result.output.substr(0, explicit_scope);
+  expect_contains(integration, "Scope: Git dirty-tree integration");
+  expect_contains(integration, "missing or deleted path: tests/affected-check-deleted-tests.cpp");
+  expect_contains(integration, "src/api/quader_tools_api.cpp");
+  expect_contains(integration, "ctest --preset vs2026-debug --output-on-failure");
+  const auto focused = result.output.substr(explicit_scope);
+  expect_missing(focused, "src/api/quader_tools_api.cpp");
+  expect_missing(focused, "affected-check-deleted-tests.cpp");
+  const auto affected = focused.find("After affected workflow:");
+  ASSERT_NE(affected, std::string::npos);
+  expect_contains(focused.substr(affected), "<nothing to run>");
+
+  for (const std::string argument : {",", "../FEATURE_IDEAS.md"}) {
+    const auto rejected = run_command_capture(
+        "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& " + script +
+        " -PlanOnly -ChangedPath '" + argument + "'\"");
+    EXPECT_NE(rejected.exit_code, 0) << rejected.output;
+    expect_contains(rejected.output, "repository-relative");
+  }
+#else
+  GTEST_SKIP() << "affected_check.ps1 plans native Windows builds.";
 #endif
 }
 
@@ -4134,7 +4257,7 @@ TEST(BuildGuardrailTests, AppVersionMetadataUsesRootVersionSource) {
                   "kQuaderAppVersionDisplay = \"v@QUADER_APP_VERSION@\"");
 
   for (const char *policy :
-       {"VERSION", "vcpkg.json", "version-string", "9999", "fast iteration mode"}) {
+       {"VERSION", "vcpkg.json", "version-string", "9999"}) {
     expect_contains(agents, policy);
   }
 }

@@ -4,12 +4,37 @@
 # No permission is granted to use, copy, modify, distribute, or sublicense this
 # file except through prior written authorization from Francesco Di Blasi.
 ################################################################################
+<#
+.SYNOPSIS
+Plans or runs verification for changed repository paths.
+.DESCRIPTION
+By default, includes the entire tracked diff from BaseRef plus untracked files.
+Use that default for integration. Existing prose documentation selects no native
+build or test work; repository guidance still selects focused guardrails.
+Missing/deleted paths and unknown changes retain conservative verification.
+Build-file changes still select full verification. For reviewed source-list-only
+edits, configure once and verify explicit current-task source/test paths using
+the narrower reviewed plan; this script does not classify CMake diff contents.
+.PARAMETER AppBuildPreset
+Build preset for the native quader executable, defaulting to vs2026-release.
+Test/library targets use BuildPreset (vs2026-debug by default). Debug/Profile
+quader requires an explicit AppBuildPreset override.
+.PARAMETER ChangedPath
+An explicit list of repository-relative paths, replacing Git change discovery
+for a focused owner iteration. Accepts a PowerShell array or comma-separated
+paths. Omitting this parameter preserves full dirty-tree integration coverage.
+.EXAMPLE
+./tools/affected_check.ps1 -PlanOnly -ChangedPath src/api/quader_tools_api.cpp,tests/editor_api_tests.cpp
+.EXAMPLE
+./tools/affected_check.ps1
+#>
 [CmdletBinding()]
 param(
     [string]$BaseRef = "HEAD",
     [string[]]$ChangedPath = @(),
     [string]$ConfigurePreset = "vs2026",
     [string]$BuildPreset = "vs2026-debug",
+    [string]$AppBuildPreset = "vs2026-release",
     [string]$TestPreset = "vs2026-debug",
     [string]$Configuration = "Debug",
     [switch]$PlanOnly,
@@ -27,6 +52,7 @@ $ErrorActionPreference = "Stop"
 $SourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $script:CMakePresetsDocument = $null
 $script:CMakeTargetSourceCache = @{}
+$script:HasExplicitChangedPaths = $PSBoundParameters.ContainsKey("ChangedPath")
 
 function Get-CMakePresetsDocument {
     if ($null -ne $script:CMakePresetsDocument) {
@@ -160,16 +186,28 @@ function Add-Unique {
 
 function Normalize-RepoPath {
     param([string]$Path)
-    return ($Path -replace "\\", "/").TrimStart("./")
+    $normalized = $Path -replace "\\", "/"
+    while ($normalized.StartsWith("./")) {
+        $normalized = $normalized.Substring(2)
+    }
+    if ([System.IO.Path]::IsPathRooted($normalized) -or
+            $normalized -match '(^|/)\.\.(/|$)') {
+        throw "Changed paths must be repository-relative without parent traversal: '$Path'."
+    }
+    return $normalized
 }
 
 function Get-ChangedPaths {
-    if ($ChangedPath.Count -gt 0) {
-        return $ChangedPath |
+    if ($script:HasExplicitChangedPaths) {
+        $explicitPaths = @($ChangedPath |
             ForEach-Object { $_ -split "," } |
-            ForEach-Object { Normalize-RepoPath $_ } |
+            ForEach-Object { Normalize-RepoPath $_.Trim() } |
             Where-Object { $_ -ne "" } |
-            Sort-Object -Unique
+            Sort-Object -Unique)
+        if ($explicitPaths.Count -eq 0) {
+            throw "-ChangedPath requires at least one repository-relative path. Omit it for dirty-tree integration coverage."
+        }
+        return $explicitPaths
     }
 
     Push-Location $SourceRoot
@@ -177,13 +215,17 @@ function Get-ChangedPaths {
     try {
         $ErrorActionPreference = "Continue"
         $paths = @()
-        $diff = & git diff --name-only --diff-filter=ACMRTUXB $BaseRef -- 2>$null
+        # Keep both sides of renames and deletions visible to owner routing.
+        $diff = & git -c core.quotepath=false diff --name-only --no-renames --diff-filter=ACDMRTUXB $BaseRef -- 2>$null
         if ($LASTEXITCODE -ne 0) {
             throw "git diff failed for base ref '$BaseRef'. Pass -ChangedPath for an explicit plan."
         }
         $paths += $diff
         if (-not $NoUntracked) {
-            $paths += (& git ls-files --others --exclude-standard 2>$null)
+            $paths += (& git -c core.quotepath=false ls-files --others --exclude-standard 2>$null)
+            if ($LASTEXITCODE -ne 0) {
+                throw "git ls-files failed while discovering untracked paths."
+            }
         }
         return $paths | ForEach-Object { Normalize-RepoPath $_ } | Where-Object { $_ -ne "" } | Sort-Object -Unique
     } finally {
@@ -481,9 +523,21 @@ function Add-TestFilePlan {
 function Add-PathPlan {
     param([string]$Path)
 
+    if (-not (Test-Path -LiteralPath (Join-Path $SourceRoot $Path) -PathType Leaf)) {
+        Add-FullVerification "missing or deleted path: $Path"
+        return
+    }
+
     if ($Path -match '(^|/)AGENTS\.md$|^(architecture-review|INPUT_KEYBINDINGS|memory|tasklist)\.md$') {
         Add-BuildTarget "quader_guardrail_tests" "repository guidance changed"
         Add-GuardrailTestsFilter "AgentInstructionRoutingTests.*:BuildGuardrailTests.ProjectOwnedCommentCapableFilesCarryProprietaryBanner:BuildGuardrailTests.ArchitectureReviewNamesRealModelingDomainTargets:BuildGuardrailTests.TestingDocsExplainPlacementAndSelectionRules:BuildGuardrailTests.AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogleTestRuns" "guard instruction routing"
+        return
+    }
+
+    # Prose must precede package rules: a README under SDK, examples, cmake or
+    # thirdparty does not by itself change executable code or dependencies.
+    if ($Path -match '\.(md|rst)$' -or $Path -match '(^|/)README(\.txt)?$') {
+        Add-Unique $script:Reasons "prose documentation only: $Path"
         return
     }
 
@@ -943,7 +997,7 @@ if ($changedPaths.Count -eq 0) {
 }
 
 if ($IncludeApp) {
-    Add-BuildTarget "quader" "manual in-app verification requested"
+    Add-BuildTarget "quader" "native app handoff requested"
 }
 
 if (-not $NoTest) {
@@ -966,7 +1020,10 @@ if (-not $NoTest) {
         Add-Unique $script:BuildTargets $target
     }
 }
-$buildTargets = @(Remove-RedundantBuildTargets @($BuildTargets))
+$needsAppBuild = $BuildTargets.Contains("quader")
+# App and test configurations differ: Release quader cannot cover a Debug
+# library build. Prune only the targets participating in the test build.
+$buildTargets = @(Remove-RedundantBuildTargets @($BuildTargets | Where-Object { $_ -ne "quader" }))
 
 $guardrailTestsFilter = Join-GTestFilter @($GuardrailTestsFilters)
 $quaderTestsFilter = Join-GTestFilter @($QuaderTestsFilters)
@@ -982,10 +1039,11 @@ $commands = New-Object "System.Collections.Generic.List[object]"
 if (-not $NoConfigure -and $NeedsConfigure) {
     $commands.Add(@("cmake", "--preset", $ConfigurePreset))
 }
-if (-not $NoBuild) {
-    foreach ($target in $buildTargets) {
-        $commands.Add(@("cmake", "--build", "--preset", $BuildPreset, "--target", $target))
-    }
+if (-not $NoBuild -and $buildTargets.Count -gt 0) {
+    $commands.Add(@("cmake", "--build", "--preset", $BuildPreset, "--target") + $buildTargets)
+}
+if (-not $NoBuild -and $needsAppBuild) {
+    $commands.Add(@("cmake", "--build", "--preset", $AppBuildPreset, "--target", "quader"))
 }
 if (-not $NoTest) {
     if ($NeedsFullCtest) {
@@ -1019,18 +1077,19 @@ $baselineCommands = @()
 if (-not $NoConfigure -and $NeedsConfigure) {
     $baselineCommands += "cmake --preset $ConfigurePreset"
 }
-$baselineCommands += @(
-    "cmake --build --preset $BuildPreset --target quader_guardrail_tests",
-    "cmake --build --preset $BuildPreset --target quader_tests",
-    "cmake --build --preset $BuildPreset --target quader_modeling_domain_tests",
-    "cmake --build --preset $BuildPreset --target quader_modeling_sdk_consumer_tests",
-    "cmake --build --preset $BuildPreset --target quader_modeling_sdk_parity_tests",
-    "ctest --preset $TestPreset --output-on-failure"
+$fullBuildTargets = @(
+    "quader_guardrail_tests", "quader_tests", "quader_modeling_domain_tests",
+    "quader_modeling_sdk_consumer_tests", "quader_modeling_sdk_parity_tests"
 )
-if ($IncludeApp) {
-    $baselineCommands = @("cmake --build --preset $BuildPreset --target quader") + $baselineCommands
+$fullBuildCommand = @("cmake", "--build", "--preset", $BuildPreset, "--target") + $fullBuildTargets
+$baselineCommands += (Format-CommandLine $fullBuildCommand)
+if ($needsAppBuild) {
+    $baselineCommands += "cmake --build --preset $AppBuildPreset --target quader"
 }
+$baselineCommands += "ctest --preset $TestPreset --output-on-failure"
 
+Write-Host $(if ($script:HasExplicitChangedPaths) { "Scope: explicit ChangedPath override (focused iteration)" }
+            else { "Scope: Git dirty-tree integration" })
 Write-Host "Changed paths:"
 if ($changedPaths.Count -eq 0) {
     Write-Host "  <none>"
@@ -1046,10 +1105,12 @@ foreach ($reason in @($Reasons | Sort-Object -Unique)) {
     Write-Host "  - $reason"
 }
 
-Write-Host ""
-Write-Host "Before full workflow:"
-foreach ($command in $baselineCommands) {
-    Write-Host "  $command"
+if ($MeasureFull) {
+    Write-Host ""
+    Write-Host "Before full workflow (benchmark only):"
+    foreach ($command in $baselineCommands) {
+        Write-Host "  $command"
+    }
 }
 
 Write-Host ""
@@ -1079,14 +1140,10 @@ if ($MeasureFull) {
     if (-not $NoConfigure -and $NeedsConfigure) {
         $fullCommands += ,@("cmake", "--preset", $ConfigurePreset)
     }
-    if ($IncludeApp) {
-        $fullCommands += ,@("cmake", "--build", "--preset", $BuildPreset, "--target", "quader")
+    $fullCommands += ,$fullBuildCommand
+    if ($needsAppBuild) {
+        $fullCommands += ,@("cmake", "--build", "--preset", $AppBuildPreset, "--target", "quader")
     }
-    $fullCommands += ,@("cmake", "--build", "--preset", $BuildPreset, "--target", "quader_guardrail_tests")
-    $fullCommands += ,@("cmake", "--build", "--preset", $BuildPreset, "--target", "quader_tests")
-    $fullCommands += ,@("cmake", "--build", "--preset", $BuildPreset, "--target", "quader_modeling_domain_tests")
-    $fullCommands += ,@("cmake", "--build", "--preset", $BuildPreset, "--target", "quader_modeling_sdk_consumer_tests")
-    $fullCommands += ,@("cmake", "--build", "--preset", $BuildPreset, "--target", "quader_modeling_sdk_parity_tests")
     $fullCommands += ,@("ctest", "--preset", $TestPreset, "--output-on-failure")
 
     $fullSeconds = 0.0

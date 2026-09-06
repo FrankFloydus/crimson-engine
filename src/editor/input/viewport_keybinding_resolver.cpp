@@ -11,6 +11,7 @@
 #include "editor/input/quader_input_binding.hpp"
 #include "viewport/viewport_host_interaction_policy.hpp"
 #include "viewport/viewport_input_types.hpp"
+#include "viewport/viewport_pointer_gesture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -731,6 +732,7 @@ void ViewportKeybindingResolver::resolve(
   input.transfer_face_texture_pointer_reserved = false;
   input.transfer_face_texture_edges.clear();
   input.curve_conversion_edges.clear();
+  input.command_pointer_edges.clear();
   input.selection_click_delay_for_double_click = false;
   input.selection_click_modifiers = {};
   input.cycle_selection_depth_pressed = false;
@@ -772,6 +774,35 @@ void ViewportKeybindingResolver::resolve(
             kind == ViewportInputEdgeKind::Pressed
                 ? pointer_edge_provenance(input, chord, pointer_edge_cursor)
                 : std::nullopt;
+        if (pointer_edge && chord.device == QuaderInputDevice::Mouse &&
+            (chord.gesture == QuaderInputGesture::Press ||
+             chord.gesture == QuaderInputGesture::DoubleClick)) {
+          // A new physical press ends any prior reservation of this button,
+          // including an earlier complete click in the same host frame.
+          std::erase_if(suppressed_chords, [&](const auto &suppressed) {
+            return suppressed.device == QuaderInputDevice::Mouse &&
+                   suppressed.mouse_button == chord.mouse_button;
+          });
+        }
+        const bool command_pointer_reserved = pointer_edge &&
+            chord.device == QuaderInputDevice::Mouse &&
+            std::any_of(suppressed_chords.begin(), suppressed_chords.end(),
+                        [&](const auto &suppressed) {
+              return suppressed.device == QuaderInputDevice::Mouse &&
+                     suppressed.mouse_button == chord.mouse_button &&
+                     (suppressed.gesture == QuaderInputGesture::Press ||
+                      suppressed.gesture == QuaderInputGesture::DoubleClick);
+            });
+        if (command_pointer_reserved) {
+          // A command/prefix owns the following Click/Drag too, independently
+          // of modifiers. It must not become a second command or navigation.
+          input.command_pointer_edges.push_back({
+              .kind = ViewportSemanticPointerEdgeKind::Trigger,
+              .semantic_chord = chord,
+              .pointer_edge = pointer_edge,
+          });
+          return true;
+        }
         if (kind == ViewportInputEdgeKind::Pressed &&
             input_chord_is_suppressed(suppressed_chords, chord)) {
           return true;
@@ -899,6 +930,15 @@ void ViewportKeybindingResolver::resolve(
         if (kind == ViewportInputEdgeKind::Pressed &&
             (pending_before || stateful_dispatch_suppresses_chord)) {
           suppress_input_chord(suppressed_chords, chord);
+          if (chord.device == QuaderInputDevice::Mouse && pointer_edge) {
+            input.command_pointer_edges.push_back({
+                .kind = chord.gesture == QuaderInputGesture::Click
+                            ? ViewportSemanticPointerEdgeKind::Trigger
+                            : ViewportSemanticPointerEdgeKind::ReservePress,
+                .semantic_chord = chord,
+                .pointer_edge = pointer_edge,
+            });
+          }
         }
         return handled;
       },
@@ -944,6 +984,18 @@ void ViewportKeybindingResolver::resolve(
     if (resolve_action(editor, state, input, chord, action)) {
       mark_action_released(input, action, pointer_edge);
     }
+  }
+  // Qt carries ordinary button-up as a pointer edge, not a released Press
+  // chord. Retire its reservation only after resolving this frame's Click.
+  for (const auto &release : input.pointer_released_edges) {
+    const auto *press =
+        viewport_pointer_latest_edge(input.pointer_pressed_edges, release.button);
+    if (press && press->sequence != 0 && release.sequence != 0 &&
+        press->sequence > release.sequence) continue;
+    std::erase_if(suppressed_chords, [&](const auto &suppressed) {
+      return suppressed.device == QuaderInputDevice::Mouse &&
+             suppressed.mouse_button == release.button;
+    });
   }
   std::stable_sort(
       input.navigation_bindings.pointer_transitions.begin(),

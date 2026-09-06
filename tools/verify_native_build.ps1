@@ -4,9 +4,13 @@
 # No permission is granted to use, copy, modify, distribute, or sublicense this
 # file except through prior written authorization from Francesco Di Blasi.
 ################################################################################
-# Read-only; run after the canonical Debug/Profile and Release builds.
+# Read-only; validate Release by default. Debug/Profile is explicitly selected when requested.
 [CmdletBinding()]
-param()
+param(
+    [ValidateNotNullOrEmpty()]
+    [ValidateSet('Debug', 'Release')]
+    [string[]]$Configuration = @('Release')
+)
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'native_build_contract.ps1')
@@ -27,15 +31,15 @@ foreach ($projectName in @('quader', 'quader_app', 'quader_platform', 'quader_mo
     $projectPath = Join-Path $buildDirectory "$projectName.vcxproj"
     Assert-ReleaseBuildProject -ProjectPath $projectPath
 }
-foreach ($configuration in @('Debug', 'Release')) {
-    $executable = Resolve-RequiredFile (Join-Path $buildDirectory "$configuration/quader.exe") "$configuration executable"
+foreach ($configurationName in $Configuration) {
+    $executable = Resolve-RequiredFile (Join-Path $buildDirectory "$configurationName/quader.exe") "$configurationName executable"
     Assert-NativeRuntimeDeployment -ExecutablePath $executable
     Assert-RuntimeDependencyClosure -ExecutablePath $executable
-    Assert-ExecutableDebugDirectory -ExecutablePath $executable -ExpectSymbols ($configuration -eq 'Debug')
+    Assert-ExecutableDebugDirectory -ExecutablePath $executable -ExpectSymbols ($configurationName -eq 'Debug')
     $fatalDiagnostics = Resolve-NativeFatalDiagnosticsExecutable -ExecutablePath $executable
-    Assert-ExecutableDebugDirectory -ExecutablePath $fatalDiagnostics -ExpectSymbols ($configuration -eq 'Debug')
+    Assert-ExecutableDebugDirectory -ExecutablePath $fatalDiagnostics -ExpectSymbols ($configurationName -eq 'Debug')
     $hash = (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant()
-    Write-Host "Verified $configuration`: $executable (SHA-256 $hash)"
+    Write-Host "Verified $configurationName`: $executable (SHA-256 $hash)"
     $companionHash = (Get-FileHash -LiteralPath $fatalDiagnostics -Algorithm SHA256).Hash.ToLowerInvariant()
-    Write-Host "Verified $configuration fatal diagnostics: $fatalDiagnostics (SHA-256 $companionHash)"
+    Write-Host "Verified $configurationName fatal diagnostics: $fatalDiagnostics (SHA-256 $companionHash)"
 }

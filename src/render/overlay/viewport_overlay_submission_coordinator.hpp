@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "render/overlay/selected_mesh_outline_cache.hpp"
+
 #include "render/overlay/curve_tool_overlay_cache.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
@@ -105,6 +107,7 @@ struct ViewportOverlayPersistentSubmissionStamp final {
 
 /** Keys the small frame-volatile stream separately from retained geometry. */
 struct ViewportOverlayDynamicSubmissionStamp final {
+  std::uint64_t mesh_outline_revision = 0u;
   ViewportOverlayDynamicToolSourceStamp dynamic_tools;
   /** Identifies one volatile modeling-overlay publication without hashing its geometry. */
   struct VolatileModelingSourceStamp final {
@@ -161,11 +164,15 @@ struct ViewportOverlaySubmissionRequest final {
   std::uint8_t layer_mask = 0u;
   /** Combined app interface scale and this pane's native-surface DPR. */
   float raster_scale = 1.0f;
+  /// Object whose selection and hover use faint wires without face tint.
+  int construction_object_id = -1;
   ViewportOverlayCamera camera;
   ViewportOverlaySelectionSourceStamp selection_source;
   const ViewportOverlaySelectionFrameProvider *selection_frame_provider =
       nullptr;
   const RenderOverlaySelectionSnapshot *scene_overlay_snapshot = nullptr;
+  /// Borrowed persistent mesh geometry; present only for whole-mesh outline selection.
+  const RenderOverlaySelectedObjectSnapshot *selected_mesh_outline_snapshot = nullptr;
   const ViewportOverlayFrame *volatile_modeling_overlay_frame = nullptr;
   ViewportOverlayVolatileModelingSourceStamp volatile_modeling_source;
   /// Borrowed only for submit(); render owns all retained curve presentation.
@@ -253,6 +260,7 @@ private:
   std::array<PaneState, kMaxViewportSlots> panes_;
   SelectionSourceState selection_source_;
   CurveToolOverlayCache curve_overlay_source_;
+  SelectedMeshOutlineCache mesh_outline_source_;
   ViewportOverlaySubmissionWorkCounters work_counters_;
   std::uint64_t dynamic_source_publication_revision_ = 0u;
 };

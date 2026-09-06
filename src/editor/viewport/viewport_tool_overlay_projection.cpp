@@ -13,10 +13,12 @@
 #include "editor/projection/selection_overlay_projection.hpp"
 #include "editor/viewport/viewport_selection_interaction.hpp"
 #include "render/overlay/viewport_box_overlay_builder.hpp"
+#include "render/overlay/viewport_primitive_creation_overlay_builder.hpp"
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
 #include "render/overlay/viewport_transform_gizmo_overlay_builder.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/viewport_overlay_policy.hpp"
+#include "viewport/primitive_creation_controls.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_pixel_scale.hpp"
 
@@ -384,9 +386,19 @@ std::uint64_t tool_overlay_publication_revision(
       inputs.selection_marquee != nullptr && inputs.selection_marquee->active;
   const bool pivot_visible =
       inputs.pivot_handle != nullptr && inputs.pivot_handle->visible;
+  const bool primitive_creation_visible =
+      inputs.interaction_pane && inputs.primitive_creation_controls != nullptr &&
+      inputs.primitive_creation_controls->visible;
+  signature.add_bool(primitive_creation_visible);
+  if (primitive_creation_visible) {
+    // The picking owner publishes all control geometry and interaction changes.
+    // Never scan its projected targets before the coordinator's unchanged gate.
+    signature.add_value(inputs.primitive_creation_controls->revision);
+  }
   const bool camera_affects_frame =
       (inputs.interaction_pane && inputs.tool_overlay_visible) ||
-      transform_gizmo_visible || marquee_visible || pivot_visible;
+      transform_gizmo_visible || marquee_visible || pivot_visible ||
+      primitive_creation_visible;
   signature.add_bool(camera_affects_frame);
   if (camera_affects_frame) {
     add_camera(signature, inputs.overlay_camera);
@@ -442,6 +454,10 @@ ViewportToolOverlaySource::build_dynamic_tool_overlay_frame() const {
           frame, *inputs_.overlay_camera, *inputs_.box_preview,
           inputs_.raster_scale);
     }
+    if (inputs_.primitive_creation_controls != nullptr) {
+      ViewportToolOverlayProjection::append_primitive_creation_controls(
+          frame, *inputs_.overlay_camera, *inputs_.primitive_creation_controls);
+    }
     if (inputs_.gizmos_visible && !inputs_.pivot_handle_editing &&
         inputs_.transform_gizmo != nullptr) {
       ViewportToolOverlayProjection::append_transform_gizmo(
@@ -492,6 +508,12 @@ void ViewportToolOverlayProjection::append_transform_gizmo(
     const quader_editor_core::TransformGizmoFrame &gizmo) {
   ViewportTransformGizmoOverlayBuilder::append(frame, render_gizmo(gizmo),
                                                camera);
+}
+
+void ViewportToolOverlayProjection::append_primitive_creation_controls(
+    ViewportOverlayFrame &frame, const ViewportOverlayCamera &camera,
+    const PrimitiveCreationControlsFrame &controls) {
+  ViewportPrimitiveCreationOverlayBuilder::append(frame, camera, controls);
 }
 
 void ViewportToolOverlayProjection::append_selection_marquee(

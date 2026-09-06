@@ -12,6 +12,7 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
@@ -1170,8 +1171,19 @@ private:
   void configure_primitive_preview() {
     require_ok(editor().tools().activate(ViewportToolId::CreatePrimitive),
                "Activate canonical primitive tool");
+    const bool cylinder =
+        command_id_ == quader_command::kToolsTogglePrimitiveCaps.string();
+    const bool sphere =
+        command_id_ == quader_command::kToolsTogglePrimitiveHemisphere.string();
+    if (cylinder || sphere) {
+      require_ok(editor().tools().set_setting(
+                     "create_primitive", "primitive.type", sphere ? 2.0 : 1.0),
+                 "Choose canonical primitive kind");
+    }
     require_command_ok(native_scene().primitive_creation().accept_preview(
-                           valid_primitive_preview(), "Preview Box"),
+                           valid_primitive_preview(),
+                           sphere ? "Preview Sphere" :
+                           cylinder ? "Preview Cylinder" : "Preview Box"),
                        "Accept canonical primitive preview");
   }
 
@@ -1328,6 +1340,19 @@ SceneSession &CommandBehaviorFixture::native_scene() {
 
 const SceneSession &CommandBehaviorFixture::native_scene() const {
   return impl_->native_scene();
+}
+
+void CommandBehaviorFixture::begin_primitive_footprint() {
+  const auto preview = native_scene().modeling().begin_box_footprint({
+      .screen_position = {400.0f, 300.0f},
+      .ray = {.origin = {12.0f, 4.0f, 0.0f},
+              .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+      .snap_enabled = true,
+  });
+  if (!preview.ok) {
+    setup_failure("Begin canonical repeat primitive footprint", preview.message);
+  }
 }
 
 std::uint64_t CommandBehaviorFixture::external_call_count() const {

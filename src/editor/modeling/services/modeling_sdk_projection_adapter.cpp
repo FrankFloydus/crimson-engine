@@ -2299,7 +2299,8 @@ public:
   }
   [[nodiscard]] ModelingCommandResult
   replace_mesh_document(int modeling_object_id,
-                        const quader_poly::Document &document) {
+                        const quader_poly::Document &document,
+                        bool preserve_selection) {
     const std::optional<ObjectId> object = sdk_object(modeling_object_id);
     if (!object.has_value()) {
       return failure("Modeling object does not exist.");
@@ -2311,10 +2312,21 @@ public:
     }
     PolygonDocument replacement = std::move(converted).value();
     const std::array<ObjectId, 1> objects{*object};
-    return mutate_documents(
+    return mutate_documents_by_object(
         objects,
-        [replacement = std::move(replacement)](
-            PolygonDocument &working) mutable -> Result<OperationResult> {
+        [replacement = std::move(replacement), preserve_selection](
+            ObjectId, PolygonDocument &working) mutable -> Result<OperationResult> {
+          if (preserve_selection) {
+            // A canceled resize changes dimensions, not topology. Retain the
+            // current component domain and active element if the user changed
+            // selection before the gesture was retired. Invalid IDs reject the
+            // replacement inside the existing publication transaction.
+            Result<OperationResult> retained =
+                replacement.apply_selection(working.selection());
+            if (!retained.ok()) {
+              return retained;
+            }
+          }
           working = replacement;
           OperationResult receipt;
           receipt.success = true;
@@ -2323,11 +2335,12 @@ public:
           receipt.dirty.topology = true;
           receipt.dirty.geometry = true;
           receipt.dirty.materials = true;
-          receipt.dirty.selection = true;
+          receipt.dirty.selection = !preserve_selection;
           receipt.dirty.overlays = true;
           return Result<OperationResult>::success(std::move(receipt));
         },
-        "Modeling mesh document could not be replaced.");
+        "Modeling mesh document could not be replaced.", false, false, false,
+        preserve_selection, preserve_selection);
   }
 
   [[nodiscard]] ModelingCommandResult execute_operation(
@@ -12155,8 +12168,10 @@ std::size_t ModelingSdkProjectionAdapter::clipboard_object_count() const {
 }
 
 ModelingCommandResult ModelingSdkProjectionAdapter::replace_mesh_document(
-    int modeling_object_id, const quader_poly::Document &document) {
-  return impl_->replace_mesh_document(modeling_object_id, document);
+    int modeling_object_id, const quader_poly::Document &document,
+    bool preserve_selection) {
+  return impl_->replace_mesh_document(modeling_object_id, document,
+                                      preserve_selection);
 }
 
 ModelingCommandResult ModelingSdkProjectionAdapter::execute_operation(

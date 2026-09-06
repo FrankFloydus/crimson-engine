@@ -159,6 +159,7 @@ private:
   ViewportPersistentOverlayStyleSnapshot synced_wire_style_;
   std::uint64_t synced_instance_edit_context_signature_ = 0u;
   bool synced_selected_mesh_wire_visible_ = true;
+  bool synced_selected_mesh_outline_only_ = false;
   ViewportCameraClipPlanes synced_clip_planes_;
   std::uint8_t synced_layer_mask_ = 0u;
   bool layer_masks_forced_hidden_ = false;

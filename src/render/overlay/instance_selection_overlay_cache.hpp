@@ -160,6 +160,7 @@ private:
   ViewportCameraClipPlanes clip_planes_;
   RenderSourceStamp synced_source_stamp_;
   std::uint64_t synced_wire_style_signature_ = 0u;
+  bool synced_selected_mesh_outline_only_ = false;
   bool has_synced_ = false;
   InstanceSelectionOverlayCacheStats stats_;
 };

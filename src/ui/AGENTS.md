@@ -42,7 +42,8 @@ file except through prior written authorization from Francesco Di Blasi.
   in a frame callback. Share cheap owner observations and skip unchanged Qt setters.
 - Explicitly invalidate on rebind, localization, keybinding, and other non-revision transitions.
   Do not compensate for UI polling by reducing render cadence or input responsiveness.
-- Frame synchronization changes require a regression test for the gate and focused UI tests.
+- Frame synchronization changes require a regression test for the gate and relevant UI coverage,
+  included in the root-selected verification path.
   Reported performance regressions also require same-build, same-scene before/after measurements.
 
 ## Runtime replacement and nested events

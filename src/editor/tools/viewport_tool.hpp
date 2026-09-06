@@ -8,6 +8,7 @@
 
 #include "assets/asset_registry.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/tools/primitive_creation_interaction.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "scene/scene_document.hpp"
@@ -15,6 +16,7 @@
 #include "viewport/viewport_input_types.hpp"
 #include "viewport/viewport_pointer_gesture.hpp"
 #include "viewport/viewport_settings.hpp"
+#include "viewport/viewport_runtime_binding_token.hpp"
 
 #include <array>
 #include <functional>
@@ -34,6 +36,7 @@ enum class ViewportToolEventKind {
     Activation,
     Frame,
     Cancel,
+    Wheel,
 };
 
 /**
@@ -62,6 +65,8 @@ struct ViewportPointerToolEvent {
     std::span<const ViewportPointerButtonEdge> pointer_released_edges;
     float pointer_drag_threshold_pixels = 4.0f;
     double monotonic_time_seconds = 0.0;
+    bool camera_changed = false;
+    std::span<ViewportNavigationWheelEvent> wheel_events;
 };
 
 /**
@@ -85,6 +90,8 @@ struct ViewportModalToolState {
   bool mirror_drag_active = false;
   std::optional<ViewportPointerGesture> primary_pointer_gesture;
   ViewportPointerReleaseSuppression primary_release_suppression;
+  PrimitiveCreationInteraction primitive_creation;
+  bool primitive_creation_drag_started = false;
 };
 
 /**
@@ -111,6 +118,16 @@ struct ViewportBoxToolContext {
   std::function<ModelingCommandResult()> cancel_session;
   std::function<bool()> session_active;
   std::function<std::string()> next_mesh_name;
+  std::function<std::optional<ViewportPrimitiveCreationState>()> live_primitive;
+  std::function<ModelingCommandResult(ViewportPrimitiveResizeControl, QVec3)>
+      begin_resize;
+  std::function<ModelingCommandResult(double)> update_resize;
+  std::function<ModelingCommandResult()> end_resize;
+  std::function<ModelingCommandResult()> cancel_resize;
+  std::function<ModelingCommandResult(int, int)>
+      set_segments;
+  float raster_scale = 1.0f;
+  bool primitive_controls_visible = true;
 };
 
 /**
@@ -138,6 +155,7 @@ struct ViewportToolContext {
     ViewportPointToolContext* point = nullptr;
 
     std::function<void(ViewportToolId)> set_active_tool;
+    ViewportRuntimeBindingToken runtime_binding;
 };
 
 /**
@@ -202,6 +220,8 @@ public:
   [[nodiscard]] operator ViewportToolId() const;
   [[nodiscard]] virtual bool allows_selection_fallback() const;
   [[nodiscard]] virtual ViewportPointerCursor pointer_cursor() const;
+  /// Opts into resolved wheel packets before camera navigation consumes them.
+  [[nodiscard]] virtual bool handles_wheel_events() const { return false; }
   [[nodiscard]] virtual ViewportToolResult
   handle_event(ViewportToolContext &context,
                const ViewportToolEvent &event) const;

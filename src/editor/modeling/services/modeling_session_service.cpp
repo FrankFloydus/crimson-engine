@@ -8184,9 +8184,10 @@ public:
   }
 
   ModelingCommandResult replace_mesh_document(
-      int modeling_object_id, quader_poly::Document document) {
+      int modeling_object_id, quader_poly::Document document,
+      bool preserve_selection) {
     ModelingCommandResult result = sdk_projection_adapter_.replace_mesh_document(
-        modeling_object_id, document);
+        modeling_object_id, document, preserve_selection);
     if (result.ok) {
       invalidate_selection_overlay_caches();
     }
@@ -10783,9 +10784,10 @@ bool ModelingSessionService::curve_document_preview_active() const {
 }
 
 ModelingCommandResult ModelingSessionService::replace_mesh_document(
-    int modeling_object_id, quader_poly::Document document) {
+    int modeling_object_id, quader_poly::Document document,
+    bool preserve_selection) {
   return impl_->replace_mesh_document(modeling_object_id,
-                                      std::move(document));
+                                      std::move(document), preserve_selection);
 }
 
 ModelingLinearArrayResult ModelingSessionService::create_linear_array(

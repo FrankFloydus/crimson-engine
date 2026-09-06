@@ -183,6 +183,12 @@ public:
     void sync_active_tool(ViewportToolId tool);
     void clear_modal_tool_state();
     void clear_modal_drag_state();
+    [[nodiscard]] PrimitiveCreationInteraction &primitive_creation_interaction() {
+      return modal_state_.primitive_creation;
+    }
+    [[nodiscard]] const PrimitiveCreationInteraction &primitive_creation_interaction() const {
+      return modal_state_.primitive_creation;
+    }
     bool handle_shortcut(const ViewportShortcut &shortcut,
                          ViewportToolState &state,
                          ViewportCameraController &camera,

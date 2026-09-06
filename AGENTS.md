@@ -80,16 +80,18 @@ Use one native multi-config Visual Studio tree: `build/vs2026`. Do not create al
 native build trees or a traditional checked Debug configuration without an explicit request.
 The isolated SDK verification fixture is separate from the native handoff.
 
-Whenever a task changes any project file, build both native executables in this order.
-The same two-artifact handoff is required after any native app build:
+For feature/fix handoff, build **Release only** by default. Build the Debug/Profile executable
+only when the user explicitly requests it. Keep both configurations available in the canonical tree:
 
 ```powershell
 cmake --preset vs2026
-cmake --build --preset vs2026-debug --target quader
 cmake --build --preset vs2026-release --target quader
 ```
 
-Configure when needed; do not clean-rebuild routinely. Allow build/test processes at least
+Documentation-only and tooling-only changes do not require native executables. Test-only changes
+build their test target. The `vs2026-debug` test preset remains valid; building a test target does
+not require building the Debug/Profile app. Reuse successful builds whose inputs have not changed.
+Configure only when needed; do not clean-rebuild routinely. Allow build/test processes at least
 10 minutes (`600000` ms); asynchronous polling must not terminate them at tool yield timeouts.
 
 | Configuration | Required contract |
@@ -101,32 +103,49 @@ Canonical presets disable Sentry for both artifacts. Deployment uses vcpkg's rec
 Release-bin app-local resolver and `windeployqt --force --release`; direct-DLL copying
 misses Qt private dependencies. `tools/boot_tracy.ps1` is Debug/Profile-only.
 
-After builds, report success/failure and the absolute executable path for **both** configurations.
+Report success/failure and the absolute path for the executable built. Do not present an older
+executable from another configuration as containing this task's changes.
 
 ## Verification
 
-- Run builds and verification locally.
-- Choose focused owner tests using [tests/AGENTS.md](tests/AGENTS.md). New/edited GoogleTests
-  must build their target and run the declared suite before broader verification.
-- Use `tools/affected_check.ps1` for public API, command, scene, selection, history, viewport,
-  UI, render, resources and app-service changes. Inspect `-PlanOnly` when choosing scope.
-- `tools/regression_gate.ps1` is mandatory for command, selection, history, instance, overlay,
-  viewport, preference, project, scene-document or cross-owner behavior changes. Its normal
-  runs and command baselines are read-only; never regenerate a baseline to hide a failure.
+- Run locally. Choose one risk-based verification path: focused owner/affected checks for normal
+  iteration, or the full regression gate for broad risk. Do not stack focused suites, an equivalent
+  affected run, and full CTest on unchanged code. A broader passing run satisfies the focused suites
+  it includes. After a failure, rerun failed/impacted checks; retain successful unrelated results.
+- Use `tools/affected_check.ps1 -PlanOnly -ChangedPath <current-task paths>` to select relevant
+  tests; see [tests/AGENTS.md](tests/AGENTS.md). Include changed test suites and affected input,
+  history, selection, publication and unchanged-frame behavior where relevant. Build each required
+  target once and run the selected tests once. Test observable behavior, not copies of implementation
+  or additional layers of assertions about other tests.
+- Scope iteration to this task's changes and interacting dependencies. Previously verified dirty
+  files are not automatically new work; keep a short record of tested scope. Unknown or interacting
+  unverified changes widen scope. Never omit them merely to obtain a faster result.
+- Use `tools/regression_gate.ps1` for changes to shared mutation/history/selection mechanisms,
+  command/input dispatch infrastructure, persistence formats, modeling foundations, dependencies,
+  compiler/linker/packaging rules, or when impact cannot be bounded confidently. Run it once before
+  pushing risky changes. Adding a feature through existing UI/API/service layers or registering a
+  command through existing dispatch does not alone require the full gate. It replaces equivalent
+  affected/focused runs and never rewrites command baselines.
+- Prose-only edits need relevant documentation/link checks, not app builds or behavior suites.
+  Tooling edits need their own focused checks. Source-list-only CMake edits need configure,
+  compilation of affected targets and their tests; they do not alone require an isolated SDK install
+  and build. The full gate retains that fixture for integration risk.
+- Run cheap applicable source-policy checks before compiling widely included headers, using an
+  existing guardrail binary when its test sources/dependencies are unchanged. Fix comments and
+  similar source-only failures before another compile; do not rerun unrelated behavior tests for
+  comment-only fixes.
 - Every visible command has one explicit contract in
   `tests/support/command_behavior_contract.cpp`. Intentional behavior updates use
   `tools/update_command_behavior_baseline.ps1 -Reason "<why the behavior changed>"`;
   review the complete `tests/baselines/command_behavior.json` diff.
 - Express inspectable editor workflows as headless synthetic tests through public APIs or
-  `tests/support/BehaviorScenario`. Reserve `tools/boot_smoke.ps1` for native window/GPU,
-  driver or pixel-output checks.
+  `tests/support/BehaviorScenario`. Use `tools/boot_smoke.ps1` only for behavior requiring a real
+  window/GPU; respect requests not to use the desktop and report unverified behavior.
 - UI frame-loop changes require a regression test gating expensive work; reported FPS
   regressions also require a same-build, same-scene before/after measurement.
-  Compile/test speed claims require affected-check `-MeasureFull` evidence.
-- Run full `ctest --preset vs2026-debug` before pushing risky or cross-cutting changes.
-  Run `python tools/check_cpp_style.py` only before commit/push or an explicit C++ style audit.
-- Only a current request explicitly naming **fast iteration mode** skips automated tests
-  and affected checks. Still build both native configurations and report untested behavior.
+  Workflow timing claims must cite actual logs or a controlled measurement. `-MeasureFull` is an
+  optional benchmark, not another required full pass during feature delivery.
+- Run `python tools/check_cpp_style.py` only before commit/push or an explicit C++ style audit.
 
 ## Keep documentation useful
 
@@ -144,8 +163,8 @@ Keep `tasklist.md` limited to verified serious open defects, with evidence and a
 - Use `rg --files` and scoped symbol searches, then trace the public entry point, state owner,
   publication path and protecting test. Read relevant sections instead of dumping whole catalogs,
   memory or logs into context. Summarize evidence with paths and test results.
-- Delegate independent investigations or edits with explicit file ownership and a bounded result.
-  Integrate findings centrally; one coordinator runs builds against a shared build tree.
+- Delegate bounded independent work only when it shortens the critical path; handle small changes
+  directly. Give each delegate explicit file ownership. One coordinator runs shared-tree builds.
   Independent editing tasks can use separate Git worktrees; never share generated build artifacts
   between checkouts or discard the current task's uncommitted starting state.
 - Keep always-loaded guidance small. Codex's documented project-instruction budget defaults to

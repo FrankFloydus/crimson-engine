@@ -114,7 +114,8 @@ viewport_overlay_depth_mode(ViewportOverlayLayer layer,
 
 ViewportOverlayDepthMode
 viewport_overlay_depth_mode(const ViewportOverlayLine &line) {
-  if (viewport_overlay_line_uses_component_depth(line)) {
+  if (viewport_overlay_line_uses_component_depth(line) ||
+      line.source == ViewportOverlaySource::MeshOutline) {
     return ViewportOverlayDepthMode::DepthTested;
   }
   return viewport_overlay_depth_mode(line.layer,

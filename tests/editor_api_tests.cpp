@@ -10,10 +10,12 @@
 #include "editor/input/quader_keybinding_service.hpp"
 #include "editor/input/viewport_keybinding_resolver.hpp"
 #include "editor/input/viewport_input_binding_adapter.hpp"
+#include "editor/metadata/command_presentation_catalog.hpp"
 #include "editor/session/project_session.hpp"
 #include "math/glm_bridge.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "support/behavior_scenario.hpp"
+#include "support/command_behavior_fixture.hpp"
 #include "support/command_observable_state.hpp"
 #include "ui/viewport_shortcut_controller.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
@@ -39,6 +41,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
@@ -4389,6 +4392,940 @@ TEST(EditorApiTests,
           "viewportFocus && !textInputActive && !navigation.active");
   EXPECT_TRUE(cylinder_conflicts.empty());
 }
+
+TEST(EditorApiTests, PrimitiveHemisphereHasTypedLocalizedSphereBinding) {
+  constexpr auto kHemisphere = quader::quader_command::kToolsTogglePrimitiveHemisphere;
+  constexpr auto kHide = quader::quader_command::kSceneHideSelection;
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  EXPECT_TRUE(typed_command_ids().contains(std::string(kHemisphere.string())));
+  ASSERT_TRUE(editor.commands().descriptor(kHemisphere));
+  EXPECT_FALSE(editor.commands().descriptor(kHemisphere)->enabled);
+  EXPECT_FALSE(editor.commands().execute(kHemisphere).ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *entry = find_keybinding_catalog_entry(catalog, kHemisphere.string());
+  const auto *hide = find_keybinding_catalog_entry(catalog, kHide.string());
+  ASSERT_NE(entry, nullptr);
+  ASSERT_NE(hide, nullptr);
+  EXPECT_EQ(entry->label, "Toggle Primitive Hemisphere");
+  EXPECT_EQ(entry->localization_key,
+            "keybindings.target.tools.primitive.toggle_hemisphere.label");
+  EXPECT_EQ(entry->context, quader::QuaderKeybindingContextKind::ModalTool);
+  EXPECT_EQ(entry->scope_id, "viewport.tool.modal");
+  EXPECT_EQ(entry->shortcut, "H");
+  EXPECT_EQ(entry->default_shortcut, "H");
+  EXPECT_FALSE(entry->customized);
+  EXPECT_FALSE(quader::keybinding_detail::when_expressions_overlap(entry->when, hide->when));
+  const auto analysis = editor.commands().analyze_shortcut_assignment(entry->key, "H");
+  ASSERT_TRUE(analysis.ok) << analysis.message;
+  EXPECT_TRUE(analysis.conflicts.empty());
+  const auto *presentation = quader::find_command_presentation(kHemisphere);
+  ASSERT_NE(presentation, nullptr);
+  EXPECT_EQ(presentation->domain, quader::CommandPresentationDomain::Create);
+  EXPECT_EQ(presentation->activation, quader::CommandPresentationActivation::Toggle);
+  EXPECT_EQ(presentation->palette_policy, quader::CommandPalettePolicy::ContextOnly);
+  EXPECT_TRUE(quader::has_command_presentation_surface(
+      *presentation, quader::CommandPresentationSurface::ToolSettings));
+
+  (void)create_selected_box(editor);
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("H"), {}, true, false).command_id, kHide.string());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  const quader::ViewportToolState state{
+      .active_tool = quader::ViewportToolId::CreatePrimitive};
+  for (const char *kind : {"box", "cylinder", "cone", "torus"}) {
+    SCOPED_TRACE(kind);
+    ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", kind).ok());
+    EXPECT_FALSE(editor.commands().descriptor(kHemisphere)->enabled);
+    const auto before = quader::test::capture_command_observable_state(editor);
+    EXPECT_FALSE(editor.commands().execute(kHemisphere).ok());
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);
+    EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("H"), state, true, false).command_id, kHide.string());
+  }
+  ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", "sphere").ok());
+  EXPECT_TRUE(editor.commands().descriptor(kHemisphere)->enabled);
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("H"), state, true, false).command_id, kHemisphere.string());
+  EXPECT_FALSE(editor.commands().resolve_immediate_global_command(
+      single_input_chord("H"), state, false));
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("H"), {}, true, false).command_id, kHide.string());
+  EXPECT_NE(editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("H"), state, true, false).command_id, kHemisphere.string());
+}
+
+TEST(EditorApiTests, PrimitiveHemisphereRebindingPersistenceAndRemovalPreserveHide) {
+  constexpr auto kHemisphere = quader::quader_command::kToolsTogglePrimitiveHemisphere;
+  constexpr auto kHide = quader::quader_command::kSceneHideSelection;
+  const auto path = keybinding_test_path("primitive-hemisphere-overrides");
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(kHide, "Ctrl+Alt+F19").ok());
+  const auto rebound = editor.commands().set_shortcut(kHemisphere, "Ctrl+Alt+F19");
+  ASSERT_TRUE(rebound.ok()) << rebound.error_message();
+
+  CommandTestHarness reloaded_harness;
+  auto &reloaded = reloaded_harness.editor;
+  ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(reloaded.commands().shortcut_for(kHemisphere), "Ctrl+Alt+F19");
+  EXPECT_EQ(reloaded.commands().shortcut_for(kHide), "Ctrl+Alt+F19");
+  (void)create_selected_box(reloaded);
+  EXPECT_EQ(reloaded.commands().dispatch_viewport_input_binding(
+      single_input_chord("Ctrl+Alt+F19"), {}, true, false).command_id, kHide.string());
+  ASSERT_TRUE(reloaded.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(reloaded.tools().set_setting("create_primitive", "primitive.type", "sphere").ok());
+  const quader::ViewportToolState state{
+      .active_tool = quader::ViewportToolId::CreatePrimitive};
+  EXPECT_EQ(reloaded.commands().dispatch_viewport_input_binding(
+      single_input_chord("Ctrl+Alt+F19"), state, true, false).command_id, kHemisphere.string());
+  EXPECT_EQ(reloaded.commands().dispatch_viewport_input_binding(
+      single_input_chord("H"), state, true, false).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  ASSERT_TRUE(reloaded.commands().remove_shortcut(kHemisphere).ok());
+  ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+  const auto catalog = reloaded.commands().keybinding_catalog();
+  const auto *removed = find_keybinding_catalog_entry(catalog, kHemisphere.string());
+  ASSERT_NE(removed, nullptr);
+  EXPECT_TRUE(removed->unassigned);
+  EXPECT_TRUE(removed->customized);
+  for (const char *key : {"H", "Ctrl+Alt+F19"}) {
+    EXPECT_EQ(reloaded.commands().dispatch_viewport_input_binding(
+        single_input_chord(key), state, true, false).kind,
+        quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  }
+  ASSERT_TRUE(reloaded.commands().reset_shortcut(kHemisphere).ok());
+  EXPECT_EQ(reloaded.commands().shortcut_for(kHemisphere), "H");
+  EXPECT_EQ(reloaded.commands().shortcut_for(kHide), "Ctrl+Alt+F19");
+  EXPECT_EQ(reloaded.commands().dispatch_viewport_input_binding(
+      single_input_chord("H"), state, true, false).command_id, kHemisphere.string());
+  ASSERT_TRUE(reloaded.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(reloaded.commands().dispatch_viewport_input_binding(
+      single_input_chord("Ctrl+Alt+F19"), {}, true, false).command_id, kHide.string());
+}
+
+TEST(EditorApiTests, PrimitiveHemisphereSequenceUsesSharedDispatcherAndSphereContext) {
+  constexpr auto kHemisphere = quader::quader_command::kToolsTogglePrimitiveHemisphere;
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(kHemisphere, "Ctrl+K H").ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", "sphere").ok());
+  const quader::ViewportToolState state{
+      .active_tool = quader::ViewportToolId::CreatePrimitive};
+  std::vector<quader::QuaderInputChord> suppressed;
+  double linear = 0.0, radial = 0.0;
+  const auto resolve = [&](const char *key, bool focus = true,
+                           bool text = false, bool navigation = false) {
+    quader::ViewportInputFrame input;
+    input.viewport_focused = focus;
+    input.text_input_active = text;
+    input.navigation_active = navigation;
+    input.pressed_input_chords = {single_input_chord(key)};
+    input.released_input_chords = input.pressed_input_chords;
+    quader::ViewportKeybindingResolver::resolve(
+        editor, state, input, suppressed, linear, radial);
+    return input;
+  };
+  const auto hemisphere = [&] {
+    return find_tool_setting_control(editor.tools().active_settings(),
+        "primitive.sphere.hemisphere")->bool_value;
+  };
+  for (const bool expected : {true, false}) {
+    EXPECT_TRUE(resolve("Ctrl+K").keybinding_input_consumed);
+    ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+    const auto completed = resolve("H");
+    EXPECT_TRUE(completed.keybinding_input_consumed);
+    EXPECT_TRUE(completed.resolved_shortcuts.empty());
+    EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+    EXPECT_EQ(hemisphere(), expected);
+  }
+  for (const auto [focus, text, navigation] :
+       {std::array{false, false, false}, std::array{true, true, false},
+        std::array{true, false, true}}) {
+    (void)resolve("Ctrl+K");
+    ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+    (void)resolve("H", focus, text, navigation);
+    EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+    EXPECT_FALSE(hemisphere());
+  }
+  (void)resolve("Ctrl+K");
+  ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+  ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", "box").ok());
+  (void)resolve("H");
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", "sphere").ok());
+  EXPECT_FALSE(hemisphere());
+}
+
+TEST(EditorApiTests, PrimitiveHemisphereAndFlipEditLiveSphereWithinCreationHistory) {
+  constexpr auto kHemisphere = quader::quader_command::kToolsTogglePrimitiveHemisphere;
+  constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
+  const auto *contract = quader::test::find_command_behavior_contract(kHemisphere.string());
+  ASSERT_NE(contract, nullptr);
+  auto fixture = quader::test::CommandBehaviorFixture::create(*contract);
+  auto &editor = fixture->editor();
+  ASSERT_EQ(editor.tools().active_primitive_type(), "sphere");
+  using Domain = quader::test::CommandObservableDomain;
+  const auto before = quader::test::capture_command_observable_state(editor);
+  const auto selected = selected_entities(editor);
+  ASSERT_EQ(selected.size(), 1u);
+  ASSERT_TRUE(editor.commands().execute(kHemisphere).ok());
+  const auto half = quader::test::capture_command_observable_state(editor);
+  EXPECT_NE(half.domain(Domain::Geometry), before.domain(Domain::Geometry));
+  ASSERT_TRUE(editor.commands().execute(kFlip).ok());
+  const auto flipped = quader::test::capture_command_observable_state(editor);
+  EXPECT_NE(flipped.domain(Domain::Geometry), half.domain(Domain::Geometry));
+  EXPECT_EQ(flipped.domain(Domain::History), before.domain(Domain::History));
+  EXPECT_EQ(selected_entities(editor), selected);
+  ASSERT_TRUE(editor.commands().execute(kHemisphere).ok());
+  ASSERT_TRUE(editor.commands().execute(kFlip).ok());
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor).domain(Domain::Geometry),
+            before.domain(Domain::Geometry));
+  ASSERT_TRUE(editor.commands().execute(kHemisphere).ok());
+  ASSERT_TRUE(editor.commands().execute(kFlip).ok());
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_FALSE(editor.commands().descriptor(kHemisphere)->enabled);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(user_entity_count(editor), 0u);
+  EXPECT_FALSE(editor.history().can_undo());
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(selected_entities(editor), selected);
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor).domain(Domain::Geometry),
+            flipped.domain(Domain::Geometry));
+}
+
+TEST(EditorApiTests, PrimitiveCapsHasTypedLocalizedCylinderAndConeBinding) {
+  constexpr auto kCaps = quader::quader_command::kToolsTogglePrimitiveCaps;
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  EXPECT_TRUE(typed_command_ids().contains(std::string(kCaps.string())));
+  ASSERT_TRUE(editor.commands().descriptor(kCaps));
+  EXPECT_FALSE(editor.commands().descriptor(kCaps)->enabled);
+  EXPECT_FALSE(editor.commands().execute(kCaps).ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *caps = find_keybinding_catalog_entry(catalog, kCaps.string());
+  ASSERT_NE(caps, nullptr);
+  EXPECT_EQ(caps->label, "Toggle Primitive Caps");
+  EXPECT_EQ(caps->localization_key,
+            "keybindings.target.tools.primitive.toggle_caps.label");
+  EXPECT_EQ(caps->context, quader::QuaderKeybindingContextKind::ModalTool);
+  EXPECT_EQ(caps->scope_id, "viewport.tool.modal");
+  EXPECT_EQ(caps->shortcut, "C");
+  EXPECT_EQ(caps->default_shortcut, "C");
+  EXPECT_FALSE(caps->customized);
+  for (const auto tool : {quader::quader_command::kToolsActivateKnife,
+                          quader::quader_command::kToolsActivateCut}) {
+    const auto *entry = find_keybinding_catalog_entry(catalog, tool.string());
+    ASSERT_NE(entry, nullptr);
+    EXPECT_FALSE(quader::keybinding_detail::when_expressions_overlap(
+        caps->when, entry->when));
+  }
+  const auto analysis = editor.commands().analyze_shortcut_assignment(caps->key, "C");
+  ASSERT_TRUE(analysis.ok) << analysis.message;
+  EXPECT_TRUE(analysis.conflicts.empty());
+  const auto *presentation = quader::find_command_presentation(kCaps);
+  ASSERT_NE(presentation, nullptr);
+  EXPECT_EQ(presentation->domain, quader::CommandPresentationDomain::Create);
+  EXPECT_EQ(presentation->activation, quader::CommandPresentationActivation::Toggle);
+  EXPECT_EQ(presentation->palette_policy, quader::CommandPalettePolicy::ContextOnly);
+  EXPECT_TRUE(quader::has_command_presentation_surface(
+      *presentation, quader::CommandPresentationSurface::ToolSettings));
+
+  (void)create_selected_box(editor);
+  const auto outside = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("C"), {}, true, false);
+  ASSERT_EQ(outside.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(outside.shortcut.tool, quader::ViewportToolId::Knife);
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  const quader::ViewportToolState state{
+      .active_tool = quader::ViewportToolId::CreatePrimitive};
+  for (const char *kind : {"box", "sphere", "torus"}) {
+    ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", kind).ok());
+    EXPECT_FALSE(editor.commands().descriptor(kCaps)->enabled);
+    const auto before = quader::test::capture_command_observable_state(editor);
+    EXPECT_FALSE(editor.commands().execute(kCaps).ok());
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);
+    EXPECT_NE(editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("C"), state, true, false).command_id, kCaps.string());
+  }
+  for (const char *kind : {"cylinder", "cone"}) {
+    ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", kind).ok());
+    EXPECT_TRUE(editor.commands().descriptor(kCaps)->enabled);
+    EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("C"), state, true, false).command_id, kCaps.string());
+  }
+  EXPECT_FALSE(editor.commands().resolve_immediate_global_command(
+      single_input_chord("C"), state, false));
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  const auto restored = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("C"), {}, true, false);
+  EXPECT_EQ(restored.kind, outside.kind);
+  EXPECT_EQ(restored.shortcut.tool, outside.shortcut.tool);
+  // A stale viewport state cannot make a Cylinder session exist.
+  EXPECT_NE(editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("C"), state, true, false).command_id, kCaps.string());
+}
+
+TEST(EditorApiTests, PrimitiveKeyboardCommandsUseViewportEligibilityBeforeDrawing) {
+  constexpr auto kCaps = quader::quader_command::kToolsTogglePrimitiveCaps;
+  constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
+  constexpr auto kHemisphere = quader::quader_command::kToolsTogglePrimitiveHemisphere;
+  using Dispatch = quader::QuaderViewportKeybindingDispatch;
+  for (const auto &[kind, key, command, setting, initial] : {
+           std::tuple{"box", "F", kFlip, "primitive.flip_faces", false},
+           std::tuple{"cylinder", "F", kFlip, "primitive.flip_faces", false},
+           std::tuple{"sphere", "F", kFlip, "primitive.flip_faces", false},
+           std::tuple{"cone", "F", kFlip, "primitive.flip_faces", false},
+           std::tuple{"torus", "F", kFlip, "primitive.flip_faces", false},
+           std::tuple{"cylinder", "C", kCaps, "primitive.cylinder.caps", true},
+           std::tuple{"cone", "C", kCaps, "primitive.cone.caps", true},
+           std::tuple{"sphere", "H", kHemisphere, "primitive.sphere.hemisphere", false}}) {
+    SCOPED_TRACE(kind);
+    SCOPED_TRACE(key);
+    CommandTestHarness harness;
+    auto &editor = harness.editor;
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+    ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", kind).ok());
+    const quader::ViewportToolState state{
+        .active_tool = quader::ViewportToolId::CreatePrimitive};
+    std::vector<quader::QuaderInputChord> suppressed;
+    double linear = 0.0, radial = 0.0;
+    EXPECT_TRUE(editor.commands().descriptor(command)->enabled);
+    for (const auto [focused, text] :
+         {std::pair{false, false}, std::pair{true, true}}) {
+      EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+          single_input_chord(key), state, focused, text).kind, Dispatch::Kind::NoMatch);
+    }
+    for (const auto context : {
+             quader::QuaderViewportKeybindingContext{.navigation_active = true},
+             quader::QuaderViewportKeybindingContext{
+                 .navigation_active = true, .fly_navigation_active = true},
+             quader::QuaderViewportKeybindingContext{
+                 .navigation_active = true, .orbit_navigation_active = true},
+             quader::QuaderViewportKeybindingContext{
+                 .navigation_active = true, .pan_navigation_active = true}}) {
+      EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+          single_input_chord(key), state, true, false, context).kind,
+          Dispatch::Kind::NoMatch);
+    }
+    for (const bool expected : {!initial, initial}) {
+      quader::ViewportInputFrame input;
+      input.viewport_focused = true;
+      input.modal_tool_active = true;
+      input.active_tool_owns_viewport = true;
+      input.active_transform_drag = true;
+      input.pressed_input_chords = {single_input_chord(key)};
+      input.released_input_chords = input.pressed_input_chords;
+      quader::ViewportKeybindingResolver::resolve(
+          editor, state, input, suppressed, linear, radial);
+      EXPECT_TRUE(input.keybinding_input_consumed);
+      EXPECT_TRUE(input.resolved_shortcuts.empty());
+      const auto settings = editor.tools().active_settings();
+      const auto *control = find_tool_setting_control(settings, setting);
+      ASSERT_NE(control, nullptr);
+      EXPECT_EQ(control->bool_value, expected);
+      EXPECT_EQ(editor.tools().active_primitive_type(), kind);
+      EXPECT_EQ(user_entity_count(editor), 0u);
+      EXPECT_FALSE(editor.history().can_undo());
+    }
+  }
+}
+
+TEST(EditorApiTests, PrimitiveCapsRebindingPersistenceAndRemovalPreserveKnifeAndCut) {
+  constexpr auto kCaps = quader::quader_command::kToolsTogglePrimitiveCaps;
+  constexpr auto kKnife = quader::quader_command::kToolsActivateKnife;
+  constexpr auto kCut = quader::quader_command::kToolsActivateCut;
+  const auto path = keybinding_test_path("primitive-caps-overrides");
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(kKnife, "Ctrl+Alt+F19").ok());
+  const auto rebound = editor.commands().set_shortcut(kCaps, "Ctrl+Alt+F19");
+  ASSERT_TRUE(rebound.ok()) << rebound.error_message();
+  ASSERT_TRUE(editor.commands().set_shortcut(kCut, "C").ok());
+
+  CommandTestHarness reloaded_harness;
+  auto &reloaded = reloaded_harness.editor;
+  ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(reloaded.commands().shortcut_for(kCaps), "Ctrl+Alt+F19");
+  EXPECT_EQ(reloaded.commands().shortcut_for(kKnife), "Ctrl+Alt+F19");
+  EXPECT_EQ(reloaded.commands().shortcut_for(kCut), "C");
+  (void)create_selected_box(reloaded);
+  ASSERT_TRUE(reloaded.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(reloaded.tools().set_setting("create_primitive", "primitive.type", 1.0).ok());
+  const quader::ViewportToolState state{
+      .active_tool = quader::ViewportToolId::CreatePrimitive};
+  for (const char *kind : {"cylinder", "cone"}) {
+    ASSERT_TRUE(reloaded.tools().set_setting("create_primitive", "primitive.type", kind).ok());
+    EXPECT_EQ(reloaded.commands().dispatch_viewport_input_binding(
+        single_input_chord("Ctrl+Alt+F19"), state, true, false).command_id, kCaps.string());
+  }
+  EXPECT_EQ(reloaded.commands().dispatch_viewport_input_binding(
+      single_input_chord("C"), state, true, false).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  ASSERT_TRUE(reloaded.commands().remove_shortcut(kCaps).ok());
+  ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+  const auto catalog = reloaded.commands().keybinding_catalog();
+  const auto *removed = find_keybinding_catalog_entry(catalog, kCaps.string());
+  ASSERT_NE(removed, nullptr);
+  EXPECT_TRUE(removed->unassigned);
+  EXPECT_TRUE(removed->customized);
+  for (const char *key : {"C", "Ctrl+Alt+F19"}) {
+    EXPECT_EQ(reloaded.commands().dispatch_viewport_input_binding(
+        single_input_chord(key), state, true, false).kind,
+        quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  }
+  ASSERT_TRUE(reloaded.tools().cancel_active_tool_preview().ok());
+  const auto cut = reloaded.commands().dispatch_viewport_input_binding(
+      single_input_chord("C"), {}, true, false);
+  EXPECT_EQ(cut.kind, quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(cut.shortcut.tool, quader::ViewportToolId::Cut);
+  EXPECT_EQ(reloaded.commands().dispatch_viewport_input_binding(
+      single_input_chord("Ctrl+Alt+F19"), {}, true, false).shortcut.tool,
+      quader::ViewportToolId::Knife);
+  ASSERT_TRUE(reloaded.commands().reset_shortcut(kCaps).ok());
+  EXPECT_EQ(reloaded.commands().shortcut_for(kCaps), "C");
+  EXPECT_EQ(reloaded.commands().shortcut_for(kKnife), "Ctrl+Alt+F19");
+  EXPECT_EQ(reloaded.commands().shortcut_for(kCut), "C");
+}
+
+TEST(EditorApiTests, PrimitiveCapsSequenceUsesSharedDispatcherAndLosesCylinderContext) {
+  constexpr auto kCaps = quader::quader_command::kToolsTogglePrimitiveCaps;
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(kCaps, "Ctrl+K C").ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", 1.0).ok());
+  const quader::ViewportToolState state{
+      .active_tool = quader::ViewportToolId::CreatePrimitive};
+  std::vector<quader::QuaderInputChord> suppressed;
+  double linear = 0, radial = 0;
+  const auto resolve = [&](const char *key, bool focus = true,
+                           bool text = false, bool navigation = false) {
+    quader::ViewportInputFrame input;
+    input.viewport_focused = focus;
+    input.text_input_active = text;
+    input.navigation_active = navigation;
+    input.pressed_input_chords = {single_input_chord(key)};
+    input.released_input_chords = input.pressed_input_chords;
+    quader::ViewportKeybindingResolver::resolve(
+        editor, state, input, suppressed, linear, radial);
+    return input;
+  };
+  for (const bool expected : {false, true}) {
+    EXPECT_TRUE(resolve("Ctrl+K").keybinding_input_consumed);
+    ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+    const auto completed = resolve("C");
+    EXPECT_TRUE(completed.keybinding_input_consumed);
+    EXPECT_TRUE(completed.resolved_shortcuts.empty());
+    EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+    const auto settings = editor.tools().active_settings();
+    EXPECT_EQ(find_tool_setting_control(settings, "primitive.cylinder.caps")->bool_value,
+              expected);
+  }
+  for (const auto [focus, text, navigation] :
+       {std::array{false, false, false}, std::array{true, true, false},
+        std::array{true, false, true}}) {
+    (void)resolve("Ctrl+K");
+    ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+    (void)resolve("C", focus, text, navigation);
+    EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+    const auto settings = editor.tools().active_settings();
+    EXPECT_TRUE(find_tool_setting_control(settings, "primitive.cylinder.caps")->bool_value);
+  }
+  (void)resolve("Ctrl+K");
+  ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+  ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", 0.0).ok());
+  (void)resolve("C");
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", 1.0).ok());
+  const auto settings = editor.tools().active_settings();
+  EXPECT_TRUE(find_tool_setting_control(settings, "primitive.cylinder.caps")->bool_value);
+}
+
+TEST(EditorApiTests, CylinderCapsAndFlipEditLiveGeometryWithinCreationHistory) {
+  constexpr auto kCaps = quader::quader_command::kToolsTogglePrimitiveCaps;
+  constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
+  const auto *contract = quader::test::find_command_behavior_contract(kCaps.string());
+  ASSERT_NE(contract, nullptr);
+  auto fixture = quader::test::CommandBehaviorFixture::create(*contract);
+  auto &editor = fixture->editor();
+  ASSERT_EQ(editor.tools().active_primitive_type(), "cylinder");
+  using Domain = quader::test::CommandObservableDomain;
+  const auto before = quader::test::capture_command_observable_state(editor);
+  const auto selected = selected_entities(editor);
+  ASSERT_EQ(selected.size(), 1u);
+  ASSERT_TRUE(editor.commands().execute(kCaps).ok());
+  const auto uncapped = quader::test::capture_command_observable_state(editor);
+  EXPECT_NE(uncapped.domain(Domain::Geometry), before.domain(Domain::Geometry));
+  ASSERT_TRUE(editor.commands().execute(kFlip).ok());
+  const auto flipped = quader::test::capture_command_observable_state(editor);
+  EXPECT_NE(flipped.domain(Domain::Geometry), uncapped.domain(Domain::Geometry));
+  EXPECT_EQ(flipped.domain(Domain::History), before.domain(Domain::History));
+  EXPECT_EQ(selected_entities(editor), selected);
+  ASSERT_TRUE(editor.commands().execute(kCaps).ok());
+  ASSERT_TRUE(editor.commands().execute(kFlip).ok());
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor).domain(Domain::Geometry),
+            before.domain(Domain::Geometry));
+  ASSERT_TRUE(editor.commands().execute(kCaps).ok());
+  ASSERT_TRUE(editor.commands().execute(kFlip).ok());
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_FALSE(editor.commands().descriptor(kCaps)->enabled);
+  EXPECT_FALSE(editor.commands().descriptor(kFlip)->enabled);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(user_entity_count(editor), 0u);
+  EXPECT_FALSE(editor.history().can_undo());
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(selected_entities(editor), selected);
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor).domain(Domain::Geometry),
+            flipped.domain(Domain::Geometry));
+}
+
+TEST(EditorApiTests, PrimitiveKeyboardCommandsDuringRepeatFootprintLeavePreviousMeshFrozen) {
+  constexpr auto kCaps = quader::quader_command::kToolsTogglePrimitiveCaps;
+  constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
+  constexpr auto kHemisphere = quader::quader_command::kToolsTogglePrimitiveHemisphere;
+  for (const char *kind : {"box", "cylinder", "sphere", "cone", "torus"}) {
+    SCOPED_TRACE(kind);
+    const auto *contract = quader::test::find_command_behavior_contract(kCaps.string());
+    ASSERT_NE(contract, nullptr);
+    auto fixture = quader::test::CommandBehaviorFixture::create(*contract);
+    auto &editor = fixture->editor();
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", kind).ok());
+    fixture->begin_primitive_footprint();
+    using Domain = quader::test::CommandObservableDomain;
+    const auto before = quader::test::capture_command_observable_state(editor);
+    const auto selected = selected_entities(editor);
+    for (const auto &[key, command, setting, initial, eligible] : {
+             std::tuple{"F", kFlip, "primitive.flip_faces", false, true},
+             std::tuple{"C", kCaps, "primitive.cylinder.caps", true,
+                        std::string_view(kind) == "cylinder"},
+             std::tuple{"C", kCaps, "primitive.cone.caps", true,
+                        std::string_view(kind) == "cone"},
+             std::tuple{"H", kHemisphere, "primitive.sphere.hemisphere", false,
+                        std::string_view(kind) == "sphere"}}) {
+      if (!eligible) {
+        continue;
+      }
+      for (const bool expected : {!initial, initial}) {
+        const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+            single_input_chord(key),
+            {.active_tool = quader::ViewportToolId::CreatePrimitive}, true, false,
+            {.modal_tool_active = true, .active_tool_owns_viewport = true});
+        ASSERT_EQ(dispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+        EXPECT_EQ(dispatch.command_id, command.string());
+        const auto result = editor.commands().execute(dispatch.command_id);
+        ASSERT_TRUE(result.ok()) << result.error_message();
+        EXPECT_TRUE(result.changed());
+        const auto after = quader::test::capture_command_observable_state(editor);
+        EXPECT_EQ(after.domain(Domain::Geometry), before.domain(Domain::Geometry));
+        EXPECT_EQ(after.domain(Domain::History), before.domain(Domain::History));
+        EXPECT_EQ(selected_entities(editor), selected);
+        const auto settings = editor.tools().active_settings();
+        const auto *control = find_tool_setting_control(settings, setting);
+        ASSERT_NE(control, nullptr);
+        EXPECT_EQ(control->bool_value, expected);
+      }
+    }
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    EXPECT_EQ(user_entity_count(editor), 0u);
+    EXPECT_FALSE(editor.commands().execute(kCaps).ok());
+    EXPECT_FALSE(editor.commands().execute(kFlip).ok());
+    EXPECT_FALSE(editor.commands().execute(kHemisphere).ok());
+  }
+}
+
+TEST(EditorApiTests, PrimitiveFlipFacesHasTypedLocalizedContextualBinding) {
+  constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
+  constexpr auto kInvert = quader::quader_command::kModelingInvertMesh;
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  EXPECT_TRUE(typed_command_ids().contains(std::string(kFlip.string())));
+  const auto descriptor = editor.commands().descriptor(kFlip);
+  ASSERT_TRUE(descriptor.has_value());
+  EXPECT_FALSE(descriptor->enabled);
+  EXPECT_FALSE(editor.commands().execute(kFlip).ok());
+
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *entry = find_keybinding_catalog_entry(catalog, kFlip.string());
+  const auto *invert = find_keybinding_catalog_entry(catalog, kInvert.string());
+  ASSERT_NE(entry, nullptr);
+  ASSERT_NE(invert, nullptr);
+  EXPECT_EQ(entry->label, "Flip Primitive Faces");
+  EXPECT_EQ(entry->localization_key,
+            "keybindings.target.tools.primitive.flip_faces.label");
+  EXPECT_EQ(entry->context, quader::QuaderKeybindingContextKind::ModalTool);
+  EXPECT_EQ(entry->scope_id, "viewport.tool.modal");
+  EXPECT_EQ(entry->shortcut, "F");
+  EXPECT_EQ(entry->default_shortcut, "F");
+  EXPECT_FALSE(entry->customized);
+  EXPECT_FALSE(quader::keybinding_detail::when_expressions_overlap(
+      entry->when, invert->when));
+  const auto analysis =
+      editor.commands().analyze_shortcut_assignment(entry->key, "F");
+  ASSERT_TRUE(analysis.ok) << analysis.message;
+  EXPECT_TRUE(analysis.conflicts.empty());
+  EXPECT_NE(std::find_if(analysis.compatible_reuses.begin(),
+                         analysis.compatible_reuses.end(),
+                         [&](const auto &reuse) {
+                           return reuse.action == invert->key;
+                         }),
+            analysis.compatible_reuses.end());
+
+  const auto *presentation = quader::find_command_presentation(kFlip);
+  ASSERT_NE(presentation, nullptr);
+  EXPECT_EQ(presentation->domain, quader::CommandPresentationDomain::Create);
+  EXPECT_EQ(presentation->palette_policy,
+            quader::CommandPalettePolicy::ContextOnly);
+  EXPECT_TRUE(quader::has_command_presentation_surface(
+      *presentation, quader::CommandPresentationSurface::ToolSettings));
+  EXPECT_FALSE(quader::has_command_presentation_surface(
+      *presentation, quader::CommandPresentationSurface::CommandPalette));
+  EXPECT_EQ(presentation->activation,
+            quader::CommandPresentationActivation::Toggle);
+
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  const quader::ViewportToolState state{
+      .active_tool = quader::ViewportToolId::CreatePrimitive};
+  EXPECT_TRUE(editor.commands().descriptor(kFlip)->enabled);
+  for (const bool expected : {true, false}) {
+    const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("F"), state, true, false);
+    ASSERT_EQ(dispatch.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    ASSERT_EQ(dispatch.command_id, kFlip.string());
+    const auto result = editor.commands().execute(dispatch.command_id);
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_TRUE(result.changed());
+    const auto settings = editor.tools().active_settings();
+    const auto *flip = find_tool_setting_control(settings, "primitive.flip_faces");
+    ASSERT_NE(flip, nullptr);
+    EXPECT_EQ(flip->bool_value, expected);
+    EXPECT_EQ(user_entity_count(editor), 0u);
+    EXPECT_FALSE(editor.history().can_undo());
+  }
+}
+
+TEST(EditorApiTests, PrimitiveFlipFacesUsesOwnerKindAndViewportEligibility) {
+  constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
+  constexpr auto kInvert = quader::quader_command::kModelingInvertMesh;
+  using Dispatch = quader::QuaderViewportKeybindingDispatch;
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  (void)create_selected_box(editor);
+  const quader::ViewportToolState state{
+      .active_tool = quader::ViewportToolId::CreatePrimitive};
+  // A stale caller tool ID cannot manufacture an active Box session.
+  EXPECT_NE(editor.commands()
+                .dispatch_viewport_input_binding(single_input_chord("F"),
+                                                 state, true, false)
+                .command_id,
+            kFlip.string());
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  for (const auto [focused, text] :
+       {std::pair{false, false}, std::pair{true, true}}) {
+    EXPECT_EQ(editor.commands()
+                  .dispatch_viewport_input_binding(single_input_chord("F"),
+                                                   state, focused, text)
+                  .kind,
+              Dispatch::Kind::NoMatch);
+  }
+  for (const quader::QuaderViewportKeybindingContext context : {
+           quader::QuaderViewportKeybindingContext{.navigation_active = true},
+           quader::QuaderViewportKeybindingContext{
+               .navigation_active = true, .fly_navigation_active = true},
+           quader::QuaderViewportKeybindingContext{
+               .navigation_active = true, .orbit_navigation_active = true},
+           quader::QuaderViewportKeybindingContext{
+               .navigation_active = true, .pan_navigation_active = true}}) {
+    EXPECT_EQ(editor.commands()
+                  .dispatch_viewport_input_binding(single_input_chord("F"),
+                                                   state, true, false, context)
+                  .kind,
+              Dispatch::Kind::NoMatch);
+  }
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(
+                    single_input_chord("F"), state, true, false,
+                    {.modal_tool_active = true,
+                     .active_tool_owns_viewport = true,
+                     .active_transform_drag = true})
+                .command_id,
+            kFlip.string());
+  EXPECT_FALSE(editor.commands().resolve_immediate_global_command(
+      single_input_chord("F"), state, false));
+
+  for (const char *kind : {"box", "cylinder", "sphere", "cone", "torus"}) {
+    SCOPED_TRACE(kind);
+    ASSERT_TRUE(editor.tools()
+                    .set_setting("create_primitive", "primitive.type", kind)
+                    .ok());
+    EXPECT_TRUE(editor.commands().descriptor(kFlip)->enabled);
+    const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("F"), state, true, false);
+    EXPECT_FALSE(editor.commands().descriptor(kInvert)->enabled);
+    EXPECT_EQ(dispatch.kind, Dispatch::Kind::Command);
+    EXPECT_EQ(dispatch.command_id, kFlip.string());
+  }
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(single_input_chord("F"),
+                                                 {}, true, false)
+                .command_id,
+            kInvert.string());
+}
+
+TEST(EditorApiTests,
+     PrimitiveFlipFacesRebindingPersistenceAndRemovalPreserveMeshOverrides) {
+  constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
+  constexpr auto kInvert = quader::quader_command::kModelingInvertMesh;
+  const auto path = keybinding_test_path("primitive-flip-persistence");
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *entry = find_keybinding_catalog_entry(catalog, kFlip.string());
+  const auto *invert = find_keybinding_catalog_entry(catalog, kInvert.string());
+  ASSERT_NE(entry, nullptr);
+  ASSERT_NE(invert, nullptr);
+  const auto action = entry->key;
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(invert->key, "Ctrl+Alt+F19")
+                  .ok());
+  const auto rebound = editor.preferences().set_action_shortcut(
+      action, "Ctrl+Alt+F19", quader::QuaderKeybindingConflictPolicy::Reject);
+  ASSERT_TRUE(rebound.ok()) << rebound.error_message();
+
+  CommandTestHarness reloaded_harness;
+  auto &reloaded = reloaded_harness.editor;
+  ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(reloaded.commands().shortcut_for(kFlip), "Ctrl+Alt+F19");
+  EXPECT_EQ(reloaded.commands().shortcut_for(kInvert), "Ctrl+Alt+F19");
+  (void)create_selected_box(reloaded);
+  ASSERT_TRUE(
+      reloaded.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  const quader::ViewportToolState state{
+      .active_tool = quader::ViewportToolId::CreatePrimitive};
+  EXPECT_EQ(reloaded.commands()
+                .dispatch_viewport_input_binding(
+                    single_input_chord("Ctrl+Alt+F19"), state, true, false)
+                .command_id,
+            kFlip.string());
+  for (const char *kind : {"box", "cylinder", "sphere", "cone", "torus"}) {
+    ASSERT_TRUE(reloaded.tools().set_setting(
+        "create_primitive", "primitive.type", kind).ok());
+    EXPECT_TRUE(reloaded.commands().descriptor(kFlip)->enabled);
+    EXPECT_EQ(reloaded.commands().dispatch_viewport_input_binding(
+        single_input_chord("Ctrl+Alt+F19"), state, true, false).command_id,
+        kFlip.string());
+  }
+  EXPECT_EQ(reloaded.commands()
+                .dispatch_viewport_input_binding(single_input_chord("F"),
+                                                 state, true, false)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  ASSERT_TRUE(reloaded.preferences().remove_action_shortcut(action).ok());
+  ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+  const auto removed_catalog = reloaded.commands().keybinding_catalog();
+  const auto *removed =
+      find_keybinding_catalog_entry(removed_catalog, kFlip.string());
+  ASSERT_NE(removed, nullptr);
+  EXPECT_TRUE(removed->unassigned);
+  EXPECT_TRUE(removed->customized);
+  for (const char *shortcut : {"F", "Ctrl+Alt+F19"}) {
+    EXPECT_EQ(reloaded.commands()
+                  .dispatch_viewport_input_binding(single_input_chord(shortcut),
+                                                   state, true, false)
+                  .kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  }
+  ASSERT_TRUE(reloaded.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(reloaded.commands()
+                .dispatch_viewport_input_binding(
+                    single_input_chord("Ctrl+Alt+F19"), {}, true, false)
+                .command_id,
+            kInvert.string());
+  ASSERT_TRUE(reloaded.preferences().reset_action_shortcut(action).ok());
+  EXPECT_EQ(reloaded.commands().shortcut_for(kFlip), "F");
+  EXPECT_EQ(reloaded.commands().shortcut_for(kInvert), "Ctrl+Alt+F19");
+}
+
+TEST(EditorApiTests, PrimitiveFlipFacesLoadsLegacyOverridesWithCurrentScope) {
+  constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
+  constexpr auto kInvert = quader::quader_command::kModelingInvertMesh;
+  const auto path = keybinding_test_path("primitive-flip-legacy-scope");
+  const std::string legacy =
+      "[{\"command\":\"modeling.invert_mesh\",\"key\":\"Ctrl+Alt+F18\","
+      "\"when\":\"true\"},"
+      "{\"command\":\"-tools.primitive.flip_faces\"}]\n";
+  {
+    std::ofstream file(path, std::ios::binary);
+    file << legacy;
+  }
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_TRUE(editor.commands().shortcut_for(kFlip).empty());
+  EXPECT_EQ(editor.commands().shortcut_for(kInvert), "Ctrl+Alt+F18");
+  EXPECT_EQ(read_text_file(path), legacy);
+  (void)create_selected_box(editor);
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(
+                    single_input_chord("Ctrl+Alt+F18"), {}, true, false)
+                .command_id,
+            kInvert.string());
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  for (const char *kind : {"box", "cylinder", "sphere", "cone", "torus"}) {
+    ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", kind).ok());
+    for (const char *shortcut : {"F", "Ctrl+Alt+F18"}) {
+      EXPECT_EQ(editor.commands()
+                    .dispatch_viewport_input_binding(
+                        single_input_chord(shortcut),
+                        {.active_tool = quader::ViewportToolId::CreatePrimitive},
+                        true, false)
+                    .kind,
+                quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+    }
+  }
+  EXPECT_EQ(read_text_file(path), legacy);
+}
+
+TEST(EditorApiTests, PrimitiveFlipFacesSequenceUsesSharedViewportDispatcher) {
+  constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("primitive-flip-sequence"))
+                  .ok());
+  ASSERT_TRUE(editor.preferences().set_shortcut(kFlip, "Ctrl+K D").ok());
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  const quader::ViewportToolState state{
+      .active_tool = quader::ViewportToolId::CreatePrimitive};
+  std::vector<quader::QuaderInputChord> suppressed;
+  double linear_wheel = 0.0;
+  double radial_wheel = 0.0;
+  const auto resolve = [&](std::string_view shortcut, bool focused = true,
+                           bool text = false, bool navigation = false) {
+    quader::ViewportInputFrame input;
+    input.viewport_focused = focused;
+    input.text_input_active = text;
+    input.navigation_active = navigation;
+    input.pressed_input_chords = {single_input_chord(shortcut)};
+    input.released_input_chords = input.pressed_input_chords;
+    quader::ViewportKeybindingResolver::resolve(
+        editor, state, input, suppressed, linear_wheel, radial_wheel);
+    return input;
+  };
+  const auto flip_value = [&] {
+    return find_tool_setting_control(editor.tools().active_settings(),
+                                     "primitive.flip_faces")
+        ->bool_value;
+  };
+  for (const bool expected : {true, false}) {
+    EXPECT_TRUE(resolve("Ctrl+K").keybinding_input_consumed);
+    ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+    EXPECT_NE(flip_value(), expected);
+    const auto completed = resolve("D");
+    EXPECT_TRUE(completed.keybinding_input_consumed);
+    EXPECT_FALSE(completed.quick_pivot_pressed);
+    EXPECT_EQ(flip_value(), expected);
+    EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  }
+  for (const auto [focused, text, navigation] :
+       {std::array{false, false, false}, std::array{true, true, false},
+        std::array{true, false, true}}) {
+    (void)resolve("Ctrl+K");
+    ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+    (void)resolve("D", focused, text, navigation);
+    EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+    EXPECT_FALSE(flip_value());
+  }
+  (void)resolve("Ctrl+K");
+  ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("create_primitive", "primitive.type", "sphere")
+                  .ok());
+  (void)resolve("D");
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_TRUE(flip_value());
+  (void)resolve("Ctrl+K");
+  ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  (void)resolve("D");
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_FALSE(editor.commands().descriptor(kFlip)->enabled);
+}
+
+TEST(EditorApiTests, PrimitiveFlipFacesUpdatesLiveCubeWithinCreationHistory) {
+  constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
+  const auto *contract =
+      quader::test::find_command_behavior_contract(kFlip.string());
+  ASSERT_NE(contract, nullptr);
+  auto fixture = quader::test::CommandBehaviorFixture::create(*contract);
+  auto &editor = fixture->editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  using Domain = quader::test::CommandObservableDomain;
+  const auto before = quader::test::capture_command_observable_state(editor);
+  const auto selected = selected_entities(editor);
+  ASSERT_EQ(selected.size(), 1u);
+
+  quader::ViewportInputFrame input;
+  input.viewport_focused = true;
+  input.pressed_input_chords = {single_input_chord("F")};
+  ASSERT_TRUE(editor.tools()
+                  .begin_primitive_cube_resize(quader::QuaderPrimitiveCubeAxis::X,
+                                               true)
+                  .ok());
+  input.active_transform_drag = true;
+  std::vector<quader::QuaderInputChord> suppressed;
+  double linear_wheel = 0.0;
+  double radial_wheel = 0.0;
+  quader::ViewportKeybindingResolver::resolve(
+      editor, {.active_tool = quader::ViewportToolId::CreatePrimitive}, input,
+      suppressed, linear_wheel, radial_wheel);
+  ASSERT_TRUE(input.keybinding_input_consumed);
+  EXPECT_TRUE(input.resolved_shortcuts.empty());
+  ASSERT_TRUE(editor.tools().live_primitive_cube().has_value());
+  EXPECT_TRUE(editor.tools().live_primitive_cube()->flip_faces);
+  EXPECT_TRUE(editor.tools().live_primitive_cube()->resizing);
+  ASSERT_TRUE(editor.tools().end_primitive_cube_resize().ok());
+  const auto flipped = quader::test::capture_command_observable_state(editor);
+  EXPECT_NE(flipped.domain(Domain::Geometry), before.domain(Domain::Geometry));
+  EXPECT_EQ(selected_entities(editor), selected);
+  EXPECT_EQ(flipped.domain(Domain::History), before.domain(Domain::History));
+
+  ASSERT_TRUE(editor.commands().execute(kFlip).ok());
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor)
+                .domain(Domain::Geometry),
+            before.domain(Domain::Geometry));
+  ASSERT_TRUE(editor.commands().execute(kFlip).ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(user_entity_count(editor), 0u);
+  EXPECT_FALSE(editor.history().can_undo());
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(selected_entities(editor), selected);
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor)
+                .domain(Domain::Geometry),
+            flipped.domain(Domain::Geometry));
+}
+
 
 TEST(EditorApiTests,
      CreatePrimitiveExposesDynamicSettingsAndRemainsActiveUntilCancel) {
@@ -17357,9 +18294,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 200u);
+  EXPECT_EQ(commands.size(), 205u);
 #else
-  EXPECT_EQ(commands.size(), 201u);
+  EXPECT_EQ(commands.size(), 204u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

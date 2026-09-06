@@ -496,8 +496,11 @@ public:
   ModelingCommandResult commit_curve_document_preview();
   ModelingCommandResult cancel_curve_document_preview();
   [[nodiscard]] bool curve_document_preview_active() const;
+  /// Optional selection retention is used when canceling a primitive resize
+  /// after selection has moved to another target or component domain.
   ModelingCommandResult replace_mesh_document(
-      int modeling_object_id, quader_poly::Document document);
+      int modeling_object_id, quader_poly::Document document,
+      bool preserve_selection = false);
   ModelingLinearArrayResult
   create_linear_array(const ModelingLinearArrayRequest &request);
   ModelingRadialArrayResult

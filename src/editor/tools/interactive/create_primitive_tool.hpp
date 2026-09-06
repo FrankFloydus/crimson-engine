@@ -19,6 +19,10 @@ public:
   CreatePrimitiveTool()
       : TwoStageBoxTool(
             viewport_tool_descriptor(ViewportToolId::CreatePrimitive)) {}
+  [[nodiscard]] bool handles_wheel_events() const override { return true; }
+  [[nodiscard]] ViewportToolResult
+  handle_event(ViewportToolContext &context,
+               const ViewportToolEvent &event) const override;
 };
 
 } // namespace quader

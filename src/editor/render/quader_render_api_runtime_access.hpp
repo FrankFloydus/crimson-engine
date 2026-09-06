@@ -30,6 +30,9 @@ struct QuaderRenderSceneOverlaySyncRequest {
   bool selected_object_overlay_visible = false;
   std::uint8_t scene_wireframe_layer_mask = 0u;
   bool selected_scene_wire_visible = true;
+  /// Object-mode presentation: preserve fill and leave the selected mesh outline
+  /// to the per-viewport silhouette stream, including in wireframe panes.
+  bool selected_mesh_outline_only = false;
   ViewportPersistentOverlayStyleSnapshot style;
   ViewportPersistentOverlayRasterGroupSet raster_groups;
 };

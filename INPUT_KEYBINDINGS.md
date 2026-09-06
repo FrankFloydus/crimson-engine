@@ -27,6 +27,8 @@ bindings. Do not copy that catalog into documentation. Follow root `AGENTS.md` f
 | Shared press record and release suppression | `src/viewport/viewport_pointer_gesture.hpp` |
 | Semantic navigation | `src/viewport/viewport_input_router.*` (`ViewportInputRouter`) |
 | Tool/selection/gizmo precedence | `src/editor/viewport/viewport_interaction_controller.*` |
+| Active operation hint declarations | `src/editor/metadata/operation_input_hint_catalog.*`, exposed by `QuaderToolsApi` |
+| Bottom-bar keybinding presentation | `src/ui/qt_operation_input_hints.*` |
 
 `QuaderCommandsApi::Impl::register_default_keybindings()` and
 `register_viewport_default_keybindings()` are the compiled mapping entry points. Their scope metadata
@@ -97,6 +99,12 @@ consumes semantic `ViewportInputActionKind`/`ViewportNavigationInput`, not Qt ke
   current app-owned scope. Loading normalizes in memory without rewriting the legacy file.
 - Retained menus/tooltips refresh on keybinding commits/revisions, outside the frame loop. They must
   not enumerate the complete catalog or repeat unchanged Qt setters every frame.
+- Operation hints declare typed commands and gesture labels at the tool owner. The shared status
+  widget resolves current bindings/localization only when their revisions or operation state change;
+  disabled or unassigned commands have no badge. Extend the owner catalog for new operations, not
+  a second shortcut map in the widget. Primitive hints show keyboard commands only, occupying the
+  existing single status-bar row with compact badges; narrow widths must not create another row.
+  See `tests/operation_input_hint_tests.cpp`.
 
 ## Mouse and held-key contracts
 
@@ -172,5 +180,6 @@ cancellation, preview lifecycle, and undo/redo as applicable. Relevant owners:
 | Semantic routing, deferred gestures, tool/gizmo precedence | `tests/viewport_interaction_controller_tests.cpp`, `tests/curve_tool_service_tests.cpp` |
 | Boundary and UI-policy protection | `tests/programmatic_api_guardrail_tests.cpp`, `tests/ui_layout_guardrail_tests.cpp` |
 
-Run the affected checks and mandatory final verification from root `AGENTS.md`; use real-window smoke
-checks for native capture, window, or GPU behavior that headless tests cannot establish.
+Choose one risk-selected verification path under root [AGENTS.md](AGENTS.md), including the relevant
+changed suites once. Use real-window smoke checks for native capture, window, or GPU behavior that
+headless tests cannot establish.

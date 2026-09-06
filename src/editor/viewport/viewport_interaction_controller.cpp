@@ -10,6 +10,7 @@
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/tools/viewport_tool.hpp"
+#include "editor/viewport/primitive_creation_api_adapter.hpp"
 #include "editor/viewport/viewport_curve_picking.hpp"
 #include "editor/viewport/viewport_path_array_source_picking.hpp"
 #include "viewport/viewport_camera_controller.hpp"
@@ -815,19 +816,43 @@ QuaderSelectionSummary ViewportInteractionController::pick_context_menu_target(
   return selection_.pick_context_menu_target(editor, frame);
 }
 
+const PrimitiveCreationControlsFrame &
+ViewportInteractionController::primitive_creation_controls(
+    const std::optional<QuaderPrimitiveCreationState> &cube,
+    const ViewportCameraController &camera, float raster_scale) {
+  return tool_runtime_.primitive_creation_interaction().project(
+      ViewportPrimitiveCreationApiAdapter::from_api(cube), camera, raster_scale);
+}
+
+void ViewportInteractionController::set_primitive_creation_decrement(bool decrement) {
+  tool_runtime_.primitive_creation_interaction().set_subdivision_decrement(decrement);
+}
+
 bool ViewportInteractionController::cancel_active_drag(
     QuaderEditorApi &editor) {
+  if (primitive_creation_pointer_active()) {
+    const auto cube = editor.tools().live_primitive_creation();
+    const auto &interaction = tool_runtime_.primitive_creation_interaction();
+    if (interaction.active() < 6 &&
+        (!cube || cube->object_id == interaction.object_id()) &&
+        !editor.tools().cancel_primitive_resize().ok()) return false;
+    tool_runtime_.clear_modal_tool_state();
+    return true;
+  }
   return transform_gizmo_.cancel_active_drag(editor);
 }
 
 bool ViewportInteractionController::cancel_active_drag(
     QuaderEditorApi &editor, NativeViewportToolCoordinator &native_tools) {
+  if (primitive_creation_pointer_active()) return cancel_active_drag(editor);
   return transform_gizmo_.cancel_active_drag(
       editor, &native_tools.curve_interaction());
 }
 
 bool ViewportInteractionController::dragging() const {
-  return transform_gizmo_.dragging();
+  return transform_gizmo_.dragging() ||
+         (tool_runtime_.primitive_creation_interaction().active() >= 0 &&
+          tool_runtime_.primitive_creation_interaction().active() < 6);
 }
 
 bool ViewportInteractionController::transform_gizmo_pointer_active() const {

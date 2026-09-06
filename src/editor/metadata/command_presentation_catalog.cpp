@@ -251,6 +251,20 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  Surface::ViewportContextMenu | Surface::ToolSettings,
                  Palette::ContextOnly, Activation::PreviewCancel),
 
+    presentation(quader_command::kToolsFlipPrimitiveFaces,
+                 Domain::Create, Group::Creation, 220u,
+                 Surface::ViewportContextMenu | Surface::ToolSettings,
+                 Palette::ContextOnly, Activation::Toggle, Danger::None,
+                 {}, kNormalKeywords),
+    presentation(quader_command::kToolsTogglePrimitiveCaps,
+                 Domain::Create, Group::Creation, 230u,
+                 Surface::ViewportContextMenu | Surface::ToolSettings,
+                 Palette::ContextOnly, Activation::Toggle),
+    presentation(quader_command::kToolsTogglePrimitiveHemisphere,
+                 Domain::Create, Group::Creation, 240u,
+                 Surface::ViewportContextMenu | Surface::ToolSettings,
+                 Palette::ContextOnly, Activation::Toggle),
+
     // Object: hierarchy, transforms, arrangement, duplication and visibility.
     presentation(quader_command::kEditCreateInstance, Domain::Object,
                  Group::Instances, 10u, kMenuViewportHierarchyPalette,

@@ -288,6 +288,9 @@ ViewportToolRuntime::handle_active_tool_event(ViewportToolState &state,
   if (active_tool_ == nullptr) {
     return {};
   }
+  if (event.kind == ViewportToolEventKind::Wheel && !active_tool_->handles_wheel_events()) {
+    return {};
+  }
   context.modal_state = &modal_state_;
   if (event.kind == ViewportToolEventKind::Frame &&
       active_tool_->viewport_tool() != ViewportToolId::CreatePrimitive &&

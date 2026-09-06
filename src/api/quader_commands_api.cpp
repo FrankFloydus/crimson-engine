@@ -217,6 +217,37 @@ constexpr std::string_view viewport_command_keybinding_context() {
   return "viewportFocus && !textInputActive && !navigation.active";
 }
 
+constexpr std::string_view primitive_flip_keybinding_context() {
+  return "viewportFocus && !textInputActive && !navigation.active && "
+         "activeTool.create_primitive && "
+         "primitiveCreation.active";
+}
+
+constexpr std::string_view primitive_caps_keybinding_context() {
+  return "viewportFocus && !textInputActive && !navigation.active && "
+         "activeTool.create_primitive && "
+         "(primitiveCreation.cylinder || primitiveCreation.cone)";
+}
+
+constexpr std::string_view primitive_hemisphere_keybinding_context() {
+  return "viewportFocus && !textInputActive && !navigation.active && "
+         "activeTool.create_primitive && primitiveCreation.sphere";
+}
+
+bool is_primitive_caps_conflicting_tool(std::string_view command_id) {
+  // Knife owns default C; Cut may have an existing user override on C.
+  return command_id == quader_command::kToolsActivateKnife.string() ||
+         command_id == quader_command::kToolsActivateCut.string();
+}
+
+bool is_modeling_face_flip_command(std::string_view command_id) {
+  // All resolver aliases share the same Settings action. Their combined
+  // context must remain disjoint from the primitive tool's flip action.
+  return command_id == quader_command::kModelingInvertMesh.string() ||
+         command_id == quader_command::kModelingInvertFaces.string() ||
+         command_id == quader_command::kModelingFlipFaceNormals.string();
+}
+
 constexpr std::string_view unobstructed_viewport_keybinding_context() {
   return "viewportFocus && !textInputActive && !navigation.active && "
          "!modalTool.active && !activeTool.ownsViewport && "
@@ -289,6 +320,9 @@ bool command_semantically_requires_viewport(std::string_view command_id) {
   return command_id.starts_with("modeling.") ||
          command_id.starts_with("select.") ||
          command_id.starts_with("viewport.") ||
+         command_id == quader_command::kToolsFlipPrimitiveFaces.string() ||
+         command_id == quader_command::kToolsTogglePrimitiveCaps.string() ||
+         command_id == quader_command::kToolsTogglePrimitiveHemisphere.string() ||
          command_id == quader_command::kEditClearSelection.string() ||
          command_id == quader_command::kDeleteSelection.string() ||
          command_id == quader_command::kCutSelection.string() ||
@@ -305,6 +339,27 @@ bool command_semantically_requires_viewport(std::string_view command_id) {
 
 std::string_view
 default_keybinding_context_for_command(std::string_view command_id) {
+  if (command_id == quader_command::kToolsFlipPrimitiveFaces.string()) {
+    return primitive_flip_keybinding_context();
+  }
+  if (command_id == quader_command::kToolsTogglePrimitiveCaps.string()) {
+    return primitive_caps_keybinding_context();
+  }
+  if (command_id == quader_command::kToolsTogglePrimitiveHemisphere.string()) {
+    return primitive_hemisphere_keybinding_context();
+  }
+  if (command_id == quader_command::kSceneHideSelection.string()) {
+    return "viewportFocus && !textInputActive && !navigation.active && "
+           "!primitiveCreation.sphere";
+  }
+  if (is_primitive_caps_conflicting_tool(command_id)) {
+    return "viewportFocus && !textInputActive && !navigation.active && "
+           "!primitiveCreation.cylinder && !primitiveCreation.cone";
+  }
+  if (is_modeling_face_flip_command(command_id)) {
+    return "viewportFocus && !textInputActive && !navigation.active && "
+           "!primitiveCreation.active";
+  }
   if (command_id == quader_command::kEditUndo.string()) {
     return undo_command_keybinding_context();
   }
@@ -403,7 +458,8 @@ QuaderKeybindingContext
 viewport_keybinding_context(const ViewportToolState &state,
                             bool viewport_focused, bool text_input_active,
                             QuaderViewportKeybindingContext input_context,
-                            bool can_undo, bool can_redo) {
+                            bool can_undo, bool can_redo,
+                            const QuaderToolsApi &tools) {
   QuaderKeybindingContext context;
   context.set("viewportFocus", viewport_focused);
   context.set("viewport.hovered", input_context.viewport_hovered);
@@ -426,6 +482,14 @@ viewport_keybinding_context(const ViewportToolState &state,
               input_context.curve_controls_editable);
   context.set("activeTool." + std::string(viewport_tool_id(state.active_tool)),
               true);
+  const std::string primitive_kind =
+      state.active_tool == ViewportToolId::CreatePrimitive
+          ? tools.active_primitive_type() : std::string{};
+  context.set("primitiveCreation.box", primitive_kind == "box");
+  context.set("primitiveCreation.cylinder", primitive_kind == "cylinder");
+  context.set("primitiveCreation.sphere", primitive_kind == "sphere");
+  context.set("primitiveCreation.cone", primitive_kind == "cone");
+  context.set("primitiveCreation.active", !primitive_kind.empty());
   context.set("selectionMode." +
                   std::string(viewport_selection_mode_id(state.selection_mode)),
               true);
@@ -1700,7 +1764,7 @@ bool QuaderCommandsApi::Impl::resolve_viewport_input_action(
 
   const QuaderKeybindingContext context = viewport_keybinding_context(
       state, viewport_focused, text_input_active, input_context,
-      api_.history().can_undo(), api_.history().can_redo());
+      api_.history().can_undo(), api_.history().can_redo(), tools_);
   const QuaderKeybindingDispatch dispatch =
       keybindings_.resolve_sequence(
           {chord}, context, [](std::string_view target_id) {
@@ -1736,7 +1800,7 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
 
   const QuaderKeybindingContext context = viewport_keybinding_context(
       state, viewport_focused, text_input_active, input_context,
-      api_.history().can_undo(), api_.history().can_redo());
+      api_.history().can_undo(), api_.history().can_redo(), tools_);
   const auto target_available = [this, &state](std::string_view target_id) {
     const bool registered = registry_.contains(target_id);
     if (registered && !registry_.enabled(target_id)) {
@@ -1813,7 +1877,7 @@ QuaderCommandsApi::Impl::resolve_immediate_global_command(
 
   const QuaderKeybindingContext context = viewport_keybinding_context(
       state, true, text_input_active, input_context,
-      api_.history().can_undo(), api_.history().can_redo());
+      api_.history().can_undo(), api_.history().can_redo(), tools_);
   const QuaderKeybindingDispatch dispatch = keybindings_.resolve_sequence(
       {chord}, context, [this](std::string_view target_id) {
         const QuaderKeybindingTargetMetadata *metadata =
@@ -2298,6 +2362,25 @@ void QuaderCommandsApi::Impl::register_commands() {
                    {}, [this] {
                      return tools_.has_active_primitive_creation();
                    });
+  register_command(quader_command::kToolsFlipPrimitiveFaces,
+                   "Flip Primitive Faces",
+                   [this] { return tools_.flip_primitive_faces(); }, "F",
+                   [this] {
+                     return !tools_.active_primitive_type().empty();
+                   });
+  register_command(quader_command::kToolsTogglePrimitiveCaps,
+                   "Toggle Primitive Caps",
+                   [this] { return tools_.toggle_primitive_caps(); }, "C",
+                   [this] {
+                     const std::string kind = tools_.active_primitive_type();
+                     return kind == "cylinder" || kind == "cone";
+                   });
+  register_command(quader_command::kToolsTogglePrimitiveHemisphere,
+                   "Toggle Primitive Hemisphere",
+                   [this] { return tools_.toggle_primitive_hemisphere(); }, "H",
+                   [this] {
+                     return tools_.active_primitive_type() == "sphere";
+                   });
   register_command(
       quader_command::kProjectNew, "New Project",
       [this] { return project_.new_project(); });
@@ -2746,6 +2829,27 @@ void QuaderCommandsApi::Impl::register_default_keybindings() {
       "Cancel Tool", "keybindings.action.tools.cancel.label",
       QuaderKeybindingContextKind::ModalTool,
       std::string(kPrimitiveToolContext), {}, "tools.cancel");
+  register_keybinding_target_metadata(
+      std::string(quader_command::kToolsFlipPrimitiveFaces.string()),
+      "Flip Primitive Faces",
+      stable_keybinding_localization_key(
+          quader_command::kToolsFlipPrimitiveFaces.string()),
+      QuaderKeybindingContextKind::ModalTool,
+      std::string(primitive_flip_keybinding_context()));
+  register_keybinding_target_metadata(
+      std::string(quader_command::kToolsTogglePrimitiveCaps.string()),
+      "Toggle Primitive Caps",
+      stable_keybinding_localization_key(
+          quader_command::kToolsTogglePrimitiveCaps.string()),
+      QuaderKeybindingContextKind::ModalTool,
+      std::string(primitive_caps_keybinding_context()));
+  register_keybinding_target_metadata(
+      std::string(quader_command::kToolsTogglePrimitiveHemisphere.string()),
+      "Toggle Primitive Hemisphere",
+      stable_keybinding_localization_key(
+          quader_command::kToolsTogglePrimitiveHemisphere.string()),
+      QuaderKeybindingContextKind::ModalTool,
+      std::string(primitive_hemisphere_keybinding_context()));
 
   for (const QuaderKeybindingTargetMetadata &metadata :
        keybinding_target_catalog_.entries()) {
@@ -2982,7 +3086,12 @@ void QuaderCommandsApi::Impl::set_keybinding_action_id(
 void QuaderCommandsApi::Impl::set_keybinding_selection_modes(
     std::string_view target_id, std::uint32_t mode_mask) {
   keybinding_target_catalog_.set_selection_modes(
-      target_id, mode_mask, viewport_command_keybinding_context());
+      target_id, mode_mask,
+      (is_modeling_face_flip_command(target_id) ||
+       is_primitive_caps_conflicting_tool(target_id) ||
+       target_id == quader_command::kSceneHideSelection.string())
+          ? default_keybinding_context_for_command(target_id)
+          : viewport_command_keybinding_context());
 }
 
 void QuaderCommandsApi::Impl::set_keybinding_selection_modes_for_modeling_action(

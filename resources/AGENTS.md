@@ -17,7 +17,8 @@ presentation and rendering integration.
 - User-facing UI text belongs in `resources/locales/*.lang`.
 - Qt starts from Fusion; explicitly requested styling can change fonts, palettes, stylesheets, and
   icons. Keep assets scoped and verify their readable, focused, selected, and disabled states.
-- Resource changes need both canonical app builds: tests alone do not refresh deployed files.
+- Runtime resource changes need the app build selected by root handoff policy (Release by default,
+  Debug/Profile only when explicitly requested); tests alone do not refresh deployed files.
   If runtime differs from source, inspect the selected executable's resource directory. Some
   resources, including the dimension font, are embedded through Qt rather than copied loose.
 - Keep logos, renderer-owned icons, textures, and material assets license-backed. Do not add

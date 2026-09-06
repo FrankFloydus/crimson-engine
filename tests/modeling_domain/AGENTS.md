@@ -38,5 +38,6 @@ This subtree covers geometry, polygon, runtime modeling, tools, metadata, and QD
   use `qdr_modeling_runtime_operation_command_tests.cpp` and
   `QdrModelingRuntimeOperationCommandTests.*`; add
   `quader_modeling_domain_metadata_loop_tests` and SDK suites when descriptors can change.
-- New operation test: build the relevant loop target and run the new suite filter before
-  `quader_modeling_domain_tests`.
+- New operation test: include its suite in the selected loop or aggregate run and build that
+  target once. A `quader_modeling_domain_tests` run that includes it satisfies this coverage;
+  do not require a duplicate loop run. Follow root [verification policy](../../AGENTS.md).

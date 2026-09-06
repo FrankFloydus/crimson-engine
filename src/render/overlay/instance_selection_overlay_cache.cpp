@@ -185,6 +185,9 @@ InstanceSelectionOccurrencePreparation prepare_selection_occurrences(
   }
   for (const RenderOverlayInstanceSelectionWireRecord &record :
        snapshot.instance_selection_wires) {
+    if (snapshot.selected_mesh_outline_only) {
+      continue;
+    }
     const RenderInstancePrimitiveKey key = wire_key(record);
     prepared.wire_record_by_key.try_emplace(key, &record);
     if (record.geometry_content_id.value == 0u || record.vertices.empty() ||
@@ -443,6 +446,7 @@ bool InstanceSelectionOverlayCache::sync(
       render_source_dependencies_match(
           synced_source_stamp_, snapshot,
           kRenderOverlayInstanceSelectionCacheNoWorkDependencies) &&
+      synced_selected_mesh_outline_only_ == snapshot.selected_mesh_outline_only &&
       !wire_style_changed && !raster_groups_changed && !clip_changed) {
     return false;
   }
@@ -476,6 +480,7 @@ bool InstanceSelectionOverlayCache::sync(
     synced_source_stamp_ = snapshot;
     synced_wire_style_signature_ = snapshot.style.wire_signature;
     synced_raster_groups_ = raster_groups;
+    synced_selected_mesh_outline_only_ = snapshot.selected_mesh_outline_only;
     has_synced_ = true;
     return raster_groups_changed || line_width_updated || clip_changed ||
            local_visibility_changed;
@@ -494,6 +499,7 @@ bool InstanceSelectionOverlayCache::sync(
     synced_source_stamp_ = snapshot;
     synced_wire_style_signature_ = snapshot.style.wire_signature;
     synced_raster_groups_ = raster_groups;
+    synced_selected_mesh_outline_only_ = snapshot.selected_mesh_outline_only;
     has_synced_ = true;
     return true;
   }
@@ -570,6 +576,7 @@ bool InstanceSelectionOverlayCache::rebuild(
   synced_source_stamp_ = snapshot;
   synced_wire_style_signature_ = snapshot.style.wire_signature;
   synced_raster_groups_ = raster_groups;
+  synced_selected_mesh_outline_only_ = snapshot.selected_mesh_outline_only;
   has_synced_ = true;
   ++stats_.rebuild_count;
   stats_.fill_chunk_count = fill_proxies_.size();

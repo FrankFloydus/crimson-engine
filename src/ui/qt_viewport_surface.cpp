@@ -49,6 +49,19 @@ ViewportModifiers viewport_modifiers(Qt::KeyboardModifiers modifiers) {
   };
 }
 
+ViewportModifiers viewport_modifiers(const QKeyEvent &event) {
+  Qt::KeyboardModifiers modifiers = event.modifiers();
+  const bool pressed = event.type() == QEvent::KeyPress;
+  switch (event.key()) {
+  case Qt::Key_Control: modifiers.setFlag(Qt::ControlModifier, pressed); break;
+  case Qt::Key_Meta: modifiers.setFlag(Qt::MetaModifier, pressed); break;
+  case Qt::Key_Shift: modifiers.setFlag(Qt::ShiftModifier, pressed); break;
+  case Qt::Key_Alt: modifiers.setFlag(Qt::AltModifier, pressed); break;
+  default: break;
+  }
+  return viewport_modifiers(modifiers);
+}
+
 bool is_native_window_close_shortcut(const QKeyEvent &event) {
   return event.key() == Qt::Key_F4 &&
          event.modifiers().testFlag(Qt::AltModifier);
@@ -135,6 +148,7 @@ struct QtViewportSurface::InputAccumulator {
   std::uint64_t mouse_move_events = 0u;
   std::uint64_t pointer_event_sequence = 0u;
   ViewportModifiers modifiers = {};
+  bool has_event_modifiers = false;
   std::vector<QuaderInputChord> pressed;
   std::vector<QuaderInputChord> released;
   std::vector<ViewportPointerButtonEdge> pointer_pressed_edges;
@@ -325,8 +339,15 @@ QtViewportSurface::take_input_frame(float delta_seconds,
     return frame;
   }
 
-  input_->modifiers =
-      viewport_modifiers(QGuiApplication::keyboardModifiers());
+  // Exposed native surfaces need the current held state even when the key
+  // event went to another widget. Hidden/synthetic hosts retain their last
+  // explicit snapshot rather than replacing a held key on every idle frame.
+  if (isExposed() || !input_->has_event_modifiers) {
+    input_->modifiers = viewport_modifiers(isExposed()
+        ? QGuiApplication::queryKeyboardModifiers()
+        : QGuiApplication::keyboardModifiers());
+    input_->has_event_modifiers = true;
+  }
   frame.input.viewport_hovered = input_->hovered || route_active_navigation;
   frame.input.viewport_focused = input_->focused || route_active_navigation;
   frame.input.pointer_interaction_canceled = input_->pointer_interaction_canceled;
@@ -443,6 +464,7 @@ void QtViewportSurface::abandon_input() {
   replacement.mouse_local = input_->mouse_local;
   replacement.has_mouse_position = input_->has_mouse_position;
   replacement.modifiers = input_->modifiers;
+  replacement.has_event_modifiers = input_->has_event_modifiers;
   replacement.abandoned_key_releases =
       std::move(abandoned_key_releases);
   replacement.abandoned_pointer_releases =
@@ -626,8 +648,10 @@ bool QtViewportSurface::event(QEvent *event) {
     };
     input_->has_mouse_position = true;
     input_->hovered = true;
-    input_->modifiers =
-        viewport_modifiers(QGuiApplication::keyboardModifiers());
+    if (!input_->has_event_modifiers) {
+      input_->modifiers = viewport_modifiers(QGuiApplication::keyboardModifiers());
+      input_->has_event_modifiers = true;
+    }
     if (focus_request_callback_) {
       focus_request_callback_(pane_id_, ViewportPaneFocusTrigger::Hover);
     }
@@ -781,6 +805,8 @@ void QtViewportSurface::record_focus_in() {
 
 void QtViewportSurface::record_focus_out() {
   input_->focused = false;
+  input_->modifiers = {};
+  input_->has_event_modifiers = true;
   input_->wheel_accumulator = {};
   input_->pointer_interaction_canceled =
       input_->pointer_interaction_canceled || input_->left_down ||
@@ -826,13 +852,15 @@ void QtViewportSurface::record_key_press(QKeyEvent &event) {
   if (event.isAutoRepeat()) {
     return;
   }
+  // Modifier-only keys have no command chord, but still change live tool UI.
+  input_->modifiers = viewport_modifiers(event);
+  input_->has_event_modifiers = true;
   const std::optional<QuaderInputChord> chord =
       quader_pressed_input_chord_from_qt_event(event);
   if (!chord.has_value()) {
     return;
   }
   input_->abandoned_key_releases.erase(event.key());
-  input_->modifiers = viewport_modifiers(event.modifiers());
   input_->pressed.push_back(*chord);
   input_->active_keys.insert_or_assign(event.key(), *chord);
 }
@@ -841,7 +869,8 @@ void QtViewportSurface::record_key_release(QKeyEvent &event) {
   if (event.isAutoRepeat()) {
     return;
   }
-  input_->modifiers = viewport_modifiers(event.modifiers());
+  input_->modifiers = viewport_modifiers(event);
+  input_->has_event_modifiers = true;
   if (input_->abandoned_key_releases.erase(event.key()) > 0u) {
     return;
   }
@@ -860,6 +889,7 @@ void QtViewportSurface::record_key_release(QKeyEvent &event) {
 
 void QtViewportSurface::record_mouse_press(QMouseEvent &event,
                                            bool double_click) {
+  input_->has_event_modifiers = true;
   record_mouse_move(event);
   input_->hovered = true;
   input_->focused = true;
@@ -875,6 +905,7 @@ void QtViewportSurface::record_mouse_press(QMouseEvent &event,
       .button = *button,
       .local = input_->mouse_local,
       .sequence = ++input_->pointer_event_sequence,
+      .modifiers = input_->modifiers,
   });
 
   if (double_click) {
@@ -936,6 +967,7 @@ void QtViewportSurface::record_mouse_press(QMouseEvent &event,
 }
 
 void QtViewportSurface::record_mouse_release(QMouseEvent &event) {
+  input_->has_event_modifiers = true;
   record_mouse_move(event);
   input_->modifiers = viewport_modifiers(event.modifiers());
   const std::optional<QuaderMouseButton> button =
@@ -951,6 +983,7 @@ void QtViewportSurface::record_mouse_release(QMouseEvent &event) {
       .button = *button,
       .local = input_->mouse_local,
       .sequence = ++input_->pointer_event_sequence,
+      .modifiers = input_->modifiers,
   });
   const auto click =
       input_->click_candidates.find(static_cast<int>(*button));
@@ -987,6 +1020,7 @@ void QtViewportSurface::record_mouse_release(QMouseEvent &event) {
 }
 
 void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
+  input_->has_event_modifiers = true;
   if (viewport_surface_diagnostics_enabled()) {
     ++input_->mouse_move_events;
   }
@@ -1049,6 +1083,7 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
         input_->pointer_drag_started_edges.push_back({
             .button = static_cast<QuaderMouseButton>(button),
             .local = local,
+            .modifiers = viewport_modifiers(event.modifiers()),
         });
       }
     }
@@ -1175,6 +1210,7 @@ void QtViewportSurface::recenter_captured_pointer() {
 }
 
 void QtViewportSurface::record_wheel(QWheelEvent &event) {
+  input_->has_event_modifiers = true;
   const qreal scale = devicePixelRatio();
   input_->mouse_local = {
       static_cast<float>(event.position().x() * scale),

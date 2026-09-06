@@ -51,6 +51,8 @@ struct ViewportOverlayStyleContext {
   ViewportOverlayProjection projection = ViewportOverlayProjection::Perspective;
   /** Combined app interface scale and destination native-surface DPR. */
   float raster_scale = 1.0f;
+  /// Live construction uses faint topology and no selection/hover face tint.
+  int construction_object_id = -1;
   std::vector<ViewportOverlayStyleOverride> overrides;
 };
 

@@ -360,6 +360,12 @@ inline constexpr QuaderCommandId kToolsApplyPrimitiveCreation{
     "tools.primitive.apply"};
 inline constexpr QuaderCommandId kToolsCancelPrimitiveCreation{
     "tools.primitive.cancel"};
+inline constexpr QuaderCommandId kToolsFlipPrimitiveFaces{
+    "tools.primitive.flip_faces"};
+inline constexpr QuaderCommandId kToolsTogglePrimitiveCaps{
+    "tools.primitive.toggle_caps"};
+inline constexpr QuaderCommandId kToolsTogglePrimitiveHemisphere{
+    "tools.primitive.toggle_hemisphere"};
 
 inline constexpr QuaderCommandId kToolsActivateSelect{"tools.activate.select"};
 inline constexpr QuaderCommandId kToolsActivateMove{"tools.activate.move"};
@@ -573,6 +579,9 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kModelingCancelActivePreview,
     kToolsApplyPrimitiveCreation,
     kToolsCancelPrimitiveCreation,
+    kToolsFlipPrimitiveFaces,
+    kToolsTogglePrimitiveCaps,
+    kToolsTogglePrimitiveHemisphere,
     kToolsActivateSelect,
     kToolsActivateMove,
     kToolsActivateRotate,

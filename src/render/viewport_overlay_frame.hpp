@@ -111,6 +111,7 @@ enum class ViewportOverlaySource {
     ComponentHover,
     External,
     SceneCurve,
+    MeshOutline,
 };
 
 /**

@@ -181,12 +181,68 @@ Tests: [SDK consumers](tests/sdk/modeling_sdk_consumer_tests.cpp),
 - Construction starts at zero extent; zero/one-span footprints cannot commit. Natural primitive
   placement accepts ground-parallel surfaces and otherwise uses the world ground plane. An explicit
   host-resolved miss must not trigger raw-runtime repicking of hidden/untransformed geometry.
+- The newest live Box exposes six face-center resize dots and three outer-edge subdivision
+  buttons. Resizing changes local bounds while retaining the entity transform; every subsequent
+  parametric rebuild retains that offset. Pointer cancellation restores only the resize bounds,
+  and local Undo cancels an unfinished resize before undoing a shape. Flip Faces during footprint
+  drawing affects the pending shape, never the previously accepted one. Drawing and hit testing
+  share the revision-gated primitive-control projection. Ctrl changes the subdivision buttons to
+  decrement controls (minimum one segment); the accepted press freezes the direction and active
+  glyph even if modifiers change before release. Modifier-only frames do not reproject or rebuild
+  geometry. Primitive settings persist between shapes in one session and reset to defaults when
+  that session ends, without changing the accepted geometry or its history snapshots.
+- Cylinder uses the same creation interaction, with top/bottom dots, one camera-facing radial
+  dot and one upper-rim segment button (3–128 sides). Radial drags scale both footprint radii about
+  their center from an immutable baseline, retaining ellipse proportions. Cylinder F/C change
+  Flip Faces/caps for the live shape or only the pending shape during footprint drawing; neither
+  command retires a held resize. Cone uses the same ends/radius controls with its radius on the base.
+- Sphere adds radial/ring buttons and a contextual H hemisphere toggle; Torus adds outer/hole
+  boundary dots, a bottom-anchored height dot, and major/minor segment buttons. Torus outer drags
+  retain the hole, inner drags retain the outside, and both retain XZ ellipse proportions. Its
+  resize baseline includes tube ratio as well as bounds: cancellation/Undo must restore both.
+  All five shapes share bounds publication, pending-setting isolation, and session reset. Hover
+  labels and highlighted loops use the shared projected controls and interaction revisions; the
+  native label must remain transparent to viewport pointer hit testing.
+- Footprint acceptance derives Sphere height from the smaller footprint diameter (half for a
+  hemisphere), and Torus height from that diameter times its tube ratio. Explicit volume acceptance
+  retains authored height. Both paths share publication/history; later resizing keeps user bounds.
+- Wheel over a segment button consumes navigation, including fractional packets and limit no-ops.
+  Resolve command sequences first, then hit-test each packet at its event position. Direction changes
+  clear fractional accumulation. Ctrl presentation updates without hover; accepted clicks retain
+  their press-time sign. Test the stationary Qt sampler as well as the tool interaction.
+- Live topology uses thin, roughly 10%-opacity wires without selection or hover face tint.
+  Modeling's object-selection frame still emits mesh edges when
+  `suppress_persistent_object_selection` is true (it suppresses fills).
+  Disabling the separate scene wire cache alone cannot hide or fade those edges. The overlay
+  style context targets the live object in both retained selection and volatile hover streams;
+  its identity participates in style invalidation. Disable the separate selected-object fill
+  cache during creation and remove targeted hover/selection triangles, including their depth masks.
+  Guide loops use `ToolPreviewLine`, below the `ToolHandle` triangles, so neither guides nor mesh
+  edges can paint over the dots and +/- glyphs.
 
 Owner: [PrimitiveCreationToolService](src/editor/modeling/services/primitive_creation_tool_service.cpp).
-Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp).
+Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
+[cube interaction](tests/primitive_cube_interaction_tests.cpp),
+[cube overlays](tests/primitive_cube_overlay_tests.cpp),
+[wire presentation](tests/viewport_overlay_submission_coordinator_tests.cpp).
 
 ## Component picking and sticky selection
 
+- Native Object/Group selection uses a depth-tested camera silhouette in place of the semantic
+  full-mesh wire used by modeling/tool consumers. Object selection retains its face fill;
+  submission removes internal selection edges.
+  Persistent scene and instance wire backends also honor `selected_mesh_outline_only`. Live primitive
+  creation retains its faint topology, and component modes retain their editing wires. The shared
+  [outline cache](src/render/overlay/selected_mesh_outline_cache.cpp) welds compiled corner splits,
+  retains adjacency across camera movement and instances, and only republishes changed contours.
+  Contour candidates are clipped against the combined projected coverage of selected triangles,
+  using a bounds BVH. Per-mesh front/back edges alone leave interior contours on intersecting meshes
+  and concave/disconnected payloads; depth bias cannot repair that. Perspective clipping restores
+  world endpoints with perspective-correct interpolation. Holes in the combined silhouette remain.
+  Selected groups feed their hierarchy mesh snapshots into the same cache, deduplicating nested
+  selections; inherited selection also suppresses native facet wires. Group bounds remain visible.
+  Coverage: [outline projection](tests/selected_mesh_outline_cache_tests.cpp) and
+  [native wire policy](tests/selected_mesh_outline_presentation_tests.cpp).
 - An empty spatial hover sample differs from explicit lifecycle clear. Component misses and leaving
   the viewport retain the last candidate mesh wire; meshes with selected components remain sticky
   independently. Object-mode hover emits no mesh outline and never changes click-owned selection.

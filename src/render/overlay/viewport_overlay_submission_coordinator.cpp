@@ -7,12 +7,37 @@
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 
 #include "diagnostics/profile.hpp"
+#include "render/render_signature_builder.hpp"
 #include "viewport/viewport_settings.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace quader {
 namespace {
+
+bool uses_mesh_outlines(const ViewportOverlaySubmissionRequest &request) {
+  return request.overlays_visible &&
+         (request.scene_selection_mode == RenderOverlaySelectionMode::Object ||
+          request.scene_selection_mode == RenderOverlaySelectionMode::Group) &&
+         request.construction_object_id < 0 && request.selected_mesh_outline_snapshot != nullptr;
+}
+
+void strip_mesh_selection_wires(ViewportOverlayFrame &frame) {
+  std::erase_if(frame.lines, [](const ViewportOverlayLine &line) {
+    if (line.source == ViewportOverlaySource::HierarchySelection) return true;
+    if (line.element.object_id < 0 ||
+        (line.source != ViewportOverlaySource::Selection &&
+         line.source != ViewportOverlaySource::ComponentSelection)) return false;
+    const auto role = line.style_role;
+    return role == ViewportOverlayStyleRole::SelectionWire ||
+           role == ViewportOverlayStyleRole::SelectedSourceWire ||
+           role == ViewportOverlayStyleRole::SourceWire ||
+           (role == ViewportOverlayStyleRole::LayerDefault &&
+            (line.layer == ViewportOverlayLayer::SourceWire ||
+             line.layer == ViewportOverlayLayer::SelectedEdge));
+  });
+}
 
 void append_overlay_frame(ViewportOverlayFrame &target,
                           const ViewportOverlayFrame &source) {
@@ -88,6 +113,7 @@ ViewportOverlayFrame build_persistent_frame(
             .selection_mode = request.selection_source.selection_context,
             .projection = request.camera.projection,
             .raster_scale = request.raster_scale,
+            .construction_object_id = request.construction_object_id,
         });
   }
 
@@ -114,8 +140,10 @@ ViewportOverlayFrame build_persistent_frame(
           .selection_mode = request.style_selection_context,
           .projection = request.camera.projection,
           .raster_scale = request.raster_scale,
+          .construction_object_id = request.construction_object_id,
       },
       scene_style_range);
+  if (uses_mesh_outlines(request)) strip_mesh_selection_wires(frame);
   return frame;
 }
 
@@ -139,8 +167,16 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
   request.raster_scale =
       viewport_overlay_sanitized_raster_scale(request.raster_scale);
   const std::uint64_t style_signature =
-      ViewportOverlayStyleResolver::style_signature(settings,
-                                                    request.raster_scale);
+      RenderSignatureBuilder(ViewportOverlayStyleResolver::style_signature(
+          settings, request.raster_scale))
+          .add_value(request.construction_object_id)
+          .add_bool(uses_mesh_outlines(request))
+          .value();
+  const ViewportOverlayFrame &mesh_outline = mesh_outline_source_.frame(
+      uses_mesh_outlines(request) ? request.selected_mesh_outline_snapshot : nullptr,
+      request.camera, request.viewport_index,
+      uses_mesh_outlines(request) && request.scene_overlay_requested
+          ? request.scene_overlay_snapshot : nullptr);
   const bool selection_overlay_visible =
       request.overlays_visible && request.selection_frame_provider != nullptr;
   if (selection_overlay_visible) {
@@ -174,6 +210,7 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
       .point_light_gizmos_visible = request.point_light_gizmos_visible,
   };
   const ViewportOverlayDynamicSubmissionStamp dynamic_stamp{
+      .mesh_outline_revision = mesh_outline_source_.revision(request.viewport_index),
       .dynamic_tools = request.dynamic_tool_source,
       .volatile_modeling =
           request.overlays_visible
@@ -271,6 +308,8 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
     // Copy broad semantic sources only after typed source stamps differ or the
     // backend reports a lost retained stream.
     ViewportOverlayFrame dynamic_frame = pane.dynamic_source_frame;
+    if (uses_mesh_outlines(request)) strip_mesh_selection_wires(dynamic_frame);
+    append_overlay_frame(dynamic_frame, mesh_outline);
     const ViewportOverlayFrame &curve_overlay_frame =
         curve_overlay_source_.frame(curve_preview);
     append_overlay_frame(dynamic_frame, curve_overlay_frame);
@@ -280,6 +319,7 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
             .selection_mode = request.style_selection_context,
             .projection = request.camera.projection,
             .raster_scale = request.raster_scale,
+            .construction_object_id = request.construction_object_id,
         });
     target.submit_dynamic_overlay(request.viewport_index, request.layer_mask,
                                   std::move(dynamic_frame), request.camera);
@@ -304,6 +344,7 @@ void ViewportOverlaySubmissionCoordinator::invalidate_all() {
   panes_ = {};
   selection_source_ = {};
   curve_overlay_source_.reset();
+  mesh_outline_source_.reset();
 }
 
 void ViewportOverlaySubmissionCoordinator::set_active_viewports(

@@ -22,6 +22,8 @@
 #include "math/glm_bridge.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_texture_mapping.hpp"
+#include "support/command_behavior_fixture.hpp"
+#include "support/command_observable_state.hpp"
 
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
 
@@ -59,6 +61,64 @@ struct CreationProjectionHarness {
   ModelingSdkProjectionAdapter projection{scene, assets, object_map,
                                            mesh_sync};
 };
+
+void set_nondefault_primitive_settings(QuaderToolsApi &tools) {
+  using Kind = PrimitiveCreationKind;
+  struct Setting {
+    Kind kind;
+    std::string_view name;
+    double value;
+  };
+  constexpr Setting kSettings[] = {
+      {Kind::Box, kBoxSubdivisionsXSetting, 2.0},
+      {Kind::Box, kBoxSubdivisionsYSetting, 3.0},
+      {Kind::Box, kBoxSubdivisionsZSetting, 4.0},
+      {Kind::Box, kPrimitiveFlipFacesSetting, 1.0},
+      {Kind::Cylinder, kCylinderSideCountSetting, 8.0},
+      {Kind::Cylinder, kCylinderCapsSetting, 0.0},
+      {Kind::Cylinder, kPrimitiveFlipFacesSetting, 1.0},
+      {Kind::Cone, kConeSideCountSetting, 8.0},
+      {Kind::Cone, kConeCapsSetting, 0.0},
+      {Kind::Cone, kPrimitiveFlipFacesSetting, 1.0},
+      {Kind::Sphere, kSphereRadialSegmentsSetting, 8.0},
+      {Kind::Sphere, kSphereRingsSetting, 4.0},
+      {Kind::Sphere, kSphereHemisphereSetting, 1.0},
+      {Kind::Sphere, kPrimitiveFlipFacesSetting, 1.0},
+      {Kind::Torus, kTorusMajorSegmentsSetting, 8.0},
+      {Kind::Torus, kTorusMinorSegmentsSetting, 4.0},
+      {Kind::Torus, kTorusTubeRadiusRatioSetting, 0.3},
+      {Kind::Torus, kPrimitiveFlipFacesSetting, 1.0},
+  };
+  for (const Setting &setting : kSettings) {
+    SCOPED_TRACE(setting.name);
+    ASSERT_TRUE(tools.set_setting(kCreatePrimitiveToolId,
+                                  kPrimitiveTypeSetting,
+                                  static_cast<double>(setting.kind)).ok());
+    ASSERT_TRUE(tools.set_setting(kCreatePrimitiveToolId, setting.name,
+                                  setting.value).ok());
+  }
+}
+
+void expect_default_primitive_settings(const PrimitiveCreationToolService &tool) {
+  EXPECT_EQ(tool.box_settings().subdivisions_x, 1);
+  EXPECT_EQ(tool.box_settings().subdivisions_y, 1);
+  EXPECT_EQ(tool.box_settings().subdivisions_z, 1);
+  EXPECT_FALSE(tool.box_settings().flip_faces);
+  EXPECT_EQ(tool.cylinder_settings().side_count, 32);
+  EXPECT_TRUE(tool.cylinder_settings().caps);
+  EXPECT_FALSE(tool.cylinder_settings().flip_faces);
+  EXPECT_EQ(tool.cone_settings().side_count, 32);
+  EXPECT_TRUE(tool.cone_settings().caps);
+  EXPECT_FALSE(tool.cone_settings().flip_faces);
+  EXPECT_EQ(tool.sphere_settings().radial_segments, 32);
+  EXPECT_EQ(tool.sphere_settings().rings, 16);
+  EXPECT_FALSE(tool.sphere_settings().hemisphere);
+  EXPECT_FALSE(tool.sphere_settings().flip_faces);
+  EXPECT_EQ(tool.torus_settings().major_segments, 32);
+  EXPECT_EQ(tool.torus_settings().minor_segments, 12);
+  EXPECT_DOUBLE_EQ(tool.torus_settings().tube_radius_ratio, 0.2);
+  EXPECT_FALSE(tool.torus_settings().flip_faces);
+}
 
 std::array<QVec3, 8> oriented_box_corners(QVec3 center, QVec3 x_axis,
                                           QVec3 y_axis, float width,
@@ -578,6 +638,16 @@ TEST(PrimitiveCreationToolServiceTests,
         object->entity, occurrence);
     ASSERT_TRUE(world.has_value());
     EXPECT_TRUE(near_point(transform_point(*world, {}), centers[index]));
+    const auto live_cube = editor.tools().live_primitive_cube();
+    ASSERT_TRUE(live_cube.has_value());
+    EXPECT_EQ(live_cube->object_id, object->modeling_object_id);
+    EXPECT_TRUE(near_point(live_cube->world_origin, centers[index]));
+    EXPECT_TRUE(near_point(live_cube->world_x,
+                           transform_vector(*world, {1.0f, 0.0f, 0.0f})));
+    EXPECT_TRUE(near_point(live_cube->world_y,
+                           transform_vector(*world, {0.0f, 1.0f, 0.0f})));
+    EXPECT_TRUE(near_point(live_cube->world_z,
+                           transform_vector(*world, {0.0f, 0.0f, 1.0f})));
     const auto mesh = session.modeling().compile_object_mesh(object->modeling_object_id);
     ASSERT_TRUE(mesh.has_value());
     for (const QVec3 corner : preview.corners) {
@@ -1652,6 +1722,151 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
+     RepeatedCubesRetainSettingsUntilFinalizeThenReactivateWithDefaults) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  ASSERT_NO_FATAL_FAILURE(set_nondefault_primitive_settings(editor.tools()));
+  ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId,
+                                        kPrimitiveTypeSetting, 0.0).ok());
+  // A rejected Finalize leaves the ongoing session and its settings intact.
+  EXPECT_FALSE(editor.tools().commit_active_tool_preview().ok());
+  ASSERT_TRUE(session.primitive_creation().active());
+  EXPECT_TRUE(session.primitive_creation().box_settings().flip_faces);
+  ASSERT_TRUE(session.primitive_creation().accept_preview(
+      valid_primitive_preview(), "First Custom Cube").ok);
+  const std::uint64_t first_content =
+      compiled_content_id(session.modeling(), "First Custom Cube");
+  ASSERT_TRUE(session.primitive_creation().accept_preview(
+      valid_primitive_preview(4.0f), "Second Custom Cube").ok);
+  const auto cube = editor.tools().live_primitive_cube();
+  ASSERT_TRUE(cube.has_value());
+  EXPECT_EQ(cube->subdivisions, (std::array<int, 3>{2, 3, 4}));
+  EXPECT_TRUE(cube->flip_faces);
+  EXPECT_EQ(compiled_index_count(session.modeling(), "First Custom Cube"),
+            312U);
+  EXPECT_EQ(compiled_index_count(session.modeling(), "Second Custom Cube"),
+            312U);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "First Custom Cube"),
+            first_content);
+  const std::uint64_t second_content =
+      compiled_content_id(session.modeling(), "Second Custom Cube");
+  const std::uint64_t settings_revision =
+      session.primitive_creation().tool_settings_revision();
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_FALSE(session.primitive_creation().active());
+  expect_default_primitive_settings(session.primitive_creation());
+  EXPECT_GT(session.primitive_creation().tool_settings_revision(),
+            settings_revision);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "First Custom Cube"),
+            first_content);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "Second Custom Cube"),
+            second_content);
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_EQ(session.modeling().objects().size(), 1U);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "First Custom Cube"),
+            first_content);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(session.modeling().objects().empty());
+  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(compiled_content_id(session.modeling(), "First Custom Cube"),
+            first_content);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "Second Custom Cube"),
+            second_content);
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  EXPECT_EQ(session.primitive_creation().active_kind(),
+            PrimitiveCreationKind::Box);
+  expect_default_primitive_settings(session.primitive_creation());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(compiled_content_id(session.modeling(), "First Custom Cube"),
+            first_content);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "Second Custom Cube"),
+            second_content);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CancelAndToolSwitchResetAllSettingsForEmptyAndRepeatedShapeSessions) {
+  for (const bool accept_shapes : {false, true}) {
+    for (const bool switch_tool : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "accept_shapes=" << accept_shapes
+                                       << ";switch_tool=" << switch_tool);
+      SceneSession session;
+      QuaderEditorApi editor(
+          QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+      ASSERT_NO_FATAL_FAILURE(set_nondefault_primitive_settings(editor.tools()));
+      if (accept_shapes) {
+        ASSERT_TRUE(session.primitive_creation().accept_preview(
+            valid_primitive_preview(), "First Custom Torus").ok);
+        ASSERT_TRUE(session.primitive_creation().accept_preview(
+            valid_primitive_preview(4.0f), "Second Custom Torus").ok);
+        EXPECT_EQ(compiled_index_count(session.modeling(), "First Custom Torus"),
+                  192U);
+        EXPECT_EQ(compiled_index_count(session.modeling(), "Second Custom Torus"),
+                  192U);
+        EXPECT_DOUBLE_EQ(session.primitive_creation().torus_settings()
+                             .tube_radius_ratio, 0.3);
+        EXPECT_TRUE(session.primitive_creation().torus_settings().flip_faces);
+      }
+      const std::uint64_t settings_revision =
+          session.primitive_creation().tool_settings_revision();
+      const QuaderApiVoidResult exited = switch_tool
+          ? editor.tools().activate(ViewportToolId::Select)
+          : editor.tools().cancel_active_tool_preview();
+      ASSERT_TRUE(exited.ok()) << exited.error_message();
+      EXPECT_FALSE(session.primitive_creation().active());
+      EXPECT_TRUE(session.modeling().objects().empty());
+      EXPECT_FALSE(editor.history().can_undo());
+      EXPECT_FALSE(editor.history().can_redo());
+      expect_default_primitive_settings(session.primitive_creation());
+      EXPECT_GT(session.primitive_creation().tool_settings_revision(),
+                settings_revision);
+      ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+      EXPECT_EQ(session.primitive_creation().active_kind(),
+                PrimitiveCreationKind::Box);
+      expect_default_primitive_settings(session.primitive_creation());
+      ASSERT_TRUE(session.primitive_creation().accept_preview(
+          valid_primitive_preview(), "Default Cube").ok);
+      const auto cube = editor.tools().live_primitive_cube();
+      ASSERT_TRUE(cube.has_value());
+      EXPECT_EQ(cube->subdivisions, (std::array<int, 3>{1, 1, 1}));
+      EXPECT_FALSE(cube->flip_faces);
+      EXPECT_EQ(compiled_index_count(session.modeling(), "Default Cube"), 36U);
+      EXPECT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    }
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     LivePublicationFailureResetsEveryPrimitiveSettingBeforeReactivation) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  ASSERT_NO_FATAL_FAILURE(set_nondefault_primitive_settings(editor.tools()));
+  ASSERT_TRUE(session.primitive_creation().accept_preview(
+      valid_primitive_preview(), "Custom Torus").ok);
+  session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::CommittedSceneNotify);
+  const QuaderApiVoidResult failed = editor.tools().set_setting(
+      kCreatePrimitiveToolId, kTorusTubeRadiusRatioSetting, 0.4);
+  EXPECT_FALSE(failed.ok());
+  EXPECT_FALSE(failed.error_message().empty());
+  EXPECT_FALSE(session.primitive_creation().active());
+  EXPECT_TRUE(session.modeling().objects().empty());
+  EXPECT_FALSE(editor.history().can_undo());
+  expect_default_primitive_settings(session.primitive_creation());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  EXPECT_EQ(session.primitive_creation().active_kind(),
+            PrimitiveCreationKind::Box);
+  expect_default_primitive_settings(session.primitive_creation());
+  EXPECT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+}
+
+TEST(PrimitiveCreationToolServiceTests,
      PerShapeFailureRollsBackAcceptedShapesAndExitsTheTool) {
   PrimitiveCreationHarness harness;
   ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Sphere).ok);
@@ -1680,6 +1895,15 @@ TEST(PrimitiveCreationToolServiceTests,
   EXPECT_FALSE(harness.history.can_undo());
   EXPECT_FALSE(harness.history.can_redo());
   EXPECT_EQ(harness.modeling.selection_summary().selected_object_count, 0U);
+  expect_default_primitive_settings(harness.tool);
+  ASSERT_TRUE(harness.tool.activate().ok);
+  EXPECT_EQ(harness.tool.active_kind(), PrimitiveCreationKind::Box);
+  expect_default_primitive_settings(harness.tool);
+  ASSERT_TRUE(harness.tool.accept_preview(valid_primitive_preview(),
+                                          "Default Box After Failure").ok);
+  EXPECT_EQ(compiled_index_count(harness.modeling, "Default Box After Failure"),
+            36U);
+  EXPECT_TRUE(harness.tool.cancel().ok);
 }
 
 TEST(PrimitiveCreationToolServiceTests,
@@ -1718,8 +1942,8 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_TRUE(harness.tool.cancel().ok);
   ASSERT_TRUE(harness.tool.activate().ok);
   ASSERT_TRUE(harness.tool.active_kind().has_value());
-  EXPECT_EQ(*harness.tool.active_kind(), PrimitiveCreationKind::Cylinder);
-  EXPECT_EQ(harness.tool.cylinder_settings().side_count, 8);
+  EXPECT_EQ(*harness.tool.active_kind(), PrimitiveCreationKind::Box);
+  expect_default_primitive_settings(harness.tool);
   EXPECT_TRUE(harness.tool.cancel().ok);
 }
 
@@ -1790,10 +2014,8 @@ TEST(PrimitiveCreationToolServiceTests,
 
   ASSERT_TRUE(harness.tool.activate().ok);
   ASSERT_TRUE(harness.tool.active_kind().has_value());
-  EXPECT_EQ(*harness.tool.active_kind(), PrimitiveCreationKind::Torus);
-  EXPECT_EQ(harness.tool.torus_settings().major_segments, 8);
-  EXPECT_EQ(harness.tool.torus_settings().minor_segments, 4);
-  EXPECT_DOUBLE_EQ(harness.tool.torus_settings().tube_radius_ratio, 0.3);
+  EXPECT_EQ(*harness.tool.active_kind(), PrimitiveCreationKind::Box);
+  expect_default_primitive_settings(harness.tool);
   EXPECT_TRUE(harness.tool.cancel().ok);
 }
 
@@ -2379,6 +2601,1748 @@ TEST(PrimitiveCreationToolServiceTests,
     EXPECT_NEAR(dragged.footprint[index].y, 0.0f, 0.0001f);
   }
   EXPECT_TRUE(harness.tool.cancel().ok);
+}
+
+// Cube creation controls are exercised through the same owner and public
+// facades used by the viewport; no native window or shared render state is needed.
+std::array<float, 3> cube_components(QVec3 value) {
+  return {value.x, value.y, value.z};
+}
+
+void expect_cube_mesh_bounds(const ModelingSessionService &modeling,
+                             int object_id, QVec3 minimum, QVec3 maximum) {
+  const auto mesh = modeling.compile_object_mesh(object_id);
+  ASSERT_TRUE(mesh.has_value());
+  ASSERT_FALSE(mesh->geometry().vertices.empty());
+  QVec3 actual_min = mesh->geometry().vertices.front().position;
+  QVec3 actual_max = actual_min;
+  for (const MeshVertex &vertex : mesh->geometry().vertices) {
+    actual_min = {std::min(actual_min.x, vertex.position.x),
+                  std::min(actual_min.y, vertex.position.y),
+                  std::min(actual_min.z, vertex.position.z)};
+    actual_max = {std::max(actual_max.x, vertex.position.x),
+                  std::max(actual_max.y, vertex.position.y),
+                  std::max(actual_max.z, vertex.position.z)};
+  }
+  EXPECT_EQ(cube_components(actual_min), cube_components(minimum));
+  EXPECT_EQ(cube_components(actual_max), cube_components(maximum));
+}
+
+double cube_signed_volume(const MeshAsset &mesh) {
+  const auto &geometry = mesh.geometry();
+  double volume = 0.0;
+  for (std::size_t index = 0; index + 2U < geometry.indices.size(); index += 3U) {
+    const QVec3 a = geometry.vertices[geometry.indices[index]].position;
+    const QVec3 b = geometry.vertices[geometry.indices[index + 1U]].position;
+    const QVec3 c = geometry.vertices[geometry.indices[index + 2U]].position;
+    volume += static_cast<double>(dot(a, cross(b, c))) / 6.0;
+  }
+  return volume;
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     PublicCubeResizeMovesEachFaceFromItsBaselineAndKeepsOppositeFaceFixed) {
+  const std::array axes{QuaderPrimitiveCubeAxis::X, QuaderPrimitiveCubeAxis::Y,
+                        QuaderPrimitiveCubeAxis::Z};
+  for (std::size_t axis = 0; axis < axes.size(); ++axis) {
+    for (const bool positive : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "axis=" << axis << ", positive=" << positive);
+      SceneSession session;
+      QuaderEditorApi editor(
+          QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+      ASSERT_TRUE(session.primitive_creation()
+                      .accept_preview(valid_primitive_preview(), "Resizable Box")
+                      .ok);
+      const auto before = editor.tools().live_primitive_cube();
+      ASSERT_TRUE(before.has_value());
+      ASSERT_TRUE(editor.tools().begin_primitive_cube_resize(axes[axis], positive).ok());
+      EXPECT_TRUE(editor.tools().live_primitive_cube()->resizing);
+      const double outward = positive ? 0.75 : -0.75;
+      ASSERT_TRUE(editor.tools().update_primitive_cube_resize(outward).ok());
+      auto expected_min = cube_components(before->local_min);
+      auto expected_max = cube_components(before->local_max);
+      (positive ? expected_max : expected_min)[axis] += static_cast<float>(outward);
+      const auto grown = editor.tools().live_primitive_cube();
+      ASSERT_TRUE(grown.has_value());
+      EXPECT_EQ(cube_components(grown->local_min), expected_min);
+      EXPECT_EQ(cube_components(grown->local_max), expected_max);
+      EXPECT_GT(grown->revision, before->revision);
+      expect_cube_mesh_bounds(session.modeling(), grown->object_id,
+                               grown->local_min, grown->local_max);
+
+      // An update is measured from the press, not accumulated from prior events.
+      const double inward = positive ? -0.25 : 0.25;
+      ASSERT_TRUE(editor.tools().update_primitive_cube_resize(inward).ok());
+      expected_min = cube_components(before->local_min);
+      expected_max = cube_components(before->local_max);
+      (positive ? expected_max : expected_min)[axis] += static_cast<float>(inward);
+      const auto shrunk = editor.tools().live_primitive_cube();
+      ASSERT_TRUE(shrunk.has_value());
+      EXPECT_EQ(cube_components(shrunk->local_min), expected_min);
+      EXPECT_EQ(cube_components(shrunk->local_max), expected_max);
+      ASSERT_TRUE(editor.tools().end_primitive_cube_resize().ok());
+      EXPECT_FALSE(editor.tools().live_primitive_cube()->resizing);
+      EXPECT_EQ(session.primitive_creation().shape_count(), 1U);
+      EXPECT_EQ(session.history().undo_count(), 0U);
+
+      // A subsequent drag starts at the last committed face, including -Y.
+      ASSERT_TRUE(editor.tools().begin_primitive_cube_resize(axes[axis], positive).ok());
+      ASSERT_TRUE(editor.tools().update_primitive_cube_resize(outward).ok());
+      const auto repeated = editor.tools().live_primitive_cube();
+      ASSERT_TRUE(repeated.has_value());
+      (positive ? expected_max : expected_min)[axis] += static_cast<float>(outward);
+      EXPECT_EQ(cube_components(repeated->local_min), expected_min);
+      EXPECT_EQ(cube_components(repeated->local_max), expected_max);
+      expect_cube_mesh_bounds(session.modeling(), repeated->object_id,
+                               repeated->local_min, repeated->local_max);
+      ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+      EXPECT_TRUE(session.modeling().objects().empty());
+    }
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CubeResizeClampsCrossingFacesRejectsNonfiniteAndSkipsUnchangedPublication) {
+  for (const PrimitiveCubeAxis axis : {PrimitiveCubeAxis::X, PrimitiveCubeAxis::Y,
+                                       PrimitiveCubeAxis::Z}) {
+    for (const bool positive : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "axis=" << static_cast<int>(axis)
+                                       << ", positive=" << positive);
+      PrimitiveCreationHarness harness;
+      ASSERT_TRUE(harness.tool.activate().ok);
+      ASSERT_TRUE(harness.tool.accept_preview(valid_primitive_preview(), "Clamp Box").ok);
+      ASSERT_TRUE(harness.tool.begin_cube_resize(axis, positive).ok);
+      const auto original = harness.tool.live_cube();
+      ASSERT_TRUE(original.has_value());
+      const auto source_before = harness.modeling.modeling_sdk_projection_stats_for_tests();
+      const auto content_before = harness.modeling.content_revision();
+      EXPECT_FALSE(harness.tool.update_cube_resize(0.0).changed);
+      EXPECT_FALSE(harness.tool.set_setting(kBoxSubdivisionsXSetting, 1.0).changed);
+      for (const double invalid : {std::numeric_limits<double>::quiet_NaN(),
+                                   std::numeric_limits<double>::infinity(),
+                                   -std::numeric_limits<double>::infinity()}) {
+        const auto rejected = harness.tool.update_cube_resize(invalid);
+        EXPECT_FALSE(rejected.ok);
+        EXPECT_FALSE(rejected.changed);
+      }
+      EXPECT_FALSE(harness.tool.begin_cube_resize(axis, !positive).ok);
+      EXPECT_EQ(harness.tool.live_cube()->revision, original->revision);
+      EXPECT_EQ(harness.modeling.content_revision(), content_before);
+      auto source_after = harness.modeling.modeling_sdk_projection_stats_for_tests();
+      EXPECT_EQ(source_after.mesh_compile_count, source_before.mesh_compile_count);
+      EXPECT_EQ(source_after.asset_publication_count, source_before.asset_publication_count);
+      EXPECT_EQ(source_after.scene_publication_count, source_before.scene_publication_count);
+
+      ASSERT_TRUE(harness.tool.update_cube_resize(positive ? -100.0 : 100.0).ok);
+      const auto clamped = harness.tool.live_cube();
+      ASSERT_TRUE(clamped.has_value());
+      const auto minimum = cube_components(clamped->local_min);
+      const auto maximum = cube_components(clamped->local_max);
+      const auto index = static_cast<std::size_t>(axis);
+      const double extent = static_cast<double>(maximum[index]) - minimum[index];
+      EXPECT_GE(extent, kPrimitiveCubeMinimumExtent);
+      EXPECT_LT(extent, 0.000101);
+      expect_cube_mesh_bounds(harness.modeling, clamped->modeling_object_id,
+                               clamped->local_min, clamped->local_max);
+      const auto clamped_source = harness.modeling.modeling_sdk_projection_stats_for_tests();
+      const auto unchanged = harness.tool.update_cube_resize(positive ? -200.0 : 200.0);
+      EXPECT_TRUE(unchanged.ok);
+      EXPECT_FALSE(unchanged.changed);
+      EXPECT_EQ(harness.tool.live_cube()->revision, clamped->revision);
+      source_after = harness.modeling.modeling_sdk_projection_stats_for_tests();
+      EXPECT_EQ(source_after.mesh_compile_count, clamped_source.mesh_compile_count);
+      EXPECT_EQ(source_after.asset_publication_count, clamped_source.asset_publication_count);
+      ASSERT_TRUE(harness.tool.cancel_cube_resize().ok);
+      expect_cube_mesh_bounds(harness.modeling, original->modeling_object_id,
+                               original->local_min, original->local_max);
+      EXPECT_FALSE(harness.tool.cancel_cube_resize().changed);
+      EXPECT_FALSE(harness.tool.end_cube_resize().changed);
+      EXPECT_FALSE(harness.tool.update_cube_resize(1.0).ok);
+      ASSERT_TRUE(harness.tool.cancel().ok);
+    }
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CubeDescriptorUsesAuthoritativeTransformAndResizePreservesMaterialAndTextureFrame) {
+  for (const bool texture_lock : {false, true}) {
+    SCOPED_TRACE(texture_lock);
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    editor.preferences().set_runtime_hooks(QuaderPreferencesRuntimeHooks{
+        .texture_lock_enabled = [texture_lock] { return texture_lock; },
+    });
+    const AssetId material = session.assets().add_material(make_default_quader_material("Cube Material"));
+    ASSERT_NE(material, kInvalidAssetId);
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+    ASSERT_TRUE(session.primitive_creation()
+                    .accept_preview(oriented_primitive_preview(
+                                        {4.0f, 2.0f, -3.0f}, {0.0f, 0.0f, -1.0f},
+                                        {0.0f, 1.0f, 0.0f}, 4.0f, 2.0f, 6.0f),
+                                    "Placed Box", MaterialReference(material))
+                    .ok);
+    const auto before = editor.tools().live_primitive_cube();
+    ASSERT_TRUE(before.has_value());
+    const EntityId entity = *session.modeling().entity_for_modeling_object(before->object_id);
+    const TransformComponent transform{
+        .position = {7.0f, 3.0f, -2.0f},
+        .rotation_euler = {0.2f, 0.7f, -0.1f},
+        .scale = {2.0f, 0.5f, 3.0f},
+    };
+    ASSERT_TRUE(session.scene().set_transform(entity, transform));
+    const QMat4 world = session.scene().world_transform_matrix(entity);
+    const auto placed = editor.tools().live_primitive_cube();
+    ASSERT_TRUE(placed.has_value());
+    EXPECT_GT(placed->revision, before->revision);
+    EXPECT_EQ(placed->revision, editor.tools().live_primitive_cube()->revision);
+    EXPECT_TRUE(near_point(placed->world_origin, transform.position));
+    EXPECT_TRUE(near_point(placed->world_x, transform_vector(world, {1.0f, 0.0f, 0.0f})));
+    EXPECT_TRUE(near_point(placed->world_y, transform_vector(world, {0.0f, 1.0f, 0.0f})));
+    EXPECT_TRUE(near_point(placed->world_z, transform_vector(world, {0.0f, 0.0f, 1.0f})));
+    const auto sampling = effective_texture_sampling_from_local(session.scene(), entity);
+    ASSERT_TRUE(sampling.has_value());
+    const auto selected = session.scene().selected_entities();
+    ASSERT_NE(session.scene().material(entity), nullptr);
+    const auto material_before = *session.scene().material(entity);
+    ASSERT_TRUE(editor.tools().begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::Y, false).ok());
+    ASSERT_TRUE(editor.tools().update_primitive_cube_resize(-4.0).ok());
+    ASSERT_TRUE(editor.tools().end_primitive_cube_resize().ok());
+    for (const auto setting : {kBoxSubdivisionsXSetting, kBoxSubdivisionsYSetting,
+                               kBoxSubdivisionsZSetting}) {
+      ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, setting, 2.0).ok());
+    }
+    const auto resized = editor.tools().live_primitive_cube();
+    ASSERT_TRUE(resized.has_value());
+    EXPECT_EQ(resized->object_id, before->object_id);
+    EXPECT_FLOAT_EQ(resized->local_min.y, before->local_min.y - 4.0f);
+    EXPECT_EQ(resized->subdivisions, (std::array<int, 3>{2, 2, 2}));
+    EXPECT_EQ(session.scene().world_transform_matrix(entity).values, world.values);
+    EXPECT_EQ(session.scene().selected_entities(), selected);
+    ASSERT_NE(session.scene().material(entity), nullptr);
+    EXPECT_EQ(*session.scene().material(entity), material_before);
+    const auto sampling_after = effective_texture_sampling_from_local(session.scene(), entity);
+    ASSERT_TRUE(sampling_after.has_value());
+    EXPECT_EQ(sampling_after->values, sampling->values);
+    expect_cube_mesh_bounds(session.modeling(), resized->object_id,
+                             resized->local_min, resized->local_max);
+    const auto mesh = session.modeling().compile_object_mesh(resized->object_id);
+    ASSERT_TRUE(mesh.has_value());
+    // The retained sampling frame evaluates regenerated vertices with the same
+    // world/locked policy; no entity motion or fresh chart is introduced.
+    const auto expected_sampling = MeshProjectionService::texture_mapping_transform(*sampling);
+    std::vector<QVec2> expected_uvs;
+    for (const auto &vertex : mesh->geometry().vertices) {
+      expected_uvs.push_back(quader_poly::evaluate_texture_mapping(
+          vertex.uv, vertex.position, vertex.uv_geometric_normal,
+          vertex.uv_carrier, expected_sampling));
+    }
+    expect_texture_uvs_near(effective_texture_uvs(session.scene(), entity, *mesh), expected_uvs);
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     PublicCubeSubdivisionSettingsChangeOnlyTheirAxisAndRespectTheMaximum) {
+  const std::array settings{kBoxSubdivisionsXSetting, kBoxSubdivisionsYSetting,
+                            kBoxSubdivisionsZSetting};
+  for (std::size_t axis = 0; axis < settings.size(); ++axis) {
+    SCOPED_TRACE(axis);
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+    ASSERT_TRUE(session.primitive_creation()
+                    .accept_preview(valid_primitive_preview(), "Subdivided Box")
+                    .ok);
+    const auto original = editor.tools().live_primitive_cube();
+    ASSERT_TRUE(original.has_value());
+    ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, settings[axis], 2.0).ok());
+    auto expected = std::array<int, 3>{1, 1, 1};
+    expected[axis] = 2;
+    EXPECT_EQ(editor.tools().live_primitive_cube()->subdivisions, expected);
+    EXPECT_EQ(compiled_index_count(session.modeling(), "Subdivided Box"), 60U);
+    ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, settings[axis], 128.0).ok());
+    expected[axis] = 128;
+    const auto maximum = editor.tools().live_primitive_cube();
+    ASSERT_TRUE(maximum.has_value());
+    EXPECT_EQ(maximum->subdivisions, expected);
+    EXPECT_EQ(compiled_index_count(session.modeling(), "Subdivided Box"), 3084U);
+    EXPECT_FALSE(editor.tools().set_setting(kCreatePrimitiveToolId, settings[axis], 128.0).changed());
+    EXPECT_FALSE(editor.tools().set_setting(kCreatePrimitiveToolId, settings[axis], 129.0).ok());
+    EXPECT_EQ(editor.tools().live_primitive_cube()->revision, maximum->revision);
+    expect_cube_mesh_bounds(session.modeling(), original->object_id,
+                             original->local_min, original->local_max);
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     PublicFlipTargetsPendingFootprintOrIdleCubeAndCancelResizeKeepsSettings) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  EXPECT_FALSE(editor.tools().flip_primitive_faces().ok());
+  EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+  EXPECT_TRUE(session.primitive_creation().box_settings().flip_faces);
+  EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
+  ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(), "First Box").ok);
+  const auto first = editor.tools().live_primitive_cube();
+  ASSERT_TRUE(first.has_value());
+  const auto first_mesh = session.modeling().compile_object_mesh(first->object_id);
+  ASSERT_TRUE(first_mesh.has_value());
+  const auto first_content = compiled_content_id(session.modeling(), "First Box");
+  ASSERT_TRUE(session.modeling().begin_box_footprint({
+      .ray = {.origin = {6.0f, 4.0f, 0.0f}, .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+  }).ok);
+  EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
+  EXPECT_FALSE(editor.tools().begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::X, true).ok());
+  ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+  EXPECT_FALSE(session.primitive_creation().box_settings().flip_faces);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "First Box"), first_content);
+  ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(6.0f), "Second Box").ok);
+  const auto second = editor.tools().live_primitive_cube();
+  ASSERT_TRUE(second.has_value());
+  EXPECT_NE(second->object_id, first->object_id);
+  const auto second_mesh = session.modeling().compile_object_mesh(second->object_id);
+  ASSERT_TRUE(second_mesh.has_value());
+  EXPECT_NEAR(cube_signed_volume(*first_mesh), -cube_signed_volume(*second_mesh), 0.0001);
+  ASSERT_TRUE(editor.tools().begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::Z, true).ok());
+  ASSERT_TRUE(editor.tools().update_primitive_cube_resize(2.0).ok());
+  ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+  ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, kBoxSubdivisionsXSetting, 3.0).ok());
+  ASSERT_TRUE(editor.tools().cancel_primitive_cube_resize().ok());
+  const auto canceled = editor.tools().live_primitive_cube();
+  ASSERT_TRUE(canceled.has_value());
+  EXPECT_FALSE(canceled->resizing);
+  EXPECT_TRUE(canceled->flip_faces);
+  EXPECT_EQ(canceled->subdivisions[0], 3);
+  EXPECT_EQ(cube_components(canceled->local_min), cube_components(second->local_min));
+  EXPECT_EQ(cube_components(canceled->local_max), cube_components(second->local_max));
+  expect_cube_mesh_bounds(session.modeling(), canceled->object_id,
+                           second->local_min, second->local_max);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "First Box"), first_content);
+  const auto flipped_mesh = session.modeling().compile_object_mesh(canceled->object_id);
+  ASSERT_TRUE(flipped_mesh.has_value());
+  EXPECT_NEAR(cube_signed_volume(*flipped_mesh), -cube_signed_volume(*second_mesh), 0.0001);
+  ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+  const auto unflipped_mesh = session.modeling().compile_object_mesh(canceled->object_id);
+  ASSERT_TRUE(unflipped_mesh.has_value());
+  EXPECT_NEAR(cube_signed_volume(*unflipped_mesh), cube_signed_volume(*second_mesh), 0.0001);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     PublicUndoCancelsResizeBeforeShapeUndoAndHistoryCoalescesLiveEdits) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(), "History Box").ok);
+  const auto original = editor.tools().live_primitive_cube();
+  ASSERT_TRUE(original.has_value());
+  ASSERT_TRUE(editor.tools().begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::X, true).ok());
+  ASSERT_TRUE(editor.tools().update_primitive_cube_resize(1.0).ok());
+  ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+  ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, kBoxSubdivisionsYSetting, 3.0).ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  const auto canceled = editor.tools().live_primitive_cube();
+  ASSERT_TRUE(canceled.has_value());
+  EXPECT_FALSE(canceled->resizing);
+  EXPECT_TRUE(canceled->flip_faces);
+  EXPECT_EQ(canceled->subdivisions[1], 3);
+  EXPECT_EQ(cube_components(canceled->local_max), cube_components(original->local_max));
+  EXPECT_EQ(session.primitive_creation().shape_count(), 1U);
+  EXPECT_EQ(session.history().undo_count(), 0U);
+  ASSERT_TRUE(editor.tools().begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::Y, false).ok());
+  ASSERT_TRUE(editor.tools().update_primitive_cube_resize(-2.0).ok());
+  ASSERT_TRUE(editor.tools().end_primitive_cube_resize().ok());
+  const auto final_cube = editor.tools().live_primitive_cube();
+  ASSERT_TRUE(final_cube.has_value());
+  const auto final_content = compiled_content_id(session.modeling(), "History Box");
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(session.modeling().objects().empty());
+  EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(compiled_content_id(session.modeling(), "History Box"), final_content);
+  EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_EQ(session.history().undo_count(), 1U);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(session.modeling().objects().empty());
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(compiled_content_id(session.modeling(), "History Box"), final_content);
+  expect_cube_mesh_bounds(session.modeling(), final_cube->object_id,
+                           final_cube->local_min, final_cube->local_max);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     PendingFlipThenFootprintCancellationNeverReopensThePreviousLiveCube) {
+  for (const bool cancel_with_undo : {false, true}) {
+    SCOPED_TRACE(cancel_with_undo);
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+    ASSERT_TRUE(session.primitive_creation()
+                    .accept_preview(valid_primitive_preview(), "Frozen Box")
+                    .ok);
+    const auto previous = editor.tools().live_primitive_cube();
+    ASSERT_TRUE(previous.has_value());
+    EXPECT_FALSE(previous->flip_faces);
+    const auto previous_content = compiled_content_id(session.modeling(), "Frozen Box");
+    ASSERT_TRUE(session.modeling().begin_box_footprint({
+        .ray = {.origin = {6.0f, 4.0f, 0.0f},
+                .direction = {0.0f, -1.0f, 0.0f}},
+        .grid_size = 1.0,
+    }).ok);
+    ASSERT_TRUE(session.scene().selected_entities().empty());
+    const auto footprint_selection = session.scene().selected_entities();
+    ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+    EXPECT_TRUE(session.primitive_creation().box_settings().flip_faces);
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Frozen Box"), previous_content);
+    if (cancel_with_undo) {
+      ASSERT_TRUE(editor.history().undo().ok());
+    } else {
+      // The viewport's canceled footprint path can reset only the runtime
+      // drawing gesture while leaving the persistent primitive session active.
+      ASSERT_TRUE(session.modeling().cancel_box().ok);
+      ASSERT_TRUE(session.modeling().activate_box_tool().ok);
+    }
+    EXPECT_EQ(session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
+    EXPECT_EQ(session.primitive_creation().shape_count(), 1U);
+    EXPECT_EQ(session.scene().selected_entities(), footprint_selection);
+    EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
+    EXPECT_FALSE(editor.tools()
+                     .begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::X, true)
+                     .ok());
+    EXPECT_FALSE(editor.tools().update_primitive_cube_resize(1.0).ok());
+    ASSERT_TRUE(editor.tools()
+                    .set_setting(kCreatePrimitiveToolId, kBoxSubdivisionsXSetting, 2.0)
+                    .ok());
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Frozen Box"), previous_content);
+    ASSERT_TRUE(session.primitive_creation()
+                    .accept_preview(valid_primitive_preview(6.0f), "Pending Flipped Box")
+                    .ok);
+    const auto next = editor.tools().live_primitive_cube();
+    ASSERT_TRUE(next.has_value());
+    EXPECT_TRUE(next->flip_faces);
+    EXPECT_EQ(next->subdivisions[0], 2);
+    EXPECT_NE(next->object_id, previous->object_id);
+    const auto previous_mesh = session.modeling().compile_object_mesh(previous->object_id);
+    const auto next_mesh = session.modeling().compile_object_mesh(next->object_id);
+    ASSERT_TRUE(previous_mesh.has_value());
+    ASSERT_TRUE(next_mesh.has_value());
+    EXPECT_NEAR(cube_signed_volume(*previous_mesh), -cube_signed_volume(*next_mesh), 0.0001);
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CubeResizeCancellationAfterSelectionChangeRestoresBoundsWithoutReselecting) {
+  for (const bool select_other : {false, true}) {
+    SCOPED_TRACE(select_other);
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    const auto target = editor.modeling().create_box(
+        {.min = {7.0f, -1.0f, -1.0f}, .max = {9.0f, 1.0f, 1.0f}},
+        "Selection Target");
+    ASSERT_TRUE(target.ok()) << target.error_message();
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+    ASSERT_TRUE(session.primitive_creation()
+                    .accept_preview(valid_primitive_preview(), "Selection Box")
+                    .ok);
+    const auto cube = editor.tools().live_primitive_cube();
+    ASSERT_TRUE(cube.has_value());
+    const auto entity = session.modeling().entity_for_modeling_object(cube->object_id);
+    ASSERT_TRUE(entity.has_value());
+    ASSERT_TRUE(editor.tools()
+                    .begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::X, false)
+                    .ok());
+    ASSERT_TRUE(editor.tools().update_primitive_cube_resize(-1.0).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    ASSERT_TRUE(session.scene().selected_entities().empty());
+    if (select_other) {
+      ASSERT_TRUE(editor.selection().select_object(target.value()).ok());
+    }
+    const auto expected_selection = session.scene().selected_entities();
+    const auto expected_summary = session.modeling().selection_summary();
+    const auto selection_revision = session.scene().selection_revision();
+    EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
+    EXPECT_FALSE(editor.tools().update_primitive_cube_resize(-2.0).ok());
+    ASSERT_TRUE(editor.tools().cancel_primitive_cube_resize().ok());
+    EXPECT_EQ(session.scene().selected_entities(), expected_selection);
+    EXPECT_EQ(session.scene().selection_revision(), selection_revision);
+    const auto restored_summary = session.modeling().selection_summary();
+    EXPECT_EQ(restored_summary.has_selection, expected_summary.has_selection);
+    EXPECT_EQ(restored_summary.active_object_id, expected_summary.active_object_id);
+    EXPECT_EQ(restored_summary.selected_object_count, expected_summary.selected_object_count);
+    expect_cube_mesh_bounds(session.modeling(), cube->object_id,
+                             cube->local_min, cube->local_max);
+    const auto restored_content = compiled_content_id(session.modeling(), "Selection Box");
+    // Retiring the resize removes its stale-selection guard. Flip now changes
+    // the pending setting and does not modify the cube that just froze.
+    ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Selection Box"), restored_content);
+    ASSERT_TRUE(editor.selection().select_object(*entity).ok());
+    EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
+    EXPECT_FALSE(editor.tools()
+                     .begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::X, true)
+                     .ok());
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     ZeroHistoryLimitStillAllowsUndoToCancelAnUnfinishedCubeResize) {
+  PrimitiveCreationHarness harness;
+  harness.history.set_max_steps(0U);
+  ASSERT_TRUE(harness.tool.activate().ok);
+  ASSERT_TRUE(harness.tool.accept_preview(valid_primitive_preview(), "Unrecorded Box").ok);
+  const auto cube = harness.tool.live_cube();
+  ASSERT_TRUE(cube.has_value());
+  EXPECT_FALSE(harness.tool.can_undo());
+  ASSERT_TRUE(harness.tool.begin_cube_resize(PrimitiveCubeAxis::Y, false).ok);
+  ASSERT_TRUE(harness.tool.update_cube_resize(-3.0).ok);
+  ASSERT_TRUE(harness.tool.flip_faces().ok);
+  EXPECT_TRUE(harness.tool.can_undo());
+  ASSERT_TRUE(harness.tool.undo().ok);
+  EXPECT_FALSE(harness.tool.can_undo());
+  EXPECT_TRUE(harness.tool.live_cube()->flip_faces);
+  EXPECT_EQ(harness.tool.shape_count(), 1U);
+  expect_cube_mesh_bounds(harness.modeling, cube->modeling_object_id,
+                           cube->local_min, cube->local_max);
+  ASSERT_TRUE(harness.tool.cancel().ok);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     SettingsBeforeViewportRetirementCancelLostSelectionResizeFirst) {
+  for (const std::string_view action : {"flip", "subdivide", "unchanged"}) {
+    SCOPED_TRACE(action);
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+    ASSERT_TRUE(session.primitive_creation()
+                    .accept_preview(valid_primitive_preview(), "Interrupted Box")
+                    .ok);
+    const auto cube = editor.tools().live_primitive_cube();
+    ASSERT_TRUE(cube.has_value());
+    const auto original_content = compiled_content_id(session.modeling(), "Interrupted Box");
+    ASSERT_TRUE(editor.tools()
+                    .begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::X, true)
+                    .ok());
+    ASSERT_TRUE(editor.tools().update_primitive_cube_resize(1.0).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    const auto resized_content = compiled_content_id(session.modeling(), "Interrupted Box");
+    // Rejected input leaves the unfinished gesture available for cancellation.
+    EXPECT_FALSE(editor.tools()
+                     .set_setting(kCreatePrimitiveToolId, kBoxSubdivisionsXSetting, 129.0)
+                     .ok());
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Interrupted Box"), resized_content);
+    const auto changed = action == "flip"
+                             ? editor.tools().flip_primitive_faces()
+                             : editor.tools().set_setting(
+                                   kCreatePrimitiveToolId, kBoxSubdivisionsXSetting,
+                                   action == "subdivide" ? 3.0 : 1.0);
+    ASSERT_TRUE(changed.ok()) << changed.error_message();
+    // Even an unchanged setting reports the restored resize geometry.
+    EXPECT_TRUE(changed.changed());
+    EXPECT_TRUE(session.primitive_creation().active());
+    EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
+    EXPECT_TRUE(session.scene().selected_entities().empty());
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Interrupted Box"), original_content);
+    expect_cube_mesh_bounds(session.modeling(), cube->object_id,
+                             cube->local_min, cube->local_max);
+    EXPECT_EQ(session.primitive_creation().box_settings().flip_faces, action == "flip");
+    EXPECT_EQ(session.primitive_creation().box_settings().subdivisions_x,
+              action == "subdivide" ? 3 : 1);
+    // The viewport's later cleanup sees an already retired owner gesture.
+    EXPECT_FALSE(editor.tools().cancel_primitive_cube_resize().changed());
+    EXPECT_FALSE(editor.tools().end_primitive_cube_resize().changed());
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     SettingsPropagateInterruptedResizePublicationFailureBeforeChangingPendingCube) {
+  for (const bool flip : {false, true}) {
+    for (const auto failure : {ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
+                               ModelingSdkProjectionFailurePoint::CommittedSceneNotify}) {
+      SCOPED_TRACE(::testing::Message() << "flip=" << flip
+                                       << ", failure=" << static_cast<int>(failure));
+      SceneSession session;
+      QuaderEditorApi editor(
+          QuaderApiSessionInternalAccess::from_scene_session(session));
+      const auto baseline = editor.modeling().create_box(
+          {.min = {7.0f, -1.0f, -1.0f}, .max = {9.0f, 1.0f, 1.0f}}, "Baseline Box");
+      ASSERT_TRUE(baseline.ok());
+      ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+      ASSERT_TRUE(session.primitive_creation()
+                      .accept_preview(valid_primitive_preview(), "Failed Interrupted Box")
+                      .ok);
+      ASSERT_TRUE(editor.tools()
+                      .begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::X, true)
+                      .ok());
+      ASSERT_TRUE(editor.tools().update_primitive_cube_resize(1.0).ok());
+      ASSERT_TRUE(editor.selection().clear().ok());
+      session.modeling().set_modeling_sdk_projection_failure_for_tests(failure);
+      const auto rejected = flip
+                                ? editor.tools().flip_primitive_faces()
+                                : editor.tools().set_setting(
+                                      kCreatePrimitiveToolId, kBoxSubdivisionsXSetting, 3.0);
+      EXPECT_FALSE(rejected.ok());
+      EXPECT_FALSE(rejected.changed());
+      EXPECT_FALSE(rejected.error_message().empty());
+      EXPECT_FALSE(session.primitive_creation().active());
+      EXPECT_FALSE(session.primitive_creation().box_settings().flip_faces);
+      EXPECT_EQ(session.primitive_creation().box_settings().subdivisions_x, 1);
+      ASSERT_EQ(session.modeling().objects().size(), 1U);
+      EXPECT_EQ(session.modeling().objects().front().modeling_object_id,
+                baseline.value().modeling_object_id);
+      EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
+      EXPECT_FALSE(editor.tools().cancel_primitive_cube_resize().changed());
+      EXPECT_FALSE(editor.tools().flip_primitive_faces().ok());
+    }
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     PublicCubeResizeCancellationRetainsComponentModeSelectionAndActiveElement) {
+  for (const auto kind : {QuaderComponentKind::Vertex, QuaderComponentKind::Edge,
+                          QuaderComponentKind::Face}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+    ASSERT_TRUE(session.primitive_creation()
+                    .accept_preview(valid_primitive_preview(), "Component Box")
+                    .ok);
+    const auto cube = editor.tools().live_primitive_cube();
+    ASSERT_TRUE(cube.has_value());
+    const auto object = editor.query().modeling_object_for_id(cube->object_id);
+    ASSERT_TRUE(object.has_value());
+    ASSERT_TRUE(editor.tools()
+                    .begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::Z, true)
+                    .ok());
+    ASSERT_TRUE(editor.tools().update_primitive_cube_resize(1.0).ok());
+    if (kind == QuaderComponentKind::Vertex) {
+      ASSERT_TRUE(editor.selection().select_vertices(*object, {1, 2}).ok());
+    } else if (kind == QuaderComponentKind::Edge) {
+      ASSERT_TRUE(editor.selection().select_edge(*object, 1, 2).ok());
+      ASSERT_TRUE(editor.selection()
+                      .select_edge(*object, 2, 3, QuaderSelectionEdit::Add)
+                      .ok());
+    } else {
+      ASSERT_TRUE(editor.selection().select_faces(*object, {1, 2}).ok());
+    }
+    const auto expected = editor.query().selection();
+    const auto scene_selection = session.scene().selected_entities();
+    const auto primary_selection = session.scene().primary_selection();
+    const auto scene_selection_revision = session.scene().selection_revision();
+    ASSERT_TRUE(expected.has_selection);
+    EXPECT_EQ(expected.selected_vertex_count + expected.selected_edge_count +
+                  expected.selected_face_count,
+              2U);
+    EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
+    ASSERT_TRUE(editor.tools().cancel_primitive_cube_resize().ok());
+    const auto restored = editor.query().selection();
+    EXPECT_EQ(restored.mode, expected.mode);
+    EXPECT_EQ(restored.has_selection, expected.has_selection);
+    EXPECT_EQ(restored.active_kind, expected.active_kind);
+    EXPECT_EQ(restored.active_object_id, expected.active_object_id);
+    EXPECT_EQ(restored.active_vertex_id, expected.active_vertex_id);
+    EXPECT_EQ(restored.active_edge_a, expected.active_edge_a);
+    EXPECT_EQ(restored.active_edge_b, expected.active_edge_b);
+    EXPECT_EQ(restored.active_face_id, expected.active_face_id);
+    EXPECT_EQ(restored.selected_vertex_count, expected.selected_vertex_count);
+    EXPECT_EQ(restored.selected_edge_count, expected.selected_edge_count);
+    EXPECT_EQ(restored.selected_face_count, expected.selected_face_count);
+    EXPECT_EQ(restored.selected_object_count, expected.selected_object_count);
+    EXPECT_EQ(session.scene().selected_entities(), scene_selection);
+    EXPECT_EQ(session.scene().primary_selection(), primary_selection);
+    EXPECT_EQ(session.scene().selection_revision(), scene_selection_revision);
+    expect_cube_mesh_bounds(session.modeling(), cube->object_id,
+                             cube->local_min, cube->local_max);
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     FailedCubeResizePublicationRollsBackSessionAndRetainsBaselineObject) {
+  for (const auto failure : {ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
+                             ModelingSdkProjectionFailurePoint::CommittedSceneNotify}) {
+    SCOPED_TRACE(static_cast<int>(failure));
+    PrimitiveCreationHarness harness;
+    const auto baseline = harness.modeling.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Baseline Box",
+    });
+    ASSERT_TRUE(baseline.ok);
+    const auto baseline_content = compiled_content_id(harness.modeling, "Baseline Box");
+    const auto baseline_assets = harness.assets.mesh_ids();
+    ASSERT_TRUE(harness.tool.activate().ok);
+    ASSERT_TRUE(harness.tool.accept_preview(valid_primitive_preview(4.0f), "Rejected Resize Box").ok);
+    ASSERT_TRUE(harness.tool.begin_cube_resize(PrimitiveCubeAxis::Z, true).ok);
+    harness.modeling.set_modeling_sdk_projection_failure_for_tests(failure);
+    const auto rejected = harness.tool.update_cube_resize(1.0);
+    EXPECT_FALSE(rejected.ok);
+    EXPECT_FALSE(rejected.changed);
+    EXPECT_FALSE(harness.tool.active());
+    EXPECT_FALSE(harness.tool.live_cube().has_value());
+    ASSERT_EQ(harness.modeling.objects().size(), 1U);
+    EXPECT_EQ(harness.modeling.objects().front().modeling_object_id, baseline.object.modeling_object_id);
+    EXPECT_EQ(compiled_content_id(harness.modeling, "Baseline Box"), baseline_content);
+    EXPECT_EQ(harness.assets.mesh_ids(), baseline_assets);
+    EXPECT_FALSE(harness.history.can_undo());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CubePublicFacadeRejectsOtherKindsInvalidAxesAndClearsDescriptorOnRebind) {
+  SceneSession first;
+  SceneSession second;
+  QuaderToolsApi tools(QuaderApiSessionInternalAccess::from_scene_session(first));
+  EXPECT_FALSE(tools.live_primitive_cube().has_value());
+  EXPECT_FALSE(tools.begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::X, true).ok());
+  ASSERT_TRUE(first.primitive_creation().activate(PrimitiveCreationKind::Cylinder).ok);
+  ASSERT_TRUE(first.primitive_creation().accept_preview(valid_primitive_preview(), "Cylinder").ok);
+  EXPECT_FALSE(tools.live_primitive_cube().has_value());
+  const auto cylinder = tools.live_primitive_creation();
+  ASSERT_TRUE(cylinder.has_value());
+  EXPECT_EQ(cylinder->shape, QuaderPrimitiveCreationShape::Cylinder);
+  ASSERT_TRUE(tools.flip_primitive_faces().ok());
+  ASSERT_TRUE(tools.toggle_primitive_caps().ok());
+  EXPECT_TRUE(tools.live_primitive_creation()->flip_faces);
+  EXPECT_FALSE(tools.live_primitive_creation()->caps);
+  ASSERT_TRUE(tools.begin_primitive_resize(QuaderPrimitiveResizeControl::Radius).ok());
+  EXPECT_FALSE(tools.begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::Y, true).ok());
+  EXPECT_FALSE(tools.update_primitive_cube_resize(1.0).ok());
+  EXPECT_FALSE(tools.cancel_primitive_cube_resize().changed());
+  EXPECT_FALSE(tools.end_primitive_cube_resize().changed());
+  EXPECT_TRUE(tools.live_primitive_creation()->resizing);
+  ASSERT_TRUE(tools.cancel_primitive_resize().ok());
+  ASSERT_TRUE(first.primitive_creation().set_kind(PrimitiveCreationKind::Box).ok);
+  const auto cube = tools.live_primitive_cube();
+  ASSERT_TRUE(cube.has_value());
+  EXPECT_EQ(tools.live_primitive_creation()->revision, cube->revision);
+  EXPECT_EQ(tools.live_primitive_creation()->shape, QuaderPrimitiveCreationShape::Box);
+  EXPECT_FALSE(tools.toggle_primitive_caps().ok());
+  EXPECT_FALSE(tools.begin_primitive_resize(QuaderPrimitiveResizeControl::Radius).ok());
+  EXPECT_FALSE(tools.begin_primitive_cube_resize(static_cast<QuaderPrimitiveCubeAxis>(99), true).ok());
+  EXPECT_EQ(tools.live_primitive_cube()->revision, cube->revision);
+  tools.rebind_session(QuaderApiSessionInternalAccess::from_scene_session(second));
+  EXPECT_FALSE(tools.live_primitive_cube().has_value());
+  EXPECT_FALSE(tools.live_primitive_creation().has_value());
+  EXPECT_FALSE(tools.update_primitive_cube_resize(1.0).ok());
+  ASSERT_TRUE(second.primitive_creation().activate().ok);
+  ASSERT_TRUE(second.primitive_creation().accept_preview(valid_primitive_preview(8.0f), "Other Scene Box").ok);
+  const auto rebound = tools.live_primitive_cube();
+  ASSERT_TRUE(rebound.has_value());
+  EXPECT_GT(rebound->revision, cube->revision);
+  EXPECT_NEAR(rebound->world_origin.x, 8.0f, 0.0001f);
+  EXPECT_EQ(tools.live_primitive_creation()->revision, rebound->revision);
+  ASSERT_TRUE(second.primitive_creation().set_kind(PrimitiveCreationKind::Sphere).ok);
+  ASSERT_TRUE(tools.live_primitive_creation().has_value());
+  EXPECT_EQ(tools.live_primitive_creation()->shape, QuaderPrimitiveCreationShape::Sphere);
+  EXPECT_FALSE(tools.live_primitive_cube().has_value());
+  ASSERT_TRUE(tools.flip_primitive_faces().ok());
+  ASSERT_TRUE(tools.toggle_primitive_hemisphere().ok());
+  EXPECT_TRUE(tools.live_primitive_creation()->hemisphere);
+  EXPECT_FALSE(tools.toggle_primitive_caps().ok());
+  ASSERT_TRUE(first.primitive_creation().cancel().ok);
+  ASSERT_TRUE(second.primitive_creation().cancel().ok);
+}
+
+void activate_public_cylinder(QuaderToolsApi &tools) {
+  ASSERT_TRUE(tools.activate(ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(tools.set_setting(kCreatePrimitiveToolId, kPrimitiveTypeSetting,
+                                "cylinder").ok());
+}
+
+void expect_cylinder_mesh_volume(const ModelingSessionService &modeling,
+                                 const QuaderPrimitiveCreationState &state) {
+  const auto mesh = modeling.compile_object_mesh(state.object_id);
+  ASSERT_TRUE(mesh.has_value());
+  ASSERT_FALSE(mesh->geometry().vertices.empty());
+  const QVec3 center = (state.local_min + state.local_max) * 0.5f;
+  const QVec3 radius = (state.local_max - state.local_min) * 0.5f;
+  bool bottom = false;
+  bool top = false;
+  for (const auto &vertex : mesh->geometry().vertices) {
+    const double x = (vertex.position.x - center.x) / radius.x;
+    const double z = (vertex.position.z - center.z) / radius.z;
+    EXPECT_NEAR(x * x + z * z, 1.0, 0.00001);
+    EXPECT_TRUE(vertex.position.y == state.local_min.y ||
+                vertex.position.y == state.local_max.y);
+    bottom = bottom || vertex.position.y == state.local_min.y;
+    top = top || vertex.position.y == state.local_max.y;
+  }
+  EXPECT_TRUE(bottom);
+  EXPECT_TRUE(top);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CylinderEndControlsKeepOppositeEndFixedAcrossUpdatesAndClampCrossing) {
+  for (const bool positive : {false, true}) {
+    SCOPED_TRACE(positive);
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_NO_FATAL_FAILURE(activate_public_cylinder(editor.tools()));
+    ASSERT_TRUE(session.primitive_creation().accept_preview(
+        oriented_primitive_preview({2.0f, 2.0f, 3.0f}, {1.0f, 0.0f, 0.0f},
+                                   {0.0f, 1.0f, 0.0f}, 6.0f, 4.0f, 2.0f),
+        "End Cylinder").ok);
+    const auto before = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(before.has_value());
+    const auto control = positive ? QuaderPrimitiveResizeControl::PositiveY
+                                  : QuaderPrimitiveResizeControl::NegativeY;
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(control).ok());
+    for (const double delta : {positive ? 2.0 : -2.0, positive ? -0.5 : 0.5}) {
+      ASSERT_TRUE(editor.tools().update_primitive_resize(delta).ok());
+      const auto resized = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(resized.has_value());
+      EXPECT_FLOAT_EQ(resized->local_min.y,
+                      before->local_min.y + (positive ? 0.0f : static_cast<float>(delta)));
+      EXPECT_FLOAT_EQ(resized->local_max.y,
+                      before->local_max.y + (positive ? static_cast<float>(delta) : 0.0f));
+      EXPECT_FLOAT_EQ(resized->local_min.x, before->local_min.x);
+      EXPECT_FLOAT_EQ(resized->local_max.x, before->local_max.x);
+      EXPECT_FLOAT_EQ(resized->local_min.z, before->local_min.z);
+      EXPECT_FLOAT_EQ(resized->local_max.z, before->local_max.z);
+      expect_cylinder_mesh_volume(session.modeling(), *resized);
+    }
+    ASSERT_TRUE(editor.tools().end_primitive_resize().ok());
+    const auto repeated_start = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(repeated_start.has_value());
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(control).ok());
+    const double outward = positive ? 1.0 : -1.0;
+    ASSERT_TRUE(editor.tools().update_primitive_resize(outward).ok());
+    const auto repeated = editor.tools().live_primitive_creation();
+    EXPECT_FLOAT_EQ(positive ? repeated->local_max.y : repeated->local_min.y,
+                   (positive ? repeated_start->local_max.y : repeated_start->local_min.y)
+                       + static_cast<float>(outward));
+    ASSERT_TRUE(editor.tools().update_primitive_resize(positive ? -100.0 : 100.0).ok());
+    const auto clamped = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(clamped.has_value());
+    EXPECT_GE(static_cast<double>(clamped->local_max.y) - clamped->local_min.y,
+              kPrimitiveMinimumExtent);
+    EXPECT_LT(clamped->local_max.y - clamped->local_min.y, 0.000101f);
+    expect_cylinder_mesh_volume(session.modeling(), *clamped);
+    const auto stats = session.modeling().modeling_sdk_projection_stats_for_tests();
+    EXPECT_FALSE(editor.tools().update_primitive_resize(positive ? -200.0 : 200.0).changed());
+    EXPECT_EQ(editor.tools().live_primitive_creation()->revision, clamped->revision);
+    EXPECT_EQ(session.modeling().modeling_sdk_projection_stats_for_tests().mesh_compile_count,
+              stats.mesh_compile_count);
+    ASSERT_TRUE(editor.tools().cancel_primitive_resize().ok());
+    const auto restored = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(restored.has_value());
+    EXPECT_EQ(cube_components(restored->local_min), cube_components(repeated_start->local_min));
+    EXPECT_EQ(cube_components(restored->local_max), cube_components(repeated_start->local_max));
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CylinderRadiusUsesEllipseRayDistancePreservesAspectAndSkipsRepeatedPublication) {
+  for (const QVec3 axis : {QVec3{2.0f, 0.0f, 0.0f}, QVec3{0.0f, 0.0f, -3.0f},
+                           QVec3{3.0f, 7.0f, 4.0f}}) {
+    SCOPED_TRACE(::testing::Message() << axis.x << "," << axis.z);
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_NO_FATAL_FAILURE(activate_public_cylinder(editor.tools()));
+    ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, kCylinderSideCountSetting, 7.0).ok());
+    ASSERT_TRUE(session.primitive_creation().accept_preview(
+        oriented_primitive_preview({}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+                                   6.0f, 4.0f, 2.0f), "Ellipse Cylinder").ok);
+    const auto before = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(before.has_value());
+    EXPECT_EQ(cube_components(before->local_min), (std::array<float, 3>{-3.0f, -2.0f, -1.0f}));
+    EXPECT_EQ(cube_components(before->local_max), (std::array<float, 3>{3.0f, 2.0f, 1.0f}));
+    for (const auto invalid : {QuaderPrimitiveResizeControl::PositiveX,
+                               QuaderPrimitiveResizeControl::NegativeX,
+                               QuaderPrimitiveResizeControl::PositiveZ,
+                               QuaderPrimitiveResizeControl::NegativeZ,
+                               static_cast<QuaderPrimitiveResizeControl>(99)}) {
+      EXPECT_FALSE(editor.tools().begin_primitive_resize(invalid).ok());
+    }
+    for (const QVec3 invalid : {QVec3{}, QVec3{0.0f, 1.0f, 0.0f},
+             QVec3{std::numeric_limits<float>::infinity(), 0.0f, 0.0f}}) {
+      EXPECT_FALSE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::Radius, invalid).ok());
+    }
+    EXPECT_EQ(editor.tools().live_primitive_creation()->revision, before->revision);
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::Radius, axis).ok());
+    const auto start_stats = session.modeling().modeling_sdk_projection_stats_for_tests();
+    EXPECT_FALSE(editor.tools().update_primitive_resize(0.0).changed());
+    for (const double invalid : {std::numeric_limits<double>::quiet_NaN(),
+                                std::numeric_limits<double>::infinity(),
+                                std::numeric_limits<double>::max()}) {
+      EXPECT_FALSE(editor.tools().update_primitive_resize(invalid).ok());
+    }
+    EXPECT_EQ(session.modeling().modeling_sdk_projection_stats_for_tests().mesh_compile_count,
+              start_stats.mesh_compile_count);
+    const double norm = std::hypot(axis.x, axis.z);
+    const double ray_radius = 1.0 / std::hypot(axis.x / norm / 3.0, axis.z / norm);
+    for (const double delta : {0.75, -0.25}) {
+      ASSERT_TRUE(editor.tools().update_primitive_resize(delta).ok());
+      const double scale = (ray_radius + delta) / ray_radius;
+      const auto resized = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(resized.has_value());
+      EXPECT_NEAR(resized->local_max.x, 3.0 * scale, 0.000001);
+      EXPECT_NEAR(resized->local_max.z, scale, 0.000001);
+      EXPECT_FLOAT_EQ(resized->local_min.x, -resized->local_max.x);
+      EXPECT_FLOAT_EQ(resized->local_min.z, -resized->local_max.z);
+      EXPECT_FLOAT_EQ(resized->local_min.y, before->local_min.y);
+      EXPECT_FLOAT_EQ(resized->local_max.y, before->local_max.y);
+      expect_cylinder_mesh_volume(session.modeling(), *resized);
+      const auto stats = session.modeling().modeling_sdk_projection_stats_for_tests();
+      EXPECT_FALSE(editor.tools().update_primitive_resize(delta).changed());
+      EXPECT_EQ(editor.tools().live_primitive_creation()->revision, resized->revision);
+      const auto repeated_stats = session.modeling().modeling_sdk_projection_stats_for_tests();
+      EXPECT_EQ(repeated_stats.mesh_compile_count, stats.mesh_compile_count);
+      EXPECT_EQ(repeated_stats.asset_publication_count, stats.asset_publication_count);
+      EXPECT_EQ(repeated_stats.scene_publication_count, stats.scene_publication_count);
+    }
+    ASSERT_TRUE(editor.tools().update_primitive_resize(-100.0).ok());
+    const auto clamped = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(clamped.has_value());
+    const QVec3 extent = clamped->local_max - clamped->local_min;
+    EXPECT_GE(extent.x, kPrimitiveMinimumExtent);
+    EXPECT_GE(extent.z, kPrimitiveMinimumExtent);
+    EXPECT_LT(extent.z, 0.000101);
+    EXPECT_NEAR(extent.x / extent.z, 3.0, 0.000001);
+    EXPECT_FALSE(editor.tools().update_primitive_resize(-200.0).changed());
+    ASSERT_TRUE(editor.tools().cancel_primitive_resize().ok());
+    EXPECT_EQ(cube_components(editor.tools().live_primitive_creation()->local_max),
+              cube_components(before->local_max));
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CylinderCapsSidesAndFlipRetainResizedBoundsAndCoalesceHistoryAcrossRepeats) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_NO_FATAL_FAILURE(activate_public_cylinder(editor.tools()));
+  ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+  ASSERT_TRUE(editor.tools().toggle_primitive_caps().ok());
+  ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(), "First Cylinder").ok);
+  const auto original = editor.tools().live_primitive_creation();
+  ASSERT_TRUE(original.has_value());
+  EXPECT_TRUE(original->flip_faces);
+  EXPECT_FALSE(original->caps);
+  ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::Radius).ok());
+  ASSERT_TRUE(editor.tools().update_primitive_resize(1.0).ok());
+  ASSERT_TRUE(editor.tools().toggle_primitive_caps().ok());
+  ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+  ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, kCylinderSideCountSetting, 8.0).ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  const auto canceled = editor.tools().live_primitive_creation();
+  ASSERT_TRUE(canceled.has_value());
+  EXPECT_FALSE(canceled->resizing);
+  EXPECT_FALSE(canceled->flip_faces);
+  EXPECT_TRUE(canceled->caps);
+  EXPECT_EQ(canceled->side_count, 8);
+  EXPECT_EQ(cube_components(canceled->local_min), cube_components(original->local_min));
+  EXPECT_EQ(cube_components(canceled->local_max), cube_components(original->local_max));
+  ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::NegativeY).ok());
+  ASSERT_TRUE(editor.tools().update_primitive_resize(-2.0).ok());
+  ASSERT_TRUE(editor.tools().end_primitive_resize().ok());
+  ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::Radius).ok());
+  ASSERT_TRUE(editor.tools().update_primitive_resize(0.5).ok());
+  ASSERT_TRUE(editor.tools().end_primitive_resize().ok());
+  const auto resized = editor.tools().live_primitive_creation();
+  ASSERT_TRUE(resized.has_value());
+  for (const int sides : {3, 128, 7}) {
+    ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, kCylinderSideCountSetting,
+                                          static_cast<double>(sides)).ok());
+    EXPECT_EQ(compiled_index_count(session.modeling(), "First Cylinder"),
+              static_cast<std::size_t>(12 * sides - 12));
+    const auto state = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->side_count, sides);
+    EXPECT_EQ(cube_components(state->local_min), cube_components(resized->local_min));
+    EXPECT_EQ(cube_components(state->local_max), cube_components(resized->local_max));
+    expect_cylinder_mesh_volume(session.modeling(), *state);
+    EXPECT_FALSE(editor.tools().set_setting(kCreatePrimitiveToolId, kCylinderSideCountSetting,
+                                           static_cast<double>(sides)).changed());
+  }
+  for (const double invalid : {2.0, 129.0, 7.5}) {
+    EXPECT_FALSE(editor.tools().set_setting(kCreatePrimitiveToolId, kCylinderSideCountSetting, invalid).ok());
+  }
+  const auto before_flip = session.modeling().compile_object_mesh(resized->object_id);
+  ASSERT_TRUE(before_flip.has_value());
+  ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+  const auto after_flip = session.modeling().compile_object_mesh(resized->object_id);
+  ASSERT_TRUE(after_flip.has_value());
+  EXPECT_NEAR(cube_signed_volume(*after_flip), -cube_signed_volume(*before_flip), 0.00001);
+  ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+  ASSERT_TRUE(editor.tools().toggle_primitive_caps().ok());
+  EXPECT_EQ(compiled_index_count(session.modeling(), "First Cylinder"), 42U);
+  const auto first_content = compiled_content_id(session.modeling(), "First Cylinder");
+  ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(5.0f), "Second Cylinder").ok);
+  const auto second = editor.tools().live_primitive_creation();
+  ASSERT_TRUE(second.has_value());
+  EXPECT_EQ(second->side_count, 7);
+  EXPECT_FALSE(second->caps);
+  EXPECT_FALSE(second->flip_faces);
+  // New footprints retain settings while establishing their own dimensions.
+  EXPECT_EQ(cube_components(second->local_max), (std::array<float, 3>{1.0f, 1.0f, 1.0f}));
+  EXPECT_EQ(compiled_content_id(session.modeling(), "First Cylinder"), first_content);
+  const auto second_content = compiled_content_id(session.modeling(), "Second Cylinder");
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(session.primitive_creation().shape_count(), 1U);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
+  EXPECT_EQ(compiled_content_id(session.modeling(), "Second Cylinder"), second_content);
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_EQ(session.history().undo_count(), 2U);
+  expect_default_primitive_settings(session.primitive_creation());
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(session.modeling().objects().empty());
+  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(compiled_content_id(session.modeling(), "First Cylinder"), first_content);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "Second Cylinder"), second_content);
+  ASSERT_NO_FATAL_FAILURE(activate_public_cylinder(editor.tools()));
+  expect_default_primitive_settings(session.primitive_creation());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CylinderResizeDescriptorPreservesAuthoritativePlacementMaterialsAndTextureFrame) {
+  for (const bool texture_lock : {false, true}) {
+    SCOPED_TRACE(texture_lock);
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    editor.preferences().set_runtime_hooks(QuaderPreferencesRuntimeHooks{
+        .texture_lock_enabled = [texture_lock] { return texture_lock; },
+    });
+    const auto material = session.assets().add_material(make_default_quader_material("Cylinder Material"));
+    ASSERT_NO_FATAL_FAILURE(activate_public_cylinder(editor.tools()));
+    ASSERT_TRUE(session.primitive_creation().accept_preview(
+        oriented_primitive_preview({4.0f, 3.0f, -2.0f}, {0.0f, 0.0f, -1.0f},
+                                   {0.0f, 1.0f, 0.0f}, 6.0f, 4.0f, 2.0f),
+        "Placed Cylinder", MaterialReference(material)).ok);
+    const auto original = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(original.has_value());
+    EXPECT_TRUE(near_point(original->world_x, {0.0f, 0.0f, -1.0f}));
+    const EntityId entity = *session.modeling().entity_for_modeling_object(original->object_id);
+    const TransformComponent transform{
+        .position = {7.0f, 3.0f, -2.0f},
+        .rotation_euler = {0.2f, 0.7f, -0.1f},
+        .scale = {2.0f, 0.5f, 3.0f},
+    };
+    ASSERT_TRUE(session.scene().set_transform(entity, transform));
+    const auto world = session.scene().world_transform_matrix(entity);
+    const auto placed = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(placed.has_value());
+    EXPECT_GT(placed->revision, original->revision);
+    EXPECT_EQ(editor.tools().live_primitive_creation()->revision, placed->revision);
+    EXPECT_TRUE(near_point(placed->world_origin, transform.position));
+    EXPECT_TRUE(near_point(placed->world_x, transform_vector(world, {1.0f, 0.0f, 0.0f})));
+    EXPECT_TRUE(near_point(placed->world_y, transform_vector(world, {0.0f, 1.0f, 0.0f})));
+    EXPECT_TRUE(near_point(placed->world_z, transform_vector(world, {0.0f, 0.0f, 1.0f})));
+    const auto sampling = effective_texture_sampling_from_local(session.scene(), entity);
+    ASSERT_TRUE(sampling.has_value());
+    const auto selected = session.scene().selected_entities();
+    const auto material_before = *session.scene().material(entity);
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::NegativeY).ok());
+    ASSERT_TRUE(editor.tools().update_primitive_resize(-4.0).ok());
+    ASSERT_TRUE(editor.tools().end_primitive_resize().ok());
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::Radius,
+                                                    {3.0f, 0.0f, -4.0f}).ok());
+    ASSERT_TRUE(editor.tools().update_primitive_resize(1.0).ok());
+    ASSERT_TRUE(editor.tools().end_primitive_resize().ok());
+    ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, kCylinderSideCountSetting, 7.0).ok());
+    ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+    ASSERT_TRUE(editor.tools().toggle_primitive_caps().ok());
+    const auto resized = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(resized.has_value());
+    EXPECT_EQ(resized->object_id, original->object_id);
+    EXPECT_FLOAT_EQ(resized->local_min.y, original->local_min.y - 4.0f);
+    EXPECT_FLOAT_EQ(resized->local_max.y, original->local_max.y);
+    EXPECT_EQ(session.scene().world_transform_matrix(entity).values, world.values);
+    EXPECT_EQ(session.scene().selected_entities(), selected);
+    ASSERT_NE(session.scene().material(entity), nullptr);
+    EXPECT_EQ(*session.scene().material(entity), material_before);
+    const auto sampling_after = effective_texture_sampling_from_local(session.scene(), entity);
+    ASSERT_TRUE(sampling_after.has_value());
+    EXPECT_EQ(sampling_after->values, sampling->values);
+    expect_cylinder_mesh_volume(session.modeling(), *resized);
+    const auto mesh = session.modeling().compile_object_mesh(resized->object_id);
+    ASSERT_TRUE(mesh.has_value());
+    const auto expected_sampling = MeshProjectionService::texture_mapping_transform(*sampling);
+    std::vector<QVec2> expected_uvs;
+    for (const auto &vertex : mesh->geometry().vertices) {
+      expected_uvs.push_back(quader_poly::evaluate_texture_mapping(
+          vertex.uv, vertex.position, vertex.uv_geometric_normal,
+          vertex.uv_carrier, expected_sampling));
+    }
+    expect_texture_uvs_near(effective_texture_uvs(session.scene(), entity, *mesh), expected_uvs);
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CylinderPendingCapsAndFlipNeverReopenPreviousShapeAfterFootprintCancellation) {
+  for (const bool caps : {false, true}) {
+    for (const bool undo : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "caps=" << caps << ";undo=" << undo);
+      SceneSession session;
+      QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_NO_FATAL_FAILURE(activate_public_cylinder(editor.tools()));
+      ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(), "Frozen Cylinder").ok);
+      const auto original_content = compiled_content_id(session.modeling(), "Frozen Cylinder");
+      ASSERT_TRUE(session.modeling().begin_box_footprint({
+          .ray = {.origin = {6.0f, 4.0f, 0.0f}, .direction = {0.0f, -1.0f, 0.0f}},
+          .grid_size = 1.0,
+      }).ok);
+      EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
+      ASSERT_TRUE((caps ? editor.tools().toggle_primitive_caps()
+                        : editor.tools().flip_primitive_faces()).ok());
+      EXPECT_FALSE(editor.tools().set_setting(kCreatePrimitiveToolId, kCylinderSideCountSetting, 7.0).ok());
+      EXPECT_EQ(compiled_content_id(session.modeling(), "Frozen Cylinder"), original_content);
+      if (undo) {
+        ASSERT_TRUE(editor.history().undo().ok());
+      } else {
+        ASSERT_TRUE(session.modeling().cancel_box().ok);
+        ASSERT_TRUE(session.modeling().activate_box_tool().ok);
+      }
+      EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
+      EXPECT_FALSE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::Radius).ok());
+      ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, kCylinderSideCountSetting, 7.0).ok());
+      ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(6.0f), "Pending Cylinder").ok);
+      const auto pending = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(pending.has_value());
+      EXPECT_EQ(pending->caps, !caps);
+      EXPECT_EQ(pending->flip_faces, !caps);
+      EXPECT_EQ(pending->side_count, 7);
+      EXPECT_EQ(compiled_content_id(session.modeling(), "Frozen Cylinder"), original_content);
+      ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+      EXPECT_TRUE(session.modeling().objects().empty());
+      expect_default_primitive_settings(session.primitive_creation());
+    }
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CylinderSelectionLossRestoresResizeBeforePendingSettingsWithoutReselecting) {
+  for (const std::string_view action : {"cancel", "caps", "flip", "unchanged"}) {
+    SCOPED_TRACE(action);
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_NO_FATAL_FAILURE(activate_public_cylinder(editor.tools()));
+    ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(), "Interrupted Cylinder").ok);
+    const auto original_content = compiled_content_id(session.modeling(), "Interrupted Cylinder");
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::Radius).ok());
+    ASSERT_TRUE(editor.tools().update_primitive_resize(1.0).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    const auto selection_revision = session.scene().selection_revision();
+    EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
+    EXPECT_FALSE(editor.tools().set_setting(kCreatePrimitiveToolId, kCylinderSideCountSetting, 2.0).ok());
+    const auto result = action == "cancel" ? editor.tools().cancel_primitive_resize()
+        : action == "caps" ? editor.tools().toggle_primitive_caps()
+        : action == "flip" ? editor.tools().flip_primitive_faces()
+        : editor.tools().set_setting(kCreatePrimitiveToolId, kCylinderSideCountSetting, 32.0);
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_TRUE(result.changed());
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Interrupted Cylinder"), original_content);
+    EXPECT_TRUE(session.scene().selected_entities().empty());
+    EXPECT_EQ(session.scene().selection_revision(), selection_revision);
+    EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
+    EXPECT_FALSE(editor.tools().cancel_primitive_resize().changed());
+    EXPECT_FALSE(editor.tools().end_primitive_resize().changed());
+    EXPECT_EQ(session.primitive_creation().cylinder_settings().caps, action != "caps");
+    EXPECT_EQ(session.primitive_creation().cylinder_settings().flip_faces, action == "flip");
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CylinderResizePublicationFailuresRollbackSessionAndResetSettings) {
+  for (const auto failure : {ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
+                             ModelingSdkProjectionFailurePoint::CommittedSceneNotify}) {
+    for (const std::string_view action : {"resize", "cancel", "pending_caps"}) {
+      SCOPED_TRACE(::testing::Message() << static_cast<int>(failure) << ";" << action);
+      SceneSession session;
+      QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_TRUE(editor.modeling().create_box(
+          {.min = {7.0f, -1.0f, -1.0f}, .max = {9.0f, 1.0f, 1.0f}}, "Baseline").ok());
+      const auto baseline = compiled_content_id(session.modeling(), "Baseline");
+      ASSERT_NO_FATAL_FAILURE(activate_public_cylinder(editor.tools()));
+      ASSERT_TRUE(editor.tools().toggle_primitive_caps().ok());
+      ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(), "Failed Cylinder").ok);
+      ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::Radius).ok());
+      if (action != "resize") {
+        ASSERT_TRUE(editor.tools().update_primitive_resize(0.5).ok());
+      }
+      if (action == "pending_caps") {
+        ASSERT_TRUE(editor.selection().clear().ok());
+      }
+      session.modeling().set_modeling_sdk_projection_failure_for_tests(failure);
+      const auto result = action == "resize" ? editor.tools().update_primitive_resize(1.0)
+          : action == "cancel" ? editor.tools().cancel_primitive_resize()
+          : editor.tools().toggle_primitive_caps();
+      EXPECT_FALSE(result.ok());
+      EXPECT_FALSE(result.changed());
+      EXPECT_FALSE(session.primitive_creation().active());
+      EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
+      ASSERT_EQ(session.modeling().objects().size(), 1U);
+      EXPECT_EQ(compiled_content_id(session.modeling(), "Baseline"), baseline);
+      expect_default_primitive_settings(session.primitive_creation());
+      EXPECT_FALSE(editor.tools().cancel_primitive_resize().changed());
+      EXPECT_FALSE(editor.tools().toggle_primitive_caps().ok());
+      ASSERT_NO_FATAL_FAILURE(activate_public_cylinder(editor.tools()));
+      EXPECT_TRUE(session.primitive_creation().cylinder_settings().caps);
+      ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    }
+  }
+}
+
+/// Starts an API-owned primitive session with a small torus topology for focused tests.
+void activate_public_primitive(QuaderToolsApi &tools, std::string_view kind) {
+  ASSERT_TRUE(tools.activate(ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(tools.set_setting(kCreatePrimitiveToolId, kPrimitiveTypeSetting, kind).ok());
+  if (kind == "torus") {
+    ASSERT_TRUE(tools.set_setting(kCreatePrimitiveToolId, kTorusMajorSegmentsSetting, 8.0).ok());
+    ASSERT_TRUE(tools.set_setting(kCreatePrimitiveToolId, kTorusMinorSegmentsSetting, 8.0).ok());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     FootprintSphereAndTorusProportionsIgnoreGridHeight) {
+  struct FootprintCase {
+    double grid;
+    float width;
+    float depth;
+    double tube_ratio;
+  };
+  // Equal footprints on different grids, plus an ellipse with a nondefault tube.
+  constexpr FootprintCase kCases[] = {
+      {0.25, 4.0f, 4.0f, 0.2},
+      {2.0, 4.0f, 4.0f, 0.2},
+      {0.5, 6.0f, 2.0f, 0.3},
+  };
+  for (const std::string_view shape : {"sphere", "hemisphere", "torus"}) {
+    SCOPED_TRACE(shape);
+    for (const auto &input : kCases) {
+      SCOPED_TRACE(input.grid);
+      SceneSession session;
+      QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_NO_FATAL_FAILURE(activate_public_primitive(
+          editor.tools(), shape == "hemisphere" ? "sphere" : shape));
+      if (shape == "torus") {
+        ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId,
+            kTorusTubeRadiusRatioSetting, input.tube_ratio).ok());
+      }
+      const ModelingBoxToolEvent start{
+          .ray = {.origin = {0.0f, 8.0f, 0.0f},
+                  .direction = {0.0f, -1.0f, 0.0f}},
+          .grid_size = input.grid,
+      };
+      ASSERT_TRUE(session.modeling().begin_box_footprint(start).ok);
+      if (shape == "hemisphere") {
+        // Pending H must affect the very first accepted volume's proportions.
+        ASSERT_TRUE(editor.tools().toggle_primitive_hemisphere().ok());
+      }
+      auto finish = start;
+      finish.ray.origin = {input.width, 8.0f, input.depth};
+      ASSERT_TRUE(session.modeling().update_box_footprint(finish).valid);
+      const auto preview = session.modeling().begin_box_height(finish);
+      ASSERT_TRUE(preview.ok) << preview.message;
+      ASSERT_TRUE(preview.valid);
+      ASSERT_EQ(preview.corner_count, 8U);
+      EXPECT_NEAR(length(preview.corners[4] - preview.corners[0]), input.grid, 0.0001);
+
+      // This is the same public acceptance path as the viewport's pointer release.
+      ASSERT_TRUE(editor.tools().accept_active_primitive("Natural Primitive").ok());
+      const auto state = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(state.has_value());
+      const float diameter = std::min(input.width, input.depth);
+      const double height = diameter * (shape == "torus" ? input.tube_ratio
+          : shape == "hemisphere" ? 0.5 : 1.0);
+      EXPECT_NEAR(state->local_max.x - state->local_min.x,
+                  length(preview.corners[3] - preview.corners[0]), 0.0001);
+      EXPECT_NEAR(state->local_max.z - state->local_min.z,
+                  length(preview.corners[1] - preview.corners[0]), 0.0001);
+      EXPECT_NEAR(state->local_max.y - state->local_min.y, height, 0.0001);
+      const auto bottom = (preview.corners[0] + preview.corners[1] +
+                            preview.corners[2] + preview.corners[3]) * 0.25f;
+      EXPECT_TRUE(near_point(state->world_origin + state->world_y * state->local_min.y,
+                             bottom));
+      const auto mesh = session.modeling().compile_object_mesh(state->object_id);
+      ASSERT_TRUE(mesh.has_value());
+      float minimum_y = std::numeric_limits<float>::infinity();
+      float maximum_y = -minimum_y;
+      for (const auto &vertex : mesh->geometry().vertices) {
+        minimum_y = std::min(minimum_y, vertex.position.y);
+        maximum_y = std::max(maximum_y, vertex.position.y);
+      }
+      EXPECT_NEAR(minimum_y, state->local_min.y, 0.0001);
+      EXPECT_NEAR(maximum_y, state->local_max.y, 0.0001);
+      ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+      EXPECT_TRUE(session.modeling().objects().empty());
+    }
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     NaturalFootprintHeightKeepsRotatedBaseAndLaterAuthoredDimensions) {
+  for (const std::string_view kind : {"sphere", "torus"}) {
+    SCOPED_TRACE(kind);
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_NO_FATAL_FAILURE(activate_public_primitive(editor.tools(), kind));
+    const QVec3 bottom{4.0f, 3.0f, -2.0f};
+    const QVec3 normal{0.0f, 0.6f, 0.8f};
+    ASSERT_TRUE(session.primitive_creation().accept_footprint(
+        oriented_primitive_preview(bottom + normal * 0.125f,
+            {1.0f, 0.0f, 0.0f}, normal, 6.0f, 0.25f, 2.0f),
+        "Rotated Natural Primitive").ok);
+    const auto initial = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(initial.has_value());
+    EXPECT_NEAR(initial->local_max.y - initial->local_min.y,
+                kind == "sphere" ? 2.0f : 0.4f, 0.0001);
+    EXPECT_TRUE(near_point(initial->world_y, normal));
+    EXPECT_TRUE(near_point(initial->world_origin + initial->world_y * initial->local_min.y,
+                           bottom));
+    const auto entity = *session.modeling().entity_for_modeling_object(initial->object_id);
+    const auto world = session.scene().world_transform_matrix(entity);
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::PositiveY).ok());
+    ASSERT_TRUE(editor.tools().update_primitive_resize(0.75).ok());
+    ASSERT_TRUE(editor.tools().end_primitive_resize().ok());
+    const auto resized = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(resized.has_value());
+    EXPECT_FLOAT_EQ(resized->local_min.y, initial->local_min.y);
+    EXPECT_FLOAT_EQ(resized->local_max.y, initial->local_max.y + 0.75f);
+    if (kind == "sphere") {
+      ASSERT_TRUE(editor.tools().toggle_primitive_hemisphere().ok());
+      ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, kSphereRingsSetting, 8.0).ok());
+    } else {
+      ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, kTorusTubeRadiusRatioSetting, 0.3).ok());
+    }
+    ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+    const auto edited = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(edited.has_value());
+    EXPECT_EQ(cube_components(edited->local_min), cube_components(resized->local_min));
+    EXPECT_EQ(cube_components(edited->local_max), cube_components(resized->local_max));
+    EXPECT_EQ(session.scene().world_transform_matrix(entity).values, world.values);
+    const auto content = compiled_content_id(session.modeling(), "Rotated Natural Primitive");
+    ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+    EXPECT_EQ(session.history().undo_count(), 1U);
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_TRUE(session.modeling().objects().empty());
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Rotated Natural Primitive"), content);
+    EXPECT_EQ(session.scene().world_transform_matrix(entity).values, world.values);
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     ConeAndSphereResizeBoundsSurviveSettingsWhileCancelRetainsIndependentToggles) {
+  for (const std::string_view kind : {"cone", "sphere"}) {
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_NO_FATAL_FAILURE(activate_public_primitive(editor.tools(), kind));
+    ASSERT_TRUE(session.primitive_creation().accept_preview(
+        oriented_primitive_preview({}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+                                   6.0f, 4.0f, 2.0f), "Curved Primitive").ok);
+    const auto original = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(original.has_value());
+    EXPECT_EQ(original->shape, kind == "cone" ? QuaderPrimitiveCreationShape::Cone
+                                              : QuaderPrimitiveCreationShape::Sphere);
+    for (const auto invalid : {QuaderPrimitiveResizeControl::PositiveX,
+                               QuaderPrimitiveResizeControl::NegativeZ,
+                               QuaderPrimitiveResizeControl::OuterRadius,
+                               QuaderPrimitiveResizeControl::InnerRadius}) {
+      EXPECT_FALSE(editor.tools().begin_primitive_resize(invalid).ok());
+    }
+    for (const auto control : {QuaderPrimitiveResizeControl::NegativeY,
+                               QuaderPrimitiveResizeControl::PositiveY,
+                               QuaderPrimitiveResizeControl::Radius}) {
+      SCOPED_TRACE(::testing::Message() << kind << ";" << static_cast<int>(control));
+      ASSERT_TRUE(editor.tools().begin_primitive_resize(control).ok());
+      const double delta = control == QuaderPrimitiveResizeControl::NegativeY ? -1.0 : 1.0;
+      ASSERT_TRUE(editor.tools().update_primitive_resize(delta).ok());
+      auto changed = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(changed.has_value());
+      if (control == QuaderPrimitiveResizeControl::Radius) {
+        EXPECT_FLOAT_EQ(changed->local_max.x, 4.0f);
+        EXPECT_NEAR(changed->local_max.z, 4.0f / 3.0f, 0.000001f);
+        EXPECT_FLOAT_EQ(changed->local_min.y, original->local_min.y);
+        EXPECT_FLOAT_EQ(changed->local_max.y, original->local_max.y);
+      } else {
+        EXPECT_FLOAT_EQ(changed->local_min.y, original->local_min.y +
+            (control == QuaderPrimitiveResizeControl::NegativeY ? -1.0f : 0.0f));
+        EXPECT_FLOAT_EQ(changed->local_max.y, original->local_max.y +
+            (control == QuaderPrimitiveResizeControl::PositiveY ? 1.0f : 0.0f));
+      }
+      const auto stats = session.modeling().modeling_sdk_projection_stats_for_tests();
+      EXPECT_FALSE(editor.tools().update_primitive_resize(delta).changed());
+      EXPECT_EQ(session.modeling().modeling_sdk_projection_stats_for_tests().mesh_compile_count,
+                stats.mesh_compile_count);
+      ASSERT_TRUE((kind == "cone" ? editor.tools().toggle_primitive_caps()
+                                  : editor.tools().toggle_primitive_hemisphere()).ok());
+      ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+      const auto setting = kind == "cone" ? kConeSideCountSetting : kSphereRadialSegmentsSetting;
+      ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, setting, 7.0).ok());
+      EXPECT_EQ(cube_components(editor.tools().live_primitive_creation()->local_min),
+                cube_components(changed->local_min));
+      EXPECT_EQ(cube_components(editor.tools().live_primitive_creation()->local_max),
+                cube_components(changed->local_max));
+      const auto edited = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(editor.tools().cancel_primitive_resize().ok());
+      const auto restored = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(restored.has_value());
+      EXPECT_EQ(cube_components(restored->local_min), cube_components(original->local_min));
+      EXPECT_EQ(cube_components(restored->local_max), cube_components(original->local_max));
+      EXPECT_EQ(restored->flip_faces, edited->flip_faces);
+      EXPECT_EQ(restored->caps, edited->caps);
+      EXPECT_EQ(restored->hemisphere, edited->hemisphere);
+      EXPECT_EQ(restored->side_count, edited->side_count);
+      EXPECT_EQ(restored->radial_segments, edited->radial_segments);
+    }
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::PositiveY).ok());
+    ASSERT_TRUE(editor.tools().update_primitive_resize(-100.0).ok());
+    const auto flat = editor.tools().live_primitive_creation();
+    EXPECT_GE(static_cast<double>(flat->local_max.y) - flat->local_min.y, kPrimitiveMinimumExtent);
+    EXPECT_FALSE(editor.tools().update_primitive_resize(-200.0).changed());
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    EXPECT_TRUE(session.modeling().objects().empty());
+    expect_default_primitive_settings(session.primitive_creation());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     TorusRadiusControlsHoldOppositeEllipseFixedAndRespectRatioLimits) {
+  for (const auto control : {QuaderPrimitiveResizeControl::OuterRadius,
+                             QuaderPrimitiveResizeControl::InnerRadius}) {
+    SCOPED_TRACE(static_cast<int>(control));
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_NO_FATAL_FAILURE(activate_public_primitive(editor.tools(), "torus"));
+    ASSERT_TRUE(session.primitive_creation().accept_preview(
+        oriented_primitive_preview({}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+                                   6.0f, 4.0f, 2.0f), "Radial Torus").ok);
+    const auto before = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(before.has_value());
+    EXPECT_EQ(before->shape, QuaderPrimitiveCreationShape::Torus);
+    EXPECT_EQ(before->major_segments, 8);
+    EXPECT_EQ(before->minor_segments, 8);
+    EXPECT_DOUBLE_EQ(before->tube_radius_ratio, 0.2);
+    for (const auto invalid : {QuaderPrimitiveResizeControl::NegativeY,
+                               QuaderPrimitiveResizeControl::Radius,
+                               QuaderPrimitiveResizeControl::PositiveX}) {
+      EXPECT_FALSE(editor.tools().begin_primitive_resize(invalid).ok());
+    }
+    const QVec3 ray{3.0f, 0.0f, 4.0f};
+    const double outer = 1.0 / std::hypot(0.6 / 3.0, 0.8);
+    const double inner = outer * 0.6;
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(control, ray).ok());
+    const auto start = editor.tools().live_primitive_creation();
+    EXPECT_FALSE(editor.tools().update_primitive_resize(0.0).changed());
+    EXPECT_EQ(editor.tools().live_primitive_creation()->revision, start->revision);
+    for (const double delta : {0.25, -0.1, 1000.0, -1000.0}) {
+      ASSERT_TRUE(editor.tools().update_primitive_resize(delta).ok());
+      const auto resized = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(resized.has_value());
+      EXPECT_GE(resized->tube_radius_ratio, kTorusMinimumTubeRadiusRatio);
+      EXPECT_LE(resized->tube_radius_ratio, kTorusMaximumTubeRadiusRatio);
+      const double scale = resized->local_max.x / 3.0;
+      EXPECT_NEAR(resized->local_max.z, scale, 0.00001);
+      EXPECT_FLOAT_EQ(resized->local_min.x, -resized->local_max.x);
+      EXPECT_FLOAT_EQ(resized->local_min.z, -resized->local_max.z);
+      EXPECT_FLOAT_EQ(resized->local_min.y, before->local_min.y);
+      EXPECT_FLOAT_EQ(resized->local_max.y, before->local_max.y);
+      if (control == QuaderPrimitiveResizeControl::OuterRadius) {
+        EXPECT_NEAR(outer * scale * (1.0 - 2.0 * resized->tube_radius_ratio), inner, 0.00001);
+        const double requested = std::clamp(outer + delta, inner / 0.98, inner / 0.02);
+        EXPECT_NEAR(outer * scale, requested, 0.00001);
+      } else {
+        EXPECT_EQ(cube_components(resized->local_min), cube_components(before->local_min));
+        EXPECT_EQ(cube_components(resized->local_max), cube_components(before->local_max));
+        EXPECT_NEAR(outer * (1.0 - 2.0 * resized->tube_radius_ratio),
+                    std::clamp(inner + delta, outer * 0.02, outer * 0.98), 0.00001);
+      }
+      const auto stats = session.modeling().modeling_sdk_projection_stats_for_tests();
+      EXPECT_FALSE(editor.tools().update_primitive_resize(delta).changed());
+      EXPECT_EQ(editor.tools().live_primitive_creation()->revision, resized->revision);
+      const auto after = session.modeling().modeling_sdk_projection_stats_for_tests();
+      EXPECT_EQ(after.mesh_compile_count, stats.mesh_compile_count);
+      EXPECT_EQ(after.asset_publication_count, stats.asset_publication_count);
+    }
+    EXPECT_FALSE(editor.tools().update_primitive_resize(std::numeric_limits<double>::quiet_NaN()).ok());
+    ASSERT_TRUE(editor.tools().cancel_primitive_resize().ok());
+    EXPECT_DOUBLE_EQ(editor.tools().live_primitive_creation()->tube_radius_ratio, 0.2);
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::PositiveY).ok());
+    ASSERT_TRUE(editor.tools().update_primitive_resize(1.0).ok());
+    EXPECT_FLOAT_EQ(editor.tools().live_primitive_creation()->local_min.y, before->local_min.y);
+    EXPECT_FLOAT_EQ(editor.tools().live_primitive_creation()->local_max.y, before->local_max.y + 1.0f);
+    ASSERT_TRUE(editor.tools().end_primitive_resize().ok());
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     TorusCancelAndUndoRestoreRatioWithBoundsWhileHistoryKeepsFinalSettings) {
+  for (const bool undo : {false, true}) {
+    SCOPED_TRACE(undo);
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_NO_FATAL_FAILURE(activate_public_primitive(editor.tools(), "torus"));
+    ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(), "History Torus").ok);
+    const auto original = editor.tools().live_primitive_creation();
+    for (const auto control : {QuaderPrimitiveResizeControl::InnerRadius,
+                               QuaderPrimitiveResizeControl::OuterRadius}) {
+      ASSERT_TRUE(editor.tools().begin_primitive_resize(control).ok());
+      ASSERT_TRUE(editor.tools().update_primitive_resize(0.25).ok());
+      ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+      ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, kTorusMinorSegmentsSetting, 7.0).ok());
+      const bool flipped = editor.tools().live_primitive_creation()->flip_faces;
+      ASSERT_TRUE((undo ? editor.history().undo() : editor.tools().cancel_primitive_resize()).ok());
+      const auto restored = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(restored.has_value());
+      EXPECT_FALSE(restored->resizing);
+      EXPECT_DOUBLE_EQ(restored->tube_radius_ratio, original->tube_radius_ratio);
+      EXPECT_EQ(cube_components(restored->local_min), cube_components(original->local_min));
+      EXPECT_EQ(cube_components(restored->local_max), cube_components(original->local_max));
+      EXPECT_EQ(restored->flip_faces, flipped);
+      EXPECT_EQ(restored->minor_segments, 7);
+      EXPECT_EQ(session.primitive_creation().shape_count(), 1U);
+    }
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::OuterRadius).ok());
+    ASSERT_TRUE(editor.tools().update_primitive_resize(0.5).ok());
+    ASSERT_TRUE(editor.tools().end_primitive_resize().ok());
+    const auto resized = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, kTorusTubeRadiusRatioSetting, 0.3).ok());
+    ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, kTorusMajorSegmentsSetting, 7.0).ok());
+    EXPECT_EQ(cube_components(editor.tools().live_primitive_creation()->local_max), cube_components(resized->local_max));
+    const auto first_content = compiled_content_id(session.modeling(), "History Torus");
+    ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(4.0f), "Repeated Torus").ok);
+    EXPECT_DOUBLE_EQ(editor.tools().live_primitive_creation()->tube_radius_ratio, 0.3);
+    EXPECT_FLOAT_EQ(editor.tools().live_primitive_creation()->local_max.x, 1.0f);
+    const auto second_content = compiled_content_id(session.modeling(), "Repeated Torus");
+    ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+    EXPECT_EQ(session.history().undo_count(), 2U);
+    expect_default_primitive_settings(session.primitive_creation());
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_TRUE(session.modeling().objects().empty());
+    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(compiled_content_id(session.modeling(), "History Torus"), first_content);
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Repeated Torus"), second_content);
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CurvedPrimitiveGenerationKeepsPlacementTextureAndShapeParameterization) {
+  for (const std::string_view kind : {"cone", "sphere", "torus"}) {
+    SCOPED_TRACE(kind);
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_NO_FATAL_FAILURE(activate_public_primitive(editor.tools(), kind));
+    const auto material = session.assets().add_material(make_default_quader_material("Curved Material"));
+    ASSERT_TRUE(session.primitive_creation().accept_preview(
+        oriented_primitive_preview({4.0f, 2.0f, -3.0f}, {0.0f, 0.0f, -1.0f},
+                                   {0.0f, 1.0f, 0.0f}, 6.0f, 4.0f, 2.0f),
+        "Parametric Primitive", MaterialReference(material)).ok);
+    const auto original = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(original.has_value());
+    // Explicit volumes retain their authored height; only drawn footprints
+    // receive natural Sphere/Torus proportions.
+    EXPECT_FLOAT_EQ(original->local_max.x - original->local_min.x, 6.0f);
+    EXPECT_FLOAT_EQ(original->local_max.y - original->local_min.y, 4.0f);
+    EXPECT_FLOAT_EQ(original->local_max.z - original->local_min.z, 2.0f);
+    const auto entity = *session.modeling().entity_for_modeling_object(original->object_id);
+    const TransformComponent transform{.position = {7.0f, 3.0f, -2.0f},
+                                      .rotation_euler = {0.2f, 0.7f, -0.1f},
+                                      .scale = {2.0f, 0.5f, 3.0f}};
+    ASSERT_TRUE(session.scene().set_transform(entity, transform));
+    const auto world = session.scene().world_transform_matrix(entity);
+    const auto placed = editor.tools().live_primitive_creation();
+    EXPECT_GT(placed->revision, original->revision);
+    EXPECT_TRUE(near_point(placed->world_x, transform_vector(world, {1.0f, 0.0f, 0.0f})));
+    const auto sampling = effective_texture_sampling_from_local(session.scene(), entity);
+    ASSERT_TRUE(sampling.has_value());
+    const auto material_before = *session.scene().material(entity);
+    const auto selection = session.scene().selected_entities();
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::PositiveY).ok());
+    ASSERT_TRUE(editor.tools().update_primitive_resize(1.0).ok());
+    ASSERT_TRUE(editor.tools().end_primitive_resize().ok());
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(kind == "torus"
+        ? QuaderPrimitiveResizeControl::OuterRadius : QuaderPrimitiveResizeControl::Radius).ok());
+    ASSERT_TRUE(editor.tools().update_primitive_resize(0.5).ok());
+    ASSERT_TRUE(editor.tools().end_primitive_resize().ok());
+    if (kind == "sphere") {
+      ASSERT_TRUE(editor.tools().toggle_primitive_hemisphere().ok());
+      ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, kSphereRingsSetting, 7.0).ok());
+    } else if (kind == "cone") {
+      ASSERT_TRUE(editor.tools().toggle_primitive_caps().ok());
+    }
+    ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+    const auto state = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->object_id, original->object_id);
+    EXPECT_EQ(session.scene().world_transform_matrix(entity).values, world.values);
+    EXPECT_EQ(session.scene().selected_entities(), selection);
+    EXPECT_EQ(*session.scene().material(entity), material_before);
+    const auto sampling_after = effective_texture_sampling_from_local(session.scene(), entity);
+    ASSERT_TRUE(sampling_after.has_value());
+    EXPECT_EQ(sampling_after->values, sampling->values);
+    const auto mesh = session.modeling().compile_object_mesh(state->object_id);
+    ASSERT_TRUE(mesh.has_value());
+    const auto center = (state->local_min + state->local_max) * 0.5f;
+    const auto radius = (state->local_max - state->local_min) * 0.5f;
+    for (const auto &vertex : mesh->geometry().vertices) {
+      const double x = (vertex.position.x - center.x) / radius.x;
+      const double z = (vertex.position.z - center.z) / radius.z;
+      const double height = (vertex.position.y - state->local_min.y) / (2.0f * radius.y);
+      if (kind == "cone") {
+        EXPECT_NEAR(x * x + z * z, (1.0 - height) * (1.0 - height), 0.00001);
+      } else if (kind == "sphere") {
+        // Hemisphere occupies the whole height, with its equator at the bottom.
+        EXPECT_NEAR(x * x + z * z + height * height, 1.0, 0.00001);
+      } else {
+        const double tube = (std::hypot(x, z) - (1.0 - state->tube_radius_ratio)) /
+                            state->tube_radius_ratio;
+        const double y = (vertex.position.y - center.y) / radius.y;
+        EXPECT_NEAR(tube * tube + y * y, 1.0, 0.00001);
+      }
+    }
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     NewShapePendingFlipCapsAndHemisphereLeavePreviousPrimitiveFrozen) {
+  for (const std::string_view kind : {"cone", "sphere", "torus"}) {
+    SCOPED_TRACE(kind);
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_NO_FATAL_FAILURE(activate_public_primitive(editor.tools(), kind));
+    ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+    ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+    if (kind != "sphere") EXPECT_FALSE(editor.tools().toggle_primitive_hemisphere().ok());
+    if (kind != "cone") EXPECT_FALSE(editor.tools().toggle_primitive_caps().ok());
+    ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(), "Frozen Shape").ok);
+    const auto content = compiled_content_id(session.modeling(), "Frozen Shape");
+    ASSERT_TRUE(session.modeling().begin_box_footprint({
+        .ray = {.origin = {6.0f, 4.0f, 0.0f}, .direction = {0.0f, -1.0f, 0.0f}},
+        .grid_size = 1.0,
+    }).ok);
+    EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
+    for (int toggle = 0; toggle < 3; ++toggle) {
+      ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
+      if (kind == "cone") ASSERT_TRUE(editor.tools().toggle_primitive_caps().ok());
+      if (kind == "sphere") ASSERT_TRUE(editor.tools().toggle_primitive_hemisphere().ok());
+    }
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Frozen Shape"), content);
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
+    ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(6.0f), "Pending Shape").ok);
+    const auto pending = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(pending.has_value());
+    EXPECT_TRUE(pending->flip_faces);
+    if (kind == "cone") EXPECT_FALSE(pending->caps);
+    if (kind == "sphere") EXPECT_TRUE(pending->hemisphere);
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Frozen Shape"), content);
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    expect_default_primitive_settings(session.primitive_creation());
+    EXPECT_TRUE(session.modeling().objects().empty());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     TorusInterruptedResizeRestoresRatioBeforePendingFlipAndPropagatesPublicationFailure) {
+  for (const auto failure : {ModelingSdkProjectionFailurePoint::None,
+                             ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
+                             ModelingSdkProjectionFailurePoint::CommittedSceneNotify}) {
+    SCOPED_TRACE(static_cast<int>(failure));
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.modeling().create_box(
+        {.min = {7.0f, -1.0f, -1.0f}, .max = {9.0f, 1.0f, 1.0f}}, "Baseline").ok());
+    const auto baseline = compiled_content_id(session.modeling(), "Baseline");
+    ASSERT_NO_FATAL_FAILURE(activate_public_primitive(editor.tools(), "torus"));
+    ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(), "Interrupted Torus").ok);
+    const auto content = compiled_content_id(session.modeling(), "Interrupted Torus");
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::InnerRadius).ok());
+    ASSERT_TRUE(editor.tools().update_primitive_resize(0.25).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    const auto selection_revision = session.scene().selection_revision();
+    EXPECT_FALSE(editor.tools().set_setting(kCreatePrimitiveToolId, kTorusTubeRadiusRatioSetting, 0.0).ok());
+    EXPECT_NE(session.primitive_creation().torus_settings().tube_radius_ratio, 0.2);
+    session.modeling().set_modeling_sdk_projection_failure_for_tests(failure);
+    const auto flipped = editor.tools().flip_primitive_faces();
+    if (failure == ModelingSdkProjectionFailurePoint::None) {
+      ASSERT_TRUE(flipped.ok()) << flipped.error_message();
+      EXPECT_TRUE(flipped.changed());
+      EXPECT_EQ(compiled_content_id(session.modeling(), "Interrupted Torus"), content);
+      EXPECT_TRUE(session.scene().selected_entities().empty());
+      EXPECT_EQ(session.scene().selection_revision(), selection_revision);
+      EXPECT_DOUBLE_EQ(session.primitive_creation().torus_settings().tube_radius_ratio, 0.2);
+      EXPECT_TRUE(session.primitive_creation().torus_settings().flip_faces);
+      ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    } else {
+      EXPECT_FALSE(flipped.ok());
+      EXPECT_FALSE(flipped.changed());
+      EXPECT_FALSE(session.primitive_creation().active());
+      expect_default_primitive_settings(session.primitive_creation());
+    }
+    EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
+    EXPECT_FALSE(editor.tools().cancel_primitive_resize().changed());
+    ASSERT_EQ(session.modeling().objects().size(), 1U);
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Baseline"), baseline);
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests, PrimitiveFlipFacesDuringFootprintLeavesPreviousCubeFrozen) {
+  constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
+  const auto *contract =
+      quader::test::find_command_behavior_contract(kFlip.string());
+  ASSERT_NE(contract, nullptr);
+  auto fixture = quader::test::CommandBehaviorFixture::create(*contract);
+  auto &editor = fixture->editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto footprint = fixture->native_scene().modeling().begin_box_footprint({
+      .screen_position = {400.0f, 300.0f},
+      .ray = {.origin = {12.0f, 4.0f, 0.0f},
+              .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+  });
+  ASSERT_TRUE(footprint.ok) << footprint.message;
+  ASSERT_EQ(footprint.drag_state, quader::ModelingBoxDragState::Footprint);
+  const auto before = quader::test::capture_command_observable_state(editor);
+  for (const bool expected : {true, false}) {
+    const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+        QuaderInputChord{.device = QuaderInputDevice::Keyboard, .key = QuaderKeyCode::F},
+        {.active_tool = quader::ViewportToolId::CreatePrimitive}, true, false,
+        {.modal_tool_active = true, .active_tool_owns_viewport = true});
+    ASSERT_EQ(dispatch.command_id, kFlip.string());
+    const auto result = editor.commands().execute(dispatch.command_id);
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_TRUE(result.changed());
+    const auto settings = editor.tools().active_settings();
+    const auto flip = std::find_if(settings.controls.begin(), settings.controls.end(),
+        [](const auto &control) { return control.id == "primitive.flip_faces"; });
+    ASSERT_NE(flip, settings.controls.end());
+    EXPECT_EQ(flip->bool_value, expected);
+    using Domain = quader::test::CommandObservableDomain;
+    const auto after = quader::test::capture_command_observable_state(editor);
+    EXPECT_EQ(after.domain(Domain::Geometry), before.domain(Domain::Geometry));
+    EXPECT_EQ(after.domain(Domain::History), before.domain(Domain::History));
+    EXPECT_EQ(fixture->native_scene().modeling().box_drag_state(),
+              quader::ModelingBoxDragState::Footprint);
+  }
 }
 
 } // namespace

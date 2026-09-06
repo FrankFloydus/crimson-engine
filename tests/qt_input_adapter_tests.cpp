@@ -11,19 +11,25 @@
 #include "editor/interactions/viewport_navigation.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
+#include "api/quader_command_ids.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "core/localization_service.hpp"
 #include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
+#include "editor/tools/primitive_creation_interaction.hpp"
+#include "editor/viewport/primitive_creation_api_adapter.hpp"
 #include "editor/tools/viewport_native_tool_interaction.hpp"
 #include "math/glm_bridge.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
 #include "viewport/viewport_input_router.hpp"
+#include "viewport/viewport_pointer_gesture.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_settings.hpp"
 
@@ -32,6 +38,7 @@
 #include <QEnterEvent>
 #include <QFocusEvent>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QPoint>
 #include <QPointF>
@@ -45,6 +52,7 @@
 #include <filesystem>
 #include <initializer_list>
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -567,6 +575,586 @@ TEST(QtViewportSurfaceInputTests,
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
   process_input();
   EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     ModifierOnlyKeysUpdateStationaryViewportInput) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-stationary-modifier-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(&surface, &focus);
+
+  // The modifier key itself determines its transition even when the event's
+  // modifier mask describes the state immediately before that transition.
+  QKeyEvent press(QEvent::KeyPress, Qt::Key_Control, Qt::NoModifier);
+  QApplication::sendEvent(&surface, &press);
+  const auto down = surface.take_input_frame(1.0f / 60.0f, false);
+  EXPECT_TRUE(down.input.modifiers.primary);
+  EXPECT_TRUE(down.input.pressed_input_chords.empty());
+  EXPECT_TRUE(down.input.pointer_pressed_edges.empty());
+  EXPECT_FLOAT_EQ(down.input.mouse_delta.x, 0.0f);
+  EXPECT_FLOAT_EQ(down.input.mouse_delta.y, 0.0f);
+
+  quader::ViewportInteractionController controller;
+  quader::ViewportCameraController camera;
+  camera.set_viewport_size(800, 600);
+  camera.focus_origin(10);
+  const quader::QuaderPrimitiveCreationState cube{
+      .object_id = 1, .local_min = {-1, -1, -1}, .local_max = {1, 1, 1},
+      .world_x = {1, 0, 0}, .world_y = {0, 1, 0}, .world_z = {0, 0, 1}};
+  (void)controller.primitive_creation_controls(cube, camera, 1);
+  controller.set_primitive_creation_decrement(down.input.modifiers.primary);
+  const auto held_revision = controller.primitive_creation_controls(cube, camera, 1).revision;
+  // Exercise the real Qt surface frame sampler on Windows too: no mouse
+  // event, Enter/hover, or tool frame is needed to retain and project Ctrl.
+  for (int frame = 0; frame < 60; ++frame) {
+    const auto idle = surface.take_input_frame(1.0f / 60.0f, false);
+    EXPECT_TRUE(idle.input.modifiers.primary);
+    EXPECT_FALSE(idle.input.viewport_hovered);
+    EXPECT_TRUE(idle.input.pressed_input_chords.empty());
+    EXPECT_TRUE(idle.input.active_input_chords.empty());
+    controller.set_primitive_creation_decrement(idle.input.modifiers.primary);
+    const auto &controls = controller.primitive_creation_controls(cube, camera, 1);
+    EXPECT_EQ(controls.revision, held_revision);
+    EXPECT_EQ(controls.hovered, -1);
+    for (int index : {6, 7, 8}) EXPECT_TRUE(controls.controls[index].subdivision_decrement);
+  }
+
+  QKeyEvent release(QEvent::KeyRelease, Qt::Key_Control, Qt::ControlModifier);
+  QApplication::sendEvent(&surface, &release);
+  const auto up = surface.take_input_frame(1.0f / 60.0f, false);
+  EXPECT_FALSE(up.input.modifiers.primary);
+  EXPECT_TRUE(up.input.pressed_input_chords.empty());
+  EXPECT_TRUE(up.input.released_input_chords.empty());
+  EXPECT_TRUE(up.input.pointer_released_edges.empty());
+  EXPECT_FLOAT_EQ(up.input.mouse_delta.x, 0.0f);
+  EXPECT_FLOAT_EQ(up.input.mouse_delta.y, 0.0f);
+  controller.set_primitive_creation_decrement(up.input.modifiers.primary);
+  const auto &released = controller.primitive_creation_controls(cube, camera, 1);
+  EXPECT_GT(released.revision, held_revision);
+  for (int index : {6, 7, 8}) EXPECT_FALSE(released.controls[index].subdivision_decrement);
+  EXPECT_FALSE(surface.take_input_frame(1.0f / 60.0f, false).input.modifiers.primary);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     CoalescedMouseEdgesPreservePressModifiersIndependentlyOfLiveState) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-pointer-modifier-provenance-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  const QPointF point{40, 50};
+  QKeyEvent ctrl_down(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
+  QMouseEvent press(QEvent::MouseButtonPress, point, point,
+                    Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+  QKeyEvent ctrl_up(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
+  QMouseEvent release(QEvent::MouseButtonRelease, point, point,
+                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(&surface, &ctrl_down);
+  QApplication::sendEvent(&surface, &press);
+  QApplication::sendEvent(&surface, &ctrl_up);
+  QApplication::sendEvent(&surface, &release);
+  const auto sample = surface.take_input_frame(1.0f / 60.0f, false);
+  ASSERT_EQ(sample.input.pointer_pressed_edges.size(), 1u);
+  ASSERT_EQ(sample.input.pointer_released_edges.size(), 1u);
+  ASSERT_TRUE(sample.input.pointer_pressed_edges[0].modifiers);
+  ASSERT_TRUE(sample.input.pointer_released_edges[0].modifiers);
+  EXPECT_TRUE(sample.input.pointer_pressed_edges[0].modifiers->primary);
+  EXPECT_FALSE(sample.input.pointer_released_edges[0].modifiers->primary);
+  EXPECT_FALSE(sample.input.modifiers.primary);
+  const auto gesture = quader::viewport_pointer_gesture_from_latest_edge(
+      sample.input.pointer_pressed_edges, QuaderMouseButton::Left,
+      sample.left_click_local, sample.input.mouse_screen, sample.input.modifiers);
+  EXPECT_TRUE(gesture.modifiers.primary);
+  EXPECT_NE(quader::viewport_pointer_edge_after(
+                sample.input.pointer_released_edges, gesture.press), nullptr);
+
+  // Legacy synthetic edges without provenance keep the explicit fallback.
+  const std::array<quader::ViewportPointerButtonEdge, 1> synthetic{{
+      {.button = QuaderMouseButton::Left}}};
+  EXPECT_TRUE(quader::viewport_pointer_gesture_from_latest_edge(
+      synthetic, QuaderMouseButton::Left, {}, {}, {.primary = true}).modifiers.primary);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     MouseCommandsReserveCubeControlsButKeyboardFlipAllowsResize) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-cube-command-pointer-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  editor.preferences().set_runtime_hooks({.gizmos_visible = [] { return true; }});
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  quader::ModelingBoxPreview preview;
+  preview.ok = preview.valid = true;
+  preview.drag_state = quader::ModelingBoxDragState::Height;
+  preview.corners = {quader::QVec3{-1, -1, -1}, quader::QVec3{-1, -1, 1},
+                     quader::QVec3{1, -1, 1}, quader::QVec3{1, -1, -1},
+                     quader::QVec3{-1, 1, -1}, quader::QVec3{-1, 1, 1},
+                     quader::QVec3{1, 1, 1}, quader::QVec3{1, 1, -1}};
+  preview.corner_count = 8;
+  ASSERT_TRUE(session.primitive_creation().accept_preview(preview, "Cube").ok);
+
+  quader::QtViewportPanel panel;
+  panel.attach_workspace(session.viewport_workspace());
+  auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+  QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
+  QApplication::sendEvent(surface, &enter);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &focus);
+  const auto process_input = [&]() {
+    panel.process_input(
+        editor, session.scene(), session.assets(), session.modeling(), {},
+        session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+  };
+  auto &camera = session.viewport_workspace().camera(
+      quader::ViewportPaneId::Perspective);
+  camera.focus_origin(10);
+  process_input();
+  const auto local_point = [&](quader::QVec2 pixels) {
+    return QPointF{pixels.x / surface->devicePixelRatio(),
+                   pixels.y / surface->devicePixelRatio()};
+  };
+  quader::PrimitiveCreationInteraction projection;
+  const auto control_point = [&](int index) {
+    const auto &frame = projection.project(
+        quader::ViewportPrimitiveCreationApiAdapter::from_api(
+            editor.tools().live_primitive_cube()), camera,
+        panel.viewport_raster_scale(quader::ViewportPaneId::Perspective));
+    return local_point(frame.controls[index].screen_position);
+  };
+  const auto send_mouse = [&](QEvent::Type type, QPointF local,
+                              Qt::KeyboardModifiers modifiers) {
+    QMouseEvent event(type, local, local + QPointF{100, 100},
+                      type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                      type == QEvent::MouseButtonRelease ? Qt::NoButton
+                                                        : Qt::LeftButton,
+                      modifiers);
+    QApplication::sendEvent(surface, &event);
+  };
+  const auto send_ctrl = [&](bool down) {
+    QKeyEvent event(down ? QEvent::KeyPress : QEvent::KeyRelease,
+                    Qt::Key_Control, down ? Qt::ControlModifier : Qt::NoModifier);
+    QApplication::sendEvent(surface, &event);
+  };
+  constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
+  // Keep the button above its decrement limit so an unreserved command click
+  // would visibly change the cube and fail the ownership assertions below.
+  ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+      quader::kBoxSubdivisionsXSetting, 2.0).ok());
+  for (const bool coalesced : {false, true}) {
+    for (const int control : {0, 6}) {
+      SCOPED_TRACE(coalesced);
+      SCOPED_TRACE(control);
+      ASSERT_TRUE(editor.commands().set_shortcut(kFlip, "Ctrl+LeftMouse").ok());
+      const auto before = editor.tools().live_primitive_cube();
+      ASSERT_TRUE(before);
+      const QPointF point = control_point(control);
+      send_mouse(QEvent::MouseButtonPress, point, Qt::ControlModifier);
+      if (!coalesced) {
+        process_input();
+        ASSERT_TRUE(editor.tools().live_primitive_cube());
+        EXPECT_FALSE(editor.tools().live_primitive_cube()->resizing);
+        // Ownership survives rebinding and a modifier change while held.
+        ASSERT_TRUE(editor.commands().reset_shortcut(kFlip).ok());
+        send_mouse(QEvent::MouseMove, point + QPointF{40, 0}, Qt::NoModifier);
+        process_input();
+        send_mouse(QEvent::MouseMove, point, Qt::NoModifier);
+        process_input();
+      }
+      send_mouse(QEvent::MouseButtonRelease, point, Qt::NoModifier);
+      process_input();
+      const auto after = editor.tools().live_primitive_cube();
+      ASSERT_TRUE(after);
+      EXPECT_NE(after->flip_faces, before->flip_faces);
+      EXPECT_EQ(after->subdivisions, before->subdivisions);
+      EXPECT_EQ(after->local_min.x, before->local_min.x);
+      EXPECT_EQ(after->local_max.x, before->local_max.x);
+      EXPECT_FALSE(after->resizing);
+      EXPECT_EQ(session.modeling().box_drag_state(), quader::ModelingBoxDragState::Idle);
+      EXPECT_EQ(session.primitive_creation().shape_count(), 1);
+    }
+  }
+
+  // A mouse sequence prefix reserves its press even before a command executes.
+  ASSERT_TRUE(editor.commands().set_shortcut(kFlip, "Ctrl+LeftMouse F").ok());
+  const auto before_sequence = editor.tools().live_primitive_cube();
+  const QPointF plus = control_point(6);
+  send_mouse(QEvent::MouseButtonPress, plus, Qt::ControlModifier);
+  send_mouse(QEvent::MouseButtonRelease, plus, Qt::NoModifier);
+  process_input();
+  EXPECT_EQ(editor.tools().live_primitive_cube()->subdivisions,
+            before_sequence->subdivisions);
+  EXPECT_EQ(editor.tools().live_primitive_cube()->flip_faces,
+            before_sequence->flip_faces);
+  QKeyEvent sequence_finish(QEvent::KeyPress, Qt::Key_F, Qt::NoModifier);
+  QKeyEvent sequence_release(QEvent::KeyRelease, Qt::Key_F, Qt::NoModifier);
+  QApplication::sendEvent(surface, &sequence_finish);
+  QApplication::sendEvent(surface, &sequence_release);
+  process_input();
+  EXPECT_NE(editor.tools().live_primitive_cube()->flip_faces,
+            before_sequence->flip_faces);
+
+  // A keyboard command in the same frame must leave an unrelated click usable.
+  ASSERT_TRUE(editor.commands().reset_shortcut(kFlip).ok());
+  ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+      quader::kBoxSubdivisionsXSetting, 2.0).ok());
+  const auto before_click = editor.tools().live_primitive_cube();
+  ASSERT_TRUE(before_click);
+  QKeyEvent flip_press(QEvent::KeyPress, Qt::Key_F, Qt::NoModifier);
+  QKeyEvent flip_release(QEvent::KeyRelease, Qt::Key_F, Qt::NoModifier);
+  QApplication::sendEvent(surface, &flip_press);
+  QApplication::sendEvent(surface, &flip_release);
+  send_ctrl(true);
+  send_mouse(QEvent::MouseButtonPress, plus, Qt::ControlModifier);
+  send_ctrl(false);
+  send_mouse(QEvent::MouseButtonRelease, plus, Qt::NoModifier);
+  process_input();
+  ASSERT_TRUE(editor.tools().live_primitive_cube());
+  EXPECT_EQ(editor.tools().live_primitive_cube()->subdivisions[0],
+            before_click->subdivisions[0] - 1);
+  EXPECT_NE(editor.tools().live_primitive_cube()->flip_faces, before_click->flip_faces);
+
+  constexpr std::array<std::string_view, 3> kSubdivisionSettings{
+      quader::kBoxSubdivisionsXSetting, quader::kBoxSubdivisionsYSetting,
+      quader::kBoxSubdivisionsZSetting};
+  for (const bool coalesced : {false, true}) {
+    for (int axis = 0; axis < 3; ++axis) {
+      SCOPED_TRACE(coalesced);
+      SCOPED_TRACE(axis);
+      for (const auto setting : kSubdivisionSettings) {
+        ASSERT_TRUE(editor.tools().set_setting(
+            quader::kCreatePrimitiveToolId, setting, 2.0).ok());
+      }
+      const QPointF button = control_point(6 + axis);
+      for (const int initial : {2, 1}) {
+        SCOPED_TRACE(initial);
+        const auto before = editor.tools().live_primitive_cube();
+        ASSERT_TRUE(before);
+        ASSERT_EQ(before->subdivisions[axis], initial);
+        send_ctrl(true);
+        send_mouse(QEvent::MouseButtonPress, button, Qt::ControlModifier);
+        if (!coalesced) process_input();
+        // Release Ctrl first, including a separate stationary frame while
+        // the mouse is held. The press still owns the decrement operation.
+        send_ctrl(false);
+        if (!coalesced) process_input();
+        send_mouse(QEvent::MouseButtonRelease, button, Qt::NoModifier);
+        process_input();
+        const auto after = editor.tools().live_primitive_cube();
+        ASSERT_TRUE(after);
+        auto expected = before->subdivisions;
+        expected[axis] = 1;
+        EXPECT_EQ(after->subdivisions, expected);
+        if (initial == 1) EXPECT_EQ(after->revision, before->revision);
+        EXPECT_FALSE(after->resizing);
+        EXPECT_EQ(session.modeling().box_drag_state(), quader::ModelingBoxDragState::Idle);
+        EXPECT_EQ(session.primitive_creation().shape_count(), 1);
+      }
+
+      // The inverse ordering also freezes intent: Ctrl pressed after the
+      // mouse-down changes live mode, but the accepted click increments.
+      send_mouse(QEvent::MouseButtonPress, button, Qt::NoModifier);
+      if (!coalesced) process_input();
+      send_ctrl(true);
+      send_mouse(QEvent::MouseButtonRelease, button, Qt::ControlModifier);
+      process_input();
+      ASSERT_TRUE(editor.tools().live_primitive_cube());
+      EXPECT_EQ(editor.tools().live_primitive_cube()->subdivisions[axis], 2);
+      send_ctrl(false);
+      process_input();
+    }
+  }
+
+  // F during a held resize keeps its owner and allows subsequent movement.
+  const auto before_resize = editor.tools().live_primitive_cube();
+  ASSERT_TRUE(before_resize);
+  const QPointF dot = control_point(0);
+  send_mouse(QEvent::MouseButtonPress, dot, Qt::NoModifier);
+  process_input();
+  ASSERT_TRUE(editor.tools().live_primitive_cube());
+  ASSERT_TRUE(editor.tools().live_primitive_cube()->resizing);
+  QKeyEvent drag_flip_press(QEvent::KeyPress, Qt::Key_F, Qt::NoModifier);
+  QKeyEvent drag_flip_release(QEvent::KeyRelease, Qt::Key_F, Qt::NoModifier);
+  QApplication::sendEvent(surface, &drag_flip_press);
+  QApplication::sendEvent(surface, &drag_flip_release);
+  process_input();
+  EXPECT_TRUE(editor.tools().live_primitive_cube()->resizing);
+  EXPECT_NE(editor.tools().live_primitive_cube()->flip_faces, before_resize->flip_faces);
+  const auto &frame = projection.frame();
+  const QPointF moved = local_point(camera.project_world_point(
+      frame.controls[0].world_position + before_resize->world_x * 2.0f).position);
+  send_mouse(QEvent::MouseMove, moved, Qt::NoModifier);
+  process_input();
+  EXPECT_GT(editor.tools().live_primitive_cube()->local_max.x, before_resize->local_max.x);
+  send_mouse(QEvent::MouseButtonRelease, moved, Qt::NoModifier);
+  process_input();
+  EXPECT_FALSE(editor.tools().live_primitive_cube()->resizing);
+  EXPECT_EQ(session.primitive_creation().shape_count(), 1);
+}
+
+TEST(QtViewportSurfaceInputTests, CylinderCapsFlipRadiusAndCtrlSegmentsShareNativeRouting) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-cylinder-viewport-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  editor.preferences().set_runtime_hooks({.gizmos_visible = [] { return true; }});
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+      quader::kPrimitiveTypeSetting, 1.0).ok());
+  quader::ModelingBoxPreview preview;
+  preview.ok = preview.valid = true;
+  preview.drag_state = quader::ModelingBoxDragState::Height;
+  preview.corners = {quader::QVec3{-1, -1, -1}, quader::QVec3{-1, -1, 1},
+                     quader::QVec3{1, -1, 1}, quader::QVec3{1, -1, -1},
+                     quader::QVec3{-1, 1, -1}, quader::QVec3{-1, 1, 1},
+                     quader::QVec3{1, 1, 1}, quader::QVec3{1, 1, -1}};
+  preview.corner_count = 8;
+  ASSERT_TRUE(session.primitive_creation().accept_preview(preview, "Cylinder").ok);
+  quader::QtViewportPanel panel;
+  panel.attach_workspace(session.viewport_workspace());
+  auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+  QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
+  QApplication::sendEvent(surface, &enter);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &focus);
+  auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+  camera.focus_origin(10);
+  const auto process = [&] {
+    panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
+                        session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+  };
+  const auto mouse = [&](QEvent::Type type, quader::QVec2 pixels, Qt::KeyboardModifiers modifiers) {
+    const QPointF local{pixels.x / surface->devicePixelRatio(), pixels.y / surface->devicePixelRatio()};
+    QMouseEvent event(type, local, QPointF(surface->mapToGlobal(local.toPoint())),
+                     type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                     type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, modifiers);
+    QApplication::sendEvent(surface, &event);
+  };
+  const auto key = [&](int code) {
+    QKeyEvent press(QEvent::KeyPress, code, Qt::NoModifier);
+    QKeyEvent release(QEvent::KeyRelease, code, Qt::NoModifier);
+    QApplication::sendEvent(surface, &press);
+    QApplication::sendEvent(surface, &release);
+  };
+  process();
+  quader::PrimitiveCreationInteraction projection;
+  const auto before = editor.tools().live_primitive_creation();
+  ASSERT_TRUE(before);
+  const auto control = projection.project(
+      quader::ViewportPrimitiveCreationApiAdapter::from_api(before), camera,
+      static_cast<float>(surface->devicePixelRatio())).controls[0];
+  mouse(QEvent::MouseButtonPress, control.screen_position, Qt::NoModifier);
+  process();
+  ASSERT_TRUE(editor.tools().live_primitive_creation()->resizing);
+  key(Qt::Key_C);
+  key(Qt::Key_F);
+  process();
+  ASSERT_TRUE(editor.tools().live_primitive_creation());
+  EXPECT_FALSE(editor.tools().live_primitive_creation()->caps);
+  EXPECT_TRUE(editor.tools().live_primitive_creation()->flip_faces);
+  EXPECT_TRUE(editor.tools().live_primitive_creation()->resizing);
+  const auto end = camera.project_world_point(control.world_position +
+      before->world_x * control.resize_axis.x + before->world_z * control.resize_axis.z).position;
+  mouse(QEvent::MouseMove, end, Qt::NoModifier);
+  process();
+  mouse(QEvent::MouseButtonRelease, end, Qt::NoModifier);
+  process();
+  const auto resized = editor.tools().live_primitive_creation();
+  ASSERT_TRUE(resized);
+  EXPECT_FALSE(resized->resizing);
+  EXPECT_GT(resized->local_max.x, before->local_max.x);
+  const auto button = projection.project(
+      quader::ViewportPrimitiveCreationApiAdapter::from_api(resized), camera,
+      static_cast<float>(surface->devicePixelRatio())).controls[6];
+  mouse(QEvent::MouseButtonPress, button.screen_position, Qt::ControlModifier);
+  mouse(QEvent::MouseButtonRelease, button.screen_position, Qt::NoModifier);
+  process();
+  const auto after = editor.tools().live_primitive_creation();
+  ASSERT_TRUE(after);
+  EXPECT_EQ(after->side_count, resized->side_count - 1);
+  EXPECT_FALSE(after->caps);
+  EXPECT_TRUE(after->flip_faces);
+  EXPECT_FLOAT_EQ(after->local_max.x, resized->local_max.x);
+  EXPECT_EQ(session.primitive_creation().shape_count(), 1);
+  EXPECT_EQ(session.modeling().box_drag_state(), quader::ModelingBoxDragState::Idle);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     RoundPrimitiveButtonsRouteSettingsAndRetainLocalizedFeedback) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-round-primitive-feedback-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::LocalizationService localization;
+  ASSERT_TRUE(localization.load(std::filesystem::path(__FILE__).parent_path().parent_path() /
+                                    "resources" / "locales", "en-US"));
+  const auto counts = [](const quader::QuaderPrimitiveCreationState &state) {
+    return std::array<int, 5>{state.side_count, state.radial_segments, state.rings,
+                              state.major_segments, state.minor_segments};
+  };
+  for (const auto kind : {quader::PrimitiveCreationKind::Cone,
+                          quader::PrimitiveCreationKind::Sphere,
+                          quader::PrimitiveCreationKind::Torus}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    ASSERT_TRUE(localization.select_locale("en-US"));
+    quader::SceneSession session;
+    quader::QuaderEditorApi editor(
+        quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+    editor.preferences().set_runtime_hooks({.gizmos_visible = [] { return true; }});
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+    ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+        quader::kPrimitiveTypeSetting, static_cast<double>(kind)).ok());
+    quader::ModelingBoxPreview preview;
+    preview.ok = preview.valid = true;
+    preview.drag_state = quader::ModelingBoxDragState::Height;
+    preview.corners = {quader::QVec3{-2, -2, -2}, quader::QVec3{-2, -2, 2},
+                       quader::QVec3{2, -2, 2}, quader::QVec3{2, -2, -2},
+                       quader::QVec3{-2, 2, -2}, quader::QVec3{-2, 2, 2},
+                       quader::QVec3{2, 2, 2}, quader::QVec3{2, 2, -2}};
+    preview.corner_count = 8;
+    ASSERT_TRUE(session.primitive_creation().accept_preview(preview, "Primitive").ok);
+    quader::QtViewportPanel panel;
+    panel.attach_workspace(session.viewport_workspace());
+    panel.set_localization(localization);
+    panel.apply_ui_scale(quader::QtUiScaleMetrics{1.5f, 1u});
+    auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+    ASSERT_NE(surface, nullptr);
+    surface->resize(800, 600);
+    auto *label = panel.findChild<QLabel *>(QStringLiteral("viewportPrimitiveFeedback_perspective"));
+    ASSERT_NE(label, nullptr);
+    ASSERT_TRUE(label->isHidden());
+    QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
+    QFocusEvent focus(QEvent::FocusIn);
+    QApplication::sendEvent(surface, &enter);
+    QApplication::sendEvent(surface, &focus);
+    auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+    ASSERT_TRUE(camera.restore_perspective_pose(
+        {.eye = {8, 7, 11}, .target = {}, .up = {0, 1, 0}}));
+    const auto process = [&] {
+      panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
+                          session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+    };
+    const auto mouse = [&](QEvent::Type type, quader::QVec2 pixels,
+                            Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+      const QPointF local{pixels.x / surface->devicePixelRatio(),
+                           pixels.y / surface->devicePixelRatio()};
+      QMouseEvent event(type, local, QPointF(surface->mapToGlobal(local.toPoint())),
+                       type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                       type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton,
+                       modifiers);
+      QApplication::sendEvent(surface, &event);
+    };
+    quader::PrimitiveCreationInteraction projection;
+    const auto project = [&]() -> const quader::PrimitiveCreationControlsFrame & {
+      return projection.project(quader::ViewportPrimitiveCreationApiAdapter::from_api(
+          editor.tools().live_primitive_creation()), camera,
+          panel.viewport_raster_scale(quader::ViewportPaneId::Perspective));
+    };
+    process();
+    const int button_count = kind == quader::PrimitiveCreationKind::Cone ? 1 : 2;
+    for (int axis = 0; axis < button_count; ++axis) {
+      const int index = 6 + axis;
+      const auto button = project().controls[index];
+      ASSERT_TRUE(button.visible);
+      mouse(QEvent::MouseMove, button.screen_position);
+      process();
+      ASSERT_FALSE(label->isHidden());
+      projection.hover(index);
+      const auto &feedback = project();
+      const auto prefix = QString::fromStdString(
+          localization.text(feedback.label_key, "missing")) + QStringLiteral(": ");
+      EXPECT_EQ(label->text(), prefix + QString::number(static_cast<int>(feedback.label_value)));
+      const auto update_count = panel.primitive_feedback_update_count();
+      for (int frame = 0; frame < 60; ++frame) process();
+      EXPECT_EQ(panel.primitive_feedback_update_count(), update_count)
+          << "Unchanged input must not reformat or reset the retained feedback";
+
+      const auto before = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(before);
+      const auto before_counts = counts(*before);
+      const int setting_index = kind == quader::PrimitiveCreationKind::Cone ? 0
+          : kind == quader::PrimitiveCreationKind::Sphere ? 1 + axis : 3 + axis;
+      for (const bool decrement : {false, true}) {
+        mouse(QEvent::MouseButtonPress, button.screen_position,
+              decrement ? Qt::ControlModifier : Qt::NoModifier);
+        process();
+        EXPECT_FALSE(label->isHidden());
+        mouse(QEvent::MouseButtonRelease, button.screen_position);
+        process();
+        const auto after = editor.tools().live_primitive_creation();
+        ASSERT_TRUE(after);
+        auto expected_counts = before_counts;
+        if (!decrement) ++expected_counts[setting_index];
+        EXPECT_EQ(counts(*after), expected_counts);
+        EXPECT_EQ(after->subdivisions, before->subdivisions);
+        EXPECT_EQ(after->object_id, before->object_id);
+        EXPECT_FLOAT_EQ(quader::length_squared(after->local_min - before->local_min), 0.0f);
+        EXPECT_FLOAT_EQ(quader::length_squared(after->local_max - before->local_max), 0.0f);
+        EXPECT_FALSE(after->resizing);
+      }
+      EXPECT_EQ(session.primitive_creation().shape_count(), 1);
+    }
+    // Catalog publication is an independent input to the presentation gate.
+    mouse(QEvent::MouseMove, project().controls[6].screen_position);
+    process();
+    const auto english = label->text();
+    const auto before_locale = panel.primitive_feedback_update_count();
+    ASSERT_TRUE(localization.select_locale("it-IT"));
+    process();
+    EXPECT_NE(label->text(), english);
+    EXPECT_EQ(panel.primitive_feedback_update_count(), before_locale + 1u);
+
+    mouse(QEvent::MouseMove, {12, 12});
+    process();
+    EXPECT_TRUE(label->isHidden());
+    mouse(QEvent::MouseMove, project().controls[6].screen_position);
+    process();
+    ASSERT_FALSE(label->isHidden());
+    QEvent leave(QEvent::Leave);
+    QApplication::sendEvent(surface, &leave);
+    EXPECT_TRUE(label->isHidden());
+    process();
+    EXPECT_TRUE(label->isHidden());
+    QApplication::sendEvent(surface, &enter);
+    mouse(QEvent::MouseMove, project().controls[6].screen_position);
+    process();
+    ASSERT_FALSE(label->isHidden());
+    QFocusEvent blur(QEvent::FocusOut);
+    QApplication::sendEvent(surface, &blur);
+    EXPECT_TRUE(label->isHidden());
+    process();
+    EXPECT_TRUE(label->isHidden());
+    QApplication::sendEvent(surface, &focus);
+    mouse(QEvent::MouseMove, project().controls[6].screen_position);
+    process();
+    ASSERT_FALSE(label->isHidden());
+    panel.abandon_interactions();
+    EXPECT_TRUE(label->isHidden());
+    process();
+    EXPECT_TRUE(label->isHidden());
+  }
 }
 
 TEST(QtViewportSurfaceInputTests,
@@ -2509,4 +3097,155 @@ TEST(QtViewportSurfaceInputTests,
       static_cast<float>(quader_editor_core::kNavigationMinCameraDistance *
                          quader_editor_core::kNavigationZoomStepFactor),
       0.00001f);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     PrimitiveWheelUsesEventPositionsConsumesLimitsAndPreservesKeybindingOwners) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-primitive-wheel-panel-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  editor.preferences().set_runtime_hooks({.gizmos_visible = [] { return true; }});
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  quader::ModelingBoxPreview preview;
+  preview.ok = preview.valid = true;
+  preview.drag_state = quader::ModelingBoxDragState::Height;
+  preview.corners = {quader::QVec3{-1, -1, -1}, quader::QVec3{-1, -1, 1},
+                     quader::QVec3{1, -1, 1}, quader::QVec3{1, -1, -1},
+                     quader::QVec3{-1, 1, -1}, quader::QVec3{-1, 1, 1},
+                     quader::QVec3{1, 1, 1}, quader::QVec3{1, 1, -1}};
+  preview.corner_count = 8;
+  ASSERT_TRUE(session.primitive_creation().accept_preview(preview, "Cube").ok);
+  quader::QtViewportPanel panel;
+  panel.attach_workspace(session.viewport_workspace());
+  auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &focus);
+  auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+  camera.focus_origin(10);
+  const auto process = [&] {
+    panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
+                        session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+  };
+  process();
+  quader::PrimitiveCreationInteraction projection;
+  const auto button = [&] {
+    const auto pixels = projection.project(
+        quader::ViewportPrimitiveCreationApiAdapter::from_api(editor.tools().live_primitive_creation()),
+        camera, panel.viewport_raster_scale(quader::ViewportPaneId::Perspective))
+                            .controls[6].screen_position;
+    return QPointF{pixels.x / surface->devicePixelRatio(), pixels.y / surface->devicePixelRatio()};
+  };
+  const auto wheel = [&](int delta, bool pixel = false,
+                          Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    const auto point = button();
+    QWheelEvent event(point, point, pixel ? QPoint{0, delta} : QPoint{},
+                      pixel ? QPoint{} : QPoint{0, delta}, Qt::NoButton,
+                      modifiers, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(surface, &event);
+  };
+  const auto count = [&] { return editor.tools().live_primitive_creation()->subdivisions[0]; };
+  ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+      quader::kBoxSubdivisionsXSetting, 128.0).ok());
+  const auto distance = camera.state().distance;
+  const auto target = camera.state().target;
+  wheel(120);
+  wheel(-120);
+  // A later mouse packet must not replace the two wheel hit-test positions.
+  QMouseEvent move(QEvent::MouseMove, {12, 12}, {12, 12},
+                    Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &move);
+  process();
+  EXPECT_EQ(count(), 127);
+  EXPECT_FLOAT_EQ(camera.state().distance, distance);
+  EXPECT_FLOAT_EQ(quader::length_squared(camera.state().target - target), 0.0f);
+
+  ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+      quader::kBoxSubdivisionsXSetting, 128.0).ok());
+  wheel(20, true, Qt::ControlModifier); // Blocked half-step still owns Ctrl+zoom.
+  process();
+  wheel(-20, true, Qt::ControlModifier);
+  process();
+  EXPECT_EQ(count(), 128);
+  EXPECT_FLOAT_EQ(camera.state().distance, distance);
+  wheel(-20, true, Qt::ControlModifier);
+  process();
+  EXPECT_EQ(count(), 127);
+  EXPECT_FLOAT_EQ(camera.state().distance, distance);
+  EXPECT_FLOAT_EQ(quader::length_squared(camera.state().target - target), 0.0f);
+
+  constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
+  for (const bool sequence : {false, true}) {
+    ASSERT_TRUE(editor.commands().set_shortcut(kFlip, sequence ? "K WheelUp" : "WheelUp").ok());
+    const bool before = editor.tools().live_primitive_creation()->flip_faces;
+    if (sequence) {
+      QKeyEvent prefix(QEvent::KeyPress, Qt::Key_K, Qt::NoModifier);
+      QApplication::sendEvent(surface, &prefix);
+      process();
+      ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+    }
+    wheel(120);
+    process();
+    EXPECT_NE(editor.tools().live_primitive_creation()->flip_faces, before);
+    EXPECT_EQ(count(), 127);
+    EXPECT_FLOAT_EQ(camera.state().distance, distance);
+    EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  }
+}
+
+TEST(QtViewportSurfaceInputTests, RoundPrimitiveFootprintUsesNaturalHeightThroughPanel) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-round-footprint-panel-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  for (auto kind : {quader::PrimitiveCreationKind::Sphere,
+                    quader::PrimitiveCreationKind::Torus}) {
+    quader::SceneSession session;
+    quader::QuaderEditorApi editor(
+        quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+    editor.preferences().set_runtime_hooks({.gizmos_visible = [] { return true; }});
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+    ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+        quader::kPrimitiveTypeSetting, static_cast<double>(kind)).ok());
+    quader::QtViewportPanel panel;
+    panel.attach_workspace(session.viewport_workspace());
+    auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+    ASSERT_NE(surface, nullptr);
+    surface->resize(800, 600);
+    QFocusEvent focus(QEvent::FocusIn);
+    QApplication::sendEvent(surface, &focus);
+    auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+    ASSERT_TRUE(camera.restore_perspective_pose(
+        {.eye = {8, 7, 11}, .target = {}, .up = {0, 1, 0}}));
+    const auto process = [&] {
+      panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
+                          session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+    };
+    process();
+    QMouseEvent press(QEvent::MouseButtonPress, {300, 300}, {300, 300},
+                       Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(surface, &press);
+    process();
+    QMouseEvent release(QEvent::MouseButtonRelease, {500, 430}, {500, 430},
+                         Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(surface, &release);
+    process();
+    const auto primitive = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(primitive);
+    const auto extent = primitive->local_max - primitive->local_min;
+    const double ratio = kind == quader::PrimitiveCreationKind::Sphere
+                             ? 1.0 : primitive->tube_radius_ratio;
+    EXPECT_NEAR(extent.y, std::min(extent.x, extent.z) * ratio, 0.0001);
+    EXPECT_EQ(session.primitive_creation().shape_count(), 1);
+    EXPECT_EQ(session.modeling().box_drag_state(), quader::ModelingBoxDragState::Idle);
+  }
 }

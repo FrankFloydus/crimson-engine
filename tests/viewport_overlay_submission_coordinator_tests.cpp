@@ -5,6 +5,10 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
+#include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_editor_api.hpp"
+#include "editor/modeling/services/primitive_creation_tool_service.hpp"
+#include "editor/session/scene_session.hpp"
 
 #include "viewport/viewport_settings.hpp"
 
@@ -14,6 +18,7 @@
 #include <cstdint>
 #include <array>
 #include <limits>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -632,6 +637,129 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   EXPECT_EQ(default_dynamic_tool_provider().build_count,
             dynamic_provider_builds_before + 4);
   EXPECT_EQ(target.dynamic_submit_count, 4);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     LivePrimitiveHasFaintTopologyWithoutFillAndRestoresAfterCreation) {
+  for (const std::string_view kind : {"box", "cylinder", "cone", "sphere", "torus"}) {
+    SCOPED_TRACE(kind);
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+    ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId,
+                                          kPrimitiveTypeSetting, kind).ok());
+    ModelingBoxPreview preview;
+    preview.ok = preview.valid = true;
+    preview.drag_state = ModelingBoxDragState::Height;
+    preview.corners = {QVec3{-1, 0, -1}, QVec3{-1, 0, 1}, QVec3{1, 0, 1},
+                       QVec3{1, 0, -1}, QVec3{-1, 2, -1}, QVec3{-1, 2, 1},
+                       QVec3{1, 2, 1}, QVec3{1, 2, -1}};
+    preview.corner_count = preview.corners.size();
+    ASSERT_TRUE(session.primitive_creation().accept_preview(preview, "Wire preview").ok);
+    const auto live = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(live.has_value());
+
+    // This is the actual Qt selection provider's input, including the mesh
+    // edges that survive suppression of the separate selected-object fill.
+    const ViewportOverlayFrame topology = session.modeling().selection_overlay_frame(
+        {.suppress_persistent_object_selection = true});
+    ASSERT_FALSE(topology.lines.empty());
+    ViewportOverlayFrame selection_with_fill = topology;
+    const auto full_selection = session.modeling().selection_overlay_frame();
+    ASSERT_FALSE(full_selection.triangles.empty());
+    selection_with_fill.triangles = full_selection.triangles;
+    StaticSelectionFrameProvider selection(selection_with_fill);
+    const auto scene = build_render_overlay_selection_snapshot(session.scene(), session.assets());
+    ViewportOverlayFrame hover;
+    hover.lines.push_back(topology.lines.front());
+    hover.lines.back().source = ViewportOverlaySource::Hover;
+    hover.lines.back().style_role = ViewportOverlayStyleRole::HoverWire;
+    hover.lines.push_back(hover.lines.front());
+    hover.lines.back().element.object_id += 1000;
+    hover.triangles.push_back({
+        .layer = ViewportOverlayLayer::ToolHandle,
+        .a = {-1, 0, 0}, .b = {1, 0, 0}, .c = {0, 1, 0},
+        .color = kOverlayPrimitiveCubeFaceColor,
+        .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::Tool,
+        .element = {.object_id = live->object_id},
+    });
+    hover.triangles.push_back(full_selection.triangles.front());
+    hover.triangles.back().layer = ViewportOverlayLayer::HoverFace;
+    hover.triangles.back().style_role = ViewportOverlayStyleRole::HoverFace;
+    hover.triangles.back().source = ViewportOverlaySource::Hover;
+    hover.triangles.push_back(hover.triangles.back());
+    hover.triangles.back().element.object_id += 1000;
+    CurveToolPreviewState curve;
+    auto request = submission_request(selection, scene, hover, curve);
+    request.scene_selection_mode = RenderOverlaySelectionMode::Object;
+    request.style_selection_context = ViewportOverlaySelectionContext::Object;
+    request.selection_source.selection_context = ViewportOverlaySelectionContext::Object;
+    ViewportOverlaySubmissionCoordinator coordinator;
+    RecordingOverlayTarget target;
+    const auto settings = ViewportSettings::defaults();
+    (void)coordinator.submit(request, settings, target);
+    const auto ordinary = target.persistent_frame;
+    const auto ordinary_hover = target.dynamic_frame;
+    ASSERT_EQ(ordinary.lines.size(), topology.lines.size() + 12u);
+    ASSERT_FALSE(ordinary.triangles.empty());
+    ASSERT_EQ(ordinary_hover.triangles.size(), 3u);
+
+    RenderOverlaySnapshotCache native_cache;
+    const auto native_selected = native_cache.update_persistent(
+        session.scene(), session.assets(), true, 0u, {});
+    EXPECT_FALSE(native_selected.selected_object->meshes.empty());
+    const auto native_creation = native_cache.update_persistent(
+        session.scene(), session.assets(), !live.has_value(), 0u, {}, {}, nullptr, false);
+    EXPECT_FALSE(native_creation.selected_object->visible);
+    EXPECT_TRUE(native_creation.selected_object->meshes.empty());
+    EXPECT_FALSE(native_cache.update_persistent(
+        session.scene(), session.assets(), false, 0u, {}, {}, nullptr, false).changed());
+
+    request.construction_object_id = live->object_id;
+    request.raster_scale = 2.0f;
+    const auto subdued = coordinator.submit(request, settings, target);
+    EXPECT_TRUE(subdued.persistent_submitted);
+    EXPECT_TRUE(subdued.dynamic_submitted);
+    EXPECT_EQ(selection.build_count, 1);
+    ASSERT_EQ(target.persistent_frame.lines.size(), ordinary.lines.size());
+    EXPECT_TRUE(target.persistent_frame.triangles.empty());
+    for (std::size_t i = 0; i < topology.lines.size(); ++i) {
+      const auto &line = target.persistent_frame.lines[i];
+      EXPECT_EQ(line.element.object_id, live->object_id);
+      EXPECT_EQ(line.color >> 24u, (ordinary.lines[i].color >> 24u) / 10u);
+      EXPECT_GT(line.color >> 24u, 0u);
+      EXPECT_LE(line.width_pixels, 2.0f);
+    }
+    for (std::size_t i = topology.lines.size(); i < ordinary.lines.size(); ++i) {
+      EXPECT_EQ(target.persistent_frame.lines[i].color, ordinary.lines[i].color);
+    }
+    ASSERT_EQ(target.dynamic_frame.lines.size(), 2u);
+    EXPECT_EQ(target.dynamic_frame.lines[0].color >> 24u,
+              (ordinary_hover.lines[0].color >> 24u) / 10u);
+    EXPECT_EQ(target.dynamic_frame.lines[1].color, ordinary_hover.lines[1].color);
+    ASSERT_EQ(target.dynamic_frame.triangles.size(), 2u);
+    EXPECT_EQ(target.dynamic_frame.triangles[0].color, kOverlayPrimitiveCubeFaceColor);
+    EXPECT_EQ(target.dynamic_frame.triangles[1].element.object_id, live->object_id + 1000);
+
+    const auto composed = coordinator.work_counters().dynamic_source_compose_count;
+    EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+    EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count, composed);
+    EXPECT_EQ(selection.build_count, 1);
+    ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+    EXPECT_FALSE(editor.tools().live_primitive_creation());
+    request.construction_object_id = -1;
+    request.raster_scale = 1.0f;
+    EXPECT_TRUE(coordinator.submit(request, settings, target).persistent_submitted);
+    EXPECT_EQ(target.persistent_frame.triangles.size(), ordinary.triangles.size());
+    EXPECT_EQ(target.dynamic_frame.triangles.size(), ordinary_hover.triangles.size());
+    EXPECT_TRUE(native_cache.update_persistent(
+        session.scene(), session.assets(), true, 0u, {}).selected_object->visible);
+    for (std::size_t i = 0; i < ordinary.lines.size(); ++i) {
+      EXPECT_EQ(target.persistent_frame.lines[i].color, ordinary.lines[i].color);
+    }
+    EXPECT_EQ(target.dynamic_frame.lines[0].color, ordinary_hover.lines[0].color);
+  }
 }
 
 } // namespace

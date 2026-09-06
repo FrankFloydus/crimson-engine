@@ -23,6 +23,7 @@
 #include "ui/viewport_hover_controller.hpp"
 #include "ui/viewport_shortcut_controller.hpp"
 #include "viewport/viewport_input_router.hpp"
+#include "viewport/viewport_pointer_gesture.hpp"
 #include "viewport/viewport_settings.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
@@ -130,6 +131,10 @@ public:
   [[nodiscard]] const ViewportToolState &tool_state() const {
     return input_router_.state();
   }
+  /// Counts retained primitive-feedback updates after revision/geometry gates.
+  [[nodiscard]] std::uint64_t primitive_feedback_update_count() const {
+    return primitive_feedback_update_count_;
+  }
 
   [[nodiscard]] QtViewportSurface *surface(ViewportPaneId pane_id);
   [[nodiscard]] const QtViewportSurface *surface(ViewportPaneId pane_id) const;
@@ -152,6 +157,12 @@ private:
     std::array<QAction *, 7> camera_actions = {};
     std::array<QAction *, 6> debug_view_actions = {};
     QLabel *info_overlay = nullptr;
+    QLabel *primitive_feedback = nullptr;
+    std::uint64_t primitive_feedback_revision = 0u;
+    std::uint64_t primitive_feedback_locale_revision = 0u;
+    QRect primitive_feedback_bounds;
+    qreal primitive_feedback_dpr = 0.0;
+    bool primitive_feedback_valid = false;
     QtNavigationGizmo *navigation_gizmo = nullptr;
     QtViewportEdgeLengthHud *edge_length_hud = nullptr;
     QtViewportFlyNavigationHud *fly_navigation_hud = nullptr;
@@ -184,6 +195,9 @@ private:
   void update_fly_navigation_hud(Pane &pane, bool active,
                                  bool speed_is_default, float speed);
   void hide_fly_navigation_huds();
+  void hide_primitive_feedback();
+  void present_primitive_feedback(Pane &pane,
+                                  const PrimitiveCreationControlsFrame &controls);
   void update_pointer_cursor_presentation();
   void draw_viewport_info_overlay(Pane &pane,
                                   const SceneDocument &document,
@@ -267,11 +281,15 @@ private:
   bool pending_external_pointer_event_ = false;
   bool pending_external_pointer_left_release_only_ = true;
   std::vector<QuaderInputChord> suppressed_keybinding_chords_;
+  std::array<ViewportPointerReleaseSuppression, 3>
+      command_pointer_release_suppression_;
   double linear_array_wheel_remainder_ = 0.0;
   double radial_array_wheel_remainder_ = 0.0;
   ViewportCurvePickCache curve_pick_cache_;
   bool last_fly_navigation_active_ = false;
   bool edge_length_hud_enabled_ = false;
+  bool primitive_feedback_input_eligible_ = false;
+  std::uint64_t primitive_feedback_update_count_ = 0u;
   const SceneDocument *viewport_info_cached_document_ = nullptr;
   const AssetRegistry *viewport_info_cached_assets_ = nullptr;
   std::uint64_t viewport_info_cached_visibility_revision_ = 0;
