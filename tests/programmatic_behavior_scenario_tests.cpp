@@ -564,6 +564,43 @@ quader::QVec3 rotate_about_axis(quader::QVec3 point, quader::QVec3 pivot,
          axis * (quader::dot(axis, relative) * (1.0f - cosine));
 }
 
+/// Starts free rotation in a side view, independent of the requested local frame.
+quader::QuaderTransformDragBeginRequest trackball_drag_request() {
+  auto camera = local_component_drag_camera();
+  camera.origin = {8.0f, 0.0f, 0.0f};
+  camera.x_axis = {0.0f, 0.0f, -1.0f};
+  camera.z_axis = {1.0f, 0.0f, 0.0f};
+  return {
+      .tool = quader::QuaderTransformTool::Rotate,
+      .axis = quader::QuaderTransformAxis::All,
+      .space = quader::QuaderTransformSpace::Local,
+      .orientation = {.x_axis = {0.0f, 1.0f, 0.0f},
+                      .y_axis = {-1.0f, 0.0f, 0.0f}},
+      .pivot = kRepeatRotationWorldPivot,
+      .screen_position = {100.0f, 100.0f},
+      .screen_pivot = {100.0f, 100.0f},
+      .screen_tip = {160.0f, 100.0f},
+      .ray = {.origin = camera.origin, .direction = {-1.0f, 0.0f, 0.0f}},
+      .camera = camera,
+      .vertex_snap_radius = 0.0,
+      .grid_snap_enabled = false,
+      .rotation_snap_degrees = 0.0,
+  };
+}
+
+/// Deliberately supplies a different camera to verify the basis is frozen at begin.
+quader::QuaderTransformDragUpdateRequest
+trackball_drag_update(quader::QVec2 position) {
+  return {
+      .screen_position = position,
+      .ray = local_component_drag_ray(),
+      .camera = local_component_drag_camera(),
+      .vertex_snap_radius = 0.0,
+      .grid_snap_enabled = false,
+      .rotation_snap_degrees = 0.0,
+  };
+}
+
 quader::QVec3 expected_local_component_position(
     quader::QVec3 point, quader::QVec3 pivot,
     const quader::QuaderTransform3 &orientation,
@@ -2087,6 +2124,210 @@ TEST(ProgrammaticBehaviorScenarioTests,
       }
     }
   }
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     TrackballSceneRotationFreezesCameraAndPreservesSharedPivotThroughHistory) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  const std::array positions{
+      quader::QVec3{-2.0f, 1.0f, 0.5f},
+      quader::QVec3{3.0f, -1.0f, 1.5f},
+  };
+  s.given()
+      .unit_box("first", "First Trackball Box")
+      .transform("first", {.position = positions[0],
+                           .rotation_euler = {0.0f, 0.0f, 0.25f}})
+      .unit_box("second", "Second Trackball Box")
+      .transform("second", {.position = positions[1],
+                            .rotation_euler = {0.0f, 0.0f, 0.25f}})
+      .selected_aliases({"first", "second"}, "second");
+  const auto initial_orientation =
+      s.api().query().selection_transform_orientation();
+  ASSERT_TRUE(initial_orientation.has_value());
+  const auto initial_center = s.api().query().selection_center();
+  ASSERT_TRUE(initial_center.has_value());
+
+  const auto expect_rotation = [&](quader::QVec3 axis, double radians) {
+    const double degrees = radians * 180.0 / std::acos(-1.0);
+    const std::array<std::string_view, 2> aliases{"first", "second"};
+    for (std::size_t index = 0; index < aliases.size(); ++index) {
+      const auto entity = s.api().query().entity(s.object(aliases[index]).entity);
+      ASSERT_TRUE(entity.has_value());
+      expect_vec3_near(entity->transform.position,
+                       rotate_about_axis(positions[index],
+                                         kRepeatRotationWorldPivot, axis,
+                                         degrees));
+    }
+    const auto orientation = s.api().query().selection_transform_orientation();
+    ASSERT_TRUE(orientation.has_value());
+    expect_orientation_near(
+        *orientation,
+        {.x_axis = rotate_about_axis(initial_orientation->x_axis, {}, axis,
+                                    degrees),
+         .y_axis = rotate_about_axis(initial_orientation->y_axis, {}, axis,
+                                    degrees),
+         .z_axis = rotate_about_axis(initial_orientation->z_axis, {}, axis,
+                                    degrees)});
+    const auto center = s.api().query().selection_center();
+    ASSERT_TRUE(center.has_value());
+    expect_vec3_near(*center, rotate_about_axis(*initial_center,
+                                               kRepeatRotationWorldPivot,
+                                               axis, degrees));
+    s.then().selection().object_count(2);
+  };
+
+  auto begin = s.api().modeling().begin_transform_drag(trackball_drag_request());
+  ASSERT_TRUE(begin.ok()) << begin.error_message();
+  auto update = s.api().modeling().update_transform_drag(
+      trackball_drag_update({150.0f, 100.0f}));
+  ASSERT_TRUE(update.ok()) << update.error_message();
+  EXPECT_TRUE(update.changed());
+  expect_rotation({0.0f, 1.0f, 0.0f}, 0.5);
+
+  // Equal-length mouse motion on the other screen axis must replace the preview.
+  update = s.api().modeling().update_transform_drag(
+      trackball_drag_update({100.0f, 150.0f}));
+  ASSERT_TRUE(update.ok()) << update.error_message();
+  EXPECT_TRUE(update.changed());
+  expect_rotation({0.0f, 0.0f, -1.0f}, 0.5);
+  update = s.api().modeling().update_transform_drag(
+      trackball_drag_update({100.0f, 150.0f}));
+  ASSERT_TRUE(update.ok()) << update.error_message();
+  EXPECT_FALSE(update.changed());
+  ASSERT_TRUE(s.api().modeling().cancel_transform_drag().ok());
+  expect_rotation({0.0f, 1.0f, 0.0f}, 0.0);
+
+  begin = s.api().modeling().begin_transform_drag(trackball_drag_request());
+  ASSERT_TRUE(begin.ok()) << begin.error_message();
+  update = s.api().modeling().update_transform_drag(
+      trackball_drag_update({130.0f, 140.0f}));
+  ASSERT_TRUE(update.ok()) << update.error_message();
+  EXPECT_TRUE(update.changed());
+  const quader::QVec3 diagonal_axis{0.0f, 0.6f, -0.8f};
+  expect_rotation(diagonal_axis, 0.5);
+  const auto commit = s.api().modeling().commit_transform_drag();
+  ASSERT_TRUE(commit.ok()) << commit.error_message();
+  EXPECT_TRUE(commit.changed());
+  expect_rotation(diagonal_axis, 0.5);
+
+  s.when().undo();
+  s.then().command().ok_changed();
+  expect_rotation(diagonal_axis, 0.0);
+  s.when().redo();
+  s.then().command().ok_changed();
+  expect_rotation(diagonal_axis, 0.5);
+  s.when().execute(quader::quader_command::kEditRepeatLastAction);
+  s.then().command().ok_changed();
+  expect_rotation(diagonal_axis, 1.0);
+  s.when().undo();
+  s.then().command().ok_changed();
+  expect_rotation(diagonal_axis, 0.5);
+  s.when().redo();
+  s.then().command().ok_changed();
+  expect_rotation(diagonal_axis, 1.0);
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     TrackballComponentRotationPreservesWorldMotionOnTransformedMeshes) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  const quader::QVec3 scene_position{5.0f, 2.0f, -1.0f};
+  const float quarter_turn = static_cast<float>(std::acos(-1.0) * 0.5);
+  s.given()
+      .mesh("tetra", local_transform_tetrahedron_document(), "Trackball Tetrahedron")
+      .transform("tetra", {.position = scene_position,
+                           .rotation_euler = {0.0f, 0.0f, quarter_turn},
+                           .scale = {2.0f, 3.0f, 0.5f}});
+  const auto object = s.object("tetra");
+  ASSERT_TRUE(s.api().selection().select_components(
+      tetrahedron_component_selection(object, quader::QuaderSelectionMode::Edge))
+                  .ok());
+
+  const auto expect_rotation = [&](double radians, bool transient_preview = false) {
+    const auto mesh = s.api().query().compiled_object_mesh(object);
+    ASSERT_TRUE(mesh.has_value());
+    quader::QVec3 minimum;
+    quader::QVec3 maximum;
+    for (std::size_t index = 0;
+         index < local_transform_tetrahedron_positions().size(); ++index) {
+      const auto source = local_transform_tetrahedron_positions()[index];
+      auto expected = source;
+      if (index < 3u) {
+        const quader::QVec3 world = scene_position +
+            quader::QVec3{-3.0f * source.y, 2.0f * source.x, 0.5f * source.z};
+        const auto rotated = rotate_about_axis(
+            world, kRepeatRotationWorldPivot, {0.0f, 0.6f, -0.8f},
+            radians * 180.0 / std::acos(-1.0));
+        if (index == 0u) {
+          minimum = maximum = rotated;
+        } else {
+          minimum = {std::min(minimum.x, rotated.x),
+                     std::min(minimum.y, rotated.y),
+                     std::min(minimum.z, rotated.z)};
+          maximum = {std::max(maximum.x, rotated.x),
+                     std::max(maximum.y, rotated.y),
+                     std::max(maximum.z, rotated.z)};
+        }
+        const auto relative = rotated - scene_position;
+        if (!transient_preview) {
+          expected = {relative.y / 2.0f, -relative.x / 3.0f, relative.z / 0.5f};
+        }
+      }
+      EXPECT_TRUE(mesh_contains_position(*mesh, expected))
+          << "missing authored vertex " << index + 1u;
+    }
+    if (transient_preview) {
+      // Position-only previews keep the compiled asset durable; selection
+      // bounds expose the live transformed component coordinates.
+      const auto center = s.api().query().selection_center();
+      ASSERT_TRUE(center.has_value());
+      expect_vec3_near(*center, (minimum + maximum) * 0.5f);
+    }
+    const auto entity = s.api().query().entity(object.entity);
+    ASSERT_TRUE(entity.has_value());
+    expect_vec3_near(entity->transform.position, scene_position);
+    expect_vec3_near(entity->transform.rotation_euler, {0.0f, 0.0f, quarter_turn});
+    expect_vec3_near(entity->transform.scale, {2.0f, 3.0f, 0.5f});
+    const auto selection = s.api().selection().summary();
+    EXPECT_EQ(selection.selected_edge_count, 2u);
+    EXPECT_EQ(selection.active_edge_a, 2u);
+    EXPECT_EQ(selection.active_edge_b, 3u);
+  };
+
+  for (const bool commit_drag : {false, true}) {
+    const auto begin =
+        s.api().modeling().begin_transform_drag(trackball_drag_request());
+    ASSERT_TRUE(begin.ok()) << begin.error_message();
+    const auto update = s.api().modeling().update_transform_drag(
+        trackball_drag_update({130.0f, 140.0f}));
+    ASSERT_TRUE(update.ok()) << update.error_message();
+    EXPECT_TRUE(update.changed());
+    expect_rotation(0.5, true);
+    if (commit_drag) {
+      const auto commit = s.api().modeling().commit_transform_drag();
+      ASSERT_TRUE(commit.ok()) << commit.error_message();
+      EXPECT_TRUE(commit.changed());
+      expect_rotation(0.5);
+    } else {
+      ASSERT_TRUE(s.api().modeling().cancel_transform_drag().ok());
+      expect_rotation(0.0);
+    }
+  }
+
+  s.when().undo();
+  s.then().command().ok_changed();
+  expect_rotation(0.0);
+  s.when().redo();
+  s.then().command().ok_changed();
+  expect_rotation(0.5);
+  s.when().execute(quader::quader_command::kEditRepeatLastAction);
+  s.then().command().ok_changed();
+  expect_rotation(1.0);
+  s.when().undo();
+  s.then().command().ok_changed();
+  expect_rotation(0.5);
+  s.when().redo();
+  s.then().command().ok_changed();
+  expect_rotation(1.0);
 }
 
 TEST(ProgrammaticBehaviorScenarioTests,

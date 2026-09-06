@@ -19,6 +19,69 @@
 namespace quader_editor_core {
 namespace {
 
+bool finite_axis(quader::QVec3 axis)
+{
+	return std::isfinite(axis.x) && std::isfinite(axis.y) && std::isfinite(axis.z);
+}
+
+bool initialize_trackball_camera(RotateToolState& state, const RotateBeginInput& input)
+{
+	if (!input.has_camera || !finite_axis(input.camera_transform.x_axis) ||
+		!finite_axis(input.camera_transform.y_axis)) {
+		return false;
+	}
+	state.trackball_camera_right = normalized_axis(input.camera_transform.x_axis);
+	const quader::QVec3 up = normalized_axis(input.camera_transform.y_axis);
+	const quader::QVec3 forward = normalized_axis(vec3_cross(state.trackball_camera_right, up));
+	if (vec3_is_tiny(state.trackball_camera_right) || vec3_is_tiny(forward)) {
+		return false;
+	}
+	state.trackball_camera_up = normalized_axis(vec3_cross(forward, state.trackball_camera_right));
+	state.trackball_last_screen = input.screen_position;
+	return true;
+}
+
+RotatePreviewResult preview_trackball(
+	RotateToolState& state,
+	quader::QVec2 screen_position,
+	double snap_degrees,
+	bool precision)
+{
+	if (!std::isfinite(screen_position.x) || !std::isfinite(screen_position.y)) {
+		return { false, "Invalid trackball screen position.", {}, {}, {}, {} };
+	}
+	// Screen coordinates point down, so downward motion rotates about camera right.
+	// Accumulate only new motion to keep precision changes continuous.
+	constexpr double kRadiansPerPixel = 0.01;
+	constexpr double kPrecisionScale = 0.25;
+	const double sensitivity = kRadiansPerPixel * (precision ? kPrecisionScale : 1.0);
+	state.trackball_horizontal_radians +=
+		(static_cast<double>(screen_position.x) - state.trackball_last_screen.x) * sensitivity;
+	state.trackball_vertical_radians +=
+		(static_cast<double>(screen_position.y) - state.trackball_last_screen.y) * sensitivity;
+	state.trackball_last_screen = screen_position;
+	double horizontal = state.trackball_horizontal_radians;
+	double vertical = state.trackball_vertical_radians;
+	const double radians_per_degree = std::acos(-1.0) / 180.0;
+	if (snap_degrees > 0.0) {
+		const double snap_radians = snap_degrees * radians_per_degree;
+		horizontal = std::round(horizontal / snap_radians) * snap_radians;
+		vertical = std::round(vertical / snap_radians) * snap_radians;
+	}
+	const quader::QVec3 rotation_vector =
+		vec3_scale(state.trackball_camera_right, vertical) +
+		vec3_scale(state.trackball_camera_up, horizontal);
+	const double angle = std::hypot(horizontal, vertical);
+	state.trackball_rotation = rotation_transform(rotation_vector, angle);
+	state.accumulated_angle_degrees =
+		std::hypot(state.trackball_horizontal_radians, state.trackball_vertical_radians) / radians_per_degree;
+	state.preview_angle_degrees = angle / radians_per_degree;
+	return {
+		true, {}, state.preview_angle_degrees, state.preview_angle_degrees,
+		state.trackball_rotation, pivoted_transform(state.trackball_rotation, state.pivot),
+	};
+}
+
 /**
  * Implements Rotate Tool behavior for the modal modeling interaction layer.
  */
@@ -47,7 +110,7 @@ public:
 
 	[[nodiscard]] RotateBeginResult begin_rotate_drag(const RotateBeginInput& input) const
 	{
-		if (vec3_is_tiny(rotation_axis_vector(input.axis))) {
+		if (input.axis != TransformAxis::All && vec3_is_tiny(rotation_axis_vector(input.axis))) {
 			return { false, "Invalid rotate axis.", {} };
 		}
 		RotateToolState state;
@@ -58,6 +121,13 @@ public:
 		state.pivot = input.pivot;
 		state.screen_pivot = input.has_screen_pivot ? input.screen_pivot : input.screen_position;
 		state.start_screen = input.screen_position;
+		if (input.axis == TransformAxis::All) {
+			if (!std::isfinite(input.screen_position.x) || !std::isfinite(input.screen_position.y) ||
+				!initialize_trackball_camera(state, input)) {
+				return { false, "Trackball rotation requires a valid camera basis and screen position.", {} };
+			}
+			return { true, {}, state };
+		}
 
 		quader::QVec2 start_vector = vec2_sub(input.screen_position, state.screen_pivot);
 		if (vec2_is_tiny(start_vector)) {
@@ -106,10 +176,14 @@ public:
 	[[nodiscard]] RotatePreviewResult preview_rotate_from_screen_position(
 			RotateToolState& state,
 			quader::QVec2 screen_position,
-			double snap_degrees) const
+			double snap_degrees,
+			bool precision) const
 	{
 		if (!state.active) {
 			return { false, "Rotate tool is not active.", {}, {}, {}, {} };
+		}
+		if (state.axis == TransformAxis::All) {
+			return preview_trackball(state, screen_position, snap_degrees, precision);
 		}
 		if (state.edge_on_linear_drag) {
 			const double projected_pixels = vec2_dot(vec2_sub(screen_position, state.start_screen), state.edge_on_screen_axis);
@@ -136,15 +210,15 @@ public:
 		if (!state.active) {
 			return { false, "Rotate tool is not active.", {}, {}, {}, {} };
 		}
+		if (state.axis == TransformAxis::All) {
+			return { false, "Trackball rotation requires a two-dimensional pointer movement.", {}, {}, {}, {} };
+		}
 		state.accumulated_angle_degrees = angle_degrees;
 		if (snap_degrees > 0.0) {
 			angle_degrees = std::round(angle_degrees / snap_degrees) * snap_degrees;
 		}
 		state.preview_angle_degrees = angle_degrees;
-		const quader_poly::Transform3 transform = oriented_rotation_transform(
-			state.axis,
-			state.preview_angle_degrees * std::acos(-1.0) / 180.0,
-			state.orientation);
+		const quader_poly::Transform3 transform = rotate_preview_transform(state);
 		return { true, {}, state.preview_angle_degrees, state.preview_angle_degrees, transform, pivoted_transform(transform, state.pivot) };
 	}
 
@@ -172,14 +246,25 @@ RotateBeginResult begin_rotate_drag(const RotateBeginInput& input)
 	return rotate_tool_impl().begin_rotate_drag(input);
 }
 
-RotatePreviewResult preview_rotate_from_screen_position(RotateToolState& state, quader::QVec2 screen_position, double snap_degrees)
+RotatePreviewResult preview_rotate_from_screen_position(
+	RotateToolState& state,
+	quader::QVec2 screen_position,
+	double snap_degrees,
+	bool precision)
 {
-	return rotate_tool_impl().preview_rotate_from_screen_position(state, screen_position, snap_degrees);
+	return rotate_tool_impl().preview_rotate_from_screen_position(state, screen_position, snap_degrees, precision);
 }
 
 RotatePreviewResult preview_rotate_from_angle_degrees(RotateToolState& state, double angle_degrees, double snap_degrees)
 {
 	return rotate_tool_impl().preview_rotate_from_angle_degrees(state, angle_degrees, snap_degrees);
+}
+
+quader_poly::Transform3 rotate_preview_transform(const RotateToolState& state)
+{
+	return state.axis == TransformAxis::All ? state.trackball_rotation :
+		oriented_rotation_transform(
+			state.axis, state.preview_angle_degrees * std::acos(-1.0) / 180.0, state.orientation);
 }
 
 void reset_rotate(RotateToolState& state)

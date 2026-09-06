@@ -29,6 +29,7 @@ quader::QVec3 inverse_transform_vector(const quader_poly::Transform3& transform,
 quader::QVec3 inverse_transform_point(const quader_poly::Transform3& transform, quader::QVec3 point);
 quader_poly::Transform3 pivoted_transform(const quader_poly::Transform3& transform, quader::QVec3 pivot);
 quader_poly::Transform3 rotation_transform(TransformAxis axis, double angle_radians);
+quader_poly::Transform3 rotation_transform(quader::QVec3 axis, double angle_radians);
 quader_poly::Transform3 scale_transform(quader::QVec3 scale);
 quader_poly::Transform3 oriented_rotation_transform(
 	TransformAxis axis,

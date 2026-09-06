@@ -613,19 +613,30 @@ public:
                 if (state.tool == ViewportInteractionTool::Rotate) {
                   const double previous_angle_degrees =
                       state.rotate.preview_angle_degrees;
+                  const quader_poly::Transform3 previous_transform =
+                      state.rotate.axis == TransformAxis::All
+                          ? rotate_preview_transform(state.rotate)
+                          : quader_poly::Transform3{};
                   const RotatePreviewResult preview =
                       preview_rotate_from_screen_position(
                           state.rotate, input.screen_position,
-                          input.rotation_snap_degrees);
+                          input.rotation_snap_degrees, input.precision);
                   if (!preview.ok) {
                     return {false, false,
                             preview.message.empty() ? "Rotate preview failed."
                                                     : preview.message};
                   }
-                  return {true,
-                          std::abs(preview.preview_angle_degrees -
-                                   previous_angle_degrees) > epsilon,
-                          {}};
+                  const bool changed = state.rotate.axis == TransformAxis::All
+                      ? (vec3_distance_squared(previous_transform.x_axis,
+                                               preview.transform.x_axis) +
+                         vec3_distance_squared(previous_transform.y_axis,
+                                               preview.transform.y_axis) +
+                         vec3_distance_squared(previous_transform.z_axis,
+                                               preview.transform.z_axis) >
+                         epsilon * epsilon)
+                      : std::abs(preview.preview_angle_degrees -
+                                 previous_angle_degrees) > epsilon;
+                  return {true, changed, {}};
                 }
 
                 if (state.tool == ViewportInteractionTool::Scale) {

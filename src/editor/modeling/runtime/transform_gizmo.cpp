@@ -617,6 +617,9 @@ TransformGizmoPickHit pick_transform_gizmo(const TransformGizmoFrameInput& input
           candidates.reserve(frame.ring_segments.size());
           for (const TransformGizmoRingSegmentPrimitive &segment :
                frame.ring_segments) {
+            if (!segment.front_facing) {
+              continue;
+            }
             TransformGizmoRingPickCandidate candidate;
             candidate.axis = segment.axis;
             candidate.local_direction = rotation_axis_vector(segment.axis);
@@ -626,8 +629,45 @@ TransformGizmoPickHit pick_transform_gizmo(const TransformGizmoFrameInput& input
             candidate.b = segment.screen_end;
             candidates.push_back(candidate);
           }
-          return pick_rotate_gizmo_axis(screen_position, candidates,
-                                        pick_radius);
+          const TransformGizmoPickHit ring_hit =
+              pick_rotate_gizmo_axis(screen_position, candidates, pick_radius);
+          if (ring_hit.hit) {
+            return ring_hit;
+          }
+
+          // The view-facing ball is the background target. Only visible axis
+          // arcs can take priority over it; the outer white ring stays separate.
+          const quader::QVec3 right =
+              normalized_axis(input.camera.transform.x_axis);
+          const quader::QVec3 view_axis = normalized_axis(vec3_cross(
+              right, input.camera.transform.y_axis));
+          if (vec3_is_tiny(right) || vec3_is_tiny(view_axis) ||
+              frame.ring_segments.empty()) {
+            return result;
+          }
+          const double radius = screen_sized_world_radius(
+              input.camera, input.pivot,
+              std::max(1.0, input.gizmo_size_pixels) * frame.info.gizmo_scale *
+                  kGizmoCircleSize);
+          quader::QVec2 screen_tip;
+          if (!project_viewport_point(
+                  input.camera, input.pivot + vec3_scale(right, radius),
+                  screen_tip)) {
+            return result;
+          }
+          const double radius_squared =
+              vec2_distance_squared(screen_tip, frame.info.screen_pivot);
+          const double distance_squared =
+              vec2_distance_squared(screen_position, frame.info.screen_pivot);
+          if (std::isfinite(radius_squared) && radius_squared > 0.0 &&
+              distance_squared <= radius_squared) {
+            result.hit = true;
+            result.axis = TransformAxis::All;
+            result.world_direction = view_axis;
+            result.screen_tip = screen_tip;
+            result.distance = std::sqrt(distance_squared);
+          }
+          return result;
         }
         return result;
 }

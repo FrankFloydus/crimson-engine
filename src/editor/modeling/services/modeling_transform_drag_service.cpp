@@ -411,6 +411,11 @@ ModelingTransformDragService::begin_transform_drag(
       quader_editor_core::sanitize_transform_drag_operation(
           to_runtime(request.operation), tool, drag_selection_mode);
   const quader_editor_core::TransformAxis axis = to_runtime(request.axis);
+  // Free rotation follows the captured camera frame around the shared pivot,
+  // including when the toolbar currently displays per-object local axes.
+  const bool trackball_rotation =
+      tool == quader_editor_core::ViewportInteractionTool::Rotate &&
+      axis == quader_editor_core::TransformAxis::All;
   const quader::QVec3 pivot = to_runtime(request.pivot);
   TransformDragPreviewRouting preview_routing =
       TransformDragController::preview_routing(
@@ -491,7 +496,9 @@ ModelingTransformDragService::begin_transform_drag(
   {
     QDR_PROFILE_SCOPE("Modeling transform drag begin runtime state");
     context.runtime.begin_transform_drag_state(
-        tool, operation, axis, to_runtime(request.space),
+        tool, operation, axis,
+        trackball_rotation ? quader_editor_core::TransformSpace::Global
+                           : to_runtime(request.space),
         to_runtime(request.orientation), pivot);
   }
   {
@@ -1299,14 +1306,9 @@ bool ModelingTransformDragService::scene_preview_transform_for_drag(
   }
   if (drag.tool == quader_editor_core::ViewportInteractionTool::Rotate &&
       drag.rotate.active) {
-    quader_editor_core::RotateToolState rotate = drag.rotate;
-    const quader_editor_core::RotatePreviewResult preview =
-        quader_editor_core::preview_rotate_from_angle_degrees(
-            rotate, drag.rotate.preview_angle_degrees, 0.0);
-    if (!preview.ok) {
-      return false;
-    }
-    out_transform = preview.pivoted_transform;
+    out_transform = quader_editor_core::pivoted_transform(
+        quader_editor_core::rotate_preview_transform(drag.rotate),
+        drag.rotate.pivot);
     return true;
   }
   if (drag.tool == quader_editor_core::ViewportInteractionTool::Scale &&

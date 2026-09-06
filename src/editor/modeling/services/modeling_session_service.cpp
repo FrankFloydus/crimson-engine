@@ -62,6 +62,7 @@
 #include <editor/interactions/cut_tool.hpp>
 #include <editor/interactions/mirror_tool.hpp>
 #include <editor/interactions/move_tool.hpp>
+#include <editor/interactions/rotate_tool.hpp>
 #include <editor/interactions/tool_math_internal.hpp>
 #include <editor/interactions/tool_transform_math.hpp>
 #include <editor/interactions/selection_box.hpp>
@@ -5302,9 +5303,11 @@ public:
                 history);
           } else {
             const quader_poly::Transform3 rotation =
-                quader_editor_core::rotation_transform(
-                    action.axis,
-                    action.rotate_angle_degrees * std::acos(-1.0) / 180.0);
+                action.axis == quader_editor_core::TransformAxis::All
+                    ? action.trackball_rotation
+                    : quader_editor_core::rotation_transform(
+                          action.axis, action.rotate_angle_degrees *
+                                           std::acos(-1.0) / 180.0);
             transformed = transform_scene_selection_by_world_delta(
                 world_affine_from_transform(rotation, action.pivot),
                 "Repeat Rotate", SceneTextureTransformKind::Rotation,
@@ -5395,6 +5398,7 @@ public:
     replay_drag.rotate.axis = action.axis;
     replay_drag.rotate.orientation = action.orientation;
     replay_drag.rotate.preview_angle_degrees = action.rotate_angle_degrees;
+    replay_drag.rotate.trackball_rotation = action.trackball_rotation;
     replay_drag.scale.active =
         action.tool == quader_editor_core::ViewportInteractionTool::Scale;
     replay_drag.scale.axis = action.axis;
@@ -9405,10 +9409,7 @@ private:
     } else if (drag.tool ==
                quader_editor_core::ViewportInteractionTool::Rotate) {
       const quader_poly::Transform3 transform =
-          quader_editor_core::oriented_rotation_transform(
-              drag.axis, drag.rotate.preview_angle_degrees *
-                             std::acos(-1.0) / 180.0,
-              drag.orientation);
+          quader_editor_core::rotate_preview_transform(drag.rotate);
       world_affine = world_affine_from_transform(
           transform, from_runtime(drag.pivot));
       if (drag.operation ==

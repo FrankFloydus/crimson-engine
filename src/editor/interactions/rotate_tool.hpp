@@ -33,6 +33,13 @@ struct RotateToolState {
 	double edge_on_radius_pixels = 1.0;
 	double accumulated_angle_degrees = 0.0;
 	double preview_angle_degrees = 0.0;
+	// Trackball uses a frozen world-space camera frame and unsnapped pointer angles.
+	quader::QVec3 trackball_camera_right;
+	quader::QVec3 trackball_camera_up;
+	quader::QVec2 trackball_last_screen;
+	double trackball_horizontal_radians = 0.0;
+	double trackball_vertical_radians = 0.0;
+	quader_poly::Transform3 trackball_rotation;
 };
 
 /**
@@ -78,8 +85,14 @@ struct RotatePreviewResult {
 };
 
 RotateBeginResult begin_rotate_drag(const RotateBeginInput& input);
-RotatePreviewResult preview_rotate_from_screen_position(RotateToolState& state, quader::QVec2 screen_position, double snap_degrees);
+RotatePreviewResult preview_rotate_from_screen_position(
+	RotateToolState& state,
+	quader::QVec2 screen_position,
+	double snap_degrees,
+	bool precision = false);
 RotatePreviewResult preview_rotate_from_angle_degrees(RotateToolState& state, double angle_degrees, double snap_degrees);
+/** Returns the linear preview rotation for both scalar-axis and trackball drags. */
+quader_poly::Transform3 rotate_preview_transform(const RotateToolState& state);
 void reset_rotate(RotateToolState& state);
 
 } // namespace quader_editor_core

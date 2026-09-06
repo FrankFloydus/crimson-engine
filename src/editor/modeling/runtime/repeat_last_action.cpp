@@ -214,6 +214,7 @@ void record_repeatable_transform(
 	action.pivot = drag.pivot;
 	action.move_delta = drag.move.preview_delta;
 	action.rotate_angle_degrees = drag.rotate.preview_angle_degrees;
+	action.trackball_rotation = drag.rotate.trackball_rotation;
 	action.scale = drag.scale.preview_scale;
 
         if (drag.tool == ViewportInteractionTool::Move &&

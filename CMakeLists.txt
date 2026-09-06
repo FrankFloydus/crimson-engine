@@ -1526,6 +1526,7 @@ if(QUADER_BUILD_TESTS)
         tests/scene_transform_tests.cpp
         tests/selection_mode_adapter_tests.cpp
         tests/viewport_interaction_controller_tests.cpp
+        tests/viewport_transform_trackball_overlay_tests.cpp
         tests/viewport_overlay_submission_coordinator_tests.cpp
         tests/viewport_tool_catalog_tests.cpp
         tests/support/behavior_expect.cpp

@@ -561,7 +561,8 @@ bool TransformGizmoInteraction::begin_pending_drag(
       dragging_ ? runtime_orientation(pending.begin_request.orientation)
                 : quader_poly::Transform3{};
   rotation_indicator_start_direction_ =
-      dragging_ && viewport_tool_interaction_tool(pending.tool) ==
+      dragging_ && pending.axis != quader_editor_core::TransformAxis::All &&
+              viewport_tool_interaction_tool(pending.tool) ==
                        quader_editor_core::ViewportInteractionTool::Rotate
           ? std::optional<QVec3>(rotation_indicator_start_direction_from_mouse(
                 frame.camera, pending.begin_request.screen_position,

@@ -47,6 +47,7 @@ struct RepeatTransformAction {
   quader::QVec3 pivot;
   quader::QVec3 move_delta;
   double rotate_angle_degrees = 0.0;
+  quader_poly::Transform3 trackball_rotation;
   quader::QVec3 scale{1.0F, 1.0F, 1.0F};
   RepeatTransformDirectionMode direction_mode =
       RepeatTransformDirectionMode::WorldDelta;

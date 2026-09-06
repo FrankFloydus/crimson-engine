@@ -275,14 +275,18 @@ quader_poly::Transform3 pivoted_transform(const quader_poly::Transform3& transfo
 
 quader_poly::Transform3 rotation_transform(TransformAxis axis, double angle_radians)
 {
-	const quader::QVec3 axis_value = rotation_axis_vector(axis);
-	if (vec3_is_tiny(axis_value)) {
+	return rotation_transform(rotation_axis_vector(axis), angle_radians);
+}
+
+quader_poly::Transform3 rotation_transform(quader::QVec3 axis, double angle_radians)
+{
+	if (vec3_is_tiny(axis)) {
 		return {};
 	}
 	return {
-		rotate_vector_around_axis({ 1.0F, 0.0F, 0.0F }, axis_value, angle_radians),
-		rotate_vector_around_axis({ 0.0F, 1.0F, 0.0F }, axis_value, angle_radians),
-		rotate_vector_around_axis({ 0.0F, 0.0F, 1.0F }, axis_value, angle_radians),
+		rotate_vector_around_axis({ 1.0F, 0.0F, 0.0F }, axis, angle_radians),
+		rotate_vector_around_axis({ 0.0F, 1.0F, 0.0F }, axis, angle_radians),
+		rotate_vector_around_axis({ 0.0F, 0.0F, 1.0F }, axis, angle_radians),
 		{},
 	};
 }

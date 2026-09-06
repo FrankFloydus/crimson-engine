@@ -306,6 +306,11 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
 - Use the displayed affine world basis, including hierarchy shear/reflection and instance transforms.
   Local Move shares the active frame; Rotate/Scale use each target's pinned frame/pivot. Use full
   inverse-basis math, not orthonormal dot-product shortcuts. Freeze active component frames at press.
+- Rotate's trackball (`All`) freezes the camera right/up frame at press and uses a shared world pivot,
+  even with Local selected. Preserve its complete rotation matrix through scene/component previews
+  and repeat; the scalar angle is only a summary. Visible axis arcs take priority over the ball.
+  Contracts: [rotation math](tests/modeling_domain/tool/qdr_modeling_runtime_tool_rotate_tests.cpp)
+  and [public transform workflows](tests/programmatic_behavior_scenario_tests.cpp).
 - The visible/custom pivot is not necessarily the raw scene origin. Repeat records the original
   world affine and pivot; component replay applies W^-1 * A * W. Shift-duplicate has one placement
   owner, and repeat is recorded only after duplicate plus transform commits.

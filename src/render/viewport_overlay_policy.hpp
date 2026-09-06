@@ -125,6 +125,10 @@ inline constexpr std::uint32_t kOverlayTransformGizmoMoveCenterColor =
     rgba8(253, 255, 136, 255);
 inline constexpr std::uint32_t kOverlayToolLineShadowColor = rgba8(0, 0, 0, 112);
 inline constexpr std::uint32_t kOverlayToolTrackballColor = rgba8(210, 214, 219, 138);
+inline constexpr std::uint32_t kOverlayTransformGizmoTrackballHoverFillColor =
+    rgba8(255, 255, 255, 8);
+inline constexpr std::uint32_t kOverlayTransformGizmoTrackballActiveFillColor =
+    rgba8(255, 255, 255, 12);
 inline constexpr std::uint32_t kOverlayToolPlaneXYColor = kOverlayToolAxisZColor;
 inline constexpr std::uint32_t kOverlayToolPlaneYZColor = kOverlayToolAxisXColor;
 inline constexpr std::uint32_t kOverlayToolPlaneXZColor = kOverlayToolAxisYColor;

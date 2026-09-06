@@ -28,6 +28,7 @@ constexpr float kGizmoScaleOffset = kGizmoCircleSize + 0.3f;
 constexpr float kGizmoScaleTip = kGizmoScaleOffset * 1.11f;
 constexpr float kGizmoScaleHalfWidth = 0.07f;
 constexpr int kConeSegments = 16;
+constexpr int kTrackballDiskSegments = 64;
 
 std::uint8_t channel(std::uint32_t color, int shift) {
     return static_cast<std::uint8_t>((color >> shift) & 0xffu);
@@ -555,10 +556,69 @@ void append_rotate_indicator(
               ViewportOverlayLayer::ToolPreviewLine, 1.55f, false);
 }
 
+void append_trackball_surface(
+    ViewportOverlayFrame &overlay_frame,
+    const RenderTransformGizmoRecord &gizmo_frame,
+    const ViewportOverlayCamera &camera) {
+  if (!highlighted(gizmo_frame, RenderTransformAxis::All)) {
+    return;
+  }
+
+  const float forward_length = length(camera.forward);
+  if (!std::isfinite(forward_length) || forward_length <= 0.000001f ||
+      !std::isfinite(length_squared(gizmo_frame.info.pivot))) {
+    return;
+  }
+  const QVec3 normal = camera.forward / forward_length;
+  const QVec3 projected_right = projected_onto_plane(camera.right, normal);
+  const float right_length = length(projected_right);
+  if (!std::isfinite(right_length) || right_length <= 0.000001f) {
+    return;
+  }
+  const QVec3 right = projected_right / right_length;
+  const QVec3 up = cross(right, normal);
+
+  float radius = 0.0f;
+  for (const RenderTransformGizmoRingSegment &segment :
+       gizmo_frame.ring_segments) {
+    const float start_radius =
+        length(segment.world_start - gizmo_frame.info.pivot);
+    const float end_radius =
+        length(segment.world_end - gizmo_frame.info.pivot);
+    if (!std::isfinite(start_radius) || !std::isfinite(end_radius)) {
+      return;
+    }
+    radius = std::max({radius, start_radius, end_radius});
+  }
+  if (radius <= 0.000001f) {
+    return;
+  }
+
+  const std::uint32_t color =
+      gizmo_frame.info.active_axis == RenderTransformAxis::All
+          ? kOverlayTransformGizmoTrackballActiveFillColor
+          : kOverlayTransformGizmoTrackballHoverFillColor;
+  const QVec3 first = gizmo_frame.info.pivot + right * radius;
+  QVec3 previous = first;
+  for (int step = 1; step <= kTrackballDiskSegments; ++step) {
+    const float angle = kCircleTau * static_cast<float>(step) /
+                        static_cast<float>(kTrackballDiskSegments);
+    const QVec3 point =
+        step == kTrackballDiskSegments
+            ? first
+            : gizmo_frame.info.pivot +
+                  (right * std::cos(angle) + up * std::sin(angle)) * radius;
+    append_triangle(overlay_frame, gizmo_frame.info.pivot, previous, point,
+                    color, ViewportOverlayLayer::ToolPreviewFill);
+    previous = point;
+  }
+}
+
 void append_rotate_gizmo(
     ViewportOverlayFrame &overlay_frame,
     const RenderTransformGizmoRecord &gizmo_frame,
-    float width_scale) {
+    const ViewportOverlayCamera &camera, float width_scale) {
+  append_trackball_surface(overlay_frame, gizmo_frame, camera);
   const float trackball_width = 2.25f * width_scale;
   for (const RenderTransformGizmoTrackballSegment
            &segment : gizmo_frame.trackball_segments) {
@@ -663,7 +723,7 @@ void ViewportTransformGizmoOverlayBuilder::append(
   const float width_scale = visual_width_scale(gizmo_frame);
   if (gizmo_frame.info.tool ==
       RenderTransformTool::Rotate) {
-    append_rotate_gizmo(overlay_frame, gizmo_frame, width_scale);
+    append_rotate_gizmo(overlay_frame, gizmo_frame, camera, width_scale);
     return;
   }
 

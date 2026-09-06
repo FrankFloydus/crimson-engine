@@ -340,3 +340,90 @@ TEST(QdrModelingRuntimeToolTransformGizmoTests,
 	}
 	EXPECT_TRUE(picked_oriented_x_ring);
 }
+
+TEST(QdrModelingRuntimeToolTransformGizmoTests,
+     RotationBallPickingTracksProjectionAndGizmoPixelScale) {
+  using namespace quader_editor_core;
+  for (const CameraProjection projection :
+       {CameraProjection::Perspective, CameraProjection::Orthographic}) {
+    for (const double pixel_scale : {1.0, 1.5, 2.0}) {
+      for (const double gizmo_scale : {0.5, 1.0, 2.0}) {
+        TransformGizmoFrameInput input;
+        input.tool = ViewportInteractionTool::Rotate;
+        input.has_selection = true;
+        input.has_pivot = true;
+        input.camera = front_camera();
+        input.camera.projection = projection;
+        input.camera.orthographic_size = 8.0;
+        input.gizmo_size_pixels = 80.0 * pixel_scale;
+        input.pick_radius_pixels = 6.0 * pixel_scale;
+        input.gizmo_scale = gizmo_scale;
+        const TransformGizmoFrame frame = build_transform_gizmo_frame(input);
+        ASSERT_TRUE(frame.info.ok);
+        const float radius =
+            static_cast<float>(88.0 * pixel_scale * gizmo_scale);
+        const quader::QVec2 interior =
+            frame.info.screen_pivot + quader::QVec2{radius * 0.4F, radius * 0.4F};
+        const TransformGizmoPickHit ball = pick_transform_gizmo(input, interior);
+        ASSERT_TRUE(ball.hit);
+        EXPECT_EQ(ball.axis, TransformAxis::All);
+        EXPECT_NEAR(screen_distance(ball.screen_tip, frame.info.screen_pivot),
+                    radius, 0.001F);
+        const quader::QVec2 ring_point =
+            frame.info.screen_pivot +
+            quader::QVec2{radius * 0.70710678F, radius * 0.70710678F};
+        const TransformGizmoPickHit ring = pick_transform_gizmo(input, ring_point);
+        ASSERT_TRUE(ring.hit);
+        EXPECT_EQ(ring.axis, TransformAxis::Z);
+        EXPECT_FALSE(pick_transform_gizmo(
+                         input, frame.info.screen_pivot +
+                                    quader::QVec2{radius * 1.4F, radius * 1.4F})
+                         .hit);
+      }
+    }
+  }
+}
+
+TEST(QdrModelingRuntimeToolTransformGizmoTests,
+     HiddenRotationArcsDoNotStealTheBallAndVisibleArcsHavePriority) {
+  using namespace quader_editor_core;
+  TransformGizmoFrameInput input;
+  input.tool = ViewportInteractionTool::Rotate;
+  input.has_selection = true;
+  input.has_pivot = true;
+  input.camera = front_camera();
+  input.camera.transform.x_axis = {0.70710678F, 0.0F, -0.70710678F};
+  input.camera.transform.y_axis = {-0.40824829F, 0.81649658F, -0.40824829F};
+  input.camera.transform.z_axis = {0.57735027F, 0.57735027F, 0.57735027F};
+  input.camera.transform.origin = {3.46410162F, 3.46410162F, 3.46410162F};
+  input.gizmo_size_pixels = 120.0;
+  input.pick_radius_pixels = 8.0;
+  const TransformGizmoFrame frame = build_transform_gizmo_frame(input);
+  ASSERT_TRUE(frame.info.ok);
+  int hidden_arc_ball_hits = 0;
+  int visible_arc_hits = 0;
+  for (const TransformGizmoRingSegmentPrimitive &segment : frame.ring_segments) {
+    const quader::QVec2 midpoint =
+        (segment.screen_start + segment.screen_end) * 0.5F;
+    const TransformGizmoPickHit hit = pick_transform_gizmo(input, midpoint);
+    ASSERT_TRUE(hit.hit);
+    if (segment.front_facing) {
+      EXPECT_NE(hit.axis, TransformAxis::All);
+      ++visible_arc_hits;
+    } else {
+      const bool near_visible_arc = std::any_of(
+          frame.ring_segments.begin(), frame.ring_segments.end(),
+          [&](const TransformGizmoRingSegmentPrimitive &other) {
+            return other.front_facing &&
+                   distance_to_screen_segment_squared(
+                       midpoint, other.screen_start, other.screen_end) <= 64.0;
+          });
+      if (!near_visible_arc) {
+        EXPECT_EQ(hit.axis, TransformAxis::All);
+        ++hidden_arc_ball_hits;
+      }
+    }
+  }
+  EXPECT_GT(visible_arc_hits, 0);
+  EXPECT_GT(hidden_arc_ball_hits, 0);
+}

@@ -8,6 +8,231 @@
 
 #include <editor/interactions/interaction_api.hpp>
 
+#include <limits>
+
+namespace {
+
+quader_editor_core::RotateBeginInput trackball_begin_input()
+{
+	quader_editor_core::RotateBeginInput input;
+	input.axis = quader_editor_core::TransformAxis::All;
+	input.has_camera = true;
+	input.camera_transform.origin = { 0.0F, 0.0F, 6.0F };
+	input.screen_position = { 200.0F, 150.0F };
+	input.pivot = { 2.0F, 3.0F, 4.0F };
+	return input;
+}
+
+void expect_vector_near(quader::QVec3 actual, quader::QVec3 expected)
+{
+	EXPECT_NEAR(actual.x, expected.x, 0.00001F);
+	EXPECT_NEAR(actual.y, expected.y, 0.00001F);
+	EXPECT_NEAR(actual.z, expected.z, 0.00001F);
+}
+
+void expect_transform_near(
+	const quader_poly::Transform3& actual, const quader_poly::Transform3& expected)
+{
+	expect_vector_near(actual.x_axis, expected.x_axis);
+	expect_vector_near(actual.y_axis, expected.y_axis);
+	expect_vector_near(actual.z_axis, expected.z_axis);
+	expect_vector_near(actual.origin, expected.origin);
+}
+
+} // namespace
+
+TEST(QdrModelingRuntimeToolRotateTests, TrackballUsesCameraAxesForHorizontalAndVerticalMotion)
+{
+	const auto input = trackball_begin_input();
+	const auto begin = quader_editor_core::begin_rotate_drag(input);
+	ASSERT_TRUE(begin.ok);
+	auto state = begin.state;
+	const auto horizontal = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 300.0F, 150.0F }, 0.0);
+	ASSERT_TRUE(horizontal.ok);
+	expect_vector_near(horizontal.transform.z_axis,
+		{ static_cast<float>(std::sin(1.0)), 0.0F, static_cast<float>(std::cos(1.0)) });
+	expect_vector_near(horizontal.transform.y_axis, { 0.0F, 1.0F, 0.0F });
+	expect_vector_near(quader_editor_core::transform_point(horizontal.pivoted_transform, input.pivot), input.pivot);
+	expect_transform_near(quader_editor_core::rotate_preview_transform(state), horizontal.transform);
+
+	state = begin.state;
+	const auto vertical = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 200.0F, 250.0F }, 0.0);
+	ASSERT_TRUE(vertical.ok);
+	expect_vector_near(vertical.transform.z_axis,
+		{ 0.0F, static_cast<float>(-std::sin(1.0)), static_cast<float>(std::cos(1.0)) });
+	expect_vector_near(vertical.transform.x_axis, { 1.0F, 0.0F, 0.0F });
+
+	state = begin.state;
+	const auto left = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 100.0F, 150.0F }, 0.0);
+	ASSERT_TRUE(left.ok);
+	expect_vector_near(left.transform.z_axis,
+		{ static_cast<float>(-std::sin(1.0)), 0.0F, static_cast<float>(std::cos(1.0)) });
+}
+
+TEST(QdrModelingRuntimeToolRotateTests, TrackballDiagonalMotionUsesOneCombinedRotation)
+{
+	const auto begin = quader_editor_core::begin_rotate_drag(trackball_begin_input());
+	ASSERT_TRUE(begin.ok);
+	auto state = begin.state;
+	const auto diagonal = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 250.0F, 200.0F }, 0.0);
+	ASSERT_TRUE(diagonal.ok);
+	const double angle = std::sqrt(0.5);
+	const float projected_sine = static_cast<float>(std::sin(angle) / std::sqrt(2.0));
+	expect_vector_near(diagonal.transform.z_axis,
+		{ projected_sine, -projected_sine, static_cast<float>(std::cos(angle)) });
+	EXPECT_NEAR(diagonal.preview_angle_degrees, angle * 180.0 / std::acos(-1.0), 0.00001);
+
+	const auto returned = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 200.0F, 150.0F }, 0.0);
+	ASSERT_TRUE(returned.ok);
+	expect_transform_near(returned.transform, {});
+	expect_transform_near(returned.pivoted_transform, {});
+	EXPECT_NEAR(returned.preview_angle_degrees, 0.0, 0.00001);
+}
+
+TEST(QdrModelingRuntimeToolRotateTests, TrackballFreezesCameraFrameAndIgnoresGizmoOrientation)
+{
+	auto input = trackball_begin_input();
+	input.camera_transform.x_axis = { 0.0F, 0.0F, -2.0F };
+	input.camera_transform.y_axis = { 0.0F, 3.0F, 0.0F };
+	input.camera_transform.z_axis = { 2.0F, 0.0F, 0.0F };
+	input.orientation.x_axis = { 0.0F, 1.0F, 0.0F };
+	input.orientation.y_axis = { -1.0F, 0.0F, 0.0F };
+	const auto begin = quader_editor_core::begin_rotate_drag(input);
+	ASSERT_TRUE(begin.ok);
+	auto state = begin.state;
+	input.camera_transform = {};
+	const auto preview = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 200.0F, 250.0F }, 0.0);
+	ASSERT_TRUE(preview.ok);
+	expect_vector_near(preview.transform.x_axis,
+		{ static_cast<float>(std::cos(1.0)), static_cast<float>(-std::sin(1.0)), 0.0F });
+	expect_vector_near(preview.transform.z_axis, { 0.0F, 0.0F, 1.0F });
+}
+
+TEST(QdrModelingRuntimeToolRotateTests, TrackballSensitivityDoesNotDependOnPressPointOrPivot)
+{
+	const auto first = quader_editor_core::begin_rotate_drag(trackball_begin_input());
+	ASSERT_TRUE(first.ok);
+	auto shifted_input = trackball_begin_input();
+	shifted_input.screen_position = { 600.0F, 400.0F };
+	shifted_input.has_screen_pivot = true;
+	shifted_input.screen_pivot = { 550.0F, 420.0F };
+	const auto shifted = quader_editor_core::begin_rotate_drag(shifted_input);
+	ASSERT_TRUE(shifted.ok);
+	auto first_state = first.state;
+	auto shifted_state = shifted.state;
+	const auto first_preview = quader_editor_core::preview_rotate_from_screen_position(
+		first_state, { 160.0F, 190.0F }, 0.0);
+	const auto shifted_preview = quader_editor_core::preview_rotate_from_screen_position(
+		shifted_state, { 560.0F, 440.0F }, 0.0);
+	ASSERT_TRUE(first_preview.ok);
+	ASSERT_TRUE(shifted_preview.ok);
+	expect_transform_near(first_preview.transform, shifted_preview.transform);
+}
+
+TEST(QdrModelingRuntimeToolRotateTests, TrackballPrecisionChangesOnlyNewMotionWithoutJumps)
+{
+	const auto begin = quader_editor_core::begin_rotate_drag(trackball_begin_input());
+	ASSERT_TRUE(begin.ok);
+	auto state = begin.state;
+	const auto full_speed = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 300.0F, 150.0F }, 0.0);
+	ASSERT_TRUE(full_speed.ok);
+	const auto toggle_on = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 300.0F, 150.0F }, 0.0, true);
+	ASSERT_TRUE(toggle_on.ok);
+	expect_transform_near(toggle_on.transform, full_speed.transform);
+	const auto precise = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 340.0F, 150.0F }, 0.0, true);
+	ASSERT_TRUE(precise.ok);
+	expect_vector_near(precise.transform.z_axis,
+		{ static_cast<float>(std::sin(1.1)), 0.0F, static_cast<float>(std::cos(1.1)) });
+	const auto toggle_off = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 340.0F, 150.0F }, 0.0, false);
+	ASSERT_TRUE(toggle_off.ok);
+	expect_transform_near(toggle_off.transform, precise.transform);
+	const auto reverse_precise = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 300.0F, 150.0F }, 0.0, true);
+	ASSERT_TRUE(reverse_precise.ok);
+	expect_transform_near(reverse_precise.transform, full_speed.transform);
+	const auto returned = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 200.0F, 150.0F }, 0.0, false);
+	ASSERT_TRUE(returned.ok);
+	expect_transform_near(returned.transform, {});
+}
+
+TEST(QdrModelingRuntimeToolRotateTests, TrackballSnapsEachAngularComponentAndRetainsUnsnappedMotion)
+{
+	const auto begin = quader_editor_core::begin_rotate_drag(trackball_begin_input());
+	ASSERT_TRUE(begin.ok);
+	auto state = begin.state;
+	const auto snapped = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 240.0F, 170.0F }, 15.0);
+	ASSERT_TRUE(snapped.ok);
+	const double angle = std::sqrt(30.0 * 30.0 + 15.0 * 15.0) * std::acos(-1.0) / 180.0;
+	const double component = std::sin(angle) / std::sqrt(5.0);
+	expect_vector_near(snapped.transform.z_axis,
+		{ static_cast<float>(2.0 * component), static_cast<float>(-component), static_cast<float>(std::cos(angle)) });
+	EXPECT_NEAR(snapped.preview_angle_degrees, std::sqrt(1125.0), 0.00001);
+	const auto unsnapped = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 240.0F, 170.0F }, 0.0);
+	ASSERT_TRUE(unsnapped.ok);
+	EXPECT_NEAR(unsnapped.preview_angle_degrees, std::sqrt(0.2) * 180.0 / std::acos(-1.0), 0.00001);
+}
+
+TEST(QdrModelingRuntimeToolRotateTests, TrackballRejectsMissingAndDegenerateCameraFrames)
+{
+	auto input = trackball_begin_input();
+	input.has_camera = false;
+	EXPECT_FALSE(quader_editor_core::begin_rotate_drag(input).ok);
+	input.has_camera = true;
+	input.camera_transform.x_axis = {};
+	EXPECT_FALSE(quader_editor_core::begin_rotate_drag(input).ok);
+	input.camera_transform.x_axis = { 0.0F, 2.0F, 0.0F };
+	EXPECT_FALSE(quader_editor_core::begin_rotate_drag(input).ok);
+	input.camera_transform.x_axis = { std::numeric_limits<float>::infinity(), 0.0F, 0.0F };
+	EXPECT_FALSE(quader_editor_core::begin_rotate_drag(input).ok);
+	input.camera_transform.x_axis = { 1.0F, 0.0F, 0.0F };
+	input.camera_transform.y_axis.y = std::numeric_limits<float>::quiet_NaN();
+	EXPECT_FALSE(quader_editor_core::begin_rotate_drag(input).ok);
+}
+
+TEST(QdrModelingRuntimeToolRotateTests, TrackballRejectsScalarAndInvalidPointerInputWithoutChangingPreview)
+{
+	const auto begin = quader_editor_core::begin_rotate_drag(trackball_begin_input());
+	ASSERT_TRUE(begin.ok);
+	auto state = begin.state;
+	const auto preview = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 250.0F, 200.0F }, 0.0);
+	ASSERT_TRUE(preview.ok);
+	EXPECT_FALSE(quader_editor_core::preview_rotate_from_angle_degrees(state, 45.0, 0.0).ok);
+	expect_transform_near(quader_editor_core::rotate_preview_transform(state), preview.transform);
+	EXPECT_FALSE(quader_editor_core::preview_rotate_from_screen_position(
+		state, { std::numeric_limits<float>::quiet_NaN(), 150.0F }, 0.0).ok);
+	expect_transform_near(quader_editor_core::rotate_preview_transform(state), preview.transform);
+	const auto returned = quader_editor_core::preview_rotate_from_screen_position(
+		state, { 200.0F, 150.0F }, 0.0);
+	ASSERT_TRUE(returned.ok);
+	expect_transform_near(returned.transform, {});
+}
+
+TEST(QdrModelingRuntimeToolRotateTests, RotatePreviewTransformPreservesManuallyPopulatedScalarStates)
+{
+	quader_editor_core::RotateToolState state;
+	state.axis = quader_editor_core::TransformAxis::X;
+	state.preview_angle_degrees = 90.0;
+	state.orientation.x_axis = { 0.0F, 1.0F, 0.0F };
+	state.orientation.y_axis = { -1.0F, 0.0F, 0.0F };
+	const auto transform = quader_editor_core::rotate_preview_transform(state);
+	expect_vector_near(transform.z_axis, { 1.0F, 0.0F, 0.0F });
+	expect_vector_near(transform.y_axis, { 0.0F, 1.0F, 0.0F });
+}
+
 TEST(QdrModelingRuntimeToolRotateTests, RotateDragSnapsScreenAngleAndBuildsPivotedTransform) {
 	quader_editor_core::RotateBeginInput input;
         input.axis = quader_editor_core::TransformAxis::Z;
