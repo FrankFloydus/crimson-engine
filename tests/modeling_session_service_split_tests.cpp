@@ -5142,7 +5142,7 @@ TEST(ModelingSessionServiceSplitTests,
     const auto *face = quader_poly::find_face(
         *assets.mesh(scene.mesh(entity)->mesh)->authored_polygon_document, 1);
     ASSERT_NE(face, nullptr);
-    EXPECT_FLOAT_EQ(face->texture_transform.scale.y, 1.1f);
+    EXPECT_FLOAT_EQ(face->texture_transform.scale.y, 2.0f);
   }
   const auto *untouched = quader_poly::find_face(*before_first, 1);
   ASSERT_NE(untouched, nullptr);

@@ -1234,8 +1234,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
   });
   EXPECT_FALSE(stale.ok());
   EXPECT_FALSE(stale.changed());
-  const auto invalid = apply_face_texture_action(
-      api, quader::QuaderFaceTextureAction::ScaleXDown);
+  const auto invalid = edit_face_texture(
+      api, quader::QuaderFaceTextureField::ScaleX, 0.0);
   EXPECT_FALSE(invalid.ok());
   EXPECT_FALSE(invalid.changed());
   expect_document_revisions_equal(api.revisions(), before_revisions);

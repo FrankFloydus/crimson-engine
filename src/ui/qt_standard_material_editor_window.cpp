@@ -7,6 +7,7 @@
 #include "ui/qt_standard_material_editor_window.hpp"
 
 #include "ui/qt_color_swatch_button.hpp"
+#include "ui/qt_double_spin_box.hpp"
 
 #include <QAction>
 #include <QActionGroup>
@@ -504,7 +505,7 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
                           QStringLiteral("albedoTexture"));
 
   roughness_label_ = new QLabel(properties_group_);
-  roughness_spin_ = new QDoubleSpinBox(properties_group_);
+  roughness_spin_ = new QtDoubleSpinBox(properties_group_);
   roughness_spin_->setObjectName(
       QStringLiteral("standardMaterialEditor.roughness"));
   roughness_spin_->setRange(0.0, 1.0);
@@ -527,7 +528,7 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
                           QStringLiteral("roughnessTexture"));
 
   metallic_label_ = new QLabel(properties_group_);
-  metallic_spin_ = new QDoubleSpinBox(properties_group_);
+  metallic_spin_ = new QtDoubleSpinBox(properties_group_);
   metallic_spin_->setObjectName(
       QStringLiteral("standardMaterialEditor.metallic"));
   metallic_spin_->setRange(0.0, 1.0);
@@ -550,7 +551,7 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
                           QStringLiteral("metallicTexture"));
 
   normal_strength_label_ = new QLabel(properties_group_);
-  normal_strength_spin_ = new QDoubleSpinBox(properties_group_);
+  normal_strength_spin_ = new QtDoubleSpinBox(properties_group_);
   normal_strength_spin_->setObjectName(
       QStringLiteral("standardMaterialEditor.normalStrength"));
   normal_strength_spin_->setRange(-16.0, 16.0);
@@ -591,7 +592,7 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
         const std::size_t index = static_cast<std::size_t>(component);
         TextureTransformControls &controls = texture_transform_controls_[index];
         controls.label = new QLabel(texture_transform_group_);
-        controls.spin = new QDoubleSpinBox(texture_transform_group_);
+        controls.spin = new QtDoubleSpinBox(texture_transform_group_);
         controls.spin->setObjectName(
             QStringLiteral("standardMaterialEditor.textureTransform.%1")
                 .arg(stable_name));

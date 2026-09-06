@@ -25,6 +25,11 @@ file except through prior written authorization from Francesco Di Blasi.
 - Reuse localization, settings descriptors, models, delegates, and signals. Call base event handlers
   on unhandled paths. Input follows [INPUT_KEYBINDINGS.md](../../INPUT_KEYBINDINGS.md): Qt adaptation,
   canonical keybindings, then semantic viewport frames. Do not add a parallel `QAction` shortcut map.
+- Floating numeric inputs use `QtDoubleSpinBox`; other numeric control text uses
+  `qt_format_number`. Show at most four decimal places without trailing zeroes, while retaining
+  owner-defined precision and ranges. Unedited rounded text must not change the stored value.
+  Face texture Scale X/Y deliberately retain four decimal places and share bounded binary steps
+  with the SDK texture actions; Shift and Rotate retain compact formatting.
 - Settings categories group existing descriptors by user purpose. Undo/autosave share
   `SessionPreferences`: stage changes, merge per field, persist, then publish SessionCommit.
   File > Recover > Auto Save opens the native file picker in the owner-provided autosave folder;

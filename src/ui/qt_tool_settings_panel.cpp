@@ -9,11 +9,14 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
+#include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/qt_tool_settings_drag_spinner.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_panel.hpp"
+
+#include <quader/modeling/neutral/polygon/face_texture_scale_steps.hpp>
 
 #include <QApplication>
 #include <QByteArray>
@@ -467,13 +470,15 @@ private:
 };
 
 /// A mixed value is presentation state, never a sentinel texture coordinate.
-class QtTextureNumberSpinBox final : public QDoubleSpinBox {
+class QtTextureNumberSpinBox final : public QtDoubleSpinBox {
 public:
   explicit QtTextureNumberSpinBox(double step_origin,
-                                  QWidget *parent = nullptr)
-      : QDoubleSpinBox(parent), step_origin_(step_origin) {
+                                  QWidget *parent = nullptr,
+                                  bool scale_steps = false)
+      : QtDoubleSpinBox(parent), step_origin_(step_origin),
+        scale_steps_(scale_steps) {
     setKeyboardTracking(false);
-    setDecimals(6);
+    setDecimals(scale_steps_ ? 13 : 6);
     setRange(-std::numeric_limits<float>::max(),
              std::numeric_limits<float>::max());
     setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
@@ -484,7 +489,7 @@ public:
                        mixed_ = false;
                        if (was_mixed) {
                          lineEdit()->setText(
-                             QDoubleSpinBox::textFromValue(value));
+                             formatted_value(value));
                        }
                        if (edited) {
                          edited(value);
@@ -499,7 +504,7 @@ public:
                            text != QStringLiteral("--")) {
                          mixed_ = false;
                          if (edited) {
-                           edited(QDoubleSpinBox::valueFromText(text));
+                           edited(QtDoubleSpinBox::valueFromText(text));
                          }
                        } else if (edited) {
                          edited(std::nullopt);
@@ -508,6 +513,7 @@ public:
   }
 
   void present(std::optional<double> value) {
+    discard_text_edit();
     const QSignalBlocker spin_blocker(this);
     const QSignalBlocker text_blocker(lineEdit());
     mixed_ = !value.has_value();
@@ -515,7 +521,7 @@ public:
       setValue(*value);
     }
     const QString desired = mixed_ ? QStringLiteral("--")
-                                   : QDoubleSpinBox::textFromValue(this->value());
+                                   : formatted_value(this->value());
     if (lineEdit()->text() != desired) {
       lineEdit()->setText(desired);
     }
@@ -526,13 +532,13 @@ public:
 protected:
   QString textFromValue(double value) const override {
     return mixed_ ? QStringLiteral("--")
-                  : QDoubleSpinBox::textFromValue(value);
+                  : formatted_value(value);
   }
 
   double valueFromText(const QString &text) const override {
     return text == QStringLiteral("--")
                ? value()
-               : QDoubleSpinBox::valueFromText(text);
+               : QtDoubleSpinBox::valueFromText(text);
   }
 
   QValidator::State validate(QString &text, int &position) const override {
@@ -542,7 +548,7 @@ protected:
   }
 
   void focusInEvent(QFocusEvent *event) override {
-    QDoubleSpinBox::focusInEvent(event);
+    QtDoubleSpinBox::focusInEvent(event);
     if (mixed_) {
       selectAll();
     }
@@ -555,12 +561,46 @@ protected:
       const QSignalBlocker blocker(this);
       setValue(step_origin_);
     }
-    QDoubleSpinBox::stepBy(steps);
+    if (scale_steps_) {
+      interpretText();
+      setValue(quader_poly::stepped_face_texture_scale(value(), steps));
+    } else {
+      QtDoubleSpinBox::stepBy(steps);
+    }
+  }
+
+  StepEnabled stepEnabled() const override {
+    if (!scale_steps_) {
+      return QtDoubleSpinBox::stepEnabled();
+    }
+    if (isReadOnly()) {
+      return StepNone;
+    }
+    const double current = mixed_ ? step_origin_ : value();
+    StepEnabled enabled = StepNone;
+    if (quader_poly::stepped_face_texture_scale(current, 1) != current) {
+      enabled |= StepUpEnabled;
+    }
+    if (quader_poly::stepped_face_texture_scale(current, -1) != current) {
+      enabled |= StepDownEnabled;
+    }
+    return enabled;
   }
 
 private:
+  [[nodiscard]] QString formatted_value(double value) const {
+    if (!scale_steps_) {
+      return QtDoubleSpinBox::textFromValue(value);
+    }
+    QLocale number_locale = locale();
+    number_locale.setNumberOptions(number_locale.numberOptions() |
+                                   QLocale::OmitGroupSeparator);
+    return number_locale.toString(value, 'f', 4);
+  }
+
   double step_origin_ = 0.0;
   bool mixed_ = false;
+  bool scale_steps_ = false;
 };
 
 std::string next_texture_edit_merge_key() {
@@ -591,9 +631,9 @@ struct TextureControlDescription {
 
 constexpr std::array<TextureControlDescription, 5> kTextureControls{{
     {QuaderFaceTextureField::ScaleX, "scale_x",
-     "tool_settings.texture_scale_x", "Scale X", 0.1, 1.0},
+     "tool_settings.texture_scale_x", "Scale X", 1.0, 1.0},
     {QuaderFaceTextureField::ScaleY, "scale_y",
-     "tool_settings.texture_scale_y", "Scale Y", 0.1, 1.0},
+     "tool_settings.texture_scale_y", "Scale Y", 1.0, 1.0},
     {QuaderFaceTextureField::ShiftX, "shift_x",
      "tool_settings.texture_shift_x", "Shift X", 1.0, 0.0},
     {QuaderFaceTextureField::ShiftY, "shift_y",
@@ -840,11 +880,11 @@ struct QtToolSettingsPanel::Impl {
     target_title_->setFont(target_font);
     content_layout->addWidget(target_title_);
 
-    auto *title_separator = new QFrame(scroll_content);
-    title_separator->setObjectName(
+    title_separator_ = new QFrame(scroll_content);
+    title_separator_->setObjectName(
         QStringLiteral("tool_settings.title_separator"));
-    title_separator->setFrameShape(QFrame::HLine);
-    content_layout->addWidget(title_separator);
+    title_separator_->setFrameShape(QFrame::HLine);
+    content_layout->addWidget(title_separator_);
 
     description_section_ = new QtToolSettingsSection(
         QStringLiteral("tool_settings.section.description"),
@@ -1051,6 +1091,7 @@ struct QtToolSettingsPanel::Impl {
       if (!edit_texture_section_->isHidden()) {
         edit_texture_section_->hide();
       }
+      synchronize_target_heading_visibility();
       texture_action_error_.clear();
       return;
     }
@@ -1096,6 +1137,7 @@ struct QtToolSettingsPanel::Impl {
     if (edit_texture_section_->isHidden() == visible) {
       edit_texture_section_->setVisible(visible);
     }
+    synchronize_target_heading_visibility();
 
     QString disabled_reason;
     if (visible && !settings.editable) {
@@ -1166,6 +1208,7 @@ struct QtToolSettingsPanel::Impl {
       if (!uv_peel_section_->isHidden()) {
         uv_peel_section_->hide();
       }
+      synchronize_target_heading_visibility();
       return;
     }
     QuaderUvPeelRevision revision =
@@ -1198,6 +1241,7 @@ struct QtToolSettingsPanel::Impl {
     if (uv_peel_section_->isHidden() == visible) {
       uv_peel_section_->setVisible(visible);
     }
+    synchronize_target_heading_visibility();
     const QuaderUvPeelOptions &options =
         uv_peel_draft_.has_value() ? *uv_peel_draft_ : settings.options;
     const int axis = options.axis == QuaderUvPeelAxis::U ? 0 : 1;
@@ -1656,6 +1700,7 @@ private:
     set_scalable_margins(*layout, QMargins(8, 6, 8, 6));
     set_scalable_grid_spacing(*layout, 8, 6);
     layout->setColumnStretch(1, 1);
+    layout->setColumnStretch(3, 1);
     for (std::size_t index = 0; index < kTextureControls.size(); ++index) {
       const TextureControlDescription &description = kTextureControls[index];
       TextureControlWidget &binding = texture_controls_[index];
@@ -1665,13 +1710,19 @@ private:
       binding.label = new QLabel(texture_section_->content());
       binding.label->setObjectName(name + QStringLiteral(".label"));
       binding.label->setWordWrap(true);
-      binding.spin = new QtTextureNumberSpinBox(description.step_origin,
-                                               texture_section_->content());
+      binding.spin = new QtTextureNumberSpinBox(
+          description.step_origin, texture_section_->content(),
+          binding.field == QuaderFaceTextureField::ScaleX ||
+              binding.field == QuaderFaceTextureField::ScaleY);
       binding.spin->setObjectName(name);
       binding.spin->setSingleStep(description.step);
+      set_scalable_minimum_width(*binding.spin, 64);
       binding.label->setBuddy(binding.spin);
-      layout->addWidget(binding.label, static_cast<int>(index), 0);
-      layout->addWidget(binding.spin, static_cast<int>(index), 1);
+      const int row = static_cast<int>(index / 2);
+      const int column = static_cast<int>(index % 2) * 2;
+      const bool rotation = binding.field == QuaderFaceTextureField::Rotate;
+      layout->addWidget(binding.label, row, column);
+      layout->addWidget(binding.spin, row, column + 1, 1, rotation ? 3 : 1);
       binding.dispatch_timer = new QTimer(binding.spin);
       binding.dispatch_timer->setSingleShot(true);
       binding.dispatch_timer->setInterval(kNumberDispatchIntervalMs);
@@ -1695,8 +1746,7 @@ private:
         QStringLiteral("tool_settings.texture.disabled_reason"));
     texture_disabled_reason_->setWordWrap(true);
     texture_disabled_reason_->hide();
-    layout->addWidget(texture_disabled_reason_,
-                      static_cast<int>(kTextureControls.size()), 0, 1, 2);
+    layout->addWidget(texture_disabled_reason_, 3, 0, 1, 4);
   }
 
   void queue_texture_dispatch(std::size_t index, std::optional<double> value) {
@@ -1934,11 +1984,25 @@ private:
     }
   }
 
+  void synchronize_target_heading_visibility() {
+    const bool visible =
+        !inactive_presented_ ||
+        (texture_section_->isHidden() && edit_texture_section_->isHidden() &&
+         uv_peel_section_->isHidden());
+    if (target_title_->isHidden() == visible) {
+      target_title_->setVisible(visible);
+    }
+    if (title_separator_->isHidden() == visible) {
+      title_separator_->setVisible(visible);
+    }
+  }
+
   void present_inactive_target() {
     clear_controls();
     last_target_.reset();
     inactive_presented_ = true;
     set_tool_sections_visible(false);
+    synchronize_target_heading_visibility();
     target_title_->setText(localized_text(
         localization_, "tool_settings.no_active.title", "No Active Tool"));
     description_label_->setText(localized_text(
@@ -2469,6 +2533,7 @@ private:
     clear_controls();
     inactive_presented_ = false;
     set_tool_sections_visible(true);
+    synchronize_target_heading_visibility();
     target_title_->setText(localized_target_title(localization_, target));
     description_label_->setText(
         localized_target_description(localization_, target));
@@ -2701,7 +2766,7 @@ private:
         field_label->setBuddy(spin);
         binding.integer = spin;
       } else {
-        auto *spin = new QDoubleSpinBox(row);
+        auto *spin = new QtDoubleSpinBox(row);
         spin->setObjectName(object_name);
         spin->setAccessibleName(label);
         const double minimum = std::min(control.min_value, control.max_value);
@@ -2812,7 +2877,7 @@ private:
         apply_qt_semantic_axis_label_color(*axis_label, kAxes[axis]);
         fields_layout->addWidget(axis_label, 0, label_column);
 
-        auto *spin = new QDoubleSpinBox(fields);
+        auto *spin = new QtDoubleSpinBox(fields);
         spin->setObjectName(component_name);
         spin->setAccessibleName(
             QStringLiteral("%1 %2").arg(label,
@@ -3245,6 +3310,7 @@ private:
   const LocalizationService *localization_ = nullptr;
   QuaderEditorApi *editor_ = nullptr;
   QLabel *target_title_ = nullptr;
+  QFrame *title_separator_ = nullptr;
   QScrollArea *scroll_area_ = nullptr;
   QtToolSettingsSection *description_section_ = nullptr;
   QLabel *description_label_ = nullptr;

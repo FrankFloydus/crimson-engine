@@ -2317,6 +2317,81 @@ TEST(EditorApiTests, UvProjectionCommandsExecuteInMeshAndFaceModes) {
 }
 
 TEST(EditorApiTests,
+     TextureScaleCommandEndpointsPreserveRevisionsAndUndoRedoForBothAxes) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto object = create_selected_box(editor, "Texture Scale Steps");
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
+
+  for (const bool horizontal : {true, false}) {
+    for (const float sign : {1.0F, -1.0F}) {
+      for (const bool maximum : {true, false}) {
+        SCOPED_TRACE(horizontal);
+        SCOPED_TRACE(sign);
+        SCOPED_TRACE(maximum);
+        const auto field = horizontal ? quader::QuaderFaceTextureField::ScaleX
+                                      : quader::QuaderFaceTextureField::ScaleY;
+        const auto up = horizontal
+            ? quader::quader_command::kModelingTextureScaleXUp
+            : quader::quader_command::kModelingTextureScaleYUp;
+        const auto down = horizontal
+            ? quader::quader_command::kModelingTextureScaleXDown
+            : quader::quader_command::kModelingTextureScaleYDown;
+        const double endpoint = sign * (maximum ? 1024.0 : 1.0 / 8192.0);
+        const double inward_value = endpoint * (maximum ? 0.5 : 2.0);
+        const auto selected = editor.modeling().face_texture_settings();
+        ASSERT_TRUE(editor.modeling().set_face_texture_setting({
+            .field = field,
+            .value = endpoint,
+            .selection_token = selected.selection_token,
+        }).ok());
+        const auto scale_value = [&]() {
+          const auto settings = editor.modeling().face_texture_settings();
+          return horizontal ? settings.scale_x : settings.scale_y;
+        };
+        ASSERT_EQ(scale_value(), endpoint);
+        const auto inward = editor.commands().execute(maximum ? down : up);
+        ASSERT_TRUE(inward.ok()) << inward.error_message();
+        ASSERT_TRUE(inward.changed());
+        EXPECT_EQ(scale_value(), inward_value);
+        ASSERT_TRUE(editor.history().undo().ok());
+        ASSERT_EQ(scale_value(), endpoint);
+        ASSERT_TRUE(editor.history().can_redo());
+        const auto before_history = editor.query().history();
+        const auto before_revisions = editor.revisions();
+        const auto before_texture_revision =
+            editor.modeling().face_texture_settings_revision();
+
+        const auto stopped = editor.commands().execute(maximum ? up : down);
+        ASSERT_TRUE(stopped.ok()) << stopped.error_message();
+        EXPECT_FALSE(stopped.changed());
+        EXPECT_EQ(scale_value(), endpoint);
+        EXPECT_EQ(editor.modeling().face_texture_settings_revision(),
+                  before_texture_revision);
+        const auto after_revisions = editor.revisions();
+        EXPECT_EQ(after_revisions.project_revision, before_revisions.project_revision);
+        EXPECT_EQ(after_revisions.scene_revision, before_revisions.scene_revision);
+        EXPECT_EQ(after_revisions.asset_revision, before_revisions.asset_revision);
+        EXPECT_EQ(after_revisions.modeling_content_revision,
+                  before_revisions.modeling_content_revision);
+        EXPECT_EQ(after_revisions.modeling_selection_revision,
+                  before_revisions.modeling_selection_revision);
+        const auto after_history = editor.query().history();
+        EXPECT_EQ(after_history.undo_label, before_history.undo_label);
+        EXPECT_EQ(after_history.redo_label, before_history.redo_label);
+        EXPECT_EQ(after_history.can_undo, before_history.can_undo);
+        EXPECT_EQ(after_history.can_redo, before_history.can_redo);
+        ASSERT_TRUE(editor.history().redo().ok());
+        EXPECT_EQ(scale_value(), inward_value);
+        ASSERT_TRUE(editor.history().undo().ok());
+        EXPECT_EQ(scale_value(), endpoint);
+      }
+    }
+  }
+}
+
+TEST(EditorApiTests,
      EditTextureKeybindingsPersistRespectContextAndReuseExclusiveScopes) {
   const std::filesystem::path path =
       keybinding_test_path("edit-texture-rebinding");
@@ -2371,7 +2446,7 @@ TEST(EditorApiTests,
   EXPECT_TRUE(result.changed());
   const auto after = loaded_editor.modeling().face_texture_settings();
   ASSERT_TRUE(after.scale_x.has_value());
-  EXPECT_NEAR(*after.scale_x, *before.scale_x + 0.1, 1.0e-6);
+  EXPECT_DOUBLE_EQ(*after.scale_x, *before.scale_x * 2.0);
 
   const auto expect_no_match =
       [&](bool focused, bool text_input,

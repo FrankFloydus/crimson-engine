@@ -1049,7 +1049,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(settings, "new QFormLayout");
   expect_contains(settings, "new QListWidget");
   expect_contains(settings, "new QStackedWidget");
-  expect_contains(settings, "new QDoubleSpinBox");
+  expect_contains(settings, "new QtDoubleSpinBox");
   expect_contains(settings, "new QCheckBox");
   expect_contains(settings, "new QComboBox");
 
@@ -1114,7 +1114,7 @@ TEST(UiLayoutGuardrailTests,
                   "void clear_controls() {\n"
                   "    // Stop old control-owned timers");
   expect_contains(tool_header, "bool numeric_interaction_active() const");
-  expect_contains(tool, "new QDoubleSpinBox");
+  expect_contains(tool, "new QtDoubleSpinBox");
   expect_contains(tool, "new QRadioButton");
   expect_contains(tool, "new QPushButton");
   expect_contains(tool, "new QGridLayout(row)");
@@ -1178,7 +1178,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel,
                   "QStringLiteral(\"tool_settings.section.edit_texture\")");
   expect_contains(panel,
-                  "class QtTextureNumberSpinBox final : public QDoubleSpinBox");
+                  "class QtTextureNumberSpinBox final : public QtDoubleSpinBox");
   expect_contains(panel, "QStringLiteral(\"--\")");
   expect_missing(panel, "setSpecialValueText(");
   expect_contains(panel, "editor_->modeling().set_face_texture_setting(");

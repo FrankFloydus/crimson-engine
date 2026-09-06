@@ -9,6 +9,7 @@
 #include "api/quader_commands_api.hpp"
 #include "core/localization_service.hpp"
 #include "ui/qt_color_swatch_button.hpp"
+#include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_retained_message_box.hpp"
 #include "ui/qt_settings_controller.hpp"
@@ -1592,7 +1593,7 @@ struct QtSettingsDialog::Impl {
       QFormLayout *form =
           section_forms[static_cast<std::size_t>(descriptor.section)];
       auto *label = new QLabel(form->parentWidget());
-      auto *spin_box = new QDoubleSpinBox(form->parentWidget());
+      auto *spin_box = new QtDoubleSpinBox(form->parentWidget());
       spin_box->setObjectName(setting_object_name(descriptor.key));
       spin_box->setDecimals(3);
       spin_box->setRange(static_cast<double>(descriptor.minimum),

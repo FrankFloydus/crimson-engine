@@ -16,6 +16,7 @@
 #include "scene/scene_document.hpp"
 #include "scene/transform_pivot.hpp"
 #include "ui/qt_color_swatch_button.hpp"
+#include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
@@ -27,7 +28,6 @@
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDialog>
-#include <QDoubleSpinBox>
 #include <QEvent>
 #include <QFocusEvent>
 #include <QFrame>
@@ -338,10 +338,10 @@ QIcon material_action_icon(InspectorMaterialActionIcon action,
 }
 
 /// Extends the stock spin box with an explicit cancel callback for previews.
-class InspectorDoubleSpinBox final : public QDoubleSpinBox {
+class InspectorDoubleSpinBox final : public QtDoubleSpinBox {
 public:
   explicit InspectorDoubleSpinBox(QWidget *parent = nullptr)
-      : QDoubleSpinBox(parent) {}
+      : QtDoubleSpinBox(parent) {}
 
   std::function<void()> cancel_handler;
 

@@ -122,6 +122,15 @@ TEST(QtViewportFlyNavigationHudTests,
             std::string::npos);
   EXPECT_EQ(presentation.speed_label.find("R resets"), std::string::npos);
 
+  presentation = quader::qt_viewport_fly_navigation_hud_presentation(
+      true, false, 15.0f, nullptr);
+  EXPECT_EQ(presentation.speed_label,
+            "Speed 15 (Middle Mouse to reset)");
+  presentation = quader::qt_viewport_fly_navigation_hud_presentation(
+      true, false, 14.123456f, nullptr);
+  EXPECT_EQ(presentation.speed_label,
+            "Speed 14.1235 (Middle Mouse to reset)");
+
   ASSERT_TRUE(localization.select_locale("it-IT"));
   presentation = quader::qt_viewport_fly_navigation_hud_presentation(
       true, false, 6.5f, &localization);

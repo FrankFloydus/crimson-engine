@@ -361,7 +361,7 @@ TEST(QtStandardMaterialEditorWindowTests,
   for (const QDoubleSpinBox *decimal_input : decimal_inputs) {
     EXPECT_EQ(decimal_input->locale().decimalPoint(), QStringLiteral("."));
   }
-  EXPECT_EQ(roughness->text(), QStringLiteral("0.350"));
+  EXPECT_EQ(roughness->text(), QStringLiteral("0.35"));
   QLineEdit *roughness_input = roughness->findChild<QLineEdit *>();
   ASSERT_NE(roughness_input, nullptr);
   roughness_input->setText(QStringLiteral("0.51"));

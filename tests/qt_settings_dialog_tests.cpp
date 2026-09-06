@@ -16,6 +16,7 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "ui/inspector_panel.hpp"
 #include "ui/qt_color_swatch_button.hpp"
+#include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_main_menu.hpp"
 #include "ui/qt_main_window.hpp"
 #include "ui/qt_retained_message_box.hpp"
@@ -53,6 +54,7 @@
 #include <QPointer>
 #include <QPixmap>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStringList>
@@ -517,6 +519,234 @@ bool capture_keybinding_and_expect_error(
       });
   send_key(table, Qt::Key_Return);
   return outcome->error_opened && outcome->capture_preserved;
+}
+
+TEST(QtDoubleSpinBoxTests, TrimsZeroesAndRoundsOnlyTheDisplayToFourDecimals) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-number-format-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  QtDoubleSpinBox spin;
+  spin.setLocale(QLocale::c());
+  spin.setDecimals(8);
+  spin.setRange(-100.0, 100.0);
+  const std::array<std::pair<double, QString>, 7> examples = {{
+      {15.0, QStringLiteral("15")},
+      {15.2, QStringLiteral("15.2")},
+      {14.123456, QStringLiteral("14.1235")},
+      {-14.123456, QStringLiteral("-14.1235")},
+      {0.000001, QStringLiteral("0")},
+      {-0.000001, QStringLiteral("0")},
+      {0.0, QStringLiteral("0")},
+  }};
+  for (const auto &[value, expected] : examples) {
+    spin.setValue(value);
+    EXPECT_EQ(spin.text(), expected) << value;
+    EXPECT_DOUBLE_EQ(spin.value(), value);
+  }
+}
+
+TEST(QtDoubleSpinBoxTests, UsesLocaleDecimalSeparatorAndLocalizedDigits) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-number-locale-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  QtDoubleSpinBox spin;
+  spin.setDecimals(6);
+  spin.setRange(-100.0, 100.0);
+  spin.setLocale(QLocale(QLocale::German, QLocale::Germany));
+  spin.setValue(15.2);
+  EXPECT_EQ(spin.text(), QStringLiteral("15,2"));
+  spin.setValue(14.123456);
+  EXPECT_EQ(spin.text(), QStringLiteral("14,1235"));
+
+  const QLocale arabic(QLocale::Arabic, QLocale::Egypt);
+  spin.setLocale(arabic);
+  spin.setValue(15.0);
+  EXPECT_EQ(spin.text(), arabic.toString(15));
+  spin.setValue(15.2);
+  EXPECT_EQ(spin.text(), arabic.toString(15.2, 'f', 1));
+  spin.setValue(-0.000001);
+  EXPECT_EQ(spin.text(), arabic.toString(0));
+}
+
+TEST(QtDoubleSpinBoxTests, PreservesAffixesGroupingAndSpecialValueText) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-number-affix-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  QtDoubleSpinBox spin;
+  spin.setLocale(QLocale(QLocale::German, QLocale::Germany));
+  spin.setDecimals(6);
+  spin.setRange(0.0, 100000.0);
+  spin.setPrefix(QStringLiteral("X: "));
+  spin.setSuffix(QStringLiteral(" mm"));
+  spin.setValue(12345.2);
+  EXPECT_EQ(spin.text(), QStringLiteral("X: 12345,2 mm"));
+  EXPECT_EQ(spin.cleanText(), QStringLiteral("12345,2"));
+  spin.setGroupSeparatorShown(true);
+  EXPECT_EQ(spin.text(), QStringLiteral("X: 12.345,2 mm"));
+  spin.setValue(12345.0);
+  EXPECT_EQ(spin.text(), QStringLiteral("X: 12.345 mm"));
+
+  spin.setSpecialValueText(QStringLiteral("Automatic"));
+  spin.setValue(spin.minimum());
+  EXPECT_EQ(spin.text(), QStringLiteral("Automatic"));
+}
+
+TEST(QtDoubleSpinBoxTests, CommitsLocalizedEditingAndRetainsKeyboardStepping) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-number-edit-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  QtDoubleSpinBox spin;
+  spin.setLocale(QLocale(QLocale::German, QLocale::Germany));
+  spin.setDecimals(6);
+  spin.setRange(-100.0, 100.0);
+  spin.setSuffix(QStringLiteral(" mm"));
+  spin.setSingleStep(0.1);
+  spin.setKeyboardTracking(false);
+  spin.setValue(15.0);
+  auto *edit = spin.findChild<QLineEdit *>();
+  ASSERT_NE(edit, nullptr);
+  edit->selectAll();
+  edit->insert(QStringLiteral("15,2 mm"));
+  EXPECT_DOUBLE_EQ(spin.value(), 15.0);
+  send_key(spin, Qt::Key_Return);
+  EXPECT_DOUBLE_EQ(spin.value(), 15.2);
+  EXPECT_EQ(spin.text(), QStringLiteral("15,2 mm"));
+
+  send_key(spin, Qt::Key_Up);
+  EXPECT_DOUBLE_EQ(spin.value(), 15.3);
+  EXPECT_EQ(spin.text(), QStringLiteral("15,3 mm"));
+}
+
+TEST(QtDoubleSpinBoxTests, UneditedFocusAndReturnPreserveMorePreciseValues) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-number-precision-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  QtDoubleSpinBox spin;
+  spin.setLocale(QLocale::c());
+  spin.setDecimals(6);
+  spin.setRange(0.000001, 1.0);
+  spin.setSuffix(QStringLiteral(" s"));
+  std::vector<double> published_values;
+  QObject::connect(&spin, &QDoubleSpinBox::valueChanged,
+                   [&published_values](double value) {
+                     published_values.push_back(value);
+                   });
+  for (const double value : {0.000001, 0.000002, 0.123456}) {
+    spin.setValue(value);
+    published_values.clear();
+    QFocusEvent focus_in(QEvent::FocusIn, Qt::TabFocusReason);
+    QCoreApplication::sendEvent(&spin, &focus_in);
+    QFocusEvent focus_out(QEvent::FocusOut, Qt::TabFocusReason);
+    QCoreApplication::sendEvent(&spin, &focus_out);
+    EXPECT_DOUBLE_EQ(spin.value(), value);
+    EXPECT_TRUE(published_values.empty());
+    send_key(spin, Qt::Key_Return);
+    EXPECT_DOUBLE_EQ(spin.value(), value);
+    // Native Qt Return can republish the current value with keyboard tracking.
+    for (const double published : published_values) {
+      EXPECT_DOUBLE_EQ(published, value);
+    }
+  }
+}
+
+TEST(QtDoubleSpinBoxTests,
+     RepeatedCommitPreservesPublishedPrecisionWhenTheDisplayIsUnchanged) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-number-republication-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  QtDoubleSpinBox spin;
+  spin.setLocale(QLocale::c());
+  spin.setDecimals(6);
+  spin.setRange(0.0, 1.0);
+  spin.setKeyboardTracking(false);
+  auto *edit = spin.findChild<QLineEdit *>();
+  ASSERT_NE(edit, nullptr);
+  edit->selectAll();
+  edit->insert(QStringLiteral("0.1235"));
+  send_key(spin, Qt::Key_Return);
+  ASSERT_DOUBLE_EQ(spin.value(), 0.1235);
+  ASSERT_EQ(spin.text(), QStringLiteral("0.1235"));
+
+  // An owner refresh can publish a more precise value with identical text.
+  spin.setValue(0.123456);
+  ASSERT_EQ(spin.text(), QStringLiteral("0.1235"));
+  send_key(spin, Qt::Key_Return);
+  EXPECT_DOUBLE_EQ(spin.value(), 0.123456);
+}
+
+TEST(QtDoubleSpinBoxTests, ExplicitSameDisplayEditingCommitsTheEnteredValue) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-number-explicit-rounding-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  QtDoubleSpinBox spin;
+  spin.setLocale(QLocale::c());
+  spin.setDecimals(6);
+  spin.setRange(0.0, 1.0);
+  spin.setKeyboardTracking(false);
+  spin.setValue(0.123456);
+  ASSERT_EQ(spin.text(), QStringLiteral("0.1235"));
+  auto *edit = spin.findChild<QLineEdit *>();
+  ASSERT_NE(edit, nullptr);
+  edit->selectAll();
+  edit->insert(QStringLiteral("0.1235"));
+  ASSERT_DOUBLE_EQ(spin.value(), 0.123456);
+  send_key(spin, Qt::Key_Return);
+  EXPECT_DOUBLE_EQ(spin.value(), 0.1235);
+}
+
+TEST(QtDoubleSpinBoxTests,
+     SignalBlockedOwnerRefreshSupersedesPendingEditsAndRetainsPrecision) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-number-blocked-refresh-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  for (const QString &pending_text :
+       {QStringLiteral("0.2"), QStringLiteral("0.1235")}) {
+    SCOPED_TRACE(pending_text.toStdString());
+    QtDoubleSpinBox spin;
+    spin.setLocale(QLocale::c());
+    spin.setDecimals(6);
+    spin.setRange(0.0, 1.0);
+    spin.setKeyboardTracking(false);
+    spin.setValue(0.1);
+    auto *edit = spin.findChild<QLineEdit *>();
+    ASSERT_NE(edit, nullptr);
+    edit->selectAll();
+    edit->insert(pending_text);
+    ASSERT_DOUBLE_EQ(spin.value(), 0.1);
+
+    // Retained presenters replace drafts without publishing widget signals.
+    {
+      const QSignalBlocker blocker(spin);
+      spin.setValue(0.123456);
+    }
+    ASSERT_EQ(spin.text(), QStringLiteral("0.1235"));
+    send_key(spin, Qt::Key_Return);
+    EXPECT_DOUBLE_EQ(spin.value(), 0.123456);
+  }
 }
 
 TEST(QtSettingsDialogTests,
@@ -1047,10 +1277,16 @@ TEST(QtSettingsDialogTests,
     EXPECT_NEAR(control->value(), viewport_settings.float_value(id), 0.000001);
   }
   EXPECT_DOUBLE_EQ(default_fly_speed->value(), 25.0);
+  EXPECT_EQ(default_fly_speed->cleanText(),
+            default_fly_speed->locale().toString(25));
   EXPECT_DOUBLE_EQ(bounding_box_thickness->value(), 1.5);
+  EXPECT_EQ(bounding_box_thickness->cleanText(),
+            bounding_box_thickness->locale().toString(1.5, 'f', 1));
   EXPECT_DOUBLE_EQ(dimension_font_size->minimum(), 6.0);
   EXPECT_DOUBLE_EQ(dimension_font_size->maximum(), 24.0);
   EXPECT_DOUBLE_EQ(dimension_font_size->value(), 12.0);
+  EXPECT_EQ(dimension_font_size->cleanText(),
+            dimension_font_size->locale().toString(12));
   EXPECT_EQ(dimension_font_size->accessibleName(),
             QStringLiteral("Dimension Font Size (pt)"));
   EXPECT_TRUE(show_hover_dimensions->isChecked());

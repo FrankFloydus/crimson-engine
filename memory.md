@@ -317,6 +317,12 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
 - TextureMappingComponent preserves occurrence-specific sampling without changing shared geometry.
   Materializing base UVs first inverts retained FaceTextureTransform; otherwise the edit is applied
   twice. Rotation numeric gestures use a captured per-face baseline, not accumulated displayed deltas.
+- Texture scale clicks double/halve signed magnitudes between exact `1/8192` and `1024`;
+  four-decimal display rounding must never feed the next step. Align Grid resets world-axis
+  mapping to `0.125` map units per texel, zero shift/rotation, using each texture's dimensions
+  (64-pixel fallback), independently of snap spacing and face size. Keep occurrence compensation.
+  Owner/tests: [texture actions](src/sdk/core/modeling/src/face_texture_actions.cpp),
+  [SDK texture workflows](tests/sdk/modeling_sdk_consumer_tests.cpp).
 - Legacy local-frame migration runs only during scene installation before hydration/clean baseline.
   Its exact old-cube signature is deliberate because old files lack provenance; generic runtime
   resets must not silently migrate assets or arbitrary geometry.

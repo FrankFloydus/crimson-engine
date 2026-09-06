@@ -5576,10 +5576,10 @@ TEST(ModelingSdkConsumerTests,
       SCOPED_TRACE(static_cast<int>(action));
       FaceTextureTransform expected = initial;
       switch (action) {
-      case FaceTextureAction::ScaleXUp: expected.scale.x = -2.1F; break;
-      case FaceTextureAction::ScaleXDown: expected.scale.x = -1.9F; break;
-      case FaceTextureAction::ScaleYUp: expected.scale.y = 0.6F; break;
-      case FaceTextureAction::ScaleYDown: expected.scale.y = 0.4F; break;
+      case FaceTextureAction::ScaleXUp: expected.scale.x = -4.0F; break;
+      case FaceTextureAction::ScaleXDown: expected.scale.x = -1.0F; break;
+      case FaceTextureAction::ScaleYUp: expected.scale.y = 1.0F; break;
+      case FaceTextureAction::ScaleYDown: expected.scale.y = 0.25F; break;
       case FaceTextureAction::ShiftLeft: expected.shift_uv.x += 1.0F / 128.0F; break;
       case FaceTextureAction::ShiftRight: expected.shift_uv.x -= 1.0F / 128.0F; break;
       case FaceTextureAction::ShiftUp: expected.shift_uv.y += 1.0F / 32.0F; break;
@@ -5631,7 +5631,7 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
-     FaceTextureActionsRejectSignedScaleZeroCrossingsWithoutPartialCandidates) {
+     FaceTextureScaleActionsHalveSmallSignedScalesWithoutCrossingZero) {
   constexpr std::array<Vec3, 3> kPoints{{
       {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}, {0.0F, 2.0F, 0.0F},
   }};
@@ -5652,14 +5652,140 @@ TEST(ModelingSdkConsumerTests,
       const std::array targets{texture_action_target(first.value(), 1U),
                                texture_action_target(second.value(), 2U)};
       const auto result = prepare_face_texture_action(targets, {.action = action});
-      ASSERT_FALSE(result.ok());
-      EXPECT_FALSE(result.error_message().empty());
+      ASSERT_TRUE(result.ok()) << result.error_message();
+      EXPECT_TRUE(result.value().changed);
+      for (const auto &prepared : result.value().documents) {
+        const auto settings = prepared.document.authored_topology();
+        ASSERT_TRUE(settings.ok());
+        const auto &transform = settings.value().faces.front().texture_transform;
+        const float source_scale = prepared.key == 1U ? 1.0F : scale;
+        EXPECT_FLOAT_EQ(transform.scale.x,
+                        action == FaceTextureAction::ScaleXDown
+                            ? source_scale * 0.5F : source_scale);
+        EXPECT_FLOAT_EQ(transform.scale.y,
+                        action == FaceTextureAction::ScaleYDown
+                            ? source_scale * 0.5F : source_scale);
+      }
       EXPECT_EQ(first.value().content_identity(), first_identity);
       EXPECT_EQ(second.value().content_identity(), second_identity);
       EXPECT_EQ(second.value().content_revision(), second_revision);
       const auto after = serialize_qdr_authored_topology(second.value());
       ASSERT_TRUE(after.ok());
       EXPECT_EQ(after.value(), before.value());
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureScaleActionsFollowExactBinaryStepsAndStopWithoutPublication) {
+  constexpr std::array<Vec3, 3> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}, {0.0F, 2.0F, 0.0F},
+  }};
+  constexpr std::array<float, 10> kIncreasing{
+      2.0F, 4.0F, 8.0F, 16.0F, 32.0F, 64.0F, 128.0F, 256.0F,
+      512.0F, 1024.0F,
+  };
+  constexpr std::array<float, 13> kDecreasing{
+      0.5F, 0.25F, 0.125F, 0.0625F, 0.03125F, 0.015625F,
+      0.0078125F, 0.00390625F, 0.001953125F, 0.0009765625F,
+      0.00048828125F, 0.000244140625F, 0.0001220703125F,
+  };
+  for (const float sign : {1.0F, -1.0F}) {
+    for (const bool horizontal : {true, false}) {
+      for (const bool increasing : {true, false}) {
+        SCOPED_TRACE(sign);
+        SCOPED_TRACE(horizontal);
+        SCOPED_TRACE(increasing);
+        auto created = make_texture_action_face(kPoints, {},
+            {.scale = {sign, sign}});
+        ASSERT_TRUE(created.ok()) << created.error_message();
+        PolygonDocument document = std::move(created.value());
+        const auto action = horizontal
+            ? (increasing ? FaceTextureAction::ScaleXUp
+                          : FaceTextureAction::ScaleXDown)
+            : (increasing ? FaceTextureAction::ScaleYUp
+                          : FaceTextureAction::ScaleYDown);
+        const auto expected_steps = increasing
+            ? std::span<const float>(kIncreasing)
+            : std::span<const float>(kDecreasing);
+        for (const float expected : expected_steps) {
+          const std::array targets{texture_action_target(document)};
+          auto result = prepare_face_texture_action(targets, {.action = action});
+          ASSERT_TRUE(result.ok()) << result.error_message();
+          ASSERT_TRUE(result.value().changed);
+          ASSERT_EQ(result.value().documents.size(), 1U);
+          document = std::move(result.value().documents.front().document);
+          const auto topology = document.authored_topology();
+          ASSERT_TRUE(topology.ok());
+          const auto scale = topology.value().faces.front().texture_transform.scale;
+          EXPECT_FLOAT_EQ(scale.x, horizontal ? sign * expected : sign);
+          EXPECT_FLOAT_EQ(scale.y, horizontal ? sign : sign * expected);
+        }
+        const auto identity = document.content_identity();
+        const auto revision = document.content_revision();
+        const std::array targets{texture_action_target(document)};
+        const auto stopped = prepare_face_texture_action(targets, {.action = action});
+        ASSERT_TRUE(stopped.ok()) << stopped.error_message();
+        EXPECT_FALSE(stopped.value().changed);
+        const auto *unchanged = prepared_texture_document(stopped.value());
+        ASSERT_NE(unchanged, nullptr);
+        EXPECT_FALSE(unchanged->receipt.changed);
+        EXPECT_EQ(unchanged->document.content_identity(), identity);
+        EXPECT_EQ(unchanged->document.content_revision(), revision);
+      }
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureScaleActionsPreserveManualValuesAndOnlyBoundTheirStepDirection) {
+  constexpr std::array<Vec3, 3> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}, {0.0F, 2.0F, 0.0F},
+  }};
+  /// Exercises manual scales independently of the unit-scale binary sequence.
+  struct ScaleCase {
+    float source;
+    bool increasing;
+    float expected;
+  };
+  constexpr std::array kCases{
+      ScaleCase{3.0F, true, 6.0F},
+      ScaleCase{3.0F, false, 1.5F},
+      ScaleCase{800.0F, true, 1024.0F},
+      ScaleCase{0.0002F, false, 1.0F / 8192.0F},
+      ScaleCase{3000.0F, true, 3000.0F},
+      ScaleCase{3000.0F, false, 1500.0F},
+      ScaleCase{1500.0F, false, 750.0F},
+      ScaleCase{1.0F / 32768.0F, false, 1.0F / 32768.0F},
+      ScaleCase{1.0F / 32768.0F, true, 1.0F / 16384.0F},
+  };
+  for (const auto test : kCases) {
+    for (const float sign : {1.0F, -1.0F}) {
+      for (const bool horizontal : {true, false}) {
+        SCOPED_TRACE(test.source);
+        SCOPED_TRACE(test.increasing);
+        SCOPED_TRACE(sign);
+        SCOPED_TRACE(horizontal);
+        auto created = make_texture_action_face(kPoints, {},
+            {.scale = {sign * test.source, sign * test.source}});
+        ASSERT_TRUE(created.ok()) << created.error_message();
+        const auto action = horizontal
+            ? (test.increasing ? FaceTextureAction::ScaleXUp
+                               : FaceTextureAction::ScaleXDown)
+            : (test.increasing ? FaceTextureAction::ScaleYUp
+                               : FaceTextureAction::ScaleYDown);
+        const std::array targets{texture_action_target(created.value())};
+        const auto result = prepare_face_texture_action(targets, {.action = action});
+        ASSERT_TRUE(result.ok()) << result.error_message();
+        EXPECT_EQ(result.value().changed, test.source != test.expected);
+        const auto *prepared = prepared_texture_document(result.value());
+        ASSERT_NE(prepared, nullptr);
+        const auto topology = prepared->document.authored_topology();
+        ASSERT_TRUE(topology.ok());
+        const auto scale = topology.value().faces.front().texture_transform.scale;
+        EXPECT_FLOAT_EQ(scale.x, sign * (horizontal ? test.expected : test.source));
+        EXPECT_FLOAT_EQ(scale.y, sign * (horizontal ? test.source : test.expected));
+      }
     }
   }
 }
@@ -5761,7 +5887,8 @@ TEST(ModelingSdkConsumerTests,
       const auto settings = prepared->document.face_texture_settings(
           prepared->document.face_ids());
       ASSERT_TRUE(settings.ok());
-      EXPECT_EQ(settings.value().front().texture_transform, FaceTextureTransform{});
+      EXPECT_EQ(settings.value().front().texture_transform,
+                (FaceTextureTransform{.scale = {0.125F, 0.125F}}));
       const auto compiled = prepared->document.compile_mesh();
       ASSERT_TRUE(compiled.ok());
       for (const auto &vertex : compiled.value().vertices) {
@@ -5776,11 +5903,85 @@ TEST(ModelingSdkConsumerTests,
           effective.y += vertex.uv_carrier[2] * delta.x +
                          vertex.uv_carrier[3] * delta.y;
         }
-        // World +X/-X faces use signed Z and negative Y at .5 tiles/unit.
+        // At 0.125 map units per texel, 64-pixel maps tile four times/world unit.
         expect_vec2_near(effective,
-                         {world_direction * 5.5F + vertex.position.x,
-                          -3.5F - 1.5F * vertex.position.y});
+                         {world_direction * 44.0F + 8.0F * vertex.position.x,
+                          -28.0F - 12.0F * vertex.position.y});
       }
+      auto repeated_target = target;
+      repeated_target.document = &prepared->document;
+      const auto repeated = prepare_face_texture_action(
+          std::span<const FaceTextureActionTarget>(&repeated_target, 1U),
+          {.action = FaceTextureAction::AlignToGrid});
+      ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+      EXPECT_FALSE(repeated.value().changed);
+      EXPECT_EQ(repeated.value().documents.front().document.content_identity(),
+                prepared->document.content_identity());
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureAlignGridKeepsFixedTexelScaleAcrossFaceAndMaterialSizes) {
+  constexpr std::array<std::array<std::uint32_t, 2>, 6> kResolutions{{
+      {0U, 0U}, {64U, 64U}, {128U, 128U}, {256U, 512U},
+      {0U, 128U}, {300U, 150U},
+  }};
+  for (const float face_width : {2.0F, 16.0F}) {
+    const std::array<Vec3, 4> points{{
+        {0.0F, 0.0F, 0.0F}, {face_width, 0.0F, 0.0F},
+        {face_width, face_width * 1.5F, 0.0F},
+        {0.0F, face_width * 1.5F, 0.0F},
+    }};
+    auto created = make_texture_action_face(points, {},
+        {.scale = {-3.0F, 7.0F}, .shift_uv = {0.25F, -0.5F},
+         .rotation_degrees = 37.0F});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    for (const auto resolution : kResolutions) {
+      SCOPED_TRACE(face_width);
+      SCOPED_TRACE(resolution[0]);
+      SCOPED_TRACE(resolution[1]);
+      auto target = texture_action_target(created.value(), 1U,
+                                          resolution[0], resolution[1]);
+      target.world_from_local.origin = {5.0F, 7.0F, 11.0F};
+      const auto result = prepare_face_texture_action(
+          std::span<const FaceTextureActionTarget>(&target, 1U),
+          {.action = FaceTextureAction::AlignToGrid});
+      ASSERT_TRUE(result.ok()) << result.error_message();
+      ASSERT_TRUE(result.value().changed);
+      const auto *prepared = prepared_texture_document(result.value());
+      ASSERT_NE(prepared, nullptr);
+      const auto settings = prepared->document.face_texture_settings(
+          prepared->document.face_ids());
+      ASSERT_TRUE(settings.ok());
+      EXPECT_EQ(settings.value().front().texture_transform,
+                (FaceTextureTransform{.scale = {0.125F, 0.125F}}));
+      EXPECT_TRUE(prepared->document.has_same_geometry(created.value()));
+      const auto compiled = prepared->document.compile_mesh();
+      ASSERT_TRUE(compiled.ok()) << compiled.error_message();
+      const float width = resolution[0] == 0U ? 64.0F
+          : static_cast<float>(resolution[0]);
+      const float height = resolution[1] == 0U ? 64.0F
+          : static_cast<float>(resolution[1]);
+      for (const auto &vertex : compiled.value().vertices) {
+        // Quader's world unit represents 32 map units, giving 256 texels/unit.
+        expect_vec2_near(vertex.uv0,
+            {(5.0F + vertex.position.x) * 256.0F / width,
+             -(7.0F + vertex.position.y) * 256.0F / height});
+      }
+      target.document = &prepared->document;
+      const auto repeated = prepare_face_texture_action(
+          std::span<const FaceTextureActionTarget>(&target, 1U),
+          {.action = FaceTextureAction::AlignToGrid});
+      ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+      EXPECT_FALSE(repeated.value().changed);
+      const auto *unchanged = prepared_texture_document(repeated.value());
+      ASSERT_NE(unchanged, nullptr);
+      EXPECT_FALSE(unchanged->receipt.changed);
+      EXPECT_EQ(unchanged->document.content_identity(),
+                prepared->document.content_identity());
+      EXPECT_EQ(unchanged->document.content_revision(),
+                prepared->document.content_revision());
     }
   }
 }

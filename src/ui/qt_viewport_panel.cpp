@@ -38,6 +38,7 @@
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
+#include "ui/qt_numeric_format.hpp"
 #include "ui/qt_viewport_chrome_layout.hpp"
 #include "ui/qt_viewport_edge_length_hud.hpp"
 #include "ui/qt_viewport_fly_navigation_hud.hpp"
@@ -893,7 +894,7 @@ void QtViewportPanel::present_primitive_feedback(
       ? QLocale(QString::fromStdString(localization_->current_locale())) : QLocale::c();
   const QString value = controls.label_is_count
       ? locale.toString(static_cast<qlonglong>(std::llround(controls.label_value)))
-      : locale.toString(controls.label_value, 'g', 6);
+      : qt_format_number(controls.label_value, locale);
   const QString text = QStringLiteral("%1: %2").arg(QString::fromStdString(label), value);
   QLabel &widget = *pane_state.primitive_feedback;
   const int margin = ui_scale_metrics_.px(4);

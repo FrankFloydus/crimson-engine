@@ -9,6 +9,7 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "ui/qt_multiresolution_icon.hpp"
+#include "ui/qt_numeric_format.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
@@ -127,10 +128,6 @@ QString localized_text(const LocalizationService &localization,
   return QString::fromStdString(localization.text(key, fallback));
 }
 
-QString exact_number(double value) {
-  return QString::number(value, 'g', 15);
-}
-
 } // namespace
 
 QtSnappingToolbar::QtSnappingToolbar(QWidget *parent) : QToolBar(parent) {
@@ -153,7 +150,8 @@ QtSnappingToolbar::QtSnappingToolbar(QWidget *parent) : QToolBar(parent) {
   grid_size_combo_->setFixedHeight(kTopToolbarButtonHeight);
   const auto grid_presets = viewport_grid_preset_catalog();
   for (const ViewportGridPresetDescriptor &preset : grid_presets) {
-    grid_size_combo_->addItem(exact_number(preset.map_units), preset.preset);
+    grid_size_combo_->addItem(qt_format_number(preset.map_units, QLocale::c()),
+                             preset.preset);
   }
   grid_label_->setBuddy(grid_size_combo_);
   addWidget(grid_size_combo_);
@@ -170,7 +168,8 @@ QtSnappingToolbar::QtSnappingToolbar(QWidget *parent) : QToolBar(parent) {
   angle_combo_->setFixedHeight(kTopToolbarButtonHeight);
   for (const double degrees : viewport_rotation_snap_degrees_catalog()) {
     angle_combo_->addItem(
-        QStringLiteral("%1\u00B0").arg(exact_number(degrees)), degrees);
+        QStringLiteral("%1\u00B0")
+            .arg(qt_format_number(degrees, QLocale::c())), degrees);
   }
   angle_label_->setBuddy(angle_combo_);
   addWidget(angle_combo_);

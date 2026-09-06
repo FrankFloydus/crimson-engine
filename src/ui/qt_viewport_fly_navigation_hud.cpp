@@ -7,6 +7,7 @@
 #include "ui/qt_viewport_fly_navigation_hud.hpp"
 
 #include "core/localization_service.hpp"
+#include "ui/qt_numeric_format.hpp"
 #include "viewport/viewport_layout.hpp"
 
 #include <QBitmap>
@@ -22,7 +23,6 @@
 #include <QWidget>
 
 #include <algorithm>
-#include <cstdio>
 #include <string>
 #include <string_view>
 
@@ -135,8 +135,8 @@ QString pane_suffix(ViewportPaneId pane_id) {
 
 std::string fly_speed_label(float fly_speed,
                             const LocalizationService *localization) {
-  char speed_value[32]{};
-  std::snprintf(speed_value, sizeof(speed_value), "%.1f", fly_speed);
+  const std::string speed_value =
+      qt_format_number(fly_speed, QLocale::c()).toStdString();
   if (localization != nullptr) {
     return localization->format(
         "viewport.fly_navigation.speed_with_reset",

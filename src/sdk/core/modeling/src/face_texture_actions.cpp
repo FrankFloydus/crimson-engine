@@ -10,6 +10,7 @@
 
 #include <quader/modeling/neutral/geometry/geometry.hpp>
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
+#include <quader/modeling/neutral/polygon/face_texture_scale_steps.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_constants.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
@@ -747,14 +748,13 @@ struct TextureAffine {
     TargetWork &target, const FaceWork &face,
     const FaceTextureActionOptions &options) {
   auto desired = face.face->texture_transform;
-  const auto scale_step = [&](float &scale, bool up) -> bool {
-    constexpr float kStep = 0.1F;
-    const float magnitude = std::abs(scale) + (up ? kStep : -kStep);
-    if (!std::isfinite(magnitude) ||
-        magnitude <= 8.0F * std::numeric_limits<float>::epsilon() * kStep) {
+  const auto scale_step = [](float &scale, bool up) -> bool {
+    const double stepped =
+        quader_poly::stepped_face_texture_scale(scale, up ? 1 : -1);
+    if (!std::isfinite(stepped) || stepped == 0.0) {
       return false;
     }
-    scale = std::copysign(magnitude, scale);
+    scale = static_cast<float>(stepped);
     return true;
   };
   const float width = static_cast<float>(
@@ -897,6 +897,7 @@ struct TextureAffine {
   std::vector<QVec2> desired;
   desired.reserve(face.world_positions.size());
   FaceBasis basis;
+  QVec2 grid_texture_resolution_scale{1.0F, 1.0F};
   if (options.action == FaceTextureAction::AlignToFace) {
     basis = geometric_basis(target, face);
     if (!basis.valid) {
@@ -917,12 +918,27 @@ struct TextureAffine {
     basis.v_axis = quader::normalize_or_zero(vertical) * -1.0F;
     basis.valid = true;
   } else {
-    desired_transform = {};
+    // Grid alignment resets to 0.125 map units per texel. Generated UVs use
+    // a 64-map-unit tile, so convert each axis to the material's pixel extent.
+    constexpr float kGridMapUnitsPerTexel = 0.125F;
+    constexpr float kGeneratedTileSize =
+        quader_poly::document_internal::kGeneratedUvTileSizeMapUnits;
+    const float width = face.requested.texture_width == 0U
+        ? kGeneratedTileSize : static_cast<float>(face.requested.texture_width);
+    const float height = face.requested.texture_height == 0U
+        ? kGeneratedTileSize : static_cast<float>(face.requested.texture_height);
+    grid_texture_resolution_scale = {kGeneratedTileSize / width,
+                                     kGeneratedTileSize / height};
+    desired_transform = {.scale = {kGridMapUnitsPerTexel, kGridMapUnitsPerTexel}};
   }
   for (const auto position : face.world_positions) {
-    const auto base = options.action == FaceTextureAction::AlignToGrid
+    auto base = options.action == FaceTextureAction::AlignToGrid
         ? quader_poly::generated_texture_uv(position, face.world_normal)
         : quader_poly::document_internal::generated_face_uv(position, basis);
+    if (options.action == FaceTextureAction::AlignToGrid) {
+      base.x *= grid_texture_resolution_scale.x;
+      base.y *= grid_texture_resolution_scale.y;
+    }
     desired.push_back(quader_poly::apply_face_texture_transform(
         base, desired_transform));
   }
