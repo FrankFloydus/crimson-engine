@@ -18,9 +18,12 @@ class QWidget;
 namespace quader {
 
 class QuaderEditorApi;
+struct QuaderViewportKeybindingContext;
 
 using QtViewportToolStateProvider = std::function<ViewportToolState()>;
 using QtApplicationCommandInputOwnerProvider = std::function<bool()>;
+using QtCommandInputContextProvider =
+    std::function<QuaderViewportKeybindingContext()>;
 
 [[nodiscard]] ViewportToolState
 qt_command_dispatch_tool_state(const QtViewportToolStateProvider &provider,
@@ -35,6 +38,9 @@ qt_command_dispatch_tool_state(const QtViewportToolStateProvider &provider,
  * notification can lag behind QWidget focus delivery.
  */
 [[nodiscard]] bool qt_window_owns_command_input(const QWidget *window);
+
+/** Reports hover or focus ownership of the retained scene hierarchy panel. */
+[[nodiscard]] bool qt_outliner_owns_command_input(const QWidget *outliner);
 
 /**
  * Routes application-level Qt key presses through Quader's canonical command
@@ -54,6 +60,9 @@ public:
   void rebind_editor(QuaderEditorApi &editor) noexcept;
   void set_command_input_owner_provider(
       QtApplicationCommandInputOwnerProvider provider);
+  void set_outliner_input_owner_provider(
+      QtApplicationCommandInputOwnerProvider provider);
+  void set_input_context_provider(QtCommandInputContextProvider provider);
 
 protected:
   bool eventFilter(QObject *watched, QEvent *event) override;
@@ -68,6 +77,8 @@ private:
   QuaderEditorApi *editor_ = nullptr;
   QtViewportToolStateProvider tool_state_provider_;
   QtApplicationCommandInputOwnerProvider command_input_owner_provider_;
+  QtApplicationCommandInputOwnerProvider outliner_input_owner_provider_;
+  QtCommandInputContextProvider input_context_provider_;
 };
 
 } // namespace quader

@@ -93,6 +93,7 @@ struct QuaderViewportKeybindingContext {
   bool active_transform_drag = false;
   bool operation_preview_active = false;
   bool curve_controls_editable = false;
+  bool outliner_focused = false;
 };
 
 /**
@@ -208,6 +209,8 @@ public:
     QuaderApiVoidResult execute_native_tool_settings_intent(
         QuaderNativeToolSettingsIntent intent);
     void reset_pending_keybinding_chord();
+    /** Clears viewport prefixes without canceling an Outliner-owned sequence. */
+    void reset_pending_viewport_keybinding_chord();
     [[nodiscard]] bool has_pending_keybinding_chord() const;
     QuaderApiVoidResult set_shortcut(std::string_view command_id,
                                      std::string shortcut);

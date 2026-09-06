@@ -1809,7 +1809,7 @@ TEST(ProgrammaticApiGuardrailTests,
       source_root() /
       "src/render/overlay/viewport_overlay_submission_coordinator.cpp");
   const std::size_t style_signature = coordinator.find(
-      "ViewportOverlayStyleResolver::style_signature(settings,");
+      "ViewportOverlayStyleResolver::style_signature(");
   const std::size_t dynamic_gate =
       coordinator.find("if (dynamic_changed)", style_signature);
   ASSERT_NE(style_signature, std::string::npos);
@@ -1857,9 +1857,11 @@ TEST(ProgrammaticApiGuardrailTests, OutlinerUsesDocumentCommandRootSelectionOwne
   EXPECT_NE(outliner.find("quader_command::kDeleteSelection"),
             std::string::npos);
   EXPECT_NE(outliner.find("editor_->scene().rename("), std::string::npos);
-  EXPECT_NE(outliner.find("editor_->scene().set_visible("),
+  EXPECT_NE(outliner.find("editor_->scene().move_entities("),
             std::string::npos);
-  EXPECT_NE(outliner.find("editor_->scene().set_locked("),
+  EXPECT_NE(outliner.find("editor_->scene().set_visibility("),
+            std::string::npos);
+  EXPECT_NE(outliner.find("editor_->scene().set_locks("),
             std::string::npos);
   EXPECT_NE(scene_aware_delete_header.find("scene_aware_delete_handles_selection"),
             std::string::npos);

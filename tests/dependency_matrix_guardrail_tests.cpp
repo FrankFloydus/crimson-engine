@@ -233,6 +233,7 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
         "editor_input",
         "editor_instances",
         "editor_material",
+        "editor_metadata",
         "editor_modeling",
         "editor_placement",
         "editor_pivot",

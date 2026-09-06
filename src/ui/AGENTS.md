@@ -13,6 +13,10 @@ file except through prior written authorization from Francesco Di Blasi.
 - `UISystem` composes `QMainWindow`, docks, tool windows, localization, and retained presentation.
   `UIPanelManager` maps public panels to docks. Widgets dispatch editor intent through public APIs
   and commands; they own only presentation state.
+- Outliner drag/drop uses Qt's native `InternalMove` view and model MIME/drop hooks, with
+  `scene().move_entities()` owning atomic hierarchy/order edits and history. The model must not
+  apply Qt's trailing source-row removal after the scene has already moved those entities.
+  Names depict visibility/lock state; the tree has no property checkbox columns.
 - `QtViewportPanel` hosts one to four native-child `QtViewportSurface` panes. Workspace state and
   cameras belong to `ViewportWorkspaceService`; Filament resources belong to render.
 - `main.cpp` selects Fusion; `qt_application_theme.*` supplies the Obsidian palette and live system

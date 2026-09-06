@@ -7,22 +7,32 @@
 #include <gtest/gtest.h>
 
 #include "api/quader_command_ids.hpp"
+#include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
+#include "core/localization_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
+#include "editor/session/scene_session.hpp"
+#include "ui/outliner_panel.hpp"
 #include "ui/qt_command_event_filter.hpp"
 #include "ui/qt_viewport_surface.hpp"
+#include "ui/ui_context.hpp"
+#include "ui/ui_settings.hpp"
+#include "viewport/viewport_settings.hpp"
 
 #include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QEnterEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPointer>
 #include <QPushButton>
 #include <QTabBar>
 #include <QTemporaryDir>
 #include <QTreeWidget>
+#include <QTreeView>
 #include <QWidget>
 
 #include <cstdint>
@@ -182,6 +192,10 @@ TEST(QtCommandEventFilterTests,
                       quader::quader_command::kSceneHideSelection)
                   .ok());
   ASSERT_TRUE(editor.commands()
+                  .remove_shortcut(
+                      quader::quader_command::kToolsTogglePrimitiveHemisphere)
+                  .ok());
+  ASSERT_TRUE(editor.commands()
                   .set_shortcut(quader::quader_command::kEditUndo, "H")
                   .ok());
   const std::uint64_t status_revision_before_combo =
@@ -287,6 +301,205 @@ TEST(QtCommandEventFilterTests,
 
   application.removeEventFilter(&command_filter);
   auxiliary_window.hide();
+}
+
+/// Supplies the real retained Outliner with a standalone editor's live owners.
+struct OutlinerCommandContext {
+  quader::UISettings ui_settings;
+  quader::ViewportSettings viewport_settings;
+  quader::LocalizationService localization;
+
+  void refresh(quader::OutlinerPanel &panel, quader::QuaderEditorApi &editor,
+               quader::SceneSession &session) {
+    quader::UIContext context{
+        .intent = {editor},
+        .scene = {session.scene(), session.assets(), session.modeling(),
+                  session.selection()},
+        .preferences = {ui_settings, viewport_settings},
+        .localization = localization,
+    };
+    panel.refresh(context);
+  }
+};
+
+TEST(QtCommandEventFilterTests,
+     OutlinerFocusRoutesSceneCommandsAndCustomSequencesWithoutTreeSearch) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-outliner-command-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto first = editor.scene().create_entity({.name = "First", .kind = quader::QuaderEntityKind::Empty});
+  const auto second = editor.scene().create_entity({.name = "Second", .kind = quader::QuaderEntityKind::Empty});
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  ASSERT_TRUE(editor.selection().select_objects_for_inspection(
+      {first.value().id, second.value().id}).ok());
+  auto &document = session.scene();
+  OutlinerCommandContext context;
+  quader::OutlinerPanel outliner;
+  context.refresh(outliner, editor, session);
+  outliner.resize(340, 400);
+  outliner.show();
+  outliner.activateWindow();
+  auto *tree = outliner.findChild<QTreeView *>(QStringLiteral("outliner.tree"));
+  ASSERT_NE(tree, nullptr);
+  tree->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::focusWidget(), tree);
+  quader::QtCommandEventFilter filter(editor, {});
+  filter.set_outliner_input_owner_provider([&outliner]() {
+    return quader::qt_outliner_owns_command_input(&outliner);
+  });
+  application.installEventFilter(&filter);
+
+  send_key_press(*tree, Qt::Key_G, Qt::ControlModifier, QStringLiteral("g"));
+  const auto group = document.parent(first.value().id);
+  ASSERT_NE(group, document.scene_root());
+  EXPECT_EQ(document.parent(second.value().id), group);
+  send_key_press(*tree, Qt::Key_G,
+                 Qt::ControlModifier | Qt::ShiftModifier, QStringLiteral("G"));
+  EXPECT_FALSE(document.exists(group));
+  EXPECT_EQ(document.parent(first.value().id), document.scene_root());
+  EXPECT_EQ(document.parent(second.value().id), document.scene_root());
+
+  send_key_press(*tree, Qt::Key_Delete, Qt::NoModifier);
+  EXPECT_FALSE(document.exists(first.value().id));
+  EXPECT_FALSE(document.exists(second.value().id));
+  send_key_press(*tree, Qt::Key_Z, Qt::ControlModifier, QStringLiteral("z"));
+  EXPECT_TRUE(document.exists(first.value().id));
+  EXPECT_TRUE(document.exists(second.value().id));
+
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_command::kDeleteSelection, "K D").ok());
+  const auto status_before = editor.commands().last_status_revision();
+  send_key_press(*tree, Qt::Key_K, Qt::NoModifier, QStringLiteral("k"));
+  ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_EQ(editor.commands().last_status_revision(), status_before);
+  // Idle viewport frames may clear their own input while this tree owns K D.
+  editor.commands().reset_pending_viewport_keybinding_chord();
+  ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+  send_key_press(*tree, Qt::Key_D, Qt::NoModifier, QStringLiteral("d"));
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_FALSE(document.exists(first.value().id));
+  EXPECT_FALSE(document.exists(second.value().id));
+  send_key_press(*tree, Qt::Key_Z, Qt::ControlModifier, QStringLiteral("z"));
+  ASSERT_TRUE(document.exists(first.value().id));
+
+  ASSERT_TRUE(editor.commands().remove_shortcut(
+      quader::quader_command::kDeleteSelection).ok());
+  send_key_press(*tree, Qt::Key_Delete, Qt::NoModifier);
+  EXPECT_TRUE(document.exists(first.value().id));
+  EXPECT_TRUE(document.exists(second.value().id));
+  application.removeEventFilter(&filter);
+}
+
+TEST(QtCommandEventFilterTests,
+     OutlinerHoverPreemptsViewportQueueButTextAndPopupKeepInput) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-outliner-hover-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto object = editor.scene().create_entity({.name = "Hover Object", .kind = quader::QuaderEntityKind::Empty});
+  ASSERT_TRUE(object.ok());
+  ASSERT_TRUE(editor.selection().select_objects_for_inspection(
+      {object.value().id}).ok());
+  auto &document = session.scene();
+  QWidget editor_window;
+  editor_window.resize(660, 420);
+  quader::OutlinerPanel outliner(&editor_window);
+  outliner.setGeometry(0, 0, 320, 400);
+  QWidget viewport_container(&editor_window);
+  viewport_container.setObjectName(QStringLiteral("viewportSurfaceContainer_test"));
+  viewport_container.setFocusPolicy(Qt::StrongFocus);
+  viewport_container.setGeometry(340, 0, 300, 300);
+  QLineEdit inspector_text(&editor_window);
+  inspector_text.setGeometry(340, 320, 300, 30);
+  OutlinerCommandContext context;
+  context.refresh(outliner, editor, session);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  quader::QtCommandEventFilter filter(editor, {});
+  filter.set_outliner_input_owner_provider([&outliner]() {
+    return quader::qt_outliner_owns_command_input(&outliner);
+  });
+  application.installEventFilter(&filter);
+  editor_window.show();
+  editor_window.activateWindow();
+  viewport_container.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::focusWidget(), &viewport_container);
+  QEnterEvent enter(QPointF(20, 30), QPointF(20, 30),
+                    QPointF(outliner.mapToGlobal(QPoint(20, 30))));
+  QCoreApplication::sendEvent(&outliner, &enter);
+  ASSERT_TRUE(quader::qt_outliner_owns_command_input(&outliner));
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_command::kDeleteSelection, "K D").ok());
+  const auto status_before_sequence = editor.commands().last_status_revision();
+  QKeyEvent prefix(QEvent::KeyPress, Qt::Key_K, Qt::NoModifier,
+                    QStringLiteral("k"));
+  QCoreApplication::sendEvent(&surface, &prefix);
+  ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+  QKeyEvent mismatch(QEvent::KeyPress, Qt::Key_D, Qt::ControlModifier,
+                      QStringLiteral("d"));
+  QCoreApplication::sendEvent(&surface, &mismatch);
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_EQ(editor.commands().last_status_revision(), status_before_sequence);
+  EXPECT_TRUE(surface.take_input_frame(0.0f, false).input.pressed_input_chords.empty());
+  ASSERT_TRUE(editor.commands().reset_shortcut(
+      quader::quader_command::kDeleteSelection).ok());
+  QKeyEvent delete_event(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+  QCoreApplication::sendEvent(&surface, &delete_event);
+  EXPECT_FALSE(document.exists(object.value().id));
+  EXPECT_TRUE(surface.take_input_frame(0.0f, false).input.pressed_input_chords.empty());
+  ASSERT_TRUE(editor.commands().execute(quader::quader_command::kEditUndo).ok());
+  ASSERT_TRUE(document.exists(object.value().id));
+
+  inspector_text.setText(QStringLiteral("Text"));
+  inspector_text.setCursorPosition(0);
+  inspector_text.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  send_key_press(inspector_text, Qt::Key_Delete, Qt::NoModifier);
+  EXPECT_EQ(inspector_text.text(), QStringLiteral("ext"));
+  EXPECT_TRUE(document.exists(object.value().id));
+
+  auto *tree = outliner.findChild<QTreeView *>(QStringLiteral("outliner.tree"));
+  ASSERT_NE(tree, nullptr);
+  context.refresh(outliner, editor, session);
+  tree->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  send_key_press(*tree, Qt::Key_F2, Qt::NoModifier);
+  QCoreApplication::processEvents();
+  auto *rename_editor = tree->findChild<QLineEdit *>();
+  ASSERT_NE(rename_editor, nullptr);
+  ASSERT_TRUE(rename_editor->hasFocus());
+  rename_editor->setText(QStringLiteral("Rename"));
+  rename_editor->setCursorPosition(0);
+  send_key_press(*rename_editor, Qt::Key_Delete, Qt::NoModifier);
+  EXPECT_EQ(rename_editor->text(), QStringLiteral("ename"));
+  EXPECT_TRUE(document.exists(object.value().id));
+  send_key_press(*rename_editor, Qt::Key_Escape, Qt::NoModifier);
+  QCoreApplication::processEvents();
+
+  QMenu popup(&editor_window);
+  popup.addAction(QStringLiteral("Keep popup input"));
+  popup.popup(outliner.mapToGlobal(QPoint(20, 30)));
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::activePopupWidget(), &popup);
+  send_key_press(popup, Qt::Key_Delete, Qt::NoModifier);
+  EXPECT_TRUE(document.exists(object.value().id));
+  popup.close();
+  application.removeEventFilter(&filter);
 }
 
 TEST(QtCommandEventFilterTests,

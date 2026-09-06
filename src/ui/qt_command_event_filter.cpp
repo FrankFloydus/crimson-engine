@@ -6,9 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_command_event_filter.hpp"
 
+#include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
+#include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
@@ -277,9 +279,29 @@ void QtCommandEventFilter::rebind_editor(QuaderEditorApi &editor) noexcept {
   reset_pending_chord();
 }
 
+bool qt_outliner_owns_command_input(const QWidget *outliner) {
+  if (outliner == nullptr || !outliner->isVisible()) {
+    return false;
+  }
+  const QWidget *const focus_widget = QApplication::focusWidget();
+  return outliner->underMouse() ||
+         (focus_widget != nullptr &&
+          (focus_widget == outliner || outliner->isAncestorOf(focus_widget)));
+}
+
 void QtCommandEventFilter::set_command_input_owner_provider(
     QtApplicationCommandInputOwnerProvider provider) {
   command_input_owner_provider_ = std::move(provider);
+}
+
+void QtCommandEventFilter::set_outliner_input_owner_provider(
+    QtApplicationCommandInputOwnerProvider provider) {
+  outliner_input_owner_provider_ = std::move(provider);
+}
+
+void QtCommandEventFilter::set_input_context_provider(
+    QtCommandInputContextProvider provider) {
+  input_context_provider_ = std::move(provider);
 }
 
 bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
@@ -309,7 +331,12 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       reset_pending_chord();
       return QObject::eventFilter(watched, event);
     }
-    const bool viewport_focused = viewport_surface_has_focus(watched);
+    const bool text_input_active = text_input_has_focus();
+    const bool outliner_focused =
+        !text_input_active && qt_application_command_input_owner_active(
+                                  outliner_input_owner_provider_);
+    const bool viewport_focused = !outliner_focused && !text_input_active &&
+                                 viewport_surface_has_focus(watched);
 
     const std::optional<QuaderInputChord> chord =
         quader_pressed_input_chord_from_qt_event(
@@ -318,12 +345,21 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       return QObject::eventFilter(watched, event);
     }
 
-    const ViewportToolState state = qt_command_dispatch_tool_state(
+    ViewportToolState state = qt_command_dispatch_tool_state(
         tool_state_provider_, editor_->viewports().grid_preset());
+    QuaderViewportKeybindingContext input_context =
+        input_context_provider_ ? input_context_provider_()
+                                : QuaderViewportKeybindingContext{};
+    input_context.outliner_focused = outliner_focused;
+    if (outliner_focused) {
+      // Tree selection can publish before the next viewport frame samples it.
+      state.selection_mode = app_selection_mode_to_viewport(
+          to_modeling_selection_mode(editor_->selection().summary().mode));
+    }
     if (viewport_focused) {
       const std::optional<std::string> immediate_command =
           editor_->commands().resolve_immediate_global_command(
-              *chord, state, false);
+              *chord, state, false, input_context);
       if (!immediate_command.has_value()) {
         return QObject::eventFilter(watched, event);
       }
@@ -346,15 +382,33 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       return true;
     }
 
-    const bool text_input_active = text_input_has_focus();
+    if (text_input_active) {
+      reset_pending_chord();
+    }
     const bool native_tool_settings_editor_focused =
         qt_object_belongs_to_tool_settings_panel(focus_widget) &&
         (text_input_active || focused_combo_box(focus_widget) != nullptr);
+    if (outliner_focused) {
+      // Hover can transfer command ownership without a Qt focus event. Clear
+      // an outgoing viewport prefix before checking for a tree continuation.
+      editor_->commands().reset_pending_viewport_keybinding_chord();
+    }
+    const bool outliner_sequence_pending =
+        outliner_focused && editor_->commands().has_pending_keybinding_chord();
     QuaderViewportKeybindingDispatch dispatch = [&]() {
       QDR_PROFILE_SCOPE("Qt command resolve keybinding");
       return editor_->commands().dispatch_viewport_input_binding(
-          *chord, state, false, text_input_active);
+          *chord, state, false, text_input_active,
+          input_context);
     }();
+    if (outliner_sequence_pending &&
+        dispatch.kind == QuaderViewportKeybindingDispatch::Kind::NoMatch) {
+      // A mismatched continuation belongs to the sequence that consumed its
+      // prefix. Do not replay it as a fresh command through a parent widget or
+      // the still-focused viewport's deferred input queue.
+      event->accept();
+      return true;
+    }
     if (dispatch.kind ==
             QuaderViewportKeybindingDispatch::Kind::NoMatch &&
         native_tool_settings_editor_focused) {
@@ -392,7 +446,7 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       }
     }
 
-    if (focused_widget_owns_key_press(
+    if (!outliner_focused && focused_widget_owns_key_press(
             focus_widget, *static_cast<QKeyEvent *>(event))) {
       // Preserve the documented key behavior of the focused Qt control,
       // including item-view Ctrl+A, range navigation, activation, and

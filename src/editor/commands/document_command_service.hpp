@@ -54,6 +54,9 @@ public:
     DocumentCommandResult destroy_entity(EntityId entity);
     DocumentCommandResult reparent_entity(EntityId entity, EntityId parent,
                                           bool preserve_world_transform = true);
+    DocumentCommandResult move_entities(
+        std::span<const EntityId> entities, EntityId parent,
+        EntityId before_sibling = kInvalidEntityId);
     DocumentGroupSelectionResult
     group_selection(std::string group_name = {},
                     TransformComponent group_transform = TransformComponent{});

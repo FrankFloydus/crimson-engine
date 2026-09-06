@@ -57,9 +57,15 @@ command behavior record and baseline requirements.
 
 A chord is physical input, not an action. Rules select a target through app-owned boolean contexts;
 `when` supports identifiers, `!`, `&&`, `||`, and parentheses. Important context families include
-`viewportFocus`, `viewport.hovered`, `viewport.orthographic`, `textInputActive`, `editorTextFocus`,
+`viewportFocus`, `outlinerFocus`, `viewport.hovered`, `viewport.orthographic`, `textInputActive`, `editorTextFocus`,
 `navigation.*`, `activeTool.*`, `modalTool.active`, `transformDrag.active`, and `selectionMode.*`.
 Read `viewport_keybinding_context()` and the registration context helpers before adding another key.
+
+The Outliner supplies `outlinerFocus` while hovered or focused. Scene commands use the same
+compiled mappings and user overrides there; only registered commands executable without viewport
+pointer routing participate. Text/delegate editors, popups, and auxiliary tool windows retain
+input ownership. Unbound tree keys fall through to Qt navigation and renaming. Idle viewport
+frames clear only viewport-owned prefixes; they must preserve an Outliner-owned multi-key sequence.
 
 Stable state such as selection mode, text focus, preview, or navigation belongs in context predicates.
 Transient command availability such as selection counts, clipboard contents, or undo history is checked

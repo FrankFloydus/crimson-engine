@@ -51,6 +51,7 @@ class ModelingSessionService;
 class LocalizationService;
 class NativeViewportToolCoordinator;
 class QuaderEditorApi;
+struct QuaderViewportKeybindingContext;
 class RenderOverlaySnapshotCache;
 class QtViewportEdgeLengthHud;
 class QtViewportFlyNavigationHud;
@@ -131,6 +132,8 @@ public:
   [[nodiscard]] const ViewportToolState &tool_state() const {
     return input_router_.state();
   }
+  /** Shares current interaction guards with commands dispatched by other panels. */
+  [[nodiscard]] QuaderViewportKeybindingContext command_input_context();
   /// Counts retained primitive-feedback updates after revision/geometry gates.
   [[nodiscard]] std::uint64_t primitive_feedback_update_count() const {
     return primitive_feedback_update_count_;

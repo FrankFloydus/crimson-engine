@@ -2005,6 +2005,10 @@ TEST(QtViewportSurfaceInputTests,
   QApplication::sendEvent(surface, &middle_move);
   process_input();
 
+  EXPECT_TRUE(panel.command_input_context().navigation_active);
+  EXPECT_TRUE(panel.command_input_context().orbit_navigation_active);
+  EXPECT_FALSE(panel.command_input_context().pan_navigation_active);
+
   const QPointF moved_again{410.0, 300.0};
   const QPointF moved_again_global{510.0, 400.0};
   QMouseEvent middle_move_again(QEvent::MouseMove, moved_again,
@@ -2024,6 +2028,7 @@ TEST(QtViewportSurfaceInputTests,
   process_input();
 
   const quader::ViewportCameraPose after_orbit = camera.pose();
+  EXPECT_FALSE(panel.command_input_context().navigation_active);
   EXPECT_NEAR(camera.state().distance, 4.0f, 0.01f);
   const quader::ViewportScreenPoint anchor_after =
       camera.project_world_point({0.0f, 0.0f, -4.0f});
@@ -2067,12 +2072,16 @@ TEST(QtViewportSurfaceInputTests,
                        Qt::MiddleButton, Qt::ShiftModifier);
   QApplication::sendEvent(surface, &pan_move);
   process_input();
+  EXPECT_TRUE(panel.command_input_context().navigation_active);
+  EXPECT_TRUE(panel.command_input_context().pan_navigation_active);
+  EXPECT_FALSE(panel.command_input_context().orbit_navigation_active);
   QMouseEvent pan_release(QEvent::MouseButtonRelease, panned, panned_global,
                           Qt::MiddleButton, Qt::NoButton,
                           Qt::ShiftModifier);
   QApplication::sendEvent(surface, &pan_release);
   process_input();
   const quader::ViewportCameraPose after_pan = camera.pose();
+  EXPECT_FALSE(panel.command_input_context().navigation_active);
   EXPECT_GT(quader::length(after_pan.target - before_pan.target), 0.01f);
 
   const float distance_before_wheel = camera.state().distance;

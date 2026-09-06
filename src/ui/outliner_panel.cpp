@@ -27,9 +27,11 @@
 #include <QList>
 #include <QMenu>
 #include <QMetaObject>
+#include <QMimeData>
 #include <QModelIndex>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPointer>
 #include <QScopedValueRollback>
 #include <QSignalBlocker>
 #include <QStandardItem>
@@ -57,26 +59,6 @@
 
 namespace quader {
 
-OutlinerPropertyState
-outliner_visibility_property_state(bool visible,
-                                   bool effectively_visible) noexcept {
-  if (!visible) {
-    return OutlinerPropertyState::Off;
-  }
-  return effectively_visible ? OutlinerPropertyState::On
-                             : OutlinerPropertyState::Inherited;
-}
-
-OutlinerPropertyState
-outliner_lock_property_state(bool locked,
-                             bool effectively_locked) noexcept {
-  if (locked) {
-    return OutlinerPropertyState::On;
-  }
-  return effectively_locked ? OutlinerPropertyState::Inherited
-                            : OutlinerPropertyState::Off;
-}
-
 bool outliner_selection_sync_required(
     bool model_rebuilt, bool cached_revision_valid,
     std::uint64_t cached_selection_revision,
@@ -93,25 +75,11 @@ constexpr int kSubduedRole = Qt::UserRole + 2;
 /// Identifies the resizable scene-tree columns owned by the Qt outliner model.
 enum class OutlinerColumn : int {
   Name = 0,
-  Visible = 1,
-  Locked = 2,
-  Count = 3,
+  Count = 1,
 };
 
 constexpr int column_index(OutlinerColumn column) {
   return static_cast<int>(column);
-}
-
-Qt::CheckState qt_check_state(OutlinerPropertyState state) {
-  switch (state) {
-  case OutlinerPropertyState::Off:
-    return Qt::Unchecked;
-  case OutlinerPropertyState::On:
-    return Qt::Checked;
-  case OutlinerPropertyState::Inherited:
-    return Qt::PartiallyChecked;
-  }
-  return Qt::Unchecked;
 }
 
 QString qt_text(std::string_view text) {
@@ -240,6 +208,70 @@ void duplicate_selection(QuaderEditorApi &editor) {
   (void)editor.commands().execute(quader_command::kDuplicateSelection);
 }
 
+/// Keeps drag identity inside the originating panel and runtime binding.
+class OutlinerMimeData final : public QMimeData {
+public:
+  QPointer<QAbstractItemModel> source;
+  std::uint64_t binding_generation = 0;
+  std::uint64_t hierarchy_revision = 0;
+  EntityId instance_scope = kInvalidEntityId;
+  std::vector<EntityId> entities;
+
+  static QString format() {
+    return QStringLiteral("application/x-quader-outliner-entities");
+  }
+};
+
+/// Adapts Qt drops to scene intent without permitting model-owned row moves.
+class OutlinerItemModel final : public QStandardItemModel {
+public:
+  using MimeHandler = std::function<QMimeData *(const QModelIndexList &)>;
+  using DropHandler = std::function<bool(const OutlinerMimeData &, int,
+                                         const QModelIndex &, bool)>;
+
+  explicit OutlinerItemModel(QObject *parent) : QStandardItemModel(parent) {}
+
+  MimeHandler mime_handler;
+  DropHandler drop_handler;
+
+  QStringList mimeTypes() const override { return {OutlinerMimeData::format()}; }
+
+  QMimeData *mimeData(const QModelIndexList &indexes) const override {
+    return mime_handler != nullptr ? mime_handler(indexes) : nullptr;
+  }
+
+  Qt::DropActions supportedDropActions() const override { return Qt::MoveAction; }
+  Qt::DropActions supportedDragActions() const override { return Qt::MoveAction; }
+
+  bool removeRows(int, int, const QModelIndex & = {}) override {
+    // Qt removes source rows after a successful Move drop. The scene API has
+    // already moved them atomically; only its refreshed projection may remove
+    // rows from this retained model.
+    return false;
+  }
+
+  void clear_projection() {
+    QStandardItemModel::removeRows(0, rowCount());
+  }
+
+  bool canDropMimeData(const QMimeData *data, Qt::DropAction action, int row,
+                       int column, const QModelIndex &parent) const override {
+    const auto *drag = dynamic_cast<const OutlinerMimeData *>(data);
+    return action == Qt::MoveAction && column <= 0 && drag != nullptr &&
+           drag->source == this && drop_handler != nullptr &&
+           drop_handler(*drag, row, parent, false);
+  }
+
+  bool dropMimeData(const QMimeData *data, Qt::DropAction action, int row,
+                    int column, const QModelIndex &parent) override {
+    if (!canDropMimeData(data, action, row, column, parent)) {
+      return false;
+    }
+    return drop_handler(*static_cast<const OutlinerMimeData *>(data), row,
+                         parent, true);
+  }
+};
+
 /// Renders hidden and locked entity rows with subdued stock palette text.
 class SubduedRowDelegate final : public QStyledItemDelegate {
 public:
@@ -287,6 +319,7 @@ public:
   }
 
   void abandon_selection_gesture() noexcept {
+    ++interaction_generation_;
     selection_gesture_active_ = false;
     resetting_selection_anchor_ = false;
   }
@@ -307,6 +340,17 @@ public:
   }
 
 protected:
+  void startDrag(Qt::DropActions supported_actions) override {
+    const std::uint64_t generation = interaction_generation_;
+    // A drag can start before mouse release; publish its row selection once
+    // before entering QDrag's nested event loop.
+    finish_selection_gesture();
+    if (interaction_generation_ != generation) {
+      return;
+    }
+    QTreeView::startDrag(supported_actions);
+  }
+
   QItemSelectionModel::SelectionFlags
   selectionCommand(const QModelIndex &index,
                    const QEvent *event = nullptr) const override {
@@ -396,6 +440,7 @@ private:
   }
 
   bool selection_gesture_active_ = false;
+  std::uint64_t interaction_generation_ = 0;
   bool resetting_selection_anchor_ = false;
   QPersistentModelIndex externally_synchronized_anchor_;
   bool externally_synchronized_anchor_valid_ = false;
@@ -433,10 +478,15 @@ struct OutlinerPanel::Impl {
     tree_->setEditTriggers(QAbstractItemView::EditKeyPressed);
     tree_->setAlternatingRowColors(true);
     tree_->setUniformRowHeights(true);
+    tree_->setDragDropMode(QAbstractItemView::InternalMove);
+    tree_->setDefaultDropAction(Qt::MoveAction);
+    tree_->setDragDropOverwriteMode(false);
+    tree_->setDropIndicatorShown(true);
+    tree_->setAutoExpandDelay(600);
     tree_->setItemDelegate(new SubduedRowDelegate(tree_));
     panel_.setFocusProxy(tree_);
 
-    model_ = new QStandardItemModel(tree_);
+    model_ = new OutlinerItemModel(tree_);
     model_->setObjectName(QStringLiteral("outliner.model"));
     model_->setColumnCount(column_index(OutlinerColumn::Count));
     tree_->setModel(model_);
@@ -447,10 +497,6 @@ struct OutlinerPanel::Impl {
     header->setStretchLastSection(false);
     header->setSectionResizeMode(column_index(OutlinerColumn::Name),
                                  QHeaderView::Stretch);
-    header->setSectionResizeMode(column_index(OutlinerColumn::Visible),
-                                 QHeaderView::ResizeToContents);
-    header->setSectionResizeMode(column_index(OutlinerColumn::Locked),
-                                 QHeaderView::ResizeToContents);
     layout->addWidget(tree_);
 
     tree_->context_menu_handler = [this](EntityId entity,
@@ -463,6 +509,13 @@ struct OutlinerPanel::Impl {
       }
       widget_selection_sync_deferred_ = false;
       handle_widget_selection_changed();
+    };
+    model_->mime_handler = [this](const QModelIndexList &indexes) {
+      return create_drag_data(indexes);
+    };
+    model_->drop_handler = [this](const OutlinerMimeData &drag, int row,
+                                   const QModelIndex &parent, bool commit) {
+      return handle_drop(drag, row, parent, commit);
     };
 
     QObject::connect(model_, &QStandardItemModel::itemChanged, &panel_,
@@ -572,12 +625,6 @@ private:
     model_->setHeaderData(
         column_index(OutlinerColumn::Name), Qt::Horizontal,
         localized("ui.outliner.name", "Name"));
-    model_->setHeaderData(
-        column_index(OutlinerColumn::Visible), Qt::Horizontal,
-        localized("ui.outliner.visible", "Visible"));
-    model_->setHeaderData(
-        column_index(OutlinerColumn::Locked), Qt::Horizontal,
-        localized("ui.outliner.locked", "Locked"));
   }
 
   void refresh_model_if_needed() {
@@ -646,7 +693,7 @@ private:
       tree_->setUpdatesEnabled(false);
       syncing_expansion_ = true;
       syncing_model_ = true;
-      model_->removeRows(0, model_->rowCount());
+      model_->clear_projection();
       item_by_entity_.clear();
       item_by_entity_.reserve(cache_.records.size());
 
@@ -664,37 +711,21 @@ private:
 
           auto *name_item = new QStandardItem(qt_text(entity_record->name));
           name_item->setEditable(!entity_record->is_scene_root);
+          name_item->setDragEnabled(!entity_record->is_scene_root &&
+                                    !entity_record->effectively_locked);
+          name_item->setDropEnabled(!entity_record->effectively_locked &&
+                                    (entity_record->is_scene_root ||
+                                     entity_record->kind == EntityKind::Empty));
           name_item->setData(static_cast<qulonglong>(entity_record->id),
                              kEntityIdRole);
           name_item->setData(!entity_record->effectively_visible ||
                                  entity_record->effectively_locked,
                              kSubduedRole);
 
-          auto *visible_item = new QStandardItem;
-          visible_item->setEditable(false);
-          visible_item->setCheckable(true);
-          visible_item->setData(static_cast<qulonglong>(entity_record->id),
-                                kEntityIdRole);
-          visible_item->setData(
-              qt_check_state(outliner_visibility_property_state(
-                  entity_record->visible, entity_record->effectively_visible)),
-              Qt::CheckStateRole);
-
-          auto *locked_item = new QStandardItem;
-          locked_item->setEditable(false);
-          locked_item->setCheckable(true);
-          locked_item->setData(static_cast<qulonglong>(entity_record->id),
-                               kEntityIdRole);
-          locked_item->setData(
-              qt_check_state(outliner_lock_property_state(
-                  entity_record->locked, entity_record->effectively_locked)),
-              Qt::CheckStateRole);
-
-          QList<QStandardItem *> row{name_item, visible_item, locked_item};
           if (parent != nullptr) {
-            parent->appendRow(row);
+            parent->appendRow(name_item);
           } else {
-            model_->appendRow(row);
+            model_->appendRow(name_item);
           }
           item_by_entity_.emplace(entity_record->id, name_item);
 
@@ -937,34 +968,84 @@ private:
     selection_sync_after_model_rebuild_ = false;
   }
 
-  void handle_property_toggle(EntityId entity, int column) {
-    if (editor_ == nullptr || document_ == nullptr) {
-      return;
+  QMimeData *create_drag_data(const QModelIndexList &indexes) const {
+    if (editor_ == nullptr || document_ == nullptr || !cache_.valid ||
+        cache_.hierarchy_presentation_revision !=
+            document_->hierarchy_presentation_revision()) {
+      return nullptr;
     }
-    refresh_model_if_needed();
-    const EntityRecord *entity_record = record(entity);
-    if (entity_record == nullptr) {
-      return;
+    auto data = std::make_unique<OutlinerMimeData>();
+    for (const QModelIndex &index : indexes) {
+      const EntityRecord *entity_record = record(entity_id(index));
+      if (index.model() != model_ || entity_record == nullptr ||
+          entity_record->is_scene_root || entity_record->effectively_locked) {
+        return nullptr;
+      }
+      data->entities.push_back(entity_record->id);
     }
+    if (data->entities.empty()) {
+      return nullptr;
+    }
+    data->source = model_;
+    data->binding_generation = runtime_binding_generation_;
+    data->hierarchy_revision = cache_.hierarchy_presentation_revision;
+    data->instance_scope = instance_scope_definition_;
+    data->setData(OutlinerMimeData::format(), QByteArray{});
+    return data.release();
+  }
 
-    const std::uint64_t mutation_generation = runtime_binding_generation_;
-    QuaderApiVoidResult result;
-    if (column == column_index(OutlinerColumn::Visible)) {
-      result = editor_->scene().set_visible(entity, !entity_record->visible);
-    } else if (column == column_index(OutlinerColumn::Locked)) {
-      result = editor_->scene().set_locked(entity, !entity_record->locked);
-    } else {
-      return;
+  bool handle_drop(const OutlinerMimeData &drag, int row,
+                    const QModelIndex &parent, bool commit) {
+    if (editor_ == nullptr || document_ == nullptr || !cache_.valid ||
+        drag.binding_generation != runtime_binding_generation_ ||
+        drag.hierarchy_revision != document_->hierarchy_presentation_revision() ||
+        drag.instance_scope != instance_scope_definition_ ||
+        (parent.isValid() && parent.model() != model_) ||
+        row < -1 || row > model_->rowCount(parent)) {
+      return false;
     }
-
-    if (runtime_binding_generation_ != mutation_generation) {
-      return;
+    const EntityId destination =
+        parent.isValid() ? entity_id(parent)
+                        : (instance_scope_definition_ != kInvalidEntityId
+                               ? instance_scope_definition_
+                               : document_->scene_root());
+    const EntityRecord *destination_record = record(destination);
+    if ((destination_record == nullptr &&
+         destination != instance_scope_definition_) ||
+        (destination_record != nullptr &&
+         (destination_record->effectively_locked ||
+          (row == -1 && !destination_record->is_scene_root &&
+           destination_record->kind != EntityKind::Empty)))) {
+      return false;
     }
-
-    if (!result.ok || !result.changed) {
-      cache_.valid = false;
+    for (const EntityId entity : drag.entities) {
+      if (destination == entity ||
+          document_->is_descendant_of(destination, entity)) {
+        return false;
+      }
+    }
+    const EntityId before_sibling =
+        row >= 0 && row < model_->rowCount(parent)
+            ? entity_id(model_->index(row, 0, parent))
+            : kInvalidEntityId;
+    if (before_sibling == document_->scene_root()) {
+      return false;
+    }
+    if (!commit) {
+      return true;
     }
     const std::uint64_t scheduled_generation = runtime_binding_generation_;
+    const QuaderApiVoidResult result = editor_->scene().move_entities(
+        drag.entities, destination, before_sibling);
+    if (runtime_binding_generation_ != scheduled_generation) {
+      return result.ok();
+    }
+    if (!result.ok()) {
+      return false;
+    }
+    if (row == -1) {
+      collapsed_entities_.erase(destination);
+    }
     QMetaObject::invokeMethod(
         &panel_,
         [this, scheduled_generation]() {
@@ -975,6 +1056,7 @@ private:
           sync_selection();
         },
         Qt::QueuedConnection);
+    return true;
   }
 
   void handle_item_changed(QStandardItem *item) {
@@ -986,11 +1068,6 @@ private:
     const EntityId entity = entity_id(item->index());
     const EntityRecord *entity_record = record(entity);
     if (entity_record == nullptr) {
-      return;
-    }
-
-    if (item->column() != column_index(OutlinerColumn::Name)) {
-      handle_property_toggle(entity, item->column());
       return;
     }
 
@@ -1271,7 +1348,7 @@ private:
 
   OutlinerPanel &panel_;
   OutlinerTreeView *tree_ = nullptr;
-  QStandardItemModel *model_ = nullptr;
+  OutlinerItemModel *model_ = nullptr;
   QuaderEditorApi *editor_ = nullptr;
   const SceneDocument *document_ = nullptr;
   LocalizationService *localization_ = nullptr;

@@ -1462,6 +1462,31 @@ bool QtViewportPanel::focus_active_pane() {
   return true;
 }
 
+QuaderViewportKeybindingContext QtViewportPanel::command_input_context() {
+  const bool navigation_gizmo_active =
+      std::ranges::any_of(panes_, [](const Pane &pane_state) {
+        return pane_state.navigation_gizmo != nullptr &&
+               pane_state.navigation_gizmo->input_locked();
+      });
+  const bool active_tool_owns_viewport =
+      interaction_controller_.active_tool_owns_viewport(
+          input_router_.state().active_tool);
+  return {
+      .orthographic_view =
+          workspace_ != nullptr &&
+          workspace_->camera(workspace_->focused_pane()).state().projection ==
+              ViewportProjection::Orthographic,
+      .navigation_active = input_router_.navigating() || navigation_gizmo_active,
+      .fly_navigation_active = input_router_.fly_navigating(),
+      .orbit_navigation_active =
+          input_router_.orbit_navigating() || navigation_gizmo_active,
+      .pan_navigation_active = input_router_.pan_navigating(),
+      .modal_tool_active = modal_tool_owns_viewport_snapshot_,
+      .active_tool_owns_viewport = active_tool_owns_viewport,
+      .active_transform_drag = interaction_controller_.dragging(),
+  };
+}
+
 QtViewportSurface *QtViewportPanel::surface(ViewportPaneId pane_id) {
   return pane(pane_id).surface;
 }

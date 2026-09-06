@@ -287,6 +287,11 @@ Tests: [viewport workflows](tests/viewport_interaction_controller_tests.cpp),
   changes do. Its edge-on fallback is specific to mesh depth cycling, not all-component picking.
 - Enabled exact-match global commands execute at the Qt event boundary so Save precedes synchronous
   window-close preflight. Stateful chords and viewport input remain with the canonical router.
+- The Outliner resolves scene shortcuts through the canonical dispatcher using hover/focus ownership.
+  Viewport frame focus-loss cleanup must preserve an Outliner-owned pending sequence, while real
+  focus loss, text editing, or changing input owners clears it. Test a sequence across an idle
+  viewport frame, not just consecutive Qt key events; see [command filter tests](tests/qt_command_event_filter_tests.cpp)
+  and [keybinding API tests](tests/editor_api_tests.cpp).
 - Knife resolves each accepted segment on a shared existing face, rebasing from the last accepted
   point. Host hits/misses are authoritative; a second differently configured picker breaks locality.
 

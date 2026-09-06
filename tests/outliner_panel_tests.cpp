@@ -32,7 +32,7 @@
 #include <QMenu>
 #include <QPersistentModelIndex>
 #include <QStyle>
-#include <QStyleOptionViewItem>
+#include <QMimeData>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QTreeView>
@@ -41,6 +41,7 @@
 #include <array>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
@@ -49,7 +50,7 @@
 #define QUADER_SOURCE_DIR "."
 #endif
 
-using quader::OutlinerPropertyState;
+
 
 namespace {
 
@@ -133,21 +134,222 @@ void expect_selection(QTreeView &tree, const quader::SceneDocument &document,
   EXPECT_EQ(document.primary_selection(), primary);
 }
 
-QPoint check_indicator_center(QTreeView &tree, const QModelIndex &index) {
-  QStyleOptionViewItem option;
-  option.initFrom(&tree);
-  option.rect = tree.visualRect(index);
-  option.widget = &tree;
-  option.features |= QStyleOptionViewItem::HasCheckIndicator;
-  option.checkState = static_cast<Qt::CheckState>(
-      index.data(Qt::CheckStateRole).toInt());
-  return tree.style()
-      ->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &option,
-                       tree.viewport())
-      .center();
-}
 
 } // namespace
+
+/// Drives the documented Qt model drag/drop interface against a live scene.
+class OutlinerPanelDropTests : public ::testing::Test {
+protected:
+  void SetUp() override {
+    QApplication::setStyle(QStringLiteral("Fusion"));
+    application_.setQuitOnLastWindowClosed(false);
+    panel_.setAttribute(Qt::WA_DontShowOnScreen, true);
+    panel_.resize(460, 560);
+    panel_.show();
+    tree_ = panel_.findChild<QTreeView *>(QStringLiteral("outliner.tree"));
+    ASSERT_NE(tree_, nullptr);
+    refresh();
+  }
+
+  quader::EntityId create(const char *name,
+                          quader::EntityId parent = quader::kInvalidEntityId) {
+    const auto result = editor_.scene().create_entity({
+        .name = name,
+        .kind = quader::QuaderEntityKind::Empty,
+        .parent = parent,
+    });
+    EXPECT_TRUE(result.ok()) << result.error_message();
+    return result.ok() ? result.value().id : quader::kInvalidEntityId;
+  }
+
+  void refresh() {
+    panel_.refresh(context_);
+    QCoreApplication::processEvents();
+  }
+
+  QModelIndex index(quader::EntityId entity) const {
+    return find_entity_index(*tree_->model(), entity);
+  }
+
+  std::unique_ptr<QMimeData>
+  mime(std::initializer_list<quader::EntityId> entities) const {
+    QModelIndexList indexes;
+    for (const quader::EntityId entity : entities) {
+      indexes.push_back(index(entity));
+    }
+    return std::unique_ptr<QMimeData>(tree_->model()->mimeData(indexes));
+  }
+
+  bool drop(const QMimeData &data, const QModelIndex &parent, int row = -1) {
+    return tree_->model()->dropMimeData(&data, Qt::MoveAction, row, 0, parent);
+  }
+
+  int argc_ = 1;
+  char application_name_[21] = "quader-outliner-drop";
+  char *argv_[2] = {application_name_, nullptr};
+  QApplication application_{argc_, argv_};
+  quader::SceneSession session_;
+  quader::QuaderEditorApi editor_{
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session_)};
+  quader::UISettings ui_settings_ = quader::UISettings::defaults();
+  quader::ViewportSettings viewport_settings_ =
+      quader::ViewportSettings::defaults();
+  quader::LocalizationService localization_ = loaded_localization();
+  quader::UIContext context_{
+      .intent = {.editor = editor_},
+      .scene = {.document = session_.scene(),
+                .assets = session_.assets(),
+                .modeling = session_.modeling(),
+                .selection = session_.selection()},
+      .preferences = {.ui = ui_settings_, .viewport = viewport_settings_},
+      .localization = localization_,
+  };
+  quader::OutlinerPanel panel_;
+  QTreeView *tree_ = nullptr;
+};
+
+TEST_F(OutlinerPanelDropTests,
+       MultiSelectionMovesIntoAndOutOfGroupsWithWorldPlacementAndSingleUndo) {
+  const quader::EntityId first = create("First");
+  const quader::EntityId second = create("Second");
+  const quader::EntityId group = create("Translated Group");
+  const quader::EntityId existing = create("Existing Member", group);
+  ASSERT_TRUE(editor_.scene()
+                  .set_transform(group, {.position = {10.0f, 20.0f, 30.0f}})
+                  .ok());
+  ASSERT_TRUE(editor_.scene()
+                  .set_transform(first, {.position = {2.0f, 3.0f, 4.0f}})
+                  .ok());
+  const quader::QMat4 first_world = session_.scene().world_transform_matrix(first);
+  const quader::QMat4 second_world = session_.scene().world_transform_matrix(second);
+  ASSERT_TRUE(editor_.selection()
+                  .select_objects_for_inspection({first, second}, second)
+                  .ok());
+  refresh();
+  tree_->collapse(index(group));
+  const auto data = mime({second, first});
+  ASSERT_NE(data, nullptr);
+  ASSERT_TRUE(tree_->model()->canDropMimeData(data.get(), Qt::MoveAction,
+                                             -1, 0, index(group)));
+  ASSERT_TRUE(drop(*data, index(group)));
+  refresh();
+  EXPECT_EQ(session_.scene().children(group),
+            (std::vector<quader::EntityId>{existing, first, second}));
+  EXPECT_TRUE(tree_->isExpanded(index(group)));
+  expect_selection(*tree_, session_.scene(), {first, second}, second);
+  EXPECT_EQ(session_.scene().world_transform_matrix(first).values, first_world.values);
+  EXPECT_EQ(session_.scene().world_transform_matrix(second).values, second_world.values);
+
+  ASSERT_TRUE(editor_.history().undo().ok());
+  refresh();
+  EXPECT_EQ(session_.scene().children(session_.scene().scene_root()),
+            (std::vector<quader::EntityId>{first, second, group}));
+  EXPECT_EQ(session_.scene().children(group),
+            std::vector<quader::EntityId>{existing});
+  expect_selection(*tree_, session_.scene(), {first, second}, second);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  refresh();
+  EXPECT_EQ(session_.scene().children(group),
+            (std::vector<quader::EntityId>{existing, first, second}));
+
+  const auto outward = mime({second, first});
+  ASSERT_NE(outward, nullptr);
+  ASSERT_TRUE(drop(*outward, {}));
+  refresh();
+  EXPECT_EQ(session_.scene().children(session_.scene().scene_root()),
+            (std::vector<quader::EntityId>{group, first, second}));
+  EXPECT_EQ(session_.scene().world_transform_matrix(first).values, first_world.values);
+  EXPECT_EQ(session_.scene().world_transform_matrix(second).values, second_world.values);
+  expect_selection(*tree_, session_.scene(), {first, second}, second);
+}
+
+TEST_F(OutlinerPanelDropTests,
+       SingleAndNoncontiguousRowsReorderThroughQtInsertionPositions) {
+  const quader::EntityId first = create("First");
+  const quader::EntityId second = create("Second");
+  const quader::EntityId third = create("Third");
+  const quader::EntityId fourth = create("Fourth");
+  refresh();
+  const auto single = mime({fourth});
+  ASSERT_NE(single, nullptr);
+  ASSERT_TRUE(drop(*single, index(first).parent(), index(first).row()));
+  refresh();
+  EXPECT_EQ(session_.scene().children(session_.scene().scene_root()),
+            (std::vector<quader::EntityId>{fourth, first, second, third}));
+  ASSERT_TRUE(editor_.history().undo().ok());
+  refresh();
+
+  const auto multiple = mime({third, first});
+  ASSERT_NE(multiple, nullptr);
+  ASSERT_TRUE(drop(*multiple, index(fourth).parent(), index(fourth).row() + 1));
+  // Qt's stock startDrag removes original rows after MoveAction. That cleanup
+  // must not remove a second set of rows from our scene-owned projection.
+  EXPECT_FALSE(tree_->model()->removeRows(0, 1, index(first).parent()));
+  refresh();
+  EXPECT_EQ(session_.scene().children(session_.scene().scene_root()),
+            (std::vector<quader::EntityId>{second, fourth, first, third}));
+  EXPECT_EQ(index(first).row(), 2);
+  EXPECT_EQ(index(third).row(), 3);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  refresh();
+  EXPECT_EQ(session_.scene().children(session_.scene().scene_root()),
+            (std::vector<quader::EntityId>{first, second, third, fourth}));
+}
+
+TEST_F(OutlinerPanelDropTests, NestedSelectionMovesAsOneSubtreeAndRejectsCycles) {
+  const quader::EntityId group = create("Source Group");
+  const quader::EntityId child = create("Child", group);
+  const quader::EntityId target = create("Target Group");
+  refresh();
+  const auto data = mime({child, group});
+  ASSERT_NE(data, nullptr);
+  EXPECT_FALSE(tree_->model()->canDropMimeData(data.get(), Qt::MoveAction,
+                                              -1, 0, index(child)));
+  EXPECT_FALSE(drop(*data, index(child)));
+  ASSERT_TRUE(drop(*data, index(target)));
+  refresh();
+  EXPECT_EQ(session_.scene().children(target),
+            std::vector<quader::EntityId>{group});
+  EXPECT_EQ(session_.scene().children(group),
+            std::vector<quader::EntityId>{child});
+}
+
+TEST_F(OutlinerPanelDropTests, StaleForeignLockedAndRootDragsCannotMutateScene) {
+  const quader::EntityId source = create("Source");
+  const quader::EntityId target = create("Target");
+  refresh();
+  const auto data = mime({source});
+  ASSERT_NE(data, nullptr);
+  EXPECT_EQ(mime({session_.scene().scene_root()}), nullptr);
+  EXPECT_FALSE(tree_->model()->dropMimeData(data.get(), Qt::CopyAction,
+                                           -1, 0, index(target)));
+  QMimeData foreign;
+  foreign.setData(tree_->model()->mimeTypes().front(), QByteArray{});
+  EXPECT_FALSE(drop(foreign, index(target)));
+
+  ASSERT_TRUE(editor_.scene().rename(source, "Renamed Source").ok());
+  refresh();
+  EXPECT_FALSE(drop(*data, index(target)));
+  ASSERT_TRUE(editor_.scene().set_locked(source, true).ok());
+  refresh();
+  EXPECT_EQ(mime({source}), nullptr);
+  ASSERT_TRUE(editor_.scene().set_locked(source, false).ok());
+  ASSERT_TRUE(editor_.scene().set_locked(target, true).ok());
+  refresh();
+  const auto unlocked = mime({source});
+  ASSERT_NE(unlocked, nullptr);
+  EXPECT_FALSE(drop(*unlocked, index(target)));
+
+  ASSERT_TRUE(editor_.scene().set_locked(target, false).ok());
+  refresh();
+  const auto before_rebind = mime({source});
+  ASSERT_NE(before_rebind, nullptr);
+  panel_.abandon_runtime();
+  refresh();
+  EXPECT_FALSE(drop(*before_rebind, index(target)));
+  EXPECT_EQ(session_.scene().children(session_.scene().scene_root()),
+            (std::vector<quader::EntityId>{source, target}));
+}
 
 TEST(OutlinerPanelTests, TreeFillsThePanelContentsRect) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
@@ -168,29 +370,15 @@ TEST(OutlinerPanelTests, TreeFillsThePanelContentsRect) {
   EXPECT_EQ(panel.focusProxy(), tree);
   EXPECT_EQ(tree->selectionMode(), QAbstractItemView::ExtendedSelection);
   EXPECT_EQ(tree->selectionBehavior(), QAbstractItemView::SelectRows);
-  EXPECT_FALSE(tree->dragEnabled())
-      << "item dragging must stay disabled so mouse motion selects rows";
+  EXPECT_TRUE(tree->dragEnabled());
+  EXPECT_EQ(tree->dragDropMode(), QAbstractItemView::InternalMove);
+  EXPECT_EQ(tree->model()->columnCount(), 1);
 
   EXPECT_EQ(tree->editTriggers(), QAbstractItemView::EditKeyPressed)
       << "double-click remains available for tree expansion; F2 and the "
          "context menu own rename";
 }
 
-TEST(OutlinerPanelTests, PropertyStatesDistinguishLocalAndInheritedValues) {
-  EXPECT_EQ(quader::outliner_visibility_property_state(false, false),
-            OutlinerPropertyState::Off);
-  EXPECT_EQ(quader::outliner_visibility_property_state(true, true),
-            OutlinerPropertyState::On);
-  EXPECT_EQ(quader::outliner_visibility_property_state(true, false),
-            OutlinerPropertyState::Inherited);
-
-  EXPECT_EQ(quader::outliner_lock_property_state(false, false),
-            OutlinerPropertyState::Off);
-  EXPECT_EQ(quader::outliner_lock_property_state(true, true),
-            OutlinerPropertyState::On);
-  EXPECT_EQ(quader::outliner_lock_property_state(false, true),
-            OutlinerPropertyState::Inherited);
-}
 
 TEST(OutlinerPanelTests,
      RepeatedCollapseExpandWithStableSelectionDoesNotResynchronize) {
@@ -299,7 +487,7 @@ TEST(OutlinerPanelTests,
 }
 
 TEST(OutlinerPanelTests,
-     QtSelectionModelDrivesClickShiftControlDragKeyboardAndBlankSelection) {
+     QtSelectionModelDrivesClickShiftControlKeyboardAndBlankSelection) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-outliner-interaction-tests";
@@ -427,43 +615,17 @@ TEST(OutlinerPanelTests,
       << "selection-only changes must not rebuild the model mid-drag";
   EXPECT_TRUE(persistent_first.isValid())
       << "selection-only refreshes must not reset persistent indexes";
-  send_mouse(viewport, QEvent::MouseMove, second_position, Qt::NoButton,
-             Qt::LeftButton);
-  panel.refresh(context);
-  EXPECT_EQ(tree->model(), stable_model);
-  EXPECT_TRUE(persistent_first.isValid());
-  send_mouse(viewport, QEvent::MouseMove, third_position, Qt::NoButton,
-             Qt::LeftButton);
-  panel.refresh(context);
-  EXPECT_EQ(tree->model(), stable_model);
-  EXPECT_TRUE(persistent_first.isValid());
-  send_mouse(viewport, QEvent::MouseButtonRelease, third_position,
+  send_mouse(viewport, QEvent::MouseButtonRelease, first_position,
              Qt::LeftButton, Qt::NoButton);
-  {
-    SCOPED_TRACE("drag selection");
-    expect_selection(*tree, session.scene(),
-                     {first.value().id, second.value().id, third.value().id},
-                     third.value().id);
-  }
-  ASSERT_TRUE(
-      editor.commands().execute(quader::quader_command::kEditUndo).ok());
+  expect_selection(*tree, session.scene(), {first.value().id}, first.value().id);
+  ASSERT_TRUE(editor.history().undo().ok());
   panel.refresh(context);
   QCoreApplication::processEvents();
-  {
-    SCOPED_TRACE("single Undo reverts the complete drag gesture");
-    expect_selection(*tree, session.scene(), {}, quader::kInvalidEntityId);
-  }
-  ASSERT_TRUE(
-      editor.commands().execute(quader::quader_command::kEditRedo).ok());
+  expect_selection(*tree, session.scene(), {}, quader::kInvalidEntityId);
+  ASSERT_TRUE(editor.history().redo().ok());
   panel.refresh(context);
   QCoreApplication::processEvents();
-  {
-    SCOPED_TRACE("Redo reapplies the complete drag gesture");
-    expect_selection(*tree, session.scene(),
-                     {first.value().id, second.value().id, third.value().id},
-                     third.value().id);
-  }
-
+  expect_selection(*tree, session.scene(), {first.value().id}, first.value().id);
   const std::array same_primary_external_selection{third.value().id};
   ASSERT_TRUE(editor.selection()
                   .select_objects_for_inspection(
@@ -588,48 +750,25 @@ TEST(OutlinerPanelTests,
                      second.value().id);
   }
 
-  QModelIndex first_visible =
-      find_entity_index(*tree->model(), first.value().id).siblingAtColumn(1);
-  ASSERT_TRUE(first_visible.isValid());
-  click(viewport, check_indicator_center(*tree, first_visible),
-        Qt::LeftButton);
-  ASSERT_TRUE(editor.query().entity(first.value().id).has_value());
-  EXPECT_FALSE(editor.query().entity(first.value().id)->visible)
-      << "the stock item delegate must route checkbox changes to the owner";
+  EXPECT_EQ(tree->model()->columnCount(), 1);
+  ASSERT_TRUE(editor.scene().set_visible(first.value().id, false).ok());
   panel.refresh(context);
-  QCoreApplication::processEvents();
-  first_visible =
-      find_entity_index(*tree->model(), first.value().id).siblingAtColumn(1);
-  ASSERT_TRUE(first_visible.isValid());
-  {
-    SCOPED_TRACE("checkbox click preserves stock delegate selection semantics");
-    expect_selection(*tree, session.scene(), {second.value().id},
-                     second.value().id);
-    EXPECT_FALSE(tree->selectionModel()->isSelected(first_visible))
-        << "Qt checkbox delegates toggle the property without selecting its row";
-  }
-  EXPECT_EQ(first_visible.data(Qt::CheckStateRole).toInt(), Qt::Unchecked);
-
-  QModelIndex first_locked =
-      find_entity_index(*tree->model(), first.value().id).siblingAtColumn(2);
-  ASSERT_TRUE(first_locked.isValid());
-  click(viewport, check_indicator_center(*tree, first_locked), Qt::LeftButton);
-  ASSERT_TRUE(editor.query().entity(first.value().id).has_value());
-  EXPECT_TRUE(editor.query().entity(first.value().id)->locked);
+  QModelIndex styled_first = find_entity_index(*tree->model(), first.value().id);
+  ASSERT_TRUE(styled_first.isValid());
+  EXPECT_FALSE(styled_first.data(Qt::CheckStateRole).isValid());
+  EXPECT_FALSE((styled_first.flags() & Qt::ItemIsUserCheckable) != 0);
+  EXPECT_TRUE(styled_first.data(Qt::UserRole + 2).toBool());
+  ASSERT_TRUE(editor.scene().set_visible(first.value().id, true).ok());
+  ASSERT_TRUE(editor.scene().set_locked(first.value().id, true).ok());
   panel.refresh(context);
-  QCoreApplication::processEvents();
-  first_locked =
-      find_entity_index(*tree->model(), first.value().id).siblingAtColumn(2);
-  ASSERT_TRUE(first_locked.isValid());
-  EXPECT_EQ(first_locked.data(Qt::CheckStateRole).toInt(), Qt::Checked);
-
-  tree->selectionModel()->setCurrentIndex(first_locked,
-                                           QItemSelectionModel::NoUpdate);
-  send_key(*tree, Qt::Key_Space);
-  ASSERT_TRUE(editor.query().entity(first.value().id).has_value());
-  EXPECT_FALSE(editor.query().entity(first.value().id)->locked)
-      << "the stock delegate's Space gesture must toggle checkable items";
-
+  styled_first = find_entity_index(*tree->model(), first.value().id);
+  EXPECT_TRUE(styled_first.data(Qt::UserRole + 2).toBool());
+  EXPECT_FALSE((styled_first.flags() & Qt::ItemIsDragEnabled) != 0);
+  EXPECT_FALSE((styled_first.flags() & Qt::ItemIsDropEnabled) != 0);
+  ASSERT_TRUE(editor.scene().set_locked(first.value().id, false).ok());
+  panel.refresh(context);
+  styled_first = find_entity_index(*tree->model(), first.value().id);
+  EXPECT_FALSE(styled_first.data(Qt::UserRole + 2).toBool());
   const QModelIndex old_root = tree->model()->index(0, 0);
   ASSERT_TRUE(old_root.isValid());
   ASSERT_TRUE(tree->model()->hasChildren(old_root));
@@ -862,8 +1001,9 @@ TEST(OutlinerPanelTests,
          "selection created while the popup was open";
 }
 
-TEST(OutlinerPanelTests,
-     GroupCommandStopsOldDocumentAccessAfterSynchronousProjectRebind) {
+namespace {
+
+void expect_outliner_stops_after_project_rebind(bool drag_drop) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-outliner-reentrant-group-tests";
@@ -903,6 +1043,11 @@ TEST(OutlinerPanelTests,
   });
   ASSERT_TRUE(first.ok()) << first.error_message();
   ASSERT_TRUE(second.ok()) << second.error_message();
+  const auto drop_target = editor.scene().create_entity({
+      .name = "Drop Target",
+      .kind = quader::QuaderEntityKind::Empty,
+  });
+  ASSERT_TRUE(drop_target.ok()) << drop_target.error_message();
   const std::array selected{first.value().id, second.value().id};
   ASSERT_TRUE(editor.selection()
                   .select_objects_for_inspection(selected, first.value().id)
@@ -979,43 +1124,66 @@ TEST(OutlinerPanelTests,
           });
   ASSERT_TRUE(dirty_subscription.valid());
 
-  bool group_action_dispatched = false;
-  QTimer::singleShot(0, &panel, [&]() {
-    auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
-    if (menu == nullptr ||
-        menu->objectName() != QStringLiteral("outliner.context_menu")) {
-      ADD_FAILURE() << "Expected the outliner context menu to open.";
-      if (QWidget *popup = QApplication::activePopupWidget()) {
-        popup->close();
+  bool action_dispatched = false;
+  if (drag_drop) {
+    const std::unique_ptr<QMimeData> data(
+        tree->model()->mimeData(tree->selectionModel()->selectedRows(0)));
+    ASSERT_NE(data, nullptr);
+    const QModelIndex destination =
+        find_entity_index(*tree->model(), drop_target.value().id);
+    ASSERT_TRUE(destination.isValid());
+    action_dispatched = tree->model()->dropMimeData(
+        data.get(), Qt::MoveAction, -1, 0, destination);
+  } else {
+    QTimer::singleShot(0, &panel, [&]() {
+      auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+      if (menu == nullptr ||
+          menu->objectName() != QStringLiteral("outliner.context_menu")) {
+        ADD_FAILURE() << "Expected the outliner context menu to open.";
+        if (QWidget *popup = QApplication::activePopupWidget()) {
+          popup->close();
+        }
+        return;
       }
-      return;
-    }
-    auto *group_action = menu->findChild<QAction *>(
-        QStringLiteral("outliner.action.group"));
-    ASSERT_NE(group_action, nullptr);
-    ASSERT_TRUE(group_action->isEnabled());
-    group_action_dispatched = true;
-    menu->setActiveAction(group_action);
-    QKeyEvent accept_action(QEvent::KeyPress, Qt::Key_Return,
-                            Qt::NoModifier);
-    QApplication::sendEvent(menu, &accept_action);
-    if (menu->isVisible()) {
-      menu->close();
-    }
-  });
-  const QPoint target_position = tree->visualRect(target).center();
-  QContextMenuEvent context_event(
-      QContextMenuEvent::Mouse, target_position,
-      tree->viewport()->mapToGlobal(target_position));
-  QCoreApplication::sendEvent(tree->viewport(), &context_event);
+      auto *group_action = menu->findChild<QAction *>(
+          QStringLiteral("outliner.action.group"));
+      ASSERT_NE(group_action, nullptr);
+      ASSERT_TRUE(group_action->isEnabled());
+      action_dispatched = true;
+      menu->setActiveAction(group_action);
+      QKeyEvent accept_action(QEvent::KeyPress, Qt::Key_Return,
+                              Qt::NoModifier);
+      QApplication::sendEvent(menu, &accept_action);
+      if (menu->isVisible()) {
+        menu->close();
+      }
+    });
+    const QPoint target_position = tree->visualRect(target).center();
+    QContextMenuEvent context_event(
+        QContextMenuEvent::Mouse, target_position,
+        tree->viewport()->mapToGlobal(target_position));
+    QCoreApplication::sendEvent(tree->viewport(), &context_event);
+  }
   QCoreApplication::processEvents();
 
-  EXPECT_TRUE(group_action_dispatched);
+  EXPECT_TRUE(action_dispatched);
   EXPECT_TRUE(close_dispatched);
   EXPECT_TRUE(fallback_bound);
   EXPECT_FALSE(project.has_project());
   EXPECT_TRUE(find_entity_index(*tree->model(), fallback_entity).isValid());
   panel.abandon_runtime();
+}
+
+} // namespace
+
+TEST(OutlinerPanelTests,
+     GroupCommandStopsOldDocumentAccessAfterSynchronousProjectRebind) {
+  expect_outliner_stops_after_project_rebind(false);
+}
+
+TEST(OutlinerPanelTests,
+     DropStopsOldDocumentAccessAfterSynchronousProjectRebind) {
+  expect_outliner_stops_after_project_rebind(true);
 }
 
 TEST(OutlinerPanelTests, DoubleClickExpandsGroupsWithoutStartingRename) {

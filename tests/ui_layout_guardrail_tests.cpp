@@ -570,7 +570,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(outliner_header,
                   "class OutlinerPanel final : public QWidget");
   expect_contains(outliner, "public QTreeView");
-  expect_contains(outliner, "new QStandardItemModel");
+  expect_contains(outliner, "public QStandardItemModel");
   expect_contains(outliner, "ui_panel_stable_id(UIPanelId::Outliner)");
   expect_contains(outliner, "QStringLiteral(\"outliner.tree\")");
   expect_contains(outliner, "QStringLiteral(\"outliner.model\")");
@@ -602,11 +602,13 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(outliner,
                   "header->setSectionResizeMode(column_index(OutlinerColumn::Name),");
   expect_contains(outliner, "QHeaderView::Stretch");
-  EXPECT_EQ(count_occurrences(outliner, "QHeaderView::ResizeToContents"), 2u);
-  expect_contains(outliner, "Qt::PartiallyChecked");
+  expect_missing(outliner, "QHeaderView::ResizeToContents");
+  expect_missing(outliner, "setCheckable(");
+  expect_contains(outliner, "QAbstractItemView::InternalMove");
   expect_contains(outliner, "editor_->scene().rename(");
-  expect_contains(outliner, "editor_->scene().set_visible(");
-  expect_contains(outliner, "editor_->scene().set_locked(");
+  expect_contains(outliner, "editor_->scene().move_entities(");
+  expect_contains(outliner, "editor_->scene().set_visibility(");
+  expect_contains(outliner, "editor_->scene().set_locks(");
   expect_contains(outliner,
                   "QStringLiteral(\"outliner.action.rename\")");
   expect_contains(outliner,
@@ -3401,10 +3403,43 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(menu,
                   "ungroup_selection(*editor_, *document_, binding)");
   expect_contains(menu, "delete_selection(*editor_, *document_, binding)");
-  EXPECT_GE(count_occurrences(
-                outliner,
-                "runtime_binding_generation_ != mutation_generation"),
-            3u);
+  const std::string rename = source_slice(
+      outliner, "void handle_item_changed(", "void begin_rename(");
+  const std::size_t rename_dispatch = rename.find("editor_->scene().rename(");
+  const std::size_t rename_generation = rename.find(
+      "runtime_binding_generation_ != mutation_generation", rename_dispatch);
+  const std::size_t rename_old_record =
+      rename.find("item->setText(qt_text(entity_record->name))", rename_dispatch);
+  ASSERT_NE(rename_dispatch, std::string::npos);
+  ASSERT_NE(rename_generation, std::string::npos);
+  ASSERT_NE(rename_old_record, std::string::npos);
+  EXPECT_LT(rename_dispatch, rename_generation);
+  EXPECT_LT(rename_generation, rename_old_record);
+
+  const std::string drop = source_slice(
+      outliner, "bool handle_drop(", "void handle_item_changed(");
+  const std::size_t drop_dispatch = drop.find("editor_->scene().move_entities(");
+  const std::size_t drop_generation = drop.find(
+      "runtime_binding_generation_ != scheduled_generation", drop_dispatch);
+  const std::size_t drop_expansion =
+      drop.find("collapsed_entities_.erase(destination)", drop_dispatch);
+  const std::size_t drop_queued_callback =
+      drop.find("[this, scheduled_generation]()", drop_dispatch);
+  const std::size_t drop_queued_generation = drop.find(
+      "runtime_binding_generation_ != scheduled_generation", drop_queued_callback);
+  const std::size_t drop_refresh =
+      drop.find("refresh_model_if_needed()", drop_queued_callback);
+  ASSERT_NE(drop_dispatch, std::string::npos);
+  ASSERT_NE(drop_generation, std::string::npos);
+  ASSERT_NE(drop_expansion, std::string::npos);
+  ASSERT_NE(drop_queued_callback, std::string::npos);
+  ASSERT_NE(drop_queued_generation, std::string::npos);
+  ASSERT_NE(drop_refresh, std::string::npos);
+  EXPECT_LT(drop_dispatch, drop_generation);
+  EXPECT_LT(drop_generation, drop_expansion);
+  EXPECT_LT(drop_generation, drop_queued_callback);
+  EXPECT_LT(drop_queued_callback, drop_queued_generation);
+  EXPECT_LT(drop_queued_generation, drop_refresh);
   EXPECT_GE(count_occurrences(
                 layer,
                 "runtime_binding_generation_ != mutation_generation"),

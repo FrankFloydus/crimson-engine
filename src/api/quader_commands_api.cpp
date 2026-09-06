@@ -217,6 +217,11 @@ constexpr std::string_view viewport_command_keybinding_context() {
   return "viewportFocus && !textInputActive && !navigation.active";
 }
 
+constexpr std::string_view editor_command_keybinding_context() {
+  return "(viewportFocus || outlinerFocus) && !textInputActive && "
+         "!navigation.active";
+}
+
 constexpr std::string_view primitive_flip_keybinding_context() {
   return "viewportFocus && !textInputActive && !navigation.active && "
          "activeTool.create_primitive && "
@@ -251,6 +256,12 @@ bool is_modeling_face_flip_command(std::string_view command_id) {
 constexpr std::string_view unobstructed_viewport_keybinding_context() {
   return "viewportFocus && !textInputActive && !navigation.active && "
          "!modalTool.active && !activeTool.ownsViewport && "
+         "!transformDrag.active && !operationPreview.active";
+}
+
+constexpr std::string_view unobstructed_editor_command_keybinding_context() {
+  return "(viewportFocus || outlinerFocus) && !textInputActive && "
+         "!navigation.active && !modalTool.active && !activeTool.ownsViewport && "
          "!transformDrag.active && !operationPreview.active";
 }
 
@@ -349,7 +360,8 @@ default_keybinding_context_for_command(std::string_view command_id) {
     return primitive_hemisphere_keybinding_context();
   }
   if (command_id == quader_command::kSceneHideSelection.string()) {
-    return "viewportFocus && !textInputActive && !navigation.active && "
+    return "(viewportFocus || outlinerFocus) && !textInputActive && "
+           "!navigation.active && "
            "!primitiveCreation.sphere";
   }
   if (is_primitive_caps_conflicting_tool(command_id)) {
@@ -357,7 +369,8 @@ default_keybinding_context_for_command(std::string_view command_id) {
            "!primitiveCreation.cylinder && !primitiveCreation.cone";
   }
   if (is_modeling_face_flip_command(command_id)) {
-    return "viewportFocus && !textInputActive && !navigation.active && "
+    return "(viewportFocus || outlinerFocus) && !textInputActive && "
+           "!navigation.active && "
            "!primitiveCreation.active";
   }
   if (command_id == quader_command::kEditUndo.string()) {
@@ -373,7 +386,9 @@ default_keybinding_context_for_command(std::string_view command_id) {
     return unobstructed_viewport_keybinding_context();
   }
   if (command_semantically_requires_viewport(command_id)) {
-    return viewport_command_keybinding_context();
+    return viewport_target_requires_router_dispatch(command_id)
+               ? viewport_command_keybinding_context()
+               : editor_command_keybinding_context();
   }
   ViewportShortcut shortcut;
   if (viewport_shortcut_for_command_target_id(command_id, shortcut) &&
@@ -462,6 +477,7 @@ viewport_keybinding_context(const ViewportToolState &state,
                             const QuaderToolsApi &tools) {
   QuaderKeybindingContext context;
   context.set("viewportFocus", viewport_focused);
+  context.set("outlinerFocus", input_context.outliner_focused);
   context.set("viewport.hovered", input_context.viewport_hovered);
   context.set("viewport.orthographic", input_context.orthographic_view);
   context.set("textInputActive", text_input_active);
@@ -1006,6 +1022,7 @@ public:
     QuaderApiVoidResult execute_native_tool_settings_intent(
         QuaderNativeToolSettingsIntent intent);
     void reset_pending_keybinding_chord();
+    void reset_pending_viewport_keybinding_chord();
     [[nodiscard]] bool has_pending_keybinding_chord() const;
     QuaderApiVoidResult set_shortcut(std::string_view command_id,
                                      std::string shortcut);
@@ -1086,6 +1103,7 @@ public:
 #endif
     EditorCommandRegistry registry_;
     QuaderKeybindingService keybindings_;
+    bool pending_keybinding_from_outliner_ = false;
     QuaderKeybindingTargetCatalog keybinding_target_catalog_;
     std::optional<QuaderApiStatus> last_status_;
     std::uint64_t last_status_revision_ = 0;
@@ -1794,15 +1812,28 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
     bool viewport_focused, bool text_input_active,
     QuaderViewportKeybindingContext input_context) {
   if (chord.empty()) {
-    keybindings_.reset_pending_chord();
+    reset_pending_keybinding_chord();
     return {};
+  }
+
+  if (keybindings_.has_pending_chord() &&
+      pending_keybinding_from_outliner_ != input_context.outliner_focused) {
+    reset_pending_keybinding_chord();
   }
 
   const QuaderKeybindingContext context = viewport_keybinding_context(
       state, viewport_focused, text_input_active, input_context,
       api_.history().can_undo(), api_.history().can_redo(), tools_);
-  const auto target_available = [this, &state](std::string_view target_id) {
+  const auto target_available = [this, &state, input_context](
+                                    std::string_view target_id) {
     const bool registered = registry_.contains(target_id);
+    // A hierarchy interaction can execute public commands, but has no
+    // viewport pointer or router to consume navigation and semantic actions.
+    // Filter before sequence resolution so their prefixes cannot take input.
+    if (input_context.outliner_focused &&
+        (!registered || viewport_target_requires_router_dispatch(target_id))) {
+      return false;
+    }
     if (registered && !registry_.enabled(target_id)) {
       return false;
     }
@@ -1822,6 +1853,9 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
   };
   const QuaderKeybindingDispatch dispatch =
       keybindings_.dispatch(chord, context, target_available);
+  pending_keybinding_from_outliner_ =
+      dispatch.kind == QuaderKeybindingDispatch::Kind::PendingChord &&
+      input_context.outliner_focused;
   if (dispatch.kind == QuaderKeybindingDispatch::Kind::PendingChord) {
     return {
         .kind = QuaderViewportKeybindingDispatch::Kind::PendingChord,
@@ -1954,6 +1988,13 @@ QuaderCommandsApi::Impl::execute_native_tool_settings_intent(
 
 void QuaderCommandsApi::Impl::reset_pending_keybinding_chord() {
   keybindings_.reset_pending_chord();
+  pending_keybinding_from_outliner_ = false;
+}
+
+void QuaderCommandsApi::Impl::reset_pending_viewport_keybinding_chord() {
+  if (!pending_keybinding_from_outliner_) {
+    reset_pending_keybinding_chord();
+  }
 }
 
 bool QuaderCommandsApi::Impl::has_pending_keybinding_chord() const {
@@ -2262,7 +2303,7 @@ void QuaderCommandsApi::Impl::register_commands() {
   keybinding_target_catalog_.set_selection_modes(
       quader_command::kApplyMaterial.string(),
       kSelectionModeObject | kSelectionModeFace | kSelectionModeGroup,
-      unobstructed_viewport_keybinding_context());
+      unobstructed_editor_command_keybinding_context());
   register_command(
       quader_command::kModelingSnapMeshesToFloor,
       "Snap Meshes to Floor",
@@ -3087,9 +3128,8 @@ void QuaderCommandsApi::Impl::set_keybinding_selection_modes(
     std::string_view target_id, std::uint32_t mode_mask) {
   keybinding_target_catalog_.set_selection_modes(
       target_id, mode_mask,
-      (is_modeling_face_flip_command(target_id) ||
-       is_primitive_caps_conflicting_tool(target_id) ||
-       target_id == quader_command::kSceneHideSelection.string())
+      (command_semantically_requires_viewport(target_id) ||
+       is_primitive_caps_conflicting_tool(target_id))
           ? default_keybinding_context_for_command(target_id)
           : viewport_command_keybinding_context());
 }
@@ -3397,6 +3437,10 @@ QuaderApiVoidResult QuaderCommandsApi::execute_native_tool_settings_intent(
 
 void QuaderCommandsApi::reset_pending_keybinding_chord() {
   impl_->reset_pending_keybinding_chord();
+}
+
+void QuaderCommandsApi::reset_pending_viewport_keybinding_chord() {
+  impl_->reset_pending_viewport_keybinding_chord();
 }
 
 bool QuaderCommandsApi::has_pending_keybinding_chord() const {

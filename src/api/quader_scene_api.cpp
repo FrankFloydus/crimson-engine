@@ -269,6 +269,15 @@ QuaderApiVoidResult QuaderSceneApi::reparent(EntityId entity, EntityId parent,
       "Reparent Entity");
 }
 
+QuaderApiVoidResult QuaderSceneApi::move_entities(
+    std::span<const EntityId> entities, EntityId parent,
+    EntityId before_sibling) {
+  return mutations_.run_document_result(
+      scene_session(session_).document_commands().move_entities(
+          entities, parent, before_sibling),
+      "Move Entities");
+}
+
 QuaderApiVoidResult QuaderSceneApi::set_transform(EntityId entity,
                                                   QuaderTransform transform) {
   SceneSession &session = scene_session(session_);

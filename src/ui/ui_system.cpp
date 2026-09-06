@@ -1487,6 +1487,20 @@ void UISystem::install_runtime_hooks(
              qt_window_owns_command_input(material_find_replace_dialog_) ||
              qt_window_owns_command_input(standard_material_editor_window_);
     });
+    command_event_filter_->set_outliner_input_owner_provider([this]() {
+      return qt_outliner_owns_command_input(outliner_panel_);
+    });
+    command_event_filter_->set_input_context_provider([this]() {
+      QuaderViewportKeybindingContext context =
+          viewport_panel_ != nullptr ? viewport_panel_->command_input_context()
+                                    : QuaderViewportKeybindingContext{};
+      if (modeling_ != nullptr) {
+        context.operation_preview_active = modeling_->operation_preview_active();
+        context.modal_tool_active =
+            context.modal_tool_active || modeling_->modal_tool_owns_viewport();
+      }
+      return context;
+    });
     if (QCoreApplication *application = QApplication::instance()) {
       application->installEventFilter(command_event_filter_.get());
     }

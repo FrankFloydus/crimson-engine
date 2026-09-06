@@ -750,7 +750,7 @@ void ViewportKeybindingResolver::resolve(
     radial_array_wheel_remainder = 0.0;
   }
   if (!input.viewport_focused || input.text_input_active) {
-    editor.commands().reset_pending_keybinding_chord();
+    editor.commands().reset_pending_viewport_keybinding_chord();
     suppressed_chords.clear();
     return;
   }

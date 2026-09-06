@@ -17,6 +17,7 @@
 #include "editor/commands/document/duplicate_entity_command.hpp"
 #include "editor/commands/document/duplicate_selected_hierarchy_command.hpp"
 #include "editor/commands/document/group_selection_command.hpp"
+#include "editor/commands/document/move_entities_command.hpp"
 #include "editor/commands/document/rename_entity_command.hpp"
 #include "editor/commands/document/reparent_entity_command.hpp"
 #include "editor/commands/document/select_entities_command.hpp"
@@ -393,6 +394,74 @@ DocumentCommandService::reparent_entity(EntityId entity, EntityId parent,
   return execute_document_command(
       history_, std::make_unique<ReparentEntityCommand>(
                     scene_, entity, parent, preserve_world_transform));
+}
+
+DocumentCommandResult DocumentCommandService::move_entities(
+    std::span<const EntityId> entities, EntityId parent,
+    EntityId before_sibling) {
+  if (entities.empty()) {
+    return document_command_unchanged_result();
+  }
+  parent = normalized_create_parent(scene_, parent);
+  if (!scene_.exists(parent)) {
+    return document_command_invalid_request_result(
+        "Parent entity does not exist");
+  }
+  if (scene_.is_effectively_locked(parent)) {
+    return document_command_invalid_request_result("Parent entity is locked");
+  }
+  if (mutation_blocked(parent)) {
+    return document_command_active_tool_entity_result();
+  }
+  if (before_sibling != kInvalidEntityId &&
+      (!scene_.exists(before_sibling) ||
+       scene_.parent(before_sibling) != parent)) {
+    return document_command_invalid_request_result(
+        "Insertion sibling does not belong to the destination parent");
+  }
+
+  std::unordered_set<EntityId> requested;
+  requested.reserve(entities.size());
+  for (const EntityId entity : entities) {
+    if (!scene_.exists(entity)) {
+      return document_command_missing_entity_result();
+    }
+    if (scene_.is_scene_root(entity)) {
+      return document_command_scene_root_protected_result();
+    }
+    if (scene_.is_effectively_locked(entity)) {
+      return document_command_invalid_request_result("Moved entity is locked");
+    }
+    if (entity == parent || scene_.is_descendant_of(parent, entity)) {
+      return document_command_invalid_request_result(
+          "An entity cannot be moved inside its own hierarchy");
+    }
+    requested.insert(entity);
+  }
+
+  std::vector<EntityId> roots;
+  for (const EntityId entity : scene_.entity_tree_order()) {
+    if (!requested.contains(entity)) {
+      continue;
+    }
+    bool selected_ancestor = false;
+    for (EntityId ancestor = scene_.parent(entity);
+         ancestor != kInvalidEntityId; ancestor = scene_.parent(ancestor)) {
+      if (requested.contains(ancestor)) {
+        selected_ancestor = true;
+        break;
+      }
+    }
+    if (!selected_ancestor) {
+      if (entities_mutation_blocked(scene_.descendants(entity, true))) {
+        return document_command_active_tool_entity_result();
+      }
+      roots.push_back(entity);
+    }
+  }
+  return execute_document_command(
+      history_, std::make_unique<MoveEntitiesCommand>(
+                    scene_, std::move(roots), parent, before_sibling));
 }
 
 DocumentGroupSelectionResult

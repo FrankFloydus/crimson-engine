@@ -136,6 +136,15 @@ public:
     QuaderApiVoidResult rename(EntityId entity, std::string name);
     QuaderApiVoidResult reparent(EntityId entity, EntityId parent,
                                  bool preserve_world_transform = true);
+    /**
+     * Moves the supplied hierarchy roots in authored tree order as one undo step.
+     * Descendants of supplied roots are deduplicated. An invalid parent means
+     * the scene root; an invalid insertion sibling appends to the destination.
+     * World transforms and selection are preserved; invalid moves are atomic.
+     */
+    QuaderApiVoidResult move_entities(
+        std::span<const EntityId> entities, EntityId parent,
+        EntityId before_sibling = kInvalidEntityId);
     QuaderApiVoidResult set_transform(EntityId entity,
                                       QuaderTransform transform);
     QuaderApiVoidResult

@@ -14,22 +14,6 @@ namespace quader {
 
 struct UIContext;
 
-/**
- * Describes how a local scene property is presented in the Outliner.
- * Inherited means an ancestor changes the property's effective value.
- */
-enum class OutlinerPropertyState {
-  Off,
-  On,
-  Inherited,
-};
-
-[[nodiscard]] OutlinerPropertyState
-outliner_visibility_property_state(bool visible,
-                                   bool effectively_visible) noexcept;
-[[nodiscard]] OutlinerPropertyState
-outliner_lock_property_state(bool locked,
-                             bool effectively_locked) noexcept;
 [[nodiscard]] bool outliner_selection_sync_required(
     bool model_rebuilt, bool cached_revision_valid,
     std::uint64_t cached_selection_revision,

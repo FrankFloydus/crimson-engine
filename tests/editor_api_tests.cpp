@@ -3777,6 +3777,209 @@ TEST(EditorApiTests,
   EXPECT_EQ(radial_align->scope_id, "viewport.selection.component");
 }
 
+TEST(EditorApiTests, OutlinerContextResolvesSceneCommandsAndScopedModeling) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  create_selected_box(editor, "Outliner Command Box");
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kCopySelection)
+                  .ok());
+  const quader::ViewportToolState state;
+  const quader::QuaderViewportKeybindingContext outliner{
+      .outliner_focused = true};
+  const auto resolve = [&](std::string_view chord,
+                           bool text_input = false,
+                           quader::QuaderViewportKeybindingContext context =
+                               {.outliner_focused = true}) {
+    return editor.commands().dispatch_viewport_input_binding(
+        single_input_chord(chord), state, false, text_input, context);
+  };
+  for (const auto command : {
+           quader::quader_command::kDeleteSelection,
+           quader::quader_command::kCopySelection,
+           quader::quader_command::kCutSelection,
+           quader::quader_command::kPasteSelection,
+           quader::quader_command::kDuplicateSelection,
+           quader::quader_command::kGroupSelection,
+           quader::quader_command::kUngroupSelection,
+           quader::quader_command::kSelectAll,
+           quader::quader_command::kSelectInverse,
+           quader::quader_command::kSceneHideSelection}) {
+    SCOPED_TRACE(command.string());
+    const std::string shortcut = editor.commands().shortcut_for(command);
+    ASSERT_FALSE(shortcut.empty());
+    const auto dispatch = resolve(shortcut);
+    ASSERT_EQ(dispatch.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(dispatch.command_id, command.string());
+    EXPECT_EQ(resolve(shortcut, true).kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+    EXPECT_EQ(resolve(shortcut, false, {}).kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+    EXPECT_EQ(resolve(shortcut, false,
+                      {.navigation_active = true, .outliner_focused = true})
+                  .kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  }
+
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *delete_entry = find_keybinding_catalog_entry(
+      catalog, quader::quader_command::kDeleteSelection.string());
+  ASSERT_NE(delete_entry, nullptr);
+  EXPECT_NE(delete_entry->when.find("outlinerFocus"), std::string::npos);
+  EXPECT_EQ(delete_entry->scope_id, "viewport");
+
+  ASSERT_TRUE(editor.commands()
+                  .set_shortcut(quader::quader_command::kModelingSnapMeshesToFloor,
+                                "Ctrl+Alt+F24")
+                  .ok());
+  const auto modeling = resolve("Ctrl+Alt+F24");
+  ASSERT_EQ(modeling.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(modeling.command_id,
+            quader::quader_command::kModelingSnapMeshesToFloor.string());
+
+  const auto group = resolve("Ctrl+G");
+  ASSERT_TRUE(editor.commands().execute(group.command_id).ok());
+  const auto ungroup = resolve("Ctrl+Shift+G");
+  ASSERT_EQ(ungroup.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  ASSERT_TRUE(editor.commands().execute(ungroup.command_id).ok());
+  ASSERT_EQ(editor.query().modeling_objects().size(), 1u);
+  ASSERT_TRUE(editor.commands().execute(resolve("H").command_id).ok());
+  const auto unhide = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("Alt+H"), state, false, false, outliner);
+  ASSERT_EQ(unhide.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(unhide.command_id,
+            quader::quader_command::kSceneUnhideHiddenObjects.string());
+  ASSERT_TRUE(editor.commands().execute(unhide.command_id).ok());
+}
+
+TEST(EditorApiTests, OutlinerDoesNotClaimViewportOnlyActionsOrTheirPrefixes) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  create_selected_box(editor, "Outliner Navigation Box");
+  const auto face_selection =
+      editor.commands().keybinding_target_id_for_selection_mode(
+          quader::QuaderSelectionMode::Face);
+  for (const std::string target : {
+           std::string(quader::quader_command::kToolsActivateMove.string()),
+           face_selection, std::string("viewport.navigation.orbit")}) {
+    SCOPED_TRACE(target);
+    ASSERT_TRUE(editor.commands().set_shortcut(target, "Ctrl+Alt+F24 G").ok());
+    for (const bool viewport_focused : {false, true}) {
+      const auto prefix = editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Alt+F24"), {}, viewport_focused, false,
+          {.viewport_hovered = true, .outliner_focused = true});
+      EXPECT_EQ(prefix.kind,
+                quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+      EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+    }
+    ASSERT_TRUE(editor.commands().reset_shortcut(target).ok());
+  }
+}
+
+TEST(EditorApiTests,
+     OutlinerSequenceSurvivesViewportFramesAndResetsAtInputOwnerBoundaries) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  create_selected_box(editor, "Outliner Sequence Box");
+  ASSERT_TRUE(editor.commands()
+                  .set_shortcut(quader::quader_command::kDeleteSelection,
+                                "Ctrl+Alt+F24 G")
+                  .ok());
+  const auto resolve = [&](std::string_view chord, bool outliner = true) {
+    return editor.commands().dispatch_viewport_input_binding(
+        single_input_chord(chord), {}, !outliner, false,
+        {.outliner_focused = outliner});
+  };
+  std::vector<quader::QuaderInputChord> suppressed;
+  double linear_wheel = 0.0;
+  double radial_wheel = 0.0;
+  const auto viewport_frame = [&](bool focused) {
+    quader::ViewportInputFrame input;
+    input.viewport_focused = focused;
+    quader::ViewportKeybindingResolver::resolve(
+        editor, {}, input, suppressed, linear_wheel, radial_wheel);
+  };
+
+  for (const bool viewport_focused : {false, true}) {
+    ASSERT_EQ(resolve("Ctrl+Alt+F24").kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+    viewport_frame(viewport_focused);
+    ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+    const auto completion = resolve("G");
+    ASSERT_EQ(completion.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(completion.command_id,
+              quader::quader_command::kDeleteSelection.string());
+  }
+
+  ASSERT_EQ(resolve("Ctrl+Alt+F24").kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  editor.commands().reset_pending_keybinding_chord();
+  EXPECT_EQ(resolve("G").kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  ASSERT_EQ(resolve("Ctrl+Alt+F24").kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  EXPECT_NE(resolve("G", false).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  ASSERT_EQ(resolve("Ctrl+Alt+F24", false).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  viewport_frame(false);
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+}
+
+TEST(EditorApiTests, OutlinerBindingsPreserveCatalogIdentityAndPersistOverrides) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto path = keybinding_test_path("outliner-scene-context");
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  create_selected_box(editor, "Outliner Persistent Binding Box");
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *initial = find_keybinding_catalog_entry(
+      catalog, quader::quader_command::kDeleteSelection.string());
+  ASSERT_NE(initial, nullptr);
+  const auto action = initial->key;
+  ASSERT_TRUE(editor.commands().set_action_shortcut(
+      action, "Ctrl+Alt+F24 G", quader::QuaderKeybindingConflictPolicy::Reject)
+                  .ok());
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  const auto loaded_catalog = editor.commands().keybinding_catalog();
+  const auto *loaded = find_keybinding_catalog_entry(
+      loaded_catalog, quader::quader_command::kDeleteSelection.string());
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_EQ(loaded->key, action);
+  EXPECT_EQ(loaded->when, initial->when);
+  EXPECT_EQ(loaded->default_shortcut, initial->default_shortcut);
+  EXPECT_EQ(loaded->shortcut, "Ctrl+Alt+F24 G");
+  const auto resolve = [&](std::string_view chord) {
+    return editor.commands().dispatch_viewport_input_binding(
+        single_input_chord(chord), {}, false, false,
+        {.outliner_focused = true});
+  };
+  ASSERT_EQ(resolve("Ctrl+Alt+F24").kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  ASSERT_TRUE(editor.commands().remove_action_shortcut(action).ok());
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_EQ(resolve("Ctrl+Alt+F24").kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  ASSERT_TRUE(editor.commands()
+                  .reset_action_shortcut(
+                      action, quader::QuaderKeybindingConflictPolicy::Reject)
+                  .ok());
+  const auto restored = resolve(initial->default_shortcut);
+  ASSERT_EQ(restored.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(restored.command_id,
+            quader::quader_command::kDeleteSelection.string());
+}
+
 TEST(EditorApiTests, DisabledKeybindingCandidateFallsThroughOrPassesInput) {
   const std::filesystem::path fallback_path =
       keybinding_test_path("availability-fallback");
