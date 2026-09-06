@@ -304,6 +304,122 @@ TEST(QdrDocumentOperationSelectionCommandsTests,
 }
 
 TEST(QdrDocumentOperationSelectionCommandsTests,
+     CoplanarityHandlesAuthoredRoundingWithoutAcceptingWarpedFaces)
+{
+    for (const float translation : {0.0F, 1000.0F}) {
+        SCOPED_TRACE(translation);
+        Document document;
+        const auto add_patch = [&](float x_offset, float plane_offset,
+                                   float warp) {
+            std::array<quader::QVec3, 4> points {{
+                {x_offset, 0.1F, 0.0F},
+                {x_offset + 1.0F, 0.1F, 0.0F},
+                {x_offset + 1.0F, 1.1F, 0.0F},
+                {x_offset, 1.1F, 0.0F},
+            }};
+            for (quader::QVec3& point : points) {
+                point.z = 0.37F * point.x + 0.61F * point.y + plane_offset;
+                point = point + quader::QVec3{translation, translation, translation};
+            }
+            points.back().z += warp;
+            return add_independent_face(document, points);
+        };
+        const AddedFace seed = add_patch(0.2F, 0.3F, 0.0F);
+        const AddedFace matching = add_patch(2.2F, 0.3F, 0.0F);
+        const AddedFace offset = add_patch(4.2F, 0.4F, 0.0F);
+        const AddedFace warped = add_patch(6.2F, 0.3F, 0.1F);
+        Selection selection = face_selection({seed.id}, seed.id);
+
+        EXPECT_TRUE(apply_component_selection_command(
+            document, selection, ComponentSelectionCommand::SelectCoplanarFaces));
+        EXPECT_EQ(selection.faces, (std::vector<ElementId>{seed.id, matching.id}));
+        EXPECT_FALSE(selection_contains_face(selection, offset.id));
+        EXPECT_FALSE(selection_contains_face(selection, warped.id));
+        EXPECT_EQ(selection.active_face, seed.id);
+        EXPECT_FALSE(apply_component_selection_command(
+            document, selection, ComponentSelectionCommand::SelectCoplanarFaces));
+
+        Selection invalid_seed = face_selection({warped.id}, warped.id);
+        EXPECT_TRUE(selected_face_planes_in_comparison_space(
+                        document, invalid_seed, {}).empty());
+        EXPECT_FALSE(apply_component_selection_command(
+            document, invalid_seed, ComponentSelectionCommand::SelectCoplanarFaces));
+        EXPECT_EQ(invalid_seed.faces, (std::vector<ElementId>{warped.id}));
+    }
+}
+
+TEST(QdrDocumentOperationSelectionCommandsTests,
+     CoplanarityMatchesDifferentLocalPlanesInAffineComparisonSpace)
+{
+    Document seed_document;
+    const AddedFace seed = add_quad(seed_document, 0.0F);
+    const Selection selected = face_selection({seed.id}, seed.id);
+    Transform3 seed_transform{
+        .x_axis = {1.0F, 0.0F, 2.0F},
+        .y_axis = {0.0F, 2.0F, 6.0F},
+        .z_axis = {0.0F, 0.0F, -0.5F},
+        .origin = {7000.0F, -3500.0F, 2000.0F},
+    };
+    const auto planes = selected_face_planes_in_comparison_space(
+        seed_document, selected, seed_transform);
+    ASSERT_EQ(planes.size(), 1U);
+
+    Document candidate_document;
+    const AddedFace matching = add_independent_face(candidate_document,
+        std::array<quader::QVec3, 4>{{
+            {3.0F, 0.0F, 6.0F}, {4.0F, 0.0F, 8.0F},
+            {4.0F, 1.0F, 11.0F}, {3.0F, 1.0F, 9.0F},
+        }});
+    Transform3 candidate_transform{.origin = seed_transform.origin};
+    Selection candidates;
+    candidates.mode = SelectionMode::Face;
+    EXPECT_TRUE(add_faces_coplanar_with_planes(
+        candidate_document, candidates, candidate_transform, planes));
+    EXPECT_EQ(candidates.faces, (std::vector<ElementId>{matching.id}));
+
+    candidate_transform.origin.z += 0.01F;
+    candidates = {};
+    candidates.mode = SelectionMode::Face;
+    EXPECT_FALSE(add_faces_coplanar_with_planes(
+        candidate_document, candidates, candidate_transform, planes));
+    EXPECT_TRUE(candidates.empty());
+
+    seed_transform.z_axis = {};
+    EXPECT_TRUE(selected_face_planes_in_comparison_space(
+                    seed_document, selected, seed_transform).empty());
+}
+
+TEST(QdrDocumentOperationSelectionCommandsTests,
+     CoplanarityRetainsFloatAffineNormalRoundoffWithoutMergingOffsets)
+{
+    Document document;
+    const AddedFace face = add_quad(document, 0.0F);
+    const Selection seed = face_selection({face.id}, face.id);
+    const Transform3 seed_transform{
+        .x_axis = {1.0F, 0.0F, 0.37F},
+        .y_axis = {0.0F, 1.0F, 0.61F},
+    };
+    const auto planes = selected_face_planes_in_comparison_space(
+        document, seed, seed_transform);
+    ASSERT_EQ(planes.size(), 1U);
+    Transform3 candidate_transform = seed_transform;
+    candidate_transform.x_axis = candidate_transform.x_axis * 3.0F;
+    candidate_transform.y_axis = candidate_transform.y_axis * 5.0F;
+    Selection candidate;
+    candidate.mode = SelectionMode::Face;
+    EXPECT_TRUE(add_faces_coplanar_with_planes(
+        document, candidate, candidate_transform, planes));
+    EXPECT_EQ(candidate.faces, (std::vector<ElementId>{face.id}));
+
+    candidate = {};
+    candidate.mode = SelectionMode::Face;
+    candidate_transform.origin.z = 0.000001F;
+    EXPECT_FALSE(add_faces_coplanar_with_planes(
+        document, candidate, candidate_transform, planes));
+    EXPECT_TRUE(candidate.empty());
+}
+
+TEST(QdrDocumentOperationSelectionCommandsTests,
      FaceNormalMatchingIsExactFacingSensitiveAndRejectsDegenerates)
 {
     Document document;

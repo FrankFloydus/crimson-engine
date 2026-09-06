@@ -12,7 +12,9 @@
 
 #include <algorithm>
 #include <iterator>
+#include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -47,6 +49,13 @@ struct SceneAwareDeleteTransitionCheckpoint {
   std::vector<EntityId> current_definition_roots;
   ModelingSessionMemento modeling;
   ModelingSelectionMode mode = ModelingSelectionMode::Object;
+};
+
+/** Defers captured hierarchy placement until the entire deleted forest exists. */
+struct SceneDeleteRestoredPlacement {
+  EntityId entity = kInvalidEntityId;
+  EntityId parent = kInvalidEntityId;
+  const SceneEntityState *state = nullptr;
 };
 
 CommandResult to_command_result(ModelingCommandResult result) {
@@ -106,34 +115,91 @@ entity_for_snapshot_modeling_object(const DocumentEntitySnapshot &snapshot,
 EntityId restore_scene_delete_snapshot(
     SceneDocument &scene, const SceneAwareDeleteRuntime &runtime,
     const DocumentEntitySnapshot &snapshot, EntityId parent,
-    std::unordered_map<EntityId, EntityId> &remapped_entities) {
+    std::unordered_map<EntityId, EntityId> &remapped_entities,
+    std::vector<SceneDeleteRestoredPlacement> &placements) {
   EntityId restored = entity_for_snapshot_modeling_object(snapshot, runtime);
   if (restored == kInvalidEntityId || !scene.exists(restored)) {
-    restored = document_command_create_entity_from_snapshot(
-        scene, snapshot, kInvalidEntityId, snapshot.name, true, true);
-  } else {
-    (void)scene.rename_entity(restored, snapshot.name);
-    (void)scene.set_editor_object_id(restored, snapshot.editor_object_id);
-    document_command_apply_entity_snapshot_components(scene, restored, snapshot,
-                                                      true);
+    // The outer transition owns compensation. Keep a failed provisional
+    // entity alive so its allocation receipt remains available to rollback.
+    restored = scene.create_entity_with_id(snapshot.id, snapshot.name,
+                                            snapshot.kind,
+                                            snapshot.editor_object_id);
+    if (restored == kInvalidEntityId ||
+        (!snapshot.uuid.empty() &&
+         !scene.set_entity_uuid(restored, snapshot.uuid))) {
+      return kInvalidEntityId;
+    }
   }
-
-  if (restored == kInvalidEntityId || !scene.exists(restored)) {
+  if (!scene.rename_entity(restored, snapshot.name) ||
+      !scene.set_editor_object_id(restored, snapshot.editor_object_id) ||
+      !apply_scene_entity_state(scene, restored, snapshot)) {
     return kInvalidEntityId;
   }
-  if (!apply_scene_entity_state_placement(scene, restored, snapshot, parent)) {
-    return kInvalidEntityId;
-  }
-  scene.set_transform(restored, snapshot.transform);
   remapped_entities[snapshot.id] = restored;
+  placements.push_back({restored, parent, &snapshot});
 
   for (const DocumentEntitySnapshot &child : snapshot.children) {
     if (restore_scene_delete_snapshot(scene, runtime, child, restored,
-                                      remapped_entities) == kInvalidEntityId) {
+                                      remapped_entities, placements) ==
+        kInvalidEntityId) {
       return kInvalidEntityId;
     }
   }
   return restored;
+}
+
+bool restore_scene_delete_placements(
+    SceneDocument &scene,
+    std::span<const SceneDeleteRestoredPlacement> placements) {
+  std::map<EntityId, std::vector<const SceneDeleteRestoredPlacement *>>
+      ordered_children;
+  for (const SceneDeleteRestoredPlacement &placement : placements) {
+    if (scene.parent(placement.entity) != placement.parent &&
+        !scene.set_parent(placement.entity, placement.parent, false)) {
+      return false;
+    }
+    if (placement.parent != kInvalidEntityId &&
+        placement.state->sibling_ordinal.has_value()) {
+      ordered_children[placement.parent].push_back(&placement);
+    }
+  }
+
+  // Definitions and modeled descendants can have been recreated in a
+  // different order from ordinary roots. Restore complete sibling sequences
+  // only after every parent and child is present, retaining untouched siblings.
+  for (const auto &[parent, restored] : ordered_children) {
+    const std::vector<EntityId> siblings = scene.children(parent);
+    std::vector<EntityId> desired(siblings.size(), kInvalidEntityId);
+    std::unordered_set<EntityId> positioned;
+    positioned.reserve(restored.size());
+    for (const SceneDeleteRestoredPlacement *placement : restored) {
+      const std::size_t ordinal = *placement->state->sibling_ordinal;
+      if (ordinal >= desired.size() || desired[ordinal] != kInvalidEntityId ||
+          !positioned.insert(placement->entity).second) {
+        return false;
+      }
+      desired[ordinal] = placement->entity;
+    }
+    std::size_t next = 0u;
+    for (const EntityId sibling : siblings) {
+      if (positioned.contains(sibling)) {
+        continue;
+      }
+      while (next < desired.size() && desired[next] != kInvalidEntityId) {
+        ++next;
+      }
+      if (next == desired.size()) {
+        return false;
+      }
+      desired[next++] = sibling;
+    }
+    for (std::size_t ordinal = 0u; ordinal < desired.size(); ++ordinal) {
+      if (!scene.set_sibling_ordinal(desired[ordinal], ordinal)) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 /**
@@ -378,8 +444,24 @@ private:
 
   [[nodiscard]] bool rollback_transition(
       const SceneAwareDeleteTransitionCheckpoint &checkpoint) {
-    std::unordered_set<EntityId> original_entities(checkpoint.entities.begin(),
-                                                   checkpoint.entities.end());
+    std::unordered_set<EntityId> known_entities(checkpoint.entities.begin(),
+                                                checkpoint.entities.end());
+    std::unordered_set<EntityId> recorded_entities;
+    std::vector<EntityId> created_entities;
+    const auto capture_created_entities = [&]() {
+      std::unordered_set<EntityId> current_entities;
+      for (const EntityId entity : scene_.entity_tree_order()) {
+        current_entities.insert(entity);
+        if (!known_entities.contains(entity) &&
+            recorded_entities.insert(entity).second) {
+          created_entities.push_back(entity);
+        }
+      }
+      known_entities = std::move(current_entities);
+    };
+    // Inverse modeling publication can remove freshly restored mesh entities.
+    // Their allocation receipts are still required by the scene checkpoint.
+    capture_created_entities();
 
     if (checkpoint.modeling.valid()) {
       const auto &restore_modeling = runtime_.restore_modeling_memento_exact
@@ -387,6 +469,15 @@ private:
                                          : runtime_.restore_modeling_memento;
       if (!restore_modeling) {
         return false;
+      }
+      // A restored occurrence can prevent inverse modeling from removing the
+      // last mesh in its definition. Detach only provisional occurrence roles;
+      // keep their entities and allocation receipts for the scene checkpoint.
+      for (const EntityId entity : created_entities) {
+        if (scene_.instance_occurrence(entity) != nullptr &&
+            !scene_.clear_instance_occurrence(entity)) {
+          return false;
+        }
       }
       const ModelingCommandResult modeling_restore =
           restore_modeling(checkpoint.modeling);
@@ -400,12 +491,10 @@ private:
     // entities manually would add inverse mutations before preflight, and a
     // second restore would attempt to consume the same allocation lease twice.
     // Restore modeling first, then let Scene consume its lease exactly once.
-    std::vector<EntityId> created_entities;
-    for (const EntityId entity : scene_.entity_tree_order()) {
-      if (!original_entities.contains(entity)) {
-        created_entities.push_back(entity);
-      }
-    }
+    // Failed redo compensation can recreate a checkpoint entity with its old
+    // identity. Its new allocation also needs a receipt, even though the scene
+    // checkpoint will restore that entity instead of removing it.
+    capture_created_entities();
     if (!scene_.restore_modeling_projection_checkpoint(checkpoint.scene,
                                                        created_entities)) {
       return false;
@@ -531,6 +620,7 @@ private:
     }
 
     std::unordered_map<EntityId, EntityId> remapped_entities;
+    std::vector<SceneDeleteRestoredPlacement> placements;
     std::vector<EntityId> restored_definitions;
     restored_definitions.reserve(state_.orphan_definitions.size());
     for (const DocumentEntitySnapshot &snapshot :
@@ -540,7 +630,7 @@ private:
                                   ? snapshot.parent
                                   : kInvalidEntityId;
       const EntityId restored = restore_scene_delete_snapshot(
-          scene_, runtime_, snapshot, parent, remapped_entities);
+          scene_, runtime_, snapshot, parent, remapped_entities, placements);
       if (restored == kInvalidEntityId) {
         return compensated_failure(
             {.ok = false,
@@ -558,7 +648,7 @@ private:
                                   ? snapshot.parent
                                   : kInvalidEntityId;
       const EntityId restored = restore_scene_delete_snapshot(
-          scene_, runtime_, snapshot, parent, remapped_entities);
+          scene_, runtime_, snapshot, parent, remapped_entities, placements);
       if (restored == kInvalidEntityId) {
         return compensated_failure(
             {.ok = false,
@@ -567,6 +657,14 @@ private:
             *checkpoint);
       }
       restored_roots.push_back(restored);
+    }
+
+    if (!restore_scene_delete_placements(scene_, placements)) {
+      return compensated_failure(
+          {.ok = false,
+           .changed = true,
+           .message = "Deleted hierarchy placement could not be restored."},
+          *checkpoint);
     }
 
     state_.current_roots = std::move(restored_roots);

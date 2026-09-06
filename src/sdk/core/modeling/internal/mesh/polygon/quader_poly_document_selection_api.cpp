@@ -781,92 +781,146 @@ std::optional<SelectionComparisonPlane> comparison_face_plane(
         return std::nullopt;
     }
 
-    const std::optional<quader::QVec3> document_normal =
-        document_face_normal(document, face);
-    if (!document_normal.has_value()) {
-        return std::nullopt;
-    }
     const Vertex* first = find_vertex(document, face.vertices.front());
     if (first == nullptr) {
         return std::nullopt;
     }
+
+    // Rebase before accumulating in double: float Newell sums can lose the
+    // normal of a small face far from the document origin.
+    using quader_geometry::QVec3d;
+    const QVec3d anchor(first->position);
+    QVec3d document_normal;
+    QVec3d coordinate_magnitude;
+    double perimeter = 0.0;
+    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+        const Vertex* current = find_vertex(document, face.vertices[index]);
+        const Vertex* next = find_vertex(
+            document, face.vertices[(index + 1U) % face.vertices.size()]);
+        if (current == nullptr || next == nullptr) {
+            return std::nullopt;
+        }
+        const QVec3d position(current->position);
+        perimeter += quader_geometry::length(QVec3d(next->position) - position);
+        document_normal = document_normal + quader_geometry::cross(
+            position - anchor, QVec3d(next->position) - anchor);
+        coordinate_magnitude.x =
+            std::max(coordinate_magnitude.x, std::abs(position.x));
+        coordinate_magnitude.y =
+            std::max(coordinate_magnitude.y, std::abs(position.y));
+        coordinate_magnitude.z =
+            std::max(coordinate_magnitude.z, std::abs(position.z));
+    }
+    const double normal_length = quader_geometry::length(document_normal);
+    if (!std::isfinite(normal_length) || normal_length <= 0.0) {
+        return std::nullopt;
+    }
+    document_normal = document_normal / normal_length;
+
+    // Account for the precision of authored coordinates, only along the
+    // normal. Tangential extent must not merge distinct parallel planes.
+    const double document_roundoff =
+        2.0 * std::numeric_limits<float>::epsilon() *
+        (std::abs(document_normal.x) * coordinate_magnitude.x +
+         std::abs(document_normal.y) * coordinate_magnitude.y +
+         std::abs(document_normal.z) * coordinate_magnitude.z);
     for (const ElementId vertex_id : face.vertices) {
         const Vertex* vertex = find_vertex(document, vertex_id);
         if (vertex == nullptr) {
             return std::nullopt;
         }
-        const quader::QVec3 delta = vertex->position - first->position;
-        const double distance =
-            static_cast<double>(delta.x) * document_normal->x +
-            static_cast<double>(delta.y) * document_normal->y +
-            static_cast<double>(delta.z) * document_normal->z;
-        const double magnitude =
-            std::abs(static_cast<double>(delta.x) * document_normal->x) +
-            std::abs(static_cast<double>(delta.y) * document_normal->y) +
-            std::abs(static_cast<double>(delta.z) * document_normal->z);
-        const double roundoff =
-            4.0 * std::numeric_limits<double>::epsilon() * magnitude;
-        if (!std::isfinite(distance) || std::abs(distance) > roundoff) {
+        const double distance = quader_geometry::dot(
+            QVec3d(vertex->position) - anchor, document_normal);
+        if (!std::isfinite(distance) ||
+            std::abs(distance) > document_roundoff) {
             return std::nullopt;
         }
     }
 
-    const std::optional<ComparisonNormal> comparison_normal =
-        comparison_normal_from_document_normal(
-            *document_normal, comparison_from_document);
-    if (!comparison_normal.has_value()) {
+    const QVec3d x_axis(comparison_from_document.x_axis);
+    const QVec3d y_axis(comparison_from_document.y_axis);
+    const QVec3d z_axis(comparison_from_document.z_axis);
+    const QVec3d yz = quader_geometry::cross(y_axis, z_axis);
+    const QVec3d zx = quader_geometry::cross(z_axis, x_axis);
+    const QVec3d xy = quader_geometry::cross(x_axis, y_axis);
+    const double determinant = quader_geometry::dot(x_axis, yz);
+    if (!std::isfinite(determinant) || determinant == 0.0) {
         return std::nullopt;
     }
-    const double document_offset =
-        -(static_cast<double>(document_normal->x) * first->position.x +
-          static_cast<double>(document_normal->y) * first->position.y +
-          static_cast<double>(document_normal->z) * first->position.z);
-    const quader::QVec3 origin = comparison_from_document.origin;
-    const double comparison_offset =
-        (document_offset -
-         (static_cast<double>(comparison_normal->unnormalized.x) * origin.x +
-          static_cast<double>(comparison_normal->unnormalized.y) * origin.y +
-          static_cast<double>(comparison_normal->unnormalized.z) * origin.z)) /
-        comparison_normal->length;
+    const QVec3d comparison_normal =
+        (yz * document_normal.x + zx * document_normal.y + xy * document_normal.z) /
+        determinant;
+    const double comparison_length = quader_geometry::length(comparison_normal);
+    if (!std::isfinite(comparison_length) || comparison_length <= 0.0) {
+        return std::nullopt;
+    }
+    const QVec3d normalized = comparison_normal / comparison_length;
+    const QVec3d point = QVec3d(comparison_from_document.origin) +
+                        x_axis * anchor.x + y_axis * anchor.y + z_axis * anchor.z;
+    // Coordinate rounding also perturbs the normal. Bound that perturbation
+    // by perimeter / twice-area, then propagate it through the affine basis.
+    const double inverse_normal_bound = std::sqrt(
+        quader_geometry::length_squared(yz) +
+        quader_geometry::length_squared(zx) +
+        quader_geometry::length_squared(xy)) / std::abs(determinant);
+    const double angular_roundoff =
+        2.0 * document_roundoff * perimeter / normal_length *
+        inverse_normal_bound / comparison_length;
+    if (!std::isfinite(angular_roundoff) || angular_roundoff >= 1.0 ||
+        !std::isfinite(quader_geometry::length_squared(point))) {
+        return std::nullopt;
+    }
     return SelectionComparisonPlane {
-        .point = transform_comparison_point(
-            comparison_from_document, first->position),
-        .normal = comparison_normal->normalized,
-        .offset = comparison_offset,
+        .point = point,
+        .normal = normalized,
+        .offset = -quader_geometry::dot(normalized, point),
+        .distance_roundoff = document_roundoff / comparison_length,
+        .angular_roundoff = angular_roundoff,
     };
 }
 
-bool planes_are_exactly_coplanar(const SelectionComparisonPlane& left,
-                                 const SelectionComparisonPlane& right)
+bool planes_are_coplanar(const SelectionComparisonPlane& left,
+                         const SelectionComparisonPlane& right)
 {
-    const float left_length_squared = quader::length_squared(left.normal);
-    const float right_length_squared = quader::length_squared(right.normal);
+    const double left_length_squared =
+        quader_geometry::length_squared(left.normal);
+    const double right_length_squared =
+        quader_geometry::length_squared(right.normal);
     if (!std::isfinite(left_length_squared) ||
         !std::isfinite(right_length_squared) ||
-        left_length_squared <= 0.0F || right_length_squared <= 0.0F) {
+        left_length_squared <= 0.0 || right_length_squared <= 0.0) {
         return false;
     }
-    const quader::QVec3 left_normal =
+    const quader_geometry::QVec3d left_normal =
         left.normal / std::sqrt(left_length_squared);
-    const quader::QVec3 right_normal =
+    const quader_geometry::QVec3d right_normal =
         right.normal / std::sqrt(right_length_squared);
-    const bool same_facing =
-        normals_match_same_facing(left_normal, right_normal);
-    const bool opposite_facing = normals_match_same_facing(
-        left_normal, right_normal * -1.0F);
-    if (!same_facing && !opposite_facing) {
+    const quader_geometry::QVec3d normal_cross =
+        quader_geometry::cross(left_normal, right_normal);
+    // Independently authored float affine bases retain their angular
+    // roundoff even when the local face has an exact axis-aligned plane.
+    const double normal_roundoff = left.angular_roundoff + right.angular_roundoff +
+                                  4.0 * std::numeric_limits<float>::epsilon();
+    if (!std::isfinite(normal_roundoff) ||
+        quader_geometry::length(normal_cross) > normal_roundoff) {
         return false;
     }
-    const double left_offset =
-        left.offset / std::sqrt(static_cast<double>(left_length_squared));
-    const double right_offset =
-        (opposite_facing ? -right.offset : right.offset) /
-        std::sqrt(static_cast<double>(right_length_squared));
+    // Compare anchored distances, not offsets whose normal roundoff is
+    // amplified by an unrelated world translation.
+    const quader_geometry::QVec3d delta = right.point - left.point;
     const double scale =
-        std::max({1.0, std::abs(left_offset), std::abs(right_offset)});
+        std::max({1.0, quader_geometry::length(left.point),
+                  quader_geometry::length(right.point)});
     const double roundoff =
+        left.distance_roundoff / std::sqrt(left_length_squared) +
+        right.distance_roundoff / std::sqrt(right_length_squared) +
         32.0 * std::numeric_limits<double>::epsilon() * scale;
-    return std::abs(left_offset - right_offset) <= roundoff;
+    const double separation = quader_geometry::length(delta);
+    return std::isfinite(roundoff) &&
+           std::abs(quader_geometry::dot(left_normal, delta)) <=
+               roundoff + left.angular_roundoff * separation &&
+           std::abs(quader_geometry::dot(right_normal, delta)) <=
+               roundoff + right.angular_roundoff * separation;
 }
 
 bool face_all_vertices_selected(const Face& face,
@@ -1654,7 +1708,7 @@ bool add_faces_coplanar_with_planes(
         const bool matches = std::ranges::any_of(
             comparison_planes,
             [&](const SelectionComparisonPlane& source_plane) {
-                return planes_are_exactly_coplanar(source_plane, *candidate);
+                return planes_are_coplanar(source_plane, *candidate);
             });
         if (matches) {
             add_unique_id(selection.faces, face.id);

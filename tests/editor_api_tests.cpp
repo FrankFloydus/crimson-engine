@@ -13793,6 +13793,86 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
+     SelectCoplanarFacesExpandsTiltedMultiFaceSeedsAndPreservesHistory) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  quader_poly::Document document;
+  std::array<quader::QuaderElementId, 5> faces{};
+  for (std::size_t index = 0; index < faces.size(); ++index) {
+    const float x = static_cast<float>(index);
+    const float offset = index == 4U ? 1.0F : 0.0F;
+    // Author the tilt in the mesh: all four corners satisfy z = 2x + 3y.
+    // Normalizing (-2, -3, 1) to floats introduces cancellation roundoff.
+    std::array corners{
+        quader_poly::add_vertex(document, {x, 0.0F, 2.0F * x + offset}),
+        quader_poly::add_vertex(
+            document, {x + 1.0F, 0.0F, 2.0F * (x + 1.0F) + offset}),
+        quader_poly::add_vertex(
+            document, {x + 1.0F, 1.0F, 2.0F * (x + 1.0F) + 3.0F + offset}),
+        quader_poly::add_vertex(document, {x, 1.0F, 2.0F * x + 3.0F + offset}),
+    };
+    if (index == 3U) {
+      std::reverse(corners.begin(), corners.end());
+    }
+    const quader_poly::ElementId face = quader_poly::add_face(document, corners);
+    ASSERT_NE(face, quader_poly::kInvalidElementId);
+    faces[index] = static_cast<quader::QuaderElementId>(face);
+  }
+  const auto created = editor.modeling().create_mesh(
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(
+          std::move(document)),
+      quader::QuaderCreateMeshArgs{.name = "Tilted Coplanar Faces"});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const quader::QuaderModelingObjectRef object = created.value();
+  quader::QuaderComponentSelectionArgs selection{
+      .object = object,
+      .kind = quader::QuaderComponentKind::Face,
+      .faces = {faces[0], faces[1], faces[2], faces[3]},
+      .active = {.object = object,
+                 .kind = quader::QuaderComponentKind::Face,
+                 .face = faces[0]},
+  };
+  ASSERT_TRUE(editor.selection().select_components(selection).ok());
+  using Domain = quader::test::CommandObservableDomain;
+  const auto expected_selection =
+      quader::test::capture_command_observable_state(editor)
+          .domain(Domain::Selection);
+  selection.faces = {faces[0], faces[1]};
+  ASSERT_TRUE(editor.selection().select_components(selection).ok());
+  ASSERT_EQ(editor.selection().summary().selected_face_count, 2U);
+  const auto before = quader::test::capture_command_observable_state(editor);
+
+  const auto selected = editor.commands().execute(
+      quader::quader_command::kSelectCoplanarFaces);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  ASSERT_TRUE(selected.changed());
+  const auto expanded = quader::test::capture_command_observable_state(editor);
+  EXPECT_EQ(editor.selection().summary().selected_face_count, 4U);
+  EXPECT_EQ(editor.selection().summary().active_face_id, faces[0]);
+  EXPECT_EQ(expanded.domain(Domain::Selection), expected_selection);
+  EXPECT_EQ(expanded.domain(Domain::Geometry), before.domain(Domain::Geometry));
+  EXPECT_EQ(expanded.domain(Domain::History), before.domain(Domain::History));
+
+  ASSERT_TRUE(editor.modeling().move_selection({0.0F, 0.0F, 2.0F}).ok());
+  const auto moved = quader::test::capture_command_observable_state(editor);
+  ASSERT_TRUE(editor.history().undo().ok());
+  const auto restored = quader::test::capture_command_observable_state(editor);
+  EXPECT_EQ(restored.domain(Domain::Geometry), expanded.domain(Domain::Geometry));
+  EXPECT_EQ(restored.domain(Domain::Selection), expected_selection);
+  ASSERT_TRUE(editor.history().can_redo());
+
+  const auto repeated = editor.commands().execute(
+      quader::quader_command::kSelectCoplanarFaces);
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_FALSE(repeated.changed());
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor), restored);
+  ASSERT_TRUE(editor.history().redo().ok());
+  const auto redone = quader::test::capture_command_observable_state(editor);
+  EXPECT_EQ(redone.domain(Domain::Geometry), moved.domain(Domain::Geometry));
+  EXPECT_EQ(redone.domain(Domain::Selection), moved.domain(Domain::Selection));
+}
+
+TEST(EditorApiTests,
      SelectFaceNormalUsesWorldFacingAndInverseTransposeForMirrors) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
@@ -17660,6 +17740,113 @@ TEST(EditorApiTests,
       editor.query().history();
   EXPECT_EQ(after_canceled_drag.undo_label, before_canceled_drag.undo_label);
   EXPECT_EQ(after_canceled_drag.redo_label, before_canceled_drag.redo_label);
+}
+
+TEST(EditorApiTests,
+     MixedSceneDeleteRestoresLateInstanceDefinitionAndSiblingOrder) {
+  for (const bool delete_all : {true, false}) {
+    SCOPED_TRACE(delete_all ? "all scene objects" : "surviving linked occurrence");
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const auto first = create_selected_box(editor, "Earlier Loose Mesh");
+    const auto first_empty = editor.scene().create_entity(
+        {.name = "Earlier Empty", .kind = quader::QuaderEntityKind::Empty});
+    ASSERT_TRUE(first_empty.ok()) << first_empty.error_message();
+    const auto second = create_selected_box(editor, "Later Loose Mesh");
+    const auto second_empty = editor.scene().create_entity(
+        {.name = "Later Empty", .kind = quader::QuaderEntityKind::Empty});
+    ASSERT_TRUE(second_empty.ok()) << second_empty.error_message();
+    const auto group = editor.scene().create_entity(
+        {.name = "Late Instance Group", .kind = quader::QuaderEntityKind::Empty});
+    ASSERT_TRUE(group.ok()) << group.error_message();
+    const auto member = create_selected_box(editor, "Late Instance Member");
+    ASSERT_TRUE(editor.scene().reparent(member.entity, group.value().id).ok());
+    ASSERT_TRUE(editor.selection().select_object(group.value().id).ok());
+    const auto instance = editor.modeling().create_instance_from_selection();
+    ASSERT_TRUE(instance.ok()) << instance.error_message();
+    const quader::EntityId occurrence = instance.value().occurrence.root.id;
+    const quader::EntityId definition = instance.value().definition.root.id;
+    quader::EntityId surviving_occurrence = quader::kInvalidEntityId;
+    if (delete_all) {
+      ASSERT_TRUE(editor.commands().execute(quader::quader_command::kSelectAll).ok());
+      EXPECT_EQ(selected_entities(editor).size(), 5U);
+    } else {
+      ASSERT_TRUE(editor.commands()
+                      .execute(quader::quader_command::kDuplicateSelection)
+                      .ok());
+      surviving_occurrence = selected_entities(editor).front();
+      ASSERT_NE(surviving_occurrence, occurrence);
+      ASSERT_TRUE(editor.selection()
+                      .select_objects({first.entity, occurrence}, occurrence)
+                      .ok());
+    }
+    const auto tree_before = editor.query().entity_tree();
+    std::vector<quader::QuaderEntitySnapshot> identities = tree_before;
+    for (const quader::EntityId hidden : {definition, group.value().id,
+                                        member.entity}) {
+      const auto snapshot = editor.query().entity(hidden);
+      ASSERT_TRUE(snapshot.has_value());
+      identities.push_back(*snapshot);
+    }
+    using Domain = quader::test::CommandObservableDomain;
+    const auto before = quader::test::capture_command_observable_state(editor);
+    const auto deleted = editor.commands().execute(
+        quader::quader_command::kDeleteSelection);
+    ASSERT_TRUE(deleted.ok()) << deleted.error_message();
+    ASSERT_TRUE(deleted.changed());
+    EXPECT_FALSE(editor.query().entity(first.entity).has_value());
+    EXPECT_FALSE(editor.query().entity(occurrence).has_value());
+    EXPECT_EQ(editor.query().entity(definition).has_value(), !delete_all);
+    EXPECT_EQ(editor.query().entity(member.entity).has_value(), !delete_all);
+    if (delete_all) {
+      EXPECT_EQ(user_entity_count(editor), 0U);
+    } else {
+      ASSERT_TRUE(editor.query().entity(surviving_occurrence).has_value());
+      EXPECT_EQ(editor.query().entity(surviving_occurrence)->instance_definition,
+                definition);
+      EXPECT_TRUE(editor.query().entity(second.entity).has_value());
+      EXPECT_TRUE(editor.query().entity(second_empty.value().id).has_value());
+    }
+    const auto after_delete =
+        quader::test::capture_command_observable_state(editor);
+    for (int cycle = 0; cycle < 2; ++cycle) {
+      SCOPED_TRACE(cycle);
+      const auto undone = editor.history().undo();
+      ASSERT_TRUE(undone.ok()) << undone.error_message();
+      ASSERT_TRUE(undone.changed());
+      const auto restored = quader::test::capture_command_observable_state(editor);
+      for (const Domain domain : {Domain::Scene, Domain::Geometry,
+                                  Domain::Selection}) {
+        EXPECT_EQ(restored.domain(domain), before.domain(domain));
+      }
+      const auto tree_after = editor.query().entity_tree();
+      ASSERT_EQ(tree_after.size(), tree_before.size());
+      for (std::size_t index = 0; index < tree_before.size(); ++index) {
+        EXPECT_EQ(tree_after[index].id, tree_before[index].id)
+            << "Undo must restore authored hierarchy order.";
+      }
+      for (const auto &expected : identities) {
+        const auto actual = editor.query().entity(expected.id);
+        ASSERT_TRUE(actual.has_value()) << expected.name;
+        EXPECT_EQ(actual->uuid, expected.uuid);
+        EXPECT_EQ(actual->editor_object_id, expected.editor_object_id);
+        EXPECT_EQ(actual->parent, expected.parent);
+        EXPECT_EQ(actual->modeling_object_id, expected.modeling_object_id);
+        EXPECT_EQ(actual->mesh, expected.mesh);
+        EXPECT_EQ(actual->instance_definition, expected.instance_definition);
+      }
+      if (cycle == 0) {
+        const auto redone = editor.history().redo();
+        ASSERT_TRUE(redone.ok()) << redone.error_message();
+        ASSERT_TRUE(redone.changed());
+        const auto state = quader::test::capture_command_observable_state(editor);
+        for (const Domain domain : {Domain::Scene, Domain::Geometry,
+                                    Domain::Selection}) {
+          EXPECT_EQ(state.domain(domain), after_delete.domain(domain));
+        }
+      }
+    }
+  }
 }
 
 TEST(EditorApiTests, DeletingFinalInstanceOccurrenceCollectsDefinitionAndUndoes) {

@@ -9,6 +9,7 @@
 // Source-only neutral modeling core contract shared by SDK and native owners.
 
 #include <quader/modeling/neutral/polygon/document_model.hpp>
+#include <quader/modeling/neutral/geometry/geometry.hpp>
 
 #include <cstdint>
 #include <numbers>
@@ -60,13 +61,16 @@ inline constexpr float kDefaultSelectionDirectionToleranceRadians =
     0.01F * std::numbers::pi_v<float>;
 
 /**
- * Stores an exact comparison-space plane. The normal need not be normalized;
- * opposite normal orientation represents the same plane.
+ * Stores a comparison-space plane and projected float-authoring roundoff.
+ * Opposite normal orientation represents the same plane. Distance roundoff
+ * uses the same scale as the normal and offset.
  */
 struct SelectionComparisonPlane {
-  quader::QVec3 point;
-  quader::QVec3 normal;
+  quader_geometry::QVec3d point;
+  quader_geometry::QVec3d normal;
   double offset = 0.0;
+  double distance_roundoff = 0.0;
+  double angular_roundoff = 0.0;
 };
 
 /**

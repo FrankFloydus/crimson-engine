@@ -5727,6 +5727,177 @@ TEST(SceneDocumentTests,
 }
 
 TEST(SceneDocumentTests,
+     ModelingProjectionCheckpointRemovesCreatedInstanceGraphAtomically) {
+  SceneDocument scene;
+  const EntityId baseline = scene.create_empty("Baseline");
+  constexpr SceneModelingProjectionDomain kDomains =
+      SceneModelingProjectionDomain::Structure |
+      SceneModelingProjectionDomain::MeshBindings |
+      SceneModelingProjectionDomain::Selection;
+  const SceneModelingProjectionCheckpoint checkpoint =
+      scene.capture_modeling_projection_checkpoint({}, kDomains);
+  ASSERT_TRUE(checkpoint.valid());
+  const std::uint64_t before_revision = scene.revision();
+  const std::uint64_t before_content_revision = scene.content_revision();
+  const EntityId definition = scene.create_empty("Provisional Definition");
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  const EntityId member =
+      scene.create_entity("Provisional Member", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(member, {.mesh = 88u}));
+  ASSERT_TRUE(scene.set_parent(member, definition, false));
+  const EntityId occurrence =
+      scene.create_entity("Provisional Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(
+      scene.set_instance_occurrence(occurrence, {.definition = definition}));
+  ASSERT_TRUE(scene.set_selected(occurrence, true));
+  ASSERT_TRUE(scene.set_active_selection(occurrence));
+  const std::string definition_uuid = scene.uuid(definition);
+  const EditorObjectId definition_editor = scene.editor_object_id(definition);
+  const std::string occurrence_uuid = scene.uuid(occurrence);
+  const EditorObjectId occurrence_editor = scene.editor_object_id(occurrence);
+  const std::array created{definition, member, occurrence};
+  const std::uint64_t staged_revision = scene.revision();
+
+  ASSERT_TRUE(
+      scene.can_restore_modeling_projection_checkpoint(checkpoint, created));
+  EXPECT_TRUE(scene.exists(definition));
+  EXPECT_EQ(scene.revision(), staged_revision);
+  SceneModelingProjectionRestoreWork work;
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(checkpoint, created,
+                                                            &work));
+  EXPECT_EQ(scene.entities(), std::vector<EntityId>{baseline});
+  EXPECT_EQ(scene.mesh_binding_reference_count(88u), 0u);
+  EXPECT_EQ(scene.entity_for_uuid(definition_uuid), kInvalidEntityId);
+  EXPECT_EQ(scene.entity_for_uuid(occurrence_uuid), kInvalidEntityId);
+  EXPECT_EQ(scene.entity_for_editor_object_id(definition_editor),
+            kInvalidEntityId);
+  EXPECT_EQ(scene.entity_for_editor_object_id(occurrence_editor),
+            kInvalidEntityId);
+  EXPECT_EQ(scene.primary_selection(), kInvalidEntityId);
+  EXPECT_EQ(scene.revision(), before_revision);
+  EXPECT_EQ(scene.content_revision(), before_content_revision);
+  EXPECT_EQ(work.created_entity_removal_count, 3u);
+  const EntityId replacement = scene.create_empty("Replacement");
+  EXPECT_EQ(replacement, definition);
+  EXPECT_EQ(scene.editor_object_id(replacement), definition_editor);
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionCheckpointRestoresEnrolledInstanceReferencesAndMembers) {
+  SceneDocument scene;
+  const EntityId original_definition = scene.create_empty("Original Definition");
+  ASSERT_TRUE(scene.set_instance_definition(original_definition));
+  const EntityId original_member =
+      scene.create_entity("Original Member", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(original_member, {.mesh = 10u}));
+  ASSERT_TRUE(scene.set_parent(original_member, original_definition, false));
+  const EntityId occurrence =
+      scene.create_entity("Retained Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(scene.set_instance_occurrence(
+      occurrence, {.definition = original_definition}));
+  const EntityId moved_member =
+      scene.create_entity("Moved Member", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(moved_member, {.mesh = 11u}));
+  const std::array participants{occurrence, moved_member};
+  constexpr SceneModelingProjectionDomain kDomains =
+      SceneModelingProjectionDomain::Structure |
+      SceneModelingProjectionDomain::MeshBindings;
+  const SceneModelingProjectionCheckpoint checkpoint =
+      scene.capture_modeling_projection_checkpoint(participants, kDomains);
+  ASSERT_TRUE(checkpoint.valid());
+  const std::vector<EntityId> before_entities = scene.entities();
+  const std::uint64_t before_revision = scene.revision();
+  const std::string occurrence_uuid = scene.uuid(occurrence);
+  const EditorObjectId occurrence_editor = scene.editor_object_id(occurrence);
+
+  const EntityId staged_definition = scene.create_empty("Provisional Definition");
+  ASSERT_TRUE(scene.set_instance_definition(staged_definition));
+  ASSERT_TRUE(scene.set_parent(moved_member, staged_definition, false));
+  ASSERT_TRUE(scene.set_instance_occurrence(
+      occurrence, {.definition = staged_definition}));
+  const std::array created{staged_definition};
+
+  ASSERT_TRUE(
+      scene.can_restore_modeling_projection_checkpoint(checkpoint, created));
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(checkpoint, created));
+  EXPECT_EQ(scene.entities(), before_entities);
+  ASSERT_NE(scene.instance_occurrence(occurrence), nullptr);
+  EXPECT_EQ(scene.instance_occurrence(occurrence)->definition, original_definition);
+  EXPECT_EQ(scene.instance_occurrences_for_definition(original_definition),
+            std::vector<EntityId>{occurrence});
+  EXPECT_EQ(scene.children(original_definition),
+            std::vector<EntityId>{original_member});
+  EXPECT_EQ(scene.parent(moved_member), kInvalidEntityId);
+  EXPECT_EQ(scene.mesh_binding_reference_count(10u), 1u);
+  EXPECT_EQ(scene.mesh_binding_reference_count(11u), 1u);
+  EXPECT_EQ(scene.entity_for_uuid(occurrence_uuid), occurrence);
+  EXPECT_EQ(scene.entity_for_editor_object_id(occurrence_editor), occurrence);
+  EXPECT_EQ(scene.revision(), before_revision);
+}
+
+TEST(SceneDocumentTests,
+     ModelingProjectionConcurrentRestoreRejectsExternalInstanceReferenceAtomically) {
+  SceneDocument scene;
+  const EntityId original_definition = scene.create_empty("Original Definition");
+  ASSERT_TRUE(scene.set_instance_definition(original_definition));
+  const EntityId original_member =
+      scene.create_entity("Original Member", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(original_member, {.mesh = 10u}));
+  ASSERT_TRUE(scene.set_parent(original_member, original_definition, false));
+  const EntityId external_occurrence =
+      scene.create_entity("External Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(scene.set_instance_occurrence(
+      external_occurrence, {.definition = original_definition}));
+  constexpr SceneModelingProjectionDomain kDomains =
+      SceneModelingProjectionDomain::Structure |
+      SceneModelingProjectionDomain::MeshBindings;
+  const SceneModelingProjectionCheckpoint checkpoint =
+      scene.capture_modeling_projection_checkpoint({}, kDomains);
+  SceneModelingProjectionMutationFence fence =
+      scene.capture_modeling_projection_mutation_fence({}, kDomains);
+  ASSERT_TRUE(checkpoint.valid());
+  ASSERT_TRUE(fence.valid());
+
+  const EntityId staged_definition = scene.create_empty("Provisional Definition");
+  ASSERT_TRUE(scene.set_instance_definition(staged_definition));
+  const EntityId staged_member =
+      scene.create_entity("Provisional Member", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(staged_member, {.mesh = 88u}));
+  ASSERT_TRUE(scene.set_parent(staged_member, staged_definition, false));
+  const std::array created{staged_definition, staged_member};
+  ASSERT_TRUE(fence.acknowledge_current(scene, created));
+  ASSERT_TRUE(scene.set_instance_occurrence(
+      external_occurrence, {.definition = staged_definition}));
+  ASSERT_TRUE(fence.matches_current(scene));
+  const std::vector<EntityId> staged_entities = scene.entities();
+  const std::string staged_uuid = scene.uuid(staged_definition);
+  const EditorObjectId staged_editor = scene.editor_object_id(staged_definition);
+  const std::uint64_t staged_revision = scene.revision();
+  const std::uint64_t staged_content_revision = scene.content_revision();
+
+  EXPECT_FALSE(
+      scene.can_restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+          checkpoint, fence, created));
+  SceneModelingProjectionRestoreWork work;
+  EXPECT_FALSE(
+      scene.restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+          checkpoint, fence, created, &work));
+  EXPECT_EQ(scene.entities(), staged_entities);
+  ASSERT_NE(scene.instance_occurrence(external_occurrence), nullptr);
+  EXPECT_EQ(scene.instance_occurrence(external_occurrence)->definition,
+            staged_definition);
+  EXPECT_EQ(scene.children(staged_definition),
+            std::vector<EntityId>{staged_member});
+  EXPECT_EQ(scene.mesh_binding_reference_count(88u), 1u);
+  EXPECT_EQ(scene.entity_for_uuid(staged_uuid), staged_definition);
+  EXPECT_EQ(scene.entity_for_editor_object_id(staged_editor), staged_definition);
+  EXPECT_EQ(scene.revision(), staged_revision);
+  EXPECT_EQ(scene.content_revision(), staged_content_revision);
+  EXPECT_EQ(work.created_entity_removal_count, 0u);
+  EXPECT_EQ(work.structure_write_count, 0u);
+}
+
+TEST(SceneDocumentTests,
      ModelingProjectionCheckpointRejectsUntrackedEntityAllocationAtomically) {
   SceneDocument scene;
   const SceneModelingProjectionCheckpoint checkpoint =

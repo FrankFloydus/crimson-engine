@@ -57,9 +57,15 @@ Tests: [Qt workspace](tests/qt_project_workspace_tests.cpp),
 - SceneStructuralLifecycleService owns mixed scene/modeling/Curve duplicate, destroy, group, and
   ungroup. Capture registered subselections, preflight the complete operation, and record repeat
   state only after commit. A failure must not leave partial geometry, bindings, assets, or history.
-- Scene-aware delete restores modeled and native siblings together. Its narrow deferred-hierarchy
-  memento path delays exact parent/sibling placement until every entity exists again. Generic
-  restore remains strict and atomic; do not clamp invalid ordinals to accommodate mixed deletion.
+- Scene-aware delete recreates the entire modeled/native/instance forest before restoring parent
+  and sibling placement. Orphan definitions can have late sibling ordinals even though their
+  occurrence references require recreating them first. Generic restore stays strict; never clamp
+  ordinals to accommodate missing siblings. Failed-transition compensation retains creation
+  receipts before inverse modeling can remove provisional entities and detaches provisional
+  occurrence roles that would block removing their last modeled member. Existing occurrences stay
+  intact; definitions may be removed only when every surviving reference is restored elsewhere or
+  removed within the rollback. Inverse recreation of an original entity ID still needs a new
+  allocation receipt, even when that entity is a captured participant rather than a removal target.
 - SceneDocument is the sole live object/component truth. SceneEntityState is the shared durable
   component inventory for history, clipboard, rollback, and persistence; ProjectObjectRecord is gone.
 - Undo retains 32 steps by default (Blender factory default); 0 disables retention. The limit bounds
@@ -257,6 +263,12 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
 - Inversion is XOR over the host-resolved eligible universe. Excluded components keep their state,
   an empty universe is an exact no-op, and emptied participants remain enrolled for a second inverse.
   Preserve scene-only selection companions and valid explicit active components.
+- Coplanar selection builds rebased face planes and affine comparisons in double precision, with
+  distance and angular roundoff derived from float-authored geometry. Double epsilon applied to
+  float normals silently discarded tilted seeds. Compare anchored distances so world translation
+  cannot amplify normal error; tangential extent alone must not merge nearby parallel planes.
+  Coverage: [selection commands](tests/modeling_domain/operation/qdr_document_operation_selection_commands_tests.cpp)
+  and `EditorApiTests.SelectCoplanarFacesExpandsTiltedMultiFaceSeedsAndPreservesHistory`.
 
 Owners: [EditorSelectionService](src/editor/selection/editor_selection_service.cpp),
 [hit arbitration](src/editor/viewport/viewport_scene_hit_policy.cpp).

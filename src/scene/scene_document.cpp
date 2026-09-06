@@ -1162,6 +1162,8 @@ bool SceneDocument::preflight_modeling_projection_restore(
 
   // Validate every point lookup and structural boundary before mutating. A
   // failed restore therefore leaves both forward indexes and components exact.
+  std::unordered_map<EntityId, const SceneEntityState *> restored_structures;
+  std::unordered_set<EntityId> removed_definitions;
   for (const auto &record : state.participants) {
     ++work.entity_lookup_count;
     if (record.existed && !exists(record.entity) &&
@@ -1177,6 +1179,11 @@ bool SceneDocument::preflight_modeling_projection_restore(
       continue;
     }
     const SceneEntityState &structure = *record.structure;
+    restored_structures.emplace(record.entity, &structure);
+    if (instance_definition(record.entity) != nullptr &&
+        !structure.instance_definition.has_value()) {
+      removed_definitions.insert(record.entity);
+    }
     if (structure.parent != kInvalidEntityId &&
         !exists(structure.parent) &&
         !originally_existing.contains(structure.parent)) {
@@ -1210,12 +1217,56 @@ bool SceneDocument::preflight_modeling_projection_restore(
     if (!exists(entity)) {
       continue;
     }
+    const bool removes_definition = instance_definition(entity) != nullptr;
+    if (removes_definition) {
+      removed_definitions.insert(entity);
+    }
     const HierarchyComponent *current_hierarchy = hierarchy(entity);
     if (current_hierarchy == nullptr ||
         std::ranges::any_of(current_hierarchy->children, [&](EntityId child) {
-          return !removal_set.contains(child);
-        }) ||
-        instance_definition(entity) != nullptr) {
+          if (removal_set.contains(child)) {
+            return false;
+          }
+          const auto restored = restored_structures.find(child);
+          return !removes_definition || restored == restored_structures.end() ||
+                 removal_set.contains(restored->second->parent);
+        })) {
+      return report(false);
+    }
+  }
+
+  // Definitions may disappear only when every referring occurrence is removed
+  // or its captured structural state restores the reference elsewhere. Inspect
+  // occurrence storage only for this instance-specific rollback boundary.
+  if (!removed_definitions.empty()) {
+    const auto occurrences =
+        registry_.view<InstanceOccurrenceComponent, EntityIdentityComponent>();
+    for (auto [entity, occurrence, identity] : occurrences.each()) {
+      (void)entity;
+      if (!removed_definitions.contains(occurrence.definition) ||
+          removal_set.contains(identity.id)) {
+        continue;
+      }
+      const auto restored = restored_structures.find(identity.id);
+      if (restored == restored_structures.end() ||
+          (restored->second->instance_occurrence.has_value() &&
+           removed_definitions.contains(
+               restored->second->instance_occurrence->definition))) {
+        return report(false);
+      }
+    }
+  }
+  for (const auto &[entity, structure] : restored_structures) {
+    (void)entity;
+    if (!structure->instance_occurrence.has_value()) {
+      continue;
+    }
+    const EntityId definition = structure->instance_occurrence->definition;
+    const auto restored_definition = restored_structures.find(definition);
+    if (removal_set.contains(definition) ||
+        (restored_definition != restored_structures.end()
+             ? !restored_definition->second->instance_definition.has_value()
+             : !is_instance_definition_entity(definition))) {
       return report(false);
     }
   }

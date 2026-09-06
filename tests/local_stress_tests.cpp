@@ -11,6 +11,7 @@
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_document_writer.hpp"
 #include "editor/session/scene_session.hpp"
+#include "support/command_observable_state.hpp"
 
 #include <gtest/gtest.h>
 
@@ -337,6 +338,100 @@ TEST(LocalStressTests, MyFirstProjectLargeWorkflow) {
     });
 
     std::filesystem::remove(save_path, remove_error);
+}
+
+TEST(LocalStressTests, SceneDeleteAllUndoRedoRestoresInstancesAndMeshes) {
+  const std::optional<std::filesystem::path> configured_path =
+      stress_project_path();
+  if (!configured_path.has_value()) {
+    GTEST_SKIP() << "Set QUADER_STRESS_QDR to an explicit licensed binary QDR "
+                    "fixture to run the scene delete/undo stress test.";
+  }
+  if (!std::filesystem::is_regular_file(*configured_path)) {
+    GTEST_SKIP() << "Configured QUADER_STRESS_QDR is not a regular file: "
+                 << configured_path->string();
+  }
+
+  quader::SceneSessionService sessions;
+  std::unique_ptr<quader::SceneSession> session = sessions.create_session();
+  ASSERT_NE(session, nullptr);
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(*session));
+  const auto opened = editor.scene_documents().open_native_path(*configured_path);
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  const auto object_mode =
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object);
+  ASSERT_TRUE(object_mode.ok()) << object_mode.error_message();
+  const auto selected =
+      editor.commands().execute(quader::quader_command::kSelectAll);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+
+  const std::vector<quader::QuaderEntitySnapshot> entities =
+      editor.query().entities();
+  const std::size_t selected_count = selected_entity_count(editor);
+  const auto definition_count = std::ranges::count_if(
+      entities, &quader::QuaderEntitySnapshot::is_instance_definition);
+  const auto occurrence_count = std::ranges::count_if(
+      entities, &quader::QuaderEntitySnapshot::has_instance_occurrence);
+  const auto mesh_count = std::ranges::count_if(
+      entities, &quader::QuaderEntitySnapshot::has_mesh);
+  std::cout << "[local-stress] delete_entity_count=" << entities.size()
+            << " selected=" << selected_count << " meshes=" << mesh_count
+            << " instance_definitions=" << definition_count
+            << " instance_occurrences=" << occurrence_count << '\n';
+  ASSERT_GT(selected_count, 0u);
+
+  using quader::test::CommandObservableDomain;
+  using quader::test::CommandObservableState;
+  using quader::test::capture_command_observable_state;
+  using quader::test::command_observable_domain_mask;
+  using quader::test::diff_command_observable_state;
+  constexpr auto restored_domains =
+      CommandObservableDomain::Scene | CommandObservableDomain::Geometry |
+      command_observable_domain_mask(CommandObservableDomain::Selection) |
+      command_observable_domain_mask(CommandObservableDomain::Assets);
+  const CommandObservableState before = capture_command_observable_state(editor);
+  for (std::size_t cycle = 0u; cycle < 3u; ++cycle) {
+    SCOPED_TRACE("delete/undo cycle " + std::to_string(cycle));
+    const auto deleted =
+        editor.commands().execute(quader::quader_command::kDeleteSelection);
+    ASSERT_TRUE(deleted.ok()) << deleted.error_message();
+    ASSERT_TRUE(deleted.changed());
+    EXPECT_EQ(selected_entity_count(editor), 0u);
+    for (const quader::QuaderEntitySnapshot &entity : entities) {
+      if (entity.selected) {
+        EXPECT_FALSE(editor.query().entity(entity.id).has_value())
+            << "Selected entity survived deletion: " << entity.name;
+      }
+    }
+    const CommandObservableState after_delete =
+        capture_command_observable_state(editor);
+
+    const auto undone = editor.history().undo();
+    ASSERT_TRUE(undone.ok()) << undone.error_message();
+    ASSERT_TRUE(undone.changed());
+    const auto undo_diff = diff_command_observable_state(
+        before, capture_command_observable_state(editor), restored_domains);
+    ASSERT_TRUE(undo_diff.empty()) << undo_diff.summary;
+
+    const auto redone = editor.history().redo();
+    ASSERT_TRUE(redone.ok()) << redone.error_message();
+    ASSERT_TRUE(redone.changed());
+    const auto redo_diff = diff_command_observable_state(
+        after_delete, capture_command_observable_state(editor), restored_domains);
+    ASSERT_TRUE(redo_diff.empty()) << redo_diff.summary;
+
+    const auto restored = editor.history().undo();
+    ASSERT_TRUE(restored.ok()) << restored.error_message();
+    ASSERT_TRUE(restored.changed());
+    const auto restored_diff = diff_command_observable_state(
+        before, capture_command_observable_state(editor), restored_domains);
+    ASSERT_TRUE(restored_diff.empty()) << restored_diff.summary;
+    std::cout << "[local-stress] delete_undo_redo_cycle=" << cycle + 1u
+              << " restored_entities=" << editor.query().entities().size()
+              << " restored_selected=" << selected_entity_count(editor)
+              << '\n';
+  }
 }
 
 TEST(LocalStressTests, SingleMeshPivotApply) {

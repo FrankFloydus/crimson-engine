@@ -3500,6 +3500,379 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
+     SceneAwareDeleteInstanceUndoPublicationFailureRestoresDeletedStateAndRetries) {
+  SceneDocument scene;
+  const EntityId parent = scene.create_empty("Retained Parent");
+  const EntityId definition = scene.create_empty("Instance Definition");
+  ASSERT_TRUE(scene.set_parent(definition, parent, false));
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  const EntityId member = scene.create_entity("Instance Member", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(member, {.mesh = 77u}));
+  ASSERT_TRUE(scene.set_parent(member, definition, false));
+  const EntityId occurrence =
+      scene.create_entity("Final Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(scene.set_parent(occurrence, parent, false));
+  ASSERT_TRUE(
+      scene.set_instance_occurrence(occurrence, {.definition = definition}));
+  ASSERT_TRUE(scene.set_selected(occurrence, true));
+  ASSERT_TRUE(scene.set_active_selection(occurrence));
+  const std::string definition_uuid = scene.uuid(definition);
+  const std::string member_uuid = scene.uuid(member);
+  const std::string occurrence_uuid = scene.uuid(occurrence);
+  const EditorObjectId definition_editor = scene.editor_object_id(definition);
+  const EditorObjectId member_editor = scene.editor_object_id(member);
+  const EditorObjectId occurrence_editor = scene.editor_object_id(occurrence);
+  const auto revisions = [&] {
+    return std::array{scene.revision(), scene.content_revision(),
+                      scene.selection_revision(),
+                      scene.hierarchy_presentation_revision(),
+                      scene.visibility_revision(), scene.transform_revision(),
+                      scene.mesh_binding_revision(),
+                      scene.render_component_revision(), scene.layer_revision()};
+  };
+  bool fail_selection_publication = false;
+  std::unique_ptr<IUndoableCommand> command =
+      create_scene_aware_delete_selection_command(
+          scene,
+          SceneAwareDeleteRuntime{
+              .capture_modeling_memento =
+                  [] { return ModelingSessionMemento{}; },
+              .restore_modeling_memento =
+                  [](const ModelingSessionMemento &) {
+                    return ModelingCommandResult{.ok = true};
+                  },
+              .app_selection_mode =
+                  [] { return ModelingSelectionMode::Object; },
+              .set_app_selection_mode = [](ModelingSelectionMode) {},
+              .sync_object_selection_from_scene = [&](bool) {
+                EXPECT_TRUE(scene.exists(definition));
+                EXPECT_TRUE(scene.exists(member));
+                EXPECT_TRUE(scene.exists(occurrence));
+                EXPECT_EQ(scene.parent(member), definition);
+                EXPECT_EQ(scene.primary_selection(), occurrence);
+                return fail_selection_publication
+                           ? ModelingCommandResult{
+                                 .ok = false,
+                                 .message =
+                                     "Injected instance selection publication failure.",
+                             }
+                           : ModelingCommandResult{.ok = true};
+              },
+              .invalidate_selection_overlay_caches = [] {},
+          });
+  ASSERT_NE(command, nullptr);
+  const CommandResult deleted = command->redo();
+  ASSERT_TRUE(deleted.ok) << deleted.message;
+  ASSERT_TRUE(deleted.changed);
+  ASSERT_EQ(scene.entities(), std::vector<EntityId>{parent});
+  ASSERT_TRUE(scene.children(parent).empty());
+  ASSERT_EQ(scene.mesh_binding_reference_count(77u), 0u);
+  const auto deleted_revisions = revisions();
+
+  fail_selection_publication = true;
+  const CommandResult failed = command->undo();
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed) << failed.message;
+  EXPECT_EQ(failed.message, "Injected instance selection publication failure.");
+  EXPECT_EQ(scene.entities(), std::vector<EntityId>{parent});
+  EXPECT_TRUE(scene.children(parent).empty());
+  EXPECT_TRUE(scene.selected_entities().empty());
+  EXPECT_EQ(scene.primary_selection(), kInvalidEntityId);
+  EXPECT_EQ(scene.mesh_binding_reference_count(77u), 0u);
+  EXPECT_EQ(scene.entity_for_uuid(definition_uuid), kInvalidEntityId);
+  EXPECT_EQ(scene.entity_for_uuid(member_uuid), kInvalidEntityId);
+  EXPECT_EQ(scene.entity_for_uuid(occurrence_uuid), kInvalidEntityId);
+  EXPECT_EQ(revisions(), deleted_revisions);
+
+  fail_selection_publication = false;
+  const CommandResult retried = command->undo();
+  ASSERT_TRUE(retried.ok) << retried.message;
+  EXPECT_TRUE(retried.changed);
+  EXPECT_EQ(scene.children(parent), (std::vector<EntityId>{definition, occurrence}));
+  EXPECT_EQ(scene.children(definition), std::vector<EntityId>{member});
+  ASSERT_NE(scene.instance_occurrence(occurrence), nullptr);
+  EXPECT_EQ(scene.instance_occurrence(occurrence)->definition, definition);
+  EXPECT_EQ(scene.instance_occurrences_for_definition(definition),
+            std::vector<EntityId>{occurrence});
+  EXPECT_EQ(scene.entity_for_uuid(definition_uuid), definition);
+  EXPECT_EQ(scene.entity_for_uuid(member_uuid), member);
+  EXPECT_EQ(scene.entity_for_uuid(occurrence_uuid), occurrence);
+  EXPECT_EQ(scene.editor_object_id(definition), definition_editor);
+  EXPECT_EQ(scene.editor_object_id(member), member_editor);
+  EXPECT_EQ(scene.editor_object_id(occurrence), occurrence_editor);
+  EXPECT_EQ(scene.mesh_binding_reference_count(77u), 1u);
+  EXPECT_EQ(scene.selected_entities(), std::vector<EntityId>{occurrence});
+  EXPECT_EQ(scene.primary_selection(), occurrence);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     SceneAwareDeleteModeledInstanceUndoFailureRetainsDeletedStateAndRetries) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  // Supply a real checkpoint while simulating the modeling callbacks so the
+  // test exercises inverse publication and its scene allocation receipts.
+  const ModelingSessionMemento modeling_checkpoint =
+      service.capture_history_memento();
+  ASSERT_TRUE(modeling_checkpoint.valid());
+  ModelingObjectRuntimeMap object_map;
+  constexpr int kModelingObject = 42;
+
+  const EntityId retained_definition = scene.create_empty("Retained Definition");
+  ASSERT_TRUE(scene.set_instance_definition(retained_definition));
+  const EntityId retained_member = scene.create_empty("Retained Member");
+  ASSERT_TRUE(scene.set_parent(retained_member, retained_definition, false));
+  const EntityId retained_occurrence =
+      scene.create_entity("Retained Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(scene.set_instance_occurrence(
+      retained_occurrence, {.definition = retained_definition}));
+  const std::string retained_uuid = scene.uuid(retained_occurrence);
+  const EntityId definition = scene.create_empty("Deleted Definition");
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  const EntityId member = scene.create_entity("Modeled Member", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(member, {.mesh = 77u}));
+  ASSERT_TRUE(scene.set_modeling_object(
+      member, {.object_id = kModelingObject, .sdk_owned = true}));
+  ASSERT_TRUE(scene.set_parent(member, definition, false));
+  ASSERT_TRUE(object_map.bind(kModelingObject, member));
+  const EditorObjectId member_editor = scene.editor_object_id(member);
+  const std::string member_uuid = scene.uuid(member);
+  const EntityId occurrence =
+      scene.create_entity("Deleted Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(
+      scene.set_instance_occurrence(occurrence, {.definition = definition}));
+  ASSERT_TRUE(scene.set_selected(occurrence, true));
+  ASSERT_TRUE(scene.set_active_selection(occurrence));
+  const auto revisions = [&] {
+    return std::array{scene.revision(), scene.content_revision(),
+                      scene.selection_revision(),
+                      scene.hierarchy_presentation_revision(),
+                      scene.visibility_revision(), scene.transform_revision(),
+                      scene.mesh_binding_revision(),
+                      scene.render_component_revision(), scene.layer_revision()};
+  };
+  bool fail_selection_publication = false;
+  std::size_t inverse_modeling_calls = 0u;
+  std::unique_ptr<IUndoableCommand> command =
+      create_scene_aware_delete_selection_command(
+          scene,
+          SceneAwareDeleteRuntime{
+              .capture_modeling_memento = [&] { return modeling_checkpoint; },
+              .restore_modeling_memento = [&](const ModelingSessionMemento &) {
+                const EntityId restored = scene.create_entity_with_id(
+                    member, "Runtime Restored", EntityKind::Mesh, member_editor);
+                if (restored == kInvalidEntityId ||
+                    !scene.set_entity_uuid(restored, member_uuid) ||
+                    !scene.set_mesh(restored, {.mesh = 77u}) ||
+                    !scene.set_modeling_object(
+                        restored,
+                        {.object_id = kModelingObject, .sdk_owned = true}) ||
+                    !object_map.bind(kModelingObject, restored)) {
+                  return ModelingCommandResult{.ok = false,
+                                               .message = "Runtime restore failed."};
+                }
+                return ModelingCommandResult{.ok = true, .changed = true};
+              },
+              .restore_modeling_memento_exact =
+                  [&](const ModelingSessionMemento &) {
+                    ++inverse_modeling_calls;
+                    const InstanceOccurrenceComponent *retained =
+                        scene.instance_occurrence(retained_occurrence);
+                    EXPECT_NE(retained, nullptr);
+                    if (retained != nullptr) {
+                      EXPECT_EQ(retained->definition, retained_definition);
+                    }
+                    EXPECT_EQ(scene.uuid(retained_occurrence), retained_uuid);
+                    const bool removed = scene.destroy_entity(member);
+                    if (removed) {
+                      object_map.unbind_object(kModelingObject);
+                    }
+                    return ModelingCommandResult{
+                        .ok = removed,
+                        .changed = removed,
+                        .message = removed ? ""
+                                           : "Inverse modeled member removal failed.",
+                    };
+                  },
+              .app_selection_mode =
+                  [] { return ModelingSelectionMode::Object; },
+              .set_app_selection_mode = [](ModelingSelectionMode) {},
+              .delete_modeling_objects = [&](const std::vector<int> &objects) {
+                EXPECT_EQ(objects, std::vector<int>{kModelingObject});
+                object_map.unbind_object(kModelingObject);
+                return ModelingCommandResult{.ok = true, .changed = true};
+              },
+              .entity_for_modeling_object = [&](int object) {
+                return object_map.entity_for_modeling_object(object);
+              },
+              .sync_object_selection_from_scene = [&](bool) {
+                EXPECT_TRUE(scene.exists(definition));
+                EXPECT_TRUE(scene.exists(member));
+                EXPECT_NE(scene.instance_occurrence(occurrence), nullptr);
+                EXPECT_EQ(scene.parent(member), definition);
+                return fail_selection_publication
+                           ? ModelingCommandResult{
+                                 .ok = false,
+                                 .message = "Injected modeled instance publication failure.",
+                             }
+                           : ModelingCommandResult{.ok = true};
+              },
+              .invalidate_selection_overlay_caches = [] {},
+          });
+  ASSERT_NE(command, nullptr);
+  const CommandResult deleted = command->redo();
+  ASSERT_TRUE(deleted.ok) << deleted.message;
+  ASSERT_TRUE(deleted.changed);
+  ASSERT_FALSE(scene.exists(definition));
+  ASSERT_FALSE(scene.exists(member));
+  ASSERT_FALSE(scene.exists(occurrence));
+  const std::vector<EntityId> deleted_entities = scene.entities();
+  const auto deleted_revisions = revisions();
+
+  fail_selection_publication = true;
+  const CommandResult failed = command->undo();
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed) << failed.message;
+  EXPECT_EQ(failed.message, "Injected modeled instance publication failure.");
+  EXPECT_EQ(inverse_modeling_calls, 1u);
+  EXPECT_EQ(scene.entities(), deleted_entities);
+  EXPECT_EQ(revisions(), deleted_revisions);
+  EXPECT_TRUE(scene.selected_entities().empty());
+  EXPECT_EQ(scene.mesh_binding_reference_count(77u), 0u);
+  EXPECT_FALSE(object_map.entity_for_modeling_object(kModelingObject).has_value());
+  ASSERT_NE(scene.instance_occurrence(retained_occurrence), nullptr);
+  EXPECT_EQ(scene.instance_occurrence(retained_occurrence)->definition,
+            retained_definition);
+  EXPECT_EQ(scene.children(retained_definition),
+            std::vector<EntityId>{retained_member});
+  EXPECT_EQ(scene.uuid(retained_occurrence), retained_uuid);
+
+  fail_selection_publication = false;
+  const CommandResult retried = command->undo();
+  ASSERT_TRUE(retried.ok) << retried.message;
+  EXPECT_TRUE(retried.changed);
+  EXPECT_EQ(inverse_modeling_calls, 1u);
+  EXPECT_EQ(object_map.entity_for_modeling_object(kModelingObject), member);
+  EXPECT_EQ(scene.uuid(member), member_uuid);
+  EXPECT_EQ(scene.editor_object_id(member), member_editor);
+  EXPECT_EQ(scene.parent(member), definition);
+  ASSERT_NE(scene.instance_occurrence(occurrence), nullptr);
+  EXPECT_EQ(scene.instance_occurrence(occurrence)->definition, definition);
+  EXPECT_EQ(scene.mesh_binding_reference_count(77u), 1u);
+  EXPECT_EQ(scene.selected_entities(), std::vector<EntityId>{occurrence});
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     SceneAwareDeleteRedoFailureRestoresReallocatedModeledIdentityAndRetries) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const ModelingSessionMemento modeling_checkpoint =
+      service.capture_history_memento();
+  ASSERT_TRUE(modeling_checkpoint.valid());
+  ModelingObjectRuntimeMap object_map;
+  constexpr int kModelingObject = 42;
+  const EntityId selected = scene.create_entity("Modeled Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(selected, {.mesh = 77u}));
+  ASSERT_TRUE(scene.set_modeling_object(
+      selected, {.object_id = kModelingObject, .sdk_owned = true}));
+  ASSERT_TRUE(scene.set_selected(selected, true));
+  ASSERT_TRUE(object_map.bind(kModelingObject, selected));
+  const EditorObjectId editor_identity = scene.editor_object_id(selected);
+  const std::string uuid = scene.uuid(selected);
+  const auto restore_modeled_entity = [&] {
+    EXPECT_FALSE(scene.exists(selected));
+    const EntityId restored = scene.create_entity_with_id(
+        selected, "Modeled Mesh", EntityKind::Mesh, editor_identity);
+    const bool restored_ok =
+        restored == selected && scene.set_entity_uuid(restored, uuid) &&
+        scene.set_mesh(restored, {.mesh = 77u}) &&
+        scene.set_modeling_object(
+            restored, {.object_id = kModelingObject, .sdk_owned = true}) &&
+        object_map.bind(kModelingObject, restored);
+    return ModelingCommandResult{.ok = restored_ok, .changed = restored_ok};
+  };
+  bool redo_transition = false;
+  bool fail_redo = false;
+  std::size_t inverse_modeling_calls = 0u;
+  std::unique_ptr<IUndoableCommand> command =
+      create_scene_aware_delete_selection_command(
+          scene,
+          SceneAwareDeleteRuntime{
+              .capture_modeling_memento = [&] { return modeling_checkpoint; },
+              .restore_modeling_memento = [&](const ModelingSessionMemento &) {
+                if (!redo_transition) {
+                  return restore_modeled_entity();
+                }
+                if (fail_redo) {
+                  return ModelingCommandResult{
+                      .ok = false,
+                      .message = "Injected modeling redo failure.",
+                  };
+                }
+                object_map.unbind_object(kModelingObject);
+                return ModelingCommandResult{.ok = true, .changed = true};
+              },
+              .restore_modeling_memento_exact =
+                  [&](const ModelingSessionMemento &) {
+                    ++inverse_modeling_calls;
+                    return restore_modeled_entity();
+                  },
+              .app_selection_mode =
+                  [] { return ModelingSelectionMode::Object; },
+              .set_app_selection_mode = [](ModelingSelectionMode) {},
+              .delete_modeling_objects = [&](const std::vector<int> &objects) {
+                EXPECT_EQ(objects, std::vector<int>{kModelingObject});
+                object_map.unbind_object(kModelingObject);
+                return ModelingCommandResult{.ok = true, .changed = true};
+              },
+              .entity_for_modeling_object = [&](int object) {
+                return object_map.entity_for_modeling_object(object);
+              },
+              .sync_object_selection_from_scene = [](bool) {
+                return ModelingCommandResult{.ok = true};
+              },
+              .invalidate_selection_overlay_caches = [] {},
+          });
+  ASSERT_NE(command, nullptr);
+  ASSERT_TRUE(command->redo().ok);
+  const CommandResult undone = command->undo();
+  ASSERT_TRUE(undone.ok) << undone.message;
+  const auto revisions = [&] {
+    return std::array{scene.revision(), scene.content_revision(),
+                      scene.selection_revision(), scene.mesh_binding_revision(),
+                      scene.hierarchy_presentation_revision(),
+                      scene.render_component_revision()};
+  };
+  const auto restored_revisions = revisions();
+  ASSERT_EQ(scene.entities(), std::vector<EntityId>{selected});
+
+  redo_transition = true;
+  fail_redo = true;
+  const CommandResult failed = command->redo();
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed) << failed.message;
+  EXPECT_EQ(failed.message, "Injected modeling redo failure.");
+  EXPECT_EQ(inverse_modeling_calls, 1u);
+  EXPECT_EQ(scene.entities(), std::vector<EntityId>{selected});
+  EXPECT_EQ(scene.uuid(selected), uuid);
+  EXPECT_EQ(scene.editor_object_id(selected), editor_identity);
+  EXPECT_EQ(object_map.entity_for_modeling_object(kModelingObject), selected);
+  EXPECT_EQ(scene.mesh_binding_reference_count(77u), 1u);
+  EXPECT_EQ(scene.selected_entities(), std::vector<EntityId>{selected});
+  EXPECT_EQ(revisions(), restored_revisions);
+
+  fail_redo = false;
+  const CommandResult retried = command->redo();
+  ASSERT_TRUE(retried.ok) << retried.message;
+  EXPECT_TRUE(retried.changed);
+  EXPECT_TRUE(scene.entities().empty());
+  EXPECT_TRUE(scene.selected_entities().empty());
+  EXPECT_EQ(scene.mesh_binding_reference_count(77u), 0u);
+  EXPECT_FALSE(object_map.entity_for_modeling_object(kModelingObject).has_value());
+}
+
+TEST(ModelingSessionServiceSplitTests,
      SceneAwareDeleteInitialDestroyFailureRestoresNestedSceneExactly) {
   SceneDocument scene;
   const EntityId group = scene.create_entity("Group", EntityKind::Empty);
