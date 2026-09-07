@@ -142,13 +142,16 @@ struct RenderOverlayBoundsSnapshot {
 };
 
 /**
- * Stores one selected non-billboard light marker input for render overlay
- * projection.
+ * Stores one scene light marker and its optional world-space radius controls.
  */
 struct RenderOverlayLightMarkerSnapshot {
   EntityId entity = kInvalidEntityId;
   LightType type = LightType::Directional;
   QMat4 world_transform;
+  /// Filament falloff is a world-space radius, independent of entity scale.
+  float radius = 0.001f;
+  bool selected = false;
+  bool radius_editable = false;
 };
 
 /**

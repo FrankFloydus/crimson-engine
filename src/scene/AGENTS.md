@@ -15,5 +15,8 @@ file except through prior written authorization from Francesco Di Blasi.
   clipboard, and rollback. Do not add a second live object-record store or allocator.
 - Keep naming in `SceneEntityNaming`; retain scene-owned hierarchy/occurrence projections and their
   revision gates. Render and UI caches derive from this state.
+- `light_property_revision()` advances only when an existing Light entity's component properties
+  change. Equal deltas with scene/render-component revisions prove light-only publication; creation,
+  removal and unrelated component edits break that proof. Exact rollback restores this counter too.
 - User mutations route through editor services/document commands/public API batches. Protect owner
   invariants with scene/document tests and user workflows with public API behavior tests.

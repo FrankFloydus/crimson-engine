@@ -44,6 +44,7 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollBar>
+#include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QStyledItemDelegate>
 #include <QStyleOptionViewItem>
@@ -74,7 +75,7 @@ namespace {
 
 constexpr float kRadToDeg = 57.29577951308232f;
 constexpr float kDegToRad = 0.017453292519943295f;
-constexpr float kInspectorLightRangeMin = 0.1f;
+constexpr float kInspectorLightRangeMin = 0.001f;
 constexpr float kInspectorLightRangeSliderMax = 100.0f;
 constexpr int kInspectorMinimumValueColumnWidth = 96;
 constexpr int kInspectorMaterialPreviewSize = 56;
@@ -478,6 +479,18 @@ struct InspectorPanel::Impl {
                      [this]() { clamp_label_column_width(); });
   }
 
+  ~Impl() {
+    // Child destruction can publish header geometry/focus signals. Remove the
+    // tree while its callback state still exists, before QWidget tears down
+    // panel children after the Impl unique_ptr has already been destroyed.
+    QObject::disconnect(tree_, nullptr, &panel_, nullptr);
+    QObject::disconnect(tree_->header(), nullptr, &panel_, nullptr);
+    rebuilding_ = true;
+    material_rows_.clear();
+    delete tree_;
+    tree_ = nullptr;
+  }
+
   void set_material_presentation(
       InspectorMaterialPresentationSnapshot snapshot) {
     const bool presentation_changed =
@@ -569,18 +582,22 @@ struct InspectorPanel::Impl {
                           : nullptr;
 
     const ModelingSelectionSummary summary = modeling_->selection_summary();
-    const bool presentation_changed =
-        force_rebuild_ || built_scene_revision_ != document_->revision() ||
+    const bool layout_changed =
+        force_rebuild_ ||
         built_modeling_content_revision_ != summary.content_revision ||
         built_modeling_selection_revision_ != summary.selection_revision ||
         built_material_presentation_revision_ !=
             material_presentation_.revision ||
         built_locale_ != localization_->current_locale();
-    if (!presentation_changed) {
+    if (!layout_changed && built_scene_revision_ == document_->revision()) {
       return;
     }
     if (!selection_changed &&
         (active_transform_edit_.has_value() || continuous_edit_active_)) {
+      return;
+    }
+
+    if (!layout_changed && refresh_light_range()) {
       return;
     }
 
@@ -704,7 +721,45 @@ private:
 
   void clear_content() {
     material_rows_.clear();
+    light_range_field_ = nullptr;
+    presented_light_.reset();
     tree_->clear();
+  }
+
+  bool refresh_light_range() {
+    const std::uint64_t scene_revision = document_->revision();
+    const std::uint64_t light_revision = document_->light_property_revision();
+    if (light_range_field_ == nullptr || !presented_light_.has_value() ||
+        scene_revision <= built_scene_revision_ ||
+        light_revision <= built_light_property_revision_ ||
+        scene_revision - built_scene_revision_ !=
+            light_revision - built_light_property_revision_) {
+      return false;
+    }
+    const LightComponent *light = document_->light(primary_);
+    if (light == nullptr) {
+      return false;
+    }
+    LightComponent other_properties = *light;
+    other_properties.range = presented_light_->range;
+    if (other_properties != *presented_light_) {
+      return false;
+    }
+
+    // Equal revision deltas exclude coalesced name, transform, component or
+    // hierarchy changes before touching a retained widget. The component
+    // comparison additionally excludes every light property except range.
+    if (light->range != presented_light_->range) {
+      const QSignalBlocker blocker(light_range_field_.data());
+      if (light->range > light_range_field_->maximum()) {
+        light_range_field_->setMaximum(light->range);
+      }
+      light_range_field_->setValue(light->range);
+      presented_light_->range = light->range;
+    }
+    built_scene_revision_ = scene_revision;
+    built_light_property_revision_ = light_revision;
+    return true;
   }
 
   void rebuild(const ModelingSelectionSummary &summary) {
@@ -743,6 +798,7 @@ private:
     }
 
     built_scene_revision_ = document_->revision();
+    built_light_property_revision_ = document_->light_property_revision();
     built_modeling_content_revision_ = summary.content_revision;
     built_modeling_selection_revision_ = summary.selection_revision;
     built_material_presentation_revision_ = material_presentation_.revision;
@@ -1970,10 +2026,12 @@ private:
                                 std::move(merge_key));
                           });
     if (light->type == LightType::Point || light->type == LightType::Spot) {
-      add_continuous_number(
+      presented_light_ = *light;
+      light_range_field_ = add_continuous_number(
           section, "light.range", localized("ui.inspector.range", "Range"),
-          light->range, kInspectorLightRangeMin, kInspectorLightRangeSliderMax,
-          0.1, 2, [this, entity](double value, std::string merge_key) {
+          light->range, kInspectorLightRangeMin,
+          std::max(kInspectorLightRangeSliderMax, light->range),
+          0.1, 4, [this, entity](double value, std::string merge_key) {
             apply_light_component(
                 entity,
                 [value](LightComponent &next) {
@@ -2019,6 +2077,8 @@ private:
   const AssetRegistry *preview_assets_ = nullptr;
   InspectorMaterialPresentationSnapshot material_presentation_;
   std::vector<MaterialRow> material_rows_;
+  QPointer<QDoubleSpinBox> light_range_field_;
+  std::optional<LightComponent> presented_light_;
   SceneTransformDragService active_transform_preview_;
   std::optional<TransformEditState> active_transform_edit_;
   UIContinuousEditTracker active_continuous_edit_;
@@ -2027,6 +2087,8 @@ private:
   EntityId primary_ = kInvalidEntityId;
   std::unordered_map<std::string, bool> expanded_sections_;
   std::uint64_t built_scene_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t built_light_property_revision_ =
       std::numeric_limits<std::uint64_t>::max();
   std::uint64_t built_modeling_content_revision_ =
       std::numeric_limits<std::uint64_t>::max();

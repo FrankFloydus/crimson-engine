@@ -220,6 +220,8 @@ using OverlaySnapshot = RenderOverlaySelectionSnapshot;
  */
 struct RenderSceneSnapshot : RenderSourceStamp {
   std::uint64_t frame_index = 0;
+  /// Scene-owned proof that existing light properties alone advanced.
+  std::uint64_t light_property_revision = 0;
   RenderSceneSnapshotDirtyState dirty;
   bool reused_previous_records = false;
   // Prevents the Curve-publication overlay fast path from retaining stale

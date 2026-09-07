@@ -19,6 +19,7 @@ file except through prior written authorization from Francesco Di Blasi.
 | Native modeling projection and picking | [runtime guide](modeling/runtime/README.md) |
 | Descriptor catalogs | [metadata guide](metadata/README.md) |
 | Native tool lifecycle and semantic input | `tools/`, then [input guide](../../INPUT_KEYBINDINGS.md) |
+| Selected point-light radius gestures | `viewport/point_light_range_interaction.*`, `commands/document_command_service.*` |
 
 - `ModelingSessionService` adapts the portable core; it must not become another modeling owner.
 - Structural actions must preserve scene state, SDK bindings, component selection, and chronological

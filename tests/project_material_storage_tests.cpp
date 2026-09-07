@@ -34,6 +34,24 @@ using namespace quader;
 
 namespace {
 
+constexpr std::string_view kNamedImageV3Material = R"json({
+  "format": "quader.material",
+  "version": 3,
+  "id": "64cc0de8-35da-4a84-bf30-bd5c87bc40de",
+  "name": "Branch Image",
+  "texture": {
+    "id": "b1a49a62-812b-48b2-9fc5-fd6558aef5c2",
+    "path": "Textures/branch_image.png",
+    "colorSpace": "srgb"
+  },
+  "textureTransform": {
+    "center": [0.25, 0.75],
+    "scale": [2.0, -3.0],
+    "offset": [-0.5, 1.25],
+    "rotationDegrees": 45.0
+  }
+})json";
+
 std::filesystem::path source_resource_root() {
   return std::filesystem::path(QUADER_SOURCE_DIR) / "resources" /
          "modeling_assets";
@@ -295,6 +313,106 @@ TEST(QmatCodecTests, ReadsV1AsStandardAndWritesTypedV2) {
             std::string::npos);
   EXPECT_NE(upgraded.value().find("\"textureTransform\""),
             std::string::npos);
+}
+
+TEST(QmatCodecTests, ReadsNamedImageV3AsStandardAndWritesTypedV2) {
+  const ProjectIoResult<ProjectMaterialDocument> decoded =
+      QmatCodec::decode(kNamedImageV3Material);
+  ASSERT_TRUE(decoded.ok()) << decoded.error().message;
+  EXPECT_EQ(decoded.value().id,
+            ProjectAssetId::parse("64cc0de8-35da-4a84-bf30-bd5c87bc40de"));
+  EXPECT_EQ(decoded.value().name, "Branch Image");
+  EXPECT_EQ(decoded.value().kind, ProjectMaterialKind::Standard);
+  EXPECT_EQ(decoded.value().material_version, kStandardMaterialVersion);
+  ASSERT_NE(decoded.value().standard_material(), nullptr);
+  const ProjectStandardMaterialDefinition &standard =
+      *decoded.value().standard_material();
+  EXPECT_EQ(standard.base_color, (std::array<float, 3>{1.0f, 1.0f, 1.0f}));
+  EXPECT_FLOAT_EQ(standard.roughness, 1.0f);
+  EXPECT_FLOAT_EQ(standard.metallic, 0.0f);
+  EXPECT_FLOAT_EQ(standard.normal_strength, 1.0f);
+  EXPECT_EQ(standard.normal_convention, NormalMapConvention::OpenGL);
+  EXPECT_FALSE(standard.roughness_texture.has_value());
+  EXPECT_FALSE(standard.metallic_texture.has_value());
+  EXPECT_FALSE(standard.normal_texture.has_value());
+  ASSERT_TRUE(standard.base_color_texture.has_value());
+  EXPECT_EQ(standard.base_color_texture->id,
+            ProjectAssetId::parse("b1a49a62-812b-48b2-9fc5-fd6558aef5c2"));
+  EXPECT_EQ(standard.base_color_texture->project_relative_path,
+            "Textures/branch_image.png");
+  EXPECT_EQ(standard.base_color_texture->color_space,
+            ProjectTextureColorSpace::Srgb);
+  const StandardMaterialTextureTransform expected_transform{
+      .center = {0.25f, 0.75f},
+      .scale = {2.0f, -3.0f},
+      .offset = {-0.5f, 1.25f},
+      .rotation_degrees = 45.0f,
+  };
+  EXPECT_EQ(standard.texture_transform, expected_transform);
+
+  const ProjectIoResult<std::string> encoded =
+      QmatCodec::encode(decoded.value());
+  ASSERT_TRUE(encoded.ok()) << encoded.error().message;
+  EXPECT_NE(encoded.value().find("\"version\": 2"), std::string::npos);
+  EXPECT_NE(encoded.value().find("\"materialType\": \"standard\""),
+            std::string::npos);
+  const ProjectIoResult<ProjectMaterialDocument> round_trip =
+      QmatCodec::decode(encoded.value());
+  ASSERT_TRUE(round_trip.ok()) << round_trip.error().message;
+  EXPECT_EQ(round_trip.value(), decoded.value());
+}
+
+TEST(QmatCodecTests, RejectsIncompleteUnsafeAndUnknownNamedImageV3Data) {
+  struct RejectedField final {
+    std::string_view before;
+    std::string_view after;
+  };
+  constexpr RejectedField kRejectedFields[]{
+      {"\"version\": 3", "\"version\": 4"},
+      {"64cc0de8-35da-4a84-bf30-bd5c87bc40de", "invalid-material-id"},
+      {"\"name\": \"Branch Image\"", "\"name\": null"},
+      {"\"texture\"", "\"missingTexture\""},
+      {"b1a49a62-812b-48b2-9fc5-fd6558aef5c2", "invalid-texture-id"},
+      {"\"path\": \"Textures/branch_image.png\",", ""},
+      {"Textures/branch_image.png", "../outside.png"},
+      {"\"colorSpace\": \"srgb\"", "\"colorSpace\": \"linear\""},
+      {"\"colorSpace\": \"srgb\"", "\"colorSpace\": \"unknown\""},
+      {"\"textureTransform\"", "\"missingTransform\""},
+      {"\"center\": [0.25, 0.75],", ""},
+      {"\"center\": [0.25, 0.75]", "\"center\": [0.25]"},
+      {"\"center\": [0.25, 0.75]", "\"center\": [0.25, \"bad\"]"},
+      {"\"center\": [0.25, 0.75]", "\"center\": [0.25, 1.01]"},
+      {"\"scale\": [2.0, -3.0]", "\"scale\": [16.01, -3.0]"},
+      {"\"offset\": [-0.5, 1.25]", "\"offset\": [-16.01, 1.25]"},
+      {"\"rotationDegrees\": 45.0", "\"rotationDegrees\": \"bad\""},
+      {"\"rotationDegrees\": 45.0", "\"rotationDegrees\": 360.01"},
+      {"\"name\": \"Branch Image\"",
+       "\"name\": \"Branch Image\", \"parameters\": {}"},
+      {"\"colorSpace\": \"srgb\"",
+       "\"colorSpace\": \"srgb\", \"sampler\": \"nearest\""},
+      {"\"rotationDegrees\": 45.0",
+       "\"rotationDegrees\": 45.0, \"projection\": \"box\""},
+  };
+  for (const RejectedField &field : kRejectedFields) {
+    SCOPED_TRACE(field.after);
+    EXPECT_FALSE(QmatCodec::decode(replace_once(
+                     std::string(kNamedImageV3Material), field.before,
+                     field.after))
+                     .ok());
+  }
+  constexpr std::string_view kTextureField = R"json("texture": {
+    "id": "b1a49a62-812b-48b2-9fc5-fd6558aef5c2",
+    "path": "Textures/branch_image.png",
+    "colorSpace": "srgb"
+  },)json";
+  for (const std::string_view replacement : {"", "\"texture\": null,",
+                                             "\"texture\": {},"}) {
+    SCOPED_TRACE(replacement);
+    EXPECT_FALSE(QmatCodec::decode(replace_once(
+                     std::string(kNamedImageV3Material), kTextureField,
+                     replacement))
+                     .ok());
+  }
 }
 
 TEST(QmatCodecTests, RejectsUnsupportedUnsafeAndUnboundedValues) {
@@ -953,6 +1071,71 @@ TEST(ProjectMaterialWorkspaceTests,
   EXPECT_NE(read_text(created.value().manifest_path)
                 .find("\"version\": 2"),
             std::string::npos);
+}
+
+TEST(ProjectMaterialWorkspaceTests,
+     OpensNamedImageV3WithoutWarningsOrRewritingSourceFiles) {
+  ScopedMaterialTestDirectory temporary("named-image-v3");
+  const std::filesystem::path root =
+      temporary.make_empty_project("NamedImages");
+  ProjectSession project;
+  project.set_resource_root(source_resource_root());
+  const ProjectSessionResult created = project.create(root);
+  ASSERT_TRUE(created.ok) << created.message;
+  const std::filesystem::path manifest = project.manifest_path();
+  ASSERT_TRUE(project.close().ok);
+
+  const std::string image_bytes =
+      read_text(root / "Textures" / "default_albedo.png");
+  write_text(root / "Textures" / "branch_image.png", image_bytes);
+  const std::filesystem::path image_material_path =
+      root / "Materials" / "branch_image.qmat";
+  write_text(image_material_path, kNamedImageV3Material);
+  const std::string default_source = replace_once(
+      replace_once(
+          replace_once(std::string(kNamedImageV3Material),
+                       "64cc0de8-35da-4a84-bf30-bd5c87bc40de",
+                       kDefaultProjectMaterialId),
+          "b1a49a62-812b-48b2-9fc5-fd6558aef5c2",
+          kDefaultProjectAlbedoTextureId),
+      "Textures/branch_image.png", "Textures/default_albedo.png");
+  const std::filesystem::path default_material_path =
+      root / "Materials" / "default_material.qmat";
+  write_text(default_material_path, default_source);
+
+  const ProjectSessionResult opened = project.open(manifest);
+  ASSERT_TRUE(opened.ok) << opened.message;
+  EXPECT_TRUE(opened.warnings.empty());
+  EXPECT_TRUE(project.material_catalog().warnings().empty());
+  ASSERT_EQ(project.material_catalog().entries().size(), 2u);
+  const ProjectAssetId image_id =
+      *ProjectAssetId::parse("64cc0de8-35da-4a84-bf30-bd5c87bc40de");
+  const ProjectMaterialCatalogEntry *image_material =
+      project.material_catalog().find(image_id);
+  ASSERT_NE(image_material, nullptr);
+  EXPECT_EQ(image_material->material.name, "Branch Image");
+  EXPECT_EQ(image_material->path.portable_string(),
+            "Materials/branch_image.qmat");
+  const ProjectIoResult<ProjectMaterialPreview> preview =
+      project.material_preview(image_id);
+  ASSERT_TRUE(preview.ok()) << preview.error().message;
+  EXPECT_EQ(std::string(
+                reinterpret_cast<const char *>(preview.value().encoded_bytes.data()),
+                preview.value().encoded_bytes.size()),
+            image_bytes);
+  EXPECT_EQ(read_text(default_material_path), default_source);
+  EXPECT_EQ(read_text(image_material_path), kNamedImageV3Material);
+  EXPECT_FALSE(project.has_dirty_material());
+
+  const ProjectSessionResult selected = project.set_active_material(image_id);
+  ASSERT_TRUE(selected.ok) << selected.message;
+  ASSERT_TRUE(project.close().ok);
+  const ProjectSessionResult reopened = project.open(manifest);
+  ASSERT_TRUE(reopened.ok) << reopened.message;
+  EXPECT_TRUE(reopened.warnings.empty());
+  EXPECT_EQ(project.active_material_id(), image_id);
+  EXPECT_EQ(read_text(default_material_path), default_source);
+  EXPECT_EQ(read_text(image_material_path), kNamedImageV3Material);
 }
 
 TEST(ProjectMaterialWorkspaceTests,

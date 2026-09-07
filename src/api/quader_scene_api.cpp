@@ -17,6 +17,7 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/selection/editor_selection_service.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "scene/scene_bounds.hpp"
 
 #include <optional>
@@ -117,6 +118,7 @@ UndoRedoExecuteOptions to_undo_redo_options(QuaderSceneEditOptions options) {
       .merge_key = std::move(options.merge_key),
   };
 }
+
 
 } // namespace
 
@@ -348,6 +350,53 @@ QuaderSceneApi::set_light_component(EntityId entity, QuaderLightComponent light,
           entity, to_scene_light_component(light),
           to_undo_redo_options(std::move(options))),
       "Set Light Component");
+}
+
+QuaderApiResult<QuaderEntityRef>
+QuaderSceneApi::begin_point_light_range_edit(EntityId entity) {
+  SceneSession &session = scene_session(session_);
+  if (session.modeling().modal_tool_owns_viewport() ||
+      session.modeling().can_cancel_active_preview_for_undo() ||
+      session.native_tools().has_pending_history_preview()) {
+    return quader_api_result_from_status<QuaderEntityRef>(
+        mutations_.run_runtime_result(document_command_invalid_request_result(
+            "Apply or cancel the active tool before editing a light radius"),
+            "Edit Point Light Radius"));
+  }
+  const auto status = mutations_.run_document_result(
+      session.document_commands().begin_point_light_range_edit(entity),
+      "Edit Point Light Radius");
+  auto result = quader_api_result_from_status<QuaderEntityRef>(status);
+  if (result.ok()) {
+    result.value = QuaderEntityRef{
+        .scene_session_id = mutations_.scene_session_id(), .id = entity,
+        .uuid = session.scene().uuid(entity),
+        .editor_object_id = session.scene().editor_object_id(entity)};
+  }
+  return result;
+}
+
+QuaderApiVoidResult QuaderSceneApi::update_point_light_range_edit(
+    QuaderEntityRef light, float range) {
+  if (!mutations_.belongs_to_active_scene(light.scene_session_id) ||
+      scene_session(session_).scene().uuid(light.id) != light.uuid) {
+    return mutations_.stale_scene_reference_status("Point light range edit");
+  }
+  auto result = mutations_.run_document_result(
+      scene_session(session_).document_commands().update_point_light_range_edit(
+          light.id, range), "Edit Point Light Radius");
+  return result;
+}
+
+QuaderApiVoidResult QuaderSceneApi::finish_point_light_range_edit(
+    QuaderEntityRef light, bool cancel) {
+  if (!mutations_.belongs_to_active_scene(light.scene_session_id) ||
+      scene_session(session_).scene().uuid(light.id) != light.uuid) {
+    return mutations_.stale_scene_reference_status("Point light range edit");
+  }
+  const auto finished = scene_session(session_).document_commands()
+                            .finish_point_light_range_edit(light.id, cancel);
+  return mutations_.run_document_result(finished, "Edit Point Light Radius");
 }
 
 QuaderApiVoidResult

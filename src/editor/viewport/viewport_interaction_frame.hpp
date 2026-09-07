@@ -34,6 +34,8 @@ struct ViewportSceneBillboardPickCandidate {
   float size_pixels = 1.0f;
   bool selectable = true;
   bool effectively_locked = false;
+  /// Present only for selected, visible point lights with a radius handle.
+  std::optional<float> point_light_range;
 };
 
 /// Carries one depth-ranked stationary mesh vertex into viewport interaction.

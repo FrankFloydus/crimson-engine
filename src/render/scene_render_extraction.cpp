@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/scene_render_extraction.hpp"
+#include "render/scene_render_light_refresh.hpp"
 
 #include "assets/curve_asset_payload.hpp"
 
@@ -701,6 +702,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
   QDR_PROFILE_FUNCTION();
   RenderSceneSnapshot snapshot;
   snapshot.frame_index = options.frame_index;
+  snapshot.light_property_revision = document.light_property_revision();
   const std::uint64_t project_material_revision =
       options.project_material_revision != 0u
           ? options.project_material_revision
@@ -1234,6 +1236,99 @@ RenderMaterialAssetSnapshot build_render_material_asset_snapshot(
 
 } // namespace
 
+bool try_refresh_render_scene_snapshot_light_properties(
+    RenderSceneSnapshot &snapshot, const SceneDocument &document,
+    const AssetRegistry &assets, std::uint64_t frame_index,
+    RenderSceneBindingKey scene_binding,
+    std::uint64_t project_material_revision,
+    RenderInstanceEditScope instance_edit_scope,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
+  const std::uint64_t light_revision = document.light_property_revision();
+  if (light_revision <= snapshot.light_property_revision) {
+    return false;
+  }
+  const RenderSourceStamp current = capture_render_source_stamp(
+      document, assets,
+      {.scene_binding = scene_binding,
+       .local_visibility = local_visibility,
+       .project_material_revision = project_material_revision,
+       .instance_edit_scope = instance_edit_scope});
+  constexpr RenderSourceDependencyMask kStableDependencies =
+      RenderSourceDependencyMask::from({
+          RenderSourceDependency::SceneBinding,
+          RenderSourceDependency::SelectionRevision,
+          RenderSourceDependency::HierarchyPresentationRevision,
+          RenderSourceDependency::VisibilityRevision,
+          RenderSourceDependency::LocalVisibilityRevision,
+          RenderSourceDependency::TransformRevision,
+          RenderSourceDependency::TextureMappingRevision,
+          RenderSourceDependency::MeshBindingRevision,
+          RenderSourceDependency::CurveBindingRevision,
+          RenderSourceDependency::MaterialBindingRevision,
+          RenderSourceDependency::LayerRevision,
+          RenderSourceDependency::AssetRevision,
+          RenderSourceDependency::MeshMaterialUsageRevision,
+          RenderSourceDependency::MaterialCatalogRevision,
+          RenderSourceDependency::ProjectMaterialRevision,
+          RenderSourceDependency::InstanceEditScope,
+      });
+  const std::uint64_t light_delta =
+      light_revision - snapshot.light_property_revision;
+  if (!render_source_dependencies_match(snapshot, current,
+                                        kStableDependencies) ||
+      current.scene_revision <= snapshot.scene_revision ||
+      current.render_component_revision <= snapshot.render_component_revision ||
+      current.scene_revision - snapshot.scene_revision != light_delta ||
+      current.render_component_revision - snapshot.render_component_revision !=
+          light_delta) {
+    return false;
+  }
+  // Validate before changing the retained snapshot. Membership cannot change
+  // through the property-only owner path, even when several lights were edited.
+  for (const RenderSceneLightRecord &record : snapshot.lights) {
+    if (document.light(record.entity_id) == nullptr ||
+        document.kind(record.entity_id) != EntityKind::Light) {
+      return false;
+    }
+  }
+
+  QDR_PROFILE_SCOPE("Render scene light-property snapshot refresh");
+  for (RenderSceneMeshRecord &record : snapshot.meshes) {
+    // Generic sync still visits retained meshes. Clear historical flags so a
+    // preceding transform or initial extraction does not repeat GPU setters.
+    record.mesh_dirty = false;
+    record.material_dirty = false;
+    record.transform_dirty = false;
+    record.texture_mapping_dirty = false;
+    record.binding_dirty = false;
+  }
+  for (RenderSceneLightRecord &record : snapshot.lights) {
+    record.light = *document.light(record.entity_id);
+    const std::uint64_t revision =
+        RenderSignatureBuilder::light_signature(record.light);
+    record.light_dirty = record.rebuild_revision != revision;
+    record.rebuild_revision = revision;
+    record.transform_dirty = false;
+  }
+  snapshot.frame_index = frame_index;
+  static_cast<RenderSourceStamp &>(snapshot) = current;
+  snapshot.light_property_revision = light_revision;
+  snapshot.dirty = {
+      .scene_changed = true,
+      .selection_changed = false,
+      .visibility_changed = false,
+      .local_visibility_changed = false,
+      .transforms_changed = false,
+      .texture_mappings_changed = false,
+      .mesh_bindings_changed = false,
+      .render_components_changed = true,
+      .assets_changed = false,
+      .project_materials_changed = false,
+  };
+  snapshot.reused_previous_records = true;
+  return true;
+}
+
 bool try_refresh_render_scene_snapshot_curve_publication(
     RenderSceneSnapshot &snapshot, const SceneDocument &document,
     const AssetRegistry &assets, std::uint64_t frame_index,
@@ -1269,6 +1364,7 @@ bool try_refresh_render_scene_snapshot_curve_publication(
   const std::uint64_t previous_scene_revision = snapshot.scene_revision;
   snapshot.frame_index = frame_index;
   static_cast<RenderSourceStamp &>(snapshot) = current;
+  snapshot.light_property_revision = document.light_property_revision();
   snapshot.dirty = {
       .scene_changed = previous_scene_revision != snapshot.scene_revision,
       .selection_changed = false,
@@ -1321,6 +1417,7 @@ bool try_refresh_render_scene_snapshot_selection(
 
   snapshot.frame_index = frame_index;
   static_cast<RenderSourceStamp &>(snapshot) = current;
+  snapshot.light_property_revision = document.light_property_revision();
   snapshot.dirty = {
       .scene_changed = previous_scene_revision != snapshot.scene_revision,
       .selection_changed =
@@ -1404,6 +1501,7 @@ bool try_refresh_render_scene_snapshot_transforms(
 
   snapshot.frame_index = frame_index;
   static_cast<RenderSourceStamp &>(snapshot) = current;
+  snapshot.light_property_revision = document.light_property_revision();
   snapshot.dirty = {
       .scene_changed = previous_scene_revision != snapshot.scene_revision,
       .selection_changed =

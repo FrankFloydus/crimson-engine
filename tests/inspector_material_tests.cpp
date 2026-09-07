@@ -7,25 +7,36 @@
 #include <gtest/gtest.h>
 
 #include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "ui/inspector_panel.hpp"
+#include "ui/qt_application_theme.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <QApplication>
+#include <QDoubleSpinBox>
 #include <QEvent>
 #include <QHeaderView>
 #include <QIcon>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPalette>
+#include <QPointer>
 #include <QPushButton>
+#include <QStyle>
 #include <QTreeWidget>
 
+#include <algorithm>
+#include <array>
+#include <chrono>
 #include <filesystem>
+#include <iostream>
+#include <numeric>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -68,6 +79,272 @@ QtMaterialPresentationItem material_item(QuaderMaterialReference reference,
       .available = true,
       .editable = editable,
   };
+}
+
+void process_inspector_events() {
+  QCoreApplication::processEvents();
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+/// Runs the real retained panel against a public-API selected-light scene.
+struct InspectorLightScenario {
+  SceneSession session;
+  QuaderEditorApi editor{
+      QuaderApiSessionInternalAccess::from_scene_session(session)};
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = inspector_localization();
+  UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+  InspectorPanel panel;
+
+  InspectorLightScenario() {
+    panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+    panel.resize(360, 780);
+    panel.show();
+  }
+
+  void refresh() {
+    panel.refresh(context);
+    process_inspector_events();
+  }
+
+  QDoubleSpinBox *range_field() {
+    return panel.findChild<QDoubleSpinBox *>(
+        QStringLiteral("inspector.light.range"));
+  }
+};
+
+TEST(InspectorMaterialTests, DISABLED_PointLightRangeRefreshPerformance) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-light-performance";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  apply_qt_obsidian_application_theme(
+      QApplication::style()->standardPalette());
+  application.setQuitOnLastWindowClosed(false);
+
+  InspectorLightScenario scenario;
+  QuaderCreatePointLightArgs args;
+  args.light.range = 2.0f;
+  args.select_created = true;
+  const auto created = scenario.editor.scene().create_point_light(args);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  scenario.refresh();
+
+  constexpr int kWarmupSamples = 12;
+  constexpr int kMeasuredSamples = 120;
+  std::uint64_t material_revision = 0;
+  for (const bool full_rebuild : {true, false}) {
+    const auto edit = scenario.editor.scene().begin_point_light_range_edit(
+        created.value().id);
+    ASSERT_TRUE(edit.ok()) << edit.error_message();
+    std::array<double, kMeasuredSamples> samples{};
+    for (int index = 0; index < kWarmupSamples + kMeasuredSamples; ++index) {
+      const auto update = scenario.editor.scene().update_point_light_range_edit(
+          edit.value(), 2.0f + static_cast<float>(index + 1) * 0.025f);
+      ASSERT_TRUE(update.ok()) << update.error_message();
+      if (full_rebuild) {
+        // Existing owner invalidation exercises the original full rebuild in
+        // this same executable without adding a production benchmark switch.
+        scenario.panel.set_material_presentation(
+            {.revision = ++material_revision});
+      }
+      const auto start = std::chrono::steady_clock::now();
+      scenario.refresh();
+      const double elapsed_ms =
+          std::chrono::duration<double, std::milli>(
+              std::chrono::steady_clock::now() - start)
+              .count();
+      if (index >= kWarmupSamples) {
+        samples[static_cast<std::size_t>(index - kWarmupSamples)] = elapsed_ms;
+      }
+    }
+    ASSERT_TRUE(scenario.editor.scene()
+                    .finish_point_light_range_edit(edit.value(), true)
+                    .ok());
+    scenario.refresh();
+    const double mean_ms =
+        std::accumulate(samples.begin(), samples.end(), 0.0) / samples.size();
+    std::sort(samples.begin(), samples.end());
+    std::cout << "Inspector point-light radius "
+              << (full_rebuild ? "full-rebuild" : "normal-refresh")
+              << ": samples=" << samples.size() << " mean_ms=" << mean_ms
+              << " p95_ms=" << samples[samples.size() * 95 / 100] << '\n';
+  }
+}
+
+TEST(InspectorMaterialTests,
+     RetainsLightRangeFieldDuringPreviewCancelAndHistory) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-light-range-retained";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  InspectorLightScenario scenario;
+  QuaderCreatePointLightArgs args;
+  args.light.range = 2.0f;
+  args.select_created = true;
+  const auto created = scenario.editor.scene().create_point_light(args);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  scenario.refresh();
+  QPointer<QDoubleSpinBox> field = scenario.range_field();
+  ASSERT_NE(field, nullptr);
+  int value_change_signals = 0;
+  QObject::connect(field.data(), &QDoubleSpinBox::valueChanged,
+                   [&value_change_signals](double) { ++value_change_signals; });
+
+  const auto edit = scenario.editor.scene().begin_point_light_range_edit(
+      created.value().id);
+  ASSERT_TRUE(edit.ok()) << edit.error_message();
+  for (const float range : {3.125f, 0.001f, 125.125f}) {
+    ASSERT_TRUE(scenario.editor.scene()
+                    .update_point_light_range_edit(edit.value(), range)
+                    .ok());
+    scenario.refresh();
+    ASSERT_NE(field, nullptr)
+        << "radius samples must retain the existing property widgets";
+    EXPECT_EQ(scenario.range_field(), field.data());
+    EXPECT_NEAR(field->value(), range, 0.00005);
+  }
+  ASSERT_TRUE(scenario.editor.scene()
+                  .finish_point_light_range_edit(edit.value(), true)
+                  .ok());
+  scenario.refresh();
+  ASSERT_NE(field, nullptr);
+  EXPECT_DOUBLE_EQ(field->value(), 2.0);
+
+  const auto committed = scenario.editor.scene().begin_point_light_range_edit(
+      created.value().id);
+  ASSERT_TRUE(committed.ok());
+  ASSERT_TRUE(scenario.editor.scene()
+                  .update_point_light_range_edit(committed.value(), 4.5f)
+                  .ok());
+  scenario.refresh();
+  ASSERT_TRUE(scenario.editor.scene()
+                  .finish_point_light_range_edit(committed.value())
+                  .ok());
+  scenario.refresh();
+  ASSERT_NE(field, nullptr);
+  EXPECT_DOUBLE_EQ(field->value(), 4.5);
+  ASSERT_TRUE(scenario.editor.history().undo().ok());
+  scenario.refresh();
+  ASSERT_NE(field, nullptr);
+  EXPECT_DOUBLE_EQ(field->value(), 2.0);
+  ASSERT_TRUE(scenario.editor.history().redo().ok());
+  scenario.refresh();
+  ASSERT_NE(field, nullptr);
+  EXPECT_DOUBLE_EQ(field->value(), 4.5);
+  EXPECT_EQ(value_change_signals, 0)
+      << "owner refreshes must not emit Inspector mutations";
+
+  scenario.refresh();
+  EXPECT_EQ(scenario.range_field(), field.data());
+}
+
+TEST(InspectorMaterialTests,
+     LightRangeRetentionInvalidatesOtherPropertiesSelectionAndLocale) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-light-range-invalidation";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  InspectorLightScenario scenario;
+  QuaderCreatePointLightArgs args;
+  args.light.range = 2.0f;
+  args.select_created = true;
+  const auto created = scenario.editor.scene().create_point_light(args);
+  ASSERT_TRUE(created.ok());
+  scenario.refresh();
+  ASSERT_NE(scenario.range_field(), nullptr);
+
+  // A range sample coalesced with another scene edit must not mask that edit.
+  const auto edit = scenario.editor.scene().begin_point_light_range_edit(
+      created.value().id);
+  ASSERT_TRUE(edit.ok());
+  ASSERT_TRUE(scenario.editor.scene()
+                  .update_point_light_range_edit(edit.value(), 3.0f)
+                  .ok());
+  ASSERT_TRUE(scenario.editor.scene().rename(created.value().id, "Renamed Light")
+                  .ok());
+  scenario.refresh();
+  ASSERT_NE(scenario.range_field(), nullptr);
+  EXPECT_DOUBLE_EQ(scenario.range_field()->value(), 3.0);
+  auto *name = scenario.panel.findChild<QLineEdit *>(
+      QStringLiteral("inspector.general.name"));
+  ASSERT_NE(name, nullptr);
+  EXPECT_EQ(name->text(), QStringLiteral("Renamed Light"));
+  ASSERT_TRUE(scenario.editor.scene()
+                  .finish_point_light_range_edit(edit.value(), true)
+                  .ok());
+  scenario.refresh();
+
+  ASSERT_NE(scenario.range_field(), nullptr);
+  EXPECT_DOUBLE_EQ(scenario.range_field()->value(), 2.0);
+  auto light = to_api_light_component(
+      *scenario.session.scene().light(created.value().id));
+  light.intensity = 3.0f;
+  ASSERT_TRUE(scenario.editor.scene()
+                  .set_light_component(created.value().id, light)
+                  .ok());
+  scenario.refresh();
+  auto *intensity = scenario.panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("inspector.light.intensity"));
+  ASSERT_NE(intensity, nullptr);
+  EXPECT_DOUBLE_EQ(intensity->value(), 3.0);
+
+  light.type = QuaderLightType::Directional;
+  ASSERT_TRUE(scenario.editor.scene()
+                  .set_light_component(created.value().id, light)
+                  .ok());
+  scenario.refresh();
+  EXPECT_EQ(scenario.range_field(), nullptr);
+  light.type = QuaderLightType::Point;
+  ASSERT_TRUE(scenario.editor.scene()
+                  .set_light_component(created.value().id, light)
+                  .ok());
+  scenario.refresh();
+  ASSERT_NE(scenario.range_field(), nullptr);
+  EXPECT_DOUBLE_EQ(scenario.range_field()->value(), 2.0);
+
+  ASSERT_TRUE(scenario.localization.select_locale("it-IT"));
+  scenario.refresh();
+  auto *tree = scenario.panel.findChild<QTreeWidget *>(
+      QStringLiteral("inspector.tree"));
+  ASSERT_NE(tree, nullptr);
+  EXPECT_EQ(tree->headerItem()->text(0),
+            QString::fromStdString(std::string(scenario.localization.text(
+                "ui.inspector.property", "Property"))));
+
+  scenario.panel.set_material_presentation(
+      {.revision = 1u, .section_visible = true});
+  scenario.refresh();
+  EXPECT_NE(find_top_level_item(*tree, QStringLiteral("material")), nullptr);
+
+  args.light.range = 8.0f;
+  const auto second = scenario.editor.scene().create_point_light(args);
+  ASSERT_TRUE(second.ok());
+  scenario.refresh();
+  ASSERT_NE(scenario.range_field(), nullptr);
+  EXPECT_DOUBLE_EQ(scenario.range_field()->value(), 8.0);
+
+  scenario.panel.abandon_runtime();
+  scenario.refresh();
+  ASSERT_NE(scenario.range_field(), nullptr);
+  EXPECT_DOUBLE_EQ(scenario.range_field()->value(), 8.0);
 }
 
 TEST(InspectorMaterialTests, AppliesInterfaceScaleToRetainedTreeMetrics) {

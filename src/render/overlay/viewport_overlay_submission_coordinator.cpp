@@ -219,6 +219,7 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
   if (request.viewport_index >= panes_.size()) {
     return result;
   }
+  PaneState &pane = panes_[request.viewport_index];
   const CurveToolPreviewState empty_curve_preview;
   const CurveToolPreviewState &curve_preview =
       request.curve_preview != nullptr ? *request.curve_preview
@@ -270,8 +271,49 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
       .wireframe_pane = request.wireframe_pane,
       .point_light_gizmos_visible = request.point_light_gizmos_visible,
   };
+  const bool point_light_radius_enabled =
+      request.overlays_visible && request.point_light_gizmos_visible &&
+      request.scene_overlay_requested && request.scene_overlay_snapshot != nullptr;
+  const ViewportOverlaySceneSubmissionStamp point_light_source =
+      scene_submission_stamp(request.scene_overlay_snapshot,
+                             point_light_radius_enabled);
+  if (!pane.point_light_source_valid ||
+      pane.point_light_source != point_light_source ||
+      pane.point_light_radius_enabled != point_light_radius_enabled) {
+    // Select the small camera-dependent source only when scene owners publish.
+    // Camera navigation and idle frames never scan the complete light catalog.
+    pane.selected_point_lights.clear();
+    if (point_light_radius_enabled) {
+      for (const RenderOverlayLightMarkerSnapshot &light :
+           request.scene_overlay_snapshot->point_light_gizmos) {
+        if (light.selected) pane.selected_point_lights.push_back(light);
+      }
+      ++work_counters_.point_light_radius_source_refresh_count;
+    }
+    pane.point_light_source = point_light_source;
+    pane.point_light_source_valid = true;
+    pane.point_light_radius_enabled = point_light_radius_enabled;
+  }
+  ViewportOverlayPointLightRadiusSubmissionStamp point_light_radius;
+  if (!pane.selected_point_lights.empty()) {
+    point_light_radius = {
+        .scene = point_light_source,
+        .camera_values = {request.camera.eye.x, request.camera.eye.y,
+                          request.camera.eye.z, request.camera.right.x,
+                          request.camera.right.y, request.camera.right.z,
+                          request.camera.forward.x, request.camera.forward.y,
+                          request.camera.forward.z, request.camera.viewport_size.x,
+                          request.camera.viewport_size.y, request.camera.orthographic_size,
+                          request.camera.fov_degrees, request.camera.near_plane,
+                          request.camera.far_plane},
+        .projection = request.camera.projection,
+        .raster_scale = request.raster_scale,
+        .active = true,
+    };
+  }
   const ViewportOverlayDynamicSubmissionStamp dynamic_stamp{
       .mesh_outline_revision = mesh_outline_source_.revision(request.viewport_index),
+      .point_light_radius = point_light_radius,
       .dynamic_tools = request.dynamic_tool_source,
       .volatile_modeling =
           request.overlays_visible
@@ -290,7 +332,6 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
       .projection = request.camera.projection,
   };
 
-  PaneState &pane = panes_[request.viewport_index];
   bool persistent_changed =
       !pane.persistent_valid || pane.persistent != persistent_stamp;
   const bool dynamic_source_changed =
@@ -366,9 +407,21 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
   }
 
   if (dynamic_changed) {
+    if (!pane.dynamic_valid ||
+        pane.dynamic.point_light_radius != point_light_radius) {
+      if (point_light_radius.active) {
+        pane.point_light_radius_frame =
+            ViewportSceneOverlayBuilder::build_point_light_radius_frame(
+                pane.selected_point_lights, request.camera, request.raster_scale);
+        ++work_counters_.point_light_radius_camera_build_count;
+      } else {
+        pane.point_light_radius_frame = {};
+      }
+    }
     // Copy broad semantic sources only after typed source stamps differ or the
     // backend reports a lost retained stream.
     ViewportOverlayFrame dynamic_frame = pane.dynamic_source_frame;
+    append_overlay_frame(dynamic_frame, pane.point_light_radius_frame);
     if (uses_mesh_outlines(request)) strip_mesh_selection_wires(dynamic_frame);
     append_overlay_frame(dynamic_frame, mesh_outline);
     const ViewportOverlayFrame &curve_overlay_frame =

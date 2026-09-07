@@ -48,6 +48,7 @@ bool QuaderApiMutationRunner::belongs_to_active_scene(
 
 bool QuaderApiMutationRunner::can_mutate_modeling_content() const {
   return available() &&
+         !scene_session().document_commands().point_light_range_edit_active() &&
          !scene_session().native_tools().blocks_modeling_content_mutation();
 }
 
@@ -406,6 +407,9 @@ bool QuaderApiMutationRunner::can_undo() const {
     return false;
   }
   SceneSession &session = scene_session();
+  if (session.document_commands().point_light_range_edit_active()) {
+    return true;
+  }
   if (const auto local_history = session.native_tools().active_history_state()) {
     return local_history->can_undo;
   }
@@ -423,6 +427,9 @@ bool QuaderApiMutationRunner::can_redo() const {
     return false;
   }
   SceneSession &session = scene_session();
+  if (session.document_commands().point_light_range_edit_active()) {
+    return false;
+  }
   if (const auto local_history = session.native_tools().active_history_state()) {
     return local_history->can_redo;
   }
@@ -440,6 +447,11 @@ QuaderApiVoidResult QuaderApiMutationRunner::undo() {
     return quader_api_failure_status(scene_session(), "No scene is active.");
   }
   SceneSession &session = scene_session();
+  if (session.document_commands().point_light_range_edit_active()) {
+    return status_from(
+        session.document_commands().cancel_active_point_light_range_edit(),
+        QuaderMutationKind::Document, "Undo");
+  }
   if (session.native_tools().active_history_state()) {
     return status_from(session.native_tools().undo_active(),
                        QuaderMutationKind::Runtime, "Undo");
@@ -465,6 +477,10 @@ QuaderApiVoidResult QuaderApiMutationRunner::redo() {
     return quader_api_failure_status(scene_session(), "No scene is active.");
   }
   SceneSession &session = scene_session();
+  if (session.document_commands().point_light_range_edit_active()) {
+    return status_from(command_invalid_result("Redo is not available"),
+                       QuaderMutationKind::Document, "Redo");
+  }
   if (session.native_tools().active_history_state()) {
     return status_from(session.native_tools().redo_active(),
                        QuaderMutationKind::Runtime, "Redo");

@@ -28,6 +28,7 @@ using Json = nlohmann::ordered_json;
 
 constexpr std::size_t kMaximumMaterialNameBytes = 256u;
 constexpr std::size_t kMaximumPortablePathBytes = 32'768u;
+constexpr std::uint32_t kQuaderNamedImageMaterialVersion = 3u;
 
 ProjectIoResult<ProjectMaterialDocument> malformed(std::string message) {
   return ProjectIoResult<ProjectMaterialDocument>::failure(
@@ -229,6 +230,36 @@ validate_document(const ProjectMaterialDocument &material) {
   return validate_standard_material(*material.standard_material());
 }
 
+ProjectIoResult<StandardMaterialTextureTransform>
+decode_texture_transform(const Json &transform) {
+  if (!transform.is_object() || !transform.contains("center") ||
+      !transform["center"].is_array() || transform["center"].size() != 2u ||
+      !transform.contains("scale") || !transform["scale"].is_array() ||
+      transform["scale"].size() != 2u || !transform.contains("offset") ||
+      !transform["offset"].is_array() || transform["offset"].size() != 2u ||
+      !transform.contains("rotationDegrees") ||
+      !transform["rotationDegrees"].is_number()) {
+    return ProjectIoResult<StandardMaterialTextureTransform>::failure(
+        ProjectIoErrorCode::MaterialMalformed,
+        "QMAT Standard texture transform is malformed.");
+  }
+  StandardMaterialTextureTransform result;
+  for (std::size_t index = 0u; index < 2u; ++index) {
+    if (!transform["center"][index].is_number() ||
+        !transform["scale"][index].is_number() ||
+        !transform["offset"][index].is_number()) {
+      return ProjectIoResult<StandardMaterialTextureTransform>::failure(
+          ProjectIoErrorCode::MaterialMalformed,
+          "QMAT Standard texture transform vectors must contain numbers.");
+    }
+    result.center[index] = transform["center"][index].get<float>();
+    result.scale[index] = transform["scale"][index].get<float>();
+    result.offset[index] = transform["offset"][index].get<float>();
+  }
+  result.rotation_degrees = transform["rotationDegrees"].get<float>();
+  return ProjectIoResult<StandardMaterialTextureTransform>::success(result);
+}
+
 ProjectIoResult<ProjectMaterialDocument> decode_standard(
     const Json &root, const Json &payload, std::uint32_t source_version) {
   if (!root.contains("id") || !root["id"].is_string() ||
@@ -287,36 +318,9 @@ ProjectIoResult<ProjectMaterialDocument> decode_standard(
     standard.normal_convention = *convention;
 
     if (payload.contains("textureTransform")) {
-      const Json &transform = payload["textureTransform"];
-      if (!transform.is_object() || !transform.contains("center") ||
-          !transform["center"].is_array() ||
-          transform["center"].size() != 2u ||
-          !transform.contains("scale") ||
-          !transform["scale"].is_array() ||
-          transform["scale"].size() != 2u ||
-          !transform.contains("offset") ||
-          !transform["offset"].is_array() ||
-          transform["offset"].size() != 2u ||
-          !transform.contains("rotationDegrees") ||
-          !transform["rotationDegrees"].is_number()) {
-        return malformed("QMAT Standard texture transform is malformed.");
-      }
-      for (std::size_t index = 0u; index < 2u; ++index) {
-        if (!transform["center"][index].is_number() ||
-            !transform["scale"][index].is_number() ||
-            !transform["offset"][index].is_number()) {
-          return malformed(
-              "QMAT Standard texture transform vectors must contain numbers.");
-        }
-        standard.texture_transform.center[index] =
-            transform["center"][index].get<float>();
-        standard.texture_transform.scale[index] =
-            transform["scale"][index].get<float>();
-        standard.texture_transform.offset[index] =
-            transform["offset"][index].get<float>();
-      }
-      standard.texture_transform.rotation_degrees =
-          transform["rotationDegrees"].get<float>();
+      auto transform = decode_texture_transform(payload["textureTransform"]);
+      if (!transform.ok()) return malformed(transform.error().message);
+      standard.texture_transform = transform.take_value();
     }
   }
 
@@ -374,6 +378,50 @@ ProjectIoResult<ProjectMaterialDocument> decode_standard(
   }
   return ProjectIoResult<ProjectMaterialDocument>::success(
       std::move(material));
+}
+
+ProjectIoResult<ProjectMaterialDocument> decode_named_image(const Json &root) {
+  // The experimental named-image format has no PBR parameters. Only accept its
+  // exact schema so importing it never silently drops an unknown authored field.
+  if (root.size() != 6u || !root.contains("id") || !root["id"].is_string() ||
+      !root.contains("name") || !root["name"].is_string() ||
+      !root.contains("texture") || !root["texture"].is_object() ||
+      root["texture"].size() != 3u || !root.contains("textureTransform") ||
+      !root["textureTransform"].is_object() ||
+      root["textureTransform"].size() != 4u) {
+    return malformed("QMAT v3 named-image fields are malformed or unsupported.");
+  }
+  const auto id = ProjectAssetId::parse(root["id"].get<std::string>());
+  if (!id) {
+    return ProjectIoResult<ProjectMaterialDocument>::failure(
+        ProjectIoErrorCode::InvalidUuid, "QMAT material UUID is invalid.");
+  }
+  auto texture = decode_texture_slot(root["texture"], "Albedo");
+  if (!texture.ok()) {
+    return ProjectIoResult<ProjectMaterialDocument>::failure(
+        texture.error().code, texture.error().message, texture.error().path);
+  }
+  if (texture.value().color_space != ProjectTextureColorSpace::Srgb) {
+    return ProjectIoResult<ProjectMaterialDocument>::failure(
+        ProjectIoErrorCode::UnsupportedFormat,
+        "QMAT v3 linear textures cannot be mapped to a Standard Material albedo.");
+  }
+  auto transform = decode_texture_transform(root["textureTransform"]);
+  if (!transform.ok()) return malformed(transform.error().message);
+
+  ProjectStandardMaterialDefinition standard;
+  standard.base_color_texture = texture.take_value();
+  standard.texture_transform = transform.take_value();
+  ProjectMaterialDocument material{
+      .id = *id, .name = root["name"].get<std::string>(),
+      .payload = std::move(standard),
+  };
+  const auto validated = validate_document(material);
+  if (!validated.ok()) {
+    return ProjectIoResult<ProjectMaterialDocument>::failure(
+        validated.error().code, validated.error().message, validated.error().path);
+  }
+  return ProjectIoResult<ProjectMaterialDocument>::success(std::move(material));
 }
 
 std::uint64_t content_hash(std::string_view bytes) {
@@ -448,6 +496,9 @@ QmatCodec::decode(std::string_view text) {
     const std::uint64_t source_version = root["version"].get<std::uint64_t>();
     if (source_version == kQuaderMaterialLegacyVersion) {
       return decode_standard(root, root, kQuaderMaterialLegacyVersion);
+    }
+    if (source_version == kQuaderNamedImageMaterialVersion) {
+      return decode_named_image(root);
     }
     if (source_version != kQuaderMaterialVersion) {
       return ProjectIoResult<ProjectMaterialDocument>::failure(

@@ -729,11 +729,18 @@ CommandResult SceneStructuralLifecycleService::destroy_hierarchy(
   if (!normalized.status.ok) {
     return normalized.status;
   }
+  const CommandResult range_cancel =
+      document_commands_.cancel_active_point_light_range_edit();
+  if (!range_cancel.ok) {
+    return range_cancel;
+  }
   if (label.empty()) {
     label = "Destroy Entities";
   }
-  return history_.execute(modeling_.create_destroy_entities_command(
+  CommandResult destroyed = history_.execute(modeling_.create_destroy_entities_command(
       std::move(normalized.roots), std::move(label)));
+  destroyed.changed = destroyed.changed || range_cancel.changed;
+  return destroyed;
 }
 
 } // namespace quader

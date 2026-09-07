@@ -10,6 +10,7 @@
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
 #include "editor/viewport/transform_gizmo_interaction.hpp"
+#include "editor/viewport/point_light_range_interaction.hpp"
 #include "editor/viewport/viewport_selection_interaction.hpp"
 #include "viewport/viewport_pointer_gesture.hpp"
 
@@ -99,6 +100,9 @@ public:
                      NativeViewportToolCoordinator &native_tools);
   [[nodiscard]] bool dragging() const;
   [[nodiscard]] bool transform_gizmo_pointer_active() const;
+  [[nodiscard]] bool point_light_range_pointer_active() const {
+    return point_light_range_.pointer_active();
+  }
   [[nodiscard]] bool primitive_creation_pointer_active() const {
     return tool_runtime_.primitive_creation_interaction().active() >= 0;
   }
@@ -219,6 +223,7 @@ private:
 
   ViewportToolRuntime tool_runtime_;
   TransformGizmoInteraction transform_gizmo_;
+  PointLightRangeInteraction point_light_range_;
   ViewportSelectionInteraction selection_;
   std::optional<PendingApplyActiveMaterial> pending_apply_active_material_;
   // Ownership only: transfer happens on the semantic trigger, never while held.

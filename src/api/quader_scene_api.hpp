@@ -159,6 +159,11 @@ public:
     QuaderApiVoidResult
     set_light_component(EntityId entity, QuaderLightComponent light,
                         QuaderSceneEditOptions options = {});
+    /// Starts a live point-light range gesture, pinned to the current scene.
+    QuaderApiResult<QuaderEntityRef> begin_point_light_range_edit(EntityId entity);
+    QuaderApiVoidResult update_point_light_range_edit(QuaderEntityRef light, float range);
+    /// Cancel restores the original range; commit adds one undo step if changed.
+    QuaderApiVoidResult finish_point_light_range_edit(QuaderEntityRef light, bool cancel = false);
     QuaderApiVoidResult set_scene_settings(EntityId entity,
                                            QuaderSceneSettings settings,
                                            QuaderSceneEditOptions options = {});

@@ -852,6 +852,7 @@ add_library(quader_editor_viewport STATIC
     src/editor/viewport/viewport_scene_projection.cpp
     src/editor/viewport/viewport_tool_overlay_projection.cpp
     src/editor/viewport/transform_gizmo_interaction.cpp
+    src/editor/viewport/point_light_range_interaction.cpp
     src/editor/viewport/viewport_interaction_controller.cpp
     src/editor/viewport/viewport_selection_interaction.cpp
     src/editor/viewport/viewport_curve_picking.cpp
@@ -1522,6 +1523,7 @@ if(QUADER_BUILD_TESTS)
         tests/modeling_legacy_local_frame_upgrade_tests.cpp
         tests/modeling_tool_catalog_tests.cpp
         tests/render_extraction_tests.cpp
+        tests/light_renderable_cache_tests.cpp
         tests/render_source_stamp_tests.cpp
         tests/tool_preview_submission_tests.cpp
         tests/scene_mesh_occurrence_projection_tests.cpp

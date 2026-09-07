@@ -10,6 +10,7 @@
 #include "render/viewport_overlay_frame.hpp"
 
 #include <cstdint>
+#include <span>
 
 namespace quader {
 
@@ -37,6 +38,10 @@ public:
       ViewportOverlayFrame base_frame,
       RenderOverlaySelectionMode selection_mode,
       const RenderOverlaySceneWireframeSnapshot &snapshot);
+  /// Builds only the camera-facing circle and fixed-pixel radius handle.
+  [[nodiscard]] static ViewportOverlayFrame build_point_light_radius_frame(
+      std::span<const RenderOverlayLightMarkerSnapshot> selected_lights,
+      const ViewportOverlayCamera &camera, float raster_scale = 1.0f);
   [[nodiscard]] static ViewportOverlayFrame
   strip_persistent_object_selection_fills(
       ViewportOverlayFrame frame, RenderOverlaySelectionMode selection_mode);

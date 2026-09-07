@@ -9,6 +9,7 @@
 #include "core/qstr.hpp"
 #include "core/user_config_paths.hpp"
 #include "editor/array/path_array_tool_service.hpp"
+#include "editor/commands/document_command_service.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
 #include "editor/session/project_autosave_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -1726,6 +1727,11 @@ ProjectSessionResult ProjectSession::persist_prepared_manifest(
 bool ProjectSession::cancel_transient_state(OpenSceneSession &scene) {
   if (!scene.session) {
     return true;
+  }
+  const CommandResult light_range =
+      scene.session->document_commands().cancel_active_point_light_range_edit();
+  if (!light_range.ok) {
+    return false;
   }
   const CommandResult native =
       scene.session->native_tools().cancel_competing_state_for_tool_activation();

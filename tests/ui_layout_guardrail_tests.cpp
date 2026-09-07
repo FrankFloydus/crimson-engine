@@ -4271,6 +4271,10 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel, "!suppress_hover_work && active_viewport_settings()");
   expect_contains(panel, "point_light_pick_cache_valid_");
   expect_contains(panel, "point_light_pick_cached_scene_revision_");
+  const std::size_t light_selection_gate = panel.find(
+      "point_light_pick_cached_selection_revision_ != selection_revision");
+  ASSERT_NE(light_selection_gate, std::string::npos);
+  EXPECT_LT(light_selection_gate, billboard_candidates);
   expect_contains(panel,
                   "point_light_pick_cached_local_visibility_revision_");
   expect_contains(panel,

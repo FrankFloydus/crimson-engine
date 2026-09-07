@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
+#include "render/overlay/overlay_camera_projector.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
@@ -14,6 +15,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <array>
@@ -24,6 +26,22 @@
 
 namespace quader {
 namespace {
+
+float circular_handle_width_pixels(const ViewportOverlayFrame &frame,
+                                   const ViewportOverlayCamera &camera) {
+  const OverlayCameraProjector projector(camera);
+  float min_x = std::numeric_limits<float>::max();
+  float max_x = std::numeric_limits<float>::lowest();
+  for (const auto &triangle : frame.triangles) {
+    if (triangle.source != ViewportOverlaySource::Gizmo) continue;
+    for (const QVec3 vertex : {triangle.a, triangle.b, triangle.c}) {
+      const auto projected = projector.project(projector.view_point_for(vertex));
+      min_x = std::min(min_x, projected.pixel.x);
+      max_x = std::max(max_x, projected.pixel.x);
+    }
+  }
+  return max_x - min_x;
+}
 
 ViewportOverlayLine test_line(ViewportOverlaySource source,
                               float offset = 0.0f) {
@@ -208,6 +226,174 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   EXPECT_FLOAT_EQ(target.last_camera.eye.y, 8.0f);
   EXPECT_FLOAT_EQ(target.last_camera.eye.z, 7.0f);
   EXPECT_EQ(selection_provider.build_count, 1);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     SelectedPointLightRadiusReusesSceneGeometryAndBroadSourcesDuringNavigation) {
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const ViewportSettings settings = ViewportSettings::defaults();
+  StaticSelectionFrameProvider selection_provider{ViewportOverlayFrame{}};
+  RenderOverlaySelectionSnapshot scene;
+  scene.scene_revision = 1u;
+  scene.point_light_gizmos.push_back({
+      .entity = 17u, .type = LightType::Point, .radius = 5.0f,
+      .selected = true, .radius_editable = true});
+  for (std::size_t index = 0u; index < 128u; ++index) {
+    scene.point_light_gizmos.push_back({
+        .entity = static_cast<EntityId>(100u + index), .type = LightType::Point});
+  }
+  ViewportOverlayFrame volatile_modeling;
+  for (std::size_t index = 0u; index < 8192u; ++index) {
+    volatile_modeling.lines.push_back(
+        test_line(ViewportOverlaySource::Tool, static_cast<float>(index)));
+  }
+  CurveToolPreviewState curve;
+  auto request = submission_request(selection_provider, scene, volatile_modeling, curve);
+  request.point_light_gizmos_visible = true;
+  request.camera.eye = {10.0f, 0.0f, 10.0f};
+  request.camera.viewport_size = {800.0f, 600.0f};
+  const auto initial = coordinator.submit(request, settings, target);
+  ASSERT_EQ(target.persistent_frame.lines.size(), 360u);
+  ASSERT_EQ(target.persistent_frame.icons.size(), 129u);
+  ASSERT_EQ(target.dynamic_frame.lines.size(), 8192u + 120u);
+  ASSERT_EQ(target.dynamic_frame.triangles.size(), 96u);
+  ASSERT_EQ(target.dynamic_frame.points.size(), 1u);
+  EXPECT_FLOAT_EQ(target.dynamic_frame.triangles.front().a.x, 5.0f);
+  EXPECT_NEAR(circular_handle_width_pixels(target.dynamic_frame, request.camera),
+              12.0f, 0.001f);
+  EXPECT_EQ(initial.edge_hud_frame->lines.size(), 8192u);
+  EXPECT_EQ(initial.edge_hud_frame->points.size(), 1u);
+  const auto initial_work = coordinator.work_counters();
+  EXPECT_EQ(initial_work.point_light_radius_source_refresh_count, 1u);
+  EXPECT_EQ(initial_work.point_light_radius_camera_build_count, 1u);
+
+  for (int frame = 0; frame < 3; ++frame) {
+    const auto idle = coordinator.submit(request, settings, target);
+    EXPECT_TRUE(idle.camera_only);
+    EXPECT_EQ(idle.dynamic_source_signature, initial.dynamic_source_signature);
+  }
+  request.camera.right = {0.0f, 0.0f, -1.0f};
+  request.camera.forward = {-1.0f, 0.0f, 0.0f};
+  const auto rotated = coordinator.submit(request, settings, target);
+  EXPECT_FALSE(rotated.persistent_submitted);
+  EXPECT_TRUE(rotated.dynamic_submitted);
+  EXPECT_EQ(rotated.dynamic_source_signature, initial.dynamic_source_signature);
+  ASSERT_EQ(target.dynamic_frame.triangles.size(), 96u);
+  ASSERT_EQ(target.dynamic_frame.points.size(), 1u);
+  EXPECT_FLOAT_EQ(target.dynamic_frame.triangles.front().a.x, 0.0f);
+  EXPECT_FLOAT_EQ(target.dynamic_frame.triangles.front().a.z, -5.0f);
+  EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+  const auto rotated_work = coordinator.work_counters();
+  EXPECT_EQ(rotated_work.point_light_radius_source_refresh_count, 1u);
+  EXPECT_EQ(rotated_work.point_light_radius_camera_build_count, 2u);
+  EXPECT_EQ(rotated_work.dynamic_source_compose_count,
+            initial_work.dynamic_source_compose_count);
+  EXPECT_EQ(rotated_work.dynamic_source_composed_record_count,
+            initial_work.dynamic_source_composed_record_count);
+  EXPECT_EQ(rotated_work.dynamic_source_hash_count, 0u);
+  EXPECT_EQ(target.persistent_submit_count, 1);
+
+  request.raster_scale = 2.0f;
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+  EXPECT_NEAR(circular_handle_width_pixels(target.dynamic_frame, request.camera),
+              24.0f, 0.001f);
+  const auto radius_line = std::find_if(target.dynamic_frame.lines.begin(),
+                                        target.dynamic_frame.lines.end(),
+      [](const auto &line) { return line.source == ViewportOverlaySource::Gizmo; });
+  ASSERT_NE(radius_line, target.dynamic_frame.lines.end());
+  EXPECT_FLOAT_EQ(radius_line->width_pixels, 2.0f);
+  EXPECT_EQ(coordinator.work_counters().point_light_radius_camera_build_count, 3u);
+
+  const auto scaled_work = coordinator.work_counters();
+  for (int change = 0; change < 4; ++change) {
+    if (change == 0) request.camera.eye.x = 20.0f;
+    if (change == 1) request.camera.fov_degrees = 35.0f;
+    if (change == 2) request.camera.viewport_size.y = 900.0f;
+    if (change == 3) {
+      request.camera.projection = ViewportOverlayProjection::Orthographic;
+      request.camera.orthographic_size = 18.0f;
+    }
+    const auto projected = coordinator.submit(request, settings, target);
+    EXPECT_TRUE(projected.dynamic_submitted);
+    EXPECT_NEAR(circular_handle_width_pixels(target.dynamic_frame, request.camera),
+                24.0f, 0.001f);
+    EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+  }
+  EXPECT_EQ(coordinator.work_counters().point_light_radius_camera_build_count, 7u);
+  EXPECT_EQ(coordinator.work_counters().point_light_radius_source_refresh_count,
+            scaled_work.point_light_radius_source_refresh_count);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            scaled_work.dynamic_source_compose_count);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     PointLightRadiusUpdatesRangeTransformSelectionAndVisibility) {
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const ViewportSettings settings = ViewportSettings::defaults();
+  StaticSelectionFrameProvider selection_provider{ViewportOverlayFrame{}};
+  RenderOverlaySelectionSnapshot scene;
+  scene.scene_revision = 1u;
+  scene.point_light_gizmos.push_back({
+      .entity = 17u, .type = LightType::Point, .radius = 5.0f,
+      .selected = true, .radius_editable = true});
+  ViewportOverlayFrame volatile_modeling;
+  CurveToolPreviewState curve;
+  auto request = submission_request(selection_provider, scene, volatile_modeling, curve);
+  request.point_light_gizmos_visible = true;
+  request.camera.eye = {0.0f, 0.0f, 10.0f};
+  request.camera.viewport_size = {800.0f, 600.0f};
+  (void)coordinator.submit(request, settings, target);
+  scene.point_light_gizmos.front().radius = 8.0f;
+  ++scene.render_component_revision;
+  ++scene.scene_revision;
+  const auto resized = coordinator.submit(request, settings, target);
+  EXPECT_TRUE(resized.persistent_submitted);
+  EXPECT_TRUE(resized.dynamic_submitted);
+  EXPECT_FLOAT_EQ(target.persistent_frame.lines.front().start.x, 8.0f);
+  ASSERT_EQ(target.dynamic_frame.triangles.size(), 96u);
+  EXPECT_FLOAT_EQ(target.dynamic_frame.triangles.front().a.x, 8.0f);
+
+  scene.point_light_gizmos.front().world_transform.values[12] = 3.0f;
+  ++scene.transform_revision;
+  const auto moved = coordinator.submit(request, settings, target);
+  EXPECT_TRUE(moved.persistent_submitted);
+  EXPECT_TRUE(moved.dynamic_submitted);
+  EXPECT_EQ(moved.dynamic_source_signature, resized.dynamic_source_signature);
+  ASSERT_EQ(target.dynamic_frame.triangles.size(), 96u);
+  EXPECT_FLOAT_EQ(target.dynamic_frame.triangles.front().a.x, 11.0f);
+
+  scene.point_light_gizmos.front().radius_editable = false;
+  ++scene.scene_revision;
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+  EXPECT_EQ(target.dynamic_frame.lines.size(), 120u);
+  EXPECT_EQ(target.dynamic_frame.points.size(), 1u);
+  EXPECT_TRUE(target.dynamic_frame.triangles.empty());
+
+  for (bool overlays_visible : {false, true}) {
+    request.overlays_visible = overlays_visible;
+    request.point_light_gizmos_visible = !overlays_visible;
+    (void)coordinator.submit(request, settings, target);
+    EXPECT_TRUE(target.persistent_frame.lines.empty());
+    EXPECT_TRUE(target.dynamic_frame.lines.empty());
+    EXPECT_EQ(target.dynamic_frame.points.size(), 1u);
+    EXPECT_TRUE(target.dynamic_frame.triangles.empty());
+  }
+  request.point_light_gizmos_visible = true;
+  scene.point_light_gizmos.front().selected = false;
+  ++scene.selection_revision;
+  (void)coordinator.submit(request, settings, target);
+  EXPECT_TRUE(target.persistent_frame.lines.empty());
+  EXPECT_TRUE(target.dynamic_frame.lines.empty());
+  const auto unselected_work = coordinator.work_counters();
+  request.camera.right = {0.0f, 0.0f, -1.0f};
+  request.camera.forward = {-1.0f, 0.0f, 0.0f};
+  EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+  EXPECT_EQ(coordinator.work_counters().point_light_radius_source_refresh_count,
+            unselected_work.point_light_radius_source_refresh_count);
+  EXPECT_EQ(coordinator.work_counters().point_light_radius_camera_build_count,
+            unselected_work.point_light_radius_camera_build_count);
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,

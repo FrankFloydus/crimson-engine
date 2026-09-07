@@ -35,6 +35,7 @@
 #include "scene/scene_transform.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -365,10 +366,14 @@ DocumentCommandResult DocumentCommandService::destroy_entity(EntityId entity) {
                                                                 entity)) {
     return document_command_modeling_owned_entity_result();
   }
-  return execute_document_command(
+  const auto canceled_range = cancel_active_point_light_range_edit();
+  if (!canceled_range.ok) return canceled_range;
+  auto result = execute_document_command(
       history_, with_checked_selection_publication(
                     scene_, std::make_unique<DestroyEntityCommand>(scene_, entity),
                     selection_publication_));
+  result.changed = result.changed || canceled_range.changed;
+  return result;
 }
 
 DocumentCommandResult
@@ -1009,11 +1014,100 @@ DocumentCommandResult DocumentCommandService::set_light_component(
   if (document_command_same_light_component(*current_light, light)) {
     return document_command_unchanged_result();
   }
-
-  return execute_document_command(history_,
+  DocumentCommandResult finished = document_command_unchanged_result();
+  if (point_light_range_edit_ && point_light_range_edit_->entity == entity) {
+    finished = finish_point_light_range_edit(entity, false);
+    if (!finished.ok) return finished;
+  }
+  auto result = execute_document_command(history_,
                                   std::make_unique<SetLightComponentCommand>(
                                       scene_, entity, *current_light, light),
                                   std::move(options));
+  result.changed = result.changed || finished.changed;
+  return result;
+}
+
+DocumentCommandResult
+DocumentCommandService::begin_point_light_range_edit(EntityId entity) {
+  if (point_light_range_edit_) {
+    return document_command_invalid_request_result("A light range edit is already active");
+  }
+  const auto *light = scene_.light(entity);
+  if (!light || light->type != LightType::Point ||
+      !std::isfinite(light->range) || scene_.is_effectively_locked(entity) ||
+      mutation_blocked(entity)) {
+    return document_command_invalid_request_result("Point light cannot be edited");
+  }
+  point_light_range_edit_ = PointLightRangeEdit{
+      .entity = entity, .uuid = scene_.uuid(entity),
+      .before = light->range, .expected = light->range};
+  if (point_light_range_preview_hooks_.begin) point_light_range_preview_hooks_.begin();
+  return document_command_unchanged_result();
+}
+
+DocumentCommandResult DocumentCommandService::update_point_light_range_edit(
+    EntityId entity, float range) {
+  if (!point_light_range_edit_ || point_light_range_edit_->entity != entity ||
+      !std::isfinite(range) || range < 0.001f) {
+    return document_command_invalid_request_result("Invalid point light range edit");
+  }
+  auto &edit = *point_light_range_edit_;
+  const auto *current = scene_.light(entity);
+  if (!current || current->type != LightType::Point ||
+      scene_.uuid(entity) != edit.uuid || current->range != edit.expected ||
+      scene_.is_effectively_locked(entity) || mutation_blocked(entity)) {
+    return document_command_invalid_request_result("Point light changed during range edit");
+  }
+  if (range == edit.expected) return document_command_unchanged_result();
+  LightComponent light = *current;
+  light.range = range;
+  if (point_light_range_preview_hooks_.observe_before_projection)
+    point_light_range_preview_hooks_.observe_before_projection();
+  if (!scene_.set_light(entity, light)) {
+    return document_command_invalid_request_result("Point light range could not be applied");
+  }
+  edit.expected = range;
+  if (point_light_range_preview_hooks_.record_after_projection)
+    point_light_range_preview_hooks_.record_after_projection();
+  return document_command_changed_result();
+}
+
+DocumentCommandResult DocumentCommandService::finish_point_light_range_edit(
+    EntityId entity, bool cancel) {
+  if (!point_light_range_edit_ || point_light_range_edit_->entity != entity) {
+    return document_command_unchanged_result();
+  }
+  const PointLightRangeEdit edit = *point_light_range_edit_;
+  point_light_range_edit_.reset();
+  if (point_light_range_preview_hooks_.observe_before_projection)
+    point_light_range_preview_hooks_.observe_before_projection();
+  const auto settled = [this](DocumentCommandResult result, bool restored) {
+    if (point_light_range_preview_hooks_.record_after_projection)
+      point_light_range_preview_hooks_.record_after_projection();
+    if (point_light_range_preview_hooks_.finish)
+      point_light_range_preview_hooks_.finish(restored);
+    return result;
+  };
+  const auto *current = scene_.light(entity);
+  if (!current || current->type != LightType::Point ||
+      scene_.uuid(entity) != edit.uuid || current->range != edit.expected) {
+    return settled(document_command_invalid_request_result("Point light changed during range edit"), false);
+  }
+  if (edit.before == edit.expected) return settled(document_command_unchanged_result(), true);
+  LightComponent before = *current;
+  before.range = edit.before;
+  if (cancel || scene_.is_effectively_locked(entity)) {
+    const bool restored = scene_.set_light(entity, before);
+    return settled(restored ? document_command_changed_result()
+                            : document_command_invalid_request_result("Point light range could not be restored"), restored);
+  }
+  return settled(history_.record_executed(std::make_unique<SetLightComponentCommand>(
+      scene_, entity, before, *current)), false);
+}
+
+DocumentCommandResult DocumentCommandService::cancel_active_point_light_range_edit() {
+  return point_light_range_edit_ ? finish_point_light_range_edit(point_light_range_edit_->entity, true)
+                                : document_command_unchanged_result();
 }
 
 DocumentCommandResult

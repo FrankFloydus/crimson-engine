@@ -10,6 +10,7 @@
 #include "render/light_render_policy.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/scene_render_extraction.hpp"
+#include "render/scene_render_light_refresh.hpp"
 
 #include <algorithm>
 #include <unordered_set>
@@ -185,6 +186,14 @@ void SceneRenderBridge::sync(const SceneDocument &document,
                                           local_visibility)) {
     // Keep draining retired GPU proxies while making unchanged camera-only
     // frames O(1) at the scene-extraction boundary.
+    (void)sync_service_.sync(previous_scene_snapshot_);
+    return;
+  }
+  if (has_previous_scene_snapshot_ &&
+      try_refresh_render_scene_snapshot_light_properties(
+          previous_scene_snapshot_, document, assets, frame_index,
+          scene_binding, project_material_revision, instance_edit_scope,
+          local_visibility)) {
     (void)sync_service_.sync(previous_scene_snapshot_);
     return;
   }

@@ -70,7 +70,8 @@ public:
             : entity(other.entity), source_entity(std::exchange(
                                         other.source_entity, kInvalidEntityId)),
               rebuild_signature(std::exchange(other.rebuild_signature, 0)),
-              transform_signature(std::exchange(other.transform_signature, 0)) {
+              transform_signature(std::exchange(other.transform_signature, 0)),
+              authored_light(other.authored_light) {
           other.entity.clear();
         }
         LightProxy& operator=(LightProxy&&) noexcept = delete;
@@ -79,6 +80,7 @@ public:
         EntityId source_entity = kInvalidEntityId;
         std::uint64_t rebuild_signature = 0;
         std::uint64_t transform_signature = 0;
+        LightComponent authored_light;
     };
 
     [[nodiscard]] LightProxy
@@ -88,6 +90,8 @@ public:
                        std::uint64_t transform_signature);
     void update_light_transform(const LightProxy &proxy,
                                 const QMat4 &world_transform);
+    bool try_update_point_light_range(LightProxy &proxy,
+                                     const LightComponent &light);
     void destroy_light_proxy(LightProxy &proxy);
 
     filament::Engine* engine_ = nullptr;

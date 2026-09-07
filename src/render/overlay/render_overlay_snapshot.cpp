@@ -15,8 +15,10 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_hierarchy_visibility.hpp"
 #include "scene/scene_mesh_occurrence_projection.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <unordered_set>
 #include <utility>
@@ -512,10 +514,17 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
         !local_visibility_allows(local_visibility, entity)) {
       continue;
     }
+    const SelectionComponent *selection = document.selection(entity);
     snapshot.point_light_gizmos.push_back(RenderOverlayLightMarkerSnapshot{
         .entity = entity,
         .type = scene_light->type,
         .world_transform = document.world_transform_matrix(entity),
+        .radius = std::max(scene_light->range, 0.001f),
+        .selected = selection != nullptr && selection->selected,
+        .radius_editable =
+            !document.is_effectively_locked(entity) &&
+            scene_hierarchy_segment_is_selectable_ignoring_visibility(
+                document, entity),
     });
   }
 

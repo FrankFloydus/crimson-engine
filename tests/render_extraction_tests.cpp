@@ -23,6 +23,7 @@
 #include "render/mesh_surface_grid_projection.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/scene_render_extraction.hpp"
+#include "render/scene_render_light_refresh.hpp"
 #include "render/render_layers.hpp"
 #include "render/viewport_info_stats.hpp"
 #include "render/viewport_render_pass_coordinator.hpp"
@@ -37,10 +38,12 @@
 #include "render/overlay/instance_selection_overlay_cache.hpp"
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
+#include "render/overlay/viewport_primitive_creation_overlay_builder.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_bounds.hpp"
 #include "viewport/viewport_settings.hpp"
+#include "viewport/primitive_creation_controls.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
@@ -76,6 +79,7 @@ public:
 
   [[nodiscard]] std::optional<RenderProjectMaterialSnapshot>
   resolve(ProjectAssetId id) const override {
+    ++resolve_count;
     return material.has_value() &&
                    material->evaluation.project_material_id == id
                ? material
@@ -83,6 +87,7 @@ public:
   }
 
   std::uint64_t revision_value = 1u;
+  mutable std::size_t resolve_count = 0u;
   std::optional<RenderProjectMaterialSnapshot> material;
 };
 
@@ -1613,6 +1618,74 @@ TEST(RenderSceneSnapshotTests,
 }
 
 TEST(RenderSceneSnapshotTests,
+     LightPropertyRefreshAvoidsMaterialResolutionAndMatchesFullExtraction) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const ProjectAssetId material_id =
+      *ProjectAssetId::parse("33333333-3333-4333-8333-333333333333");
+  TestProjectMaterialResolver resolver;
+  resolver.material = RenderProjectMaterialSnapshot{
+      .evaluation = RenderMaterialEvaluationSnapshot{
+          .project_material_id = material_id,
+          .kind = RenderMaterialEvaluationKind::Standard,
+          .identity_revision = 2u,
+          .content_revision = 3u,
+          .payload = RenderStandardMaterialEvaluationSnapshot{},
+      },
+      .catalog_revision = 4u,
+  };
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId entity = document.create_entity("Radius Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(entity, MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.set_material(entity, MaterialComponent{
+      .material = MaterialReference::project(material_id)}));
+  const EntityId light = document.create_entity("Radius Light", EntityKind::Light);
+  LightComponent component{.type = LightType::Point};
+  component.range = 2.0f;
+  ASSERT_TRUE(document.set_light(light, component));
+  auto retained = build_render_scene_snapshot(
+      document, assets, {.project_material_resolver = &resolver});
+  ASSERT_EQ(retained.meshes.size(), 1u);
+  ASSERT_EQ(retained.lights.size(), 1u);
+  ASSERT_GT(resolver.resolve_count, 0u);
+  const auto initial_resolutions = resolver.resolve_count;
+  const auto *const mesh_storage = retained.meshes.data();
+  const auto *const geometry_storage = retained.meshes.front().mesh.vertices.data();
+  const auto geometry_owner = retained.meshes.front().mesh.geometry_payload;
+  const auto *const material_storage = &retained.meshes.front().material;
+  for (std::uint64_t sample = 0u; sample < 128u; ++sample) {
+    component.range = 2.0f + static_cast<float>(sample + 1u) * 0.05f;
+    ASSERT_TRUE(document.set_light(light, component));
+    ASSERT_TRUE(try_refresh_render_scene_snapshot_light_properties(
+        retained, document, assets, sample, {}, resolver.revision()));
+    EXPECT_EQ(resolver.resolve_count, initial_resolutions);
+    EXPECT_EQ(retained.meshes.data(), mesh_storage);
+    EXPECT_EQ(retained.meshes.front().mesh.vertices.data(), geometry_storage);
+    EXPECT_EQ(retained.meshes.front().mesh.geometry_payload, geometry_owner);
+    EXPECT_EQ(&retained.meshes.front().material, material_storage);
+  }
+  const auto full = build_render_scene_snapshot(
+      document, assets, {.project_material_resolver = &resolver});
+  EXPECT_GT(resolver.resolve_count, initial_resolutions);
+  EXPECT_EQ(static_cast<const RenderSourceStamp &>(retained),
+            static_cast<const RenderSourceStamp &>(full));
+  ASSERT_EQ(full.lights.size(), retained.lights.size());
+  EXPECT_EQ(retained.lights.front().light, full.lights.front().light);
+  EXPECT_EQ(retained.lights.front().rebuild_revision,
+            full.lights.front().rebuild_revision);
+  EXPECT_EQ(retained.lights.front().world_transform.values,
+            full.lights.front().world_transform.values);
+  EXPECT_EQ(retained.meshes.front().mesh.geometry_payload,
+            full.meshes.front().mesh.geometry_payload);
+  EXPECT_EQ(retained.meshes.front().material.revision,
+            full.meshes.front().material.revision);
+  EXPECT_EQ(retained.meshes.front().world_transform.values,
+            full.meshes.front().world_transform.values);
+  EXPECT_EQ(retained.live_mesh_entities, full.live_mesh_entities);
+  EXPECT_EQ(retained.live_light_entities, full.live_light_entities);
+}
+
+TEST(RenderSceneSnapshotTests,
      ProjectMaterialRevisionInvalidatesReuseAndTransformRefresh) {
   SceneDocument document;
   AssetRegistry assets;
@@ -2838,6 +2911,151 @@ TEST(RenderOverlaySnapshotTests,
 }
 
 TEST(RenderOverlaySnapshotTests,
+     SelectedPointLightRadiusUsesWorldFalloffAndRefreshesEditability) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const EntityId parent = document.create_empty("Scaled Light Parent");
+  document.set_transform(parent, TransformComponent{
+      .position = {4.0f, -2.0f, 1.0f}, .scale = {3.0f, 2.0f, 4.0f}});
+  const EntityId entity = document.create_entity("Point", EntityKind::Light);
+  document.set_light(entity, LightComponent{.type = LightType::Point, .range = 5.0f});
+  document.set_transform(entity, TransformComponent{
+      .position = {2.0f, 1.0f, -1.0f}, .scale = {2.0f, 3.0f, 0.5f}});
+  ASSERT_TRUE(document.set_parent(entity, parent, false));
+  ASSERT_TRUE(document.set_selected(entity, true));
+  const EntityId other = document.create_entity("Unselected", EntityKind::Light);
+  document.set_light(other, LightComponent{.type = LightType::Point});
+
+  RenderOverlaySnapshotCache cache;
+  const auto &snapshot = cache.selection_snapshot(document, assets);
+  ASSERT_EQ(snapshot.point_light_gizmos.size(), 2u);
+  EXPECT_TRUE(snapshot.selected_lights.empty());
+  const auto marker = std::find_if(snapshot.point_light_gizmos.begin(),
+                                   snapshot.point_light_gizmos.end(),
+      [entity](const auto &light) { return light.entity == entity; });
+  ASSERT_NE(marker, snapshot.point_light_gizmos.end());
+  EXPECT_TRUE(marker->selected);
+  EXPECT_TRUE(marker->radius_editable);
+  EXPECT_FLOAT_EQ(marker->radius, 5.0f);
+  QVec3 center = transform_point(document.world_transform_matrix(entity), {});
+  const ViewportOverlayFrame frame =
+      ViewportSceneOverlayBuilder::build_selection_frame({}, snapshot, true);
+  ASSERT_EQ(frame.lines.size(), 360u);
+  ASSERT_EQ(frame.icons.size(), 2u);
+  for (const auto &line : frame.lines) {
+    EXPECT_EQ(line.element.object_id, static_cast<int>(entity));
+    EXPECT_NEAR(length(line.start - center), 5.0f, 0.00001f);
+    EXPECT_NEAR(length(line.end - center), 5.0f, 0.00001f);
+    EXPECT_EQ(line.color, kOverlayPointLightRadiusWireColor);
+  }
+
+  const ViewportOverlayCamera camera{.eye = center + QVec3{10.0f, 0.0f, 0.0f},
+                                      .forward = {-1.0f, 0.0f, 0.0f},
+                                      .right = {0.0f, 0.0f, -1.0f},
+                                      .viewport_size = {800.0f, 600.0f}};
+  const ViewportOverlayFrame billboard =
+      ViewportSceneOverlayBuilder::build_point_light_radius_frame(
+          snapshot.point_light_gizmos, camera);
+  ASSERT_EQ(billboard.lines.size(), 120u);
+  ASSERT_EQ(billboard.triangles.size(), 96u);
+  EXPECT_TRUE(billboard.points.empty());
+  const auto handle_plan = OverlayRenderableBuilder::build_layer(
+      billboard, camera, ViewportOverlayLayer::ToolHandle);
+  ASSERT_EQ(handle_plan.face_fill_batches.size(), 1u);
+  EXPECT_TRUE(handle_plan.point_batches.empty());
+  EXPECT_EQ(handle_plan.face_fill_batches.front().state.depth_func,
+            OverlayDepthFunc::Always);
+  const QVec3 handle = billboard.triangles.front().a;
+  EXPECT_FLOAT_EQ(handle.x, center.x);
+  EXPECT_FLOAT_EQ(handle.y, center.y);
+  EXPECT_FLOAT_EQ(handle.z, center.z - 5.0f);
+  const OverlayCameraProjector projector(camera);
+  const auto projected = projector.project(projector.view_point_for(handle));
+  PrimitiveCreationControlsFrame controls;
+  controls.visible = true;
+  controls.controls.front() = {
+      .world_position = handle,
+      .screen_position = {projected.pixel.x, camera.viewport_size.y - projected.pixel.y},
+      .depth = -projector.view_point_for(handle).z,
+      .radius_pixels = 6.0f,
+      .visible = true,
+  };
+  ViewportOverlayFrame primitive_handle;
+  ViewportPrimitiveCreationOverlayBuilder::append(primitive_handle, camera, controls);
+  ASSERT_EQ(primitive_handle.triangles.size(), billboard.triangles.size());
+  for (std::size_t index = 0u; index < billboard.triangles.size(); ++index) {
+    const auto &actual = billboard.triangles[index];
+    const auto &expected = primitive_handle.triangles[index];
+    EXPECT_NEAR(length(actual.a - expected.a), 0.0f, 0.00001f);
+    EXPECT_NEAR(length(actual.b - expected.b), 0.0f, 0.00001f);
+    EXPECT_NEAR(length(actual.c - expected.c), 0.0f, 0.00001f);
+    EXPECT_EQ(actual.color, expected.color);
+    EXPECT_EQ(actual.layer, expected.layer);
+    EXPECT_EQ(actual.source, ViewportOverlaySource::Gizmo);
+    EXPECT_EQ(actual.element.object_id, static_cast<int>(entity));
+  }
+  for (const auto &line : billboard.lines) {
+    EXPECT_FLOAT_EQ(line.start.x, center.x);
+    EXPECT_NEAR(length(line.start - center), 5.0f, 0.00001f);
+  }
+
+  document.set_transform(parent, TransformComponent{
+      .position = {1.0f, 4.0f, -2.0f}, .scale = {5.0f, 3.0f, 2.0f}});
+  center = transform_point(document.world_transform_matrix(entity), {});
+  const auto &moved = cache.selection_snapshot(document, assets);
+  const auto moved_frame = ViewportSceneOverlayBuilder::build_selection_frame(
+      {}, moved, true);
+  ASSERT_EQ(moved_frame.lines.size(), 360u);
+  EXPECT_NEAR(length(moved_frame.lines.front().start - center), 5.0f, 0.00001f);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_transform_refresh_count, 1u);
+
+  document.set_light(entity, LightComponent{.type = LightType::Point, .range = 8.0f});
+  const auto &updated = cache.selection_snapshot(document, assets);
+  const auto updated_frame = ViewportSceneOverlayBuilder::build_selection_frame(
+      {}, updated, true);
+  ASSERT_EQ(updated_frame.lines.size(), 360u);
+  EXPECT_NEAR(length(updated_frame.lines.front().start - center), 8.0f, 0.00001f);
+
+  ASSERT_TRUE(document.set_locked(parent, true));
+  const auto &locked = cache.selection_snapshot(document, assets);
+  const auto locked_frame = ViewportSceneOverlayBuilder::build_point_light_radius_frame(
+      locked.point_light_gizmos, camera);
+  EXPECT_EQ(locked_frame.lines.size(), 120u);
+  EXPECT_TRUE(locked_frame.triangles.empty());
+  ASSERT_TRUE(document.set_locked(parent, false));
+  ASSERT_TRUE(document.set_selectable(parent, false));
+  const auto &unselectable = cache.selection_snapshot(document, assets);
+  EXPECT_TRUE(ViewportSceneOverlayBuilder::build_point_light_radius_frame(
+      unselectable.point_light_gizmos, camera).triangles.empty());
+
+  ASSERT_TRUE(document.set_visible(parent, false));
+  const auto &hidden = cache.selection_snapshot(document, assets);
+  EXPECT_TRUE(ViewportSceneOverlayBuilder::build_selection_frame({}, hidden, true)
+                  .lines.empty());
+  ASSERT_EQ(hidden.point_light_gizmos.size(), 1u);
+  EXPECT_EQ(hidden.point_light_gizmos.front().entity, other);
+}
+
+TEST(RenderOverlaySnapshotTests,
+     PointLightRadiusClampAndOverlayVisibilityMatchLightMarkers) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const EntityId entity = document.create_entity("Point", EntityKind::Light);
+  document.set_light(entity, LightComponent{.type = LightType::Point, .range = 0.0f});
+  ASSERT_TRUE(document.set_selected(entity, true));
+  const auto snapshot = build_render_overlay_selection_snapshot(document, assets);
+  ASSERT_EQ(snapshot.point_light_gizmos.size(), 1u);
+  EXPECT_FLOAT_EQ(snapshot.point_light_gizmos.front().radius, 0.001f);
+  EXPECT_TRUE(ViewportSceneOverlayBuilder::build_selection_frame({}, snapshot, false)
+                  .lines.empty());
+  const auto hidden = ViewportSceneOverlayBuilder::build_selection_frame(
+      {}, snapshot, true, RenderOverlaySelectionMode::Object, true, false);
+  EXPECT_TRUE(hidden.lines.empty());
+  EXPECT_EQ(hidden.icons.size(), 1u);
+}
+
+TEST(RenderOverlaySnapshotTests,
      CapturesSelectedObjectAndSceneWireframeRecordsWithDirtyRevisions) {
   SceneDocument document;
   AssetRegistry assets;
@@ -3610,6 +3828,12 @@ TEST(RenderOverlaySnapshotCacheTests,
               rebuilt.point_light_gizmos[index].type);
     EXPECT_EQ(refreshed.point_light_gizmos[index].world_transform.values,
               rebuilt.point_light_gizmos[index].world_transform.values);
+    EXPECT_EQ(refreshed.point_light_gizmos[index].radius,
+              rebuilt.point_light_gizmos[index].radius);
+    EXPECT_EQ(refreshed.point_light_gizmos[index].selected,
+              rebuilt.point_light_gizmos[index].selected);
+    EXPECT_EQ(refreshed.point_light_gizmos[index].radius_editable,
+              rebuilt.point_light_gizmos[index].radius_editable);
   }
 }
 

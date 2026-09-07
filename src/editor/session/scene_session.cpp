@@ -90,6 +90,18 @@ void SceneSession::rebuild_services() {
   history_->set_max_steps(history_max_steps_);
   document_commands_ = std::make_unique<DocumentCommandService>(
       document_.scene(), *history_, &document_.assets());
+  document_commands_->set_point_light_range_preview_hooks({
+      .begin = [this]() { begin_modeling_preview_checkpoint(); },
+      .observe_before_projection = [this]() {
+        observe_before_modeling_preview_projection();
+      },
+      .record_after_projection = [this]() {
+        record_after_modeling_preview_projection();
+      },
+      .finish = [this](bool restored_by_cancel) {
+        finish_modeling_preview_checkpoint(restored_by_cancel);
+      },
+  });
   asset_commands_ = std::make_unique<AssetCommandService>(
       document_.assets(), *history_, &document_.scene());
   modeling_ = std::make_unique<ModelingSessionService>(
@@ -350,6 +362,7 @@ void SceneSession::replace_document_impl(
   native_tools_->reset_transient_state();
   instance_edit_context_.clear();
   preview_content_checkpoint_.reset();
+  document_commands_->abandon_point_light_range_edit();
   document_ = std::move(document);
   scene_surface_query_->invalidate();
   point_placement_->invalidate();

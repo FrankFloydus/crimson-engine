@@ -256,6 +256,7 @@ private:
   QtViewportDeletePopupPresenter delete_popup_presenter_;
   const SceneDocument *point_light_pick_cached_document_ = nullptr;
   std::uint64_t point_light_pick_cached_scene_revision_ = 0u;
+  std::uint64_t point_light_pick_cached_selection_revision_ = 0u;
   std::uint64_t point_light_pick_cached_local_visibility_revision_ = 0u;
   float point_light_pick_cached_viewport_pixel_scale_ = 1.0F;
   std::vector<ViewportSceneBillboardPickCandidate>

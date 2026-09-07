@@ -38,6 +38,7 @@ ViewportSceneProjection::point_light_pick_candidates(
             static_cast<ViewportLocalVisibilityEntityId>(entity))) {
       continue;
     }
+    const SelectionComponent *selection = document.selection(entity);
     candidates.push_back({
         .entity = entity,
         .position = transform_point(state->world_transform, {}),
@@ -47,6 +48,9 @@ ViewportSceneProjection::point_light_pick_candidates(
             scene_hierarchy_segment_is_selectable_ignoring_visibility(
                 document, entity),
         .effectively_locked = state->effectively_locked,
+        .point_light_range = selection != nullptr && selection->selected
+                                 ? std::optional<float>(light->range)
+                                 : std::nullopt,
     });
   }
   return candidates;

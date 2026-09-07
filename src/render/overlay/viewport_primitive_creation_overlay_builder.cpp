@@ -7,11 +7,11 @@
 #include "render/overlay/viewport_primitive_creation_overlay_builder.hpp"
 
 #include "render/overlay/overlay_camera_projector.hpp"
+#include "render/overlay/viewport_circular_handle.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "viewport/primitive_creation_controls.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -19,24 +19,9 @@
 namespace quader {
 namespace {
 
-constexpr std::size_t kDiscSegments = 32u;
 constexpr float kTau = 6.2831853071795864769f;
-constexpr float kFaceInnerRadius = 0.72f;
 constexpr float kPlusExtent = 0.52f;
 constexpr float kPlusHalfWidth = 0.12f;
-
-const std::array<QVec2, kDiscSegments> &disc_directions() {
-  static const std::array<QVec2, kDiscSegments> kDirections = [] {
-    std::array<QVec2, kDiscSegments> result{};
-    for (std::size_t index = 0u; index < result.size(); ++index) {
-      const float angle = kTau * static_cast<float>(index) /
-                          static_cast<float>(result.size());
-      result[index] = {std::cos(angle), std::sin(angle)};
-    }
-    return result;
-  }();
-  return kDirections;
-}
 
 void append_triangle(ViewportOverlayFrame &frame, QVec3 a, QVec3 b, QVec3 c,
                      std::uint32_t color) {
@@ -105,24 +90,12 @@ void append_control(ViewportOverlayFrame &frame,
   const QVec3 right = pixel_right * control.radius_pixels;
   const QVec3 down = pixel_down * control.radius_pixels;
 
-  const auto &directions = disc_directions();
-  for (std::size_t segment = 0u; segment < directions.size(); ++segment) {
-    const QVec2 a = directions[segment];
-    const QVec2 b = directions[(segment + 1u) % directions.size()];
-    const QVec3 outer_a = right * a.x + down * a.y;
-    const QVec3 outer_b = right * b.x + down * b.y;
-    if (face) {
-      const QVec3 inner_a = center + outer_a * kFaceInnerRadius;
-      const QVec3 inner_b = center + outer_b * kFaceInnerRadius;
-      append_triangle(frame, center, inner_a, inner_b, fill);
-      append_triangle(frame, inner_a, center + outer_a, center + outer_b,
-                      kOverlayPrimitiveCubeFaceOutlineColor);
-      append_triangle(frame, inner_a, center + outer_b, inner_b,
-                      kOverlayPrimitiveCubeFaceOutlineColor);
-    } else {
-      append_triangle(frame, center, center + outer_a, center + outer_b, fill);
-    }
-  }
+  append_viewport_circular_handle(frame, center, right, down, {
+      .fill_color = fill,
+      .outline_color = face
+                           ? std::optional{kOverlayPrimitiveCubeFaceOutlineColor}
+                           : std::nullopt,
+  });
   if (!face) {
     // Keep the glyph in the same triangle batch as its yellow background.
     // Unlike point/line sizes, this physical-pixel geometry is not rescaled by
@@ -174,8 +147,9 @@ void ViewportPrimitiveCreationOverlayBuilder::append(
     const PrimitiveCreationControl &control = controls.controls[index];
     if (drawable(control)) {
       triangle_count += index < 6u
-                            ? kDiscSegments * 3u
-                            : kDiscSegments + (control.subdivision_decrement ? 2u : 6u);
+                            ? kViewportCircularHandleSegments * 3u
+                            : kViewportCircularHandleSegments +
+                                  (control.subdivision_decrement ? 2u : 6u);
     }
   }
   if (triangle_count == 0u) {

@@ -13,6 +13,7 @@
 #include "editor/array/path_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/curve/curve_tool_service.hpp"
+#include "editor/commands/document_command_service.hpp"
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/operations/operation_schema.hpp"
 #include "editor/session/scene_session.hpp"
@@ -1187,6 +1188,10 @@ void QuaderToolsApi::rebind_session(QuaderApiSession session) {
 }
 
 QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
+  if (scene_session(session_).document_commands().point_light_range_edit_active()) {
+    return quader_api_failure_status(
+        scene_session(session_), "Finish the light radius drag before changing tools.");
+  }
   if (hooks_.activate) {
     return hooks_.activate(tool_id);
   }
@@ -1238,7 +1243,10 @@ QuaderApiVoidResult QuaderToolsApi::activate(ViewportToolId tool) {
 }
 
 bool QuaderToolsApi::can_activate(std::string_view tool_id) const {
-  const SceneSession &session = scene_session(session_);
+  SceneSession &session = scene_session(session_);
+  if (session.document_commands().point_light_range_edit_active()) {
+    return false;
+  }
   if (session.native_tools().handles(tool_id)) {
     return session.native_tools().can_activate(tool_id);
   }

@@ -29,6 +29,8 @@
 #include "editor/viewport/viewport_scene_projection.hpp"
 #include "editor/viewport/viewport_selection_interaction.hpp"
 #include "render/viewport_overlay_policy.hpp"
+#include "render/scene_render_extraction.hpp"
+#include "render/scene_render_light_refresh.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/session/viewport_local_visibility_service.hpp"
 #include "editor/session/project_session.hpp"
@@ -49,6 +51,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -9435,6 +9438,611 @@ TEST(ViewportInteractionControllerTests, MoveGizmoComponentAxisDragKeepsPickedAx
         }
       }
     }
+}
+
+namespace {
+
+quader::QuaderEntityRef create_radius_test_light(ViewportInteractionHarness &harness) {
+  harness.editor.preferences().set_runtime_hooks(quader::QuaderPreferencesRuntimeHooks{
+      .overlays_visible = [&harness]() {
+        return harness.settings.bool_value(quader::ViewportBoolSettingId::ShowOverlays);
+      },
+      .set_overlays_visible = [&harness](bool visible) {
+        return quader::QuaderApiVoidResult{
+            .ok = true,
+            .changed = harness.settings.set_bool_value(
+                quader::ViewportBoolSettingId::ShowOverlays, visible)};
+      },
+  });
+  quader::QuaderCreatePointLightArgs args;
+  args.light.range = 2.0f;
+  args.select_created = true;
+  const auto created = harness.editor.scene().create_point_light(args);
+  EXPECT_TRUE(created.ok()) << created.error_message();
+  return created.value();
+}
+
+void refresh_radius_candidates(ViewportInteractionHarness &harness) {
+  harness.billboard_pick_candidates = quader::ViewportSceneProjection::point_light_pick_candidates(
+      harness.session.scene(), harness.session.viewport_workspace().local_visibility_snapshot());
+}
+
+quader::QVec2 radius_handle(ViewportInteractionHarness &harness, quader::EntityId entity) {
+  refresh_radius_candidates(harness);
+  const auto found = std::find_if(harness.billboard_pick_candidates.begin(),
+      harness.billboard_pick_candidates.end(), [entity](const auto &candidate) {
+        return candidate.entity == entity;
+      });
+  EXPECT_NE(found, harness.billboard_pick_candidates.end());
+  if (found == harness.billboard_pick_candidates.end()) return {};
+  const auto pose = harness.camera.pose();
+  const auto right = quader::normalize(quader::cross(
+      quader::normalize(pose.target - pose.eye), pose.up));
+  return harness.camera.project_world_point(found->position +
+      right * std::max(found->point_light_range.value_or(0.0f), 0.001f)).position;
+}
+
+bool radius_frame(ViewportInteractionHarness &harness, quader::QVec2 local,
+                  bool pressed, bool down, bool released) {
+  refresh_radius_candidates(harness);
+  harness.input.mouse_local = local;
+  harness.input.mouse_screen = local;
+  return harness.dispatch_frame(harness.frame(pressed, down, released, local)).gizmo_consumed;
+}
+
+} // namespace
+
+TEST(ViewportInteractionControllerTests, PointLightRadiusDragPublishesLiveAndOneUndoStep) {
+  for (const bool orthographic : {false, true}) {
+    ViewportInteractionHarness harness;
+    if (orthographic) harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+    const auto light = create_radius_test_light(harness);
+    const auto start = radius_handle(harness, light.id);
+    const auto transform = *harness.session.scene().transform(light.id);
+    const auto history_before = harness.session.history().undo_count();
+    ASSERT_TRUE(radius_frame(harness, start, true, true, false));
+    EXPECT_TRUE(harness.controller.point_light_range_pointer_active());
+    EXPECT_FALSE(harness.controller.dragging());
+    ASSERT_TRUE(radius_frame(harness, start + quader::QVec2{30, 40}, false, true, false));
+    EXPECT_TRUE(harness.controller.dragging());
+    const float middle = harness.editor.query().entity(light.id)->light.range;
+    EXPECT_GT(middle, 2.0f);
+    EXPECT_EQ(harness.session.history().undo_count(), history_before);
+    const auto revision = harness.session.scene().revision();
+    ASSERT_TRUE(radius_frame(harness, start + quader::QVec2{30, 40}, false, true, false));
+    EXPECT_EQ(harness.session.scene().revision(), revision);
+    ASSERT_TRUE(radius_frame(harness, start + quader::QVec2{60, 80}, false, false, true));
+    const float after = harness.editor.query().entity(light.id)->light.range;
+    EXPECT_GT(after, middle);
+    EXPECT_FALSE(harness.controller.point_light_range_pointer_active());
+    EXPECT_EQ(harness.session.history().undo_count(), history_before + 1u);
+    expect_transform_near(*harness.session.scene().transform(light.id), transform);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    EXPECT_FLOAT_EQ(harness.editor.query().entity(light.id)->light.range, 2.0f);
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    EXPECT_FLOAT_EQ(harness.editor.query().entity(light.id)->light.range, after);
+  }
+}
+
+TEST(ViewportInteractionControllerTests, PointLightRadiusDiagonalDragUsesPlaneDistance) {
+  ViewportInteractionHarness harness;
+  const auto light = create_radius_test_light(harness);
+  const auto start = radius_handle(harness, light.id);
+  ASSERT_TRUE(radius_frame(harness, start, true, true, false));
+  ASSERT_TRUE(radius_frame(harness, start + quader::QVec2{0, 90}, false, true, false));
+  EXPECT_GT(harness.editor.query().entity(light.id)->light.range, 2.0f);
+  EXPECT_TRUE(harness.controller.cancel_active_drag(harness.editor));
+  EXPECT_FLOAT_EQ(harness.editor.query().entity(light.id)->light.range, 2.0f);
+}
+
+TEST(ViewportInteractionControllerTests, PointLightRadiusProductionLifecycleRefreshesSelectionBeforeDrag) {
+  ViewportInteractionHarness harness;
+  const auto light = create_radius_test_light(harness);
+  const auto start = radius_handle(harness, light.id);
+  const auto dispatch = [&](quader::QVec2 local, bool pressed, bool down, bool released) {
+    refresh_radius_candidates(harness);
+    harness.input.mouse_local = local;
+    harness.input.mouse_screen = local;
+    auto interaction = harness.frame(pressed, down, released, local);
+    interaction.selection_state = {};
+    const quader::ViewportNativeToolInteractionFrame native{
+        .input = harness.input, .input_result = harness.input_result,
+        .left_pressed = pressed, .left_down = down, .left_released = released,
+        .left_click_local = local};
+    return harness.controller.handle_tool_pointer_lifecycle(
+        harness.editor, harness.session.scene(), harness.session.assets(),
+        harness.session.native_tools(), &harness.session.point_placement(),
+        harness.camera, {.interaction = interaction, .native_tool = native});
+  };
+  EXPECT_TRUE(dispatch(start, true, true, false).before_tool.gizmo_consumed);
+  EXPECT_TRUE(dispatch(start + quader::QVec2{60, 0}, false, true, false).before_tool.gizmo_consumed);
+  EXPECT_TRUE(harness.controller.dragging());
+  EXPECT_GT(harness.editor.query().entity(light.id)->light.range, 2.0f);
+  EXPECT_TRUE(dispatch(start + quader::QVec2{60, 0}, false, false, true).before_tool.gizmo_consumed);
+  EXPECT_FALSE(harness.controller.point_light_range_pointer_active());
+}
+
+TEST(ViewportInteractionControllerTests, PointLightRadiusClickAndRoundTripKeepHistoryAndCleanState) {
+  for (const bool round_trip : {false, true}) {
+    ViewportInteractionHarness harness;
+    const auto light = create_radius_test_light(harness);
+    const auto start = radius_handle(harness, light.id);
+    harness.session.mark_clean();
+    const auto before = harness.session.history().undo_count();
+    ASSERT_TRUE(radius_frame(harness, start, true, true, false));
+    if (round_trip) {
+      ASSERT_TRUE(radius_frame(harness, start + quader::QVec2{60, 0}, false, true, false));
+    }
+    ASSERT_TRUE(radius_frame(harness, start, false, false, true));
+    EXPECT_FLOAT_EQ(harness.editor.query().entity(light.id)->light.range, 2.0f);
+    EXPECT_EQ(harness.session.history().undo_count(), before);
+    EXPECT_FALSE(harness.session.dirty());
+    ASSERT_NE(harness.session.scene().selection(light.id), nullptr);
+    EXPECT_TRUE(harness.session.scene().selection(light.id)->selected);
+  }
+}
+
+TEST(ViewportInteractionControllerTests, PointLightRadiusCancelReservesReleaseAndRetainsRedo) {
+  ViewportInteractionHarness harness;
+  const auto light = create_radius_test_light(harness);
+  ASSERT_TRUE(harness.editor.scene().rename(light.id, "Renamed Light").ok());
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  ASSERT_TRUE(harness.editor.history().can_redo());
+  harness.session.mark_clean();
+  const auto start = radius_handle(harness, light.id);
+  const auto before = harness.session.history().undo_count();
+  ASSERT_TRUE(radius_frame(harness, start, true, true, false));
+  ASSERT_TRUE(radius_frame(harness, start + quader::QVec2{60, 0}, false, true, false));
+  EXPECT_FALSE(harness.editor.history().can_redo());
+  ASSERT_TRUE(harness.controller.cancel_active_drag(harness.editor));
+  EXPECT_FLOAT_EQ(harness.editor.query().entity(light.id)->light.range, 2.0f);
+  EXPECT_TRUE(harness.editor.history().can_redo());
+  EXPECT_FALSE(harness.session.dirty());
+  ASSERT_TRUE(radius_frame(harness, {20, 20}, false, false, true));
+  ASSERT_NE(harness.session.scene().selection(light.id), nullptr);
+  EXPECT_TRUE(harness.session.scene().selection(light.id)->selected);
+  EXPECT_EQ(harness.session.history().undo_count(), before);
+}
+
+TEST(ViewportInteractionControllerTests, PointLightRadiusInterruptionRestoresPreview) {
+  for (int interruption = 0; interruption < 6; ++interruption) {
+    SCOPED_TRACE(interruption);
+    ViewportInteractionHarness harness;
+    const auto light = create_radius_test_light(harness);
+    const auto start = radius_handle(harness, light.id);
+    ASSERT_TRUE(radius_frame(harness, start, true, true, false));
+    ASSERT_TRUE(radius_frame(harness, start + quader::QVec2{60, 0}, false, true, false));
+    switch (interruption) {
+    case 0: harness.input.pointer_interaction_canceled = true; break;
+    case 1: harness.input.viewport_focused = false; break;
+    case 2: harness.input_result.navigation_active = true; break;
+    case 3: harness.input_result.cancel_requested = true; break;
+    case 4: ASSERT_TRUE(harness.editor.preferences().set_overlays_visible(false).ok()); break;
+    case 5: ASSERT_TRUE(harness.editor.scene().set_locked(light.id, true).ok()); break;
+    }
+    ASSERT_TRUE(radius_frame(harness, start + quader::QVec2{80, 0}, false, true, false));
+    EXPECT_FALSE(harness.controller.dragging());
+    EXPECT_TRUE(harness.controller.point_light_range_pointer_active());
+    EXPECT_FLOAT_EQ(harness.editor.query().entity(light.id)->light.range, 2.0f);
+    harness.input_result.cancel_requested = false;
+    EXPECT_TRUE(radius_frame(harness, start, false, false, true));
+    EXPECT_FALSE(harness.controller.point_light_range_pointer_active());
+  }
+}
+
+TEST(ViewportInteractionControllerTests, PointLightRadiusMatchesExactReleaseAndCoalescedGesture) {
+  ViewportInteractionHarness harness;
+  const auto light = create_radius_test_light(harness);
+  const auto start = radius_handle(harness, light.id);
+  harness.input.pointer_pressed_edges = {{.button = quader::QuaderMouseButton::Left,
+                                          .local = start, .sequence = 20}};
+  ASSERT_TRUE(radius_frame(harness, start, true, true, false));
+  harness.input.pointer_pressed_edges.clear();
+  harness.input.pointer_released_edges = {{.button = quader::QuaderMouseButton::Left,
+                                           .local = start + quader::QVec2{60, 0}, .sequence = 19}};
+  ASSERT_TRUE(radius_frame(harness, start + quader::QVec2{60, 0}, false, true, true));
+  EXPECT_TRUE(harness.controller.point_light_range_pointer_active());
+  harness.input.pointer_released_edges = {{.button = quader::QuaderMouseButton::Left,
+                                           .local = start + quader::QVec2{70, 0}, .sequence = 21}};
+  ASSERT_TRUE(radius_frame(harness, start + quader::QVec2{160, 0}, false, false, true));
+  const float exact_release_range = harness.editor.query().entity(light.id)->light.range;
+  EXPECT_FALSE(harness.controller.point_light_range_pointer_active());
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  harness.input.pointer_pressed_edges = {{.button = quader::QuaderMouseButton::Left,
+                                          .local = start, .sequence = 30}};
+  harness.input.pointer_released_edges = {{.button = quader::QuaderMouseButton::Left,
+                                           .local = start + quader::QVec2{70, 0}, .sequence = 31}};
+  refresh_radius_candidates(harness);
+  harness.input.mouse_local = start + quader::QVec2{160, 0};
+  ASSERT_TRUE(harness.dispatch_frame(harness.frame(true, false, true, start)).gizmo_consumed);
+  EXPECT_FLOAT_EQ(harness.editor.query().entity(light.id)->light.range, exact_release_range);
+}
+
+TEST(ViewportInteractionControllerTests, PointLightRadiusApiUndoCancelsBeforePriorHistory) {
+  ViewportInteractionHarness harness;
+  const auto light = create_radius_test_light(harness);
+  ASSERT_TRUE(harness.editor.scene().rename(light.id, "Renamed").ok());
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  const auto before = harness.session.history().undo_count();
+  const auto begun = harness.editor.scene().begin_point_light_range_edit(light.id);
+  ASSERT_TRUE(begun.ok());
+  ASSERT_TRUE(harness.editor.scene().update_point_light_range_edit(begun.value(), 4.0f).ok());
+  EXPECT_TRUE(harness.editor.history().can_undo());
+  EXPECT_FALSE(harness.editor.history().can_redo());
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_FLOAT_EQ(harness.editor.query().entity(light.id)->light.range, 2.0f);
+  EXPECT_EQ(harness.session.history().undo_count(), before);
+  EXPECT_TRUE(harness.editor.history().can_redo());
+  EXPECT_FALSE(harness.session.document_commands().point_light_range_edit_active());
+}
+
+TEST(ViewportInteractionControllerTests, PointLightRadiusCancelPreservesConcurrentContentDirtyState) {
+  for (const bool change_camera : {false, true}) {
+    ViewportInteractionHarness harness;
+    const auto light = create_radius_test_light(harness);
+    harness.session.mark_clean();
+    const auto begun = harness.editor.scene().begin_point_light_range_edit(light.id);
+    ASSERT_TRUE(begun.ok());
+    ASSERT_TRUE(harness.editor.scene().update_point_light_range_edit(begun.value(), 4.0f).ok());
+    if (change_camera) {
+      auto camera = harness.session.persisted_viewport_camera_pose();
+      camera.eye.x += 1.0f;
+      ASSERT_TRUE(harness.session.restore_persisted_viewport_camera_pose(camera));
+    } else {
+      harness.session.document().rename("Concurrent Scene Name");
+    }
+    ASSERT_TRUE(harness.editor.scene().finish_point_light_range_edit(begun.value(), true).ok());
+    EXPECT_FLOAT_EQ(harness.editor.query().entity(light.id)->light.range, 2.0f);
+    EXPECT_TRUE(harness.session.dirty());
+  }
+}
+
+TEST(ViewportInteractionControllerTests, PointLightRadiusDocumentReplacementRetiresPreview) {
+  ViewportInteractionHarness harness;
+  const auto light = create_radius_test_light(harness);
+  const auto begun = harness.editor.scene().begin_point_light_range_edit(light.id);
+  ASSERT_TRUE(begun.ok());
+  ASSERT_TRUE(harness.editor.scene().update_point_light_range_edit(begun.value(), 4.0f).ok());
+  harness.session.replace_document(quader::SceneContentDocument{});
+  EXPECT_FALSE(harness.session.document_commands().point_light_range_edit_active());
+  const auto replacement = create_radius_test_light(harness);
+  ASSERT_EQ(replacement.id, light.id);
+  const auto replacement_edit = harness.editor.scene().begin_point_light_range_edit(replacement.id);
+  ASSERT_TRUE(replacement_edit.ok());
+  ASSERT_TRUE(harness.editor.scene().update_point_light_range_edit(replacement_edit.value(), 6.0f).ok());
+  EXPECT_FALSE(harness.editor.scene().finish_point_light_range_edit(begun.value()).ok());
+  EXPECT_FALSE(harness.editor.scene().finish_point_light_range_edit(begun.value(), true).ok());
+  EXPECT_TRUE(harness.session.document_commands().point_light_range_edit_active());
+  EXPECT_FLOAT_EQ(harness.editor.query().entity(replacement.id)->light.range, 6.0f);
+  ASSERT_TRUE(harness.editor.scene().finish_point_light_range_edit(replacement_edit.value(), true).ok());
+  EXPECT_FLOAT_EQ(harness.editor.query().entity(replacement.id)->light.range, 2.0f);
+}
+
+TEST(ViewportInteractionControllerTests, PointLightRadiusRejectsCompetingToolAndNoOpInspectorDoesNotCommit) {
+  ViewportInteractionHarness harness;
+  const auto light = create_radius_test_light(harness);
+  harness.session.mark_clean();
+  const auto before = harness.session.history().undo_count();
+  const auto begun = harness.editor.scene().begin_point_light_range_edit(light.id);
+  ASSERT_TRUE(begun.ok());
+  ASSERT_TRUE(harness.editor.scene().update_point_light_range_edit(begun.value(), 4.0f).ok());
+  EXPECT_FALSE(harness.editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  const auto unchanged = harness.editor.scene().set_light_component(
+      light.id, harness.editor.query().entity(light.id)->light);
+  ASSERT_TRUE(unchanged.ok());
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_TRUE(harness.session.document_commands().point_light_range_edit_active());
+  EXPECT_EQ(harness.session.history().undo_count(), before);
+  ASSERT_TRUE(harness.editor.scene().finish_point_light_range_edit(begun.value(), true).ok());
+  EXPECT_FLOAT_EQ(harness.editor.query().entity(light.id)->light.range, 2.0f);
+  EXPECT_FALSE(harness.session.dirty());
+}
+
+TEST(ViewportInteractionControllerTests, PointLightRadiusProjectionTracksSelectionAndInheritedPosition) {
+  ViewportInteractionHarness harness;
+  auto parent = harness.editor.scene().create_entity({.name = "Light Parent"});
+  ASSERT_TRUE(parent.ok());
+  quader::QuaderTransform parent_transform;
+  parent_transform.position = {3, 4, 5};
+  parent_transform.scale = {2, 3, 4};
+  ASSERT_TRUE(harness.editor.scene().set_transform(parent.value().id, parent_transform).ok());
+  quader::QuaderCreatePointLightArgs args;
+  args.parent = parent.value().id;
+  args.transform.position = {1, 0, 0};
+  args.light.range = 2;
+  const auto light = harness.editor.scene().create_point_light(args);
+  ASSERT_TRUE(light.ok());
+  refresh_radius_candidates(harness);
+  ASSERT_EQ(harness.billboard_pick_candidates.size(), 1u);
+  EXPECT_FALSE(harness.billboard_pick_candidates.front().point_light_range);
+  ASSERT_TRUE(harness.editor.scene().select(light.value().id).ok());
+  refresh_radius_candidates(harness);
+  const auto selected = harness.billboard_pick_candidates.front();
+  ASSERT_TRUE(selected.point_light_range);
+  EXPECT_FLOAT_EQ(*selected.point_light_range, 2.0f);
+  EXPECT_FLOAT_EQ(selected.position.x, 5.0f);
+  EXPECT_FLOAT_EQ(selected.position.y, 4.0f);
+  EXPECT_FLOAT_EQ(selected.position.z, 5.0f);
+  auto component = harness.editor.query().entity(light.value().id)->light;
+  component.range = 7;
+  ASSERT_TRUE(harness.editor.scene().set_light_component(light.value().id, component).ok());
+  refresh_radius_candidates(harness);
+  EXPECT_FLOAT_EQ(*harness.billboard_pick_candidates.front().point_light_range, 7.0f);
+  ASSERT_TRUE(harness.editor.scene().set_visible(parent.value().id, false).ok());
+  refresh_radius_candidates(harness);
+  EXPECT_TRUE(harness.billboard_pick_candidates.empty());
+}
+
+TEST(ViewportInteractionControllerTests, DISABLED_PointLightRadiusPreviewCpuBenchmark) {
+  using Clock = std::chrono::steady_clock;
+  constexpr int kSamples = 256;
+  for (const int mesh_count : {0, 128}) {
+    ViewportInteractionHarness harness;
+    for (int index = 0; index < mesh_count; ++index) {
+      (void)create_box_at(harness, {static_cast<float>(index % 16) * 3.0f,
+                                    0.0f, static_cast<float>(index / 16) * 3.0f});
+    }
+    const auto light = create_radius_test_light(harness);
+    const auto &scene = harness.session.scene();
+    const auto &assets = harness.session.assets();
+    const auto visibility = harness.session.viewport_workspace().local_visibility_snapshot();
+    for (const bool retained_refresh : {false, true}) {
+      const auto begun = harness.editor.scene().begin_point_light_range_edit(light.id);
+      ASSERT_TRUE(begun.ok());
+      auto render = quader::build_render_scene_snapshot(scene, assets, {.local_visibility = &visibility});
+      (void)harness.editor.selection().summary();
+      (void)harness.session.scene_surface_query().snapshot();
+      const auto sdk_before = harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+      const auto surface_before = harness.session.scene_surface_query().stats();
+      std::array<double, 5> elapsed_us{};
+      int full_render_builds = 0;
+      for (int index = 0; index < kSamples; ++index) {
+        const auto begin = Clock::now();
+        const auto updated = harness.editor.scene().update_point_light_range_edit(
+            begun.value(), 2.0f + static_cast<float>(index + 1) * 0.005f);
+        const auto after_api = Clock::now();
+        const auto selection = harness.editor.selection().summary();
+        const auto after_selection = Clock::now();
+        const auto surfaces = harness.session.scene_surface_query().snapshot();
+        const auto after_surfaces = Clock::now();
+        const auto picks = quader::ViewportSceneProjection::point_light_pick_candidates(scene, visibility);
+        const auto after_picks = Clock::now();
+        if (!quader::render_scene_snapshot_matches_sources(render, scene, assets, {}, 0, {}, &visibility) &&
+            !(retained_refresh && quader::try_refresh_render_scene_snapshot_light_properties(render, scene, assets, index, {}, 0, {}, &visibility)) &&
+            !quader::try_refresh_render_scene_snapshot_curve_publication(render, scene, assets, index, {}, 0, {}, &visibility) &&
+            !quader::try_refresh_render_scene_snapshot_selection(render, scene, assets, index, {}, 0, {}, &visibility) &&
+            !quader::try_refresh_render_scene_snapshot_transforms(render, scene, assets, index, {}, 0, {}, &visibility)) {
+          render = quader::build_render_scene_snapshot(scene, assets,
+              {.previous = &render, .frame_index = static_cast<std::uint64_t>(index),
+               .local_visibility = &visibility});
+          ++full_render_builds;
+        }
+        const auto after_render = Clock::now();
+        ASSERT_TRUE(updated.ok());
+        ASSERT_TRUE(selection.has_selection);
+        ASSERT_TRUE(surfaces.valid());
+        ASSERT_EQ(picks.size(), 1u);
+        ASSERT_EQ(render.lights.size(), 1u);
+        ASSERT_FLOAT_EQ(render.lights.front().light.range, scene.light(light.id)->range);
+        const std::array times{begin, after_api, after_selection, after_surfaces, after_picks, after_render};
+        for (std::size_t stage = 0; stage < elapsed_us.size(); ++stage) {
+          elapsed_us[stage] += std::chrono::duration<double, std::micro>(times[stage + 1] - times[stage]).count();
+        }
+      }
+      const auto sdk_after = harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+      const auto surface_after = harness.session.scene_surface_query().stats();
+      std::printf("LIGHT_RADIUS_CPU mode=%s meshes=%d samples=%d api_us=%.3f selection_us=%.3f surface_us=%.3f pick_projection_us=%.3f render_extraction_us=%.3f full_render_builds=%d sdk_resets=%llu sdk_document_syncs=%llu surface_rebuilds=%llu\n",
+          retained_refresh ? "retained" : "baseline", mesh_count, kSamples, elapsed_us[0] / kSamples, elapsed_us[1] / kSamples,
+          elapsed_us[2] / kSamples, elapsed_us[3] / kSamples, elapsed_us[4] / kSamples,
+          full_render_builds,
+          static_cast<unsigned long long>(sdk_after.full_scene_reset_count - sdk_before.full_scene_reset_count),
+          static_cast<unsigned long long>(sdk_after.targeted_scene_sync_document_count - sdk_before.targeted_scene_sync_document_count),
+          static_cast<unsigned long long>(surface_after.snapshot_build_count - surface_before.snapshot_build_count));
+      EXPECT_EQ(full_render_builds, retained_refresh ? 0 : kSamples);
+      ASSERT_TRUE(harness.editor.scene().finish_point_light_range_edit(begun.value(), true).ok());
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     PointLightPropertyRefreshRetainsMeshStorageAndUpdatesLiveProperties) {
+  for (const int mesh_count : {1, 2}) {
+    SCOPED_TRACE(mesh_count);
+    ViewportInteractionHarness harness;
+    std::vector<quader::EntityId> mesh_entities;
+    for (int index = 0; index < mesh_count; ++index) {
+      mesh_entities.push_back(create_box_at(harness, {}).entity);
+    }
+    const auto other_light = create_radius_test_light(harness);
+    const auto light = create_radius_test_light(harness);
+    auto &scene = harness.session.scene();
+    const auto &assets = harness.session.assets();
+    if (mesh_count == 2) {
+      // The modeling fixture creates separate authored payloads. Explicitly
+      // share one mesh asset so this case exercises retained GPU occurrences.
+      const auto shared_mesh = *scene.mesh(mesh_entities.front());
+      ASSERT_TRUE(scene.set_mesh(mesh_entities.back(), shared_mesh));
+      auto placement = *scene.transform(mesh_entities.back());
+      placement.position.x = 3.0f;
+      ASSERT_TRUE(scene.set_transform(mesh_entities.back(), placement));
+    }
+    auto render = quader::build_render_scene_snapshot(scene, assets);
+    ASSERT_EQ(render.lights.size(), 2u);
+    if (mesh_count == 1) {
+      ASSERT_EQ(render.meshes.size(), 1u);
+    } else {
+      ASSERT_FALSE(render.instance_primitives.empty());
+    }
+    const auto *const meshes = render.meshes.data();
+    const auto *const instances = render.instance_primitives.data();
+    const auto *const lights = render.lights.data();
+    const auto geometry = mesh_count == 1
+        ? render.meshes.front().mesh.geometry_payload
+        : render.instance_primitives.front().mesh.geometry_payload;
+    const auto *const occurrences = mesh_count == 1
+        ? nullptr : render.instance_primitives.front().occurrences.data();
+    auto changed = *scene.light(light.id);
+    changed.range = 5.0f;
+    changed.color = {0.1f, 0.2f, 0.3f};
+    changed.intensity = 3.5f;
+    changed.casts_shadows = !changed.casts_shadows;
+    ASSERT_TRUE(scene.set_light(light.id, changed));
+
+    ASSERT_TRUE(quader::try_refresh_render_scene_snapshot_light_properties(
+        render, scene, assets, 9u));
+    EXPECT_EQ(render.frame_index, 9u);
+    EXPECT_EQ(render.meshes.data(), meshes);
+    EXPECT_EQ(render.instance_primitives.data(), instances);
+    EXPECT_EQ(render.lights.data(), lights);
+    EXPECT_TRUE(render.reused_previous_records);
+    EXPECT_TRUE(render.dirty.render_components_changed);
+    EXPECT_FALSE(render.dirty.transforms_changed);
+    for (const auto &mesh : render.meshes) {
+      EXPECT_FALSE(mesh.mesh_dirty);
+      EXPECT_FALSE(mesh.material_dirty);
+      EXPECT_FALSE(mesh.binding_dirty);
+      EXPECT_FALSE(mesh.transform_dirty);
+      EXPECT_FALSE(mesh.texture_mapping_dirty);
+    }
+    if (mesh_count == 1) {
+      EXPECT_EQ(render.meshes.front().mesh.geometry_payload, geometry);
+    } else {
+      EXPECT_EQ(render.instance_primitives.front().mesh.geometry_payload, geometry);
+      EXPECT_EQ(render.instance_primitives.front().occurrences.data(), occurrences);
+    }
+    for (const auto &record : render.lights) {
+      EXPECT_EQ(record.light, *scene.light(record.entity_id));
+      EXPECT_EQ(record.light_dirty, record.entity_id == light.id);
+      EXPECT_FALSE(record.transform_dirty);
+      if (record.entity_id == other_light.id) {
+        EXPECT_FLOAT_EQ(record.light.range, 2.0f);
+      }
+    }
+    EXPECT_TRUE(quader::render_scene_snapshot_matches_sources(render, scene, assets));
+    EXPECT_FALSE(quader::try_refresh_render_scene_snapshot_light_properties(
+        render, scene, assets, 10u));
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     PointLightPropertyRefreshRejectsMixedEditsAndChangedBindings) {
+  for (const int mixed_edit : {0, 1, 2, 3, 4, 5, 6, 7, 8}) {
+    SCOPED_TRACE(mixed_edit);
+    ViewportInteractionHarness harness;
+    const auto box = create_box_at(harness, {0.0f, 0.0f, 0.0f});
+    const auto light = create_radius_test_light(harness);
+    auto &scene = harness.session.scene();
+    const auto &assets = harness.session.assets();
+    quader::RenderSceneBindingKey binding{
+        .scene_session_id = 19u, .activation_generation = 1u, .binding_revision = 1u};
+    auto render = quader::build_render_scene_snapshot(
+        scene, assets, {.scene_binding = binding});
+    const quader::RenderSourceStamp before = render;
+    const auto *const meshes = render.meshes.data();
+    auto component = *scene.light(light.id);
+    component.range = 5.0f;
+    ASSERT_TRUE(scene.set_light(light.id, component));
+    std::uint64_t project_material_revision = 0u;
+    switch (mixed_edit) {
+    case 0:
+      ASSERT_TRUE(harness.editor.scene().create_point_light({}).ok());
+      break;
+    case 1:
+      ASSERT_TRUE(scene.clear_light(light.id));
+      break;
+    case 2: {
+      auto mesh = *scene.mesh(box.entity);
+      mesh.cast_shadows = !mesh.cast_shadows;
+      ASSERT_TRUE(scene.set_mesh(box.entity, mesh));
+      break;
+    }
+    case 3: {
+      auto transform = *scene.transform(box.entity);
+      transform.position.x += 1.0f;
+      ASSERT_TRUE(scene.set_transform(box.entity, transform));
+      break;
+    }
+    case 4:
+      ASSERT_TRUE(harness.editor.scene().rename(light.id, "Mixed Radius Edit").ok());
+      break;
+    case 5:
+      ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+      break;
+    case 6:
+      ASSERT_TRUE(harness.editor.scene().set_visible(box.entity, false).ok());
+      break;
+    case 7:
+      project_material_revision = 1u;
+      break;
+    case 8:
+      ++binding.activation_generation;
+      break;
+    }
+    EXPECT_FALSE(quader::try_refresh_render_scene_snapshot_light_properties(
+        render, scene, assets, 9u, binding, project_material_revision));
+    EXPECT_EQ(static_cast<const quader::RenderSourceStamp &>(render), before);
+    EXPECT_EQ(render.meshes.data(), meshes);
+    ASSERT_EQ(render.lights.size(), 1u);
+    EXPECT_FLOAT_EQ(render.lights.front().light.range, 2.0f);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     PointLightPropertyRefreshRejectsRevisionRollbackAndRecoversAfterRebuild) {
+  ViewportInteractionHarness harness;
+  const auto light = create_radius_test_light(harness);
+  auto &scene = harness.session.scene();
+  const auto &assets = harness.session.assets();
+  const std::array participants{light.id};
+  const auto checkpoint = scene.capture_modeling_projection_checkpoint(
+      participants, quader::SceneModelingProjectionDomain::Structure |
+                        quader::SceneModelingProjectionDomain::Selection);
+  ASSERT_TRUE(checkpoint.valid());
+  const auto initial_light_revision = scene.light_property_revision();
+  auto component = *scene.light(light.id);
+  component.range = 5.0f;
+  ASSERT_TRUE(scene.set_light(light.id, component));
+  auto render = quader::build_render_scene_snapshot(scene, assets);
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(checkpoint));
+  EXPECT_EQ(scene.light_property_revision(), initial_light_revision);
+  EXPECT_FALSE(quader::try_refresh_render_scene_snapshot_light_properties(
+      render, scene, assets));
+  render = quader::build_render_scene_snapshot(scene, assets);
+  EXPECT_FLOAT_EQ(render.lights.front().light.range, 2.0f);
+  ASSERT_TRUE(scene.set_light(light.id, component));
+  EXPECT_TRUE(quader::try_refresh_render_scene_snapshot_light_properties(
+      render, scene, assets));
+  EXPECT_FLOAT_EQ(render.lights.front().light.range, 5.0f);
+}
+
+TEST(ViewportInteractionControllerTests, LightPropertyRevisionDistinguishesEditsAndExactRollback) {
+  ViewportInteractionHarness harness;
+  const auto light = create_radius_test_light(harness);
+  auto &scene = harness.session.scene();
+  const auto baseline = scene.light_property_revision();
+  const auto scene_baseline = scene.revision();
+  const auto original = *scene.light(light.id);
+  auto changed = original;
+  changed.range = 5.0f;
+  ASSERT_TRUE(scene.set_light(light.id, changed));
+  EXPECT_EQ(scene.light_property_revision(), baseline + 1u);
+  EXPECT_EQ(scene.revision(), scene_baseline + 1u);
+  ASSERT_TRUE(scene.set_light(light.id, changed));
+  EXPECT_EQ(scene.light_property_revision(), baseline + 1u);
+  ASSERT_TRUE(harness.editor.scene().rename(light.id, "Renamed Radius Light").ok());
+  EXPECT_EQ(scene.light_property_revision(), baseline + 1u);
+  EXPECT_GT(scene.revision() - scene_baseline, scene.light_property_revision() - baseline);
+
+  auto checkpoint = scene.capture_scalar_compensation_checkpoint();
+  ASSERT_TRUE(checkpoint.valid());
+  const auto before_checkpoint_edit = scene.light_property_revision();
+  ASSERT_TRUE(scene.set_light(light.id, original));
+  ASSERT_TRUE(scene.acknowledge_scalar_compensation_checkpoint(checkpoint));
+  ASSERT_TRUE(scene.begin_scalar_compensation_restore(checkpoint));
+  ASSERT_TRUE(scene.set_light(light.id, changed));
+  ASSERT_TRUE(scene.restore_scalar_compensation_checkpoint(checkpoint));
+  EXPECT_EQ(scene.light_property_revision(), before_checkpoint_edit);
+  EXPECT_FLOAT_EQ(scene.light(light.id)->range, changed.range);
 }
 
 TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedPointLightThroughViewportFrames) {

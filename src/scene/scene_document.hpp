@@ -546,6 +546,11 @@ public:
     std::uint64_t render_component_revision() const {
       return render_component_revision_;
     }
+    /// Advances only for property changes to an already existing Light entity.
+    /// Equal deltas with render-component/scene revision prove light-only work.
+    std::uint64_t light_property_revision() const {
+      return light_property_revision_;
+    }
     std::uint64_t layer_revision() const { return layer_revision_; }
 
     /**
@@ -716,6 +721,7 @@ private:
   std::uint64_t curve_binding_revision_ = 0;
   std::uint64_t material_binding_revision_ = 0;
   std::uint64_t render_component_revision_ = 0;
+  std::uint64_t light_property_revision_ = 0;
   std::uint64_t layer_revision_ = 0;
   EditorObjectIdAllocator editor_object_id_allocator_;
   entt::registry registry_;

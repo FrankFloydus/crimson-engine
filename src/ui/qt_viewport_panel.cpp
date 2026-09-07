@@ -2097,6 +2097,7 @@ bool QtViewportPanel::pane_interaction_locked() const {
                   [](const auto &suppression) { return suppression.active(); }) ||
       interaction_controller_.primitive_creation_pointer_active() ||
       interaction_controller_.transform_gizmo_pointer_active() ||
+      interaction_controller_.point_light_range_pointer_active() ||
       (interaction_native_tools_ != nullptr &&
        interaction_native_tools_->pointer_dragging()) ||
       interaction_controller_.texture_transfer_pointer_active() ||
@@ -2530,6 +2531,7 @@ void QtViewportPanel::process_viewport_input(
                   [](const auto &suppression) { return suppression.active(); }) ||
       interaction_controller_.primitive_creation_pointer_active() ||
       interaction_controller_.transform_gizmo_pointer_active() ||
+      interaction_controller_.point_light_range_pointer_active() ||
       native_tools.pointer_dragging() ||
       interaction_controller_.texture_transfer_pointer_active() ||
       interaction_controller_.context_menu_pointer_active() ||
@@ -2773,6 +2775,7 @@ void QtViewportPanel::process_viewport_input(
              .left_released = sample.left_released,
              .gizmo_consumed = command_pointer_owned || navigation_gizmo_consumed ||
                  interaction_controller_.transform_gizmo_pointer_active() ||
+                 interaction_controller_.point_light_range_pointer_active() ||
                  native_tools.pointer_dragging() || pane_state.surface->pointer_captured(),
              .navigation_active = input.navigation_active || input.fly_navigation_active ||
                  input.right_down || input.middle_down || input.right_pressed ||
@@ -3086,11 +3089,13 @@ void QtViewportPanel::process_viewport_input(
   std::span<const ViewportSceneBillboardPickCandidate> billboards;
   if (point_lights_pickable) {
     const std::uint64_t scene_revision = document.revision();
+    const std::uint64_t selection_revision = document.selection_revision();
     const std::uint64_t local_visibility_revision =
         local_visibility.revision();
     if (!point_light_pick_cache_valid_ ||
         point_light_pick_cached_document_ != &document ||
         point_light_pick_cached_scene_revision_ != scene_revision ||
+        point_light_pick_cached_selection_revision_ != selection_revision ||
         point_light_pick_cached_local_visibility_revision_ !=
             local_visibility_revision ||
         point_light_pick_cached_viewport_pixel_scale_ !=
@@ -3101,6 +3106,7 @@ void QtViewportPanel::process_viewport_input(
               document, local_visibility, viewport_pixel_scale);
       point_light_pick_cached_document_ = &document;
       point_light_pick_cached_scene_revision_ = scene_revision;
+      point_light_pick_cached_selection_revision_ = selection_revision;
       point_light_pick_cached_local_visibility_revision_ =
           local_visibility_revision;
       point_light_pick_cached_viewport_pixel_scale_ = viewport_pixel_scale;
@@ -3796,6 +3802,7 @@ void QtViewportPanel::process_viewport_input(
     hover_controller_.invalidate();
   }
   if (interaction_controller_.transform_gizmo_pointer_active() ||
+      interaction_controller_.point_light_range_pointer_active() ||
       interaction_controller_.primitive_creation_pointer_active() ||
       before_tool.gizmo_consumed ||
       has_input_activity(sample)) {
@@ -3841,6 +3848,7 @@ void QtViewportPanel::process_viewport_input(
       !suppress_hover_work && !gizmo_consumed &&
       !modal_tool_owns_viewport_snapshot_ && !modal_tool_dragging_ &&
       !interaction_controller_.transform_gizmo_pointer_active() &&
+      !interaction_controller_.point_light_range_pointer_active() &&
       !native_tools.pointer_dragging() &&
       !show_context_menu && !show_delete_popup;
   primitive_feedback_input_eligible_ =

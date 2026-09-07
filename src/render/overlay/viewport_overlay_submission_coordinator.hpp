@@ -105,9 +105,22 @@ struct ViewportOverlayPersistentSubmissionStamp final {
       default;
 };
 
+/** Radius handles keep a fixed pixel size as camera pose and projection change. */
+struct ViewportOverlayPointLightRadiusSubmissionStamp final {
+  ViewportOverlaySceneSubmissionStamp scene;
+  std::array<float, 15u> camera_values{};
+  ViewportOverlayProjection projection = ViewportOverlayProjection::Perspective;
+  float raster_scale = 1.0f;
+  bool active = false;
+
+  friend bool operator==(const ViewportOverlayPointLightRadiusSubmissionStamp &,
+                         const ViewportOverlayPointLightRadiusSubmissionStamp &) = default;
+};
+
 /** Keys the small frame-volatile stream separately from retained geometry. */
 struct ViewportOverlayDynamicSubmissionStamp final {
   std::uint64_t mesh_outline_revision = 0u;
+  ViewportOverlayPointLightRadiusSubmissionStamp point_light_radius;
   ViewportOverlayDynamicToolSourceStamp dynamic_tools;
   /** Identifies one volatile modeling-overlay publication without hashing its geometry. */
   struct VolatileModelingSourceStamp final {
@@ -215,6 +228,8 @@ struct ViewportOverlaySubmissionWorkCounters final {
   std::uint64_t dynamic_source_compose_count = 0u;
   std::uint64_t dynamic_source_composed_record_count = 0u;
   std::uint64_t curve_overlay_build_count = 0u;
+  std::uint64_t point_light_radius_source_refresh_count = 0u;
+  std::uint64_t point_light_radius_camera_build_count = 0u;
 };
 
 /**
@@ -255,6 +270,11 @@ private:
     bool dynamic_valid = false;
     ViewportOverlayFrame dynamic_source_frame;
     std::uint64_t dynamic_source_revision = 0u;
+    ViewportOverlaySceneSubmissionStamp point_light_source;
+    std::vector<RenderOverlayLightMarkerSnapshot> selected_point_lights;
+    ViewportOverlayFrame point_light_radius_frame;
+    bool point_light_source_valid = false;
+    bool point_light_radius_enabled = false;
   };
 
   std::array<PaneState, kMaxViewportSlots> panes_;

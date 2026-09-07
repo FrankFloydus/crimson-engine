@@ -89,12 +89,18 @@ void LightRenderableCache::sync_light(const RenderSceneLightRecord &light) {
   }
 
   if (needs_rebuild(light)) {
-    remove(light.entity_id);
-    LightProxy proxy =
-        create_light_proxy(light.entity_id, light.light, light.world_transform,
-                           light.rebuild_revision, light.transform_revision);
-    light_proxies_.emplace(light.entity_id, std::move(proxy));
-    return;
+    const auto existing = light_proxies_.find(light.entity_id);
+    if (existing != light_proxies_.end() &&
+        try_update_point_light_range(existing->second, light.light)) {
+      existing->second.rebuild_signature = light.rebuild_revision;
+    } else {
+      remove(light.entity_id);
+      LightProxy proxy =
+          create_light_proxy(light.entity_id, light.light, light.world_transform,
+                             light.rebuild_revision, light.transform_revision);
+      light_proxies_.emplace(light.entity_id, std::move(proxy));
+      return;
+    }
   }
 
   auto existing = light_proxies_.find(light.entity_id);
@@ -196,6 +202,7 @@ LightRenderableCache::LightProxy LightRenderableCache::create_light_proxy(
   proxy.source_entity = entity_id;
   proxy.rebuild_signature = rebuild_signature;
   proxy.transform_signature = transform_signature;
+  proxy.authored_light = light;
   LightProxyCreationGuard creation_guard{*engine_, *scene_, proxy};
 
   filament::LightManager::Builder builder(to_filament_light_type(light.type));
@@ -209,6 +216,28 @@ LightRenderableCache::LightProxy LightRenderableCache::create_light_proxy(
   scene_->addEntity(proxy.entity);
   creation_guard.release();
   return proxy;
+}
+
+bool LightRenderableCache::try_update_point_light_range(
+    LightProxy &proxy, const LightComponent &light) {
+  if (light.type != LightType::Point) {
+    return false;
+  }
+  LightComponent previous_with_new_range = proxy.authored_light;
+  previous_with_new_range.range = light.range;
+  if (!(previous_with_new_range == light)) {
+    return false;
+  }
+  auto &light_manager = engine_->getLightManager();
+  const filament::LightManager::Instance instance =
+      light_manager.getInstance(proxy.entity);
+  if (!instance) {
+    return false;
+  }
+  // Keep the light and its shadow resources stable throughout radius dragging.
+  light_manager.setFalloff(instance, light_falloff_radius(light));
+  proxy.authored_light = light;
+  return true;
 }
 
 void LightRenderableCache::update_light_transform(

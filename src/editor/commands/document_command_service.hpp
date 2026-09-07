@@ -16,6 +16,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -30,6 +31,14 @@ class AssetRegistry;
 struct PreparedDocumentCommand final {
   DocumentCommandResult status;
   std::unique_ptr<IUndoableCommand> command;
+};
+
+/// Lets the session track clean content across a live radius preview.
+struct PointLightRangePreviewCheckpointHooks {
+  std::function<void()> begin;
+  std::function<void()> observe_before_projection;
+  std::function<void()> record_after_projection;
+  std::function<void(bool restored_by_cancel)> finish;
 };
 
 /**
@@ -105,6 +114,18 @@ public:
     DocumentCommandResult
     set_light_component(EntityId entity, LightComponent light,
                         UndoRedoExecuteOptions options = {});
+    /// A range preview publishes live light values and records only its finish.
+    DocumentCommandResult begin_point_light_range_edit(EntityId entity);
+    DocumentCommandResult update_point_light_range_edit(EntityId entity, float range);
+    DocumentCommandResult finish_point_light_range_edit(EntityId entity, bool cancel);
+    DocumentCommandResult cancel_active_point_light_range_edit();
+    void abandon_point_light_range_edit() { point_light_range_edit_.reset(); }
+    [[nodiscard]] bool point_light_range_edit_active() const {
+      return point_light_range_edit_.has_value();
+    }
+    void set_point_light_range_preview_hooks(PointLightRangePreviewCheckpointHooks hooks) {
+      point_light_range_preview_hooks_ = std::move(hooks);
+    }
     DocumentCommandResult
     set_scene_settings(EntityId entity, SceneSettingsComponent settings,
                        UndoRedoExecuteOptions options = {});
@@ -147,6 +168,15 @@ public:
     EntityMutationBlocker entity_mutation_blocker_;
     CheckedSelectionPublication selection_publication_;
     std::function<TextureLockSettings()> texture_lock_settings_provider_;
+    /// Owns only the range field; concurrent component changes remain intact.
+    struct PointLightRangeEdit {
+      EntityId entity = kInvalidEntityId;
+      std::string uuid;
+      float before = 0.0f;
+      float expected = 0.0f;
+    };
+    std::optional<PointLightRangeEdit> point_light_range_edit_;
+    PointLightRangePreviewCheckpointHooks point_light_range_preview_hooks_;
 };
 
 } // namespace quader

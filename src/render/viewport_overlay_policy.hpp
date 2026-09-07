@@ -105,6 +105,7 @@ inline constexpr std::uint32_t kOverlayPrimitiveCubeFaceHighlightColor =
     rgba8(255, 128, 112, 255);
 inline constexpr std::uint32_t kOverlayPrimitiveCubeFaceOutlineColor =
     rgba8(255, 255, 255, 255);
+inline constexpr float kOverlayCircularHandleInnerRadius = 0.72f;
 inline constexpr std::uint32_t kOverlayPrimitiveCubeSubdivisionColor =
     rgba8(255, 214, 0, 255);
 inline constexpr std::uint32_t kOverlayPrimitiveCubeSubdivisionHighlightColor =
@@ -169,6 +170,12 @@ inline constexpr float kOverlayDrawnPlaneLineWidthPixels = 2.0f;
 inline constexpr float kOverlayLightMarkerPointSizePixels = 13.0f;
 inline constexpr float kOverlayLightMarkerOutlineGrowthPixels = 2.0f;
 inline constexpr float kOverlayPointLightGizmoSizePixels = 64.0f;
+inline constexpr std::uint32_t kOverlayPointLightRadiusWireColor =
+    rgba8(255, 255, 255, 89);
+inline constexpr std::uint32_t kOverlayPointLightRadiusSilhouetteColor =
+    rgba8(255, 255, 255, 255);
+inline constexpr float kOverlayPointLightRadiusLineWidthPixels = 1.0f;
+inline constexpr float kOverlayPointLightRadiusHandleSizePixels = 12.0f;
 inline constexpr float kOverlayTransformGizmoSizePixels = 80.0f;
 inline constexpr float kOverlayTransformGizmoPickRadiusPixels = 12.0f;
 inline constexpr float kOverlayTransformGizmoMoveCenterRadiusPixels = 10.0f;

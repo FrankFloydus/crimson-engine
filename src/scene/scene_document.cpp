@@ -63,6 +63,7 @@ struct SceneModelingProjectionCheckpoint::State final {
   std::uint64_t curve_binding_revision = 0u;
   std::uint64_t material_binding_revision = 0u;
   std::uint64_t render_component_revision = 0u;
+  std::uint64_t light_property_revision = 0u;
   std::uint64_t layer_revision = 0u;
 };
 
@@ -125,6 +126,7 @@ struct SceneScalarCompensationCheckpoint::State final {
     std::uint64_t curve_binding_revision = 0u;
     std::uint64_t material_binding_revision = 0u;
     std::uint64_t render_component_revision = 0u;
+    std::uint64_t light_property_revision = 0u;
     std::uint64_t layer_revision = 0u;
   };
 
@@ -149,6 +151,7 @@ struct SceneScalarCompensationCheckpoint::State final {
   std::uint64_t curve_binding_revision = 0u;
   std::uint64_t material_binding_revision = 0u;
   std::uint64_t render_component_revision = 0u;
+  std::uint64_t light_property_revision = 0u;
   std::uint64_t layer_revision = 0u;
   std::vector<EntityAllocationReceipt> entity_allocations;
   std::vector<LayerAllocationReceipt> layer_allocations;
@@ -486,6 +489,7 @@ SceneDocument::capture_scalar_compensation_checkpoint() {
   state->curve_binding_revision = curve_binding_revision_;
   state->material_binding_revision = material_binding_revision_;
   state->render_component_revision = render_component_revision_;
+  state->light_property_revision = light_property_revision_;
   state->layer_revision = layer_revision_;
 
   scalar_compensation_stack_.push_back(state);
@@ -527,6 +531,7 @@ bool SceneDocument::acknowledge_scalar_compensation_checkpoint(
   boundary.curve_binding_revision = curve_binding_revision_;
   boundary.material_binding_revision = material_binding_revision_;
   boundary.render_component_revision = render_component_revision_;
+  boundary.light_property_revision = light_property_revision_;
   boundary.layer_revision = layer_revision_;
   checkpoint.state_->acknowledged = true;
   return true;
@@ -565,6 +570,7 @@ bool SceneDocument::begin_scalar_compensation_restore(
       curve_binding_revision_ != boundary.curve_binding_revision ||
       material_binding_revision_ != boundary.material_binding_revision ||
       render_component_revision_ != boundary.render_component_revision ||
+      light_property_revision_ != boundary.light_property_revision ||
       layer_revision_ != boundary.layer_revision) {
     return false;
   }
@@ -720,6 +726,7 @@ bool SceneDocument::restore_scalar_compensation_checkpoint(
   curve_binding_revision_ = state.curve_binding_revision;
   material_binding_revision_ = state.material_binding_revision;
   render_component_revision_ = state.render_component_revision;
+  light_property_revision_ = state.light_property_revision;
   layer_revision_ = state.layer_revision;
   for (const auto &[entity, baseline] : state.mutation_baselines) {
     if (!baseline.record_existed) {
@@ -793,6 +800,7 @@ SceneDocument::capture_modeling_projection_checkpoint(
   state->curve_binding_revision = curve_binding_revision_;
   state->material_binding_revision = material_binding_revision_;
   state->render_component_revision = render_component_revision_;
+  state->light_property_revision = light_property_revision_;
   state->layer_revision = layer_revision_;
   if (has_projection_domain(domains,
                             SceneModelingProjectionDomain::Selection)) {
@@ -980,6 +988,7 @@ bool SceneDocument::preflight_modeling_projection_restore(
         curve_binding_revision_ < state.curve_binding_revision ||
         material_binding_revision_ < state.material_binding_revision ||
         render_component_revision_ < state.render_component_revision ||
+        light_property_revision_ < state.light_property_revision ||
         layer_revision_ < state.layer_revision) {
       return report(false);
     }
@@ -1705,6 +1714,7 @@ bool SceneDocument::restore_modeling_projection_checkpoint_impl(
     curve_binding_revision_ = state.curve_binding_revision;
     material_binding_revision_ = state.material_binding_revision;
     render_component_revision_ = state.render_component_revision;
+    light_property_revision_ = state.light_property_revision;
     layer_revision_ = state.layer_revision;
   }
   invalidate_spatial_projection_caches_after_revision_restore();
@@ -3139,6 +3149,7 @@ bool SceneDocument::set_light(EntityId id, LightComponent light) {
     return true;
   }
   const bool kind_changed = kind(id) != EntityKind::Light;
+  const bool existing_light_properties = current != nullptr && !kind_changed;
   const bool active_kind_changed =
       current == nullptr && active_selection_ == id && is_selected(id);
   registry_.emplace_or_replace<LightComponent>(entity, light);
@@ -3150,6 +3161,9 @@ bool SceneDocument::set_light(EntityId id, LightComponent light) {
   ++render_component_revision_;
   if (active_kind_changed) {
     ++selection_revision_;
+  }
+  if (existing_light_properties) {
+    ++light_property_revision_;
   }
   mark_dirty(id, SceneModelingProjectionDomain::Structure);
   return true;

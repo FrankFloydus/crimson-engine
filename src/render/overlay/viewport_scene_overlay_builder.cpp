@@ -7,6 +7,8 @@
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
 
 #include "render/overlay/curve_overlay_geometry.hpp"
+#include "render/overlay/overlay_camera_projector.hpp"
+#include "render/overlay/viewport_circular_handle.hpp"
 
 #include "diagnostics/profile.hpp"
 #include "core/color_space.hpp"
@@ -17,6 +19,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <numbers>
 #include <optional>
 #include <unordered_map>
 #include <utility>
@@ -395,6 +398,52 @@ void append_selected_light_markers(ViewportOverlayFrame &frame,
   }
 }
 
+void append_light_radius_circle(ViewportOverlayFrame &frame,
+                                const RenderOverlayLightMarkerSnapshot &light,
+                                QVec3 right, QVec3 up,
+                                std::uint32_t color) {
+  constexpr std::size_t kCircleSegments = 120u;
+  const QVec3 center = transform_point(light.world_transform, {});
+  QVec3 previous = center + right * light.radius;
+  for (std::size_t segment = 1u; segment <= kCircleSegments; ++segment) {
+    const float angle = 2.0f * std::numbers::pi_v<float> * static_cast<float>(segment) /
+                        static_cast<float>(kCircleSegments);
+    const QVec3 next = segment == kCircleSegments
+                           ? center + right * light.radius
+                           : center + (right * std::cos(angle) +
+                                       up * std::sin(angle)) * light.radius;
+    frame.lines.push_back({
+        .layer = ViewportOverlayLayer::ToolPlaneLine,
+        .start = previous,
+        .end = next,
+        .color = color,
+        .width_pixels = kOverlayPointLightRadiusLineWidthPixels,
+        .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::Gizmo,
+        .element = {.object_id = static_cast<int>(light.entity)},
+    });
+    previous = next;
+  }
+}
+
+void append_selected_light_radius_circles(
+    ViewportOverlayFrame &frame,
+    const RenderOverlaySelectionSnapshot &snapshot) {
+  for (const RenderOverlayLightMarkerSnapshot &light :
+       snapshot.point_light_gizmos) {
+    if (!light.selected) continue;
+    append_light_radius_circle(frame, light, {1.0f, 0.0f, 0.0f},
+                               {0.0f, 1.0f, 0.0f},
+                               kOverlayPointLightRadiusWireColor);
+    append_light_radius_circle(frame, light, {1.0f, 0.0f, 0.0f},
+                               {0.0f, 0.0f, 1.0f},
+                               kOverlayPointLightRadiusWireColor);
+    append_light_radius_circle(frame, light, {0.0f, 1.0f, 0.0f},
+                               {0.0f, 0.0f, 1.0f},
+                               kOverlayPointLightRadiusWireColor);
+  }
+}
+
 void append_point_light_gizmos(ViewportOverlayFrame &frame,
                                const RenderOverlaySelectionSnapshot
                                    &snapshot) {
@@ -530,6 +579,9 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
   }
   if (point_light_gizmos_visible) {
     append_point_light_gizmos(base_frame, snapshot);
+    if (selection_overlays_visible) {
+      append_selected_light_radius_circles(base_frame, snapshot);
+    }
   }
   if (include_tool_overlays) {
     base_frame.lines.insert(base_frame.lines.end(),
@@ -553,6 +605,43 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
         snapshot.tool_overlays.hover_target_selected;
   }
   return base_frame;
+}
+
+ViewportOverlayFrame ViewportSceneOverlayBuilder::build_point_light_radius_frame(
+    std::span<const RenderOverlayLightMarkerSnapshot> selected_lights,
+    const ViewportOverlayCamera &raw_camera, float raster_scale) {
+  ViewportOverlayFrame frame;
+  const ViewportOverlayCamera camera =
+      OverlayCameraProjector::sanitized_camera(raw_camera);
+  frame.lines.reserve(selected_lights.size() * 120u);
+  frame.triangles.reserve(selected_lights.size() *
+                          kViewportCircularHandleSegments * 3u);
+  const float perspective_span_per_depth =
+      2.0f * std::tan(camera.fov_degrees * std::numbers::pi_v<float> / 360.0f);
+  const float handle_radius_pixels =
+      kOverlayPointLightRadiusHandleSizePixels * 0.5f *
+      viewport_overlay_sanitized_raster_scale(raster_scale);
+  for (const RenderOverlayLightMarkerSnapshot &light : selected_lights) {
+    if (!light.selected) continue;
+    append_light_radius_circle(frame, light, camera.right, camera.up,
+                               kOverlayPointLightRadiusSilhouetteColor);
+    if (!light.radius_editable) continue;
+    const QVec3 handle = transform_point(light.world_transform, {}) +
+                         camera.right * light.radius;
+    const float depth = dot(handle - camera.eye, camera.forward);
+    if (!std::isfinite(depth) || depth < camera.near_plane) continue;
+    const float world_radius =
+        (camera.projection == ViewportOverlayProjection::Orthographic
+             ? camera.orthographic_size
+             : depth * perspective_span_per_depth) *
+        handle_radius_pixels / camera.viewport_size.y;
+    append_viewport_circular_handle(
+        frame, handle, camera.right * world_radius, camera.up * -world_radius, {
+            .source = ViewportOverlaySource::Gizmo,
+            .element = {.object_id = static_cast<int>(light.entity)},
+        });
+  }
+  return frame;
 }
 
 ViewportOverlayFrame
