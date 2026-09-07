@@ -46,7 +46,7 @@ include(cmake/QuaderBuildOptions.cmake)
 # participate in the final executable's link-time optimization pass.
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 
-set(_QUADER_DEFAULT_FILAMENT_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/filament-v1.71.6-quader-vsync2-windows")
+set(_QUADER_DEFAULT_FILAMENT_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/filament-v1.71.6-quader-vsync3-windows")
 if(DEFINED ENV{FILAMENT_SDK_ROOT} AND NOT "$ENV{FILAMENT_SDK_ROOT}" STREQUAL "")
     file(TO_CMAKE_PATH "$ENV{FILAMENT_SDK_ROOT}" _QUADER_DEFAULT_FILAMENT_SDK_ROOT)
 endif()

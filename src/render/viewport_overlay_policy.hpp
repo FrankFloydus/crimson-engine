@@ -170,7 +170,7 @@ inline constexpr float kOverlayDrawnPlanePointSizePixels = 8.0f;
 inline constexpr float kOverlayDrawnPlaneLineWidthPixels = 2.0f;
 inline constexpr float kOverlayLightMarkerPointSizePixels = 13.0f;
 inline constexpr float kOverlayLightMarkerOutlineGrowthPixels = 2.0f;
-inline constexpr float kOverlayPointLightGizmoSizePixels = 64.0f;
+inline constexpr float kOverlayPointLightGizmoSizePixels = 51.2f;
 inline constexpr std::uint32_t kOverlayPointLightRadiusWireColor =
     rgba8(255, 255, 255, 89);
 inline constexpr std::uint32_t kOverlayPointLightRadiusSilhouetteColor =

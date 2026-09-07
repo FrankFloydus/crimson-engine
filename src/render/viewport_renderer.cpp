@@ -14,7 +14,6 @@
 #include <filament/ColorGrading.h>
 #include <filament/ColorSpace.h>
 #include <filament/Options.h>
-#include <filament/SwapChain.h>
 #include <filament/ToneMapper.h>
 #include <filament/Viewport.h>
 #include <utils/EntityManager.h>
@@ -54,42 +53,43 @@ viewport_clear_color(const SceneEnvironmentSettings &environment,
 
 filament::ColorGrading *
 build_color_grading(filament::Engine &engine,
-                    const filament::ToneMapper &tone_mapper,
-                    const filament::color::ColorSpace &output_color_space) {
+                    const filament::ToneMapper &tone_mapper) {
+  // Filament's dithering and LDR intermediates operate in display codes. The
+  // maintained renderer patch handles the final hardware-sRGB swapchain write.
   return filament::ColorGrading::Builder()
       .quality(filament::ColorGrading::QualityLevel::MEDIUM)
       .toneMapper(&tone_mapper)
-      .outputColorSpace(output_color_space)
+      .outputColorSpace(filament::color::Rec709 - filament::color::sRGB -
+                        filament::color::D65)
       .build(engine);
 }
 
 filament::ColorGrading *build_color_grading(
-    filament::Engine &engine, SceneToneMapping tone_mapping,
-    const filament::color::ColorSpace &output_color_space) {
+    filament::Engine &engine, SceneToneMapping tone_mapping) {
   switch (tone_mapping) {
   case SceneToneMapping::Linear: {
     const filament::LinearToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper, output_color_space);
+    return build_color_grading(engine, tone_mapper);
   }
   case SceneToneMapping::AcesLegacy: {
     const filament::ACESLegacyToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper, output_color_space);
+    return build_color_grading(engine, tone_mapper);
   }
   case SceneToneMapping::Aces: {
     const filament::ACESToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper, output_color_space);
+    return build_color_grading(engine, tone_mapper);
   }
   case SceneToneMapping::Filmic: {
     const filament::FilmicToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper, output_color_space);
+    return build_color_grading(engine, tone_mapper);
   }
   case SceneToneMapping::DisplayRange: {
     const filament::DisplayRangeToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper, output_color_space);
+    return build_color_grading(engine, tone_mapper);
   }
   }
   const filament::ACESToneMapper tone_mapper;
-  return build_color_grading(engine, tone_mapper, output_color_space);
+  return build_color_grading(engine, tone_mapper);
 }
 
 TextureSampleColorSpace
@@ -438,19 +438,7 @@ void ViewportRenderer::apply_tone_mapping(SceneToneMapping tone_mapping,
 
   view_->setColorGrading(nullptr);
   destroy_color_grading();
-  // An sRGB swapchain encodes linear pixels during presentation. Applying the
-  // grading LUT's sRGB transfer too would encode the rendered scene twice.
-  const bool swapchain_encodes_srgb =
-      surface_ == ViewportRenderSurface::SrgbSwapchain &&
-      filament::SwapChain::isSRGBSwapChainSupported(*engine_);
-  const filament::color::ColorSpace output_color_space =
-      swapchain_encodes_srgb
-          ? filament::color::Rec709 - filament::color::Linear -
-                filament::color::D65
-          : filament::color::Rec709 - filament::color::sRGB -
-                filament::color::D65;
-  color_grading_ =
-      build_color_grading(*engine_, tone_mapping, output_color_space);
+  color_grading_ = build_color_grading(*engine_, tone_mapping);
   if (color_grading_ == nullptr) {
     has_color_grading_tone_mapping_ = false;
     return;

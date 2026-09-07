@@ -39,7 +39,6 @@ bool QtMaterialPreviewSurface::initialize(RenderSystem &render_system) {
     render_system_ = nullptr;
     return false;
   }
-  renderer_.set_srgb_swapchain(true);
   renderer_.set_preview_state(preview_state_);
   initialized_ = true;
   mark_render_pending();

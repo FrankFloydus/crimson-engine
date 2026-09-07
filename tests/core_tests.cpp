@@ -2277,8 +2277,8 @@ TEST(ViewportOverlayPolicyTests, MatchesDepthAndHoverSuppressionContract) {
             ViewportOverlayDepthMode::DrawOnTop);
   EXPECT_EQ(viewport_overlay_depth_mode(ViewportOverlayLayer::PointLightGizmo,
                                         ViewportOverlayGeometryKind::Icons),
-            ViewportOverlayDepthMode::DrawOnTop);
-  EXPECT_FALSE(
+            ViewportOverlayDepthMode::DepthTested);
+  EXPECT_TRUE(
       viewport_overlay_depth_tested(ViewportOverlayLayer::PointLightGizmo,
                                     ViewportOverlayGeometryKind::Icons));
 
@@ -2449,7 +2449,7 @@ TEST(ViewportOverlayPolicyTests, MatchesNativeColorsAndRuntimePointSizes) {
       viewport_overlay_point_size_pixels(ViewportOverlayLayer::PointLightGizmo,
                                          kOverlayPointLightGizmoSizePixels),
       kOverlayPointLightGizmoSizePixels);
-  EXPECT_GE(kOverlayPointLightGizmoSizePixels, 64.0f);
+  EXPECT_FLOAT_EQ(kOverlayPointLightGizmoSizePixels, 51.2f);
   EXPECT_TRUE(
       viewport_overlay_point_has_outline(ViewportOverlayLayer::SelectedVertex));
   EXPECT_FLOAT_EQ(viewport_overlay_point_outline_growth_pixels(

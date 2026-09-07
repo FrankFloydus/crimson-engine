@@ -6375,8 +6375,10 @@ TEST(OverlayPointMeshBuilderTests, BuildsPointLightIconBillboardBatch) {
                     kOverlayPointLightGizmoSizePixels);
     EXPECT_EQ(plan.icon_batches[0].mesh.vertices.size(), 4u);
     EXPECT_EQ(plan.icon_batches[0].mesh.indices.size(), 6u);
-    EXPECT_EQ(plan.icon_batches[0].state.depth_func, OverlayDepthFunc::Always);
-    EXPECT_FALSE(plan.icon_batches[0].state.depth_culling);
+    EXPECT_EQ(plan.icon_batches[0].state.depth_func,
+              OverlayDepthFunc::GreaterOrEqual);
+    EXPECT_TRUE(plan.icon_batches[0].state.depth_culling);
+    EXPECT_FLOAT_EQ(plan.icon_batches[0].depth_bias, 0.0f);
     EXPECT_TRUE(OverlayRenderableBuilder::layer_build_depends_on_camera(
         ViewportOverlayLayer::PointLightGizmo));
 }

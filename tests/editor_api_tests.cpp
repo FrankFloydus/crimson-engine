@@ -6617,7 +6617,9 @@ TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
         editor.commands().dispatch_viewport_input_binding(escape->front(),
                                                           state, true, false);
     EXPECT_EQ(escape_without_preview.kind,
-              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+              quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(escape_without_preview.command_id,
+              quader::quader_command::kEditClearSelection.string());
     const quader::QuaderViewportKeybindingDispatch escape_with_drag =
         editor.commands().dispatch_viewport_input_binding(
             escape->front(), state, true, false,
@@ -6636,6 +6638,236 @@ TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
               quader::QuaderViewportKeybindingDispatch::Kind::Command);
     EXPECT_EQ(escape_with_preview.command_id,
               quader::quader_command::kModelingCancelActivePreview.string());
+}
+
+TEST(EditorApiTests, EscapeClearsSelectionInSelectAndTransformToolsInEveryMode) {
+  constexpr std::array kModes{
+      std::pair{quader::QuaderSelectionMode::Object,
+                quader::ViewportSelectionMode::Object},
+      std::pair{quader::QuaderSelectionMode::Group,
+                quader::ViewportSelectionMode::Group},
+      std::pair{quader::QuaderSelectionMode::Vertex,
+                quader::ViewportSelectionMode::Vertex},
+      std::pair{quader::QuaderSelectionMode::Edge,
+                quader::ViewportSelectionMode::Edge},
+      std::pair{quader::QuaderSelectionMode::Face,
+                quader::ViewportSelectionMode::Face}};
+  for (const auto tool : {quader::ViewportToolId::Select,
+                          quader::ViewportToolId::Move,
+                          quader::ViewportToolId::Rotate,
+                          quader::ViewportToolId::Scale}) {
+    for (const auto &[mode, viewport_mode] : kModes) {
+      SCOPED_TRACE(static_cast<int>(tool));
+      SCOPED_TRACE(static_cast<int>(mode));
+      CommandTestHarness harness;
+      auto &editor = harness.editor;
+      const auto first = create_selected_box(editor, "Escape First");
+      const auto second = create_selected_box(editor, "Escape Second");
+      ASSERT_TRUE(editor.selection().select_objects({first, second}).ok());
+      if (mode == quader::QuaderSelectionMode::Group) {
+        ASSERT_TRUE(editor.scene().group_selection("Escape Group").ok());
+      }
+      ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      if (mode == quader::QuaderSelectionMode::Vertex) {
+        ASSERT_TRUE(editor.selection().select_vertex(first, 1).ok());
+        ASSERT_TRUE(editor.selection()
+                        .select_vertex(second, 2,
+                                       quader::QuaderSelectionEdit::Add)
+                        .ok());
+      } else if (mode == quader::QuaderSelectionMode::Edge) {
+        ASSERT_TRUE(editor.selection().select_edge(first, 1, 2).ok());
+        ASSERT_TRUE(editor.selection()
+                        .select_edge(second, 1, 2,
+                                     quader::QuaderSelectionEdit::Add)
+                        .ok());
+      } else if (mode == quader::QuaderSelectionMode::Face) {
+        ASSERT_TRUE(editor.selection().select_face(first, 1).ok());
+        ASSERT_TRUE(editor.selection()
+                        .select_face(second, 2,
+                                     quader::QuaderSelectionEdit::Add)
+                        .ok());
+      }
+      ASSERT_TRUE(editor.tools().activate(tool).ok());
+      ASSERT_TRUE(editor.selection().summary().has_selection);
+      const auto selected_before = selected_entities(editor);
+      const auto history_before = editor.query().history();
+      const auto tool_before = editor.tools().active_tool();
+      quader::ViewportToolState state;
+      state.active_tool = tool;
+      state.selection_mode = viewport_mode;
+
+      for (int press = 0; press < 2; ++press) {
+        const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+            single_input_chord("Escape"), state, true, false);
+        ASSERT_EQ(dispatch.kind,
+                  quader::QuaderViewportKeybindingDispatch::Kind::Command);
+        ASSERT_EQ(dispatch.command_id,
+                  quader::quader_command::kEditClearSelection.string());
+        const auto cleared = editor.commands().execute(dispatch.command_id);
+        ASSERT_TRUE(cleared.ok()) << cleared.error_message();
+        EXPECT_EQ(cleared.changed(), press == 0);
+        const auto selection = editor.selection().summary();
+        EXPECT_FALSE(selection.has_selection);
+        EXPECT_TRUE(selected_entities(editor).empty());
+        EXPECT_EQ(selection.selected_vertex_count, 0u);
+        EXPECT_EQ(selection.selected_edge_count, 0u);
+        EXPECT_EQ(selection.selected_face_count, 0u);
+        EXPECT_EQ(selection.mode, mode);
+        EXPECT_EQ(editor.tools().active_tool(), tool_before);
+      }
+      if (mode == quader::QuaderSelectionMode::Object ||
+          mode == quader::QuaderSelectionMode::Group) {
+        ASSERT_TRUE(editor.history().undo().ok());
+        EXPECT_EQ(selected_entities(editor), selected_before);
+        ASSERT_TRUE(editor.history().redo().ok());
+        EXPECT_TRUE(selected_entities(editor).empty());
+      } else {
+        EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+        EXPECT_EQ(editor.query().history().redo_label, history_before.redo_label);
+      }
+    }
+  }
+}
+
+TEST(EditorApiTests, EscapeClearSelectionRespectsInputOwnershipAndCancellation) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto box = create_selected_box(editor, "Escape Ownership");
+  const auto selection_before = selected_entities(editor);
+  quader::ViewportToolState state;
+  state.active_tool = quader::ViewportToolId::Move;
+  const auto escape = single_input_chord("Escape");
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(escape, state, false, false)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(escape, state, true, true)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  const auto navigation = editor.commands().dispatch_viewport_input_binding(
+      escape, state, true, false, {.navigation_active = true});
+  EXPECT_EQ(navigation.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportInputAction);
+  EXPECT_EQ(navigation.action, quader::ViewportInputActionKind::CancelNavigation);
+  const auto outliner = editor.commands().dispatch_viewport_input_binding(
+      escape, state, false, false, {.outliner_focused = true});
+  ASSERT_EQ(outliner.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(outliner.command_id,
+            quader::quader_command::kEditClearSelection.string());
+  for (const auto context : {
+           quader::QuaderViewportKeybindingContext{.modal_tool_active = true},
+           quader::QuaderViewportKeybindingContext{
+               .active_tool_owns_viewport = true},
+           quader::QuaderViewportKeybindingContext{
+               .active_transform_drag = true}}) {
+    const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+        escape, state, true, false, context);
+    ASSERT_EQ(dispatch.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+    EXPECT_EQ(dispatch.shortcut.kind,
+              quader::ViewportShortcutKind::CancelActiveTool);
+  }
+  const auto preview = editor.commands().dispatch_viewport_input_binding(
+      escape, state, true, false, {.operation_preview_active = true});
+  ASSERT_EQ(preview.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(preview.command_id,
+            quader::quader_command::kModelingCancelActivePreview.string());
+  EXPECT_EQ(selected_entities(editor), selection_before);
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  const auto primitive_selection = selected_entities(editor);
+  state.active_tool = quader::ViewportToolId::CreatePrimitive;
+  const auto primitive = editor.commands().dispatch_viewport_input_binding(
+      escape, state, true, false);
+  EXPECT_EQ(primitive.command_id,
+            quader::quader_command::kToolsCancelPrimitiveCreation.string());
+  EXPECT_EQ(selected_entities(editor), primitive_selection);
+  EXPECT_TRUE(editor.query().entity(box.entity).has_value());
+}
+
+TEST(EditorApiTests, EscapeClearSelectionKeepsExplicitShortcutOverrides) {
+  const auto path = keybinding_test_path("escape-clear-selection");
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  constexpr auto kCommand = quader::quader_command::kEditClearSelection;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(editor.commands().shortcut_for(kCommand), "Escape");
+  ASSERT_TRUE(editor.preferences().set_shortcut(kCommand, "Ctrl+Alt+F23").ok());
+  for (const bool unassigned : {false, true}) {
+    SCOPED_TRACE(unassigned);
+    if (unassigned) {
+      ASSERT_TRUE(editor.preferences().remove_shortcut(kCommand).ok());
+    }
+    CommandTestHarness reloaded;
+    ASSERT_TRUE(reloaded.editor.commands().set_keybinding_storage_path(path).ok());
+    create_selected_box(reloaded.editor, "Reloaded Escape Selection");
+    EXPECT_EQ(reloaded.editor.commands()
+                  .dispatch_viewport_input_binding(single_input_chord("Escape"),
+                                                   {}, true, false)
+                  .kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+    const auto custom = reloaded.editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("Ctrl+Alt+F23"), {}, true, false);
+    EXPECT_EQ(custom.kind,
+              unassigned
+                  ? quader::QuaderViewportKeybindingDispatch::Kind::NoMatch
+                  : quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    if (!unassigned) {
+      EXPECT_EQ(custom.command_id, kCommand.string());
+      ASSERT_TRUE(reloaded.editor.commands().execute(custom.command_id).ok());
+      EXPECT_TRUE(selected_entities(reloaded.editor).empty());
+    }
+  }
+  std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests, EscapeClearsSceneOnlySelectionWhileInComponentMode) {
+  constexpr std::array kModes{
+      std::pair{quader::QuaderSelectionMode::Vertex,
+                quader::ViewportSelectionMode::Vertex},
+      std::pair{quader::QuaderSelectionMode::Edge,
+                quader::ViewportSelectionMode::Edge},
+      std::pair{quader::QuaderSelectionMode::Face,
+                quader::ViewportSelectionMode::Face}};
+  for (const auto &[mode, viewport_mode] : kModes) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    CommandTestHarness harness;
+    auto &editor = harness.editor;
+    const auto light = editor.scene().create_point_light(
+        {.name = "Escape Scene-Only Light", .select_created = true});
+    ASSERT_TRUE(light.ok()) << light.error_message();
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+    ASSERT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{light.value().id});
+    quader::ViewportToolState state;
+    state.active_tool = quader::ViewportToolId::Move;
+    state.selection_mode = viewport_mode;
+    const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("Escape"), state, true, false);
+    ASSERT_EQ(dispatch.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    ASSERT_EQ(dispatch.command_id,
+              quader::quader_command::kEditClearSelection.string());
+    const auto cleared = editor.commands().execute(dispatch.command_id);
+    ASSERT_TRUE(cleared.ok()) << cleared.error_message();
+    EXPECT_TRUE(cleared.changed());
+    EXPECT_TRUE(selected_entities(editor).empty());
+    EXPECT_FALSE(editor.selection().summary().has_selection);
+    EXPECT_EQ(editor.selection().summary().mode, mode);
+    const auto repeated = editor.commands().execute(dispatch.command_id);
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.changed());
+    EXPECT_EQ(editor.selection().summary().mode, mode);
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{light.value().id});
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_TRUE(selected_entities(editor).empty());
+    EXPECT_EQ(editor.selection().summary().mode, mode);
+  }
 }
 
 TEST(EditorApiTests, DefaultKeybindingProjectionDoesNotDuplicateRuleTuples) {

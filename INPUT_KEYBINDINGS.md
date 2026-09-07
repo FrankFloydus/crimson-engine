@@ -84,6 +84,11 @@ Tool, selection-mode, grid, and ordinary viewport command bindings normally requ
 For example, `W` activates Move when idle and means Fly Forward during fly navigation. The router
 consumes semantic `ViewportInputActionKind`/`ViewportNavigationInput`, not Qt keys or physical chords.
 
+Escape defaults to Clear Selection in idle Select, Move, Rotate, and Scale tools, from the viewport
+or Outliner, in every selection mode. Active transform drags, previews, and modal tools retain cancellation
+priority; a subsequent Escape clears selection. The existing selection owner handles object/group
+history and component selection. Clear Selection remains remappable through Settings.
+
 ## Settings and persistence
 
 - The row key is `action_id + scope_id`, not its coarse display category. A row can represent several

@@ -365,12 +365,16 @@ Tests: [occurrences](tests/scene_mesh_occurrence_projection_tests.cpp),
 
 ## Render binding and resource lifetime
 
-- Native sRGB swapchains encode linear output in hardware. Their viewport color grading must
-  output Rec709-Linear-D65; ordinary texture targets retain Rec709-sRGB-D65. Encoding in both
-  the grading LUT and swapchain brightens dark areas and can masquerade as incorrect light
-  attenuation. A texture-only GPU comparison does not exercise this presentation path.
+- Keep postprocessed viewport and preview grading in Rec709-sRGB-D65: Filament's dithering,
+  integer LUT and LDR intermediates need display-encoded values. Linear grading amplifies dark
+  noise and loses shadow precision. The maintained presentation patch decodes only the final
+  blit into an sRGB swapchain, whose hardware encoding restores those display values; direct
+  shaded rendering and linear overlays bypass that conversion. Verify actual native windows
+  with dithering and FXAA both on and off; texture-only checks miss the presentation contract.
   Owners: [viewport color grading](src/render/viewport_renderer.cpp),
-  [material preview grading](src/render/material_preview_renderer.cpp).
+  [material preview grading](src/render/material_preview_renderer.cpp),
+  [Filament patch](thirdparty/filament/README.md).
+  Test: [native dark-pixel presentation](tests/render_vsync_runtime_tests.cpp).
 - RenderSceneBindingKey includes session identity, project activation generation, and binding
   revision. Equal local entity/asset/revision numbers across tabs never justify cache reuse.
 - Texture identity follows image content and color space, independently of material scalar edits.
@@ -395,7 +399,7 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
 
 ## VSync and accepted presentation
 
-- The pinned Filament v1.71.6 quader-vsync2 patch supplies opt-in Immediate presentation and a
+- The pinned Filament v1.71.6 quader-vsync3 patch supplies opt-in Immediate presentation and a
   backend-confirmed mode callback. FIFO is the default/unsupported-mode fallback. Rebuild matching
   headers/libraries together; CMake verifies provenance/hashes. Keep the maintained patch through
   upgrades; the installer consumes compiled artifacts, not a compiler or end-user SDK download.
@@ -415,7 +419,7 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
   baseline remains compatible while detecting preference side effects.
 
 Owners: [RenderSystem](src/render/render_system.cpp), [frame schedule](src/app/app_frame_schedule.hpp),
-[Filament patch](thirdparty/filament/filament-v1.71.6-quader-vsync2.patch).
+[Filament patch](thirdparty/filament/filament-v1.71.6-quader-vsync3.patch).
 Tests: [presentation](tests/render_presentation_tests.cpp),
 [opt-in native Vulkan runtime](tests/render_vsync_runtime_tests.cpp).
 

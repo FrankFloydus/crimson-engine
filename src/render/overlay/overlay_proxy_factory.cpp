@@ -39,9 +39,8 @@ namespace {
 
 using AttributeType = filament::backend::ElementType;
 
-// The point-light billboard is authored at 64 design pixels and the shared
-// viewport scale is sanitized to at most 15x. Keep one native texel available
-// per displayed pixel even at that upper bound, then let Filament's mip chain
+// The shared viewport scale is sanitized to at most 15x. Keep one native texel
+// available per displayed pixel at that upper bound, then let Filament's mip chain
 // handle every smaller presentation without depending on a fixed-DPI asset.
 constexpr std::uint32_t kPointLightIconTextureExtent = 1024u;
 static_assert(static_cast<float>(kPointLightIconTextureExtent) >=

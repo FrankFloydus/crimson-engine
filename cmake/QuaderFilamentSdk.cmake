@@ -5,10 +5,10 @@
 # file except through prior written authorization from Francesco Di Blasi.
 ################################################################################
 
-# The extension changes VulkanPlatform and light APIs. Validate the complete produced
-# artifact, so an official SDK or mixed headers/libraries fail before compilation.
+# The extension changes VulkanPlatform, light APIs, and sRGB presentation. Validate
+# the complete artifact so an official SDK or mixed inputs fail before compilation.
 function(quader_validate_filament_patch sdk_root)
-    set(pin_path "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/filament/filament-v1.71.6-quader-vsync2.json")
+    set(pin_path "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/filament/filament-v1.71.6-quader-vsync3.json")
     set(marker_path "${sdk_root}/quader-filament-sdk.json")
     if(NOT EXISTS "${marker_path}")
         message(FATAL_ERROR "Filament SDK is missing Quader's presentation and lighting extension. Run tools/build_filament_sdk.ps1 -AllowDownload and configure FILAMENT_SDK_ROOT to the resulting SDK.")

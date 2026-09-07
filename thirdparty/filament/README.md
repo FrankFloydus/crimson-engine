@@ -1,8 +1,8 @@
 # Filament presentation and lighting patch
 
 Quader uses upstream Filament v1.71.6 at commit
-`ab65c099438ead4fabf496706da4aa3e0a272472` with the `quader-vsync2` patch in this directory.
-The archive identity is recorded in `filament-v1.71.6-quader-vsync2.json`. Filament and changes to
+`ab65c099438ead4fabf496706da4aa3e0a272472` with the `quader-vsync3` patch in this directory.
+The archive identity is recorded in `filament-v1.71.6-quader-vsync3.json`. Filament and changes to
 these upstream source files are licensed under Apache-2.0; see
 [`../licenses/filament-Apache-2.0.txt`](../licenses/filament-Apache-2.0.txt). The patch modifies files
 carrying the upstream license notices. This directory contains the patch and provenance only.
@@ -17,8 +17,23 @@ is a protected virtual callback with a default empty implementation. It reports 
 after successful creation and recreation, including resize. It runs on the backend thread, so
 Quader's override publishes synchronized state and never calls the UI or Engine from the callback.
 The platform must outlive the Engine. Vulkan creation diagnostics record requested and actual modes.
-`FILAMENT_QUADER_VSYNC_PATCH_VERSION` is `2` in the public backend header; revision 2 retains
-revision 1's presentation behavior and adds the light attenuation extension below.
+`FILAMENT_QUADER_VSYNC_PATCH_VERSION` is `3` in the public backend header. Revision 3 retains
+revision 1's VSync behavior and revision 2's light attenuation extension below, and fixes
+display-encoded post-processing on hardware-sRGB swapchains.
+
+Color-grading LUTs, dithering, FXAA, and scaling remain in the encoded output space. Filament's
+unchanged dither assumes this space and an 8-bit destination; applying it to linear values before
+hardware sRGB encoding amplifies dark noise. The renderer now inserts a terminal shader blit when
+encoded color grading targets the renderer's swapchain and its effective flags include
+`CONFIG_SRGB_COLORSPACE`. The blit applies the sRGB EOTF so the hardware's OETF writes the intended
+encoded values exactly once. Unprocessed shaded views, overlays, explicit linear color grading,
+custom render targets, and swapchains without hardware sRGB encoding keep their existing paths.
+
+The presentation conversion preserves coverage alpha by unpremultiplying, decoding RGB, and
+premultiplying again. Opaque intermediate alpha can contain FXAA luminance and is restored to one.
+Scaling retains alpha while deferring blending to the terminal conversion, including sharpened
+bilinear upscaling; material-instance reuse resets conversion uniforms on every blit path.
+This adds an internal presentation pass, not a public API or light/material behavior change.
 
 `LightManager::Builder::distanceAttenuation(float)`, `setDistanceAttenuation()` and
 `getDistanceAttenuation()` expose the point/spot distance exponent, defaulting to `2`. Non-finite
@@ -69,4 +84,6 @@ Changing this patch requires changing its version and the corresponding source p
 configure guardrails and render integration together. Validate FIFO default,
 Immediate selection, explicit FIFO fallback, runtime toggling, resize, multiple viewport surfaces,
 and material previews. Verify default light appearance and authored point/spot attenuation in both
-scene and tool previews. FPS measurements require the same native build and scene on a real GPU.
+scene and tool previews. Compare dark gradients with dithering enabled and disabled, encoded
+UNORM and hardware-sRGB presentation, scaled output, and translucent compositing. FPS measurements
+require the same native build and scene on a real GPU.

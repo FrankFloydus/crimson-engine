@@ -350,6 +350,13 @@ bool command_semantically_requires_viewport(std::string_view command_id) {
 
 std::string_view
 default_keybinding_context_for_command(std::string_view command_id) {
+  if (command_id == quader_command::kEditClearSelection.string()) {
+    return "(viewportFocus || outlinerFocus) && !textInputActive && "
+           "!navigation.active && !modalTool.active && !activeTool.ownsViewport && "
+           "!transformDrag.active && !operationPreview.active && "
+           "(activeTool.select || activeTool.move || activeTool.rotate || "
+           "activeTool.scale)";
+  }
   if (command_id == quader_command::kToolsFlipPrimitiveFaces.string()) {
     return primitive_flip_keybinding_context();
   }
@@ -2127,7 +2134,7 @@ void QuaderCommandsApi::Impl::register_commands() {
       quader_command::kEditRepeatLastAction, "Repeat Last Action",
       [this] { return api_.history().repeat_last_action(); }, "Ctrl+R");
   register_command(quader_command::kEditClearSelection, "Clear Selection",
-                   [this] { return api_.selection().clear(); });
+                   [this] { return api_.selection().clear(); }, "Escape");
   register_command(
       quader_command::kUiSearchCommands, "Search Commands",
       [this] { return ui_.show_command_search(); }, "Ctrl+Shift+P",

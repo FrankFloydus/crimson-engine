@@ -427,17 +427,20 @@ EditorSelectionService::try_delete_sub_selection() {
 }
 
 DocumentCommandResult EditorSelectionService::apply_scene_selection_state(
-    SceneSelectionState selection) {
+    SceneSelectionState selection, bool preserve_selection_mode) {
   if (same_scene_selection(capture_scene_selection(scene_), selection)) {
     if (is_component_selection_mode(modeling_.selection_mode())) {
-      return publish_scene_selection();
+      return publish_scene_selection(preserve_selection_mode);
     }
     return document_command_unchanged_result();
   }
-  const auto publish = [this]() { return publish_scene_selection(); };
+  const auto publish = [this, preserve_selection_mode]() {
+    return publish_scene_selection(preserve_selection_mode);
+  };
   if (scene_selection_history_suppression_provider_ &&
       scene_selection_history_suppression_provider_()) {
-    return apply_runtime_scene_selection_state(std::move(selection));
+    return apply_runtime_scene_selection_state(std::move(selection),
+                                               preserve_selection_mode);
   }
   return document_commands_.select_entities(
       std::move(selection.selected), selection.active,
@@ -446,14 +449,15 @@ DocumentCommandResult EditorSelectionService::apply_scene_selection_state(
 
 DocumentCommandResult
 EditorSelectionService::apply_runtime_scene_selection_state(
-    SceneSelectionState selection) {
+    SceneSelectionState selection, bool preserve_selection_mode) {
   const SceneSelectionState before = capture_scene_selection(scene_);
   const SceneModelingProjectionCheckpoint checkpoint =
       capture_scene_selection_checkpoint(scene_, before, selection);
   const bool changed =
       apply_scene_selection(scene_, selection,
                             SceneSelectionApplicationMode::RuntimeSync);
-  DocumentCommandResult published = publish_scene_selection();
+  DocumentCommandResult published =
+      publish_scene_selection(preserve_selection_mode);
   if (!published.ok) {
     summary_cache_valid_ = false;
     if (!restore_scene_selection_checkpoint(scene_, checkpoint)) {
@@ -469,9 +473,11 @@ EditorSelectionService::apply_runtime_scene_selection_state(
                  : document_command_unchanged_result();
 }
 
-DocumentCommandResult EditorSelectionService::publish_scene_selection() {
+DocumentCommandResult EditorSelectionService::publish_scene_selection(
+    bool preserve_selection_mode) {
   ModelingCommandResult result{.ok = true};
-  if (modeling_.selection_mode() == ModelingSelectionMode::Group) {
+  if (preserve_selection_mode ||
+      modeling_.selection_mode() == ModelingSelectionMode::Group) {
     result =
         modeling_.clear_runtime_object_selection_for_scene_owned_selection();
   } else {
@@ -731,7 +737,21 @@ ModelingCommandResult EditorSelectionService::clear() {
   }
   const ModelingSelectionMode selection_mode = modeling_.selection_mode();
   if (!selection_mode_uses_scene_document(selection_mode)) {
-    return modeling_.clear_selection();
+    ModelingCommandResult result = modeling_.clear_selection();
+    if (!result.ok || result.changed) {
+      return result;
+    }
+    const std::vector<EntityId> selected = scene_.selected_entities();
+    if (selected.empty() ||
+        std::ranges::any_of(selected, [&](EntityId entity) {
+          return scene_.modeling_object(entity) != nullptr;
+        })) {
+      return result;
+    }
+    // Lights and other scene-only selections can remain in component mode.
+    // With no selected mesh, the modeling owner has nothing to clear.
+    return modeling_command_result_from_document(apply_scene_selection_state(
+        make_scene_selection(scene_, {}, kInvalidEntityId), true));
   }
 
   return modeling_command_result_from_document(

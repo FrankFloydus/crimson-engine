@@ -202,7 +202,8 @@ public:
   synchronize_scene_selection(std::span<const EntityId> entities,
                               EntityId active = kInvalidEntityId);
   /** Publishes the scene's current selection through every selection owner. */
-  [[nodiscard]] DocumentCommandResult publish_scene_selection();
+  [[nodiscard]] DocumentCommandResult
+  publish_scene_selection(bool preserve_selection_mode = false);
   DocumentCommandResult edit_scene_selection(EntityId entity,
                                              EditorSelectionEdit edit);
   DocumentCommandResult edit_scene_selection(std::span<const EntityId> entities,
@@ -331,9 +332,11 @@ private:
   [[nodiscard]] ModelingSelectionSummary
   scene_summary_for(ModelingSelectionMode mode) const;
   DocumentCommandResult
-  apply_scene_selection_state(SceneSelectionState selection);
+  apply_scene_selection_state(SceneSelectionState selection,
+                              bool preserve_selection_mode = false);
   DocumentCommandResult
-  apply_runtime_scene_selection_state(SceneSelectionState selection);
+  apply_runtime_scene_selection_state(SceneSelectionState selection,
+                                      bool preserve_selection_mode = false);
   ModelingCommandResult apply_component_selection_command(
       ModelingComponentSelectionCommand command,
       std::span<const ModelingSelectionMode> allowed_modes);

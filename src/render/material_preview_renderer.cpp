@@ -18,8 +18,6 @@
 #include <backend/DriverEnums.h>
 #include <filament/Box.h>
 #include <filament/Camera.h>
-#include <filament/ColorGrading.h>
-#include <filament/ColorSpace.h>
 #include <filament/Engine.h>
 #include <filament/IndexBuffer.h>
 #include <filament/LightManager.h>
@@ -28,7 +26,6 @@
 #include <filament/RenderableManager.h>
 #include <filament/Renderer.h>
 #include <filament/Scene.h>
-#include <filament/SwapChain.h>
 #include <filament/Texture.h>
 #include <filament/TextureSampler.h>
 #include <filament/TransformManager.h>
@@ -334,10 +331,6 @@ struct MaterialPreviewRenderer::Impl final {
       engine->destroy(view);
       view = nullptr;
     }
-    if (linear_color_grading != nullptr) {
-      engine->destroy(linear_color_grading);
-      linear_color_grading = nullptr;
-    }
     if (camera != nullptr) {
       engine->destroyCameraComponent(camera_entity);
       camera = nullptr;
@@ -354,30 +347,6 @@ struct MaterialPreviewRenderer::Impl final {
     width = 1u;
     height = 1u;
     engine = nullptr;
-  }
-
-  void set_srgb_swapchain(bool enabled) {
-    if (engine == nullptr || view == nullptr) {
-      return;
-    }
-    if (!enabled || !filament::SwapChain::isSRGBSwapChainSupported(*engine)) {
-      view->setColorGrading(nullptr);
-      return;
-    }
-    if (linear_color_grading == nullptr) {
-      // Preserve Filament's default tone mapper and LUT quality; the swapchain
-      // supplies the sRGB transfer after grading has produced linear pixels.
-      linear_color_grading =
-          filament::ColorGrading::Builder()
-              .outputColorSpace(filament::color::Rec709 -
-                                filament::color::Linear - filament::color::D65)
-              .build(*engine);
-      if (linear_color_grading == nullptr) {
-        LOG_ERROR("Unable to create Standard Material preview color grading");
-        return;
-      }
-    }
-    view->setColorGrading(linear_color_grading);
   }
 
   bool create_mesh(MaterialPreviewMeshKind kind) {
@@ -745,7 +714,6 @@ struct MaterialPreviewRenderer::Impl final {
   filament::Engine *engine = nullptr;
   filament::Scene *scene = nullptr;
   filament::View *view = nullptr;
-  filament::ColorGrading *linear_color_grading = nullptr;
   utils::Entity camera_entity;
   filament::Camera *camera = nullptr;
   utils::Entity key_light;
@@ -783,10 +751,6 @@ void MaterialPreviewRenderer::shutdown() { impl_->shutdown(); }
 void MaterialPreviewRenderer::resize(std::uint32_t width,
                                      std::uint32_t height) {
   impl_->resize(width, height);
-}
-
-void MaterialPreviewRenderer::set_srgb_swapchain(bool enabled) {
-  impl_->set_srgb_swapchain(enabled);
 }
 
 void MaterialPreviewRenderer::set_preview_state(
