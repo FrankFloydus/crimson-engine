@@ -46,6 +46,7 @@
 #include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QStandardItemModel>
 #include <QStyledItemDelegate>
 #include <QStyleOptionViewItem>
 #include <QString>
@@ -792,6 +793,7 @@ private:
         build_mesh_sections();
         build_light_section();
       }
+      build_physics_section();
       if (selection_.size() > 1u) {
         build_component_count_section();
       }
@@ -1077,22 +1079,39 @@ private:
   add_enum_combo(Section &section, std::string stable_id, const QString &label,
                  Enum current,
                  const std::vector<std::pair<Enum, QString>> &options,
-                 std::function<void(Enum)> changed) {
+                 std::function<void(Enum)> changed,
+                 std::optional<Enum> supported = std::nullopt,
+                 bool mixed = false) {
     auto *combo = new QComboBox(section.editor_parent);
     combo->setObjectName(stable_name(stable_id));
     int selected_index = -1;
     for (std::size_t index = 0; index < options.size(); ++index) {
       combo->addItem(options[index].second,
                      static_cast<int>(options[index].first));
+      if (supported.has_value() && options[index].first != *supported) {
+        const int item_index = static_cast<int>(index);
+        combo->setItemText(
+            item_index,
+            localized("ui.inspector.unsupported_option", "%1 (unsupported)")
+                .arg(options[index].second));
+        auto *model = qobject_cast<QStandardItemModel *>(combo->model());
+        model->item(item_index)->setEnabled(false);
+      }
       if (options[index].first == current) {
         selected_index = static_cast<int>(index);
       }
     }
-    combo->setCurrentIndex(selected_index);
+    if (mixed) {
+      combo->setPlaceholderText(localized("ui.inspector.mixed", "Mixed"));
+    }
+    combo->setCurrentIndex(mixed ? -1 : selected_index);
     add_row(section, stable_id, label, combo);
     QObject::connect(combo, &QComboBox::activated, &panel_,
                      [this, combo, changed = std::move(changed)](int index) {
-                       if (rebuilding_ || index < 0) {
+                       if (rebuilding_ || index < 0 ||
+                           !(combo->model()->flags(
+                                 combo->model()->index(index, 0)) &
+                             Qt::ItemIsEnabled)) {
                          return;
                        }
                        changed(
@@ -1253,6 +1272,29 @@ private:
     mutation(next);
     (void)editor_->scene().set_mesh_component(entity,
                                               to_api_mesh_component(next));
+  }
+
+  void apply_mesh_components(
+      const std::vector<EntityId> &entities,
+      const std::function<void(MeshComponent &)> &mutation) {
+    if (editor_ == nullptr || document_ == nullptr) {
+      return;
+    }
+    if (entities.size() == 1u) {
+      apply_mesh_component(entities.front(), mutation);
+      return;
+    }
+    auto batch = editor_->scene().batch("Set Mesh Physics");
+    for (const EntityId entity : entities) {
+      const MeshComponent *current = document_->mesh(entity);
+      if (current == nullptr) {
+        return;
+      }
+      MeshComponent next = *current;
+      mutation(next);
+      batch.set_mesh_component(entity, to_api_mesh_component(next));
+    }
+    (void)batch.commit();
   }
 
   void
@@ -1923,21 +1965,56 @@ private:
                      next.double_sided = enabled;
                    });
                  });
+  }
+
+  void build_physics_section() {
+    std::vector<EntityId> meshes;
+    meshes.reserve(selection_.size());
+    BoolAggregate generate;
+    BoolAggregate display;
+    std::optional<MeshCollisionType> collision_type;
+    std::optional<MeshPhysicsBodyType> body_type;
+    bool mixed_collision_type = false;
+    bool mixed_body_type = false;
+    bool unsupported = false;
+    for (const EntityId entity : selection_) {
+      const MeshComponent *mesh = document_->mesh(entity);
+      if (mesh == nullptr || document_->is_scene_root(entity)) {
+        continue;
+      }
+      meshes.push_back(entity);
+      generate.all_true = generate.all_true && mesh->generate_collisions;
+      generate.any_true = generate.any_true || mesh->generate_collisions;
+      display.all_true = display.all_true && mesh->display_collision;
+      display.any_true = display.any_true || mesh->display_collision;
+      if (collision_type.has_value()) {
+        mixed_collision_type = mixed_collision_type ||
+                               *collision_type != mesh->collision_type;
+        mixed_body_type = mixed_body_type || *body_type != mesh->body_type;
+      } else {
+        collision_type = mesh->collision_type;
+        body_type = mesh->body_type;
+      }
+      unsupported = unsupported || !mesh_collision_supported(*mesh);
+    }
+    if (meshes.empty()) {
+      return;
+    }
 
     Section physics =
         add_section("physics", localized("ui.inspector.physics", "Physics"));
-    add_checkbox(
+    add_mixed_checkbox(
         physics, "physics.generate_collisions",
         localized("ui.inspector.generate_collisions", "Generate Collisions"),
-        mesh->generate_collisions, [this, entity](bool enabled) {
-          apply_mesh_component(entity, [enabled](MeshComponent &next) {
+        generate.all_true, generate.mixed(), [this, meshes](bool enabled) {
+          apply_mesh_components(meshes, [enabled](MeshComponent &next) {
             next.generate_collisions = enabled;
           });
         });
     add_enum_combo<MeshCollisionType>(
         physics, "physics.collision_type",
         localized("ui.inspector.collision_type", "Collision Type"),
-        mesh->collision_type,
+        *collision_type,
         {
             {MeshCollisionType::Box,
              localized("ui.inspector.collision_type.box", "Box")},
@@ -1951,32 +2028,43 @@ private:
             {MeshCollisionType::Mesh,
              localized("ui.inspector.collision_type.mesh", "Mesh")},
         },
-        [this, entity](MeshCollisionType value) {
-          apply_mesh_component(entity, [value](MeshComponent &next) {
+        [this, meshes](MeshCollisionType value) {
+          apply_mesh_components(meshes, [value](MeshComponent &next) {
             next.collision_type = value;
           });
-        });
-    add_checkbox(
+        }, MeshCollisionType::Mesh, mixed_collision_type);
+    add_mixed_checkbox(
         physics, "physics.display_collision",
         localized("ui.inspector.display_collision", "Display Collision"),
-        mesh->display_collision, [this, entity](bool enabled) {
-          apply_mesh_component(entity, [enabled](MeshComponent &next) {
+        display.all_true, display.mixed(), [this, meshes](bool enabled) {
+          apply_mesh_components(meshes, [enabled](MeshComponent &next) {
             next.display_collision = enabled;
           });
         });
     add_enum_combo<MeshPhysicsBodyType>(
         physics, "physics.body_type",
-        localized("ui.inspector.body_type", "Body type"), mesh->body_type,
+        localized("ui.inspector.body_type", "Body type"), *body_type,
         {
             {MeshPhysicsBodyType::StaticBody,
              localized("ui.inspector.body_type.static_body", "Static Body")},
             {MeshPhysicsBodyType::RigidBody,
              localized("ui.inspector.body_type.rigid_body", "Rigid Body")},
         },
-        [this, entity](MeshPhysicsBodyType value) {
-          apply_mesh_component(
-              entity, [value](MeshComponent &next) { next.body_type = value; });
-        });
+        [this, meshes](MeshPhysicsBodyType value) {
+          apply_mesh_components(
+              meshes, [value](MeshComponent &next) { next.body_type = value; });
+        }, MeshPhysicsBodyType::StaticBody, mixed_body_type);
+    if (unsupported) {
+      auto *status = new QLabel(
+          localized("ui.inspector.collision_unsupported",
+                    "Select Mesh and Static Body to generate collisions."),
+          physics.editor_parent);
+      status->setObjectName(stable_name("physics.collision_status"));
+      status->setWordWrap(true);
+      add_row(physics, "physics.collision_status",
+              localized("ui.inspector.collision_status", "Collision Status"),
+              status);
+    }
   }
 
   void build_light_section() {

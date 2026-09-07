@@ -8,6 +8,7 @@
 
 #include "core/qstr.hpp"
 #include "editor/material/project_material_persistence.hpp"
+#include "io/project/project_bridge_notifications.hpp"
 #include "editor/session/project_session.hpp"
 
 #include <algorithm>
@@ -600,8 +601,18 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
   current_->decoded_previews.fill(std::nullopt);
   current_->preview_errors.fill(std::nullopt);
   current_->snapshot.pending_texture_sources.fill(std::nullopt);
-  return success(true, save_as ? "Standard Material saved as a new asset."
-                               : "Standard Material saved.");
+  StandardMaterialEditResult result =
+      success(true, save_as ? "Standard Material saved as a new asset."
+                            : "Standard Material saved.");
+  const auto notification = ProjectBridgeNotifications::publish_material(
+      file_system, project_->manifest()->id(), *saved);
+  const std::string &warning = notification.ok()
+                                   ? notification.warning()
+                                   : notification.error().message;
+  if (!warning.empty()) {
+    result.message += " " + warning;
+  }
+  return result;
 }
 
 } // namespace quader

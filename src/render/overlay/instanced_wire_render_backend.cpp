@@ -294,6 +294,7 @@ InstancedWireRenderBackend::create_batch(
   proxy.material_instance_->setParameter("featherPixels",
                                          kOverlayLineFeatherPixels);
   proxy.material_instance_->setParameter("nearPlane", style.near_plane);
+  update_line_tint(std::span<BatchProxy>(&proxy, 1u), style.line_tint);
 
   std::vector<filament::math::mat4f> transforms;
   transforms.reserve(chunk.world_transforms.size());
@@ -353,6 +354,18 @@ bool InstancedWireRenderBackend::update_batch(
   renderables.setAxisAlignedBoundingBox(instance,
                                         filament_bounds(chunk.world_bounds));
   return true;
+}
+
+void InstancedWireRenderBackend::update_line_tint(
+    std::span<BatchProxy> proxies, const ViewportSettingColor &tint) {
+  const filament::math::float4 linear_tint{
+      srgb_to_linear(tint.r), srgb_to_linear(tint.g),
+      srgb_to_linear(tint.b), tint.a};
+  for (BatchProxy &proxy : proxies) {
+    if (proxy.material_instance_ != nullptr) {
+      proxy.material_instance_->setParameter("lineTint", linear_tint);
+    }
+  }
 }
 
 bool InstancedWireRenderBackend::update_line_width(

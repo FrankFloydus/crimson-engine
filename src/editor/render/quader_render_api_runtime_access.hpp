@@ -35,6 +35,8 @@ struct QuaderRenderSceneOverlaySyncRequest {
   bool selected_mesh_outline_only = false;
   ViewportPersistentOverlayStyleSnapshot style;
   ViewportPersistentOverlayRasterGroupSet raster_groups;
+  bool collision_visible = false;
+  ViewportSettingColor collision_color{0.0f, 0.6f, 0.7f, 0.42f};
 };
 
 /**

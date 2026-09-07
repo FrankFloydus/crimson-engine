@@ -69,6 +69,7 @@ enum class ViewportColorSettingId {
     SelectedVertex,
     HoverVertex,
     RemoveSelectionVertex,
+    CollisionFill,
     Count,
 };
 
@@ -128,6 +129,7 @@ enum class ViewportBoolSettingId {
     BackfaceSelection,
     TextureLock,
     TextureLockScale,
+    ShowCollisions,
     Count,
 };
 

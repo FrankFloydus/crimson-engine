@@ -13,6 +13,7 @@
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
 
+#include <array>
 #include <gtest/gtest.h>
 
 namespace quader {
@@ -156,6 +157,11 @@ TEST(SceneMeshOccurrenceProjectionTests,
   EXPECT_EQ(work.formal_geometry_group_count, 2u);
   EXPECT_EQ(work.formal_placement_count, 4u);
   EXPECT_EQ(work.world_transform_multiply_count, 4u);
+  EXPECT_EQ(work.singular_definition_count, 0u);
+  for (const SceneMeshOccurrenceProjectionRecord &record :
+       projection.records()) {
+    EXPECT_TRUE(record.effectively_visible);
+  }
 }
 
 TEST(SceneMeshOccurrenceProjectionTests,
@@ -186,7 +192,243 @@ TEST(SceneMeshOccurrenceProjectionTests,
   TransformComponent singular;
   singular.scale = {0.0f, 1.0f, 1.0f};
   ASSERT_TRUE(scene.set_transform(definition, singular));
-  EXPECT_TRUE(build_scene_mesh_occurrence_projection(scene).records().empty());
+  SceneMeshOccurrenceProjectionWorkStats work;
+  EXPECT_TRUE(
+      build_scene_mesh_occurrence_projection(scene, &work).records().empty());
+  EXPECT_EQ(work.singular_definition_count, 1u);
+  EXPECT_TRUE(build_scene_mesh_occurrence_projection(
+                  scene, &work, SceneMeshOccurrenceVisibility::IncludeHidden)
+                  .records()
+                  .empty());
+  EXPECT_EQ(work.singular_definition_count, 1u);
+}
+
+TEST(SceneMeshOccurrenceProjectionTests,
+     SingularDiagnosticsRequireAnIncludedOccurrenceAndMeshMember) {
+  SceneDocument scene;
+  const EntityId definition = scene.create_entity("Singular Definition");
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  TransformComponent singular;
+  singular.scale = {0.0f, 1.0f, 1.0f};
+  ASSERT_TRUE(scene.set_transform(definition, singular));
+  SceneMeshOccurrenceProjectionWorkStats work;
+  const auto project_all = [&]() {
+    return build_scene_mesh_occurrence_projection(
+        scene, &work, SceneMeshOccurrenceVisibility::IncludeHidden);
+  };
+  EXPECT_TRUE(project_all().records().empty());
+  EXPECT_EQ(work.singular_definition_count, 0u);
+
+  const EntityId member = scene.create_entity("Member", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(member, {.mesh = 205u}));
+  ASSERT_TRUE(scene.set_parent(member, definition, false));
+  EXPECT_TRUE(project_all().records().empty());
+  EXPECT_EQ(work.singular_definition_count, 0u)
+      << "unreferenced definition storage omits no actual placement";
+
+  const EntityId occurrence =
+      scene.create_entity("Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(scene.set_instance_occurrence(
+      occurrence, {.definition = definition}));
+  EXPECT_TRUE(project_all().records().empty());
+  EXPECT_EQ(work.singular_definition_count, 1u);
+
+  ASSERT_TRUE(scene.set_visible(occurrence, false));
+  EXPECT_TRUE(build_scene_mesh_occurrence_projection(scene, &work)
+                  .records()
+                  .empty());
+  EXPECT_EQ(work.singular_definition_count, 0u);
+  EXPECT_TRUE(project_all().records().empty());
+  EXPECT_EQ(work.singular_definition_count, 1u);
+  ASSERT_TRUE(scene.set_visible(occurrence, true));
+  ASSERT_TRUE(scene.set_visible(member, false));
+  EXPECT_TRUE(build_scene_mesh_occurrence_projection(scene, &work)
+                  .records()
+                  .empty());
+  EXPECT_EQ(work.singular_definition_count, 0u);
+  EXPECT_TRUE(project_all().records().empty());
+  EXPECT_EQ(work.singular_definition_count, 1u);
+
+  ASSERT_TRUE(scene.clear_mesh(member));
+  EXPECT_TRUE(project_all().records().empty());
+  EXPECT_EQ(work.singular_definition_count, 0u)
+      << "an occurrence of a definition without meshes omits no mesh placement";
+}
+
+TEST(SceneMeshOccurrenceProjectionTests,
+     IncludeHiddenRetainsOrdinaryVisibilityFromObjectsAncestorsAndLayers) {
+  SceneDocument scene;
+  const EntityId visible = scene.create_entity("Visible", EntityKind::Mesh);
+  const EntityId hidden = scene.create_entity("Hidden", EntityKind::Mesh);
+  const EntityId hidden_parent = scene.create_entity("Hidden Parent");
+  const EntityId hidden_by_parent =
+      scene.create_entity("Hidden By Parent", EntityKind::Mesh);
+  const EntityId hidden_by_layer =
+      scene.create_entity("Hidden By Layer", EntityKind::Mesh);
+  for (const EntityId mesh :
+       {visible, hidden, hidden_by_parent, hidden_by_layer}) {
+    ASSERT_TRUE(scene.set_mesh(mesh, {.mesh = 301u}));
+  }
+  ASSERT_TRUE(scene.set_visible(hidden, false));
+  ASSERT_TRUE(scene.set_visible(hidden_parent, false));
+  ASSERT_TRUE(scene.set_parent(hidden_by_parent, hidden_parent, false));
+  ASSERT_TRUE(scene.set_transform(
+      hidden_parent, TransformComponent{.position = {7.0f, 0.0f, 0.0f}}));
+  const SceneLayerId hidden_layer = scene.create_layer("Hidden Layer");
+  ASSERT_NE(hidden_layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(scene.set_entity_layer(hidden_by_layer, hidden_layer));
+  ASSERT_TRUE(scene.set_layer_visible(hidden_layer, false));
+
+  const auto visible_only = build_scene_mesh_occurrence_projection(scene);
+  ASSERT_EQ(visible_only.records().size(), 1u);
+  EXPECT_EQ(visible_only.records().front().display_entity, visible);
+
+  SceneMeshOccurrenceProjectionWorkStats work;
+  const auto all = build_scene_mesh_occurrence_projection(
+      scene, &work, SceneMeshOccurrenceVisibility::IncludeHidden);
+  ASSERT_EQ(all.records().size(), 4u);
+  ASSERT_EQ(all.ordinary_placement_indices().size(), 4u);
+  EXPECT_EQ(work.ordinary_placement_count, 4u);
+  EXPECT_TRUE(all.formal_geometry_groups().empty());
+  for (const EntityId mesh :
+       {visible, hidden, hidden_by_parent, hidden_by_layer}) {
+    const auto placements = all.records_for_display(mesh);
+    ASSERT_EQ(placements.size(), 1u);
+    EXPECT_EQ(placements.front().effectively_visible, mesh == visible);
+    EXPECT_FALSE(placements.front().formal_instance());
+  }
+  EXPECT_FLOAT_EQ(all.records_for_display(hidden_by_parent)
+                      .front()
+                      .world_from_geometry.values[12],
+                  7.0f);
+}
+
+TEST(SceneMeshOccurrenceProjectionTests,
+     IncludeHiddenCombinesOccurrenceAndMemberVisibilityWithoutStorageCopies) {
+  SceneDocument scene;
+  const EntityId definition = scene.create_entity("Definition");
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  ASSERT_TRUE(scene.set_visible(definition, false));
+  const EntityId visible_member =
+      scene.create_entity("Visible Member", EntityKind::Mesh);
+  const EntityId hidden_member =
+      scene.create_entity("Hidden Member", EntityKind::Mesh);
+  const EntityId member_parent =
+      scene.create_entity("Hidden Member Parent", EntityKind::Empty);
+  const EntityId hidden_by_parent_member =
+      scene.create_entity("Hidden By Parent Member", EntityKind::Mesh);
+  for (const EntityId mesh :
+       {visible_member, hidden_member, hidden_by_parent_member}) {
+    ASSERT_TRUE(scene.set_mesh(mesh, {.mesh = 302u}));
+  }
+  ASSERT_TRUE(scene.set_parent(visible_member, definition, false));
+  ASSERT_TRUE(scene.set_parent(hidden_member, definition, false));
+  ASSERT_TRUE(scene.set_parent(member_parent, definition, false));
+  ASSERT_TRUE(scene.set_parent(hidden_by_parent_member, member_parent, false));
+  ASSERT_TRUE(scene.set_visible(hidden_member, false));
+  ASSERT_TRUE(scene.set_visible(member_parent, false));
+  for (const EntityId mesh :
+       {visible_member, hidden_member, hidden_by_parent_member}) {
+    ASSERT_TRUE(scene.set_transform(
+        mesh, TransformComponent{.position = {2.0f, 0.0f, 0.0f}}));
+  }
+
+  const EntityId visible_occurrence =
+      scene.create_entity("Visible Occurrence", EntityKind::Instance);
+  const EntityId hidden_occurrence =
+      scene.create_entity("Hidden Occurrence", EntityKind::Instance);
+  const EntityId occurrence_parent = scene.create_entity("Hidden Parent");
+  const EntityId hidden_by_parent_occurrence =
+      scene.create_entity("Hidden By Parent Occurrence", EntityKind::Instance);
+  for (const EntityId occurrence :
+       {visible_occurrence, hidden_occurrence, hidden_by_parent_occurrence}) {
+    ASSERT_TRUE(scene.set_instance_occurrence(
+        occurrence, {.definition = definition}));
+    ASSERT_TRUE(scene.set_transform(
+        occurrence, TransformComponent{.position = {10.0f, 0.0f, 0.0f}}));
+  }
+  ASSERT_TRUE(scene.set_visible(hidden_occurrence, false));
+  ASSERT_TRUE(scene.set_parent(hidden_by_parent_occurrence, occurrence_parent,
+                               false));
+  ASSERT_TRUE(scene.set_visible(occurrence_parent, false));
+
+  const auto visible_only = build_scene_mesh_occurrence_projection(scene);
+  ASSERT_EQ(visible_only.records().size(), 1u);
+  EXPECT_EQ(visible_only.records().front().identity(),
+            (SceneMeshOccurrenceIdentity{visible_occurrence, definition,
+                                         visible_member}));
+  EXPECT_TRUE(visible_only.records().front().effectively_visible);
+
+  SceneMeshOccurrenceProjectionWorkStats work;
+  const auto all = build_scene_mesh_occurrence_projection(
+      scene, &work, SceneMeshOccurrenceVisibility::IncludeHidden);
+  ASSERT_EQ(all.records().size(), 9u);
+  EXPECT_TRUE(all.ordinary_placement_indices().empty());
+  ASSERT_EQ(all.formal_geometry_groups().size(), 3u);
+  ASSERT_EQ(all.formal_placement_indices().size(), 9u);
+  EXPECT_EQ(work.formal_placement_count, 9u);
+  EXPECT_EQ(work.formal_geometry_group_count, 3u);
+  for (const EntityId occurrence :
+       {visible_occurrence, hidden_occurrence, hidden_by_parent_occurrence}) {
+    const auto placements = all.records_for_display(occurrence);
+    ASSERT_EQ(placements.size(), 3u);
+    EXPECT_EQ(placements[0].geometry_entity, visible_member);
+    EXPECT_EQ(placements[1].geometry_entity, hidden_member);
+    EXPECT_EQ(placements[2].geometry_entity, hidden_by_parent_member);
+    for (const SceneMeshOccurrenceProjectionRecord &record : placements) {
+      EXPECT_EQ(record.effectively_visible,
+                occurrence == visible_occurrence &&
+                    record.geometry_entity == visible_member);
+      EXPECT_EQ(record.definition_entity, definition);
+      EXPECT_FLOAT_EQ(record.world_from_geometry.values[12], 12.0f);
+    }
+  }
+  for (const SceneMeshOccurrenceGeometryGroup &group :
+       all.formal_geometry_groups()) {
+    ASSERT_EQ(group.participant_indices.size(), 3u);
+    EXPECT_EQ(all.record(group.participant_indices[0])->display_entity,
+              visible_occurrence);
+    EXPECT_EQ(all.record(group.participant_indices[1])->display_entity,
+              hidden_occurrence);
+    EXPECT_EQ(all.record(group.participant_indices[2])->display_entity,
+              hidden_by_parent_occurrence);
+  }
+  EXPECT_TRUE(all.records_for_display(definition).empty());
+  EXPECT_TRUE(all.records_for_display(visible_member).empty());
+  EXPECT_TRUE(all.records_for_display(hidden_member).empty());
+  EXPECT_TRUE(all.records_for_display(hidden_by_parent_member).empty());
+}
+
+TEST(SceneMeshOccurrenceProjectionTests,
+     IncludeHiddenDoesNotReplaceVisibleOnlyCacheOrMutateSceneRevisions) {
+  SceneDocument scene;
+  const EntityId visible = scene.create_entity("Visible", EntityKind::Mesh);
+  const EntityId hidden = scene.create_entity("Hidden", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(visible, {.mesh = 303u}));
+  ASSERT_TRUE(scene.set_mesh(hidden, {.mesh = 304u}));
+  ASSERT_TRUE(scene.set_visible(hidden, false));
+  const auto cached_before = scene.mesh_occurrence_projection();
+  ASSERT_EQ(cached_before->records().size(), 1u);
+  const auto stats_before = scene.spatial_projection_cache_stats();
+  const std::array<std::uint64_t, 4> revisions_before{
+      scene.hierarchy_presentation_revision(), scene.visibility_revision(),
+      scene.transform_revision(), scene.mesh_binding_revision()};
+
+  const auto all = build_scene_mesh_occurrence_projection(
+      scene, nullptr, SceneMeshOccurrenceVisibility::IncludeHidden);
+  EXPECT_EQ(all.records().size(), 2u);
+  const auto cached_after = scene.mesh_occurrence_projection();
+  EXPECT_EQ(cached_before.get(), cached_after.get());
+  EXPECT_EQ(cached_after->records().size(), 1u);
+  const auto stats_after = scene.spatial_projection_cache_stats();
+  EXPECT_EQ(stats_before.hierarchy_build_count,
+            stats_after.hierarchy_build_count);
+  EXPECT_EQ(stats_before.mesh_occurrence_build_count,
+            stats_after.mesh_occurrence_build_count);
+  const std::array<std::uint64_t, 4> revisions_after{
+      scene.hierarchy_presentation_revision(), scene.visibility_revision(),
+      scene.transform_revision(), scene.mesh_binding_revision()};
+  EXPECT_EQ(revisions_before, revisions_after);
 }
 
 TEST(SceneMeshOccurrenceProjectionTests,

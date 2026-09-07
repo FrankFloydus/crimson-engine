@@ -153,6 +153,9 @@ float viewport_overlay_depth_bias(ViewportOverlayDepthMode mode,
 
 float viewport_overlay_depth_bias(ViewportOverlayLayer layer,
                                   ViewportOverlayGeometryKind kind) {
+  if (layer == ViewportOverlayLayer::CollisionFill) {
+    return 0.0f;
+  }
   return viewport_overlay_depth_bias(viewport_overlay_depth_mode(layer, kind),
                                      kind);
 }

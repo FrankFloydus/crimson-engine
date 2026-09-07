@@ -18,6 +18,10 @@ material {
     ],
     parameters : [
         {
+            type : float4,
+            name : lineTint
+        },
+        {
             type : float,
             name : lineWidth
         },
@@ -127,7 +131,7 @@ fragment {
         }
 
         vec4 color = applyInstanceEditContext(
-            getColor(),
+            getColor() * materialParams.lineTint,
             materialParams.instanceEditContextColor,
             materialParams.instanceEditDim * materialParams.instanceEditContextStrength,
             materialParams.instanceEditContextTintAmount,

@@ -8,6 +8,7 @@
 
 #include "diagnostics/profile.hpp"
 #include "io/qdr/qdr_atomic_write.hpp"
+#include "io/qdr/qdr_binary_container.hpp"
 #include "io/qdr/qdr_scene_binary_codec.hpp"
 
 #include <cstddef>
@@ -97,8 +98,13 @@ QdrProjectWriteResult QdrDocumentWriter::write_project_document_atomic(
       QDR_PROFILE_SCOPE("QDR encode binary scene");
       return serialize_project_document_bytes(snapshot, scene_uuid);
     }();
-    return project_write_result_from_atomic(quader_io::write_qdr_text_atomic(
-        path, binary_string(bytes)));
+    QdrProjectWriteResult result = project_write_result_from_atomic(
+        quader_io::write_qdr_text_atomic(path, binary_string(bytes)));
+    if (result.ok) {
+      result.source_byte_count = bytes.size();
+      result.source_content_hash = quader_io::qdr_binary_content_hash(bytes);
+    }
+    return result;
   } catch (const std::exception &exception) {
     return {.ok = false, .message = exception.what()};
   } catch (...) {

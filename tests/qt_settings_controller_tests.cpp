@@ -145,13 +145,37 @@ TEST(QtSettingsControllerTests,
 }
 
 TEST(QtSettingsControllerTests,
+     CollisionColorUsesGodotDefaultAndLocalizedMeshOverlayLabel) {
+  ViewportSettings defaults = ViewportSettings::defaults();
+  expect_color_exact(defaults.color(ViewportColorSettingId::CollisionFill),
+                     {0.0f, 0.6f, 0.7f, 0.42f});
+  const auto &descriptor = viewport_color_settings()[
+      static_cast<std::size_t>(ViewportColorSettingId::CollisionFill)];
+  EXPECT_EQ(descriptor.id, ViewportColorSettingId::CollisionFill);
+  EXPECT_EQ(descriptor.section, ViewportSettingsSectionId::Overlay);
+  EXPECT_EQ(descriptor.key, "CollisionFillColor");
+  EXPECT_EQ(descriptor.label, "Collision Color");
+  EXPECT_EQ(loaded_localization().text(
+                "viewport.settings.CollisionFillColor.label", ""),
+            "Collision Color");
+  EXPECT_EQ(loaded_localization("it-IT").text(
+                "viewport.settings.CollisionFillColor.label", ""),
+            "Colore collisioni");
+  ASSERT_TRUE(defaults.set_color(ViewportColorSettingId::CollisionFill,
+                                 {0.8f, 0.2f, 0.4f, 0.1f}));
+  ASSERT_TRUE(defaults.reset_to_defaults());
+  expect_color_exact(defaults.color(ViewportColorSettingId::CollisionFill),
+                     {0.0f, 0.6f, 0.7f, 0.42f});
+}
+
+TEST(QtSettingsControllerTests,
      EveryControlMutatesItsOwnerAndNotifiesItsPhase) {
-  static_assert(kViewportColorSettingCount == 23u);
+  static_assert(kViewportColorSettingCount == 24u);
   static_assert(kViewportFloatSettingCount == 32u);
-  static_assert(kViewportBoolSettingCount == 13u);
+  static_assert(kViewportBoolSettingCount == 14u);
   static_assert(3u + kViewportColorSettingCount + kViewportFloatSettingCount +
                      kViewportBoolSettingCount ==
-                71u);
+                73u);
 
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();

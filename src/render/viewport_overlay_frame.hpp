@@ -44,9 +44,10 @@ enum class ViewportOverlayLayer {
     SourceWireDepthStamp = 23,
     WireframeXray = 24,
     PointLightGizmo = 25,
+    CollisionFill = 26,
 };
 
-inline constexpr std::size_t kViewportOverlayLayerCount = 26u;
+inline constexpr std::size_t kViewportOverlayLayerCount = 27u;
 
 /**
  * Enumerates ViewportOverlayIconKind values used by render-owned billboard overlays.

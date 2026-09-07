@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "editor/metadata/command_presentation_catalog.hpp"
@@ -1175,6 +1176,88 @@ TEST(QtSettingsDialogTests,
   ASSERT_EQ(changes.size(), 1u);
   EXPECT_EQ(changes.back().kind, QtSettingsChangeKind::SessionCommit);
   dialog.reject();
+}
+
+TEST(QtSettingsDialogTests,
+     CollisionFillStagesOpacityAndPersistsOnlyAppliedChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-collision-fill-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QTemporaryDir directory;
+  ASSERT_TRUE(directory.isValid());
+  const std::filesystem::path path =
+      std::filesystem::path(directory.path().toStdWString()) / "viewport.ini";
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  const ViewportSettingColor initial =
+      viewport_settings.color(ViewportColorSettingId::CollisionFill);
+  LocalizationService localization = loaded_localization();
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  std::vector<QtSettingsChange> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) {
+        changes.push_back(change);
+        EXPECT_TRUE(viewport_settings.save(path));
+      });
+  auto *swatch = dialog.findChild<QPushButton *>(
+      QStringLiteral("viewportSetting_CollisionFillColor"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  auto *cancel = dialog.findChild<QPushButton *>(QStringLiteral("settingsCancel"));
+  ASSERT_NE(swatch, nullptr);
+  ASSERT_NE(apply, nullptr);
+  ASSERT_NE(cancel, nullptr);
+  const auto *group = qobject_cast<QGroupBox *>(swatch->parentWidget());
+  ASSERT_NE(group, nullptr);
+  EXPECT_EQ(group->title(), QStringLiteral("Mesh Overlays"));
+
+  dialog.show();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(swatch->accessibleName(), QStringLiteral("Collision Fill"));
+  EXPECT_TRUE(swatch->toolTip().contains(QStringLiteral("Opacity: 42%")));
+  const QColor applied = QColor::fromRgb(51, 102, 153, 77);
+  const QString picker_name =
+      QStringLiteral("viewportSetting_CollisionFillColor_dialog");
+  ASSERT_TRUE(reject_color_picker(dialog, *swatch, picker_name, applied));
+  EXPECT_FALSE(apply->isEnabled());
+  EXPECT_TRUE(changes.empty());
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::CollisionFill), initial));
+
+  ASSERT_TRUE(accept_color_picker(dialog, *swatch, picker_name, applied));
+  EXPECT_TRUE(apply->isEnabled());
+  EXPECT_TRUE(changes.empty());
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::CollisionFill), initial));
+  apply->click();
+  EXPECT_FALSE(apply->isEnabled());
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 1u);
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::CollisionFill),
+      setting_color(applied)));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      ViewportSettings::load(path).color(ViewportColorSettingId::CollisionFill),
+      setting_color(applied)));
+
+  ASSERT_TRUE(accept_color_picker(dialog, *swatch, picker_name,
+                                 QColor::fromRgb(200, 10, 100, 230)));
+  cancel->click();
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 1u);
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::CollisionFill),
+      setting_color(applied)));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      ViewportSettings::load(path).color(ViewportColorSettingId::CollisionFill),
+      setting_color(applied)));
 }
 
 TEST(QtSettingsDialogTests,
@@ -3071,6 +3154,293 @@ TEST(QtSettingsDialogTests,
 }
 
 TEST(InspectorPanelTests,
+     CollisionOptionsPreserveLegacyMetadataUntilSupportedChoicesAreSelected) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-collision-options-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto box = editor.modeling().create_box(
+      QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+      "Collision Mesh");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  const EntityId entity = box.value().entity;
+  ASSERT_NE(session.scene().mesh(entity), nullptr);
+  EXPECT_EQ(session.scene().mesh(entity)->collision_type, MeshCollisionType::Mesh);
+  EXPECT_TRUE(session.scene().mesh(entity)->generate_collisions);
+  EXPECT_TRUE(session.scene().mesh(entity)->display_collision);
+  MeshComponent legacy = *session.scene().mesh(entity);
+  legacy.collision_type = MeshCollisionType::Box;
+  legacy.body_type = MeshPhysicsBodyType::RigidBody;
+  legacy.display_collision = true;
+  ASSERT_TRUE(editor.scene()
+                  .set_mesh_component(entity, to_api_mesh_component(legacy))
+                  .ok());
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  UIInspectorPreviewContext preview{.document = session.scene(),
+                                    .assets = session.assets()};
+  UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .inspector_preview = &preview,
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+  InspectorPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  const auto refresh = [&]() {
+    panel.refresh(context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  };
+  const auto combo = [&](const char *name) {
+    return panel.findChild<QComboBox *>(QString::fromUtf8(name));
+  };
+  const auto status = [&]() {
+    return panel.findChild<QLabel *>(
+        QStringLiteral("inspector.physics.collision_status"));
+  };
+  const auto activate = [](QComboBox &field, int value) {
+    const int index = field.findData(value);
+    ASSERT_GE(index, 0);
+    field.setCurrentIndex(index);
+    ASSERT_TRUE(QMetaObject::invokeMethod(&field, "activated", Qt::DirectConnection,
+                                         Q_ARG(int, index)));
+  };
+
+  const auto scene_revision = session.scene().revision();
+  const auto undo_label = editor.query().history().undo_label;
+  refresh();
+  QComboBox *shape = combo("inspector.physics.collision_type");
+  QComboBox *body = combo("inspector.physics.body_type");
+  ASSERT_NE(shape, nullptr);
+  ASSERT_NE(body, nullptr);
+  ASSERT_NE(status(), nullptr);
+  EXPECT_EQ(shape->currentText(), QStringLiteral("Box (unsupported)"));
+  EXPECT_EQ(body->currentText(), QStringLiteral("Rigid Body (unsupported)"));
+  EXPECT_EQ(status()->text(),
+            QStringLiteral("Select Mesh and Static Body to generate collisions."));
+  EXPECT_EQ(*session.scene().mesh(entity), legacy);
+  EXPECT_EQ(session.scene().revision(), scene_revision);
+  EXPECT_EQ(editor.query().history().undo_label, undo_label);
+  for (int index = 0; index < shape->count(); ++index) {
+    const bool enabled = shape->model()->flags(
+                             shape->model()->index(index, 0)) & Qt::ItemIsEnabled;
+    EXPECT_EQ(enabled, shape->itemData(index).toInt() ==
+                           static_cast<int>(MeshCollisionType::Mesh));
+  }
+  const int rigid_index = body->findData(static_cast<int>(MeshPhysicsBodyType::RigidBody));
+  EXPECT_FALSE(body->model()->flags(body->model()->index(rigid_index, 0)) &
+               Qt::ItemIsEnabled);
+  const int sphere_index = shape->findData(static_cast<int>(MeshCollisionType::Sphere));
+  ASSERT_TRUE(QMetaObject::invokeMethod(shape, "activated", Qt::DirectConnection,
+                                       Q_ARG(int, sphere_index)));
+  EXPECT_EQ(*session.scene().mesh(entity), legacy);
+  for (int frame = 0; frame < 8; ++frame) {
+    refresh();
+    EXPECT_EQ(combo("inspector.physics.collision_type"), shape);
+    EXPECT_EQ(combo("inspector.physics.body_type"), body);
+    EXPECT_EQ(session.scene().revision(), scene_revision);
+  }
+
+  activate(*shape, static_cast<int>(MeshCollisionType::Mesh));
+  EXPECT_EQ(session.scene().mesh(entity)->collision_type, MeshCollisionType::Mesh);
+  EXPECT_EQ(session.scene().mesh(entity)->body_type, MeshPhysicsBodyType::RigidBody);
+  refresh();
+  ASSERT_NE(status(), nullptr);
+  body = combo("inspector.physics.body_type");
+  ASSERT_NE(body, nullptr);
+  activate(*body, static_cast<int>(MeshPhysicsBodyType::StaticBody));
+  EXPECT_TRUE(mesh_collision_supported(*session.scene().mesh(entity)));
+  refresh();
+  EXPECT_EQ(status(), nullptr);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(session.scene().mesh(entity)->body_type, MeshPhysicsBodyType::RigidBody);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(*session.scene().mesh(entity), legacy);
+  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_TRUE(editor.history().redo().ok());
+  refresh();
+  EXPECT_EQ(status(), nullptr);
+
+  auto *generate = panel.findChild<QCheckBox *>(
+      QStringLiteral("inspector.physics.generate_collisions"));
+  auto *display = panel.findChild<QCheckBox *>(
+      QStringLiteral("inspector.physics.display_collision"));
+  ASSERT_NE(generate, nullptr);
+  ASSERT_NE(display, nullptr);
+  EXPECT_TRUE(generate->isChecked());
+  EXPECT_TRUE(display->isChecked());
+  generate->setChecked(false);
+  EXPECT_FALSE(session.scene().mesh(entity)->generate_collisions);
+  EXPECT_TRUE(session.scene().mesh(entity)->display_collision);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(session.scene().mesh(entity)->generate_collisions);
+  display->setChecked(false);
+  EXPECT_FALSE(session.scene().mesh(entity)->display_collision);
+  EXPECT_TRUE(session.scene().mesh(entity)->generate_collisions);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(session.scene().mesh(entity)->display_collision);
+}
+
+TEST(InspectorPanelTests,
+     SharedPhysicsEditsOnlySelectedMeshesWithMixedValuesAndOneUndoStep) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-shared-physics-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderBounds bounds{.min = {-1.0f, -1.0f, -1.0f},
+                            .max = {1.0f, 1.0f, 1.0f}};
+  const auto first = editor.modeling().create_box(bounds, "First mesh");
+  const auto second = editor.modeling().create_box(bounds, "Second mesh");
+  const auto light = editor.scene().create_point_light();
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  ASSERT_TRUE(light.ok());
+  const EntityId first_id = first.value().entity;
+  const EntityId second_id = second.value().entity;
+  MeshComponent first_mesh = *session.scene().mesh(first_id);
+  first_mesh.collision_type = MeshCollisionType::Box;
+  first_mesh.body_type = MeshPhysicsBodyType::RigidBody;
+  first_mesh.generate_collisions = true;
+  first_mesh.display_collision = false;
+  MeshComponent second_mesh = *session.scene().mesh(second_id);
+  second_mesh.generate_collisions = false;
+  second_mesh.display_collision = true;
+  ASSERT_TRUE(editor.scene()
+                  .set_mesh_component(first_id, to_api_mesh_component(first_mesh))
+                  .ok());
+  ASSERT_TRUE(editor.scene()
+                  .set_mesh_component(second_id, to_api_mesh_component(second_mesh))
+                  .ok());
+  const std::array<EntityId, 3> selected{first_id, second_id, light.value().id};
+  ASSERT_TRUE(editor.selection()
+                  .select_objects_for_inspection(selected, light.value().id)
+                  .ok());
+  const LightComponent original_light = *session.scene().light(light.value().id);
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  UIInspectorPreviewContext preview{.document = session.scene(),
+                                    .assets = session.assets()};
+  UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .inspector_preview = &preview,
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+  InspectorPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  const auto refresh = [&]() {
+    panel.refresh(context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  };
+  const auto combo = [&](const char *name) {
+    return panel.findChild<QComboBox *>(QString::fromUtf8(name));
+  };
+  const auto activate = [&](const char *name, int value) {
+    QComboBox *field = combo(name);
+    ASSERT_NE(field, nullptr);
+    const int index = field->findData(value);
+    ASSERT_GE(index, 0);
+    field->setCurrentIndex(index);
+    ASSERT_TRUE(QMetaObject::invokeMethod(field, "activated", Qt::DirectConnection,
+                                         Q_ARG(int, index)));
+  };
+  refresh();
+  QComboBox *shape = combo("inspector.physics.collision_type");
+  QComboBox *body = combo("inspector.physics.body_type");
+  ASSERT_NE(shape, nullptr);
+  ASSERT_NE(body, nullptr);
+  EXPECT_EQ(shape->currentIndex(), -1);
+  EXPECT_EQ(body->currentIndex(), -1);
+  EXPECT_EQ(shape->placeholderText(), QStringLiteral("Mixed"));
+  EXPECT_EQ(body->placeholderText(), QStringLiteral("Mixed"));
+  for (const char *field : {"generate_collisions", "display_collision"}) {
+    EXPECT_NE(panel.findChild<QLabel *>(
+                  QStringLiteral("inspector.physics.%1.mixed").arg(field)),
+              nullptr);
+  }
+  const auto before_revision = session.scene().revision();
+  for (int frame = 0; frame < 8; ++frame) {
+    refresh();
+    EXPECT_EQ(combo("inspector.physics.collision_type"), shape);
+    EXPECT_EQ(session.scene().revision(), before_revision);
+  }
+  activate("inspector.physics.collision_type",
+           static_cast<int>(MeshCollisionType::Sphere));
+  EXPECT_EQ(*session.scene().mesh(first_id), first_mesh);
+  EXPECT_EQ(*session.scene().mesh(second_id), second_mesh);
+  activate("inspector.physics.collision_type",
+           static_cast<int>(MeshCollisionType::Mesh));
+  EXPECT_EQ(session.scene().mesh(first_id)->collision_type, MeshCollisionType::Mesh);
+  EXPECT_EQ(session.scene().mesh(second_id)->collision_type, MeshCollisionType::Mesh);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(*session.scene().mesh(first_id), first_mesh);
+  EXPECT_EQ(*session.scene().mesh(second_id), second_mesh);
+  ASSERT_TRUE(editor.history().redo().ok());
+  refresh();
+  activate("inspector.physics.body_type",
+           static_cast<int>(MeshPhysicsBodyType::StaticBody));
+  EXPECT_TRUE(mesh_collision_supported(*session.scene().mesh(first_id)));
+  EXPECT_TRUE(mesh_collision_supported(*session.scene().mesh(second_id)));
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(session.scene().mesh(first_id)->body_type, first_mesh.body_type);
+  EXPECT_EQ(session.scene().mesh(second_id)->body_type, second_mesh.body_type);
+  ASSERT_TRUE(editor.history().redo().ok());
+  for (const char *field : {"generate_collisions", "display_collision"}) {
+    refresh();
+    const MeshComponent before_first = *session.scene().mesh(first_id);
+    const MeshComponent before_second = *session.scene().mesh(second_id);
+    auto *check = panel.findChild<QCheckBox *>(
+        QStringLiteral("inspector.physics.%1").arg(field));
+    ASSERT_NE(check, nullptr);
+    EXPECT_FALSE(check->isChecked());
+    check->setChecked(true);
+    if (std::string_view(field) == "generate_collisions") {
+      EXPECT_TRUE(session.scene().mesh(first_id)->generate_collisions);
+      EXPECT_TRUE(session.scene().mesh(second_id)->generate_collisions);
+    } else {
+      EXPECT_TRUE(session.scene().mesh(first_id)->display_collision);
+      EXPECT_TRUE(session.scene().mesh(second_id)->display_collision);
+    }
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(*session.scene().mesh(first_id), before_first);
+    EXPECT_EQ(*session.scene().mesh(second_id), before_second);
+  }
+  EXPECT_EQ(*session.scene().light(light.value().id), original_light);
+  const auto other_light = editor.scene().create_point_light();
+  ASSERT_TRUE(other_light.ok());
+  const std::array<EntityId, 2> non_meshes{light.value().id, other_light.value().id};
+  ASSERT_TRUE(editor.selection()
+                  .select_objects_for_inspection(non_meshes, light.value().id)
+                  .ok());
+  refresh();
+  EXPECT_EQ(combo("inspector.physics.collision_type"), nullptr);
+}
+
+TEST(InspectorPanelTests,
      InstanceNameCommitsOnEnterAndFocusLoss) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -3491,6 +3861,105 @@ TEST(InspectorPanelTests,
   EXPECT_TRUE(session.dirty());
   EXPECT_EQ(history_label(session.history().undo_label()),
             std::optional<std::string>("Set Scene Settings"));
+}
+
+TEST(QtMainMenuTests,
+     CollisionDisplayTogglePersistsWithoutChangingMeshMetadata) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-collision-display-menu-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QTemporaryDir directory;
+  ASSERT_TRUE(directory.isValid());
+  const std::filesystem::path preferences_path =
+      std::filesystem::path(directory.path().toStdWString()) / "viewport.ini";
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      preferences_path.parent_path() / "keybindings.json")
+                  .ok());
+  const auto box = editor.modeling().create_box(
+      QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}}, "Collision Display Mesh");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const MeshComponent original = *session.scene().mesh(box.value().entity);
+  const auto scene_revision = session.scene().revision();
+  const auto undo_label = editor.query().history().undo_label;
+  ViewportSettings settings = ViewportSettings::defaults();
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowCollisions));
+  editor.preferences().set_runtime_hooks(QuaderPreferencesRuntimeHooks{
+      .collisions_visible = [&] {
+        return settings.bool_value(ViewportBoolSettingId::ShowCollisions);
+      },
+      .set_collisions_visible = [&](bool visible) {
+        const bool changed = settings.set_bool_value(
+            ViewportBoolSettingId::ShowCollisions, visible);
+        if (changed) {
+          EXPECT_TRUE(settings.save(preferences_path));
+        }
+        return QuaderApiVoidResult{
+            .ok = true,
+            .changed = changed,
+            .mutation_kind = QuaderMutationKind::Runtime,
+        };
+      },
+  });
+  LocalizationService localization = loaded_localization();
+  QMenuBar menu_bar;
+  QtMainMenu menu;
+  menu.initialize(menu_bar, QtMainMenuContext{
+                               .editor = editor,
+                               .modeling = session.modeling(),
+                               .viewport_settings = settings,
+                               .localization = localization,
+                           });
+  auto *view = menu_bar.findChild<QMenu *>(QStringLiteral("menu_view"));
+  auto *display = menu_bar.findChild<QMenu *>(QStringLiteral("menu_view_display"));
+  auto *action = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_viewport_toggle_collisions"));
+  ASSERT_NE(view, nullptr);
+  ASSERT_NE(display, nullptr);
+  ASSERT_NE(action, nullptr);
+  ASSERT_TRUE(view->actions().contains(display->menuAction()));
+  ASSERT_TRUE(display->actions().contains(action));
+  ASSERT_TRUE(QMetaObject::invokeMethod(view, "aboutToShow", Qt::DirectConnection));
+  EXPECT_EQ(action->text(), QStringLiteral("Display Collisions"));
+  EXPECT_TRUE(action->isCheckable());
+  EXPECT_TRUE(action->isChecked());
+  EXPECT_TRUE(action->shortcut().isEmpty());
+
+  action->trigger();
+  menu.refresh();
+  EXPECT_FALSE(action->isChecked());
+  EXPECT_FALSE(editor.preferences().collisions_visible());
+  EXPECT_FALSE(ViewportSettings::load(preferences_path)
+                   .bool_value(ViewportBoolSettingId::ShowCollisions));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowOverlays));
+  EXPECT_EQ(*session.scene().mesh(box.value().entity), original);
+  EXPECT_EQ(session.scene().revision(), scene_revision);
+  EXPECT_EQ(editor.query().history().undo_label, undo_label);
+  EXPECT_FALSE(editor.preferences().set_collisions_visible(false).changed());
+
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader_command::kViewportToggleCollisions)
+                  .changed());
+  ASSERT_TRUE(QMetaObject::invokeMethod(view, "aboutToShow", Qt::DirectConnection));
+  EXPECT_TRUE(action->isChecked());
+  EXPECT_TRUE(ViewportSettings::load(preferences_path)
+                  .bool_value(ViewportBoolSettingId::ShowCollisions));
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *binding = find_keybinding_catalog_entry(
+      catalog, quader_command::kViewportToggleCollisions.string());
+  ASSERT_NE(binding, nullptr);
+  EXPECT_TRUE(binding->default_shortcut.empty());
+  EXPECT_TRUE(binding->unassigned);
+  EXPECT_EQ(loaded_localization("it-IT").text("ui.menu.view.collisions", ""),
+            "Mostra collisioni");
 }
 
 TEST(QtMainMenuTests,

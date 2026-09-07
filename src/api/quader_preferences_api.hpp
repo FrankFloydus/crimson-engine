@@ -71,6 +71,8 @@ public:
     [[nodiscard]] bool mesh_grid_visible() const;
     QuaderApiVoidResult set_overlays_visible(bool visible);
     [[nodiscard]] bool overlays_visible() const;
+    QuaderApiVoidResult set_collisions_visible(bool visible);
+    [[nodiscard]] bool collisions_visible() const;
     QuaderApiVoidResult set_texture_lock_enabled(bool enabled);
     [[nodiscard]] bool texture_lock_enabled() const;
     QuaderApiVoidResult set_texture_lock_scale_enabled(bool enabled);

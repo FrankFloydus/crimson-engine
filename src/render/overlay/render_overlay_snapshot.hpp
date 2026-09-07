@@ -8,6 +8,7 @@
 
 #include "assets/mesh_asset.hpp"
 #include "assets/mesh_wire_geometry.hpp"
+#include "assets/mesh_collision_geometry_payload.hpp"
 #include "core/types.hpp"
 #include "math/types.hpp"
 #include "render/render_source_stamp.hpp"
@@ -29,6 +30,7 @@ namespace quader {
 class AssetRegistry;
 class SceneDocument;
 struct CurveSamplePayload;
+struct RenderToolPreviewSuppressionSnapshot;
 
 /// Pins one visible authored curve and its derived local samples for rendering.
 struct RenderOverlayCurveSnapshot {
@@ -188,6 +190,25 @@ struct RenderOverlaySceneWireframeSnapshot : RenderSourceStamp {
   std::vector<RenderOverlayMeshSnapshot> meshes;
 };
 
+/** Pins local collision triangles and one concrete scene occurrence. */
+struct RenderOverlayCollisionMeshSnapshot final {
+  EntityId entity = kInvalidEntityId;
+  EntityId occurrence = kInvalidEntityId;
+  EntityId definition = kInvalidEntityId;
+  EntityId member = kInvalidEntityId;
+  AssetId mesh_id = kInvalidAssetId;
+  std::shared_ptr<const MeshCollisionGeometryPayload> collision_payload;
+  QMat4 world_transform;
+  bool selected = false;
+};
+
+/** Selection-independent retained collision fill inputs. */
+struct RenderOverlayCollisionSnapshot : RenderSourceStamp {
+  bool visible = false;
+  ViewportSettingColor color{0.0f, 0.6f, 0.7f, 0.42f};
+  std::vector<RenderOverlayCollisionMeshSnapshot> meshes;
+};
+
 /**
  * Captures transient scene/tool overlay records appended to the runtime overlay
  * frame before style resolution.
@@ -211,11 +232,13 @@ struct RenderOverlaySelectionSnapshot : RenderSourceStamp {
 struct RenderOverlayPersistentSnapshotUpdate {
   const RenderOverlaySelectedObjectSnapshot *selected_object = nullptr;
   const RenderOverlaySceneWireframeSnapshot *scene_wireframe = nullptr;
+  const RenderOverlayCollisionSnapshot *collision = nullptr;
   bool selected_object_changed = false;
   bool scene_wireframe_changed = false;
+  bool collision_changed = false;
 
   [[nodiscard]] bool changed() const {
-    return selected_object_changed || scene_wireframe_changed;
+    return selected_object_changed || scene_wireframe_changed || collision_changed;
   }
 };
 
@@ -225,6 +248,8 @@ struct RenderOverlayPersistentSnapshotUpdate {
  * to prove that camera-only frames remain extraction-free.
  */
 struct RenderOverlaySnapshotCacheStats {
+  std::uint64_t collision_build_count = 0;
+  std::uint64_t collision_transform_refresh_count = 0;
   std::uint64_t selected_object_build_count = 0;
   std::uint64_t scene_wireframe_build_count = 0;
   std::uint64_t scene_wireframe_curve_publication_reuse_count = 0;
@@ -256,7 +281,9 @@ public:
       bool selected_mesh_wire_visible = true,
       RenderInstanceEditScope instance_edit_scope = {},
       const ViewportPersistentOverlayRasterGroupSet &raster_groups = {},
-      bool selected_mesh_outline_only = false);
+      bool selected_mesh_outline_only = false,
+      bool collision_visible = false,
+      ViewportSettingColor collision_color = {0.0f, 0.6f, 0.7f, 0.42f});
   /// Null before update_persistent or after reset. Borrowed data is current only
   /// until the next update/reset; immutable geometry payloads pin mesh storage.
   [[nodiscard]] const RenderOverlaySelectedObjectSnapshot *
@@ -297,6 +324,11 @@ private:
                     const AssetRegistry &assets,
                     RenderSceneBindingKey scene_binding);
   void invalidate_snapshots();
+  [[nodiscard]] bool update_collision_snapshot(
+      const SceneDocument &document, const AssetRegistry &assets,
+      const RenderSourceStamp &current,
+      const ViewportLocalVisibilitySnapshot *local_visibility,
+      bool visible, ViewportSettingColor color);
   [[nodiscard]] std::optional<RenderOverlayBoundsSnapshot>
   selected_mesh_world_bounds(const SceneDocument &document,
                              const AssetRegistry &assets, EntityId entity);
@@ -325,9 +357,11 @@ private:
   RenderSceneBindingKey source_scene_binding_;
   RenderOverlaySelectedObjectSnapshot selected_object_snapshot_;
   RenderOverlaySceneWireframeSnapshot scene_wireframe_snapshot_;
+  RenderOverlayCollisionSnapshot collision_snapshot_;
   RenderOverlaySelectionSnapshot selection_snapshot_;
   bool has_selected_object_snapshot_ = false;
   bool has_scene_wireframe_snapshot_ = false;
+  bool has_collision_snapshot_ = false;
   bool has_selection_snapshot_ = false;
   std::unordered_map<AssetId, CachedLocalMeshBounds>
       selection_local_mesh_bounds_;
@@ -339,6 +373,19 @@ private:
   std::vector<EntityId> selection_group_entities_;
   RenderOverlaySnapshotCacheStats stats_;
 };
+
+[[nodiscard]] RenderOverlayCollisionSnapshot
+build_render_overlay_collision_snapshot(
+    const SceneDocument &document, const AssetRegistry &assets, bool visible,
+    ViewportSettingColor color = {0.0f, 0.6f, 0.7f, 0.42f},
+    RenderSceneBindingKey scene_binding = {},
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
+
+/** Removes only the concrete source placements replaced by a live tool. */
+[[nodiscard]] RenderOverlayCollisionSnapshot
+filter_render_overlay_collision_snapshot(
+    const RenderOverlayCollisionSnapshot &snapshot,
+    const RenderToolPreviewSuppressionSnapshot &suppression);
 
 [[nodiscard]] RenderOverlaySelectedObjectSnapshot
 build_render_overlay_selected_object_snapshot(const SceneDocument &document,

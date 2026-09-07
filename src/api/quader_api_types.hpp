@@ -1212,8 +1212,8 @@ struct QuaderMeshComponent {
   bool cast_shadows = true;
   bool double_sided = false;
   bool generate_collisions = true;
-  QuaderMeshCollisionType collision_type = QuaderMeshCollisionType::Box;
-  bool display_collision = false;
+  QuaderMeshCollisionType collision_type = QuaderMeshCollisionType::Mesh;
+  bool display_collision = true;
   QuaderMeshPhysicsBodyType body_type = QuaderMeshPhysicsBodyType::StaticBody;
 };
 

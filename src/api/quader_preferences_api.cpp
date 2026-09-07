@@ -217,6 +217,16 @@ bool QuaderPreferencesApi::overlays_visible() const {
   return hooks_.overlays_visible ? hooks_.overlays_visible() : false;
 }
 
+QuaderApiVoidResult QuaderPreferencesApi::set_collisions_visible(bool visible) {
+  return hooks_.set_collisions_visible
+             ? hooks_.set_collisions_visible(visible)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::collisions_visible() const {
+  return hooks_.collisions_visible ? hooks_.collisions_visible() : false;
+}
+
 QuaderApiVoidResult
 QuaderPreferencesApi::set_texture_lock_enabled(bool enabled) {
   return hooks_.set_texture_lock_enabled

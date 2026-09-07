@@ -21,6 +21,7 @@
 #include "render/overlay/overlay_proxy_factory.hpp"
 #include "render/overlay/overlay_renderable_cache.hpp"
 #include "render/overlay/instance_selection_overlay_cache.hpp"
+#include "render/overlay/collision_shape_overlay_cache.hpp"
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/selected_object_overlay_cache.hpp"
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
@@ -103,7 +104,8 @@ public:
                                   const ViewportSettings &settings);
     void sync_scene_asset_overlays(
         const RenderOverlaySelectedObjectSnapshot &selected_object_snapshot,
-        const RenderOverlaySceneWireframeSnapshot &wireframe_snapshot);
+        const RenderOverlaySceneWireframeSnapshot &wireframe_snapshot,
+        const RenderOverlayCollisionSnapshot &collision_snapshot = {});
     /**
      * Pins and derives one compound preview with this bridge's retained render
      * caches, including transient Curve solid geometry.
@@ -162,6 +164,7 @@ public:
     OverlayRenderableCache dynamic_overlay_cache_;
     ViewportOverlaySubmissionCoordinator overlay_submission_coordinator_;
     InstanceSelectionOverlayCache instance_selection_overlay_cache_;
+    CollisionShapeOverlayCache collision_shape_overlay_cache_;
     SceneWireframeOverlayCache scene_wireframe_overlay_cache_;
     SelectedObjectOverlayCache selected_object_overlay_cache_;
     SceneRenderSyncService sync_service_;
@@ -181,6 +184,9 @@ public:
     ViewportOverlayFrame tool_preview_overlay_frame_;
     std::uint64_t tool_preview_overlay_revision_ = 0u;
     RenderOverlaySelectionSnapshot filtered_scene_overlay_snapshot_;
+    RenderOverlayCollisionSnapshot filtered_collision_snapshot_;
+    RenderSourceStamp filtered_collision_source_stamp_;
+    bool filtered_collision_valid_ = false;
     std::uint64_t filtered_scene_overlay_signature_ = 0u;
     bool filtered_scene_overlay_valid_ = false;
     bool tool_preview_overlay_suppression_dirty_ = false;

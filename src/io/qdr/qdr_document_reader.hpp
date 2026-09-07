@@ -13,6 +13,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -52,6 +53,9 @@ struct QdrProjectReadResult {
     std::vector<ProjectAssetReference> project_asset_dependencies;
     std::optional<QdrSceneViewportCameraPose> viewport_camera_pose;
     QdrProjectReadStats stats;
+    /// Identifies the exact bytes decoded, independently of later disk changes.
+    std::uint64_t source_byte_count = 0u;
+    std::uint64_t source_content_hash = 0u;
 };
 
 /**

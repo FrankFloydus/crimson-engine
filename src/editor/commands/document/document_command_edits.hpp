@@ -60,6 +60,7 @@ enum class DocumentSceneBatchOperationKind {
     SetTransform,
     SetVisible,
     SetLocked,
+    SetMeshComponent,
 };
 
 /**
@@ -72,6 +73,7 @@ struct DocumentSceneBatchOperation {
     bool preserve_world_transform = true;
     bool flag = false;
     TransformComponent transform;
+    MeshComponent mesh;
     std::string name;
 };
 

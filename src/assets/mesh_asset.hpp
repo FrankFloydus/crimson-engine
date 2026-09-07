@@ -27,6 +27,7 @@ struct Document;
 namespace quader {
 
 struct MeshWireGeometryPayload;
+struct MeshCollisionGeometryPayload;
 
 /**
  * Represents a Mesh Vertex value used by the asset document and registry layer.
@@ -89,6 +90,10 @@ struct MeshGeometryPayload final {
     indices = other.indices;
     primitives = other.primitives;
     wire_geometry_payload_.reset();
+    std::atomic_store_explicit(
+        &collision_geometry_payload_,
+        std::shared_ptr<const MeshCollisionGeometryPayload>{},
+        std::memory_order_release);
     content_id_.store(other.content_id_.load(std::memory_order_relaxed),
                       std::memory_order_relaxed);
     return *this;
@@ -102,6 +107,10 @@ struct MeshGeometryPayload final {
     indices = std::move(other.indices);
     primitives = std::move(other.primitives);
     wire_geometry_payload_.reset();
+    std::atomic_store_explicit(
+        &collision_geometry_payload_,
+        std::shared_ptr<const MeshCollisionGeometryPayload>{},
+        std::memory_order_release);
     content_id_.store(other.content_id_.load(std::memory_order_relaxed),
                       std::memory_order_relaxed);
     return *this;
@@ -190,14 +199,23 @@ struct MeshGeometryPayload final {
 
   void invalidate_content_id() noexcept {
     wire_geometry_payload_.reset();
+    std::atomic_store_explicit(
+        &collision_geometry_payload_,
+        std::shared_ptr<const MeshCollisionGeometryPayload>{},
+        std::memory_order_release);
     content_id_.store(0, std::memory_order_release);
   }
 
 private:
   friend struct MeshAsset;
+  friend std::shared_ptr<const MeshCollisionGeometryPayload>
+  mesh_collision_geometry_payload(const MeshGeometryPayload &geometry);
 
   mutable std::shared_ptr<const MeshWireGeometryPayload>
       wire_geometry_payload_;
+  // Immutable geometry snapshots share the lazily published collision data.
+  mutable std::shared_ptr<const MeshCollisionGeometryPayload>
+      collision_geometry_payload_;
   mutable std::atomic<std::uint64_t> content_id_{0};
 };
 
@@ -313,8 +331,7 @@ private:
 };
 
 inline std::vector<MeshPrimitiveSpan>
-normalized_mesh_primitive_spans(const MeshAsset &mesh) {
-  const MeshGeometryPayload &geometry = mesh.geometry();
+normalized_mesh_primitive_spans(const MeshGeometryPayload &geometry) {
   std::vector<MeshPrimitiveSpan> spans;
   spans.reserve(geometry.primitives.empty() ? 1u
                                             : geometry.primitives.size());
@@ -335,6 +352,11 @@ normalized_mesh_primitive_spans(const MeshAsset &mesh) {
     });
   }
   return spans;
+}
+
+inline std::vector<MeshPrimitiveSpan>
+normalized_mesh_primitive_spans(const MeshAsset &mesh) {
+  return normalized_mesh_primitive_spans(mesh.geometry());
 }
 
 inline std::vector<MeshPrimitiveSpan>

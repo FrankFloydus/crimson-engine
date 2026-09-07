@@ -6,19 +6,24 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
 #include "assets/default_material_catalog.hpp"
+#include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/render/standard_material_render_snapshot_adapter.hpp"
 #include "editor/session/project_session.hpp"
+#include "io/project/project_bridge_notifications.hpp"
 #include "io/project/qmat_codec.hpp"
 #include "ui/standard_material_preview_render_snapshot_adapter.hpp"
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -59,6 +64,37 @@ void write_bytes(const std::filesystem::path &path,
   stream.write(reinterpret_cast<const char *>(bytes.data()),
                static_cast<std::streamsize>(bytes.size()));
   ASSERT_TRUE(stream.good()) << path.string();
+}
+
+/// Reads the externally observable bridge record without its production parser.
+nlohmann::json read_material_sync_record(const std::filesystem::path &path) {
+  std::ifstream stream(path, std::ios::binary);
+  EXPECT_TRUE(stream.is_open()) << path.string();
+  return nlohmann::json::parse(stream);
+}
+
+/// Verifies material wire identity and fingerprint against its committed QMAT.
+void expect_material_sync_record(const nlohmann::json &record,
+                                 const std::filesystem::path &document,
+                                 std::string_view project_id,
+                                 std::string_view material_id,
+                                 std::string_view relative_path) {
+  const auto bytes = read_bytes(document);
+  std::uint64_t hash = 14695981039346656037ull;
+  for (const std::byte byte : bytes) {
+    hash ^= static_cast<unsigned char>(byte);
+    hash *= 1099511628211ull;
+  }
+  std::ostringstream hex;
+  hex << std::hex << std::setfill('0') << std::setw(16) << hash;
+  EXPECT_EQ(record.at("version").get<int>(), 1);
+  EXPECT_EQ(record.at("project_id").get<std::string>(), project_id);
+  EXPECT_EQ(record.at("document_id").get<std::string>(), material_id);
+  EXPECT_EQ(record.at("relative_path").get<std::string>(), relative_path);
+  EXPECT_EQ(record.at("byte_count").get<std::string>(),
+            std::to_string(bytes.size()));
+  EXPECT_EQ(record.at("content_hash").get<std::string>(), hex.str());
+  EXPECT_TRUE(SceneId::parse(record.at("save_token").get<std::string>()).ok());
 }
 
 std::size_t regular_file_count(const std::filesystem::path &root) {
@@ -945,6 +981,142 @@ TEST(StandardMaterialDocumentsTests,
       EXPECT_FALSE(item.editable);
     }
   }
+}
+
+TEST(StandardMaterialDocumentsTests,
+     MaterialSavesPublishFingerprintsAndSaveAsPreservesOriginalNotification) {
+  StandardMaterialDocumentsHarness harness("bridge-material-save");
+  const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  auto &documents = harness.editor().standard_material_documents();
+  ASSERT_TRUE(documents.open(*default_id).ok());
+  ASSERT_TRUE(documents.set_name("First Saved Material").ok());
+  ASSERT_TRUE(documents.save().ok());
+  const auto record_path = harness.root() / ".quader/bridge/materials" /
+      (std::string(kDefaultProjectMaterialId) + ".json");
+  ASSERT_TRUE(std::filesystem::is_regular_file(record_path));
+  const auto first_record = read_material_sync_record(record_path);
+  expect_material_sync_record(first_record,
+                              harness.root() / kDefaultProjectMaterialPath,
+                              harness.project().manifest()->id().str(),
+                              kDefaultProjectMaterialId,
+                              kDefaultProjectMaterialPath);
+  EXPECT_FALSE(harness.project().has_dirty_scenes());
+  EXPECT_FALSE(harness.project().has_dirty_material());
+  EXPECT_FALSE(std::filesystem::exists(harness.root() / ".quader/bridge/scenes"))
+      << "A material-only save must not masquerade as a scene save.";
+
+  ASSERT_TRUE(documents.set_roughness(0.37f).ok());
+  ASSERT_TRUE(documents.save().ok());
+  const auto second_record = read_material_sync_record(record_path);
+  expect_material_sync_record(second_record,
+                              harness.root() / kDefaultProjectMaterialPath,
+                              harness.project().manifest()->id().str(),
+                              kDefaultProjectMaterialId,
+                              kDefaultProjectMaterialPath);
+  EXPECT_NE(second_record.at("save_token"), first_record.at("save_token"));
+  EXPECT_NE(second_record.at("content_hash"), first_record.at("content_hash"));
+  const auto preserved_record = read_bytes(record_path);
+  const auto copy = project_path("Materials/bridge_copy.qmat");
+  ASSERT_TRUE(documents.save_as(copy).ok());
+  const auto current = documents.current();
+  ASSERT_TRUE(current.ok());
+  EXPECT_NE(current.value().id, *default_id);
+  EXPECT_EQ(read_bytes(record_path), preserved_record);
+  const auto copied_record_path = harness.root() / ".quader/bridge/materials" /
+      (std::string(current.value().id.str()) + ".json");
+  ASSERT_TRUE(std::filesystem::is_regular_file(copied_record_path));
+  expect_material_sync_record(read_material_sync_record(copied_record_path),
+                              harness.root() / copy.native_path(),
+                              harness.project().manifest()->id().str(),
+                              current.value().id.str(), copy.portable_string());
+}
+
+TEST(StandardMaterialDocumentsTests,
+     FailedMaterialCatalogCommitKeepsPreviousCompletionRecord) {
+  StandardMaterialDocumentsHarness harness("bridge-material-rollback");
+  const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  auto &documents = harness.editor().standard_material_documents();
+  ASSERT_TRUE(documents.open(*default_id).ok());
+  ASSERT_TRUE(documents.set_name("Committed Material").ok());
+  ASSERT_TRUE(documents.save().ok());
+  const auto record_path = harness.root() / ".quader/bridge/materials" /
+      (std::string(kDefaultProjectMaterialId) + ".json");
+  const auto record_before = read_bytes(record_path);
+  const auto qmat_path = harness.root() / kDefaultProjectMaterialPath;
+  const auto qmat_before = read_bytes(qmat_path);
+  ASSERT_TRUE(documents.set_roughness(0.29f).ok());
+  write_bytes(harness.root() / "Materials/duplicate_bridge_id.qmat", qmat_before);
+  const auto failed = documents.save();
+  EXPECT_FALSE(failed.ok());
+  EXPECT_TRUE(harness.project().has_dirty_material());
+  EXPECT_EQ(read_bytes(qmat_path), qmat_before);
+  EXPECT_EQ(read_bytes(record_path), record_before);
+}
+
+TEST(StandardMaterialDocumentsTests,
+     MaterialNotificationFailureWarnsAfterSuccessfulSaveAndClearsDirtyState) {
+  StandardMaterialDocumentsHarness harness("bridge-material-warning");
+  const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  auto &documents = harness.editor().standard_material_documents();
+  ASSERT_TRUE(documents.open(*default_id).ok());
+  ASSERT_TRUE(documents.set_name("Saved Despite Notification Failure").ok());
+  const auto bridge_root = harness.root() / ".quader/bridge";
+  std::filesystem::create_directories(bridge_root.parent_path());
+  {
+    std::ofstream blocker(bridge_root, std::ios::binary);
+    ASSERT_TRUE(blocker.is_open());
+    blocker << "Keep this unrelated file";
+  }
+  const auto saved = harness.project().standard_material_editor().save();
+  ASSERT_TRUE(saved.ok) << saved.message;
+  EXPECT_TRUE(saved.changed);
+  EXPECT_NE(saved.message.find("Godot synchronization"), std::string::npos);
+  EXPECT_FALSE(harness.project().has_dirty_material());
+  const auto persisted = QmatCodec::read(harness.project().workspace()->file_system,
+                                        project_path(kDefaultProjectMaterialPath));
+  ASSERT_TRUE(persisted.ok()) << persisted.error().message;
+  EXPECT_EQ(persisted.value().material.name,
+            "Saved Despite Notification Failure");
+  const auto current = documents.current();
+  ASSERT_TRUE(current.ok());
+  EXPECT_FALSE(current.value().dirty);
+  EXPECT_EQ(current.value().name, persisted.value().material.name);
+  const auto bytes = read_bytes(bridge_root);
+  EXPECT_EQ(std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size()),
+            "Keep this unrelated file");
+}
+
+TEST(StandardMaterialDocumentsTests,
+     StaleCatalogCannotPublishNotificationForReplacedMaterialBytes) {
+  StandardMaterialDocumentsHarness harness("bridge-material-stale-catalog");
+  const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  auto &documents = harness.editor().standard_material_documents();
+  ASSERT_TRUE(documents.open(*default_id).ok());
+  ASSERT_TRUE(documents.set_name("Committed Material").ok());
+  ASSERT_TRUE(documents.save().ok());
+  const auto record_path = harness.root() / ".quader/bridge/materials" /
+      (std::string(kDefaultProjectMaterialId) + ".json");
+  const auto record_before = read_bytes(record_path);
+  const auto *entry = harness.project().material_catalog().find(*default_id);
+  ASSERT_NE(entry, nullptr);
+  const ProjectMaterialCatalogEntry stale_entry = *entry;
+  ProjectMaterialDocument replacement = stale_entry.material;
+  replacement.name = "Externally Replaced Material";
+  const auto &file_system = harness.project().workspace()->file_system;
+  ASSERT_TRUE(QmatCodec::write_atomic(file_system, stale_entry.path, replacement).ok());
+  const auto notification = ProjectBridgeNotifications::publish_material(
+      file_system, harness.project().manifest()->id(), stale_entry);
+  EXPECT_FALSE(notification.ok());
+  EXPECT_NE(notification.error().message.find("Godot synchronization"),
+            std::string::npos);
+  EXPECT_EQ(read_bytes(record_path), record_before);
+  const auto persisted = QmatCodec::read(file_system, stale_entry.path);
+  ASSERT_TRUE(persisted.ok());
+  EXPECT_EQ(persisted.value().material.name, replacement.name);
 }
 
 } // namespace

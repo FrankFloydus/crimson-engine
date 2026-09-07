@@ -7,12 +7,12 @@
 #include "io/project/project_material_catalog.hpp"
 
 #include "core/qstr.hpp"
+#include "io/shared_file_read.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -474,31 +474,16 @@ ProjectMaterialCatalog::read_texture(
         absolute.error().code, absolute.error().message,
         absolute.error().path);
   }
-  std::error_code error;
-  const std::uintmax_t size =
-      std::filesystem::file_size(absolute.value(), error);
-  if (error || size > kMaximumMaterialPreviewBytes) {
+  quader_io::SharedFileReadResult source = quader_io::read_file_bytes_shared(
+      absolute.value(), kMaximumMaterialPreviewBytes);
+  if (!source.ok) {
     return ProjectIoResult<ProjectMaterialTextureData>::failure(
-        error ? ProjectIoErrorCode::IoFailure
-              : ProjectIoErrorCode::MaterialMalformed,
-        error ? "Could not inspect material texture: " + error.message()
-              : "Material texture exceeds the supported size limit.",
-        absolute.value());
+        source.error == quader_io::SharedFileReadError::Limit
+            ? ProjectIoErrorCode::MaterialMalformed
+            : ProjectIoErrorCode::IoFailure,
+        "Could not read material texture: " + source.message, absolute.value());
   }
-  std::ifstream stream(absolute.value(), std::ios::binary);
-  if (!stream.is_open()) {
-    return ProjectIoResult<ProjectMaterialTextureData>::failure(
-        ProjectIoErrorCode::IoFailure,
-        "Could not open material texture.", absolute.value());
-  }
-  std::vector<std::byte> bytes(static_cast<std::size_t>(size));
-  stream.read(reinterpret_cast<char *>(bytes.data()),
-              static_cast<std::streamsize>(bytes.size()));
-  if (!stream.good() && !stream.eof()) {
-    return ProjectIoResult<ProjectMaterialTextureData>::failure(
-        ProjectIoErrorCode::IoFailure,
-        "Could not read material texture.", absolute.value());
-  }
+  std::vector<std::byte> bytes = std::move(source.bytes);
   const std::string_view byte_view(
       reinterpret_cast<const char *>(bytes.data()), bytes.size());
   // Texture storage depends on image content and its interpretation, not QMAT

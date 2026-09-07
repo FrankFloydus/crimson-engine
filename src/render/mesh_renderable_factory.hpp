@@ -25,6 +25,8 @@ namespace quader {
 
 class MaterialBindingService;
 class ViewportSettings;
+struct MeshCollisionGeometryPayload;
+struct ViewportSettingColor;
 
 /**
  * Creates Mesh Renderable Factory resources for the render extraction and Filament resource layer.
@@ -91,6 +93,16 @@ public:
         std::span<const QMat4> world_transforms,
         const RenderInstanceBounds &world_bounds, std::uint32_t color,
         std::uint16_t blend_order);
+    /// Shares position-only triangle soup buffers across collision instances.
+    MeshRenderableProxy create_collision_shape_fill(
+        std::shared_ptr<const MeshCollisionGeometryPayload> geometry,
+        filament::Material &material,
+        std::span<const QMat4> world_transforms,
+        const RenderInstanceBounds &world_bounds,
+        const ViewportSettingColor &color, std::uint16_t blend_order);
+    /// Updates the fill uniform without quantizing the chosen opacity.
+    void update_collision_shape_fill_color(
+        const MeshRenderableProxy &proxy, const ViewportSettingColor &color);
     bool update_explicit_instances(
         const MeshRenderableProxy &proxy,
         std::span<const QMat4> world_transforms,
@@ -172,6 +184,14 @@ public:
     struct GeometryCacheState;
     bool acquire_geometry(const RenderMeshAssetSnapshot &mesh,
                           MeshRenderableProxy &proxy);
+    bool acquire_collision_geometry(
+        std::shared_ptr<const MeshCollisionGeometryPayload> geometry,
+        MeshRenderableProxy &proxy);
+    bool initialize_instance_overlay_fill(
+        MeshRenderableProxy &proxy, filament::Material &material,
+        std::span<const QMat4> world_transforms,
+        const RenderInstanceBounds &world_bounds,
+        const ViewportSettingColor &color, std::uint16_t blend_order);
     bool acquire_dynamic_geometry(const RenderMeshAssetSnapshot &mesh,
                                   MeshRenderableProxy &proxy,
                                   std::span<const QVec3> dynamic_positions);

@@ -14,7 +14,9 @@ file except through prior written authorization from Francesco Di Blasi.
 | `.qproj` workspace manifest and contained paths | `project/project_manifest.*`, `project/project_file_system.*` |
 | External `.qmat` materials and dependency resolution | `project/qmat_codec.*`, `project/project_material_catalog.*`, `project/project_asset_resolver.*` |
 | OBJ export | `mesh/obj_writer.*` |
+| Read-only engine bridge C ABI | `bridge/quader_bridge_reader.hpp`, [bridge contract](bridge/README.md) |
 | User save/open/close lifecycle | `src/editor/session/project_session.*`, `src/api/quader_scene_documents_api.*` |
+| Advisory engine synchronization after committed saves | `project/project_bridge_notifications.*` |
 
 Keep format validation deterministic and version-aware. Parse/validate candidates before replacing
 live documents; failed writes must not silently replace valid on-disk state. Use `ProjectFileSystem`
@@ -27,3 +29,11 @@ them. Authoring still writes v2. Reject v3 data that cannot be represented witho
 
 Update focused IO tests and compatibility fixtures with format changes; cover user save/load and
 project identity through the existing project-session/API tests. Root verification rules apply.
+
+Engine bridge completion records live below `.quader/bridge/` and never alter authored formats.
+Only scene/material save owners publish them after their complete transaction commits; recovery
+autosaves do not. Fingerprints identify the exact serialized or decoded bytes, not a later file
+read. Scene publication establishes missing referenced material baselines before its scene record.
+Notification failure remains a visible warning on a successful native save.
+Bridge source reads use `shared_file_read.hpp`: Windows handles share read/write/delete and close
+before decoding so imports cannot hold up atomic scene, material, texture or manifest replacement.

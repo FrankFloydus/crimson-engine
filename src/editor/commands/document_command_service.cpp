@@ -1555,6 +1555,7 @@ DocumentCommandResult DocumentCommandService::apply_scene_batch(
   commands.reserve(operations.size() + 1u);
   std::vector<DocumentLockEdit> lock_edits;
   std::unordered_map<EntityId, DocumentSceneBatchEntityState> simulated;
+  std::unordered_map<EntityId, MeshComponent> simulated_meshes;
 
   auto failure = [](std::string message) {
     return document_command_invalid_request_result(std::move(message));
@@ -1706,6 +1707,32 @@ DocumentCommandResult DocumentCommandService::apply_scene_batch(
       commands.push_back(std::make_unique<SetVisibilityCommand>(
           scene_, operation.entity, state->get().visible, operation.flag));
       state->get().visible = operation.flag;
+      break;
+    }
+    case DocumentSceneBatchOperationKind::SetMeshComponent: {
+      if (operation.mesh.mesh == kInvalidAssetId) {
+        return failure("Mesh asset is invalid");
+      }
+      if (assets_ != nullptr && assets_->mesh(operation.mesh.mesh) == nullptr) {
+        return failure("Mesh asset does not exist");
+      }
+      const auto pending = simulated_meshes.find(operation.entity);
+      const MeshComponent *current_mesh =
+          pending != simulated_meshes.end() ? &pending->second
+                                           : scene_.mesh(operation.entity);
+      if (current_mesh == nullptr) {
+        return failure("Batch entity has no mesh component.");
+      }
+      if (document_command_entity_is_modeling_owned(scene_, operation.entity) &&
+          current_mesh->mesh != operation.mesh.mesh) {
+        return document_command_modeling_owned_entity_result();
+      }
+      if (document_command_same_mesh_component(*current_mesh, operation.mesh)) {
+        break;
+      }
+      commands.push_back(std::make_unique<SetMeshComponentCommand>(
+          scene_, operation.entity, *current_mesh, operation.mesh));
+      simulated_meshes.insert_or_assign(operation.entity, operation.mesh);
       break;
     }
     case DocumentSceneBatchOperationKind::SetLocked: {

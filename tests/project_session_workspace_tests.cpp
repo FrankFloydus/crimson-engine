@@ -8,15 +8,19 @@
 
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
+#include "assets/default_material_catalog.hpp"
 #include "editor/commands/document/document_command_result.hpp"
 #include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
+#include "editor/session/project_autosave_service.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
+#include "io/project/qmat_codec.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "scene/scene_transform.hpp"
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -25,7 +29,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -120,6 +126,36 @@ void expect_vec3_eq(QVec3 actual, QVec3 expected) {
   EXPECT_FLOAT_EQ(actual.z, expected.z);
 }
 
+/// Reads a completion record independently from the bridge's JSON decoder.
+nlohmann::json read_sync_record(const std::filesystem::path &path) {
+  const std::vector<char> bytes = read_file_bytes(path);
+  return nlohmann::json::parse(bytes.begin(), bytes.end());
+}
+
+/// Checks the wire fingerprint against the actual committed document bytes.
+void expect_sync_record(const nlohmann::json &record,
+                        const std::filesystem::path &document,
+                        std::string_view project_id,
+                        std::string_view document_id,
+                        std::string_view relative_path) {
+  const std::vector<char> bytes = read_file_bytes(document);
+  std::uint64_t hash = 14695981039346656037ull;
+  for (const char byte : bytes) {
+    hash ^= static_cast<unsigned char>(byte);
+    hash *= 1099511628211ull;
+  }
+  std::ostringstream hex;
+  hex << std::hex << std::setfill('0') << std::setw(16) << hash;
+  EXPECT_EQ(record.at("version").get<int>(), 1);
+  EXPECT_EQ(record.at("project_id").get<std::string>(), project_id);
+  EXPECT_EQ(record.at("document_id").get<std::string>(), document_id);
+  EXPECT_EQ(record.at("relative_path").get<std::string>(), relative_path);
+  EXPECT_EQ(record.at("byte_count").get<std::string>(),
+            std::to_string(bytes.size()));
+  EXPECT_EQ(record.at("content_hash").get<std::string>(), hex.str());
+  EXPECT_TRUE(SceneId::parse(record.at("save_token").get<std::string>()).ok());
+}
+
 template <typename ActualVector3, typename ExpectedVector3>
 void expect_vec3_near(const ActualVector3 &actual,
                       const ExpectedVector3 &expected,
@@ -180,6 +216,29 @@ public:
                               FILE_ATTRIBUTE_NORMAL, nullptr)) {}
 
   ~ScopedManifestWriteLock() {
+    if (ready()) {
+      ::CloseHandle(handle_);
+    }
+  }
+
+  [[nodiscard]] bool ready() const noexcept {
+    return handle_ != INVALID_HANDLE_VALUE;
+  }
+
+private:
+  HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
+
+/// Requires readers to share deletion while permitting atomic save replacement.
+class ScopedSharedDeleteAccess final {
+public:
+  explicit ScopedSharedDeleteAccess(const std::filesystem::path &path)
+      : handle_(::CreateFileW(path.c_str(), DELETE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                              nullptr)) {}
+
+  ~ScopedSharedDeleteAccess() {
     if (ready()) {
       ::CloseHandle(handle_);
     }
@@ -2601,6 +2660,367 @@ TEST(ProjectSessionWorkspace,
   ASSERT_TRUE(replaced.ok()) << replaced.error_message();
   ASSERT_TRUE(replaced.changed());
   EXPECT_FALSE(editor.modeling().instance_edit_state().active);
+}
+
+TEST(ProjectSessionWorkspace,
+     SuccessfulSavesPublishCommittedFingerprintsAndSaveAsKeepsOldLink) {
+  ScopedProjectSessionDirectory temporary("bridge-scene-saves");
+  ProjectSession project;
+  const auto created = project.create(temporary.make_empty_child("Project"));
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(created.scene_session_id.has_value());
+  const SceneSessionId tab = *created.scene_session_id;
+  const ProjectRelativePath first_path = project_path("Scenes/First.qdr");
+  ASSERT_TRUE(project.save_as(tab, first_path).ok);
+  OpenSceneSession *scene = project.find(tab);
+  ASSERT_NE(scene, nullptr);
+  const SceneId first_id = scene->scene_id;
+  const auto record_path = project.root() / ".quader/bridge/scenes" /
+                           (std::string(first_id.str()) + ".json");
+  ASSERT_TRUE(std::filesystem::is_regular_file(record_path));
+  const auto first_record = read_sync_record(record_path);
+  expect_sync_record(first_record, project.root() / first_path.native_path(),
+                     project.manifest()->id().str(), first_id.str(),
+                     first_path.portable_string());
+
+  const auto first_bytes = read_file_bytes(project.root() / first_path.native_path());
+  const auto decoded = QdrDocumentReader::read_project_document(
+      project.root() / first_path.native_path());
+  ASSERT_TRUE(decoded.ok) << decoded.message;
+  EXPECT_EQ(decoded.source_byte_count, first_bytes.size());
+  EXPECT_EQ(decoded.source_content_hash,
+            std::stoull(first_record.at("content_hash").get<std::string>(),
+                         nullptr, 16));
+  ASSERT_TRUE(project.save(tab).ok);
+  EXPECT_EQ(read_file_bytes(project.root() / first_path.native_path()), first_bytes)
+      << "Completion tokens must not alter the authored QDR serialization.";
+  const auto unchanged_record = read_sync_record(record_path);
+  EXPECT_NE(unchanged_record.at("save_token"), first_record.at("save_token"));
+  EXPECT_EQ(unchanged_record.at("content_hash"), first_record.at("content_hash"));
+  EXPECT_EQ(unchanged_record.at("byte_count"), first_record.at("byte_count"));
+
+  ASSERT_TRUE(scene->session->document_commands().create_entity("Saved Edit").ok);
+  const auto saved = project.save(tab);
+  ASSERT_TRUE(saved.ok) << saved.message;
+  const auto second_record = read_sync_record(record_path);
+  expect_sync_record(second_record, project.root() / first_path.native_path(),
+                     project.manifest()->id().str(), first_id.str(),
+                     first_path.portable_string());
+  EXPECT_NE(second_record.at("save_token"), first_record.at("save_token"));
+  EXPECT_NE(second_record.at("content_hash"), first_record.at("content_hash"));
+  const auto preserved_record = read_file_bytes(record_path);
+
+  const ProjectRelativePath second_path = project_path("Scenes/Second.qdr");
+  ASSERT_TRUE(project.save_as(tab, second_path).ok);
+  EXPECT_NE(scene->scene_id, first_id);
+  EXPECT_EQ(read_file_bytes(record_path), preserved_record);
+  const auto second_record_path = project.root() / ".quader/bridge/scenes" /
+      (std::string(scene->scene_id.str()) + ".json");
+  ASSERT_TRUE(std::filesystem::is_regular_file(second_record_path));
+  expect_sync_record(read_sync_record(second_record_path),
+                     project.root() / second_path.native_path(),
+                     project.manifest()->id().str(), scene->scene_id.str(),
+                     second_path.portable_string());
+}
+
+TEST(ProjectSessionWorkspace,
+     SceneSaveEstablishesAndRepairsReferencedMaterialCompletionRecords) {
+  ScopedProjectSessionDirectory temporary("bridge-material-baseline");
+  ProjectSession project;
+  project.set_resource_root(std::filesystem::path(QUADER_SOURCE_DIR) /
+                            "resources/modeling_assets");
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  ASSERT_TRUE(editor.modeling()
+                  .create_box(QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                                          .max = {1.0f, 1.0f, 1.0f}},
+                              "Material User")
+                  .ok());
+  const auto scene_path = project_path("Scenes/MaterialUser.qdr");
+  const auto tab = project.active_scene_id();
+  ASSERT_TRUE(project.save_as(tab, scene_path).ok);
+  const auto material_record_path = project.root() / ".quader/bridge/materials" /
+      (std::string(kDefaultProjectMaterialId) + ".json");
+  ASSERT_TRUE(std::filesystem::is_regular_file(material_record_path));
+  const auto material_record = read_sync_record(material_record_path);
+  expect_sync_record(material_record,
+                     project.root() / kDefaultProjectMaterialPath,
+                     project.manifest()->id().str(), kDefaultProjectMaterialId,
+                     kDefaultProjectMaterialPath);
+
+  ASSERT_TRUE(project.active_scene()->session->document_commands()
+                  .create_entity("Unrelated Scene Edit").ok);
+  ASSERT_TRUE(project.save(tab).ok);
+  EXPECT_EQ(read_sync_record(material_record_path), material_record)
+      << "A matching saved-material baseline must retain its token.";
+  {
+    std::ofstream corrupt(material_record_path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(corrupt.is_open());
+    corrupt << "incomplete record";
+  }
+  ASSERT_TRUE(project.active_scene()->session->document_commands()
+                  .create_entity("Repair Trigger").ok);
+  ASSERT_TRUE(project.save(tab).ok);
+  const auto repaired_record = read_sync_record(material_record_path);
+  expect_sync_record(repaired_record,
+                     project.root() / kDefaultProjectMaterialPath,
+                     project.manifest()->id().str(), kDefaultProjectMaterialId,
+                     kDefaultProjectMaterialPath);
+  EXPECT_NE(repaired_record.at("save_token"), material_record.at("save_token"));
+}
+
+TEST(ProjectSessionWorkspace,
+     FailedSceneSaveAndRecoveryAutosaveKeepLastCompletionRecord) {
+  ScopedProjectSessionDirectory temporary("bridge-failure-autosave");
+  ProjectSession project;
+  const auto created = project.create(temporary.make_empty_child("Project"));
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(created.scene_session_id.has_value());
+  const auto tab = *created.scene_session_id;
+  const auto path = project_path("Scenes/Authored.qdr");
+  ASSERT_TRUE(project.save_as(tab, path).ok);
+  OpenSceneSession *scene = project.find(tab);
+  ASSERT_NE(scene, nullptr);
+  const auto record_path = project.root() / ".quader/bridge/scenes" /
+                           (std::string(scene->scene_id.str()) + ".json");
+  const auto before = read_file_bytes(record_path);
+  ASSERT_TRUE(scene->session->document_commands().create_entity("Unsaved Edit").ok);
+  {
+    ScopedManifestWriteFailure blocked(project.root() / path.native_path());
+    ASSERT_TRUE(blocked.ready()) << blocked.message();
+    const auto failed = project.save(tab);
+    EXPECT_FALSE(failed.ok);
+    EXPECT_TRUE(scene->dirty());
+    EXPECT_EQ(read_file_bytes(record_path), before);
+  }
+  const SessionPreferences settings;
+  const std::chrono::steady_clock::time_point epoch{};
+  EXPECT_EQ(project.autosave().poll(project, settings, epoch).written, 0u);
+  const auto recovery = project.autosave().poll(
+      project, settings, epoch + std::chrono::minutes(2));
+  ASSERT_TRUE(recovery.ok);
+  ASSERT_EQ(recovery.written, 1u);
+  EXPECT_TRUE(scene->dirty());
+  EXPECT_EQ(read_file_bytes(record_path), before);
+}
+
+TEST(ProjectSessionWorkspace,
+     NotificationFailureDoesNotFailSaveAndSaveAllPreservesEachWarning) {
+  ScopedProjectSessionDirectory temporary("bridge-nonfatal");
+  ProjectSession project;
+  const auto created = project.create(temporary.make_empty_child("Project"));
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(created.scene_session_id.has_value());
+  const auto first = *created.scene_session_id;
+  const auto bridge_root = project.root() / ".quader/bridge";
+  std::filesystem::create_directories(bridge_root.parent_path());
+  {
+    std::ofstream blocker(bridge_root, std::ios::binary);
+    ASSERT_TRUE(blocker.is_open());
+    blocker << "Keep this unrelated file";
+  }
+  const auto saved = project.save_as(first, project_path("Scenes/First.qdr"));
+  ASSERT_TRUE(saved.ok) << saved.message;
+  EXPECT_FALSE(project.find(first)->dirty());
+  ASSERT_FALSE(saved.warnings.empty());
+  EXPECT_TRUE(std::ranges::any_of(saved.warnings, [](const std::string &warning) {
+    return warning.find("Godot synchronization") != std::string::npos;
+  }));
+  const auto second_created = project.new_scene();
+  ASSERT_TRUE(second_created.ok) << second_created.message;
+  ASSERT_TRUE(second_created.scene_session_id.has_value());
+  const auto second = *second_created.scene_session_id;
+  ASSERT_TRUE(project.save_as(second, project_path("Scenes/Second.qdr")).ok);
+  ASSERT_TRUE(project.find(first)->session->document_commands()
+                  .create_entity("First Edit").ok);
+  ASSERT_TRUE(project.find(second)->session->document_commands()
+                  .create_entity("Second Edit").ok);
+  const auto all = project.save_all();
+  ASSERT_TRUE(all.ok) << all.message;
+  EXPECT_FALSE(project.has_dirty_scenes());
+  EXPECT_EQ(std::ranges::count_if(all.warnings, [](const std::string &warning) {
+    return warning.find("Godot synchronization") != std::string::npos;
+  }), 2);
+  const auto blocker_bytes = read_file_bytes(bridge_root);
+  EXPECT_EQ(std::string(blocker_bytes.begin(), blocker_bytes.end()),
+            "Keep this unrelated file");
+}
+
+TEST(ProjectSessionWorkspace,
+     SceneReadSharesDeletionAndPreservesDecodedSnapshotAcrossAtomicSave) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "Reciprocal file sharing is a Windows-specific contract.";
+#else
+  ScopedProjectSessionDirectory temporary("bridge-scene-shared-delete");
+  ProjectSession project;
+  const auto created = project.create(temporary.make_empty_child("Project"));
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(created.scene_session_id.has_value());
+  const auto tab = *created.scene_session_id;
+  auto *scene = project.find(tab);
+  ASSERT_NE(scene, nullptr);
+  const auto original_entity =
+      scene->session->document_commands().create_entity("Original Saved Entity");
+  ASSERT_TRUE(original_entity.ok) << original_entity.message;
+  const auto relative = project_path("Scenes/SharedRead.qdr");
+  ASSERT_TRUE(project.save_as(tab, relative).ok);
+  const auto absolute = project.root() / relative.native_path();
+  const auto record_path = project.root() / ".quader/bridge/scenes" /
+      (std::string(scene->scene_id.str()) + ".json");
+  const auto original_record = read_sync_record(record_path);
+
+  // No sleeps or competing thread are needed: Windows checks sharing in both
+  // directions, so a reader that omits FILE_SHARE_DELETE fails this open.
+  ScopedSharedDeleteAccess held(absolute);
+  ASSERT_TRUE(held.ready()) << ::GetLastError();
+  const auto original = QdrDocumentReader::read_project_document(absolute);
+  ASSERT_TRUE(original.ok) << original.message;
+  EXPECT_EQ(original.source_byte_count,
+            std::stoull(original_record.at("byte_count").get<std::string>()));
+  EXPECT_EQ(original.source_content_hash,
+            std::stoull(original_record.at("content_hash").get<std::string>(),
+                         nullptr, 16));
+  ASSERT_NE(original.document.scene().name(original_entity.entity), nullptr);
+  EXPECT_EQ(original.document.scene().name(original_entity.entity)->name,
+            "Original Saved Entity");
+
+  const auto added =
+      scene->session->document_commands().create_entity("Saved During Read");
+  ASSERT_TRUE(added.ok) << added.message;
+  const auto saved = project.save(tab);
+  ASSERT_TRUE(saved.ok) << saved.message;
+  const auto replacement = QdrDocumentReader::read_project_document(absolute);
+  ASSERT_TRUE(replacement.ok) << replacement.message;
+  const auto replacement_record = read_sync_record(record_path);
+  expect_sync_record(replacement_record, absolute, project.manifest()->id().str(),
+                     scene->scene_id.str(), relative.portable_string());
+  EXPECT_EQ(replacement.source_byte_count,
+            std::stoull(replacement_record.at("byte_count").get<std::string>()));
+  EXPECT_EQ(replacement.source_content_hash,
+            std::stoull(replacement_record.at("content_hash").get<std::string>(),
+                         nullptr, 16));
+  EXPECT_NE(replacement.source_content_hash, original.source_content_hash);
+  ASSERT_NE(replacement.document.scene().name(added.entity), nullptr);
+  EXPECT_EQ(replacement.document.scene().name(added.entity)->name,
+            "Saved During Read");
+  EXPECT_EQ(original.document.scene().name(added.entity), nullptr);
+  EXPECT_EQ(original.document.scene().name(original_entity.entity)->name,
+            "Original Saved Entity");
+  EXPECT_EQ(original.source_content_hash,
+            std::stoull(original_record.at("content_hash").get<std::string>(),
+                         nullptr, 16));
+#endif
+}
+
+TEST(ProjectSessionWorkspace,
+     MaterialReadSharesDeletionAndPreservesDecodedSnapshotAcrossAtomicSave) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "Reciprocal file sharing is a Windows-specific contract.";
+#else
+  ScopedProjectSessionDirectory temporary("bridge-material-shared-delete");
+  ProjectSession project;
+  project.set_resource_root(std::filesystem::path(QUADER_SOURCE_DIR) /
+                            "resources/modeling_assets");
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  auto &documents = editor.standard_material_documents();
+  ASSERT_TRUE(documents.open(*default_id).ok());
+  ASSERT_TRUE(documents.set_name("Original Saved Material").ok());
+  ASSERT_TRUE(documents.save().ok());
+  const auto relative = project_path(kDefaultProjectMaterialPath);
+  const auto absolute = project.root() / relative.native_path();
+  const auto record_path = project.root() / ".quader/bridge/materials" /
+      (std::string(kDefaultProjectMaterialId) + ".json");
+  const auto original_record = read_sync_record(record_path);
+  const auto &file_system = project.workspace()->file_system;
+
+  ScopedSharedDeleteAccess held(absolute);
+  ASSERT_TRUE(held.ready()) << ::GetLastError();
+  const auto original = QmatCodec::read(file_system, relative);
+  ASSERT_TRUE(original.ok()) << original.error().message;
+  EXPECT_EQ(original.value().material.name, "Original Saved Material");
+  EXPECT_EQ(original.value().content_revision,
+            std::stoull(original_record.at("content_hash").get<std::string>(),
+                         nullptr, 16));
+
+  ASSERT_TRUE(documents.set_name("Material Saved During Read").ok());
+  const auto saved = documents.save();
+  ASSERT_TRUE(saved.ok()) << saved.error_message();
+  const auto replacement = QmatCodec::read(file_system, relative);
+  ASSERT_TRUE(replacement.ok()) << replacement.error().message;
+  const auto replacement_record = read_sync_record(record_path);
+  expect_sync_record(replacement_record, absolute, project.manifest()->id().str(),
+                     kDefaultProjectMaterialId, relative.portable_string());
+  EXPECT_EQ(replacement.value().file_size,
+            std::stoull(replacement_record.at("byte_count").get<std::string>()));
+  EXPECT_EQ(replacement.value().content_revision,
+            std::stoull(replacement_record.at("content_hash").get<std::string>(),
+                         nullptr, 16));
+  EXPECT_NE(replacement.value().content_revision, original.value().content_revision);
+  EXPECT_EQ(replacement.value().material.name, "Material Saved During Read");
+  EXPECT_EQ(original.value().material.name, "Original Saved Material");
+  EXPECT_EQ(original.value().content_revision,
+            std::stoull(original_record.at("content_hash").get<std::string>(),
+                         nullptr, 16));
+#endif
+}
+
+TEST(ProjectSessionWorkspace,
+     ManifestReadSharesDeletionAndKeepsSnapshotAcrossWorkspaceChanges) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "Reciprocal file sharing is a Windows-specific contract.";
+#else
+  ScopedProjectSessionDirectory temporary("bridge-manifest-shared-delete");
+  ProjectSession project;
+  const auto created = project.create(temporary.make_empty_child("Project"));
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(created.scene_session_id.has_value());
+  const auto first_path = project_path("Scenes/First.qdr");
+  ASSERT_TRUE(project.save_as(*created.scene_session_id, first_path).ok);
+
+  ScopedSharedDeleteAccess held(project.manifest_path());
+  ASSERT_TRUE(held.ready()) << ::GetLastError();
+  const auto original = ProjectManifestStore::open(project.manifest_path());
+  ASSERT_TRUE(original.ok()) << original.error().message;
+  ASSERT_EQ(original.value().manifest.open_scene_paths().size(), 1u);
+  EXPECT_EQ(original.value().manifest.open_scene_paths().front(), first_path);
+  EXPECT_EQ(original.value().manifest.active_scene_path(), first_path);
+  ASSERT_EQ(original.value().manifest.scenes().size(), 1u);
+  const auto first_catalog_entry = original.value().manifest.scenes().front();
+
+  const auto added = project.new_scene();
+  ASSERT_TRUE(added.ok) << added.message;
+  ASSERT_TRUE(added.scene_session_id.has_value());
+  const auto after_new = ProjectManifestStore::open(project.manifest_path());
+  ASSERT_TRUE(after_new.ok()) << after_new.error().message;
+  ASSERT_EQ(after_new.value().manifest.open_scene_paths().size(), 1u);
+  EXPECT_EQ(after_new.value().manifest.open_scene_paths().front(), first_path);
+  EXPECT_FALSE(after_new.value().manifest.active_scene_path().has_value());
+  ASSERT_EQ(after_new.value().manifest.scenes().size(), 1u);
+  EXPECT_EQ(after_new.value().manifest.scenes().front(), first_catalog_entry);
+
+  const auto second_path = project_path("Scenes/Second.qdr");
+  const auto saved = project.save_as(*added.scene_session_id, second_path);
+  ASSERT_TRUE(saved.ok) << saved.message;
+  const auto replacement = ProjectManifestStore::open(project.manifest_path());
+  ASSERT_TRUE(replacement.ok()) << replacement.error().message;
+  ASSERT_EQ(replacement.value().manifest.open_scene_paths().size(), 2u);
+  EXPECT_EQ(replacement.value().manifest.open_scene_paths()[0], first_path);
+  EXPECT_EQ(replacement.value().manifest.open_scene_paths()[1], second_path);
+  EXPECT_EQ(replacement.value().manifest.active_scene_path(), second_path);
+  ASSERT_EQ(replacement.value().manifest.scenes().size(), 2u);
+  const auto *second_entry = replacement.value().manifest.find_scene(second_path);
+  ASSERT_NE(second_entry, nullptr);
+  EXPECT_EQ(second_entry->id, project.find(*added.scene_session_id)->scene_id);
+  ASSERT_EQ(original.value().manifest.open_scene_paths().size(), 1u);
+  EXPECT_EQ(original.value().manifest.open_scene_paths().front(), first_path);
+  EXPECT_EQ(original.value().manifest.active_scene_path(), first_path);
+  ASSERT_EQ(original.value().manifest.scenes().size(), 1u);
+  EXPECT_EQ(original.value().manifest.scenes().front(), first_catalog_entry);
+  EXPECT_EQ(original.value().manifest.find_scene(second_path), nullptr);
+#endif
 }
 
 } // namespace

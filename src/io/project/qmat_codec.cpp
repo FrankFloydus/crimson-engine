@@ -8,6 +8,7 @@
 
 #include "core/qstr.hpp"
 #include "io/qdr/qdr_atomic_write.hpp"
+#include "io/shared_file_read.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -16,7 +17,6 @@
 #include <cmath>
 #include <exception>
 #include <filesystem>
-#include <fstream>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -434,30 +434,22 @@ std::uint64_t content_hash(std::string_view bytes) {
 }
 
 ProjectIoResult<std::string> read_text_file(const std::filesystem::path &path) {
-  std::error_code error;
-  const std::uintmax_t size = std::filesystem::file_size(path, error);
-  if (error) {
+  const quader_io::SharedFileReadResult source =
+      quader_io::read_file_bytes_shared(path, kMaximumQmatBytes);
+  if (!source.ok) {
     return ProjectIoResult<std::string>::failure(
-        ProjectIoErrorCode::IoFailure,
-        "Could not inspect QMAT file: " + error.message(), path);
+        source.error == quader_io::SharedFileReadError::Limit
+            ? ProjectIoErrorCode::MaterialMalformed
+            : ProjectIoErrorCode::IoFailure,
+        source.error == quader_io::SharedFileReadError::Limit
+            ? "QMAT exceeds the supported 4 MiB size limit."
+            : "Could not read QMAT file: " + source.message,
+        path);
   }
-  if (size > kMaximumQmatBytes) {
-    return ProjectIoResult<std::string>::failure(
-        ProjectIoErrorCode::MaterialMalformed,
-        "QMAT exceeds the supported 4 MiB size limit.", path);
-  }
-  std::ifstream stream(path, std::ios::binary);
-  if (!stream.is_open()) {
-    return ProjectIoResult<std::string>::failure(
-        ProjectIoErrorCode::IoFailure, "Could not open QMAT file.", path);
-  }
-  std::string text(static_cast<std::size_t>(size), '\0');
-  stream.read(text.data(), static_cast<std::streamsize>(text.size()));
-  if (!stream.good() && !stream.eof()) {
-    return ProjectIoResult<std::string>::failure(
-        ProjectIoErrorCode::IoFailure, "Could not read QMAT file.", path);
-  }
-  return ProjectIoResult<std::string>::success(std::move(text));
+  return ProjectIoResult<std::string>::success(std::string(
+      source.bytes.empty() ? ""
+                           : reinterpret_cast<const char *>(source.bytes.data()),
+      source.bytes.size()));
 }
 
 Json encode_texture_slot(const ProjectMaterialTextureSlot &slot) {

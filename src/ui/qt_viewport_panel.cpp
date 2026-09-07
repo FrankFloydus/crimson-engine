@@ -1091,6 +1091,10 @@ void QtViewportPanel::prepare_viewports(
           .selected_mesh_outline_only = selected_mesh_outline_only,
           .style = persistent_overlay_style,
           .raster_groups = persistent_raster_groups,
+          .collision_visible =
+              overlays_visible &&
+              settings.bool_value(ViewportBoolSettingId::ShowCollisions),
+          .collision_color = settings.color(ViewportColorSettingId::CollisionFill),
       });
 
   std::array<bool, kViewportPaneCount> scene_overlay_requests = {};

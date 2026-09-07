@@ -12,6 +12,8 @@ See [README.md](README.md) for the format/owner map.
 
 - Native extraction/hydration wraps the SDK-owned authored-topology codec. Serialize from
   `QdrProjectWriteSnapshot`; preserve the persistent scene UUID supplied by the project session.
+- Successful native read/write results carry the exact source byte count and FNV-1a fingerprint
+  for save synchronization. Compute these from the bytes already being decoded/serialized.
 - Keep supported binary schemas round-trip safe. Legacy JSON `.qdr` input is unsupported;
   `qdr_dump --json` is write-only developer inspection output.
 - Canonical `Entity` records own serialized object state. Retained `ObjectRecord`/`objects` schema

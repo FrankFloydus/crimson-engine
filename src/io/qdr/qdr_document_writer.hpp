@@ -11,6 +11,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -25,6 +26,9 @@ namespace quader {
 struct QdrProjectWriteResult {
     bool ok = false;
     std::string message;
+    /// Identifies the exact serialized bytes after successful atomic publication.
+    std::uint64_t source_byte_count = 0u;
+    std::uint64_t source_content_hash = 0u;
 };
 
 /**

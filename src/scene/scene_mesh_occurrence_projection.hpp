@@ -37,7 +37,13 @@ struct SceneMeshOccurrenceIdentity final {
   }
 };
 
-/** One render-visible ordinary mesh or expanded formal-instance placement. */
+/** Selects whether hidden concrete mesh placements remain in a snapshot. */
+enum class SceneMeshOccurrenceVisibility : std::uint8_t {
+  VisibleOnly,
+  IncludeHidden,
+};
+
+/** One ordinary mesh or expanded formal-instance placement. */
 struct SceneMeshOccurrenceProjectionRecord final {
   EntityId display_entity = kInvalidEntityId;
   EntityId geometry_entity = kInvalidEntityId;
@@ -45,6 +51,8 @@ struct SceneMeshOccurrenceProjectionRecord final {
   QMat4 world_from_geometry;
   bool selectable = true;
   bool effectively_locked = false;
+  /** Occurrence hierarchy and member segment visibility, excluding storage. */
+  bool effectively_visible = true;
 
   [[nodiscard]] bool formal_instance() const noexcept {
     return definition_entity != kInvalidEntityId;
@@ -59,7 +67,7 @@ struct SceneMeshOccurrenceProjectionRecord final {
 };
 
 /**
- * Groups every visible placement of one canonical definition mesh.
+ * Groups the included placements of one canonical definition mesh.
  *
  * Groups retain definition/member authored order and participant indices retain
  * occurrence entity order. Render extraction can therefore keep its existing
@@ -78,10 +86,12 @@ struct SceneMeshOccurrenceProjectionWorkStats final {
   std::uint64_t formal_geometry_group_count = 0u;
   std::uint64_t formal_placement_count = 0u;
   std::uint64_t world_transform_multiply_count = 0u;
+  /** Singular definitions that omit at least one included mesh placement. */
+  std::uint64_t singular_definition_count = 0u;
 };
 
 /**
- * Immutable scene-owned projection of every render-visible concrete mesh.
+ * Immutable scene-owned projection of concrete mesh placements.
  *
  * `records()` uses display-entity order, then authored member order. This is
  * the stable spatial/picking traversal. `formal_placement_indices()` preserves
@@ -117,7 +127,8 @@ public:
 private:
   friend SceneMeshOccurrenceProjectionSnapshot
   build_scene_mesh_occurrence_projection(
-      const SceneDocument &, SceneMeshOccurrenceProjectionWorkStats *);
+      const SceneDocument &, SceneMeshOccurrenceProjectionWorkStats *,
+      SceneMeshOccurrenceVisibility);
 
   /** Maps one display entity to its contiguous occurrence records. */
   struct DisplayRange final {
@@ -140,10 +151,16 @@ private:
       index_by_identity_;
 };
 
-/** Builds one scene-only projection without AssetRegistry or viewport policy. */
+/**
+ * Builds one scene-only projection without AssetRegistry or viewport policy.
+ * Hidden placements can be retained for export without changing scene visibility
+ * or the renderer's default visible-only scene-owned cache.
+ */
 [[nodiscard]] SceneMeshOccurrenceProjectionSnapshot
 build_scene_mesh_occurrence_projection(
     const SceneDocument &document,
-    SceneMeshOccurrenceProjectionWorkStats *work_stats = nullptr);
+    SceneMeshOccurrenceProjectionWorkStats *work_stats = nullptr,
+    SceneMeshOccurrenceVisibility visibility =
+        SceneMeshOccurrenceVisibility::VisibleOnly);
 
 } // namespace quader

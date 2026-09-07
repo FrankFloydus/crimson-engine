@@ -106,7 +106,10 @@ OverlayRenderState make_state_with_depth_mode(
       : kind == ViewportOverlayGeometryKind::Triangles
           ? OverlayTransparencyMode::TwoPassesOneSide
           : OverlayTransparencyMode::Default;
-  if (kind == ViewportOverlayGeometryKind::Triangles) {
+  if (kind == ViewportOverlayGeometryKind::Triangles &&
+      layer == ViewportOverlayLayer::CollisionFill) {
+    state.transparency_mode = OverlayTransparencyMode::Default;
+  } else if (kind == ViewportOverlayGeometryKind::Triangles) {
     state.polygon_offset_scale = -1.0f;
     state.polygon_offset_constant = -1.0f;
   }

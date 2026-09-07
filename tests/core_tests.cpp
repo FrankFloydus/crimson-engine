@@ -1609,13 +1609,14 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       15.0f);
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::DimensionFontSize), 12.0f);
-  ASSERT_EQ(viewport_color_settings().size(), 23u);
+  ASSERT_EQ(viewport_color_settings().size(), 24u);
   ASSERT_EQ(viewport_float_settings().size(), 32u);
-  ASSERT_EQ(viewport_bool_settings().size(), 13u);
+  ASSERT_EQ(viewport_bool_settings().size(), 14u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGizmos));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowOverlays));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowCollisions));
   EXPECT_TRUE(
       settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowInfo));
@@ -2182,6 +2183,7 @@ TEST(ViewportSettingsTests,
 
 TEST(ViewportOverlayPolicyTests, MatchesNativeLayerDrawOrder) {
   const std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> expected{{
+      ViewportOverlayLayer::CollisionFill,
       ViewportOverlayLayer::SelectedVisibleFace,
       ViewportOverlayLayer::SelectedFaceMask,
       ViewportOverlayLayer::WireframeBase,

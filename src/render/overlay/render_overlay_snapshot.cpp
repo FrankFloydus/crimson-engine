@@ -615,7 +615,9 @@ RenderOverlaySnapshotCache::update_persistent(
     bool selected_mesh_wire_visible,
     RenderInstanceEditScope instance_edit_scope,
     const ViewportPersistentOverlayRasterGroupSet &raster_groups,
-    bool selected_mesh_outline_only) {
+    bool selected_mesh_outline_only,
+    bool collision_visible,
+    ViewportSettingColor collision_color) {
   QDR_PROFILE_FUNCTION();
   bind_sources(document, assets, scene_binding);
   const RenderSourceStamp current = capture_render_source_stamp(
@@ -735,11 +737,17 @@ RenderOverlaySnapshotCache::update_persistent(
   }
   scene_wireframe_snapshot_.raster_groups = raster_groups;
 
+  const bool collision_changed = update_collision_snapshot(
+      document, assets, current, local_visibility, collision_visible,
+      collision_color);
+
   return {
       .selected_object = &selected_object_snapshot_,
       .scene_wireframe = &scene_wireframe_snapshot_,
+      .collision = &collision_snapshot_,
       .selected_object_changed = selected_object_changed,
       .scene_wireframe_changed = scene_wireframe_changed,
+      .collision_changed = collision_changed,
   };
 }
 
@@ -807,9 +815,11 @@ void RenderOverlaySnapshotCache::bind_sources(
 void RenderOverlaySnapshotCache::invalidate_snapshots() {
   selected_object_snapshot_ = {};
   scene_wireframe_snapshot_ = {};
+  collision_snapshot_ = {};
   selection_snapshot_ = {};
   has_selected_object_snapshot_ = false;
   has_scene_wireframe_snapshot_ = false;
+  has_collision_snapshot_ = false;
   has_selection_snapshot_ = false;
   selection_local_mesh_bounds_.clear();
   selection_world_mesh_bounds_.clear();

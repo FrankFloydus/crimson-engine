@@ -82,6 +82,8 @@ public:
     QuaderSceneBatch &set_transform(EntityId entity, QuaderTransform transform);
     QuaderSceneBatch &set_visible(EntityId entity, bool visible);
     QuaderSceneBatch &set_locked(EntityId entity, bool locked);
+    QuaderSceneBatch &set_mesh_component(EntityId entity,
+                                         QuaderMeshComponent mesh);
     QuaderApiVoidResult commit();
 
 private:
@@ -96,6 +98,7 @@ private:
         SetTransform,
         SetVisible,
         SetLocked,
+        SetMeshComponent,
     };
 
     /**
@@ -108,6 +111,7 @@ private:
         bool preserve_world_transform = true;
         bool flag = false;
         QuaderTransform transform;
+        QuaderMeshComponent mesh;
         std::string name;
     };
 

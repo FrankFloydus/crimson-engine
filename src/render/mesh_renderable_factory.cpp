@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/mesh_renderable_factory.hpp"
 
+#include "assets/mesh_collision_geometry_payload.hpp"
 #include "core/color_space.hpp"
 #include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
@@ -15,6 +16,7 @@
 #include "render/mesh_quad_uv_interpolation.hpp"
 #include "render/mesh_surface_grid_projection.hpp"
 #include "render/render_signature_builder.hpp"
+#include "viewport/viewport_settings.hpp"
 
 #include <backend/DriverEnums.h>
 #include <filament/RenderableManager.h>
@@ -403,6 +405,7 @@ struct MeshRenderableFactory::GeometryCacheState final {
     std::uint64_t id = 0u;
     std::uint64_t signature = 0u;
     std::shared_ptr<const MeshGeometryPayload> payload;
+    std::shared_ptr<const MeshCollisionGeometryPayload> collision_payload;
     std::vector<MeshVertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<MeshPrimitiveSpan> primitives;
@@ -474,6 +477,9 @@ bool MeshRenderableFactory::acquire_geometry(
         continue;
       }
       const GeometryCacheState::Resource &candidate = *resource->second;
+      if (candidate.collision_payload != nullptr) {
+        continue;
+      }
       const bool same_pinned_payload =
           candidate.payload != nullptr && mesh.geometry_payload != nullptr &&
            (candidate.payload == mesh.geometry_payload ||
@@ -588,6 +594,99 @@ bool MeshRenderableFactory::acquire_geometry(
       static_cast<std::uint64_t>(vertices.size() * sizeof(RenderVertex));
   geometry_cache_->stats.uploaded_index_bytes +=
       static_cast<std::uint64_t>(mesh.indices.size_bytes());
+  geometry_cache_->stats.resource_count = geometry_cache_->resources.size();
+  return true;
+}
+
+bool MeshRenderableFactory::acquire_collision_geometry(
+    std::shared_ptr<const MeshCollisionGeometryPayload> geometry,
+    MeshRenderableProxy &proxy) {
+  if (engine_ == nullptr || geometry_cache_ == nullptr || geometry == nullptr ||
+      !geometry->error_message.empty() || geometry->faces.empty() ||
+      geometry->faces.size() % 3u != 0u ||
+      geometry->faces.size() > std::numeric_limits<std::uint32_t>::max()) {
+    return false;
+  }
+  const std::uint64_t signature = geometry->content_id;
+  const auto bind_resource = [&](const GeometryCacheState::Resource &resource) {
+    proxy.geometry_resource = resource.id;
+    proxy.vertex_buffer = resource.vertex_buffer;
+    proxy.index_buffer = resource.index_buffer;
+    proxy.owns_mesh_buffers = true;
+    proxy.vertex_count = static_cast<std::uint32_t>(geometry->faces.size());
+    proxy.index_count = proxy.vertex_count;
+  };
+  if (const auto found = geometry_cache_->candidates.find(signature);
+      found != geometry_cache_->candidates.end()) {
+    for (const std::uint64_t resource_id : found->second) {
+      const auto resource = geometry_cache_->resources.find(resource_id);
+      if (resource == geometry_cache_->resources.end()) {
+        continue;
+      }
+      const auto &candidate = resource->second->collision_payload;
+      if (candidate == nullptr ||
+          (candidate != geometry &&
+           (candidate->faces.size() != geometry->faces.size() ||
+            !std::equal(candidate->faces.begin(), candidate->faces.end(),
+                        geometry->faces.begin(),
+                        [](QVec3 left, QVec3 right) {
+                          return left.x == right.x && left.y == right.y &&
+                                 left.z == right.z;
+                        })))) {
+        continue;
+      }
+      ++resource->second->reference_count;
+      ++geometry_cache_->stats.cache_hit_count;
+      bind_resource(*resource->second);
+      return true;
+    }
+  }
+
+  auto resource = std::make_unique<GeometryCacheState::Resource>();
+  resource->id = geometry_cache_->next_id++;
+  resource->signature = signature;
+  resource->collision_payload = geometry;
+  resource->reference_count = 1u;
+  const auto face_count = static_cast<std::uint32_t>(geometry->faces.size());
+  resource->vertex_buffer =
+      filament::VertexBuffer::Builder()
+          .vertexCount(face_count)
+          .bufferCount(1u)
+          .attribute(filament::VertexAttribute::POSITION, 0,
+                     AttributeType::FLOAT3, 0, sizeof(QVec3))
+          .build(*engine_);
+  resource->index_buffer =
+      filament::IndexBuffer::Builder()
+          .indexCount(face_count)
+          .bufferType(filament::IndexBuffer::IndexType::UINT)
+          .build(*engine_);
+  if (resource->vertex_buffer == nullptr || resource->index_buffer == nullptr) {
+    if (resource->vertex_buffer != nullptr) {
+      engine_->destroy(resource->vertex_buffer);
+    }
+    if (resource->index_buffer != nullptr) {
+      engine_->destroy(resource->index_buffer);
+    }
+    return false;
+  }
+  std::vector<std::uint32_t> indices(face_count);
+  for (std::uint32_t index = 0u; index < face_count; ++index) {
+    indices[index] = index;
+  }
+  resource->vertex_buffer->setBufferAt(
+      *engine_, 0,
+      FilamentBufferDescriptorFactory::span<QVec3>(geometry->faces));
+  resource->index_buffer->setBuffer(
+      *engine_, FilamentBufferDescriptorFactory::vector(std::move(indices)));
+  bind_resource(*resource);
+  const std::uint64_t resource_id = resource->id;
+  geometry_cache_->candidates[signature].push_back(resource_id);
+  geometry_cache_->resources.emplace(resource_id, std::move(resource));
+  ++geometry_cache_->stats.upload_count;
+  geometry_cache_->stats.uploaded_vertex_bytes +=
+      geometry->faces.size() * sizeof(QVec3);
+  geometry_cache_->stats.uploaded_index_bytes +=
+      geometry->faces.size() * sizeof(std::uint32_t);
   geometry_cache_->stats.resource_count = geometry_cache_->resources.size();
   return true;
 }
@@ -1263,21 +1362,77 @@ MeshRenderableProxy MeshRenderableFactory::create_instance_selection_fill(
     return proxy;
   }
 
-  filament::MaterialInstance *material_instance = material.createInstance();
-  if (material_instance == nullptr) {
+  const float inverse_byte = 1.0f / 255.0f;
+  const ViewportSettingColor fill_color{
+      static_cast<float>(color & 0xffu) * inverse_byte,
+      static_cast<float>((color >> 8u) & 0xffu) * inverse_byte,
+      static_cast<float>((color >> 16u) & 0xffu) * inverse_byte,
+      static_cast<float>((color >> 24u) & 0xffu) * inverse_byte,
+  };
+  if (!initialize_instance_overlay_fill(proxy, material, world_transforms,
+                                        world_bounds, fill_color,
+                                        blend_order)) {
     return proxy;
   }
-  const float inverse_byte = 1.0f / 255.0f;
-  const float red = srgb_to_linear(
-      static_cast<float>(color & 0xffu) * inverse_byte);
-  const float green = srgb_to_linear(
-      static_cast<float>((color >> 8u) & 0xffu) * inverse_byte);
-  const float blue = srgb_to_linear(
-      static_cast<float>((color >> 16u) & 0xffu) * inverse_byte);
-  const float alpha =
-      static_cast<float>((color >> 24u) & 0xffu) * inverse_byte;
-  material_instance->setParameter(
-      "fillColor", filament::math::float4{red, green, blue, alpha});
+  scene_->addEntity(proxy.entity);
+  creation_guard.mark_scene_added();
+  creation_guard.release();
+  return proxy;
+}
+
+MeshRenderableProxy MeshRenderableFactory::create_collision_shape_fill(
+    std::shared_ptr<const MeshCollisionGeometryPayload> geometry,
+    filament::Material &material, std::span<const QMat4> world_transforms,
+    const RenderInstanceBounds &world_bounds,
+    const ViewportSettingColor &color, std::uint16_t blend_order) {
+  QDR_PROFILE_FUNCTION();
+  MeshRenderableProxy proxy;
+  if (!initialized() || world_transforms.empty() ||
+      world_transforms.size() > engine_->getMaxAutomaticInstances()) {
+    return proxy;
+  }
+  MeshRenderableCreationGuard creation_guard(*this, proxy);
+  proxy.entity = utils::EntityManager::get().create();
+  if (!acquire_collision_geometry(std::move(geometry), proxy) ||
+      !initialize_instance_overlay_fill(proxy, material, world_transforms,
+                                        world_bounds, color, blend_order)) {
+    return proxy;
+  }
+  for (filament::MaterialInstance *fill : proxy.material_instances) {
+    fill->setCullingMode(filament::MaterialInstance::CullingMode::BACK);
+    fill->setTransparencyMode(
+        filament::MaterialInstance::TransparencyMode::DEFAULT);
+    fill->setPolygonOffset(0.0f, 0.0f);
+  }
+  scene_->addEntity(proxy.entity);
+  creation_guard.mark_scene_added();
+  creation_guard.release();
+  return proxy;
+}
+
+void MeshRenderableFactory::update_collision_shape_fill_color(
+    const MeshRenderableProxy &proxy, const ViewportSettingColor &color) {
+  const filament::math::float4 fill_color{
+      srgb_to_linear(color.r), srgb_to_linear(color.g),
+      srgb_to_linear(color.b), color.a};
+  for (filament::MaterialInstance *material : proxy.material_instances) {
+    if (material != nullptr) {
+      material->setParameter("fillColor", fill_color);
+    }
+  }
+}
+
+bool MeshRenderableFactory::initialize_instance_overlay_fill(
+    MeshRenderableProxy &proxy, filament::Material &material,
+    std::span<const QMat4> world_transforms,
+    const RenderInstanceBounds &world_bounds,
+    const ViewportSettingColor &color, std::uint16_t blend_order) {
+  filament::MaterialInstance *material_instance = material.createInstance();
+  if (material_instance == nullptr) {
+    return false;
+  }
+  proxy.material_instances.push_back(material_instance);
+  update_collision_shape_fill_color(proxy, color);
   material_instance->setColorWrite(true);
   material_instance->setDepthWrite(false);
   material_instance->setDepthCulling(true);
@@ -1288,7 +1443,6 @@ MeshRenderableProxy MeshRenderableFactory::create_instance_selection_fill(
   material_instance->setTransparencyMode(
       filament::MaterialInstance::TransparencyMode::TWO_PASSES_TWO_SIDES);
   material_instance->setPolygonOffset(-1.0f, -1.0f);
-  proxy.material_instances.push_back(material_instance);
 
   std::vector<filament::math::mat4f> transforms;
   transforms.reserve(world_transforms.size());
@@ -1299,11 +1453,14 @@ MeshRenderableProxy MeshRenderableFactory::create_instance_selection_fill(
       filament::InstanceBuffer::Builder(transforms.size())
           .localTransforms(transforms.data())
           .build(*engine_);
-
-  filament::RenderableManager::Builder(1u)
+  if (proxy.instance_buffer == nullptr) {
+    return false;
+  }
+  const filament::RenderableManager::Builder::Result result =
+      filament::RenderableManager::Builder(1u)
       .geometry(0u, filament::RenderableManager::PrimitiveType::TRIANGLES,
                 proxy.vertex_buffer, proxy.index_buffer, 0u,
-                static_cast<std::uint32_t>(mesh.indices.size()))
+                proxy.index_count)
       .material(0u, material_instance)
       .instances(transforms.size(), proxy.instance_buffer)
       .blendOrder(0u, blend_order)
@@ -1314,11 +1471,11 @@ MeshRenderableProxy MeshRenderableFactory::create_instance_selection_fill(
       .castShadows(false)
       .receiveShadows(false)
       .build(*engine_, proxy.entity);
+  if (result != filament::RenderableManager::Builder::Success) {
+    return false;
+  }
   engine_->getTransformManager().create(proxy.entity);
-  scene_->addEntity(proxy.entity);
-  creation_guard.mark_scene_added();
-  creation_guard.release();
-  return proxy;
+  return true;
 }
 
 bool MeshRenderableFactory::update_explicit_instances(

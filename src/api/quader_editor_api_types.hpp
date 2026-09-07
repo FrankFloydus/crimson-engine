@@ -291,6 +291,8 @@ struct QuaderPreferencesRuntimeHooks {
     std::function<QuaderApiVoidResult(bool)> set_mesh_grid_visible;
     std::function<bool()> overlays_visible;
     std::function<QuaderApiVoidResult(bool)> set_overlays_visible;
+    std::function<bool()> collisions_visible;
+    std::function<QuaderApiVoidResult(bool)> set_collisions_visible;
     std::function<bool()> texture_lock_enabled;
     std::function<QuaderApiVoidResult(bool)> set_texture_lock_enabled;
     std::function<bool()> texture_lock_scale_enabled;

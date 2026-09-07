@@ -9,12 +9,11 @@
 #include "diagnostics/profile.hpp"
 #include "io/qdr/qdr_binary_container.hpp"
 #include "io/qdr/qdr_scene_binary_codec.hpp"
+#include "io/shared_file_read.hpp"
 
 #include <cstddef>
 #include <chrono>
 #include <filesystem>
-#include <fstream>
-#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -61,6 +60,8 @@ copy_bytes(std::span<const std::byte> bytes) {
 deserialize_owned_project_document(std::vector<std::byte> bytes) {
   QdrProjectReadStats stats;
   stats.file_bytes = bytes.size();
+  const std::uint64_t source_content_hash =
+      quader_io::qdr_binary_content_hash(bytes);
   const auto container_started = std::chrono::steady_clock::now();
   quader_io::QdrBinaryContainerReadResult container = [&]() {
     QDR_PROFILE_SCOPE("QDR validate binary container");
@@ -123,6 +124,8 @@ deserialize_owned_project_document(std::vector<std::byte> bytes) {
           std::move(decoded.project_asset_dependencies),
       .viewport_camera_pose = std::move(decoded.viewport_camera_pose),
       .stats = stats,
+      .source_byte_count = stats.file_bytes,
+      .source_content_hash = source_content_hash,
   };
 }
 
@@ -147,40 +150,30 @@ QdrProjectReadResult QdrDocumentReader::read_project_document(
     const std::filesystem::path &path) {
   QDR_PROFILE_FUNCTION();
   const auto byte_read_started = std::chrono::steady_clock::now();
-  std::ifstream stream(path, std::ios::binary | std::ios::ate);
-  if (!stream.is_open()) {
-    return project_error_result(quader_io::qdr_make_error(
-        "qdr.file_open_failed", "",
-        "Could not open QDR scene: " + path.string(), std::nullopt,
-        std::nullopt, path));
-  }
-  const std::streamoff end = stream.tellg();
-  if (end < 0 || static_cast<std::uintmax_t>(end) >
-                     std::numeric_limits<std::size_t>::max()) {
-    return project_read_result_with_source_path(
-        project_error_result("qdr.binary.file_too_large",
-                             "QDR scene size cannot be represented in memory."),
-        path);
-  }
-  std::vector<std::byte> bytes(static_cast<std::size_t>(end));
-  stream.seekg(0, std::ios::beg);
-  if (!bytes.empty()) {
-    stream.read(reinterpret_cast<char *>(bytes.data()),
-                static_cast<std::streamsize>(bytes.size()));
-  }
-  if (!stream.good() && !stream.eof()) {
-    return project_read_result_with_source_path(
-        project_error_result("qdr.file_read_failed",
-                             "Could not read QDR scene: " + path.string()),
-        path);
-  }
-  const double byte_read_ms = std::chrono::duration<double, std::milli>(
-                                  std::chrono::steady_clock::now() -
-                                  byte_read_started)
-                                  .count();
   try {
+    // The opened source version is fully copied and closed before hydration;
+    // a Godot import must not hold up a subsequent native atomic save.
+    quader_io::SharedFileReadResult source =
+        quader_io::read_file_bytes_shared(path);
+    if (!source.ok) {
+      std::string_view code = "qdr.file_read_failed";
+      if (source.error == quader_io::SharedFileReadError::Open) {
+        code = "qdr.file_open_failed";
+      } else if (source.error == quader_io::SharedFileReadError::Size ||
+                 source.error == quader_io::SharedFileReadError::Limit) {
+        code = "qdr.binary.file_too_large";
+      }
+      return project_read_result_with_source_path(
+          project_error_result(code, "Could not read QDR scene '" +
+                                         path.string() + "': " + source.message),
+          path);
+    }
+    const double byte_read_ms = std::chrono::duration<double, std::milli>(
+                                    std::chrono::steady_clock::now() -
+                                    byte_read_started)
+                                    .count();
     QdrProjectReadResult result =
-        deserialize_owned_project_document(std::move(bytes));
+        deserialize_owned_project_document(std::move(source.bytes));
     result.stats.byte_read_ms = byte_read_ms;
     return project_read_result_with_source_path(std::move(result), path);
   } catch (const quader_io::QdrDiagnosticException &exception) {

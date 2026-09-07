@@ -315,6 +315,21 @@ inline constexpr RenderSourceDependencyMask
             RenderSourceDependency::MeshBindingRevision,
         });
 
+/** Collision sources deliberately exclude camera and selection revisions. */
+inline constexpr RenderSourceDependencyMask
+    kRenderOverlayCollisionSourceDependencies =
+        RenderSourceDependencyMask::from({
+            RenderSourceDependency::SceneBinding,
+            RenderSourceDependency::MeshMaterialUsageRevision,
+            RenderSourceDependency::VisibilityRevision,
+            RenderSourceDependency::LocalVisibilityRevision,
+            RenderSourceDependency::TransformRevision,
+            RenderSourceDependency::MeshBindingRevision,
+            RenderSourceDependency::RenderComponentRevision,
+            RenderSourceDependency::HierarchyPresentationRevision,
+            RenderSourceDependency::LayerRevision,
+        });
+
 /** Full transient selection-overlay unchanged-frame dependencies. */
 inline constexpr RenderSourceDependencyMask
     kRenderOverlaySelectionSourceDependencies =

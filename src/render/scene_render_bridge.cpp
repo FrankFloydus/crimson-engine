@@ -59,6 +59,10 @@ void SceneRenderBridge::initialize(
   instance_selection_overlay_cache_.initialize(
       engine, scene, mesh_factory_, instance_selection_fill_material,
       selected_object_line_material, engine.getMaxAutomaticInstances());
+  collision_shape_overlay_cache_.initialize(
+      engine, scene, mesh_factory_, instance_selection_fill_material,
+      selected_object_line_material,
+      engine.getMaxAutomaticInstances());
   scene_wireframe_overlay_cache_.initialize(engine, scene,
                                             selected_object_line_material,
                                             engine.getMaxAutomaticInstances());
@@ -77,6 +81,7 @@ void SceneRenderBridge::shutdown() {
     selected_object_overlay_cache_.shutdown();
     scene_wireframe_overlay_cache_.shutdown();
     instance_selection_overlay_cache_.shutdown();
+    collision_shape_overlay_cache_.shutdown();
     mesh_cache_.shutdown();
     instance_cache_.shutdown();
     dynamic_overlay_cache_.shutdown();
@@ -101,6 +106,8 @@ void SceneRenderBridge::shutdown() {
   tool_preview_overlay_frame_ = {};
   ++tool_preview_overlay_revision_;
   filtered_scene_overlay_snapshot_ = {};
+  filtered_collision_snapshot_ = {};
+  filtered_collision_valid_ = false;
   filtered_scene_overlay_signature_ = 0u;
   filtered_scene_overlay_valid_ = false;
   tool_preview_overlay_suppression_dirty_ = false;
@@ -139,6 +146,8 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   tool_preview_overlay_frame_ = {};
   ++tool_preview_overlay_revision_;
   filtered_scene_overlay_snapshot_ = {};
+  filtered_collision_snapshot_ = {};
+  filtered_collision_valid_ = false;
   filtered_scene_overlay_signature_ = 0u;
   filtered_scene_overlay_valid_ = false;
   tool_preview_overlay_suppression_dirty_ = true;
@@ -150,6 +159,7 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   mesh_cache_.set_preview_suppressed_entities({});
   instance_cache_.set_preview_suppressed_entities({}, {}, {});
   instance_selection_overlay_cache_.clear(true);
+  collision_shape_overlay_cache_.clear();
   for (std::size_t index = 0u;
        index < OverlayRenderableCache::kMaxViewportOverlaySlots; ++index) {
     overlay_cache_.clear_slot(index);
@@ -352,12 +362,14 @@ void SceneRenderBridge::set_active_overlay_viewports(
 
 void SceneRenderBridge::sync_scene_asset_overlays(
     const RenderOverlaySelectedObjectSnapshot &selected_object_snapshot,
-    const RenderOverlaySceneWireframeSnapshot &wireframe_snapshot) {
+    const RenderOverlaySceneWireframeSnapshot &wireframe_snapshot,
+    const RenderOverlayCollisionSnapshot &collision_snapshot) {
   QDR_PROFILE_FUNCTION();
   bind_scene(selected_object_snapshot.scene_binding);
   const RenderOverlaySelectedObjectSnapshot *selected =
       &selected_object_snapshot;
   const RenderOverlaySceneWireframeSnapshot *wireframe = &wireframe_snapshot;
+  const RenderOverlayCollisionSnapshot *collision = &collision_snapshot;
   RenderOverlaySelectedObjectSnapshot filtered_selected;
   RenderOverlaySceneWireframeSnapshot filtered_wireframe;
   if (!tool_preview_suppressed_entities_.empty() ||
@@ -417,6 +429,27 @@ void SceneRenderBridge::sync_scene_asset_overlays(
             .add_value(tool_preview_suppression_signature_)
             .value();
     wireframe = &filtered_wireframe;
+    // Selection updates can resync sibling caches during a preview. Keep the
+    // collision filter behind its own source gate before copying placements.
+    if (!filtered_collision_valid_ || tool_preview_overlay_suppression_dirty_ ||
+        filtered_collision_snapshot_.visible != collision_snapshot.visible ||
+        filtered_collision_source_stamp_.selection_revision !=
+            collision_snapshot.selection_revision ||
+        !render_source_dependencies_match(
+            filtered_collision_source_stamp_, collision_snapshot,
+            kRenderOverlayCollisionSourceDependencies)) {
+      filtered_collision_snapshot_ = filter_render_overlay_collision_snapshot(
+          collision_snapshot, tool_preview_suppression_);
+      filtered_collision_source_stamp_ = collision_snapshot;
+      filtered_collision_valid_ = true;
+    }
+    filtered_collision_snapshot_.color = collision_snapshot.color;
+    collision = &filtered_collision_snapshot_;
+  } else {
+    filtered_collision_valid_ = false;
+  }
+  if (engine_ && scene_ && collision_shape_overlay_cache_.initialized()) {
+    collision_shape_overlay_cache_.sync(*collision, selected_object_snapshot);
   }
   if (engine_ && scene_ && selected_object_overlay_cache_.initialized()) {
     selected_object_overlay_cache_.sync(*selected);

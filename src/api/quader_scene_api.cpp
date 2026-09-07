@@ -198,6 +198,16 @@ QuaderSceneBatch &QuaderSceneBatch::set_locked(EntityId entity, bool locked) {
   return *this;
 }
 
+QuaderSceneBatch &QuaderSceneBatch::set_mesh_component(
+    EntityId entity, QuaderMeshComponent mesh) {
+  operations_.push_back(Operation{
+      .kind = OperationKind::SetMeshComponent,
+      .entity = entity,
+      .mesh = mesh,
+  });
+  return *this;
+}
+
 QuaderApiVoidResult QuaderSceneBatch::commit() {
     if (scene_ == nullptr) {
       return {
@@ -550,6 +560,7 @@ QuaderSceneApi::commit_batch(const QuaderSceneBatch &batch) {
         .flag = operation.flag,
         .transform = scene_transform_preserving_pivot_marker(
             session, operation.entity, operation.transform),
+        .mesh = to_scene_mesh_component(operation.mesh),
         .name = operation.name,
     };
     switch (operation.kind) {
@@ -567,6 +578,9 @@ QuaderSceneApi::commit_batch(const QuaderSceneBatch &batch) {
       break;
     case QuaderSceneBatch::OperationKind::SetLocked:
       document_operation.kind = DocumentSceneBatchOperationKind::SetLocked;
+      break;
+    case QuaderSceneBatch::OperationKind::SetMeshComponent:
+      document_operation.kind = DocumentSceneBatchOperationKind::SetMeshComponent;
       break;
     }
     operations.push_back(std::move(document_operation));

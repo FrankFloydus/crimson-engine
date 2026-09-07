@@ -54,13 +54,14 @@ struct DefinitionMemberProjection final {
   QMat4 definition_from_geometry;
   bool selectable = true;
   bool effectively_locked = false;
+  bool effectively_visible = true;
   std::size_t geometry_group_index = 0u;
 };
 
 struct DefinitionProjection final {
   EntityId entity = kInvalidEntityId;
   std::vector<DefinitionMemberProjection> members;
-  std::vector<EntityId> visible_occurrences;
+  std::vector<EntityId> occurrences;
 };
 
 } // namespace
@@ -126,8 +127,11 @@ SceneDocument::mesh_occurrence_projection() const {
 
 SceneMeshOccurrenceProjectionSnapshot build_scene_mesh_occurrence_projection(
     const SceneDocument &document,
-    SceneMeshOccurrenceProjectionWorkStats *work_stats) {
+    SceneMeshOccurrenceProjectionWorkStats *work_stats,
+    SceneMeshOccurrenceVisibility visibility) {
   SceneMeshOccurrenceProjectionWorkStats work;
+  const bool include_hidden =
+      visibility == SceneMeshOccurrenceVisibility::IncludeHidden;
   SceneMeshOccurrenceProjectionSnapshot snapshot;
   const std::vector<EntityId> entities = document.entities();
   const std::shared_ptr<const SceneHierarchyProjectionSnapshot> hierarchy =
@@ -150,14 +154,41 @@ SceneMeshOccurrenceProjectionSnapshot build_scene_mesh_occurrence_projection(
     const std::optional<QMat4> definition_from_world =
         try_scene_matrix_inverse(definition_state->world_transform);
     if (!definition_from_world.has_value()) {
+      bool has_included_occurrence = false;
+      for (const EntityId occurrence :
+           document.instance_occurrences_for_definition(definition)) {
+        const SceneHierarchyProjectionRecord *occurrence_state =
+            hierarchy->find(occurrence);
+        if (occurrence_state != nullptr &&
+            (include_hidden || occurrence_state->effectively_visible)) {
+          has_included_occurrence = true;
+          break;
+        }
+      }
+      if (has_included_occurrence) {
+        for (const EntityId member : document.descendants(definition, false)) {
+          if (document.containing_instance_definition(member) == definition &&
+              document.mesh(member) != nullptr &&
+              hierarchy->find(member) != nullptr &&
+              (include_hidden || scene_hierarchy_segment_is_visible(
+                                     document, member, definition))) {
+            ++work.singular_definition_count;
+            break;
+          }
+        }
+      }
       continue;
     }
 
     DefinitionProjection projected_definition{.entity = definition};
     for (const EntityId member : document.descendants(definition, false)) {
       if (document.containing_instance_definition(member) != definition ||
-          document.mesh(member) == nullptr ||
-          !scene_hierarchy_segment_is_visible(document, member, definition)) {
+          document.mesh(member) == nullptr) {
+        continue;
+      }
+      const bool member_visible =
+          scene_hierarchy_segment_is_visible(document, member, definition);
+      if (!include_hidden && !member_visible) {
         continue;
       }
       const SceneHierarchyProjectionRecord *member_state =
@@ -182,6 +213,7 @@ SceneMeshOccurrenceProjectionSnapshot build_scene_mesh_occurrence_projection(
                   document, member, definition),
           .effectively_locked = scene_hierarchy_segment_is_locked(
               document, member, definition),
+          .effectively_visible = member_visible,
           .geometry_group_index = group_index,
       });
     }
@@ -194,12 +226,12 @@ SceneMeshOccurrenceProjectionSnapshot build_scene_mesh_occurrence_projection(
       const SceneHierarchyProjectionRecord *occurrence_state =
           hierarchy->find(occurrence);
       if (occurrence_state == nullptr ||
-          !occurrence_state->effectively_visible) {
+          (!include_hidden && !occurrence_state->effectively_visible)) {
         continue;
       }
-      projected_definition.visible_occurrences.push_back(occurrence);
+      projected_definition.occurrences.push_back(occurrence);
     }
-    if (projected_definition.visible_occurrences.empty()) {
+    if (projected_definition.occurrences.empty()) {
       snapshot.formal_geometry_groups_.resize(
           snapshot.formal_geometry_groups_.size() -
           projected_definition.members.size());
@@ -208,7 +240,7 @@ SceneMeshOccurrenceProjectionSnapshot build_scene_mesh_occurrence_projection(
 
     const std::size_t definition_index = definitions.size();
     for (const EntityId occurrence :
-         projected_definition.visible_occurrences) {
+         projected_definition.occurrences) {
       definition_by_occurrence.emplace(occurrence, definition_index);
     }
     definitions.push_back(std::move(projected_definition));
@@ -258,6 +290,8 @@ SceneMeshOccurrenceProjectionSnapshot build_scene_mesh_occurrence_projection(
             .selectable = occurrence_selectable && member.selectable,
             .effectively_locked = occurrence_state->effectively_locked ||
                                   member.effectively_locked,
+            .effectively_visible = occurrence_state->effectively_visible &&
+                                   member.effectively_visible,
         });
         snapshot.formal_geometry_groups_[member.geometry_group_index]
             .participant_indices.push_back(record_index);
@@ -268,7 +302,8 @@ SceneMeshOccurrenceProjectionSnapshot build_scene_mesh_occurrence_projection(
     }
 
     const SceneHierarchyProjectionRecord *state = hierarchy->find(entity);
-    if (state == nullptr || !state->effectively_visible ||
+    if (state == nullptr ||
+        (!include_hidden && !state->effectively_visible) ||
         document.mesh(entity) == nullptr ||
         document.is_instance_definition_entity(entity) ||
         document.is_instance_definition_member(entity) ||
@@ -283,12 +318,13 @@ SceneMeshOccurrenceProjectionSnapshot build_scene_mesh_occurrence_projection(
             scene_hierarchy_segment_is_selectable_ignoring_visibility(document,
                                                                        entity),
         .effectively_locked = state->effectively_locked,
+        .effectively_visible = state->effectively_visible,
     }));
     ++work.ordinary_placement_count;
   }
 
   for (const DefinitionProjection &definition : definitions) {
-    for (const EntityId occurrence : definition.visible_occurrences) {
+    for (const EntityId occurrence : definition.occurrences) {
       for (const DefinitionMemberProjection &member : definition.members) {
         const SceneMeshOccurrenceProjectionRecord *record = snapshot.find({
             .display_entity = occurrence,

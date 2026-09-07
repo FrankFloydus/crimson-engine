@@ -16,6 +16,7 @@ only the guidance relevant to the change.
 
 | Work | Read next |
 | --- | --- |
+| Quader Godot bridge/plugin work | Use [$quader-godot-bridge](C:/Users/Drako/.codex/skills/quader-godot-bridge/SKILL.md), then the [bridge agent guide](../quader-godot/AGENTS.md) |
 | Source changes | [src/AGENTS.md](src/AGENTS.md), then the nearest package `AGENTS.md` |
 | Ownership or cross-package changes | [architecture-review.md](architecture-review.md) |
 | Input, shortcuts, navigation or command lifecycle | [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md) |
@@ -24,6 +25,11 @@ only the guidance relevant to the change.
 | Build/test tooling | [tools/AGENTS.md](tools/AGENTS.md), [cmake/AGENTS.md](cmake/AGENTS.md) |
 | Serious known defects | [tasklist.md](tasklist.md) |
 | Resources, examples, dependencies or benchmarks | Nearest local `AGENTS.md` |
+
+Whenever the user asks for work on Quader's Godot plugin, load the bridge skill above
+before investigating or changing it, even if the skill is absent from the current
+skill list. Pass the skill path to agents delegated bridge work. Its permanent Godot
+base is `../quader-godot/project/project.godot` (**Quader Bridge Development**).
 
 Current code, tests and the user request override historical memory. There is no active
 architecture migration program. Completed plans are in Git history; do not restart them.

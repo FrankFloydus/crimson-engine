@@ -115,6 +115,7 @@ const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kCo
         {ViewportColorSettingId::SelectedVertex, ViewportSettingsSectionId::Vertices, "Selected Vertex", key("SelectedVertexColor"), abgr8(kOverlaySelectedVertexColor)},
         {ViewportColorSettingId::HoverVertex, ViewportSettingsSectionId::Vertices, "Hover Vertex", key("HoverVertexColor"), abgr8(kOverlayHoverVertexColor)},
         {ViewportColorSettingId::RemoveSelectionVertex, ViewportSettingsSectionId::Vertices, "Remove Vertex", key("RemoveSelectionVertexColor"), abgr8(kOverlayRemoveWireColor)},
+        {ViewportColorSettingId::CollisionFill, ViewportSettingsSectionId::Overlay, "Collision Color", key("CollisionFillColor"), kDefaultViewportCollisionFillColor},
 }};
 
 const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFloatSettings{{
@@ -171,6 +172,7 @@ const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBool
         {ViewportBoolSettingId::BackfaceSelection, ViewportSettingsSectionId::Selection, "Backface Selection", key("BackfaceSelection"), false},
         {ViewportBoolSettingId::TextureLock, ViewportSettingsSectionId::Texturing, "Texture Lock", key("TextureLock"), true},
         {ViewportBoolSettingId::TextureLockScale, ViewportSettingsSectionId::Texturing, "Texture Lock Scale", key("TextureLockScale"), false},
+        {ViewportBoolSettingId::ShowCollisions, ViewportSettingsSectionId::Overlay, "Display Collisions", key("ShowCollisions"), true},
 }};
 
 std::string full_key(std::string_view suffix) {

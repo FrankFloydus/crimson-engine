@@ -49,6 +49,7 @@ struct InstancedWireBatchStyle final {
   float instance_edit_dim = 0.0f;
   std::uint8_t layer_mask = 0u;
   std::uint8_t channel = 0u;
+  ViewportSettingColor line_tint{1.0f, 1.0f, 1.0f, 1.0f};
 };
 
 /// Reports resident geometry and cumulative upload/reuse work.
@@ -116,6 +117,9 @@ public:
   bool update_batch(BatchProxy &proxy,
                     const RenderInstanceBatchChunk &chunk);
   bool update_line_width(BatchProxy &proxy, float line_width_pixels);
+  /// Patches authored sRGB tint and direct opacity without rebuilding ribbons.
+  void update_line_tint(std::span<BatchProxy> proxies,
+                        const ViewportSettingColor &tint);
   void destroy_batch(BatchProxy &proxy);
   void destroy_batches(std::span<BatchProxy> proxies);
 

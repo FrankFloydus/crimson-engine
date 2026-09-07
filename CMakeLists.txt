@@ -314,6 +314,7 @@ add_library(quader_assets STATIC
     src/assets/bake_service.cpp
     src/assets/material_document.cpp
     src/assets/modeling_mesh_payload_adapter.cpp
+    src/assets/mesh_collision_geometry_payload.cpp
     src/assets/mesh_wire_geometry.cpp
     src/assets/project_asset_id.cpp
 )
@@ -390,6 +391,7 @@ target_link_libraries(quader_editor_services
 
 add_library(quader_project_qdr_io STATIC
     src/io/project/project_asset_resolver.cpp
+    src/io/project/project_bridge_notifications.cpp
     src/io/project/project_types.cpp
     src/io/project/project_file_system.cpp
     src/io/project/project_manifest.cpp
@@ -448,6 +450,17 @@ target_link_libraries(quader_project_qdr_io
         quader_modeling_sdk_qdr_document
         stduuid
         ${QUADER_ZSTD_TARGET})
+
+add_library(quader_bridge_reader SHARED
+    src/io/bridge/quader_bridge_reader.cpp)
+target_compile_features(quader_bridge_reader PRIVATE cxx_std_20)
+target_include_directories(quader_bridge_reader PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_definitions(quader_bridge_reader PRIVATE
+    QUADER_BRIDGE_READER_EXPORTS)
+target_link_libraries(quader_bridge_reader PRIVATE
+    quader_project_qdr_io
+    quader_modeling)
 
 if(QUADER_BUILD_QDR_TOOLS)
     add_executable(qdr_validate tools/qdr_validate_main.cpp)
@@ -762,11 +775,13 @@ add_library(quader_render STATIC
     src/render/png_texture_loader.cpp
     src/render/overlay/overlay_camera_projector.cpp
     src/render/overlay/curve_tool_overlay_cache.cpp
+    src/render/overlay/collision_shape_overlay_cache.cpp
     src/render/overlay/overlay_face_fill_builder.cpp
     src/render/overlay/overlay_line_mesh_builder.cpp
     src/render/overlay/overlay_point_mesh_builder.cpp
     src/render/overlay/overlay_proxy_factory.cpp
     src/render/overlay/render_overlay_snapshot.cpp
+    src/render/overlay/render_overlay_collision_snapshot.cpp
     src/render/overlay/overlay_renderable_builder.cpp
     src/render/overlay/overlay_renderable_cache.cpp
     src/render/overlay/instanced_wire_render_backend.cpp
@@ -1267,6 +1282,18 @@ if(WIN32)
     endfunction()
 
     quader_deploy_windows_qt_runtime(quader)
+
+    # The read-only bridge is consumed outside Quader. Resolve its own Release
+    # dependency closure without adding Qt or renderer deployment to the DLL.
+    add_custom_command(TARGET quader_bridge_reader POST_BUILD
+        COMMAND "${Z_VCPKG_POWERSHELL_PATH}"
+                -NoProfile
+                -ExecutionPolicy Bypass
+                -File "${_QUADER_VCPKG_APPLOCAL_SCRIPT}"
+                -targetBinary "$<TARGET_FILE:quader_bridge_reader>"
+                -installedDir "${_QUADER_VCPKG_RELEASE_BIN}"
+        COMMENT "Deploying bridge reader runtime dependencies"
+        VERBATIM)
 endif()
 
 if(MSVC)
@@ -1434,6 +1461,9 @@ if(QUADER_BUILD_TESTS)
     add_executable(quader_tests
         tests/quader_tests_main.cpp
         tests/app_frame_clock_tests.cpp
+        tests/bridge_reader_tests.cpp
+        tests/mesh_collision_geometry_tests.cpp
+        tests/collision_shape_overlay_tests.cpp
         tests/command_behavior_contract_tests.cpp
         tests/component_transform_persistence_tests.cpp
         tests/core_tests.cpp
@@ -1555,6 +1585,7 @@ if(QUADER_BUILD_TESTS)
         PRIVATE
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest)
+    target_link_libraries(quader_tests PRIVATE quader_bridge_reader)
     quader_deploy_test_runtime_dlls(quader_tests)
     if(WIN32)
         quader_deploy_windows_qt_runtime(quader_tests)

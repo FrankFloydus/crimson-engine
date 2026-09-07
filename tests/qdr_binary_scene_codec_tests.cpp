@@ -493,6 +493,60 @@ TEST(QdrBinarySceneCodecTests,
 }
 
 TEST(QdrBinarySceneCodecTests,
+     NewMeshCollisionDefaultsAreExplicitWhileLegacyDefaultsStayAbsent) {
+  for (const MeshCollisionType type :
+       {MeshCollisionType::Mesh, MeshCollisionType::Box}) {
+    SceneContentDocument document = simple_scene();
+    MeshComponent mesh = *document.scene().mesh(100u);
+    mesh.collision_type = type;
+    if (type == MeshCollisionType::Box) {
+      mesh.display_collision = false;
+    }
+    (void)document.scene().set_mesh(100u, mesh);
+    const auto container = parse_written_scene(document);
+    ASSERT_TRUE(container.ok) << container.message;
+    const auto metadata = std::ranges::find_if(
+        container.chunks, [](const quader_io::QdrBinaryChunk &chunk) {
+          return chunk.type == static_cast<std::uint32_t>(
+                                   quader_io::QdrBinaryChunkType::SceneMetadata);
+        });
+    ASSERT_NE(metadata, container.chunks.end());
+    const qdr_fb::ScenePayload *payload =
+        qdr_fb::GetScenePayload(metadata->bytes().data());
+    ASSERT_NE(payload->entities(), nullptr);
+    const qdr_fb::MeshComponent *serialized_mesh = nullptr;
+    for (const qdr_fb::Entity *entity : *payload->entities()) {
+      if (entity->mesh() != nullptr) {
+        serialized_mesh = entity->mesh();
+        break;
+      }
+    }
+    ASSERT_NE(serialized_mesh, nullptr);
+    EXPECT_EQ(flatbuffers::IsFieldPresent(
+                  serialized_mesh, qdr_fb::MeshComponent::VT_COLLISION_TYPE),
+              type == MeshCollisionType::Mesh);
+    EXPECT_EQ(serialized_mesh->collision_type(),
+              type == MeshCollisionType::Mesh ? qdr_fb::MeshCollisionType::Mesh
+                                              : qdr_fb::MeshCollisionType::Box);
+    EXPECT_EQ(flatbuffers::IsFieldPresent(
+                  serialized_mesh, qdr_fb::MeshComponent::VT_DISPLAY_COLLISION),
+              type == MeshCollisionType::Mesh);
+    EXPECT_EQ(serialized_mesh->display_collision(),
+              type == MeshCollisionType::Mesh);
+
+    const QdrProjectReadResult read =
+        QdrDocumentReader::deserialize_project_document(
+            quader_io::build_qdr_binary_container(
+                container.scene_uuid, copy_chunks(container)));
+    ASSERT_TRUE(read.ok) << read.message;
+    ASSERT_NE(read.document.scene().mesh(100u), nullptr);
+    EXPECT_EQ(*read.document.scene().mesh(100u), mesh);
+    EXPECT_EQ(mesh_collision_supported(*read.document.scene().mesh(100u)),
+              type == MeshCollisionType::Mesh);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
      RichEntityStateRoundTripPreservesEveryDurableComponent) {
   SceneContentDocument document = simple_scene();
   const EntityId entity = 100u;

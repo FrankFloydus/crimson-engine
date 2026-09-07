@@ -260,12 +260,19 @@ struct MeshComponent {
   bool cast_shadows = true;
   bool double_sided = false;
   bool generate_collisions = true;
-  MeshCollisionType collision_type = MeshCollisionType::Box;
-  bool display_collision = false;
+  MeshCollisionType collision_type = MeshCollisionType::Mesh;
+  bool display_collision = true;
   MeshPhysicsBodyType body_type = MeshPhysicsBodyType::StaticBody;
 
   [[nodiscard]] bool operator==(const MeshComponent &) const = default;
 };
+
+/// Generation currently supports triangle mesh collisions on static bodies.
+[[nodiscard]] inline constexpr bool
+mesh_collision_supported(const MeshComponent &mesh) noexcept {
+  return mesh.collision_type == MeshCollisionType::Mesh &&
+         mesh.body_type == MeshPhysicsBodyType::StaticBody;
+}
 
 inline constexpr int kCurveSolidifyMinimumResolution = 3;
 inline constexpr int kCurveSolidifyMaximumResolution = 128;

@@ -8,6 +8,7 @@
 
 #include "core/qstr.hpp"
 #include "io/qdr/qdr_atomic_write.hpp"
+#include "io/shared_file_read.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -17,7 +18,6 @@
 #include <cwctype>
 #include <exception>
 #include <filesystem>
-#include <fstream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -412,27 +412,21 @@ ProjectManifestStore::open(const std::filesystem::path &manifest_path) {
         canonical_manifest);
   }
 
-  const std::uintmax_t size = std::filesystem::file_size(canonical_manifest, error);
-  if (error || size > kMaximumManifestBytes) {
+  const quader_io::SharedFileReadResult source =
+      quader_io::read_file_bytes_shared(canonical_manifest, kMaximumManifestBytes);
+  if (!source.ok) {
     return ProjectIoResult<ProjectWorkspaceStorage>::failure(
-        ProjectIoErrorCode::ManifestMalformed,
-        error ? "Could not inspect project manifest: " + error.message()
-              : "Project manifest exceeds the supported size limit.",
+        source.error == quader_io::SharedFileReadError::Limit ||
+                source.error == quader_io::SharedFileReadError::Size
+            ? ProjectIoErrorCode::ManifestMalformed
+            : ProjectIoErrorCode::IoFailure,
+        "Could not read project manifest: " + source.message,
         canonical_manifest);
   }
-  std::ifstream stream(canonical_manifest, std::ios::binary);
-  if (!stream.is_open()) {
-    return ProjectIoResult<ProjectWorkspaceStorage>::failure(
-        ProjectIoErrorCode::IoFailure, "Could not open project manifest.",
-        canonical_manifest);
-  }
-  std::string text(static_cast<std::size_t>(size), '\0');
-  stream.read(text.data(), static_cast<std::streamsize>(text.size()));
-  if (!stream.good() && !stream.eof()) {
-    return ProjectIoResult<ProjectWorkspaceStorage>::failure(
-        ProjectIoErrorCode::IoFailure, "Could not read project manifest.",
-        canonical_manifest);
-  }
+  const std::string text(
+      source.bytes.empty() ? ""
+                           : reinterpret_cast<const char *>(source.bytes.data()),
+      source.bytes.size());
 
   ProjectIoResult<ProjectManifest> decoded = deserialize(text);
   if (!decoded.ok()) {

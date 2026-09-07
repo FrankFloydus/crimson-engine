@@ -22,6 +22,7 @@
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "io/project/project_material_provisioner.hpp"
+#include "io/project/project_bridge_notifications.hpp"
 #include "io/qdr/qdr_atomic_write.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_document_writer.hpp"
@@ -65,6 +66,17 @@ ProjectSessionResult success(bool changed, std::string message,
       .message = std::move(message),
       .scene_session_id = scene,
   };
+}
+
+void append_bridge_notification_warning(
+    ProjectSessionResult &result, const ProjectIoResult<void> &notification) {
+  const std::string &warning = notification.ok()
+                                   ? notification.warning()
+                                   : notification.error().message;
+  if (!warning.empty()) {
+    result.warnings.push_back(warning);
+    result.message += " " + warning;
+  }
 }
 
 std::string path_text_utf8(const std::filesystem::path &path) {
@@ -808,6 +820,13 @@ ProjectSessionResult ProjectSession::save(SceneSessionId id) {
   if (!written.message.empty()) {
     success_result.warnings.push_back(std::move(written.message));
   }
+  append_bridge_notification_warning(
+      success_result, ProjectBridgeNotifications::publish_scene(
+                          workspace_->file_system, workspace_->manifest.id(),
+                          scene->scene_id, *scene->path,
+                          written.source_byte_count,
+                          written.source_content_hash, snapshot.snapshot,
+                          material_catalog_));
   remember_scene(id);
   return success_result;
 }
@@ -1131,6 +1150,13 @@ ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
     scene->session->mark_clean_at(stamp);
   }
   scene->identity_dirty = false;
+  append_bridge_notification_warning(
+      success_result, ProjectBridgeNotifications::publish_scene(
+                          workspace_->file_system, workspace_->manifest.id(),
+                          scene->scene_id, *scene->path,
+                          written.source_byte_count,
+                          written.source_content_hash, snapshot.snapshot,
+                          material_catalog_));
   remember_scene(id);
   return success_result;
 }
@@ -1140,6 +1166,7 @@ ProjectSessionResult ProjectSession::save_all() {
     return failure("No project is open.");
   }
   bool changed = false;
+  std::vector<std::string> warnings;
   for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
     if (scene && scene->dirty() && !scene->path.has_value()) {
       return failure("Save All requires paths for every dirty scene.");
@@ -1151,12 +1178,25 @@ ProjectSessionResult ProjectSession::save_all() {
     }
     ProjectSessionResult saved = save(scene->session_id);
     if (!saved.ok) {
+      saved.warnings.insert(saved.warnings.begin(), warnings.begin(),
+                            warnings.end());
+      for (const std::string &warning : warnings) {
+        saved.message += " " + warning;
+      }
       return saved;
     }
+    warnings.insert(warnings.end(), saved.warnings.begin(),
+                     saved.warnings.end());
     changed = true;
   }
-  return success(changed, changed ? "All dirty scenes saved."
-                                  : "No dirty scenes to save.");
+  ProjectSessionResult result =
+      success(changed, changed ? "All dirty scenes saved."
+                               : "No dirty scenes to save.");
+  result.warnings = std::move(warnings);
+  for (const std::string &warning : result.warnings) {
+    result.message += " " + warning;
+  }
+  return result;
 }
 
 ProjectSessionResult ProjectSession::close_scene(SceneSessionId id,

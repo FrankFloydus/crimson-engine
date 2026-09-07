@@ -12072,6 +12072,93 @@ TEST(EditorApiTests, SceneBatchUsesPendingStateForRepeatedEntityEdits) {
     EXPECT_EQ(snapshot->transform.position.x, 2.0f);
 }
 
+TEST(EditorApiTests, SceneBatchMeshPhysicsEditsShareOneUndoRedoStep) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto first = create_selected_box(editor, "First Physics Mesh");
+  const auto second = create_selected_box(editor, "Second Physics Mesh");
+  const quader::QuaderMeshComponent first_before{.mesh = first.mesh};
+  const quader::QuaderMeshComponent second_before{.mesh = second.mesh};
+  auto first_after = first_before;
+  auto second_after = second_before;
+  first_after.generate_collisions = false;
+  first_after.display_collision = false;
+  second_after.generate_collisions = false;
+  second_after.display_collision = false;
+
+  const auto result = editor.scene().batch("Physics")
+                          .set_mesh_component(first.entity, first_after)
+                          .set_mesh_component(second.entity, second_after)
+                          .commit();
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  EXPECT_TRUE(result.changed());
+  EXPECT_EQ(editor.query().history().undo_label, "Physics");
+  EXPECT_FALSE(editor.scene().set_mesh_component(first.entity, first_after).changed());
+  EXPECT_FALSE(editor.scene().set_mesh_component(second.entity, second_after).changed());
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_FALSE(editor.scene().set_mesh_component(first.entity, first_before).changed());
+  EXPECT_FALSE(editor.scene().set_mesh_component(second.entity, second_before).changed());
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_FALSE(editor.scene().set_mesh_component(first.entity, first_after).changed());
+  EXPECT_FALSE(editor.scene().set_mesh_component(second.entity, second_after).changed());
+}
+
+TEST(EditorApiTests, SceneBatchMeshEditsUsePendingState) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto box = create_selected_box(editor, "Repeated Physics Mesh");
+  const quader::QuaderMeshComponent before{.mesh = box.mesh};
+  auto intermediate = before;
+  intermediate.display_collision = false;
+
+  const auto result = editor.scene().batch("Repeated Physics")
+                          .set_mesh_component(box.entity, intermediate)
+                          .set_mesh_component(box.entity, before)
+                          .commit();
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  EXPECT_TRUE(result.changed());
+  EXPECT_FALSE(editor.scene().set_mesh_component(box.entity, before).changed());
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_FALSE(editor.scene().set_mesh_component(box.entity, before).changed());
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_FALSE(editor.scene().set_mesh_component(box.entity, before).changed());
+}
+
+TEST(EditorApiTests, SceneBatchMeshValidationLeavesEarlierEditsUnchanged) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto first = create_selected_box(editor, "Valid Physics Mesh");
+  const auto second = create_selected_box(editor, "Invalid Physics Mesh");
+  const quader::QuaderMeshComponent before{.mesh = first.mesh};
+  auto after = before;
+  after.generate_collisions = false;
+  const auto history_before = editor.query().history();
+
+  for (const auto invalid : {
+           quader::QuaderMeshComponent{.mesh = quader::kInvalidAssetId},
+           quader::QuaderMeshComponent{.mesh = 9100u},
+           quader::QuaderMeshComponent{.mesh = first.mesh}}) {
+    const auto result = editor.scene().batch("Invalid Physics")
+                            .set_mesh_component(first.entity, after)
+                            .set_mesh_component(second.entity, invalid)
+                            .commit();
+    EXPECT_FALSE(result.ok());
+    EXPECT_FALSE(result.changed());
+    EXPECT_FALSE(editor.scene().set_mesh_component(first.entity, before).changed());
+    EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+  }
+
+  const auto non_mesh = editor.scene().create_entity({.name = "Not A Mesh"});
+  ASSERT_TRUE(non_mesh.ok());
+  const auto missing_component = editor.scene().batch("Invalid Component")
+                                     .set_mesh_component(first.entity, after)
+                                     .set_mesh_component(non_mesh.value().id, before)
+                                     .commit();
+  EXPECT_FALSE(missing_component.ok());
+  EXPECT_FALSE(editor.scene().set_mesh_component(first.entity, before).changed());
+}
+
 TEST(EditorApiTests, SceneBatchTransformLockChecksUsePendingParentAndLockState) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
@@ -18759,9 +18846,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 205u);
+  EXPECT_EQ(commands.size(), 206u);
 #else
-  EXPECT_EQ(commands.size(), 204u);
+  EXPECT_EQ(commands.size(), 205u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

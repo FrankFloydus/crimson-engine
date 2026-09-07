@@ -1370,6 +1370,19 @@ void UISystem::install_runtime_hooks(
             }
             return runtime_status(changed);
           },
+      .collisions_visible = [this]() {
+        return viewport_settings_.bool_value(ViewportBoolSettingId::ShowCollisions);
+      },
+      .set_collisions_visible =
+          [this](bool visible) {
+            const bool changed = viewport_settings_.set_bool_value(
+                ViewportBoolSettingId::ShowCollisions, visible);
+            if (changed) {
+              (void)save_viewport_settings();
+              synchronize_settings_surfaces(true);
+            }
+            return runtime_status(changed);
+          },
       .texture_lock_enabled = [this]() {
         return viewport_settings_.bool_value(ViewportBoolSettingId::TextureLock);
       },

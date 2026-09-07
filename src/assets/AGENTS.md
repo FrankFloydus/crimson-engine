@@ -12,6 +12,9 @@ file except through prior written authorization from Francesco Di Blasi.
   Renderer resources are derived caches.
 - `mesh_asset_payload.hpp` and `modeling_mesh_payload_adapter.*` are the mesh payload boundary;
   preserve immutable/shared payload and clone semantics when editing assets.
+- `mesh_collision_geometry_payload.*` derives and caches local collision triangles from rendered
+  primitive spans. Viewport and engine bridges share this owner; preserve Godot-compatible snapping
+  and triangle multiplicity. Collision payloads are derived, never a second editable mesh.
 - Scene-local `AssetId` and persistent `ProjectAssetId` are different identities. Project material
   files and catalog resolution live in `src/io/project`, with project lifetime in
   `src/editor/session/project_session.*`.

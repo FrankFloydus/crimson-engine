@@ -45,6 +45,7 @@ struct ViewportOverlayLayerPolicy {
 };
 
 inline constexpr std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> kViewportOverlayDrawOrder{{
+        ViewportOverlayLayer::CollisionFill,
         ViewportOverlayLayer::SelectedVisibleFace,
         ViewportOverlayLayer::SelectedFaceMask,
         ViewportOverlayLayer::WireframeBase,
