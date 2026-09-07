@@ -2116,6 +2116,7 @@ bool ToolPreviewLightCache::create_inert_proxy(
       .position(filament_light_position(world_transform))
       .direction(filament_light_direction(world_transform))
       .falloff(filament_light_falloff(record.light))
+      .distanceAttenuation(record.light.distance_attenuation)
       .castShadows(record.light.casts_shadows);
   builder.build(*engine_, proxy.entity);
   if (!engine_->getLightManager().getInstance(proxy.entity)) {

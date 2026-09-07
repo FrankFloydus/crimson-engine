@@ -2127,6 +2127,18 @@ private:
                 },
                 std::move(merge_key));
           });
+      add_continuous_number(
+          section, "light.distance_attenuation",
+          localized("ui.inspector.distance_attenuation", "Distance attenuation"),
+          light->distance_attenuation, -10.0, 10.0, 0.01, 4,
+          [this, entity](double value, std::string merge_key) {
+            apply_light_component(
+                entity,
+                [value](LightComponent &next) {
+                  next.distance_attenuation = static_cast<float>(value);
+                },
+                std::move(merge_key));
+          });
     }
     add_checkbox(section, "light.cast_shadows",
                  localized("ui.inspector.cast_shadows", "Cast Shadows"),

@@ -5,13 +5,13 @@
 # file except through prior written authorization from Francesco Di Blasi.
 ################################################################################
 
-# The extension changes VulkanPlatform's ABI. Validate the complete produced
+# The extension changes VulkanPlatform and light APIs. Validate the complete produced
 # artifact, so an official SDK or mixed headers/libraries fail before compilation.
 function(quader_validate_filament_patch sdk_root)
-    set(pin_path "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/filament/filament-v1.71.6-quader-vsync1.json")
+    set(pin_path "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/filament/filament-v1.71.6-quader-vsync2.json")
     set(marker_path "${sdk_root}/quader-filament-sdk.json")
     if(NOT EXISTS "${marker_path}")
-        message(FATAL_ERROR "Filament SDK is missing Quader's VSync extension. Run tools/build_filament_sdk.ps1 -AllowDownload and configure FILAMENT_SDK_ROOT to the resulting SDK.")
+        message(FATAL_ERROR "Filament SDK is missing Quader's presentation and lighting extension. Run tools/build_filament_sdk.ps1 -AllowDownload and configure FILAMENT_SDK_ROOT to the resulting SDK.")
     endif()
     file(READ "${pin_path}" pin)
     file(READ "${marker_path}" marker)
@@ -45,6 +45,7 @@ function(quader_validate_filament_patch sdk_root)
         include/vulkan/vulkan_win32.h
         include/vulkan/vulkan_beta.h
         include/filament/SwapChain.h
+        include/filament/LightManager.h
         bin/matc.exe)
     foreach(lib_name IN LISTS QUADER_FILAMENT_LIB_NAMES)
         list(APPEND required_files "lib/x86_64/md/${lib_name}.lib")

@@ -30,6 +30,22 @@ combinations are distinguished from disabled generation for a bounded consumer
 diagnostic. Editor collision display, fill color and mesh visibility do not
 control physics export.
 
+ABI version 4 adds direct authored lights and saved camera exposure inputs.
+`scene_view` exposes the light count, aperture, shutter duration in seconds and
+ISO sensitivity. Scenes without camera settings use the native defaults of 16,
+0.008 seconds and ISO 100. `light_view` exposes stable scene-local entity identity,
+name, type, affine world transform, effective saved visibility, linear RGB,
+authored intensity, range, distance attenuation and cast-shadow state. Published
+light type IDs are Directional = 0, Point = 1 and Spot = 2.
+
+Light snapshots include hidden ordinary hierarchy members and exclude definition
+storage, definition members and occurrence leaves, matching native direct-light
+ownership. Directional and spot emission follows transformed local -Y. The reader
+does not apply renderer intensity, exposure, color-space or axis conversions.
+Light views validate finite light values and transforms only when requested;
+consumers with light importing disabled do not need to consume these views or
+interpret the camera settings. Canonical QDR validation remains unchanged.
+
 The `scene_source_fingerprint` and `material_source_fingerprint` functions
 introduced in ABI version 2 remain unchanged.
 Their byte count and FNV-1a64 content hash describe the exact QDR/QMAT bytes
@@ -37,15 +53,15 @@ decoded by the canonical reader, not a later reread of a mutable pathname.
 Embedded material fingerprints refer to their containing QDR. The corresponding
 source path is borrowed from the handle and remains project-relative. A bridge
 can compare these fingerprints with the post-commit records under
-`.quader/bridge/` before publishing an automatic update. Ship the v3 reader and
+`.quader/bridge/` before publishing an automatic update. Ship the v4 reader and
 its consumer together; requesting the earlier ABI returns null.
 
 ## Lifetime and threading
 
 Project handles own the validated manifest and scene catalog. Opening a scene
 reopens the manifest, verifies the project identity and selected scene UUID, reads
-the binary QDR through its canonical reader, and builds a detached immutable mesh
-snapshot. Scene handles own their project filesystem and native document and remain
+the binary QDR through its canonical reader, and builds detached immutable mesh
+and light snapshots. Scene handles own their project filesystem and native document and remain
 valid after the project handle is released. Texture blob handles are independent
 of both.
 

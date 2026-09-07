@@ -3137,6 +3137,9 @@ bool SceneDocument::clear_material(EntityId id) {
 }
 
 bool SceneDocument::set_light(EntityId id, LightComponent light) {
+  if (!std::isfinite(light.distance_attenuation)) {
+    return false;
+  }
   const entt::entity entity = require_entity(id);
   if (entity == entt::null || instance_occurrence(id) != nullptr ||
       is_instance_definition_entity(id) ||

@@ -935,6 +935,7 @@ struct QuaderLightComponent {
     float intensity = 1.0f;
     float range = 10.0f;
     bool casts_shadows = false;
+    float distance_attenuation = 2.0f;
 };
 
 /**

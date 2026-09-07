@@ -389,7 +389,7 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
 
 ## VSync and accepted presentation
 
-- The pinned Filament v1.71.6 quader-vsync1 patch supplies opt-in Immediate presentation and a
+- The pinned Filament v1.71.6 quader-vsync2 patch supplies opt-in Immediate presentation and a
   backend-confirmed mode callback. FIFO is the default/unsupported-mode fallback. Rebuild matching
   headers/libraries together; CMake verifies provenance/hashes. Keep the maintained patch through
   upgrades; the installer consumes compiled artifacts, not a compiler or end-user SDK download.
@@ -409,7 +409,7 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
   baseline remains compatible while detecting preference side effects.
 
 Owners: [RenderSystem](src/render/render_system.cpp), [frame schedule](src/app/app_frame_schedule.hpp),
-[Filament patch](thirdparty/filament/filament-v1.71.6-quader-vsync1.patch).
+[Filament patch](thirdparty/filament/filament-v1.71.6-quader-vsync2.patch).
 Tests: [presentation](tests/render_presentation_tests.cpp),
 [opt-in native Vulkan runtime](tests/render_vsync_runtime_tests.cpp).
 

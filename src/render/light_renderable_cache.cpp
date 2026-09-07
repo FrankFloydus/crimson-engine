@@ -211,6 +211,7 @@ LightRenderableCache::LightProxy LightRenderableCache::create_light_proxy(
       .position(position_from_matrix(world_transform))
       .direction(direction_from_matrix(world_transform))
       .falloff(light_falloff_radius(light))
+      .distanceAttenuation(light.distance_attenuation)
       .castShadows(light.casts_shadows);
   builder.build(*engine_, proxy.entity);
   scene_->addEntity(proxy.entity);

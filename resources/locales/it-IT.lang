@@ -682,6 +682,7 @@ ui.inspector.light_type=Tipo
 ui.inspector.light_type.directional=Direzionale
 ui.inspector.light_type.point=Punto
 ui.inspector.light_type.spot=Spot
+ui.inspector.distance_attenuation=Attenuazione della distanza
 ui.inspector.environment=Ambiente
 ui.inspector.environment_preset=Preset
 ui.inspector.environment.lightroom_14b=Lightroom 14b

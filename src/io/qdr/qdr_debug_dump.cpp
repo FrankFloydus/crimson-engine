@@ -273,6 +273,7 @@ texture_color_space_name(TextureColorSpace color_space) {
       {"intensity", light.intensity},
       {"range", light.range},
       {"castsShadows", light.casts_shadows},
+      {"distanceAttenuation", light.distance_attenuation},
   };
 }
 

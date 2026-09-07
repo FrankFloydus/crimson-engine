@@ -244,7 +244,8 @@ RenderSignatureBuilder::light_signature(const LightComponent &light) {
       .add_vec3(light.color)
       .add_float(light.intensity)
       .add_float(light.range)
-      .add_bool(light.casts_shadows);
+      .add_bool(light.casts_shadows)
+      .add_float(light.distance_attenuation);
   return signature.value();
 }
 

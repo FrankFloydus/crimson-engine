@@ -253,6 +253,7 @@ table LightComponent {
   intensity:float = 1.0;
   range:float = 10.0;
   casts_shadows:bool = false;
+  distance_attenuation:float = 2.0;
 }
 
 table SceneEnvironmentSettings {

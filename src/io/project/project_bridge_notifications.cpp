@@ -36,10 +36,10 @@ ProjectIoResult<void> notification_failure(std::string message,
 }
 
 std::string hash_text(std::uint64_t hash) {
-  constexpr std::string_view digits = "0123456789abcdef";
+  constexpr std::string_view kDigits = "0123456789abcdef";
   std::string result(16u, '0');
   for (std::size_t index = result.size(); index != 0u; --index) {
-    result[index - 1u] = digits[hash & 0xfu];
+    result[index - 1u] = kDigits[hash & 0xfu];
     hash >>= 4u;
   }
   return result;

@@ -54,6 +54,15 @@ struct MeshStorage final {
   std::shared_ptr<const std::vector<QuaderBridgeCollisionPoint>> collision_points;
 };
 
+/** Retains authored light values without applying a target renderer policy. */
+struct LightStorage final {
+  std::string name;
+  EntityId entity = kInvalidEntityId;
+  QMat4 world_transform;
+  LightComponent light;
+  bool effectively_visible = true;
+};
+
 /** Retains the source descriptor without touching its image files. */
 struct MaterialDescriptor final {
   std::string name;
@@ -153,6 +162,7 @@ struct QuaderBridgeScene final {
   std::string id;
   std::string relative_path;
   std::vector<MeshStorage> meshes;
+  std::vector<LightStorage> lights;
   std::vector<MaterialStorage> materials;
   std::unordered_map<std::string, uint32_t> material_indices;
   std::optional<quader::ProjectMaterialCatalog> legacy_material_catalog;
@@ -297,6 +307,27 @@ void build_mesh_snapshot(QuaderBridgeScene &target) {
   }
   (void)count32(target.meshes.size());
   (void)count32(target.materials.size());
+}
+
+void build_light_snapshot(QuaderBridgeScene &target) {
+  const SceneDocument &scene = target.source.document.scene();
+  const auto hierarchy = scene.hierarchy_projection();
+  for (const SceneHierarchyProjectionRecord &placement : hierarchy->records()) {
+    const LightComponent *component = scene.light(placement.entity);
+    if (component == nullptr ||
+        placement.containing_instance_definition != kInvalidEntityId ||
+        scene.instance_occurrence(placement.entity) != nullptr) {
+      continue;
+    }
+    const NameComponent *name = scene.name(placement.entity);
+    target.lights.push_back({
+        .name = name != nullptr ? name->name : "Light",
+        .entity = placement.entity,
+        .world_transform = placement.world_transform,
+        .light = *component,
+        .effectively_visible = placement.effectively_visible});
+  }
+  (void)count32(target.lights.size());
 }
 
 [[nodiscard]] ProjectMaterialCatalogEntry read_project_material(
@@ -492,6 +523,7 @@ int open_scene(const QuaderBridgeProject *project, const char *scene_id,
             "Scene identity does not match its project catalog entry.");
     scene->id = std::string(id.value().str());
     build_mesh_snapshot(*scene);
+    build_light_snapshot(*scene);
     *out = scene.release();
   });
 }
@@ -502,9 +534,17 @@ int scene_view(const QuaderBridgeScene *scene, QuaderBridgeSceneView *out,
                QuaderBridgeError *error) noexcept {
   return guarded(error, [&] {
     require(scene != nullptr && out != nullptr, "Scene and output view are required.");
+    const SceneDocument &document = scene->source.document.scene();
+    const SceneSettingsComponent *settings = document.scene_settings(document.scene_root());
+    const SceneCameraSettings camera = settings != nullptr
+                                           ? settings->camera : SceneCameraSettings{};
     *out = {.id = scene->id.c_str(), .relative_path = scene->relative_path.c_str(),
             .mesh_count = count32(scene->meshes.size()),
-            .material_count = count32(scene->materials.size())};
+            .material_count = count32(scene->materials.size()),
+            .light_count = count32(scene->lights.size()),
+            .camera_aperture = camera.aperture,
+            .camera_shutter_seconds = camera.shutter_speed,
+            .camera_iso = camera.sensitivity};
   });
 }
 
@@ -527,6 +567,46 @@ int mesh_view(const QuaderBridgeScene *scene, uint32_t index,
             .collision_point_count = mesh.collision_points
                                          ? count32(mesh.collision_points->size()) : 0u};
     std::ranges::copy(mesh.placement.world_from_geometry.values, out->transform);
+  });
+}
+
+int light_view(const QuaderBridgeScene *scene, uint32_t index,
+               QuaderBridgeLightView *out, QuaderBridgeError *error) noexcept {
+  return guarded(error, [&] {
+    require(scene != nullptr && out != nullptr, "Scene and output light are required.");
+    require(index < scene->lights.size(), "Light index is out of bounds.");
+    const LightStorage &source = scene->lights[index];
+    const LightComponent &light = source.light;
+    uint32_t type = QUADER_BRIDGE_LIGHT_DIRECTIONAL;
+    switch (light.type) {
+    case LightType::Directional:
+      type = QUADER_BRIDGE_LIGHT_DIRECTIONAL;
+      break;
+    case LightType::Point:
+      type = QUADER_BRIDGE_LIGHT_POINT;
+      break;
+    case LightType::Spot:
+      type = QUADER_BRIDGE_LIGHT_SPOT;
+      break;
+    default:
+      fail("Source light has an unsupported type.");
+    }
+    require(scene_matrix_is_finite(source.world_transform),
+            "Source light transform contains non-finite values.");
+    require(std::isfinite(light.color.x) && std::isfinite(light.color.y) &&
+                std::isfinite(light.color.z) && std::isfinite(light.intensity) &&
+                std::isfinite(light.range) && std::isfinite(light.distance_attenuation),
+            "Source light contains non-finite lighting values.");
+    *out = {.name = source.name.c_str(),
+            .entity = source.entity,
+            .type = type,
+            .visible = source.effectively_visible ? 1u : 0u,
+            .color = {light.color.x, light.color.y, light.color.z},
+            .intensity = light.intensity,
+            .range = light.range,
+            .distance_attenuation = light.distance_attenuation,
+            .casts_shadows = light.casts_shadows ? 1u : 0u};
+    std::ranges::copy(source.world_transform.values, out->transform);
   });
 }
 
@@ -654,7 +734,8 @@ constexpr QuaderBridgeApi kApi{
     .material_identity = material_identity, .material_view = material_view,
     .read_texture = read_texture, .blob_view = blob_view, .release_blob = release_blob,
     .scene_source_fingerprint = scene_source_fingerprint,
-    .material_source_fingerprint = material_source_fingerprint};
+    .material_source_fingerprint = material_source_fingerprint,
+    .light_view = light_view};
 
 } // namespace
 

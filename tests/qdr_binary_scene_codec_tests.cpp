@@ -927,7 +927,7 @@ TEST(QdrBinarySceneCodecTests,
                           quader_io::QdrBinaryChunkType::SceneMetadata)) {
       continue;
     }
-    EXPECT_EQ(chunk.schema_version, 9u);
+    EXPECT_EQ(chunk.schema_version, 10u);
     flatbuffers::Verifier verifier(
         reinterpret_cast<const std::uint8_t *>(chunk.bytes().data()),
         chunk.bytes().size());
@@ -1303,7 +1303,7 @@ TEST(QdrBinarySceneCodecTests,
                                  quader_io::QdrBinaryChunkType::SceneMetadata);
       });
   ASSERT_NE(metadata, parsed.chunks.end());
-  EXPECT_EQ(metadata->schema_version, 9u);
+  EXPECT_EQ(metadata->schema_version, 10u);
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(
@@ -2279,7 +2279,7 @@ TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
   ASSERT_TRUE(parsed.ok) << parsed.message;
   std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
   ASSERT_FALSE(chunks.empty());
-  chunks.front().schema_version = 10u;
+  chunks.front().schema_version = 11u;
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(

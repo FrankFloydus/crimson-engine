@@ -335,12 +335,14 @@ struct LightComponent {
     float intensity = 1.0f;
     float range = 10.0f;
     bool casts_shadows = false;
+    float distance_attenuation = 2.0f;
 
     [[nodiscard]] bool operator==(const LightComponent& other) const {
       return type == other.type && color.x == other.color.x &&
              color.y == other.color.y && color.z == other.color.z &&
              intensity == other.intensity && range == other.range &&
-             casts_shadows == other.casts_shadows;
+             casts_shadows == other.casts_shadows &&
+             distance_attenuation == other.distance_attenuation;
     }
 };
 

@@ -35,7 +35,7 @@ files. Portable SDK modeling-document QDR is a separate interchange contract.
 
 ## Compatibility that must survive
 
-Current scene metadata schema is 9; schema versions and defaults are enforced in the codec.
+Current scene metadata schema is 10; schema versions and defaults are enforced in the codec.
 
 | Version | Durable data/defaults |
 | --- | --- |
@@ -46,6 +46,7 @@ Current scene metadata schema is 9; schema versions and defaults are enforced in
 | 7 | Optional entity affine texture sampling; earlier schemas use identity |
 | 8 | Curve assets/components with stable authored controls and allocation cursors |
 | 9 | Curve solidification; schema 8 defaults to disabled, resolution 8, radius 0.1 |
+| 10 | Light distance attenuation; schemas 1-9 default to inverse-square attenuation (2) |
 
 Curves need at least two anchors and cannot be instance-definition members. Curve samples and tool
 drafts are derived/transient. Face texture scale/shift/rotation use QGEO 1.1; QGEO 1.0 reads identity

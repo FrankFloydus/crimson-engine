@@ -6,7 +6,7 @@
 ################################################################################
 <#
 .SYNOPSIS
-Builds Quader's pinned Filament SDK with Vulkan VSync control and matching headers.
+Builds Quader's pinned Filament SDK with Vulkan VSync and light attenuation controls.
 .DESCRIPTION
 Requires CMake, Git, Python 3.10+, and Visual Studio 2026 C++ tools. Only -AllowDownload
 permits network access. Source, build, and installed SDK stay outside this repository
@@ -27,7 +27,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$pinPath = Join-Path $repoRoot "thirdparty/filament/filament-v1.71.6-quader-vsync1.json"
+$pinPath = Join-Path $repoRoot "thirdparty/filament/filament-v1.71.6-quader-vsync2.json"
 $pin = Get-Content -LiteralPath $pinPath -Raw | ConvertFrom-Json
 $patchPath = Join-Path (Split-Path $pinPath -Parent) $pin.patch_file
 $patchSha = (Get-FileHash -LiteralPath $patchPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -176,7 +176,8 @@ foreach ($group in @("bluevk", "vulkan", "vk_video")) {
 $requiredFiles = @(
     "include/backend/DriverEnums.h", "include/backend/platforms/VulkanPlatform.h",
     "include/backend/platforms/VulkanPlatformWindows.h",
-    "include/filament/SwapChain.h", "include/filament/Engine.h", "bin/matc.exe"
+    "include/filament/SwapChain.h", "include/filament/Engine.h",
+    "include/filament/LightManager.h", "bin/matc.exe"
 ) + $platformHeaderFiles
 $libraries = @("filament", "backend", "bluegl", "bluevk", "filabridge", "filaflat",
     "utils", "geometry", "smol-v", "ibl", "ktxreader", "image", "basis_transcoder",

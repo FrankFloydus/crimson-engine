@@ -1821,7 +1821,7 @@ TEST(BuildGuardrailTests, NativeDependencyToolsValidateSourceAndDeployment) {
   const std::string third_party_manifest =
       read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
   const std::string filament_pin = read_source_file(
-      "thirdparty/filament/filament-v1.71.6-quader-vsync1.json");
+      "thirdparty/filament/filament-v1.71.6-quader-vsync2.json");
   const std::string filament_builder = read_source_file("tools/build_filament_sdk.ps1");
   const std::string tracy_pin = read_source_file("thirdparty/tracy-0.13.1.json");
   const std::string native_verifier = read_source_file("tools/verify_native_build.ps1");
@@ -2134,7 +2134,7 @@ TEST(BuildGuardrailTests, LocalMachinePathsUseEnvironmentBackedDefaults) {
   const std::string presets = read_source_file("CMakePresets.json");
 
   expect_contains(root_c_make, "ENV{FILAMENT_SDK_ROOT}");
-  expect_contains(root_c_make, "../_SOURCES/filament-v1.71.6-quader-vsync1-windows");
+  expect_contains(root_c_make, "../_SOURCES/filament-v1.71.6-quader-vsync2-windows");
   expect_contains(options, "QUADER_OPENMESH_SOURCE_DIR");
   expect_contains(options, "ENV{${env_var}}");
   expect_contains(options, "ENV{USERPROFILE}");

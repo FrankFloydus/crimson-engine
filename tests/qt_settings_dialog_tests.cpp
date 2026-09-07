@@ -1221,7 +1221,7 @@ TEST(QtSettingsDialogTests,
 
   dialog.show();
   QCoreApplication::processEvents();
-  EXPECT_EQ(swatch->accessibleName(), QStringLiteral("Collision Fill"));
+  EXPECT_EQ(swatch->accessibleName(), QStringLiteral("Collision Color"));
   EXPECT_TRUE(swatch->toolTip().contains(QStringLiteral("Opacity: 42%")));
   const QColor applied = QColor::fromRgb(51, 102, 153, 77);
   const QString picker_name =

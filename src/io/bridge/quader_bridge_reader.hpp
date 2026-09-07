@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define QUADER_BRIDGE_ABI_VERSION 3u
+#define QUADER_BRIDGE_ABI_VERSION 4u
 #define QUADER_BRIDGE_NO_MATERIAL UINT32_MAX
 #define QUADER_BRIDGE_NO_SCENE UINT32_MAX
 #define QUADER_BRIDGE_TEXTURE_COUNT 4u
@@ -56,6 +56,13 @@ typedef struct QuaderBridgeSceneView {
   const char *relative_path;
   uint32_t mesh_count;
   uint32_t material_count;
+  uint32_t light_count;
+  /* Saved exposure inputs, before renderer clamping. Defaults are 16, 0.008,
+   * and 100 when the scene has no camera settings. Consumers that do not
+   * import lights need not interpret or validate these values. */
+  float camera_aperture;
+  float camera_shutter_seconds;
+  float camera_iso;
 } QuaderBridgeSceneView;
 
 /* FNV-1a64 of exactly the serialized bytes decoded into the owning handle.
@@ -117,6 +124,32 @@ typedef struct QuaderBridgeMeshView {
   const QuaderBridgeCollisionPoint *collision_points;
   uint32_t collision_point_count;
 } QuaderBridgeMeshView;
+
+/* Preserve published uppercase C ABI names for bridge source compatibility. */
+// NOLINTBEGIN(readability-identifier-naming)
+typedef enum QuaderBridgeLightType {
+  QUADER_BRIDGE_LIGHT_DIRECTIONAL = 0,
+  QUADER_BRIDGE_LIGHT_POINT = 1,
+  QUADER_BRIDGE_LIGHT_SPOT = 2
+} QuaderBridgeLightType;
+// NOLINTEND(readability-identifier-naming)
+
+typedef struct QuaderBridgeLightView {
+  const char *name;
+  /* Namespace this identity with the owning project UUID and scene UUID. */
+  uint64_t entity;
+  uint32_t type;
+  /* Column-major affine world transform, right-handed Y-up, 1:1 units.
+   * Directional and spot emission follows the transformed local -Y axis. */
+  float transform[16];
+  uint32_t visible;
+  /* Linear RGB, authored intensity scalar and unscaled world-space range. */
+  float color[3];
+  float intensity;
+  float range;
+  float distance_attenuation;
+  uint32_t casts_shadows;
+} QuaderBridgeLightView;
 
 /* Preserve published uppercase C ABI names for bridge source compatibility. */
 // NOLINTBEGIN(readability-identifier-naming)
@@ -214,6 +247,11 @@ typedef struct QuaderBridgeApi {
   int (*material_source_fingerprint)(QuaderBridgeScene *scene, uint32_t index,
                                      QuaderBridgeSourceFingerprint *out,
                                      QuaderBridgeError *error);
+  /* Direct authored lights, including hidden ordinary hierarchy members.
+   * Excludes instance definition storage and occurrence leaves. Numerical
+   * light validation occurs only when this view is requested. */
+  int (*light_view)(const QuaderBridgeScene *scene, uint32_t index,
+                    QuaderBridgeLightView *out, QuaderBridgeError *error);
 } QuaderBridgeApi;
 
 /* Resolve this one symbol with GetProcAddress. Returns null for other ABIs. */

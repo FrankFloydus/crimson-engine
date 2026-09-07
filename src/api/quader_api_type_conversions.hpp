@@ -185,6 +185,7 @@ to_scene_light_component(const QuaderLightComponent &component) {
       .intensity = component.intensity,
       .range = component.range,
       .casts_shadows = component.casts_shadows,
+      .distance_attenuation = component.distance_attenuation,
   };
 }
 
@@ -196,6 +197,7 @@ to_api_light_component(const LightComponent &component) {
       .intensity = component.intensity,
       .range = component.range,
       .casts_shadows = component.casts_shadows,
+      .distance_attenuation = component.distance_attenuation,
   };
 }
 

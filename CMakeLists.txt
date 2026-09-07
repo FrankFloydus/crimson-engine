@@ -46,7 +46,7 @@ include(cmake/QuaderBuildOptions.cmake)
 # participate in the final executable's link-time optimization pass.
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 
-set(_QUADER_DEFAULT_FILAMENT_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/filament-v1.71.6-quader-vsync1-windows")
+set(_QUADER_DEFAULT_FILAMENT_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/filament-v1.71.6-quader-vsync2-windows")
 if(DEFINED ENV{FILAMENT_SDK_ROOT} AND NOT "$ENV{FILAMENT_SDK_ROOT}" STREQUAL "")
     file(TO_CMAKE_PATH "$ENV{FILAMENT_SDK_ROOT}" _QUADER_DEFAULT_FILAMENT_SDK_ROOT)
 endif()
@@ -675,7 +675,7 @@ function(quader_compile_material target_name input_file output_name)
                 --platform all
                 --output "${output_file}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/${input_file}"
-        DEPENDS ${input_dependencies}
+        DEPENDS ${input_dependencies} "${FILAMENT_SDK_ROOT}/bin/matc.exe"
         VERBATIM)
     add_custom_target("${target_name}" DEPENDS "${output_file}")
     set("${target_name}_OUTPUT" "${output_file}" PARENT_SCOPE)

@@ -50,7 +50,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 9u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 10u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 [[nodiscard]] fb::Vec2 to_fb(QVec2 value) {
@@ -894,7 +894,8 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
       const fb::Vec3 color = to_fb(entity.light->color);
       light = fb::CreateLightComponent(
           builder, to_fb(entity.light->type), &color, entity.light->intensity,
-          entity.light->range, entity.light->casts_shadows);
+          entity.light->range, entity.light->casts_shadows,
+          entity.light->distance_attenuation);
     }
     flatbuffers::Offset<fb::SceneSettingsComponent> settings;
     if (entity.scene_settings.has_value()) {
@@ -2006,12 +2007,19 @@ decode_entity_state(const SceneContentDocument &document,
     state.curve = curve;
   }
   if (const fb::LightComponent *value = stored.light()) {
+    const float distance_attenuation =
+        schema_version >= 10u ? value->distance_attenuation() : 2.0f;
+    if (!std::isfinite(distance_attenuation)) {
+      throw std::runtime_error(
+          "QDR scene contains invalid light distance attenuation.");
+    }
     state.light = LightComponent{
         .type = light_type_from_fb(value->type()),
         .color = from_fb(value->color(), {1.0f, 1.0f, 1.0f}),
         .intensity = value->intensity(),
         .range = value->range(),
         .casts_shadows = value->casts_shadows(),
+        .distance_attenuation = distance_attenuation,
     };
   }
   if (stored.scene_root() || stored.scene_settings() != nullptr) {
