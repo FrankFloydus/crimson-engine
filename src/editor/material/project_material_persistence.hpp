@@ -20,7 +20,9 @@
 
 namespace quader {
 
-/// One collision-checked UUID-backed destination for a project asset file.
+class ProjectMaterialCatalog;
+
+/// One collision-checked readable destination with an independent asset identity.
 struct ProjectMaterialAssetDestination final {
   ProjectAssetId id;
   ProjectRelativePath path;
@@ -35,6 +37,11 @@ make_unique_texture_destination(const ProjectFileSystem &file_system,
                                 std::string_view source_stem,
                                 std::string_view extension);
 
+/// Uses the albedo stem, or the next exact Material_<number> catalog name.
+[[nodiscard]] ProjectIoResult<std::string>
+default_project_material_name(const ProjectMaterialCatalog &catalog,
+                              std::string_view albedo_stem = {});
+
 [[nodiscard]] ProjectIoResult<std::string>
 read_project_material_file_bytes(const std::filesystem::path &path);
 
@@ -46,6 +53,8 @@ read_project_material_file_bytes(const std::filesystem::path &path);
 class ProjectMaterialFileRollback final {
 public:
   using Checkpoint = std::size_t;
+
+  ~ProjectMaterialFileRollback();
 
   [[nodiscard]] Checkpoint checkpoint() const noexcept {
     return entries_.size();
@@ -61,6 +70,11 @@ public:
   replace_qmat(const std::filesystem::path &path,
                const ProjectMaterialDocument &document);
 
+  /// Creates a missing collision directory inside the validated project root.
+  [[nodiscard]] ProjectIoResult<std::filesystem::path>
+  prepare_destination(const ProjectFileSystem &file_system,
+                       const ProjectRelativePath &path);
+
   /// Returns an empty string on success or a combined rollback diagnostic.
   [[nodiscard]] std::string rollback_to(Checkpoint checkpoint);
   [[nodiscard]] std::string rollback() {
@@ -69,12 +83,18 @@ public:
   void commit() noexcept;
 
 private:
+  /// Retains a file transaction or one newly created empty parent directory.
+  struct Publication final {
+    std::unique_ptr<quader_io::QdrAtomicFileTransaction> file;
+    std::filesystem::path directory;
+  };
+
   [[nodiscard]] ProjectIoResult<void> publish(
       const std::filesystem::path &path, std::string_view bytes,
       quader_io::QdrAtomicWriteValidator validator,
       quader_io::QdrAtomicWriteDisposition disposition);
 
-  std::vector<std::unique_ptr<quader_io::QdrAtomicFileTransaction>> entries_;
+  std::vector<Publication> entries_;
 };
 
 } // namespace quader

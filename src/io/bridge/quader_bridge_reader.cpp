@@ -542,9 +542,9 @@ int scene_view(const QuaderBridgeScene *scene, QuaderBridgeSceneView *out,
             .mesh_count = count32(scene->meshes.size()),
             .material_count = count32(scene->materials.size()),
             .light_count = count32(scene->lights.size()),
-            .camera_aperture = camera.aperture,
-            .camera_shutter_seconds = camera.shutter_speed,
-            .camera_iso = camera.sensitivity};
+            .camera_aperture = camera.use_exposure ? camera.aperture : 1.0f,
+            .camera_shutter_seconds = camera.use_exposure ? camera.shutter_speed : 1.2f,
+            .camera_iso = camera.use_exposure ? camera.sensitivity : 100.0f};
   });
 }
 

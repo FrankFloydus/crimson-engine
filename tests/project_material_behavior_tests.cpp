@@ -133,21 +133,6 @@ regular_files_below(const std::filesystem::path &root) {
   return files;
 }
 
-bool has_uuid8_asset_path_shape(std::string_view portable_path,
-                                std::string_view prefix,
-                                std::string_view extension) {
-  if (!portable_path.starts_with(prefix) ||
-      !portable_path.ends_with(extension) ||
-      portable_path.size() != prefix.size() + 8u + extension.size()) {
-    return false;
-  }
-  const std::string_view suffix = portable_path.substr(prefix.size(), 8u);
-  return std::ranges::all_of(suffix, [](unsigned char character) {
-    return (character >= '0' && character <= '9') ||
-           (character >= 'a' && character <= 'f');
-  });
-}
-
 bool contains_bytes(std::span<const std::byte> haystack,
                     std::span<const std::byte> needle) {
   if (needle.empty()) {
@@ -750,8 +735,8 @@ TEST(ProjectMaterialPublicApiTests,
     EXPECT_EQ(success.material.kind, QuaderProjectMaterialKind::Standard);
     EXPECT_NE(success.material.project_relative_path.find("Materials/"),
               std::string::npos);
-    EXPECT_TRUE(has_uuid8_asset_path_shape(
-        success.material.project_relative_path, "Materials/same_", ".qmat"));
+    EXPECT_EQ(project_path(success.material.project_relative_path)
+                  .native_path().filename(), "same.qmat");
 
     const std::filesystem::path qmat_path =
         harness.root() /
@@ -774,9 +759,13 @@ TEST(ProjectMaterialPublicApiTests,
     ASSERT_TRUE(standard->base_color_texture.has_value());
     EXPECT_EQ(standard->base_color_texture->color_space,
               ProjectTextureColorSpace::Srgb);
-    EXPECT_TRUE(has_uuid8_asset_path_shape(
-        standard->base_color_texture->project_relative_path,
-        "Textures/same_", ".png"));
+    EXPECT_EQ(project_path(standard->base_color_texture->project_relative_path)
+                  .native_path().filename(), "same.png");
+    if (imported_ids.size() == 1u) {
+      EXPECT_EQ(success.material.project_relative_path, "Materials/same.qmat");
+      EXPECT_EQ(standard->base_color_texture->project_relative_path,
+                "Textures/same.png");
+    }
     EXPECT_EQ(read_bytes(harness.root() /
                          std::filesystem::path(standard->base_color_texture
                                                    ->project_relative_path)),
@@ -847,7 +836,7 @@ TEST(ProjectMaterialPublicApiTests,
   std::filesystem::create_directories(source_directory, error);
   ASSERT_FALSE(error) << error.message();
   const std::filesystem::path source =
-      source_directory / std::filesystem::path(L"albedo-β.png");
+      source_directory / std::filesystem::path(L"albedo β_deadbeef.PNG");
   write_bytes(source, original);
 
   const std::array sources{source};
@@ -860,12 +849,170 @@ TEST(ProjectMaterialPublicApiTests,
   EXPECT_TRUE(imported.value().failed.empty());
   EXPECT_EQ(imported.value().imported.front().source_path, source);
   EXPECT_EQ(imported.value().imported.front().material.name,
-            QStringLiteral("albedo-β").toUtf8().toStdString());
+            QStringLiteral("albedo β_deadbeef").toUtf8().toStdString());
+  EXPECT_EQ(imported.value().imported.front().material.project_relative_path,
+            QStringLiteral("Materials/albedo β_deadbeef.qmat")
+                .toUtf8().toStdString());
+  const auto *entry = harness.project().material_catalog().find(
+      imported.value().imported.front().material.id);
+  ASSERT_NE(entry, nullptr);
+  ASSERT_NE(entry->material.standard_material(), nullptr);
+  ASSERT_TRUE(entry->material.standard_material()->base_color_texture);
+  const auto &texture = *entry->material.standard_material()->base_color_texture;
+  EXPECT_EQ(texture.project_relative_path,
+            QStringLiteral("Textures/albedo β_deadbeef.PNG")
+                .toUtf8().toStdString());
+  EXPECT_EQ(read_bytes(harness.root() /
+                      project_path(texture.project_relative_path).native_path()),
+            original);
   const QuaderApiResult<QuaderProjectMaterialPreview> preview =
       harness.editor().project_assets().material_preview(
           imported.value().imported.front().material.id);
   ASSERT_TRUE(preview.ok()) << preview.error_message();
   EXPECT_EQ(preview.value().encoded_bytes, original);
+}
+
+TEST(ProjectMaterialPublicApiTests,
+     CaseInsensitiveNameCollisionsKeepReadableLeavesAndSeparateAssets) {
+  ProjectMaterialBehaviorHarness harness("texture-case-collision");
+  harness.create();
+  const auto original = read_bytes(source_resource_root() / "materials" /
+                                   "default" / "default_albedo.png");
+  const auto first = harness.root() / "First" / "Brick.PNG";
+  const auto second = harness.root() / "Second" / "brick.png";
+  std::filesystem::create_directory(first.parent_path());
+  std::filesystem::create_directory(second.parent_path());
+  write_bytes(first, original);
+  write_bytes(second, original);
+  const std::array sources{first, second};
+  const auto imported = harness.editor().project_assets()
+                            .import_textures_as_materials(sources);
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  ASSERT_EQ(imported.value().imported.size(), 2u);
+  const auto &one = imported.value().imported[0].material;
+  const auto &two = imported.value().imported[1].material;
+  EXPECT_EQ(one.name, "Brick");
+  EXPECT_EQ(two.name, "brick");
+  EXPECT_EQ(one.project_relative_path, "Materials/Brick.qmat");
+  const auto second_qmat = project_path(two.project_relative_path).native_path();
+  EXPECT_EQ(second_qmat.filename(), "brick.qmat");
+  EXPECT_NE(second_qmat.parent_path(), std::filesystem::path("Materials"));
+  EXPECT_NE(one.id, two.id);
+  const auto *first_entry = harness.project().material_catalog().find(one.id);
+  const auto *second_entry = harness.project().material_catalog().find(two.id);
+  ASSERT_NE(first_entry, nullptr);
+  ASSERT_NE(second_entry, nullptr);
+  const auto &first_texture =
+      *first_entry->material.standard_material()->base_color_texture;
+  const auto &second_texture =
+      *second_entry->material.standard_material()->base_color_texture;
+  EXPECT_NE(first_texture.id, second_texture.id);
+  EXPECT_EQ(first_texture.project_relative_path, "Textures/Brick.PNG");
+  const auto second_texture_path =
+      project_path(second_texture.project_relative_path).native_path();
+  EXPECT_EQ(second_texture_path.filename(), "brick.png");
+  EXPECT_NE(second_texture_path.parent_path(), std::filesystem::path("Textures"));
+  EXPECT_EQ(read_bytes(harness.root() / second_texture_path), original);
+  EXPECT_EQ(read_bytes(harness.root() / "Textures/Brick.PNG"), original);
+}
+
+TEST(ProjectMaterialPublicApiTests,
+     TextureBatchFallbackNamesAdvanceWithinTheSameImport) {
+  ProjectMaterialBehaviorHarness harness("texture-fallback-sequence");
+  harness.create();
+  const auto original = read_bytes(source_resource_root() / "materials" /
+                                   "default" / "default_albedo.png");
+  const auto first = harness.root() / "First" / " .png";
+  const auto second = harness.root() / "Second" / " .png";
+  std::filesystem::create_directory(first.parent_path());
+  std::filesystem::create_directory(second.parent_path());
+  write_bytes(first, original);
+  write_bytes(second, original);
+  const std::array sources{first, second};
+  const auto imported = harness.editor().project_assets()
+                            .import_textures_as_materials(sources);
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  ASSERT_EQ(imported.value().imported.size(), 2u);
+  EXPECT_EQ(imported.value().imported[0].material.name, "Material_1");
+  EXPECT_EQ(imported.value().imported[1].material.name, "Material_2");
+  EXPECT_EQ(imported.value().imported[0].material.project_relative_path,
+            "Materials/Material_1.qmat");
+  EXPECT_EQ(imported.value().imported[1].material.project_relative_path,
+            "Materials/Material_2.qmat");
+}
+
+TEST(ProjectMaterialPublicApiTests,
+     GeneratedDestinationsSafelyRepresentReservedAndUnsafeNames) {
+  ProjectMaterialBehaviorHarness harness("asset-safe-names");
+  harness.create();
+  const auto &file_system = harness.project().workspace()->file_system;
+  const auto unsafe =
+      make_unique_material_destination(file_system, "../paint:<red>?*");
+  ASSERT_TRUE(unsafe.ok()) << unsafe.error().message;
+  EXPECT_EQ(unsafe.value().path.native_path().parent_path(),
+            std::filesystem::path("Materials"));
+  EXPECT_EQ(unsafe.value().path.native_path().filename(),
+            ".._paint__red___.qmat");
+  const auto reserved =
+      make_unique_texture_destination(file_system, "CON", ".PNG");
+  ASSERT_TRUE(reserved.ok()) << reserved.error().message;
+  EXPECT_EQ(reserved.value().path.portable_string(), "Textures/_CON.PNG");
+}
+
+TEST(ProjectMaterialPublicApiTests,
+     CollisionDirectoryRollsBackWithoutChangingTheExistingTexture) {
+  ProjectMaterialBehaviorHarness harness("texture-directory-rollback");
+  harness.create();
+  const auto &file_system = harness.project().workspace()->file_system;
+  const auto original = bytes_from_text("existing texture");
+  const auto existing_texture = harness.root() / "Textures/shared.PNG";
+  write_bytes(existing_texture, original);
+  const auto allocated =
+      make_unique_texture_destination(file_system, "shared", ".PNG");
+  ASSERT_TRUE(allocated.ok()) << allocated.error().message;
+  const auto collision_parent =
+      harness.root() / allocated.value().path.native_path().parent_path();
+  EXPECT_FALSE(std::filesystem::exists(collision_parent));
+  const auto existing_qmat = harness.root() / kDefaultProjectMaterialPath;
+  const auto qmat_before = read_bytes(existing_qmat);
+  {
+    ProjectMaterialFileRollback publication;
+    const auto prepared =
+        publication.prepare_destination(file_system, allocated.value().path);
+    ASSERT_TRUE(prepared.ok()) << prepared.error().message;
+    EXPECT_TRUE(std::filesystem::is_directory(collision_parent));
+    ASSERT_TRUE(publication.create_bytes(prepared.value(),
+                                        bytes_from_text("new texture")).ok());
+    const auto competing = project_material(
+        "6d0f4ab6-969c-402c-ad93-d72c627e4e69", "Competing",
+        {0.25f, 0.5f, 0.75f});
+    EXPECT_FALSE(publication.create_qmat(existing_qmat, competing).ok());
+    // Abandoning an uncommitted request must roll back directories as well as
+    // files without touching the source that caused the naming collision.
+  }
+  EXPECT_FALSE(std::filesystem::exists(collision_parent));
+  EXPECT_EQ(read_bytes(existing_texture), original);
+  EXPECT_EQ(read_bytes(existing_qmat), qmat_before);
+}
+
+TEST(ProjectMaterialPublicApiTests,
+     CompetingFileAfterDestinationAllocationIsNeverOverwritten) {
+  ProjectMaterialBehaviorHarness harness("texture-create-new-race");
+  harness.create();
+  const auto &file_system = harness.project().workspace()->file_system;
+  const auto allocated =
+      make_unique_texture_destination(file_system, "raced", ".png");
+  ASSERT_TRUE(allocated.ok()) << allocated.error().message;
+  EXPECT_EQ(allocated.value().path.portable_string(), "Textures/raced.png");
+  const auto absolute = file_system.resolve(allocated.value().path);
+  ASSERT_TRUE(absolute.ok());
+  const auto competing = bytes_from_text("competing import");
+  write_bytes(absolute.value(), competing);
+  ProjectMaterialFileRollback publication;
+  EXPECT_FALSE(publication.create_bytes(absolute.value(),
+                                       bytes_from_text("late import")).ok());
+  EXPECT_TRUE(publication.rollback().empty());
+  EXPECT_EQ(read_bytes(absolute.value()), competing);
 }
 
 TEST(ProjectMaterialPublicApiTests,

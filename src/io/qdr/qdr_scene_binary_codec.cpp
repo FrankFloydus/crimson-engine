@@ -50,7 +50,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 10u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 11u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 [[nodiscard]] fb::Vec2 to_fb(QVec2 value) {
@@ -744,7 +744,7 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
   const auto camera = fb::CreateSceneCameraSettings(
       builder, settings.camera.aperture, settings.camera.shutter_speed,
       settings.camera.sensitivity, settings.camera.near_plane,
-      settings.camera.far_plane);
+      settings.camera.far_plane, settings.camera.use_exposure);
   const auto post_process = fb::CreateScenePostProcessSettings(
       builder, settings.post_process.enabled,
       settings.post_process.anti_aliasing,
@@ -1553,7 +1553,8 @@ decode_legacy_object_records(const SceneContentDocument &document,
 }
 
 [[nodiscard]] SceneSettingsComponent
-decode_scene_settings(const fb::SceneSettingsComponent &value) {
+decode_scene_settings(const fb::SceneSettingsComponent &value,
+                      std::uint16_t schema_version) {
   const fb::SceneEnvironmentSettings *environment = value.environment();
   const fb::SceneCameraSettings *camera = value.camera();
   const fb::ScenePostProcessSettings *post_process = value.post_process();
@@ -1577,6 +1578,8 @@ decode_scene_settings(const fb::SceneSettingsComponent &value) {
   settings.camera.sensitivity = camera->sensitivity();
   settings.camera.near_plane = camera->near_plane();
   settings.camera.far_plane = camera->far_plane();
+  settings.camera.use_exposure =
+      schema_version < 11u || camera->use_exposure();
   settings.post_process.enabled = post_process->enabled();
   settings.post_process.anti_aliasing = post_process->anti_aliasing();
   settings.post_process.ambient_occlusion =
@@ -2028,7 +2031,8 @@ decode_entity_state(const SceneContentDocument &document,
           "QDR scene contains invalid scene-root settings.");
     }
     state.scene_root = stored.scene_root();
-    state.scene_settings = decode_scene_settings(*stored.scene_settings());
+    state.scene_settings =
+        decode_scene_settings(*stored.scene_settings(), schema_version);
   }
   if (stored.instance_definition() != nullptr) {
     state.instance_definition = InstanceDefinitionComponent{};

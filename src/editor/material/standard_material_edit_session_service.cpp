@@ -57,6 +57,7 @@ struct StandardMaterialEditSessionService::Draft final {
   };
 
   StandardMaterialEditSnapshot snapshot;
+  bool automatic_name = false;
   std::array<std::optional<ProjectImportedImage>, 4> pending;
   std::array<std::optional<StandardMaterialTexturePreview>, 4>
       decoded_previews;
@@ -104,12 +105,17 @@ StandardMaterialEditSessionService::new_material() {
     return failure("Current Standard Material has unsaved changes.");
   }
   ProjectMaterialDocument document;
+  auto name = default_project_material_name(project_->material_catalog());
+  if (!name.ok()) {
+    return failure(name.error().message);
+  }
   document.id = ProjectAssetId::generate();
-  document.name = "Untitled Material";
+  document.name = name.take_value();
   document.kind = ProjectMaterialKind::Standard;
   document.material_version = kStandardMaterialVersion;
   document.payload = ProjectStandardMaterialDefinition{};
   reset_with(std::move(document), std::nullopt, 0u);
+  current_->automatic_name = true;
   return success(true, "New Standard Material created.");
 }
 
@@ -191,6 +197,7 @@ StandardMaterialEditSessionService::set_name(std::string name) {
   if (name.empty() || name.size() > 256u) {
     return failure("Material name must contain 1 to 256 characters.");
   }
+  current_->automatic_name = false;
   if (current_->snapshot.document.name == name) {
     return success(false);
   }
@@ -342,6 +349,15 @@ StandardMaterialEditResult StandardMaterialEditSessionService::import_texture(
     return failure(imported.error().message);
   }
   ProjectImportedImage value = imported.take_value();
+  if (slot == StandardMaterialTextureSlot::Albedo &&
+      current_->automatic_name) {
+    auto name = default_project_material_name(project_->material_catalog(),
+                                              value.source_stem);
+    if (!name.ok()) {
+      return failure(name.error().message);
+    }
+    current_->snapshot.document.name = name.take_value();
+  }
   current_->decoded_previews[slot_index(slot)] =
       StandardMaterialTexturePreview{
           .color_space = slot == StandardMaterialTextureSlot::Albedo
@@ -371,6 +387,14 @@ StandardMaterialEditResult StandardMaterialEditSessionService::clear_texture(
   const bool had_pending = current_->pending[slot_index(slot)].has_value();
   if (texture == nullptr || (!texture->has_value() && !had_pending)) {
     return success(false);
+  }
+  if (slot == StandardMaterialTextureSlot::Albedo &&
+      current_->automatic_name) {
+    auto name = default_project_material_name(project_->material_catalog());
+    if (!name.ok()) {
+      return failure(name.error().message);
+    }
+    current_->snapshot.document.name = name.take_value();
   }
   texture->reset();
   current_->pending[slot_index(slot)].reset();
@@ -538,7 +562,7 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
       return fail_with_rollback(destination.error().message);
     }
     ProjectIoResult<std::filesystem::path> texture_absolute =
-        file_system.resolve_for_write(destination.value().path);
+        rollback.prepare_destination(file_system, destination.value().path);
     if (!texture_absolute.ok()) {
       return fail_with_rollback(texture_absolute.error().message);
     }

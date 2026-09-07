@@ -3706,6 +3706,86 @@ TEST(InspectorPanelTests,
 }
 
 TEST(InspectorPanelTests,
+     CameraExposureToggleRetainsValuesAndUpdatesControlsAcrossUndoRedo) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-exposure-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const EntityId root = session.scene().scene_root();
+  QuaderSceneSettings settings =
+      to_api_scene_settings(*session.scene().scene_settings(root));
+  ASSERT_TRUE(settings.camera.use_exposure);
+  settings.camera.aperture = 4.0f;
+  settings.camera.shutter_speed = 0.01f;
+  settings.camera.sensitivity = 800.0f;
+  ASSERT_TRUE(editor.scene().set_scene_settings(root, settings).ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_objects_for_inspection(
+                      std::span<const EntityId>(&root, 1u), root)
+                  .ok());
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  UIInspectorPreviewContext preview{.document = session.scene(),
+                                    .assets = session.assets()};
+  UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .inspector_preview = &preview,
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+  InspectorPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  const auto expect_controls = [&](bool enabled) {
+    panel.refresh(context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    const auto *toggle = panel.findChild<QCheckBox *>(
+        QStringLiteral("inspector.camera.use_exposure"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_EQ(toggle->isChecked(), enabled);
+    for (const char *name : {"aperture", "shutter", "sensitivity"}) {
+      const auto *input = panel.findChild<QDoubleSpinBox *>(
+          QStringLiteral("inspector.camera.") + QString::fromLatin1(name));
+      ASSERT_NE(input, nullptr);
+      EXPECT_EQ(input->isEnabled(), enabled) << name;
+    }
+    for (const char *name : {"near", "far"}) {
+      const auto *input = panel.findChild<QDoubleSpinBox *>(
+          QStringLiteral("inspector.camera.") + QString::fromLatin1(name));
+      ASSERT_NE(input, nullptr);
+      EXPECT_TRUE(input->isEnabled()) << name;
+    }
+    const SceneCameraSettings &camera =
+        session.scene().scene_settings(root)->camera;
+    EXPECT_EQ(camera.use_exposure, enabled);
+    EXPECT_FLOAT_EQ(camera.aperture, settings.camera.aperture);
+    EXPECT_FLOAT_EQ(camera.shutter_speed, settings.camera.shutter_speed);
+    EXPECT_FLOAT_EQ(camera.sensitivity, settings.camera.sensitivity);
+  };
+  expect_controls(true);
+  auto *toggle = panel.findChild<QCheckBox *>(
+      QStringLiteral("inspector.camera.use_exposure"));
+  ASSERT_NE(toggle, nullptr);
+  toggle->click();
+  expect_controls(false);
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_controls(true);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_controls(false);
+}
+
+TEST(InspectorPanelTests,
      ColorCancelDoesNotMutateDocumentHistoryOrDirtyState) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

@@ -16,6 +16,7 @@
 #include "scene/document/scene_content_document.hpp"
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
 #include <QImage>
 #include <QColor>
@@ -52,7 +53,18 @@ constexpr char kFirstScene[] = "11111111-1111-4111-8111-111111111111";
 constexpr char kSecondScene[] = "22222222-2222-4222-8222-222222222222";
 constexpr char kProjectMaterial[] = "33333333-3333-4333-8333-333333333333";
 constexpr char kTexture[] = "44444444-4444-4444-8444-444444444444";
+constexpr char kNormalTexture[] = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 constexpr char kMissingMaterial[] = "55555555-5555-4555-8555-555555555555";
+constexpr char kNamingScene[] = "77777777-7777-4777-8777-777777777777";
+constexpr char kNamingCollisionScene[] = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+constexpr char kNamingNormalCollisionScene[] = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+constexpr char kNamingNormalCollisionMaterial[] = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+constexpr std::array<const char *, 2> kNamingMaterials{
+    "88888888-8888-4888-8888-888888888888",
+    "99999999-9999-4999-8999-999999999999"};
+constexpr std::array<const char *, 2> kNamingTextures{
+    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"};
 
 std::string utf8_path(const std::filesystem::path &path) {
   const auto text = path.u8string();
@@ -136,10 +148,11 @@ MeshAsset make_two_material_mesh() {
 }
 
 SceneContentDocument make_document(bool mixed_materials = false,
-                                   const char *material_id = kProjectMaterial) {
+                                   const char *material_id = kProjectMaterial,
+                                   std::string_view embedded_name = "Embedded blue") {
   SceneContentDocument document({.id = 7u, .name = "Bridge fixture"});
   EXPECT_EQ(document.assets().add_mesh(10u, make_two_material_mesh()), 10u);
-  auto material = make_default_quader_material("Embedded blue");
+  auto material = make_default_quader_material(std::string(embedded_name));
   material.base_color = {0.1f, 0.2f, 0.8f};
   material.roughness = 0.35f;
   material.metallic = 0.6f;
@@ -202,16 +215,17 @@ protected:
 
   void add_scene(const char *id, std::string_view path,
                 const SceneContentDocument &document,
-                const char *project_material = nullptr) {
+                const char *project_material = nullptr,
+                std::string_view material_path = {}) {
     auto snapshot = qdr_project_write_snapshot_from_document(document);
     ASSERT_TRUE(snapshot.ok()) << snapshot.error().message;
     if (project_material != nullptr) {
       snapshot.value().project_asset_dependencies.push_back({
           .stable_id = *ProjectAssetId::parse(project_material),
           .kind = ProjectAssetKind::Material,
-          .path = relative_path(std::string_view(project_material) == kMissingMaterial
-                                    ? "Materials/missing.qmat"
-                                    : "Materials/surface.qmat"),
+          .path = relative_path(!material_path.empty() ? material_path
+                                : std::string_view(project_material) == kMissingMaterial
+                                    ? "Materials/missing.qmat" : "Materials/surface.qmat"),
       });
     }
     const auto relative = relative_path(path);
@@ -254,12 +268,15 @@ protected:
 
   void write_project_material(const char *id = kProjectMaterial,
                             std::string_view texture = "Textures/albedo.PNG",
-                            bool all_textures = false) {
+                            bool all_textures = false,
+                            std::string_view resource_prefix = {},
+                            bool separate_normal = false) {
     std::filesystem::create_directories(root_ / "Materials");
     std::filesystem::create_directories(root_ / "Textures");
     ProjectMaterialDocument material;
     material.id = *ProjectAssetId::parse(id);
-    material.name = "Project surface";
+    material.name = std::string(resource_prefix) +
+                    (std::string_view(id) == kMissingMaterial ? "Missing surface" : "Project surface");
     auto &standard = *material.standard_material();
     standard.base_color = {0.2f, 0.4f, 0.6f};
     standard.roughness = 0.45f;
@@ -281,11 +298,17 @@ protected:
       standard.roughness_texture = linear;
       standard.metallic_texture = linear;
       standard.normal_texture = linear;
+      if (separate_normal) {
+        standard.normal_texture->id = *ProjectAssetId::parse(kNormalTexture);
+        standard.normal_texture->project_relative_path =
+            "Textures/" + std::string(resource_prefix) + "normal.PNG";
+      }
     }
     const auto written = QmatCodec::write_atomic(
         workspace_.file_system,
-        relative_path(std::string_view(id) == kMissingMaterial
-                          ? "Materials/missing.qmat" : "Materials/surface.qmat"),
+        relative_path("Materials/" + std::string(resource_prefix) +
+                      (std::string_view(id) == kMissingMaterial
+                           ? "missing.qmat" : "surface.qmat")),
         material);
     ASSERT_TRUE(written.ok()) << written.error().message;
   }
@@ -424,6 +447,33 @@ TEST_F(BridgeReaderTests, CatalogUsesSavedActiveSceneAndFallsBackToFirst) {
   EXPECT_EQ(view.default_scene_index, 1u);
 }
 
+TEST_F(BridgeReaderTests, SceneViewExportsEffectiveCameraExposure) {
+  auto document = make_document();
+  SceneSettingsComponent settings;
+  settings.camera.aperture = 8.0f;
+  settings.camera.shutter_speed = 0.02f;
+  settings.camera.sensitivity = 400.0f;
+  ASSERT_TRUE(document.scene().set_scene_settings(document.scene().scene_root(), settings));
+  add_scene(kFirstScene, "Scenes/exposed.qdr", document);
+  settings.camera.use_exposure = false;
+  ASSERT_TRUE(document.scene().set_scene_settings(document.scene().scene_root(), settings));
+  add_scene(kSecondScene, "Scenes/unexposed.qdr", document);
+  open_project();
+  open_scene();
+  QuaderBridgeSceneView view{};
+  ASSERT_EQ(api_->scene_view(scene_, &view, &error_), 1) << error_.message;
+  EXPECT_FLOAT_EQ(view.camera_aperture, 8.0f);
+  EXPECT_FLOAT_EQ(view.camera_shutter_seconds, 0.02f);
+  EXPECT_FLOAT_EQ(view.camera_iso, 400.0f);
+
+  api_->release_scene(std::exchange(scene_, nullptr));
+  open_scene(kSecondScene);
+  ASSERT_EQ(api_->scene_view(scene_, &view, &error_), 1) << error_.message;
+  EXPECT_FLOAT_EQ(view.camera_aperture, 1.0f);
+  EXPECT_FLOAT_EQ(view.camera_shutter_seconds, 1.2f);
+  EXPECT_FLOAT_EQ(view.camera_iso, 100.0f);
+}
+
 TEST_F(BridgeReaderTests, SceneStorageSurvivesProjectRelease) {
   add_scene(kFirstScene, "Scenes/first.qdr", make_document());
   open_project();
@@ -434,6 +484,9 @@ TEST_F(BridgeReaderTests, SceneStorageSurvivesProjectRelease) {
   EXPECT_STREQ(scene_view.id, kFirstScene);
   EXPECT_EQ(scene_view.mesh_count, 1u);
   EXPECT_EQ(scene_view.material_count, 1u);
+  EXPECT_FLOAT_EQ(scene_view.camera_aperture, 16.0f);
+  EXPECT_FLOAT_EQ(scene_view.camera_shutter_seconds, 0.008f);
+  EXPECT_FLOAT_EQ(scene_view.camera_iso, 100.0f);
   QuaderBridgeMeshView mesh{};
   ASSERT_EQ(api_->mesh_view(scene_, 0u, &mesh, &error_), 1) << error_.message;
   EXPECT_STREQ(mesh.name, "Fixture mesh");
@@ -832,8 +885,29 @@ TEST_F(BridgeReaderTests, RevalidatesManifestBeforeOpeningScene) {
 }
 
 TEST_F(BridgeReaderTests, ExportGodotAcceptanceFixtures) {
-  write_project_material(kProjectMaterial, "Textures/albedo.PNG", true);
-  write_project_material(kMissingMaterial, "Textures/missing.PNG");
+  const char *configured_prefix = std::getenv("QUADER_BRIDGE_TEST_RESOURCE_PREFIX");
+  const std::string resource_prefix = configured_prefix == nullptr ? "" : configured_prefix;
+  ASSERT_LE(resource_prefix.size(), 64u);
+  for (const char c : resource_prefix) {
+    ASSERT_TRUE((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') || c == '_' || c == '-')
+        << "Fixture resource prefix accepts only ASCII letters, digits, '_' and '-'.";
+  }
+  const std::string texture_path = "Textures/" + resource_prefix + "albedo.PNG";
+  const std::string normal_texture_path = "Textures/" + resource_prefix + "normal.PNG";
+  const std::string project_material_path = "Materials/" + resource_prefix + "surface.qmat";
+  const std::string missing_material_path = "Materials/" + resource_prefix + "missing.qmat";
+  const std::string embedded_material_name = resource_prefix + "Embedded blue";
+  const std::array<std::string, 2> naming_material_names{
+      resource_prefix + "Marmo Caf\xc3\xa9", resource_prefix + "Marmo Blu"};
+  const std::array<std::string, 2> naming_material_paths{
+      "Materials/" + resource_prefix + "naming-1.qmat",
+      "Materials/" + resource_prefix + "naming-2.qmat"};
+  const std::array<std::string, 2> naming_texture_filenames{
+      naming_material_names[0] + ".PNG", naming_material_names[1] + ".PNG"};
+  write_project_material(kProjectMaterial, texture_path, true, resource_prefix, true);
+  write_project_material(kMissingMaterial, "Textures/" + resource_prefix + "missing.PNG",
+                         false, resource_prefix);
   constexpr std::uint8_t kPng[] = {
       0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
       0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
@@ -842,9 +916,11 @@ TEST_F(BridgeReaderTests, ExportGodotAcceptanceFixtures) {
       0x1f, 0x00, 0x05, 0x04, 0x02, 0x80, 0x3c, 0x9e, 0x03, 0x80, 0x00, 0x00,
       0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
   };
-  write_bytes(root_ / "Textures" / "albedo.PNG",
+  write_bytes(root_ / std::filesystem::u8path(texture_path),
               {reinterpret_cast<const char *>(kPng), sizeof(kPng)});
-  auto document = make_document(true);
+  write_bytes(root_ / std::filesystem::u8path(normal_texture_path),
+              {reinterpret_cast<const char *>(kPng), sizeof(kPng)});
+  auto document = make_document(true, kProjectMaterial, embedded_material_name);
   auto &source = document.scene();
   ASSERT_TRUE(source.set_mesh(100u,
       MeshComponent{.mesh = 10u, .collision_type = MeshCollisionType::Mesh,
@@ -871,9 +947,79 @@ TEST_F(BridgeReaderTests, ExportGodotAcceptanceFixtures) {
   ASSERT_TRUE(source.set_transform(
       202u, TransformComponent{.position = {6, 0, 0}, .scale = {-1, 2, 1}}));
   add_scene(kFirstScene, "Scenes/mixed_materials.qdr", document,
-           kProjectMaterial);
+           kProjectMaterial, project_material_path);
   add_scene(kSecondScene, "Scenes/missing_texture.qdr",
-           make_document(true, kMissingMaterial), kMissingMaterial);
+           make_document(true, kMissingMaterial, resource_prefix + "Missing embedded blue"),
+           kMissingMaterial, missing_material_path);
+  {
+    // Unique authored names, non-ASCII text, spaces and uppercase extensions
+    // must survive the reader and the flat destination filenames.
+    auto naming_document = make_document(false, kProjectMaterial, embedded_material_name);
+    MaterialComponent binding{
+        .material = MaterialReference::project(*ProjectAssetId::parse(kNamingMaterials[0]))};
+    binding.material_slots.emplace(
+        1u, MaterialReference::project(*ProjectAssetId::parse(kNamingMaterials[1])));
+    ASSERT_TRUE(naming_document.scene().set_material(100u, std::move(binding)));
+    auto naming_snapshot = qdr_project_write_snapshot_from_document(naming_document);
+    ASSERT_TRUE(naming_snapshot.ok()) << naming_snapshot.error().message;
+    for (std::size_t i = 0; i < kNamingMaterials.size(); ++i) {
+      const std::string suffix = std::to_string(i + 1u);
+      const std::string texture_folder = "Textures/naming-" + suffix;
+      const std::string named_texture_path = texture_folder + "/" + naming_texture_filenames[i];
+      std::filesystem::create_directories(root_ / std::filesystem::u8path(texture_folder));
+      QImage image(1, 1, QImage::Format_RGBA8888);
+      image.fill(i == 0u ? QColor(192, 32, 64, 255) : QColor(16, 160, 224, 255));
+      ASSERT_TRUE(image.save(QString::fromStdWString(
+          (root_ / std::filesystem::u8path(named_texture_path)).wstring()), "PNG"));
+      ProjectMaterialDocument material;
+      material.id = *ProjectAssetId::parse(kNamingMaterials[i]);
+      material.name = naming_material_names[i];
+      material.standard_material()->base_color_texture = ProjectMaterialTextureSlot{
+          .id = *ProjectAssetId::parse(kNamingTextures[i]),
+          .project_relative_path = named_texture_path,
+          .color_space = ProjectTextureColorSpace::Srgb};
+      const auto material_path = relative_path(naming_material_paths[i]);
+      const auto written = QmatCodec::write_atomic(workspace_.file_system, material_path, material);
+      ASSERT_TRUE(written.ok()) << written.error().message;
+      naming_snapshot.value().project_asset_dependencies.push_back({
+          .stable_id = material.id,
+          .kind = ProjectAssetKind::Material,
+          .path = material_path});
+    }
+    const auto path = relative_path("Scenes/resource_names.qdr");
+    const auto resolved = workspace_.file_system.resolve_for_write(path);
+    ASSERT_TRUE(resolved.ok()) << resolved.error().message;
+    const auto written = QdrDocumentWriter::write_project_document_atomic(
+        resolved.value(), naming_snapshot.value(), scene_id(kNamingScene).bytes());
+    ASSERT_TRUE(written.ok) << written.message;
+    ASSERT_TRUE(workspace_.manifest.register_scene({.id = scene_id(kNamingScene), .path = path}).ok());
+    save_manifest();
+  }
+  // A distinct embedded identity cannot claim an existing project material's
+  // flat filename, even though the authored display names are equal.
+  add_scene(kNamingCollisionScene, "Scenes/resource_name_collision.qdr",
+            make_document(false, kProjectMaterial, naming_material_names[0]));
+  {
+    // One encoded source used both ordinarily and as a DirectX normal requires
+    // incompatible import settings and must fail instead of inventing a name.
+    auto material_file = QmatCodec::read(workspace_.file_system,
+                                         relative_path(project_material_path));
+    ASSERT_TRUE(material_file.ok()) << material_file.error().message;
+    auto material = std::move(material_file.value().material);
+    material.id = *ProjectAssetId::parse(kNamingNormalCollisionMaterial);
+    material.name = resource_prefix + "Normal collision";
+    auto &standard = *material.standard_material();
+    standard.normal_texture = standard.roughness_texture;
+    const std::string material_path = "Materials/" + resource_prefix + "normal-collision.qmat";
+    const auto written = QmatCodec::write_atomic(workspace_.file_system,
+                                                relative_path(material_path), material);
+    ASSERT_TRUE(written.ok()) << written.error().message;
+    auto collision_document = make_document(false, kProjectMaterial, embedded_material_name);
+    ASSERT_TRUE(collision_document.scene().set_material(100u, MaterialComponent{
+        .material = MaterialReference::project(material.id)}));
+    add_scene(kNamingNormalCollisionScene, "Scenes/normal_name_collision.qdr",
+              collision_document, kNamingNormalCollisionMaterial, material_path);
+  }
   open_project();
   open_scene();
   QuaderBridgeSceneView view{};
@@ -938,22 +1084,38 @@ TEST_F(BridgeReaderTests, ExportGodotAcceptanceFixtures) {
       EXPECT_TRUE(committed.warnings.empty()) << committed.message;
     }
   }
-  write_bytes(destination / "expected.json",
-      "{\n"
-      "  \"valid_scene_id\": \"11111111-1111-4111-8111-111111111111\",\n"
-      "  \"valid_scene_path\": \"Scenes/mixed_materials.qdr\",\n"
-      "  \"valid_mesh_count\": 3,\n"
-      "  \"surfaces_per_mesh\": 2,\n"
-      "  \"visible_mesh_entity\": 100,\n"
-      "  \"hidden_mesh_entity\": 101,\n"
-      "  \"mirrored_mesh_entity\": 202,\n"
-      "  \"collision_mesh_count\": 3,\n"
-      "  \"collision_point_count\": 6,\n"
-      "  \"missing_scene_id\": \"22222222-2222-4222-8222-222222222222\",\n"
-      "  \"missing_scene_path\": \"Scenes/missing_texture.qdr\",\n"
-      "  \"texture_path\": \"Textures/albedo.PNG\",\n"
-      "  \"project_material_id\": \"33333333-3333-4333-8333-333333333333\"\n"
-      "}\n");
+  const nlohmann::ordered_json expectations{
+      {"resource_prefix", resource_prefix},
+      {"valid_scene_id", kFirstScene},
+      {"valid_scene_path", "Scenes/mixed_materials.qdr"},
+      {"valid_mesh_count", 3},
+      {"surfaces_per_mesh", 2},
+      {"visible_mesh_entity", 100},
+      {"hidden_mesh_entity", 101},
+      {"mirrored_mesh_entity", 202},
+      {"collision_mesh_count", 3},
+      {"collision_point_count", 6},
+      {"missing_scene_id", kSecondScene},
+      {"missing_scene_path", "Scenes/missing_texture.qdr"},
+      {"texture_path", texture_path},
+      {"normal_texture_path", normal_texture_path},
+      {"project_material_path", project_material_path},
+      {"missing_material_path", missing_material_path},
+      {"installed_material_names", {embedded_material_name, resource_prefix + "Project surface"}},
+      {"installed_texture_filenames", {resource_prefix + "albedo.PNG", resource_prefix + "normal.PNG"}},
+      {"naming_scene_id", kNamingScene},
+      {"naming_scene_path", "Scenes/resource_names.qdr"},
+      {"naming_material_name", naming_material_names[0]},
+      {"naming_material_names", naming_material_names},
+      {"naming_texture_filenames", naming_texture_filenames},
+      {"naming_material_paths", naming_material_paths},
+      {"naming_renamed_material_id", kNamingMaterials[0]},
+      {"naming_renamed_material_name", resource_prefix + "Renamed Marmo"},
+      {"naming_material_ids", kNamingMaterials},
+      {"naming_collision_scene_id", kNamingCollisionScene},
+      {"naming_normal_collision_scene_id", kNamingNormalCollisionScene},
+      {"project_material_id", kProjectMaterial}};
+  write_bytes(destination / "expected.json", expectations.dump(2) + "\n");
   RecordProperty("godot_fixture_manifest", utf8_path(destination / manifest_filename));
 }
 
@@ -967,6 +1129,10 @@ TEST_F(BridgeReaderTests, SaveGodotAcceptanceFixture) {
   ASSERT_NE(destination, destination.root_path());
   ASSERT_TRUE(std::filesystem::is_regular_file(destination / "expected.json"))
       << "Mutations require an exported acceptance fixture.";
+  std::ifstream expectations_stream(destination / "expected.json", std::ios::binary);
+  ASSERT_TRUE(expectations_stream.is_open());
+  const auto expectations = nlohmann::json::parse(expectations_stream, nullptr, false);
+  ASSERT_TRUE(expectations.is_object()) << "Fixture expectations must contain valid JSON.";
   auto manifest_filename = destination.filename();
   manifest_filename += ".qproj";
   const auto catalog = ProjectManifestStore::open(destination / manifest_filename);
@@ -996,6 +1162,16 @@ TEST_F(BridgeReaderTests, SaveGodotAcceptanceFixture) {
       ASSERT_TRUE(committed.ok) << committed.message;
       ASSERT_TRUE(committed.warnings.empty()) << committed.message;
     }
+    return;
+  }
+  if (mode == "naming_rename") {
+    auto &editor = native_project.standard_material_editor();
+    const auto material = editor.open(*ProjectAssetId::parse(kNamingMaterials[0]));
+    ASSERT_TRUE(material.ok) << material.message;
+    ASSERT_TRUE(editor.set_name(expectations.value(
+        "naming_renamed_material_name", std::string("Renamed Marmo"))).ok);
+    const auto committed = editor.save();
+    ASSERT_TRUE(committed.ok) << committed.message;
     return;
   }
   if (mode == "collision_enable" || mode == "collision_disable" ||
@@ -1056,13 +1232,19 @@ TEST_F(BridgeReaderTests, SaveGodotAcceptanceFixture) {
   ASSERT_TRUE(editor.set_texture_transform_component(
       StandardMaterialTextureTransformComponent::OffsetU,
       0.2f + 0.01f * static_cast<float>(revision)).ok);
-  if (mode == "texture") {
-    QImage image(1, 1, QImage::Format_RGBA8888);
-    image.fill(QColor(static_cast<int>(revision * 4u), 64, 192, 255));
-    ASSERT_TRUE(image.save(QString::fromStdWString(
-        (destination / "Textures" / "albedo.PNG").wstring()), "PNG"));
-  } else if (mode == "failed_texture") {
-    write_bytes(destination / "Textures" / "albedo.PNG", "invalid PNG payload");
+  if (mode == "texture" || mode == "failed_texture") {
+    const auto relative = ProjectRelativePath::parse_portable(
+        expectations.value("texture_path", std::string{}));
+    ASSERT_TRUE(relative.ok()) << relative.error().message;
+    const auto texture = catalog.value().file_system.resolve_for_write(relative.value());
+    ASSERT_TRUE(texture.ok()) << texture.error().message;
+    if (mode == "texture") {
+      QImage image(1, 1, QImage::Format_RGBA8888);
+      image.fill(QColor(static_cast<int>(revision * 4u), 64, 192, 255));
+      ASSERT_TRUE(image.save(QString::fromStdWString(texture.value().wstring()), "PNG"));
+    } else {
+      write_bytes(texture.value(), "invalid PNG payload");
+    }
   }
   const auto committed = editor.save();
   ASSERT_TRUE(committed.ok) << committed.message;

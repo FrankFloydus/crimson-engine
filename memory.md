@@ -365,6 +365,12 @@ Tests: [occurrences](tests/scene_mesh_occurrence_projection_tests.cpp),
 
 ## Render binding and resource lifetime
 
+- Native sRGB swapchains encode linear output in hardware. Their viewport color grading must
+  output Rec709-Linear-D65; ordinary texture targets retain Rec709-sRGB-D65. Encoding in both
+  the grading LUT and swapchain brightens dark areas and can masquerade as incorrect light
+  attenuation. A texture-only GPU comparison does not exercise this presentation path.
+  Owners: [viewport color grading](src/render/viewport_renderer.cpp),
+  [material preview grading](src/render/material_preview_renderer.cpp).
 - RenderSceneBindingKey includes session identity, project activation generation, and binding
   revision. Equal local entity/asset/revision numbers across tabs never justify cache reuse.
 - Texture identity follows image content and color space, independently of material scalar edits.

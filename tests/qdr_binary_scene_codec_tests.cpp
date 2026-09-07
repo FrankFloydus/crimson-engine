@@ -927,7 +927,7 @@ TEST(QdrBinarySceneCodecTests,
                           quader_io::QdrBinaryChunkType::SceneMetadata)) {
       continue;
     }
-    EXPECT_EQ(chunk.schema_version, 10u);
+    EXPECT_EQ(chunk.schema_version, 11u);
     flatbuffers::Verifier verifier(
         reinterpret_cast<const std::uint8_t *>(chunk.bytes().data()),
         chunk.bytes().size());
@@ -1252,6 +1252,70 @@ TEST(QdrBinarySceneCodecTests,
 }
 
 TEST(QdrBinarySceneCodecTests,
+     SchemaElevenPreservesCameraExposureToggleAndAuthoredValues) {
+  for (const bool use_exposure : {true, false}) {
+    SCOPED_TRACE(use_exposure);
+    SceneContentDocument document = simple_scene();
+    const EntityId root = document.scene().scene_root();
+    SceneSettingsComponent settings = *document.scene().scene_settings(root);
+    settings.camera.use_exposure = use_exposure;
+    settings.camera.aperture = 5.6f;
+    settings.camera.shutter_speed = 1.0f / 250.0f;
+    settings.camera.sensitivity = 800.0f;
+    ASSERT_TRUE(document.scene().set_scene_settings(root, settings));
+
+    const QdrProjectReadResult read =
+        QdrDocumentReader::deserialize_project_document(
+            QdrDocumentWriter::serialize_project_document_bytes(
+                required_write_snapshot(document), test_uuid()));
+    ASSERT_TRUE(read.ok) << read.message;
+    const SceneSettingsComponent *restored =
+        read.document.scene().scene_settings(root);
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(restored->camera.use_exposure, use_exposure);
+    EXPECT_FLOAT_EQ(restored->camera.aperture, settings.camera.aperture);
+    EXPECT_FLOAT_EQ(restored->camera.shutter_speed,
+                    settings.camera.shutter_speed);
+    EXPECT_FLOAT_EQ(restored->camera.sensitivity, settings.camera.sensitivity);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     SchemaTenKeepsCameraExposureEnabledWithAuthoredValues) {
+  SceneContentDocument document = simple_scene();
+  const EntityId root = document.scene().scene_root();
+  SceneSettingsComponent settings = *document.scene().scene_settings(root);
+  settings.camera.use_exposure = false;
+  settings.camera.aperture = 4.0f;
+  settings.camera.shutter_speed = 1.0f / 60.0f;
+  settings.camera.sensitivity = 400.0f;
+  ASSERT_TRUE(document.scene().set_scene_settings(root, settings));
+  const quader_io::QdrBinaryContainerReadResult parsed =
+      parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
+  const auto metadata = std::ranges::find_if(
+      chunks, [](const quader_io::QdrBinaryChunkInput &chunk) {
+        return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+      });
+  ASSERT_NE(metadata, chunks.end());
+  ASSERT_EQ(metadata->schema_version, 11u);
+  metadata->schema_version = 10u;
+
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks)));
+  ASSERT_TRUE(read.ok) << read.message;
+  const SceneSettingsComponent *restored =
+      read.document.scene().scene_settings(root);
+  ASSERT_NE(restored, nullptr);
+  EXPECT_TRUE(restored->camera.use_exposure);
+  EXPECT_FLOAT_EQ(restored->camera.aperture, settings.camera.aperture);
+  EXPECT_FLOAT_EQ(restored->camera.shutter_speed, settings.camera.shutter_speed);
+  EXPECT_FLOAT_EQ(restored->camera.sensitivity, settings.camera.sensitivity);
+}
+
+TEST(QdrBinarySceneCodecTests,
      SchemaFourIgnoresAppendedViewportCameraPose) {
   QdrProjectWriteSnapshot snapshot =
       required_write_snapshot(simple_scene());
@@ -1303,7 +1367,7 @@ TEST(QdrBinarySceneCodecTests,
                                  quader_io::QdrBinaryChunkType::SceneMetadata);
       });
   ASSERT_NE(metadata, parsed.chunks.end());
-  EXPECT_EQ(metadata->schema_version, 10u);
+  EXPECT_EQ(metadata->schema_version, 11u);
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(
@@ -2279,7 +2343,7 @@ TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
   ASSERT_TRUE(parsed.ok) << parsed.message;
   std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
   ASSERT_FALSE(chunks.empty());
-  chunks.front().schema_version = 11u;
+  chunks.front().schema_version = 12u;
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(

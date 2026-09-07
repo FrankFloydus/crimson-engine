@@ -381,12 +381,14 @@ struct SceneCameraSettings {
     float sensitivity = 100.0f;
     float near_plane = 0.05f;
     float far_plane = 1000.0f;
+    bool use_exposure = true;
 
     [[nodiscard]] bool operator==(const SceneCameraSettings& other) const {
       return aperture == other.aperture &&
              shutter_speed == other.shutter_speed &&
              sensitivity == other.sensitivity &&
-             near_plane == other.near_plane && far_plane == other.far_plane;
+             near_plane == other.near_plane && far_plane == other.far_plane &&
+             use_exposure == other.use_exposure;
     }
 };
 

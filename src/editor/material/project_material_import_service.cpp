@@ -10,7 +10,6 @@
 #include "editor/material/project_material_persistence.hpp"
 #include "editor/session/project_session.hpp"
 
-#include <QByteArray>
 #include <QString>
 
 #include <optional>
@@ -30,25 +29,6 @@ std::string completed_message(std::size_t imported, std::size_t failed) {
     message += " " + std::to_string(failed) + " source file(s) failed.";
   }
   return message;
-}
-
-std::string imported_material_name(const std::filesystem::path &source_path) {
-  QString stem = QString::fromStdWString(source_path.stem().wstring());
-  if (stem.trimmed().isEmpty()) {
-    return "Imported Material";
-  }
-  QByteArray utf8 = stem.toUtf8();
-  while (utf8.size() > 256 && !stem.isEmpty()) {
-    const qsizetype last = stem.size() - 1;
-    const bool surrogate_pair =
-        last > 0 && stem.at(last).isLowSurrogate() &&
-        stem.at(last - 1).isHighSurrogate();
-    stem.chop(surrogate_pair ? 2 : 1);
-    utf8 = stem.toUtf8();
-  }
-  return utf8.isEmpty() || stem.trimmed().isEmpty()
-             ? std::string("Imported Material")
-             : utf8.toStdString();
 }
 
 std::string with_rollback_diagnostic(
@@ -114,8 +94,29 @@ ProjectMaterialImportService::import_textures_as_materials(
     }
     ProjectImportedImage imported = decoded.take_value();
 
+    std::optional<ProjectMaterialCatalog> pending_catalog;
+    if (!pending_successes.empty() &&
+        QString::fromUtf8(imported.source_stem).trimmed().isEmpty()) {
+      auto scanned = ProjectMaterialCatalog::scan(file_system);
+      if (!scanned.ok()) {
+        if (!reject(scanned.error().message)) {
+          return report;
+        }
+        continue;
+      }
+      pending_catalog = scanned.take_value();
+    }
+    auto name = default_project_material_name(
+        pending_catalog ? *pending_catalog : project_->material_catalog(),
+        imported.source_stem);
+    if (!name.ok()) {
+      if (!reject(name.error().message)) {
+        return report;
+      }
+      continue;
+    }
     ProjectIoResult<ProjectMaterialAssetDestination> material_destination =
-        make_unique_material_destination(file_system, imported.source_stem);
+        make_unique_material_destination(file_system, name.value());
     if (!material_destination.ok()) {
       if (!reject(material_destination.error().message)) {
         return report;
@@ -133,7 +134,8 @@ ProjectMaterialImportService::import_textures_as_materials(
     }
 
     ProjectIoResult<std::filesystem::path> texture_absolute =
-        file_system.resolve_for_write(texture_destination.value().path);
+        rollback.prepare_destination(file_system,
+                                      texture_destination.value().path);
     if (!texture_absolute.ok()) {
       if (!reject(texture_absolute.error().message)) {
         return report;
@@ -141,7 +143,8 @@ ProjectMaterialImportService::import_textures_as_materials(
       continue;
     }
     ProjectIoResult<std::filesystem::path> material_absolute =
-        file_system.resolve_for_write(material_destination.value().path);
+        rollback.prepare_destination(file_system,
+                                      material_destination.value().path);
     if (!material_absolute.ok()) {
       if (!reject(material_absolute.error().message)) {
         return report;
@@ -151,7 +154,7 @@ ProjectMaterialImportService::import_textures_as_materials(
 
     ProjectMaterialDocument document{
         .id = material_destination.value().id,
-        .name = imported_material_name(source_path),
+        .name = name.take_value(),
         .kind = ProjectMaterialKind::Standard,
         .material_version = kStandardMaterialVersion,
         .payload = ProjectStandardMaterialDefinition{},

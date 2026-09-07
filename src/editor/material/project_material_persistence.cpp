@@ -6,9 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/material/project_material_persistence.hpp"
 
-#include "core/qstr.hpp"
+#include "io/project/project_material_catalog.hpp"
 #include "io/project/qmat_codec.hpp"
 
+#include <QString>
+
+#include <algorithm>
 #include <fstream>
 #include <system_error>
 #include <utility>
@@ -17,52 +20,96 @@ namespace quader {
 namespace {
 
 constexpr std::size_t kMaximumUniqueDestinationAttempts = 32u;
-constexpr std::size_t kMaximumGeneratedAssetStemBytes = 200u;
+constexpr qsizetype kMaximumAssetFilenameCharacters = 255;
+constexpr std::size_t kMaximumMaterialNameBytes = 256u;
 
-std::string sanitized_stem(std::string_view source,
-                           std::string_view fallback) {
-  std::string result;
-  result.reserve(source.size());
-  for (unsigned char character : source) {
-    const bool ascii_alphanumeric =
-        (character >= 'a' && character <= 'z') ||
-        (character >= 'A' && character <= 'Z') ||
-        (character >= '0' && character <= '9');
-    if (ascii_alphanumeric || character == '-' || character == '_') {
-      result.push_back(static_cast<char>(character));
-    } else if (!result.empty() && result.back() != '_') {
-      result.push_back('_');
+void chop_character(QString &text) {
+  const qsizetype last = text.size() - 1;
+  const bool surrogate_pair =
+      last > 0 && text.at(last).isLowSurrogate() &&
+      text.at(last - 1).isHighSurrogate();
+  text.chop(surrogate_pair ? 2 : 1);
+}
+
+QString safe_filename_part(std::string_view source) {
+  QString result = QString::fromUtf8(source.data(),
+                                    static_cast<qsizetype>(source.size()));
+  for (QChar &character : result) {
+    if (character.unicode() < 32u ||
+        QStringView(u"<>:\"/\\|?*").contains(character)) {
+      character = QChar('_');
     }
   }
-  while (!result.empty() && result.back() == '_') {
-    result.pop_back();
+  return result;
+}
+
+std::string readable_filename(std::string_view source_stem,
+                               std::string_view fallback,
+                               std::string_view source_extension) {
+  QString stem = safe_filename_part(source_stem);
+  QString extension = safe_filename_part(source_extension);
+  if (!extension.isEmpty() && extension.front() != QChar('.')) {
+    extension.prepend(QChar('.'));
   }
-  if (result.size() > kMaximumGeneratedAssetStemBytes) {
-    result.resize(kMaximumGeneratedAssetStemBytes);
-    while (!result.empty() && result.back() == '_') {
-      result.pop_back();
-    }
+  if (stem.isEmpty()) {
+    stem = QString::fromUtf8(fallback.data(),
+                            static_cast<qsizetype>(fallback.size()));
   }
-  return result.empty() ? std::string(fallback) : result;
+  const QString device = stem.section(QChar('.'), 0, 0).trimmed().toUpper();
+  const bool numbered_device =
+      device.size() == 4 &&
+      (device.startsWith(QStringLiteral("COM")) ||
+       device.startsWith(QStringLiteral("LPT"))) &&
+      (QStringView(u"123456789¹²³").contains(device.back()));
+  if (device == QStringLiteral("CON") || device == QStringLiteral("PRN") ||
+      device == QStringLiteral("AUX") || device == QStringLiteral("NUL") ||
+      device == QStringLiteral("CLOCK$") || numbered_device) {
+    stem.prepend(QChar('_'));
+  }
+  while (extension.size() >= kMaximumAssetFilenameCharacters) {
+    chop_character(extension);
+  }
+  while (!stem.isEmpty() &&
+         stem.size() + extension.size() > kMaximumAssetFilenameCharacters) {
+    chop_character(stem);
+  }
+  QString filename = stem + extension;
+  while (!filename.isEmpty() &&
+         (filename.back() == QChar('.') || filename.back() == QChar(' '))) {
+    filename.chop(1);
+  }
+  return filename.isEmpty() ? std::string(fallback)
+                            : filename.toUtf8().toStdString();
 }
 
 ProjectIoResult<ProjectMaterialAssetDestination> make_unique_destination(
     const ProjectFileSystem &file_system, std::string_view directory,
     std::string_view source_stem, std::string_view fallback_stem,
     std::string_view extension) {
-  const std::string stem = sanitized_stem(source_stem, fallback_stem);
-  std::string normalized_extension = QStr::to_ascii_lower(extension);
-  if (!normalized_extension.empty() && normalized_extension.front() != '.') {
-    normalized_extension.insert(normalized_extension.begin(), '.');
+  const std::string filename =
+      readable_filename(source_stem, fallback_stem, extension);
+
+  // Check the owning directory separately so a casing error in Materials or
+  // Textures cannot be mistaken for a collision in the desired asset leaf.
+  const auto parent = ProjectRelativePath::parse_portable(directory);
+  if (!parent.ok()) {
+    return ProjectIoResult<ProjectMaterialAssetDestination>::failure(
+        parent.error().code, parent.error().message, parent.error().path);
+  }
+  const auto resolved_parent = file_system.resolve(parent.value());
+  if (!resolved_parent.ok()) {
+    return ProjectIoResult<ProjectMaterialAssetDestination>::failure(
+        resolved_parent.error().code, resolved_parent.error().message,
+        resolved_parent.error().path);
   }
 
   for (std::size_t attempt = 0u;
        attempt < kMaximumUniqueDestinationAttempts; ++attempt) {
     const ProjectAssetId id = ProjectAssetId::generate();
-    const std::string suffix(id.str().substr(0u, 8u));
     const std::string portable_path =
-        std::string(directory) + "/" + stem + "_" + suffix +
-        normalized_extension;
+        std::string(directory) + "/" +
+        (attempt == 0u ? std::string{} : std::string(id.str()) + "/") +
+        filename;
     ProjectIoResult<ProjectRelativePath> relative =
         ProjectRelativePath::parse_portable(portable_path);
     if (!relative.ok()) {
@@ -73,6 +120,9 @@ ProjectIoResult<ProjectMaterialAssetDestination> make_unique_destination(
     ProjectIoResult<std::filesystem::path> absolute =
         file_system.resolve(relative.value());
     if (!absolute.ok()) {
+      if (absolute.error().code == ProjectIoErrorCode::PathCaseCollision) {
+        continue;
+      }
       return ProjectIoResult<ProjectMaterialAssetDestination>::failure(
           absolute.error().code, absolute.error().message,
           absolute.error().path);
@@ -125,6 +175,60 @@ make_unique_texture_destination(const ProjectFileSystem &file_system,
 }
 
 ProjectIoResult<std::string>
+default_project_material_name(const ProjectMaterialCatalog &catalog,
+                              std::string_view albedo_stem) {
+  QString stem = QString::fromUtf8(albedo_stem.data(),
+                                  static_cast<qsizetype>(albedo_stem.size()));
+  if (!stem.trimmed().isEmpty()) {
+    while (static_cast<std::size_t>(stem.toUtf8().size()) >
+           kMaximumMaterialNameBytes) {
+      chop_character(stem);
+    }
+    if (!stem.trimmed().isEmpty()) {
+      return ProjectIoResult<std::string>::success(
+          stem.toUtf8().toStdString());
+    }
+  }
+
+  constexpr std::string_view kPrefix = "Material_";
+  std::string largest = "0";
+  for (const ProjectMaterialCatalogEntry &entry : catalog.entries()) {
+    const std::string_view name = entry.material.name;
+    if (!name.starts_with(kPrefix)) {
+      continue;
+    }
+    std::string_view digits = name.substr(kPrefix.size());
+    if (digits.empty() || !std::ranges::all_of(digits, [](char character) {
+          return character >= '0' && character <= '9';
+        })) {
+      continue;
+    }
+    const std::size_t first = digits.find_first_not_of('0');
+    digits = first == std::string_view::npos ? std::string_view("0")
+                                            : digits.substr(first);
+    if (digits.size() > largest.size() ||
+        (digits.size() == largest.size() && digits > largest)) {
+      largest = digits;
+    }
+  }
+  bool carry = true;
+  for (std::size_t index = largest.size(); index != 0u && carry; --index) {
+    char &digit = largest[index - 1u];
+    carry = digit == '9';
+    digit = carry ? '0' : static_cast<char>(digit + 1);
+  }
+  if (carry) {
+    largest.insert(largest.begin(), '1');
+  }
+  if (kPrefix.size() + largest.size() > kMaximumMaterialNameBytes) {
+    return ProjectIoResult<std::string>::failure(
+        ProjectIoErrorCode::InvalidArgument,
+        "The next Material_<number> name exceeds the material name limit.");
+  }
+  return ProjectIoResult<std::string>::success(std::string(kPrefix) + largest);
+}
+
+ProjectIoResult<std::string>
 read_project_material_file_bytes(const std::filesystem::path &path) {
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
@@ -139,6 +243,40 @@ read_project_material_file_bytes(const std::filesystem::path &path) {
         ProjectIoErrorCode::IoFailure, "Could not read material file.", path);
   }
   return ProjectIoResult<std::string>::success(std::move(bytes));
+}
+
+ProjectMaterialFileRollback::~ProjectMaterialFileRollback() {
+  try {
+    (void)rollback();
+  } catch (...) {
+    // File transactions retain their existing recovery behavior if directory
+    // cleanup or its diagnostic allocation fails during stack unwinding.
+  }
+}
+
+ProjectIoResult<std::filesystem::path>
+ProjectMaterialFileRollback::prepare_destination(
+    const ProjectFileSystem &file_system, const ProjectRelativePath &path) {
+  auto resolved = file_system.resolve(path);
+  if (!resolved.ok()) {
+    return resolved;
+  }
+  const std::filesystem::path parent = resolved.value().parent_path();
+  std::error_code error;
+  const bool exists = std::filesystem::exists(parent, error);
+  if (!error && !exists) {
+    const bool created = std::filesystem::create_directory(parent, error);
+    if (created) {
+      entries_.push_back({.directory = parent});
+    }
+  }
+  if (error) {
+    return ProjectIoResult<std::filesystem::path>::failure(
+        ProjectIoErrorCode::IoFailure,
+        "Could not prepare project asset directory: " + error.message(),
+        parent);
+  }
+  return file_system.resolve_for_write(path);
 }
 
 ProjectIoResult<void>
@@ -246,7 +384,7 @@ ProjectIoResult<void> ProjectMaterialFileRollback::publish(
   if (!published.ok) {
     return fail_with_rollback(std::move(published));
   }
-  entries_.push_back(std::move(transaction));
+  entries_.push_back({.file = std::move(transaction)});
   return ProjectIoResult<void>::success();
 }
 
@@ -257,14 +395,24 @@ std::string ProjectMaterialFileRollback::rollback_to(
     checkpoint = entries_.size();
   }
   for (std::size_t index = entries_.size(); index > checkpoint; --index) {
-    quader_io::QdrAtomicFileTransaction &transaction =
-        *entries_[index - 1u];
-    const quader_io::QdrAtomicWriteResult rolled_back =
-        transaction.rollback();
-    if (!rolled_back.ok) {
-      append_rollback_error(message, transaction.target_path(),
-                            rolled_back.message);
+    Publication &entry = entries_[index - 1u];
+    bool restored = false;
+    if (entry.file) {
+      const auto rolled_back = entry.file->rollback();
+      restored = rolled_back.ok;
+      if (!restored) {
+        append_rollback_error(message, entry.file->target_path(),
+                              rolled_back.message);
+      }
     } else {
+      std::error_code error;
+      (void)std::filesystem::remove(entry.directory, error);
+      restored = !error;
+      if (error) {
+        append_rollback_error(message, entry.directory, error.message());
+      }
+    }
+    if (restored) {
       entries_.erase(entries_.begin() +
                      static_cast<std::ptrdiff_t>(index - 1u));
     }
@@ -273,7 +421,11 @@ std::string ProjectMaterialFileRollback::rollback_to(
 }
 
 void ProjectMaterialFileRollback::commit() noexcept {
-  for (const auto &transaction : entries_) {
+  for (const Publication &entry : entries_) {
+    const auto &transaction = entry.file;
+    if (!transaction) {
+      continue;
+    }
     try {
       const quader_io::QdrAtomicWriteResult committed = transaction->commit();
       if (!committed.ok && transaction->published()) {

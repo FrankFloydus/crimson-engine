@@ -297,6 +297,7 @@ scene_settings_json(const SceneSettingsComponent &settings) {
            {"sensitivity", settings.camera.sensitivity},
            {"nearPlane", settings.camera.near_plane},
            {"farPlane", settings.camera.far_plane},
+           {"useExposure", settings.camera.use_exposure},
        }},
       {"postProcess",
        {

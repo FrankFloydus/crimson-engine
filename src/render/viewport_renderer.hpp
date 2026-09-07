@@ -29,11 +29,12 @@
 namespace quader {
 
 /**
- * Selects whether a viewport renders into a texture or directly into the active swapchain.
+ * Selects a viewport's target and whether its swapchain performs sRGB encoding.
  */
 enum class ViewportRenderSurface {
     Texture,
     Swapchain,
+    SrgbSwapchain,
 };
 
 /**

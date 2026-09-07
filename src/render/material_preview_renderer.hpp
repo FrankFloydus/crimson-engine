@@ -46,6 +46,7 @@ public:
   void shutdown();
 
   void resize(std::uint32_t width, std::uint32_t height);
+  void set_srgb_swapchain(bool enabled);
   void set_preview_state(const MaterialPreviewState &state);
   void set_material(StandardMaterialPreviewSnapshot snapshot);
   void render(filament::Renderer &renderer);

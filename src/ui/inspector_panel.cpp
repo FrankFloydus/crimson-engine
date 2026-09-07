@@ -1768,19 +1768,28 @@ private:
 
     Section camera =
         add_section("camera", localized("ui.inspector.camera", "Camera"));
-    add_continuous_number(camera, "camera.aperture",
-                          localized("ui.inspector.aperture", "Aperture"),
-                          settings->camera.aperture, 0.01, 128.0, 0.05, 2,
-                          [this, entity](double value, std::string merge_key) {
-                            apply_scene_settings(
-                                entity,
-                                [value](SceneSettingsComponent &next) {
-                                  next.camera.aperture =
-                                      static_cast<float>(value);
-                                },
-                                std::move(merge_key));
-                          });
-    add_continuous_number(
+    add_checkbox(
+        camera, "camera.use_exposure",
+        localized("ui.inspector.use_camera_exposure", "Use camera exposure"),
+        settings->camera.use_exposure, [this, entity](bool enabled) {
+          apply_scene_settings(entity, [enabled](SceneSettingsComponent &next) {
+            next.camera.use_exposure = enabled;
+          });
+        });
+    auto *aperture = add_continuous_number(
+        camera, "camera.aperture",
+        localized("ui.inspector.aperture", "Aperture"),
+        settings->camera.aperture, 0.01, 128.0, 0.05, 2,
+        [this, entity](double value, std::string merge_key) {
+          apply_scene_settings(
+              entity,
+              [value](SceneSettingsComponent &next) {
+                next.camera.aperture = static_cast<float>(value);
+              },
+              std::move(merge_key));
+        });
+    aperture->setEnabled(settings->camera.use_exposure);
+    auto *shutter = add_continuous_number(
         camera, "camera.shutter",
         localized("ui.inspector.shutter_speed", "Shutter"),
         settings->camera.shutter_speed, 0.000001, 10.0, 0.0001, 6,
@@ -1792,18 +1801,20 @@ private:
               },
               std::move(merge_key));
         });
-    add_continuous_number(camera, "camera.sensitivity",
-                          localized("ui.inspector.sensitivity", "ISO"),
-                          settings->camera.sensitivity, 1.0, 51200.0, 1.0, 0,
-                          [this, entity](double value, std::string merge_key) {
-                            apply_scene_settings(
-                                entity,
-                                [value](SceneSettingsComponent &next) {
-                                  next.camera.sensitivity =
-                                      static_cast<float>(value);
-                                },
-                                std::move(merge_key));
-                          });
+    shutter->setEnabled(settings->camera.use_exposure);
+    auto *sensitivity = add_continuous_number(
+        camera, "camera.sensitivity",
+        localized("ui.inspector.sensitivity", "ISO"),
+        settings->camera.sensitivity, 1.0, 51200.0, 1.0, 0,
+        [this, entity](double value, std::string merge_key) {
+          apply_scene_settings(
+              entity,
+              [value](SceneSettingsComponent &next) {
+                next.camera.sensitivity = static_cast<float>(value);
+              },
+              std::move(merge_key));
+        });
+    sensitivity->setEnabled(settings->camera.use_exposure);
     add_continuous_number(
         camera, "camera.near", localized("ui.inspector.near_plane", "Near"),
         settings->camera.near_plane, 0.001, 10000.0, 0.001, 4,

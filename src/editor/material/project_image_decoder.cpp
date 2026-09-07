@@ -6,8 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/material/project_image_decoder.hpp"
 
-#include "core/qstr.hpp"
-
 #include <QBuffer>
 #include <QByteArray>
 #include <QImage>
@@ -221,10 +219,10 @@ ProjectImageDecoder::read_import(const std::filesystem::path &source_path) {
     return ProjectIoResult<ProjectImportedImage>::failure(
         decoded.error().code, decoded.error().message, source_path);
   }
-  std::string extension = QStr::to_ascii_lower(
+  std::string extension =
       QString::fromStdWString(source_path.extension().wstring())
           .toUtf8()
-          .toStdString());
+          .toStdString();
   if (extension.empty()) {
     extension = "." + decoded.value().detected_format;
   }

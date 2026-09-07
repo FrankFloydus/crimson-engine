@@ -231,7 +231,7 @@ bool QtViewportSurface::initialize(RenderSystem &render_system,
 
   render_system_ = &render_system;
   render_system_->initialize_viewport_renderer(
-      renderer_, grid_layer_mask, ViewportRenderSurface::Swapchain);
+      renderer_, grid_layer_mask, ViewportRenderSurface::SrgbSwapchain);
   initialized_ = true;
 
   // winId() deliberately creates a stable native child before Filament creates

@@ -253,6 +253,7 @@ to_scene_settings_component(const QuaderSceneSettings &settings) {
               .sensitivity = settings.camera.sensitivity,
               .near_plane = settings.camera.near_plane,
               .far_plane = settings.camera.far_plane,
+              .use_exposure = settings.camera.use_exposure,
           },
       .post_process =
           ScenePostProcessSettings{
@@ -292,6 +293,7 @@ to_api_scene_settings(const SceneSettingsComponent &settings) {
               .sensitivity = settings.camera.sensitivity,
               .near_plane = settings.camera.near_plane,
               .far_plane = settings.camera.far_plane,
+              .use_exposure = settings.camera.use_exposure,
           },
       .post_process =
           QuaderScenePostProcessSettings{

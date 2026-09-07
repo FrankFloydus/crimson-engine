@@ -3823,12 +3823,18 @@ bool UISystem::save_standard_material(bool save_as) {
       const std::filesystem::path filename =
           current.value().path->native_path().filename();
       options.initial_file_name =
-          filename.stem().string() + "_copy" + filename.extension().string();
+          filename.stem().wstring() + L"_copy" + filename.extension().wstring();
       options.initial_directory =
           editor_->project().root() /
           current.value().path->native_path().parent_path();
     } else {
-      options.initial_file_name = "untitled_material.qmat";
+      const auto suggested = ProjectRelativePath::parse_portable(
+          current.value().name + ".qmat");
+      options.initial_file_name =
+          suggested.ok() &&
+                  !suggested.value().native_path().has_parent_path()
+              ? suggested.value().native_path()
+              : std::filesystem::path("Material.qmat");
     }
     const std::optional<std::filesystem::path> selected =
         platform_save_material_file_dialog(options);

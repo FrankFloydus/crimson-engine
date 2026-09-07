@@ -30,18 +30,21 @@ combinations are distinguished from disabled generation for a bounded consumer
 diagnostic. Editor collision display, fill color and mesh visibility do not
 control physics export.
 
-ABI version 4 adds direct authored lights and saved camera exposure inputs.
+ABI version 4 adds direct authored lights and effective camera exposure inputs.
 `scene_view` exposes the light count, aperture, shutter duration in seconds and
 ISO sensitivity. Scenes without camera settings use the native defaults of 16,
-0.008 seconds and ISO 100. `light_view` exposes stable scene-local entity identity,
+0.008 seconds and ISO 100. When camera exposure is disabled, these inputs are
+1, 1.2 seconds and ISO 100, equivalent to an exposure multiplier of 1. Inactive
+authored camera values remain stored in the native scene. `light_view` exposes stable scene-local entity identity,
 name, type, affine world transform, effective saved visibility, linear RGB,
 authored intensity, range, distance attenuation and cast-shadow state. Published
 light type IDs are Directional = 0, Point = 1 and Spot = 2.
 
 Light snapshots include hidden ordinary hierarchy members and exclude definition
 storage, definition members and occurrence leaves, matching native direct-light
-ownership. Directional and spot emission follows transformed local -Y. The reader
-does not apply renderer intensity, exposure, color-space or axis conversions.
+ownership. Directional and spot emission follows transformed local -Y. Light
+values remain unconverted; consumers apply renderer intensity units, effective
+camera exposure, color-space and axis conversions.
 Light views validate finite light values and transforms only when requested;
 consumers with light importing disabled do not need to consume these views or
 interpret the camera settings. Canonical QDR validation remains unchanged.

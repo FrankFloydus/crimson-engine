@@ -737,6 +737,7 @@ std::string scene_settings_text(const QuaderSceneSettings &settings) {
          ",sensitivity:" + float_bits(camera.sensitivity) +
          ",near_plane:" + float_bits(camera.near_plane) +
          ",far_plane:" + float_bits(camera.far_plane) +
+         (camera.use_exposure ? "" : ",use_exposure:false") +
          ",post_process_enabled:" + bool_text(post_process.enabled) +
          ",anti_aliasing:" + bool_text(post_process.anti_aliasing) +
          ",ambient_occlusion:" +

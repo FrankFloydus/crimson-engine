@@ -272,6 +272,7 @@ table SceneCameraSettings {
   sensitivity:float = 100.0;
   near_plane:float = 0.05;
   far_plane:float = 1000.0;
+  use_exposure:bool = true;
 }
 
 table ScenePostProcessSettings {

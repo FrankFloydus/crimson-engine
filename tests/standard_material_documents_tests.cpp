@@ -1119,4 +1119,147 @@ TEST(StandardMaterialDocumentsTests,
   EXPECT_EQ(persisted.value().material.name, replacement.name);
 }
 
+TEST(StandardMaterialDocumentsTests,
+     NewMaterialNamesAdvancePastExactNumericSuffixesWithoutIntegerOverflow) {
+  StandardMaterialDocumentsHarness harness("material-name-sequence");
+  auto &documents = harness.editor().standard_material_documents();
+  const auto first = documents.new_material();
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  EXPECT_EQ(first.value().name, "Material_1");
+  ASSERT_TRUE(documents.save_as(project_path("Materials/first.qmat")).ok());
+
+  const std::vector<std::string> existing_names{
+      "Material_00042", "Material_900x", "Material_+700",
+      "Material_701.5", "material_600", "Material_3"};
+  for (std::size_t index = 0u; index < existing_names.size(); ++index) {
+    SCOPED_TRACE(existing_names[index]);
+    ASSERT_TRUE(documents.new_material().ok());
+    ASSERT_TRUE(documents.set_name(existing_names[index]).ok());
+    ASSERT_TRUE(documents.save_as(project_path(
+        "Materials/named_" + std::to_string(index) + ".qmat")).ok());
+  }
+
+  const auto next = documents.new_material();
+  ASSERT_TRUE(next.ok()) << next.error_message();
+  EXPECT_EQ(next.value().name, "Material_43");
+  ASSERT_TRUE(documents.set_name("Material_18446744073709551615").ok());
+  ASSERT_TRUE(documents.save_as(project_path("Materials/large.qmat")).ok());
+  const auto beyond_integer = documents.new_material();
+  ASSERT_TRUE(beyond_integer.ok()) << beyond_integer.error_message();
+  EXPECT_EQ(beyond_integer.value().name, "Material_18446744073709551616");
+}
+
+TEST(StandardMaterialDocumentsTests,
+     DraftNamesFollowAlbedoUntilTheUserExplicitlySetsTheSameName) {
+  StandardMaterialDocumentsHarness harness("draft-albedo-name");
+  auto &documents = harness.editor().standard_material_documents();
+  const auto original = read_bytes(source_resource_root() / "materials" /
+                                   "default" / "default_albedo.png");
+  const auto first_source = harness.root() / "my texture.PNG";
+  const auto replacement_source = harness.root() / "Replacement.png";
+  write_bytes(first_source, original);
+  write_bytes(replacement_source, original);
+  ASSERT_TRUE(documents.new_material().ok());
+  ASSERT_TRUE(documents.import_texture(
+      QuaderStandardMaterialTextureSlot::Normal, replacement_source).ok());
+  EXPECT_EQ(documents.current().value().name, "Material_1");
+  ASSERT_TRUE(documents.import_texture(
+      QuaderStandardMaterialTextureSlot::Albedo, first_source).ok());
+  EXPECT_EQ(documents.current().value().name, "my texture");
+  ASSERT_TRUE(documents.import_texture(
+      QuaderStandardMaterialTextureSlot::Albedo, replacement_source).ok());
+  EXPECT_EQ(documents.current().value().name, "Replacement");
+  ASSERT_TRUE(documents.clear_texture(
+      QuaderStandardMaterialTextureSlot::Albedo).ok());
+  EXPECT_EQ(documents.current().value().name, "Material_1");
+
+  ASSERT_TRUE(documents.import_texture(
+      QuaderStandardMaterialTextureSlot::Albedo, first_source).ok());
+  ASSERT_TRUE(documents.set_name("my texture").ok());
+  ASSERT_TRUE(documents.import_texture(
+      QuaderStandardMaterialTextureSlot::Albedo, replacement_source).ok());
+  EXPECT_EQ(documents.current().value().name, "my texture");
+  ASSERT_TRUE(documents.clear_texture(
+      QuaderStandardMaterialTextureSlot::Albedo).ok());
+  EXPECT_EQ(documents.current().value().name, "my texture");
+}
+
+TEST(StandardMaterialDocumentsTests,
+     OpeningSavedMaterialsPreservesTheirNamesAcrossAlbedoChanges) {
+  StandardMaterialDocumentsHarness harness("saved-albedo-name");
+  auto &documents = harness.editor().standard_material_documents();
+  const auto original_source = source_resource_root() / "materials" /
+                               "default" / "default_albedo.png";
+  const auto replacement_source = harness.root() / "Replacement.png";
+  write_bytes(replacement_source, read_bytes(original_source));
+  ASSERT_TRUE(documents.new_material().ok());
+  ASSERT_TRUE(documents.import_texture(
+      QuaderStandardMaterialTextureSlot::Albedo, original_source).ok());
+  EXPECT_EQ(documents.current().value().name, "default_albedo");
+  ASSERT_TRUE(documents.save_as(project_path("Materials/saved.qmat")).ok());
+  const auto saved = documents.current();
+  ASSERT_TRUE(saved.ok());
+  const ProjectAssetId id = saved.value().id;
+  ASSERT_TRUE(documents.close().ok());
+  ASSERT_TRUE(documents.open(id).ok());
+  ASSERT_TRUE(documents.import_texture(
+      QuaderStandardMaterialTextureSlot::Albedo, replacement_source).ok());
+  EXPECT_EQ(documents.current().value().name, "default_albedo");
+  ASSERT_TRUE(documents.clear_texture(
+      QuaderStandardMaterialTextureSlot::Albedo).ok());
+  EXPECT_EQ(documents.current().value().name, "default_albedo");
+
+  ASSERT_TRUE(documents.set_name("Material_7").ok());
+  ASSERT_TRUE(documents.save().ok());
+  ASSERT_TRUE(documents.close().ok());
+  ASSERT_TRUE(documents.open(id).ok());
+  ASSERT_TRUE(documents.import_texture(
+      QuaderStandardMaterialTextureSlot::Albedo, original_source).ok());
+  EXPECT_EQ(documents.current().value().name, "Material_7");
+}
+
+TEST(StandardMaterialDocumentsTests,
+     SavedTexturesPreserveUnicodeLeavesInIndependentLocations) {
+  StandardMaterialDocumentsHarness harness("texture-source-names");
+  auto &documents = harness.editor().standard_material_documents();
+  const std::filesystem::path leaf(u8"pietra \u00e0 colore.PNG");
+  const auto first_source = harness.root() / "First" / leaf;
+  const auto second_source = harness.root() / "Second" / leaf;
+  std::filesystem::create_directory(first_source.parent_path());
+  std::filesystem::create_directory(second_source.parent_path());
+  const auto original = read_bytes(source_resource_root() / "materials" /
+                                   "default" / "default_albedo.png");
+  write_bytes(first_source, original);
+  write_bytes(second_source, original);
+  ASSERT_TRUE(documents.new_material().ok());
+  ASSERT_TRUE(documents.import_texture(
+      QuaderStandardMaterialTextureSlot::Albedo, first_source).ok());
+  ASSERT_TRUE(documents.import_texture(
+      QuaderStandardMaterialTextureSlot::Normal, second_source).ok());
+  EXPECT_EQ(documents.current().value().name, "pietra \xC3\xA0 colore");
+  ASSERT_TRUE(documents.save_as(project_path("Materials/unicode.qmat")).ok());
+  const auto saved = documents.current();
+  ASSERT_TRUE(saved.ok());
+  ASSERT_TRUE(documents.close().ok());
+  const auto reopened = documents.open(saved.value().id);
+  ASSERT_TRUE(reopened.ok()) << reopened.error_message();
+  EXPECT_EQ(reopened.value().name, "pietra \xC3\xA0 colore");
+  ASSERT_TRUE(reopened.value().material.base_color_texture.has_value());
+  ASSERT_TRUE(reopened.value().material.normal_texture.has_value());
+  const auto &albedo = *reopened.value().material.base_color_texture;
+  const auto &normal = *reopened.value().material.normal_texture;
+  const auto albedo_path =
+      std::filesystem::u8path(albedo.project_relative_path);
+  const auto normal_path =
+      std::filesystem::u8path(normal.project_relative_path);
+  EXPECT_NE(albedo.id, normal.id);
+  EXPECT_EQ(albedo_path.filename(), leaf);
+  EXPECT_EQ(normal_path.filename(), leaf);
+  EXPECT_NE(albedo_path.parent_path(), normal_path.parent_path());
+  EXPECT_EQ(read_bytes(harness.root() / albedo_path), original);
+  EXPECT_EQ(read_bytes(harness.root() / normal_path), original);
+  EXPECT_EQ(read_bytes(first_source), original);
+  EXPECT_EQ(read_bytes(second_source), original);
+}
+
 } // namespace

@@ -121,6 +121,7 @@ void expect_scene_settings_eq(const quader::QuaderSceneSettings &actual,
                   expected.environment.background_intensity);
   EXPECT_FLOAT_EQ(actual.environment.rotation_y,
                   expected.environment.rotation_y);
+  EXPECT_EQ(actual.camera.use_exposure, expected.camera.use_exposure);
   EXPECT_FLOAT_EQ(actual.camera.aperture, expected.camera.aperture);
   EXPECT_FLOAT_EQ(actual.camera.shutter_speed, expected.camera.shutter_speed);
   EXPECT_FLOAT_EQ(actual.camera.sensitivity, expected.camera.sensitivity);
@@ -1237,6 +1238,7 @@ TEST(EditorApiTests, ProjectSaveAsSaveAndOpenUseQdrDocumentIo) {
   settings.environment.intensity = 2.25f;
   settings.environment.background_intensity = 0.5f;
   settings.environment.rotation_y = 1.25f;
+  settings.camera.use_exposure = false;
   settings.camera.aperture = 8.0f;
   settings.camera.shutter_speed = 1.0f / 60.0f;
   settings.camera.sensitivity = 320.0f;
@@ -14432,6 +14434,38 @@ TEST(EditorApiTests, MixedEntitySelectionGroupsMeshAndLightThroughSceneHierarchy
     EXPECT_EQ(light_snapshot->parent, group.value().id);
 }
 
+TEST(EditorApiTests, CameraExposureTogglePreservesAuthoredSettingsAcrossUndoRedo) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const std::optional<quader::QuaderEntitySnapshot> root = scene_root(editor);
+  ASSERT_TRUE(root.has_value());
+  quader::QuaderSceneSettings enabled = root->scene_settings;
+  ASSERT_TRUE(enabled.camera.use_exposure);
+  enabled.camera.aperture = 5.6f;
+  enabled.camera.shutter_speed = 1.0f / 250.0f;
+  enabled.camera.sensitivity = 800.0f;
+  ASSERT_TRUE(editor.scene().set_scene_settings(root->id, enabled).ok());
+
+  quader::QuaderSceneSettings disabled = enabled;
+  disabled.camera.use_exposure = false;
+  const quader::QuaderApiVoidResult toggled =
+      editor.scene().set_scene_settings(root->id, disabled);
+  ASSERT_TRUE(toggled.ok()) << toggled.error_message();
+  EXPECT_TRUE(toggled.changed());
+  expect_scene_settings_eq(scene_root_settings(editor), disabled);
+  const quader::QuaderApiVoidResult unchanged =
+      editor.scene().set_scene_settings(root->id, disabled);
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.changed());
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_scene_settings_eq(scene_root_settings(editor), enabled);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_scene_settings_eq(scene_root_settings(editor), disabled);
+  ASSERT_TRUE(editor.scene().set_scene_settings(root->id, enabled).ok());
+  expect_scene_settings_eq(scene_root_settings(editor), enabled);
+}
+
 TEST(EditorApiTests, SceneSettingsPropertiesUndoAndRedoIndividually) {
     auto exercise = [](std::string_view label, auto mutate) {
         SCOPED_TRACE(std::string(label));
@@ -14491,6 +14525,9 @@ TEST(EditorApiTests, SceneSettingsPropertiesUndoAndRedoIndividually) {
              [](quader::QuaderSceneSettings &settings) {
                settings.environment.rotation_y = 1.25f;
              });
+    exercise("camera.use_exposure", [](quader::QuaderSceneSettings &settings) {
+      settings.camera.use_exposure = false;
+    });
     exercise("camera.aperture", [](quader::QuaderSceneSettings& settings) {
         settings.camera.aperture = 8.0f;
     });

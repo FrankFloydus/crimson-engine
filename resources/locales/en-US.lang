@@ -694,6 +694,7 @@ ui.inspector.background=Background
 ui.inspector.clear_color=Clear Color
 ui.inspector.background_intensity=Background Intensity
 ui.inspector.camera=Camera
+ui.inspector.use_camera_exposure=Use camera exposure
 ui.inspector.aperture=Aperture
 ui.inspector.shutter_speed=Shutter
 ui.inspector.sensitivity=ISO

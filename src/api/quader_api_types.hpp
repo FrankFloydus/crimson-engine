@@ -982,6 +982,7 @@ struct QuaderSceneCameraSettings {
     float sensitivity = 100.0f;
     float near_plane = 0.05f;
     float far_plane = 1000.0f;
+    bool use_exposure = true;
 };
 
 /**

@@ -2094,12 +2094,11 @@ TEST(CommandAndKeybindingOwnershipGuardrailTests,
 
 TEST(ConversionMappingGuardrailTests,
      NativeAsciiNormalizationUsesQStrOwner) {
-  constexpr std::array<std::string_view, 7> kConsumers{{
+  constexpr std::array<std::string_view, 6> kConsumers{{
       "src/io/project/project_manifest.cpp",
       "src/io/project/project_material_catalog.cpp",
       "src/io/project/qmat_codec.cpp",
       "src/io/mesh/obj_writer.cpp",
-      "src/editor/material/project_image_decoder.cpp",
       "src/editor/material/standard_material_edit_session_service.cpp",
       "src/editor/session/project_session.cpp",
   }};

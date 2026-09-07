@@ -12,7 +12,9 @@
 #include "render/render_signature_builder.hpp"
 
 #include <filament/ColorGrading.h>
+#include <filament/ColorSpace.h>
 #include <filament/Options.h>
+#include <filament/SwapChain.h>
 #include <filament/ToneMapper.h>
 #include <filament/Viewport.h>
 #include <utils/EntityManager.h>
@@ -52,39 +54,42 @@ viewport_clear_color(const SceneEnvironmentSettings &environment,
 
 filament::ColorGrading *
 build_color_grading(filament::Engine &engine,
-                    const filament::ToneMapper &tone_mapper) {
+                    const filament::ToneMapper &tone_mapper,
+                    const filament::color::ColorSpace &output_color_space) {
   return filament::ColorGrading::Builder()
       .quality(filament::ColorGrading::QualityLevel::MEDIUM)
       .toneMapper(&tone_mapper)
+      .outputColorSpace(output_color_space)
       .build(engine);
 }
 
-filament::ColorGrading *build_color_grading(filament::Engine &engine,
-                                            SceneToneMapping tone_mapping) {
+filament::ColorGrading *build_color_grading(
+    filament::Engine &engine, SceneToneMapping tone_mapping,
+    const filament::color::ColorSpace &output_color_space) {
   switch (tone_mapping) {
   case SceneToneMapping::Linear: {
     const filament::LinearToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper);
+    return build_color_grading(engine, tone_mapper, output_color_space);
   }
   case SceneToneMapping::AcesLegacy: {
     const filament::ACESLegacyToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper);
+    return build_color_grading(engine, tone_mapper, output_color_space);
   }
   case SceneToneMapping::Aces: {
     const filament::ACESToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper);
+    return build_color_grading(engine, tone_mapper, output_color_space);
   }
   case SceneToneMapping::Filmic: {
     const filament::FilmicToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper);
+    return build_color_grading(engine, tone_mapper, output_color_space);
   }
   case SceneToneMapping::DisplayRange: {
     const filament::DisplayRangeToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper);
+    return build_color_grading(engine, tone_mapper, output_color_space);
   }
   }
   const filament::ACESToneMapper tone_mapper;
-  return build_color_grading(engine, tone_mapper);
+  return build_color_grading(engine, tone_mapper, output_color_space);
 }
 
 TextureSampleColorSpace
@@ -129,9 +134,12 @@ std::uint64_t scene_settings_presentation_signature(
   RenderSignatureBuilder signature;
   add_setting_color(signature, resolved_background);
   signature.add_bool(post_processing_enabled)
-      .add_float(settings.camera.aperture)
-      .add_float(settings.camera.shutter_speed)
-      .add_float(settings.camera.sensitivity);
+      .add_bool(settings.camera.use_exposure);
+  if (settings.camera.use_exposure) {
+    signature.add_float(settings.camera.aperture)
+        .add_float(settings.camera.shutter_speed)
+        .add_float(settings.camera.sensitivity);
+  }
   if (post_processing_enabled) {
     signature
         .add_bool(settings.post_process.anti_aliasing)
@@ -402,9 +410,13 @@ void ViewportRenderer::apply_scene_settings(
   bloom.strength = std::clamp(settings.post_process.bloom_strength, 0.0f, 1.0f);
   view_->setBloomOptions(bloom);
 
-  camera_->setExposure(std::max(settings.camera.aperture, 0.01f),
-                       std::max(settings.camera.shutter_speed, 0.000001f),
-                       std::max(settings.camera.sensitivity, 1.0f));
+  if (settings.camera.use_exposure) {
+    camera_->setExposure(std::max(settings.camera.aperture, 0.01f),
+                         std::max(settings.camera.shutter_speed, 0.000001f),
+                         std::max(settings.camera.sensitivity, 1.0f));
+  } else {
+    camera_->setExposure(1.0f);
+  }
   apply_neutral_overlay_exposure(overlay_camera_);
   scene_settings_presentation_signature_ = presentation_signature;
 }
@@ -426,7 +438,19 @@ void ViewportRenderer::apply_tone_mapping(SceneToneMapping tone_mapping,
 
   view_->setColorGrading(nullptr);
   destroy_color_grading();
-  color_grading_ = build_color_grading(*engine_, tone_mapping);
+  // An sRGB swapchain encodes linear pixels during presentation. Applying the
+  // grading LUT's sRGB transfer too would encode the rendered scene twice.
+  const bool swapchain_encodes_srgb =
+      surface_ == ViewportRenderSurface::SrgbSwapchain &&
+      filament::SwapChain::isSRGBSwapChainSupported(*engine_);
+  const filament::color::ColorSpace output_color_space =
+      swapchain_encodes_srgb
+          ? filament::color::Rec709 - filament::color::Linear -
+                filament::color::D65
+          : filament::color::Rec709 - filament::color::sRGB -
+                filament::color::D65;
+  color_grading_ =
+      build_color_grading(*engine_, tone_mapping, output_color_space);
   if (color_grading_ == nullptr) {
     has_color_grading_tone_mapping_ = false;
     return;

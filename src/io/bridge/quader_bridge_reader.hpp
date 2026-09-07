@@ -57,9 +57,10 @@ typedef struct QuaderBridgeSceneView {
   uint32_t mesh_count;
   uint32_t material_count;
   uint32_t light_count;
-  /* Saved exposure inputs, before renderer clamping. Defaults are 16, 0.008,
-   * and 100 when the scene has no camera settings. Consumers that do not
-   * import lights need not interpret or validate these values. */
+  /* Effective exposure inputs, before renderer clamping. Defaults are 16,
+   * 0.008 and 100 when the scene has no camera settings. Disabled camera
+   * exposure yields 1, 1.2 and 100, equivalent to an exposure multiplier of 1.
+   * Consumers that do not import lights need not interpret these values. */
   float camera_aperture;
   float camera_shutter_seconds;
   float camera_iso;
