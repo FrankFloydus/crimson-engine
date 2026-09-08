@@ -374,15 +374,26 @@ void PrimitiveCreationInteraction::update_feedback() {
       "primitive.controls.width", "primitive.controls.height", "primitive.controls.depth"};
   frame_.label_position = control.screen_position +
       QVec2{control.radius_pixels + 8 * cached_scale_, -control.radius_pixels};
+  if (box) {
+    const int axis = index < 6 ? index / 2 : index - 6;
+    const QVec3 basis = axis == 0 ? primitive.world_x
+                        : axis == 1 ? primitive.world_y : primitive.world_z;
+    frame_.label_key = kDimensions[axis];
+    frame_.label_value = 2 * component(radii, axis) * length(basis);
+    frame_.label_is_count = false;
+    if (index >= 6) {
+      frame_.highlight_points[0] = control.world_position - basis * component(radii, axis);
+      frame_.highlight_points[1] = control.world_position + basis * component(radii, axis);
+      frame_.highlight_point_count = 2;
+    }
+    return;
+  }
   frame_.label_is_count = index >= 6;
   if (index < 6) {
     const QVec3 axis = control.resize_axis;
     const float world_scale = length(primitive.world_x * axis.x +
         primitive.world_y * axis.y + primitive.world_z * axis.z);
-    if (box) {
-      frame_.label_key = kDimensions[index / 2];
-      frame_.label_value = 2 * component(radii, index / 2) * world_scale;
-    } else if (index == 2 || index == 3) {
+    if (index == 2 || index == 3) {
       frame_.label_key = torus ? "primitive.controls.tube_height" : "primitive.controls.height";
       frame_.label_value = 2 * radii.y * world_scale;
     } else {
@@ -395,16 +406,6 @@ void PrimitiveCreationInteraction::update_feedback() {
     return;
   }
   frame_.label_value = control.segment_count;
-  if (box) {
-    const int axis = index - 6;
-    frame_.label_key = kDimensions[axis];
-    const QVec3 basis = axis == 0 ? primitive.world_x
-                        : axis == 1 ? primitive.world_y : primitive.world_z;
-    frame_.highlight_points[0] = control.world_position - basis * component(radii, axis);
-    frame_.highlight_points[1] = control.world_position + basis * component(radii, axis);
-    frame_.highlight_point_count = 2;
-    return;
-  }
   frame_.label_key = sphere ? (index == 6 ? "primitive.controls.radial_segments"
                                          : "primitive.controls.rings")
       : torus ? (index == 6 ? "primitive.controls.major_segments"
@@ -522,7 +523,7 @@ ViewportPointerCursor
 PrimitiveCreationInteraction::pointer_cursor(bool drag_started) const {
   if (!frame_.visible) return ViewportPointerCursor::Default;
   const int control = frame_.active >= 0 ? frame_.active : frame_.hovered;
-  if (control < 0 || control >= static_cast<int>(frame_.controls.size()) ||
+  if (control < 0 || control >= 6 ||
       !frame_.controls[control].visible || !frame_.controls[control].enabled) {
     return ViewportPointerCursor::Default;
   }

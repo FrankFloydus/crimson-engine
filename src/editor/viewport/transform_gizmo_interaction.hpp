@@ -52,10 +52,17 @@ public:
 
   [[nodiscard]] bool dragging() const { return dragging_; }
   [[nodiscard]] ViewportPointerCursor pointer_cursor() const {
-    if (dragging_) return ViewportPointerCursor::ClosedHand;
-    return pending_drag_ || hover_axis_ != quader_editor_core::TransformAxis::None
-               ? ViewportPointerCursor::OpenHand
-               : ViewportPointerCursor::Default;
+    if (!current_frame_ || current_frame_->info.tool !=
+                               quader_editor_core::ViewportInteractionTool::Rotate) {
+      return ViewportPointerCursor::Default;
+    }
+    const auto axis = dragging_ ? active_axis_
+                     : pending_drag_ ? pending_drag_->axis : hover_axis_;
+    if (axis != quader_editor_core::TransformAxis::All) {
+      return ViewportPointerCursor::Default;
+    }
+    return dragging_ ? ViewportPointerCursor::ClosedHand
+                     : ViewportPointerCursor::OpenHand;
   }
   /// A pending gizmo click owns its release before a drag preview exists.
   [[nodiscard]] bool pointer_interaction_active() const {

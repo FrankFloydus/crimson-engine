@@ -17,6 +17,7 @@ namespace quader {
 
 class EditorSelectionService;
 class SceneStructuralLifecycleService;
+enum class ModelingViewportTool;
 
 /**
  * Coordinates Modeling Command Execution Service responsibilities for the editor coordination layer.
@@ -49,6 +50,12 @@ public:
   ModelingCommandResult commit_preview(EditorHistoryService &history,
                                        ModelingSessionService &modeling,
                                        std::string label);
+
+  /// Accepts the active viewport modeling owner through editor history.
+  ModelingCommandResult commit_viewport_tool(
+      EditorHistoryService &history, ModelingSessionService &modeling,
+      ModelingViewportTool tool, std::string label,
+      MaterialReference active_material = {});
 
   ModelingCommandResult cancel_preview(ModelingSessionService &modeling);
 

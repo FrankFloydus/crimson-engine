@@ -11,6 +11,7 @@
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
+#include "editor/viewport/viewport_modeling_tool_commit_adapter.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "scene/scene_bounds.hpp"
@@ -388,7 +389,7 @@ TEST(ToolPreviewSubmissionTests,
     EXPECT_EQ(modeling.modeling_sdk_projection_stats_for_tests().mesh_compile_count,
               changed_compiles);
 
-    quader::ViewportModelingToolPortAdapter tool_port(modeling);
+    quader::ViewportModelingToolCommitAdapter tool_port(editor.tools());
     const auto committed =
         tool_port.finalize_drawn_plane_tool(quader::ModelingViewportTool::Mirror);
     ASSERT_TRUE(committed.ok) << committed.message;
@@ -495,7 +496,7 @@ TEST(ToolPreviewSubmissionTests,
 
   // Drawn-plane tools finalize through the viewport commit port; the public
   // operation-preview Apply route does not own Mirror's modal interaction.
-  quader::ViewportModelingToolPortAdapter tool_port(modeling);
+  quader::ViewportModelingToolCommitAdapter tool_port(editor.tools());
   const quader::ModelingCommandResult committed =
       tool_port.finalize_drawn_plane_tool(quader::ModelingViewportTool::Mirror);
   ASSERT_TRUE(committed.ok) << committed.message;

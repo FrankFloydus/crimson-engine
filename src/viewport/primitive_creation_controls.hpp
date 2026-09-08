@@ -75,6 +75,7 @@ struct PrimitiveCreationControlsFrame final {
   std::array<QVec3, 65> highlight_points{};
   std::size_t highlight_point_count = 0;
   std::string_view label_key;
+  /// World-space distance unless label_is_count; the presenter converts to map units.
   double label_value = 0.0;
   bool label_is_count = false;
   QVec2 label_position;

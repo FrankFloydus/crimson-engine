@@ -871,6 +871,7 @@ add_library(quader_editor_viewport STATIC
     src/editor/viewport/transform_gizmo_interaction.cpp
     src/editor/viewport/point_light_range_interaction.cpp
     src/editor/viewport/viewport_interaction_controller.cpp
+    src/editor/viewport/viewport_modeling_tool_commit_adapter.cpp
     src/editor/viewport/viewport_selection_interaction.cpp
     src/editor/viewport/viewport_curve_picking.cpp
     src/editor/viewport/viewport_vertex_snap_aggregation.cpp

@@ -67,6 +67,7 @@
 #include <QLocale>
 #include <QMainWindow>
 #include <QMenuBar>
+#include <QPainter>
 #include <QPointer>
 #include <QRect>
 #include <QSize>
@@ -100,6 +101,20 @@ namespace {
 
 constexpr int kQtWindowStateVersion = 1;
 constexpr int kDockContentMinimumWidth = 220;
+
+/** Keeps the native status bar layout with a quiet, palette-aware top edge. */
+class QtMainStatusBar final : public QStatusBar {
+public:
+  using QStatusBar::QStatusBar;
+
+protected:
+  void paintEvent(QPaintEvent *event) override {
+    QStatusBar::paintEvent(event);
+    QPainter painter(this);
+    painter.fillRect(QRectF(0, 0, width(), 1.0 / devicePixelRatioF()),
+                     palette().brush(QPalette::Midlight));
+  }
+};
 
 void apply_dock_content_minimum_width(
     QWidget &content, const QtUiScaleMetrics &metrics) {
@@ -821,6 +836,7 @@ bool UISystem::initialize(RenderSystem &render_system,
   standard_material_editor_window_->set_close_request_handler(
       [this]() { return resolve_standard_material_document(true); });
   standard_material_editor_window_->hide();
+  main_window_->setStatusBar(new QtMainStatusBar(main_window_.get()));
   status_message_ = new QtStatusMessage(main_window_.get());
   status_message_->setObjectName(QStringLiteral("statusMessage"));
   status_message_->setWordWrap(false);
@@ -4531,8 +4547,11 @@ bool UISystem::apply_interface_scale(float factor) {
 void UISystem::apply_ui_scale_to_retained_surfaces(
     const QtUiScaleMetrics &metrics) {
   if (main_window_ != nullptr) {
-    const int top = metrics.px(5);
-    main_window_->statusBar()->setContentsMargins(0, top, 0, metrics.px(10) - top);
+    const int padding = metrics.px(10);
+    // QStatusBar adds 3 native pixels above its row and 2 below. Balance
+    // that offset for every child, including fixed-height shortcut hints.
+    const int top = (padding - 1) / 2;
+    main_window_->statusBar()->setContentsMargins(0, top, 0, padding - top);
   }
   if (operation_input_hints_ != nullptr) {
     operation_input_hints_->apply_ui_scale(metrics);

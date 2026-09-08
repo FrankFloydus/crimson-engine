@@ -28,11 +28,12 @@ ViewportModelingToolPortAdapter::ViewportModelingToolPortAdapter(
     ViewportModelingToolPortCallbacks callbacks)
     : modeling_(modeling), callbacks_(std::move(callbacks)) {}
 
-ViewportToolPorts ViewportModelingToolPortAdapter::ports() {
+ViewportToolPorts
+ViewportModelingToolPortAdapter::ports(ViewportToolCommitPort *commit) {
   return {
       .hover = this,
       .preview = this,
-      .commit = this,
+      .commit = commit,
       .cancel = this,
       .selection_mode = this,
       .command_result = this,
@@ -183,35 +184,6 @@ ViewportModelingToolPortAdapter::end_drawn_plane_drag(
 
 ModelingCommandResult ViewportModelingToolPortAdapter::cycle_cut_mode() {
   return modeling_.cycle_cut_mode();
-}
-
-ModelingCommandResult
-ViewportModelingToolPortAdapter::commit_insert_edge_loop_drag() {
-  return modeling_.commit_insert_edge_loop_drag();
-}
-
-ModelingCommandResult ViewportModelingToolPortAdapter::commit_knife_tool() {
-  return modeling_.commit_knife_tool();
-}
-
-ModelingCommandResult ViewportModelingToolPortAdapter::commit_poly_tool() {
-  const MaterialReference material = callbacks_.active_material
-                                         ? callbacks_.active_material()
-                                         : MaterialReference{};
-  return material.valid() ? modeling_.commit_poly_tool(material)
-                          : modeling_.commit_poly_tool();
-}
-
-ModelingCommandResult
-ViewportModelingToolPortAdapter::finalize_drawn_plane_tool(
-    ModelingViewportTool tool) {
-  if (tool == ModelingViewportTool::Cut) {
-    return modeling_.finalize_cut_tool();
-  }
-  if (tool == ModelingViewportTool::Mirror) {
-    return modeling_.finalize_mirror_tool();
-  }
-  return unsupported_drawn_plane_tool();
 }
 
 ModelingCommandResult ViewportModelingToolPortAdapter::cancel_box() {

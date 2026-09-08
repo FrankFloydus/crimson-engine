@@ -794,13 +794,13 @@ void press_update_release_gizmo(ViewportInteractionHarness &harness,
   (void)harness.controller.handle_before_active_tool(harness.editor,
                                                      harness.frame());
   EXPECT_EQ(harness.controller.active_tool_pointer_cursor(harness.router.state().active_tool),
-            quader::ViewportPointerCursor::OpenHand);
+            quader::ViewportPointerCursor::Default);
   const quader::ViewportBeforeToolInteractionResult press =
       harness.controller.handle_before_active_tool(
           harness.editor, harness.frame(true, true, false, start));
   ASSERT_TRUE(press.gizmo_consumed);
   EXPECT_EQ(harness.controller.active_tool_pointer_cursor(harness.router.state().active_tool),
-            quader::ViewportPointerCursor::OpenHand);
+            quader::ViewportPointerCursor::Default);
 
   harness.input.mouse_local = update;
   harness.input.mouse_screen = update;
@@ -809,14 +809,14 @@ void press_update_release_gizmo(ViewportInteractionHarness &harness,
           harness.editor, harness.frame(false, true, false, start));
   EXPECT_TRUE(drag.gizmo_consumed);
   EXPECT_EQ(harness.controller.active_tool_pointer_cursor(harness.router.state().active_tool),
-            quader::ViewportPointerCursor::ClosedHand);
+            quader::ViewportPointerCursor::Default);
 
   const quader::ViewportBeforeToolInteractionResult release =
       harness.controller.handle_before_active_tool(
           harness.editor, harness.frame(false, false, true, start));
   EXPECT_TRUE(release.gizmo_consumed);
-  EXPECT_NE(harness.controller.active_tool_pointer_cursor(harness.router.state().active_tool),
-            quader::ViewportPointerCursor::ClosedHand);
+  EXPECT_EQ(harness.controller.active_tool_pointer_cursor(harness.router.state().active_tool),
+            quader::ViewportPointerCursor::Default);
 }
 
 std::vector<quader::EntityId>
@@ -1485,6 +1485,9 @@ TEST(ViewportInteractionControllerTests, RotateGizmoDragEmitsPieAngleIndicator) 
 TEST(ViewportInteractionControllerTests,
      RotateTrackballDragCommitsOnceAndRetainsStationaryPreview) {
   ViewportInteractionHarness harness;
+  const auto cursor = [&] {
+    return harness.controller.active_tool_pointer_cursor(harness.router.state().active_tool);
+  };
   const auto box = create_unit_box(harness);
   ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
   ASSERT_TRUE(
@@ -1502,6 +1505,7 @@ TEST(ViewportInteractionControllerTests,
   gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(gizmo, nullptr);
   ASSERT_EQ(gizmo->info.hover_axis, quader_editor_core::TransformAxis::All);
+  EXPECT_EQ(cursor(), quader::ViewportPointerCursor::OpenHand);
   const quader::TransformComponent before =
       *harness.session.scene().transform(box.entity);
   const quader::QMat4 before_matrix =
@@ -1512,11 +1516,13 @@ TEST(ViewportInteractionControllerTests,
   ASSERT_TRUE(press.gizmo_consumed);
   EXPECT_FALSE(press.selection_click_requested);
   EXPECT_FALSE(harness.controller.dragging());
+  EXPECT_EQ(cursor(), quader::ViewportPointerCursor::OpenHand);
   harness.input.mouse_local = start + quader::QVec2{1.0f, 1.0f};
   harness.input.mouse_screen = harness.input.mouse_local;
   EXPECT_TRUE(harness.dispatch_frame(harness.frame(false, true, false, start))
                   .gizmo_consumed);
   EXPECT_FALSE(harness.controller.dragging());
+  EXPECT_EQ(cursor(), quader::ViewportPointerCursor::OpenHand);
   EXPECT_EQ(harness.session.scene().world_transform_matrix(box.entity).values,
             before_matrix.values);
 
@@ -1528,6 +1534,7 @@ TEST(ViewportInteractionControllerTests,
   gizmo = harness.controller.transform_gizmo_frame();
   ASSERT_NE(gizmo, nullptr);
   EXPECT_EQ(gizmo->info.active_axis, quader_editor_core::TransformAxis::All);
+  EXPECT_EQ(cursor(), quader::ViewportPointerCursor::ClosedHand);
   EXPECT_FALSE(gizmo->info.rotate_indicator.active);
   const quader::QMat4 preview_matrix =
       harness.session.scene().world_transform_matrix(box.entity);
@@ -1541,6 +1548,7 @@ TEST(ViewportInteractionControllerTests,
     SCOPED_TRACE(frame_index);
     EXPECT_TRUE(harness.dispatch_frame(harness.frame(false, true, false, start))
                     .gizmo_consumed);
+    EXPECT_EQ(cursor(), quader::ViewportPointerCursor::ClosedHand);
     EXPECT_EQ(harness.session.modeling().content_revision(), content_revision);
     EXPECT_EQ(harness.session.scene().revision(), scene_revision);
     EXPECT_EQ(harness.session.assets().revision(), asset_revision);
@@ -1553,6 +1561,7 @@ TEST(ViewportInteractionControllerTests,
   EXPECT_TRUE(release.gizmo_consumed);
   EXPECT_FALSE(release.selection_click_requested);
   EXPECT_FALSE(harness.controller.dragging());
+  EXPECT_NE(cursor(), quader::ViewportPointerCursor::ClosedHand);
   expect_transform_near(*harness.session.scene().transform(box.entity), preview);
   EXPECT_EQ(selected_entities(harness),
             std::vector<quader::EntityId>{box.entity});

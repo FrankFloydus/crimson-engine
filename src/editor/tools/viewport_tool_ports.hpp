@@ -149,18 +149,16 @@ struct ViewportModelingToolPortCallbacks {
   std::function<void()> mark_overlay_dirty;
   std::function<void(ViewportSelectionMode)> set_selection_mode;
   std::function<void(ModelingSelectionMode)> set_app_selection_mode;
-  std::function<MaterialReference()> active_material;
   std::function<void(std::string_view, const ModelingCommandResult &, bool)>
       handle_tool_command_result;
 };
 
 /**
- * Adapts the current modeling session facade to the narrow viewport tool ports.
+ * Adapts transient modeling interactions; accepted geometry needs a tracked commit port.
  */
 class ViewportModelingToolPortAdapter final
     : public ViewportToolHoverPort,
       public ViewportToolPreviewPort,
-      public ViewportToolCommitPort,
       public ViewportToolCancelPort,
       public ViewportToolSelectionModePort,
       public ViewportToolCommandResultPort {
@@ -169,7 +167,7 @@ public:
       ModelingSessionService &modeling,
       ViewportModelingToolPortCallbacks callbacks = {});
 
-  [[nodiscard]] ViewportToolPorts ports();
+  [[nodiscard]] ViewportToolPorts ports(ViewportToolCommitPort *commit = nullptr);
 
   [[nodiscard]] bool claim(ModelingBoxDragState drag_state) override;
   void invalidate() override;
@@ -215,13 +213,6 @@ public:
   [[nodiscard]] ModelingCommandResult
   end_drawn_plane_drag(ModelingViewportTool tool) override;
   [[nodiscard]] ModelingCommandResult cycle_cut_mode() override;
-
-  [[nodiscard]] ModelingCommandResult
-  commit_insert_edge_loop_drag() override;
-  [[nodiscard]] ModelingCommandResult commit_knife_tool() override;
-  [[nodiscard]] ModelingCommandResult commit_poly_tool() override;
-  [[nodiscard]] ModelingCommandResult
-  finalize_drawn_plane_tool(ModelingViewportTool tool) override;
 
   [[nodiscard]] ModelingCommandResult cancel_box() override;
   [[nodiscard]] ModelingCommandResult cancel_active_modal_tool() override;

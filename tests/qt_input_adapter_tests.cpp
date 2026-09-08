@@ -887,6 +887,9 @@ TEST(QtViewportSurfaceInputTests,
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
+  quader::LocalizationService localization;
+  ASSERT_TRUE(localization.load(std::filesystem::path(__FILE__).parent_path().parent_path() /
+                                    "resources" / "locales", "en-US"));
 
   quader::SceneSession session;
   quader::QuaderEditorApi editor(
@@ -902,10 +905,16 @@ TEST(QtViewportSurfaceInputTests,
                      quader::QVec3{-1, 1, -1}, quader::QVec3{-1, 1, 1},
                      quader::QVec3{1, 1, 1}, quader::QVec3{1, 1, -1}};
   preview.corner_count = 8;
+  // One world unit is 32 map units; width also exercises fractional map units.
+  for (auto &corner : preview.corners) {
+    if (corner.x > 0) corner.x = 1.1328125f;
+    if (corner.y > 0) corner.y = 0.0f;
+  }
   ASSERT_TRUE(session.primitive_creation().accept_preview(preview, "Cube").ok);
 
   quader::QtViewportPanel panel;
   panel.attach_workspace(session.viewport_workspace());
+  panel.set_localization(localization);
   auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
   surface->resize(800, 600);
@@ -1077,6 +1086,31 @@ TEST(QtViewportSurfaceInputTests,
     }
   }
 
+  auto *dimension_label = panel.findChild<QLabel *>(
+      QStringLiteral("viewportPrimitiveFeedback_perspective"));
+  ASSERT_NE(dimension_label, nullptr);
+  for (const int index : {2, 3, 7}) {
+    SCOPED_TRACE(index);
+    const QPointF height_control = control_point(index);
+    QMouseEvent hover_height(QEvent::MouseMove, height_control,
+                             height_control + QPointF{100, 100},
+                             Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(surface, &hover_height);
+    process_input();
+    ASSERT_FALSE(dimension_label->isHidden());
+    EXPECT_EQ(dimension_label->text(), QStringLiteral("Height: 32"));
+  }
+  const QPointF width_button = control_point(6);
+  QMouseEvent hover_width(QEvent::MouseMove, width_button, width_button + QPointF{100, 100},
+                          Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &hover_width);
+  process_input();
+  ASSERT_FALSE(dimension_label->isHidden());
+  EXPECT_EQ(dimension_label->text(), QStringLiteral("Width: 68.25"));
+  const auto feedback_updates = panel.primitive_feedback_update_count();
+  for (int frame = 0; frame < 20; ++frame) process_input();
+  EXPECT_EQ(panel.primitive_feedback_update_count(), feedback_updates);
+
   // F during a held resize keeps its owner and allows subsequent movement.
   const auto before_resize = editor.tools().live_primitive_cube();
   ASSERT_TRUE(before_resize);
@@ -1086,6 +1120,7 @@ TEST(QtViewportSurfaceInputTests,
   QApplication::sendEvent(surface, &hover_handle);
   process_input();
   EXPECT_EQ(surface->cursor().shape(), Qt::OpenHandCursor);
+  EXPECT_EQ(dimension_label->text(), QStringLiteral("Width: 68.25"));
   send_mouse(QEvent::MouseButtonPress, dot, Qt::NoModifier);
   process_input();
   ASSERT_TRUE(editor.tools().live_primitive_cube());
@@ -1105,6 +1140,10 @@ TEST(QtViewportSurfaceInputTests,
   process_input();
   EXPECT_GT(editor.tools().live_primitive_cube()->local_max.x, before_resize->local_max.x);
   EXPECT_EQ(surface->cursor().shape(), Qt::ClosedHandCursor);
+  EXPECT_EQ(dimension_label->text(), QStringLiteral("Width: 132.25"));
+  ASSERT_TRUE(localization.select_locale("it-IT"));
+  process_input();
+  EXPECT_EQ(dimension_label->text(), QStringLiteral("Larghezza: 132,25"));
   send_mouse(QEvent::MouseButtonRelease, moved, Qt::NoModifier);
   process_input();
   EXPECT_FALSE(editor.tools().live_primitive_cube()->resizing);
@@ -1219,7 +1258,8 @@ TEST(QtViewportSurfaceInputTests,
     return std::array<int, 5>{state.side_count, state.radial_segments, state.rings,
                               state.major_segments, state.minor_segments};
   };
-  for (const auto kind : {quader::PrimitiveCreationKind::Cone,
+  for (const auto kind : {quader::PrimitiveCreationKind::Cylinder,
+                          quader::PrimitiveCreationKind::Cone,
                           quader::PrimitiveCreationKind::Sphere,
                           quader::PrimitiveCreationKind::Torus}) {
     SCOPED_TRACE(static_cast<int>(kind));
@@ -1279,7 +1319,23 @@ TEST(QtViewportSurfaceInputTests,
           panel.viewport_raster_scale(quader::ViewportPaneId::Perspective));
     };
     process();
-    const int button_count = kind == quader::PrimitiveCreationKind::Cone ? 1 : 2;
+    // The four-world-unit primitive is 128 map units tall with a 64-unit radius.
+    for (const int index : {0, 2}) {
+      const auto handle = project().controls[index];
+      ASSERT_TRUE(handle.visible);
+      mouse(QEvent::MouseMove, handle.screen_position);
+      process();
+      ASSERT_FALSE(label->isHidden());
+      const bool torus = kind == quader::PrimitiveCreationKind::Torus;
+      const QString name = index == 0
+          ? (torus ? QStringLiteral("Outer Radius") : QStringLiteral("Radius"))
+          : (torus ? QStringLiteral("Tube Height") : QStringLiteral("Height"));
+      EXPECT_EQ(label->text(), name + (index == 0 ? QStringLiteral(": 64")
+                                                 : QStringLiteral(": 128")));
+    }
+    const bool side_count_kind = kind == quader::PrimitiveCreationKind::Cylinder ||
+        kind == quader::PrimitiveCreationKind::Cone;
+    const int button_count = side_count_kind ? 1 : 2;
     for (int axis = 0; axis < button_count; ++axis) {
       const int index = 6 + axis;
       const auto button = project().controls[index];
@@ -1300,7 +1356,7 @@ TEST(QtViewportSurfaceInputTests,
       const auto before = editor.tools().live_primitive_creation();
       ASSERT_TRUE(before);
       const auto before_counts = counts(*before);
-      const int setting_index = kind == quader::PrimitiveCreationKind::Cone ? 0
+      const int setting_index = side_count_kind ? 0
           : kind == quader::PrimitiveCreationKind::Sphere ? 1 + axis : 3 + axis;
       for (const bool decrement : {false, true}) {
         mouse(QEvent::MouseButtonPress, button.screen_position,

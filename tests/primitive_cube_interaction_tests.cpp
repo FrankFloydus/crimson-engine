@@ -166,15 +166,23 @@ TEST(PrimitiveCubeInteractionTests, EveryShapeUsesHandForHandlesAndGrabsOnlyConf
     EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
     h.pointer(control.screen_position, false, false, true);
 
-    const auto button = interaction.project(h.box.live_primitive(), h.camera, 1).controls[6];
-    ASSERT_TRUE(button.visible);
-    h.pointer(button.screen_position, false, false, false);
-    EXPECT_EQ(cursor(), ViewportPointerCursor::OpenHand);
-    ASSERT_TRUE(h.pointer(button.screen_position, true, true, false).consumed);
-    ASSERT_TRUE(h.pointer(button.screen_position + QVec2{20, 20}, false, true, false).consumed);
-    EXPECT_EQ(cursor(), ViewportPointerCursor::OpenHand);
-    h.pointer(button.screen_position + QVec2{20, 20}, false, false, true);
-    EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
+    for (const bool decrement : {false, true}) {
+      SCOPED_TRACE(decrement);
+      ASSERT_TRUE(h.box.set_segments(0, 8).ok);
+      const auto button = interaction.project(h.box.live_primitive(), h.camera, 1).controls[6];
+      ASSERT_TRUE(button.visible);
+      h.pointer(button.screen_position, false, false, false, decrement);
+      ASSERT_TRUE(interaction.frame().controls[6].enabled);
+      EXPECT_EQ(interaction.frame().controls[6].subdivision_decrement, decrement);
+      EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
+      ASSERT_TRUE(h.pointer(button.screen_position, true, true, false, decrement).consumed);
+      EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
+      ASSERT_TRUE(h.pointer(button.screen_position + QVec2{20, 20}, false, true, false,
+                            decrement).consumed);
+      EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
+      h.pointer(button.screen_position + QVec2{20, 20}, false, false, true, decrement);
+      EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
+    }
     ASSERT_TRUE(h.box.set_segments(0, 128).ok);
     const auto disabled = interaction.project(h.box.live_primitive(), h.camera, 1).controls[6];
     h.pointer(disabled.screen_position, false, false, false);
@@ -793,6 +801,65 @@ TEST(PrimitiveCubeInteractionTests, CylinderRadiusDragUsesRotatedScaledPlacement
   ASSERT_TRUE(displacement);
   EXPECT_NEAR(*displacement, 0.75, 0.0001);
   EXPECT_NEAR(interaction.axis_world_scale(), length(axis), 0.0001);
+}
+
+TEST(PrimitiveCubeInteractionTests, BoxFeedbackShowsWorldDimensionsIndependentOfSubdivisions) {
+  PrimitiveCubeInteractionHarness h;
+  auto primitive = *h.box.live_primitive();
+  primitive.local_min = {-1.0f, -1.0f, -1.0f};
+  primitive.local_max = {1.25f, 1.5f, 1.75f};
+  primitive.world_origin = {1.0f, 0.0f, 0.0f};
+  primitive.world_x = {0.0f, 0.0f, 2.0f};
+  primitive.world_y = {0.0f, 0.5f, 0.0f};
+  primitive.world_z = {-1.5f, 0.0f, 0.0f};
+  constexpr std::array<double, 3> kWorldDimensions{4.5, 1.25, 4.125};
+  constexpr std::array<double, 3> kWorldResizeIncrements{0.5, 0.125, 0.375};
+  constexpr std::array<std::string_view, 3> kKeys{
+      "primitive.controls.width", "primitive.controls.height", "primitive.controls.depth"};
+  PrimitiveCreationInteraction interaction;
+  for (const auto subdivisions : {std::array{1, 1, 1}, std::array{7, 9, 11}}) {
+    primitive.subdivisions = subdivisions;
+    const auto &frame = interaction.project(primitive, h.camera, 1.5f);
+    for (int index = 0; index < 9; ++index) {
+      SCOPED_TRACE(index);
+      const int axis = index < 6 ? index / 2 : index - 6;
+      ASSERT_TRUE(frame.controls[index].visible);
+      interaction.hover(index);
+      EXPECT_EQ(frame.label_key, kKeys[axis]);
+      EXPECT_FALSE(frame.label_is_count);
+      EXPECT_NEAR(frame.label_value, kWorldDimensions[axis], 0.00001);
+      if (index >= 6) {
+        EXPECT_EQ(frame.controls[index].segment_count, subdivisions[axis]);
+        interaction.set_subdivision_decrement(true);
+        EXPECT_FALSE(frame.label_is_count);
+        EXPECT_NEAR(frame.label_value, kWorldDimensions[axis], 0.00001);
+        interaction.set_subdivision_decrement(false);
+      }
+    }
+  }
+
+  for (int index = 0; index < 6; ++index) {
+    SCOPED_TRACE(index);
+    const int axis = index / 2;
+    const auto control = interaction.project(primitive, h.camera, 1.5f).controls[index];
+    interaction.begin(index, primitive, h.camera, control.screen_position);
+    EXPECT_FALSE(interaction.frame().label_is_count);
+    EXPECT_NEAR(interaction.frame().label_value, kWorldDimensions[axis], 0.00001);
+    auto resized = primitive;
+    resized.resizing = true;
+    QVec3 &moving = index % 2 == 0 ? resized.local_max : resized.local_min;
+    const float displacement = index % 2 == 0 ? 0.25f : -0.25f;
+    if (axis == 0) moving.x += displacement;
+    else if (axis == 1) moving.y += displacement;
+    else moving.z += displacement;
+    const auto &frame = interaction.project(resized, h.camera, 1.5f);
+    interaction.hover(-1);
+    EXPECT_EQ(frame.label_key, kKeys[axis]);
+    EXPECT_FALSE(frame.label_is_count);
+    EXPECT_NEAR(frame.label_value,
+                kWorldDimensions[axis] + kWorldResizeIncrements[axis], 0.00001);
+    interaction.end();
+  }
 }
 
 TEST(PrimitiveCubeInteractionTests, RoundShapesExposeOnlyRelevantControlsAndGatedFeedback) {

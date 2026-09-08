@@ -171,11 +171,18 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
 - A transformed preview must match committed positions, normals, UVs, indices, sidedness, material
   references, and slots. Position changes may require both vertex streams and indices to refresh;
   the old assumption that every non-position stream stays static was superseded.
+- Viewport geometry acceptance uses the API-backed commit port and the existing modeling memento
+  command owner. SDK history alone does not register an editor Undo step. Transient modeling ports
+  expose no implicit commit fallback; previews and cancellation do not publish history. Returning
+  to Select without changing content must preserve the redo branch. Insert Edge Loop synchronizes
+  the active tool after both click and release acceptance.
 
 Owners: [publication transaction](src/editor/modeling/services/modeling_host_publication_transaction.cpp),
 [object bindings](src/editor/modeling/runtime/modeling_object_binding_registry.cpp).
 Tests: [SDK consumers](tests/sdk/modeling_sdk_consumer_tests.cpp),
 [preview submission](tests/tool_preview_submission_tests.cpp), [editor API](tests/editor_api_tests.cpp).
+Viewport acceptance: [commit adapter](src/editor/viewport/viewport_modeling_tool_commit_adapter.cpp),
+[history regressions](tests/viewport_tool_catalog_tests.cpp).
 
 ## Persistent primitive tool history
 
@@ -214,7 +221,9 @@ Tests: [SDK consumers](tests/sdk/modeling_sdk_consumer_tests.cpp),
   resize baseline includes tube ratio as well as bounds: cancellation/Undo must restore both.
   All five shapes share bounds publication, pending-setting isolation, and session reset. Hover
   labels and highlighted loops use the shared projected controls and interaction revisions; the
-  native label must remain transparent to viewport pointer hit testing.
+  native label must remain transparent to viewport pointer hit testing. Dimension feedback stays
+  in world units until the Qt presenter converts with `viewport_host_defaults().map_units_per_world_unit`,
+  matching edge measurements (one world unit displays as 32 map units); segment counts are unitless.
 - Footprint acceptance derives Sphere height from the smaller footprint diameter (half for a
   hemisphere), and Torus height from that diameter times its tube ratio. Explicit volume acceptance
   retains authored height. Both paths share publication/history; later resizing keeps user bounds.

@@ -21,10 +21,13 @@
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
+#include "editor/viewport/viewport_modeling_tool_commit_adapter.hpp"
 #include "support/viewport_overlay_test_helpers.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_host_interaction_policy.hpp"
 #include "viewport/viewport_input_router.hpp"
+
+#include <quader/modeling/neutral/polygon/document_topology.hpp>
 
 #include <gtest/gtest.h>
 
@@ -37,6 +40,24 @@
 
 namespace quader {
 namespace {
+
+/// Supplies the required commit boundary without mutating preview-only fixtures.
+class RejectingToolCommitPort final : public ViewportToolCommitPort {
+public:
+  ModelingCommandResult commit_insert_edge_loop_drag() override {
+    return rejected();
+  }
+  ModelingCommandResult commit_knife_tool() override { return rejected(); }
+  ModelingCommandResult commit_poly_tool() override { return rejected(); }
+  ModelingCommandResult finalize_drawn_plane_tool(ModelingViewportTool) override {
+    return rejected();
+  }
+
+private:
+  static ModelingCommandResult rejected() {
+    return {.ok = false, .message = "Preview-only fixture cannot commit."};
+  }
+};
 
 TEST(ViewportToolCatalogTests, HostViewportAdapterUsesViewportToolDescriptors) {
   ViewportToolId tool = ViewportToolId::Select;
@@ -266,6 +287,7 @@ void expect_point_tool_click_uses_queued_press_coordinate(
   AssetRegistry assets;
   ModelingSessionService modeling(document, assets);
   ViewportModelingToolPortAdapter tool_ports(modeling);
+  RejectingToolCommitPort commit_port;
   ViewportToolState state;
   state.active_tool = tool_id;
   ViewportCameraController camera;
@@ -293,7 +315,7 @@ void expect_point_tool_click_uses_queued_press_coordinate(
   ViewportToolContext context{
       .state = state,
       .camera = camera,
-      .ports = tool_ports.ports(),
+      .ports = tool_ports.ports(&commit_port),
       .modal_state = &modal_state,
       .point = &point_context,
   };
@@ -1212,6 +1234,7 @@ TEST(ViewportToolRuntimeTests,
   ViewportToolState state;
   ViewportCameraController camera;
   ViewportModelingToolPortAdapter tool_ports(modeling);
+  RejectingToolCommitPort commit_port;
   ASSERT_TRUE(runtime.set_active_tool(state, ViewportToolId::InsertEdgeLoop));
   ASSERT_TRUE(runtime.activate_active_tool(modeling).ok);
 
@@ -1245,7 +1268,7 @@ TEST(ViewportToolRuntimeTests,
   ViewportToolContext context{
       .state = state,
       .camera = camera,
-      .ports = tool_ports.ports(),
+      .ports = tool_ports.ports(&commit_port),
       .point = &point_context,
   };
 
@@ -1288,6 +1311,7 @@ TEST(ViewportToolRuntimeTests,
   ViewportToolState state;
   ViewportCameraController camera;
   ViewportModelingToolPortAdapter tool_ports(modeling);
+  RejectingToolCommitPort commit_port;
   ASSERT_TRUE(runtime.set_active_tool(state, ViewportToolId::InsertEdgeLoop));
   ASSERT_TRUE(runtime.activate_active_tool(modeling).ok);
 
@@ -1322,7 +1346,7 @@ TEST(ViewportToolRuntimeTests,
   ViewportToolContext context{
       .state = state,
       .camera = camera,
-      .ports = tool_ports.ports(),
+      .ports = tool_ports.ports(&commit_port),
       .point = &point_context,
   };
 
@@ -2056,7 +2080,8 @@ TEST(ViewportToolRuntimeTests,
              }});
     FailingToolPreviewPorts failing_hover;
     failing_hover.fail_point_hover = true;
-    ViewportToolPorts ports = tool_ports.ports();
+    ViewportModelingToolCommitAdapter commit_adapter(editor.tools());
+    ViewportToolPorts ports = tool_ports.ports(&commit_adapter);
     ports.hover = &failing_hover;
     if (tool_id == ViewportToolId::InsertEdgeLoop) {
       // Empty-space begin can legitimately succeed without a preview. Inject
@@ -2259,6 +2284,533 @@ TEST(ViewportToolRuntimeTests,
 
 
 
+
+/// Drives modal mesh commits through the production viewport runtime and ports.
+class ModelingPointerHistoryHarness final {
+public:
+  ModelingPointerHistoryHarness()
+      : editor(QuaderApiSessionInternalAccess::from_scene_session(session)),
+        commit_adapter(editor.tools()),
+        tool_ports(session.modeling(),
+                   {.handle_tool_command_result =
+                        [this](std::string_view, const ModelingCommandResult &command,
+                               bool) { commands.push_back(command); }}),
+        context{.state = state,
+                .camera = camera,
+                .ports = tool_ports.ports(&commit_adapter),
+                .document = &session.scene(),
+                .point = &point} {
+    point.make_event_at = [this](QVec2 local, bool dragging) {
+      ModelingViewportCamera projection{
+          .orthographic = tool_id == ViewportToolId::InsertEdgeLoop,
+          .origin = {0.0f, 0.0f, 10.0f},
+          .x_axis = {1.0f, 0.0f, 0.0f},
+          .y_axis = {0.0f, 1.0f, 0.0f},
+          .z_axis = {0.0f, 0.0f, 1.0f},
+          .viewport_size = {100.0f, 100.0f},
+          .orthographic_size = 100.0,
+          .fov_degrees = 60.0,
+      };
+      return ModelingToolRayEvent{
+          .screen_position = local,
+          .ray = tool_id == ViewportToolId::InsertEdgeLoop
+              ? ModelingRay{.origin = {1.0f, local.x, 5.0f},
+                            .direction = {0.0f, 0.0f, -1.0f}}
+              : ModelingRay{.origin = {local.x, 2.0f, 0.0f},
+                            .direction = {0.0f, -1.0f, 0.0f}},
+          .camera = projection,
+          .grid_size = 0.5,
+          .vertex_radius = 0.3,
+          .edge_radius = 0.2,
+          .snap_enabled = tool_id == ViewportToolId::Cut,
+          .dragging = dragging,
+      };
+    };
+  }
+
+  void initialize(ViewportToolId requested_tool) {
+    tool_id = requested_tool;
+    const auto created = editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        "Pointer History Source");
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    source = created.value();
+    ASSERT_TRUE(editor.selection().select_object(source).ok());
+    ASSERT_TRUE(editor.tools().activate(tool_id).ok());
+    ASSERT_TRUE(runtime.set_active_tool(state, tool_id));
+    session.history().clear();
+  }
+
+  ViewportToolResult dispatch(ViewportPointerToolEvent pointer) {
+    return runtime.handle_active_tool_event(
+        state, context,
+        {.kind = ViewportToolEventKind::Frame,
+         .tool = tool_id,
+         .pointer = pointer});
+  }
+
+  void begin_preview() {
+    if (tool_id == ViewportToolId::InsertEdgeLoop) {
+      const auto begun = context.ports.preview->begin_insert_edge_loop_drag(
+          point.make_event_at({}, true));
+      ASSERT_TRUE(begun.ok) << begun.message;
+      ASSERT_TRUE(session.modeling().tool_status().insert_edge_loop_dragging);
+    } else {
+      ASSERT_TRUE(dispatch({.left_clicked = true,
+                            .left_down = true,
+                            .can_interact = true,
+                            .suppress_hover_work = true}).handled);
+      ASSERT_TRUE(dispatch({.left_down = true,
+                            .can_interact = true,
+                            .mouse_local = {1.0f, 0.0f}}).handled);
+      ASSERT_TRUE(dispatch({.left_released = true,
+                            .can_interact = true,
+                            .suppress_hover_work = true,
+                            .mouse_local = {1.0f, 0.0f}}).handled);
+      ASSERT_TRUE(session.modeling().tool_status().cut_preview_valid);
+    }
+  }
+
+  ViewportToolResult commit_pointer() {
+    if (tool_id == ViewportToolId::Cut) {
+      begin_preview();
+      return dispatch({.can_interact = true,
+                       .finalize_pressed = true,
+                       .suppress_hover_work = true});
+    }
+    return dispatch({.left_clicked = true,
+                     .can_interact = true,
+                     .suppress_hover_work = true});
+  }
+
+  using Documents = std::vector<std::pair<EntityId, quader_poly::Document>>;
+
+  Documents documents() const {
+    Documents result;
+    for (const auto &object : editor.query().modeling_objects()) {
+      const auto *mesh = session.assets().mesh(object.mesh);
+      EXPECT_NE(mesh, nullptr);
+      if (mesh == nullptr) continue;
+      EXPECT_NE(mesh->authored_polygon_document, nullptr);
+      if (mesh->authored_polygon_document != nullptr) {
+        result.emplace_back(object.entity, *mesh->authored_polygon_document);
+      }
+    }
+    std::sort(result.begin(), result.end(), [](const auto &left, const auto &right) {
+      return left.first < right.first;
+    });
+    return result;
+  }
+
+  void expect_documents(const Documents &expected) const {
+    const auto actual = documents();
+    ASSERT_EQ(actual.size(), expected.size());
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+      SCOPED_TRACE(index);
+      EXPECT_EQ(actual[index].first, expected[index].first);
+      const auto &current = actual[index].second;
+      const auto &original = expected[index].second;
+      EXPECT_TRUE(quader_poly::has_same_geometry(current, original));
+      EXPECT_EQ(current.hard_normal_edges, original.hard_normal_edges);
+      ASSERT_EQ(current.vertices.size(), original.vertices.size());
+      for (std::size_t vertex = 0; vertex < original.vertices.size(); ++vertex) {
+        EXPECT_EQ(current.vertices[vertex].id, original.vertices[vertex].id);
+        EXPECT_EQ(current.vertices[vertex].position.x, original.vertices[vertex].position.x);
+        EXPECT_EQ(current.vertices[vertex].position.y, original.vertices[vertex].position.y);
+        EXPECT_EQ(current.vertices[vertex].position.z, original.vertices[vertex].position.z);
+      }
+      ASSERT_EQ(current.faces.size(), original.faces.size());
+      for (std::size_t face = 0; face < original.faces.size(); ++face) {
+        const auto &value = current.faces[face];
+        const auto &wanted = original.faces[face];
+        EXPECT_EQ(value.id, wanted.id);
+        EXPECT_EQ(value.vertices, wanted.vertices);
+        EXPECT_EQ(value.material_slot, wanted.material_slot);
+        EXPECT_EQ(value.normal_shading, wanted.normal_shading);
+        EXPECT_EQ(value.texture_transform, wanted.texture_transform);
+        ASSERT_EQ(value.uvs.size(), wanted.uvs.size());
+        for (std::size_t uv = 0; uv < wanted.uvs.size(); ++uv) {
+          EXPECT_EQ(value.uvs[uv].x, wanted.uvs[uv].x);
+          EXPECT_EQ(value.uvs[uv].y, wanted.uvs[uv].y);
+        }
+      }
+    }
+  }
+
+  SceneSession session;
+  QuaderEditorApi editor;
+  ViewportModelingToolCommitAdapter commit_adapter;
+  ViewportToolRuntime runtime;
+  ViewportToolState state;
+  ViewportCameraController camera;
+  ViewportPointToolContext point;
+  std::vector<ModelingCommandResult> commands;
+  ViewportModelingToolPortAdapter tool_ports;
+  ViewportToolContext context;
+  ViewportToolId tool_id = ViewportToolId::Select;
+  QuaderModelingObjectRef source;
+};
+
+TEST(ViewportToolRuntimeTests,
+     CutAndInsertEdgeLoopPointerCommitsHaveOneUndoStepAndExactRedo) {
+  for (const auto tool : {ViewportToolId::Cut, ViewportToolId::InsertEdgeLoop}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    ModelingPointerHistoryHarness harness;
+    harness.initialize(tool);
+    const auto before = harness.documents();
+    ASSERT_EQ(before.size(), 1u);
+    const auto committed = harness.commit_pointer();
+    ASSERT_TRUE(committed.handled);
+    ASSERT_FALSE(harness.commands.empty());
+    ASSERT_TRUE(harness.commands.back().ok) << harness.commands.back().message;
+    ASSERT_TRUE(harness.commands.back().changed);
+    const auto after = harness.documents();
+    if (tool == ViewportToolId::Cut) {
+      ASSERT_GT(after.size(), before.size());
+    } else {
+      ASSERT_EQ(after.size(), 1u);
+      EXPECT_GT(after.front().second.vertices.size(),
+                before.front().second.vertices.size());
+    }
+    EXPECT_EQ(harness.session.history().undo_count(), 1u);
+    EXPECT_EQ(harness.state.active_tool, ViewportToolId::Select);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    harness.expect_documents(before);
+    EXPECT_EQ(harness.session.history().undo_count(), 0u);
+    EXPECT_EQ(harness.session.history().redo_count(), 1u);
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    harness.expect_documents(after);
+    EXPECT_EQ(harness.session.history().undo_count(), 1u);
+    EXPECT_EQ(harness.session.history().redo_count(), 0u);
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
+     InsertEdgeLoopReleaseCommitSynchronizesRuntimeToolAndRecordsHistory) {
+  ModelingPointerHistoryHarness harness;
+  harness.initialize(ViewportToolId::InsertEdgeLoop);
+  const auto before = harness.documents();
+  harness.begin_preview();
+  EXPECT_EQ(harness.session.history().undo_count(), 0u);
+  const auto committed = harness.dispatch({.left_released = true,
+                                            .can_interact = true,
+                                            .suppress_hover_work = true});
+  ASSERT_TRUE(committed.handled);
+  ASSERT_FALSE(harness.commands.empty());
+  ASSERT_TRUE(harness.commands.back().ok) << harness.commands.back().message;
+  ASSERT_TRUE(harness.commands.back().changed);
+  EXPECT_TRUE(committed.sync_active_tool_from_modeling);
+  EXPECT_TRUE(committed.active_tool_changed);
+  EXPECT_EQ(harness.state.active_tool, ViewportToolId::Select);
+  ASSERT_NE(harness.runtime.active_tool(), nullptr);
+  EXPECT_EQ(harness.runtime.active_tool()->viewport_tool(), ViewportToolId::Select);
+  EXPECT_EQ(harness.session.modeling().tool_status().active_tool,
+            ModelingViewportTool::Select);
+  EXPECT_EQ(harness.session.history().undo_count(), 1u);
+  const auto after = harness.documents();
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  harness.expect_documents(before);
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  harness.expect_documents(after);
+}
+
+TEST(ViewportToolRuntimeTests,
+     CutAndInsertEdgeLoopHistoryInterleavesWithOrdinarySceneEdits) {
+  for (const auto tool : {ViewportToolId::Cut, ViewportToolId::InsertEdgeLoop}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    ModelingPointerHistoryHarness harness;
+    harness.initialize(tool);
+    const auto source = harness.source.entity;
+    ASSERT_TRUE(harness.editor.scene().rename(source, "Before Pointer Commit").ok());
+    const auto before = harness.documents();
+    ASSERT_TRUE(harness.commit_pointer().handled);
+    const auto after = harness.documents();
+    ASSERT_TRUE(harness.editor.scene().rename(source, "After Pointer Commit").ok());
+    EXPECT_EQ(harness.session.history().undo_count(), 3u);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    harness.expect_documents(after);
+    EXPECT_EQ(harness.editor.query().entity(source)->name, "Before Pointer Commit");
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    harness.expect_documents(before);
+    EXPECT_EQ(harness.editor.query().entity(source)->name, "Before Pointer Commit");
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    EXPECT_EQ(harness.editor.query().entity(source)->name, "Pointer History Source");
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    harness.expect_documents(before);
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    harness.expect_documents(after);
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    harness.expect_documents(after);
+    EXPECT_EQ(harness.editor.query().entity(source)->name, "After Pointer Commit");
+    EXPECT_FALSE(harness.editor.history().can_redo());
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
+     CutAndInsertEdgeLoopCanceledOrMissingPreviewsDoNotRecordHistory) {
+  for (const auto tool : {ViewportToolId::Cut, ViewportToolId::InsertEdgeLoop}) {
+    for (const bool valid_preview : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(tool));
+      SCOPED_TRACE(valid_preview);
+      ModelingPointerHistoryHarness harness;
+      harness.initialize(tool);
+      const auto before = harness.documents();
+      if (valid_preview) {
+        harness.begin_preview();
+      } else {
+        EXPECT_TRUE(harness.dispatch({
+            .left_clicked = tool == ViewportToolId::InsertEdgeLoop,
+            .can_interact = true,
+            .finalize_pressed = tool == ViewportToolId::Cut,
+            .suppress_hover_work = true,
+            .left_click_local = {100.0f, 100.0f},
+        }).handled);
+      }
+      EXPECT_EQ(harness.session.history().undo_count(), 0u);
+      const auto canceled = harness.runtime.handle_active_tool_event(
+          harness.state, harness.context,
+          {.kind = ViewportToolEventKind::Cancel,
+           .tool = tool,
+           .exit_active_modal_tool = true});
+      EXPECT_TRUE(canceled.handled);
+      harness.expect_documents(before);
+      EXPECT_EQ(harness.session.history().undo_count(), 0u);
+      EXPECT_EQ(harness.session.history().redo_count(), 0u);
+      EXPECT_FALSE(harness.editor.history().can_undo());
+    }
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
+     MissingCommitPortCannotAcceptCutOrInsertEdgeLoopPreview) {
+  for (const auto tool : {ViewportToolId::Cut, ViewportToolId::InsertEdgeLoop}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    ModelingPointerHistoryHarness harness;
+    harness.initialize(tool);
+    const auto before = harness.documents();
+    harness.begin_preview();
+    harness.commands.clear();
+    harness.context.ports = harness.tool_ports.ports();
+    ASSERT_EQ(harness.context.ports.commit, nullptr);
+
+    const auto blocked = harness.dispatch({
+        .left_released = tool == ViewportToolId::InsertEdgeLoop,
+        .can_interact = true,
+        .finalize_pressed = tool == ViewportToolId::Cut,
+        .suppress_hover_work = true,
+    });
+    EXPECT_FALSE(blocked.active_tool_changed);
+    EXPECT_FALSE(blocked.sync_active_tool_from_modeling);
+    EXPECT_TRUE(harness.commands.empty());
+    EXPECT_EQ(harness.state.active_tool, tool);
+    EXPECT_EQ(harness.session.history().undo_count(), 0u);
+    harness.expect_documents(before);
+
+    const auto canceled = harness.runtime.handle_active_tool_event(
+        harness.state, harness.context,
+        {.kind = ViewportToolEventKind::Cancel,
+         .tool = tool,
+         .exit_active_modal_tool = true});
+    EXPECT_TRUE(canceled.handled);
+    harness.expect_documents(before);
+    EXPECT_FALSE(harness.editor.history().can_undo());
+  }
+}
+
+TEST(ViewportToolRuntimeTests, EmptyKnifeCommitPreservesExistingRedo) {
+  ModelingPointerHistoryHarness harness;
+  harness.initialize(ViewportToolId::Knife);
+  ASSERT_TRUE(harness.editor.scene()
+                  .rename(harness.source.entity, "Redo Survives Empty Knife")
+                  .ok());
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  ASSERT_TRUE(harness.editor.tools().activate(ViewportToolId::Knife).ok());
+  const auto before = harness.documents();
+  const auto content_revision = harness.session.modeling().content_revision();
+  const auto no_op = harness.context.ports.commit->commit_knife_tool();
+  EXPECT_TRUE(no_op.ok) << no_op.message;
+  EXPECT_FALSE(no_op.changed);
+  EXPECT_EQ(harness.session.modeling().content_revision(), content_revision);
+  harness.expect_documents(before);
+  EXPECT_EQ(harness.session.history().undo_count(), 0u);
+  EXPECT_EQ(harness.session.history().redo_count(), 1u);
+
+  ASSERT_TRUE(harness.editor.tools().cancel_modal_tool().ok());
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  EXPECT_EQ(harness.editor.query().entity(harness.source.entity)->name,
+            "Redo Survives Empty Knife");
+  harness.expect_documents(before);
+}
+
+TEST(ViewportToolRuntimeTests,
+     UnsupportedOrMismatchedCommitCannotConsumeAnActiveCutPreview) {
+  ModelingPointerHistoryHarness harness;
+  harness.initialize(ViewportToolId::Cut);
+  harness.begin_preview();
+  const auto before = harness.documents();
+  const auto content_revision = harness.session.modeling().content_revision();
+  for (const auto requested : {ViewportToolId::Select, ViewportToolId::LassoSelect,
+                               ViewportToolId::InsertEdgeLoop,
+                               ViewportToolId::Mirror}) {
+    SCOPED_TRACE(static_cast<int>(requested));
+    const auto rejected = harness.editor.tools().commit_modeling_tool(requested);
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_FALSE(rejected.changed());
+    EXPECT_FALSE(rejected.error_message().empty());
+    EXPECT_TRUE(harness.session.modeling().tool_status().cut_preview_valid);
+    EXPECT_EQ(harness.editor.tools().active_tool(),
+              viewport_tool_id(ViewportToolId::Cut));
+    EXPECT_EQ(harness.session.modeling().content_revision(), content_revision);
+    EXPECT_EQ(harness.session.history().undo_count(), 0u);
+    harness.expect_documents(before);
+  }
+  const auto committed = harness.dispatch({.can_interact = true,
+                                            .finalize_pressed = true,
+                                            .suppress_hover_work = true});
+  ASSERT_TRUE(committed.handled);
+  ASSERT_FALSE(harness.commands.empty());
+  EXPECT_TRUE(harness.commands.back().ok) << harness.commands.back().message;
+  EXPECT_EQ(harness.session.history().undo_count(), 1u);
+}
+
+TEST(ViewportToolRuntimeTests,
+     StaleCutAndInsertEdgeLoopCommitPreservesHistoryAndTopology) {
+  for (const auto tool : {ViewportToolId::Cut, ViewportToolId::InsertEdgeLoop}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    ModelingPointerHistoryHarness harness;
+    harness.initialize(tool);
+    const auto before = harness.documents();
+    ASSERT_TRUE(harness.commit_pointer().handled);
+    ASSERT_FALSE(harness.commands.empty());
+    ASSERT_TRUE(harness.commands.back().ok) << harness.commands.back().message;
+    const auto after = harness.documents();
+    const auto rejected = harness.editor.tools().commit_modeling_tool(tool);
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_FALSE(rejected.changed());
+    EXPECT_EQ(harness.session.history().undo_count(), 1u);
+    harness.expect_documents(after);
+
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    harness.expect_documents(before);
+    const auto rejected_after_undo =
+        harness.editor.tools().commit_modeling_tool(tool);
+    EXPECT_FALSE(rejected_after_undo.ok());
+    EXPECT_FALSE(rejected_after_undo.changed());
+    EXPECT_EQ(harness.session.history().undo_count(), 0u);
+    EXPECT_EQ(harness.session.history().redo_count(), 1u);
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    harness.expect_documents(after);
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
+     CutUndoPreservesSelectedGroupAndRedoRestoresExactResultSelection) {
+  ModelingPointerHistoryHarness harness;
+  harness.initialize(ViewportToolId::Cut);
+  const auto grouped = harness.editor.scene().group_selection("Cut Group");
+  ASSERT_TRUE(grouped.ok()) << grouped.error_message();
+  const auto group = grouped.value().id;
+  const auto target = harness.editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Selected Cut Target");
+  ASSERT_TRUE(target.ok()) << target.error_message();
+  ASSERT_TRUE(harness.editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  // Object mode projects the direct mesh into Cut's SDK selection. The
+  // accompanying group remains scene-owned throughout the history transaction.
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_objects({group, target.value().entity},
+                                  target.value().entity)
+                  .ok());
+  const auto activated = harness.editor.tools().activate(ViewportToolId::Cut);
+  ASSERT_TRUE(activated.ok()) << activated.error_message();
+  harness.session.history().clear();
+  ASSERT_EQ(harness.editor.selection().summary().mode, QuaderSelectionMode::Object);
+  const auto before = harness.documents();
+  const auto selected_before = harness.session.scene().selected_entities();
+  const auto active_before = harness.session.scene().primary_selection();
+  ASSERT_EQ(selected_before.size(), 2u);
+  ASSERT_NE(std::find(selected_before.begin(), selected_before.end(), group),
+            selected_before.end());
+  ASSERT_NE(std::find(selected_before.begin(), selected_before.end(),
+                      target.value().entity),
+            selected_before.end());
+  ASSERT_EQ(active_before, target.value().entity);
+  ASSERT_TRUE(harness.commit_pointer().handled);
+  ASSERT_FALSE(harness.commands.empty());
+  ASSERT_TRUE(harness.commands.back().ok) << harness.commands.back().message;
+  ASSERT_TRUE(harness.commands.back().changed);
+  const auto after = harness.documents();
+  const auto selected_after = harness.session.scene().selected_entities();
+  const auto active_after = harness.session.scene().primary_selection();
+  const auto mode_after = harness.editor.selection().summary().mode;
+  EXPECT_EQ(harness.session.history().undo_count(), 1u);
+
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  harness.expect_documents(before);
+  ASSERT_TRUE(harness.editor.query().entity(group).has_value());
+  EXPECT_EQ(harness.editor.query().entity(group)->name, "Cut Group");
+  EXPECT_EQ(harness.session.scene().selected_entities(), selected_before);
+  EXPECT_EQ(harness.session.scene().primary_selection(), active_before);
+  EXPECT_EQ(harness.editor.selection().summary().mode, QuaderSelectionMode::Object);
+
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  harness.expect_documents(after);
+  EXPECT_EQ(harness.session.scene().selected_entities(), selected_after);
+  EXPECT_EQ(harness.session.scene().primary_selection(), active_after);
+  EXPECT_EQ(harness.editor.selection().summary().mode, mode_after);
+}
+
+TEST(ViewportToolRuntimeTests,
+     FailedCutAndInsertEdgeLoopPublicationPreservesTopologySelectionAndRedo) {
+  for (const auto tool : {ViewportToolId::Cut, ViewportToolId::InsertEdgeLoop}) {
+    for (const auto failure : {ModelingSdkProjectionFailurePoint::AfterSdkMutation,
+                              ModelingSdkProjectionFailurePoint::BeforeCommit}) {
+      SCOPED_TRACE(static_cast<int>(tool));
+      SCOPED_TRACE(static_cast<int>(failure));
+      ModelingPointerHistoryHarness harness;
+      harness.initialize(tool);
+      ASSERT_TRUE(harness.editor.scene()
+                      .rename(harness.source.entity, "Redo After Failed Commit")
+                      .ok());
+      ASSERT_TRUE(harness.editor.history().undo().ok());
+      ASSERT_TRUE(harness.editor.tools().activate(tool).ok());
+      harness.begin_preview();
+      harness.commands.clear();
+      const auto before = harness.documents();
+      const auto selected = harness.session.scene().selected_entities();
+      const auto active = harness.session.scene().primary_selection();
+      const auto content_revision = harness.session.modeling().content_revision();
+      const auto assets = harness.session.assets().mesh_ids();
+      harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(failure);
+      const auto failed = harness.dispatch({
+          .left_released = tool == ViewportToolId::InsertEdgeLoop,
+          .can_interact = true,
+          .finalize_pressed = tool == ViewportToolId::Cut,
+          .suppress_hover_work = true,
+      });
+      harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+          ModelingSdkProjectionFailurePoint::None);
+      EXPECT_TRUE(failed.handled);
+      EXPECT_FALSE(failed.active_tool_changed);
+      ASSERT_FALSE(harness.commands.empty());
+      EXPECT_FALSE(harness.commands.back().ok);
+      EXPECT_FALSE(harness.commands.back().changed);
+      harness.expect_documents(before);
+      EXPECT_EQ(harness.session.scene().selected_entities(), selected);
+      EXPECT_EQ(harness.session.scene().primary_selection(), active);
+      EXPECT_EQ(harness.session.assets().mesh_ids(), assets);
+      EXPECT_EQ(harness.session.modeling().content_revision(), content_revision);
+      EXPECT_EQ(harness.session.history().undo_count(), 0u);
+      EXPECT_EQ(harness.session.history().redo_count(), 1u);
+      ASSERT_TRUE(harness.editor.tools().cancel_modal_tool().ok());
+      ASSERT_TRUE(harness.editor.history().redo().ok());
+      EXPECT_EQ(harness.editor.query().entity(harness.source.entity)->name,
+                "Redo After Failed Commit");
+      harness.expect_documents(before);
+    }
+  }
+}
 
 } // namespace
 } // namespace quader

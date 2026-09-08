@@ -72,6 +72,56 @@ private:
   std::string action_id_;
 };
 
+/** Records one accepted viewport modeling edit with its group selection. */
+class ViewportModelingToolHistoryCommand final : public ModelingMementoCommand {
+public:
+  ViewportModelingToolHistoryCommand(ModelingSessionService &modeling,
+                                    ModelingViewportTool tool, std::string label,
+                                    MaterialReference active_material)
+      : ModelingMementoCommand(modeling, std::move(label)), tool_(tool),
+        active_material_(active_material) {}
+
+private:
+  ModelingSessionMemento capture_before_memento() override {
+    return modeling().capture_history_memento(true);
+  }
+
+  ModelingSessionMemento capture_after_memento() override {
+    return modeling().capture_history_memento(true);
+  }
+
+  ModelingCommandResult execute_initial() override {
+    const std::uint64_t content_before = modeling().content_revision();
+    ModelingCommandResult result;
+    switch (tool_) {
+    case ModelingViewportTool::InsertEdgeLoop:
+      result = modeling().commit_insert_edge_loop_drag();
+      break;
+    case ModelingViewportTool::Cut:
+      result = modeling().finalize_cut_tool();
+      break;
+    case ModelingViewportTool::Knife:
+      result = modeling().commit_knife_tool();
+      break;
+    case ModelingViewportTool::Poly:
+      result = modeling().commit_poly_tool(active_material_);
+      break;
+    case ModelingViewportTool::Mirror:
+      result = modeling().finalize_mirror_tool();
+      break;
+    default:
+      return {.ok = false,
+              .message = "Viewport tool has no modeling commit operation."};
+    }
+    // Returning to Select changes runtime state but is not an authored edit.
+    result.changed = modeling().content_revision() != content_before;
+    return result;
+  }
+
+  ModelingViewportTool tool_;
+  MaterialReference active_material_;
+};
+
 ModelingCommandResult from_command_result(CommandResult result) {
   return {
       .ok = result.ok,
@@ -230,6 +280,30 @@ ModelingCommandResult ModelingCommandExecutionService::commit_preview(
 ModelingCommandResult ModelingCommandExecutionService::cancel_preview(
     ModelingSessionService &modeling) {
   return ModelingPreviewCommandService::cancel(modeling);
+}
+
+ModelingCommandResult ModelingCommandExecutionService::commit_viewport_tool(
+    EditorHistoryService &history, ModelingSessionService &modeling,
+    ModelingViewportTool tool, std::string label,
+    MaterialReference active_material) {
+  switch (tool) {
+  case ModelingViewportTool::InsertEdgeLoop:
+  case ModelingViewportTool::Cut:
+  case ModelingViewportTool::Knife:
+  case ModelingViewportTool::Poly:
+  case ModelingViewportTool::Mirror:
+    break;
+  default:
+    return {.ok = false,
+            .message = "Viewport tool has no modeling commit operation."};
+  }
+  if (modeling.tool_status().active_tool != tool) {
+    return {.ok = false,
+            .message = "The requested viewport modeling tool is not active."};
+  }
+  return from_command_result(
+      history.execute(std::make_unique<ViewportModelingToolHistoryCommand>(
+          modeling, tool, std::move(label), active_material)));
 }
 
 ModelingCommandAvailability ModelingCommandExecutionService::availability(

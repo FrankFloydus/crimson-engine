@@ -7,6 +7,7 @@
 #include "api/quader_tools_api.hpp"
 #include "editor/metadata/operation_input_hint_catalog.hpp"
 #include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_api_mutation_runner.hpp"
 
 #include "api/quader_api_status_internal.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
@@ -18,6 +19,7 @@
 #include "editor/modeling/operations/operation_schema.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
+#include "editor/modeling/modeling_result_adapters.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
@@ -2103,6 +2105,30 @@ QuaderApiVoidResult QuaderToolsApi::commit_active_tool_preview() {
     return hooks_.commit_active_tool_preview();
   }
   return quader_api_failure_status(session, "No active tool preview.");
+}
+
+QuaderApiVoidResult QuaderToolsApi::commit_modeling_tool(ViewportToolId tool) {
+  QuaderApiMutationRunner mutations(session_);
+  SceneSession &session = scene_session(session_);
+  if (!mutations.available()) {
+    return quader_api_failure_status(session, "No scene is active.");
+  }
+  if (!mutations.can_mutate_modeling_content()) {
+    return mutations.modeling_content_blocked_status(
+        "committing a viewport modeling tool.");
+  }
+  const ToolDescriptor *descriptor = find_viewport_tool_descriptor(tool);
+  if (descriptor == nullptr) {
+    return quader_api_failure_status(session, "Unknown viewport tool.");
+  }
+  ModelingCommandExecutionService execution;
+  ModelingCommandResult result = execution.commit_viewport_tool(
+      session.history(), session.modeling(), descriptor->modeling_tool,
+      std::string(descriptor->label),
+      active_project_material(session_));
+  return api_status_from_command(
+      session, command_result_from_modeling(std::move(result)),
+      QuaderMutationKind::Modeling, descriptor->label);
 }
 
 QuaderApiVoidResult QuaderToolsApi::cancel_active_tool_preview() {

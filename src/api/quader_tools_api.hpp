@@ -95,6 +95,8 @@ public:
     QuaderApiVoidResult cancel_primitive_cube_resize();
     QuaderApiVoidResult flip_primitive_faces();
     QuaderApiVoidResult commit_active_tool_preview();
+    /// Accepts one active polygon modeling tool as one editor undo/redo step.
+    QuaderApiVoidResult commit_modeling_tool(ViewportToolId tool);
     QuaderApiVoidResult cancel_active_tool_preview();
     QuaderApiVoidResult cancel_modal_tool();
     [[nodiscard]] bool

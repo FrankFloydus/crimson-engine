@@ -92,6 +92,12 @@ ViewportToolResult DragCommitTool::handle_event(
           app_selection_mode_to_viewport(
               context.ports.selection_mode->selection_summary().mode));
     }
+    return {
+        .handled = true,
+        .modal_state_changed = true,
+        .active_tool_changed = command.ok,
+        .sync_active_tool_from_modeling = command.ok,
+    };
   }
 
   return {

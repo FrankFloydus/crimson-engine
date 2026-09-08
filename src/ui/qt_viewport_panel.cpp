@@ -27,6 +27,7 @@
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
+#include "editor/viewport/viewport_modeling_tool_commit_adapter.hpp"
 #include "editor/tools/viewport_native_tool_interaction.hpp"
 #include "math/glm_bridge.hpp"
 #include "platform/native_window_input.hpp"
@@ -904,7 +905,9 @@ void QtViewportPanel::present_primitive_feedback(
       ? QLocale(QString::fromStdString(localization_->current_locale())) : QLocale::c();
   const QString value = controls.label_is_count
       ? locale.toString(static_cast<qlonglong>(std::llround(controls.label_value)))
-      : qt_format_number(controls.label_value, locale);
+      : qt_format_number(controls.label_value *
+                             viewport_host_defaults().map_units_per_world_unit,
+                         locale);
   const QString text = QStringLiteral("%1: %2").arg(QString::fromStdString(label), value);
   QLabel &widget = *pane_state.primitive_feedback;
   const int margin = ui_scale_metrics_.px(4);
@@ -3497,12 +3500,6 @@ void QtViewportPanel::process_viewport_input(
     input_router_.set_selection_mode(app_selection_mode_to_viewport(
         to_modeling_selection_mode(editor.selection().summary().mode)));
   };
-  tool_callbacks.active_material = [&editor]() {
-    const QuaderApiResult<QuaderProjectMaterialInfo> active =
-        editor.project_assets().active_material();
-    return active.ok ? MaterialReference::project(active.value().id)
-                     : MaterialReference{};
-  };
   tool_callbacks.handle_tool_command_result =
       [&](std::string_view label, const ModelingCommandResult &command,
           bool announce_failure) {
@@ -3527,6 +3524,7 @@ void QtViewportPanel::process_viewport_input(
       };
   ViewportModelingToolPortAdapter tool_ports(modeling,
                                              std::move(tool_callbacks));
+  ViewportModelingToolCommitAdapter tool_commits(editor.tools());
   const auto record_direct_tool_failure = [&](const QuaderApiVoidResult &result) {
     if (!result.ok() && !tool_error_notification.has_value()) {
       tool_error_notification = result.message.empty() ? "Command failed."
@@ -3634,7 +3632,7 @@ void QtViewportPanel::process_viewport_input(
   ViewportToolContext tool_context{
       .state = input_router_.state(),
       .camera = camera,
-      .ports = tool_ports.ports(),
+      .ports = tool_ports.ports(&tool_commits),
       .document = &document,
       .settings = &active_viewport_settings(),
       .box = &box_context,
