@@ -5,10 +5,12 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
+#include "api/quader_command_ids.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "assets/asset_registry.hpp"
 #include "editor/curve/curve_tool_service.hpp"
+#include "editor/input/quader_input_binding.hpp"
 #include "editor/interactions/tool_identity.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
@@ -324,6 +326,8 @@ void expect_point_tool_click_uses_queued_press_coordinate(
 TEST(ViewportToolCatalogTests, CatalogContainsExpectedInteractiveToolContracts) {
   ASSERT_EQ(viewport_tool_catalog().size(), viewport_tool_descriptors().size());
   for (const ToolDescriptor &descriptor : viewport_tool_descriptors()) {
+    SCOPED_TRACE(descriptor.id);
+    EXPECT_EQ(std::string_view(viewport_tool_id(descriptor.tool)), descriptor.id);
     EXPECT_EQ(find_viewport_tool_descriptor(descriptor.id), &descriptor);
     EXPECT_EQ(find_viewport_tool_descriptor(descriptor.tool), &descriptor);
     if (!descriptor.editor_owned_native_lifecycle) {
@@ -352,6 +356,40 @@ TEST(ViewportToolCatalogTests, CatalogContainsExpectedInteractiveToolContracts) 
           viewport_tool_interaction_tool(descriptor.tool),
           quader_editor_core::viewport_interaction_tool_from_id(descriptor.id));
     }
+  }
+}
+
+TEST(ViewportToolCatalogTests,
+     SelectionCapableToolsShareEscapeDispatchAndConflictScope) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  constexpr auto kClearSelection = quader_command::kEditClearSelection;
+  const auto shortcut = editor.commands().shortcut_for(kClearSelection);
+  ASSERT_EQ(shortcut, "Escape");
+  const auto chords = quader_input_parse_shortcut(shortcut);
+  ASSERT_TRUE(chords.has_value());
+  ASSERT_EQ(chords->size(), 1u);
+  for (const auto &descriptor : viewport_tool_descriptors()) {
+    SCOPED_TRACE(descriptor.id);
+    ViewportToolState state;
+    state.active_tool = descriptor.tool;
+    const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+        chords->front(), state, true, false);
+    if (!descriptor.allows_selection_fallback) {
+      EXPECT_NE(dispatch.command_id, kClearSelection.string());
+      continue;
+    }
+    EXPECT_EQ(dispatch.kind, QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(dispatch.command_id, kClearSelection.string());
+    const auto conflicts = editor.commands().conflicts_for_shortcut(
+        shortcut, "activeTool." + std::string(descriptor.id));
+    EXPECT_NE(std::find_if(conflicts.begin(), conflicts.end(),
+                          [&](const auto &conflict) {
+                            return conflict.target_id == kClearSelection.string();
+                          }),
+              conflicts.end());
   }
 }
 

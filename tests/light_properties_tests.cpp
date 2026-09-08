@@ -66,7 +66,7 @@ TEST(LightPropertiesTests, EngineOutputsShareOneScaleAcrossShapesAndLegacyUnits)
     float preview_energy;
     double physical_output;
   };
-  constexpr std::array references = {
+  constexpr std::array kReferences = {
       IntensityReference{1.0f, 0.0625f, 7539.822368615504},
       IntensityReference{16.0f, 1.0f, 120637.15789784807},
       IntensityReference{32.0f, 2.0f, 241274.31579569614},
@@ -75,7 +75,7 @@ TEST(LightPropertiesTests, EngineOutputsShareOneScaleAcrossShapesAndLegacyUnits)
                            LightType::Spot}) {
     for (const auto unit : {LightUnit::Simple, LightUnit::Lumens,
                             LightUnit::Candela}) {
-      for (const auto &reference : references) {
+      for (const auto &reference : kReferences) {
         SCOPED_TRACE(reference.intensity);
         SCOPED_TRACE(static_cast<int>(shape));
         SCOPED_TRACE(static_cast<int>(unit));

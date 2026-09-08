@@ -11,6 +11,7 @@
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/interactions/selection_edit.hpp"
+#include "editor/interactions/selection_lasso.hpp"
 #include "editor/interactions/transform_gizmo.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/selection/box_selection_rules.hpp"
@@ -131,6 +132,30 @@ QuaderHoverRequest make_hover_request(const ViewportInteractionFrame &frame,
   };
 }
 
+const ViewportPointerButtonEdge *lasso_release_edge(
+    const ViewportInputFrame &input, const ViewportPointerButtonEdge &press) {
+  const ViewportPointerButtonEdge *release = nullptr;
+  for (const auto &edge : input.pointer_released_edges) {
+    if (edge.button != press.button ||
+        (press.sequence != 0u && edge.sequence != 0u &&
+         edge.sequence <= press.sequence)) {
+      continue;
+    }
+    const bool followed_new_press = std::any_of(
+        input.pointer_pressed_edges.begin(), input.pointer_pressed_edges.end(),
+        [&](const auto &new_press) {
+          return new_press.button == press.button &&
+                 new_press.sequence > press.sequence &&
+                 new_press.sequence < edge.sequence;
+        });
+    if (!followed_new_press &&
+        (release == nullptr || edge.sequence < release->sequence)) {
+      release = &edge;
+    }
+  }
+  return release;
+}
+
 ModelingBoxSelectRequest
 make_box_select_request(const ViewportCameraController &camera,
                         const ViewportSettings &settings,
@@ -201,7 +226,9 @@ bool depth_cycle_context_available(const ViewportInteractionFrame &frame) {
          frame.input.viewport_focused && !frame.input.text_input_active &&
          !frame.input.navigation_active &&
          !frame.input.operation_preview_active &&
-         !frame.input.active_transform_drag && !frame.input.modal_tool_active &&
+         (!frame.input.active_transform_drag ||
+          frame.input_router.state().active_tool == ViewportToolId::LassoSelect) &&
+         !frame.input.modal_tool_active &&
          !frame.input.active_tool_owns_viewport &&
          !frame.input.keybinding_input_consumed &&
          !frame.input_result.consumed &&
@@ -528,6 +555,80 @@ box_selection(QuaderEditorApi &editor, ViewportInputRouter &input_router,
       "Viewport resolved marquee selection");
 }
 
+ViewportSelectionApplyResult lasso_selection(
+    QuaderEditorApi &editor, ViewportInputRouter &input_router,
+    const ViewportInteractionFrame &frame, std::span<const QVec2> points,
+    bool partial_intersection,
+    quader_editor_core::SelectionEditOperation edit,
+    const EditorSelectionBoxBaseline &baseline,
+    ViewportCurveInteractionPort *curve, bool include_curve_controls,
+    ViewportSceneLassoProjectionCache *projection_cache) {
+  QDR_PROFILE_FUNCTION();
+  EditorSelectionService &selection = selection_owner(editor);
+  const quader_editor_core::SelectionLassoRegion region(points);
+  if (!region.valid()) {
+    return {.command = {.ok = true},
+            .selection = synchronize_selection_summary(input_router,
+                                                         selection.summary())};
+  }
+  const ModelingLassoSelectRequest request{
+      .camera = ViewportCameraAdapter::modeling_camera(
+          frame.camera, frame.input.viewport_size),
+      .points = points,
+      .partial_intersection = partial_intersection,
+      .select_backfaces =
+          frame.settings.bool_value(ViewportBoolSettingId::BackfaceSelection),
+      .near_plane = frame.camera.state().near_plane,
+      .far_plane = frame.camera.state().far_plane,
+  };
+  const bool scene_mode = baseline.mode == ModelingSelectionMode::Object ||
+                          baseline.mode == ModelingSelectionMode::Group;
+  std::vector<EntityId> eligible_entities;
+  const std::vector<ResolvedSelectionHit> modeling_hits =
+      selection.query_modeling_lasso_hits(request, &eligible_entities);
+  const CurveToolPreviewState *curve_controls =
+      include_curve_controls && curve != nullptr && curve->controls_editable()
+          ? &curve->preview_state() : nullptr;
+  const auto hits = collect_viewport_scene_lasso_hits({
+      .camera = frame.camera,
+      .points = points,
+      .partial_intersection = partial_intersection,
+      .billboards = scene_mode
+          ? frame.scene_billboard_pick_candidates
+          : std::span<const ViewportSceneBillboardPickCandidate>{},
+      .curves = scene_mode
+          ? frame.scene_curve_pick_candidates
+          : std::span<const ViewportSceneCurvePickCandidate>{},
+      .curve_controls = curve_controls,
+      .resolved_selection_hits = modeling_hits,
+      .include_curve_controls = curve_controls != nullptr,
+      .eligible_entities = &eligible_entities,
+      .projection_cache = projection_cache,
+  });
+  std::vector<ResolvedSelectionTarget> targets;
+  targets.reserve(hits.size());
+  for (const ViewportSceneHitCandidate &hit : hits) {
+    if (auto target = resolved_selection_target(hit)) {
+      targets.push_back(std::move(*target));
+    }
+  }
+  if (baseline.mode == ModelingSelectionMode::Group) {
+    targets = selection.filter_lasso_group_targets(
+        targets, eligible_entities, partial_intersection);
+  }
+  return checked_selection_apply_result(
+      input_router,
+      selection.apply_resolved_marquee({
+          .targets = std::move(targets),
+          .edit = selection_edit_to_modeling(edit),
+          .mode = baseline.mode,
+          .rule = partial_intersection ? ModelingBoxSelectionRule::Crossing
+                                       : ModelingBoxSelectionRule::Contain,
+          .baseline = baseline,
+      }),
+      "Viewport resolved lasso selection");
+}
+
 } // namespace
 
 void ViewportSelectionInteraction::reset() {
@@ -544,6 +645,9 @@ void ViewportSelectionInteraction::reset() {
   pending_pick_feedback_.reset();
   box_hovered_before_selection_.reset();
   box_baseline_.reset();
+  lasso_context_.reset();
+  marquee_cache_ = {};
+  lasso_projection_cache_ = {};
   curve_control_box_active_ = false;
   committed_marquee_.reset();
   hover_suppressed_target_.reset();
@@ -585,7 +689,7 @@ bool ViewportSelectionInteraction::DepthClickBaseline::matches_frame(
 void ViewportSelectionInteraction::cancel_pending_click() {
   if (depth_click_baseline_.has_value() &&
       depth_click_baseline_->delay_single_click && box_state_.active &&
-      !box_state_.dragging) {
+      !box_state_.dragging && !lasso_context_.has_value()) {
     quader_editor_core::clear_selection_box(box_state_);
     box_edit_ = quader_editor_core::SelectionEditOperation::Replace;
     box_cycle_depth_ = false;
@@ -819,16 +923,90 @@ ViewportSelectionInteraction::commit_pick_selection(
   return result;
 }
 
-ViewportSelectionMarquee ViewportSelectionInteraction::marquee() const {
+const ViewportSelectionMarquee &ViewportSelectionInteraction::marquee() const {
   if (!box_state_.active || !box_state_.dragging) {
-    return committed_marquee_.value_or(ViewportSelectionMarquee{});
+    static const ViewportSelectionMarquee kEmpty;
+    return committed_marquee_.has_value() ? *committed_marquee_ : kEmpty;
   }
-  return box_marquee(box_state_.start, box_state_.end);
+  if (!lasso_context_.has_value()) {
+    marquee_cache_ = box_marquee(box_state_.start, box_state_.end);
+  }
+  return marquee_cache_;
+}
+
+bool ViewportSelectionInteraction::cancel_lasso_drag() {
+  if (!lasso_context_.has_value()) {
+    return false;
+  }
+  box_release_suppression_.begin(QuaderMouseButton::Left, true);
+  clear_curve_control_box();
+  box_baseline_.reset();
+  box_hovered_before_selection_.reset();
+  box_cycle_depth_ = false;
+  box_cycle_modifiers_ = {};
+  committed_marquee_.reset();
+  cancel_pending_click();
+  return true;
+}
+
+void ViewportSelectionInteraction::append_lasso_point(QVec2 point,
+                                                       bool include_release) {
+  if (!lasso_context_.has_value() || !box_pointer_.has_value() ||
+      !std::isfinite(point.x) || !std::isfinite(point.y)) {
+    return;
+  }
+  box_state_.end = point;
+  box_state_.dragging = box_state_.dragging ||
+      viewport_pointer_drag_threshold_reached(*box_pointer_, point);
+  std::vector<QVec2> &points = marquee_cache_.lasso_points;
+  const double distance_squared = points.empty()
+      ? lasso_sample_distance_squared_
+      : viewport_pointer_distance_squared(points.back(), point);
+  if (points.empty() || distance_squared >= lasso_sample_distance_squared_ ||
+      (include_release && distance_squared > 0.0)) {
+    points.push_back(point);
+    marquee_cache_.path_revision = ++lasso_path_revision_;
+  }
+  marquee_cache_.active = box_state_.dragging;
+  marquee_cache_.end = point;
+}
+
+void ViewportSelectionInteraction::collect_lasso_samples(
+    const ViewportInteractionFrame &frame) {
+  if (!lasso_context_.has_value() || !box_pointer_.has_value()) {
+    return;
+  }
+  const ViewportPointerButtonEdge &press = box_pointer_->press;
+  const ViewportPointerButtonEdge *release =
+      lasso_release_edge(frame.input, press);
+  bool sampled = false;
+  for (const ViewportPointerMotionSample &sample :
+       frame.input.pointer_motion_samples) {
+    if (sample.button != QuaderMouseButton::Left ||
+        (press.sequence != 0u && sample.press_sequence != press.sequence) ||
+        (sample.sequence != 0u &&
+         sample.sequence <= lasso_sample_sequence_) ||
+        (release != nullptr && sample.sequence > release->sequence)) {
+      continue;
+    }
+    append_lasso_point(sample.local,
+                       release != nullptr &&
+                           sample.sequence == release->sequence);
+    lasso_sample_sequence_ = sample.sequence;
+    sampled = true;
+  }
+  if (release != nullptr) {
+    append_lasso_point(release->local, true);
+  } else if (!sampled && (frame.left_down || frame.left_released)) {
+    append_lasso_point(frame.input.mouse_local, frame.left_released);
+  }
 }
 
 void ViewportSelectionInteraction::clear_curve_control_box() {
   quader_editor_core::clear_selection_box(box_state_);
   box_pointer_.reset();
+  lasso_context_.reset();
+  marquee_cache_ = {};
   curve_control_box_active_ = false;
   box_edit_ = quader_editor_core::SelectionEditOperation::Replace;
 }
@@ -840,7 +1018,7 @@ void ViewportSelectionInteraction::handle_frame(
     ViewportToolHoverPort *tool_hover, ViewportCurveInteractionPort *curve) {
   QDR_PROFILE_FUNCTION();
   committed_marquee_.reset();
-  const bool canceled_release_reserved = box_release_suppression_.consume(
+  bool canceled_release_reserved = box_release_suppression_.consume(
       QuaderMouseButton::Left, frame.left_pressed, frame.left_down,
       frame.left_released);
   const bool curve_controls_editable =
@@ -869,6 +1047,19 @@ void ViewportSelectionInteraction::handle_frame(
       can_use_selection_fallback && frame.input.viewport_hovered;
   const bool can_cycle_depth =
       can_pick && depth_cycle_context_available(frame);
+  if (lasso_context_.has_value() &&
+      (!can_use_selection_fallback || !frame.input.viewport_focused ||
+       frame.input_result.view_changed ||
+       !lasso_context_->matches_context(
+           frame, editor.scene_documents().active_scene_id().value_or(
+                      SceneSessionId{})) ||
+       lasso_context_->selection.mode !=
+           to_modeling_selection_mode(frame.selection_state.summary.mode) ||
+       lasso_context_->keybindings_revision !=
+           editor.commands().keybindings_revision())) {
+    (void)cancel_lasso_drag();
+    canceled_release_reserved = true;
+  }
   if (tool_result.handled ||
       (before_tool.gizmo_consumed && frame.left_released) ||
       !depth_cycle_context_available(frame) ||
@@ -886,11 +1077,7 @@ void ViewportSelectionInteraction::handle_frame(
   // its pick boundary between clicks. Its deferred request owns this release.
   if (before_tool.selection_click_requested ||
       (box_cycle_depth_ && !can_cycle_depth)) {
-    if (curve_control_box_active_) {
-      clear_curve_control_box();
-    } else {
-      quader_editor_core::clear_selection_box(box_state_);
-    }
+    clear_curve_control_box();
     box_edit_ = quader_editor_core::SelectionEditOperation::Replace;
     box_cycle_depth_ = false;
     box_cycle_modifiers_ = {};
@@ -907,6 +1094,7 @@ void ViewportSelectionInteraction::handle_frame(
     box_cycle_modifiers_ = {};
     box_hovered_before_selection_.reset();
     box_baseline_.reset();
+    canceled_release_reserved = true;
   }
   // The first release and second double-click press can share a frame while
   // the ordinary first click still owns the pending selection box.
@@ -1097,6 +1285,8 @@ void ViewportSelectionInteraction::handle_frame(
   if (!box_state_.active &&
       (can_use_selection_fallback || curve_control_gesture_available) &&
       frame.left_pressed && !canceled_release_reserved &&
+      !frame.input.pointer_interaction_canceled &&
+      !frame.input_result.cancel_requested &&
       !before_tool.selection_click_requested) {
     QDR_PROFILE_SCOPE("Viewport selection begin box");
     box_edit_ = quader_editor_core::selection_edit_operation_from_modifiers(
@@ -1120,17 +1310,64 @@ void ViewportSelectionInteraction::handle_frame(
         frame.input.pointer_pressed_edges, QuaderMouseButton::Left,
         frame.left_click_local, frame.input.mouse_screen,
         frame.input.modifiers, frame.pointer_drag_threshold_pixels);
+    box_edit_ = quader_editor_core::selection_edit_operation_from_modifiers(
+        box_pointer_->modifiers.primary, box_pointer_->modifiers.shift);
     quader_editor_core::begin_selection_box(
         box_state_, box_pointer_->press.local, box_edit_);
+    if (frame.input_router.state().active_tool == ViewportToolId::LassoSelect) {
+      // Only a press resolves settings. Pointer motion retains this snapshot.
+      const QuaderToolSettingsTarget settings = editor.tools().active_settings();
+      const auto partial = std::find_if(
+          settings.controls.begin(), settings.controls.end(),
+          [](const QuaderToolSettingControl &control) {
+            return control.id == "select_partial_intersection";
+          });
+      lasso_partial_intersection_ =
+          partial != settings.controls.end() && partial->bool_value;
+      const ViewportRay ray =
+          frame.camera.ray_from_viewport_point(box_pointer_->press.local);
+      lasso_context_ = DepthClickBaseline{
+          .pointer = *box_pointer_,
+          .selection = *box_baseline_,
+          .camera = &frame.camera,
+          .ray = {.origin = ray.origin, .direction = ray.direction},
+          .viewport_size = frame.input.viewport_size,
+          .scene_session_id = editor.scene_documents().active_scene_id().value_or(
+              SceneSessionId{}),
+          .tool = ViewportToolId::LassoSelect,
+          .content_revision = frame.selection_state.summary.content_revision,
+          .selection_revision = frame.selection_state.summary.selection_revision,
+          .scene_revision = frame.selection_state.scene_revision,
+          .asset_revision = frame.selection_state.asset_revision,
+          .keybindings_revision = editor.commands().keybindings_revision(),
+      };
+      const double sample_distance = 2.0 * static_cast<double>(
+          viewport_sanitized_pixel_scale(frame.viewport_pixel_scale));
+      lasso_sample_distance_squared_ = sample_distance * sample_distance;
+      lasso_sample_sequence_ = 0;
+      marquee_cache_ = {
+          .start = box_pointer_->press.local,
+          .end = box_pointer_->press.local,
+          .rule = lasso_partial_intersection_
+              ? ModelingBoxSelectionRule::Crossing
+              : ModelingBoxSelectionRule::Contain,
+      };
+      append_lasso_point(box_pointer_->press.local);
+    }
   }
 
-  if (box_state_.active && frame.left_down) {
+  if (lasso_context_.has_value()) {
+    collect_lasso_samples(frame);
+  }
+  if (box_state_.active && (frame.left_down || lasso_context_.has_value())) {
     QDR_PROFILE_SCOPE("Viewport selection update box");
-    quader_editor_core::update_selection_box(
+    if (!lasso_context_.has_value()) {
+      quader_editor_core::update_selection_box(
         box_state_, frame.input.mouse_local,
         box_pointer_.has_value()
             ? static_cast<double>(box_pointer_->drag_threshold_pixels)
             : static_cast<double>(frame.pointer_drag_threshold_pixels));
+    }
     if (box_state_.dragging) {
       // Mouse motion only presents the marquee. Resolving and publishing a
       // selection here would synchronously rebuild SDK, scene, UI, and overlay
@@ -1146,8 +1383,10 @@ void ViewportSelectionInteraction::handle_frame(
   const bool matching_box_release =
       box_pointer_.has_value() && frame.left_released &&
       (!release_provenance_available || box_pointer_->press.sequence == 0u ||
-       viewport_pointer_edge_after(frame.input.pointer_released_edges,
-                                   box_pointer_->press) != nullptr);
+       (lasso_context_.has_value()
+            ? lasso_release_edge(frame.input, box_pointer_->press)
+            : viewport_pointer_edge_after(frame.input.pointer_released_edges,
+                                           box_pointer_->press)) != nullptr);
   const bool exact_box_press =
       box_pointer_.has_value() && box_pointer_->press.sequence != 0u;
   const bool mismatched_box_release =
@@ -1168,9 +1407,12 @@ void ViewportSelectionInteraction::handle_frame(
   if (box_state_.active && !canceled_release_reserved &&
       (matching_box_release || box_button_became_idle)) {
     QDR_PROFILE_SCOPE("Viewport selection finish box");
+    const bool lasso_commit = lasso_context_.has_value();
+    const QVec2 release_local = lasso_commit
+        ? box_state_.end : frame.input.mouse_local;
     const quader_editor_core::SelectionBoxCommit commit =
         quader_editor_core::finish_selection_box(
-            box_state_, frame.input.mouse_local, box_edit_,
+            box_state_, release_local, box_edit_,
             box_pointer_.has_value()
                 ? static_cast<double>(box_pointer_->drag_threshold_pixels)
                 : static_cast<double>(frame.pointer_drag_threshold_pixels));
@@ -1184,17 +1426,24 @@ void ViewportSelectionInteraction::handle_frame(
     curve_control_box_active_ = false;
     if (commit.dragged) {
       cancel_pending_click();
-      committed_marquee_ = box_marquee(commit.start, commit.end);
+      committed_marquee_ = lasso_commit
+          ? std::move(marquee_cache_) : box_marquee(commit.start, commit.end);
       const EditorSelectionBoxBaseline baseline =
           box_baseline_.value_or(
               selection_owner(editor).capture_box_selection_baseline());
-      const ViewportSelectionApplyResult applied = box_selection(
-          editor, frame.input_router, frame, commit.start, commit.end,
-          box_edit_, baseline, curve, include_curve_controls,
-          !can_pick && include_curve_controls
-              ? EditorSubSelectionKind::CurveControl
-              : EditorSubSelectionKind::None,
-          &scene_surface_scratch_);
+      const ViewportSelectionApplyResult applied = lasso_commit
+          ? lasso_selection(editor, frame.input_router, frame,
+                            committed_marquee_->lasso_points,
+                            lasso_partial_intersection_, box_edit_, baseline,
+                            curve, include_curve_controls,
+                            &lasso_projection_cache_)
+          : box_selection(
+                editor, frame.input_router, frame, commit.start, commit.end,
+                box_edit_, baseline, curve, include_curve_controls,
+                !can_pick && include_curve_controls
+                    ? EditorSubSelectionKind::CurveControl
+                    : EditorSubSelectionKind::None,
+                &scene_surface_scratch_);
       last_selection_command_result_ = applied.command;
       suppress_hover_after_selection(commit.end, hovered_before_selection);
       refresh_hover_work_after_selection(commit.end, false);
@@ -1225,6 +1474,8 @@ void ViewportSelectionInteraction::handle_frame(
     box_cycle_modifiers_ = {};
     box_hovered_before_selection_.reset();
     box_baseline_.reset();
+    lasso_context_.reset();
+    marquee_cache_ = {};
   }
 
   if (pending_first_pick_.has_value() && !frame.left_down) {

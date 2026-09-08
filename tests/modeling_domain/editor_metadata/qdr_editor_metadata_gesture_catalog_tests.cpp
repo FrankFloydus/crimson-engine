@@ -88,7 +88,7 @@ bool has_interaction_kind(std::string_view id, qhc::HostInteractionKind kind)
 
 TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogStaysDescriptorOnlyAndResolvesToolReferences) {
 	const std::span<const qhc::HostGestureDescriptor> gestures = qhc::gesture_catalog();
-	EXPECT_TRUE(gestures.size() == 15U);
+	EXPECT_TRUE(gestures.size() == 16U);
 
 	for (const qhc::HostGestureDescriptor& gesture : gestures) {
 		EXPECT_FALSE(gesture.id.empty());
@@ -265,6 +265,18 @@ TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogDescribesVi
             has_pointer_input(orbit, qhc::HostPointerInputKind::MiddleUp));
         EXPECT_TRUE(has_modifier_meaning(orbit, "shift:pan"));
 	EXPECT_TRUE(has_modifier_meaning(orbit, "alt:orbit_snap_modifier"));
+}
+
+TEST(QdrEditorMetadataGestureCatalogTests, LassoGestureKeepsSelectionToolAfterReleaseAndCancel) {
+  const auto &lasso = require_gesture("lasso_selection_drag");
+  EXPECT_TRUE(has_tool(lasso, "lasso_select"));
+  EXPECT_TRUE(has_key_input(lasso, "Escape"));
+  EXPECT_TRUE(has_modifier_meaning(lasso, "primary_modifier:remove_selection"));
+  EXPECT_TRUE(has_modifier_meaning(lasso, "shift:extend_selection"));
+  EXPECT_TRUE(lasso.suppressed_while_fly_navigation);
+  EXPECT_TRUE(lasso.blocked_by_active_preview);
+  EXPECT_FALSE(lasso.returns_to_select_on_cancel);
+  EXPECT_FALSE(lasso.returns_to_select_on_success);
 }
 
 TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogDescribesKeyOnlyPreviewAndLayoutBehavior) {

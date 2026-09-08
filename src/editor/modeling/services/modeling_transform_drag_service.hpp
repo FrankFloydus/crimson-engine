@@ -51,6 +51,8 @@ public:
   [[nodiscard]] virtual bool portable_modeling_preview_active() const = 0;
   /** True while a topology-stable transform is streamed as transient positions. */
   [[nodiscard]] virtual bool transient_transform_preview_active() const = 0;
+  [[nodiscard]] virtual bool
+  portable_transform_supports_sparse_history() const = 0;
   virtual ModelingCommandResult
   begin_portable_transform_preview(bool duplicate_selected,
                                    bool topology_stable_transform,
@@ -120,6 +122,7 @@ struct ModelingTransformDragServiceContext {
   const ModelingStructuralDuplicate *structural_duplicate =
       nullptr;
   EditorHistoryService *history = nullptr;
+  bool move_auto_merge_vertices = true;
 };
 
 /**

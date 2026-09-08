@@ -892,6 +892,8 @@ inline QuaderViewportTool to_api_viewport_tool(ModelingViewportTool tool) {
   switch (tool) {
   case ModelingViewportTool::Select:
     return QuaderViewportTool::Select;
+  case ModelingViewportTool::LassoSelect:
+    return QuaderViewportTool::LassoSelect;
   case ModelingViewportTool::Move:
     return QuaderViewportTool::Move;
   case ModelingViewportTool::Extrude:

@@ -399,6 +399,7 @@ enum class QuaderViewportTool {
     Mirror,
     Pivot,
     Curve,
+    LassoSelect,
 };
 
 /**

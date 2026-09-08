@@ -80,11 +80,11 @@ constexpr std::array kLightSourcePresets = {
 
 /// Avoids overflow when an extended physical-unit numeric input reaches float limits.
 [[nodiscard]] float representable_intensity(double value) noexcept {
-  constexpr double maximum = std::numeric_limits<float>::max();
+  constexpr double kMaximum = std::numeric_limits<float>::max();
   if (std::isnan(value)) {
     return 0.0f;
   }
-  return static_cast<float>(std::clamp(value, -maximum, maximum));
+  return static_cast<float>(std::clamp(value, -kMaximum, kMaximum));
 }
 
 /// Restricts picker presentation to displayable channels without changing storage.

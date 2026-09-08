@@ -208,8 +208,7 @@ private:
                       const std::vector<const ViewportOverlayPoint *> &points,
                       const ViewportOverlayCamera &camera,
                       ViewportOverlayLayer layer, std::uint16_t &blend_order,
-                      bool outline,
-                      const OverlayDepthStampPointVisibilityFilter *visibility);
+                      bool outline);
     static void
     append_icon_pass(OverlayLayerBuildPlan &plan,
                      const std::vector<const ViewportOverlayIcon *> &icons,

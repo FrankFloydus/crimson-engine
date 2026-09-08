@@ -49,6 +49,15 @@ bool face_loop_is_valid_after_merge(const Document& document, std::span<const El
 Face make_repaired_merge_face(const Face& source_face, std::vector<ElementId> vertices);
 std::vector<Face> repaired_faces_for_vertex_merge( const Document& source_document, const Document& candidate_document, const Face& source_face, const std::set<ElementId>& merge_vertex_ids, ElementId active_vertex_id);
 OperationResult build_vertex_merge_candidate( const Document& document, Document& candidate, const std::set<ElementId>& merge_vertex_ids, ElementId survivor_vertex_id, quader::QVec3 target_position);
+/// Repairs only incident topology, without the convex-hull reconstruction fallback.
+/// The authored-geometry policy retains loose vertices and untouched collapsed faces.
+OperationResult build_topology_vertex_merge_candidate(
+    const Document &document, Document &candidate,
+    const std::set<ElementId> &merge_vertex_ids, ElementId survivor_vertex_id,
+    quader::QVec3 target_position,
+    bool preserve_unaffected_authored_geometry = false,
+    std::map<ElementId, ElementId> *created_face_sources = nullptr,
+    std::map<ElementId, ElementId> *merged_face_ids = nullptr);
 void prune_unused_vertices(Document& document);
 void prune_invalid_faces(Document& document);
 } // namespace quader_poly::document_internal

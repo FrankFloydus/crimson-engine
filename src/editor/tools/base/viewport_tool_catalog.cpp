@@ -26,6 +26,7 @@ namespace quader {
 
 std::span<const ViewportTool *const> viewport_tool_catalog() {
   static const SelectTool kSelectTool;
+  static const ViewportTool kLassoSelectTool(ViewportToolId::LassoSelect);
   static const MoveTool kMoveTool;
   static const ExtrudeTool kExtrudeTool;
   static const RotateTool kRotateTool;
@@ -41,8 +42,9 @@ std::span<const ViewportTool *const> viewport_tool_catalog() {
   static const ViewportTool kRadialArrayTool(ViewportToolId::RadialArray);
   static const ViewportTool kPathArrayTool(ViewportToolId::PathArray);
   static const ViewportTool kCurveTool(ViewportToolId::Curve);
-  static const std::array<const ViewportTool *, 16> kTools{{
+  static const std::array<const ViewportTool *, 17> kTools{{
       &kSelectTool,
+      &kLassoSelectTool,
       &kMoveTool,
       &kExtrudeTool,
       &kRotateTool,

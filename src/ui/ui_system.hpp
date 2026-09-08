@@ -176,6 +176,7 @@ private:
   void bind_project_workspace_events(QuaderEditorApi &editor);
   void clear_project_workspace_events();
   void refresh_status_bar();
+  void refresh_status_selection();
   void present_status_notification(const QuaderApiStatus &result,
                                    int timeout_ms = 0);
   void present_lifecycle_result(const QuaderApiStatus &result);
@@ -270,6 +271,7 @@ private:
   QtStatusMessage *status_message_ = nullptr;
   QtOperationInputHints *operation_input_hints_ = nullptr;
   QLabel *status_version_ = nullptr;
+  QLabel *status_selection_ = nullptr;
   QTimer *auxiliary_window_save_timer_ = nullptr;
   UIPanelManager panels_;
   LocalizationService localization_;
@@ -497,6 +499,18 @@ private:
                            const StatusPresentationStamp &) = default;
   };
   RetainedUiPresenter<StatusPresentationStamp> status_presenter_;
+  /** Gates selection counting and formatting before querying either owner. */
+  struct StatusSelectionPresentationStamp final {
+    std::uint64_t scene_revision = 0u;
+    std::uint64_t scene_selection_revision = 0u;
+    std::uint64_t modeling_content_revision = 0u;
+    std::uint64_t modeling_selection_revision = 0u;
+    std::uint64_t localization_revision = 0u;
+    friend bool operator==(const StatusSelectionPresentationStamp &,
+                           const StatusSelectionPresentationStamp &) = default;
+  };
+  RetainedUiPresenter<StatusSelectionPresentationStamp>
+      status_selection_presenter_;
   std::uint64_t status_observed_command_revision_ = 0u;
   std::optional<QuaderApiStatus> status_notification_;
   std::uint64_t status_notification_command_revision_ = 0u;

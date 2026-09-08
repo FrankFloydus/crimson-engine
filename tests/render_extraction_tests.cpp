@@ -4805,20 +4805,20 @@ TEST(LightRenderableCacheTests, ConvertsEditorIntensityToViewportFilamentUnits) 
     // Reference strength 16 resolves to Godot energy 1. Filament's Lambert
     // response and fixed 1/38400 exposure require pi*38400 lux or candela.
     // Point and Filament SPOT convert candela to flux by 4*pi and pi.
-    constexpr double pi = 3.14159265358979323846;
+    constexpr double kPi = 3.14159265358979323846;
     for (float intensity : {1.0f, 16.0f, 32.0f}) {
         LightComponent light;
         light.intensity = intensity;
-        const double physical = pi * 38400.0 * intensity / 16.0;
+        const double physical = kPi * 38400.0 * intensity / 16.0;
         light.type = LightType::Directional;
         EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(light),
                         static_cast<float>(physical));
         light.type = LightType::Point;
         EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(light),
-                        static_cast<float>(physical * 4.0 * pi));
+                        static_cast<float>(physical * 4.0 * kPi));
         light.type = LightType::Spot;
         EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(light),
-                        static_cast<float>(physical * pi));
+                        static_cast<float>(physical * kPi));
     }
 }
 
@@ -6340,16 +6340,12 @@ TEST(OverlayPointMeshBuilderTests,
 }
 
 TEST(OverlayPointMeshBuilderTests,
-     InsideOutVertexPointsDrawOnTopWhenCameraIsInsideStampVolume) {
+     InwardRoomVertexPointsKeepSceneDepthInsideAndOutsideTheRoom) {
   const std::array<ViewportOverlayLayer, 3u> layers{{
       ViewportOverlayLayer::UnselectedVertex,
       ViewportOverlayLayer::SelectedVertex,
       ViewportOverlayLayer::HoverVertex,
   }};
-
-  ViewportOverlayCamera camera = test_perspective_overlay_camera();
-  camera.eye = {0.0f, 0.0f, -2.0f};
-  camera.forward = {0.0f, 0.0f, -1.0f};
 
   for (const ViewportOverlayLayer layer : layers) {
     SCOPED_TRACE(static_cast<int>(layer));
@@ -6362,17 +6358,86 @@ TEST(OverlayPointMeshBuilderTests,
         .element = {.object_id = 1, .vertex_id = 1},
         .outline_growth_pixels = 0.0f,
     });
+    // Retain a visible back-wall corner alongside the interior wall marker.
+    // CPU filtering must not throw away inward-room boundary handles: the
+    // scene depth buffer resolves their fragments against any intervening wall.
+    frame.points.push_back({
+        .layer = layer,
+        .position = {1.0f, 1.0f, -3.0f},
+        .color = rgba8(255, 211, 31, 255),
+        .size_pixels = 6.0f,
+        .element = {.object_id = 1, .vertex_id = 2},
+        .outline_growth_pixels = 0.0f,
+    });
     append_source_wire_depth_stamp_box(frame, 1, true);
+    // This separate wall is in front of vertex 1, including while the camera
+    // is within the inward room. Volume containment cannot grant X-ray drawing.
+    append_source_wire_depth_stamp_quad(
+        frame, 2, {-0.75f, -0.75f, -2.5f}, {0.75f, -0.75f, -2.5f},
+        {0.75f, 0.75f, -2.5f}, {-0.75f, 0.75f, -2.5f}, false);
+
+    for (const ViewportOverlayProjection projection : {
+             ViewportOverlayProjection::Perspective,
+             ViewportOverlayProjection::Orthographic}) {
+      SCOPED_TRACE(static_cast<int>(projection));
+      for (const float eye_z : {-2.0f, -0.5f, 15.0f}) {
+        SCOPED_TRACE(eye_z);
+        ViewportOverlayCamera camera = test_perspective_overlay_camera();
+        camera.eye = {0.0f, 0.0f, eye_z};
+        camera.forward = {0.0f, 0.0f, -1.0f};
+        camera.projection = projection;
+
+        const OverlayLayerBuildPlan plan =
+            OverlayRenderableBuilder::build_layer(frame, camera, layer);
+
+        ASSERT_EQ(plan.point_batches.size(), 1u);
+        EXPECT_EQ(point_mesh_vertex_count(plan), 8u);
+        const OverlayPointBatch &batch = plan.point_batches.front();
+        EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+        EXPECT_TRUE(batch.state.depth_culling);
+        EXPECT_FLOAT_EQ(batch.depth_bias, kOverlayPointDepthBias);
+        ASSERT_EQ(batch.mesh.position_stream_bindings.size(), 2u);
+        EXPECT_EQ(batch.mesh.position_stream_bindings[0].vertex_id, 1);
+        EXPECT_EQ(batch.mesh.position_stream_bindings[1].vertex_id, 2);
+      }
+    }
+  }
+}
+
+TEST(OverlayPointMeshBuilderTests,
+     InwardRoomVertexOutlinesRetainDepthWhileSnapTargetsStayOnTop) {
+  ViewportOverlayCamera camera = test_perspective_overlay_camera();
+  camera.eye = {0.0f, 0.0f, -2.0f};
+  camera.forward = {0.0f, 0.0f, -1.0f};
+
+  for (const ViewportOverlayLayer layer : {
+           ViewportOverlayLayer::SelectedVertex,
+           ViewportOverlayLayer::HoverVertex,
+           ViewportOverlayLayer::SnapTargetVertex}) {
+    SCOPED_TRACE(static_cast<int>(layer));
+    ViewportOverlayFrame frame;
+    append_source_wire_depth_stamp_box(frame, 1, true);
+    frame.points.push_back({
+        .layer = layer,
+        .position = {0.25f, 0.25f, -3.0f},
+        .color = rgba8(255, 211, 31, 255),
+        .size_pixels = 6.0f,
+        .element = {.object_id = 1, .vertex_id = 1},
+    });
 
     const OverlayLayerBuildPlan plan =
         OverlayRenderableBuilder::build_layer(frame, camera, layer);
-
-    ASSERT_EQ(plan.point_batches.size(), 1u);
-    EXPECT_EQ(point_mesh_vertex_count(plan), 4u);
-    EXPECT_EQ(plan.point_batches.front().state.depth_func,
-              OverlayDepthFunc::Always);
-    EXPECT_FLOAT_EQ(plan.point_batches.front().depth_bias, 0.0f);
-    EXPECT_FALSE(plan.point_batches.front().state.depth_culling);
+    const bool snap_target = layer == ViewportOverlayLayer::SnapTargetVertex;
+    ASSERT_EQ(plan.point_batches.size(), snap_target ? 1u : 2u);
+    for (const OverlayPointBatch &batch : plan.point_batches) {
+      EXPECT_EQ(batch.state.depth_func,
+                snap_target ? OverlayDepthFunc::Always
+                            : OverlayDepthFunc::GreaterOrEqual);
+      EXPECT_EQ(batch.state.depth_culling, !snap_target);
+      EXPECT_FLOAT_EQ(batch.depth_bias,
+                      snap_target ? 0.0f : kOverlayPointDepthBias);
+      EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+    }
   }
 }
 
@@ -8543,7 +8608,7 @@ TEST(RenderInstanceEditPresentationTests,
 
   constexpr int kObjectId = 77;
   ModelingObjectRuntimeMap object_map;
-  object_map.bind(kObjectId, member);
+  (void)object_map.bind(kObjectId, member);
   quader_editor_core::SelectionOverlayFrame runtime_frame;
   runtime_frame.lines.push_back({
       .layer = quader_editor_core::SelectionOverlayLayer::SourceWire,

@@ -137,7 +137,7 @@ public:
   transform_gizmo_snap_overlay_points() const;
   [[nodiscard]] const TransformGizmoSelectionCacheStats &
   transform_gizmo_selection_cache_stats() const;
-  [[nodiscard]] ViewportSelectionMarquee selection_marquee() const;
+  [[nodiscard]] const ViewportSelectionMarquee &selection_marquee() const;
   [[nodiscard]] const MaterialInteractionWorkStats &
   material_interaction_work_stats() const;
 

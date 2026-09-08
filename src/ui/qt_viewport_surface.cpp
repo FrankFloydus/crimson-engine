@@ -155,6 +155,7 @@ struct QtViewportSurface::InputAccumulator {
   bool has_mouse_position = false;
   std::uint64_t mouse_move_events = 0u;
   std::uint64_t pointer_event_sequence = 0u;
+  std::uint64_t left_pointer_press_sequence = 0u;
   ViewportModifiers modifiers = {};
   bool has_event_modifiers = false;
   std::vector<QuaderInputChord> pressed;
@@ -162,6 +163,7 @@ struct QtViewportSurface::InputAccumulator {
   std::vector<ViewportPointerButtonEdge> pointer_pressed_edges;
   std::vector<ViewportPointerButtonEdge> pointer_released_edges;
   std::vector<ViewportPointerButtonEdge> pointer_drag_started_edges;
+  std::vector<ViewportPointerMotionSample> pointer_motion_samples;
   std::vector<QuaderWheelInputEdge> wheel;
   QtWheelInputAccumulator wheel_accumulator;
   std::unordered_map<int, QuaderInputChord> active_keys;
@@ -392,6 +394,7 @@ QtViewportSurface::take_input_frame(float delta_seconds,
   frame.input.pointer_released_edges = std::move(input_->pointer_released_edges);
   frame.input.pointer_drag_started_edges =
       std::move(input_->pointer_drag_started_edges);
+  frame.input.pointer_motion_samples = std::move(input_->pointer_motion_samples);
   frame.input.wheel_input_edges = std::move(input_->wheel);
   frame.input.active_input_chords.reserve(input_->active_keys.size() + 2u);
   for (const auto &[key, chord] : input_->active_keys) {
@@ -432,6 +435,7 @@ QtViewportSurface::take_input_frame(float delta_seconds,
   input_->pointer_pressed_edges.clear();
   input_->pointer_released_edges.clear();
   input_->pointer_drag_started_edges.clear();
+  input_->pointer_motion_samples.clear();
   input_->wheel.clear();
   if (pointer_captured()) {
     recenter_captured_pointer();
@@ -541,6 +545,8 @@ void QtViewportSurface::set_pointer_capture(bool captured) {
     input_->suppress_warp_event = false;
     input_->warp_motion_overtook_target = false;
     input_->mouse_delta = {};
+    input_->pointer_motion_samples.clear();
+    input_->left_pointer_press_sequence = 0u;
     const bool raw_input_active =
         relative_pointer_input_.start_raw_input(native_window_handle());
     if (PlatformRawMouseInput::supported() && !raw_input_active) {
@@ -647,6 +653,11 @@ bool QtViewportSurface::event(QEvent *event) {
       input_->pointer_pressed_edges.clear();
       input_->pointer_released_edges.clear();
       input_->pointer_drag_started_edges.clear();
+      input_->pointer_motion_samples.clear();
+      if (input_->left_pointer_press_sequence != 0u) {
+        input_->pointer_interaction_canceled = true;
+        input_->left_pointer_press_sequence = 0u;
+      }
       relative_pointer_input_.clear();
     }
     synchronize_render_size();
@@ -823,6 +834,8 @@ void QtViewportSurface::record_focus_out() {
   input_->modifiers = {};
   input_->has_event_modifiers = true;
   input_->wheel_accumulator = {};
+  input_->pointer_motion_samples.clear();
+  input_->left_pointer_press_sequence = 0u;
   input_->pointer_interaction_canceled =
       input_->pointer_interaction_canceled || input_->left_down ||
       input_->middle_down || input_->right_down ||
@@ -955,6 +968,16 @@ void QtViewportSurface::record_mouse_press(QMouseEvent &event,
   case QuaderMouseButton::Left:
     input_->left_pressed = true;
     input_->left_down = true;
+    input_->left_pointer_press_sequence =
+        pointer_captured() ? 0u : input_->pointer_event_sequence;
+    if (input_->left_pointer_press_sequence != 0u) {
+      input_->pointer_motion_samples.push_back({
+          .button = QuaderMouseButton::Left,
+          .local = input_->mouse_local,
+          .sequence = input_->pointer_event_sequence,
+          .press_sequence = input_->left_pointer_press_sequence,
+      });
+    }
     input_->left_click_count = double_click ? 2 : 1;
     input_->left_click_local = input_->mouse_local;
     break;
@@ -1010,6 +1033,15 @@ void QtViewportSurface::record_mouse_release(QMouseEvent &event) {
   }
   switch (*button) {
   case QuaderMouseButton::Left:
+    if (input_->left_pointer_press_sequence != 0u) {
+      input_->pointer_motion_samples.push_back({
+          .button = QuaderMouseButton::Left,
+          .local = input_->mouse_local,
+          .sequence = input_->pointer_event_sequence,
+          .press_sequence = input_->left_pointer_press_sequence,
+      });
+      input_->left_pointer_press_sequence = 0u;
+    }
     input_->left_down = false;
     input_->left_released = true;
     break;
@@ -1118,6 +1150,15 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
   input_->mouse_local = local;
   input_->mouse_screen = screen;
   input_->has_mouse_position = true;
+  if (event.type() == QEvent::MouseMove &&
+      input_->left_pointer_press_sequence != 0u && !pointer_captured()) {
+    input_->pointer_motion_samples.push_back({
+        .button = QuaderMouseButton::Left,
+        .local = local,
+        .sequence = ++input_->pointer_event_sequence,
+        .press_sequence = input_->left_pointer_press_sequence,
+    });
+  }
   input_->hovered = true;
   input_->modifiers = viewport_modifiers(event.modifiers());
   synchronize_interaction_cursor();
@@ -1131,6 +1172,8 @@ void QtViewportSurface::record_native_pointer_capture_lost() {
   const bool capture_was_stolen = native_capture_loss_pending_;
   if (capture_was_stolen) {
     input_->wheel_accumulator = {};
+    input_->pointer_motion_samples.clear();
+    input_->left_pointer_press_sequence = 0u;
   }
   input_->pointer_interaction_canceled =
       input_->pointer_interaction_canceled ||

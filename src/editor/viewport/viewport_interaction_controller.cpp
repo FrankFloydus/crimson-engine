@@ -232,9 +232,14 @@ ViewportInteractionController::handle_before_active_tool_impl(
     prepared.selection_state = *resolved_selection;
   }
   if (frame.input_result.cancel_requested) {
+    (void)selection_.cancel_lasso_drag();
     (void)point_light_range_.cancel(editor);
     (void)transform_gizmo_.cancel_active_drag(editor, curve);
     return {.gizmo_consumed = true};
+  }
+  if (frame.input_router.state().active_tool == ViewportToolId::LassoSelect ||
+      selection_.lasso_pointer_active()) {
+    return {.selection_after_pending_pick = resolved_selection};
   }
   if (!transform_gizmo_.pointer_interaction_active() &&
       point_light_range_.handle_frame(editor, prepared)) {
@@ -848,6 +853,7 @@ void ViewportInteractionController::set_primitive_creation_decrement(bool decrem
 bool ViewportInteractionController::cancel_active_drag(
     QuaderEditorApi &editor) {
   interaction_cursor_ = ViewportPointerCursor::Default;
+  if (selection_.cancel_lasso_drag()) return true;
   if (point_light_range_.cancel(editor)) return true;
   if (primitive_creation_pointer_active()) {
     const auto cube = editor.tools().live_primitive_creation();
@@ -864,6 +870,7 @@ bool ViewportInteractionController::cancel_active_drag(
 bool ViewportInteractionController::cancel_active_drag(
     QuaderEditorApi &editor, NativeViewportToolCoordinator &native_tools) {
   interaction_cursor_ = ViewportPointerCursor::Default;
+  if (selection_.cancel_lasso_drag()) return true;
   if (primitive_creation_pointer_active()) return cancel_active_drag(editor);
   if (point_light_range_.cancel(editor)) return true;
   return transform_gizmo_.cancel_active_drag(
@@ -871,7 +878,8 @@ bool ViewportInteractionController::cancel_active_drag(
 }
 
 bool ViewportInteractionController::dragging() const {
-  return point_light_range_.dragging() || transform_gizmo_.dragging() ||
+  return selection_.lasso_pointer_active() ||
+         point_light_range_.dragging() || transform_gizmo_.dragging() ||
          (tool_runtime_.primitive_creation_interaction().active() >= 0 &&
           tool_runtime_.primitive_creation_interaction().active() < 6);
 }
@@ -935,7 +943,7 @@ ViewportInteractionController::transform_gizmo_selection_cache_stats() const {
   return transform_gizmo_.selection_cache_stats();
 }
 
-ViewportSelectionMarquee
+const ViewportSelectionMarquee &
 ViewportInteractionController::selection_marquee() const {
   return selection_.marquee();
 }

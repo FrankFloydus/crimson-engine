@@ -270,8 +270,15 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
 - Backface filtering uses authored winding adjusted by the world determinant sign. It is independent
   of depth, select-through, culling, and marquee policy. Viewport requests inject the persisted
   preference; independent tools and public modeling defaults retain their explicit policy.
+- Lasso bypasses occluders while retaining backface, visibility, lock, clipping, and edit-scope
+  eligibility. Full containment checks complete projected geometry; groups require all eligible
+  descendants. Selection and its overlay share the boundary-inclusive even-odd region contract.
 - Inward-room radius hits may survive same-surface arbitration only for the exact rendered occurrence
   and geometry member. A sibling instance, different member, or different object remains an occluder.
+- Editable vertex markers and their outlines remain depth-tested inside inward-facing rooms.
+  Camera containment must never enable X-ray rendering; retain inward boundary points for GPU
+  occlusion. Coverage: `OverlayPointMeshBuilderTests.InwardRoomVertex*` in
+  [render extraction](tests/render_extraction_tests.cpp).
 - Inversion is XOR over the host-resolved eligible universe. Excluded components keep their state,
   an empty universe is an exact no-op, and emptied participants remain enrolled for a second inverse.
   Preserve scene-only selection companions and valid explicit active components.
@@ -326,6 +333,12 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
 - The visible/custom pivot is not necessarily the raw scene origin. Repeat records the original
   world affine and pivot; component replay applies W^-1 * A * W. Shift-duplicate has one placement
   owner, and repeat is recorded only after duplicate plus transform commits.
+- Move auto-merge runs only at accepted component-move completion, including zero-distance
+  acceptance, within the same publication and undo transaction. Capture the setting for repeat;
+  retain sparse position history unless a mesh actually welds, then retain its topology and selection.
+  Duplicate-face cleanup must transfer selected/active cap identity to its surviving face. Undo/redo
+  preserves allocator high-water without strict topology reimport, including nonmanifold welds.
+  Contracts: [Move regressions](tests/move_auto_merge_tests.cpp).
 - TextureMappingComponent preserves occurrence-specific sampling without changing shared geometry.
   Materializing base UVs first inverts retained FaceTextureTransform; otherwise the edit is applied
   twice. Rotation numeric gestures use a captured per-face baseline, not accumulated displayed deltas.

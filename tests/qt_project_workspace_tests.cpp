@@ -10,6 +10,7 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "core/localization_service.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/session/scene_session.hpp"
@@ -44,6 +45,7 @@
 #include <QCoreApplication>
 #include <QDataStream>
 #include <QDockWidget>
+#include <QFrame>
 #include <QGuiApplication>
 #include <QHeaderView>
 #include <QIcon>
@@ -304,7 +306,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 17);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 18);
   QToolButton *scale_metric_probe = nullptr;
   for (QToolButton *candidate :
        selection_toolbar.findChildren<QToolButton *>()) {
@@ -324,7 +326,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 60), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 17);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 18);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
             baseline_button_margin * 2);
@@ -335,7 +337,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 17);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 18);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
             baseline_button_margin);
@@ -1995,6 +1997,225 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
+     StatusSelectionCountsEveryModeAndLocaleThroughRetainedOwnerRevisions) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const std::filesystem::path isolated_profile =
+      std::filesystem::temp_directory_path() /
+      ("quader-ui-system-selection-count-" +
+       std::to_string(std::chrono::steady_clock::now()
+                          .time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-status-selection-ui-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const std::filesystem::path resource_root =
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+  const std::filesystem::path project_root =
+      scoped_profile.profile() / "Selection Counter Project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  const auto created_project = editor.project().create(project_root);
+  ASSERT_TRUE(created_project.ok()) << created_project.error_message();
+  ASSERT_NE(project.active_scene(), nullptr);
+  quader::SceneSession &scene = *project.active_scene()->session;
+  const auto bind = [&]() {
+    ui.install_runtime_hooks(
+        editor, scene.scene(), scene.assets(), scene.modeling(),
+        scene.selection(), scene.native_tools(), scene.point_placement(),
+        quader::kInvalidAssetId);
+  };
+  bind();
+  auto *counter = ui.main_window()->findChild<QLabel *>(
+      QStringLiteral("statusSelection"));
+  auto *separator = ui.main_window()->findChild<QFrame *>(
+      QStringLiteral("statusSelectionSeparator"));
+  auto *version = ui.main_window()->findChild<QLabel *>(
+      QStringLiteral("statusVersion"));
+  auto *vertex_mode_action = ui.main_window()->findChild<QAction *>(
+      QStringLiteral("selectionModeVertex"));
+  auto *face_mode_action = ui.main_window()->findChild<QAction *>(
+      QStringLiteral("selectionModeFace"));
+  auto *mesh_mode_action = ui.main_window()->findChild<QAction *>(
+      QStringLiteral("selectionModeMesh"));
+  ASSERT_NE(counter, nullptr);
+  ASSERT_NE(separator, nullptr);
+  ASSERT_NE(version, nullptr);
+  ASSERT_NE(vertex_mode_action, nullptr);
+  ASSERT_NE(face_mode_action, nullptr);
+  ASSERT_NE(mesh_mode_action, nullptr);
+  EXPECT_EQ(separator->frameShape(), QFrame::VLine);
+
+  quader_poly::Document document;
+  const std::array vertices{
+      quader_poly::add_vertex(document, {0.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(document, {1.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(document, {1.0F, 1.0F, 0.0F}),
+      quader_poly::add_vertex(document, {0.0F, 1.0F, 0.0F}),
+  };
+  const std::array faces{
+      quader_poly::add_face(document,
+                           std::array{vertices[0], vertices[1], vertices[2]}),
+      quader_poly::add_face(document,
+                           std::array{vertices[0], vertices[2], vertices[3]}),
+  };
+  const auto mesh = editor.modeling().create_mesh(
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(
+          std::move(document)), {.name = "Selection Counter Mesh"});
+  const auto light = editor.scene().create_point_light();
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0F, 0.0F, 0.0F}},
+                 {.position = {2.0F, 0.0F, 0.0F}}},
+      .name = "Selection Counter Curve",
+  });
+  const auto first_group = editor.scene().create_entity(
+      {.name = "First Group", .kind = quader::QuaderEntityKind::Empty});
+  const auto second_group = editor.scene().create_entity(
+      {.name = "Second Group", .kind = quader::QuaderEntityKind::Empty});
+  ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+  ASSERT_TRUE(light.ok()) << light.error_message();
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(first_group.ok()) << first_group.error_message();
+  ASSERT_TRUE(second_group.ok()) << second_group.error_message();
+  ASSERT_TRUE(editor.scene()
+                  .reparent(mesh.value().entity, first_group.value().id)
+                  .ok());
+
+  const std::array modes{
+      quader::QuaderSelectionMode::Vertex, quader::QuaderSelectionMode::Edge,
+      quader::QuaderSelectionMode::Face, quader::QuaderSelectionMode::Object,
+      quader::QuaderSelectionMode::Group};
+  const std::array english_one{"Vertex Selected", "Edge Selected",
+                               "Face Selected", "Mesh Selected",
+                               "Group Selected"};
+  const std::array english_other{"Vertices Selected", "Edges Selected",
+                                 "Faces Selected", "Meshes Selected",
+                                 "Groups Selected"};
+  const std::array italian_one{"Vertice selezionato", "Spigolo selezionato",
+                               "Faccia selezionata", "Mesh selezionata",
+                               "Gruppo selezionato"};
+  const std::array italian_other{"Vertici selezionati", "Spigoli selezionati",
+                                 "Facce selezionate", "Mesh selezionate",
+                                 "Gruppi selezionati"};
+  for (const bool italian : {false, true}) {
+    ASSERT_TRUE(editor.preferences().set_locale(italian ? "it-IT" : "en-US").ok());
+    for (std::size_t mode_index = 0; mode_index < modes.size(); ++mode_index) {
+      const auto mode = modes[mode_index];
+      for (int count = 0; count <= 2; ++count) {
+        ASSERT_TRUE(editor.selection().clear().ok());
+        ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+        for (int index = 0; index < count; ++index) {
+          quader::QuaderApiVoidResult selected;
+          switch (mode) {
+          case quader::QuaderSelectionMode::Vertex:
+            selected = editor.selection().select_vertex(
+                mesh.value(), vertices[index], quader::QuaderSelectionEdit::Add);
+            break;
+          case quader::QuaderSelectionMode::Edge:
+            selected = editor.selection().select_edge(
+                mesh.value(), vertices[index], vertices[index + 1],
+                quader::QuaderSelectionEdit::Add);
+            break;
+          case quader::QuaderSelectionMode::Face:
+            selected = editor.selection().select_face(
+                mesh.value(), faces[index], quader::QuaderSelectionEdit::Add);
+            break;
+          case quader::QuaderSelectionMode::Object:
+            selected = editor.selection().select_object(
+                index == 0 ? mesh.value().entity : light.value().id,
+                quader::QuaderSelectionEdit::Add);
+            break;
+          case quader::QuaderSelectionMode::Group:
+            selected = editor.selection().select_object(
+                index == 0 ? first_group.value().id
+                           : second_group.value().id,
+                quader::QuaderSelectionEdit::Add);
+            break;
+          }
+          ASSERT_TRUE(selected.ok()) << selected.error_message();
+        }
+        ui.refresh({}, {});
+        const auto &words = italian ? (count == 1 ? italian_one : italian_other)
+                                    : (count == 1 ? english_one : english_other);
+        const QString expected = QStringLiteral("%1 %2")
+                                     .arg(count).arg(words[mode_index]);
+        EXPECT_EQ(counter->text(), expected)
+            << "mode " << mode_index << ", count " << count;
+        EXPECT_EQ(counter->accessibleName(), expected);
+      }
+    }
+  }
+
+  ASSERT_TRUE(editor.preferences().set_locale("en-US").ok());
+  ASSERT_TRUE(editor.selection().select_object(light.value().id).ok());
+  for (const auto mode : {quader::QuaderSelectionMode::Face,
+                         quader::QuaderSelectionMode::Vertex}) {
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    // A scene-only selection is summarized as Object even while the active
+    // component mode remains unchanged. The counter follows the active mode.
+    ASSERT_EQ(editor.selection().summary().mode,
+              quader::QuaderSelectionMode::Object);
+    ASSERT_EQ(scene.modeling().selection_mode(),
+              mode == quader::QuaderSelectionMode::Face
+                  ? quader::ModelingSelectionMode::Face
+                  : quader::ModelingSelectionMode::Vertex);
+    ui.refresh({}, {});
+    EXPECT_EQ(face_mode_action->isChecked(),
+              mode == quader::QuaderSelectionMode::Face);
+    EXPECT_EQ(vertex_mode_action->isChecked(),
+              mode == quader::QuaderSelectionMode::Vertex);
+    EXPECT_FALSE(mesh_mode_action->isChecked());
+    EXPECT_EQ(counter->text(),
+              mode == quader::QuaderSelectionMode::Face
+                  ? QStringLiteral("0 Faces Selected")
+                  : QStringLiteral("0 Vertices Selected"));
+  }
+  ASSERT_TRUE(editor.selection().clear().ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_objects(
+      {mesh.value().entity, light.value().id, curve.value().entity}).ok());
+  ui.refresh({}, {});
+  EXPECT_EQ(counter->text(), QStringLiteral("3 Meshes Selected"));
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Group).ok());
+  ASSERT_TRUE(editor.selection().select_objects(
+      {first_group.value().id, first_group.value().id,
+       mesh.value().entity, light.value().id, curve.value().entity}).ok());
+  ui.refresh({}, {});
+  EXPECT_EQ(counter->text(), QStringLiteral("1 Group Selected"));
+
+  // A retained value is untouched on unchanged frames; rebinding invalidates
+  // the gate even when both runtime owners and their revisions are identical.
+  counter->setText(QStringLiteral("retained presentation probe"));
+  for (int frame = 0; frame < 50; ++frame) {
+    ui.refresh({}, {});
+  }
+  EXPECT_EQ(counter->text(), QStringLiteral("retained presentation probe"));
+  bind();
+  ui.refresh({}, {});
+  EXPECT_EQ(counter->text(), QStringLiteral("1 Group Selected"));
+
+  ASSERT_TRUE(editor.selection().select_object(
+      second_group.value().id, quader::QuaderSelectionEdit::Add).ok());
+  ui.refresh({}, {});
+  EXPECT_EQ(counter->text(), QStringLiteral("2 Groups Selected"));
+  ASSERT_TRUE(editor.history().undo().ok());
+  ui.refresh({}, {});
+  EXPECT_EQ(counter->text(), QStringLiteral("1 Group Selected"));
+  ASSERT_TRUE(editor.history().redo().ok());
+  ui.refresh({}, {});
+  EXPECT_EQ(counter->text(), QStringLiteral("2 Groups Selected"));
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
      InterfaceScaleAndVSyncFlowThroughTheRealUiSystemAndPublicPreferencesHooks) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   const std::filesystem::path isolated_profile =
@@ -2046,7 +2267,7 @@ TEST(QtProjectWorkspaceTests,
     status_bar->setContentsMargins(margins);
     EXPECT_EQ(padded_height, unpadded_height + padding);
   };
-  expect_status_padding(5);
+  expect_status_padding(10);
 
   QAction *settings_action = ui.main_window()->findChild<QAction *>(
       QStringLiteral("action_settings"));
@@ -2071,7 +2292,7 @@ TEST(QtProjectWorkspaceTests,
   scale->setValue(150);
   QCoreApplication::processEvents();
   EXPECT_FLOAT_EQ(scale_style->metrics().factor(), 1.5F);
-  expect_status_padding(8);
+  expect_status_padding(15);
   EXPECT_DOUBLE_EQ(editor.preferences().interface_scale(), 1.0);
   EXPECT_TRUE(apply->isEnabled());
 
@@ -2081,7 +2302,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_TRUE(committed.changed());
   QCoreApplication::processEvents();
   EXPECT_FLOAT_EQ(scale_style->metrics().factor(), 2.0F);
-  expect_status_padding(10);
+  expect_status_padding(20);
   const QSize committed_status_size = status_bar->sizeHint();
   EXPECT_DOUBLE_EQ(editor.preferences().interface_scale(), 2.0);
   EXPECT_EQ(scale->value(), 200);
@@ -2114,7 +2335,7 @@ TEST(QtProjectWorkspaceTests,
             no_op_write_time);
   EXPECT_FALSE(timestamp_error);
   EXPECT_FLOAT_EQ(scale_style->metrics().factor(), 2.0F);
-  expect_status_padding(10);
+  expect_status_padding(20);
   EXPECT_EQ(status_bar->sizeHint(), committed_status_size);
   EXPECT_EQ(scale->value(), 200);
   EXPECT_FALSE(apply->isEnabled());

@@ -13,6 +13,9 @@
 
 namespace quader {
 
+/// Declares the selection gesture semantics owned by the lasso tool.
+[[nodiscard]] std::vector<QuaderOperationInputHint> lasso_selection_input_hints();
+
 /// Selects hints from owner state without resolving bindings or localizing text.
 [[nodiscard]] std::vector<QuaderOperationInputHint>
 primitive_creation_input_hints(QuaderPrimitiveCreationShape kind, bool can_finalize);

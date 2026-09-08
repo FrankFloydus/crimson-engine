@@ -54,6 +54,8 @@ to_runtime(ModelingViewportTool tool) {
     return quader_editor_core::ViewportInteractionTool::Mirror;
   case ModelingViewportTool::Select:
     return quader_editor_core::ViewportInteractionTool::Select;
+  case ModelingViewportTool::LassoSelect:
+    return quader_editor_core::ViewportInteractionTool::LassoSelect;
   }
   return quader_editor_core::ViewportInteractionTool::Select;
 }

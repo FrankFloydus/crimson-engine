@@ -65,8 +65,8 @@ constexpr Matrix kGodotAgxOutset = {{
   if (std::isnan(channel)) {
     return 0.0;
   }
-  constexpr double maximum = std::numeric_limits<float>::max();
-  return std::clamp(static_cast<double>(channel), -maximum, maximum);
+  constexpr double kMaximum = std::numeric_limits<float>::max();
+  return std::clamp(static_cast<double>(channel), -kMaximum, kMaximum);
 }
 
 class GodotAgxToneMapper final : public filament::ToneMapper {
@@ -127,24 +127,24 @@ private:
 const filament::ToneMapper &scene_tone_mapper(SceneToneMapping tone_mapping) noexcept {
   switch (tone_mapping) {
   case SceneToneMapping::Linear: {
-    static const filament::LinearToneMapper mapper;
-    return mapper;
+    static const filament::LinearToneMapper kMapper;
+    return kMapper;
   }
   case SceneToneMapping::Filmic: {
-    static const filament::FilmicToneMapper mapper;
-    return mapper;
+    static const filament::FilmicToneMapper kMapper;
+    return kMapper;
   }
   case SceneToneMapping::Agx: {
-    static const GodotAgxToneMapper mapper;
-    return mapper;
+    static const GodotAgxToneMapper kMapper;
+    return kMapper;
   }
   case SceneToneMapping::AcesLegacy:
   case SceneToneMapping::Aces:
   case SceneToneMapping::DisplayRange:
     break;
   }
-  static const filament::ACESToneMapper mapper;
-  return mapper;
+  static const filament::ACESToneMapper kMapper;
+  return kMapper;
 }
 
 } // namespace quader

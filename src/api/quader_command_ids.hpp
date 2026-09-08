@@ -370,6 +370,8 @@ inline constexpr QuaderCommandId kToolsTogglePrimitiveHemisphere{
     "tools.primitive.toggle_hemisphere"};
 
 inline constexpr QuaderCommandId kToolsActivateSelect{"tools.activate.select"};
+inline constexpr QuaderCommandId kToolsActivateLassoSelect{
+    "tools.activate.lasso_select"};
 inline constexpr QuaderCommandId kToolsActivateMove{"tools.activate.move"};
 inline constexpr QuaderCommandId kToolsActivateRotate{"tools.activate.rotate"};
 inline constexpr QuaderCommandId kToolsActivateScale{"tools.activate.scale"};
@@ -586,6 +588,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kToolsTogglePrimitiveCaps,
     kToolsTogglePrimitiveHemisphere,
     kToolsActivateSelect,
+    kToolsActivateLassoSelect,
     kToolsActivateMove,
     kToolsActivateRotate,
     kToolsActivateScale,

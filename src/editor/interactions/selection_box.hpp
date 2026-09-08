@@ -52,6 +52,8 @@ struct RectangleProjectedObject {
 	std::vector<quader::QVec2> screen_points;
 	std::vector<RectangleProjectedSegment> screen_segments;
 	std::vector<std::vector<quader::QVec2>> screen_polygons;
+	/// Lasso containment rejects geometry clipped by the camera depth planes.
+	bool complete_geometry = true;
 };
 
 /**
@@ -68,6 +70,7 @@ struct RectangleProjectedFace {
 	quader::QVec2 screen_max;
 	std::vector<quader::QVec2> screen_vertices;
 	bool front_facing = true;
+	bool complete_geometry = true;
 };
 
 /**
@@ -84,6 +87,7 @@ struct RectangleProjectedEdge {
 	bool has_screen_end = false;
 	quader::QVec2 screen_end;
 	bool front_facing = true;
+	bool complete_geometry = true;
 };
 
 /**

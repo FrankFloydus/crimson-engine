@@ -11,6 +11,25 @@
 namespace quader_editor_core {
 namespace {
 
+/// Shares selection cleanup while the viewport gesture owner traces the lasso.
+class LassoSelectTool final : public EditorTool {
+public:
+  [[nodiscard]] ViewportInteractionTool tool_id() const override {
+    return ViewportInteractionTool::LassoSelect;
+  }
+  [[nodiscard]] std::string_view id() const override { return "lasso_select"; }
+  [[nodiscard]] std::string_view label() const override { return "Lasso Select"; }
+  void reset_runtime_state(EditorRuntimeState &runtime,
+                           bool keep_active_when_current_tool) const override {
+    select_tool().reset_runtime_state(runtime, keep_active_when_current_tool);
+  }
+};
+
+const EditorTool &lasso_select_tool() {
+  static const LassoSelectTool kTool;
+  return kTool;
+}
+
 /**
  * Stores the Tool Registry Record data contract used by the modal modeling interaction layer.
  */
@@ -21,8 +40,9 @@ struct ToolRegistryRecord {
 
 std::span<const ToolRegistryRecord> tool_registry_records()
 {
-  static const std::array<ToolRegistryRecord, 11> kRecords{{
+  static const std::array<ToolRegistryRecord, 12> kRecords{{
       {"select", &select_tool()},
+      {"lasso_select", &lasso_select_tool()},
       {"move", &move_tool()},
       {"extrude", &extrude_tool()},
       {"rotate", &rotate_tool()},
@@ -39,10 +59,11 @@ std::span<const ToolRegistryRecord> tool_registry_records()
 
 std::span<const EditorTool* const> tool_entries()
 {
-  static const std::array<const EditorTool *, 11> kTools{
+  static const std::array<const EditorTool *, 12> kTools{
       &select_tool(), &move_tool(),   &extrude_tool(), &rotate_tool(),
       &scale_tool(),  &box_tool(),    &insert_edge_loop_tool(),
       &knife_tool(),  &cut_tool(),    &mirror_tool(),  &poly_tool(),
+      &lasso_select_tool(),
   };
   return kTools;
 }

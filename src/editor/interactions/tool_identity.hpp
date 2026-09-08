@@ -40,6 +40,7 @@ enum class ViewportInteractionTool {
   Mirror,
   Poly,
   Unknown,
+  LassoSelect,
 };
 
 /**

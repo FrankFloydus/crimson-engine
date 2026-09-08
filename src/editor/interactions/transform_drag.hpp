@@ -118,6 +118,7 @@ struct TransformDragState {
         quader_poly::Transform3 orientation;
         quader::QVec3 pivot;
 	bool scene_transform_preview_eligible = false;
+        bool move_auto_merge_vertices = false;
 	TransformSnapTarget snap_target;
 	MoveToolState move;
 	RotateToolState rotate;

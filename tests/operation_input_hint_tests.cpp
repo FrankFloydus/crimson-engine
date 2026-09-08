@@ -78,6 +78,27 @@ TEST(OperationInputHintTests, MetadataSelectsOnlyApplicableKeyboardCommands) {
   }
 }
 
+TEST(OperationInputHintTests, LassoHintsDescribeSelectionModifiersAndTrackToolChanges) {
+  auto standalone = create_standalone_editor();
+  auto &tools = standalone.editor().tools();
+  ASSERT_TRUE(tools.activate(ViewportToolId::LassoSelect).ok());
+  const auto hints = tools.active_input_hints();
+  EXPECT_TRUE(contains_gesture(hints, QuaderOperationInputGesture::PrimaryDrag));
+  EXPECT_TRUE(contains_gesture(hints, QuaderOperationInputGesture::ShiftPrimaryDrag));
+  EXPECT_TRUE(contains_gesture(hints, QuaderOperationInputGesture::ControlPrimaryDrag));
+  for (const char *locale : {"en-US", "it-IT"}) {
+    const auto localization = localization_for(locale);
+    for (const auto &hint : hints) {
+      EXPECT_NE(localization.text(hint.label_key, "missing"), "missing");
+    }
+  }
+  const auto revision = tools.active_input_hints_revision();
+  EXPECT_EQ(tools.active_input_hints_revision(), revision);
+  ASSERT_TRUE(tools.activate(ViewportToolId::Select).ok());
+  EXPECT_GT(tools.active_input_hints_revision(), revision);
+  EXPECT_TRUE(tools.active_input_hints().empty());
+}
+
 TEST(OperationInputHintTests, OwnerRevisionTracksKindSelectionFootprintAndCancel) {
   const auto *contract = test::find_command_behavior_contract(
       quader_command::kToolsTogglePrimitiveCaps.string());

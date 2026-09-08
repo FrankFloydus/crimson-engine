@@ -1541,7 +1541,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_system, "QtSettingsChangeKind::InterfaceCommit");
   expect_contains(ui_system, "QtSettingsChangeKind::KeybindingsCommit");
   expect_contains(ui_system,
-                  "selection_toolbar_->synchronize(*editor_, selection.mode, true)");
+                  "selection_toolbar_->synchronize(*editor_, active_mode, true)");
   expect_contains(ui_system,
                   "tool_toolbar_->synchronize(*editor_, selection, true)");
   expect_contains(ui_system,
@@ -1684,12 +1684,12 @@ TEST(UiLayoutGuardrailTests,
                   "addToolBar(Qt::TopToolBarArea, selection_toolbar_)");
   expect_contains(ui_system, "editor_->selection().set_mode(mode)");
   expect_contains(ui_system,
-                  "selection_toolbar_->synchronize(*editor_, selection.mode)");
+                  "selection_toolbar_->synchronize(*editor_, active_mode)");
   expect_contains(toolbar_header,
                   "void synchronize(const QuaderEditorApi &editor");
   expect_contains(
       ui_system,
-      "selection_toolbar_->synchronize(*editor_, selection.mode, true)");
+      "selection_toolbar_->synchronize(*editor_, active_mode, true)");
   expect_contains(toolbar, "if (!force && synchronization_valid_");
   expect_contains(toolbar,
                   "keybinding_target_id_for_selection_mode(entry.mode)");
@@ -4398,4 +4398,39 @@ TEST(UiLayoutGuardrailTests,
                   "apply_dock_content_minimum_width(*content, metrics)");
   expect_missing(create_dock, "std::max(220, content.minimumWidth())");
   expect_missing(refresh, "apply_dock_content_minimum_width");
+}
+
+TEST(UiLayoutGuardrailTests,
+     StatusSelectionGatesOwnerQueriesFormattingAndWidgetSettersByRevisions) {
+  const std::string ui = read_source_file("src/ui/ui_system.cpp");
+  const std::string refresh = source_slice(
+      ui, "void UISystem::refresh_status_selection()",
+      "void UISystem::refresh_status_bar()");
+  const std::size_t gate = refresh.find(
+      "if (!status_selection_presenter_.needs_refresh(stamp))");
+  ASSERT_NE(gate, std::string::npos);
+  for (const std::string_view revision : {
+           "document_->revision()", "document_->selection_revision()",
+           "modeling_->content_revision()", "modeling_->selection_revision()",
+           "localization_.revision()"}) {
+    const std::size_t observation = refresh.find(revision);
+    ASSERT_NE(observation, std::string::npos) << revision;
+    EXPECT_LT(observation, gate) << revision;
+  }
+  for (const std::string_view work : {
+           "editor_->selection().summary()", "modeling_->selection_mode()",
+           "document_->selected_entities()",
+           "localization_.text(", "status_selection_->setText(text)",
+           "status_selection_->setAccessibleName(text)"}) {
+    const std::size_t query = refresh.find(work);
+    ASSERT_NE(query, std::string::npos) << work;
+    EXPECT_LT(gate, query) << work;
+  }
+  expect_contains(refresh, "if (status_selection_->text() != text)");
+  expect_contains(refresh, "status_selection_presenter_.mark_presented(stamp)");
+  const std::string rebind = source_slice(
+      ui, "void UISystem::install_runtime_hooks(",
+      "void UISystem::refresh_project_workspace(");
+  expect_contains(rebind, "status_selection_presenter_.invalidate()");
+  expect_missing(refresh, "commands().available()");
 }

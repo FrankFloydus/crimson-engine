@@ -507,6 +507,9 @@ ModelingTransformDragService::begin_transform_drag(
         context.runtime.transform_drag_state();
     drag.scene_transform_preview_eligible =
         preview_routing.scene_transform_preview_eligible;
+    drag.move_auto_merge_vertices =
+        tool == quader_editor_core::ViewportInteractionTool::Move &&
+        portable_modeling_selection && context.move_auto_merge_vertices;
     context.runtime.set_transform_drag_state(drag);
   }
   {
@@ -760,7 +763,9 @@ ModelingTransformDragService::commit_transform_drag(
       selected_scene_targets_are_sdk_modeling_objects(context.scene);
   const bool sparse_transform_history =
       finish_preview_transaction && history != nullptr &&
-      context.port.transient_transform_preview_active() &&
+      (context.port.transient_transform_preview_active() ||
+       repeat_drag.move_auto_merge_vertices) &&
+      context.port.portable_transform_supports_sparse_history() &&
       !controller_.duplicate_selected() &&
       repeat_drag.operation ==
           quader_editor_core::TransformDragOperation::Transform;

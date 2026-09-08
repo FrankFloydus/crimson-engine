@@ -44,6 +44,10 @@ void activate_edge_selection(Selection& selection, Edge edge);
 void activate_face_selection(Selection& selection, ElementId face_id);
 void activate_pick_selection(Selection& selection, const PickResult& pick);
 void activate_last_selection(Selection& selection);
+/// Restores live component and active identities after a vertex weld.
+void restore_remapped_selection(
+    const Document &document, const Selection &source, Selection &selection,
+    const std::map<ElementId, ElementId> &merged_vertex_ids);
 ElementId active_face_or_invalid(const Selection& selection);
 void activate_face_or_last_selection(Selection& selection, ElementId preferred_face_id);
 bool face_uses_vertex(const Face& face, ElementId vertex_id);

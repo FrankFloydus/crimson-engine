@@ -675,6 +675,7 @@ Face make_repaired_merge_face(const Face& source_face, std::vector<ElementId> ve
     repaired.id = source_face.id;
     repaired.vertices = std::move(vertices);
     repaired.material_slot = source_face.material_slot;
+    repaired.normal_shading = source_face.normal_shading;
     repaired.texture_transform = source_face.texture_transform;
     repaired.uvs.clear();
     return repaired;
@@ -707,7 +708,9 @@ std::vector<ElementId> duplicate_face_key(const Face& face)
     return best;
 }
 
-bool remove_duplicate_faces_created_by_merge(Document& document, const std::set<ElementId>& touched_face_ids)
+bool remove_duplicate_faces_created_by_merge(
+        Document& document, const std::set<ElementId>& touched_face_ids,
+        std::map<ElementId, ElementId>& merged_face_ids)
 {
     if (touched_face_ids.empty()) {
         return false;
@@ -741,7 +744,10 @@ bool remove_duplicate_faces_created_by_merge(Document& document, const std::set<
         }
 
         if (kept_was_touched && !current_was_touched) {
+            merged_face_ids[kept_face.id] = face.id;
             kept_face = face;
+        } else {
+            merged_face_ids[face.id] = kept_face.id;
         }
         removed = true;
     }
@@ -823,7 +829,10 @@ OperationResult build_topology_vertex_merge_candidate(
         Document& candidate,
         const std::set<ElementId>& merge_vertex_ids,
         ElementId survivor_vertex_id,
-        quader::QVec3 target_position)
+        quader::QVec3 target_position,
+        bool preserve_unaffected_authored_geometry,
+        std::map<ElementId, ElementId> *created_face_sources,
+        std::map<ElementId, ElementId> *merged_face_ids)
 {
     candidate = document;
     Vertex* survivor_vertex = find_vertex(candidate, survivor_vertex_id);
@@ -840,6 +849,8 @@ OperationResult build_topology_vertex_merge_candidate(
     rebuilt_faces.reserve(document.faces.size());
     std::vector<MergeFaceUvAssignment> uv_assignments;
     std::set<ElementId> merge_touched_face_ids;
+    std::map<ElementId, ElementId> generated_face_sources;
+    std::map<ElementId, ElementId> duplicate_face_survivors;
 
     std::set<ElementId> used_face_ids;
     for (const Face& face : document.faces) {
@@ -873,6 +884,9 @@ OperationResult build_topology_vertex_merge_candidate(
         for (std::size_t index = 0; index < repaired_faces.size(); ++index) {
             Face& repaired_face = repaired_faces[index];
             repaired_face.id = index == 0 ? face.id : next_repaired_face_id();
+            if (index != 0U) {
+                generated_face_sources.emplace(repaired_face.id, face.id);
+            }
             merge_touched_face_ids.insert(repaired_face.id);
             repaired_face.material_slot = face.material_slot;
             repaired_face.texture_transform = face.texture_transform;
@@ -897,7 +911,8 @@ OperationResult build_topology_vertex_merge_candidate(
     }
 
     candidate.faces = std::move(rebuilt_faces);
-    changed = remove_duplicate_faces_created_by_merge(candidate, merge_touched_face_ids) || changed;
+    changed = remove_duplicate_faces_created_by_merge(
+        candidate, merge_touched_face_ids, duplicate_face_survivors) || changed;
     stitch_merge_split_uv_density(candidate, uv_assignments);
     std::erase_if(candidate.vertices, [&merge_vertex_ids](const Vertex& vertex) {
         return merge_vertex_ids.contains(vertex.id);
@@ -912,11 +927,24 @@ OperationResult build_topology_vertex_merge_candidate(
     if (find_vertex(candidate, survivor_vertex_id) == nullptr) {
         return OperationResult::failure("Merge would remove the survivor vertex.");
     }
-    if (!every_face_triangulates(candidate)) {
+    const bool repaired_faces_triangulate = std::ranges::all_of(
+        candidate.faces, [&](const Face &face) {
+            return (preserve_unaffected_authored_geometry &&
+                    !merge_touched_face_ids.contains(face.id)) ||
+                   !triangulate_face_local_indices(candidate, face).empty();
+        });
+    if (!repaired_faces_triangulate) {
         return OperationResult::failure("Merge would create a face that cannot be triangulated.");
     }
-    if (document_has_unreferenced_vertices(candidate)) {
+    if (!preserve_unaffected_authored_geometry && document_has_unreferenced_vertices(candidate)) {
         return OperationResult::failure("Merge would create a floating vertex.");
+    }
+
+    if (created_face_sources != nullptr) {
+        *created_face_sources = std::move(generated_face_sources);
+    }
+    if (merged_face_ids != nullptr) {
+        *merged_face_ids = std::move(duplicate_face_survivors);
     }
 
     return { true, {} };

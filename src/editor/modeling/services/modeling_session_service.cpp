@@ -961,6 +961,8 @@ to_runtime(ModelingViewportTool tool) {
     return quader_editor_core::ViewportInteractionTool::Mirror;
   case ModelingViewportTool::Select:
     return quader_editor_core::ViewportInteractionTool::Select;
+  case ModelingViewportTool::LassoSelect:
+    return quader_editor_core::ViewportInteractionTool::LassoSelect;
   }
   return quader_editor_core::ViewportInteractionTool::Select;
 }
@@ -988,6 +990,8 @@ from_runtime_viewport_tool(quader_editor_core::ViewportInteractionTool tool) {
     return ModelingViewportTool::Poly;
   case quader_editor_core::ViewportInteractionTool::Mirror:
     return ModelingViewportTool::Mirror;
+  case quader_editor_core::ViewportInteractionTool::LassoSelect:
+    return ModelingViewportTool::LassoSelect;
   case quader_editor_core::ViewportInteractionTool::Select:
   case quader_editor_core::ViewportInteractionTool::Unknown:
     break;
@@ -1921,6 +1925,72 @@ public:
     for (const int object_id : hits.object_ids) {
       append(object_id, ModelingActiveSelectionKind::Object, -1, -1, -1,
              -1);
+    }
+    for (const auto &face : hits.faces) {
+      append(face.object_id, ModelingActiveSelectionKind::Face, -1, -1, -1,
+             face.face_index);
+    }
+    for (const auto &edge : hits.edges) {
+      append(edge.object_id, ModelingActiveSelectionKind::Edge, -1,
+             edge.a_index, edge.b_index, -1);
+    }
+    for (const auto &vertex : hits.vertices) {
+      append(vertex.object_id, ModelingActiveSelectionKind::Vertex,
+             vertex.vertex_index, -1, -1, -1);
+    }
+    return result;
+  }
+
+  [[nodiscard]] std::vector<ModelingSelectionHit> query_selection_lasso_hits(
+      const ModelingLassoSelectRequest &request,
+      std::vector<EntityId> *eligible_entities) const {
+    const auto &projected = selection_projection_snapshot();
+    const auto hits = selection_service_.lasso_selection_hits(
+        projected, scene_, object_registry_, request);
+    const auto entity_for = [&](int object_id) {
+      auto entity = selection_service_.scene_target_for_picking_participant(object_id);
+      return entity.has_value() ? entity : object_registry_.entity_for_modeling_object(object_id);
+    };
+    std::vector<int> eligible_objects;
+    if (projected.selection_mode() == quader_editor_core::SelectionMode::Object &&
+        (eligible_entities != nullptr || !request.partial_intersection)) {
+      eligible_objects = selection_service_.lasso_eligible_object_ids(
+          projected, scene_, object_registry_, request);
+      if (eligible_entities != nullptr) {
+        for (const int object_id : eligible_objects) {
+          if (const auto entity = entity_for(object_id)) {
+            eligible_entities->push_back(*entity);
+          }
+        }
+      }
+    }
+    std::vector<ModelingSelectionHit> result;
+    const auto append = [&](int object_id, ModelingActiveSelectionKind kind,
+                            int vertex, int edge_a, int edge_b, int face) {
+      const auto entity = entity_for(object_id);
+      const auto authored_object = entity.has_value()
+          ? object_registry_.modeling_object_for_entity(*entity) : std::nullopt;
+      result.push_back({
+          .entity = entity.value_or(kInvalidEntityId),
+          .modeling_object_id = authored_object.value_or(
+              kind == ModelingActiveSelectionKind::Object
+                  ? kInvalidModelingObjectId : object_id),
+          .kind = kind, .vertex_id = vertex, .edge_a = edge_a,
+          .edge_b = edge_b, .face_id = face});
+    };
+    for (const int object_id : hits.object_ids) {
+      const auto entity = entity_for(object_id);
+      // A formal occurrence can project multiple geometry participants. Full
+      // containment belongs to the occurrence as a whole, before group promotion.
+      if (!request.partial_intersection && std::any_of(
+              eligible_objects.begin(), eligible_objects.end(), [&](int other) {
+                return entity_for(other) == entity &&
+                    std::find(hits.object_ids.begin(), hits.object_ids.end(), other) ==
+                        hits.object_ids.end();
+              })) {
+        continue;
+      }
+      append(object_id, ModelingActiveSelectionKind::Object, -1, -1, -1, -1);
     }
     for (const auto &face : hits.faces) {
       append(face.object_id, ModelingActiveSelectionKind::Face, -1, -1, -1,
@@ -3965,16 +4035,19 @@ public:
     const std::optional<quader_editor_core::EditorOperationId>
         preview_operation = sdk_projection_adapter_.active_preview_operation();
     const bool cut_active = runtime_.status().cut_active;
+    const auto active_tool = runtime_.status().active_tool;
     const std::uint64_t interaction_revision =
         interaction_settings_service_.revision();
     const std::uint64_t metadata_revision = tool_settings_service_.revision();
     if (!tool_settings_revision_valid_ ||
         tool_settings_preview_operation_ != preview_operation ||
         tool_settings_cut_active_ != cut_active ||
+        tool_settings_active_tool_ != active_tool ||
         tool_settings_interaction_revision_ != interaction_revision ||
         tool_settings_metadata_revision_ != metadata_revision) {
       tool_settings_preview_operation_ = preview_operation;
       tool_settings_cut_active_ = cut_active;
+      tool_settings_active_tool_ = active_tool;
       tool_settings_interaction_revision_ = interaction_revision;
       tool_settings_metadata_revision_ = metadata_revision;
       tool_settings_revision_valid_ = true;
@@ -5362,7 +5435,8 @@ public:
         (void)cancel_transform_preview();
         return {false, update.changed, update.message};
       }
-      const ModelingCommandResult committed = commit_transform_preview();
+      const ModelingCommandResult committed =
+          commit_transform_preview(action.move_auto_merge_vertices);
       return {committed.ok, committed.changed, committed.message};
     }
 
@@ -6020,12 +6094,13 @@ public:
     return result;
   }
 
-  ModelingCommandResult commit_transform_preview() {
+  ModelingCommandResult
+  commit_transform_preview(bool auto_merge_vertices = false) {
     if (structural_transform_preview_active()) {
       return commit_structural_transform_preview();
     }
     ModelingCommandResult result =
-        sdk_projection_adapter_.commit_translate_preview();
+        sdk_projection_adapter_.commit_translate_preview(auto_merge_vertices);
     if (result.ok) {
       invalidate_selection_overlay_caches();
     }
@@ -6108,6 +6183,7 @@ public:
     drag.move.axis = drag.axis;
     drag.move.orientation = drag.orientation;
     drag.move.preview_delta = to_runtime(transform.move_delta);
+    drag.move_auto_merge_vertices = transform.move_auto_merge_vertices;
     drag.rotate.active = transform.tool == ModelingTransformTool::Rotate;
     drag.rotate.axis = drag.axis;
     drag.rotate.orientation = drag.orientation;
@@ -6511,6 +6587,7 @@ public:
       return set_active_runtime_tool(
           quader_editor_core::ViewportInteractionTool::Select);
     case quader_editor_core::ViewportInteractionTool::Select:
+    case quader_editor_core::ViewportInteractionTool::LassoSelect:
     case quader_editor_core::ViewportInteractionTool::Move:
     case quader_editor_core::ViewportInteractionTool::Extrude:
     case quader_editor_core::ViewportInteractionTool::Rotate:
@@ -9332,6 +9409,8 @@ private:
         .document_commands = document_commands,
         .structural_duplicate = structural_duplicate,
         .history = history,
+        .move_auto_merge_vertices =
+            interaction_settings().move_auto_merge_vertices,
     };
   }
 
@@ -9441,7 +9520,13 @@ private:
   }
 
   ModelingCommandResult commit_portable_translate_preview() override {
-    return sdk_projection_adapter_.commit_translate_preview();
+    return sdk_projection_adapter_.commit_translate_preview(
+        runtime_.transform_drag_state().move_auto_merge_vertices);
+  }
+
+  [[nodiscard]] bool
+  portable_transform_supports_sparse_history() const override {
+    return sdk_projection_adapter_.transform_preview_supports_sparse_history();
   }
 
   ModelingCommandResult cancel_portable_translate_preview() override {
@@ -9734,6 +9819,9 @@ private:
   mutable std::uint64_t tool_settings_metadata_revision_ = 0;
   mutable std::uint64_t tool_settings_revision_ = 0;
   mutable bool tool_settings_cut_active_ = false;
+  mutable quader_editor_core::ViewportInteractionTool
+      tool_settings_active_tool_ =
+          quader_editor_core::ViewportInteractionTool::Unknown;
   mutable bool tool_settings_revision_valid_ = false;
 
   quader_editor_core::EditorRuntime runtime_;
@@ -9840,6 +9928,12 @@ std::vector<ModelingSelectionHit>
 ModelingSessionService::query_selection_marquee_hits(
     const ModelingBoxSelectRequest &request) const {
   return impl_->query_selection_marquee_hits(request);
+}
+
+std::vector<ModelingSelectionHit> ModelingSessionService::query_selection_lasso_hits(
+    const ModelingLassoSelectRequest &request,
+    std::vector<EntityId> *eligible_entities) const {
+  return impl_->query_selection_lasso_hits(request, eligible_entities);
 }
 
 std::span<const ViewportSceneCurvePickCandidate>

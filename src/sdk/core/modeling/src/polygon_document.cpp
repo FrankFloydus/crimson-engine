@@ -898,6 +898,20 @@ PolygonDocument::operator=(PolygonDocument &&other) noexcept = default;
 
 PolygonDocument::~PolygonDocument() = default;
 
+void PolygonDocument::preserve_identity_high_water(const PolygonDocument &other) {
+  const quader_poly::Document &current = *impl_->document;
+  const quader_poly::Document &observed = *other.impl_->document;
+  const auto next_vertex_id = std::max(current.next_vertex_id, observed.next_vertex_id);
+  const auto next_face_id = std::max(current.next_face_id, observed.next_face_id);
+  if (next_vertex_id == current.next_vertex_id && next_face_id == current.next_face_id) {
+    return;
+  }
+  quader_poly::Document reconciled = current;
+  reconciled.next_vertex_id = next_vertex_id;
+  reconciled.next_face_id = next_face_id;
+  impl_->document = std::make_shared<const quader_poly::Document>(std::move(reconciled));
+}
+
 Result<PolygonDocument> PolygonDocument::make_box(const BoxSpec &spec) {
   const Vec3 dimensions{
       spec.max.x - spec.min.x,
@@ -2481,6 +2495,31 @@ PolygonDocument::merge_selected_vertices_by_distance(float tolerance) {
 
 Result<OperationResult> PolygonDocument::remove_double_vertices() {
   return apply_operation(*impl_, quader_poly::remove_double_vertices);
+}
+
+Result<OperationResult>
+PolygonDocument::auto_merge_selected_vertices(float tolerance) {
+  const PolygonSelectionSnapshot source = selection();
+  Result<OperationResult> result = apply_operation(
+      *impl_, [tolerance](quader_poly::Document &document,
+                          quader_poly::Selection &selection) {
+        return quader_poly::auto_merge_selected_vertices(document, selection,
+                                                         tolerance);
+      });
+  if (result.ok() && result.value().changed) {
+    const PolygonSelectionSnapshot destination = selection();
+    result.value().selection_remap.source = {
+        .vertices = source.vertices,
+        .edges = source.edges,
+        .faces = source.faces,
+    };
+    result.value().selection_remap.destination = {
+        .vertices = destination.vertices,
+        .edges = destination.edges,
+        .faces = destination.faces,
+    };
+  }
+  return result;
 }
 
 Result<OperationResult>

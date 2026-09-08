@@ -173,6 +173,39 @@ struct ViewportSceneMarqueeHitQuery final {
   SceneSurfaceQueryScratch *surface_scratch = nullptr;
 };
 
+/** One retained provider silhouette paired with its canonical selection hit. */
+struct ViewportSceneLassoProjectedCandidate final {
+  ViewportSceneHitCandidate hit;
+  quader_editor_core::RectangleProjectedObject projected;
+};
+
+/** Cache keys contain camera/provider facts, never the changing lasso path. */
+struct ViewportSceneLassoProjectionCache final {
+  std::vector<std::uint64_t> key;
+  std::vector<ViewportSceneLassoProjectedCandidate> candidates;
+  std::vector<EntityId> eligible_entities;
+  // Pin immutable payload identities while their projections are retained.
+  std::vector<ViewportSceneCurvePickCandidate> retained_curves;
+  std::uint64_t projection_build_count = 0;
+};
+
+/** Through-depth lasso inputs; provider geometry remains independently cached. */
+struct ViewportSceneLassoHitQuery final {
+  ViewportSceneProjectionCamera camera;
+  std::span<const QVec2> points;
+  bool partial_intersection = false;
+  std::span<const ViewportSceneBillboardPickCandidate> billboards;
+  std::span<const ViewportSceneCurvePickCandidate> curves;
+  const CurveToolPreviewState *curve_controls = nullptr;
+  std::span<const ResolvedSelectionHit> resolved_selection_hits;
+  bool include_curve_controls = false;
+  std::vector<EntityId> *eligible_entities = nullptr;
+  ViewportSceneLassoProjectionCache *projection_cache = nullptr;
+};
+
+[[nodiscard]] std::vector<ViewportSceneHitCandidate>
+collect_viewport_scene_lasso_hits(const ViewportSceneLassoHitQuery &query);
+
 /** Adapts an owner-resolved modeling hit into the shared viewport policy. */
 [[nodiscard]] ViewportSceneHitCandidate
 viewport_scene_hit_candidate(const ResolvedSelectionHit &hit);

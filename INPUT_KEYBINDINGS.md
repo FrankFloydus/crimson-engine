@@ -84,10 +84,12 @@ Tool, selection-mode, grid, and ordinary viewport command bindings normally requ
 For example, `W` activates Move when idle and means Fly Forward during fly navigation. The router
 consumes semantic `ViewportInputActionKind`/`ViewportNavigationInput`, not Qt keys or physical chords.
 
-Escape defaults to Clear Selection in idle Select, Move, Rotate, and Scale tools, from the viewport
-or Outliner, in every selection mode. Active transform drags, previews, and modal tools retain cancellation
-priority; a subsequent Escape clears selection. The existing selection owner handles object/group
-history and component selection. Clear Selection remains remappable through Settings.
+Escape defaults to the shared Clear Selection command when the active tool's descriptor permits
+selection fallback, from the viewport or Outliner in every selection mode. The command context uses
+that capability rather than a tool-name list. Active transform drags, previews, and modal tools retain
+cancellation priority; a subsequent Escape clears selection. The existing selection owner handles
+object/group history and component selection. Clear Selection remains remappable through Settings.
+Tool IDs used by input contexts come from the same descriptor catalog as tool activation and presentation.
 
 ## Settings and persistence
 
@@ -136,6 +138,9 @@ cannot commit a newer gesture. Cancellation reserves the originating release unt
 so it cannot become a selection click, context menu, navigation start, or another tool's input.
 
 Keep drag-start chords immutable: pressing Shift after RMB fly navigation starts must not end it.
+Freehand selection consumes ordered, gesture-scoped pointer samples, including press and release;
+a closed path collected between frames must not collapse to the final cursor position. Clear the
+sample stream on capture/focus loss, runtime rebinding, and coordinate-system changes.
 Focus/capture loss supplies `pointer_interaction_canceled`, even when Qt synthesizes a release.
 `ViewportInteractionController::handle_tool_pointer_lifecycle()` preserves Curve-control prepass,
 semantic conversion edge order, native tool lifecycle, then ordinary transform-gizmo precedence.

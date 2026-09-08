@@ -10,6 +10,7 @@
 
 #include "assets/curve_asset_payload.hpp"
 #include "editor/interactions/viewport_segment_projection.hpp"
+#include "editor/interactions/selection_lasso.hpp"
 #include "editor/modeling/modeling_viewport_camera_adapter.hpp"
 #include "editor/selection/box_selection_rules.hpp"
 #include "editor/viewport/viewport_curve_picking.hpp"
@@ -20,6 +21,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -1108,6 +1110,200 @@ std::vector<ViewportSceneHitCandidate> collect_viewport_scene_marquee_hits(
     if (visible.has_value()) {
       hits.push_back(*visible);
     }
+  }
+  return resolve_viewport_scene_marquee_hits(hits);
+}
+
+std::vector<ViewportSceneHitCandidate> collect_viewport_scene_lasso_hits(
+    const ViewportSceneLassoHitQuery &query) {
+  const quader_editor_core::SelectionLassoRegion region(query.points);
+  std::vector<ViewportSceneHitCandidate> hits;
+  ViewportSceneLassoProjectionCache local_cache;
+  auto &cache = query.projection_cache != nullptr ? *query.projection_cache : local_cache;
+  std::vector<std::uint64_t> key;
+  const auto scalar = [&](double value) { key.push_back(std::bit_cast<std::uint64_t>(value)); };
+  const auto vector = [&](QVec3 value) { scalar(value.x); scalar(value.y); scalar(value.z); };
+  const auto &camera = query.camera.runtime_camera();
+  key.push_back(static_cast<std::uint64_t>(camera.projection));
+  key.push_back(camera.affine_model_space);
+  vector(camera.transform.origin);
+  vector(camera.transform.x_axis);
+  vector(camera.transform.y_axis);
+  vector(camera.transform.z_axis);
+  scalar(camera.viewport_size.x);
+  scalar(camera.viewport_size.y);
+  scalar(camera.orthographic_size);
+  scalar(camera.fov_degrees);
+  scalar(query.camera.near_plane());
+  scalar(query.camera.far_plane());
+  key.push_back(query.billboards.size());
+  for (const auto &candidate : query.billboards) {
+    key.push_back(candidate.entity);
+    key.push_back(candidate.selectable);
+    key.push_back(candidate.effectively_locked);
+    vector(candidate.position);
+    scalar(candidate.size_pixels);
+  }
+  key.push_back(query.curves.size());
+  for (const auto &candidate : query.curves) {
+    key.push_back(candidate.entity);
+    key.push_back(candidate.solidified);
+    key.push_back(reinterpret_cast<std::uintptr_t>(candidate.sample_payload.get()));
+    key.push_back(reinterpret_cast<std::uintptr_t>(candidate.tube_payload.get()));
+    for (const auto value : candidate.world_transform.values) {
+      scalar(value);
+    }
+  }
+  key.push_back(query.include_curve_controls);
+  if (query.include_curve_controls && query.curve_controls != nullptr) {
+    key.push_back(reinterpret_cast<std::uintptr_t>(query.curve_controls));
+    key.push_back(query.curve_controls->revision);
+    key.push_back(query.curve_controls->entity);
+    key.push_back(query.curve_controls->active);
+    key.push_back(query.curve_controls->drawing);
+    for (const auto value : query.curve_controls->world_transform.values) {
+      scalar(value);
+    }
+  }
+  if (cache.key != key) {
+    cache.key = std::move(key);
+    cache.candidates.clear();
+    cache.eligible_entities.clear();
+    cache.retained_curves.assign(query.curves.begin(), query.curves.end());
+    ++cache.projection_build_count;
+  const auto eligible = [&](EntityId entity) {
+    if (entity != kInvalidEntityId) {
+      cache.eligible_entities.push_back(entity);
+    }
+  };
+  const auto append = [&](ViewportSceneHitCandidate hit,
+                          quader_editor_core::RectangleProjectedObject projected) {
+    cache.candidates.push_back({std::move(hit), std::move(projected)});
+  };
+  for (const auto &candidate : query.billboards) {
+    if (candidate.entity == kInvalidEntityId || !candidate.selectable ||
+        candidate.effectively_locked || !finite_vector(candidate.position)) {
+      continue;
+    }
+    eligible(candidate.entity);
+    const auto screen = query.camera.project_world_point(candidate.position);
+    if (!screen.visible) {
+      continue;
+    }
+    const float half_size = std::max(candidate.size_pixels, 1.0f) * 0.5f;
+    quader_editor_core::RectangleProjectedObject projected;
+    projected.has_screen_bounds = true;
+    projected.screen_min = screen.position - QVec2{half_size, half_size};
+    projected.screen_max = screen.position + QVec2{half_size, half_size};
+    append({.kind = ViewportSceneHitKind::Billboard,
+            .entity = candidate.entity, .world_position = candidate.position,
+            .ray_distance = world_point_ray_distance(query.camera, candidate.position).value_or(0.0),
+            .source = ViewportSceneBillboardHit{}}, projected);
+  }
+  for (const auto &candidate : query.curves) {
+    if (candidate.entity == kInvalidEntityId) {
+      continue;
+    }
+    eligible(candidate.entity);
+    quader_editor_core::RectangleProjectedObject projected;
+    QVec3 witness{};
+    double depth = 0.0;
+    if (candidate.solidified && candidate.tube_payload != nullptr) {
+      for (const auto &triangle : candidate.tube_payload->triangles()) {
+        std::vector<QVec3> world_polygon;
+        world_polygon.reserve(3);
+        for (const auto point : {triangle.a, triangle.b, triangle.c}) {
+          const auto world = transform_point(candidate.world_transform, point);
+          world_polygon.push_back(world);
+          if (!query.camera.project_world_point(world).visible) {
+            projected.complete_geometry = false;
+          }
+        }
+        auto polygon = quader_editor_core::project_lasso_polygon(
+            query.camera.runtime_camera(), world_polygon,
+            query.camera.near_plane(), query.camera.far_plane());
+        if (!polygon.empty()) {
+          projected.screen_polygons.push_back(std::move(polygon));
+        }
+      }
+    } else if (candidate.sample_payload != nullptr) {
+      const auto &samples = candidate.sample_payload->samples;
+      bool has_witness = false;
+      for (std::size_t index = 0; index < samples.size(); ++index) {
+        const auto local = samples[index].position;
+        const auto world = transform_point(candidate.world_transform,
+                                            {local.x, local.y, local.z});
+        const auto screen = query.camera.project_world_point(world);
+        projected.complete_geometry = projected.complete_geometry && screen.visible;
+        if (screen.visible) {
+          quader_editor_core::include_projected_object_point(projected, screen.position);
+          if (!has_witness) {
+            witness = world;
+            depth = world_point_ray_distance(query.camera, world).value_or(0.0);
+            has_witness = true;
+          }
+        }
+        if (index == 0) {
+          continue;
+        }
+        const auto previous = samples[index - 1].position;
+        const auto start = transform_point(candidate.world_transform,
+                                            {previous.x, previous.y, previous.z});
+        const auto segment = query.camera.project_visible_world_segment(start, world, false);
+        if (segment.has_value()) {
+          projected.screen_segments.push_back({segment->start, segment->end});
+          if (!has_witness) {
+            witness = start + (world - start) *
+                static_cast<float>((segment->start_parameter + segment->end_parameter) * 0.5);
+            depth = world_point_ray_distance(query.camera, witness).value_or(0.0);
+            has_witness = true;
+          }
+        }
+      }
+    }
+    append({.kind = ViewportSceneHitKind::CurveEntity,
+            .entity = candidate.entity, .world_position = witness,
+            .ray_distance = depth, .source = ViewportSceneCurveEntityHit{}}, projected);
+  }
+  if (query.include_curve_controls && query.curve_controls != nullptr &&
+      query.curve_controls->document.has_value()) {
+    const auto &document = *query.curve_controls->document;
+    constexpr std::array kKinds{CurveControlKind::Anchor,
+        CurveControlKind::IncomingHandle, CurveControlKind::OutgoingHandle};
+    for (std::size_t index = 0; index < document.point_count(); ++index) {
+      const auto &point = document.points()[index];
+      for (const auto kind : kKinds) {
+        if (!curve_control_is_visible(*query.curve_controls, index, kind)) {
+          continue;
+        }
+        const auto world = transform_point(query.curve_controls->world_transform,
+                                            curve_control_local_position(point, kind));
+        const auto screen = query.camera.project_world_point(world);
+        if (screen.visible) {
+          quader_editor_core::RectangleProjectedObject projected;
+          projected.has_screen_center = true;
+          projected.screen_center = screen.position;
+          append({.kind = ViewportSceneHitKind::CurveControl,
+              .entity = query.curve_controls->entity, .world_position = world,
+              .ray_distance = world_point_ray_distance(query.camera, world).value_or(0.0),
+              .source = ViewportSceneCurveControlHit{.control = {.point = point.id, .kind = kind}}},
+              std::move(projected));
+        }
+      }
+    }
+  }
+  }
+  if (query.eligible_entities != nullptr) {
+    query.eligible_entities->insert(query.eligible_entities->end(),
+        cache.eligible_entities.begin(), cache.eligible_entities.end());
+  }
+  for (const auto &candidate : cache.candidates) {
+    if (region.matches_object(candidate.projected, query.partial_intersection)) {
+      hits.push_back(candidate.hit);
+    }
+  }
+  for (const auto &hit : query.resolved_selection_hits) {
+    hits.push_back(viewport_scene_hit_candidate(hit));
   }
   return resolve_viewport_scene_marquee_hits(hits);
 }

@@ -199,6 +199,9 @@ public:
   [[nodiscard]] PolygonContentIdentity content_identity() const noexcept;
   [[nodiscard]] std::uint64_t content_revision() const;
   [[nodiscard]] std::uint64_t selection_revision() const;
+  /// Retains allocation cursors observed by history without replacing geometry
+  /// or selection and without revalidating an existing authored document.
+  void preserve_identity_high_water(const PolygonDocument &other);
   /** Returns whether two facades currently reference the same immutable topology. */
   [[nodiscard]] bool
   shares_topology_with(const PolygonDocument &other) const noexcept;
@@ -267,6 +270,10 @@ public:
   [[nodiscard]] Result<OperationResult> merge_selected_vertices_to_center();
   [[nodiscard]] Result<OperationResult>
   merge_selected_vertices_by_distance(float tolerance);
+  /// Welds vertices in the current component selection into nearby unselected
+  /// targets, then welds remaining selected clusters without moving survivors.
+  [[nodiscard]] Result<OperationResult>
+  auto_merge_selected_vertices(float tolerance = 0.001F);
   [[nodiscard]] Result<OperationResult> remove_double_vertices();
   [[nodiscard]] Result<OperationResult> bevel_selected_vertices(float distance);
   [[nodiscard]] Result<OperationResult> connect_selected_vertices();

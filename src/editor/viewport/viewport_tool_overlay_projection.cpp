@@ -324,7 +324,8 @@ void add_selection_marquee(RenderSignatureBuilder &signature,
   signature.add_bool(marquee->active)
       .add_vec2(marquee->start)
       .add_vec2(marquee->end)
-      .add_value(static_cast<std::uint64_t>(marquee->rule));
+      .add_value(static_cast<std::uint64_t>(marquee->rule))
+      .add_value(marquee->path_revision);
 }
 
 void add_pivot_handle(RenderSignatureBuilder &signature,
@@ -526,6 +527,7 @@ void ViewportToolOverlayProjection::append_selection_marquee(
           .crossing = marquee.rule == ModelingBoxSelectionRule::Crossing,
           .start = marquee.start,
           .end = marquee.end,
+          .lasso_points = marquee.lasso_points,
       },
       raster_scale);
 }

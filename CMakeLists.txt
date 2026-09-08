@@ -1072,6 +1072,7 @@ set(QUADER_SELECTION_TOOLBAR_ICON_FILES
 
 set(QUADER_TOOL_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_select.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_lasso.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_move.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_rotate.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_scale.png"
@@ -1564,12 +1565,18 @@ if(QUADER_BUILD_TESTS)
         tests/render_extraction_tests.cpp
         tests/light_renderable_cache_tests.cpp
         tests/light_properties_tests.cpp
+        tests/lasso_overlay_tests.cpp
+        tests/lasso_selection_geometry_tests.cpp
+        tests/lasso_selection_interaction_tests.cpp
+        tests/move_auto_merge_tests.cpp
         tests/scene_color_preview_tests.cpp
         tests/render_source_stamp_tests.cpp
         tests/tool_preview_submission_tests.cpp
         tests/scene_mesh_occurrence_projection_tests.cpp
         tests/scene_transform_tests.cpp
         tests/selection_mode_adapter_tests.cpp
+        tests/selection_overlay_runtime_tests.cpp
+        tests/selection_tool_settings_tests.cpp
         tests/viewport_interaction_controller_tests.cpp
         tests/viewport_transform_trackball_overlay_tests.cpp
         tests/viewport_overlay_submission_coordinator_tests.cpp

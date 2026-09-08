@@ -6567,7 +6567,11 @@ TEST(ViewportInteractionControllerTests,
     ASSERT_TRUE(applied.ok) << applied.message;
     EXPECT_FALSE(harness.session.pivot().persistent_active());
     EXPECT_FALSE(harness.session.pivot().handle_state().visible);
-    EXPECT_FALSE(harness.editor.tools().active_settings().active);
+    const auto settings = harness.editor.tools().active_settings();
+    EXPECT_TRUE(settings.active);
+    EXPECT_EQ(settings.tool_id, "move");
+    EXPECT_FALSE(settings.preview_active);
+    EXPECT_FALSE(settings.apply_visible);
     EXPECT_FALSE(harness.editor.history().can_undo());
     ASSERT_NE(harness.session.scene().transform(box.entity), nullptr);
     expect_transform_near(*harness.session.scene().transform(box.entity),

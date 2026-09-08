@@ -30,6 +30,7 @@ enum class ViewportToolId {
     RadialArray,
     Curve,
     PathArray,
+    LassoSelect,
 };
 
 /**

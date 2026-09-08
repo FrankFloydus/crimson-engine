@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace quader {
 
@@ -34,6 +35,9 @@ struct ViewportSelectionMarquee {
     QVec2 start = {};
     QVec2 end = {};
     ModelingBoxSelectionRule rule = ModelingBoxSelectionRule::Contain;
+    /// Empty for rectangle selection; otherwise a closed even-odd path.
+    std::vector<QVec2> lasso_points;
+    std::uint64_t path_revision = 0;
 };
 
 /// Counts selection hit-test work for diagnostics and deterministic tests.
@@ -68,7 +72,12 @@ public:
     [[nodiscard]] QuaderSelectionSummary
     pick_context_menu_target(QuaderEditorApi &editor,
                              const ViewportInteractionFrame &frame);
-    [[nodiscard]] ViewportSelectionMarquee marquee() const;
+    [[nodiscard]] const ViewportSelectionMarquee &marquee() const;
+    [[nodiscard]] bool lasso_pointer_active() const {
+      return lasso_context_.has_value();
+    }
+    /// Cancels the owned gesture while reserving its eventual button release.
+    bool cancel_lasso_drag();
     /// Reports ownership of a deferred click, marquee, or held paint gesture.
     [[nodiscard]] bool pointer_interaction_active() const {
       return pending_first_pick_.has_value() || box_state_.active ||
@@ -149,6 +158,8 @@ private:
       ViewportCurveInteractionPort *curve = nullptr,
       bool curve_controls_only = false);
   void clear_curve_control_box();
+  void append_lasso_point(QVec2 point, bool include_release = false);
+  void collect_lasso_samples(const ViewportInteractionFrame &frame);
 
   HoverClearState hover_clear_state_ = HoverClearState::Armed;
   quader_editor_core::SelectionBoxState box_state_;
@@ -163,6 +174,12 @@ private:
   std::optional<PendingPickFeedback> pending_pick_feedback_;
   std::optional<ResolvedSelectionTarget> box_hovered_before_selection_;
   std::optional<EditorSelectionBoxBaseline> box_baseline_;
+  std::optional<DepthClickBaseline> lasso_context_;
+  bool lasso_partial_intersection_ = false;
+  double lasso_sample_distance_squared_ = 4.0;
+  std::uint64_t lasso_sample_sequence_ = 0;
+  std::uint64_t lasso_path_revision_ = 0;
+  mutable ViewportSelectionMarquee marquee_cache_;
   bool curve_control_box_active_ = false;
   std::optional<ViewportSelectionMarquee> committed_marquee_;
   std::optional<ResolvedSelectionTarget> hover_suppressed_target_;
@@ -172,6 +189,7 @@ private:
   ViewportSelectionInteractionWorkStats work_stats_;
   ModelingCommandResult last_selection_command_result_{.ok = true};
   SceneSurfaceQueryScratch scene_surface_scratch_;
+  ViewportSceneLassoProjectionCache lasso_projection_cache_;
 };
 
 } // namespace quader

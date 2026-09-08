@@ -452,14 +452,15 @@ bool ModelingSdkProjectionSnapshot::valid() const noexcept {
   return static_cast<bool>(impl_);
 }
 
-/// Stores immutable per-object authored-position deltas for sparse transform
-/// undo and redo without cloning complete modeling sessions.
+/// Keeps sparse authored positions and exact documents only for welded meshes.
 struct ModelingSdkTransformHistoryDelta::Impl {
-  /// Pairs one SDK object with its exact sparse before and after positions.
+  /// Pairs one SDK object with its exact before and after transform state.
   struct ObjectDelta {
     ObjectId object{};
     std::vector<VertexPositionUpdate> before;
     std::vector<VertexPositionUpdate> after;
+    std::optional<PolygonDocument> topology_before;
+    std::optional<PolygonDocument> topology_after;
   };
 
   std::vector<ObjectDelta> objects;
@@ -6560,12 +6561,100 @@ public:
                : ModelingSdkTransformHistoryDelta(std::move(delta));
   }
 
-  [[nodiscard]] ModelingCommandResult commit_translate_preview() {
+  [[nodiscard]] bool transform_preview_supports_sparse_history() const {
+    const auto preview = session_.preview_summary();
+    return preview.active && !preview.objects.empty() &&
+           std::ranges::all_of(preview.objects, [](const auto &participant) {
+             return participant.kind == modeling::SessionObjectKind::Mesh &&
+                    participant.action ==
+                        modeling::SessionPreviewAction::ReplaceExisting;
+           });
+  }
+
+  /** Prepares welding without changing any published or preview owner. */
+  [[nodiscard]] ModelingCommandResult prepare_move_auto_merge(
+      const modeling::PreviewTransactionSummary &preview,
+      std::vector<modeling::SessionPreviewDocumentUpdate> &updates,
+      ModelingSdkTransformHistoryDelta &history_delta) const {
+    if (selection_mode_ == ModelingSelectionMode::Object ||
+        selection_mode_ == ModelingSelectionMode::Group) {
+      return {.ok = true};
+    }
+    auto data = history_delta.valid()
+                    ? std::make_shared<ModelingSdkTransformHistoryDelta::Impl>(
+                          *history_delta.impl_)
+                    : std::make_shared<ModelingSdkTransformHistoryDelta::Impl>();
+    bool changed = false;
+    for (const auto &participant : preview.objects) {
+      if (participant.action == modeling::SessionPreviewAction::RemoveExisting) {
+        continue;
+      }
+      if (participant.kind == modeling::SessionObjectKind::Curve) {
+        auto curve = session_.preview_curve_document_copy(
+            preview.id, participant.object_id);
+        if (!curve.ok()) {
+          return failure(curve.error_message());
+        }
+        updates.push_back({.object = participant.object_id,
+                           .document = std::move(curve).value(),
+                           .receipt = {.success = true}});
+        continue;
+      }
+      Result<PolygonDocument> document = session_.preview_document_copy(
+          preview.id, participant.object_id);
+      if (!document.ok()) {
+        return failure(document.error_message());
+      }
+      Result<OperationResult> merged =
+          document.value().auto_merge_selected_vertices(0.001F);
+      if (!merged.ok() || !merged.value().success) {
+        return failure(merged.ok() ? merged.value().message
+                                   : merged.error_message());
+      }
+      if (!merged.value().changed) {
+        updates.push_back({.object = participant.object_id,
+                           .document = std::move(document).value(),
+                           .receipt = std::move(merged).value()});
+        continue;
+      }
+      changed = true;
+      if (participant.action == modeling::SessionPreviewAction::ReplaceExisting) {
+        Result<PolygonDocument> before =
+            session_.document_copy(participant.object_id);
+        if (!before.ok()) {
+          return failure(before.error_message());
+        }
+        auto entry = std::ranges::find(
+            data->objects, participant.object_id,
+            &ModelingSdkTransformHistoryDelta::Impl::ObjectDelta::object);
+        if (entry == data->objects.end()) {
+          data->objects.push_back({.object = participant.object_id});
+          entry = std::prev(data->objects.end());
+        }
+        entry->before.clear();
+        entry->after.clear();
+        entry->topology_before = std::move(before).value();
+        entry->topology_after = document.value();
+      }
+      updates.push_back({.object = participant.object_id,
+                         .document = std::move(document).value(),
+                         .receipt = std::move(merged).value()});
+    }
+    if (changed) {
+      history_delta = ModelingSdkTransformHistoryDelta(std::move(data));
+    } else {
+      updates.clear();
+    }
+    return {.ok = true, .changed = changed};
+  }
+
+  [[nodiscard]] ModelingCommandResult
+  commit_translate_preview(bool auto_merge_vertices = false) {
     QDR_PROFILE_FUNCTION();
     if (!preview_active()) {
       return failure("No active SDK translate preview.");
     }
-    if (!preview_changed_) {
+    if (!preview_changed_ && !auto_merge_vertices) {
       const bool curve_preview = curve_document_preview_active();
       ModelingCommandResult canceled = cancel_translate_preview();
       if (canceled.ok) {
@@ -6582,9 +6671,25 @@ public:
         !mesh_preview_host_baseline_->active_for(preview.id)) {
       return failure("Preview commit baseline is unavailable.");
     }
-    const ModelingSdkTransformHistoryDelta transform_history_delta =
+    ModelingSdkTransformHistoryDelta transform_history_delta =
         transient_transform_payload_active_ ? build_transform_history_delta()
                                             : ModelingSdkTransformHistoryDelta{};
+    std::vector<modeling::SessionPreviewDocumentUpdate> auto_merge_updates;
+    if (auto_merge_vertices) {
+      const ModelingCommandResult prepared = prepare_move_auto_merge(
+          preview, auto_merge_updates, transform_history_delta);
+      if (!prepared.ok) {
+        return prepared;
+      }
+      if (!preview_changed_ && !prepared.changed) {
+        ModelingCommandResult canceled = cancel_translate_preview();
+        if (canceled.ok) {
+          canceled.changed = false;
+          canceled.message = "Preview unchanged.";
+        }
+        return canceled;
+      }
+    }
     const std::optional<std::size_t> transform_history_undo_mark =
         transform_history_delta.valid()
             ? std::optional{
@@ -6641,7 +6746,19 @@ public:
         fails(ModelingSdkProjectionFailurePoint::CommittedSceneNotify)) {
       return failure("Committed preview projection could not be published.");
     }
-    if (transient_transform_payload_active_ &&
+    const bool auto_merged = !auto_merge_updates.empty();
+    if (auto_merged) {
+      Result<OperationResult> updated = session_.update_preview_transaction(
+          preview.id, std::move(auto_merge_updates));
+      if (!updated.ok() || !updated.value().success ||
+          fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
+        return abort_preview_publication(
+            preview.id, updated.ok() ? "Auto merge preview could not publish."
+                                     : updated.error_message());
+      }
+      preview_changed_ = true;
+    }
+    if ((transient_transform_payload_active_ || auto_merged) &&
         !project_preview_object(true, true)) {
       return abort_preview_publication(
           preview.id,
@@ -10510,9 +10627,33 @@ private:
                     "Transform commit object is not live."));
           }
           const auto &entry = exact_positions->objects[found->second];
+          const auto &topology =
+              use_after ? entry.topology_after : entry.topology_before;
+          if (topology.has_value()) {
+            PolygonDocument restored_document = *topology;
+            restored_document.preserve_identity_high_water(document);
+            document = std::move(restored_document);
+            OperationResult restored;
+            restored.success = true;
+            restored.changed = true;
+            restored.dirty = {.topology = true,
+                              .geometry = true,
+                              .selection = true,
+                              .materials = true,
+                              .overlays = true};
+            return Result<OperationResult>::success(std::move(restored));
+          }
           return document.set_vertex_positions(use_after ? entry.after
                                                          : entry.before);
         };
+
+    if (std::ranges::any_of(exact_positions->objects, [](const auto &entry) {
+          return entry.topology_before.has_value();
+        })) {
+      return mutate_documents_by_object(
+          objects, exact_mutation, "Move auto merge history failed.", false,
+          false, false, true, true);
+    }
 
     // Shared mesh bindings need the normal detach/rollback machinery. Keep
     // that uncommon path correct while avoiding whole-project checkpoints for
@@ -12473,8 +12614,13 @@ ModelingCommandResult ModelingSdkProjectionAdapter::update_inset_preview(
 }
 
 ModelingCommandResult
-ModelingSdkProjectionAdapter::commit_translate_preview() {
-  return impl_->commit_translate_preview();
+ModelingSdkProjectionAdapter::commit_translate_preview(bool auto_merge_vertices) {
+  return impl_->commit_translate_preview(auto_merge_vertices);
+}
+
+bool ModelingSdkProjectionAdapter::transform_preview_supports_sparse_history()
+    const {
+  return impl_->transform_preview_supports_sparse_history();
 }
 
 ModelingCommandResult

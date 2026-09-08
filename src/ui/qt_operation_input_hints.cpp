@@ -72,6 +72,18 @@ void QtOperationInputHints::refresh(const QuaderToolsApi &tools,
       badge = QString::fromStdString(localization.text(
           "operation.hints.key.wheel", "Wheel +/-"));
       break;
+    case QuaderOperationInputGesture::PrimaryDrag:
+      badge = QString::fromStdString(localization.text(
+          "operation.hints.key.primary_drag", "LMB Drag"));
+      break;
+    case QuaderOperationInputGesture::ShiftPrimaryDrag:
+      badge = QString::fromStdString(localization.text(
+          "operation.hints.key.shift_primary_drag", "Shift + LMB Drag"));
+      break;
+    case QuaderOperationInputGesture::ControlPrimaryDrag:
+      badge = QString::fromStdString(localization.text(
+          "operation.hints.key.control_primary_drag", "Ctrl + LMB Drag"));
+      break;
     }
     hints.push_back({std::move(badge), QString::fromStdString(
         localization.text(hint.label_key, hint.label_fallback))});

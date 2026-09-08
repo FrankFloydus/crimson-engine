@@ -13,7 +13,14 @@
 namespace quader {
 
 /// A command binding or an intrinsic gesture owned by a tool/operation.
-enum class QuaderOperationInputGesture { Command, PrimaryClick, Wheel };
+enum class QuaderOperationInputGesture {
+  Command,
+  PrimaryClick,
+  Wheel,
+  PrimaryDrag,
+  ShiftPrimaryDrag,
+  ControlPrimaryDrag,
+};
 
 /// Presentation metadata only; commands and tool owners still resolve input.
 struct QuaderOperationInputHint {

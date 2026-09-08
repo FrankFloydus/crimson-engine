@@ -170,6 +170,7 @@ set(QUADER_MODELING_RUNTIME_SOURCES
     src/editor/interactions/runtime_command.cpp
     src/editor/interactions/scale_tool.cpp
     src/editor/interactions/select_tool.cpp
+    src/editor/interactions/selection_lasso.cpp
     src/editor/interactions/session_tool_runtime.cpp
     src/editor/interactions/tool_drag_math.cpp
     src/editor/interactions/tool_identifiers.cpp
@@ -492,6 +493,7 @@ if(QUADER_BUILD_TESTS AND QUADER_BUILD_NATIVE_APP)
     quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_surface_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_surface_tests.cpp)
 
     set(QUADER_POLYGON_OPERATION_TEST_SOURCES
+        tests/modeling_domain/operation/qdr_document_operation_auto_merge_vertices_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_assign_material_slot_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_bevel_edges_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_bevel_vertices_tests.cpp
@@ -609,6 +611,7 @@ endif()
 if(QUADER_BUILD_TESTS)
     find_package(GTest CONFIG REQUIRED)
     add_executable(quader_modeling_sdk_consumer_tests
+        tests/sdk/modeling_auto_merge_tests.cpp
         tests/sdk/headers/mesh_handle_header_compile.cpp
         tests/sdk/headers/previews_header_compile.cpp
         tests/sdk/headers/selection_header_compile.cpp

@@ -44,6 +44,7 @@ struct RepeatTransformAction {
   TransformSpace space = TransformSpace::Global;
   quader_poly::Transform3 orientation;
   bool duplicate_selected = false;
+  bool move_auto_merge_vertices = false;
   quader::QVec3 pivot;
   quader::QVec3 move_delta;
   double rotate_angle_degrees = 0.0;

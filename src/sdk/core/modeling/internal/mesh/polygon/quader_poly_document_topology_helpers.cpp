@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
 
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_backend.hpp>
 
 #include <quader/modeling/neutral/geometry/geometry.hpp>
@@ -555,6 +556,81 @@ ElementId next_valid_face_id(Document& document)
         ++document.next_face_id;
     }
     return document.next_face_id++;
+}
+
+static ElementId
+remap_vertex_id(ElementId vertex_id,
+                const std::map<ElementId, ElementId> &merged_vertex_ids) {
+  const auto found = merged_vertex_ids.find(vertex_id);
+  return found == merged_vertex_ids.end() ? vertex_id : found->second;
+}
+
+static Edge remap_edge(Edge edge,
+                const std::map<ElementId, ElementId> &merged_vertex_ids) {
+  return make_edge(remap_vertex_id(edge.a, merged_vertex_ids),
+                   remap_vertex_id(edge.b, merged_vertex_ids));
+}
+
+void restore_remapped_selection(
+    const Document &document, const Selection &source, Selection &selection,
+    const std::map<ElementId, ElementId> &merged_vertex_ids) {
+  Selection remapped;
+  remapped.mode = source.mode;
+
+  for (const ElementId vertex_id : source.vertices) {
+    const ElementId mapped_id = remap_vertex_id(vertex_id, merged_vertex_ids);
+    if (find_vertex(document, mapped_id) != nullptr) {
+      add_unique_id(remapped.vertices, mapped_id);
+    }
+  }
+
+  for (Edge edge : source.edges) {
+    edge = remap_edge(edge, merged_vertex_ids);
+    if (edge.a != edge.b && edge_exists(document, edge)) {
+      add_unique_edge(remapped.edges, edge);
+    }
+  }
+
+  for (const ElementId face_id : source.faces) {
+    if (find_face(document, face_id) != nullptr) {
+      add_unique_id(remapped.faces, face_id);
+    }
+  }
+
+  if (source.has_active) {
+    switch (source.active_kind) {
+    case ElementKind::Vertex: {
+      const ElementId mapped_id =
+          remap_vertex_id(source.active_vertex, merged_vertex_ids);
+      if (find_vertex(document, mapped_id) != nullptr) {
+        add_unique_id(remapped.vertices, mapped_id);
+        activate_vertex_selection(remapped, mapped_id);
+      }
+      break;
+    }
+    case ElementKind::Edge: {
+      const Edge mapped_edge =
+          remap_edge(source.active_edge, merged_vertex_ids);
+      if (mapped_edge.a != mapped_edge.b &&
+          edge_exists(document, mapped_edge)) {
+        add_unique_edge(remapped.edges, mapped_edge);
+        activate_edge_selection(remapped, mapped_edge);
+      }
+      break;
+    }
+    case ElementKind::Face:
+      if (find_face(document, source.active_face) != nullptr) {
+        add_unique_id(remapped.faces, source.active_face);
+        activate_face_selection(remapped, source.active_face);
+      }
+      break;
+    }
+  }
+
+  if (!remapped.has_active) {
+    activate_last_selection(remapped);
+  }
+  selection = std::move(remapped);
 }
 
 } // namespace quader_poly::document_internal

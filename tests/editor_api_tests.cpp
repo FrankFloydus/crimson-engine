@@ -6686,7 +6686,7 @@ TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
               quader::quader_command::kModelingCancelActivePreview.string());
 }
 
-TEST(EditorApiTests, EscapeClearsSelectionInSelectAndTransformToolsInEveryMode) {
+TEST(EditorApiTests, EscapeClearsSelectionInEverySelectionCapableToolAndMode) {
   constexpr std::array kModes{
       std::pair{quader::QuaderSelectionMode::Object,
                 quader::ViewportSelectionMode::Object},
@@ -6699,9 +6699,11 @@ TEST(EditorApiTests, EscapeClearsSelectionInSelectAndTransformToolsInEveryMode) 
       std::pair{quader::QuaderSelectionMode::Face,
                 quader::ViewportSelectionMode::Face}};
   for (const auto tool : {quader::ViewportToolId::Select,
-                          quader::ViewportToolId::Move,
-                          quader::ViewportToolId::Rotate,
-                          quader::ViewportToolId::Scale}) {
+                         quader::ViewportToolId::LassoSelect,
+                         quader::ViewportToolId::Move,
+                         quader::ViewportToolId::Extrude,
+                         quader::ViewportToolId::Rotate,
+                         quader::ViewportToolId::Scale}) {
     for (const auto &[mode, viewport_mode] : kModes) {
       SCOPED_TRACE(static_cast<int>(tool));
       SCOPED_TRACE(static_cast<int>(mode));
@@ -6741,6 +6743,14 @@ TEST(EditorApiTests, EscapeClearsSelectionInSelectAndTransformToolsInEveryMode) 
       quader::ViewportToolState state;
       state.active_tool = tool;
       state.selection_mode = viewport_mode;
+
+      const auto outliner = editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Escape"), state, false, false,
+          {.outliner_focused = true});
+      ASSERT_EQ(outliner.kind,
+                quader::QuaderViewportKeybindingDispatch::Kind::Command);
+      EXPECT_EQ(outliner.command_id,
+                quader::quader_command::kEditClearSelection.string());
 
       for (int press = 0; press < 2; ++press) {
         const auto dispatch = editor.commands().dispatch_viewport_input_binding(
@@ -16201,7 +16211,11 @@ TEST(EditorApiTests,
   EXPECT_TRUE(activated.changed());
   EXPECT_EQ(editor.tools().active_tool(), "move");
   EXPECT_FALSE(editor.modeling().can_cancel_active_tool_or_preview());
-  EXPECT_FALSE(editor.tools().active_settings().active);
+  const auto settings = editor.tools().active_settings();
+  EXPECT_TRUE(settings.active);
+  EXPECT_EQ(settings.tool_id, "move");
+  EXPECT_FALSE(settings.preview_active);
+  EXPECT_FALSE(settings.apply_visible);
   EXPECT_FALSE(editor.project().dirty());
   EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
 
@@ -19161,9 +19175,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 206u);
+  EXPECT_EQ(commands.size(), 207u);
 #else
-  EXPECT_EQ(commands.size(), 205u);
+  EXPECT_EQ(commands.size(), 206u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

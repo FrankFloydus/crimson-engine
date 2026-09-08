@@ -195,6 +195,9 @@ merge_selected_vertices_by_distance(Document &document, Selection &selection,
                                     float tolerance);
 [[nodiscard]] OperationResult remove_double_vertices(Document &document,
                                                      Selection &selection);
+/// Welds component-selected vertices while keeping existing target positions.
+[[nodiscard]] OperationResult auto_merge_selected_vertices(
+    Document &document, Selection &selection, float tolerance = 0.001F);
 [[nodiscard]] OperationResult bevel_selected_vertices(Document &document,
                                                       Selection &selection,
                                                       float distance);

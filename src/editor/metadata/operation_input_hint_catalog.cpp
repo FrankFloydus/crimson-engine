@@ -8,6 +8,15 @@
 
 namespace quader {
 
+std::vector<QuaderOperationInputHint> lasso_selection_input_hints() {
+  using Gesture = QuaderOperationInputGesture;
+  return {
+      {Gesture::PrimaryDrag, {}, "operation.hints.lasso.replace", "Select"},
+      {Gesture::ShiftPrimaryDrag, {}, "operation.hints.lasso.add", "Add"},
+      {Gesture::ControlPrimaryDrag, {}, "operation.hints.lasso.remove", "Remove"},
+  };
+}
+
 std::vector<QuaderOperationInputHint>
 primitive_creation_input_hints(QuaderPrimitiveCreationShape kind, bool can_finalize) {
   using Gesture = QuaderOperationInputGesture;

@@ -354,8 +354,7 @@ default_keybinding_context_for_command(std::string_view command_id) {
     return "(viewportFocus || outlinerFocus) && !textInputActive && "
            "!navigation.active && !modalTool.active && !activeTool.ownsViewport && "
            "!transformDrag.active && !operationPreview.active && "
-           "(activeTool.select || activeTool.move || activeTool.rotate || "
-           "activeTool.scale)";
+           "selection.allowedByTool";
   }
   if (command_id == quader_command::kToolsFlipPrimitiveFaces.string()) {
     return primitive_flip_keybinding_context();
@@ -498,6 +497,10 @@ viewport_keybinding_context(const ViewportToolState &state,
   context.set("modalTool.active", input_context.modal_tool_active);
   context.set("activeTool.ownsViewport",
               input_context.active_tool_owns_viewport);
+  const ToolDescriptor *descriptor =
+      find_viewport_tool_descriptor(state.active_tool);
+  context.set("selection.allowedByTool",
+              descriptor != nullptr && descriptor->allows_selection_fallback);
   context.set("transformDrag.active", input_context.active_transform_drag);
   context.set("operationPreview.active",
               input_context.operation_preview_active);

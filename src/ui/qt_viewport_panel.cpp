@@ -1129,7 +1129,7 @@ void QtViewportPanel::prepare_viewports(
   const std::vector<quader_editor_core::SelectionOverlayPoint> &
       transform_snap_points =
           interaction_controller_.transform_gizmo_snap_overlay_points();
-  const ViewportSelectionMarquee selection_marquee =
+  const ViewportSelectionMarquee &selection_marquee =
       interaction_controller_.selection_marquee();
   const ViewportToolOverlaySourceRevisions dynamic_tool_revisions{
       .active_tool = editor.tools().active_tool_revision(),
@@ -2720,6 +2720,7 @@ void QtViewportPanel::process_viewport_input(
     std::erase_if(input.pointer_pressed_edges, matches);
     std::erase_if(input.pointer_released_edges, matches);
     std::erase_if(input.pointer_drag_started_edges, matches);
+    std::erase_if(input.pointer_motion_samples, matches);
   };
   consume_command_pointer(0, QuaderMouseButton::Left, sample.left_pressed,
                           sample.left_down, sample.left_released);

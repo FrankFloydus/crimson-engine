@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/ui_system.hpp"
 
+#include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "assets/asset_registry.hpp"
 #include "core/logger.hpp"
@@ -58,6 +59,7 @@
 #include <QColor>
 #include <QDialog>
 #include <QDockWidget>
+#include <QFrame>
 #include <QIcon>
 #include <QImage>
 #include <QLabel>
@@ -824,6 +826,12 @@ bool UISystem::initialize(RenderSystem &render_system,
   status_message_->setWordWrap(false);
   status_message_->hide();
   operation_input_hints_ = new QtOperationInputHints(main_window_->statusBar());
+  status_selection_ = new QLabel(main_window_->statusBar());
+  status_selection_->setObjectName(QStringLiteral("statusSelection"));
+  auto *selection_separator = new QFrame(main_window_->statusBar());
+  selection_separator->setObjectName(QStringLiteral("statusSelectionSeparator"));
+  selection_separator->setFrameShape(QFrame::VLine);
+  selection_separator->setFrameShadow(QFrame::Sunken);
   status_version_ = new QLabel(
       QStringLiteral("v%1").arg(QString::fromUtf8(kQuaderAppVersion)),
       main_window_.get());
@@ -831,6 +839,8 @@ bool UISystem::initialize(RenderSystem &render_system,
   main_window_->statusBar()->setObjectName(QStringLiteral("statusBar"));
   main_window_->statusBar()->addPermanentWidget(operation_input_hints_, 1);
   main_window_->statusBar()->addPermanentWidget(status_message_, 1);
+  main_window_->statusBar()->addPermanentWidget(status_selection_);
+  main_window_->statusBar()->addPermanentWidget(selection_separator);
   main_window_->statusBar()->addPermanentWidget(status_version_);
 
   apply_ui_scale_to_retained_surfaces(ui_scale_controller_->metrics());
@@ -897,6 +907,7 @@ void UISystem::install_runtime_hooks(
   uv_peel_presenter_.invalidate();
   standard_material_editor_presenter_.invalidate();
   status_presenter_.invalidate();
+  status_selection_presenter_.invalidate();
   status_observed_command_revision_ = editor.commands().last_status_revision();
   status_notification_.reset();
   ++status_notification_generation_;
@@ -907,13 +918,15 @@ void UISystem::install_runtime_hooks(
 
   selection_toolbar_->set_mode_requested_callback(
       [this](QuaderSelectionMode mode) {
-        if (editor_ == nullptr) {
+        if (editor_ == nullptr || modeling_ == nullptr) {
           return;
         }
         present_lifecycle_result(editor_->selection().set_mode(mode));
         const QuaderSelectionSummary selection =
             editor_->selection().summary();
-        selection_toolbar_->synchronize(*editor_, selection.mode, true);
+        const QuaderSelectionMode active_mode =
+            to_api_selection_mode(modeling_->selection_mode());
+        selection_toolbar_->synchronize(*editor_, active_mode, true);
         tool_toolbar_->synchronize(*editor_, selection, true);
       });
   tool_toolbar_->set_tool_requested_callback(
@@ -2327,8 +2340,10 @@ void UISystem::show_workspace() {
   }
   if (presentation_changed && editor_ != nullptr) {
     const QuaderSelectionSummary selection = editor_->selection().summary();
-    if (selection_toolbar_ != nullptr) {
-      selection_toolbar_->synchronize(*editor_, selection.mode, true);
+    if (selection_toolbar_ != nullptr && modeling_ != nullptr) {
+      const QuaderSelectionMode active_mode =
+          to_api_selection_mode(modeling_->selection_mode());
+      selection_toolbar_->synchronize(*editor_, active_mode, true);
     }
     if (snapping_toolbar_ != nullptr) {
       snapping_toolbar_->synchronize(*editor_, true);
@@ -2539,6 +2554,7 @@ void UISystem::shutdown() {
   status_message_ = nullptr;
   operation_input_hints_ = nullptr;
   status_version_ = nullptr;
+  status_selection_ = nullptr;
   auxiliary_window_save_timer_ = nullptr;
   ui_scale_controller_.reset();
   render_system_ = nullptr;
@@ -2583,6 +2599,7 @@ void UISystem::shutdown() {
   uv_peel_presenter_.invalidate();
   standard_material_editor_presenter_.invalidate();
   status_presenter_.invalidate();
+  status_selection_presenter_.invalidate();
   status_observed_command_revision_ = 0u;
   status_notification_.reset();
   ++status_notification_generation_;
@@ -2661,9 +2678,12 @@ void UISystem::refresh(const FrameTiming &frame_timing,
           QDR_PROFILE_SCOPE("UI toolbar query selection summary");
           return editor_->selection().summary();
         }();
-        if (selection_toolbar_ != nullptr && owner_state_changed) {
+        if (selection_toolbar_ != nullptr && modeling_ != nullptr &&
+            owner_state_changed) {
           QDR_PROFILE_SCOPE("UI synchronize selection toolbar");
-          selection_toolbar_->synchronize(*editor_, selection.mode);
+          const QuaderSelectionMode active_mode =
+              to_api_selection_mode(modeling_->selection_mode());
+          selection_toolbar_->synchronize(*editor_, active_mode);
         }
         if (tool_toolbar_ != nullptr) {
           QDR_PROFILE_SCOPE("UI synchronize tool toolbar");
@@ -2822,6 +2842,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   }
   {
     QDR_PROFILE_SCOPE("UI synchronize status bar");
+    refresh_status_selection();
     refresh_status_bar();
   }
 
@@ -3411,6 +3432,84 @@ void UISystem::schedule_auxiliary_window_state_save() {
   if (auxiliary_window_save_timer_ != nullptr) {
     auxiliary_window_save_timer_->start();
   }
+}
+
+void UISystem::refresh_status_selection() {
+  if (status_selection_ == nullptr || editor_ == nullptr ||
+      document_ == nullptr || modeling_ == nullptr) {
+    return;
+  }
+  const StatusSelectionPresentationStamp stamp{
+      .scene_revision = document_->revision(),
+      .scene_selection_revision = document_->selection_revision(),
+      .modeling_content_revision = modeling_->content_revision(),
+      .modeling_selection_revision = modeling_->selection_revision(),
+      .localization_revision = localization_.revision(),
+  };
+  if (!status_selection_presenter_.needs_refresh(stamp)) {
+    return;
+  }
+
+  QDR_PROFILE_SCOPE("UI status selection count and presentation");
+  const QuaderSelectionSummary selection = editor_->selection().summary();
+  const ModelingSelectionMode mode = modeling_->selection_mode();
+  std::size_t count = 0u;
+  std::string_view singular_key;
+  std::string_view plural_key;
+  std::string_view singular_fallback;
+  std::string_view plural_fallback;
+  switch (mode) {
+  case ModelingSelectionMode::Vertex:
+    count = selection.selected_vertex_count;
+    singular_key = "ui.status.selection.vertex.one";
+    plural_key = "ui.status.selection.vertex.other";
+    singular_fallback = "%1 Vertex Selected";
+    plural_fallback = "%1 Vertices Selected";
+    break;
+  case ModelingSelectionMode::Edge:
+    count = selection.selected_edge_count;
+    singular_key = "ui.status.selection.edge.one";
+    plural_key = "ui.status.selection.edge.other";
+    singular_fallback = "%1 Edge Selected";
+    plural_fallback = "%1 Edges Selected";
+    break;
+  case ModelingSelectionMode::Face:
+    count = selection.selected_face_count;
+    singular_key = "ui.status.selection.face.one";
+    plural_key = "ui.status.selection.face.other";
+    singular_fallback = "%1 Face Selected";
+    plural_fallback = "%1 Faces Selected";
+    break;
+  case ModelingSelectionMode::Object:
+    count = document_->selected_entities().size();
+    singular_key = "ui.status.selection.mesh.one";
+    plural_key = "ui.status.selection.mesh.other";
+    singular_fallback = "%1 Mesh Selected";
+    plural_fallback = "%1 Meshes Selected";
+    break;
+  case ModelingSelectionMode::Group:
+    for (const EntityId entity : document_->selected_entities()) {
+      if (document_->kind(entity) == EntityKind::Empty &&
+          !document_->is_scene_root(entity)) {
+        ++count;
+      }
+    }
+    singular_key = "ui.status.selection.group.one";
+    plural_key = "ui.status.selection.group.other";
+    singular_fallback = "%1 Group Selected";
+    plural_fallback = "%1 Groups Selected";
+    break;
+  }
+  const QString text =
+      QString::fromStdString(localization_.text(
+          count == 1u ? singular_key : plural_key,
+          count == 1u ? singular_fallback : plural_fallback))
+          .arg(static_cast<qulonglong>(count));
+  if (status_selection_->text() != text) {
+    status_selection_->setText(text);
+    status_selection_->setAccessibleName(text);
+  }
+  status_selection_presenter_.mark_presented(stamp);
 }
 
 void UISystem::refresh_status_bar() {
@@ -4387,8 +4486,10 @@ void UISystem::handle_settings_dialog_change(const QtSettingsChange &change) {
   case QtSettingsChangeKind::KeybindingsCommit:
     if (editor_ != nullptr) {
       const QuaderSelectionSummary selection = editor_->selection().summary();
-      if (selection_toolbar_ != nullptr) {
-        selection_toolbar_->synchronize(*editor_, selection.mode, true);
+      if (selection_toolbar_ != nullptr && modeling_ != nullptr) {
+        const QuaderSelectionMode active_mode =
+            to_api_selection_mode(modeling_->selection_mode());
+        selection_toolbar_->synchronize(*editor_, active_mode, true);
       }
       if (tool_toolbar_ != nullptr) {
         tool_toolbar_->synchronize(*editor_, selection, true);
@@ -4430,8 +4531,8 @@ bool UISystem::apply_interface_scale(float factor) {
 void UISystem::apply_ui_scale_to_retained_surfaces(
     const QtUiScaleMetrics &metrics) {
   if (main_window_ != nullptr) {
-    const int top = metrics.px(2);
-    main_window_->statusBar()->setContentsMargins(0, top, 0, metrics.px(5) - top);
+    const int top = metrics.px(5);
+    main_window_->statusBar()->setContentsMargins(0, top, 0, metrics.px(10) - top);
   }
   if (operation_input_hints_ != nullptr) {
     operation_input_hints_->apply_ui_scale(metrics);

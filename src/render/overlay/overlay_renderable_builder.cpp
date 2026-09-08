@@ -17,7 +17,6 @@
 #include <quader/modeling/neutral/geometry/bvh.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -28,7 +27,6 @@ namespace quader {
 namespace {
 
 constexpr float kOverlayVisibilityEpsilon = 0.000001f;
-constexpr float kOverlayVisibilityHitTolerance = 0.001f;
 
 bool overlay_layer_uses_depth_stamp_point_visibility(
     ViewportOverlayLayer layer) {
@@ -152,8 +150,8 @@ quader_geometry::QVec3f neutral_point(QVec3 value) {
  */
 class OverlayDepthStampPointVisibilityFilter final {
 public:
-  OverlayDepthStampPointVisibilityFilter(const ViewportOverlayFrame &frame,
-                                         const ViewportOverlayCamera &camera) {
+  explicit OverlayDepthStampPointVisibilityFilter(
+      const ViewportOverlayFrame &frame) {
     QDR_PROFILE_FUNCTION();
     for (const ViewportOverlayTriangle &triangle : frame.triangles) {
       if (triangle.layer != ViewportOverlayLayer::SourceWireDepthStamp ||
@@ -181,8 +179,6 @@ public:
         continue;
       }
       set.traversal_scratch.reserve(set.bvh.required_traversal_capacity());
-      set.camera_inside =
-          set.inside_out && point_inside_stamp_volume(camera, set);
     }
   }
 
@@ -196,15 +192,6 @@ public:
            point_visible(point.position, camera, *stamps);
   }
 
-  [[nodiscard]] ViewportOverlayDepthMode
-  point_depth_mode(const ViewportOverlayPoint &point) const {
-    const StampSet *stamps = stamps_for(point.element.object_id);
-    if (stamps != nullptr && stamps->inside_out && stamps->camera_inside) {
-      return ViewportOverlayDepthMode::DrawOnTop;
-    }
-    return viewport_overlay_depth_mode(point);
-  }
-
 private:
   /** Owns one object's source triangles, acceleration data, and orientation. */
   struct StampSet final {
@@ -215,7 +202,6 @@ private:
     QVec3 centroid;
     std::size_t vertex_count = 0u;
     bool inside_out = false;
-    bool camera_inside = false;
   };
 
   [[nodiscard]] const StampSet *stamps_for(int object_id) const {
@@ -233,57 +219,6 @@ private:
       score += dot(normal, triangle_centroid - stamps.centroid);
     }
     return score;
-  }
-
-  [[nodiscard]] static int distinct_intersection_count(
-      QVec3 origin, QVec3 direction, const StampSet &stamps) {
-    if (stamps.bvh.empty()) {
-      return 0;
-    }
-    quader_geometry::QTriangleBvhQueryOptions<float> options;
-    options.min_distance = 0.0001f;
-    options.intersection_epsilon = kOverlayVisibilityEpsilon;
-    options.tie_tolerance = kOverlayVisibilityHitTolerance;
-    int count = 0;
-    for (std::size_t iteration = 0u;
-         iteration < stamps.bvh.primitive_count(); ++iteration) {
-      const quader_geometry::QTriangleBvhHit<float> hit =
-          stamps.bvh.nearest_hit(
-              {neutral_point(origin), neutral_point(direction)}, options,
-              stamps.traversal_scratch);
-      if (!hit.hit) {
-        break;
-      }
-      ++count;
-      options.min_distance =
-          hit.triangle_hit.distance + kOverlayVisibilityHitTolerance;
-    }
-    return count;
-  }
-
-  [[nodiscard]] static bool point_inside_stamp_volume(
-      const ViewportOverlayCamera &raw_camera, const StampSet &stamps) {
-    const ViewportOverlayCamera camera =
-        OverlayCameraProjector::sanitized_camera(raw_camera);
-    const std::array<QVec3, 3u> directions{{
-        normalize(QVec3{0.331f, 0.521f, 0.787f}),
-        normalize(QVec3{-0.613f, 0.247f, 0.751f}),
-        normalize(QVec3{0.419f, -0.733f, 0.537f}),
-    }};
-    int samples = 0;
-    int inside_votes = 0;
-    for (const QVec3 direction : directions) {
-      const int intersections =
-          distinct_intersection_count(camera.eye, direction, stamps);
-      if (intersections == 0) {
-        continue;
-      }
-      ++samples;
-      if ((intersections % 2) == 1) {
-        ++inside_votes;
-      }
-    }
-    return samples > 0 && inside_votes * 2 > samples;
   }
 
   [[nodiscard]] static bool point_visible(
@@ -572,7 +507,7 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
     std::optional<OverlayDepthStampPointVisibilityFilter> visibility;
     if (overlay_layer_uses_depth_stamp_point_visibility(layer) &&
         frame_signatures.has_source_wire_depth_stamp) {
-      visibility.emplace(frame, sanitized_camera);
+      visibility.emplace(frame);
     }
     const std::vector<const ViewportOverlayPoint *> points = [&]() {
       QDR_PROFILE_SCOPE("Overlay collect layer points");
@@ -582,13 +517,11 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
     }();
     {
       QDR_PROFILE_SCOPE("Overlay build point outline pass");
-      append_point_pass(plan, points, camera, layer, blend_order, true,
-                        visibility ? &*visibility : nullptr);
+      append_point_pass(plan, points, camera, layer, blend_order, true);
     }
     {
       QDR_PROFILE_SCOPE("Overlay build point fill pass");
-      append_point_pass(plan, points, camera, layer, blend_order, false,
-                        visibility ? &*visibility : nullptr);
+      append_point_pass(plan, points, camera, layer, blend_order, false);
     }
   }
   if (overlay_layer_can_build_icons(layer)) {
@@ -673,13 +606,12 @@ void OverlayRenderableBuilder::append_point_pass(
     OverlayLayerBuildPlan &plan,
     const std::vector<const ViewportOverlayPoint *> &points,
     const ViewportOverlayCamera &camera, ViewportOverlayLayer layer,
-    std::uint16_t &blend_order, bool outline,
-    const OverlayDepthStampPointVisibilityFilter *visibility) {
-  const auto depth_mode_for =
-      [visibility](const ViewportOverlayPoint *point) {
-        return visibility == nullptr
-                   ? viewport_overlay_depth_mode(*point)
-                   : visibility->point_depth_mode(*point);
+    std::uint16_t &blend_order, bool outline) {
+  // An inward-facing room needs the same scene-depth test as an outward mesh.
+  // Camera containment must never turn editable vertices into X-ray handles;
+  // the GPU retains visible corners while rejecting walls in front of them.
+  const auto depth_mode_for = [](const ViewportOverlayPoint *point) {
+    return viewport_overlay_depth_mode(*point);
   };
   const auto outline_growth_for = [layer](const ViewportOverlayPoint *point) {
     return point->outline_growth_pixels.value_or(

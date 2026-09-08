@@ -12,13 +12,23 @@
 namespace quader {
 namespace {
 
-constexpr std::array<ToolDescriptor, 16> kViewportToolDescriptors{{
+constexpr std::array<ToolDescriptor, 17> kViewportToolDescriptors{{
     {
         .tool = ViewportToolId::Select,
         .modeling_tool = ModelingViewportTool::Select,
         .id = "select",
         .label = "Select",
         .shortcut = "Q",
+        .kind = ToolKind::Selection,
+        .menu_group = ToolMenuGroup::Navigation,
+        .allows_selection_fallback = true,
+    },
+    {
+        .tool = ViewportToolId::LassoSelect,
+        .modeling_tool = ModelingViewportTool::LassoSelect,
+        .id = "lasso_select",
+        .label = "Lasso Select",
+        .shortcut = "Shift+Q",
         .kind = ToolKind::Selection,
         .menu_group = ToolMenuGroup::Navigation,
         .allows_selection_fallback = true,
@@ -193,6 +203,11 @@ constexpr std::array<ToolDescriptor, 16> kViewportToolDescriptors{{
 
 std::span<const ToolDescriptor> viewport_tool_descriptors() {
   return kViewportToolDescriptors;
+}
+
+const char *viewport_tool_id(ViewportToolId tool) {
+  const ToolDescriptor *descriptor = find_viewport_tool_descriptor(tool);
+  return descriptor != nullptr ? descriptor->id.data() : "unknown";
 }
 
 const ToolDescriptor *find_viewport_tool_descriptor(ViewportToolId tool) {

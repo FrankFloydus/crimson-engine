@@ -738,6 +738,148 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
+     FreehandSamplesPreserveClosedLoopsAndCoalescedGestureIdentity) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-freehand-coalesced-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  const std::array<QPointF, 5> loop{{{40, 50}, {90, 50}, {90, 100},
+                                   {40, 100}, {40, 50}}};
+  const auto send = [&](QEvent::Type type, QPointF local) {
+    const bool move = type == QEvent::MouseMove;
+    QMouseEvent event(type, local, local + QPointF{100, 200},
+                      move ? Qt::NoButton : Qt::LeftButton,
+                      type == QEvent::MouseButtonRelease ? Qt::NoButton
+                                                        : Qt::LeftButton,
+                      Qt::NoModifier);
+    QApplication::sendEvent(&surface, &event);
+  };
+  send(QEvent::MouseButtonPress, loop.front());
+  for (std::size_t index = 1; index < loop.size() - 1; ++index) {
+    send(QEvent::MouseMove, loop[index]);
+  }
+  send(QEvent::MouseButtonRelease, loop.back());
+  send(QEvent::MouseButtonPress, {140, 150});
+  send(QEvent::MouseButtonRelease, {140, 150});
+
+  const auto frame = surface.take_input_frame(1.0f / 60.0f, false);
+  ASSERT_EQ(frame.input.pointer_pressed_edges.size(), 2u);
+  ASSERT_EQ(frame.input.pointer_released_edges.size(), 2u);
+  const auto &samples = frame.input.pointer_motion_samples;
+  ASSERT_EQ(samples.size(), loop.size() + 2u);
+  const auto first_press = frame.input.pointer_pressed_edges[0].sequence;
+  const auto second_press = frame.input.pointer_pressed_edges[1].sequence;
+  const float scale = frame.input.device_pixel_ratio;
+  for (std::size_t index = 0; index < loop.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_EQ(samples[index].button, QuaderMouseButton::Left);
+    EXPECT_EQ(samples[index].press_sequence, first_press);
+    EXPECT_FLOAT_EQ(samples[index].local.x,
+                    static_cast<float>(loop[index].x()) * scale);
+    EXPECT_FLOAT_EQ(samples[index].local.y,
+                    static_cast<float>(loop[index].y()) * scale);
+  }
+  EXPECT_EQ(samples.front().sequence, first_press);
+  EXPECT_EQ(samples[loop.size() - 1u].sequence,
+            frame.input.pointer_released_edges[0].sequence);
+  for (std::size_t index = 1; index < samples.size(); ++index) {
+    EXPECT_GT(samples[index].sequence, samples[index - 1u].sequence);
+  }
+  EXPECT_EQ(samples[loop.size()].press_sequence, second_press);
+  EXPECT_EQ(samples.back().press_sequence, second_press);
+  EXPECT_EQ(samples.back().sequence,
+            frame.input.pointer_released_edges[1].sequence);
+  EXPECT_TRUE(surface.take_input_frame(1.0f / 60.0f, false)
+                  .input.pointer_motion_samples.empty());
+}
+
+TEST(QtViewportSurfaceInputTests,
+     FreehandSamplesSurviveFrameDrainsAndClosedMotionRemainsActivity) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-freehand-frame-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  const QPointF origin{40, 50};
+  QMouseEvent press(QEvent::MouseButtonPress, origin, origin,
+                    Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(&surface, &press);
+  const auto pressed = surface.take_input_frame(1.0f / 60.0f, false);
+  ASSERT_EQ(pressed.input.pointer_motion_samples.size(), 1u);
+  const auto press_sequence = pressed.input.pointer_pressed_edges[0].sequence;
+  for (const QPointF point : {QPointF{90, 50}, QPointF{90, 100}, origin}) {
+    QMouseEvent move(QEvent::MouseMove, point, point, Qt::NoButton,
+                     Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&surface, &move);
+  }
+  const auto moved = surface.take_input_frame(1.0f / 60.0f, false);
+  ASSERT_EQ(moved.input.pointer_motion_samples.size(), 3u);
+  EXPECT_TRUE(moved.input.pointer_pressed_edges.empty());
+  EXPECT_TRUE(moved.input.pointer_released_edges.empty());
+  EXPECT_FLOAT_EQ(moved.input.mouse_delta.x, 0.0f);
+  EXPECT_FLOAT_EQ(moved.input.mouse_delta.y, 0.0f);
+  EXPECT_TRUE(moved.pointer_activity());
+  for (const auto &sample : moved.input.pointer_motion_samples) {
+    EXPECT_EQ(sample.press_sequence, press_sequence);
+    EXPECT_GT(sample.sequence, press_sequence);
+  }
+
+  QMouseEvent release(QEvent::MouseButtonRelease, origin, origin,
+                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(&surface, &release);
+  const auto released = surface.take_input_frame(1.0f / 60.0f, false);
+  ASSERT_EQ(released.input.pointer_motion_samples.size(), 1u);
+  EXPECT_EQ(released.input.pointer_motion_samples[0].press_sequence,
+            press_sequence);
+  EXPECT_EQ(released.input.pointer_motion_samples[0].sequence,
+            released.input.pointer_released_edges[0].sequence);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     FreehandSamplesExcludeHoverAndNavigationAndClearOnFocusOrScaleChange) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-freehand-cancel-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  for (const auto button : {Qt::NoButton, Qt::MiddleButton, Qt::RightButton}) {
+    if (button != Qt::NoButton) {
+      auto press = mouse_event(QEvent::MouseButtonPress, button);
+      QApplication::sendEvent(&surface, &press);
+    }
+    QMouseEvent move(QEvent::MouseMove, {40, 50}, {140, 250}, Qt::NoButton,
+                     button, Qt::NoModifier);
+    QApplication::sendEvent(&surface, &move);
+    if (button != Qt::NoButton) {
+      auto release = mouse_event(QEvent::MouseButtonRelease, button);
+      QApplication::sendEvent(&surface, &release);
+    }
+    EXPECT_TRUE(surface.take_input_frame(1.0f / 60.0f, false)
+                    .input.pointer_motion_samples.empty());
+  }
+  for (const auto interruption : {QEvent::FocusOut,
+                                  QEvent::DevicePixelRatioChange}) {
+    auto press = mouse_event(QEvent::MouseButtonPress, Qt::LeftButton);
+    QApplication::sendEvent(&surface, &press);
+    QEvent scale_changed(QEvent::DevicePixelRatioChange);
+    QFocusEvent focus_lost(QEvent::FocusOut);
+    QApplication::sendEvent(&surface, interruption == QEvent::FocusOut
+                                         ? &focus_lost : &scale_changed);
+    const auto canceled = surface.take_input_frame(1.0f / 60.0f, false);
+    EXPECT_TRUE(canceled.input.pointer_interaction_canceled);
+    EXPECT_TRUE(canceled.input.pointer_motion_samples.empty());
+    auto release = mouse_event(QEvent::MouseButtonRelease, Qt::LeftButton);
+    QApplication::sendEvent(&surface, &release);
+    EXPECT_TRUE(surface.take_input_frame(1.0f / 60.0f, false)
+                    .input.pointer_motion_samples.empty());
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
      MouseCommandsReserveCubeControlsButKeyboardFlipAllowsResize) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -2532,6 +2674,7 @@ TEST(QtViewportSurfaceInputTests,
   EXPECT_TRUE(abandoned.input.pointer_pressed_edges.empty());
   EXPECT_TRUE(abandoned.input.pointer_released_edges.empty());
   EXPECT_TRUE(abandoned.input.pointer_drag_started_edges.empty());
+  EXPECT_TRUE(abandoned.input.pointer_motion_samples.empty());
   EXPECT_TRUE(abandoned.input.wheel_input_edges.empty());
   EXPECT_FALSE(abandoned.left_pressed);
   EXPECT_FALSE(abandoned.left_down);

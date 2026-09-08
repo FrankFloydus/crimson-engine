@@ -207,7 +207,8 @@ public:
       std::span<const quader_editor_core::PickObjectTransform>
           object_transforms,
       quader_editor_core::SelectionMode selection_mode,
-      const ModelingBoxSelectRequest &request) const;
+      const ModelingBoxSelectRequest &request, bool clip_depth = false,
+      double near_plane = 0.01, double far_plane = 1000000.0) const;
   [[nodiscard]] std::vector<int>
   box_pick_object_ids(const ModelingSelectionProjectionSnapshot &session,
                       const SceneDocument &scene,
@@ -219,6 +220,16 @@ public:
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map,
       const ModelingBoxSelectRequest &request) const;
+  [[nodiscard]] quader_editor_core::RectangleSelectionHits
+  lasso_selection_hits(
+      const ModelingSelectionProjectionSnapshot &session,
+      const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
+      const ModelingLassoSelectRequest &request) const;
+  /// Eligible geometry participants, including those outside the camera frustum.
+  [[nodiscard]] std::vector<int> lasso_eligible_object_ids(
+      const ModelingSelectionProjectionSnapshot &session,
+      const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
+      const ModelingLassoSelectRequest &request) const;
   [[nodiscard]] ModelingSelectionProjectionApplyResult
   apply_rectangle_selection(const ModelingSelectionProjectionSnapshot &session,
       const quader_editor_core::RectangleSelectionState &selection) const;
@@ -264,6 +275,8 @@ private:
     quader_editor_core::SelectionMode selection_mode =
         quader_editor_core::SelectionMode::Object;
     ModelingViewportCamera camera;
+    double near_plane = 0.01;
+    double far_plane = 1000000.0;
     quader_editor_core::RectangleProjectedHitsRequest request;
   };
 
@@ -304,7 +317,8 @@ private:
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map,
       quader_editor_core::SelectionMode selection_mode,
-      const ModelingBoxSelectRequest &request) const;
+      const ModelingBoxSelectRequest &request, bool clip_depth = false,
+      double near_plane = 0.01, double far_plane = 1000000.0) const;
 
   [[nodiscard]] ModelingInstanceEditScope instance_edit_scope() const;
   [[nodiscard]] ModelingSelectionMode app_selection_mode() const;
@@ -322,6 +336,7 @@ private:
 
   mutable ModelingPickingCache picking_cache_;
   mutable RectangleProjectionCache rectangle_projection_cache_;
+  mutable RectangleProjectionCache lasso_projection_cache_;
   mutable RectangleUniverseCache rectangle_universe_cache_;
   mutable RectangleResolutionCache rectangle_resolution_cache_;
   mutable std::uint64_t transformed_picking_projection_build_count_ = 0;

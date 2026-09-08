@@ -63,6 +63,7 @@ struct QtViewportInputFrame {
            !input.pointer_pressed_edges.empty() ||
            !input.pointer_released_edges.empty() ||
            !input.pointer_drag_started_edges.empty() ||
+           !input.pointer_motion_samples.empty() ||
            input.middle_pressed || input.middle_released ||
            input.mouse_wheel != 0.0f || input.mouse_delta.x != 0.0f ||
            input.mouse_delta.y != 0.0f;

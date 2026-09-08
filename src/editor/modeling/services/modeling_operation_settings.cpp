@@ -38,6 +38,10 @@ ModelingHalfCutAxis to_modeling_half_cut_axis(int axis) {
 
 const char *fallback_tool_settings_label(ModelingToolSettingsTargetKind kind) {
   switch (kind) {
+  case ModelingToolSettingsTargetKind::Move:
+    return "Move";
+  case ModelingToolSettingsTargetKind::LassoSelect:
+    return "Lasso Select";
   case ModelingToolSettingsTargetKind::Cut:
     return "Cut";
   case ModelingToolSettingsTargetKind::Mirror:
@@ -120,6 +124,17 @@ quader_editor_core::EditorOperationSettings settings_for_operation(
 bool apply_modeling_interaction_setting(
     ModelingInteractionSettings &interaction_settings, std::string_view tool_id,
     std::string_view name, double value) {
+  if ((tool_id.empty() || tool_id == "move") &&
+      name == "auto_merge_vertices" && (value == 0.0 || value == 1.0)) {
+    interaction_settings.move_auto_merge_vertices = value != 0.0;
+    return true;
+  }
+  if ((tool_id.empty() || tool_id == "lasso_select") &&
+      name == "select_partial_intersection" &&
+      (value == 0.0 || value == 1.0)) {
+    interaction_settings.lasso_select_partial_intersection = value != 0.0;
+    return true;
+  }
   const std::optional<quader_editor_core::EditorOperationOptionDescriptor>
       option = quader_editor_core::operation_option_for_setting(tool_id, name);
   if (!option.has_value()) {

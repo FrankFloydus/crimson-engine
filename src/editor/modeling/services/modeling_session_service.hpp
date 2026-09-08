@@ -185,6 +185,9 @@ public:
   [[nodiscard]] std::vector<ModelingSelectionHit>
   query_selection_marquee_hits(
       const ModelingBoxSelectRequest &request) const;
+  [[nodiscard]] std::vector<ModelingSelectionHit> query_selection_lasso_hits(
+      const ModelingLassoSelectRequest &request,
+      std::vector<EntityId> *eligible_entities = nullptr) const;
   /// Borrows the retained whole-Curve candidates used by typed viewport/API
   /// hit arbitration until the next scene, asset, or Local Visibility change.
   [[nodiscard]] std::span<const ViewportSceneCurvePickCandidate>

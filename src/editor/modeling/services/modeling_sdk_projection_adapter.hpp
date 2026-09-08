@@ -218,7 +218,7 @@ private:
   std::shared_ptr<const Impl> impl_;
 };
 
-/// Stores exact sparse authored-position before/after values for one transform.
+/// Keeps sparse positions, upgrading only welded meshes to exact documents.
 class ModelingSdkTransformHistoryDelta final {
 public:
   ModelingSdkTransformHistoryDelta();
@@ -442,7 +442,9 @@ public:
   update_extrude_preview(QVec3 offset, float closed_edge_ledge_size = 0.0F);
   [[nodiscard]] ModelingCommandResult
   update_inset_preview(const ModelingTransform3 &transform, QVec3 pivot);
-  [[nodiscard]] ModelingCommandResult commit_translate_preview();
+  [[nodiscard]] ModelingCommandResult
+  commit_translate_preview(bool auto_merge_vertices = false);
+  [[nodiscard]] bool transform_preview_supports_sparse_history() const;
   [[nodiscard]] ModelingCommandResult cancel_translate_preview();
   [[nodiscard]] ModelingSdkTransformHistoryDelta
   take_committed_transform_history_delta();

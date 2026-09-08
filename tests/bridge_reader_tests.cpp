@@ -587,8 +587,8 @@ TEST_F(BridgeReaderTests, LightViewsUseOneCalibrationForEveryShapeAndLegacyUnit)
   QuaderBridgeSceneView view{};
   ASSERT_EQ(api_->scene_view(scene_, &view, &error_), 1) << error_.message;
   ASSERT_EQ(view.light_count, 27u);
-  constexpr std::array<float, 3> expected_energy{0.0625f, 1.0f, 2.0f};
-  constexpr std::array<float, 3> expected_physical{7539.8223686f, 120637.1579f, 241274.3158f};
+  constexpr std::array<float, 3> kExpectedEnergy{0.0625f, 1.0f, 2.0f};
+  constexpr std::array<float, 3> kExpectedPhysical{7539.8223686f, 120637.1579f, 241274.3158f};
   for (std::uint32_t index = 0u; index < view.light_count; ++index) {
     QuaderBridgeLightView light{};
     ASSERT_EQ(api_->light_view(scene_, index, &light, &error_), 1) << error_.message;
@@ -598,10 +598,10 @@ TEST_F(BridgeReaderTests, LightViewsUseOneCalibrationForEveryShapeAndLegacyUnit)
     const auto intensity = offset % 3u;
     EXPECT_EQ(light.type, shape);
     EXPECT_FLOAT_EQ(light.intensity, kCalibrationIntensities[intensity]);
-    EXPECT_FLOAT_EQ(light.preview_energy, expected_energy[intensity]);
-    EXPECT_FLOAT_EQ(light.illuminance_lux, shape == 0u ? expected_physical[intensity] : 0.0f);
+    EXPECT_FLOAT_EQ(light.preview_energy, kExpectedEnergy[intensity]);
+    EXPECT_FLOAT_EQ(light.illuminance_lux, shape == 0u ? kExpectedPhysical[intensity] : 0.0f);
     EXPECT_FLOAT_EQ(light.luminous_intensity_candela,
-                    shape == 0u ? 0.0f : expected_physical[intensity]);
+                    shape == 0u ? 0.0f : kExpectedPhysical[intensity]);
     EXPECT_FLOAT_EQ(light.range, 12.0f);
     EXPECT_FLOAT_EQ(light.distance_attenuation, 2.0f);
   }

@@ -79,6 +79,12 @@ SceneSession &scene_session(QuaderApiSession session) {
   return QuaderApiSessionInternalAccess::scene_session(session);
 }
 
+bool passive_curve_settings_available(const SceneSession &session) {
+  return session.modeling().tool_status().active_tool !=
+             ModelingViewportTool::LassoSelect &&
+         session.curve().has_editable_existing_curve();
+}
+
 MaterialReference active_project_material(QuaderApiSession session) {
   ProjectSession *project =
       QuaderApiSessionInternalAccess::project_session(session);
@@ -144,7 +150,7 @@ active_tool_settings_source(const SceneSession &session) {
         .kind = ActiveToolSettingsSourceKind::Pivot,
     };
   }
-  if (curve.has_editable_existing_curve()) {
+  if (passive_curve_settings_available(session)) {
     return {
         .identity = &curve,
         .revision = curve.tool_settings_revision(),
@@ -868,6 +874,10 @@ std::string tool_settings_target_tool_id(
     return target.action_id;
   }
   switch (target.kind) {
+  case ModelingToolSettingsTargetKind::Move:
+    return "move";
+  case ModelingToolSettingsTargetKind::LassoSelect:
+    return "lasso_select";
   case ModelingToolSettingsTargetKind::Cut:
     return "cut";
   case ModelingToolSettingsTargetKind::Mirror:
@@ -903,6 +913,10 @@ std::string_view active_tool_id(const SceneSession &session) {
 const char *fallback_tool_settings_description(
     ModelingToolSettingsTargetKind kind) {
   switch (kind) {
+  case ModelingToolSettingsTargetKind::Move:
+    return "Move the selection and optionally merge nearby vertices on acceptance.";
+  case ModelingToolSettingsTargetKind::LassoSelect:
+    return "Draw a freehand region to select enclosed geometry through occluders.";
   case ModelingToolSettingsTargetKind::Cut:
     return "Draw a cutting plane through the selection and choose which side "
            "to keep.";
@@ -961,6 +975,16 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
           quader_editor_core::merge_by_distance_operation_schema();
 
   switch (target.kind) {
+  case ModelingToolSettingsTargetKind::Move:
+    result.controls.push_back(toggle_control(
+        "auto_merge_vertices", "Auto Merge Vertices",
+        settings.move_auto_merge_vertices));
+    break;
+  case ModelingToolSettingsTargetKind::LassoSelect:
+    result.controls.push_back(toggle_control(
+        "select_partial_intersection", "Enable select partial intersection",
+        settings.lasso_select_partial_intersection));
+    break;
   case ModelingToolSettingsTargetKind::Cut: {
     const int cut_mode = static_cast<int>(settings.cut_mode);
     result.controls.push_back(choice_control(
@@ -1278,7 +1302,7 @@ QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
   if (session.pivot().persistent_active()) {
     return pivot_tool_settings_target(session.pivot());
   }
-  if (session.curve().has_editable_existing_curve()) {
+  if (passive_curve_settings_available(session)) {
     return curve_tool_settings_target(session.curve());
   }
   const ModelingSessionService &modeling = session.modeling();
@@ -1340,6 +1364,9 @@ std::uint64_t QuaderToolsApi::active_input_hints_revision() const {
 }
 
 std::vector<QuaderOperationInputHint> QuaderToolsApi::active_input_hints() const {
+  if (active_tool_id(scene_session(session_)) == "lasso_select") {
+    return lasso_selection_input_hints();
+  }
   const auto &primitive = scene_session(session_).primitive_creation();
   const auto kind = primitive.active_kind();
   if (!kind) {
@@ -1477,7 +1504,7 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
   CurveToolService &curve = session.curve();
   const bool curve_setting_target =
       curve.active() ||
-      (curve.has_editable_existing_curve() &&
+      (passive_curve_settings_available(session) &&
        (tool_id.empty() || tool_id == kCurveToolId));
   if (curve_setting_target) {
     if (!tool_id.empty() && tool_id != kCurveToolId) {
@@ -1788,7 +1815,7 @@ QuaderApiVoidResult QuaderToolsApi::reset_active_settings() {
         session, session.pivot().reset_settings(),
         QuaderMutationKind::Runtime, "Reset Pivot Settings");
   }
-  if (session.curve().has_editable_existing_curve()) {
+  if (passive_curve_settings_available(session)) {
     return quader_api_failure_status(
         session, "Selected Curve settings do not have a reset action.");
   }

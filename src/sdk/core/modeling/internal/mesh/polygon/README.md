@@ -44,3 +44,10 @@ Keep backend-neutral topology query/mutation declarations in
 Use normal `.cpp` files and narrow helper headers; do not add permanent `.inc` implementation
 shards. Document overlay APIs emit primitive geometry only. Semantic host projection belongs in
 `src/editor`; styling, layers, draw policy, and render resources belong in `src/render`.
+
+`auto_merge_selected_vertices` welds component-selected vertices into the nearest unselected
+target before clustering remaining selected vertices. It keeps existing survivor coordinates,
+corner attributes, selection identity and loose vertices. The fixed native Move default is
+0.001 local units; previews stay outside this operation. Unlike the explicit Merge by Distance
+command, auto-merge never relocates the survivor to a centroid. Its topology and SDK receipt
+contracts are covered by the auto-merge document-operation and SDK consumer suites.

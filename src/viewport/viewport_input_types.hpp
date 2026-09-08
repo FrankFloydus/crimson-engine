@@ -36,6 +36,17 @@ struct ViewportPointerButtonEdge {
   std::optional<ViewportModifiers> modifiers;
 };
 
+/// Preserves a freehand pointer path when a complete gesture occurs in one frame.
+struct ViewportPointerMotionSample {
+  QuaderMouseButton button = QuaderMouseButton::None;
+  // Event-time pane coordinates use the same physical pixels as button edges.
+  QVec2 local = {};
+  // Shares the button-edge ordering; press/release samples retain that edge's
+  // sequence. The originating press remains identifiable across frame drains.
+  std::uint64_t sequence = 0u;
+  std::uint64_t press_sequence = 0u;
+};
+
 /// Distinguishes ordered semantic pointer presses from releases.
 enum class ViewportNavigationPointerTransitionKind {
   Pressed,
@@ -204,6 +215,9 @@ struct ViewportInputFrame {
   std::vector<ViewportPointerButtonEdge> pointer_pressed_edges;
   std::vector<ViewportPointerButtonEdge> pointer_released_edges;
   std::vector<ViewportPointerButtonEdge> pointer_drag_started_edges;
+  // Hosts accumulate only uncaptured left-button gestures, including their
+  // endpoints. Idle hover and relative navigation do not allocate path data.
+  std::vector<ViewportPointerMotionSample> pointer_motion_samples;
   std::vector<QuaderWheelInputEdge> wheel_input_edges;
   bool keybinding_input_consumed = false;
   std::vector<ViewportShortcut> resolved_shortcuts;

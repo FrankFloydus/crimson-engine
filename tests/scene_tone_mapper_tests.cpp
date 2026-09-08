@@ -34,7 +34,7 @@ TEST(SceneToneMapperTests, AgxMatchesGodotSdrReferenceColors) {
   // Reference inputs are Rec.709 white, primaries, warm HDR and bright cyan,
   // transformed to Filament's Rec.2020 boundary. Outputs are fixed reference
   // evaluations of the upstream shader, without applying an sRGB transfer.
-  constexpr std::array references = {
+  constexpr std::array kReferences = {
       Reference{{1.0f, 1.0f, 1.0f},
                 {0.596110849f, 0.596110849f, 0.596110849f}},
       Reference{{0.627403896f, 0.069097289f, 0.016391439f},
@@ -49,7 +49,7 @@ TEST(SceneToneMapperTests, AgxMatchesGodotSdrReferenceColors) {
                 {1.0f, 1.0f, 1.0f}},
   };
   const auto &mapper = scene_tone_mapper(SceneToneMapping::Agx);
-  for (const auto &reference : references) {
+  for (const auto &reference : kReferences) {
     expect_color_near(mapper(reference.linear_rec2020_input),
                       reference.linear_rec2020_output);
   }
@@ -66,11 +66,11 @@ TEST(SceneToneMapperTests, AgxPreservesBlackMiddleGrayAndReferenceWhite) {
 
 TEST(SceneToneMapperTests, AgxCompressesNeutralHdrMonotonically) {
   const auto &mapper = scene_tone_mapper(SceneToneMapping::Agx);
-  constexpr std::array samples = {0.0f,    0.0001f, 0.01f, 0.17999f, 0.18f,
+  constexpr std::array kSamples = {0.0f,    0.0001f, 0.01f, 0.17999f, 0.18f,
                                   0.18001f, 0.5f,    1.0f,  4.0f,     16.29f,
                                   1000.0f};
   float previous = 0.0f;
-  for (float sample : samples) {
+  for (float sample : kSamples) {
     const float3 actual = mapper({sample, sample, sample});
     EXPECT_GE(actual.r, previous);
     EXPECT_LE(actual.r, 1.0f);
@@ -94,19 +94,19 @@ TEST(SceneToneMapperTests, AgxHandlesExtremeAndNegativeInputs) {
 
 TEST(SceneToneMapperTests, RetiredAndUnknownModesUseModernAces) {
   const filament::ACESToneMapper expected_mapper;
-  constexpr std::array modes = {
+  constexpr std::array kModes = {
       SceneToneMapping::Aces,
       SceneToneMapping::AcesLegacy,
       SceneToneMapping::DisplayRange,
       static_cast<SceneToneMapping>(255),
   };
-  constexpr std::array samples = {float3{0.18f, 0.18f, 0.18f},
+  constexpr std::array kSamples = {float3{0.18f, 0.18f, 0.18f},
                                   float3{2.0f, 0.2f, 0.05f},
                                   float3{20.0f, 10.0f, 1.0f}};
-  for (SceneToneMapping mode : modes) {
+  for (SceneToneMapping mode : kModes) {
     const auto &mapper = scene_tone_mapper(mode);
     EXPECT_EQ(&mapper, &scene_tone_mapper(SceneToneMapping::Aces));
-    for (float3 sample : samples) {
+    for (float3 sample : kSamples) {
       expect_color_near(mapper(sample), expected_mapper(sample));
     }
   }

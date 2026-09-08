@@ -808,44 +808,6 @@ bool ViewportInputRouter::handle_shortcut(const ViewportShortcut &shortcut,
   return false;
 }
 
-const char *viewport_tool_id(ViewportToolId tool) {
-  switch (tool) {
-  case ViewportToolId::Select:
-    return "select";
-  case ViewportToolId::Move:
-    return "move";
-  case ViewportToolId::Extrude:
-    return "extrude";
-  case ViewportToolId::Rotate:
-    return "rotate";
-  case ViewportToolId::Scale:
-    return "scale";
-  case ViewportToolId::CreatePrimitive:
-    return "create_primitive";
-  case ViewportToolId::InsertEdgeLoop:
-    return "insert_edge_loop";
-  case ViewportToolId::Knife:
-    return "knife";
-  case ViewportToolId::Cut:
-    return "cut";
-  case ViewportToolId::Poly:
-    return "poly";
-  case ViewportToolId::Mirror:
-    return "mirror";
-  case ViewportToolId::Pivot:
-    return "pivot";
-  case ViewportToolId::LinearArray:
-    return "linear_array";
-  case ViewportToolId::RadialArray:
-    return "radial_array";
-  case ViewportToolId::Curve:
-    return "curve";
-  case ViewportToolId::PathArray:
-    return "path_array";
-  }
-  return "unknown";
-}
-
 const char *viewport_selection_mode_id(ViewportSelectionMode mode) {
   switch (mode) {
   case ViewportSelectionMode::Vertex:

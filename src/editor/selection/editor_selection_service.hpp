@@ -241,6 +241,14 @@ public:
   [[nodiscard]] std::vector<ResolvedSelectionHit>
   query_modeling_marquee_hits(
       const ModelingBoxSelectRequest &request) const;
+  [[nodiscard]] std::vector<ResolvedSelectionHit> query_modeling_lasso_hits(
+      const ModelingLassoSelectRequest &request,
+      std::vector<EntityId> *eligible_entities = nullptr) const;
+  /// Group containment requires every eligible descendant provider to match.
+  [[nodiscard]] std::vector<ResolvedSelectionTarget> filter_lasso_group_targets(
+      std::span<const ResolvedSelectionTarget> targets,
+      std::span<const EntityId> eligible_entities,
+      bool partial_intersection) const;
   /**
    * Advances one provider-neutral depth stack. Ordinary and depth-cycle picks
    * share this state so meshes, Curves, billboards, and formal occurrences

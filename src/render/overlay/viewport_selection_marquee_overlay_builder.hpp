@@ -8,6 +8,8 @@
 
 #include "render/viewport_overlay_frame.hpp"
 
+#include <span>
+
 namespace quader {
 
 /// Renderer-neutral marquee state projected by the selection owner.
@@ -16,6 +18,8 @@ struct RenderSelectionMarqueeRecord final {
   bool crossing = false;
   QVec2 start;
   QVec2 end;
+  /// Same-call borrowing only; append() does not retain this screen-space path.
+  std::span<const QVec2> lasso_points;
 };
 
 /**

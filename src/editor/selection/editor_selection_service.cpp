@@ -957,6 +957,61 @@ EditorSelectionService::query_modeling_marquee_hits(
   return hits;
 }
 
+std::vector<ResolvedSelectionHit> EditorSelectionService::query_modeling_lasso_hits(
+    const ModelingLassoSelectRequest &request,
+    std::vector<EntityId> *eligible_entities) const {
+  auto modeling_hits = modeling_.query_selection_lasso_hits(request, eligible_entities);
+  std::vector<ResolvedSelectionHit> result;
+  result.reserve(modeling_hits.size());
+  for (auto &hit : modeling_hits) {
+    result.push_back(resolved_modeling_hit(std::move(hit)));
+  }
+  return result;
+}
+
+std::vector<ResolvedSelectionTarget> EditorSelectionService::filter_lasso_group_targets(
+    std::span<const ResolvedSelectionTarget> targets,
+    std::span<const EntityId> eligible_entities, bool partial_intersection) const {
+  if (modeling_.selection_mode() != ModelingSelectionMode::Group) {
+    return {targets.begin(), targets.end()};
+  }
+  std::vector<ResolvedSelectionTarget> result;
+  std::unordered_set<EntityId> matched_entities;
+  for (const auto &target : targets) {
+    if (target.domain == ResolvedSelectionDomain::SceneEntity) {
+      matched_entities.insert(target.entity);
+    }
+  }
+  std::unordered_set<EntityId> visited;
+  for (const auto &target : targets) {
+    const EntityId group = nearest_group_ancestor(target.entity);
+    if (target.domain != ResolvedSelectionDomain::SceneEntity ||
+        group == kInvalidEntityId || !visited.insert(group).second) {
+      continue;
+    }
+    if (!partial_intersection) {
+      const bool unmatched_descendant = std::any_of(
+          eligible_entities.begin(), eligible_entities.end(), [&](EntityId entity) {
+            if (matched_entities.contains(entity)) {
+              return false;
+            }
+            for (EntityId parent = entity; parent != kInvalidEntityId;
+                 parent = scene_.parent(parent)) {
+              if (parent == group) {
+                return true;
+              }
+            }
+            return false;
+          });
+      if (unmatched_descendant) {
+        continue;
+      }
+    }
+    result.push_back({.domain = ResolvedSelectionDomain::SceneEntity, .entity = group});
+  }
+  return result;
+}
+
 std::optional<ResolvedSelectionTarget>
 EditorSelectionService::resolve_depth_arbitrated_target(
     std::span<const ResolvedSelectionTarget> ordered_depth_targets,

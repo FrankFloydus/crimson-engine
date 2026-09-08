@@ -44,6 +44,8 @@
 #include <editor/interactions/cut_tool.hpp>
 #include <editor/interactions/mirror_tool.hpp>
 #include <editor/interactions/selection_box.hpp>
+#include <editor/interactions/selection_lasso.hpp>
+#include <editor/interactions/viewport_segment_projection.hpp>
 #include <editor/interactions/transform_drag.hpp>
 #include <editor/interactions/viewport_projection.hpp>
 #include <editor/modeling/runtime/runtime_command.hpp>
@@ -1005,6 +1007,7 @@ ModelingSelectionService::scene_target_for_picking_participant(
 void ModelingSelectionService::invalidate_picking_cache() const {
   picking_cache_ = {};
   rectangle_projection_cache_ = {};
+  lasso_projection_cache_ = {};
   rectangle_universe_cache_ = {};
   rectangle_resolution_cache_ = {};
 }
@@ -2238,10 +2241,16 @@ ModelingSelectionService::rectangle_projected_hits_request(
     std::span<const quader_editor_core::PickObjectTransform>
         object_transforms,
     quader_editor_core::SelectionMode selection_mode,
-    const ModelingBoxSelectRequest &request) const {
+    const ModelingBoxSelectRequest &request, bool clip_depth,
+    double near_plane, double far_plane) const {
   QDR_PROFILE_SCOPE("Box selection project candidates");
   const quader_editor_core::ViewportCameraState camera =
       modeling_runtime_camera(request.camera);
+  const auto depth_visible = [&](QVec3 world) {
+    const double depth = dot(world - camera.transform.origin,
+                             normalize(camera.transform.z_axis * -1.0f));
+    return !clip_depth || (depth >= near_plane && depth <= far_plane);
+  };
   quader_editor_core::RectangleProjectedHitsRequest hits_request;
   hits_request.mode = selection_mode;
   hits_request.match =
@@ -2345,8 +2354,10 @@ ModelingSelectionService::rectangle_projected_hits_request(
       world_vertices[vertex_index] = world_position;
       world_vertex_valid[vertex_index] = 1U;
       QVec2 screen;
-      if (!quader_editor_core::project_viewport_point(camera, world_position,
+      if (!depth_visible(world_position) ||
+          !quader_editor_core::project_viewport_point(camera, world_position,
                                                       screen)) {
+        projected_object.complete_geometry = false;
         continue;
       }
       projected_vertices[vertex_index] = screen;
@@ -2369,6 +2380,23 @@ ModelingSelectionService::rectangle_projected_hits_request(
 
     if (selection_mode == quader_editor_core::SelectionMode::Object) {
       for (const quader_poly::Face &face : object.document.faces) {
+        if (clip_depth) {
+          std::vector<QVec3> world_polygon;
+          for (const auto vertex_id : face.vertices) {
+            if (const auto *world = cached_world_position(vertex_id)) {
+              world_polygon.push_back(*world);
+            }
+          }
+          auto polygon = quader_editor_core::project_lasso_polygon(
+              camera, world_polygon, near_plane, far_plane);
+          if (!polygon.empty()) {
+            for (const auto screen : polygon) {
+              include_projected_object_point(projected_object, screen);
+            }
+            projected_object.screen_polygons.push_back(std::move(polygon));
+          }
+          continue;
+        }
         std::vector<QVec2> screen_vertices;
         screen_vertices.reserve(face.vertices.size());
         bool all_projected = !face.vertices.empty();
@@ -2449,12 +2477,25 @@ ModelingSelectionService::rectangle_projected_hits_request(
           projected_face.screen_vertices.clear();
           projected_face.has_screen_bounds = false;
         }
+        projected_face.complete_geometry = all_projected;
+        if (clip_depth && !all_projected) {
+          std::vector<QVec3> world_polygon;
+          for (const auto vertex_id : face.vertices) {
+            if (const auto *world = cached_world_position(vertex_id)) {
+              world_polygon.push_back(*world);
+            }
+          }
+          projected_face.screen_vertices = quader_editor_core::project_lasso_polygon(
+              camera, world_polygon, near_plane, far_plane);
+        }
         if (world_center_count > 0U) {
           QVec2 facing_screen;
           world_center = world_center /
                          static_cast<float>(world_center_count);
-          if (quader_editor_core::project_viewport_point(
-                  camera, world_center, facing_screen)) {
+          if ((clip_depth && !projected_face.screen_vertices.empty()
+                   ? (facing_screen = projected_face.screen_vertices.front(), true)
+                   : quader_editor_core::project_viewport_point(
+                         camera, world_center, facing_screen))) {
             projected_face.front_facing =
                 pick_facts->face_is_front_facing_pickable(
                     face.id,
@@ -2489,10 +2530,24 @@ ModelingSelectionService::rectangle_projected_hits_request(
         }
         const QVec3 *world_a = cached_world_position(edge.a);
         const QVec3 *world_b = cached_world_position(edge.b);
+        projected_edge.complete_geometry = a != nullptr && b != nullptr;
+        if (clip_depth && world_a != nullptr && world_b != nullptr) {
+          if (const auto segment = project_visible_viewport_segment(
+                  camera, *world_a, *world_b, near_plane, far_plane, false)) {
+            projected_edge.has_screen_start = true;
+            projected_edge.has_screen_end = true;
+            projected_edge.screen_start = segment->start;
+            projected_edge.screen_end = segment->end;
+            projected_edge.has_screen_position = true;
+            projected_edge.screen_position = (segment->start + segment->end) * 0.5f;
+          }
+        }
         if (world_a != nullptr && world_b != nullptr) {
           QVec2 facing_screen;
-          if (quader_editor_core::project_viewport_point(
-                  camera, (*world_a + *world_b) * 0.5F, facing_screen)) {
+          if ((clip_depth && projected_edge.has_screen_position
+                   ? (facing_screen = projected_edge.screen_position, true)
+                   : quader_editor_core::project_viewport_point(
+                         camera, (*world_a + *world_b) * 0.5F, facing_screen))) {
             projected_edge.front_facing =
                 !pick_facts->edge_has_incident_face(edge) ||
                 pick_facts->edge_has_front_facing_pickable_face(
@@ -2537,7 +2592,10 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
     const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
     quader_editor_core::SelectionMode selection_mode,
-    const ModelingBoxSelectRequest &request) const {
+    const ModelingBoxSelectRequest &request, bool clip_depth,
+    double near_plane, double far_plane) const {
+  RectangleProjectionCache &projection_cache =
+      clip_depth ? lasso_projection_cache_ : rectangle_projection_cache_;
   QDR_PROFILE_SCOPE("Box selection projected candidates cache");
   const std::uint64_t content_revision = session.content_revision();
   const std::uint64_t scene_hierarchy_revision =
@@ -2559,65 +2617,69 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
           ? current_app_selection_mode
           : ModelingSelectionMode::Vertex;
   const bool rebuild =
-      !rectangle_projection_cache_.valid ||
-      rectangle_projection_cache_.content_revision != content_revision ||
-      rectangle_projection_cache_.scene_hierarchy_revision !=
+      !projection_cache.valid ||
+      (clip_depth && (projection_cache.near_plane != near_plane ||
+                      projection_cache.far_plane != far_plane)) ||
+      projection_cache.content_revision != content_revision ||
+      projection_cache.scene_hierarchy_revision !=
           scene_hierarchy_revision ||
-      rectangle_projection_cache_.scene_transform_revision !=
+      projection_cache.scene_transform_revision !=
           scene_transform_revision ||
-      rectangle_projection_cache_.scene_visibility_revision !=
+      projection_cache.scene_visibility_revision !=
           scene_visibility_revision ||
-      rectangle_projection_cache_.scene_layer_revision !=
+      projection_cache.scene_layer_revision !=
           scene_layer_revision ||
-      rectangle_projection_cache_.scene_mesh_binding_revision !=
+      projection_cache.scene_mesh_binding_revision !=
           scene_mesh_binding_revision ||
-      rectangle_projection_cache_.object_map_revision != object_map_revision ||
-      rectangle_projection_cache_.viewport_visibility_revision !=
+      projection_cache.object_map_revision != object_map_revision ||
+      projection_cache.viewport_visibility_revision !=
           local_visibility_revision ||
-      rectangle_projection_cache_.instance_edit_scope != edit_scope ||
-      rectangle_projection_cache_.app_selection_mode !=
+      projection_cache.instance_edit_scope != edit_scope ||
+      projection_cache.app_selection_mode !=
           participant_mode ||
-      rectangle_projection_cache_.selection_mode != selection_mode ||
-      !modeling_viewport_camera_matches(rectangle_projection_cache_.camera,
+      projection_cache.selection_mode != selection_mode ||
+      !modeling_viewport_camera_matches(projection_cache.camera,
                             request.camera);
   if (rebuild) {
     QDR_PROFILE_SCOPE("Box selection build projected candidates cache miss");
     const std::vector<quader_editor_core::PolygonObject> &picking_objects =
         cached_local_picking_objects(session, scene, object_map);
-    rectangle_projection_cache_.request = rectangle_projected_hits_request(
+    projection_cache.request = rectangle_projected_hits_request(
         picking_objects,
         cached_local_picking_transforms(session, scene, object_map),
-        selection_mode, request);
-    rectangle_projection_cache_.valid = true;
-    rectangle_projection_cache_.content_revision = content_revision;
-    rectangle_projection_cache_.scene_hierarchy_revision =
+        selection_mode, request, clip_depth, near_plane, far_plane);
+    projection_cache.valid = true;
+    projection_cache.content_revision = content_revision;
+    projection_cache.scene_hierarchy_revision =
         scene_hierarchy_revision;
-    rectangle_projection_cache_.scene_transform_revision =
+    projection_cache.scene_transform_revision =
         scene_transform_revision;
-    rectangle_projection_cache_.scene_visibility_revision =
+    projection_cache.scene_visibility_revision =
         scene_visibility_revision;
-    rectangle_projection_cache_.scene_layer_revision = scene_layer_revision;
-    rectangle_projection_cache_.scene_mesh_binding_revision =
+    projection_cache.scene_layer_revision = scene_layer_revision;
+    projection_cache.scene_mesh_binding_revision =
         scene_mesh_binding_revision;
-    rectangle_projection_cache_.object_map_revision = object_map_revision;
-    rectangle_projection_cache_.viewport_visibility_revision =
+    projection_cache.object_map_revision = object_map_revision;
+    projection_cache.viewport_visibility_revision =
         local_visibility_revision;
-    rectangle_projection_cache_.instance_edit_scope = edit_scope;
-    rectangle_projection_cache_.app_selection_mode =
+    projection_cache.instance_edit_scope = edit_scope;
+    projection_cache.app_selection_mode =
         participant_mode;
-    rectangle_projection_cache_.selection_mode = selection_mode;
-    rectangle_projection_cache_.camera = request.camera;
+    projection_cache.selection_mode = selection_mode;
+    projection_cache.camera = request.camera;
+    projection_cache.near_plane = near_plane;
+    projection_cache.far_plane = far_plane;
     ++rectangle_picking_projection_build_count_;
   } else {
     QDR_PROFILE_SCOPE("Box selection projected candidates cache hit");
   }
-  rectangle_projection_cache_.request.match =
+  projection_cache.request.match =
       rectangle_selection_match(request.rule, request.start, request.end);
-  rectangle_projection_cache_.request.rect =
+  projection_cache.request.rect =
       quader_editor_core::normalized_screen_rect(request.start, request.end);
-  rectangle_projection_cache_.request.select_backfaces =
+  projection_cache.request.select_backfaces =
       request.select_backfaces;
-  return rectangle_projection_cache_.request;
+  return projection_cache.request;
 }
 
 std::vector<int> ModelingSelectionService::box_pick_object_ids(
@@ -2643,6 +2705,37 @@ ModelingSelectionService::rectangle_selection_hits(
       cached_rectangle_projected_hits_request(
           session, scene, object_registry, session.selection_mode(),
           request));
+}
+
+quader_editor_core::RectangleSelectionHits
+ModelingSelectionService::lasso_selection_hits(
+    const ModelingSelectionProjectionSnapshot &session,
+    const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
+    const ModelingLassoSelectRequest &request) const {
+  const ModelingBoxSelectRequest projection_request{
+      .camera = request.camera, .select_backfaces = request.select_backfaces};
+  return quader_editor_core::lasso_hits_from_projected_candidates(
+      cached_rectangle_projected_hits_request(session, scene, object_map,
+          session.selection_mode(), projection_request, true,
+          request.near_plane, request.far_plane),
+      quader_editor_core::SelectionLassoRegion(request.points),
+      request.partial_intersection);
+}
+
+std::vector<int> ModelingSelectionService::lasso_eligible_object_ids(
+    const ModelingSelectionProjectionSnapshot &session,
+    const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
+    const ModelingLassoSelectRequest &request) const {
+  const ModelingBoxSelectRequest projection_request{.camera = request.camera};
+  const auto &candidates = cached_rectangle_projected_hits_request(
+      session, scene, object_map, quader_editor_core::SelectionMode::Object,
+      projection_request, true, request.near_plane, request.far_plane);
+  std::vector<int> result;
+  result.reserve(candidates.objects.size());
+  for (const auto &object : candidates.objects) {
+    result.push_back(object.object_id);
+  }
+  return result;
 }
 
 ModelingSelectionProjectionApplyResult
@@ -4051,6 +4144,13 @@ bool ModelingInteractionSettingsService::reset_for_target(
   const ModelingInteractionSettings defaults =
       normalize(ModelingInteractionSettings{});
   switch (target_kind) {
+  case ModelingToolSettingsTargetKind::Move:
+    settings_.move_auto_merge_vertices = defaults.move_auto_merge_vertices;
+    break;
+  case ModelingToolSettingsTargetKind::LassoSelect:
+    settings_.lasso_select_partial_intersection =
+        defaults.lasso_select_partial_intersection;
+    break;
   case ModelingToolSettingsTargetKind::Cut:
     settings_.cut_mode = defaults.cut_mode;
     break;
@@ -4210,6 +4310,18 @@ ModelingToolSettingsTarget
 ModelingToolSettingsService::active_runtime_tool_target(
     const quader_editor_core::EditorRuntimeStatus &runtime_status) const {
   ModelingToolSettingsTarget target;
+  if (runtime_status.active_tool ==
+      quader_editor_core::ViewportInteractionTool::Move) {
+    target.kind = ModelingToolSettingsTargetKind::Move;
+  } else if (runtime_status.active_tool ==
+             quader_editor_core::ViewportInteractionTool::LassoSelect) {
+    target.kind = ModelingToolSettingsTargetKind::LassoSelect;
+  }
+  if (target.kind != ModelingToolSettingsTargetKind::None) {
+    target.active = true;
+    target.label = fallback_tool_settings_label(target.kind);
+    return target;
+  }
   if (runtime_status.cut_active) {
     target.kind = ModelingToolSettingsTargetKind::Cut;
     target.active = true;

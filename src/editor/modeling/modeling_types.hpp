@@ -141,6 +141,7 @@ enum class ModelingViewportTool {
   Cut,
   Poly,
   Mirror,
+  LassoSelect,
 };
 
 /**
@@ -543,6 +544,16 @@ struct ModelingBoxSelectRequest {
   bool select_backfaces = true;
 };
 
+/** Read-only lasso projection request; the ordered path is caller-owned. */
+struct ModelingLassoSelectRequest {
+  ModelingViewportCamera camera;
+  std::span<const QVec2> points;
+  bool partial_intersection = false;
+  bool select_backfaces = true;
+  double near_plane = 0.01;
+  double far_plane = 1000000.0;
+};
+
 /** One actual projected geometry point that caused a rectangle hit. */
 struct ModelingSelectionVisibilityWitness {
   QVec2 screen_position;
@@ -720,6 +731,7 @@ struct ModelingRepeatTransform {
   ModelingTransformSpace space = ModelingTransformSpace::Global;
   ModelingTransform3 orientation = {};
   bool duplicate_selected = false;
+  bool move_auto_merge_vertices = false;
   QVec3 pivot = {};
   QVec3 move_delta = {};
   double rotate_angle_degrees = 0.0;
@@ -799,6 +811,8 @@ enum class ModelingToolSettingsTargetKind {
   SliceQuad,
   MergeByDistance,
   HalfCut,
+  Move,
+  LassoSelect,
 };
 
 /**
@@ -830,6 +844,8 @@ struct ModelingInteractionSettings {
   bool half_cut_separate_parts = false;
   bool half_cut_fill_parts = true;
   ModelingCutMode cut_mode = ModelingCutMode::KeepBoth;
+  bool move_auto_merge_vertices = true;
+  bool lasso_select_partial_intersection = false;
 
   [[nodiscard]] bool
   operator==(const ModelingInteractionSettings &) const = default;
