@@ -30,6 +30,27 @@ public:
 
   [[nodiscard]] EntityId group_entity() const { return group_; }
 
+  [[nodiscard]] DocumentCommandResult preflight() const {
+    const std::vector<EntityId> roots =
+        captured_roots_
+            ? document_command_normalize_existing_entities(scene(), roots_)
+            : document_command_selected_root_entities(scene());
+    if (roots.empty()) {
+      return document_command_unchanged_result();
+    }
+    const EntityId common_parent =
+        document_command_common_parent(scene(), roots);
+    const std::optional<QMat4> group_world =
+        preflight_group_world(common_parent);
+    if (!group_world.has_value() ||
+        !planned_root_reparents(roots, *group_world).has_value()) {
+      return document_command_invalid_request_result(
+          "Selected entities cannot preserve their world transforms under "
+          "the group");
+    }
+    return document_command_changed_result();
+  }
+
   DocumentCommandResult undo() override {
     if (group_ == kInvalidEntityId || !scene().exists(group_)) {
       return document_command_missing_entity_result();
@@ -112,7 +133,7 @@ public:
       const std::optional<std::vector<SceneTransformAssignment>>
           root_transforms =
               effective_group_world.has_value()
-                  ? planned_root_reparents(*effective_group_world)
+                  ? planned_root_reparents(roots_, *effective_group_world)
                   : std::nullopt;
       if (!effective_group_world.has_value() ||
           !root_transforms.has_value()) {
@@ -202,10 +223,11 @@ private:
   }
 
   std::optional<std::vector<SceneTransformAssignment>>
-  planned_root_reparents(const QMat4 &group_world) const {
+  planned_root_reparents(const std::vector<EntityId> &roots,
+                         const QMat4 &group_world) const {
     std::vector<SceneTransformAssignment> transforms;
-    transforms.reserve(roots_.size());
-    for (const EntityId root : roots_) {
+    transforms.reserve(roots.size());
+    for (const EntityId root : roots) {
       const TransformComponent *transform = scene().transform(root);
       const std::optional<TransformComponent> local =
           transform == nullptr

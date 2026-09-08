@@ -10,6 +10,7 @@
 #include "assets/material_document.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
+#include "scene/light_properties.hpp"
 #include "scene/scene_texture_mapping.hpp"
 
 #include <quader/modeling/io/qdr_document.hpp>
@@ -50,7 +51,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 11u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 14u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 [[nodiscard]] fb::Vec2 to_fb(QVec2 value) {
@@ -224,6 +225,8 @@ mesh_body_type_from_fb(fb::MeshPhysicsBodyType value) {
     return fb::SceneToneMapping::Filmic;
   case SceneToneMapping::DisplayRange:
     return fb::SceneToneMapping::DisplayRange;
+  case SceneToneMapping::Agx:
+    return fb::SceneToneMapping::Agx;
   }
   throw std::runtime_error("Cannot encode an unknown tone-mapping mode.");
 }
@@ -241,6 +244,8 @@ tone_mapping_from_fb(fb::SceneToneMapping value) {
     return SceneToneMapping::Filmic;
   case fb::SceneToneMapping::DisplayRange:
     return SceneToneMapping::DisplayRange;
+  case fb::SceneToneMapping::Agx:
+    return SceneToneMapping::Agx;
   default:
     throw std::runtime_error(
         "QDR scene contains an unknown tone-mapping mode.");
@@ -804,6 +809,9 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
   for (const QdrProjectMaterialAssetWriteSnapshot &snapshot_material :
        snapshot.materials) {
     const MaterialDocument &material = snapshot_material.material;
+    if (!is_valid_material_diffuse_model(material.diffuse_model)) {
+      throw std::runtime_error("QDR material diffuse model is unsupported.");
+    }
     std::vector<flatbuffers::Offset<fb::TextureSlotBinding>> slots;
     slots.reserve(material.texture_slots.size());
     for (const MaterialTextureSlotDescriptor &descriptor :
@@ -820,7 +828,8 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
     materials.push_back(fb::CreateMaterialAsset(
         builder, snapshot_material.id, builder.CreateString(material.name),
         &base_color, material.roughness, material.metallic,
-        builder.CreateVector(slots), material.node_graph_reserved));
+        builder.CreateVector(slots), material.node_graph_reserved,
+        static_cast<fb::MaterialDiffuseModel>(material.diffuse_model)));
   }
 
   std::vector<flatbuffers::Offset<fb::TextureAsset>> textures;
@@ -891,11 +900,18 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
     }
     flatbuffers::Offset<fb::LightComponent> light;
     if (entity.light.has_value()) {
+      if (!light_component_metadata_is_valid(*entity.light)) {
+        throw std::runtime_error("Cannot encode invalid light metadata.");
+      }
       const fb::Vec3 color = to_fb(entity.light->color);
       light = fb::CreateLightComponent(
           builder, to_fb(entity.light->type), &color, entity.light->intensity,
           entity.light->range, entity.light->casts_shadows,
-          entity.light->distance_attenuation);
+          entity.light->distance_attenuation,
+          static_cast<fb::LightUnit>(entity.light->light_unit),
+          static_cast<fb::LightColorMode>(entity.light->color_mode),
+          entity.light->color_temperature_kelvin,
+          static_cast<fb::LightSourcePreset>(entity.light->source_preset));
     }
     flatbuffers::Offset<fb::SceneSettingsComponent> settings;
     if (entity.scene_settings.has_value()) {
@@ -1591,6 +1607,11 @@ decode_scene_settings(const fb::SceneSettingsComponent &value,
   settings.post_process.bloom = post_process->bloom();
   settings.post_process.bloom_strength = post_process->bloom_strength();
   settings.post_process.dithering = post_process->dithering();
+  if (schema_version < 13u &&
+      post_process->tone_mapping() == fb::SceneToneMapping::Agx) {
+    throw std::runtime_error(
+        "QDR scene contains AgX tone mapping before schema 13.");
+  }
   settings.post_process.tone_mapping =
       tone_mapping_from_fb(post_process->tone_mapping());
   return settings;
@@ -1797,6 +1818,13 @@ void decode_assets(
                                     {1.0f, 1.0f, 1.0f});
       material.roughness = stored_material->roughness();
       material.metallic = stored_material->metallic();
+      if (scene_schema_version < 14u &&
+          stored_material->diffuse_model() != fb::MaterialDiffuseModel::Burley) {
+        throw std::runtime_error(
+            "QDR material diffuse model is unsupported before schema 14.");
+      }
+      material.diffuse_model =
+          static_cast<MaterialDiffuseModel>(stored_material->diffuse_model());
       material.node_graph_reserved = stored_material->node_graph_reserved();
       if (const auto *slots = stored_material->texture_slots()) {
         for (std::size_t slot_index = 0u; slot_index < slots->size();
@@ -2024,6 +2052,18 @@ decode_entity_state(const SceneContentDocument &document,
         .casts_shadows = value->casts_shadows(),
         .distance_attenuation = distance_attenuation,
     };
+    if (schema_version >= 12u) {
+      state.light->light_unit = static_cast<LightUnit>(value->light_unit());
+      state.light->color_mode =
+          static_cast<LightColorMode>(value->color_mode());
+      state.light->color_temperature_kelvin =
+          value->color_temperature_kelvin();
+      state.light->source_preset =
+          static_cast<LightSourcePreset>(value->source_preset());
+      if (!light_component_metadata_is_valid(*state.light)) {
+        throw std::runtime_error("QDR scene contains invalid light metadata.");
+      }
+    }
   }
   if (stored.scene_root() || stored.scene_settings() != nullptr) {
     if (stored.scene_settings() == nullptr) {

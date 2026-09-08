@@ -103,9 +103,17 @@ qt_viewport_cursor_presentation(ViewportPointerCursor requested,
   if (!hovered || !focused) {
     return QtViewportCursorPresentation::Default;
   }
-  return requested == ViewportPointerCursor::PrecisionCross
-             ? QtViewportCursorPresentation::PrecisionCross
-             : QtViewportCursorPresentation::Default;
+  switch (requested) {
+  case ViewportPointerCursor::PrecisionCross:
+    return QtViewportCursorPresentation::PrecisionCross;
+  case ViewportPointerCursor::OpenHand:
+    return QtViewportCursorPresentation::OpenHand;
+  case ViewportPointerCursor::ClosedHand:
+    return QtViewportCursorPresentation::ClosedHand;
+  case ViewportPointerCursor::Default:
+    return QtViewportCursorPresentation::Default;
+  }
+  return QtViewportCursorPresentation::Default;
 }
 
 /// Collects transient Qt input state until the panel consumes one frame.
@@ -178,6 +186,12 @@ void QtViewportSurface::synchronize_interaction_cursor() {
     break;
   case QtViewportCursorPresentation::PrecisionCross:
     setCursor(QCursor(Qt::CrossCursor));
+    break;
+  case QtViewportCursorPresentation::OpenHand:
+    setCursor(QCursor(Qt::OpenHandCursor));
+    break;
+  case QtViewportCursorPresentation::ClosedHand:
+    setCursor(QCursor(Qt::ClosedHandCursor));
     break;
   case QtViewportCursorPresentation::Hidden:
     setCursor(QCursor(Qt::BlankCursor));
@@ -470,6 +484,7 @@ void QtViewportSurface::abandon_input() {
   replacement.abandoned_pointer_releases =
       std::move(abandoned_pointer_releases);
   *input_ = std::move(replacement);
+  set_interaction_cursor(ViewportPointerCursor::Default);
 }
 
 void QtViewportSurface::set_pointer_capture(bool captured) {

@@ -13771,6 +13771,34 @@ TEST(SceneSessionTests,
 }
 
 
+TEST(SceneSessionTests, DefaultAssetBootstrapPreservesAuthoredLambertMaterial) {
+  SceneSession session;
+  const ProjectDefaultAssets original =
+      ProjectAssetBootstrapService{}.bootstrap_default_assets(session);
+  ASSERT_TRUE(session.assets().update_material(
+      original.default_material, [](MaterialDocument &material) {
+        material.diffuse_model = MaterialDiffuseModel::Lambert;
+      }));
+
+  const ProjectDefaultAssets defaults =
+      ProjectAssetBootstrapService{}.bootstrap_default_assets(session);
+  EXPECT_NE(defaults.default_material, original.default_material);
+  EXPECT_EQ(defaults.albedo_texture, original.albedo_texture);
+  EXPECT_EQ(defaults.roughness_texture, original.roughness_texture);
+  ASSERT_NE(session.assets().material(original.default_material), nullptr);
+  EXPECT_EQ(session.assets().material(original.default_material)->diffuse_model,
+            MaterialDiffuseModel::Lambert);
+  ASSERT_NE(session.assets().material(defaults.default_material), nullptr);
+  EXPECT_EQ(session.assets().material(defaults.default_material)->diffuse_model,
+            MaterialDiffuseModel::Burley);
+
+  const std::uint64_t revision = session.assets().revision();
+  EXPECT_EQ(ProjectAssetBootstrapService{}.bootstrap_default_assets(session)
+                .default_material,
+            defaults.default_material);
+  EXPECT_EQ(session.assets().revision(), revision);
+}
+
 TEST(DocumentCommandServiceTests, RecordsUndoRedoForNativeSceneEdits) {
   SceneDocument scene;
   const EntityId entity = scene.create_entity("Brush");

@@ -30,24 +30,38 @@ combinations are distinguished from disabled generation for a bounded consumer
 diagnostic. Editor collision display, fill color and mesh visibility do not
 control physics export.
 
-ABI version 4 adds direct authored lights and effective camera exposure inputs.
-`scene_view` exposes the light count, aperture, shutter duration in seconds and
-ISO sensitivity. Scenes without camera settings use the native defaults of 16,
-0.008 seconds and ISO 100. When camera exposure is disabled, these inputs are
-1, 1.2 seconds and ISO 100, equivalent to an exposure multiplier of 1. Inactive
-authored camera values remain stored in the native scene. `light_view` exposes stable scene-local entity identity,
+ABI version 5 appends engine-ready light calibration to the direct-light views
+introduced in version 4. `light_view` retains stable scene-local entity identity,
 name, type, affine world transform, effective saved visibility, linear RGB,
 authored intensity, range, distance attenuation and cast-shadow state. Published
-light type IDs are Directional = 0, Point = 1 and Spot = 2.
+light type IDs remain Directional = 0, Point = 1 and Spot = 2.
+
+The appended fields are `preview_energy`, `illuminance_lux`, and
+`luminous_intensity_candela`, resolved by the scene-owned
+[`light_engine_values`](../../scene/light_properties.hpp) helper. For authored
+intensity I, nonnegative preview energy G is I / 16. Directional lights provide
+illuminance `pi * 38400 * G` lux; Point and Spot provide the same numerical value
+in candela. The unused physical field is zero. The helper computes in double
+precision and saturates exported values to finite float range. I = 1, 16, and 32
+therefore produce preview energy 0.0625, 1, and 2; I = 16 produces approximately
+120637.158 lux or candela. Existing saved intensity numbers remain unchanged;
+legacy display-unit metadata does not select a different calibration.
+
+`scene_view` still exposes the light count and three camera inputs, now always
+the fixed preview reference: aperture 16, shutter 1/125 second, ISO 100. Its
+exposure multiplier is 1/38400. Editing the source camera or disabling authored
+camera exposure never changes these fields or the resolved light values.
+Consumers use `preview_energy` directly in a nonphysical engine, or the physical
+field appropriate to the light shape in a physical engine. They must not add
+another camera/exposure conversion to these resolved values.
 
 Light snapshots include hidden ordinary hierarchy members and exclude definition
 storage, definition members and occurrence leaves, matching native direct-light
-ownership. Directional and spot emission follows transformed local -Y. Light
-values remain unconverted; consumers apply renderer intensity units, effective
-camera exposure, color-space and axis conversions.
-Light views validate finite light values and transforms only when requested;
-consumers with light importing disabled do not need to consume these views or
-interpret the camera settings. Canonical QDR validation remains unchanged.
+ownership. Directional and spot emission follows transformed local -Y. Consumers
+still apply their engine's color-space and axis conversions. Light views validate
+finite authored light values and transforms only when requested; consumers with
+light importing disabled do not need to consume these views. Canonical QDR
+validation remains unchanged.
 
 The `scene_source_fingerprint` and `material_source_fingerprint` functions
 introduced in ABI version 2 remain unchanged.
@@ -56,8 +70,16 @@ decoded by the canonical reader, not a later reread of a mutable pathname.
 Embedded material fingerprints refer to their containing QDR. The corresponding
 source path is borrowed from the handle and remains project-relative. A bridge
 can compare these fingerprints with the post-commit records under
-`.quader/bridge/` before publishing an automatic update. Ship the v4 reader and
+`.quader/bridge/` before publishing an automatic update. Ship the v6 reader and
 its consumer together; requesting the earlier ABI returns null.
+
+ABI version 6 appends `diffuse_model` to `QuaderBridgeMaterialView`. Both project
+and embedded materials publish their authored choice: Burley = 0, Lambert = 1.
+New materials and older files without a saved choice resolve to Burley. Other
+values are rejected. The field is part of the immutable, lazily loaded material
+descriptor and requires no texture reads. Consumers map it to their equivalent
+diffuse model when importing or explicitly refreshing a material; their existing
+material-edit preservation policy continues to decide when to request it.
 
 ## Lifetime and threading
 
@@ -110,3 +132,12 @@ the importing engine's responsibility. It never writes source projects or assets
 
 Public behavior and deterministic export fixtures are covered by
 [`BridgeReaderTests`](../../../tests/bridge_reader_tests.cpp).
+
+The maintained export fixture adds `Scenes/lighting.qdr` (three white I=16 lights,
+range 12, falloff 2) and `Scenes/lighting_calibration.qdr` (all three shapes at
+I=1/16/32, range 12, falloff 1). Their identities and resolved values are recorded
+in `expected.json` under `light_entries` and `calibration_lights`. The existing
+`SaveGodotAcceptanceFixture` path supports `QUADER_BRIDGE_MUTATION=lights_half`
+to save I=8 through the native document owner, and `lights_camera` to change only
+authored camera fields and disable camera exposure. These fixtures are disposable
+verification projects, not installed plugin payload.

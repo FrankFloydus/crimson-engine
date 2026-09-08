@@ -95,6 +95,8 @@ struct ViewportInteractionFrame {
   bool active_tool_allows_selection_fallback = false;
   std::span<const ViewportSceneBillboardPickCandidate>
       scene_billboard_pick_candidates;
+  /// Host cache generation, including local visibility; zero disables reuse.
+  std::uint64_t scene_billboard_pick_revision = 0;
   std::span<const ViewportSceneCurvePickCandidate> scene_curve_pick_candidates;
   /// One frozen render-visible surface index shared by every Curve hit in the
   /// frame. The host owns its lifetime until frame dispatch returns.

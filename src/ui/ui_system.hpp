@@ -471,6 +471,8 @@ private:
   std::uint64_t material_picker_presentation_revision_ = 0;
   QtStandardMaterialPreviewImageCache
       standard_material_preview_image_cache_;
+  std::optional<MaterialEditSessionId> material_color_preview_session_;
+  std::uint64_t material_color_preview_binding_generation_ = 0u;
   /** Captures the edit-session state presented by the standard material editor. */
   struct StandardMaterialEditorPresentationStamp final {
     MaterialEditSessionId session_id;

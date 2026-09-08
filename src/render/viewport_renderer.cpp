@@ -10,6 +10,8 @@
 #include "diagnostics/profile.hpp"
 #include "render/render_layers.hpp"
 #include "render/render_signature_builder.hpp"
+#include "render/scene_tone_mapper.hpp"
+#include "scene/light_properties.hpp"
 
 #include <filament/ColorGrading.h>
 #include <filament/ColorSpace.h>
@@ -66,30 +68,7 @@ build_color_grading(filament::Engine &engine,
 
 filament::ColorGrading *build_color_grading(
     filament::Engine &engine, SceneToneMapping tone_mapping) {
-  switch (tone_mapping) {
-  case SceneToneMapping::Linear: {
-    const filament::LinearToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper);
-  }
-  case SceneToneMapping::AcesLegacy: {
-    const filament::ACESLegacyToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper);
-  }
-  case SceneToneMapping::Aces: {
-    const filament::ACESToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper);
-  }
-  case SceneToneMapping::Filmic: {
-    const filament::FilmicToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper);
-  }
-  case SceneToneMapping::DisplayRange: {
-    const filament::DisplayRangeToneMapper tone_mapper;
-    return build_color_grading(engine, tone_mapper);
-  }
-  }
-  const filament::ACESToneMapper tone_mapper;
-  return build_color_grading(engine, tone_mapper);
+  return build_color_grading(engine, scene_tone_mapper(tone_mapping));
 }
 
 TextureSampleColorSpace
@@ -133,13 +112,7 @@ std::uint64_t scene_settings_presentation_signature(
       rendered_mode && settings.post_process.enabled;
   RenderSignatureBuilder signature;
   add_setting_color(signature, resolved_background);
-  signature.add_bool(post_processing_enabled)
-      .add_bool(settings.camera.use_exposure);
-  if (settings.camera.use_exposure) {
-    signature.add_float(settings.camera.aperture)
-        .add_float(settings.camera.shutter_speed)
-        .add_float(settings.camera.sensitivity);
-  }
+  signature.add_bool(post_processing_enabled);
   if (post_processing_enabled) {
     signature
         .add_bool(settings.post_process.anti_aliasing)
@@ -410,13 +383,8 @@ void ViewportRenderer::apply_scene_settings(
   bloom.strength = std::clamp(settings.post_process.bloom_strength, 0.0f, 1.0f);
   view_->setBloomOptions(bloom);
 
-  if (settings.camera.use_exposure) {
-    camera_->setExposure(std::max(settings.camera.aperture, 0.01f),
-                         std::max(settings.camera.shutter_speed, 0.000001f),
-                         std::max(settings.camera.sensitivity, 1.0f));
-  } else {
-    camera_->setExposure(1.0f);
-  }
+  camera_->setExposure(kLightPreviewAperture, kLightPreviewShutterSeconds,
+                       kLightPreviewSensitivity);
   apply_neutral_overlay_exposure(overlay_camera_);
   scene_settings_presentation_signature_ = presentation_signature;
 }

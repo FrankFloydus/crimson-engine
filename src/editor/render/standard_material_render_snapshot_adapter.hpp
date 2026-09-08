@@ -31,6 +31,7 @@ struct StandardMaterialRenderValues final {
   std::array<float, 2> texture_scale{1.0f, 1.0f};
   std::array<float, 2> texture_offset{0.0f, 0.0f};
   float texture_rotation_degrees = 0.0f;
+  MaterialDiffuseModel diffuse_model = MaterialDiffuseModel::Burley;
 };
 
 [[nodiscard]] RenderStandardMaterialEvaluationSnapshot

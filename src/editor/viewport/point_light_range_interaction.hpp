@@ -10,6 +10,7 @@
 #include "viewport/viewport_pointer_gesture.hpp"
 
 #include <optional>
+#include <array>
 
 namespace quader {
 
@@ -26,6 +27,12 @@ public:
     return gesture_.has_value() || release_suppression_.active();
   }
   [[nodiscard]] bool dragging() const { return edit_.has_value(); }
+  [[nodiscard]] ViewportPointerCursor pointer_cursor() const {
+    if (edit_) return ViewportPointerCursor::ClosedHand;
+    return gesture_ || hovered_ ? ViewportPointerCursor::OpenHand
+                                : ViewportPointerCursor::Default;
+  }
+  [[nodiscard]] std::uint64_t hover_pick_count() const { return hover_pick_count_; }
 
 private:
   /// Freezes the camera-facing drag plane and its press coordinate.
@@ -41,6 +48,16 @@ private:
   };
   std::optional<Gesture> gesture_;
   std::optional<QuaderEntityRef> edit_;
+  [[nodiscard]] std::optional<ViewportSceneBillboardPickCandidate>
+  pick_handle(const ViewportInteractionFrame &frame, QVec2 local);
+  bool hovered_ = false;
+  bool pick_cache_valid_ = false;
+  std::uint64_t pick_revision_ = 0;
+  std::array<float, 17> pick_camera_ = {};
+  QVec2 pick_local_ = {};
+  std::size_t pick_candidate_count_ = 0;
+  std::optional<ViewportSceneBillboardPickCandidate> picked_handle_;
+  std::uint64_t hover_pick_count_ = 0;
   ViewportPointerReleaseSuppression release_suppression_;
   bool left_down_ = false;
 };

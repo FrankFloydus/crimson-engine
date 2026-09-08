@@ -791,10 +791,16 @@ void press_update_release_gizmo(ViewportInteractionHarness &harness,
                                 quader::QVec2 start, quader::QVec2 update) {
   harness.input.mouse_local = start;
   harness.input.mouse_screen = start;
+  (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+  EXPECT_EQ(harness.controller.active_tool_pointer_cursor(harness.router.state().active_tool),
+            quader::ViewportPointerCursor::OpenHand);
   const quader::ViewportBeforeToolInteractionResult press =
       harness.controller.handle_before_active_tool(
           harness.editor, harness.frame(true, true, false, start));
   ASSERT_TRUE(press.gizmo_consumed);
+  EXPECT_EQ(harness.controller.active_tool_pointer_cursor(harness.router.state().active_tool),
+            quader::ViewportPointerCursor::OpenHand);
 
   harness.input.mouse_local = update;
   harness.input.mouse_screen = update;
@@ -802,11 +808,15 @@ void press_update_release_gizmo(ViewportInteractionHarness &harness,
       harness.controller.handle_before_active_tool(
           harness.editor, harness.frame(false, true, false, start));
   EXPECT_TRUE(drag.gizmo_consumed);
+  EXPECT_EQ(harness.controller.active_tool_pointer_cursor(harness.router.state().active_tool),
+            quader::ViewportPointerCursor::ClosedHand);
 
   const quader::ViewportBeforeToolInteractionResult release =
       harness.controller.handle_before_active_tool(
           harness.editor, harness.frame(false, false, true, start));
   EXPECT_TRUE(release.gizmo_consumed);
+  EXPECT_NE(harness.controller.active_tool_pointer_cursor(harness.router.state().active_tool),
+            quader::ViewportPointerCursor::ClosedHand);
 }
 
 std::vector<quader::EntityId>
@@ -9503,8 +9513,12 @@ TEST(ViewportInteractionControllerTests, PointLightRadiusDragPublishesLiveAndOne
     ASSERT_TRUE(radius_frame(harness, start, true, true, false));
     EXPECT_TRUE(harness.controller.point_light_range_pointer_active());
     EXPECT_FALSE(harness.controller.dragging());
+    EXPECT_EQ(harness.controller.active_tool_pointer_cursor(harness.router.state().active_tool),
+              quader::ViewportPointerCursor::OpenHand);
     ASSERT_TRUE(radius_frame(harness, start + quader::QVec2{30, 40}, false, true, false));
     EXPECT_TRUE(harness.controller.dragging());
+    EXPECT_EQ(harness.controller.active_tool_pointer_cursor(harness.router.state().active_tool),
+              quader::ViewportPointerCursor::ClosedHand);
     const float middle = harness.editor.query().entity(light.id)->light.range;
     EXPECT_GT(middle, 2.0f);
     EXPECT_EQ(harness.session.history().undo_count(), history_before);
@@ -9515,6 +9529,8 @@ TEST(ViewportInteractionControllerTests, PointLightRadiusDragPublishesLiveAndOne
     const float after = harness.editor.query().entity(light.id)->light.range;
     EXPECT_GT(after, middle);
     EXPECT_FALSE(harness.controller.point_light_range_pointer_active());
+    EXPECT_NE(harness.controller.active_tool_pointer_cursor(harness.router.state().active_tool),
+              quader::ViewportPointerCursor::ClosedHand);
     EXPECT_EQ(harness.session.history().undo_count(), history_before + 1u);
     expect_transform_near(*harness.session.scene().transform(light.id), transform);
     ASSERT_TRUE(harness.editor.history().undo().ok());
@@ -9522,6 +9538,52 @@ TEST(ViewportInteractionControllerTests, PointLightRadiusDragPublishesLiveAndOne
     ASSERT_TRUE(harness.editor.history().redo().ok());
     EXPECT_FLOAT_EQ(harness.editor.query().entity(light.id)->light.range, after);
   }
+}
+
+TEST(ViewportInteractionControllerTests, PointLightRadiusHoverCachesPicksAndClearsOnUnavailableHandles) {
+  ViewportInteractionHarness harness;
+  const auto light = create_radius_test_light(harness);
+  harness.input.mouse_local = radius_handle(harness, light.id);
+  const auto cursor = [&] {
+    return harness.controller.active_tool_pointer_cursor(harness.router.state().active_tool);
+  };
+  const auto hover = [&](std::uint64_t revision) {
+    auto frame = harness.frame();
+    frame.scene_billboard_pick_revision = revision;
+    (void)harness.dispatch_frame(frame);
+  };
+  hover(1);
+  EXPECT_EQ(cursor(), quader::ViewportPointerCursor::OpenHand);
+  const auto picks = harness.controller.point_light_range_hover_pick_count();
+  const auto scene_revision = harness.session.scene().revision();
+  for (int index = 0; index < 8; ++index) hover(1);
+  EXPECT_EQ(harness.controller.point_light_range_hover_pick_count(), picks);
+  EXPECT_EQ(harness.session.scene().revision(), scene_revision);
+  harness.billboard_pick_candidates.front().effectively_locked = true;
+  hover(2);
+  EXPECT_EQ(cursor(), quader::ViewportPointerCursor::Default);
+  harness.billboard_pick_candidates.front().effectively_locked = false;
+  hover(3);
+  ASSERT_EQ(cursor(), quader::ViewportPointerCursor::OpenHand);
+  for (int unavailable = 0; unavailable < 5; ++unavailable) {
+    harness.input.viewport_focused = unavailable != 0;
+    harness.input.viewport_hovered = unavailable != 1;
+    harness.input.navigation_active = unavailable == 2;
+    harness.input.pointer_interaction_canceled = unavailable == 3;
+    harness.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos,
+                                    unavailable != 4);
+    hover(3);
+    EXPECT_EQ(cursor(), quader::ViewportPointerCursor::Default);
+  }
+  harness.input.viewport_focused = true;
+  harness.input.viewport_hovered = true;
+  harness.input.navigation_active = false;
+  harness.input.pointer_interaction_canceled = false;
+  harness.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos, true);
+  hover(3);
+  EXPECT_EQ(cursor(), quader::ViewportPointerCursor::OpenHand);
+  harness.controller.reset();
+  EXPECT_EQ(cursor(), quader::ViewportPointerCursor::Default);
 }
 
 TEST(ViewportInteractionControllerTests, PointLightRadiusDiagonalDragUsesPlaneDistance) {

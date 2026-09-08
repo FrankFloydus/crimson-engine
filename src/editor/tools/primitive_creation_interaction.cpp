@@ -518,6 +518,19 @@ std::optional<double> PrimitiveCreationInteraction::displacement(
                      : std::nullopt;
 }
 
+ViewportPointerCursor
+PrimitiveCreationInteraction::pointer_cursor(bool drag_started) const {
+  if (!frame_.visible) return ViewportPointerCursor::Default;
+  const int control = frame_.active >= 0 ? frame_.active : frame_.hovered;
+  if (control < 0 || control >= static_cast<int>(frame_.controls.size()) ||
+      !frame_.controls[control].visible || !frame_.controls[control].enabled) {
+    return ViewportPointerCursor::Default;
+  }
+  return frame_.active >= 0 && frame_.active < 6 && drag_started
+             ? ViewportPointerCursor::ClosedHand
+             : ViewportPointerCursor::OpenHand;
+}
+
 void PrimitiveCreationInteraction::end() {
   if (frame_.active != -1) {
     frame_.active = -1;

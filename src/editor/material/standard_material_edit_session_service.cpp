@@ -50,6 +50,11 @@ bool valid_material_path(const ProjectRelativePath &path) {
 
 /// Owns mutable draft state and staged source images for one edit session.
 struct StandardMaterialEditSessionService::Draft final {
+  /// Owns the cancel checkpoint for the albedo field alone.
+  struct BaseColorPreview final {
+    std::array<float, 3> before;
+    bool scene_preview_before = false;
+  };
   /// Retains one failed dependency result until the texture identity changes.
   struct CachedPreviewError final {
     ProjectAssetId texture_id;
@@ -58,6 +63,8 @@ struct StandardMaterialEditSessionService::Draft final {
 
   StandardMaterialEditSnapshot snapshot;
   bool automatic_name = false;
+  bool scene_color_preview = false;
+  std::optional<BaseColorPreview> base_color_preview;
   std::array<std::optional<ProjectImportedImage>, 4> pending;
   std::array<std::optional<StandardMaterialTexturePreview>, 4>
       decoded_previews;
@@ -89,6 +96,9 @@ void StandardMaterialEditSessionService::reset_with(
     ProjectMaterialDocument document,
     std::optional<ProjectRelativePath> path,
     std::uint64_t source_content_revision) {
+  if (current_ && current_->scene_color_preview) {
+    advance_scene_preview_revision();
+  }
   Draft draft;
   draft.snapshot.session_id = allocate_session_id();
   draft.snapshot.document = std::move(document);
@@ -167,6 +177,9 @@ StandardMaterialEditSessionService::close(bool discard_dirty) {
   if (current_->snapshot.dirty && !discard_dirty) {
     return failure("Standard Material contains unsaved changes.");
   }
+  if (current_->scene_color_preview) {
+    advance_scene_preview_revision();
+  }
   current_.reset();
   return success(true, "Standard Material closed.");
 }
@@ -182,11 +195,22 @@ StandardMaterialEditSessionService::mark_changed() {
     return failure("No Standard Material is open.");
   }
   current_->snapshot.dirty = true;
+  advance_draft_revision();
+  return success(true, "Standard Material changed.");
+}
+
+void StandardMaterialEditSessionService::advance_draft_revision() {
   ++current_->snapshot.draft_revision;
   if (current_->snapshot.draft_revision == 0u) {
     ++current_->snapshot.draft_revision;
   }
-  return success(true, "Standard Material changed.");
+}
+
+void StandardMaterialEditSessionService::advance_scene_preview_revision() {
+  ++scene_preview_revision_;
+  if (scene_preview_revision_ == 0u) {
+    ++scene_preview_revision_;
+  }
 }
 
 StandardMaterialEditResult
@@ -207,6 +231,9 @@ StandardMaterialEditSessionService::set_name(std::string name) {
 
 StandardMaterialEditResult StandardMaterialEditSessionService::set_base_color(
     std::array<float, 3> color) {
+  if (current_ && current_->base_color_preview.has_value()) {
+    return failure("Finish the active albedo preview before editing its color.");
+  }
   ProjectStandardMaterialDefinition *material = standard();
   if (material == nullptr || !finite_unit(color[0]) ||
       !finite_unit(color[1]) || !finite_unit(color[2])) {
@@ -216,7 +243,94 @@ StandardMaterialEditResult StandardMaterialEditSessionService::set_base_color(
     return success(false);
   }
   material->base_color = color;
+  current_->scene_color_preview = true;
+  advance_scene_preview_revision();
   return mark_changed();
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::begin_base_color_preview(
+    MaterialEditSessionId session_id) {
+  if (!current_ || current_->snapshot.session_id != session_id) {
+    return failure("The Standard Material edit session has expired.");
+  }
+  if (current_->base_color_preview.has_value()) {
+    return failure("An albedo preview is already active.");
+  }
+  current_->base_color_preview = Draft::BaseColorPreview{
+      .before = standard()->base_color,
+      .scene_preview_before = current_->scene_color_preview,
+  };
+  return success(false);
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::update_base_color_preview(
+    MaterialEditSessionId session_id, std::array<float, 3> color) {
+  if (!current_ || current_->snapshot.session_id != session_id ||
+      !current_->base_color_preview.has_value()) {
+    return failure("The Standard Material albedo preview has expired.");
+  }
+  if (!finite_unit(color[0]) || !finite_unit(color[1]) ||
+      !finite_unit(color[2])) {
+    return failure("Albedo values must be finite values from 0 to 1.");
+  }
+  if (standard()->base_color == color) {
+    return success(false);
+  }
+  standard()->base_color = color;
+  const Draft::BaseColorPreview &preview = *current_->base_color_preview;
+  current_->scene_color_preview =
+      preview.scene_preview_before || color != preview.before;
+  advance_draft_revision();
+  advance_scene_preview_revision();
+  return success(true);
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::finish_base_color_preview(
+    MaterialEditSessionId session_id, bool accept) {
+  if (!current_ || current_->snapshot.session_id != session_id ||
+      !current_->base_color_preview.has_value()) {
+    return failure("The Standard Material albedo preview has expired.");
+  }
+  const Draft::BaseColorPreview preview = *current_->base_color_preview;
+  current_->base_color_preview.reset();
+  const bool changed = standard()->base_color != preview.before;
+  if (accept && changed) {
+    return mark_changed();
+  }
+  const bool scene_changed =
+      current_->scene_color_preview != preview.scene_preview_before;
+  standard()->base_color = preview.before;
+  current_->scene_color_preview = preview.scene_preview_before;
+  if (changed) {
+    advance_draft_revision();
+  }
+  if (changed || scene_changed) {
+    advance_scene_preview_revision();
+  }
+  return success(changed || scene_changed);
+}
+
+std::optional<std::array<float, 3>>
+StandardMaterialEditSessionService::scene_base_color_preview(
+    ProjectAssetId id) const noexcept {
+  if (!current_ || !current_->scene_color_preview ||
+      current_->snapshot.document.id != id) {
+    return std::nullopt;
+  }
+  const ProjectStandardMaterialDefinition *material =
+      current_->snapshot.document.standard_material();
+  return material != nullptr ? std::optional(material->base_color)
+                             : std::nullopt;
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::cancel_base_color_preview() {
+  return current_ && current_->base_color_preview.has_value()
+             ? finish_base_color_preview(current_->snapshot.session_id, false)
+             : success(false);
 }
 
 StandardMaterialEditResult
@@ -284,6 +398,22 @@ StandardMaterialEditSessionService::set_normal_convention(
     return success(false);
   }
   material->normal_convention = convention;
+  return mark_changed();
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::set_diffuse_model(MaterialDiffuseModel model) {
+  if (!is_valid_material_diffuse_model(model)) {
+    return failure("The Standard Material diffuse model is invalid.");
+  }
+  ProjectStandardMaterialDefinition *material = standard();
+  if (material == nullptr) {
+    return failure("No Standard Material is open.");
+  }
+  if (material->diffuse_model == model) {
+    return success(false);
+  }
+  material->diffuse_model = model;
   return mark_changed();
 }
 
@@ -495,6 +625,9 @@ StandardMaterialEditSessionService::save_as(ProjectRelativePath path) {
 
 StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
     ProjectRelativePath path, bool save_as) {
+  if (current_ && current_->base_color_preview.has_value()) {
+    return failure("Finish the albedo preview before saving the material.");
+  }
   if (!current_ || project_ == nullptr || !project_->has_project() ||
       project_->workspace() == nullptr) {
     return failure("Open a project and Standard Material before saving.");
@@ -612,6 +745,10 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
         "Saved Standard Material is missing from the catalog.");
   }
   rollback.commit();
+  if (current_->scene_color_preview) {
+    current_->scene_color_preview = false;
+    advance_scene_preview_revision();
+  }
   current_->snapshot.document = saved->material;
   current_->snapshot.path = saved->path;
   current_->snapshot.source_content_revision = saved->content_revision;

@@ -6,7 +6,7 @@
 ################################################################################
 <#
 .SYNOPSIS
-Builds Quader's pinned Filament SDK with Vulkan VSync, light attenuation, and sRGB presentation.
+Builds Quader's pinned Filament SDK with VSync, light attenuation, sRGB presentation, and diffuse selection.
 .DESCRIPTION
 Requires CMake, Git, Python 3.10+, and Visual Studio 2026 C++ tools. Only -AllowDownload
 permits network access. Source, build, and installed SDK stay outside this repository
@@ -27,7 +27,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$pinPath = Join-Path $repoRoot "thirdparty/filament/filament-v1.71.6-quader-vsync3.json"
+$pinPath = Join-Path $repoRoot "thirdparty/filament/filament-v1.71.6-quader-vsync4.json"
 $pin = Get-Content -LiteralPath $pinPath -Raw | ConvertFrom-Json
 $patchPath = Join-Path (Split-Path $pinPath -Parent) $pin.patch_file
 $patchSha = (Get-FileHash -LiteralPath $patchPath -Algorithm SHA256).Hash.ToLowerInvariant()

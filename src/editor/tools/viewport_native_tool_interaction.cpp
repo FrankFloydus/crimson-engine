@@ -94,7 +94,7 @@ std::optional<CurveControlTarget> curve_control_hit(
     const ViewportNativeToolInteractionFrame &frame,
     const CurveToolPreviewState &preview, QVec2 mouse_local,
     bool anchors_only) {
-  return frame.curve_control_picker != nullptr
+  return frame.handles_visible && frame.curve_control_picker != nullptr
              ? frame.curve_control_picker->pick(preview, mouse_local,
                                                 anchors_only)
              : std::nullopt;
@@ -102,6 +102,22 @@ std::optional<CurveControlTarget> curve_control_hit(
 
 bool curve_creation_kind_is_preset(CurveCreationKind kind) {
   return kind == CurveCreationKind::Circle || kind == CurveCreationKind::Oval;
+}
+
+std::array<float, 25> pointer_camera_key(
+    const ViewportCameraController &camera, QVec2 pointer_local,
+    float viewport_pixel_scale) {
+  const ViewportCameraState &state = camera.state();
+  const ViewportCameraPose pose = camera.pose();
+  const QVec2 size = camera.viewport_size();
+  return {pointer_local.x, pointer_local.y, viewport_pixel_scale,
+          size.x, size.y, state.target.x, state.target.y, state.target.z,
+          state.yaw_radians, state.pitch_radians, state.distance,
+          static_cast<float>(state.projection), state.orthographic_size,
+          state.fov_degrees, state.near_plane, state.far_plane,
+          pose.eye.x, pose.eye.y, pose.eye.z,
+          pose.target.x, pose.target.y, pose.target.z,
+          pose.up.x, pose.up.y, pose.up.z};
 }
 
 } // namespace
@@ -119,6 +135,7 @@ ViewportNativeToolInteraction::handle_frame(
     const ViewportNativeToolInteractionFrame &frame,
     CurveToolService *curve) {
   ViewportNativeToolInteractionResult output;
+  pointer_cursor_ = ViewportPointerCursor::Default;
   const ViewportInputFrame &input = frame.input;
   const ViewportInputResult &input_result = frame.input_result;
   const bool canceled_left_release = left_release_suppression_.consume(
@@ -460,6 +477,9 @@ ViewportNativeToolInteraction::handle_frame(
             }
             const auto pressed_hit = curve_control_hit(
                 frame, preview, event.pointer_edge->local, true);
+            if (pressed_hit) {
+              pointer_cursor_ = ViewportPointerCursor::OpenHand;
+            }
             curve_conversion_press_ = CurveConversionPress{
                 .gesture = {.press = *event.pointer_edge},
                 .target = pressed_hit,
@@ -480,6 +500,7 @@ ViewportNativeToolInteraction::handle_frame(
             const auto action_hit =
                 curve_control_hit(frame, preview, input.mouse_local, true);
             if (action_hit) {
+              pointer_cursor_ = ViewportPointerCursor::OpenHand;
               record_change(
                   curve->toggle_point_smoothness(action_hit->point));
             }
@@ -493,6 +514,9 @@ ViewportNativeToolInteraction::handle_frame(
           const QuaderMouseButton button = event.pointer_edge->button;
           const auto action_hit = curve_control_hit(
               frame, preview, event.pointer_edge->local, true);
+          if (action_hit) {
+            pointer_cursor_ = ViewportPointerCursor::OpenHand;
+          }
           if (trigger.gesture == QuaderInputGesture::Click) {
             const bool valid_press =
                 curve_conversion_press_ &&
@@ -590,6 +614,35 @@ ViewportNativeToolInteraction::handle_frame(
                               curve->point_count() == 0u;
     if (!curve->dragging() && !curve_preset_placement_press_ &&
         input.viewport_hovered && !frame.suppress_hover_work) {
+      const CurveToolPreviewState &preview = curve->preview_state();
+      const QVec2 control_local = frame.left_pressed ? frame.left_click_local
+                                                     : input.mouse_local;
+      const CurveControlHoverKey hover_key{
+          .content = preview.document ? preview.document->content_identity()
+                                      : modeling::CurveContentIdentity{},
+          .entity = preview.entity,
+          .scene_revision = document.revision(),
+          .asset_revision = assets.revision(),
+          .scene_surface_revision = frame.scene_surface_revision,
+          .world_transform = preview.world_transform.values,
+          .pointer_camera = pointer_camera_key(camera, control_local,
+                                                frame.viewport_pixel_scale),
+          .drawing = preview.drawing,
+          .active = preview.active,
+      };
+      if (!frame.handles_visible || frame.curve_control_picker == nullptr) {
+        curve_control_hover_key_.reset();
+        curve_control_hover_target_.reset();
+      } else if (!curve_control_hover_key_ ||
+                 *curve_control_hover_key_ != hover_key) {
+        curve_control_hover_key_ = hover_key;
+        curve_control_hover_target_ =
+            curve_control_hit(frame, preview, control_local, false);
+      }
+      const std::optional<CurveControlTarget> hit = curve_control_hover_target_;
+      if (hit) {
+        pointer_cursor_ = ViewportPointerCursor::OpenHand;
+      }
       if (frame.left_pressed && !canceled_left_release) {
         const bool plain_construction_gesture =
             !input.modifiers.primary && !input.modifiers.shift &&
@@ -619,8 +672,6 @@ ViewportNativeToolInteraction::handle_frame(
             record_change(curve->set_preset_hover(std::nullopt));
           }
         } else if (creation_kind == CurveCreationKind::Draw) {
-          const auto hit = curve_control_hit(
-              frame, curve->preview_state(), frame.left_click_local, false);
           if (!hit && curve->drawing() && plain_construction_gesture) {
             const auto placement = resolve_position(frame.left_click_local,
                                                      construction_plane);
@@ -715,6 +766,9 @@ ViewportNativeToolInteraction::handle_frame(
       const bool moved = viewport_pointer_drag_threshold_reached(
           curve_point_construction_press_->gesture, drag_local);
       if (moved && (frame.left_down || matching_release)) {
+        if (frame.handles_visible) {
+          pointer_cursor_ = ViewportPointerCursor::ClosedHand;
+        }
         const auto placement = resolve_position(
             drag_local +
                 curve_point_construction_press_->pointer_offset,
@@ -726,6 +780,7 @@ ViewportNativeToolInteraction::handle_frame(
       if (matching_release && !canceled_left_release) {
         record_change(curve->commit_drag());
         curve_point_construction_press_.reset();
+        pointer_cursor_ = ViewportPointerCursor::Default;
       } else if (!frame.left_down && !frame.left_released) {
         // Capture/focus loss without a real release must never create history.
         record_change(curve->cancel_drag());
@@ -747,6 +802,8 @@ ViewportNativeToolInteraction::handle_frame(
   }
   curve_preset_placement_press_.reset();
   curve_conversion_press_.reset();
+  curve_control_hover_key_.reset();
+  curve_control_hover_target_.reset();
 
   if (radial_array != nullptr && radial_array->active()) {
     output.radial_array_consumed = true;
@@ -768,9 +825,7 @@ ViewportNativeToolInteraction::handle_frame(
     } else if (!radial_array->center_locked()) {
       const bool can_place = point_placement != nullptr &&
                              input.viewport_hovered &&
-                             !input_result.navigation_active &&
-                             !frame.navigation_gizmo_consumed &&
-                             !input.text_input_active &&
+                             !native_pointer_interrupted(frame) &&
                              !frame.suppress_hover_work;
       if (!can_place) {
         (void)radial_array->clear_center_candidate();
@@ -792,6 +847,9 @@ ViewportNativeToolInteraction::handle_frame(
         const ViewportPointPlacementResult hover =
             resolve_center(input.mouse_local);
         if (hover.valid) {
+          if (frame.handles_visible) {
+            pointer_cursor_ = ViewportPointerCursor::OpenHand;
+          }
           const CommandResult changed = radial_array->update_center_candidate(
               hover.world_position, hover.world_normal, grid_size);
           output.mark_overlay_dirty =
@@ -807,6 +865,7 @@ ViewportNativeToolInteraction::handle_frame(
             (void)radial_array->update_center_candidate(
                 clicked.world_position, clicked.world_normal, grid_size);
             const CommandResult locked = radial_array->lock_center();
+            pointer_cursor_ = ViewportPointerCursor::Default;
             if (locked.changed) {
               output.claim_interaction_pane = true;
               output.invalidate_hover = true;
@@ -850,14 +909,33 @@ ViewportNativeToolInteraction::handle_frame(
       linear_array_handle_press_.reset();
     } else {
       const LinearArrayHandleState handle = linear_array->handle_state();
-      const bool can_interact = handle.visible && input.viewport_hovered &&
-                                 !input_result.navigation_active &&
-                                 !frame.navigation_gizmo_consumed &&
-                                 !input.text_input_active;
+      const bool can_interact = handle.visible && frame.handles_visible &&
+                                input.viewport_hovered &&
+                                !native_pointer_interrupted(frame) &&
+                                !frame.suppress_hover_work;
+      bool handle_hit = false;
+      if (can_interact &&
+          (!linear_array_handle_press_ || frame.left_released)) {
+        const QVec2 pointer_local =
+            frame.left_pressed ? frame.left_click_local : input.mouse_local;
+        const HandleHoverKey hover_key{
+            .pointer_camera = pointer_camera_key(camera, pointer_local,
+                                                  frame.viewport_pixel_scale),
+            .position = {handle.endpoint_world.x, handle.endpoint_world.y,
+                         handle.endpoint_world.z},
+        };
+        if (!linear_array_hover_key_ || *linear_array_hover_key_ != hover_key) {
+          linear_array_hover_key_ = hover_key;
+          linear_array_hover_hit_ = linear_array_handle_hit(
+              camera, handle, pointer_local, frame.viewport_pixel_scale);
+        }
+        handle_hit = linear_array_hover_hit_;
+      }
+      if (handle_hit) {
+        pointer_cursor_ = ViewportPointerCursor::OpenHand;
+      }
       if (can_interact && frame.left_pressed && !canceled_left_release &&
-          !linear_array_handle_press_ &&
-          linear_array_handle_hit(camera, handle, frame.left_click_local,
-                                  frame.viewport_pixel_scale)) {
+          !linear_array_handle_press_ && handle_hit) {
         linear_array_handle_press_ = LinearArrayHandlePress{
             .gesture = viewport_pointer_gesture_from_latest_edge(
                 input.pointer_pressed_edges, QuaderMouseButton::Left,
@@ -876,7 +954,7 @@ ViewportNativeToolInteraction::handle_frame(
                                       frame,
                                       linear_array_handle_press_->gesture);
         const bool interrupted = native_pointer_interrupted(frame) ||
-                                 !drag_handle.visible;
+                                 !drag_handle.visible || !frame.handles_visible;
         const bool abandoned = !frame.left_down && !frame.left_released;
         if (interrupted || abandoned) {
           (void)linear_array->set_endpoint(
@@ -900,6 +978,9 @@ ViewportNativeToolInteraction::handle_frame(
             !canceled_left_release) {
           linear_array->end_endpoint_drag();
           linear_array_handle_press_.reset();
+        }
+        if (linear_array_handle_press_) {
+          pointer_cursor_ = ViewportPointerCursor::ClosedHand;
         }
       }
     }
@@ -947,14 +1028,32 @@ ViewportNativeToolInteraction::handle_frame(
     }
 
     const PivotHandleState handle = pivot->handle_state();
-    const bool can_interact = handle.visible && input.viewport_hovered &&
-                              !input_result.navigation_active &&
-                              !frame.navigation_gizmo_consumed &&
-                              !input.text_input_active;
+    const bool can_interact = handle.visible && frame.handles_visible &&
+                             input.viewport_hovered &&
+                             !native_pointer_interrupted(frame) &&
+                             !frame.suppress_hover_work;
+    bool handle_hit = false;
+    if (can_interact && (!pivot_handle_press_ || frame.left_released)) {
+      const QVec2 pointer_local =
+          frame.left_pressed ? frame.left_click_local : input.mouse_local;
+      const HandleHoverKey hover_key{
+          .pointer_camera = pointer_camera_key(camera, pointer_local,
+                                                frame.viewport_pixel_scale),
+          .position = {handle.world_position.x, handle.world_position.y,
+                       handle.world_position.z},
+      };
+      if (!pivot_hover_key_ || *pivot_hover_key_ != hover_key) {
+        pivot_hover_key_ = hover_key;
+        pivot_hover_hit_ = pivot_handle_hit(
+            camera, handle, pointer_local, frame.viewport_pixel_scale);
+      }
+      handle_hit = pivot_hover_hit_;
+    }
+    if (handle_hit) {
+      pointer_cursor_ = ViewportPointerCursor::OpenHand;
+    }
     if (can_interact && frame.left_pressed && !canceled_left_release &&
-        !pivot_handle_press_ &&
-        pivot_handle_hit(camera, handle, frame.left_click_local,
-                         frame.viewport_pixel_scale)) {
+        !pivot_handle_press_ && handle_hit) {
       pivot_handle_press_ = PivotHandlePress{
           .gesture = viewport_pointer_gesture_from_latest_edge(
               input.pointer_pressed_edges, QuaderMouseButton::Left,
@@ -973,7 +1072,7 @@ ViewportNativeToolInteraction::handle_frame(
           release != nullptr || synthetic_left_release_matches(
                                     frame, pivot_handle_press_->gesture);
       const bool interrupted = native_pointer_interrupted(frame) ||
-                               !handle.visible;
+                               !handle.visible || !frame.handles_visible;
       const bool abandoned = !frame.left_down && !frame.left_released;
       if (interrupted || abandoned) {
         if (pivot_handle_press_->persistent) {
@@ -1012,6 +1111,9 @@ ViewportNativeToolInteraction::handle_frame(
           !canceled_left_release) {
         pivot_handle_press_.reset();
       }
+      if (pivot_handle_press_) {
+        pointer_cursor_ = ViewportPointerCursor::ClosedHand;
+      }
     }
 
     const PivotHandleState after = pivot->handle_state();
@@ -1025,6 +1127,11 @@ ViewportNativeToolInteraction::handle_frame(
 }
 
 void ViewportNativeToolInteraction::clear_drag_state() {
+  pointer_cursor_ = ViewportPointerCursor::Default;
+  curve_control_hover_key_.reset();
+  curve_control_hover_target_.reset();
+  linear_array_hover_key_.reset();
+  pivot_hover_key_.reset();
   if (pivot_handle_press_ || linear_array_handle_press_ ||
       curve_point_construction_press_ || curve_preset_placement_press_ ||
       path_array_source_press_) {

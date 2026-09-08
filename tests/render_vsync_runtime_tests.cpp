@@ -7,18 +7,28 @@
 #include "app/app_frame_schedule.hpp"
 #include "api/quader_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_api_type_conversions.hpp"
+#include "editor/commands/asset_command_service.hpp"
+#include "render/filament_material_library.hpp"
 #include "render/render_layers.hpp"
 #include "render/render_system.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/viewport_renderer.hpp"
+#include "scene/light_properties.hpp"
 
 #include <gtest/gtest.h>
+
+#include <backend/PixelBufferDescriptor.h>
 
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDir>
 #include <QEventLoop>
 #include <QImage>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPixmap>
 #include <QScreen>
 #include <QTimer>
@@ -26,13 +36,17 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <limits>
+#include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace quader {
@@ -429,6 +443,205 @@ private:
   SceneSettingsComponent settings_;
 };
 
+/// Exercises production scene resources and viewport shading without a native
+/// window. Readable swapchain pixels are encoded sRGB, matching the Godot probe.
+class LightCalibrationRuntimeHarness final {
+public:
+  static constexpr std::uint32_t kWidth = 384u;
+  static constexpr std::uint32_t kHeight = 256u;
+
+  ~LightCalibrationRuntimeHarness() {
+    if (engine_ == nullptr) return;
+    (void)engine_->flushAndWait(5'000'000'000ULL);
+    engine_->pumpMessageQueues();
+    view_.shutdown();
+    bridge_.shutdown();
+    registry_.clear();
+    materials_.shutdown();
+    if (swapchain_) engine_->destroy(swapchain_);
+    if (renderer_) engine_->destroy(renderer_);
+    if (scene_) engine_->destroy(scene_);
+    filament::Engine::destroy(&engine_);
+  }
+
+  bool initialize() {
+    const std::filesystem::path resources(
+        QCoreApplication::applicationDirPath().toStdWString());
+    engine_ = filament::Engine::create(filament::Engine::Backend::VULKAN);
+    if (engine_ == nullptr) return false;
+    scene_ = engine_->createScene();
+    renderer_ = engine_->createRenderer();
+    swapchain_ = engine_->createSwapChain(
+        kWidth, kHeight, filament::SwapChain::CONFIG_READABLE);
+    if (!scene_ || !renderer_ || !swapchain_ ||
+        !materials_.initialize(*engine_, resources)) return false;
+    renderer_->setClearOptions({.clearColor = {0, 0, 0, 1}, .clear = true});
+    bridge_.initialize(
+        *engine_, *scene_, materials_.quader_mesh(),
+        materials_.quader_mesh_lit(), materials_.vertex_color_overlay(),
+        materials_.instance_selection_fill(), materials_.overlay_line(),
+        materials_.selected_object_line(), materials_.edit_wire_line(),
+        materials_.overlay_point(), materials_.overlay_icon(), resources);
+    view_.initialize(*engine_, *scene_, registry_, materials_.ground_grid(),
+                     viewport_grid_layer_mask(0u),
+                     ViewportRenderSurface::Swapchain);
+    camera_.set_viewport_size(kWidth, kHeight);
+    camera_.view_axis(ViewportViewAxis::Y, 1);
+    camera_.focus_origin(6.0f);
+    camera_.set_clip_planes(0.05f, 60.0f);
+    view_.resize(kWidth, kHeight);
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+    view_.set_overlay_visible(false);
+    view_.set_scene_layer_mask(kViewportRenderedSceneLayerMask);
+    view_.set_shadowing_enabled(false);
+    view_.set_material_debug_mode(ViewportMaterialDebugMode::None);
+    settings_.environment.enabled = false;
+    settings_.environment.show_background = false;
+    settings_.environment.clear_color = {};
+    settings_.post_process.anti_aliasing = false;
+    settings_.post_process.dithering = false;
+    settings_.post_process.ambient_occlusion = false;
+    settings_.post_process.bloom = false;
+    QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session_));
+    const auto mesh = api.modeling().create_box(
+        QuaderBounds{.min = {-0.6f, -0.1f, -1.0f},
+                     .max = {0.6f, 0.0f, 1.0f}}, "Calibration patch");
+    if (!mesh.ok()) return false;
+    patch_ = mesh.value().entity;
+    for (std::size_t index = 0; index < kAlbedos.size(); ++index) {
+      const float albedo = kAlbedos[index];
+      const auto material = api.assets().add_material(QuaderMaterialAsset{
+          .name = "Calibration material " + std::to_string(index),
+          .base_color = {albedo, albedo, albedo}, .roughness = 1.0f});
+      if (!material.ok()) return false;
+      patch_materials_[index] = material.value().id;
+    }
+    QuaderCreatePointLightArgs args;
+    args.name = "Calibration light";
+    args.transform.position = {0, 3, 0};
+    const auto light = api.scene().create_point_light(args);
+    if (!light.ok()) {
+      ADD_FAILURE() << "Creating calibration light: " << light.error_message();
+      return false;
+    }
+    light_ = light.value().id;
+    return true;
+  }
+
+  bool set_sample(LightType shape, float intensity, std::size_t albedo,
+                  MaterialDiffuseModel diffuse_model = MaterialDiffuseModel::Burley,
+                  float roughness = 1.0f, float metallic = 0.0f) {
+    QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session_));
+    LightComponent light;
+    light.type = shape;
+    light.intensity = intensity;
+    light.range = 12.0f;
+    light.distance_attenuation = 1.0f;
+    const auto changed =
+        api.scene().set_light_component(light_, to_api_light_component(light));
+    if (!changed.ok()) {
+      ADD_FAILURE() << "Setting calibration light: " << changed.error_message();
+      return false;
+    }
+    const auto material_changed = session_.asset_commands().update_material(
+        patch_materials_[albedo], [=](MaterialDocument &material) {
+          material.diffuse_model = diffuse_model;
+          material.roughness = roughness;
+          material.metallic = metallic;
+        });
+    if (!material_changed.ok) {
+      ADD_FAILURE() << "Updating calibration material: "
+                    << material_changed.message;
+      return false;
+    }
+    const auto assigned =
+        api.assets().assign_material_to_entity(patch_, patch_materials_[albedo]);
+    if (!assigned.ok()) {
+      ADD_FAILURE() << "Assigning calibration material: " << assigned.error_message();
+      return false;
+    }
+    bridge_.sync(session_.scene(), session_.assets());
+    return true;
+  }
+
+  QImage capture(SceneToneMapping tone, SceneCameraSettings camera = {}) {
+    settings_.camera = camera;
+    settings_.post_process.tone_mapping = tone;
+    view_.apply_scene_settings(settings_, true);
+    for (int frame = 0; frame < 6; ++frame) {
+      if (!begin_frame()) return {};
+      view_.render(*renderer_);
+      renderer_->endFrame();
+    }
+    if (!begin_frame()) return {};
+    view_.render(*renderer_);
+    auto readback = std::make_shared<Readback>();
+    auto *owner = new std::shared_ptr<Readback>(readback);
+    renderer_->readPixels(
+        0, 0, kWidth, kHeight,
+        filament::backend::PixelBufferDescriptor(
+            readback->bytes.data(), readback->bytes.size(),
+            filament::backend::PixelDataFormat::RGBA,
+            filament::backend::PixelDataType::UBYTE,
+            [](void *, std::size_t, void *user) {
+              auto *holder = static_cast<std::shared_ptr<Readback> *>(user);
+              (*holder)->complete.store(true, std::memory_order_release);
+              delete holder;
+            }, owner));
+    renderer_->endFrame();
+    for (int attempt = 0; attempt < 10 &&
+         !readback->complete.load(std::memory_order_acquire); ++attempt) {
+      if (!engine_->flushAndWait(1'000'000'000ULL)) return {};
+      engine_->pumpMessageQueues();
+    }
+    if (!readback->complete.load(std::memory_order_acquire)) return {};
+    // Filament's readPixels uses a lower-left origin; JSON and PNGs are top-down.
+    return QImage(readback->bytes.data(), kWidth, kHeight,
+                  QImage::Format_RGBA8888).mirrored(false, true);
+  }
+
+  const ViewportCameraController &camera() const { return camera_; }
+  QRect region() const { return QRect(kWidth / 2 - 8, kHeight / 2 - 8, 16, 16); }
+  /// Retains orthographic framing while exposing rough diffuse grazing response.
+  void use_grazing_view() {
+    camera_.set_view_direction({0.0f, -0.2f, -std::sqrt(0.96f)});
+    view_.update_camera(camera_);
+  }
+  static constexpr std::array<float, 3> kAlbedos = {0.18f, 0.8f, 0.005f};
+
+private:
+  struct Readback {
+    std::array<unsigned char, kWidth * kHeight * 4> bytes{};
+    std::atomic<bool> complete = false;
+  };
+
+  bool begin_frame() {
+    for (int attempt = 0; attempt < 80; ++attempt) {
+      if (renderer_->beginFrame(swapchain_)) return true;
+      if (!engine_->flushAndWait(1'000'000'000ULL)) return false;
+      engine_->pumpMessageQueues();
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+  }
+
+  SceneSession session_;
+  EntityId patch_ = kInvalidEntityId;
+  EntityId light_ = kInvalidEntityId;
+  std::array<AssetId, kAlbedos.size()> patch_materials_{};
+  filament::Engine *engine_ = nullptr;
+  filament::Scene *scene_ = nullptr;
+  filament::Renderer *renderer_ = nullptr;
+  filament::SwapChain *swapchain_ = nullptr;
+  FilamentMaterialLibrary materials_;
+  TextureRegistry registry_;
+  SceneRenderBridge bridge_;
+  ViewportRenderer view_;
+  ViewportCameraController camera_;
+  SceneSettingsComponent settings_;
+};
+
 struct ColorRuntimePatchStats {
   int minimum = 255;
   int maximum = 0;
@@ -697,6 +910,283 @@ TEST(RenderColorRuntimeTests, NativeVulkanDarkDitheringStaysWithinDisplayCodes) 
       << "The UNORM reference must exercise dithering rather than bypass it";
   EXPECT_TRUE(changed_by_dithering[1])
       << "The production native sRGB path must keep dithering active";
+}
+
+TEST(RenderColorRuntimeTests,
+     NativeVulkanSimpleLightsUseStableExposureAndExportGodotSamples) {
+  if (qEnvironmentVariable("QUADER_RUN_VULKAN_LIGHTING_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_LIGHTING_TESTS=1 for the opt-in "
+                    "test reading production offscreen Vulkan lighting.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-vulkan-lighting-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  LightCalibrationRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize());
+  const QString output_directory =
+      qEnvironmentVariable("QUADER_VULKAN_COLOR_OUTPUT_DIR");
+  if (!output_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(output_directory));
+  }
+  const auto json_vector = [](QVec3 value) {
+    return QJsonArray{value.x, value.y, value.z};
+  };
+  const auto rgb_means = [](const QImage &image, QRect region, bool linear) {
+    std::array<double, 3> result{};
+    const double count = static_cast<double>(region.width() * region.height());
+    for (int y = region.top(); y <= region.bottom(); ++y) {
+      for (int x = region.left(); x <= region.right(); ++x) {
+        const QRgb pixel = image.pixel(x, y);
+        const std::array<int, 3> channels = {
+            qRed(pixel), qGreen(pixel), qBlue(pixel)};
+        for (std::size_t channel = 0; channel < channels.size(); ++channel) {
+          double value = static_cast<double>(channels[channel]) / 255.0;
+          if (linear) {
+            value = value <= 0.04045 ? value / 12.92
+                                     : std::pow((value + 0.055) / 1.055, 2.4);
+          }
+          result[channel] += value / count;
+        }
+      }
+    }
+    return result;
+  };
+  const QRect region = harness.region();
+  const ViewportCameraPose pose = harness.camera().pose();
+  QJsonObject report{
+      {"width", static_cast<int>(LightCalibrationRuntimeHarness::kWidth)},
+      {"height", static_cast<int>(LightCalibrationRuntimeHarness::kHeight)},
+      {"orthographic_height", harness.camera().state().orthographic_size},
+      {"camera_position", json_vector(pose.eye)},
+      {"camera_target", json_vector(pose.target)},
+      {"camera_up", json_vector(pose.up)},
+      {"light_position", QJsonArray{0, 3, 0}},
+      {"range", 12.0}, {"falloff", 1.0}, {"rows_flipped", false},
+      {"backend", "Vulkan"}, {"desktop_input", false},
+      {"desktop_capture", false},
+      {"material_source_mesh", "calibration-receiver-burley"},
+      {"fixture_scene_uuid", "13131313-1313-4313-8313-131313131313"}};
+  const QString fixture_qproj =
+      qEnvironmentVariable("QUADER_VULKAN_LIGHTING_FIXTURE_QPROJ");
+  if (!fixture_qproj.isEmpty()) report["fixture_qproj"] = fixture_qproj;
+  constexpr std::array<LightType, 3> kShapes = {
+      LightType::Directional, LightType::Point, LightType::Spot};
+  constexpr std::array<const char *, 3> kShapeNames = {
+      "directional", "point", "spot"};
+  constexpr std::array<SceneToneMapping, 2> kTones = {
+      SceneToneMapping::Linear, SceneToneMapping::Agx};
+  constexpr std::array<const char *, 2> kToneNames = {"linear", "agx"};
+  constexpr std::array<float, 3> kIntensities = {1.0f, 16.0f, 32.0f};
+  constexpr std::array<const char *, 3> kAlbedoNames = {"gray", "white", "dark"};
+  QJsonArray samples;
+  int exposure_invariance_cases = 0;
+  std::array<QImage, kTones.size()> normal_burley;
+  for (std::size_t shape = 0; shape < kShapes.size(); ++shape) {
+    ASSERT_TRUE(harness.set_sample(kShapes[shape], 0.0f, 0));
+    const QImage off = harness.capture(SceneToneMapping::Linear);
+    ASSERT_FALSE(off.isNull());
+    EXPECT_LE(color_patch_stats(off, region).maximum, 1)
+        << kShapeNames[shape] << ": no light or IBL must render black";
+    for (std::size_t tone = 0; tone < kTones.size(); ++tone) {
+      for (std::size_t albedo = 0;
+           albedo < LightCalibrationRuntimeHarness::kAlbedos.size(); ++albedo) {
+        std::array<double, 3> linear_means{};
+        std::array<double, 3> display_means{};
+        for (std::size_t intensity = 0; intensity < kIntensities.size(); ++intensity) {
+          const QString label = QStringLiteral("calibration-%1-%2-%3-%4")
+              .arg(QString::fromLatin1(kShapeNames[shape]),
+                   QString::fromLatin1(kToneNames[tone]))
+              .arg(kIntensities[intensity], 0, 'f', 0)
+              .arg(QString::fromLatin1(kAlbedoNames[albedo]));
+          SCOPED_TRACE(label.toStdString());
+          ASSERT_TRUE(harness.set_sample(kShapes[shape], kIntensities[intensity], albedo));
+          const QImage image = harness.capture(kTones[tone]);
+          ASSERT_FALSE(image.isNull());
+          if (shape == 0 && albedo == 0 && intensity == 1) {
+            normal_burley[tone] = image;
+          }
+          const QString filename = label + QStringLiteral(".png");
+          if (!output_directory.isEmpty()) {
+            ASSERT_TRUE(image.save(QDir(output_directory).filePath(filename)));
+          }
+          const auto srgb = rgb_means(image, region, false);
+          const auto linear = rgb_means(image, region, true);
+          const auto stats = color_patch_stats(image, region);
+          display_means[intensity] = stats.mean;
+          linear_means[intensity] = (linear[0] + linear[1] + linear[2]) / 3.0;
+          const QString light_name = QStringLiteral("calibration-%1-%2")
+              .arg(QString::fromLatin1(kShapeNames[shape]))
+              .arg(kIntensities[intensity], 0, 'f', 0);
+          samples.append(QJsonObject{
+              {"shape", QString::fromLatin1(kShapeNames[shape])},
+              {"view", "normal"},
+              {"diffuse_model", "burley"},
+              {"material_source_mesh", "calibration-receiver-burley"},
+              {"roughness", 1.0}, {"metallic", 0.0},
+              {"intensity", kIntensities[intensity]},
+              {"albedo", LightCalibrationRuntimeHarness::kAlbedos[albedo]},
+              {"tone_mapping", QString::fromLatin1(kToneNames[tone])},
+              {"light_name", light_name}, {"native_png", filename},
+              {"region", QJsonArray{region.x(), region.y(), region.width(), region.height()}},
+              {"rgb_srgb", QJsonArray{srgb[0], srgb[1], srgb[2]}},
+              {"rgb_linearized", QJsonArray{linear[0], linear[1], linear[2]}},
+              {"minimum", stats.minimum}, {"maximum", stats.maximum}});
+          std::cout << "Vulkan Simple lighting " << label.toStdString()
+                    << " mean_srgb8=" << stats.mean
+                    << " mean_linear=" << linear_means[intensity]
+                    << " min=" << stats.minimum << " max=" << stats.maximum << '\n';
+          if (albedo == 0 && intensity == 1) {
+            SceneCameraSettings fast;
+            fast.aperture = 64.0f;
+            fast.shutter_speed = 1.0f / 25000.0f;
+            fast.sensitivity = 10.0f;
+            SceneCameraSettings disabled;
+            disabled.use_exposure = false;
+            disabled.aperture = 0.5f;
+            disabled.shutter_speed = 60.0f;
+            disabled.sensitivity = 204800.0f;
+            SceneCameraSettings invalid;
+            invalid.aperture = std::numeric_limits<float>::quiet_NaN();
+            invalid.shutter_speed = -1.0f;
+            invalid.sensitivity = std::numeric_limits<float>::infinity();
+            for (const SceneCameraSettings &camera : {fast, disabled, invalid}) {
+              const QImage unchanged = harness.capture(kTones[tone], camera);
+              ASSERT_FALSE(unchanged.isNull());
+              EXPECT_EQ(color_patch_maximum_difference(image, unchanged, region), 0)
+                  << "Stored photographic settings must not change Simple lighting";
+              ++exposure_invariance_cases;
+            }
+          }
+        }
+        if (albedo == 0) {
+          EXPECT_GT(display_means[1], display_means[0] + 8.0);
+          EXPECT_GT(display_means[2], display_means[1] + 4.0);
+          if (tone == 0) {
+            EXPECT_NEAR(linear_means[1], linear_means[0] * 16.0,
+                        std::max(0.008, linear_means[1] * 0.1));
+            EXPECT_NEAR(linear_means[2], linear_means[1] * 2.0,
+                        std::max(0.004, linear_means[2] * 0.07));
+          }
+        }
+      }
+    }
+  }
+  const auto material_sample = [&](const char *view_name, QRect sample_region,
+                                   std::size_t tone, std::size_t albedo,
+                                   MaterialDiffuseModel model, float roughness,
+                                   float metallic) -> QImage {
+    const QString model_name = model == MaterialDiffuseModel::Burley
+                                   ? QStringLiteral("burley")
+                                   : QStringLiteral("lambert");
+    const QString label = QStringLiteral("calibration-directional-%1-16-%2-%3-%4-r%5-m%6")
+        .arg(QString::fromLatin1(kToneNames[tone]),
+             QString::fromLatin1(kAlbedoNames[albedo]),
+             QString::fromLatin1(view_name), model_name)
+        .arg(roughness, 0, 'f', 1).arg(metallic, 0, 'f', 0);
+    if (!harness.set_sample(LightType::Directional, 16.0f, albedo,
+                            model, roughness, metallic)) return {};
+    const QImage image = harness.capture(kTones[tone]);
+    if (image.isNull()) return {};
+    const QString filename = label + QStringLiteral(".png");
+    if (!output_directory.isEmpty()) {
+      EXPECT_TRUE(image.save(QDir(output_directory).filePath(filename)));
+    }
+    const auto srgb = rgb_means(image, sample_region, false);
+    const auto linear = rgb_means(image, sample_region, true);
+    const auto stats = color_patch_stats(image, sample_region);
+    const ViewportCameraPose sample_pose = harness.camera().pose();
+    EXPECT_GT(stats.mean, 32.0) << label.toStdString() << ": must sample the lit top face";
+    if (albedo == 0) {
+      EXPECT_LT(stats.maximum, 252)
+          << label.toStdString() << ": gray diffuse comparisons must remain unclipped";
+    }
+    samples.append(QJsonObject{
+        {"shape", "directional"}, {"view", QString::fromLatin1(view_name)},
+        {"intensity", 16.0}, {"diffuse_model", model_name},
+        {"material_source_mesh", QStringLiteral("calibration-receiver-") + model_name},
+        {"roughness", roughness}, {"metallic", metallic},
+        {"albedo", LightCalibrationRuntimeHarness::kAlbedos[albedo]},
+        {"tone_mapping", QString::fromLatin1(kToneNames[tone])},
+        {"light_name", "calibration-directional-16"}, {"native_png", filename},
+        {"region", QJsonArray{sample_region.x(), sample_region.y(),
+                               sample_region.width(), sample_region.height()}},
+        {"camera_position", json_vector(sample_pose.eye)},
+        {"camera_target", json_vector(sample_pose.target)},
+        {"camera_up", json_vector(sample_pose.up)},
+        {"orthographic_height", harness.camera().state().orthographic_size},
+        {"rgb_srgb", QJsonArray{srgb[0], srgb[1], srgb[2]}},
+        {"rgb_linearized", QJsonArray{linear[0], linear[1], linear[2]}},
+        {"minimum", stats.minimum}, {"maximum", stats.maximum}});
+    std::cout << "Vulkan material " << label.toStdString()
+              << " mean_srgb8=" << stats.mean
+              << " mean_linear=" << (linear[0] + linear[1] + linear[2]) / 3.0
+              << " min=" << stats.minimum << " max=" << stats.maximum << '\n';
+    return image;
+  };
+  for (std::size_t tone = 0; tone < kTones.size(); ++tone) {
+    const QImage lambert = material_sample("normal", region, tone, 0,
+                                           MaterialDiffuseModel::Lambert, 1.0f, 0.0f);
+    ASSERT_FALSE(lambert.isNull());
+    EXPECT_LE(color_patch_maximum_difference(normal_burley[tone], lambert, region), 1)
+        << "The perpendicular diffuse response is unchanged by the model";
+  }
+  // Grazing samples expose both model selection and perceptual roughness. Each
+  // comparison edits the same native material; returning to Burley must restore
+  // its pixels exactly, proving the retained uniform follows authored changes.
+  harness.use_grazing_view();
+  const QRect grazing_region(LightCalibrationRuntimeHarness::kWidth / 2 - 4,
+                             LightCalibrationRuntimeHarness::kHeight / 2 - 2,
+                             8, 4);
+  int material_round_trip_cases = 0;
+  int metallic_invariance_cases = 0;
+  for (std::size_t tone = 0; tone < kTones.size(); ++tone) {
+    for (float metallic : {0.0f, 1.0f}) {
+      for (float roughness : {0.5f, 1.0f}) {
+        for (std::size_t albedo = 0; albedo < 2; ++albedo) {
+          if (metallic == 1.0f && (roughness != 0.5f || albedo != 1)) continue;
+          const QImage burley = material_sample("grazing", grazing_region, tone, albedo,
+                                                 MaterialDiffuseModel::Burley,
+                                                 roughness, metallic);
+          ASSERT_FALSE(burley.isNull());
+          const QImage lambert = material_sample("grazing", grazing_region, tone, albedo,
+                                                  MaterialDiffuseModel::Lambert,
+                                                  roughness, metallic);
+          ASSERT_FALSE(lambert.isNull());
+          if (metallic == 1.0f) {
+            EXPECT_EQ(color_patch_maximum_difference(burley, lambert, grazing_region), 0)
+                << "A fully metallic surface has no diffuse contribution";
+            ++metallic_invariance_cases;
+          } else if (roughness == 1.0f && albedo == 0) {
+            EXPECT_GT(color_patch_stats(burley, grazing_region).mean,
+                      color_patch_stats(lambert, grazing_region).mean + 2.0)
+                << "Rough Burley diffuse must show its grazing response";
+          }
+          ASSERT_TRUE(harness.set_sample(LightType::Directional, 16.0f, albedo,
+                                         MaterialDiffuseModel::Burley, roughness, metallic));
+          const QImage restored = harness.capture(kTones[tone]);
+          ASSERT_FALSE(restored.isNull());
+          EXPECT_EQ(color_patch_maximum_difference(burley, restored, grazing_region), 0)
+              << "Changing Lambert back to Burley must restore the same material pixels";
+          ++material_round_trip_cases;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(samples.size(), 76);
+  report["samples"] = samples;
+  report["exposure_invariance_cases"] = exposure_invariance_cases;
+  report["material_round_trip_cases"] = material_round_trip_cases;
+  report["metallic_invariance_cases"] = metallic_invariance_cases;
+  report["native_assertions_passed"] = !::testing::Test::HasFailure();
+  if (!output_directory.isEmpty()) {
+    QFile output(QDir(output_directory).filePath(QStringLiteral("calibration.json")));
+    ASSERT_TRUE(output.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    const QByteArray json = QJsonDocument(report).toJson(QJsonDocument::Indented);
+    ASSERT_EQ(output.write(json), json.size());
+  }
 }
 
 } // namespace

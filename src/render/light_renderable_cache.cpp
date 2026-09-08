@@ -18,15 +18,6 @@
 namespace quader {
 namespace {
 
-constexpr float kGodotPunctualLightLumensPerIntensity = 1000.0f;
-constexpr float kViewportPunctualLightExposureCompensation = 10000.0f;
-constexpr float kGodotDirectionalLightLuxPerIntensity = 100000.0f;
-static_assert(kGodotPunctualLightLumensPerIntensity ==
-              kFilamentPunctualLightLumensPerIntensity);
-static_assert(kViewportPunctualLightExposureCompensation ==
-              kFilamentPunctualLightExposureCompensation);
-static_assert(kGodotDirectionalLightLuxPerIntensity ==
-              kFilamentDirectionalLightLuxPerIntensity);
 filament::LightManager::Type to_filament_light_type(LightType type) {
   return filament_light_type(type);
 }
@@ -91,7 +82,7 @@ void LightRenderableCache::sync_light(const RenderSceneLightRecord &light) {
   if (needs_rebuild(light)) {
     const auto existing = light_proxies_.find(light.entity_id);
     if (existing != light_proxies_.end() &&
-        try_update_point_light_range(existing->second, light.light)) {
+        try_update_light_properties(existing->second, light.light)) {
       existing->second.rebuild_signature = light.rebuild_revision;
     } else {
       remove(light.entity_id);
@@ -219,14 +210,9 @@ LightRenderableCache::LightProxy LightRenderableCache::create_light_proxy(
   return proxy;
 }
 
-bool LightRenderableCache::try_update_point_light_range(
+bool LightRenderableCache::try_update_light_properties(
     LightProxy &proxy, const LightComponent &light) {
-  if (light.type != LightType::Point) {
-    return false;
-  }
-  LightComponent previous_with_new_range = proxy.authored_light;
-  previous_with_new_range.range = light.range;
-  if (!(previous_with_new_range == light)) {
+  if (!filament_light_structure_matches(proxy.authored_light, light)) {
     return false;
   }
   auto &light_manager = engine_->getLightManager();
@@ -235,8 +221,9 @@ bool LightRenderableCache::try_update_point_light_range(
   if (!instance) {
     return false;
   }
-  // Keep the light and its shadow resources stable throughout radius dragging.
-  light_manager.setFalloff(instance, light_falloff_radius(light));
+  // Keep light identity and companion shadow resources stable while editing.
+  update_filament_light_properties(light_manager, instance,
+                                   proxy.authored_light, light);
   proxy.authored_light = light;
   return true;
 }

@@ -790,6 +790,7 @@ void QtViewportPanel::process_input(
       diagnostics_enabled ? ViewportProbeClock::now()
                           : ViewportProbeClock::time_point{};
   primitive_feedback_input_eligible_ = false;
+  pointer_cursor_pane_.reset();
   process_viewport_input(editor, document, assets, modeling, default_material,
                          native_tools, point_placement, delta_seconds);
   if (primitive_feedback_input_eligible_ && workspace_ != nullptr) {
@@ -2217,7 +2218,9 @@ void QtViewportPanel::update_pointer_cursor_presentation() {
         input_router_.state().active_tool);
   }
   for (Pane &pane_state : panes_) {
-    pane_state.surface->set_interaction_cursor(cursor);
+    pane_state.surface->set_interaction_cursor(
+        pointer_cursor_pane_ == pane_state.id ? cursor
+                                             : ViewportPointerCursor::Default);
   }
 }
 
@@ -2588,6 +2591,7 @@ void QtViewportPanel::process_viewport_input(
   }
 
   Pane &pane_state = pane(*input_pane);
+  pointer_cursor_pane_ = *input_pane;
   QtViewportInputFrame &sample = samples[viewport_pane_index(*input_pane)];
   if (viewport_frame_diagnostics_enabled()) {
     g_viewport_probe.mouse_events += sample.mouse_move_events;
@@ -3115,6 +3119,7 @@ void QtViewportPanel::process_viewport_input(
           local_visibility_revision;
       point_light_pick_cached_viewport_pixel_scale_ = viewport_pixel_scale;
       point_light_pick_cache_valid_ = true;
+      ++point_light_pick_generation_;
     }
     billboards = point_light_pick_cached_candidates_;
   }
@@ -3148,6 +3153,7 @@ void QtViewportPanel::process_viewport_input(
           interaction_controller_.active_tool_allows_selection_fallback(
               input_router_.state().active_tool),
       .scene_billboard_pick_candidates = billboards,
+      .scene_billboard_pick_revision = point_light_pick_generation_,
   };
   const ViewportContextMenuPointerResult context_menu_pointer =
       interaction_controller_.handle_context_menu_pointer(

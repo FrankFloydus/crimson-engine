@@ -28,6 +28,8 @@ enum class ViewportPaneFocusTrigger;
 enum class QtViewportCursorPresentation {
   Default,
   PrecisionCross,
+  OpenHand,
+  ClosedHand,
   Hidden,
 };
 

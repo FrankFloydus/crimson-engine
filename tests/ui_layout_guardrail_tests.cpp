@@ -631,12 +631,12 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(inspector, "event->reason() == Qt::MouseFocusReason");
   expect_contains(inspector, "editor_->scene().set_scene_settings(");
   expect_contains(inspector, "editor_->scene().set_light_component(");
-  expect_contains(inspector,
-                  "if (result == QDialog::Accepted && committed.isValid()");
-  expect_contains(inspector,
-                  "changed({static_cast<float>(committed.redF())");
-  expect_missing(inspector,
-                 "changed({static_cast<float>(initial.redF())");
+  expect_contains(inspector, "editor_->scene().begin_light_color_edit(");
+  expect_contains(inspector, "editor_->scene().update_light_color_edit(");
+  expect_contains(inspector, "editor_->scene().finish_light_color_edit(");
+  expect_contains(inspector, "editor_->scene().begin_environment_color_edit(");
+  expect_contains(inspector, "editor_->scene().update_environment_color_edit(");
+  expect_contains(inspector, "editor_->scene().finish_environment_color_edit(");
   expect_missing(inspector, "document_->set_scene_settings(");
   expect_missing(inspector, "document_->set_light(");
 

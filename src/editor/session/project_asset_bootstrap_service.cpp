@@ -43,6 +43,7 @@ ProjectDefaultAssets ProjectAssetBootstrapService::bootstrap_default_assets(
           material->base_color.z == expected.base_color.z &&
           material->roughness == expected.roughness &&
           material->metallic == expected.metallic &&
+          material->diffuse_model == expected.diffuse_model &&
           material->texture_slots == expected.texture_slots &&
           material->node_graph_reserved == expected.node_graph_reserved) {
         return id;

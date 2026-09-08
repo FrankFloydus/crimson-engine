@@ -61,6 +61,10 @@ material {
             name : roughnessFactor
         },
         {
+            type : int,
+            name : diffuseModel
+        },
+        {
             type : float,
             name : normalStrength
         },
@@ -221,6 +225,8 @@ vertex {
 }
 
 fragment {
+    #define QUADER_HAS_DIFFUSE_MODEL
+
     #include "mesh_quad_uv.glsl"
     #include "instance_edit.glsl"
 

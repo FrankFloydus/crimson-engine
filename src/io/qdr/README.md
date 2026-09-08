@@ -35,7 +35,7 @@ files. Portable SDK modeling-document QDR is a separate interchange contract.
 
 ## Compatibility that must survive
 
-Current scene metadata schema is 11; schema versions and defaults are enforced in the codec.
+Current scene metadata schema is 14; schema versions and defaults are enforced in the codec.
 
 | Version | Durable data/defaults |
 | --- | --- |
@@ -48,6 +48,24 @@ Current scene metadata schema is 11; schema versions and defaults are enforced i
 | 9 | Curve solidification; schema 8 defaults to disabled, resolution 8, radius 0.1 |
 | 10 | Light distance attenuation; schemas 1-9 default to inverse-square attenuation (2) |
 | 11 | Camera exposure toggle; schemas 1-10 default to enabled |
+| 12 | Light unit, color mode, remembered Kelvin, and stable source preset; schemas 1-11 default to Simple/Color/6500 K/Custom |
+| 13 | AgX tone mapping, appended as value 5; historical tone-mapping IDs 0-4 remain readable and round-trip unchanged |
+| 14 | Embedded material diffuse model (Burley or Lambert); missing fields use Burley |
+
+The FlatBuffers defaults remain intensity 1 and ACES tone mapping, even when new native
+objects use different creation defaults. Saved camera values also remain unchanged. Obsolete
+ACES Legacy and Display Range settings retain their stored identities; their current viewport
+presentation falls back to ACES. Readers predating schema 13 reject new scene files rather
+than interpreting the appended AgX mode incorrectly. Schema 14 appends the material diffuse
+model with Burley as the wire default; readers predating schema 14 reject new files rather
+than silently dropping an authored Lambert selection. Unknown diffuse-model values are rejected.
+
+Light metadata does not replace authored RGB or canonical intensity. Reading historical scenes
+preserves those values and their falloff, including values outside the current Inspector slider
+spans. The FlatBuffers distance-attenuation default stays 2 for compatibility; new native lights
+use falloff 1 and serialize it explicitly. Kelvin must be finite and within 1500-15000 K; unknown
+units, color modes, and source presets are rejected. Source presets are editable RGB approximations,
+not spectral simulations, and retain their stable enum identities when saved.
 
 Curves need at least two anchors and cannot be instance-definition members. Curve samples and tool
 drafts are derived/transient. Face texture scale/shift/rotation use QGEO 1.1; QGEO 1.0 reads identity

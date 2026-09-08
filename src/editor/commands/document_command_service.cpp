@@ -32,6 +32,7 @@
 #include "editor/commands/document/ungroup_selection_command.hpp"
 #include "editor/selection/checked_selection_publication_command.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/light_properties.hpp"
 #include "scene/scene_transform.hpp"
 
 #include <algorithm>
@@ -45,6 +46,11 @@
 
 namespace quader {
 namespace {
+
+/// Compares preview-owned RGB fields without introducing formatting tolerance.
+bool same_preview_color(QVec3 a, QVec3 b) {
+  return a.x == b.x && a.y == b.y && a.z == b.z;
+}
 
 DocumentCommandResult
 execute_document_command(EditorHistoryService &history,
@@ -366,13 +372,13 @@ DocumentCommandResult DocumentCommandService::destroy_entity(EntityId entity) {
                                                                 entity)) {
     return document_command_modeling_owned_entity_result();
   }
-  const auto canceled_range = cancel_active_point_light_range_edit();
-  if (!canceled_range.ok) return canceled_range;
+  const auto canceled_preview = cancel_active_property_edit();
+  if (!canceled_preview.ok) return canceled_preview;
   auto result = execute_document_command(
       history_, with_checked_selection_publication(
                     scene_, std::make_unique<DestroyEntityCommand>(scene_, entity),
                     selection_publication_));
-  result.changed = result.changed || canceled_range.changed;
+  result.changed = result.changed || canceled_preview.changed;
   return result;
 }
 
@@ -483,6 +489,7 @@ DocumentCommandService::group_selection(std::string group_name,
   assign_document_command_status(
       result,
       execute_document_command(history_, std::move(prepared.command)));
+  result.changed = result.changed || prepared.status.changed;
   if (result.ok && result.changed) {
     result.group_entity = scene_.primary_selection();
   }
@@ -494,39 +501,50 @@ DocumentCommandResult DocumentCommandService::ungroup_selection() {
   if (!prepared.command) {
     return std::move(prepared.status);
   }
-  return execute_document_command(history_, std::move(prepared.command));
+  auto result = execute_document_command(history_, std::move(prepared.command));
+  result.changed = result.changed || prepared.status.changed;
+  return result;
 }
 
 PreparedDocumentCommand
 DocumentCommandService::prepare_group_selection_command(
     std::string group_name, TransformComponent group_transform) {
   if (selected_mutation_blocked()) {
-    return {
-        .status = document_command_active_tool_entity_result(),
-    };
+    return {.status = document_command_active_tool_entity_result()};
+  }
+  auto command = std::make_unique<GroupSelectionCommand>(
+      scene_, std::move(group_name), group_transform);
+  DocumentCommandResult canceled = document_command_unchanged_result();
+  if (property_edit_) {
+    const auto preflight = command->preflight();
+    if (!preflight.ok || !preflight.changed) return {.status = preflight};
+    canceled = cancel_active_property_edit();
+    if (!canceled.ok) return {.status = canceled};
   }
   return {
-      .status = document_command_unchanged_result(),
+      .status = canceled,
       .command = with_checked_selection_publication(
-          scene_,
-          std::make_unique<GroupSelectionCommand>(
-              scene_, std::move(group_name), group_transform),
-          selection_publication_),
+          scene_, std::move(command), selection_publication_),
   };
 }
 
 PreparedDocumentCommand
 DocumentCommandService::prepare_ungroup_selection_command() {
   if (selected_mutation_blocked()) {
-    return {
-        .status = document_command_active_tool_entity_result(),
-    };
+    return {.status = document_command_active_tool_entity_result()};
+  }
+  auto command = std::make_unique<UngroupSelectionCommand>(scene_);
+  DocumentCommandResult canceled = document_command_unchanged_result();
+  if (property_edit_) {
+    const auto preflight = command->preflight();
+    if (!preflight.ok || !preflight.changed) return {.status = preflight};
+    canceled = cancel_active_property_edit();
+    if (!canceled.ok) return {.status = canceled};
   }
   return {
-      .status = document_command_unchanged_result(),
+      .status = canceled,
       .command = with_checked_selection_publication(
-          scene_, std::make_unique<UngroupSelectionCommand>(scene_),
-          selection_publication_),
+          scene_, std::move(command), selection_publication_),
   };
 }
 
@@ -552,6 +570,12 @@ DocumentCommandService::duplicate_entity(EntityId entity) {
     return result;
   }
 
+  const auto canceled = cancel_active_property_edit();
+  if (!canceled.ok) {
+    DocumentDuplicateEntityResult result;
+    assign_document_command_status(result, canceled);
+    return result;
+  }
   auto command = std::make_unique<DuplicateEntityCommand>(scene_, entity);
   DuplicateEntityCommand *duplicate_command = command.get();
   DocumentDuplicateEntityResult result;
@@ -581,6 +605,14 @@ DocumentCommandService::duplicate_selected_hierarchy() {
     return result;
   }
 
+  if (!document_command_selected_root_entities(scene_).empty()) {
+    const auto canceled = cancel_active_property_edit();
+    if (!canceled.ok) {
+      DocumentDuplicateHierarchyResult result;
+      assign_document_command_status(result, canceled);
+      return result;
+    }
+  }
   auto command = std::make_unique<DuplicateSelectedHierarchyCommand>(scene_);
   DuplicateSelectedHierarchyCommand *duplicate_command = command.get();
   DocumentDuplicateHierarchyResult result;
@@ -644,6 +676,12 @@ DocumentCommandService::duplicate_hierarchy_with_existing_clones(
     }
   }
 
+  const auto canceled = cancel_active_property_edit();
+  if (!canceled.ok) {
+    DocumentDuplicateHierarchyResult result;
+    assign_document_command_status(result, canceled);
+    return result;
+  }
   std::vector<DocumentEntitySnapshot> source_snapshots;
   source_snapshots.reserve(roots.size());
   {
@@ -683,6 +721,10 @@ DocumentCreateEntityResult DocumentCommandService::create_point_light(
     return invalid_create_result("Light transform must be finite");
   }
   light.type = LightType::Point;
+  if (!std::isfinite(light.distance_attenuation) ||
+      !light_component_metadata_is_valid(light)) {
+    return invalid_create_result("Light properties are invalid");
+  }
   parent = normalized_create_parent(scene_, parent);
   if (parent != kInvalidEntityId && !scene_.exists(parent)) {
     DocumentCreateEntityResult result;
@@ -695,6 +737,14 @@ DocumentCreateEntityResult DocumentCommandService::create_point_light(
     return invalid_create_result(
         "Apply or cancel the active tool before parenting to its transient "
         "entity");
+  }
+  if (select_created) {
+    const auto canceled = cancel_active_property_edit();
+    if (!canceled.ok) {
+      DocumentCreateEntityResult result;
+      assign_document_command_status(result, canceled);
+      return result;
+    }
   }
   auto command = std::make_unique<CreateLightCommand>(
       scene_, "Create Point Light", std::move(name), light, parent, transform,
@@ -724,6 +774,10 @@ DocumentCreateEntityResult DocumentCommandService::create_directional_light(
     return invalid_create_result("Light transform must be finite");
   }
   light.type = LightType::Directional;
+  if (!std::isfinite(light.distance_attenuation) ||
+      !light_component_metadata_is_valid(light)) {
+    return invalid_create_result("Light properties are invalid");
+  }
   parent = normalized_create_parent(scene_, parent);
   if (parent != kInvalidEntityId && !scene_.exists(parent)) {
     DocumentCreateEntityResult result;
@@ -736,6 +790,14 @@ DocumentCreateEntityResult DocumentCommandService::create_directional_light(
     return invalid_create_result(
         "Apply or cancel the active tool before parenting to its transient "
         "entity");
+  }
+  if (select_created) {
+    const auto canceled = cancel_active_property_edit();
+    if (!canceled.ok) {
+      DocumentCreateEntityResult result;
+      assign_document_command_status(result, canceled);
+      return result;
+    }
   }
   auto command = std::make_unique<CreateLightCommand>(
       scene_, "Create Directional Light", std::move(name), light, parent,
@@ -764,13 +826,21 @@ DocumentCommandService::select_entities(std::vector<EntityId> entities,
   if (!publication) {
     publication = selection_publication_;
   }
-  return execute_document_command(history_,
+  DocumentCommandResult canceled = document_command_unchanged_result();
+  if (property_edit_ && !same_scene_selection(capture_scene_selection(scene_),
+                                             make_scene_selection(scene_, entities, active))) {
+    canceled = cancel_active_property_edit();
+    if (!canceled.ok) return canceled;
+  }
+  auto result = execute_document_command(history_,
                                   with_checked_selection_publication(
                                       scene_,
                                       std::make_unique<SelectEntitiesCommand>(
                                           scene_, std::move(entities), active,
                                           mode),
                                       std::move(publication)));
+  result.changed = result.changed || canceled.changed;
+  return result;
 }
 
 DocumentCommandResult
@@ -1000,6 +1070,10 @@ DocumentCommandResult DocumentCommandService::set_curve_component(
 
 DocumentCommandResult DocumentCommandService::set_light_component(
     EntityId entity, LightComponent light, UndoRedoExecuteOptions options) {
+  if (!std::isfinite(light.distance_attenuation) ||
+      !light_component_metadata_is_valid(light)) {
+    return document_command_invalid_request_result("Light properties are invalid");
+  }
   if (mutation_blocked(entity)) {
     return document_command_active_tool_entity_result();
   }
@@ -1011,12 +1085,17 @@ DocumentCommandResult DocumentCommandService::set_light_component(
     return document_command_invalid_request_result(
         "Entity does not have a light component");
   }
+  if (scene_.instance_occurrence(entity) != nullptr ||
+      scene_.is_instance_definition_entity(entity) ||
+      scene_.is_instance_definition_member(entity) || scene_.curve(entity) != nullptr) {
+    return document_command_invalid_request_result("Light component cannot be edited here");
+  }
   if (document_command_same_light_component(*current_light, light)) {
     return document_command_unchanged_result();
   }
   DocumentCommandResult finished = document_command_unchanged_result();
-  if (point_light_range_edit_ && point_light_range_edit_->entity == entity) {
-    finished = finish_point_light_range_edit(entity, false);
+  if (property_edit_ && property_edit_->entity == entity) {
+    finished = finish_property_edit(false);
     if (!finished.ok) return finished;
   }
   auto result = execute_document_command(history_,
@@ -1027,10 +1106,20 @@ DocumentCommandResult DocumentCommandService::set_light_component(
   return result;
 }
 
+void DocumentCommandService::advance_property_edit_generation() {
+  ++property_edit_generation_;
+  if (property_edit_generation_ == 0u) ++property_edit_generation_;
+}
+
+bool DocumentCommandService::point_light_range_edit_active() const {
+  return property_edit_ &&
+      std::holds_alternative<PointLightRangeEdit>(property_edit_->value);
+}
+
 DocumentCommandResult
 DocumentCommandService::begin_point_light_range_edit(EntityId entity) {
-  if (point_light_range_edit_) {
-    return document_command_invalid_request_result("A light range edit is already active");
+  if (property_edit_) {
+    return document_command_invalid_request_result("A document property edit is already active");
   }
   const auto *light = scene_.light(entity);
   if (!light || light->type != LightType::Point ||
@@ -1038,76 +1127,246 @@ DocumentCommandService::begin_point_light_range_edit(EntityId entity) {
       mutation_blocked(entity)) {
     return document_command_invalid_request_result("Point light cannot be edited");
   }
-  point_light_range_edit_ = PointLightRangeEdit{
+  property_edit_ = PropertyEdit{
       .entity = entity, .uuid = scene_.uuid(entity),
-      .before = light->range, .expected = light->range};
-  if (point_light_range_preview_hooks_.begin) point_light_range_preview_hooks_.begin();
+      .value = PointLightRangeEdit{light->range, light->range}};
+  advance_property_edit_generation();
+  if (property_preview_hooks_.begin) property_preview_hooks_.begin();
   return document_command_unchanged_result();
 }
 
 DocumentCommandResult DocumentCommandService::update_point_light_range_edit(
     EntityId entity, float range) {
-  if (!point_light_range_edit_ || point_light_range_edit_->entity != entity ||
+  if (!point_light_range_edit_active() || property_edit_->entity != entity ||
       !std::isfinite(range) || range < 0.001f) {
     return document_command_invalid_request_result("Invalid point light range edit");
   }
-  auto &edit = *point_light_range_edit_;
+  auto &edit = std::get<PointLightRangeEdit>(property_edit_->value);
   const auto *current = scene_.light(entity);
   if (!current || current->type != LightType::Point ||
-      scene_.uuid(entity) != edit.uuid || current->range != edit.expected ||
+      scene_.uuid(entity) != property_edit_->uuid || current->range != edit.expected ||
       scene_.is_effectively_locked(entity) || mutation_blocked(entity)) {
-    return document_command_invalid_request_result("Point light changed during range edit");
+    const auto canceled = finish_property_edit(true);
+    return canceled.ok ? document_command_invalid_request_result("Point light changed during range edit")
+                       : canceled;
   }
   if (range == edit.expected) return document_command_unchanged_result();
   LightComponent light = *current;
   light.range = range;
-  if (point_light_range_preview_hooks_.observe_before_projection)
-    point_light_range_preview_hooks_.observe_before_projection();
+  if (property_preview_hooks_.observe_before_projection)
+    property_preview_hooks_.observe_before_projection();
   if (!scene_.set_light(entity, light)) {
     return document_command_invalid_request_result("Point light range could not be applied");
   }
   edit.expected = range;
-  if (point_light_range_preview_hooks_.record_after_projection)
-    point_light_range_preview_hooks_.record_after_projection();
+  if (property_preview_hooks_.record_after_projection)
+    property_preview_hooks_.record_after_projection();
   return document_command_changed_result();
 }
 
 DocumentCommandResult DocumentCommandService::finish_point_light_range_edit(
     EntityId entity, bool cancel) {
-  if (!point_light_range_edit_ || point_light_range_edit_->entity != entity) {
-    return document_command_unchanged_result();
+  return point_light_range_edit_active() && property_edit_->entity == entity
+      ? finish_property_edit(cancel) : document_command_unchanged_result();
+}
+
+DocumentCommandResult DocumentCommandService::begin_light_color_edit(EntityId entity) {
+  if (property_edit_) {
+    return document_command_invalid_request_result("A document property edit is already active");
   }
-  const PointLightRangeEdit edit = *point_light_range_edit_;
-  point_light_range_edit_.reset();
-  if (point_light_range_preview_hooks_.observe_before_projection)
-    point_light_range_preview_hooks_.observe_before_projection();
-  const auto settled = [this](DocumentCommandResult result, bool restored) {
-    if (point_light_range_preview_hooks_.record_after_projection)
-      point_light_range_preview_hooks_.record_after_projection();
-    if (point_light_range_preview_hooks_.finish)
-      point_light_range_preview_hooks_.finish(restored);
-    return result;
-  };
+  const auto *light = scene_.light(entity);
+  if (!light || scene_.is_effectively_locked(entity) || mutation_blocked(entity)) {
+    return document_command_invalid_request_result("Light color cannot be edited");
+  }
+  const LightColorValue color{light->color, light->color_mode, light->source_preset};
+  property_edit_ = PropertyEdit{.entity = entity, .uuid = scene_.uuid(entity),
+                               .value = LightColorEdit{color, color}};
+  advance_property_edit_generation();
+  if (property_preview_hooks_.begin) property_preview_hooks_.begin();
+  return document_command_unchanged_result();
+}
+
+DocumentCommandResult DocumentCommandService::update_light_color_edit(
+    EntityId entity, std::uint64_t generation, QVec3 color) {
+  if (generation == 0u || generation != property_edit_generation_ ||
+      !property_edit_ || property_edit_->entity != entity ||
+      !std::holds_alternative<LightColorEdit>(property_edit_->value) ||
+      !std::isfinite(color.x) || !std::isfinite(color.y) || !std::isfinite(color.z) ||
+      color.x < 0.0f || color.y < 0.0f || color.z < 0.0f) {
+    return document_command_invalid_request_result("Invalid light color edit");
+  }
+  auto &edit = std::get<LightColorEdit>(property_edit_->value);
   const auto *current = scene_.light(entity);
-  if (!current || current->type != LightType::Point ||
-      scene_.uuid(entity) != edit.uuid || current->range != edit.expected) {
-    return settled(document_command_invalid_request_result("Point light changed during range edit"), false);
+  if (!current || scene_.uuid(entity) != property_edit_->uuid ||
+      !same_preview_color(current->color, edit.expected.color) || current->color_mode != edit.expected.mode ||
+      current->source_preset != edit.expected.preset || scene_.is_effectively_locked(entity) ||
+      mutation_blocked(entity)) {
+    const auto canceled = finish_property_edit(true);
+    return canceled.ok ? document_command_invalid_request_result("Light changed during color edit")
+                       : canceled;
   }
-  if (edit.before == edit.expected) return settled(document_command_unchanged_result(), true);
+  if (same_preview_color(color, edit.expected.color)) return document_command_unchanged_result();
+  LightComponent light = *current;
+  light.color = color;
+  light.color_mode = LightColorMode::Color;
+  light.source_preset = LightSourcePreset::Custom;
+  if (property_preview_hooks_.observe_before_projection)
+    property_preview_hooks_.observe_before_projection();
+  if (!scene_.set_light(entity, light)) {
+    return document_command_invalid_request_result("Light color could not be applied");
+  }
+  edit.expected = {color, light.color_mode, light.source_preset};
+  if (property_preview_hooks_.record_after_projection)
+    property_preview_hooks_.record_after_projection();
+  return document_command_changed_result();
+}
+
+DocumentCommandResult DocumentCommandService::finish_light_color_edit(
+    EntityId entity, std::uint64_t generation, bool cancel) {
+  if (generation == 0u || generation != property_edit_generation_ ||
+      (property_edit_ && (property_edit_->entity != entity ||
+                         !std::holds_alternative<LightColorEdit>(property_edit_->value)))) {
+    return document_command_invalid_request_result("Color edit is no longer active");
+  }
+  return finish_property_edit(cancel);
+}
+
+DocumentCommandResult DocumentCommandService::begin_environment_color_edit(EntityId entity) {
+  if (property_edit_) {
+    return document_command_invalid_request_result("A document property edit is already active");
+  }
+  const auto *settings = scene_.scene_settings(entity);
+  if (!settings || scene_.is_effectively_locked(entity) || mutation_blocked(entity)) {
+    return document_command_invalid_request_result("Environment color cannot be edited");
+  }
+  const QVec3 color = settings->environment.clear_color;
+  property_edit_ = PropertyEdit{.entity = entity, .uuid = scene_.uuid(entity),
+                               .value = EnvironmentColorEdit{color, color}};
+  advance_property_edit_generation();
+  if (property_preview_hooks_.begin) property_preview_hooks_.begin();
+  return document_command_unchanged_result();
+}
+
+DocumentCommandResult DocumentCommandService::update_environment_color_edit(
+    EntityId entity, std::uint64_t generation, QVec3 color) {
+  if (generation == 0u || generation != property_edit_generation_ ||
+      !property_edit_ || property_edit_->entity != entity ||
+      !std::holds_alternative<EnvironmentColorEdit>(property_edit_->value) ||
+      !std::isfinite(color.x) || !std::isfinite(color.y) || !std::isfinite(color.z) ||
+      color.x < 0.0f || color.y < 0.0f || color.z < 0.0f) {
+    return document_command_invalid_request_result("Invalid environment color edit");
+  }
+  auto &edit = std::get<EnvironmentColorEdit>(property_edit_->value);
+  const auto *current = scene_.scene_settings(entity);
+  if (!current || scene_.uuid(entity) != property_edit_->uuid ||
+      !same_preview_color(current->environment.clear_color, edit.expected) ||
+      scene_.is_effectively_locked(entity) || mutation_blocked(entity)) {
+    const auto canceled = finish_property_edit(true);
+    return canceled.ok ? document_command_invalid_request_result("Environment changed during color edit")
+                       : canceled;
+  }
+  if (same_preview_color(color, edit.expected)) return document_command_unchanged_result();
+  SceneSettingsComponent settings = *current;
+  settings.environment.clear_color = color;
+  if (property_preview_hooks_.observe_before_projection)
+    property_preview_hooks_.observe_before_projection();
+  if (!scene_.set_scene_settings(entity, settings)) {
+    return document_command_invalid_request_result("Environment color could not be applied");
+  }
+  edit.expected = color;
+  if (property_preview_hooks_.record_after_projection)
+    property_preview_hooks_.record_after_projection();
+  return document_command_changed_result();
+}
+
+DocumentCommandResult DocumentCommandService::finish_environment_color_edit(
+    EntityId entity, std::uint64_t generation, bool cancel) {
+  if (generation == 0u || generation != property_edit_generation_ ||
+      (property_edit_ && (property_edit_->entity != entity ||
+                         !std::holds_alternative<EnvironmentColorEdit>(property_edit_->value)))) {
+    return document_command_invalid_request_result("Color edit is no longer active");
+  }
+  return finish_property_edit(cancel);
+}
+
+DocumentCommandResult DocumentCommandService::settle_property_edit(
+    DocumentCommandResult result, bool restored) {
+  if (property_preview_hooks_.record_after_projection)
+    property_preview_hooks_.record_after_projection();
+  if (property_preview_hooks_.finish) property_preview_hooks_.finish(restored);
+  return result;
+}
+
+DocumentCommandResult DocumentCommandService::finish_property_edit(bool cancel) {
+  if (!property_edit_) return document_command_unchanged_result();
+  const PropertyEdit edit = *property_edit_;
+  property_edit_.reset();
+  if (property_preview_hooks_.observe_before_projection)
+    property_preview_hooks_.observe_before_projection();
+  if (!scene_.exists(edit.entity) || scene_.uuid(edit.entity) != edit.uuid) {
+    return settle_property_edit(document_command_invalid_request_result(
+        "Entity changed during property edit"), false);
+  }
+  const bool restore = cancel || scene_.is_effectively_locked(edit.entity);
+  if (const auto *color = std::get_if<EnvironmentColorEdit>(&edit.value)) {
+    const auto *current = scene_.scene_settings(edit.entity);
+    if (!current || !same_preview_color(current->environment.clear_color, color->expected)) {
+      return settle_property_edit(document_command_invalid_request_result(
+          "Environment changed during color edit"), false);
+    }
+    if (same_preview_color(color->before, color->expected))
+      return settle_property_edit(document_command_unchanged_result(), true);
+    SceneSettingsComponent before = *current;
+    before.environment.clear_color = color->before;
+    if (restore) {
+      const bool restored = scene_.set_scene_settings(edit.entity, before);
+      return settle_property_edit(restored ? document_command_changed_result()
+          : document_command_invalid_request_result("Environment color could not be restored"), restored);
+    }
+    return settle_property_edit(history_.record_executed(
+        std::make_unique<SetSceneSettingsCommand>(scene_, edit.entity, before, *current)), false);
+  }
+  const auto *current = scene_.light(edit.entity);
+  if (!current) {
+    return settle_property_edit(document_command_invalid_request_result(
+        "Light changed during property edit"), false);
+  }
   LightComponent before = *current;
-  before.range = edit.before;
-  if (cancel || scene_.is_effectively_locked(entity)) {
-    const bool restored = scene_.set_light(entity, before);
-    return settled(restored ? document_command_changed_result()
-                            : document_command_invalid_request_result("Point light range could not be restored"), restored);
+  if (const auto *range = std::get_if<PointLightRangeEdit>(&edit.value)) {
+    if (current->type != LightType::Point || current->range != range->expected) {
+      return settle_property_edit(document_command_invalid_request_result(
+          "Point light changed during range edit"), false);
+    }
+    before.range = range->before;
+  } else {
+    const auto &color = std::get<LightColorEdit>(edit.value);
+    if (!same_preview_color(current->color, color.expected.color) || current->color_mode != color.expected.mode ||
+        current->source_preset != color.expected.preset) {
+      return settle_property_edit(document_command_invalid_request_result(
+          "Light changed during color edit"), false);
+    }
+    before.color = color.before.color;
+    before.color_mode = color.before.mode;
+    before.source_preset = color.before.preset;
   }
-  return settled(history_.record_executed(std::make_unique<SetLightComponentCommand>(
-      scene_, entity, before, *current)), false);
+  if (document_command_same_light_component(before, *current))
+    return settle_property_edit(document_command_unchanged_result(), true);
+  if (restore) {
+    const bool restored = scene_.set_light(edit.entity, before);
+    return settle_property_edit(restored ? document_command_changed_result()
+        : document_command_invalid_request_result("Light property could not be restored"), restored);
+  }
+  return settle_property_edit(history_.record_executed(
+      std::make_unique<SetLightComponentCommand>(scene_, edit.entity, before, *current)), false);
+}
+
+DocumentCommandResult DocumentCommandService::cancel_active_property_edit() {
+  return finish_property_edit(true);
 }
 
 DocumentCommandResult DocumentCommandService::cancel_active_point_light_range_edit() {
-  return point_light_range_edit_ ? finish_point_light_range_edit(point_light_range_edit_->entity, true)
-                                : document_command_unchanged_result();
+  return point_light_range_edit_active() ? finish_property_edit(true)
+                                        : document_command_unchanged_result();
 }
 
 DocumentCommandResult
@@ -1126,15 +1385,27 @@ DocumentCommandService::set_scene_settings(EntityId entity,
     return document_command_invalid_request_result(
         "Entity does not have scene settings");
   }
+  const EntityId root = scene_.scene_root();
+  if (scene_.curve(entity) != nullptr ||
+      (root != kInvalidEntityId && root != entity)) {
+    return document_command_invalid_request_result("Scene settings cannot be edited here");
+  }
   if (document_command_same_scene_settings(*current_settings, settings)) {
     return document_command_unchanged_result();
   }
 
-  return execute_document_command(
+  DocumentCommandResult finished = document_command_unchanged_result();
+  if (property_edit_ && property_edit_->entity == entity) {
+    finished = finish_property_edit(false);
+    if (!finished.ok) return finished;
+  }
+  auto result = execute_document_command(
       history_,
       std::make_unique<SetSceneSettingsCommand>(
           scene_, entity, *current_settings, std::move(settings)),
       std::move(options));
+  result.changed = result.changed || finished.changed;
+  return result;
 }
 
 DocumentCommandResult

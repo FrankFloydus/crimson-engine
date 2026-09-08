@@ -8,6 +8,7 @@
 
 #include "viewport/primitive_creation_controls.hpp"
 #include "viewport/viewport_camera_controller.hpp"
+#include "viewport/viewport_input_types.hpp"
 
 #include <optional>
 
@@ -33,6 +34,8 @@ public:
   void end();
   void clear();
   [[nodiscard]] int active() const { return frame_.active; }
+  /// Presents the existing control hit and the tool's confirmed drag threshold.
+  [[nodiscard]] ViewportPointerCursor pointer_cursor(bool drag_started) const;
   [[nodiscard]] std::int32_t object_id() const { return object_id_; }
   [[nodiscard]] const PrimitiveCreationControlsFrame &frame() const { return frame_; }
   [[nodiscard]] std::uint64_t projection_count() const { return projection_count_; }

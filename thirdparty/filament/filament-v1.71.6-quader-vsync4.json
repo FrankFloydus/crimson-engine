@@ -1,8 +1,8 @@
 {
-  "artifact": "filament-v1.71.6-quader-vsync3-windows",
+  "artifact": "filament-v1.71.6-quader-vsync4-windows",
   "upstream_version": "1.71.6",
   "upstream_commit": "ab65c099438ead4fabf496706da4aa3e0a272472",
   "source_sha256": "ed2c4faa3bc22046d9a9ae574fb644c80f305f3e0386536fc9e6d8577295eb8a",
-  "patch_version": 3,
-  "patch_file": "filament-v1.71.6-quader-vsync3.patch"
+  "patch_version": 4,
+  "patch_file": "filament-v1.71.6-quader-vsync4.patch"
 }

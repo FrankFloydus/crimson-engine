@@ -80,6 +80,42 @@ enum class QuaderLightType {
     Spot,
 };
 
+/// Selects the display unit; the component intensity remains canonical Simple.
+enum class QuaderLightUnit { Simple = 0, Lumens = 1, Candela = 2 };
+
+/// Selects explicit RGB or correlated color temperature for a light.
+enum class QuaderLightColorMode { Color = 0, ColorTemperature = 1 };
+
+/// Stable preset identities shared by every light shape; append new values.
+enum class QuaderLightSourcePreset {
+  Custom = 0,
+  Candle = 1,
+  Incandescent40W = 2,
+  Incandescent60W = 3,
+  Incandescent75W = 4,
+  Incandescent100W = 5,
+  Halogen80W = 6,
+  DecorativeLed = 7,
+  WarmLed = 8,
+  WarmWhiteLed = 9,
+  NeutralLed = 10,
+  DaylightLed = 11,
+  CoolDaylightLed = 12,
+  WarmFluorescent36W = 13,
+  NeutralFluorescent36W = 14,
+  DaylightFluorescent36W = 15,
+  HighPressureSodium100W = 16,
+  MercuryVapor80W = 17,
+  MetalHalide400W = 18,
+  StudioTungsten = 19,
+  SunriseSunset = 20,
+  MiddaySun = 21,
+  Daylight = 22,
+  Overcast = 23,
+  OutdoorShade = 24,
+  BlueSky = 25,
+};
+
 /**
  * Represents a Quader Transform value used by the public Quader API surface.
  */
@@ -932,10 +968,14 @@ struct QuaderCreateEntityArgs {
 struct QuaderLightComponent {
     QuaderLightType type = QuaderLightType::Point;
     QVec3 color = {1.0f, 1.0f, 1.0f};
-    float intensity = 1.0f;
+    float intensity = 16.0f;
     float range = 10.0f;
     bool casts_shadows = false;
-    float distance_attenuation = 2.0f;
+    float distance_attenuation = 1.0f;
+    QuaderLightUnit light_unit = QuaderLightUnit::Simple;
+    QuaderLightColorMode color_mode = QuaderLightColorMode::Color;
+    float color_temperature_kelvin = 6500.0f;
+    QuaderLightSourcePreset source_preset = QuaderLightSourcePreset::Custom;
 };
 
 /**
@@ -994,6 +1034,7 @@ enum class QuaderToneMapping {
     Aces,
     Filmic,
     DisplayRange,
+    Agx,
 };
 
 /**
@@ -1008,7 +1049,7 @@ struct QuaderScenePostProcessSettings {
     bool bloom = false;
     float bloom_strength = 0.1f;
     bool dithering = true;
-    QuaderToneMapping tone_mapping = QuaderToneMapping::Aces;
+    QuaderToneMapping tone_mapping = QuaderToneMapping::Linear;
 };
 
 /**
@@ -1078,6 +1119,9 @@ struct QuaderPreviewSettings {
     QuaderInteractionSettings interaction;
 };
 
+/// Selects a material's authored diffuse reflection model.
+enum class QuaderMaterialDiffuseModel : std::uint8_t { Burley = 0, Lambert = 1 };
+
 /**
  * Stores the Quader Material Args data contract used by the public Quader API surface.
  */
@@ -1086,6 +1130,7 @@ struct QuaderMaterialArgs {
     QVec3 base_color = {1.0f, 1.0f, 1.0f};
     float roughness = 1.0f;
     float metallic = 0.0f;
+    QuaderMaterialDiffuseModel diffuse_model = QuaderMaterialDiffuseModel::Burley;
 };
 
 /**
@@ -1182,6 +1227,7 @@ struct QuaderMaterialAsset {
   QVec3 base_color = {1.0f, 1.0f, 1.0f};
   float roughness = 1.0f;
   float metallic = 0.0f;
+  QuaderMaterialDiffuseModel diffuse_model = QuaderMaterialDiffuseModel::Burley;
   std::unordered_map<std::string, AssetId> texture_slots;
   bool node_graph_reserved = true;
 };

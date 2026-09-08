@@ -471,6 +471,7 @@ bool same_render_material_payload(
                           right->document.roughness) ||
       !same_float_payload(left->document.metallic,
                           right->document.metallic) ||
+      left->document.diffuse_model != right->document.diffuse_model ||
       !same_float_payload(left->normal_strength, right->normal_strength) ||
       left->directx_normal != right->directx_normal ||
       !same_vec2_payload(left->texture_transform.center,
@@ -942,6 +943,7 @@ std::uint64_t render_material_payload_signature(
   signature.add_vec3(material->document.base_color)
       .add_float(material->document.roughness)
       .add_float(material->document.metallic)
+      .add_value(static_cast<std::uint64_t>(material->document.diffuse_model))
       .add_float(material->normal_strength)
       .add_bool(material->directx_normal)
       .add_vec2(material->texture_transform.center)
@@ -1192,6 +1194,7 @@ RenderMaterialAssetSnapshot build_render_project_material_asset_snapshot(
   snapshot.document.base_color = standard->base_color;
   snapshot.document.roughness = standard->roughness;
   snapshot.document.metallic = standard->metallic;
+  snapshot.document.diffuse_model = standard->diffuse_model;
   snapshot.normal_strength = standard->normal_strength;
   snapshot.directx_normal = standard->directx_normal;
   snapshot.texture_transform = standard->texture_transform;

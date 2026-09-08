@@ -34,6 +34,10 @@ StandardMaterialRenderValues public_standard_values(
       .texture_offset = definition.texture_transform.offset,
       .texture_rotation_degrees =
           definition.texture_transform.rotation_degrees,
+      .diffuse_model =
+          definition.diffuse_model == QuaderMaterialDiffuseModel::Lambert
+              ? MaterialDiffuseModel::Lambert
+              : MaterialDiffuseModel::Burley,
   };
 }
 

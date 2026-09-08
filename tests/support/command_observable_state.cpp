@@ -278,7 +278,8 @@ std::string material_content_key(const QuaderMaterialAsset &material) {
       "name:" + quote(material.name) + ",base_color:" +
       vec3_text(material.base_color) + ",roughness:" +
       float_bits(material.roughness) + ",metallic:" +
-      float_bits(material.metallic) + ",node_graph_reserved:" +
+      float_bits(material.metallic) + ",diffuse_model:" +
+      enum_text(material.diffuse_model) + ",node_graph_reserved:" +
       bool_text(material.node_graph_reserved);
   for (const auto &[slot, texture] : slots) {
     result += ",slot:" + quote(slot) + "->" + std::to_string(texture);
@@ -756,7 +757,12 @@ std::string light_text(const QuaderLightComponent &light) {
   return "type:" + enum_text(light.type) + ",color:" +
          vec3_text(light.color) + ",intensity:" + float_bits(light.intensity) +
          ",range:" + float_bits(light.range) + ",casts_shadows:" +
-         bool_text(light.casts_shadows);
+         bool_text(light.casts_shadows) + ",falloff:" +
+         float_bits(light.distance_attenuation) + ",light_unit:" +
+         enum_text(light.light_unit) + ",color_mode:" +
+         enum_text(light.color_mode) + ",color_temperature_kelvin:" +
+         float_bits(light.color_temperature_kelvin) + ",source_preset:" +
+         enum_text(light.source_preset);
 }
 
 std::string capture_documents(const CaptureData &data) {
@@ -1294,6 +1300,7 @@ std::string capture_assets(const CaptureData &data) {
     writer.line(prefix + ".base_color", vec3_text(material->base_color));
     writer.line(prefix + ".roughness", float_bits(material->roughness));
     writer.line(prefix + ".metallic", float_bits(material->metallic));
+    writer.line(prefix + ".diffuse_model", enum_text(material->diffuse_model));
     writer.line(prefix + ".node_graph_reserved",
                 bool_text(material->node_graph_reserved));
     std::vector<std::pair<std::string, AssetId>> slots(

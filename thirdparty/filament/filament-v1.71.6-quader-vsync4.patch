@@ -7,7 +7,7 @@ index 6aeb05c..9fa2249 100644
  #define TNT_FILAMENT_BACKEND_DRIVERENUMS_H
  
 +// Quader's pinned presentation and lighting extension; rebuild headers and libraries together.
-+#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 3
++#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 4
 +
  #include <utils/unwindows.h> // Because we define ERROR in the FenceStatus enum.
  
@@ -697,3 +697,22 @@ index df015d7..bccc6f5 100644
      light.direction = direction;
      light.NoL = saturate(dot(shading_normal, light.l));
      light.worldPosition = positionFalloff.xyz;
+diff --git a/shaders/src/surface_shading_model_standard.fs b/shaders/src/surface_shading_model_standard.fs
+--- a/shaders/src/surface_shading_model_standard.fs
++++ b/shaders/src/surface_shading_model_standard.fs
+@@ -80,7 +80,15 @@ vec3 specularLobe(const PixelParams pixel, const Light light, const vec3 h,
+ }
+ 
+ vec3 diffuseLobe(const PixelParams pixel, float NoV, float NoL, float LoH) {
++#if defined(QUADER_HAS_DIFFUSE_MODEL)
++    // Opt-in material contract: Burley = 0, Lambert = 1.
++    float diffuseResponse = materialParams.diffuseModel == 1
++            ? Fd_Lambert()
++            : Fd_Burley(pixel.perceptualRoughness, NoV, NoL, LoH);
++    return pixel.diffuseColor * diffuseResponse;
++#else
+     return pixel.diffuseColor * diffuse(pixel.roughness, NoV, NoL, LoH);
++#endif
+ }
+ 
+ /**

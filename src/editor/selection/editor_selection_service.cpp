@@ -451,6 +451,10 @@ DocumentCommandResult
 EditorSelectionService::apply_runtime_scene_selection_state(
     SceneSelectionState selection, bool preserve_selection_mode) {
   const SceneSelectionState before = capture_scene_selection(scene_);
+  if (!same_scene_selection(before, selection)) {
+    const auto canceled = document_commands_.cancel_active_property_edit();
+    if (!canceled.ok) return canceled;
+  }
   const SceneModelingProjectionCheckpoint checkpoint =
       capture_scene_selection_checkpoint(scene_, before, selection);
   const bool changed =

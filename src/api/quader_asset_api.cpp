@@ -66,6 +66,7 @@ QuaderAssetApi::add_material(const QuaderMaterialArgs &args) {
   material.base_color = args.base_color;
   material.roughness = args.roughness;
   material.metallic = args.metallic;
+  material.diffuse_model = args.diffuse_model;
   return add_material(std::move(material));
 }
 

@@ -15,6 +15,7 @@
 #include "editor/session/project_session.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "scene/light_properties.hpp"
 #include "ui/inspector_panel.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_double_spin_box.hpp"
@@ -3706,7 +3707,7 @@ TEST(InspectorPanelTests,
 }
 
 TEST(InspectorPanelTests,
-     CameraExposureToggleRetainsValuesAndUpdatesControlsAcrossUndoRedo) {
+     CameraClipEditsPreserveInactivePhotographicMetadata) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-inspector-exposure-tests";
@@ -3720,7 +3721,7 @@ TEST(InspectorPanelTests,
   const EntityId root = session.scene().scene_root();
   QuaderSceneSettings settings =
       to_api_scene_settings(*session.scene().scene_settings(root));
-  ASSERT_TRUE(settings.camera.use_exposure);
+  settings.camera.use_exposure = true;
   settings.camera.aperture = 4.0f;
   settings.camera.shutter_speed = 0.01f;
   settings.camera.sensitivity = 800.0f;
@@ -3747,18 +3748,16 @@ TEST(InspectorPanelTests,
   };
   InspectorPanel panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
-  const auto expect_controls = [&](bool enabled) {
+  const auto expect_controls = [&]() {
     panel.refresh(context);
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     const auto *toggle = panel.findChild<QCheckBox *>(
         QStringLiteral("inspector.camera.use_exposure"));
-    ASSERT_NE(toggle, nullptr);
-    EXPECT_EQ(toggle->isChecked(), enabled);
+    EXPECT_EQ(toggle, nullptr);
     for (const char *name : {"aperture", "shutter", "sensitivity"}) {
       const auto *input = panel.findChild<QDoubleSpinBox *>(
           QStringLiteral("inspector.camera.") + QString::fromLatin1(name));
-      ASSERT_NE(input, nullptr);
-      EXPECT_EQ(input->isEnabled(), enabled) << name;
+      EXPECT_EQ(input, nullptr) << name;
     }
     for (const char *name : {"near", "far"}) {
       const auto *input = panel.findChild<QDoubleSpinBox *>(
@@ -3768,21 +3767,30 @@ TEST(InspectorPanelTests,
     }
     const SceneCameraSettings &camera =
         session.scene().scene_settings(root)->camera;
-    EXPECT_EQ(camera.use_exposure, enabled);
+    EXPECT_EQ(camera.use_exposure, settings.camera.use_exposure);
     EXPECT_FLOAT_EQ(camera.aperture, settings.camera.aperture);
     EXPECT_FLOAT_EQ(camera.shutter_speed, settings.camera.shutter_speed);
     EXPECT_FLOAT_EQ(camera.sensitivity, settings.camera.sensitivity);
   };
-  expect_controls(true);
-  auto *toggle = panel.findChild<QCheckBox *>(
-      QStringLiteral("inspector.camera.use_exposure"));
-  ASSERT_NE(toggle, nullptr);
-  toggle->click();
-  expect_controls(false);
+  session.mark_clean();
+  const std::size_t undo_count = session.history().undo_count();
+  expect_controls();
+  EXPECT_FALSE(session.dirty());
+  EXPECT_EQ(session.history().undo_count(), undo_count);
+  auto *near_plane = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("inspector.camera.near"));
+  ASSERT_NE(near_plane, nullptr);
+  near_plane->setValue(1.25);
+  near_plane->editingFinished();
+  expect_controls();
+  EXPECT_FLOAT_EQ(session.scene().scene_settings(root)->camera.near_plane, 1.25f);
   ASSERT_TRUE(editor.history().undo().ok());
-  expect_controls(true);
+  expect_controls();
+  EXPECT_FLOAT_EQ(session.scene().scene_settings(root)->camera.near_plane,
+                  settings.camera.near_plane);
   ASSERT_TRUE(editor.history().redo().ok());
-  expect_controls(false);
+  expect_controls();
+  EXPECT_FLOAT_EQ(session.scene().scene_settings(root)->camera.near_plane, 1.25f);
 }
 
 TEST(InspectorPanelTests,
@@ -3830,16 +3838,21 @@ TEST(InspectorPanelTests,
       history_label(session.history().undo_label());
   const std::optional<std::string> light_redo_before =
       history_label(session.history().redo_label());
+  const QColor committed_light_color = QColor::fromRgb(31, 127, 223);
+  const QVec3 expected_light_color = light_srgb_to_linear(
+      {static_cast<float>(committed_light_color.redF()),
+       static_cast<float>(committed_light_color.greenF()),
+       static_cast<float>(committed_light_color.blueF())});
   session.mark_clean();
   ASSERT_TRUE(reject_color_picker(
       panel, *light_swatch, QStringLiteral("inspector.light.color.dialog"),
-      QColor::fromRgb(31, 127, 223), [&]() {
+      committed_light_color, [&]() {
         const LightComponent *during = session.scene().light(light.value().id);
         EXPECT_NE(during, nullptr);
         if (during != nullptr) {
-          EXPECT_FLOAT_EQ(during->color.x, initial_light.color.x);
-          EXPECT_FLOAT_EQ(during->color.y, initial_light.color.y);
-          EXPECT_FLOAT_EQ(during->color.z, initial_light.color.z);
+          EXPECT_FLOAT_EQ(during->color.x, expected_light_color.x);
+          EXPECT_FLOAT_EQ(during->color.y, expected_light_color.y);
+          EXPECT_FLOAT_EQ(during->color.z, expected_light_color.z);
         }
         EXPECT_FALSE(session.dirty());
         EXPECT_EQ(history_label(session.history().undo_label()),
@@ -3856,19 +3869,15 @@ TEST(InspectorPanelTests,
   EXPECT_EQ(history_label(session.history().undo_label()), light_undo_before);
   EXPECT_EQ(history_label(session.history().redo_label()), light_redo_before);
 
-  const QColor committed_light_color = QColor::fromRgb(31, 127, 223);
   ASSERT_TRUE(accept_color_picker(
       panel, *light_swatch, QStringLiteral("inspector.light.color.dialog"),
       committed_light_color));
   const LightComponent *committed_light =
       session.scene().light(light.value().id);
   ASSERT_NE(committed_light, nullptr);
-  EXPECT_NEAR(committed_light->color.x,
-              static_cast<float>(committed_light_color.redF()), 0.00001f);
-  EXPECT_NEAR(committed_light->color.y,
-              static_cast<float>(committed_light_color.greenF()), 0.00001f);
-  EXPECT_NEAR(committed_light->color.z,
-              static_cast<float>(committed_light_color.blueF()), 0.00001f);
+  EXPECT_FLOAT_EQ(committed_light->color.x, expected_light_color.x);
+  EXPECT_FLOAT_EQ(committed_light->color.y, expected_light_color.y);
+  EXPECT_FLOAT_EQ(committed_light->color.z, expected_light_color.z);
   EXPECT_TRUE(session.dirty());
   EXPECT_EQ(history_label(session.history().undo_label()),
             std::optional<std::string>("Set Light Component"));
@@ -3889,21 +3898,22 @@ TEST(InspectorPanelTests,
       history_label(session.history().undo_label());
   const std::optional<std::string> scene_redo_before =
       history_label(session.history().redo_label());
+  const QColor committed_scene_color = QColor::fromRgb(211, 83, 47);
   session.mark_clean();
   ASSERT_TRUE(reject_color_picker(
       panel, *clear_color_swatch,
       QStringLiteral("inspector.environment.clear_color.dialog"),
-      QColor::fromRgb(211, 83, 47), [&]() {
+      committed_scene_color, [&]() {
         const SceneSettingsComponent *during =
             session.scene().scene_settings(root);
         EXPECT_NE(during, nullptr);
         if (during != nullptr) {
           EXPECT_FLOAT_EQ(during->environment.clear_color.x,
-                          initial_scene.environment.clear_color.x);
+                          static_cast<float>(committed_scene_color.redF()));
           EXPECT_FLOAT_EQ(during->environment.clear_color.y,
-                          initial_scene.environment.clear_color.y);
+                          static_cast<float>(committed_scene_color.greenF()));
           EXPECT_FLOAT_EQ(during->environment.clear_color.z,
-                          initial_scene.environment.clear_color.z);
+                          static_cast<float>(committed_scene_color.blueF()));
         }
         EXPECT_FALSE(session.dirty());
         EXPECT_EQ(history_label(session.history().undo_label()),
@@ -3924,7 +3934,6 @@ TEST(InspectorPanelTests,
   EXPECT_EQ(history_label(session.history().undo_label()), scene_undo_before);
   EXPECT_EQ(history_label(session.history().redo_label()), scene_redo_before);
 
-  const QColor committed_scene_color = QColor::fromRgb(211, 83, 47);
   ASSERT_TRUE(accept_color_picker(
       panel, *clear_color_swatch,
       QStringLiteral("inspector.environment.clear_color.dialog"),

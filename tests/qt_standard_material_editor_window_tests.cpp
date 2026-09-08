@@ -12,6 +12,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDoubleSpinBox>
@@ -78,6 +79,87 @@ public:
 
 QColor icon_center_color(const QIcon &icon) {
   return icon.pixmap(QSize(16, 16)).toImage().pixelColor(8, 8);
+}
+
+TEST(QtStandardMaterialEditorWindowTests,
+     DiffuseModelIsRetainedLocalizedAndSeparateFromPreviewShading) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-material-diffuse-model";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QtStandardMaterialEditorWindow window;
+  QPointer<QComboBox> diffuse = window.findChild<QComboBox *>(
+      QStringLiteral("standardMaterialEditor.diffuseModel"));
+  auto *shading = window.findChild<QComboBox *>(
+      QStringLiteral("standardMaterialEditor.previewShading"));
+  ASSERT_NE(diffuse, nullptr);
+  ASSERT_NE(shading, nullptr);
+  EXPECT_NE(diffuse.data(), shading);
+  EXPECT_FALSE(diffuse->isEnabled());
+  EXPECT_EQ(diffuse->count(), 2);
+  EXPECT_EQ(diffuse->currentData().toInt(), static_cast<int>(QtStandardMaterialDiffuseModel::Burley));
+  EXPECT_EQ(diffuse->accessibleName(), QStringLiteral("Diffuse Model"));
+  EXPECT_EQ(diffuse->itemText(0), QStringLiteral("Burley"));
+  EXPECT_EQ(diffuse->itemText(1), QStringLiteral("Lambert"));
+
+  QtStandardMaterialEditorDocument document;
+  document.stable_id = QStringLiteral("diffuse-model-document");
+  document.session_generation = 1u;
+  document.name = QStringLiteral("Diffuse Model Test");
+  std::vector<QtStandardMaterialDiffuseModel> edits;
+  window.set_diffuse_model_edited_callback([&](QtStandardMaterialDiffuseModel model) {
+    edits.push_back(model);
+    document.diffuse_model = model;
+    document.dirty = true;
+    window.set_document(document);
+  });
+  window.set_document(document);
+  EXPECT_TRUE(diffuse->isEnabled());
+  const int previous_shading = shading->currentIndex();
+  const int lambert = diffuse->findData(static_cast<int>(QtStandardMaterialDiffuseModel::Lambert));
+  ASSERT_GE(lambert, 0);
+  diffuse->setCurrentIndex(lambert);
+  diffuse->activated(lambert);
+  ASSERT_EQ(edits.size(), 1u);
+  EXPECT_EQ(edits.front(), QtStandardMaterialDiffuseModel::Lambert);
+  EXPECT_EQ(document.diffuse_model, QtStandardMaterialDiffuseModel::Lambert);
+  EXPECT_EQ(shading->currentIndex(), previous_shading);
+  EXPECT_EQ(window.preview_shading(), QtStandardMaterialPreviewShading::Rendered);
+  ASSERT_NE(diffuse, nullptr);
+  EXPECT_EQ(window.findChild<QComboBox *>(
+                QStringLiteral("standardMaterialEditor.diffuseModel")), diffuse.data());
+
+  int value_signals = 0;
+  QObject::connect(diffuse.data(), &QComboBox::currentIndexChanged,
+                   [&](int) { ++value_signals; });
+  window.set_document(document);
+  EXPECT_EQ(value_signals, 0);
+  EXPECT_EQ(edits.size(), 1u);
+  QtStandardMaterialEditorLabels labels;
+  labels.diffuse_model = QStringLiteral("Modello diffuso");
+  labels.diffuse_burley = QStringLiteral("Burley locale");
+  labels.diffuse_lambert = QStringLiteral("Lambert locale");
+  window.set_labels(labels);
+  ASSERT_NE(diffuse, nullptr);
+  EXPECT_EQ(diffuse->accessibleName(), labels.diffuse_model);
+  EXPECT_EQ(diffuse->itemText(0), labels.diffuse_burley);
+  EXPECT_EQ(diffuse->itemText(1), labels.diffuse_lambert);
+  EXPECT_EQ(diffuse->currentData().toInt(), static_cast<int>(QtStandardMaterialDiffuseModel::Lambert));
+  EXPECT_EQ(edits.size(), 1u);
+  EXPECT_EQ(value_signals, 0);
+
+  document.session_generation = 2u;
+  document.diffuse_model = QtStandardMaterialDiffuseModel::Burley;
+  document.dirty = false;
+  window.set_document(document);
+  ASSERT_NE(diffuse, nullptr);
+  EXPECT_EQ(diffuse->currentData().toInt(), static_cast<int>(QtStandardMaterialDiffuseModel::Burley));
+  EXPECT_EQ(edits.size(), 1u);
+  window.clear_document();
+  EXPECT_FALSE(diffuse->isEnabled());
+  EXPECT_EQ(edits.size(), 1u);
 }
 
 TEST(QtStandardMaterialEditorWindowTests,
@@ -911,6 +993,209 @@ TEST(QtStandardMaterialEditorWindowTests,
   EXPECT_TRUE(close_request_saw_latest_edit)
       << "dirty-close resolution must run after the pending edit is applied";
   EXPECT_FALSE(scale_v_timer->isActive());
+}
+
+TEST(QtStandardMaterialEditorWindowTests,
+     AlbedoPickerDispatchesLiveColorsBeforeAcceptAndSupportsCancel) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-material-live-color-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  application.setQuitOnLastWindowClosed(false);
+
+  QWidget owner;
+  auto *window = new QtStandardMaterialEditorWindow(&owner);
+  window->setAttribute(Qt::WA_DontShowOnScreen, true);
+  QtStandardMaterialEditorDocument document{
+      .stable_id = QStringLiteral("live-color-material"),
+      .name = QStringLiteral("Live Color"),
+      .albedo = QColor(30, 60, 90),
+  };
+  window->set_document(document);
+  auto *button = static_cast<QtColorSwatchButton *>(
+      window->findChild<QPushButton *>(
+          QStringLiteral("standardMaterialEditor.albedo")));
+  ASSERT_NE(button, nullptr);
+  int begin_count = 0;
+  QColor original_color;
+  bool original_dirty = false;
+  std::vector<QColor> live_colors;
+  std::vector<bool> finishes;
+  window->set_albedo_preview_begin_callback([&]() {
+    ++begin_count;
+    original_color = document.albedo;
+    original_dirty = document.dirty;
+    return true;
+  });
+  window->set_albedo_edited_callback([&](QColor color) {
+    live_colors.push_back(color);
+    document.albedo = color;
+    window->set_document(document);
+  });
+  window->set_albedo_preview_finish_callback([&](bool accept) {
+    finishes.push_back(accept);
+    if (accept) {
+      document.dirty = original_dirty || document.albedo != original_color;
+    } else {
+      document.albedo = original_color;
+      document.dirty = original_dirty;
+    }
+    window->set_document(document);
+  });
+
+  const QColor accepted_color(100, 150, 200);
+  std::size_t live_count_before_accept = 0u;
+  QTimer::singleShot(0, window, [&]() {
+    auto *dialog = window->findChild<QColorDialog *>();
+    ASSERT_NE(dialog, nullptr);
+    EXPECT_TRUE(dialog->isVisible());
+    EXPECT_EQ(begin_count, 1);
+    dialog->setCurrentColor(QColor(70, 100, 130));
+    EXPECT_EQ(document.albedo, QColor(70, 100, 130));
+    EXPECT_TRUE(finishes.empty());
+    EXPECT_FALSE(document.dirty);
+    dialog->setCurrentColor(accepted_color);
+    EXPECT_EQ(document.albedo, accepted_color);
+    EXPECT_EQ(button->swatch_color(), accepted_color);
+    EXPECT_TRUE(finishes.empty());
+    live_count_before_accept = live_colors.size();
+    dialog->accept();
+  });
+  button->click();
+  EXPECT_EQ(document.albedo, accepted_color);
+  EXPECT_TRUE(document.dirty);
+  ASSERT_EQ(finishes.size(), 1u);
+  EXPECT_TRUE(finishes.front());
+  EXPECT_GE(live_count_before_accept, 2u);
+  EXPECT_EQ(live_colors.size(), live_count_before_accept)
+      << "acceptance must not dispatch the last color for a second edit";
+  EXPECT_EQ(window->findChild<QPushButton *>(
+                QStringLiteral("standardMaterialEditor.albedo")),
+            button);
+
+  QTimer::singleShot(0, window, [&]() {
+    auto *dialog = window->findChild<QColorDialog *>();
+    ASSERT_NE(dialog, nullptr);
+    EXPECT_EQ(dialog->currentColor(), accepted_color);
+    dialog->setCurrentColor(QColor(220, 100, 40));
+    EXPECT_EQ(document.albedo, QColor(220, 100, 40));
+    EXPECT_EQ(finishes.size(), 1u);
+    dialog->reject();
+  });
+  button->click();
+  EXPECT_EQ(begin_count, 2);
+  ASSERT_EQ(finishes.size(), 2u);
+  EXPECT_FALSE(finishes.back());
+  EXPECT_EQ(document.albedo, accepted_color);
+  EXPECT_EQ(button->swatch_color(), accepted_color);
+  EXPECT_TRUE(document.dirty);
+}
+
+TEST(QtStandardMaterialEditorWindowTests,
+     AlbedoPickerAbandonsCallbacksAcrossDocumentAndRuntimeBoundaries) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-material-color-lifecycle-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QWidget owner;
+  auto *window = new QtStandardMaterialEditorWindow(&owner);
+  window->setAttribute(Qt::WA_DontShowOnScreen, true);
+  const QtStandardMaterialEditorDocument first{
+      .stable_id = QStringLiteral("color-first"),
+      .session_generation = 1u,
+      .name = QStringLiteral("First"),
+      .albedo = QColor(25, 50, 75),
+  };
+  const QtStandardMaterialEditorDocument replacement{
+      .stable_id = QStringLiteral("color-replacement"),
+      .name = QStringLiteral("Replacement"),
+      .albedo = QColor(150, 175, 200),
+  };
+  QtStandardMaterialEditorDocument reopened = first;
+  reopened.session_generation = first.session_generation + 1u;
+  reopened.albedo = QColor(175, 125, 75);
+  auto *button = static_cast<QtColorSwatchButton *>(
+      window->findChild<QPushButton *>(
+          QStringLiteral("standardMaterialEditor.albedo")));
+  ASSERT_NE(button, nullptr);
+  int begin_count = 0;
+  int color_count = 0;
+  int finish_count = 0;
+  window->set_albedo_preview_begin_callback([&]() {
+    ++begin_count;
+    return true;
+  });
+  window->set_albedo_edited_callback([&](QColor) { ++color_count; });
+  window->set_albedo_preview_finish_callback([&](bool) { ++finish_count; });
+
+  for (int boundary = 0; boundary < 4; ++boundary) {
+    SCOPED_TRACE(boundary);
+    window->set_document(first);
+    const int colors_before = color_count;
+    QTimer::singleShot(0, window, [&]() {
+      auto *dialog = window->findChild<QColorDialog *>();
+      ASSERT_NE(dialog, nullptr);
+      // Owner-free abandonment preserves the last swatch presentation; use a
+      // fresh sample in each case so Qt emits an actual color-change signal.
+      const QColor next_color(50 + boundary * 20, 100, 150);
+      EXPECT_NE(dialog->currentColor(), next_color);
+      dialog->setCurrentColor(next_color);
+      EXPECT_GT(color_count, colors_before);
+      const int dispatched_colors = color_count;
+      if (boundary == 0) {
+        window->abandon_interactions();
+      } else if (boundary == 1) {
+        window->set_document(replacement);
+      } else if (boundary == 2) {
+        window->clear_document();
+      } else {
+        window->set_document(reopened);
+      }
+      EXPECT_FALSE(dialog->isVisible());
+      dialog->setCurrentColor(QColor(200, 100, 50));
+      EXPECT_EQ(color_count, dispatched_colors)
+          << "late picker signals must not reach an outgoing owner";
+      EXPECT_EQ(finish_count, 0);
+    });
+    button->click();
+    EXPECT_EQ(finish_count, 0)
+        << "abandonment must not invoke the outgoing finish callback";
+    if (boundary == 1) {
+      EXPECT_TRUE(window->has_document());
+      EXPECT_EQ(button->swatch_color(), replacement.albedo);
+    } else if (boundary == 2) {
+      EXPECT_FALSE(window->has_document());
+    } else if (boundary == 3) {
+      EXPECT_TRUE(window->has_document());
+      EXPECT_EQ(button->swatch_color(), reopened.albedo);
+    }
+  }
+  EXPECT_EQ(begin_count, 4);
+
+  window->set_document(first);
+  window->set_albedo_preview_begin_callback([&]() {
+    ++begin_count;
+    return false;
+  });
+  bool rejected_begin_opened_dialog = false;
+  const int colors_before_rejected_begin = color_count;
+  QTimer::singleShot(0, window, [&]() {
+    if (auto *dialog = window->findChild<QColorDialog *>()) {
+      rejected_begin_opened_dialog = true;
+      dialog->reject();
+    }
+  });
+  button->click();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(begin_count, 5);
+  EXPECT_FALSE(rejected_begin_opened_dialog);
+  EXPECT_EQ(color_count, colors_before_rejected_begin);
+  EXPECT_EQ(finish_count, 0);
 }
 
 } // namespace

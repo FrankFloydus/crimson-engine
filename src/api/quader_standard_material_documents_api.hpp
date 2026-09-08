@@ -8,6 +8,7 @@
 
 #include "api/quader_api_result.hpp"
 #include "api/quader_api_session.hpp"
+#include "api/quader_api_types.hpp"
 #include "io/project/project_types.hpp"
 
 #include <array>
@@ -91,6 +92,7 @@ struct QuaderStandardMaterialDefinition final {
   float normal_strength = 1.0f;
   QuaderNormalMapConvention normal_convention =
       QuaderNormalMapConvention::OpenGL;
+  QuaderMaterialDiffuseModel diffuse_model = QuaderMaterialDiffuseModel::Burley;
   QuaderStandardMaterialTextureTransform texture_transform;
   std::optional<QuaderStandardMaterialTextureReference> base_color_texture;
   std::optional<QuaderStandardMaterialTextureReference> roughness_texture;
@@ -179,6 +181,13 @@ public:
 
   QuaderApiVoidResult set_name(std::string name);
   QuaderApiVoidResult set_base_color(std::array<float, 3> color);
+  /// Starts a cancelable albedo preview bound to the current material session.
+  QuaderApiVoidResult begin_base_color_preview(MaterialEditSessionId session_id);
+  QuaderApiVoidResult update_base_color_preview(
+      MaterialEditSessionId session_id, std::array<float, 3> color);
+  /// Accept retains the draft preview; Cancel restores only the albedo field.
+  QuaderApiVoidResult finish_base_color_preview(MaterialEditSessionId session_id,
+                                               bool accept);
   QuaderApiVoidResult set_roughness(float value);
   QuaderApiVoidResult set_metallic(float value);
   QuaderApiVoidResult set_normal_strength(float value);
@@ -186,6 +195,7 @@ public:
                                  float value);
   QuaderApiVoidResult
   set_normal_convention(QuaderNormalMapConvention convention);
+  QuaderApiVoidResult set_diffuse_model(QuaderMaterialDiffuseModel model);
   QuaderApiVoidResult set_texture_transform(
       QuaderStandardMaterialTextureTransform transform);
   QuaderApiVoidResult set_texture_transform_component(

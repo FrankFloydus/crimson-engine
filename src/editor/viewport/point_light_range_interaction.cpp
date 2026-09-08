@@ -30,15 +30,63 @@ std::optional<float> plane_coordinate(const ViewportCameraController &camera,
 
 } // namespace
 
+std::optional<ViewportSceneBillboardPickCandidate>
+PointLightRangeInteraction::pick_handle(const ViewportInteractionFrame &frame,
+                                       QVec2 local) {
+  if (frame.scene_billboard_pick_candidates.empty()) {
+    pick_cache_valid_ = false;
+    return std::nullopt;
+  }
+  const auto pose = frame.camera.pose();
+  const auto &state = frame.camera.state();
+  const auto viewport = frame.camera.viewport_size();
+  const std::array<float, 17> camera{
+      pose.eye.x, pose.eye.y, pose.eye.z, pose.target.x, pose.target.y,
+      pose.target.z, pose.up.x, pose.up.y, pose.up.z,
+      static_cast<float>(state.projection), state.orthographic_size,
+      state.fov_degrees, state.near_plane, state.far_plane,
+      viewport.x, viewport.y, frame.viewport_pixel_scale};
+  if (pick_cache_valid_ && frame.scene_billboard_pick_revision != 0 &&
+      pick_revision_ == frame.scene_billboard_pick_revision &&
+      pick_camera_ == camera && pick_local_.x == local.x &&
+      pick_local_.y == local.y &&
+      pick_candidate_count_ == frame.scene_billboard_pick_candidates.size()) {
+    return picked_handle_;
+  }
+  ++hover_pick_count_;
+  pick_cache_valid_ = true;
+  pick_revision_ = frame.scene_billboard_pick_revision;
+  pick_camera_ = camera;
+  pick_local_ = local;
+  pick_candidate_count_ = frame.scene_billboard_pick_candidates.size();
+  picked_handle_.reset();
+  const QVec3 normal = normalize(pose.target - pose.eye);
+  const QVec3 right = normalize(cross(normal, pose.up));
+  const float radius = 10.0f * viewport_sanitized_pixel_scale(frame.viewport_pixel_scale);
+  double nearest = static_cast<double>(radius * radius);
+  for (const auto &candidate : frame.scene_billboard_pick_candidates) {
+    if (!candidate.point_light_range || !candidate.selectable ||
+        candidate.effectively_locked || !std::isfinite(*candidate.point_light_range)) continue;
+    const auto tip = frame.camera.project_world_point(
+        candidate.position + right * std::max(*candidate.point_light_range, 0.001f));
+    if (!tip.visible) continue;
+    const double distance = viewport_pointer_distance_squared(tip.position, local);
+    if (distance <= nearest) {
+      nearest = distance;
+      picked_handle_ = candidate;
+    }
+  }
+  return picked_handle_;
+}
+
 bool PointLightRangeInteraction::handle_frame(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame) {
   left_down_ = frame.left_down;
+  hovered_ = false;
   if (release_suppression_.consume(QuaderMouseButton::Left, frame.left_pressed,
                                     frame.left_down, frame.left_released)) {
     return true;
   }
-  if (!gesture_ && !frame.left_pressed) return false;
-
   const bool allowed = frame.settings.bool_value(ViewportBoolSettingId::ShowGizmos) &&
       frame.settings.bool_value(ViewportBoolSettingId::ShowOverlays) &&
       editor.preferences().overlays_visible() &&
@@ -64,22 +112,11 @@ bool PointLightRangeInteraction::handle_frame(
     if (!frame.input.viewport_hovered) return false;
     const auto pose = frame.camera.pose();
     const QVec3 normal = normalize(pose.target - pose.eye);
-    const QVec3 right = normalize(cross(normal, pose.up));
-    const float pick_radius = 10.0f * viewport_sanitized_pixel_scale(frame.viewport_pixel_scale);
-    const ViewportSceneBillboardPickCandidate *picked = nullptr;
-    double nearest = static_cast<double>(pick_radius * pick_radius);
-    for (const auto &candidate : frame.scene_billboard_pick_candidates) {
-      if (!candidate.point_light_range || !candidate.selectable ||
-          candidate.effectively_locked || !std::isfinite(*candidate.point_light_range)) continue;
-      const auto tip = frame.camera.project_world_point(
-          candidate.position + right * std::max(*candidate.point_light_range, 0.001f));
-      if (!tip.visible) continue;
-      const double distance = viewport_pointer_distance_squared(tip.position, frame.left_click_local);
-      if (distance <= nearest) {
-        nearest = distance;
-        picked = &candidate;
-      }
-    }
+    const auto picked = pick_handle(frame, frame.left_pressed
+                                              ? frame.left_click_local
+                                              : frame.input.mouse_local);
+    hovered_ = picked.has_value();
+    if (!frame.left_pressed) return false;
     const auto scene = editor.scene_documents().active_scene_id();
     if (!picked || !scene) return false;
     const auto coordinate = plane_coordinate(frame.camera, frame.left_click_local,
@@ -118,6 +155,7 @@ bool PointLightRangeInteraction::handle_frame(
     if (edit_) (void)editor.scene().finish_point_light_range_edit(*edit_);
     edit_.reset();
     gesture_.reset();
+    hovered_ = false;
   } else if (!frame.left_down && !frame.left_pressed) {
     (void)cancel(editor);
   }
@@ -125,6 +163,7 @@ bool PointLightRangeInteraction::handle_frame(
 }
 
 bool PointLightRangeInteraction::cancel(QuaderEditorApi &editor) {
+  hovered_ = false;
   if (!gesture_) return false;
   if (edit_) (void)editor.scene().finish_point_light_range_edit(*edit_, true);
   release_suppression_.begin(QuaderMouseButton::Left, left_down_);
@@ -134,6 +173,8 @@ bool PointLightRangeInteraction::cancel(QuaderEditorApi &editor) {
 }
 
 void PointLightRangeInteraction::reset(QuaderEditorApi *editor) {
+  hovered_ = false;
+  pick_cache_valid_ = false;
   if (editor) (void)cancel(*editor);
   else {
     if (gesture_) release_suppression_.begin(QuaderMouseButton::Left, left_down_);

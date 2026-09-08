@@ -218,6 +218,7 @@ ViewportInteractionController::handle_before_active_tool_impl(
     ViewportCurveInteractionPort *curve,
     NativeViewportToolCoordinator *native_tools) {
   QDR_PROFILE_FUNCTION();
+  interaction_cursor_ = ViewportPointerCursor::Default;
   if (!point_light_range_.pointer_active()) {
     if (const auto transfer =
             reserve_face_texture_transfer(editor, frame, native_tools)) {
@@ -237,12 +238,19 @@ ViewportInteractionController::handle_before_active_tool_impl(
   }
   if (!transform_gizmo_.pointer_interaction_active() &&
       point_light_range_.handle_frame(editor, prepared)) {
+    interaction_cursor_ = point_light_range_.pointer_cursor();
     selection_.cancel_pending_click();
     return {.selection_after_pending_pick = resolved_selection,
             .gizmo_consumed = true};
   }
   ViewportBeforeToolInteractionResult result =
       transform_gizmo_.handle_frame(editor, prepared, curve);
+  interaction_cursor_ = result.gizmo_consumed ||
+                                transform_gizmo_.pointer_interaction_active() ||
+                                point_light_range_.pointer_cursor() ==
+                                    ViewportPointerCursor::Default
+                            ? transform_gizmo_.pointer_cursor()
+                            : point_light_range_.pointer_cursor();
   result.selection_after_pending_pick = resolved_selection;
   return result;
 }
@@ -839,6 +847,7 @@ void ViewportInteractionController::set_primitive_creation_decrement(bool decrem
 
 bool ViewportInteractionController::cancel_active_drag(
     QuaderEditorApi &editor) {
+  interaction_cursor_ = ViewportPointerCursor::Default;
   if (point_light_range_.cancel(editor)) return true;
   if (primitive_creation_pointer_active()) {
     const auto cube = editor.tools().live_primitive_creation();
@@ -854,6 +863,7 @@ bool ViewportInteractionController::cancel_active_drag(
 
 bool ViewportInteractionController::cancel_active_drag(
     QuaderEditorApi &editor, NativeViewportToolCoordinator &native_tools) {
+  interaction_cursor_ = ViewportPointerCursor::Default;
   if (primitive_creation_pointer_active()) return cancel_active_drag(editor);
   if (point_light_range_.cancel(editor)) return true;
   return transform_gizmo_.cancel_active_drag(
@@ -871,6 +881,7 @@ bool ViewportInteractionController::transform_gizmo_pointer_active() const {
 }
 
 void ViewportInteractionController::reset(QuaderEditorApi *editor) {
+  interaction_cursor_ = ViewportPointerCursor::Default;
   point_light_range_.reset(editor);
   transform_gizmo_.reset(editor);
   selection_.reset();
@@ -880,6 +891,7 @@ void ViewportInteractionController::reset(QuaderEditorApi *editor) {
 
 void ViewportInteractionController::reset(
     QuaderEditorApi *editor, NativeViewportToolCoordinator &native_tools) {
+  interaction_cursor_ = ViewportPointerCursor::Default;
   point_light_range_.reset(editor);
   transform_gizmo_.reset(editor, &native_tools.curve_interaction());
   selection_.reset();
@@ -965,7 +977,8 @@ bool ViewportInteractionController::active_tool_uses_editor_native_lifecycle(
 ViewportPointerCursor
 ViewportInteractionController::active_tool_pointer_cursor(
     ViewportToolId tool) const {
-  return tool_runtime_.tool_pointer_cursor(tool);
+  return interaction_cursor_ != ViewportPointerCursor::Default
+             ? interaction_cursor_ : tool_runtime_.tool_pointer_cursor(tool);
 }
 
 bool ViewportInteractionController::has_active_modal_preview(
@@ -986,14 +999,17 @@ ViewportInteractionController::active_tool(ViewportToolId tool) {
 
 bool ViewportInteractionController::set_active_tool(
     ViewportToolState &state, ViewportToolId tool, ViewportInputResult *result) {
+  interaction_cursor_ = ViewportPointerCursor::Default;
   return tool_runtime_.set_active_tool(state, tool, result);
 }
 
 void ViewportInteractionController::clear_modal_tool_state() {
+  interaction_cursor_ = ViewportPointerCursor::Default;
   tool_runtime_.clear_modal_tool_state();
 }
 
 void ViewportInteractionController::clear_modal_drag_state() {
+  interaction_cursor_ = ViewportPointerCursor::Default;
   tool_runtime_.clear_modal_drag_state();
 }
 
@@ -1028,6 +1044,7 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
     ViewportPointPlacementService *point_placement,
     ViewportCameraController &camera,
     const ViewportToolPointerLifecycleFrame &frame) {
+  interaction_cursor_ = ViewportPointerCursor::Default;
   ViewportToolPointerLifecycleResult output;
   ViewportInteractionFrame interaction = frame.interaction;
   const bool light_range_prepass = point_light_range_.pointer_active();
@@ -1079,6 +1096,10 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
   }
 
   ViewportNativeToolInteractionFrame native_frame = frame.native_tool;
+  native_frame.handles_visible =
+      interaction.settings.bool_value(ViewportBoolSettingId::ShowGizmos);
+  native_frame.scene_surface_revision =
+      interaction.scene_surfaces ? interaction.scene_surfaces->revision() : 0;
   native_frame.viewport_pixel_scale = interaction.viewport_pixel_scale;
   native_frame.select_backfaces = interaction.settings.bool_value(
       ViewportBoolSettingId::BackfaceSelection);
@@ -1115,6 +1136,12 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
             ? ViewportBeforeToolInteractionResult{.gizmo_consumed = true}
             : handle_before_active_tool_impl(editor, interaction, curve,
                                              &native_tools);
+  }
+  if (native_tools.pointer_cursor() != ViewportPointerCursor::Default &&
+      (!output.before_tool.gizmo_consumed ||
+       (!light_range_prepass && !output.curve_gizmo_prepass &&
+        output.native_tool.blocks_transform_gizmo))) {
+    interaction_cursor_ = native_tools.pointer_cursor();
   }
   return output;
 }

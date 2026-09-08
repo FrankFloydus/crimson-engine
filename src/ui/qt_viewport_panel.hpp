@@ -262,7 +262,9 @@ private:
   std::vector<ViewportSceneBillboardPickCandidate>
       point_light_pick_cached_candidates_;
   bool point_light_pick_cache_valid_ = false;
+  std::uint64_t point_light_pick_generation_ = 0;
   ViewportPaneId interaction_pane_id_ = ViewportPaneId::Perspective;
+  std::optional<ViewportPaneId> pointer_cursor_pane_;
   std::array<SplitHandleHost, 2> split_handles_;
   ViewportSplitHandleId active_split_handle_ =
       ViewportSplitHandleId::TwoHorizontal;

@@ -14,6 +14,7 @@
 #include "io/qdr/qdr_binary_container.hpp"
 #include "io/qdr/qdr_project_write_snapshot.hpp"
 #include "scene/document/scene_content_document.hpp"
+#include "scene/light_properties.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -30,6 +31,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -51,6 +53,15 @@ namespace {
 
 constexpr char kFirstScene[] = "11111111-1111-4111-8111-111111111111";
 constexpr char kSecondScene[] = "22222222-2222-4222-8222-222222222222";
+constexpr char kLightingScene[] = "12121212-1212-4212-8212-121212121212";
+constexpr char kCalibrationScene[] = "13131313-1313-4313-8313-131313131313";
+constexpr std::array<LightType, 3> kLightShapes{
+    LightType::Directional, LightType::Point, LightType::Spot};
+constexpr std::array<std::string_view, 3> kLightShapeNames{
+    "Directional", "Point", "Spot"};
+constexpr std::array<std::string_view, 3> kLightShapeSlugs{
+    "directional", "point", "spot"};
+constexpr std::array<float, 3> kCalibrationIntensities{1.0f, 16.0f, 32.0f};
 constexpr char kProjectMaterial[] = "33333333-3333-4333-8333-333333333333";
 constexpr char kTexture[] = "44444444-4444-4444-8444-444444444444";
 constexpr char kNormalTexture[] = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
@@ -169,6 +180,66 @@ SceneContentDocument make_document(bool mixed_materials = false,
   }
   EXPECT_TRUE(document.scene().set_material(entity, std::move(binding)));
   return document;
+}
+
+/// Creates deterministic authored lights independently of any renderer mapping.
+SceneContentDocument make_lighting_document(std::span<const float> intensities,
+                                            float falloff, bool calibration) {
+  SceneContentDocument document({.id = 8u, .name = "Lighting calibration"});
+  auto &scene = document.scene();
+  SceneSettingsComponent settings;
+  settings.environment.enabled = false;
+  settings.environment.show_background = false;
+  settings.environment.clear_color = {0.0f, 0.0f, 0.0f};
+  EXPECT_TRUE(scene.set_scene_settings(scene.scene_root(), settings));
+  EntityId id = 300u;
+  for (std::size_t shape = 0u; shape < kLightShapes.size(); ++shape) {
+    for (const float intensity : intensities) {
+      const std::string name = calibration
+          ? "calibration-" + std::string(kLightShapeSlugs[shape]) + "-" +
+                std::to_string(static_cast<int>(intensity))
+          : std::string(kLightShapeNames[shape]) +
+                std::to_string(static_cast<int>(intensity));
+      EXPECT_EQ(scene.create_entity_with_id(id, name, EntityKind::Light), id);
+      LightComponent light;
+      light.type = kLightShapes[shape];
+      light.color = {1.0f, 1.0f, 1.0f};
+      light.intensity = intensity;
+      light.range = 12.0f;
+      light.distance_attenuation = falloff;
+      light.casts_shadows = false;
+      EXPECT_TRUE(scene.set_light(id, light));
+      EXPECT_TRUE(scene.set_transform(id, TransformComponent{.position = {0, 3, 0}}));
+      ++id;
+    }
+  }
+  return document;
+}
+
+/// Publishes fixture metadata consumed by the maintained Godot import checks.
+nlohmann::ordered_json lighting_expectations(const SceneContentDocument &document) {
+  auto result = nlohmann::ordered_json::array();
+  for (const EntityId entity : document.scene().entity_tree_order()) {
+    const auto *light = document.scene().light(entity);
+    if (light == nullptr) continue;
+    const auto engine = light_engine_values(*light);
+    result.push_back({
+        {"name", document.scene().name(entity)->name},
+        {"entity", entity}, {"type", static_cast<int>(light->type)},
+        {"color", {light->color.x, light->color.y, light->color.z}},
+        {"intensity", light->intensity}, {"range", light->range},
+        {"falloff", light->distance_attenuation},
+        {"casts_shadows", light->casts_shadows},
+        {"light_unit", static_cast<int>(light->light_unit)},
+        {"color_mode", static_cast<int>(light->color_mode)},
+        {"temperature_kelvin", light->color_temperature_kelvin},
+        {"source_preset", static_cast<int>(light->source_preset)},
+        {"preview_energy", engine.preview_energy},
+        {"illuminance_lux", engine.illuminance_lux},
+        {"luminous_intensity_candela", engine.luminous_intensity_candela},
+    });
+  }
+  return result;
 }
 
 /// Exercises the public reader ABI against disposable canonical native files.
@@ -326,6 +397,9 @@ TEST_F(BridgeReaderTests, RejectsUnsupportedAbiAndInvalidArguments) {
   EXPECT_EQ(quader_bridge_get_api(0u), nullptr);
   EXPECT_EQ(quader_bridge_get_api(1u), nullptr);
   EXPECT_EQ(quader_bridge_get_api(2u), nullptr);
+  EXPECT_EQ(quader_bridge_get_api(3u), nullptr);
+  EXPECT_EQ(quader_bridge_get_api(4u), nullptr);
+  EXPECT_EQ(quader_bridge_get_api(5u), nullptr);
   EXPECT_EQ(quader_bridge_get_api(QUADER_BRIDGE_ABI_VERSION + 1u), nullptr);
   EXPECT_EQ(api_->abi_version, QUADER_BRIDGE_ABI_VERSION);
   EXPECT_EQ(api_->struct_size, sizeof(QuaderBridgeApi));
@@ -447,31 +521,154 @@ TEST_F(BridgeReaderTests, CatalogUsesSavedActiveSceneAndFallsBackToFirst) {
   EXPECT_EQ(view.default_scene_index, 1u);
 }
 
-TEST_F(BridgeReaderTests, SceneViewExportsEffectiveCameraExposure) {
-  auto document = make_document();
-  SceneSettingsComponent settings;
+TEST_F(BridgeReaderTests, SceneViewUsesFixedExposureDespiteAuthoredCameraChanges) {
+  auto document = make_lighting_document(std::array{16.0f}, 1.0f, false);
+  SceneSettingsComponent settings = *document.scene().scene_settings(document.scene().scene_root());
   settings.camera.aperture = 8.0f;
   settings.camera.shutter_speed = 0.02f;
   settings.camera.sensitivity = 400.0f;
+  settings.camera.use_exposure = true;
   ASSERT_TRUE(document.scene().set_scene_settings(document.scene().scene_root(), settings));
   add_scene(kFirstScene, "Scenes/exposed.qdr", document);
+  settings.camera.aperture = 2.0f;
+  settings.camera.shutter_speed = 0.5f;
+  settings.camera.sensitivity = 1600.0f;
   settings.camera.use_exposure = false;
   ASSERT_TRUE(document.scene().set_scene_settings(document.scene().scene_root(), settings));
   add_scene(kSecondScene, "Scenes/unexposed.qdr", document);
   open_project();
+  std::array<QuaderBridgeLightView, 3> before{};
+  for (const char *id : {kFirstScene, kSecondScene}) {
+    open_scene(id);
+    QuaderBridgeSceneView view{};
+    ASSERT_EQ(api_->scene_view(scene_, &view, &error_), 1) << error_.message;
+    EXPECT_FLOAT_EQ(view.camera_aperture, 16.0f);
+    EXPECT_FLOAT_EQ(view.camera_shutter_seconds, 1.0f / 125.0f);
+    EXPECT_FLOAT_EQ(view.camera_iso, 100.0f);
+    ASSERT_EQ(view.light_count, 3u);
+    for (std::uint32_t index = 0u; index < view.light_count; ++index) {
+      QuaderBridgeLightView light{};
+      ASSERT_EQ(api_->light_view(scene_, index, &light, &error_), 1) << error_.message;
+      if (std::string_view(id) == kFirstScene) {
+        before[index] = light;
+      } else {
+        EXPECT_FLOAT_EQ(light.intensity, before[index].intensity);
+        EXPECT_FLOAT_EQ(light.preview_energy, before[index].preview_energy);
+        EXPECT_FLOAT_EQ(light.illuminance_lux, before[index].illuminance_lux);
+        EXPECT_FLOAT_EQ(light.luminous_intensity_candela,
+                        before[index].luminous_intensity_candela);
+      }
+    }
+    api_->release_scene(std::exchange(scene_, nullptr));
+  }
+}
+
+TEST_F(BridgeReaderTests, LightViewsUseOneCalibrationForEveryShapeAndLegacyUnit) {
+  SceneContentDocument document({.id = 8u, .name = "Light units"});
+  const std::array<LightUnit, 3> units{LightUnit::Simple, LightUnit::Lumens, LightUnit::Candela};
+  EntityId entity = 300u;
+  for (const auto shape : kLightShapes) {
+    for (const auto unit : units) {
+      for (const float intensity : kCalibrationIntensities) {
+        ASSERT_EQ(document.scene().create_entity_with_id(entity, "Legacy unit light", EntityKind::Light), entity);
+        LightComponent light;
+        light.type = shape;
+        light.intensity = intensity;
+        light.light_unit = unit;
+        light.range = 12.0f;
+        light.distance_attenuation = 2.0f;
+        ASSERT_TRUE(document.scene().set_light(entity++, light));
+      }
+    }
+  }
+  add_scene(kFirstScene, "Scenes/units.qdr", document);
+  open_project();
   open_scene();
   QuaderBridgeSceneView view{};
   ASSERT_EQ(api_->scene_view(scene_, &view, &error_), 1) << error_.message;
-  EXPECT_FLOAT_EQ(view.camera_aperture, 8.0f);
-  EXPECT_FLOAT_EQ(view.camera_shutter_seconds, 0.02f);
-  EXPECT_FLOAT_EQ(view.camera_iso, 400.0f);
+  ASSERT_EQ(view.light_count, 27u);
+  constexpr std::array<float, 3> expected_energy{0.0625f, 1.0f, 2.0f};
+  constexpr std::array<float, 3> expected_physical{7539.8223686f, 120637.1579f, 241274.3158f};
+  for (std::uint32_t index = 0u; index < view.light_count; ++index) {
+    QuaderBridgeLightView light{};
+    ASSERT_EQ(api_->light_view(scene_, index, &light, &error_), 1) << error_.message;
+    ASSERT_GE(light.entity, 300u);
+    const auto offset = static_cast<std::size_t>(light.entity - 300u);
+    const auto shape = offset / 9u;
+    const auto intensity = offset % 3u;
+    EXPECT_EQ(light.type, shape);
+    EXPECT_FLOAT_EQ(light.intensity, kCalibrationIntensities[intensity]);
+    EXPECT_FLOAT_EQ(light.preview_energy, expected_energy[intensity]);
+    EXPECT_FLOAT_EQ(light.illuminance_lux, shape == 0u ? expected_physical[intensity] : 0.0f);
+    EXPECT_FLOAT_EQ(light.luminous_intensity_candela,
+                    shape == 0u ? 0.0f : expected_physical[intensity]);
+    EXPECT_FLOAT_EQ(light.range, 12.0f);
+    EXPECT_FLOAT_EQ(light.distance_attenuation, 2.0f);
+  }
+  QuaderBridgeLightView invalid{};
+  EXPECT_EQ(api_->light_view(scene_, view.light_count, &invalid, &error_), 0);
+}
 
+TEST_F(BridgeReaderTests, ResolvedLightValuesSaturateWithoutChangingAuthoredIntensity) {
+  SceneContentDocument document({.id = 8u, .name = "Large light"});
+  EntityId entity = 300u;
+  for (const auto shape : kLightShapes) {
+    ASSERT_EQ(document.scene().create_entity_with_id(entity, "Large light", EntityKind::Light), entity);
+    LightComponent light;
+    light.type = shape;
+    light.intensity = std::numeric_limits<float>::max();
+    ASSERT_TRUE(document.scene().set_light(entity++, light));
+  }
+  add_scene(kFirstScene, "Scenes/large-lights.qdr", document);
+  open_project();
+  open_scene();
+  for (std::uint32_t index = 0u; index < 3u; ++index) {
+    QuaderBridgeLightView light{};
+    ASSERT_EQ(api_->light_view(scene_, index, &light, &error_), 1) << error_.message;
+    EXPECT_EQ(light.intensity, std::numeric_limits<float>::max());
+    EXPECT_FLOAT_EQ(light.preview_energy, std::numeric_limits<float>::max() / 16.0f);
+    const float physical = light.type == QUADER_BRIDGE_LIGHT_DIRECTIONAL
+        ? light.illuminance_lux : light.luminous_intensity_candela;
+    EXPECT_EQ(physical, std::numeric_limits<float>::max());
+  }
+}
+
+TEST_F(BridgeReaderTests, LightSnapshotsRemainDetachedFromLaterSourceEdits) {
+  auto document = make_lighting_document(std::array{16.0f}, 1.0f, false);
+  add_scene(kFirstScene, "Scenes/lights.qdr", document);
+  open_project();
+  open_scene();
+  QuaderBridgeLightView initial{};
+  ASSERT_EQ(api_->light_view(scene_, 0u, &initial, &error_), 1) << error_.message;
+  auto light = *document.scene().light(initial.entity);
+  light.intensity = 32.0f;
+  ASSERT_TRUE(document.scene().set_light(initial.entity, light));
+  auto settings = *document.scene().scene_settings(document.scene().scene_root());
+  settings.camera.use_exposure = false;
+  settings.camera.aperture = 2.0f;
+  ASSERT_TRUE(document.scene().set_scene_settings(document.scene().scene_root(), settings));
+  const auto snapshot = qdr_project_write_snapshot_from_document(document);
+  ASSERT_TRUE(snapshot.ok()) << snapshot.error().message;
+  const auto written = QdrDocumentWriter::write_project_document_atomic(
+      root_ / "Scenes/lights.qdr", snapshot.value(), scene_id(kFirstScene).bytes());
+  ASSERT_TRUE(written.ok) << written.message;
+  api_->release_project(std::exchange(project_, nullptr));
+  QuaderBridgeLightView retained{};
+  ASSERT_EQ(api_->light_view(scene_, 0u, &retained, &error_), 1) << error_.message;
+  EXPECT_STREQ(retained.name, "Directional16");
+  EXPECT_FLOAT_EQ(retained.intensity, 16.0f);
+  EXPECT_FLOAT_EQ(retained.preview_energy, 1.0f);
+  EXPECT_FLOAT_EQ(retained.illuminance_lux, initial.illuminance_lux);
+  EXPECT_EQ(retained.name, initial.name);
+  QuaderBridgeSceneView retained_scene{};
+  ASSERT_EQ(api_->scene_view(scene_, &retained_scene, &error_), 1);
+  EXPECT_FLOAT_EQ(retained_scene.camera_aperture, 16.0f);
   api_->release_scene(std::exchange(scene_, nullptr));
-  open_scene(kSecondScene);
-  ASSERT_EQ(api_->scene_view(scene_, &view, &error_), 1) << error_.message;
-  EXPECT_FLOAT_EQ(view.camera_aperture, 1.0f);
-  EXPECT_FLOAT_EQ(view.camera_shutter_seconds, 1.2f);
-  EXPECT_FLOAT_EQ(view.camera_iso, 100.0f);
+  open_project();
+  open_scene();
+  ASSERT_EQ(api_->light_view(scene_, 0u, &retained, &error_), 1) << error_.message;
+  EXPECT_FLOAT_EQ(retained.intensity, 32.0f);
+  EXPECT_FLOAT_EQ(retained.preview_energy, 2.0f);
 }
 
 TEST_F(BridgeReaderTests, SceneStorageSurvivesProjectRelease) {
@@ -669,6 +866,7 @@ TEST_F(BridgeReaderTests, MaterialMetadataDoesNotRequireTextureAndBlobOwnsBytes)
   EXPECT_FLOAT_EQ(material.metallic, 0.7f);
   EXPECT_FLOAT_EQ(material.normal_strength, 0.8f);
   EXPECT_EQ(material.normal_directx, 1u);
+  EXPECT_EQ(material.diffuse_model, QUADER_BRIDGE_MATERIAL_DIFFUSE_BURLEY);
   EXPECT_FLOAT_EQ(material.uv_center[0], 0.25f);
   EXPECT_FLOAT_EQ(material.uv_scale[1], -1.0f);
   EXPECT_FLOAT_EQ(material.uv_offset[1], -0.3f);
@@ -693,6 +891,108 @@ TEST_F(BridgeReaderTests, MaterialMetadataDoesNotRequireTextureAndBlobOwnsBytes)
   ASSERT_NE(blob.bytes, nullptr);
   EXPECT_EQ(std::string(reinterpret_cast<const char *>(blob.bytes),
                         static_cast<std::size_t>(blob.byte_count)), bytes);
+}
+
+TEST_F(BridgeReaderTests, DiffuseModelsPreserveProjectAndEmbeddedChoicesWithoutTextures) {
+  write_project_material();
+  write_project_material(kMissingMaterial);
+  const auto material_path = relative_path("Materials/surface.qmat");
+  auto decoded = QmatCodec::read(workspace_.file_system, material_path);
+  ASSERT_TRUE(decoded.ok()) << decoded.error().message;
+  decoded.value().material.standard_material()->diffuse_model =
+      MaterialDiffuseModel::Lambert;
+  ASSERT_TRUE(QmatCodec::write_atomic(workspace_.file_system, material_path,
+                                     decoded.value().material).ok());
+  add_scene(kFirstScene, "Scenes/first.qdr", make_document(true), kProjectMaterial);
+  auto second = make_document(true, kMissingMaterial);
+  ASSERT_TRUE(second.assets().update_material(20u, [](MaterialDocument &material) {
+    material.diffuse_model = MaterialDiffuseModel::Lambert;
+  }));
+  add_scene(kSecondScene, "Scenes/second.qdr", second, kMissingMaterial);
+  ASSERT_FALSE(std::filesystem::exists(root_ / "Textures/albedo.PNG"));
+  open_project();
+  open_scene();
+  QuaderBridgeMaterialView material{};
+  ASSERT_EQ(api_->material_view(scene_, material_index(QUADER_BRIDGE_MATERIAL_PROJECT),
+                                &material, &error_), 1) << error_.message;
+  EXPECT_EQ(material.diffuse_model, QUADER_BRIDGE_MATERIAL_DIFFUSE_LAMBERT);
+  ASSERT_EQ(api_->material_view(scene_, material_index(QUADER_BRIDGE_MATERIAL_EMBEDDED),
+                                &material, &error_), 1) << error_.message;
+  EXPECT_EQ(material.diffuse_model, QUADER_BRIDGE_MATERIAL_DIFFUSE_BURLEY);
+  api_->release_scene(std::exchange(scene_, nullptr));
+  open_scene(kSecondScene);
+  ASSERT_EQ(api_->material_view(scene_, material_index(QUADER_BRIDGE_MATERIAL_PROJECT),
+                                &material, &error_), 1) << error_.message;
+  EXPECT_EQ(material.diffuse_model, QUADER_BRIDGE_MATERIAL_DIFFUSE_BURLEY);
+  ASSERT_EQ(api_->material_view(scene_, material_index(QUADER_BRIDGE_MATERIAL_EMBEDDED),
+                                &material, &error_), 1) << error_.message;
+  EXPECT_EQ(material.diffuse_model, QUADER_BRIDGE_MATERIAL_DIFFUSE_LAMBERT);
+  EXPECT_FALSE(std::filesystem::exists(root_ / "Textures/albedo.PNG"));
+}
+
+TEST_F(BridgeReaderTests, DiffuseModelSnapshotsTrackTheDecodedMaterialFingerprint) {
+  write_project_material();
+  add_scene(kFirstScene, "Scenes/first.qdr", make_document(true), kProjectMaterial);
+  open_project();
+  open_scene();
+  const auto index = material_index(QUADER_BRIDGE_MATERIAL_PROJECT);
+  QuaderBridgeMaterialView material{};
+  ASSERT_EQ(api_->material_view(scene_, index, &material, &error_), 1);
+  ASSERT_EQ(material.diffuse_model, QUADER_BRIDGE_MATERIAL_DIFFUSE_BURLEY);
+  QuaderBridgeSourceFingerprint before{};
+  ASSERT_EQ(api_->material_source_fingerprint(scene_, index, &before, &error_), 1);
+  const auto path = relative_path("Materials/surface.qmat");
+  auto decoded = QmatCodec::read(workspace_.file_system, path);
+  ASSERT_TRUE(decoded.ok()) << decoded.error().message;
+  decoded.value().material.standard_material()->diffuse_model =
+      MaterialDiffuseModel::Lambert;
+  ASSERT_TRUE(QmatCodec::write_atomic(workspace_.file_system, path,
+                                     decoded.value().material).ok());
+  ASSERT_EQ(api_->material_view(scene_, index, &material, &error_), 1);
+  EXPECT_EQ(material.diffuse_model, QUADER_BRIDGE_MATERIAL_DIFFUSE_BURLEY);
+  QuaderBridgeSourceFingerprint retained{};
+  ASSERT_EQ(api_->material_source_fingerprint(scene_, index, &retained, &error_), 1);
+  EXPECT_EQ(retained.content_hash, before.content_hash);
+  EXPECT_EQ(retained.byte_count, before.byte_count);
+  api_->release_scene(std::exchange(scene_, nullptr));
+  open_scene();
+  ASSERT_EQ(api_->material_view(scene_, index, &material, &error_), 1);
+  EXPECT_EQ(material.diffuse_model, QUADER_BRIDGE_MATERIAL_DIFFUSE_LAMBERT);
+  QuaderBridgeSourceFingerprint updated{};
+  ASSERT_EQ(api_->material_source_fingerprint(scene_, index, &updated, &error_), 1);
+  EXPECT_NE(updated.content_hash, before.content_hash);
+}
+
+TEST_F(BridgeReaderTests, MissingDiffuseChoiceDefaultsToBurleyAndMalformedChoicesFail) {
+  write_project_material();
+  const auto path = root_ / "Materials/surface.qmat";
+  nlohmann::json data;
+  {
+    std::ifstream stream(path);
+    stream >> data;
+  }
+  data["payload"]["parameters"].erase("diffuseModel");
+  write_bytes(path, data.dump());
+  add_scene(kFirstScene, "Scenes/first.qdr", make_document(true), kProjectMaterial);
+  open_project();
+  open_scene();
+  QuaderBridgeMaterialView material{};
+  const auto index = material_index(QUADER_BRIDGE_MATERIAL_PROJECT);
+  ASSERT_EQ(api_->material_view(scene_, index, &material, &error_), 1)
+      << error_.message;
+  EXPECT_EQ(material.diffuse_model, QUADER_BRIDGE_MATERIAL_DIFFUSE_BURLEY);
+  api_->release_scene(std::exchange(scene_, nullptr));
+  const std::array<nlohmann::json, 3> invalid_choices{
+      nlohmann::json("unsupported"), nlohmann::json(2), nlohmann::json(nullptr)};
+  for (const auto &choice : invalid_choices) {
+    SCOPED_TRACE(choice.dump());
+    data["payload"]["parameters"]["diffuseModel"] = choice;
+    write_bytes(path, data.dump());
+    open_scene();
+    EXPECT_EQ(api_->material_view(scene_, index, &material, &error_), 0);
+    EXPECT_NE(error_.message[0], '\0');
+    api_->release_scene(std::exchange(scene_, nullptr));
+  }
 }
 
 #if defined(_WIN32)
@@ -974,6 +1274,8 @@ TEST_F(BridgeReaderTests, ExportGodotAcceptanceFixtures) {
       ProjectMaterialDocument material;
       material.id = *ProjectAssetId::parse(kNamingMaterials[i]);
       material.name = naming_material_names[i];
+      material.standard_material()->diffuse_model =
+          i == 0u ? MaterialDiffuseModel::Lambert : MaterialDiffuseModel::Burley;
       material.standard_material()->base_color_texture = ProjectMaterialTextureSlot{
           .id = *ProjectAssetId::parse(kNamingTextures[i]),
           .project_relative_path = named_texture_path,
@@ -1020,6 +1322,31 @@ TEST_F(BridgeReaderTests, ExportGodotAcceptanceFixtures) {
     add_scene(kNamingNormalCollisionScene, "Scenes/normal_name_collision.qdr",
               collision_document, kNamingNormalCollisionMaterial, material_path);
   }
+  const auto lighting_document = make_lighting_document(std::array{16.0f}, 2.0f, false);
+  add_scene(kLightingScene, "Scenes/lighting.qdr", lighting_document);
+  auto calibration_document = make_lighting_document(kCalibrationIntensities, 1.0f, true);
+  ASSERT_EQ(calibration_document.assets().add_mesh(10u, make_two_material_mesh()), 10u);
+  for (const auto model : {MaterialDiffuseModel::Burley, MaterialDiffuseModel::Lambert}) {
+    const bool lambert = model == MaterialDiffuseModel::Lambert;
+    const AssetId material_id = lambert ? 21u : 20u;
+    auto receiver_material = make_default_quader_material(
+        lambert ? "CalibrationReceiverLambert" : "CalibrationReceiverBurley");
+    receiver_material.base_color = {0.18f, 0.18f, 0.18f};
+    receiver_material.roughness = 1.0f;
+    receiver_material.metallic = 0.0f;
+    receiver_material.diffuse_model = model;
+    ASSERT_EQ(calibration_document.assets().add_material(
+                  material_id, std::move(receiver_material)), material_id);
+    const EntityId receiver_id = lambert ? 401u : 400u;
+    const EntityId receiver = calibration_document.scene().create_entity_with_id(
+        receiver_id, lambert ? "calibration-receiver-lambert" : "calibration-receiver-burley",
+        EntityKind::Mesh);
+    ASSERT_EQ(receiver, receiver_id);
+    ASSERT_TRUE(calibration_document.scene().set_mesh(receiver, MeshComponent{.mesh = 10u}));
+    ASSERT_TRUE(calibration_document.scene().set_material(
+        receiver, MaterialComponent{.material = material_id}));
+  }
+  add_scene(kCalibrationScene, "Scenes/lighting_calibration.qdr", calibration_document);
   open_project();
   open_scene();
   QuaderBridgeSceneView view{};
@@ -1086,6 +1413,23 @@ TEST_F(BridgeReaderTests, ExportGodotAcceptanceFixtures) {
   }
   const nlohmann::ordered_json expectations{
       {"resource_prefix", resource_prefix},
+      {"light_scene_id", kLightingScene},
+      {"light_scene_path", "Scenes/lighting.qdr"},
+      {"light_entries", lighting_expectations(lighting_document)},
+      {"light_updated_intensity", 8.0f},
+      {"light_updated_preview_energy", 0.5f},
+      {"calibration_scene_id", kCalibrationScene},
+      {"calibration_scene_path", "Scenes/lighting_calibration.qdr"},
+      {"calibration_lights", lighting_expectations(calibration_document)},
+      {"calibration_environment_enabled", false},
+      {"calibration_receiver_burley_name", "calibration-receiver-burley"},
+      {"calibration_receiver_lambert_name", "calibration-receiver-lambert"},
+      {"calibration_receiver_burley_material_name", "CalibrationReceiverBurley"},
+      {"calibration_receiver_lambert_material_name", "CalibrationReceiverLambert"},
+      {"light_reference_camera", {{"aperture", 16.0f},
+                                   {"shutter_seconds", 1.0f / 125.0f},
+                                   {"iso", 100.0f},
+                                   {"exposure_multiplier", 1.0 / 38400.0}}},
       {"valid_scene_id", kFirstScene},
       {"valid_scene_path", "Scenes/mixed_materials.qdr"},
       {"valid_mesh_count", 3},
@@ -1107,6 +1451,7 @@ TEST_F(BridgeReaderTests, ExportGodotAcceptanceFixtures) {
       {"naming_scene_path", "Scenes/resource_names.qdr"},
       {"naming_material_name", naming_material_names[0]},
       {"naming_material_names", naming_material_names},
+      {"naming_material_diffuse_models", {1, 0}},
       {"naming_texture_filenames", naming_texture_filenames},
       {"naming_material_paths", naming_material_paths},
       {"naming_renamed_material_id", kNamingMaterials[0]},
@@ -1162,6 +1507,38 @@ TEST_F(BridgeReaderTests, SaveGodotAcceptanceFixture) {
       ASSERT_TRUE(committed.ok) << committed.message;
       ASSERT_TRUE(committed.warnings.empty()) << committed.message;
     }
+    return;
+  }
+  if (mode == "lights_half" || mode == "lights_camera") {
+    const auto opened_scene = native_project.open_scene(relative_path(
+        expectations.at("light_scene_path").get<std::string>()));
+    ASSERT_TRUE(opened_scene.ok) << opened_scene.message;
+    ASSERT_TRUE(opened_scene.scene_session_id.has_value());
+    auto *scene = native_project.find(*opened_scene.scene_session_id);
+    ASSERT_NE(scene, nullptr);
+    if (mode == "lights_half") {
+      for (const auto &entry : expectations.at("light_entries")) {
+        const EntityId entity = entry.at("entity").get<EntityId>();
+        const auto *current = scene->session->scene().light(entity);
+        ASSERT_NE(current, nullptr);
+        LightComponent light = *current;
+        light.intensity = 8.0f;
+        const auto changed = scene->session->document_commands().set_light_component(entity, light);
+        ASSERT_TRUE(changed.ok) << changed.message;
+      }
+    } else {
+      const EntityId root = scene->session->scene().scene_root();
+      auto settings = *scene->session->scene().scene_settings(root);
+      settings.camera.aperture = 2.0f;
+      settings.camera.shutter_speed = 0.5f;
+      settings.camera.sensitivity = 1600.0f;
+      settings.camera.use_exposure = false;
+      const auto changed = scene->session->document_commands().set_scene_settings(root, settings);
+      ASSERT_TRUE(changed.ok) << changed.message;
+    }
+    const auto committed = native_project.save(scene->session_id);
+    ASSERT_TRUE(committed.ok) << committed.message;
+    ASSERT_TRUE(committed.warnings.empty()) << committed.message;
     return;
   }
   if (mode == "naming_rename") {

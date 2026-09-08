@@ -19,7 +19,8 @@ file except through prior written authorization from Francesco Di Blasi.
 | Native modeling projection and picking | [runtime guide](modeling/runtime/README.md) |
 | Descriptor catalogs | [metadata guide](metadata/README.md) |
 | Native tool lifecycle and semantic input | `tools/`, then [input guide](../../INPUT_KEYBINDINGS.md) |
-| Selected point-light radius gestures | `viewport/point_light_range_interaction.*`, `commands/document_command_service.*` |
+| Light range and live scene-color previews | `viewport/point_light_range_interaction.*`, `commands/document_command_service.*` |
+| Live material albedo drafts | `material/standard_material_edit_session_service.*`, `render/standard_material_render_snapshot_adapter.*` |
 
 - `ModelingSessionService` adapts the portable core; it must not become another modeling owner.
 - Structural actions must preserve scene state, SDK bindings, component selection, and chronological
@@ -29,3 +30,6 @@ file except through prior written authorization from Francesco Di Blasi.
   scene-aware document route for objects, groups, and selected roots other than the scene root.
 - Tools own state machines; UI dispatches intent. Cover preview cancel/commit, selection, overlays,
   and undo/redo with focused synthetic behavior tests under the root verification contract.
+- Scene color previews publish through the existing property-preview checkpoint and record history
+  only on acceptance. Material color previews remain drafts; scene saves and inactive-tab closure
+  must not cancel the material picker. Preserve saved material texture identity during live tint edits.

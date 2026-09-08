@@ -46,7 +46,7 @@ include(cmake/QuaderBuildOptions.cmake)
 # participate in the final executable's link-time optimization pass.
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 
-set(_QUADER_DEFAULT_FILAMENT_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/filament-v1.71.6-quader-vsync3-windows")
+set(_QUADER_DEFAULT_FILAMENT_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/filament-v1.71.6-quader-vsync4-windows")
 if(DEFINED ENV{FILAMENT_SDK_ROOT} AND NOT "$ENV{FILAMENT_SDK_ROOT}" STREQUAL "")
     file(TO_CMAKE_PATH "$ENV{FILAMENT_SDK_ROOT}" _QUADER_DEFAULT_FILAMENT_SDK_ROOT)
 endif()
@@ -336,6 +336,7 @@ target_link_libraries(quader_mesh_io PUBLIC quader_assets)
 add_library(quader_document STATIC
     src/scene/document/scene_content_document.cpp
     src/scene/document/scene_entity_state.cpp
+    src/scene/light_properties.cpp
     src/scene/scene_bounds.cpp
     src/scene/scene_document.cpp
     src/scene/scene_mesh_occurrence_projection.cpp
@@ -767,6 +768,7 @@ add_library(quader_render STATIC
     src/render/material_binding_service.cpp
     src/render/material_preview_mesh_library.cpp
     src/render/material_preview_renderer.cpp
+    src/render/scene_tone_mapper.cpp
     src/render/material_compiler_service.cpp
     src/render/mesh_renderable_cache.cpp
     src/render/mesh_renderable_factory.cpp
@@ -1321,6 +1323,7 @@ file(GLOB QUADER_RUNTIME_LOCALE_INPUTS
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/locales/*")
 
 set(QUADER_RUNTIME_RESOURCE_INPUTS
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/licenses/godot-MIT.txt"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/logo.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/point_light.png"
     "${QUADER_DEFAULT_ALBEDO_TEXTURE}"
@@ -1404,6 +1407,11 @@ add_custom_command(
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE}"
             "${QUADER_RUNTIME_DEPLOY_DIR}/materials/default/default_material.qmat"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "${QUADER_RUNTIME_DEPLOY_DIR}/licenses"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/licenses/godot-MIT.txt"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/licenses/godot-MIT.txt"
     COMMAND "${CMAKE_COMMAND}" -E touch
             "${QUADER_RUNTIME_RESOURCE_STAMP}"
     DEPENDS
@@ -1476,6 +1484,7 @@ if(QUADER_BUILD_TESTS)
         tests/session_preferences_tests.cpp
         tests/render_presentation_tests.cpp
         tests/render_vsync_runtime_tests.cpp
+        tests/scene_tone_mapper_tests.cpp
         tests/render_texture_lifetime_tests.cpp
         tests/curve_modeling_behavior_tests.cpp
         tests/curve_tool_service_tests.cpp
@@ -1554,6 +1563,8 @@ if(QUADER_BUILD_TESTS)
         tests/modeling_tool_catalog_tests.cpp
         tests/render_extraction_tests.cpp
         tests/light_renderable_cache_tests.cpp
+        tests/light_properties_tests.cpp
+        tests/scene_color_preview_tests.cpp
         tests/render_source_stamp_tests.cpp
         tests/tool_preview_submission_tests.cpp
         tests/scene_mesh_occurrence_projection_tests.cpp

@@ -8,6 +8,7 @@
 
 #include "assets/project_material_document.hpp"
 #include "editor/material/project_material_texture_snapshot.hpp"
+#include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/session/project_session.hpp"
 
 #include <array>
@@ -52,6 +53,7 @@ StandardMaterialRenderValues project_standard_values(
       .texture_offset = definition.texture_transform.offset,
       .texture_rotation_degrees =
           definition.texture_transform.rotation_degrees,
+      .diffuse_model = definition.diffuse_model,
   };
 }
 
@@ -74,6 +76,7 @@ make_standard_material_render_evaluation(
               .offset = {values.texture_offset[0], values.texture_offset[1]},
               .rotation_degrees = values.texture_rotation_degrees,
           },
+      .diffuse_model = values.diffuse_model,
   };
 }
 
@@ -82,7 +85,8 @@ std::uint64_t ProjectSessionRenderMaterialResolver::revision() const noexcept {
       project_->manifest() == nullptr) {
     return 0u;
   }
-  return project_->material_texture_revision();
+  return project_->material_texture_revision() +
+         project_->standard_material_editor().scene_preview_revision();
 }
 
 std::optional<RenderProjectMaterialSnapshot>
@@ -102,14 +106,23 @@ ProjectSessionRenderMaterialResolver::resolve(ProjectAssetId id) const {
   }
 
   const std::uint64_t catalog_revision = revision();
+  // Draft albedo changes invalidate evaluation without replacing texture keys.
+  const std::uint64_t saved_revision = project_->material_texture_revision();
+  const auto &editor = project_->standard_material_editor();
+  const auto preview_color = editor.scene_base_color_preview(id);
+  StandardMaterialRenderValues values = project_standard_values(*standard);
+  if (preview_color.has_value()) {
+    values.base_color = *preview_color;
+  }
   RenderProjectMaterialSnapshot result{
       .evaluation =
           make_evaluation(
               id,
-              catalog_revision ^ render_project_asset_identity_revision(id),
-              entry->content_revision,
-              make_standard_material_render_evaluation(
-                  project_standard_values(*standard))),
+              saved_revision ^ render_project_asset_identity_revision(id),
+              entry->content_revision +
+                  (preview_color.has_value() ? editor.scene_preview_revision()
+                                             : 0u),
+              make_standard_material_render_evaluation(values)),
       .catalog_revision = catalog_revision,
   };
   RenderStandardMaterialEvaluationSnapshot *render_standard =
@@ -135,7 +148,7 @@ ProjectSessionRenderMaterialResolver::resolve(ProjectAssetId id) const {
         RenderMaterialTextureEvaluationSnapshot{
             .project_texture_id = definition.id,
             .identity_revision =
-                catalog_revision ^
+                saved_revision ^
                 render_project_asset_identity_revision(definition.id),
             .content_revision = cached->content_revision,
             .color_space =

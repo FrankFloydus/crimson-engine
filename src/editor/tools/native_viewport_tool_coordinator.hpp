@@ -106,6 +106,7 @@ public:
       const ViewportNativeToolInteractionFrame &frame);
   void clear_pointer_drag_state();
   [[nodiscard]] bool pointer_dragging() const;
+  [[nodiscard]] ViewportPointerCursor pointer_cursor() const;
 
   [[nodiscard]] bool curve_control_gizmo_start_allowed(
       ViewportToolId active_tool, bool selection_fallback_allowed,

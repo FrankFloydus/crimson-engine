@@ -93,6 +93,21 @@ public:
   [[nodiscard]] StandardMaterialEditResult set_name(std::string name);
   [[nodiscard]] StandardMaterialEditResult
   set_base_color(std::array<float, 3> color);
+  /// Previews one session's albedo without saving or dirtying its draft.
+  [[nodiscard]] StandardMaterialEditResult
+  begin_base_color_preview(MaterialEditSessionId session_id);
+  [[nodiscard]] StandardMaterialEditResult update_base_color_preview(
+      MaterialEditSessionId session_id, std::array<float, 3> color);
+  [[nodiscard]] StandardMaterialEditResult
+  finish_base_color_preview(MaterialEditSessionId session_id, bool accept);
+  /// Cancels before a live project changes its active scene/runtime binding.
+  [[nodiscard]] StandardMaterialEditResult cancel_base_color_preview();
+  /// Projects only the draft albedo explicitly previewed on assigned objects.
+  [[nodiscard]] std::optional<std::array<float, 3>>
+  scene_base_color_preview(ProjectAssetId id) const noexcept;
+  [[nodiscard]] std::uint64_t scene_preview_revision() const noexcept {
+    return scene_preview_revision_;
+  }
   [[nodiscard]] StandardMaterialEditResult set_roughness(float value);
   [[nodiscard]] StandardMaterialEditResult set_metallic(float value);
   [[nodiscard]] StandardMaterialEditResult set_normal_strength(float value);
@@ -100,6 +115,8 @@ public:
   set_scalar(StandardMaterialScalar scalar, float value);
   [[nodiscard]] StandardMaterialEditResult
   set_normal_convention(NormalMapConvention convention);
+  [[nodiscard]] StandardMaterialEditResult
+  set_diffuse_model(MaterialDiffuseModel model);
   [[nodiscard]] StandardMaterialEditResult set_texture_transform(
       StandardMaterialTextureTransform transform);
   [[nodiscard]] StandardMaterialEditResult set_texture_transform_component(
@@ -122,6 +139,8 @@ private:
   [[nodiscard]] StandardMaterialEditResult save_to(ProjectRelativePath path,
                                                     bool save_as);
   [[nodiscard]] StandardMaterialEditResult mark_changed();
+  void advance_draft_revision();
+  void advance_scene_preview_revision();
   [[nodiscard]] ProjectStandardMaterialDefinition *standard() noexcept;
   void reset_with(ProjectMaterialDocument document,
                   std::optional<ProjectRelativePath> path,
@@ -131,6 +150,7 @@ private:
   ProjectSession *project_ = nullptr;
   std::unique_ptr<Draft> current_;
   std::uint32_t generation_ = 0u;
+  std::uint64_t scene_preview_revision_ = 0u;
 };
 
 } // namespace quader

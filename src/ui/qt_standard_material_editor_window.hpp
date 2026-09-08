@@ -11,6 +11,7 @@
 #include <QColor>
 #include <QImage>
 #include <QMainWindow>
+#include <QPointer>
 #include <QSize>
 #include <QString>
 
@@ -25,6 +26,7 @@ class QAction;
 class QActionGroup;
 class QCheckBox;
 class QCloseEvent;
+class QColorDialog;
 class QComboBox;
 class QDoubleSpinBox;
 class QEvent;
@@ -65,6 +67,12 @@ enum class QtStandardMaterialPreviewShading : std::uint8_t {
   Wireframe,
   Shaded,
   Rendered,
+};
+
+/// Selects the material's diffuse response independently of preview draw mode.
+enum class QtStandardMaterialDiffuseModel : std::uint8_t {
+  Burley,
+  Lambert,
 };
 
 /// Identifies one scalar control in the Standard Material property form.
@@ -146,6 +154,7 @@ struct QtStandardMaterialTexturePresentation final {
 /// Immutable Standard Material draft presentation supplied by editor APIs.
 struct QtStandardMaterialEditorDocument final {
   QString stable_id;
+  std::uint32_t session_generation = 0u;
   QString name;
   QString project_relative_path;
   QColor albedo = Qt::white;
@@ -153,6 +162,7 @@ struct QtStandardMaterialEditorDocument final {
   double metallic = 0.0;
   double normal_strength = 1.0;
   bool direct_x_normal = false;
+  QtStandardMaterialDiffuseModel diffuse_model = QtStandardMaterialDiffuseModel::Burley;
   std::array<QtStandardMaterialTexturePresentation, 4> textures;
   QtStandardMaterialTextureTransform texture_transform;
   bool dirty = false;
@@ -189,6 +199,9 @@ struct QtStandardMaterialEditorLabels final {
       "MMB Tumble - Shift+MMB Pan - Ctrl+MMB Environment - Wheel Zoom");
   QString properties_group = QStringLiteral("Material");
   QString name = QStringLiteral("Name");
+  QString diffuse_model = QStringLiteral("Diffuse Model");
+  QString diffuse_burley = QStringLiteral("Burley");
+  QString diffuse_lambert = QStringLiteral("Lambert");
   QString type = QStringLiteral("Type");
   QString standard_material = QStringLiteral("Standard Material");
   QString albedo = QStringLiteral("Albedo");
@@ -225,9 +238,12 @@ public:
       std::function<void(QtStandardMaterialEditorFileAction)>;
   using NameEditedCallback = std::function<void(QString)>;
   using AlbedoEditedCallback = std::function<void(QColor)>;
+  using AlbedoPreviewBeginCallback = std::function<bool()>;
+  using AlbedoPreviewFinishCallback = std::function<void(bool)>;
   using ScalarEditedCallback =
       std::function<void(QtStandardMaterialScalar, double)>;
   using NormalConventionEditedCallback = std::function<void(bool)>;
+  using DiffuseModelEditedCallback = std::function<void(QtStandardMaterialDiffuseModel)>;
   using TextureActionCallback = std::function<void(
       QtStandardMaterialTextureSlot, QtStandardMaterialTextureAction)>;
   using TextureTransformEditedCallback =
@@ -247,14 +263,19 @@ public:
   void set_labels(QtStandardMaterialEditorLabels labels);
   void set_document(QtStandardMaterialEditorDocument document);
   void clear_document();
+  /// Closes transient dialogs without accessing an outgoing runtime owner.
+  void abandon_interactions();
   [[nodiscard]] bool has_document() const { return has_document_; }
 
   void set_file_action_callback(FileActionCallback callback);
   void set_name_edited_callback(NameEditedCallback callback);
   void set_albedo_edited_callback(AlbedoEditedCallback callback);
+  void set_albedo_preview_begin_callback(AlbedoPreviewBeginCallback callback);
+  void set_albedo_preview_finish_callback(AlbedoPreviewFinishCallback callback);
   void set_scalar_edited_callback(ScalarEditedCallback callback);
   void set_normal_convention_edited_callback(
       NormalConventionEditedCallback callback);
+  void set_diffuse_model_edited_callback(DiffuseModelEditedCallback callback);
   void set_texture_action_callback(TextureActionCallback callback);
   void set_texture_transform_edited_callback(
       TextureTransformEditedCallback callback);
@@ -389,8 +410,12 @@ private:
   QGroupBox *properties_group_ = nullptr;
   QLabel *name_label_ = nullptr;
   QLineEdit *name_edit_ = nullptr;
+  QLabel *diffuse_model_label_ = nullptr;
+  QComboBox *diffuse_model_combo_ = nullptr;
   QLabel *albedo_label_ = nullptr;
   QtColorSwatchButton *albedo_button_ = nullptr;
+  QPointer<QColorDialog> active_albedo_dialog_;
+  std::uint64_t interaction_generation_ = 0u;
   QLabel *roughness_label_ = nullptr;
   QDoubleSpinBox *roughness_spin_ = nullptr;
   QSlider *roughness_slider_ = nullptr;
@@ -413,8 +438,11 @@ private:
   FileActionCallback file_action_;
   NameEditedCallback name_edited_;
   AlbedoEditedCallback albedo_edited_;
+  AlbedoPreviewBeginCallback albedo_preview_begin_;
+  AlbedoPreviewFinishCallback albedo_preview_finish_;
   ScalarEditedCallback scalar_edited_;
   NormalConventionEditedCallback normal_convention_edited_;
+  DiffuseModelEditedCallback diffuse_model_edited_;
   TextureActionCallback texture_action_;
   TextureTransformEditedCallback texture_transform_edited_;
   PreviewResetCallback preview_reset_;

@@ -662,6 +662,10 @@ struct MaterialPreviewRenderer::Impl final {
             : 1.0f);
     rendered_instance->setParameter("normalYSign",
                                     standard.directx_normal ? -1.0f : 1.0f);
+    rendered_instance->setParameter(
+        "diffuseModel", standard.diffuse_model == MaterialDiffuseModel::Lambert
+                            ? 1
+                            : 0);
     wire_instance->setParameter("baseColorTexture", fallback_textures[0],
                                 sampler);
     wire_instance->setParameter(

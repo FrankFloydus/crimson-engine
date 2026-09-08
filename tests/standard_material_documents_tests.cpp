@@ -17,12 +17,14 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iterator>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -146,6 +148,71 @@ private:
   ProjectSession project_;
   QuaderEditorApi editor_;
 };
+
+TEST(StandardMaterialDocumentsTests,
+     DiffuseModelDefaultsToBurleyAndUsesTheExistingDraftSaveLifecycle) {
+  StandardMaterialDocumentsHarness harness("diffuse-model");
+  auto &documents = harness.editor().standard_material_documents();
+  const auto created = documents.new_material();
+  ASSERT_TRUE(created.ok());
+  EXPECT_EQ(created.value().material.diffuse_model, QuaderMaterialDiffuseModel::Burley);
+  ASSERT_TRUE(documents.close(true).ok());
+  const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  const auto opened = documents.open(*default_id);
+  ASSERT_TRUE(opened.ok());
+  EXPECT_EQ(opened.value().material.diffuse_model, QuaderMaterialDiffuseModel::Burley);
+  const auto saved_bytes = read_bytes(harness.root() / kDefaultProjectMaterialPath);
+  const auto unchanged = documents.set_diffuse_model(QuaderMaterialDiffuseModel::Burley);
+  ASSERT_TRUE(unchanged.ok());
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(documents.current_revision().value().draft_revision, opened.value().draft_revision);
+  EXPECT_FALSE(harness.project().has_dirty_material());
+  EXPECT_FALSE(harness.project().standard_material_editor()
+                   .set_diffuse_model(static_cast<MaterialDiffuseModel>(255)).ok);
+
+  const auto changed = documents.set_diffuse_model(QuaderMaterialDiffuseModel::Lambert);
+  ASSERT_TRUE(changed.ok()) << changed.error_message();
+  EXPECT_TRUE(changed.changed());
+  const auto draft = documents.current();
+  ASSERT_TRUE(draft.ok());
+  EXPECT_EQ(draft.value().material.diffuse_model, QuaderMaterialDiffuseModel::Lambert);
+  EXPECT_GT(draft.value().draft_revision, opened.value().draft_revision);
+  EXPECT_TRUE(draft.value().dirty);
+  EXPECT_FALSE(harness.project().has_dirty_scenes());
+  const auto preview = documents.preview();
+  ASSERT_TRUE(preview.ok());
+  EXPECT_EQ(preview.value().material.diffuse_model, QuaderMaterialDiffuseModel::Lambert);
+  const auto sphere = standard_material_preview_render_snapshot(draft.value(), &preview.value());
+  ASSERT_NE(sphere.standard_material(), nullptr);
+  EXPECT_EQ(sphere.standard_material()->diffuse_model, MaterialDiffuseModel::Lambert);
+  ProjectSessionRenderMaterialResolver resolver(harness.project());
+  const auto before_save = resolver.resolve(*default_id);
+  ASSERT_TRUE(before_save.has_value());
+  ASSERT_NE(before_save->evaluation.standard_material(), nullptr);
+  EXPECT_EQ(before_save->evaluation.standard_material()->diffuse_model,
+            MaterialDiffuseModel::Burley);
+  EXPECT_EQ(read_bytes(harness.root() / kDefaultProjectMaterialPath), saved_bytes);
+  const auto same_draft = documents.set_diffuse_model(QuaderMaterialDiffuseModel::Lambert);
+  ASSERT_TRUE(same_draft.ok());
+  EXPECT_FALSE(same_draft.changed());
+  EXPECT_EQ(documents.current_revision().value().draft_revision, draft.value().draft_revision);
+
+  ASSERT_TRUE(documents.save().ok());
+  EXPECT_FALSE(harness.project().has_dirty_material());
+  const auto saved = resolver.resolve(*default_id);
+  ASSERT_TRUE(saved.has_value());
+  ASSERT_NE(saved->evaluation.standard_material(), nullptr);
+  EXPECT_EQ(saved->evaluation.standard_material()->diffuse_model,
+            MaterialDiffuseModel::Lambert);
+  ASSERT_TRUE(documents.set_diffuse_model(QuaderMaterialDiffuseModel::Burley).ok());
+  EXPECT_FALSE(documents.close().ok());
+  ASSERT_TRUE(documents.close(true).ok());
+  const auto reopened = documents.open(*default_id);
+  ASSERT_TRUE(reopened.ok());
+  EXPECT_FALSE(reopened.value().dirty);
+  EXPECT_EQ(reopened.value().material.diffuse_model, QuaderMaterialDiffuseModel::Lambert);
+}
 
 TEST(StandardMaterialDocumentsTests,
      EditableDefaultSavesTypedV2WithoutDirtyingTheScene) {
@@ -658,6 +725,8 @@ TEST(StandardMaterialDocumentsTests,
                    .standard_material_documents()
                    .set_normal_convention(invalid_convention)
                    .ok());
+  EXPECT_FALSE(harness.editor().standard_material_documents()
+                   .set_diffuse_model(static_cast<QuaderMaterialDiffuseModel>(255)).ok());
   EXPECT_FALSE(harness.editor()
                    .standard_material_documents()
                    .clear_texture(invalid_slot)
@@ -691,6 +760,8 @@ TEST(StandardMaterialDocumentsTests,
   EXPECT_EQ(after.value().draft_revision, before.value().draft_revision);
   EXPECT_EQ(after.value().material.normal_convention,
             before.value().material.normal_convention);
+  EXPECT_EQ(after.value().material.diffuse_model,
+            before.value().material.diffuse_model);
   EXPECT_EQ(after.value().material.texture_transform,
             before.value().material.texture_transform);
   EXPECT_FALSE(after.value().dirty);
@@ -745,6 +816,7 @@ TEST(StandardMaterialDocumentsTests,
   document.material.metallic = 0.75f;
   document.material.normal_strength = -2.5f;
   document.material.normal_convention = QuaderNormalMapConvention::DirectX;
+  document.material.diffuse_model = QuaderMaterialDiffuseModel::Lambert;
   document.material.texture_transform.center = {0.2f, 0.8f};
   document.material.texture_transform.scale = {2.0f, -3.0f};
   document.material.texture_transform.offset = {-0.5f, 1.5f};
@@ -780,6 +852,7 @@ TEST(StandardMaterialDocumentsTests,
   EXPECT_FLOAT_EQ(standard->metallic, 0.75f);
   EXPECT_FLOAT_EQ(standard->normal_strength, -2.5f);
   EXPECT_TRUE(standard->directx_normal);
+  EXPECT_EQ(standard->diffuse_model, MaterialDiffuseModel::Lambert);
   EXPECT_FLOAT_EQ(standard->texture_transform.center.x, 0.2f);
   EXPECT_FLOAT_EQ(standard->texture_transform.center.y, 0.8f);
   EXPECT_FLOAT_EQ(standard->texture_transform.scale.x, 2.0f);
@@ -843,6 +916,8 @@ TEST(StandardMaterialDocumentsTests,
   StandardMaterialDocumentsHarness harness("render-adapter-parity");
   ASSERT_TRUE(
       harness.editor().standard_material_documents().new_material().ok());
+  ASSERT_TRUE(harness.editor().standard_material_documents()
+                  .set_diffuse_model(QuaderMaterialDiffuseModel::Lambert).ok());
   ASSERT_TRUE(harness.editor()
                   .standard_material_documents()
                   .set_base_color({0.12f, 0.34f, 0.56f})
@@ -937,6 +1012,373 @@ TEST(StandardMaterialDocumentsTests,
   EXPECT_FLOAT_EQ(standard->normal_strength, source->normal_strength);
   EXPECT_EQ(standard->directx_normal,
             source->normal_convention == NormalMapConvention::DirectX);
+  EXPECT_EQ(standard->diffuse_model, source->diffuse_model);
+}
+
+TEST(StandardMaterialDocumentsTests,
+     LiveBaseColorPreviewUpdatesBothRenderProjectionsAndCancelsCleanly) {
+  StandardMaterialDocumentsHarness harness("live-color-cancel");
+  auto &documents = harness.editor().standard_material_documents();
+  const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  const auto opened = documents.open(*default_id);
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  const auto session_id = opened.value().session_id;
+  const auto original_color = opened.value().material.base_color;
+  const auto saved_bytes =
+      read_bytes(harness.root() / kDefaultProjectMaterialPath);
+  ProjectSessionRenderMaterialResolver resolver(harness.project());
+  const auto original_render = resolver.resolve(*default_id);
+  ASSERT_TRUE(original_render.has_value());
+  ASSERT_NE(original_render->evaluation.standard_material(), nullptr);
+  ASSERT_TRUE(original_render->evaluation.standard_material()
+                  ->texture(RenderStandardMaterialTextureSlot::Albedo)
+                  .present());
+  const auto original_revision = resolver.revision();
+
+  ASSERT_TRUE(documents.begin_base_color_preview(session_id).ok());
+  EXPECT_EQ(resolver.revision(), original_revision);
+  ASSERT_TRUE(documents.update_base_color_preview(
+                           session_id, {0.12f, 0.34f, 0.56f})
+                  .ok());
+  const auto live_document = documents.current();
+  ASSERT_TRUE(live_document.ok());
+  EXPECT_FALSE(live_document.value().dirty);
+  EXPECT_FALSE(harness.project().has_dirty_material());
+  EXPECT_FALSE(harness.project().has_dirty_scenes());
+  EXPECT_GT(live_document.value().draft_revision,
+            opened.value().draft_revision);
+  EXPECT_NE(resolver.revision(), original_revision);
+  const auto preview = documents.preview();
+  ASSERT_TRUE(preview.ok());
+  EXPECT_EQ(preview.value().material.base_color,
+            live_document.value().material.base_color);
+  const auto live_render = resolver.resolve(*default_id);
+  ASSERT_TRUE(live_render.has_value());
+  const auto *live_standard = live_render->evaluation.standard_material();
+  ASSERT_NE(live_standard, nullptr);
+  EXPECT_FLOAT_EQ(live_standard->base_color.x, 0.12f);
+  EXPECT_FLOAT_EQ(live_standard->base_color.y, 0.34f);
+  EXPECT_FLOAT_EQ(live_standard->base_color.z, 0.56f);
+  EXPECT_EQ(live_render->evaluation.identity_revision,
+            original_render->evaluation.identity_revision);
+  EXPECT_EQ(live_standard->textures,
+            original_render->evaluation.standard_material()->textures)
+      << "albedo changes must retain existing texture cache identities";
+  EXPECT_EQ(read_bytes(harness.root() / kDefaultProjectMaterialPath),
+            saved_bytes);
+
+  const auto live_revision = resolver.revision();
+  const auto unchanged = documents.update_base_color_preview(
+      session_id, {0.12f, 0.34f, 0.56f});
+  ASSERT_TRUE(unchanged.ok());
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(resolver.revision(), live_revision);
+  EXPECT_EQ(documents.current_revision().value().draft_revision,
+            live_document.value().draft_revision);
+
+  EXPECT_FALSE(documents.begin_base_color_preview(session_id).ok());
+  EXPECT_FALSE(documents.set_base_color({0.8f, 0.6f, 0.4f}).ok());
+  const std::array<std::array<float, 3>, 4> invalid_colors{{
+      {std::numeric_limits<float>::quiet_NaN(), 0.5f, 0.5f},
+      {0.5f, std::numeric_limits<float>::infinity(), 0.5f},
+      {-0.01f, 0.5f, 0.5f},
+      {0.5f, 0.5f, 1.01f},
+  }};
+  for (const auto &invalid_color : invalid_colors) {
+    EXPECT_FALSE(
+        documents.update_base_color_preview(session_id, invalid_color).ok());
+    const auto after_invalid = documents.current();
+    ASSERT_TRUE(after_invalid.ok());
+    EXPECT_EQ(after_invalid.value().material.base_color,
+              live_document.value().material.base_color);
+    EXPECT_EQ(after_invalid.value().draft_revision,
+              live_document.value().draft_revision);
+    EXPECT_FALSE(after_invalid.value().dirty);
+    EXPECT_EQ(resolver.revision(), live_revision);
+  }
+
+  ASSERT_TRUE(documents.finish_base_color_preview(session_id, false).ok());
+  const auto canceled = documents.current();
+  ASSERT_TRUE(canceled.ok());
+  EXPECT_EQ(canceled.value().material.base_color, original_color);
+  EXPECT_FALSE(canceled.value().dirty);
+  EXPECT_FALSE(harness.project().has_dirty_material());
+  const auto restored_render = resolver.resolve(*default_id);
+  ASSERT_TRUE(restored_render.has_value());
+  ASSERT_NE(restored_render->evaluation.standard_material(), nullptr);
+  EXPECT_EQ(*restored_render->evaluation.standard_material(),
+            *original_render->evaluation.standard_material());
+  EXPECT_EQ(read_bytes(harness.root() / kDefaultProjectMaterialPath),
+            saved_bytes);
+}
+
+TEST(StandardMaterialDocumentsTests,
+     AcceptedBaseColorPreviewSurvivesAnotherCancelUntilTheEditorCloses) {
+  StandardMaterialDocumentsHarness harness("live-color-accept");
+  auto &documents = harness.editor().standard_material_documents();
+  const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  const auto opened = documents.open(*default_id);
+  ASSERT_TRUE(opened.ok());
+  const auto session_id = opened.value().session_id;
+  ProjectSessionRenderMaterialResolver resolver(harness.project());
+  const auto saved_render = resolver.resolve(*default_id);
+  ASSERT_TRUE(saved_render.has_value());
+  ASSERT_NE(saved_render->evaluation.standard_material(), nullptr);
+  const auto saved_bytes =
+      read_bytes(harness.root() / kDefaultProjectMaterialPath);
+
+  ASSERT_TRUE(documents.begin_base_color_preview(session_id).ok());
+  ASSERT_TRUE(documents.update_base_color_preview(
+                           session_id, {0.2f, 0.4f, 0.6f})
+                  .ok());
+  ASSERT_TRUE(documents.finish_base_color_preview(session_id, true).ok());
+  const auto accepted = documents.current();
+  ASSERT_TRUE(accepted.ok());
+  EXPECT_TRUE(accepted.value().dirty);
+  const auto accepted_render = resolver.resolve(*default_id);
+  ASSERT_TRUE(accepted_render.has_value());
+  ASSERT_NE(accepted_render->evaluation.standard_material(), nullptr);
+  EXPECT_FLOAT_EQ(
+      accepted_render->evaluation.standard_material()->base_color.x, 0.2f);
+
+  ASSERT_TRUE(documents.begin_base_color_preview(session_id).ok());
+  ASSERT_TRUE(documents.update_base_color_preview(
+                           session_id, {0.8f, 0.6f, 0.4f})
+                  .ok());
+  ASSERT_TRUE(documents.finish_base_color_preview(session_id, false).ok());
+  const auto canceled = documents.current();
+  ASSERT_TRUE(canceled.ok());
+  EXPECT_EQ(canceled.value().material.base_color,
+            accepted.value().material.base_color);
+  EXPECT_TRUE(canceled.value().dirty);
+  const auto restored = resolver.resolve(*default_id);
+  ASSERT_TRUE(restored.has_value());
+  ASSERT_NE(restored->evaluation.standard_material(), nullptr);
+  EXPECT_EQ(*restored->evaluation.standard_material(),
+            *accepted_render->evaluation.standard_material());
+  EXPECT_EQ(read_bytes(harness.root() / kDefaultProjectMaterialPath),
+            saved_bytes);
+
+  ASSERT_TRUE(documents.close(true).ok());
+  const auto closed_render = resolver.resolve(*default_id);
+  ASSERT_TRUE(closed_render.has_value());
+  ASSERT_NE(closed_render->evaluation.standard_material(), nullptr);
+  EXPECT_EQ(*closed_render->evaluation.standard_material(),
+            *saved_render->evaluation.standard_material());
+  EXPECT_FALSE(harness.project().has_dirty_material());
+}
+
+TEST(StandardMaterialDocumentsTests,
+     BaseColorPreviewCancellationPreservesOtherEditsAndRejectsStaleSessions) {
+  StandardMaterialDocumentsHarness harness("live-color-session");
+  auto &documents = harness.editor().standard_material_documents();
+  const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  const auto opened = documents.open(*default_id);
+  ASSERT_TRUE(opened.ok());
+  const auto session_id = opened.value().session_id;
+  ASSERT_TRUE(documents.begin_base_color_preview(session_id).ok());
+  ASSERT_TRUE(documents.update_base_color_preview(
+                           session_id, {0.3f, 0.5f, 0.7f})
+                  .ok());
+  ASSERT_TRUE(documents.set_roughness(0.37f).ok());
+  ASSERT_TRUE(documents.set_name("Unrelated material edit").ok());
+  ASSERT_TRUE(documents.finish_base_color_preview(session_id, false).ok());
+  const auto canceled = documents.current();
+  ASSERT_TRUE(canceled.ok());
+  EXPECT_EQ(canceled.value().material.base_color,
+            opened.value().material.base_color);
+  EXPECT_FLOAT_EQ(canceled.value().material.roughness, 0.37f);
+  EXPECT_EQ(canceled.value().name, "Unrelated material edit");
+  EXPECT_TRUE(canceled.value().dirty);
+
+  ASSERT_TRUE(documents.close(true).ok());
+  const auto replacement = documents.open(*default_id);
+  ASSERT_TRUE(replacement.ok());
+  ASSERT_NE(replacement.value().session_id, session_id);
+  EXPECT_FALSE(documents.begin_base_color_preview(session_id).ok());
+  EXPECT_FALSE(documents.update_base_color_preview(
+                            session_id, {0.9f, 0.8f, 0.7f})
+                   .ok());
+  EXPECT_FALSE(documents.finish_base_color_preview(session_id, true).ok());
+  const auto unchanged = documents.current();
+  ASSERT_TRUE(unchanged.ok());
+  EXPECT_EQ(unchanged.value().material.base_color,
+            replacement.value().material.base_color);
+  EXPECT_EQ(unchanged.value().draft_revision,
+            replacement.value().draft_revision);
+  EXPECT_FALSE(unchanged.value().dirty);
+}
+
+TEST(StandardMaterialDocumentsTests,
+     BaseColorPreviewNoOpAndSaveRespectThePickerBoundary) {
+  StandardMaterialDocumentsHarness harness("live-color-save");
+  auto &documents = harness.editor().standard_material_documents();
+  const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  const auto opened = documents.open(*default_id);
+  ASSERT_TRUE(opened.ok());
+  const auto session_id = opened.value().session_id;
+  ProjectSessionRenderMaterialResolver resolver(harness.project());
+  const auto original_revision = resolver.revision();
+  ASSERT_TRUE(documents.begin_base_color_preview(session_id).ok());
+  ASSERT_TRUE(documents.finish_base_color_preview(session_id, true).ok());
+  EXPECT_FALSE(documents.current().value().dirty);
+  EXPECT_EQ(documents.current_revision().value().draft_revision,
+            opened.value().draft_revision);
+  EXPECT_EQ(resolver.revision(), original_revision);
+
+  ASSERT_TRUE(documents.begin_base_color_preview(session_id).ok());
+  ASSERT_TRUE(documents.update_base_color_preview(
+                           session_id, {0.2f, 0.6f, 0.8f})
+                  .ok());
+  ASSERT_TRUE(documents.update_base_color_preview(
+                           session_id, opened.value().material.base_color)
+                  .ok());
+  ASSERT_TRUE(documents.finish_base_color_preview(session_id, true).ok());
+  EXPECT_FALSE(documents.current().value().dirty)
+      << "accepting the starting color must leave a clean document clean";
+
+  const auto saved_bytes =
+      read_bytes(harness.root() / kDefaultProjectMaterialPath);
+  ASSERT_TRUE(documents.begin_base_color_preview(session_id).ok());
+  ASSERT_TRUE(documents.update_base_color_preview(
+                           session_id, {0.25f, 0.5f, 0.75f})
+                  .ok());
+  EXPECT_FALSE(documents.save().ok());
+  EXPECT_FALSE(documents.save_as(project_path("Materials/preview.qmat")).ok());
+  EXPECT_EQ(read_bytes(harness.root() / kDefaultProjectMaterialPath),
+            saved_bytes);
+  EXPECT_FALSE(std::filesystem::exists(harness.root() / "Materials" /
+                                       "preview.qmat"));
+  ASSERT_TRUE(documents.finish_base_color_preview(session_id, true).ok());
+  ASSERT_TRUE(documents.save().ok());
+  EXPECT_FALSE(documents.current().value().dirty);
+  EXPECT_NE(read_bytes(harness.root() / kDefaultProjectMaterialPath),
+            saved_bytes);
+  ASSERT_TRUE(documents.close().ok());
+  const auto reopened = documents.open(*default_id);
+  ASSERT_TRUE(reopened.ok());
+  EXPECT_EQ(reopened.value().material.base_color,
+            (std::array<float, 3>{0.25f, 0.5f, 0.75f}));
+}
+
+TEST(StandardMaterialDocumentsTests,
+     SceneSaveAndInactiveTabClosePreserveTheLiveBaseColorPreview) {
+  StandardMaterialDocumentsHarness harness("live-color-scene-save");
+  auto &documents = harness.editor().standard_material_documents();
+  auto &scenes = harness.editor().scene_documents();
+  const auto inactive_scene = scenes.active_scene_id();
+  ASSERT_TRUE(inactive_scene.has_value());
+  const auto active_scene = scenes.new_scene();
+  ASSERT_TRUE(active_scene.ok()) << active_scene.error_message();
+  const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  const auto opened = documents.open(*default_id);
+  ASSERT_TRUE(opened.ok());
+  const auto session_id = opened.value().session_id;
+  const auto original_color = opened.value().material.base_color;
+  const auto saved_bytes = read_bytes(harness.root() / kDefaultProjectMaterialPath);
+  ProjectSessionRenderMaterialResolver resolver(harness.project());
+  ASSERT_TRUE(documents.begin_base_color_preview(session_id).ok());
+  const std::array<float, 3> preview_color{0.15f, 0.35f, 0.55f};
+  ASSERT_TRUE(documents.update_base_color_preview(session_id, preview_color).ok());
+  const auto draft_revision = documents.current_revision().value().draft_revision;
+  const auto render_revision = resolver.revision();
+  const auto expect_preview_retained = [&]() {
+    const auto current = documents.current();
+    ASSERT_TRUE(current.ok());
+    EXPECT_EQ(current.value().session_id, session_id);
+    EXPECT_EQ(current.value().material.base_color, preview_color);
+    EXPECT_EQ(current.value().draft_revision, draft_revision);
+    EXPECT_FALSE(current.value().dirty);
+    EXPECT_EQ(scenes.active_scene_id(), active_scene.value());
+    EXPECT_EQ(resolver.revision(), render_revision);
+    const auto rendered = resolver.resolve(*default_id);
+    ASSERT_TRUE(rendered.has_value());
+    ASSERT_NE(rendered->evaluation.standard_material(), nullptr);
+    EXPECT_FLOAT_EQ(rendered->evaluation.standard_material()->base_color.x,
+                    preview_color[0]);
+    EXPECT_FLOAT_EQ(rendered->evaluation.standard_material()->base_color.y,
+                    preview_color[1]);
+    EXPECT_FLOAT_EQ(rendered->evaluation.standard_material()->base_color.z,
+                    preview_color[2]);
+  };
+
+  const auto saved_as = scenes.save_as(
+      active_scene.value(), project_path("Scenes/material_preview.qdr"));
+  ASSERT_TRUE(saved_as.ok()) << saved_as.error_message();
+  expect_preview_retained();
+  const auto saved = scenes.save_active();
+  ASSERT_TRUE(saved.ok()) << saved.error_message();
+  expect_preview_retained();
+  const auto closed = scenes.close(*inactive_scene);
+  ASSERT_TRUE(closed.ok()) << closed.error_message();
+  expect_preview_retained();
+
+  ASSERT_TRUE(documents.update_base_color_preview(
+                           session_id, {0.25f, 0.45f, 0.65f}).ok())
+      << "the same open picker must remain editable after scene-only actions";
+  ASSERT_TRUE(documents.finish_base_color_preview(session_id, false).ok());
+  EXPECT_EQ(documents.current().value().material.base_color, original_color);
+  EXPECT_FALSE(documents.current().value().dirty);
+  EXPECT_EQ(read_bytes(harness.root() / kDefaultProjectMaterialPath), saved_bytes);
+}
+
+TEST(StandardMaterialDocumentsTests,
+     SceneReplacementCancelsLiveBaseColorWithoutDiscardingMaterialEdits) {
+  for (const bool initially_dirty : {false, true}) {
+    SCOPED_TRACE(initially_dirty);
+    StandardMaterialDocumentsHarness harness("live-color-scene-replacement");
+    auto &documents = harness.editor().standard_material_documents();
+    auto &scenes = harness.editor().scene_documents();
+    const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+    ASSERT_TRUE(default_id.has_value());
+    ASSERT_TRUE(documents.open(*default_id).ok());
+    if (initially_dirty) {
+      ASSERT_TRUE(documents.set_roughness(0.37f).ok());
+    }
+    const auto before = documents.current();
+    ASSERT_TRUE(before.ok());
+    ASSERT_EQ(before.value().dirty, initially_dirty);
+    const auto session_id = before.value().session_id;
+    const auto outgoing_scene = scenes.active_scene_id();
+    ASSERT_TRUE(outgoing_scene.has_value());
+    ProjectSessionRenderMaterialResolver resolver(harness.project());
+    const auto saved_render = resolver.resolve(*default_id);
+    ASSERT_TRUE(saved_render.has_value());
+    ASSERT_NE(saved_render->evaluation.standard_material(), nullptr);
+
+    ASSERT_TRUE(documents.begin_base_color_preview(session_id).ok());
+    ASSERT_TRUE(documents.update_base_color_preview(
+                             session_id, {0.15f, 0.35f, 0.55f})
+                    .ok());
+    ASSERT_NE(documents.current().value().material.base_color,
+              before.value().material.base_color);
+    const auto replacement = scenes.new_scene();
+    ASSERT_TRUE(replacement.ok()) << replacement.error_message();
+    EXPECT_NE(replacement.value(), *outgoing_scene);
+    EXPECT_EQ(scenes.active_scene_id(), replacement.value());
+
+    const auto after = documents.current();
+    ASSERT_TRUE(after.ok());
+    EXPECT_EQ(after.value().session_id, session_id);
+    EXPECT_EQ(after.value().material.base_color,
+              before.value().material.base_color);
+    EXPECT_FLOAT_EQ(after.value().material.roughness,
+                    before.value().material.roughness);
+    EXPECT_EQ(after.value().dirty, initially_dirty);
+    EXPECT_EQ(harness.project().has_dirty_material(), initially_dirty);
+    EXPECT_FALSE(documents.finish_base_color_preview(session_id, true).ok())
+        << "a trailing picker acceptance must not revive a canceled preview";
+    const auto restored_render = resolver.resolve(*default_id);
+    ASSERT_TRUE(restored_render.has_value());
+    ASSERT_NE(restored_render->evaluation.standard_material(), nullptr);
+    EXPECT_EQ(*restored_render->evaluation.standard_material(),
+              *saved_render->evaluation.standard_material());
+  }
 }
 
 TEST(StandardMaterialDocumentsTests,

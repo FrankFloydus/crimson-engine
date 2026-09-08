@@ -199,6 +199,53 @@ private:
   std::array<std::uint32_t, 3u> indices_{0u, 1u, 2u};
 };
 
+TEST(RenderTextureLifetimeTests,
+     DiffuseModelUniformFollowsEmbeddedAndProjectedMaterialValues) {
+  TextureLifetimeHarness harness;
+  ASSERT_TRUE(harness.initialize());
+  AssetRegistry assets;
+  for (const auto model : {MaterialDiffuseModel::Burley,
+                           MaterialDiffuseModel::Lambert,
+                           static_cast<MaterialDiffuseModel>(255u)}) {
+    SCOPED_TRACE(static_cast<int>(model));
+    MaterialDocument material;
+    material.diffuse_model = model;
+    const int expected = model == MaterialDiffuseModel::Lambert ? 1 : 0;
+    filament::MaterialInstance *embedded =
+        harness.materials().create_mesh_material_instance(assets, &material,
+                                                          false);
+    ASSERT_NE(embedded, nullptr);
+    EXPECT_EQ(embedded->getParameter<int>("diffuseModel"), expected);
+    harness.materials().destroy_mesh_material_instance(harness.engine(),
+                                                       embedded);
+
+    RenderMaterialAssetSnapshot snapshot;
+    snapshot.present = true;
+    snapshot.document = material;
+    filament::MaterialInstance *projected =
+        harness.materials().create_mesh_material_instance(&snapshot, false);
+    ASSERT_NE(projected, nullptr);
+    EXPECT_EQ(projected->getParameter<int>("diffuseModel"), expected);
+    harness.materials().destroy_mesh_material_instance(harness.engine(),
+                                                       projected);
+  }
+
+  filament::MaterialInstance *missing_embedded =
+      harness.materials().create_mesh_material_instance(assets, nullptr, false);
+  ASSERT_NE(missing_embedded, nullptr);
+  EXPECT_EQ(missing_embedded->getParameter<int>("diffuseModel"), 0);
+  harness.materials().destroy_mesh_material_instance(harness.engine(),
+                                                     missing_embedded);
+  RenderMaterialAssetSnapshot missing;
+  missing.document.diffuse_model = MaterialDiffuseModel::Lambert;
+  filament::MaterialInstance *missing_projected =
+      harness.materials().create_mesh_material_instance(&missing, false);
+  ASSERT_NE(missing_projected, nullptr);
+  EXPECT_EQ(missing_projected->getParameter<int>("diffuseModel"), 0);
+  harness.materials().destroy_mesh_material_instance(harness.engine(),
+                                                     missing_projected);
+}
+
 TEST(RenderTextureLifetimeTests, ScalarUpdatesReuseTextureAcrossRetiredProxies) {
   TextureLifetimeHarness harness;
   ASSERT_TRUE(harness.initialize());
@@ -207,6 +254,9 @@ TEST(RenderTextureLifetimeTests, ScalarUpdatesReuseTextureAcrossRetiredProxies) 
   ASSERT_EQ(harness.stats().upload_count, 1u);
   for (std::size_t edit = 0u; edit < 48u; ++edit) {
     triangle.change_scalar();
+    triangle.record.material.primary_material.document.diffuse_model =
+        edit % 2u == 0u ? MaterialDiffuseModel::Lambert
+                       : MaterialDiffuseModel::Burley;
     harness.cache().sync_mesh(triangle.record);
     harness.cache().drain_retired_destroy_queue(1u);
     EXPECT_EQ(harness.stats().resource_count, 1u);

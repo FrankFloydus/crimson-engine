@@ -37,6 +37,7 @@ bool same_material_payload(const MaterialDocument &left,
   return left.name == right.name && same_vec3(left.base_color, right.base_color) &&
          left.roughness == right.roughness &&
          left.metallic == right.metallic &&
+         left.diffuse_model == right.diffuse_model &&
          left.texture_slots == right.texture_slots &&
          left.node_graph_reserved == right.node_graph_reserved;
 }

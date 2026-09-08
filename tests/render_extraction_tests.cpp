@@ -1546,6 +1546,7 @@ TEST(RenderSceneSnapshotTests,
                       .color_space = TextureColorSpace::Srgb,
                       .encoded_file_bytes = encoded_texture,
                   }},
+                  .diffuse_model = MaterialDiffuseModel::Lambert,
               },
           },
       .catalog_revision = 29u,
@@ -1569,6 +1570,8 @@ TEST(RenderSceneSnapshotTests,
   EXPECT_FLOAT_EQ(binding.primary_material.document.base_color.z, 0.75f);
   EXPECT_FLOAT_EQ(binding.primary_material.document.roughness, 0.35f);
   EXPECT_FLOAT_EQ(binding.primary_material.document.metallic, 0.65f);
+  EXPECT_EQ(binding.primary_material.document.diffuse_model,
+            MaterialDiffuseModel::Lambert);
   EXPECT_FLOAT_EQ(binding.primary_material.texture_transform.center.x,
                   0.25f);
   EXPECT_FLOAT_EQ(binding.primary_material.texture_transform.center.y,
@@ -1718,6 +1721,8 @@ TEST(RenderSceneSnapshotTests,
   ASSERT_EQ(initial.meshes.size(), 1u);
   EXPECT_EQ(initial.project_material_revision, 41u);
   EXPECT_TRUE(initial.meshes.front().material_reference.project_owned());
+  EXPECT_EQ(initial.meshes.front().material.primary_material.document.diffuse_model,
+            MaterialDiffuseModel::Burley);
   EXPECT_TRUE(render_scene_snapshot_matches_sources(initial, document, assets,
                                                     {}, 41u));
   EXPECT_FALSE(render_scene_snapshot_matches_sources(initial, document, assets,
@@ -1731,12 +1736,26 @@ TEST(RenderSceneSnapshotTests,
 
   resolver.revision_value = 53u;
   resolver.material->evaluation.content_revision = 59u;
+  resolver.material->evaluation.standard_material()->diffuse_model =
+      MaterialDiffuseModel::Lambert;
   const RenderSceneSnapshot changed = build_render_scene_snapshot(
       document, assets,
       {.previous = &unchanged, .project_material_resolver = &resolver});
   EXPECT_FALSE(changed.reused_previous_records);
   EXPECT_TRUE(changed.dirty.project_materials_changed);
   EXPECT_TRUE(changed.meshes.front().material_dirty);
+  EXPECT_FALSE(changed.meshes.front().mesh_dirty);
+  EXPECT_EQ(changed.meshes.front().mesh.geometry_payload,
+            initial.meshes.front().mesh.geometry_payload);
+  EXPECT_EQ(changed.meshes.front().material.primary_material.document.diffuse_model,
+            MaterialDiffuseModel::Lambert);
+  const auto resolutions = resolver.resolve_count;
+  const RenderSceneSnapshot retained = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &changed, .project_material_resolver = &resolver});
+  EXPECT_TRUE(retained.reused_previous_records);
+  EXPECT_FALSE(retained.dirty.any_dirty());
+  EXPECT_EQ(resolver.resolve_count, resolutions);
 
   document.set_transform(
       entity, TransformComponent{.position = {1.0f, 2.0f, 3.0f}});
@@ -1747,8 +1766,9 @@ TEST(RenderSceneSnapshotTests,
 TEST(RenderSceneSnapshotTests,
      ToolPreviewSnapshotsKeepEmbeddedMaterialBindings) {
   AssetRegistry assets;
-  const AssetId material =
-      assets.add_material(make_default_quader_material("Preview Material"));
+  MaterialDocument definition = make_default_quader_material("Preview Material");
+  definition.diffuse_model = MaterialDiffuseModel::Lambert;
+  const AssetId material = assets.add_material(definition);
   const std::vector<RenderToolPreviewMeshRecord> records =
       build_render_tool_preview_snapshot(
           {ToolPreviewMesh{
@@ -1765,6 +1785,8 @@ TEST(RenderSceneSnapshotTests,
   EXPECT_TRUE(
       records.front().material.primary_material.reference.embedded());
   EXPECT_EQ(records.front().material.primary_material.material_id, material);
+  EXPECT_EQ(records.front().material.primary_material.document.diffuse_model,
+            MaterialDiffuseModel::Lambert);
   EXPECT_EQ(records.front().material_revision,
             records.front().material.revision);
 }
@@ -4780,26 +4802,24 @@ TEST(LightRenderableCacheTests, SeparatesRebuildAndTransformSignatures) {
 }
 
 TEST(LightRenderableCacheTests, ConvertsEditorIntensityToViewportFilamentUnits) {
-    LightComponent point;
-    point.type = LightType::Point;
-    point.intensity = 1.0f;
-    EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(point),
-                    10000000.0f);
-
-    LightComponent brighter_point = point;
-    brighter_point.intensity = 2.5f;
-    EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(brighter_point),
-                    25000000.0f);
-
-    LightComponent spot = point;
-    spot.type = LightType::Spot;
-    EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(spot),
-                    10000000.0f);
-
-    LightComponent directional = point;
-    directional.type = LightType::Directional;
-    EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(directional),
-                    100000.0f);
+    // Reference strength 16 resolves to Godot energy 1. Filament's Lambert
+    // response and fixed 1/38400 exposure require pi*38400 lux or candela.
+    // Point and Filament SPOT convert candela to flux by 4*pi and pi.
+    constexpr double pi = 3.14159265358979323846;
+    for (float intensity : {1.0f, 16.0f, 32.0f}) {
+        LightComponent light;
+        light.intensity = intensity;
+        const double physical = pi * 38400.0 * intensity / 16.0;
+        light.type = LightType::Directional;
+        EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(light),
+                        static_cast<float>(physical));
+        light.type = LightType::Point;
+        EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(light),
+                        static_cast<float>(physical * 4.0 * pi));
+        light.type = LightType::Spot;
+        EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(light),
+                        static_cast<float>(physical * pi));
+    }
 }
 
 TEST(ViewportSceneOverlayBuilderTests, AddsHierarchySelectionWiresAndGroupBounds) {
@@ -7145,6 +7165,75 @@ TEST(InstanceRenderableCacheLookupTests,
           old_chunks, undersized, next_chunks);
   EXPECT_EQ(rejected.old_chunk_by_next_chunk,
             (std::vector<std::size_t>{rejected.no_old_chunk}));
+}
+
+TEST(RenderSceneSnapshotTests, DiffuseModelsKeepSeparateInstanceMaterialPayloads) {
+  class DiffuseModelResolver final : public RenderProjectMaterialResolver {
+  public:
+    std::uint64_t revision() const noexcept override { return revision_value; }
+    std::optional<RenderProjectMaterialSnapshot>
+    resolve(ProjectAssetId id) const override {
+      return RenderProjectMaterialSnapshot{
+          .evaluation = RenderMaterialEvaluationSnapshot{
+              .project_material_id = id,
+              .kind = RenderMaterialEvaluationKind::Standard,
+              .identity_revision = 1u,
+              .content_revision = revision_value,
+              .payload = RenderStandardMaterialEvaluationSnapshot{
+                  .diffuse_model = separate_models && id == lambert_id
+                                       ? MaterialDiffuseModel::Lambert
+                                       : MaterialDiffuseModel::Burley,
+              },
+          },
+          .catalog_revision = revision_value,
+      };
+    }
+    ProjectAssetId lambert_id;
+    std::uint64_t revision_value = 1u;
+    bool separate_models = true;
+  } resolver;
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const ProjectAssetId burley_id =
+      *ProjectAssetId::parse("58ecaccc-cb80-4126-9d76-cebb03df1b7e");
+  resolver.lambert_id =
+      *ProjectAssetId::parse("74b4e78c-9a47-46e4-97bb-4776b4688f72");
+  for (const ProjectAssetId material : {burley_id, resolver.lambert_id}) {
+    for (std::size_t instance = 0u; instance < 2u; ++instance) {
+      const EntityId entity =
+          document.create_entity("Diffuse Mesh", EntityKind::Mesh);
+      ASSERT_TRUE(document.set_mesh(entity, MeshComponent{.mesh = mesh}));
+      ASSERT_TRUE(document.set_material(entity, MaterialComponent{
+          .material = MaterialReference::project(material)}));
+    }
+  }
+
+  const RenderSceneSnapshot separate = build_render_scene_snapshot(
+      document, assets, {.project_material_resolver = &resolver});
+  EXPECT_TRUE(separate.meshes.empty());
+  ASSERT_EQ(separate.instance_primitives.size(), 2u);
+  const auto &first = separate.instance_primitives[0];
+  const auto &second = separate.instance_primitives[1];
+  EXPECT_EQ(first.mesh.geometry_payload, second.mesh.geometry_payload);
+  EXPECT_NE(first.key.material_payload, second.key.material_payload);
+  EXPECT_NE(first.material.primary_material.document.diffuse_model,
+            second.material.primary_material.document.diffuse_model);
+  EXPECT_EQ(first.occurrences.size(), 2u);
+  EXPECT_EQ(second.occurrences.size(), 2u);
+
+  resolver.separate_models = false;
+  ++resolver.revision_value;
+  const RenderSceneSnapshot combined = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &separate, .project_material_resolver = &resolver});
+  EXPECT_TRUE(combined.meshes.empty());
+  ASSERT_EQ(combined.instance_primitives.size(), 1u);
+  const auto &primitive = combined.instance_primitives.front();
+  EXPECT_EQ(primitive.occurrences.size(), 4u);
+  EXPECT_EQ(primitive.mesh.geometry_payload, first.mesh.geometry_payload);
+  EXPECT_EQ(primitive.material.primary_material.document.diffuse_model,
+            MaterialDiffuseModel::Burley);
 }
 
 TEST(RenderSceneWireframeBatchPlannerTests,

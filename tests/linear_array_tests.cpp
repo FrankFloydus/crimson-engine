@@ -12,8 +12,10 @@
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/modeling/linear_array_layout.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "math/glm_bridge.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
@@ -23,6 +25,7 @@
 #include "scene/scene_document.hpp"
 #include "scene/scene_transform.hpp"
 #include "scene/scene_transform_pivot.hpp"
+#include "viewport/viewport_camera_controller.hpp"
 
 #include <gtest/gtest.h>
 
@@ -135,6 +138,189 @@ TEST(LinearArrayLayoutTests, PreservesOrientationAndIncludesSharedEndpoint) {
       transform_vector(layout.generated_world_transforms[1],
                        {1.0f, 0.0f, 0.0f}),
       transform_vector(source_world, {1.0f, 0.0f, 0.0f}));
+}
+
+TEST(NativeViewportToolCursorTests,
+     PivotAndLinearHandlesTrackHoverDragReleaseAndCancellation) {
+  for (const ViewportToolId tool_id :
+       {ViewportToolId::Pivot, ViewportToolId::LinearArray}) {
+    SCOPED_TRACE(static_cast<int>(tool_id));
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    const auto source = editor.modeling().create_box(
+        QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                     .max = {1.0f, 1.0f, 1.0f}},
+        "Cursor Source");
+    ASSERT_TRUE(source.ok()) << source.error_message();
+    ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+    ASSERT_TRUE(editor.tools().activate(tool_id).ok());
+    ViewportCameraController camera;
+    camera.set_viewport_size(800.0f, 600.0f);
+    camera.focus_origin(16.0f);
+    camera.view_axis(ViewportViewAxis::Y, 1);
+    const auto handle_world = [&]() {
+      return tool_id == ViewportToolId::Pivot
+                 ? session.pivot().handle_state().world_position
+                 : session.linear_array().handle_state().endpoint_world;
+    };
+    ViewportInputFrame input;
+    input.viewport_hovered = true;
+    input.viewport_focused = true;
+    input.viewport_size = {800.0f, 600.0f};
+    input.mouse_local = camera.project_world_point(handle_world()).position;
+    input.mouse_screen = input.mouse_local;
+    ViewportInputResult input_result;
+    bool handles_visible = true;
+    const auto frame = [&](bool pressed, bool down, bool released) {
+      return session.native_tools().handle_pointer_frame(
+          session.scene(), session.assets(), &session.point_placement(), camera,
+          {.input = input,
+           .input_result = input_result,
+           .handles_visible = handles_visible,
+           .left_pressed = pressed,
+           .left_down = down,
+           .left_released = released,
+           .left_click_local = input.mouse_local});
+    };
+    (void)frame(false, false, false);
+    EXPECT_EQ(session.native_tools().pointer_cursor(),
+              ViewportPointerCursor::OpenHand);
+    const std::uint64_t scene_revision = session.scene().revision();
+    (void)frame(false, false, false);
+    EXPECT_EQ(session.scene().revision(), scene_revision);
+    EXPECT_EQ(session.native_tools().pointer_cursor(),
+              ViewportPointerCursor::OpenHand);
+    (void)frame(true, true, false);
+    EXPECT_EQ(session.native_tools().pointer_cursor(),
+              ViewportPointerCursor::ClosedHand);
+    EXPECT_TRUE(session.native_tools().pointer_dragging());
+    input.mouse_local.x += 24.0f;
+    (void)frame(false, true, false);
+    EXPECT_EQ(session.native_tools().pointer_cursor(),
+              ViewportPointerCursor::ClosedHand);
+    input.mouse_local = camera.project_world_point(handle_world()).position;
+    (void)frame(false, false, true);
+    EXPECT_FALSE(session.native_tools().pointer_dragging());
+    EXPECT_EQ(session.native_tools().pointer_cursor(),
+              ViewportPointerCursor::OpenHand);
+
+    for (int interruption = 0; interruption < 5; ++interruption) {
+      SCOPED_TRACE(interruption);
+      input.mouse_local = camera.project_world_point(handle_world()).position;
+      (void)frame(true, true, false);
+      ASSERT_TRUE(session.native_tools().pointer_dragging());
+      input_result.navigation_active = interruption == 0;
+      input.viewport_focused = interruption != 1;
+      handles_visible = interruption != 2;
+      input.pointer_interaction_canceled = interruption == 3;
+      input.text_input_active = interruption == 4;
+      (void)frame(false, true, false);
+      EXPECT_EQ(session.native_tools().pointer_cursor(),
+                ViewportPointerCursor::Default);
+      EXPECT_FALSE(session.native_tools().pointer_dragging());
+      input_result.navigation_active = false;
+      input.viewport_focused = true;
+      handles_visible = true;
+      input.pointer_interaction_canceled = false;
+      input.text_input_active = false;
+      (void)frame(false, false, true);
+    }
+    input.mouse_local = camera.project_world_point(handle_world()).position;
+    (void)frame(false, false, false);
+    EXPECT_EQ(session.native_tools().pointer_cursor(),
+              ViewportPointerCursor::OpenHand);
+    session.native_tools().clear_pointer_drag_state();
+    EXPECT_EQ(session.native_tools().pointer_cursor(),
+              ViewportPointerCursor::Default);
+    input.mouse_local = {-100.0f, -100.0f};
+    (void)frame(false, false, false);
+    EXPECT_EQ(session.native_tools().pointer_cursor(),
+              ViewportPointerCursor::Default);
+    input.mouse_local = camera.project_world_point(handle_world()).position;
+    (void)frame(false, false, false);
+    ASSERT_EQ(session.native_tools().pointer_cursor(),
+              ViewportPointerCursor::OpenHand);
+    ASSERT_TRUE(session.native_tools().cancel_active().ok);
+    EXPECT_EQ(session.native_tools().pointer_cursor(),
+              ViewportPointerCursor::Default);
+  }
+}
+
+TEST(NativeViewportToolCursorTests,
+     HiddenRadialCenterKeepsPlacementAndLockingAvailable) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto source = editor.modeling().create_box(
+      QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+      "Radial Cursor Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(source.value().entity,
+                                 {.position = {6.0f, 0.0f, 0.0f}})
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(16.0f);
+  camera.view_axis(ViewportViewAxis::Y, 1);
+  ViewportInputFrame input;
+  input.viewport_hovered = true;
+  input.viewport_focused = true;
+  input.viewport_size = {800.0f, 600.0f};
+  input.mouse_local = camera.project_world_point({}).position;
+  ViewportInputResult input_result;
+  bool handles_visible = true;
+  const auto frame = [&](bool pressed = false) {
+    input.mouse_screen = input.mouse_local;
+    return session.native_tools().handle_pointer_frame(
+        session.scene(), session.assets(), &session.point_placement(), camera,
+        {.input = input,
+         .input_result = input_result,
+         .handles_visible = handles_visible,
+         .left_pressed = pressed,
+         .left_down = pressed,
+         .left_click_local = input.mouse_local});
+  };
+
+  (void)frame();
+  const RadialArrayCenterState visible_candidate =
+      session.radial_array().center_state();
+  ASSERT_TRUE(visible_candidate.visible);
+  ASSERT_FALSE(visible_candidate.locked);
+  EXPECT_EQ(session.native_tools().pointer_cursor(),
+            ViewportPointerCursor::OpenHand);
+
+  handles_visible = false;
+  (void)frame();
+  ASSERT_TRUE(session.radial_array().active());
+  ASSERT_TRUE(session.radial_array().center_state().visible);
+  EXPECT_FALSE(session.radial_array().center_locked());
+  expect_vec3_near(session.radial_array().center_state().world_position,
+                   visible_candidate.world_position);
+  EXPECT_EQ(session.native_tools().pointer_cursor(),
+            ViewportPointerCursor::Default);
+
+  const QVec3 moved_center{0.0f, 0.0f, 2.0f};
+  input.mouse_local = camera.project_world_point(moved_center).position;
+  (void)frame();
+  ASSERT_TRUE(session.radial_array().center_state().visible);
+  expect_vec3_near(session.radial_array().center_state().world_position,
+                   moved_center);
+  EXPECT_EQ(session.native_tools().pointer_cursor(),
+            ViewportPointerCursor::Default);
+
+  const auto locked = frame(true);
+  EXPECT_TRUE(locked.radial_array_consumed);
+  EXPECT_TRUE(session.radial_array().active());
+  EXPECT_TRUE(session.radial_array().center_locked());
+  expect_vec3_near(session.radial_array().center_state().world_position,
+                   moved_center);
+  EXPECT_EQ(session.native_tools().pointer_cursor(),
+            ViewportPointerCursor::Default);
 }
 
 TEST(LinearArrayPerformanceTests,

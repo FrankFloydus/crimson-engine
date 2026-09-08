@@ -102,6 +102,7 @@ ViewportToolResult CreatePrimitiveTool::handle_event(
     modal.primary_pointer_gesture.reset();
     modal.primitive_creation_drag_started = false;
     interaction.end();
+    interaction.hover(-1);
     invalidate_cube(context);
   };
   if (interaction.active() >= 0) {

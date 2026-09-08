@@ -7,6 +7,7 @@
 #include "io/bridge/quader_bridge_reader.hpp"
 
 #include "assets/material_document.hpp"
+#include "assets/material_diffuse_model.hpp"
 #include "assets/mesh_collision_geometry_payload.hpp"
 #include "core/qstr.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
@@ -15,6 +16,7 @@
 #include "io/project/qmat_codec.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/shared_file_read.hpp"
+#include "scene/light_properties.hpp"
 #include "scene/scene_mesh_occurrence_projection.hpp"
 #include "scene/scene_texture_mapping.hpp"
 
@@ -409,6 +411,7 @@ void build_light_snapshot(QuaderBridgeScene &target) {
         {material->base_color.x, material->base_color.y, material->base_color.z};
     descriptor->standard.roughness = material->roughness;
     descriptor->standard.metallic = material->metallic;
+    descriptor->standard.diffuse_model = material->diffuse_model;
     constexpr std::array<const char *, QUADER_BRIDGE_TEXTURE_COUNT> kSlots{
         material_texture_slot::kBaseColor, material_texture_slot::kRoughness,
         material_texture_slot::kMetallic, material_texture_slot::kNormal};
@@ -534,17 +537,13 @@ int scene_view(const QuaderBridgeScene *scene, QuaderBridgeSceneView *out,
                QuaderBridgeError *error) noexcept {
   return guarded(error, [&] {
     require(scene != nullptr && out != nullptr, "Scene and output view are required.");
-    const SceneDocument &document = scene->source.document.scene();
-    const SceneSettingsComponent *settings = document.scene_settings(document.scene_root());
-    const SceneCameraSettings camera = settings != nullptr
-                                           ? settings->camera : SceneCameraSettings{};
     *out = {.id = scene->id.c_str(), .relative_path = scene->relative_path.c_str(),
             .mesh_count = count32(scene->meshes.size()),
             .material_count = count32(scene->materials.size()),
             .light_count = count32(scene->lights.size()),
-            .camera_aperture = camera.use_exposure ? camera.aperture : 1.0f,
-            .camera_shutter_seconds = camera.use_exposure ? camera.shutter_speed : 1.2f,
-            .camera_iso = camera.use_exposure ? camera.sensitivity : 100.0f};
+            .camera_aperture = kLightPreviewAperture,
+            .camera_shutter_seconds = kLightPreviewShutterSeconds,
+            .camera_iso = kLightPreviewSensitivity};
   });
 }
 
@@ -597,6 +596,7 @@ int light_view(const QuaderBridgeScene *scene, uint32_t index,
                 std::isfinite(light.color.z) && std::isfinite(light.intensity) &&
                 std::isfinite(light.range) && std::isfinite(light.distance_attenuation),
             "Source light contains non-finite lighting values.");
+    const LightEngineValues engine = light_engine_values(light);
     *out = {.name = source.name.c_str(),
             .entity = source.entity,
             .type = type,
@@ -605,7 +605,10 @@ int light_view(const QuaderBridgeScene *scene, uint32_t index,
             .intensity = light.intensity,
             .range = light.range,
             .distance_attenuation = light.distance_attenuation,
-            .casts_shadows = light.casts_shadows ? 1u : 0u};
+            .casts_shadows = light.casts_shadows ? 1u : 0u,
+            .preview_energy = engine.preview_energy,
+            .illuminance_lux = engine.illuminance_lux,
+            .luminous_intensity_candela = engine.luminous_intensity_candela};
     std::ranges::copy(source.world_transform.values, out->transform);
   });
 }
@@ -624,6 +627,17 @@ int material_identity(const QuaderBridgeScene *scene, uint32_t index,
   });
 }
 
+/** Maps the authored material choice without exposing native enum layout. */
+[[nodiscard]] uint32_t material_diffuse_model(MaterialDiffuseModel model) {
+  switch (model) {
+  case MaterialDiffuseModel::Burley:
+    return QUADER_BRIDGE_MATERIAL_DIFFUSE_BURLEY;
+  case MaterialDiffuseModel::Lambert:
+    return QUADER_BRIDGE_MATERIAL_DIFFUSE_LAMBERT;
+  }
+  fail("Source material has an unsupported diffuse model.");
+}
+
 int material_view(QuaderBridgeScene *scene, uint32_t index,
                   QuaderBridgeMaterialView *out, QuaderBridgeError *error) noexcept {
   return guarded(error, [&] {
@@ -635,7 +649,8 @@ int material_view(QuaderBridgeScene *scene, uint32_t index,
             .roughness = standard.roughness, .metallic = standard.metallic,
             .normal_strength = standard.normal_strength,
             .normal_directx = standard.normal_convention == NormalMapConvention::DirectX ? 1u : 0u,
-            .uv_rotation_degrees = standard.texture_transform.rotation_degrees};
+            .uv_rotation_degrees = standard.texture_transform.rotation_degrees,
+            .diffuse_model = material_diffuse_model(standard.diffuse_model)};
     std::ranges::copy(standard.base_color, out->base_color);
     std::ranges::copy(standard.texture_transform.center, out->uv_center);
     std::ranges::copy(standard.texture_transform.scale, out->uv_scale);

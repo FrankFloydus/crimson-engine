@@ -296,7 +296,8 @@ ProjectSessionResult ProjectSession::write_scene_recovery(
     return failure("Autosave requires an open scene and a recovery destination.");
   }
   const SceneSession &session = *scene->session;
-  if (session.native_tools().has_pending_history_preview() ||
+  if (session.document_commands().property_edit_active() ||
+      session.native_tools().has_pending_history_preview() ||
       session.native_tools().pointer_dragging() ||
       session.modeling().can_cancel_active_tool_or_preview() ||
       session.modeling().curve_document_preview_active()) {
@@ -776,6 +777,7 @@ ProjectSessionResult ProjectSession::activate(SceneSessionId id) {
     activation_generation_ = previous_activation_generation;
     return persisted;
   }
+  (void)standard_material_editor().cancel_base_color_preview();
   return success(true, "Active scene changed.", id);
 }
 
@@ -1250,6 +1252,9 @@ ProjectSessionResult ProjectSession::close_scene(SceneSessionId id,
     activation_generation_ = previous_activation_generation;
     return persisted;
   }
+  if (was_active) {
+    (void)standard_material_editor().cancel_base_color_preview();
+  }
   release_session_id(id);
   return success(true, "Scene closed.", active_scene_id_.valid()
                                                ? std::optional(active_scene_id_)
@@ -1635,6 +1640,7 @@ ProjectSessionResult ProjectSession::install_scene_and_activate(
     return result;
   }
 
+  (void)standard_material_editor().cancel_base_color_preview();
   active_scene_id_ = id;
   ++activation_generation_;
   ProjectSessionResult result = success(true, "Scene activated.", id);
@@ -1768,9 +1774,9 @@ bool ProjectSession::cancel_transient_state(OpenSceneSession &scene) {
   if (!scene.session) {
     return true;
   }
-  const CommandResult light_range =
-      scene.session->document_commands().cancel_active_point_light_range_edit();
-  if (!light_range.ok) {
+  const CommandResult property_edit =
+      scene.session->document_commands().cancel_active_property_edit();
+  if (!property_edit.ok) {
     return false;
   }
   const CommandResult native =

@@ -186,6 +186,10 @@ to_scene_light_component(const QuaderLightComponent &component) {
       .range = component.range,
       .casts_shadows = component.casts_shadows,
       .distance_attenuation = component.distance_attenuation,
+      .light_unit = static_cast<LightUnit>(component.light_unit),
+      .color_mode = static_cast<LightColorMode>(component.color_mode),
+      .color_temperature_kelvin = component.color_temperature_kelvin,
+      .source_preset = static_cast<LightSourcePreset>(component.source_preset),
   };
 }
 
@@ -198,6 +202,10 @@ to_api_light_component(const LightComponent &component) {
       .range = component.range,
       .casts_shadows = component.casts_shadows,
       .distance_attenuation = component.distance_attenuation,
+      .light_unit = static_cast<QuaderLightUnit>(component.light_unit),
+      .color_mode = static_cast<QuaderLightColorMode>(component.color_mode),
+      .color_temperature_kelvin = component.color_temperature_kelvin,
+      .source_preset = static_cast<QuaderLightSourcePreset>(component.source_preset),
   };
 }
 
@@ -213,6 +221,8 @@ inline SceneToneMapping to_scene_tone_mapping(QuaderToneMapping tone_mapping) {
     return SceneToneMapping::Filmic;
   case QuaderToneMapping::DisplayRange:
     return SceneToneMapping::DisplayRange;
+  case QuaderToneMapping::Agx:
+    return SceneToneMapping::Agx;
   }
   return SceneToneMapping::Aces;
 }
@@ -229,6 +239,8 @@ inline QuaderToneMapping to_api_tone_mapping(SceneToneMapping tone_mapping) {
     return QuaderToneMapping::Filmic;
   case SceneToneMapping::DisplayRange:
     return QuaderToneMapping::DisplayRange;
+  case SceneToneMapping::Agx:
+    return QuaderToneMapping::Agx;
   }
   return QuaderToneMapping::Aces;
 }
@@ -1285,6 +1297,7 @@ to_api_material_asset(const MaterialDocument &material) {
       .base_color = material.base_color,
       .roughness = material.roughness,
       .metallic = material.metallic,
+      .diffuse_model = static_cast<QuaderMaterialDiffuseModel>(material.diffuse_model),
       .texture_slots = material.texture_slots,
       .node_graph_reserved = material.node_graph_reserved,
   };
@@ -1299,6 +1312,7 @@ to_material_document(const QuaderMaterialAsset &material) {
   result.base_color = material.base_color;
   result.roughness = material.roughness;
   result.metallic = material.metallic;
+  result.diffuse_model = static_cast<MaterialDiffuseModel>(material.diffuse_model);
   result.texture_slots = material.texture_slots;
   result.node_graph_reserved = material.node_graph_reserved;
   return result;

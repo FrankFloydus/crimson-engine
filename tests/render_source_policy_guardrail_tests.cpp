@@ -1939,6 +1939,8 @@ TEST(SceneRenderBridgeTests,
       read_source_file("src/render/tool_preview_renderable_cache.hpp");
   const std::string cache_source =
       read_source_file("src/render/tool_preview_renderable_cache.cpp");
+  const std::string light_policy =
+      read_source_file("src/render/light_render_policy.hpp");
 
   EXPECT_NE(cache_header.find("struct LightPool final"),
             std::string::npos);
@@ -1946,9 +1948,17 @@ TEST(SceneRenderBridgeTests,
   EXPECT_NE(cache_source.find("build_inert_growth("), std::string::npos);
   EXPECT_NE(cache_source.find("plan_tool_preview_light_pools("),
             std::string::npos);
-  EXPECT_NE(cache_source.find(
-                "manager.setIntensity(instance, 0.0f)"),
-            std::string::npos)
+  EXPECT_TRUE(source_contains_compact(
+      cache_source,
+      "const bool enabled = proxy_index < record.instance_transforms.size()"));
+  EXPECT_TRUE(source_contains_compact(
+      cache_source,
+      "update_filament_light_properties(manager, instance, proxy.light, "
+      "record.light, proxy.enabled, enabled)"));
+  EXPECT_TRUE(source_contains_compact(
+      light_policy,
+      "manager.setIntensity(instance, "
+      "enabled ? filament_light_intensity(after) : 0.0f)"))
       << "inactive high-water proxies must remain inert";
 }
 
@@ -2878,7 +2888,10 @@ TEST(ViewportRendererTests, OverlayPassUsesNeutralExposureCamera) {
   EXPECT_NE(source.find("apply_projection(overlay_camera_)"),
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
-      source, "camera_->setExposure(std::max(settings.camera.aperture"));
+      source, "camera_->setExposure(kLightPreviewAperture, "
+              "kLightPreviewShutterSeconds, kLightPreviewSensitivity)"));
+  EXPECT_EQ(source.find("settings.camera.use_exposure"), std::string::npos);
+  EXPECT_EQ(source.find("settings.camera.aperture"), std::string::npos);
   EXPECT_NE(
       source.find("apply_neutral_overlay_exposure(filament::Camera *camera)"),
       std::string::npos);

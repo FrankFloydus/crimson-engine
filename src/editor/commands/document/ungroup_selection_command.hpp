@@ -22,8 +22,27 @@ namespace quader {
  */
 class UngroupSelectionCommand final : public SceneCommand {
 public:
-    explicit UngroupSelectionCommand(SceneDocument& scene)
+    explicit UngroupSelectionCommand(SceneDocument &scene)
         : SceneCommand(scene, "Ungroup Selection") {}
+
+    [[nodiscard]] DocumentCommandResult preflight() const {
+      const std::vector<EntityId> targets =
+          current_groups_.empty()
+              ? selected_ungroupable_roots()
+              : document_command_normalize_existing_entities(scene(),
+                                                             current_groups_);
+      if (targets.empty()) {
+        return document_command_unchanged_result();
+      }
+      const auto planned_groups = preflight_ungroup(targets);
+      if (!planned_groups.has_value()) {
+        return document_command_invalid_request_result(
+            "Grouped entities cannot preserve their world transforms when "
+            "ungrouped");
+      }
+      return planned_groups->empty() ? document_command_unchanged_result()
+                                     : document_command_changed_result();
+    }
 
     DocumentCommandResult undo() override {
         if (groups_.empty()) {
@@ -86,7 +105,6 @@ public:
       if (planned_groups->empty()) {
         return document_command_unchanged_result();
       }
-
       const DocumentSelectionState before_selection =
           document_command_capture_selection(scene());
       std::vector<EntityId> selected_children;
@@ -109,6 +127,11 @@ public:
 
       if (scene().set_parents(parent_assignments)) {
         scene().set_transforms(transform_assignments);
+        // Enroll group selection removal in the forward compensation scope;
+        // restoring the selected group on a failed publication writes it back.
+        for (const EntityId group : group_entities) {
+          (void)scene().set_selected(group, false);
+        }
         if (!scene().destroy_entities(group_entities)) {
           return document_command_missing_entity_result();
         }
@@ -121,6 +144,7 @@ public:
                   "Entity cannot be reparented");
             }
           }
+          (void)scene().set_selected(group, false);
           if (!scene().destroy_entity(group)) {
             return document_command_missing_entity_result();
           }

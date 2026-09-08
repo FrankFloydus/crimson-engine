@@ -527,6 +527,7 @@ third_party_license_expectations() {
       {"", "Google Material Icons",
        "licenses/google-material-icons-Apache-2.0.txt", false},
       {"", "Home Video font", "licenses/home-video-CC0-1.0.txt", false},
+      {"", "Godot AgX", "licenses/godot-MIT.txt", false},
       {"zstd", "Zstandard",
        "licenses/zstd-BSD-3-Clause-OR-GPL-2.0-only.txt", true},
       {"entt", "EnTT", "licenses/entt-MIT.txt", true},
@@ -1821,7 +1822,7 @@ TEST(BuildGuardrailTests, NativeDependencyToolsValidateSourceAndDeployment) {
   const std::string third_party_manifest =
       read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
   const std::string filament_pin = read_source_file(
-      "thirdparty/filament/filament-v1.71.6-quader-vsync3.json");
+      "thirdparty/filament/filament-v1.71.6-quader-vsync4.json");
   const std::string filament_builder = read_source_file("tools/build_filament_sdk.ps1");
   const std::string tracy_pin = read_source_file("thirdparty/tracy-0.13.1.json");
   const std::string native_verifier = read_source_file("tools/verify_native_build.ps1");
@@ -1876,11 +1877,11 @@ TEST(BuildGuardrailTests, FilamentPatchAppliesInsideAncestorWorktree) {
 
 TEST(BuildGuardrailTests, FilamentPresentationPatchPreservesDitheringAndTargetRouting) {
   const std::string pin = read_source_file(
-      "thirdparty/filament/filament-v1.71.6-quader-vsync3.json");
+      "thirdparty/filament/filament-v1.71.6-quader-vsync4.json");
   const std::string patch = read_source_file(
-      "thirdparty/filament/filament-v1.71.6-quader-vsync3.patch");
-  expect_contains(pin, "\"patch_version\": 3");
-  expect_contains(patch, "#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 3");
+      "thirdparty/filament/filament-v1.71.6-quader-vsync4.patch");
+  expect_contains(pin, "\"patch_version\": 4");
+  expect_contains(patch, "#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 4");
   // Preserve upstream dither amplitude. Native GPU tests verify the resulting pixels;
   // this contract prevents a dependency update from replacing the presentation fix
   // with noise suppression or applying its decode to an unrelated render target.
@@ -2154,7 +2155,7 @@ TEST(BuildGuardrailTests, LocalMachinePathsUseEnvironmentBackedDefaults) {
   const std::string presets = read_source_file("CMakePresets.json");
 
   expect_contains(root_c_make, "ENV{FILAMENT_SDK_ROOT}");
-  expect_contains(root_c_make, "../_SOURCES/filament-v1.71.6-quader-vsync3-windows");
+  expect_contains(root_c_make, "../_SOURCES/filament-v1.71.6-quader-vsync4-windows");
   expect_contains(options, "QUADER_OPENMESH_SOURCE_DIR");
   expect_contains(options, "ENV{${env_var}}");
   expect_contains(options, "ENV{USERPROFILE}");
@@ -5195,11 +5196,11 @@ TEST(BuildGuardrailTests, OwnsIncrementalLightSyncPolicy) {
   expect_contains(header, "rebuild_signature");
   expect_contains(header, "transform_signature");
   expect_contains(header, "filament_intensity");
-  expect_contains(source,
-                  "kGodotPunctualLightLumensPerIntensity = 1000.0f");
-  expect_contains(
-      source,
-      "kViewportPunctualLightExposureCompensation = 10000.0f");
+  expect_contains(source, "return filament_light_intensity(light)");
+  const std::string policy =
+      read_source_file({"src", "render", "light_render_policy.hpp"});
+  expect_contains(policy, "light_engine_values(light)");
+  expect_missing(source, "ExposureCompensation");
   expect_contains(source, "needs_rebuild(light)");
   expect_contains(source, "update_light_transform(existing->second, "
                           "light.world_transform)");

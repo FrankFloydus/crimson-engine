@@ -106,6 +106,12 @@ PreparedStructuralDuplicate prepare_structural_duplicate(
     ModelingSelectionMode result_selection_mode, const std::string &label,
     bool independent_mesh_assets, bool contains_modeling_content) {
   PreparedStructuralDuplicate prepared;
+  const CommandResult property_cancel =
+      document_commands.cancel_active_property_edit();
+  if (!property_cancel.ok) {
+    prepared.result = duplicate_batch_failure(property_cancel);
+    return prepared;
+  }
   prepared.scalar_checkpoint =
       scene.capture_scalar_compensation_checkpoint();
   if (!prepared.scalar_checkpoint.valid()) {
@@ -378,6 +384,7 @@ SceneStructuralLifecycleService::group_selection(
   static_cast<DocumentCommandResult &>(result) = history_.execute(
       std::make_unique<ModelingSelectionMementoCommand>(
           modeling_, selection_, std::move(prepared.command)));
+  result.changed = result.changed || prepared.status.changed;
   if (result.ok && result.changed) {
     result.group_entity = scene_.primary_selection();
   }
@@ -391,9 +398,11 @@ SceneStructuralLifecycleService::ungroup_selection() {
   if (!prepared.command) {
     return std::move(prepared.status);
   }
-  return history_.execute(
+  auto result = history_.execute(
       std::make_unique<ModelingSelectionMementoCommand>(
           modeling_, selection_, std::move(prepared.command)));
+  result.changed = result.changed || prepared.status.changed;
+  return result;
 }
 
 std::vector<EntityId>
@@ -729,17 +738,17 @@ CommandResult SceneStructuralLifecycleService::destroy_hierarchy(
   if (!normalized.status.ok) {
     return normalized.status;
   }
-  const CommandResult range_cancel =
-      document_commands_.cancel_active_point_light_range_edit();
-  if (!range_cancel.ok) {
-    return range_cancel;
+  const CommandResult property_cancel =
+      document_commands_.cancel_active_property_edit();
+  if (!property_cancel.ok) {
+    return property_cancel;
   }
   if (label.empty()) {
     label = "Destroy Entities";
   }
   CommandResult destroyed = history_.execute(modeling_.create_destroy_entities_command(
       std::move(normalized.roots), std::move(label)));
-  destroyed.changed = destroyed.changed || range_cancel.changed;
+  destroyed.changed = destroyed.changed || property_cancel.changed;
   return destroyed;
 }
 

@@ -73,6 +73,8 @@ struct ViewportNativeToolInteractionFrame final {
   bool navigation_gizmo_consumed = false;
   bool transform_gizmo_consumed = false;
   bool suppress_hover_work = false;
+  bool handles_visible = true;
+  std::uint64_t scene_surface_revision = 0u;
   bool left_pressed = false;
   bool left_down = false;
   bool left_released = false;
@@ -127,6 +129,9 @@ public:
       CurveToolService *curve = nullptr);
   void clear_drag_state();
   [[nodiscard]] bool dragging() const;
+  [[nodiscard]] ViewportPointerCursor pointer_cursor() const {
+    return pointer_cursor_;
+  }
 
   [[nodiscard]] static std::optional<int> hit_drawn_plane_captured_point(
       const std::array<QVec3, 3> &points, int captured_point_count,
@@ -158,6 +163,27 @@ public:
       const ViewportCameraController &camera, QVec2 mouse_local,
       const LinearArrayHandleState &handle);
 private:
+  /// Reuses projected handle hover until the camera, pointer, or handle moves.
+  struct HandleHoverKey final {
+    std::array<float, 25> pointer_camera{};
+    std::array<float, 3> position{};
+    bool operator==(const HandleHoverKey &) const = default;
+  };
+
+  /// Invalidates control picking only when its authored or spatial inputs change.
+  struct CurveControlHoverKey final {
+    modeling::CurveContentIdentity content;
+    EntityId entity = kInvalidEntityId;
+    std::uint64_t scene_revision = 0u;
+    std::uint64_t asset_revision = 0u;
+    std::uint64_t scene_surface_revision = 0u;
+    std::array<float, 16> world_transform{};
+    std::array<float, 25> pointer_camera{};
+    bool drawing = false;
+    bool active = false;
+    bool operator==(const CurveControlHoverKey &) const = default;
+  };
+
   /** Retains press-time state for one deferred curve-point construction gesture. */
   struct CurvePointConstructionPress final {
     ViewportPointerGesture gesture;
@@ -215,6 +241,13 @@ private:
   std::vector<SceneSurfaceOccurrenceExclusion>
       path_array_excluded_occurrences_;
   ViewportPointerReleaseSuppression left_release_suppression_;
+  ViewportPointerCursor pointer_cursor_ = ViewportPointerCursor::Default;
+  std::optional<CurveControlHoverKey> curve_control_hover_key_;
+  std::optional<CurveControlTarget> curve_control_hover_target_;
+  std::optional<HandleHoverKey> linear_array_hover_key_;
+  std::optional<HandleHoverKey> pivot_hover_key_;
+  bool linear_array_hover_hit_ = false;
+  bool pivot_hover_hit_ = false;
 };
 
 } // namespace quader

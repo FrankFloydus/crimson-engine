@@ -26,6 +26,9 @@ IO belongs to `src/sdk/core/modeling`.
 QMAT reads legacy v1, Standard v2, and the experimental v3 named-image schema. Map supported v3
 sRGB images to Standard albedo with their identities and UV transform intact; opening never rewrites
 them. Authoring still writes v2. Reject v3 data that cannot be represented without loss.
+Standard v1/v2 parameters may specify `diffuseModel` as `burley` or `lambert`;
+missing values use Burley. Writers preserve the authored selection in v2, and unknown
+strings or non-string values are rejected. Strict named-image v3 remains Burley.
 
 Update focused IO tests and compatibility fixtures with format changes; cover user save/load and
 project identity through the existing project-session/API tests. Root verification rules apply.

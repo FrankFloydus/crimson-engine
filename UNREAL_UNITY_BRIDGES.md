@@ -13,6 +13,12 @@ Neither bridge is implemented or scheduled by this document. It records the ligh
 research and Godot integration lessons for future development. Select and pin engine and
 render-pipeline versions before implementation; recheck their APIs and shader behavior then.
 
+The [2026-09-08 light source audit](src/scene/light_interoperability.md) records verified Unreal
+5.8, Blender 5.2 alpha, Unity HDRP/URP and pinned Filament internals. Quader now implements one
+nonnegative numeric intensity control for every light shape, fixed preview exposure, and ABI 5
+resolved light values. Intensity has no artistic upper cap or slider. The Unreal and Unity
+adapters below remain future work; neither bridge exists yet.
+
 ## Intended result and scope
 
 Build editor integrations that import saved Quader scenes and synchronize completed saves,
@@ -31,22 +37,25 @@ Use the [native bridge reader contract](src/io/bridge/README.md) and
 decoding, project containment, validation and saved-byte fingerprints in their current native
 owners. Unreal and Unity adapters should not implement independent QDR parsers.
 
-ABI 4 currently supplies:
+ABI 5 currently supplies:
 
 | Input | Future bridge use |
 | --- | --- |
 | Project UUID, scene UUID and light entity ID | Stable identity for import, reimport and preservation |
 | Name and Directional/Point/Spot type | Editor object/component creation |
 | Affine world transform and effective visibility | Placement, emission direction and enabled state |
-| Linear RGB and authored intensity | Engine-specific color and energy conversion |
+| Linear RGB and authored intensity | Color transfer and source authoring state |
+| `preview_energy`, `illuminance_lux`, `luminous_intensity_candela` | Central resolved calibration; consume the appropriate field without repeating Quader's conversion |
 | Range, distance attenuation and cast-shadow state | Punctual influence and shadow configuration |
-| Effective camera aperture, shutter seconds and ISO | Source exposure calculation |
+| Fixed-reference aperture, shutter seconds and ISO | Document the preview baseline; not an imported authored camera |
 
-The ABI exposes effective exposure inputs, not a complete authored camera. Disabled Quader
-camera exposure yields `(1, 1.2, 100)`, equivalent to multiplier 1. The separate toggle and
-inactive authored photographic values remain in Quader's scene and are not exposed by ABI 4.
-Faithful camera import would require a deliberate ABI extension. Do not infer the toggle from
-that triple, since an enabled camera can have the same values.
+The ABI always reports `(16, 1/125, 100)`: Filament's reference exposure `p0 = 1/38400`.
+Authored photographic values and the old exposure toggle remain stored in Quader scenes, but
+do not change current viewport lighting or these reader fields. There is no exposure-bypass
+branch and no separate legacy light-calibration profile. Saved scalar values are retained;
+the current resolver interprets them on the same scale as new lights. Faithful authored-camera
+import would require a deliberate ABI extension. Do not infer authored camera state from the
+fixed reference triple.
 
 Directional and spot emission follows transformed local **-Y**. Convert coordinate basis,
 handedness and distance units explicitly. Use the same placement conversion for geometry and
@@ -82,10 +91,13 @@ clamp, the punctual profile is:
 attenuation(d) = d^(-exponent) * max(1 - (d / range)^4, 0)^2
 ```
 
-Default 2 preserves the original Filament inverse-square calculation. Values 0 and 1 remove
-distance decay or select inverse distance respectively; negative values increase intensity
-with distance before the range cutoff. Exact near-source clamps and cutoff behavior remain
-part of validation, even when two engines both call their model inverse-square.
+New lights default to exponent **1**, selecting inverse distance. Historical QDR's absent
+falloff field defaults to **2**, preserving that stored inverse-square setting. The Inspector
+permits 0–2; exponent 0 removes distance decay, and older saved values outside that interval
+remain stored. Negative historical values increase intensity with distance before the range
+cutoff. Exact near-source clamps and cutoff behavior remain part of validation, even when
+two engines both call their model inverse-square. Initial physical parity tests must explicitly
+set exponent 2; the new-light default is not automatically equivalent to that profile.
 
 Unreal's **Light Falloff Exponent** is used when inverse-square falloff is disabled and has
 different semantics. Epic describes value 2 in that mode as almost linear. Never copy Quader's
@@ -103,34 +115,76 @@ provide Quader's arbitrary distance exponent.
 
 ### Intensity, spotlights and exposure
 
-Current [Quader light policy](src/render/light_render_policy.hpp) converts nonnegative authored
-intensity `I` to `I * 100000` lux for directional lights and `I * 10000000` lumens for punctual
-lights. Recheck this owner when implementing a bridge. Godot's additional conversion factors
-must not be copied to another engine without checking that engine's normalization.
+The [scene-owned resolver](src/scene/light_properties.cpp) defines all shapes from the same
+artist-facing intensity `I`, with a new-light default of 16. Its numeric field accepts
+nonnegative representable values, including values above 32:
+
+```text
+G = max(I, 0) / 16
+p0 = 1 / 38400
+Directional: E = G * pi / p0 lux
+Point/Spot: J = G * pi / p0 candela
+```
+
+Thus `I = 16` gives Godot preview energy `G = 1`; the corresponding physical field is
+approximately 120637.16 lux for Directional or 120637.16 candela for Point/Spot. These are
+calibrated backend quantities derived from the artist control, not a claim that the scalar
+itself is lux, candela, or a lamp's measured output. The physical field unused by the shape is
+zero. Presets supply editable starting values in 1–32; that interval does not limit manual
+intensity entry. Historical scalar values remain stored; consumers use the resolver's published
+fields, including its finite-range saturation, instead of imposing a separate cap on import.
+
+The [Filament adapter](src/render/light_render_policy.hpp) sends `E` directly and converts
+`J` to Point `4*pi*J` lumens or ordinary Spot `pi*J` reference lumens. The old independent
+punctual multiplier is gone. Godot's nonphysical import consumes `preview_energy` directly;
+its physical mode uses the physical fields. Unreal and Unity must use their own unit contracts:
+
+| Destination path | Directional | Point/Spot |
+| --- | --- | --- |
+| Unreal, inverse-square local lights | Set Intensity to reader `illuminance_lux` | Select Candela and set Intensity to reader `luminous_intensity_candela` |
+| Unity HDRP | Set native lux from `illuminance_lux` | Set native candela from `luminous_intensity_candela` through the supported HDRP API |
+| Unity URP / Built-in | Evaluate `preview_energy` against a locked pipeline-specific reference | Calibrate `preview_energy`, distance and cone response together; parity is not yet implemented or measured |
+
+Convert geometry and ranges to Unreal centimeters together. Unreal's local-light implementation
+already applies its centimeter-squared factor internally; do not multiply reader candela by
+10000 in the exporter. HDRP and Unreal receive resolved physical quantities without multiplying
+by Quader's reference exposure. Their destination camera applies exposure during rendering.
 
 Unreal and HDRP provide physical units, but equal lumen values alone do not establish equal
 spotlight brightness. Validate cone solid-angle normalization and reflector behavior; candela
-may offer a clearer comparison after converting Filament's emitted intensity.
+is the shared reader quantity for Point/Spot. Unreal lumen conversion uses
+`2*pi*(1-cos(outerHalfAngle))`; HDRP's cone/reflector choice also affects lumen conversion.
+Importing reader candela avoids an unnecessary and potentially different lumen round trip.
 [Unreal physical units](https://dev.epicgames.com/documentation/en-us/unreal-engine/using-physical-lighting-units-in-unreal-engine),
 [HDRP physical units](https://docs.unity3d.com/Packages/com.unity.render-pipelines.high-definition@17.0/manual/Physical-Light-Units.html).
 
 Quader's current spot inner/outer cones are fixed. Unreal and Unity URP/HDRP support separate
 inner and outer controls. Convert full-angle versus half-angle conventions explicitly, and
 verify the edge profile. Editable Quader cone angles and corresponding reader fields would
-be useful future additions; ABI 4 does not already expose them.
+be useful future additions; ABI 5 does not expose them.
 [Unreal spotlights](https://dev.epicgames.com/documentation/en-us/unreal-engine/spot-lights-in-unreal-engine),
 [HDRP spotlight controls](https://docs.unity3d.com/Packages/com.unity.render-pipelines.high-definition@17.0/manual/reference-light-component.html).
 
 Choose an explicit exposure policy before calibrating energy:
 
-- Preserve physical light quantities and let the destination camera/environment control exposure.
-- Or apply Quader's effective exposure to imported energy for a documented destination exposure
-  baseline. The destination's exposure still affects the resulting image.
+- Preserve the reader's resolved physical quantities and let the destination camera/environment
+  control exposure. This transfers the calibration without promising identical final pixels.
+- Or match Quader's viewport against a documented, locked destination exposure and tone-mapping
+  baseline. Derive any appearance correction from the source and destination linear responses.
 
-Honor the Quader bypass in the second policy. Avoid applying source exposure twice, and keep
-destination cameras, automatic exposure and project settings unchanged unless their import is
-explicitly enabled. Quader's Filament exposure uses a factor of 1.2; equal aperture/shutter/ISO
-values in another engine are not proof of equal exposure multipliers.
+Quader's baseline is fixed at `p0`; stored camera edits or the old toggle do not change it.
+`preview_energy` already represents the preview calibration, while `E` and `J` are backend
+quantities intended to be rendered through the reference exposure. Do not multiply either
+reader branch by another source-exposure factor. Keep destination cameras, automatic exposure,
+and project settings unchanged unless their import is explicitly enabled.
+
+For controlled physical comparisons, match the destination exposure multiplier to `p0`.
+Unreal's default lens attenuation differs from Filament's factor of 1.2. In Unreal postprocess
+Manual mode, with physical-camera exposure enabled and no editor fixed override or bias curve,
+the same camera settings require absolute Exposure Compensation `-log2(1.2)`, approximately
+-0.263 stops. The editor fixed-EV override ignores that compensation; use the source EV100
+plus 0.263 instead. HDRP's reference formula uses the same 1.2 factor as Filament. Automatic
+exposure and tone mapping can still counteract or alter the visible intensity comparison.
 [Unreal exposure](https://dev.epicgames.com/documentation/unreal-engine/auto-exposure-in-unreal-engine),
 [HDRP exposure](https://docs.unity3d.com/Packages/com.unity.render-pipelines.high-definition@17.0/manual/Override-Exposure.html).
 
@@ -182,7 +236,9 @@ Begin with small controlled fixtures and a quick visual handoff before expanding
 - [ ] Validate directional and spotlight orientation, cone edges, linear RGB conversion, physical
   intensity normalization, source visibility and shadows.
 - [ ] Compare 2, 1, 0 and negative exponents only where supported; expose unsupported cases clearly.
-- [ ] Toggle source exposure off/on, save/reopen and verify the selected destination exposure policy.
+- [ ] Verify I=0/1/16/32/64 resolves to preview energy 0/0.0625/1/2/4 for every shape, with the expected
+  physical reader fields. Save/reopen and confirm stored camera edits and the old exposure toggle
+  do not alter the fixed source calibration. Test destination exposure policies separately.
 - [ ] Verify actual editor viewport presentation as well as offscreen render targets. Quader's
   double-sRGB bug made correct attenuation appear wrong: a grading LUT and sRGB swapchain must
   not both encode the same output. Equal tone-mapper names also do not guarantee equal curves.

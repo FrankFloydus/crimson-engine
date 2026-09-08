@@ -326,23 +326,66 @@ enum class LightType {
     Spot
 };
 
+/// Historical metadata retained for saved-scene/API compatibility; UI uses Intensity.
+enum class LightUnit { Simple = 0, Lumens = 1, Candela = 2 };
+
+/// Selects an explicit RGB color or a remembered correlated color temperature.
+enum class LightColorMode { Color = 0, ColorTemperature = 1 };
+
+/// Stable identities for editable nominal light-source presets; append new values.
+enum class LightSourcePreset {
+  Custom = 0,
+  Candle = 1,
+  Incandescent40W = 2,
+  Incandescent60W = 3,
+  Incandescent75W = 4,
+  Incandescent100W = 5,
+  Halogen80W = 6,
+  DecorativeLed = 7,
+  WarmLed = 8,
+  WarmWhiteLed = 9,
+  NeutralLed = 10,
+  DaylightLed = 11,
+  CoolDaylightLed = 12,
+  WarmFluorescent36W = 13,
+  NeutralFluorescent36W = 14,
+  DaylightFluorescent36W = 15,
+  HighPressureSodium100W = 16,
+  MercuryVapor80W = 17,
+  MetalHalide400W = 18,
+  StudioTungsten = 19,
+  SunriseSunset = 20,
+  MiddaySun = 21,
+  Daylight = 22,
+  Overcast = 23,
+  OutdoorShade = 24,
+  BlueSky = 25,
+};
+
 /**
  * Represents a Light Component value used by the scene graph document layer.
  */
 struct LightComponent {
     LightType type = LightType::Directional;
     QVec3 color = {1.0f, 1.0f, 1.0f};
-    float intensity = 1.0f;
+    float intensity = 16.0f;
     float range = 10.0f;
     bool casts_shadows = false;
-    float distance_attenuation = 2.0f;
+    float distance_attenuation = 1.0f;
+    LightUnit light_unit = LightUnit::Simple;
+    LightColorMode color_mode = LightColorMode::Color;
+    float color_temperature_kelvin = 6500.0f;
+    LightSourcePreset source_preset = LightSourcePreset::Custom;
 
     [[nodiscard]] bool operator==(const LightComponent& other) const {
       return type == other.type && color.x == other.color.x &&
              color.y == other.color.y && color.z == other.color.z &&
              intensity == other.intensity && range == other.range &&
              casts_shadows == other.casts_shadows &&
-             distance_attenuation == other.distance_attenuation;
+             distance_attenuation == other.distance_attenuation &&
+             light_unit == other.light_unit && color_mode == other.color_mode &&
+             color_temperature_kelvin == other.color_temperature_kelvin &&
+             source_preset == other.source_preset;
     }
 };
 
@@ -401,6 +444,7 @@ enum class SceneToneMapping {
     Aces,
     Filmic,
     DisplayRange,
+    Agx,
 };
 
 /**
@@ -415,7 +459,7 @@ struct ScenePostProcessSettings {
     bool bloom = false;
     float bloom_strength = 0.1f;
     bool dithering = true;
-    SceneToneMapping tone_mapping = SceneToneMapping::Aces;
+    SceneToneMapping tone_mapping = SceneToneMapping::Linear;
 
     [[nodiscard]] bool operator==(const ScenePostProcessSettings& other) const {
       return enabled == other.enabled && anti_aliasing == other.anti_aliasing &&

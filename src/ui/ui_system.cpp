@@ -676,17 +676,73 @@ bool UISystem::initialize(RenderSystem &render_system,
         present_lifecycle_result(result);
         refresh_standard_material_editor();
       });
+  standard_material_editor_window_->set_albedo_preview_begin_callback([this]() {
+    if (editor_ == nullptr) {
+      return false;
+    }
+    const auto revision =
+        editor_->standard_material_documents().current_revision();
+    if (!revision.ok()) {
+      return false;
+    }
+    const auto generation = runtime_binding_generation_;
+    const auto session = revision.value().session_id;
+    const auto result =
+        editor_->standard_material_documents().begin_base_color_preview(session);
+    if (!result.ok()) {
+      present_lifecycle_result(result);
+      return false;
+    }
+    if (generation != runtime_binding_generation_) {
+      return false;
+    }
+    material_color_preview_session_ = session;
+    material_color_preview_binding_generation_ = generation;
+    return true;
+  });
   standard_material_editor_window_->set_albedo_edited_callback(
       [this](QColor color) {
-        if (editor_ == nullptr) {
+        if (editor_ == nullptr || !material_color_preview_session_.has_value() ||
+            material_color_preview_binding_generation_ !=
+                runtime_binding_generation_) {
           return;
         }
+        const auto generation = runtime_binding_generation_;
         const QuaderApiVoidResult result =
-            editor_->standard_material_documents().set_base_color(
+            editor_->standard_material_documents().update_base_color_preview(
+                *material_color_preview_session_,
                 {static_cast<float>(color.redF()),
                  static_cast<float>(color.greenF()),
                  static_cast<float>(color.blueF())});
-        present_lifecycle_result(result);
+        if (generation != runtime_binding_generation_) {
+          return;
+        }
+        if (!result.ok()) {
+          material_color_preview_session_.reset();
+          standard_material_editor_window_->abandon_interactions();
+          present_lifecycle_result(result);
+        }
+        refresh_standard_material_editor();
+      });
+  standard_material_editor_window_->set_albedo_preview_finish_callback(
+      [this](bool accepted) {
+        if (editor_ == nullptr || !material_color_preview_session_.has_value() ||
+            material_color_preview_binding_generation_ !=
+                runtime_binding_generation_) {
+          return;
+        }
+        const auto session = *material_color_preview_session_;
+        const auto generation = runtime_binding_generation_;
+        material_color_preview_session_.reset();
+        const auto result =
+            editor_->standard_material_documents().finish_base_color_preview(
+                session, accepted);
+        if (generation != runtime_binding_generation_) {
+          return;
+        }
+        if (!result.ok()) {
+          present_lifecycle_result(result);
+        }
         refresh_standard_material_editor();
       });
   standard_material_editor_window_->set_scalar_edited_callback(
@@ -703,6 +759,26 @@ bool UISystem::initialize(RenderSystem &render_system,
                 direct_x ? QuaderNormalMapConvention::DirectX
                          : QuaderNormalMapConvention::OpenGL);
         present_lifecycle_result(result);
+        refresh_standard_material_editor();
+      });
+  standard_material_editor_window_->set_diffuse_model_edited_callback(
+      [this](QtStandardMaterialDiffuseModel model) {
+        if (editor_ == nullptr) {
+          return;
+        }
+        const std::uint64_t generation = runtime_binding_generation_;
+        const QuaderApiVoidResult result =
+            editor_->standard_material_documents().set_diffuse_model(
+                model == QtStandardMaterialDiffuseModel::Lambert
+                    ? QuaderMaterialDiffuseModel::Lambert
+                    : QuaderMaterialDiffuseModel::Burley);
+        if (generation != runtime_binding_generation_) {
+          return;
+        }
+        present_lifecycle_result(result);
+        if (generation != runtime_binding_generation_) {
+          return;
+        }
         refresh_standard_material_editor();
       });
   standard_material_editor_window_->set_texture_action_callback(
@@ -772,6 +848,10 @@ void UISystem::install_runtime_hooks(
     NativeViewportToolCoordinator &native_tools,
     ViewportPointPlacementService &point_placement, AssetId default_material) {
   ++runtime_binding_generation_;
+  material_color_preview_session_.reset();
+  if (standard_material_editor_window_ != nullptr) {
+    standard_material_editor_window_->abandon_interactions();
+  }
   abandon_scene_backed_panels();
   if (viewport_panel_ != nullptr) {
     // Project rebinding can release the previous SceneSession before this
@@ -3559,6 +3639,7 @@ void UISystem::refresh_standard_material_editor() {
   const QuaderStandardMaterialDocumentInfo &source = current.value();
   QtStandardMaterialEditorDocument document{
       .stable_id = QString::fromStdString(std::string(source.id.str())),
+      .session_generation = source.session_id.generation(),
       .name = QString::fromStdString(source.name),
       .project_relative_path =
           source.path.has_value()
@@ -3572,6 +3653,9 @@ void UISystem::refresh_standard_material_editor() {
       .normal_strength = source.material.normal_strength,
       .direct_x_normal = source.material.normal_convention ==
                          QuaderNormalMapConvention::DirectX,
+      .diffuse_model = source.material.diffuse_model == QuaderMaterialDiffuseModel::Lambert
+                           ? QtStandardMaterialDiffuseModel::Lambert
+                           : QtStandardMaterialDiffuseModel::Burley,
       .texture_transform =
           QtStandardMaterialTextureTransform{
               .center_u = source.material.texture_transform.center[0],
@@ -4188,6 +4272,9 @@ void UISystem::refresh_localized_chrome() {
             .properties_group = text(
                 "ui.standard_material_editor.properties", "Material"),
             .name = text("ui.standard_material_editor.name", "Name"),
+            .diffuse_model = text("ui.standard_material_editor.diffuse_model", "Diffuse Model"),
+            .diffuse_burley = text("ui.standard_material_editor.diffuse_model.burley", "Burley"),
+            .diffuse_lambert = text("ui.standard_material_editor.diffuse_model.lambert", "Lambert"),
             .type = text("ui.standard_material_editor.type", "Type"),
             .standard_material = text(
                 "ui.standard_material_editor.standard_material",

@@ -51,6 +51,12 @@ public:
              ViewportCurveInteractionPort *curve_tool);
 
   [[nodiscard]] bool dragging() const { return dragging_; }
+  [[nodiscard]] ViewportPointerCursor pointer_cursor() const {
+    if (dragging_) return ViewportPointerCursor::ClosedHand;
+    return pending_drag_ || hover_axis_ != quader_editor_core::TransformAxis::None
+               ? ViewportPointerCursor::OpenHand
+               : ViewportPointerCursor::Default;
+  }
   /// A pending gizmo click owns its release before a drag preview exists.
   [[nodiscard]] bool pointer_interaction_active() const {
     return dragging_ || pending_drag_.has_value();

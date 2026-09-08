@@ -4,6 +4,8 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#include "api/quader_api_type_conversions.hpp"
+#include "api/quader_editor_api.hpp"
 #include "assets/mesh_asset.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
 #include "io/mesh/obj_writer.hpp"
@@ -15,6 +17,8 @@
 #include "scene/document/scene_content_document.hpp"
 
 #include "qdr_scene_generated.h"
+
+#include <QTemporaryDir>
 
 #include <gtest/gtest.h>
 #include <quader/modeling/curves/curve_document.hpp>
@@ -112,6 +116,28 @@ namespace qdr_fb = ::quader::qdr::fb;
   const EntityId entity = document.scene().create_entity_with_id(
       100u, "Triangle Entity", EntityKind::Mesh);
   (void)document.scene().set_mesh(entity, MeshComponent{.mesh = 10u});
+  return document;
+}
+
+[[nodiscard]] SceneContentDocument scene_with_light(LightComponent light) {
+  SceneContentDocument document = simple_scene();
+  const EntityId entity = document.scene().create_entity_with_id(
+      200u, "Authored Light", EntityKind::Light);
+  if (!document.scene().set_light(entity, light)) {
+    throw std::runtime_error("Could not create the test light component.");
+  }
+  return document;
+}
+
+[[nodiscard]] SceneContentDocument
+scene_with_material(MaterialDiffuseModel diffuse_model) {
+  SceneContentDocument document = simple_scene();
+  auto material = make_default_quader_material("Authored diffuse material");
+  material.diffuse_model = diffuse_model;
+  if (document.assets().add_material(20u, std::move(material)) != 20u ||
+      !document.scene().set_material(100u, MaterialComponent{.material = 20u})) {
+    throw std::runtime_error("Could not create the test material.");
+  }
   return document;
 }
 
@@ -927,7 +953,7 @@ TEST(QdrBinarySceneCodecTests,
                           quader_io::QdrBinaryChunkType::SceneMetadata)) {
       continue;
     }
-    EXPECT_EQ(chunk.schema_version, 11u);
+    EXPECT_EQ(chunk.schema_version, 14u);
     flatbuffers::Verifier verifier(
         reinterpret_cast<const std::uint8_t *>(chunk.bytes().data()),
         chunk.bytes().size());
@@ -1251,6 +1277,427 @@ TEST(QdrBinarySceneCodecTests,
                   snapshot.viewport_camera_pose->up.z);
 }
 
+TEST(QdrBinarySceneCodecTests, EmbeddedDiffuseModelsRoundTripWithBurleyWireDefault) {
+  for (const auto model : {MaterialDiffuseModel::Burley, MaterialDiffuseModel::Lambert}) {
+    SCOPED_TRACE(static_cast<int>(model));
+    const auto parsed = parse_written_scene(scene_with_material(model));
+    ASSERT_TRUE(parsed.ok) << parsed.message;
+    const auto metadata = std::ranges::find_if(parsed.chunks, [](const auto &chunk) {
+      return chunk.type == static_cast<std::uint32_t>(quader_io::QdrBinaryChunkType::SceneMetadata);
+    });
+    ASSERT_NE(metadata, parsed.chunks.end());
+    EXPECT_EQ(metadata->schema_version, 14u);
+    const auto *payload = qdr_fb::GetScenePayload(metadata->bytes().data());
+    ASSERT_NE(payload->materials(), nullptr);
+    ASSERT_EQ(payload->materials()->size(), 1u);
+    const auto *stored = payload->materials()->Get(0u);
+    EXPECT_EQ(flatbuffers::IsFieldPresent(stored, qdr_fb::MaterialAsset::VT_DIFFUSE_MODEL),
+              model == MaterialDiffuseModel::Lambert);
+    const auto read = QdrDocumentReader::deserialize_project_document(
+        quader_io::build_qdr_binary_container(parsed.scene_uuid, copy_chunks(parsed)));
+    ASSERT_TRUE(read.ok) << read.message;
+    ASSERT_NE(read.document.assets().material(20u), nullptr);
+    EXPECT_EQ(read.document.assets().material(20u)->diffuse_model, model);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests, LegacySchemasWithoutDiffuseModelUseBurley) {
+  const auto parsed = parse_written_scene(scene_with_material(MaterialDiffuseModel::Burley));
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  for (std::uint16_t version = 1u; version <= 13u; ++version) {
+    SCOPED_TRACE(version);
+    auto chunks = copy_chunks(parsed);
+    const auto metadata = std::ranges::find_if(chunks, [](const auto &chunk) {
+      return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+    });
+    ASSERT_NE(metadata, chunks.end());
+    metadata->schema_version = version;
+    const auto read = QdrDocumentReader::deserialize_project_document(
+        quader_io::build_qdr_binary_container(parsed.scene_uuid, std::move(chunks)));
+    ASSERT_TRUE(read.ok) << read.message;
+    ASSERT_NE(read.document.assets().material(20u), nullptr);
+    EXPECT_EQ(read.document.assets().material(20u)->diffuse_model, MaterialDiffuseModel::Burley);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests, RejectsUnknownDiffuseModelAndLambertBeforeSchemaFourteen) {
+  const auto parsed = parse_written_scene(scene_with_material(MaterialDiffuseModel::Lambert));
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  for (const std::uint8_t model : {std::uint8_t{1u}, std::uint8_t{2u}, std::uint8_t{255u}}) {
+    SCOPED_TRACE(static_cast<int>(model));
+    auto chunks = copy_chunks(parsed);
+    const auto metadata = std::ranges::find_if(chunks, [](const auto &chunk) {
+      return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+    });
+    ASSERT_NE(metadata, chunks.end());
+    const auto *payload = qdr_fb::GetScenePayload(metadata->bytes.data());
+    const auto *stored = payload->materials()->Get(0u);
+    const auto offset = static_cast<std::size_t>(
+        reinterpret_cast<const std::byte *>(stored) - metadata->bytes.data());
+    overwrite_flatbuffer_table_scalar<std::uint8_t>(metadata->bytes, offset, 7u, model);
+    if (model == 1u) metadata->schema_version = 13u;
+    metadata->content_hash = 0u;
+    const auto read = QdrDocumentReader::deserialize_project_document(
+        quader_io::build_qdr_binary_container(parsed.scene_uuid, std::move(chunks)));
+    EXPECT_FALSE(read.ok);
+    EXPECT_NE(read.message.find("diffuse model"), std::string::npos);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests, RejectsInvalidDiffuseModelInWriteSnapshot) {
+  auto snapshot = required_write_snapshot(scene_with_material(MaterialDiffuseModel::Burley));
+  ASSERT_EQ(snapshot.materials.size(), 1u);
+  snapshot.materials.front().material.diffuse_model = static_cast<MaterialDiffuseModel>(255u);
+  EXPECT_THROW(QdrDocumentWriter::serialize_project_document_bytes(snapshot, test_uuid()),
+               std::runtime_error);
+}
+
+TEST(QdrBinarySceneCodecTests,
+     SchemaTwelveRoundTripPreservesLightMetadataAndAuthoredValues) {
+  for (int preset = static_cast<int>(LightSourcePreset::Custom);
+       preset <= static_cast<int>(LightSourcePreset::BlueSky); ++preset) {
+    SCOPED_TRACE(preset);
+    const LightComponent light{
+        .type = static_cast<LightType>(preset % 3),
+        .color = {0.17f, 0.35f, 0.61f},
+        .intensity = 321.125f,
+        .range = 27.5f,
+        .casts_shadows = true,
+        .distance_attenuation = 3.5f,
+        .light_unit = static_cast<LightUnit>(preset % 3),
+        .color_mode = static_cast<LightColorMode>(preset % 2),
+        .color_temperature_kelvin = preset % 2 == 0 ? 1500.0f : 15000.0f,
+        .source_preset = static_cast<LightSourcePreset>(preset),
+    };
+    const auto parsed = parse_written_scene(scene_with_light(light));
+    ASSERT_TRUE(parsed.ok) << parsed.message;
+    const auto metadata = std::ranges::find_if(
+        parsed.chunks, [](const quader_io::QdrBinaryChunk &chunk) {
+          return chunk.type == static_cast<std::uint32_t>(
+                                   quader_io::QdrBinaryChunkType::SceneMetadata);
+        });
+    ASSERT_NE(metadata, parsed.chunks.end());
+    EXPECT_EQ(metadata->schema_version, 14u);
+
+    const auto read = QdrDocumentReader::deserialize_project_document(
+        quader_io::build_qdr_binary_container(parsed.scene_uuid,
+                                               copy_chunks(parsed)));
+    ASSERT_TRUE(read.ok) << read.message;
+    const LightComponent *restored = read.document.scene().light(200u);
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(*restored, light)
+        << "Reading must retain RGB and intensity, not reapply the preset.";
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     NewLightFalloffIsExplicitWhileHistoricalDefaultRemainsTwo) {
+  for (const float falloff : {1.0f, 2.0f}) {
+    SCOPED_TRACE(falloff);
+    LightComponent light;
+    EXPECT_FLOAT_EQ(light.distance_attenuation, 1.0f);
+    light.distance_attenuation = falloff;
+    const auto parsed = parse_written_scene(scene_with_light(light));
+    ASSERT_TRUE(parsed.ok) << parsed.message;
+    const auto metadata = std::ranges::find_if(
+        parsed.chunks, [](const quader_io::QdrBinaryChunk &chunk) {
+          return chunk.type == static_cast<std::uint32_t>(
+                                   quader_io::QdrBinaryChunkType::SceneMetadata);
+        });
+    ASSERT_NE(metadata, parsed.chunks.end());
+    const qdr_fb::ScenePayload *payload =
+        qdr_fb::GetScenePayload(metadata->bytes().data());
+    ASSERT_NE(payload->entities(), nullptr);
+    const qdr_fb::LightComponent *stored_light = nullptr;
+    for (const qdr_fb::Entity *stored : *payload->entities()) {
+      if (stored->id() == 200u) {
+        stored_light = stored->light();
+        break;
+      }
+    }
+    ASSERT_NE(stored_light, nullptr);
+    EXPECT_EQ(flatbuffers::IsFieldPresent(
+                  stored_light, qdr_fb::LightComponent::VT_DISTANCE_ATTENUATION),
+              falloff == 1.0f);
+    EXPECT_FLOAT_EQ(stored_light->distance_attenuation(), falloff);
+    EXPECT_FALSE(flatbuffers::IsFieldPresent(
+        stored_light, qdr_fb::LightComponent::VT_LIGHT_UNIT));
+    EXPECT_FALSE(flatbuffers::IsFieldPresent(
+        stored_light, qdr_fb::LightComponent::VT_COLOR_MODE));
+    EXPECT_FALSE(flatbuffers::IsFieldPresent(
+        stored_light, qdr_fb::LightComponent::VT_COLOR_TEMPERATURE_KELVIN));
+    EXPECT_FALSE(flatbuffers::IsFieldPresent(
+        stored_light, qdr_fb::LightComponent::VT_SOURCE_PRESET));
+
+    const auto read = QdrDocumentReader::deserialize_project_document(
+        quader_io::build_qdr_binary_container(parsed.scene_uuid,
+                                               copy_chunks(parsed)));
+    ASSERT_TRUE(read.ok) << read.message;
+    ASSERT_NE(read.document.scene().light(200u), nullptr);
+    EXPECT_EQ(*read.document.scene().light(200u), light);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     SchemasOneThroughElevenIgnoreLightMetadataAndPreserveHistoricalValues) {
+  const LightComponent light{
+      .type = LightType::Spot,
+      .color = {0.125f, 0.25f, 0.75f},
+      .intensity = 512.25f,
+      .range = 25.0f,
+      .casts_shadows = true,
+      .distance_attenuation = 3.5f,
+      .light_unit = LightUnit::Candela,
+      .color_mode = LightColorMode::ColorTemperature,
+      .color_temperature_kelvin = 2900.0f,
+      .source_preset = LightSourcePreset::Halogen80W,
+  };
+  const auto parsed = parse_written_scene(scene_with_light(light));
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  for (std::uint16_t schema_version = 1u; schema_version <= 11u;
+       ++schema_version) {
+    SCOPED_TRACE(schema_version);
+    auto chunks = copy_chunks(parsed);
+    const auto metadata = std::ranges::find_if(chunks, [](const auto &chunk) {
+      return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+    });
+    ASSERT_NE(metadata, chunks.end());
+    metadata->schema_version = schema_version;
+    const auto read = QdrDocumentReader::deserialize_project_document(
+        quader_io::build_qdr_binary_container(parsed.scene_uuid,
+                                               std::move(chunks)));
+    ASSERT_TRUE(read.ok) << read.message;
+    const LightComponent *restored = read.document.scene().light(200u);
+    ASSERT_NE(restored, nullptr);
+    LightComponent expected = light;
+    expected.distance_attenuation = schema_version < 10u ? 2.0f : 3.5f;
+    expected.light_unit = LightUnit::Simple;
+    expected.color_mode = LightColorMode::Color;
+    expected.color_temperature_kelvin = 6500.0f;
+    expected.source_preset = LightSourcePreset::Custom;
+    EXPECT_EQ(*restored, expected);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests, RejectsInvalidStoredLightMetadata) {
+  struct InvalidMetadata {
+    std::size_t field_index;
+    std::uint8_t enum_value = 0u;
+    float kelvin = 0.0f;
+  };
+  const std::array invalid_values{
+      InvalidMetadata{.field_index = 6u, .enum_value = 3u},
+      InvalidMetadata{.field_index = 7u, .enum_value = 2u},
+      InvalidMetadata{.field_index = 9u, .enum_value = 26u},
+      InvalidMetadata{.field_index = 9u, .enum_value = 255u},
+      InvalidMetadata{.field_index = 8u, .kelvin = 1499.0f},
+      InvalidMetadata{.field_index = 8u, .kelvin = 15001.0f},
+      InvalidMetadata{.field_index = 8u,
+                      .kelvin = std::numeric_limits<float>::quiet_NaN()},
+      InvalidMetadata{.field_index = 8u,
+                      .kelvin = std::numeric_limits<float>::infinity()},
+  };
+  const auto parsed = parse_written_scene(scene_with_light({
+      .light_unit = LightUnit::Candela,
+      .color_mode = LightColorMode::ColorTemperature,
+      .color_temperature_kelvin = 2900.0f,
+      .source_preset = LightSourcePreset::Halogen80W,
+  }));
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  for (const InvalidMetadata &invalid : invalid_values) {
+    SCOPED_TRACE(invalid.field_index);
+    SCOPED_TRACE(invalid.enum_value);
+    SCOPED_TRACE(invalid.kelvin);
+    auto chunks = copy_chunks(parsed);
+    const auto metadata = std::ranges::find_if(chunks, [](const auto &chunk) {
+      return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+    });
+    ASSERT_NE(metadata, chunks.end());
+    const qdr_fb::ScenePayload *payload =
+        qdr_fb::GetScenePayload(metadata->bytes.data());
+    ASSERT_NE(payload->entities(), nullptr);
+    const qdr_fb::LightComponent *stored_light = nullptr;
+    for (const qdr_fb::Entity *stored : *payload->entities()) {
+      if (stored->id() == 200u) {
+        stored_light = stored->light();
+        break;
+      }
+    }
+    ASSERT_NE(stored_light, nullptr);
+    const std::size_t table_offset = static_cast<std::size_t>(
+        reinterpret_cast<const std::byte *>(stored_light) -
+        metadata->bytes.data());
+    if (invalid.field_index == 8u) {
+      overwrite_flatbuffer_table_scalar<float>(
+          metadata->bytes, table_offset, invalid.field_index, invalid.kelvin);
+    } else {
+      overwrite_flatbuffer_table_scalar<std::uint8_t>(
+          metadata->bytes, table_offset, invalid.field_index,
+          invalid.enum_value);
+    }
+    metadata->content_hash = 0u;
+    const auto read = QdrDocumentReader::deserialize_project_document(
+        quader_io::build_qdr_binary_container(parsed.scene_uuid,
+                                               std::move(chunks)));
+    EXPECT_FALSE(read.ok);
+    EXPECT_NE(read.message.find("invalid light metadata"), std::string::npos);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests, RejectsInvalidLightMetadataOnWrite) {
+  const auto valid = required_write_snapshot(scene_with_light({}));
+  const auto expect_rejected = [&valid](LightComponent light) {
+    auto snapshot = valid;
+    const auto entity = std::ranges::find_if(
+        snapshot.entities, [](const auto &value) { return value.id == 200u; });
+    ASSERT_NE(entity, snapshot.entities.end());
+    entity->light = light;
+    EXPECT_THROW(QdrDocumentWriter::serialize_project_document_bytes(
+                     snapshot, test_uuid()),
+                 std::runtime_error);
+  };
+  expect_rejected({.light_unit = static_cast<LightUnit>(3)});
+  expect_rejected({.color_mode = static_cast<LightColorMode>(2)});
+  expect_rejected({.source_preset = static_cast<LightSourcePreset>(26)});
+  for (const float kelvin : {1499.0f, 15001.0f,
+                             std::numeric_limits<float>::quiet_NaN(),
+                             std::numeric_limits<float>::infinity()}) {
+    expect_rejected({.color_temperature_kelvin = kelvin});
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     AgxPublicSceneSettingsSurviveSaveOpenAndHistory) {
+  QTemporaryDir directory;
+  ASSERT_TRUE(directory.isValid());
+  const std::filesystem::path path(
+      directory.filePath(QStringLiteral("agx-scene.qdr")).toStdWString());
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  const auto entities = editor.query().entities();
+  const auto root = std::ranges::find_if(
+      entities, [](const auto &entity) { return entity.is_scene_root; });
+  ASSERT_NE(root, entities.end());
+  const QuaderSceneSettings original = root->scene_settings;
+  QuaderSceneSettings settings = original;
+  settings.post_process.tone_mapping = QuaderToneMapping::Agx;
+  settings.camera.aperture = 5.6f;
+  settings.camera.shutter_speed = 1.0f / 250.0f;
+  settings.camera.sensitivity = 800.0f;
+  settings.camera.use_exposure = false;
+  const auto updated = editor.scene().set_scene_settings(root->id, settings);
+  ASSERT_TRUE(updated.ok()) << updated.error_message();
+  ASSERT_TRUE(updated.changed());
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(to_scene_settings_component(
+                editor.query().entity(root->id)->scene_settings),
+            to_scene_settings_component(original));
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(to_scene_settings_component(
+                editor.query().entity(root->id)->scene_settings),
+            to_scene_settings_component(settings));
+
+  const auto saved = editor.scene_documents().save_as_native_path(
+      *editor.scene_documents().active_scene_id(), path);
+  ASSERT_TRUE(saved.ok()) << saved.error_message();
+  auto reopened = create_standalone_editor();
+  auto &restored_editor = reopened.editor();
+  const auto opened = restored_editor.scene_documents().open_native_path(path);
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  const auto restored_entities = restored_editor.query().entities();
+  const auto restored_root = std::ranges::find_if(
+      restored_entities, [](const auto &entity) { return entity.is_scene_root; });
+  ASSERT_NE(restored_root, restored_entities.end());
+  EXPECT_EQ(restored_root->scene_settings.post_process.tone_mapping,
+            QuaderToneMapping::Agx);
+  EXPECT_EQ(to_scene_settings_component(restored_root->scene_settings),
+            to_scene_settings_component(settings));
+  EXPECT_FALSE(restored_editor.project().dirty());
+}
+
+TEST(QdrBinarySceneCodecTests,
+     SchemaTwelvePreservesHistoricalToneIdsLightDefaultsAndCameraValues) {
+  for (const SceneToneMapping tone : {
+           SceneToneMapping::Linear, SceneToneMapping::AcesLegacy,
+           SceneToneMapping::Aces, SceneToneMapping::Filmic,
+           SceneToneMapping::DisplayRange}) {
+    SCOPED_TRACE(static_cast<int>(tone));
+    const LightComponent historical_light{
+        .intensity = 1.0f, .distance_attenuation = 2.0f};
+    SceneContentDocument document = scene_with_light(historical_light);
+    const EntityId root = document.scene().scene_root();
+    SceneSettingsComponent settings = *document.scene().scene_settings(root);
+    settings.post_process.tone_mapping = tone;
+    settings.camera.aperture = 16.0f;
+    settings.camera.shutter_speed = 0.008f;
+    settings.camera.sensitivity = 100.0f;
+    settings.camera.use_exposure = true;
+    ASSERT_TRUE(document.scene().set_scene_settings(root, settings));
+    const auto parsed = parse_written_scene(document);
+    ASSERT_TRUE(parsed.ok) << parsed.message;
+    auto chunks = copy_chunks(parsed);
+    const auto metadata = std::ranges::find_if(
+        chunks, [](const quader_io::QdrBinaryChunkInput &chunk) {
+          return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+        });
+    ASSERT_NE(metadata, chunks.end());
+    ASSERT_EQ(metadata->schema_version, 14u);
+    metadata->schema_version = 12u;
+    const qdr_fb::ScenePayload *payload =
+        qdr_fb::GetScenePayload(metadata->bytes.data());
+    ASSERT_NE(payload->entities(), nullptr);
+    for (const qdr_fb::Entity *entity : *payload->entities()) {
+      if (entity->id() == 200u) {
+        ASSERT_NE(entity->light(), nullptr);
+        EXPECT_FALSE(flatbuffers::IsFieldPresent(
+            entity->light(), qdr_fb::LightComponent::VT_INTENSITY));
+        EXPECT_FLOAT_EQ(entity->light()->intensity(), 1.0f);
+      }
+      if (entity->id() == root) {
+        ASSERT_NE(entity->scene_settings(), nullptr);
+        const auto *stored = entity->scene_settings()->post_process();
+        ASSERT_NE(stored, nullptr);
+        EXPECT_EQ(flatbuffers::IsFieldPresent(
+                      stored, qdr_fb::ScenePostProcessSettings::VT_TONE_MAPPING),
+                  tone != SceneToneMapping::Aces);
+      }
+    }
+
+    const auto read = QdrDocumentReader::deserialize_project_document(
+        quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks)));
+    ASSERT_TRUE(read.ok) << read.message;
+    const auto *restored = read.document.scene().scene_settings(root);
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(*restored, settings);
+    EXPECT_EQ(to_scene_tone_mapping(to_api_tone_mapping(
+                  restored->post_process.tone_mapping)),
+              tone);
+    ASSERT_NE(read.document.scene().light(200u), nullptr);
+    EXPECT_EQ(*read.document.scene().light(200u), historical_light);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests, RejectsAgxDeclaredBeforeSchemaThirteen) {
+  SceneContentDocument document = simple_scene();
+  const EntityId root = document.scene().scene_root();
+  auto settings = *document.scene().scene_settings(root);
+  settings.post_process.tone_mapping = SceneToneMapping::Agx;
+  ASSERT_TRUE(document.scene().set_scene_settings(root, settings));
+  const auto parsed = parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  auto chunks = copy_chunks(parsed);
+  const auto metadata = std::ranges::find_if(
+      chunks, [](const quader_io::QdrBinaryChunkInput &chunk) {
+        return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+      });
+  ASSERT_NE(metadata, chunks.end());
+  metadata->schema_version = 12u;
+  const auto read = QdrDocumentReader::deserialize_project_document(
+      quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks)));
+  EXPECT_FALSE(read.ok);
+  EXPECT_NE(read.message.find("before schema 13"), std::string::npos);
+}
+
 TEST(QdrBinarySceneCodecTests,
      SchemaElevenPreservesCameraExposureToggleAndAuthoredValues) {
   for (const bool use_exposure : {true, false}) {
@@ -1299,7 +1746,7 @@ TEST(QdrBinarySceneCodecTests,
         return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
       });
   ASSERT_NE(metadata, chunks.end());
-  ASSERT_EQ(metadata->schema_version, 11u);
+  ASSERT_EQ(metadata->schema_version, 14u);
   metadata->schema_version = 10u;
 
   const QdrProjectReadResult read =
@@ -1367,7 +1814,7 @@ TEST(QdrBinarySceneCodecTests,
                                  quader_io::QdrBinaryChunkType::SceneMetadata);
       });
   ASSERT_NE(metadata, parsed.chunks.end());
-  EXPECT_EQ(metadata->schema_version, 11u);
+  EXPECT_EQ(metadata->schema_version, 14u);
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(
@@ -2343,7 +2790,7 @@ TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
   ASSERT_TRUE(parsed.ok) << parsed.message;
   std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
   ASSERT_FALSE(chunks.empty());
-  chunks.front().schema_version = 12u;
+  chunks.front().schema_version = 15u;
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(

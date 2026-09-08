@@ -135,6 +135,56 @@ struct PrimitiveCubeInteractionHarness {
   }
 };
 
+TEST(PrimitiveCubeInteractionTests, EveryShapeUsesHandForHandlesAndGrabsOnlyConfirmedResizeDrags) {
+  for (const auto shape : {ViewportPrimitiveCreationShape::Box,
+                          ViewportPrimitiveCreationShape::Cylinder,
+                          ViewportPrimitiveCreationShape::Cone,
+                          ViewportPrimitiveCreationShape::Sphere,
+                          ViewportPrimitiveCreationShape::Torus}) {
+    SCOPED_TRACE(static_cast<int>(shape));
+    PrimitiveCubeInteractionHarness h(shape);
+    auto &interaction = h.modal.primitive_creation;
+    const auto cursor = [&] {
+      return interaction.pointer_cursor(h.modal.primitive_creation_drag_started);
+    };
+    const auto control = interaction.frame().controls[0];
+    ASSERT_TRUE(control.visible);
+    h.pointer(control.screen_position, false, false, false);
+    EXPECT_EQ(cursor(), ViewportPointerCursor::OpenHand);
+    const auto projections = interaction.projection_count();
+    for (int index = 0; index < 5; ++index) {
+      h.pointer(control.screen_position, false, false, false);
+      EXPECT_EQ(cursor(), ViewportPointerCursor::OpenHand);
+    }
+    EXPECT_EQ(interaction.projection_count(), projections);
+    ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
+    EXPECT_EQ(cursor(), ViewportPointerCursor::OpenHand);
+    ASSERT_TRUE(h.pointer(control.screen_position + QVec2{20, 20}, false, true, false).consumed);
+    EXPECT_EQ(cursor(), ViewportPointerCursor::ClosedHand);
+    EXPECT_TRUE(h.frame({.left_down = true, .viewport_focused = false,
+                        .pointer_interaction_canceled = true}).consumed);
+    EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
+    h.pointer(control.screen_position, false, false, true);
+
+    const auto button = interaction.project(h.box.live_primitive(), h.camera, 1).controls[6];
+    ASSERT_TRUE(button.visible);
+    h.pointer(button.screen_position, false, false, false);
+    EXPECT_EQ(cursor(), ViewportPointerCursor::OpenHand);
+    ASSERT_TRUE(h.pointer(button.screen_position, true, true, false).consumed);
+    ASSERT_TRUE(h.pointer(button.screen_position + QVec2{20, 20}, false, true, false).consumed);
+    EXPECT_EQ(cursor(), ViewportPointerCursor::OpenHand);
+    h.pointer(button.screen_position + QVec2{20, 20}, false, false, true);
+    EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
+    ASSERT_TRUE(h.box.set_segments(0, 128).ok);
+    const auto disabled = interaction.project(h.box.live_primitive(), h.camera, 1).controls[6];
+    h.pointer(disabled.screen_position, false, false, false);
+    EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
+    h.box.primitive_controls_visible = false;
+    h.pointer(control.screen_position, false, false, false);
+    EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
+  }
+}
+
 TEST(PrimitiveCubeInteractionTests, OrderedWheelConsumesLimitsAndFractionalReversals) {
   PrimitiveCubeInteractionHarness h;
   const auto send = [&](float steps, int axis = 0) {

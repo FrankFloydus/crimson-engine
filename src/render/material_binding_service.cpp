@@ -315,6 +315,11 @@ MaterialBindingService::create_mesh_material_instance(
                                     material ? material->metallic : 0.0f);
     material_instance->setParameter("roughnessFactor",
                                     material ? material->roughness : 1.0f);
+    material_instance->setParameter(
+        "diffuseModel",
+        material && material->diffuse_model == MaterialDiffuseModel::Lambert
+            ? 1
+            : 0);
     material_instance->setParameter("normalStrength", 1.0f);
     material_instance->setParameter("normalYSign", 1.0f);
   }
@@ -390,6 +395,12 @@ MaterialBindingService::create_mesh_material_instance(
     material_instance->setParameter(
         "roughnessFactor",
         material && material->present ? material->document.roughness : 1.0f);
+    material_instance->setParameter(
+        "diffuseModel",
+        material && material->present &&
+                material->document.diffuse_model == MaterialDiffuseModel::Lambert
+            ? 1
+            : 0);
     material_instance->setParameter(
         "normalStrength",
         material && material->present ? material->normal_strength : 1.0f);

@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define QUADER_BRIDGE_ABI_VERSION 4u
+#define QUADER_BRIDGE_ABI_VERSION 6u
 #define QUADER_BRIDGE_NO_MATERIAL UINT32_MAX
 #define QUADER_BRIDGE_NO_SCENE UINT32_MAX
 #define QUADER_BRIDGE_TEXTURE_COUNT 4u
@@ -57,10 +57,9 @@ typedef struct QuaderBridgeSceneView {
   uint32_t mesh_count;
   uint32_t material_count;
   uint32_t light_count;
-  /* Effective exposure inputs, before renderer clamping. Defaults are 16,
-   * 0.008 and 100 when the scene has no camera settings. Disabled camera
-   * exposure yields 1, 1.2 and 100, equivalent to an exposure multiplier of 1.
-   * Consumers that do not import lights need not interpret these values. */
+  /* Fixed preview-reference exposure: aperture 16, shutter 1/125 second,
+   * ISO 100. Authored camera settings and their exposure toggle do not alter
+   * imported light calibration. */
   float camera_aperture;
   float camera_shutter_seconds;
   float camera_iso;
@@ -150,6 +149,13 @@ typedef struct QuaderBridgeLightView {
   float range;
   float distance_attenuation;
   uint32_t casts_shadows;
+  /* Engine-ready calibration, independent of authored legacy unit metadata
+   * and camera settings. Preview energy is max(intensity, 0) / 16. Directional lights
+   * provide lux; Point/Spot provide candela. The unused physical field is zero.
+   * Consumers apply these values without another exposure multiplier. */
+  float preview_energy;
+  float illuminance_lux;
+  float luminous_intensity_candela;
 } QuaderBridgeLightView;
 
 /* Preserve published uppercase C ABI names for bridge source compatibility. */
@@ -158,6 +164,14 @@ typedef enum QuaderBridgeMaterialKind {
   QUADER_BRIDGE_MATERIAL_PROJECT = 1,
   QUADER_BRIDGE_MATERIAL_EMBEDDED = 2
 } QuaderBridgeMaterialKind;
+// NOLINTEND(readability-identifier-naming)
+
+/* Preserve published uppercase C ABI names for bridge source compatibility. */
+// NOLINTBEGIN(readability-identifier-naming)
+typedef enum QuaderBridgeMaterialDiffuseModel {
+  QUADER_BRIDGE_MATERIAL_DIFFUSE_BURLEY = 0,
+  QUADER_BRIDGE_MATERIAL_DIFFUSE_LAMBERT = 1
+} QuaderBridgeMaterialDiffuseModel;
 // NOLINTEND(readability-identifier-naming)
 
 /* Identity is available without reading QMAT or texture source files. IDs are
@@ -201,6 +215,8 @@ typedef struct QuaderBridgeMaterialView {
   float uv_offset[2];
   float uv_rotation_degrees;
   QuaderBridgeTextureInfo textures[QUADER_BRIDGE_TEXTURE_COUNT];
+  /* QuaderBridgeMaterialDiffuseModel; missing legacy choices resolve to Burley. */
+  uint32_t diffuse_model;
 } QuaderBridgeMaterialView;
 
 typedef struct QuaderBridgeBlobView {

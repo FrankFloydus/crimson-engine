@@ -136,6 +136,9 @@ QuaderStandardMaterialDefinition to_public_material(
       .normal_strength = material.normal_strength,
       .normal_convention =
           to_public_normal_convention(material.normal_convention),
+      .diffuse_model = material.diffuse_model == MaterialDiffuseModel::Lambert
+                           ? QuaderMaterialDiffuseModel::Lambert
+                           : QuaderMaterialDiffuseModel::Burley,
       .texture_transform =
           to_public_texture_transform(material.texture_transform),
       .base_color_texture = to_public_texture(material.base_color_texture),
@@ -372,6 +375,23 @@ QuaderApiVoidResult QuaderStandardMaterialDocumentsApi::set_base_color(
   QUADER_STANDARD_MATERIAL_MUTATION(editor->set_base_color(color));
 }
 
+QuaderApiVoidResult QuaderStandardMaterialDocumentsApi::begin_base_color_preview(
+    MaterialEditSessionId session_id) {
+  QUADER_STANDARD_MATERIAL_MUTATION(editor->begin_base_color_preview(session_id));
+}
+
+QuaderApiVoidResult QuaderStandardMaterialDocumentsApi::update_base_color_preview(
+    MaterialEditSessionId session_id, std::array<float, 3> color) {
+  QUADER_STANDARD_MATERIAL_MUTATION(
+      editor->update_base_color_preview(session_id, color));
+}
+
+QuaderApiVoidResult QuaderStandardMaterialDocumentsApi::finish_base_color_preview(
+    MaterialEditSessionId session_id, bool accept) {
+  QUADER_STANDARD_MATERIAL_MUTATION(
+      editor->finish_base_color_preview(session_id, accept));
+}
+
 QuaderApiVoidResult
 QuaderStandardMaterialDocumentsApi::set_roughness(float value) {
   QUADER_STANDARD_MATERIAL_MUTATION(editor->set_roughness(value));
@@ -409,6 +429,23 @@ QuaderStandardMaterialDocumentsApi::set_normal_convention(
   }
   QUADER_STANDARD_MATERIAL_MUTATION(
       editor->set_normal_convention(*internal));
+}
+
+QuaderApiVoidResult
+QuaderStandardMaterialDocumentsApi::set_diffuse_model(QuaderMaterialDiffuseModel model) {
+  MaterialDiffuseModel internal;
+  switch (model) {
+  case QuaderMaterialDiffuseModel::Burley:
+    internal = MaterialDiffuseModel::Burley;
+    break;
+  case QuaderMaterialDiffuseModel::Lambert:
+    internal = MaterialDiffuseModel::Lambert;
+    break;
+  default:
+    return status(session_, false, false,
+                  "The Standard Material diffuse model is invalid.");
+  }
+  QUADER_STANDARD_MATERIAL_MUTATION(editor->set_diffuse_model(internal));
 }
 
 QuaderApiVoidResult

@@ -1568,6 +1568,52 @@ TEST(EditorApiTests, PublicAssetApiOwnsStandaloneMeshReplacementPolicy) {
               std::string::npos);
 }
 
+TEST(EditorApiTests, EmbeddedDiffuseModelEditsRetainRevisionsAndHistory) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto created = editor.assets().add_material(quader::QuaderMaterialArgs{
+      .name = "Diffuse material", .diffuse_model = quader::QuaderMaterialDiffuseModel::Lambert});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto id = created.value().id;
+  auto material = editor.query().material(id);
+  ASSERT_TRUE(material.has_value());
+  EXPECT_EQ(material->diffuse_model, quader::QuaderMaterialDiffuseModel::Lambert);
+  const auto initial_revision = material->revision;
+  EXPECT_FALSE(editor.assets().replace_material(id, *material).changed());
+  EXPECT_EQ(editor.query().material(id)->revision, initial_revision);
+  material->diffuse_model = quader::QuaderMaterialDiffuseModel::Burley;
+  const auto changed = editor.assets().replace_material(id, *material);
+  ASSERT_TRUE(changed.ok()) << changed.error_message();
+  EXPECT_TRUE(changed.changed());
+  EXPECT_GT(editor.query().material(id)->revision, initial_revision);
+  EXPECT_EQ(editor.query().material(id)->diffuse_model, quader::QuaderMaterialDiffuseModel::Burley);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(editor.query().material(id)->diffuse_model, quader::QuaderMaterialDiffuseModel::Lambert);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(editor.query().material(id)->diffuse_model, quader::QuaderMaterialDiffuseModel::Burley);
+}
+
+TEST(EditorApiTests, InvalidEmbeddedDiffuseModelPreservesAssetAndRedo) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto created = editor.assets().add_material(quader::QuaderMaterialArgs{.name = "Burley default"});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto id = created.value().id;
+  auto material = *editor.query().material(id);
+  EXPECT_EQ(material.diffuse_model, quader::QuaderMaterialDiffuseModel::Burley);
+  material.diffuse_model = quader::QuaderMaterialDiffuseModel::Lambert;
+  ASSERT_TRUE(editor.assets().replace_material(id, material).ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  const auto before = *editor.query().material(id);
+  material.diffuse_model = static_cast<quader::QuaderMaterialDiffuseModel>(255u);
+  EXPECT_FALSE(editor.assets().replace_material(id, material).ok());
+  EXPECT_FALSE(editor.assets().add_material(material).ok());
+  EXPECT_EQ(editor.query().material(id)->revision, before.revision);
+  EXPECT_EQ(editor.query().material(id)->diffuse_model, before.diffuse_model);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(editor.query().material(id)->diffuse_model, quader::QuaderMaterialDiffuseModel::Lambert);
+}
+
 TEST(EditorApiTests, PublicAssetApiEditsAreUndoableThroughHistory) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;

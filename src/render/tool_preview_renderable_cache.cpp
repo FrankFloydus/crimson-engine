@@ -1944,11 +1944,11 @@ ToolPreviewSubmissionResult ToolPreviewLightCache::prepare(
     }
     punctual_light_count += light.instance_transforms.size();
   }
-  pending_submission_ = lights;
   if (same_submission(lights)) {
     pending_kind_ = PendingKind::Unchanged;
     return ToolPreviewSubmissionResult::Unchanged;
   }
+  pending_submission_ = lights;
   if (same_structure(lights)) {
     std::vector<std::size_t> requested_counts;
     std::vector<std::size_t> retained_capacities;
@@ -1962,7 +1962,7 @@ ToolPreviewSubmissionResult ToolPreviewLightCache::prepare(
         plan_tool_preview_light_pools(requested_counts,
                                       retained_capacities);
     if (pool_plan.new_proxy_count == 0u) {
-      pending_kind_ = PendingKind::TransformsOnly;
+      pending_kind_ = PendingKind::RetainedUpdate;
       return ToolPreviewSubmissionResult::Published;
     }
     bool complete = false;
@@ -1990,8 +1990,8 @@ void ToolPreviewLightCache::publish_prepared() {
   case PendingKind::None:
   case PendingKind::Unchanged:
     break;
-  case PendingKind::TransformsOnly:
-    apply_transforms(pending_submission_);
+  case PendingKind::RetainedUpdate:
+    apply_updates(pending_submission_);
     submitted_ = std::move(pending_submission_);
     ++transform_update_count_;
     break;
@@ -2008,7 +2008,7 @@ void ToolPreviewLightCache::publish_prepared() {
         }
         growth.proxies.clear();
       }
-      apply_transforms(pending_submission_);
+      apply_updates(pending_submission_);
       submitted_ = std::move(pending_submission_);
       ++transform_update_count_;
     }
@@ -2066,10 +2066,10 @@ bool ToolPreviewLightCache::same_structure(
     const LightPool &pool = current_->pools[index];
     if (before.source_entity != after.source_entity ||
         before.visibility_entity != after.visibility_entity ||
-        !(before.light == after.light) ||
+        !filament_light_structure_matches(before.light, after.light) ||
         before.layout_key != after.layout_key ||
         pool.source_entity != after.source_entity ||
-        !(pool.light == after.light) ||
+        !filament_light_structure_matches(pool.light, after.light) ||
         pool.layout_key != after.layout_key) {
       return false;
     }
@@ -2084,6 +2084,10 @@ bool ToolPreviewLightCache::same_submission(
   }
   for (std::size_t record_index = 0u; record_index < lights.size();
        ++record_index) {
+    if (!filament_light_properties_match(submitted_[record_index].light,
+                                          lights[record_index].light)) {
+      return false;
+    }
     const auto &before = submitted_[record_index].instance_transforms;
     const auto &after = lights[record_index].instance_transforms;
     if (before.size() != after.size()) {
@@ -2199,7 +2203,7 @@ ToolPreviewLightCache::build_inert_growth(
   return growth;
 }
 
-void ToolPreviewLightCache::apply_transforms(
+void ToolPreviewLightCache::apply_updates(
     const std::vector<RenderToolPreviewLightRecord> &lights) {
   if (current_ == nullptr || current_->pools.size() != lights.size()) {
     return;
@@ -2210,6 +2214,7 @@ void ToolPreviewLightCache::apply_transforms(
     const RenderToolPreviewLightRecord &record = lights[record_index];
     LightPool &pool = current_->pools[record_index];
     pool.active_count = record.instance_transforms.size();
+    pool.light = record.light;
     for (std::size_t proxy_index = 0u; proxy_index < pool.proxies.size();
          ++proxy_index) {
       LightProxy &proxy = pool.proxies[proxy_index];
@@ -2218,19 +2223,23 @@ void ToolPreviewLightCache::apply_transforms(
       if (!instance) {
         continue;
       }
-      if (proxy_index >= record.instance_transforms.size()) {
-        manager.setIntensity(instance, 0.0f);
+      const bool enabled = proxy_index < record.instance_transforms.size();
+      update_filament_light_properties(manager, instance, proxy.light,
+                                       record.light, proxy.enabled, enabled);
+      proxy.light = record.light;
+      proxy.enabled = enabled;
+      if (!enabled) {
         continue;
       }
       const QMat4 &world_transform =
           record.instance_transforms[proxy_index];
-      manager.setPosition(instance,
-                          filament_light_position(world_transform));
-      manager.setDirection(instance,
-                           filament_light_direction(world_transform));
-      manager.setIntensity(instance,
-                           filament_light_intensity(record.light));
-      proxy.world_transform = world_transform;
+      if (!same_mat4(proxy.world_transform, world_transform)) {
+        manager.setPosition(instance,
+                            filament_light_position(world_transform));
+        manager.setDirection(instance,
+                             filament_light_direction(world_transform));
+        proxy.world_transform = world_transform;
+      }
     }
   }
 }
@@ -2245,11 +2254,10 @@ void ToolPreviewLightCache::set_generation_intensity(Generation &generation,
       const filament::LightManager::Instance instance =
           manager.getInstance(proxy.entity);
       if (instance) {
+        proxy.enabled = enabled && proxy_index < pool.active_count;
         manager.setIntensity(
             instance,
-            enabled && proxy_index < pool.active_count
-                ? filament_light_intensity(proxy.light)
-                : 0.0f);
+            proxy.enabled ? filament_light_intensity(proxy.light) : 0.0f);
       }
     }
   }

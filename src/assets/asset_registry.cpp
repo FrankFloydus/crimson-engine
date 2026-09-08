@@ -1096,6 +1096,9 @@ AssetRegistry::validate_mesh(const MeshAsset &mesh) const {
 
 AssetRegistryValidationResult
 AssetRegistry::validate_material(const MaterialDocument &material) const {
+  if (!is_valid_material_diffuse_model(material.diffuse_model)) {
+    return {.ok = false, .message = "Material diffuse model is unsupported"};
+  }
   if (!std::isfinite(material.base_color.x) ||
       !std::isfinite(material.base_color.y) ||
       !std::isfinite(material.base_color.z) ||

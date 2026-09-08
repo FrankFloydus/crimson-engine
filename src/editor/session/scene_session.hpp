@@ -106,6 +106,9 @@ public:
   void set_content_settled_observer(std::function<void(bool)> observer);
 
   DocumentCommandService &document_commands() { return *document_commands_; }
+  const DocumentCommandService &document_commands() const {
+    return *document_commands_;
+  }
   AssetCommandService &asset_commands() { return *asset_commands_; }
   ModelingSessionService &modeling() { return *modeling_; }
   const ModelingSessionService &modeling() const { return *modeling_; }

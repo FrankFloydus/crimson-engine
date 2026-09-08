@@ -1188,9 +1188,9 @@ void QuaderToolsApi::rebind_session(QuaderApiSession session) {
 }
 
 QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
-  if (scene_session(session_).document_commands().point_light_range_edit_active()) {
+  if (scene_session(session_).document_commands().property_edit_active()) {
     return quader_api_failure_status(
-        scene_session(session_), "Finish the light radius drag before changing tools.");
+        scene_session(session_), "Finish the active property edit before changing tools.");
   }
   if (hooks_.activate) {
     return hooks_.activate(tool_id);
@@ -1244,7 +1244,7 @@ QuaderApiVoidResult QuaderToolsApi::activate(ViewportToolId tool) {
 
 bool QuaderToolsApi::can_activate(std::string_view tool_id) const {
   SceneSession &session = scene_session(session_);
-  if (session.document_commands().point_light_range_edit_active()) {
+  if (session.document_commands().property_edit_active()) {
     return false;
   }
   if (session.native_tools().handles(tool_id)) {

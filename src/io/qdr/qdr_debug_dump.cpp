@@ -8,6 +8,7 @@
 
 #include "assets/material_document.hpp"
 #include "io/qdr/qdr_project_write_snapshot.hpp"
+#include "scene/light_properties.hpp"
 #include "quader/modeling/neutral/polygon/document_topology.hpp"
 #include <quader/modeling/curves/curve_document.hpp>
 
@@ -134,6 +135,28 @@ authored_polygon_json(const quader_poly::Document &document) {
   return "unknown";
 }
 
+[[nodiscard]] std::string_view light_unit_name(LightUnit unit) {
+  switch (unit) {
+  case LightUnit::Simple:
+    return "simple";
+  case LightUnit::Lumens:
+    return "lumens";
+  case LightUnit::Candela:
+    return "candela";
+  }
+  return "unknown";
+}
+
+[[nodiscard]] std::string_view light_color_mode_name(LightColorMode mode) {
+  switch (mode) {
+  case LightColorMode::Color:
+    return "color";
+  case LightColorMode::ColorTemperature:
+    return "colorTemperature";
+  }
+  return "unknown";
+}
+
 [[nodiscard]] std::string_view collision_type_name(MeshCollisionType type) {
   switch (type) {
   case MeshCollisionType::Box:
@@ -211,6 +234,8 @@ texture_color_space_name(TextureColorSpace color_space) {
     return "filmic";
   case SceneToneMapping::DisplayRange:
     return "displayRange";
+  case SceneToneMapping::Agx:
+    return "agx";
   }
   return "unknown";
 }
@@ -274,6 +299,10 @@ texture_color_space_name(TextureColorSpace color_space) {
       {"range", light.range},
       {"castsShadows", light.casts_shadows},
       {"distanceAttenuation", light.distance_attenuation},
+      {"lightUnit", light_unit_name(light.light_unit)},
+      {"colorMode", light_color_mode_name(light.color_mode)},
+      {"colorTemperatureKelvin", light.color_temperature_kelvin},
+      {"sourcePreset", light_source_preset_id(light.source_preset)},
   };
 }
 
@@ -432,6 +461,8 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
       {"baseColor", vec3_json(material.base_color)},
       {"roughness", material.roughness},
       {"metallic", material.metallic},
+      {"diffuseModel", material.diffuse_model == MaterialDiffuseModel::Lambert
+                           ? "lambert" : "burley"},
       {"textureSlots", std::move(slots)},
       {"nodeGraphReserved", material.node_graph_reserved},
   };

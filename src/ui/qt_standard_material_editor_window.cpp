@@ -453,6 +453,13 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   name_label_->setBuddy(name_edit_);
   form->addRow(name_label_, name_edit_);
 
+  diffuse_model_label_ = new QLabel(properties_group_);
+  diffuse_model_combo_ = new QComboBox(properties_group_);
+  diffuse_model_combo_->setObjectName(
+      QStringLiteral("standardMaterialEditor.diffuseModel"));
+  diffuse_model_label_->setBuddy(diffuse_model_combo_);
+  form->addRow(diffuse_model_label_, diffuse_model_combo_);
+
   albedo_label_ = new QLabel(properties_group_);
   albedo_button_ = new QtColorSwatchButton(properties_group_);
   albedo_button_->setObjectName(
@@ -814,6 +821,14 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
                        normal_convention_edited_(direct_x);
                      }
                    });
+  QObject::connect(diffuse_model_combo_, &QComboBox::activated, this,
+                   [this](int index) {
+                     if (!refreshing_ && has_document_ && index >= 0 &&
+                         diffuse_model_edited_) {
+                       diffuse_model_edited_(static_cast<QtStandardMaterialDiffuseModel>(
+                           diffuse_model_combo_->itemData(index).toInt()));
+                     }
+                   });
 
   refresh_labels();
   set_preview_mesh(QtStandardMaterialPreviewMesh::Sphere, false);
@@ -996,7 +1011,11 @@ void QtStandardMaterialEditorWindow::set_document(
     return;
   }
   const bool changed_document =
-      has_document_ && document_.stable_id != document.stable_id;
+      has_document_ && (document_.stable_id != document.stable_id ||
+                       document_.session_generation != document.session_generation);
+  if (changed_document) {
+    abandon_interactions();
+  }
   bool inspected_texture_changed = false;
   if (has_document_ && !changed_document &&
       inspected_texture_slot_.has_value()) {
@@ -1019,6 +1038,7 @@ void QtStandardMaterialEditorWindow::set_document(
 }
 
 void QtStandardMaterialEditorWindow::clear_document() {
+  abandon_interactions();
   (void)cancel_pending_number_edits();
   document_ = {};
   has_document_ = false;
@@ -1027,6 +1047,15 @@ void QtStandardMaterialEditorWindow::clear_document() {
   }
   inspected_texture_slot_.reset();
   refresh_document_controls();
+}
+
+void QtStandardMaterialEditorWindow::abandon_interactions() {
+  ++interaction_generation_;
+  if (active_albedo_dialog_ != nullptr) {
+    const QPointer<QColorDialog> dialog = active_albedo_dialog_;
+    active_albedo_dialog_.clear();
+    dialog->reject();
+  }
 }
 
 void QtStandardMaterialEditorWindow::set_file_action_callback(
@@ -1044,6 +1073,16 @@ void QtStandardMaterialEditorWindow::set_albedo_edited_callback(
   albedo_edited_ = std::move(callback);
 }
 
+void QtStandardMaterialEditorWindow::set_albedo_preview_begin_callback(
+    AlbedoPreviewBeginCallback callback) {
+  albedo_preview_begin_ = std::move(callback);
+}
+
+void QtStandardMaterialEditorWindow::set_albedo_preview_finish_callback(
+    AlbedoPreviewFinishCallback callback) {
+  albedo_preview_finish_ = std::move(callback);
+}
+
 void QtStandardMaterialEditorWindow::set_scalar_edited_callback(
     ScalarEditedCallback callback) {
   scalar_edited_ = std::move(callback);
@@ -1052,6 +1091,11 @@ void QtStandardMaterialEditorWindow::set_scalar_edited_callback(
 void QtStandardMaterialEditorWindow::set_normal_convention_edited_callback(
     NormalConventionEditedCallback callback) {
   normal_convention_edited_ = std::move(callback);
+}
+
+void QtStandardMaterialEditorWindow::set_diffuse_model_edited_callback(
+    DiffuseModelEditedCallback callback) {
+  diffuse_model_edited_ = std::move(callback);
 }
 
 void QtStandardMaterialEditorWindow::set_texture_action_callback(
@@ -1168,6 +1212,12 @@ bool QtStandardMaterialEditorWindow::event(QEvent *event) {
 }
 
 void QtStandardMaterialEditorWindow::closeEvent(QCloseEvent *event) {
+  if (active_albedo_dialog_ != nullptr) {
+    abandon_interactions();
+    if (albedo_preview_finish_) {
+      albedo_preview_finish_(false);
+    }
+  }
   flush_pending_number_edits();
   if (close_request_handler_ && !close_request_handler_()) {
     event->ignore();
@@ -1302,6 +1352,7 @@ void QtStandardMaterialEditorWindow::refresh_document_controls() {
   const QSignalBlocker normal_strength_blocker(normal_strength_spin_);
   const QSignalBlocker normal_strength_slider_blocker(normal_strength_slider_);
   const QSignalBlocker convention_blocker(direct_x_normal_);
+  const QSignalBlocker diffuse_model_blocker(diffuse_model_combo_);
   const QIcon no_texture_icon =
       style()->standardIcon(QStyle::SP_FileIcon, nullptr, this);
   name_edit_->setText(has_document_ ? document_.name : QString());
@@ -1318,6 +1369,12 @@ void QtStandardMaterialEditorWindow::refresh_document_controls() {
   normal_strength_slider_->setValue(static_cast<int>(std::lround(
       (has_document_ ? document_.normal_strength : 1.0) * kScalarSliderScale)));
   direct_x_normal_->setChecked(has_document_ && document_.direct_x_normal);
+  const int diffuse_model = static_cast<int>(
+      has_document_ ? document_.diffuse_model : QtStandardMaterialDiffuseModel::Burley);
+  if (diffuse_model_combo_->currentData().toInt() != diffuse_model ||
+      diffuse_model_combo_->currentIndex() < 0) {
+    diffuse_model_combo_->setCurrentIndex(diffuse_model_combo_->findData(diffuse_model));
+  }
   for (std::size_t index = 0; index < kTextureSlotCount; ++index) {
     TextureControls &controls = texture_controls_[index];
     const QtStandardMaterialTexturePresentation presentation =
@@ -1448,6 +1505,20 @@ void QtStandardMaterialEditorWindow::refresh_labels() {
   preview_placeholder_->setText(labels_.preview_unavailable);
   properties_group_->setTitle(labels_.properties_group);
   name_label_->setText(labels_.name);
+  diffuse_model_label_->setText(labels_.diffuse_model);
+  diffuse_model_combo_->setAccessibleName(labels_.diffuse_model);
+  {
+    const QSignalBlocker blocker(diffuse_model_combo_);
+    if (diffuse_model_combo_->count() == 0) {
+      diffuse_model_combo_->addItem(labels_.diffuse_burley,
+          static_cast<int>(QtStandardMaterialDiffuseModel::Burley));
+      diffuse_model_combo_->addItem(labels_.diffuse_lambert,
+          static_cast<int>(QtStandardMaterialDiffuseModel::Lambert));
+    } else {
+      diffuse_model_combo_->setItemText(0, labels_.diffuse_burley);
+      diffuse_model_combo_->setItemText(1, labels_.diffuse_lambert);
+    }
+  }
   albedo_label_->setText(labels_.albedo);
   albedo_button_->setText({});
   albedo_button_->setAccessibleName(labels_.albedo);
@@ -1507,18 +1578,43 @@ void QtStandardMaterialEditorWindow::refresh_title_and_status() {
 }
 
 void QtStandardMaterialEditorWindow::choose_albedo_color() {
-  if (!has_document_) {
+  if (!has_document_ || active_albedo_dialog_ != nullptr) {
     return;
   }
-  QColorDialog dialog(albedo_button_->swatch_color(), this);
+  flush_pending_number_edits();
+  const std::uint64_t generation = interaction_generation_;
+  if (albedo_preview_begin_ && !albedo_preview_begin_()) {
+    return;
+  }
+  if (generation != interaction_generation_ || !has_document_) {
+    return;
+  }
+  const QColor original = albedo_button_->swatch_color();
+  QColorDialog dialog(original, this);
+  active_albedo_dialog_ = &dialog;
+  dialog.setObjectName(QStringLiteral("standardMaterialEditor.albedoDialog"));
   dialog.setWindowTitle(labels_.choose_albedo_title);
   dialog.setOption(QColorDialog::DontUseNativeDialog, true);
-  if (dialog.exec() != QDialog::Accepted) {
+  QObject::connect(&dialog, &QColorDialog::currentColorChanged, this,
+                   [this, generation](const QColor &color) {
+    if (generation != interaction_generation_ || !color.isValid()) {
+      return;
+    }
+    albedo_button_->set_swatch_color(color);
+    if (albedo_edited_) {
+      albedo_edited_(color);
+    }
+  });
+  const bool accepted = dialog.exec() == QDialog::Accepted;
+  if (generation != interaction_generation_) {
     return;
   }
-  const QColor color = dialog.selectedColor();
-  if (color.isValid() && albedo_edited_) {
-    albedo_edited_(color);
+  active_albedo_dialog_.clear();
+  if (albedo_preview_finish_) {
+    albedo_preview_finish_(accepted);
+  }
+  if (generation == interaction_generation_ && !accepted) {
+    albedo_button_->set_swatch_color(original);
   }
 }
 

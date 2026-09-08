@@ -21,6 +21,12 @@ class QuaderSceneApi;
 class SceneTransformDragService;
 class SceneTransformPreviewTransaction;
 
+/// Pins a color preview to both the scene entity and one edit lifetime.
+struct QuaderScenePropertyEditRef {
+  QuaderEntityRef entity;
+  std::uint64_t generation = 0u;
+};
+
 /**
  * Represents a scene transform edit used by the public Quader API surface.
  */
@@ -168,6 +174,14 @@ public:
     QuaderApiVoidResult update_point_light_range_edit(QuaderEntityRef light, float range);
     /// Cancel restores the original range; commit adds one undo step if changed.
     QuaderApiVoidResult finish_point_light_range_edit(QuaderEntityRef light, bool cancel = false);
+    /// Previews linear RGB and restores only color, color mode and preset on cancel.
+    QuaderApiResult<QuaderScenePropertyEditRef> begin_light_color_edit(EntityId entity);
+    QuaderApiVoidResult update_light_color_edit(QuaderScenePropertyEditRef light, QVec3 color);
+    QuaderApiVoidResult finish_light_color_edit(QuaderScenePropertyEditRef light, bool cancel = false);
+    /// Previews the scene-root clear color; acceptance records one undo step.
+    QuaderApiResult<QuaderScenePropertyEditRef> begin_environment_color_edit(EntityId entity);
+    QuaderApiVoidResult update_environment_color_edit(QuaderScenePropertyEditRef environment, QVec3 color);
+    QuaderApiVoidResult finish_environment_color_edit(QuaderScenePropertyEditRef environment, bool cancel = false);
     QuaderApiVoidResult set_scene_settings(EntityId entity,
                                            QuaderSceneSettings settings,
                                            QuaderSceneEditOptions options = {});

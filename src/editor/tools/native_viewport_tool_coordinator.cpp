@@ -343,6 +343,10 @@ bool NativeViewportToolCoordinator::pointer_dragging() const {
   return interaction_.dragging();
 }
 
+ViewportPointerCursor NativeViewportToolCoordinator::pointer_cursor() const {
+  return interaction_.pointer_cursor();
+}
+
 bool NativeViewportToolCoordinator::curve_control_gizmo_start_allowed(
     ViewportToolId active_tool, bool selection_fallback_allowed,
     bool active_tool_owns_viewport, bool modal_tool_active) const {
@@ -382,6 +386,7 @@ NativeViewportToolCoordinator::cancel_competing_state_for_tool_activation() {
         .message = native_cancel.message,
     };
   }
+  interaction_.clear_drag_state();
   return {
       .ok = true,
       .changed = modeling_cancel.changed || native_cancel.changed,
@@ -389,7 +394,11 @@ NativeViewportToolCoordinator::cancel_competing_state_for_tool_activation() {
 }
 
 CommandResult NativeViewportToolCoordinator::commit_active() {
-  return runtime_.commit_active_native_lifecycle();
+  const CommandResult result = runtime_.commit_active_native_lifecycle();
+  if (result.ok) {
+    interaction_.clear_drag_state();
+  }
+  return result;
 }
 
 CommandResult NativeViewportToolCoordinator::undo_active() {
@@ -401,7 +410,11 @@ CommandResult NativeViewportToolCoordinator::redo_active() {
 }
 
 CommandResult NativeViewportToolCoordinator::cancel_active() {
-  return runtime_.cancel_native_lifecycles();
+  const CommandResult result = runtime_.cancel_native_lifecycles();
+  if (result.ok) {
+    interaction_.clear_drag_state();
+  }
+  return result;
 }
 
 CommandResult NativeViewportToolCoordinator::accept_active_primitive(

@@ -20,6 +20,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 namespace quader {
@@ -33,8 +34,8 @@ struct PreparedDocumentCommand final {
   std::unique_ptr<IUndoableCommand> command;
 };
 
-/// Lets the session track clean content across a live radius preview.
-struct PointLightRangePreviewCheckpointHooks {
+/// Lets the session track clean content across a live document-property preview.
+struct DocumentPropertyPreviewCheckpointHooks {
   std::function<void()> begin;
   std::function<void()> observe_before_projection;
   std::function<void()> record_after_projection;
@@ -118,13 +119,22 @@ public:
     DocumentCommandResult begin_point_light_range_edit(EntityId entity);
     DocumentCommandResult update_point_light_range_edit(EntityId entity, float range);
     DocumentCommandResult finish_point_light_range_edit(EntityId entity, bool cancel);
+    DocumentCommandResult begin_light_color_edit(EntityId entity);
+    DocumentCommandResult update_light_color_edit(EntityId entity, std::uint64_t generation, QVec3 color);
+    DocumentCommandResult finish_light_color_edit(EntityId entity, std::uint64_t generation, bool cancel);
+    DocumentCommandResult begin_environment_color_edit(EntityId entity);
+    DocumentCommandResult update_environment_color_edit(EntityId entity, std::uint64_t generation, QVec3 color);
+    DocumentCommandResult finish_environment_color_edit(EntityId entity, std::uint64_t generation, bool cancel);
+    DocumentCommandResult cancel_active_property_edit();
     DocumentCommandResult cancel_active_point_light_range_edit();
-    void abandon_point_light_range_edit() { point_light_range_edit_.reset(); }
-    [[nodiscard]] bool point_light_range_edit_active() const {
-      return point_light_range_edit_.has_value();
+    void abandon_property_edit() { property_edit_.reset(); }
+    [[nodiscard]] bool property_edit_active() const { return property_edit_.has_value(); }
+    [[nodiscard]] std::uint64_t property_edit_generation() const {
+      return property_edit_ ? property_edit_generation_ : 0u;
     }
-    void set_point_light_range_preview_hooks(PointLightRangePreviewCheckpointHooks hooks) {
-      point_light_range_preview_hooks_ = std::move(hooks);
+    [[nodiscard]] bool point_light_range_edit_active() const;
+    void set_property_preview_hooks(DocumentPropertyPreviewCheckpointHooks hooks) {
+      property_preview_hooks_ = std::move(hooks);
     }
     DocumentCommandResult
     set_scene_settings(EntityId entity, SceneSettingsComponent settings,
@@ -168,15 +178,39 @@ public:
     EntityMutationBlocker entity_mutation_blocker_;
     CheckedSelectionPublication selection_publication_;
     std::function<TextureLockSettings()> texture_lock_settings_provider_;
-    /// Owns only the range field; concurrent component changes remain intact.
+    /// Each preview owns only its named fields; unrelated edits remain intact.
     struct PointLightRangeEdit {
-      EntityId entity = kInvalidEntityId;
-      std::string uuid;
       float before = 0.0f;
       float expected = 0.0f;
     };
-    std::optional<PointLightRangeEdit> point_light_range_edit_;
-    PointLightRangePreviewCheckpointHooks point_light_range_preview_hooks_;
+    /// Fields changed by a manual RGB edit, including its authored mode.
+    struct LightColorValue {
+      QVec3 color;
+      LightColorMode mode = LightColorMode::Color;
+      LightSourcePreset preset = LightSourcePreset::Custom;
+    };
+    /// Captures initial and most recently published light-color properties.
+    struct LightColorEdit {
+      LightColorValue before;
+      LightColorValue expected;
+    };
+    /// Captures only the environment clear color.
+    struct EnvironmentColorEdit {
+      QVec3 before;
+      QVec3 expected;
+    };
+    /// Pins the sole active preview to an entity identity and typed values.
+    struct PropertyEdit {
+      EntityId entity = kInvalidEntityId;
+      std::string uuid;
+      std::variant<PointLightRangeEdit, LightColorEdit, EnvironmentColorEdit> value;
+    };
+    DocumentCommandResult finish_property_edit(bool cancel);
+    DocumentCommandResult settle_property_edit(DocumentCommandResult result, bool restored);
+    void advance_property_edit_generation();
+    std::optional<PropertyEdit> property_edit_;
+    std::uint64_t property_edit_generation_ = 0u;
+    DocumentPropertyPreviewCheckpointHooks property_preview_hooks_;
 };
 
 } // namespace quader

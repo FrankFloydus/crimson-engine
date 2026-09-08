@@ -7,6 +7,7 @@
 #include "scene/scene_document.hpp"
 
 #include "scene/document/scene_entity_state.hpp"
+#include "scene/light_properties.hpp"
 #include "scene/scene_transform.hpp"
 #include "scene/scene_texture_mapping.hpp"
 
@@ -3137,7 +3138,8 @@ bool SceneDocument::clear_material(EntityId id) {
 }
 
 bool SceneDocument::set_light(EntityId id, LightComponent light) {
-  if (!std::isfinite(light.distance_attenuation)) {
+  if (!std::isfinite(light.distance_attenuation) ||
+      !light_component_metadata_is_valid(light)) {
     return false;
   }
   const entt::entity entity = require_entity(id);

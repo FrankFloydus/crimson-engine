@@ -7,6 +7,7 @@
 #pragma once
 
 #include "assets/asset_document.hpp"
+#include "assets/material_diffuse_model.hpp"
 #include "core/types.hpp"
 #include "math/types.hpp"
 
@@ -41,6 +42,7 @@ struct MaterialDocument final : AssetDocumentBase<MaterialAssetRevision> {
   QVec3 base_color = {1.0f, 1.0f, 1.0f};
   float roughness = 1.0f;
   float metallic = 0.0f;
+  MaterialDiffuseModel diffuse_model = MaterialDiffuseModel::Burley;
   std::unordered_map<std::string, AssetId> texture_slots;
   bool node_graph_reserved = true;
 };

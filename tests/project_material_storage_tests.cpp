@@ -34,6 +34,19 @@ using namespace quader;
 
 namespace {
 
+constexpr std::string_view kPlainV1Material = R"json({
+  "format": "quader.material",
+  "version": 1,
+  "id": "64cc0de8-35da-4a84-bf30-bd5c87bc40de",
+  "name": "Legacy Paint",
+  "model": "metallicRoughness",
+  "parameters": {
+    "baseColor": [0.25, 0.5, 0.75],
+    "roughness": 0.8,
+    "metallic": 0.1
+  }
+})json";
+
 constexpr std::string_view kNamedImageV3Material = R"json({
   "format": "quader.material",
   "version": 3,
@@ -246,6 +259,117 @@ TEST(QmatCodecTests, RoundTripsDeterministicallyAndValidatesInput) {
   ProjectMaterialDocument invalid = material;
   standard_material(invalid).roughness = 2.0f;
   EXPECT_FALSE(QmatCodec::encode(invalid).ok());
+}
+
+TEST(QmatCodecTests, RoundTripsBothDiffuseModelsThroughAtomicStorage) {
+  ScopedMaterialTestDirectory temporary("qmat-diffuse-model");
+  const auto root = temporary.make_empty_project("DiffuseModels");
+  const auto workspace = ProjectManifestStore::create_in_empty_directory(root);
+  ASSERT_TRUE(workspace.ok()) << workspace.error().message;
+  ASSERT_TRUE(std::filesystem::create_directory(root / "Materials"));
+  const auto path = project_path("Materials/paint.qmat");
+  auto material = material_definition(
+      "64cc0de8-35da-4a84-bf30-bd5c87bc40de", "Paint");
+  for (const auto model : {MaterialDiffuseModel::Burley,
+                           MaterialDiffuseModel::Lambert}) {
+    const std::string name = model == MaterialDiffuseModel::Burley
+        ? "burley" : "lambert";
+    SCOPED_TRACE(name);
+    standard_material(material).diffuse_model = model;
+    const auto encoded = QmatCodec::encode(material);
+    ASSERT_TRUE(encoded.ok()) << encoded.error().message;
+    EXPECT_NE(encoded.value().find("\"version\": 2"), std::string::npos);
+    EXPECT_NE(encoded.value().find("\"diffuseModel\": \"" + name + "\""),
+              std::string::npos);
+    const auto written =
+        QmatCodec::write_atomic(workspace.value().file_system, path, material);
+    ASSERT_TRUE(written.ok()) << written.error().message;
+    const auto read = QmatCodec::read(workspace.value().file_system, path);
+    ASSERT_TRUE(read.ok()) << read.error().message;
+    EXPECT_EQ(read.value().material, material);
+    const auto reencoded = QmatCodec::encode(read.value().material);
+    ASSERT_TRUE(reencoded.ok()) << reencoded.error().message;
+    EXPECT_EQ(reencoded.value(), encoded.value());
+  }
+}
+
+TEST(QmatCodecTests, MissingDiffuseModelDefaultsToBurleyForEveryVersion) {
+  const auto encoded = QmatCodec::encode(material_definition(
+      "64cc0de8-35da-4a84-bf30-bd5c87bc40de", "Paint"));
+  ASSERT_TRUE(encoded.ok()) << encoded.error().message;
+  const std::array<std::string, 3u> sources{
+      std::string(kPlainV1Material),
+      replace_once(encoded.value(), "\"diffuseModel\": \"burley\",", ""),
+      std::string(kNamedImageV3Material),
+  };
+  for (std::size_t index = 0u; index < sources.size(); ++index) {
+    SCOPED_TRACE(index + 1u);
+    const auto decoded = QmatCodec::decode(sources[index]);
+    ASSERT_TRUE(decoded.ok()) << decoded.error().message;
+    EXPECT_EQ(standard_material(decoded.value()).diffuse_model,
+              MaterialDiffuseModel::Burley);
+  }
+}
+
+TEST(QmatCodecTests, AcceptsOnlyCanonicalDiffuseModelsForStandardVersions) {
+  const auto encoded = QmatCodec::encode(material_definition(
+      "64cc0de8-35da-4a84-bf30-bd5c87bc40de", "Paint"));
+  ASSERT_TRUE(encoded.ok()) << encoded.error().message;
+  const std::array<std::string, 2u> sources{
+      replace_once(std::string(kPlainV1Material), "\"metallic\": 0.1",
+                   "\"metallic\": 0.1, \"diffuseModel\": \"burley\""),
+      encoded.value(),
+  };
+  for (std::size_t index = 0u; index < sources.size(); ++index) {
+    SCOPED_TRACE(index + 1u);
+    for (const auto model : {MaterialDiffuseModel::Burley,
+                             MaterialDiffuseModel::Lambert}) {
+      const std::string name = model == MaterialDiffuseModel::Burley
+          ? "burley" : "lambert";
+      const auto decoded = QmatCodec::decode(replace_once(
+          sources[index], "\"burley\"", "\"" + name + "\""));
+      ASSERT_TRUE(decoded.ok()) << decoded.error().message;
+      EXPECT_EQ(standard_material(decoded.value()).diffuse_model, model);
+    }
+    for (const std::string_view token :
+         {"\"\"", "\"Burley\"", "\"Lambert\"", "\"orenNayar\"",
+          "\"burley \"", "null", "0", "true", "[]", "{}"}) {
+      SCOPED_TRACE(token);
+      const auto decoded = QmatCodec::decode(
+          replace_once(sources[index], "\"burley\"", token));
+      EXPECT_FALSE(decoded.ok());
+      EXPECT_EQ(decoded.error().code, ProjectIoErrorCode::MaterialMalformed);
+    }
+  }
+}
+
+TEST(QmatCodecTests, InvalidDiffuseModelNeverReplacesOrCreatesMaterialFiles) {
+  ScopedMaterialTestDirectory temporary("qmat-invalid-diffuse-model");
+  const auto root = temporary.make_empty_project("InvalidDiffuseModel");
+  const auto workspace = ProjectManifestStore::create_in_empty_directory(root);
+  ASSERT_TRUE(workspace.ok()) << workspace.error().message;
+  ASSERT_TRUE(std::filesystem::create_directory(root / "Materials"));
+  const auto path = project_path("Materials/existing.qmat");
+  const auto original = material_definition(
+      "64cc0de8-35da-4a84-bf30-bd5c87bc40de", "Original");
+  ASSERT_TRUE(QmatCodec::write_atomic(workspace.value().file_system, path,
+                                     original).ok());
+  const auto before = read_text(root / path.native_path());
+  auto invalid = original;
+  standard_material(invalid).diffuse_model =
+      static_cast<MaterialDiffuseModel>(255u);
+  const auto encoded = QmatCodec::encode(invalid);
+  EXPECT_FALSE(encoded.ok());
+  EXPECT_EQ(encoded.error().code, ProjectIoErrorCode::MaterialMalformed);
+  EXPECT_FALSE(QmatCodec::write_atomic(workspace.value().file_system, path,
+                                      invalid).ok());
+  EXPECT_FALSE(QmatCodec::create_atomic(workspace.value().file_system,
+                                       project_path("Materials/new.qmat"),
+                                       invalid).ok());
+  EXPECT_EQ(read_text(root / path.native_path()), before);
+  EXPECT_FALSE(std::filesystem::exists(root / "Materials" / "new.qmat"));
+  EXPECT_EQ(std::distance(std::filesystem::directory_iterator(root / "Materials"),
+                          std::filesystem::directory_iterator{}), 1);
 }
 
 TEST(QmatCodecTests, ReadsV1AsStandardAndWritesTypedV2) {

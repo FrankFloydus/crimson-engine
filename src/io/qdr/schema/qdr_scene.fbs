@@ -35,12 +35,53 @@ enum LightType : ubyte {
   Spot = 2
 }
 
+enum LightUnit : ubyte {
+  Simple = 0,
+  Lumens = 1,
+  Candela = 2
+}
+
+enum LightColorMode : ubyte {
+  Color = 0,
+  ColorTemperature = 1
+}
+
+enum LightSourcePreset : ubyte {
+  Custom = 0,
+  Candle = 1,
+  Incandescent40W = 2,
+  Incandescent60W = 3,
+  Incandescent75W = 4,
+  Incandescent100W = 5,
+  Halogen80W = 6,
+  DecorativeLed = 7,
+  WarmLed = 8,
+  WarmWhiteLed = 9,
+  NeutralLed = 10,
+  DaylightLed = 11,
+  CoolDaylightLed = 12,
+  WarmFluorescent36W = 13,
+  NeutralFluorescent36W = 14,
+  DaylightFluorescent36W = 15,
+  HighPressureSodium100W = 16,
+  MercuryVapor80W = 17,
+  MetalHalide400W = 18,
+  StudioTungsten = 19,
+  SunriseSunset = 20,
+  MiddaySun = 21,
+  Daylight = 22,
+  Overcast = 23,
+  OutdoorShade = 24,
+  BlueSky = 25
+}
+
 enum SceneToneMapping : ubyte {
   Linear = 0,
   AcesLegacy = 1,
   Aces = 2,
   Filmic = 3,
-  DisplayRange = 4
+  DisplayRange = 4,
+  Agx = 5
 }
 
 enum TextureUsage : ubyte {
@@ -174,6 +215,11 @@ table TextureSlotBinding {
   texture_id:ulong;
 }
 
+enum MaterialDiffuseModel : ubyte {
+  Burley = 0,
+  Lambert = 1
+}
+
 table MaterialAsset {
   id:ulong;
   name:string;
@@ -182,6 +228,7 @@ table MaterialAsset {
   metallic:float = 0.0;
   texture_slots:[TextureSlotBinding];
   node_graph_reserved:bool = true;
+  diffuse_model:MaterialDiffuseModel = Burley;
 }
 
 table TextureAsset {
@@ -254,6 +301,10 @@ table LightComponent {
   range:float = 10.0;
   casts_shadows:bool = false;
   distance_attenuation:float = 2.0;
+  light_unit:LightUnit = Simple;
+  color_mode:LightColorMode = Color;
+  color_temperature_kelvin:float = 6500.0;
+  source_preset:LightSourcePreset = Custom;
 }
 
 table SceneEnvironmentSettings {

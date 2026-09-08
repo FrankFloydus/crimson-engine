@@ -20,6 +20,8 @@ namespace quader {
 enum class ViewportPointerCursor {
   Default,
   PrecisionCross,
+  OpenHand,
+  ClosedHand,
 };
 
 /// Carries one canonical mouse-button edge with its event-time pane position.

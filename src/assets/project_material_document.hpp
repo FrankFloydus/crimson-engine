@@ -7,6 +7,7 @@
 #pragma once
 
 #include "assets/project_asset_id.hpp"
+#include "assets/material_diffuse_model.hpp"
 
 #include <array>
 #include <cmath>
@@ -116,6 +117,7 @@ struct ProjectStandardMaterialDefinition final {
   std::array<float, 3> base_color{1.0f, 1.0f, 1.0f};
   float roughness = 1.0f;
   float metallic = 0.0f;
+  MaterialDiffuseModel diffuse_model = MaterialDiffuseModel::Burley;
   float normal_strength = 1.0f;
   NormalMapConvention normal_convention = NormalMapConvention::OpenGL;
   StandardMaterialTextureTransform texture_transform;

@@ -119,6 +119,7 @@ struct CurveToolHarness {
   double radial_wheel_remainder = 0.0;
   bool scene_snap_enabled = false;
   bool grid_snap_enabled = false;
+  bool handles_visible = true;
   std::function<ViewportMeshSnapQueryResult(
       const ViewportRay &, double, std::optional<double>)>
       mesh_snap_query;
@@ -167,6 +168,10 @@ struct CurveToolHarness {
          .input_result = input_result,
          .navigation_gizmo_consumed = gizmo,
          .suppress_hover_work = suppress_hover,
+         .handles_visible = handles_visible,
+         .scene_surface_revision = scene_surfaces != nullptr
+                                       ? scene_surfaces->revision()
+                                       : 0u,
          .left_pressed = pressed,
          .left_down = down,
          .left_released = released,
@@ -197,6 +202,10 @@ struct CurveToolHarness {
         {.input = input,
          .input_result = input_result,
          .transform_gizmo_consumed = transform_gizmo_consumed,
+         .handles_visible = handles_visible,
+         .scene_surface_revision = scene_surfaces != nullptr
+                                       ? scene_surfaces->revision()
+                                       : 0u,
          .scene_snap_enabled = scene_snap_enabled,
          .grid_snap_enabled = grid_snap_enabled,
          .curve_control_picker = &curve_control_picker},
@@ -556,6 +565,141 @@ QVec2 plane_screen_center(
     const quader_editor_core::TransformGizmoPlanePrimitive &plane) {
   return (plane.screen0 + plane.screen1 + plane.screen2 + plane.screen3) *
          0.25f;
+}
+
+TEST(CurveToolServiceTests,
+     NativeControlCursorReusesStationaryPicksAndClearsOnBlockedFrames) {
+  CurveToolHarness harness;
+  const auto object = harness.make_curve();
+  ASSERT_TRUE(harness.editor.selection().select_object(object).ok());
+  harness.activate_curve_edit();
+  const SceneSurfaceQuerySnapshot surfaces =
+      harness.session.scene_surface_query().snapshot();
+
+  /// Counts real owner picks without replacing their geometry or occlusion logic.
+  class CountingPicker final : public ViewportCurveControlPickingPort {
+  public:
+    CountingPicker(const ViewportCameraController &camera,
+                   const SceneSurfaceQuerySnapshot &surfaces)
+        : picker_(camera, &surfaces) {}
+
+    std::optional<CurveControlTarget> pick(
+        const CurveToolPreviewState &preview, QVec2 local,
+        bool anchors_only) const override {
+      ++calls;
+      return picker_.pick(preview, local, anchors_only);
+    }
+
+    mutable std::size_t calls = 0u;
+
+  private:
+    ViewportCurveControlPickingAdapter picker_;
+  } picker(harness.camera, surfaces);
+
+  bool handles_visible = true;
+  const auto frame = [&]() {
+    return harness.interaction.handle_frame(
+        harness.lifecycle, harness.session.scene(), harness.session.assets(),
+        nullptr, nullptr, nullptr, nullptr, nullptr,
+        &harness.session.point_placement(), harness.camera,
+        {.input = harness.input,
+         .input_result = harness.input_result,
+         .handles_visible = handles_visible,
+         .scene_surface_revision = surfaces.revision(),
+         .curve_control_picker = &picker},
+        &harness.session.curve());
+  };
+  for (const CurveControlKind kind :
+       {CurveControlKind::Anchor, CurveControlKind::OutgoingHandle}) {
+    harness.input.mouse_local = curve_control_screen(
+        harness, harness.session.curve().preview_state(), 0u, kind);
+    (void)frame();
+    EXPECT_EQ(harness.interaction.pointer_cursor(),
+              ViewportPointerCursor::OpenHand);
+    const std::size_t picked_calls = picker.calls;
+    const std::uint64_t preview_revision =
+        harness.session.curve().preview_state().revision;
+    for (int unchanged = 0; unchanged < 4; ++unchanged) {
+      (void)frame();
+      EXPECT_EQ(harness.interaction.pointer_cursor(),
+                ViewportPointerCursor::OpenHand);
+    }
+    EXPECT_EQ(picker.calls, picked_calls);
+    EXPECT_EQ(harness.session.curve().preview_state().revision,
+              preview_revision);
+  }
+  const std::size_t picked_calls = picker.calls;
+  handles_visible = false;
+  (void)frame();
+  EXPECT_EQ(harness.interaction.pointer_cursor(),
+            ViewportPointerCursor::Default);
+  EXPECT_EQ(picker.calls, picked_calls);
+  handles_visible = true;
+  harness.input.viewport_focused = false;
+  (void)frame();
+  EXPECT_EQ(harness.interaction.pointer_cursor(),
+            ViewportPointerCursor::Default);
+  harness.input.viewport_focused = true;
+  harness.input_result.navigation_active = true;
+  (void)frame();
+  EXPECT_EQ(harness.interaction.pointer_cursor(),
+            ViewportPointerCursor::Default);
+  harness.input_result.navigation_active = false;
+  harness.input.mouse_local = {-100.0f, -100.0f};
+  (void)frame();
+  EXPECT_EQ(harness.interaction.pointer_cursor(),
+            ViewportPointerCursor::Default);
+  EXPECT_EQ(picker.calls, picked_calls + 1u);
+  harness.interaction.clear_drag_state();
+  EXPECT_EQ(harness.interaction.pointer_cursor(),
+            ViewportPointerCursor::Default);
+}
+
+TEST(CurveToolServiceTests, HiddenGizmosPreserveDrawAndPresetConstruction) {
+  for (const auto kind : {CurveCreationKind::Draw, CurveCreationKind::Circle,
+                          CurveCreationKind::Oval}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    CurveToolHarness harness;
+    const std::size_t expected_points = kind == CurveCreationKind::Draw ? 1u
+        : kind == CurveCreationKind::Circle ? 4u : 6u;
+    ASSERT_TRUE(harness.editor.tools().activate(kCurveToolId).ok());
+    auto &curve = harness.session.curve();
+    ASSERT_TRUE(curve.set_creation_kind(kind).ok);
+    harness.handles_visible = false;
+    EXPECT_TRUE(harness.frame(false, false, false).consumed);
+    EXPECT_EQ(harness.interaction.pointer_cursor(), ViewportPointerCursor::Default);
+    const auto &hover = curve.preview_state();
+    if (kind == CurveCreationKind::Draw) {
+      EXPECT_TRUE(hover.hover_world.has_value());
+    } else {
+      EXPECT_TRUE(hover.preset_hover_document.has_value());
+    }
+    EXPECT_TRUE(harness.frame(true, true, false).claim_interaction_pane);
+    if (kind == CurveCreationKind::Draw) {
+      ASSERT_TRUE(curve.point_construction_dragging());
+      harness.input.mouse_local.x += 35.0f;
+      EXPECT_TRUE(harness.frame(false, true, false).consumed);
+      EXPECT_TRUE(curve.point_construction_dragging());
+      EXPECT_EQ(harness.interaction.pointer_cursor(), ViewportPointerCursor::Default);
+      harness.handles_visible = true;
+      EXPECT_TRUE(harness.frame(false, true, false).consumed);
+      EXPECT_EQ(harness.interaction.pointer_cursor(), ViewportPointerCursor::ClosedHand);
+      harness.handles_visible = false;
+    }
+    EXPECT_TRUE(harness.frame(false, false, true).consumed);
+    EXPECT_FALSE(curve.dragging());
+    EXPECT_EQ(curve.point_count(), expected_points);
+    EXPECT_EQ(harness.interaction.pointer_cursor(), ViewportPointerCursor::Default);
+    harness.handles_visible = true;
+    harness.input.mouse_local = curve_control_screen(
+        harness, curve.preview_state(), 0u, CurveControlKind::Anchor);
+    EXPECT_TRUE(harness.frame(false, false, false).consumed);
+    EXPECT_EQ(harness.interaction.pointer_cursor(), ViewportPointerCursor::OpenHand);
+    harness.handles_visible = false;
+    EXPECT_TRUE(harness.frame(false, false, false).consumed);
+    EXPECT_EQ(harness.interaction.pointer_cursor(), ViewportPointerCursor::Default);
+    EXPECT_EQ(curve.point_count(), expected_points);
+  }
 }
 
 TEST(CurveToolServiceTests, PointerPreviewDoesNotDirtyUnchangedMeshSelection) {

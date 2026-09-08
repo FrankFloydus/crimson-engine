@@ -11,6 +11,7 @@
 #include "api/quader_events_api.hpp"
 #include "api/quader_events_api_internal_access.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/commands/document_command_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/project_autosave_service.hpp"
 #include "editor/session/scene_viewport_camera_persistence.hpp"
@@ -44,7 +45,8 @@ scene_result(SceneSession &session, const ProjectSessionResult &result) {
 }
 
 bool has_uncommitted_preview(const SceneSession &session) {
-  return session.native_tools().has_pending_tool() ||
+  return session.document_commands().property_edit_active() ||
+         session.native_tools().has_pending_tool() ||
          session.modeling().can_cancel_active_tool_or_preview();
 }
 

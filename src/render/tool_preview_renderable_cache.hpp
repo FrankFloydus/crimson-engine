@@ -336,6 +336,7 @@ private:
     EntityId source_entity = kInvalidEntityId;
     LightComponent light;
     QMat4 world_transform;
+    bool enabled = false;
   };
 
   /** Retains one record's active prefix and its high-water proxy capacity. */
@@ -356,7 +357,7 @@ private:
   enum class PendingKind : std::uint8_t {
     None,
     Unchanged,
-    TransformsOnly,
+    RetainedUpdate,
     Grow,
     Rebuild,
   };
@@ -374,7 +375,7 @@ private:
   [[nodiscard]] bool create_inert_proxy(
       const RenderToolPreviewLightRecord &record,
       const QMat4 &world_transform, LightProxy &proxy);
-  void apply_transforms(
+  void apply_updates(
       const std::vector<RenderToolPreviewLightRecord> &lights);
   void set_generation_intensity(Generation &generation, bool enabled);
   void destroy_generation(std::unique_ptr<Generation> generation);

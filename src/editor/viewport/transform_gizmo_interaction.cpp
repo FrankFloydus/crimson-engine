@@ -637,6 +637,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     // Qt focus loss synthesizes a release while the surface can remain hovered.
     // Dropping ownership must not turn that release into an ordinary front pick.
     reset_pending_drag();
+    clear_frame();
     result.gizmo_consumed = true;
     return result;
   }
@@ -750,7 +751,8 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
   }
 
   const bool suppress_hover =
-      frame.input_result.navigation_active ||
+      !frame.input.viewport_focused || frame.input.pointer_interaction_canceled ||
+      frame.input.navigation_active || frame.input_result.navigation_active ||
       frame.input_result.camera_changed || frame.input.text_input_active ||
       frame.input.modal_tool_active ||
       (!curve_route && frame.input.active_tool_owns_viewport);

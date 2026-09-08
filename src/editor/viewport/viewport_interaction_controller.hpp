@@ -103,6 +103,9 @@ public:
   [[nodiscard]] bool point_light_range_pointer_active() const {
     return point_light_range_.pointer_active();
   }
+  [[nodiscard]] std::uint64_t point_light_range_hover_pick_count() const {
+    return point_light_range_.hover_pick_count();
+  }
   [[nodiscard]] bool primitive_creation_pointer_active() const {
     return tool_runtime_.primitive_creation_interaction().active() >= 0;
   }
@@ -235,6 +238,7 @@ private:
   std::optional<ViewportPointerGesture> context_menu_pointer_;
   ViewportPointerReleaseSuppression context_menu_release_suppression_;
   MaterialInteractionWorkStats material_interaction_work_stats_;
+  ViewportPointerCursor interaction_cursor_ = ViewportPointerCursor::Default;
 };
 
 } // namespace quader

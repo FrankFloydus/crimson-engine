@@ -89,6 +89,21 @@ std::string_view normal_convention_name(NormalMapConvention convention) {
   return convention == NormalMapConvention::OpenGL ? "opengl" : "directx";
 }
 
+std::optional<MaterialDiffuseModel>
+parse_diffuse_model(std::string_view text) {
+  if (text == "burley") {
+    return MaterialDiffuseModel::Burley;
+  }
+  if (text == "lambert") {
+    return MaterialDiffuseModel::Lambert;
+  }
+  return std::nullopt;
+}
+
+std::string_view diffuse_model_name(MaterialDiffuseModel model) {
+  return model == MaterialDiffuseModel::Burley ? "burley" : "lambert";
+}
+
 ProjectIoResult<ProjectMaterialTextureSlot>
 decode_texture_slot(const Json &json, std::string_view slot_name) {
   if (!json.is_object() || !json.contains("id") ||
@@ -165,6 +180,11 @@ ProjectIoResult<void> validate_texture_slot(
 
 ProjectIoResult<void> validate_standard_material(
     const ProjectStandardMaterialDefinition &material) {
+  if (!is_valid_material_diffuse_model(material.diffuse_model)) {
+    return ProjectIoResult<void>::failure(
+        ProjectIoErrorCode::MaterialMalformed,
+        "Standard Material diffuse model is unsupported.");
+  }
   if (!std::ranges::all_of(material.base_color, finite_unit) ||
       !finite_unit(material.roughness) || !finite_unit(material.metallic) ||
       !is_valid_standard_material_normal_strength(
@@ -291,6 +311,17 @@ ProjectIoResult<ProjectMaterialDocument> decode_standard(
   }
 
   ProjectStandardMaterialDefinition standard;
+  if (parameters.contains("diffuseModel")) {
+    if (!parameters["diffuseModel"].is_string()) {
+      return malformed("QMAT diffuse model must be a string.");
+    }
+    const auto diffuse_model =
+        parse_diffuse_model(parameters["diffuseModel"].get<std::string>());
+    if (!diffuse_model.has_value()) {
+      return malformed("QMAT diffuse model is unsupported.");
+    }
+    standard.diffuse_model = *diffuse_model;
+  }
   for (std::size_t index = 0u; index < standard.base_color.size(); ++index) {
     if (!parameters["baseColor"][index].is_number()) {
       return malformed("QMAT base color must contain three numbers.");
@@ -562,6 +593,8 @@ QmatCodec::encode(const ProjectMaterialDocument &material) {
            {"model", "metallicRoughness"},
            {"parameters",
             Json{
+                {"diffuseModel",
+                 std::string(diffuse_model_name(standard.diffuse_model))},
                 {"baseColor", standard.base_color},
                 {"roughness", standard.roughness},
                 {"metallic", standard.metallic},

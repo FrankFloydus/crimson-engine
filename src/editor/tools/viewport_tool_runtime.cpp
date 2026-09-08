@@ -145,6 +145,11 @@ bool ViewportToolRuntime::tool_uses_editor_native_lifecycle(
 
 ViewportPointerCursor
 ViewportToolRuntime::tool_pointer_cursor(ViewportToolId tool) const {
+  if (tool == ViewportToolId::CreatePrimitive) {
+    const auto cursor = modal_state_.primitive_creation.pointer_cursor(
+        modal_state_.primitive_creation_drag_started);
+    if (cursor != ViewportPointerCursor::Default) return cursor;
+  }
   const ViewportTool *item = registry_.find(tool);
   return item != nullptr ? item->pointer_cursor()
                          : ViewportPointerCursor::Default;

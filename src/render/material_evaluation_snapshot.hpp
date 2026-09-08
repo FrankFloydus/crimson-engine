@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "assets/material_diffuse_model.hpp"
 #include "assets/project_asset_id.hpp"
 #include "core/color_space.hpp"
 #include "math/types.hpp"
@@ -112,6 +113,7 @@ struct RenderStandardMaterialEvaluationSnapshot final {
   bool directx_normal = false;
   RenderStandardMaterialTextureTransformSnapshot texture_transform;
   std::array<RenderMaterialTextureEvaluationSnapshot, 4> textures;
+  MaterialDiffuseModel diffuse_model = MaterialDiffuseModel::Burley;
 
   [[nodiscard]] const RenderMaterialTextureEvaluationSnapshot &
   texture(RenderStandardMaterialTextureSlot slot) const noexcept {
@@ -131,7 +133,8 @@ struct RenderStandardMaterialEvaluationSnapshot final {
            left.normal_strength == right.normal_strength &&
            left.directx_normal == right.directx_normal &&
            left.texture_transform == right.texture_transform &&
-           left.textures == right.textures;
+           left.textures == right.textures &&
+           left.diffuse_model == right.diffuse_model;
   }
 };
 

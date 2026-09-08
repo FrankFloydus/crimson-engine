@@ -11,7 +11,9 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "scene/light_properties.hpp"
 #include "ui/inspector_panel.hpp"
+#include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
@@ -19,6 +21,8 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <QApplication>
+#include <QColorDialog>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QEvent>
 #include <QHeaderView>
@@ -29,6 +33,8 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QStyle>
+#include <QSlider>
+#include <QTimer>
 #include <QTreeWidget>
 
 #include <algorithm>
@@ -36,6 +42,7 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <string_view>
@@ -86,6 +93,12 @@ void process_inspector_events() {
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
+void expect_inspector_color(QVec3 actual, QVec3 expected) {
+  EXPECT_FLOAT_EQ(actual.x, expected.x);
+  EXPECT_FLOAT_EQ(actual.y, expected.y);
+  EXPECT_FLOAT_EQ(actual.z, expected.z);
+}
+
 /// Runs the real retained panel against a public-API selected-light scene.
 struct InspectorLightScenario {
   SceneSession session;
@@ -121,6 +134,400 @@ struct InspectorLightScenario {
         QStringLiteral("inspector.light.range"));
   }
 };
+
+TEST(InspectorMaterialTests, LightControlsRetainTemperatureEdits) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-light-controls";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  InspectorLightScenario scenario;
+  QuaderCreatePointLightArgs args;
+  args.select_created = true;
+  args.light.intensity = 5.0f;
+  args.light.light_unit = QuaderLightUnit::Candela;
+  args.light.distance_attenuation = -1.0f;
+  const auto created = scenario.editor.scene().create_point_light(args);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  scenario.refresh();
+  const auto number = [&scenario](const char *name) {
+    return scenario.panel.findChild<QDoubleSpinBox *>(QString::fromLatin1(name));
+  };
+  const auto combo = [&scenario](const char *name) {
+    return scenario.panel.findChild<QComboBox *>(QString::fromLatin1(name));
+  };
+  const auto activate = [](QComboBox *field, int value) {
+    ASSERT_NE(field, nullptr);
+    const int index = field->findData(value);
+    ASSERT_GE(index, 0);
+    field->setCurrentIndex(index);
+    field->activated(index);
+  };
+  auto *falloff = number("inspector.light.distance_attenuation");
+  ASSERT_NE(falloff, nullptr);
+  EXPECT_DOUBLE_EQ(falloff->value(), -1.0);
+  falloff->setValue(1.5);
+  falloff->editingFinished();
+  scenario.refresh();
+  EXPECT_FLOAT_EQ(scenario.session.scene().light(created.value().id)
+                      ->distance_attenuation, 1.5f);
+
+  QPointer<QDoubleSpinBox> temperature = number("inspector.light.color_temperature_kelvin");
+  QPointer<QPushButton> color = scenario.panel.findChild<QPushButton *>(
+      QStringLiteral("inspector.light.color"));
+  QPointer<QComboBox> preset = combo("inspector.light.source_preset");
+  ASSERT_NE(temperature, nullptr);
+  ASSERT_NE(color, nullptr);
+  ASSERT_NE(preset, nullptr);
+  EXPECT_FALSE(temperature->isEnabled());
+  EXPECT_TRUE(color->isEnabled());
+  activate(preset, static_cast<int>(LightSourcePreset::Halogen80W));
+  scenario.refresh();
+  ASSERT_NE(temperature, nullptr);
+  ASSERT_NE(preset, nullptr);
+  EXPECT_DOUBLE_EQ(temperature->value(), 2900.0);
+  EXPECT_TRUE(temperature->isEnabled());
+  EXPECT_FALSE(color->isEnabled());
+  EXPECT_EQ(scenario.session.scene().light(created.value().id)->light_unit,
+            LightUnit::Candela);
+  auto *temperature_slider = scenario.panel.findChild<QSlider *>(
+      QStringLiteral("inspector.light.color_temperature_kelvin.slider"));
+  ASSERT_NE(temperature_slider, nullptr);
+  temperature_slider->setSliderDown(true);
+  temperature_slider->setValue(temperature_slider->maximum());
+  scenario.refresh();
+  ASSERT_NE(temperature, nullptr);
+  EXPECT_DOUBLE_EQ(temperature->value(), 15000.0);
+  EXPECT_EQ(preset->currentData().toInt(), static_cast<int>(LightSourcePreset::Custom));
+  const LightComponent *light = scenario.session.scene().light(created.value().id);
+  const QVec3 expected_color = light_color_temperature_rgb(15000.0f);
+  expect_inspector_color(light->color, expected_color);
+  const QVec3 display = light_linear_to_srgb(expected_color);
+  EXPECT_EQ(static_cast<QtColorSwatchButton *>(color.data())->swatch_color(),
+            QColor::fromRgbF(display.x, display.y, display.z));
+  temperature_slider->setSliderDown(false);
+  scenario.refresh();
+  ASSERT_NE(temperature, nullptr);
+  activate(combo("inspector.light.color_mode"), static_cast<int>(LightColorMode::Color));
+  scenario.refresh();
+  ASSERT_NE(temperature, nullptr);
+  EXPECT_FALSE(temperature->isEnabled());
+  EXPECT_TRUE(color->isEnabled());
+  expect_inspector_color(scenario.session.scene().light(created.value().id)->color,
+                          expected_color);
+
+  auto *intensity = number("inspector.light.intensity");
+  ASSERT_NE(intensity, nullptr);
+  intensity->setValue(48.0);
+  intensity->editingFinished();
+  activate(combo("inspector.light.type"), static_cast<int>(LightType::Directional));
+  scenario.refresh();
+  EXPECT_EQ(combo("inspector.light.light_unit"), nullptr);
+  EXPECT_EQ(number("inspector.light.brightness"), nullptr);
+  EXPECT_EQ(number("inspector.light.candela"), nullptr);
+  ASSERT_NE(number("inspector.light.intensity"), nullptr);
+  EXPECT_DOUBLE_EQ(number("inspector.light.intensity")->value(), 48.0);
+  EXPECT_EQ(scenario.panel.findChild<QSlider *>(
+                QStringLiteral("inspector.light.intensity.slider")), nullptr);
+  EXPECT_EQ(number("inspector.light.range"), nullptr);
+}
+
+TEST(InspectorMaterialTests, AllLightShapesUseUncappedNumericIntensityAndRetainControls) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-simple-light-intensity";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  InspectorLightScenario scenario;
+  QuaderCreatePointLightArgs args;
+  args.select_created = true;
+  const auto created = scenario.editor.scene().create_point_light(args);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+
+  for (const QuaderLightType shape : {QuaderLightType::Directional,
+                                      QuaderLightType::Point,
+                                      QuaderLightType::Spot}) {
+    SCOPED_TRACE(static_cast<int>(shape));
+    auto legacy = to_api_light_component(
+        *scenario.session.scene().light(created.value().id));
+    legacy.type = shape;
+    legacy.intensity = 128.0f;
+    legacy.light_unit = QuaderLightUnit::Candela;
+    ASSERT_TRUE(scenario.editor.scene().set_light_component(created.value().id, legacy).ok());
+    const std::size_t legacy_undo_count = scenario.session.history().undo_count();
+    scenario.refresh();
+    QPointer<QDoubleSpinBox> intensity = scenario.panel.findChild<QDoubleSpinBox *>(
+        QStringLiteral("inspector.light.intensity"));
+    ASSERT_NE(intensity, nullptr);
+    EXPECT_EQ(scenario.panel.findChild<QSlider *>(
+                  QStringLiteral("inspector.light.intensity.slider")), nullptr);
+    EXPECT_DOUBLE_EQ(intensity->value(), 128.0);
+    EXPECT_DOUBLE_EQ(intensity->minimum(), 0.0);
+    EXPECT_DOUBLE_EQ(intensity->maximum(), std::numeric_limits<float>::max());
+    EXPECT_DOUBLE_EQ(intensity->singleStep(), 0.01);
+    EXPECT_EQ(scenario.panel.findChild<QComboBox *>(
+                  QStringLiteral("inspector.light.light_unit")), nullptr);
+    EXPECT_EQ(scenario.panel.findChild<QDoubleSpinBox *>(
+                  QStringLiteral("inspector.light.brightness")), nullptr);
+    EXPECT_EQ(scenario.panel.findChild<QDoubleSpinBox *>(
+                  QStringLiteral("inspector.light.candela")), nullptr);
+    auto *tree = scenario.panel.findChild<QTreeWidget *>(
+        QStringLiteral("inspector.tree"));
+    ASSERT_NE(tree, nullptr);
+    QTreeWidgetItem *section = find_top_level_item(*tree, QStringLiteral("light"));
+    ASSERT_NE(section, nullptr);
+    QTreeWidgetItem *intensity_row = nullptr;
+    for (int index = 0; index < section->childCount(); ++index) {
+      if (section->child(index)->data(0, Qt::UserRole).toString() ==
+          QStringLiteral("inspector.light.intensity")) {
+        intensity_row = section->child(index);
+        break;
+      }
+    }
+    ASSERT_NE(intensity_row, nullptr);
+    EXPECT_EQ(intensity_row->text(0), QStringLiteral("Intensity"));
+    auto *preset = scenario.panel.findChild<QComboBox *>(
+        QStringLiteral("inspector.light.source_preset"));
+    ASSERT_NE(preset, nullptr);
+    EXPECT_EQ(preset->toolTip(), QString::fromStdString(
+        scenario.localization.text("ui.inspector.source_type_tooltip", "")));
+    intensity->editingFinished();
+    scenario.refresh();
+    EXPECT_EQ(scenario.session.history().undo_count(), legacy_undo_count);
+    EXPECT_FLOAT_EQ(scenario.session.scene().light(created.value().id)->intensity, 128.0f);
+
+    // Historical unit metadata neither changes display values nor invalidates rows.
+    legacy.light_unit = QuaderLightUnit::Lumens;
+    ASSERT_TRUE(scenario.editor.scene().set_light_component(created.value().id, legacy).ok());
+    scenario.refresh();
+    ASSERT_NE(intensity, nullptr);
+    EXPECT_DOUBLE_EQ(intensity->value(), 128.0);
+    for (const float value : {150000.0f, 100000000.0f, 0.0f, 0.25f, 16.0f}) {
+      SCOPED_TRACE(value);
+      const float before = scenario.session.scene().light(created.value().id)->intensity;
+      intensity->setValue(value);
+      intensity->editingFinished();
+      scenario.refresh();
+      ASSERT_NE(intensity, nullptr);
+      EXPECT_DOUBLE_EQ(intensity->value(), static_cast<double>(value));
+      EXPECT_FLOAT_EQ(scenario.session.scene().light(created.value().id)->intensity, value);
+      EXPECT_EQ(scenario.session.scene().light(created.value().id)->light_unit,
+                LightUnit::Lumens);
+      const std::size_t edited_undo_count = scenario.session.history().undo_count();
+      intensity->editingFinished();
+      scenario.refresh();
+      EXPECT_EQ(scenario.session.history().undo_count(), edited_undo_count);
+      ASSERT_TRUE(scenario.editor.history().undo().ok());
+      scenario.refresh();
+      ASSERT_NE(intensity, nullptr);
+      EXPECT_DOUBLE_EQ(intensity->value(), static_cast<double>(before));
+      EXPECT_FLOAT_EQ(scenario.session.scene().light(created.value().id)->intensity, before);
+      ASSERT_TRUE(scenario.editor.history().redo().ok());
+      scenario.refresh();
+      ASSERT_NE(intensity, nullptr);
+      EXPECT_DOUBLE_EQ(intensity->value(), static_cast<double>(value));
+      EXPECT_FLOAT_EQ(scenario.session.scene().light(created.value().id)->intensity, value);
+    }
+    EXPECT_EQ(scenario.panel.findChild<QDoubleSpinBox *>(
+                  QStringLiteral("inspector.light.intensity")), intensity.data());
+  }
+}
+
+TEST(InspectorMaterialTests, ToneMappingOffersAgxAndDisplaysLegacyValuesWithoutMutation) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-tone-mapping";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  InspectorLightScenario scenario;
+  const EntityId root = scenario.session.scene().scene_root();
+  ASSERT_TRUE(scenario.editor.scene().select(root).ok());
+  scenario.refresh();
+  const auto tone_combo = [&]() {
+    return scenario.panel.findChild<QComboBox *>(
+        QStringLiteral("inspector.post_process.tone_mapping"));
+  };
+  QComboBox *tone = tone_combo();
+  ASSERT_NE(tone, nullptr);
+  EXPECT_EQ(tone->count(), 4);
+  EXPECT_EQ(tone->currentData().toInt(), static_cast<int>(SceneToneMapping::Linear));
+  EXPECT_GE(tone->findData(static_cast<int>(SceneToneMapping::Linear)), 0);
+  EXPECT_GE(tone->findData(static_cast<int>(SceneToneMapping::Aces)), 0);
+  EXPECT_GE(tone->findData(static_cast<int>(SceneToneMapping::Filmic)), 0);
+  const int agx_index = tone->findData(static_cast<int>(SceneToneMapping::Agx));
+  ASSERT_GE(agx_index, 0);
+  EXPECT_EQ(tone->itemText(agx_index), QStringLiteral("AgX"));
+  EXPECT_EQ(tone->findData(static_cast<int>(SceneToneMapping::AcesLegacy)), -1);
+  EXPECT_EQ(tone->findData(static_cast<int>(SceneToneMapping::DisplayRange)), -1);
+  tone->setCurrentIndex(agx_index);
+  tone->activated(agx_index);
+  EXPECT_EQ(scenario.session.scene().scene_settings(root)->post_process.tone_mapping,
+            SceneToneMapping::Agx);
+  ASSERT_TRUE(scenario.editor.history().undo().ok());
+  scenario.refresh();
+  ASSERT_NE(tone_combo(), nullptr);
+  EXPECT_EQ(tone_combo()->currentData().toInt(), static_cast<int>(SceneToneMapping::Linear));
+  ASSERT_TRUE(scenario.editor.history().redo().ok());
+  scenario.refresh();
+  ASSERT_NE(tone_combo(), nullptr);
+  EXPECT_EQ(tone_combo()->currentData().toInt(), static_cast<int>(SceneToneMapping::Agx));
+
+  for (const SceneToneMapping legacy : {SceneToneMapping::AcesLegacy,
+                                        SceneToneMapping::DisplayRange}) {
+    auto settings = *scenario.session.scene().scene_settings(root);
+    settings.post_process.tone_mapping = legacy;
+    ASSERT_TRUE(scenario.editor.scene().set_scene_settings(root,
+        to_api_scene_settings(settings)).ok());
+    scenario.session.mark_clean();
+    const std::size_t undo_count = scenario.session.history().undo_count();
+    scenario.refresh();
+    tone = tone_combo();
+    ASSERT_NE(tone, nullptr);
+    EXPECT_EQ(tone->currentData().toInt(), static_cast<int>(SceneToneMapping::Aces));
+    EXPECT_EQ(scenario.session.scene().scene_settings(root)->post_process.tone_mapping,
+              legacy);
+    EXPECT_EQ(scenario.session.history().undo_count(), undo_count);
+    EXPECT_FALSE(scenario.session.dirty());
+    scenario.refresh();
+    EXPECT_EQ(scenario.session.history().undo_count(), undo_count);
+    EXPECT_EQ(scenario.session.scene().scene_settings(root)->post_process.tone_mapping,
+              legacy);
+    const int aces_index = tone->currentIndex();
+    tone->activated(aces_index);
+    EXPECT_EQ(scenario.session.scene().scene_settings(root)->post_process.tone_mapping,
+              SceneToneMapping::Aces);
+    EXPECT_TRUE(scenario.session.dirty());
+    ASSERT_TRUE(scenario.editor.history().undo().ok());
+    EXPECT_EQ(scenario.session.scene().scene_settings(root)->post_process.tone_mapping,
+              legacy);
+  }
+}
+
+TEST(InspectorMaterialTests, LightColorDialogPreviewsCancelsAndCommitsOneUndoStep) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-light-live-color";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  InspectorLightScenario scenario;
+  QuaderCreatePointLightArgs args;
+  args.select_created = true;
+  args.light.color = {0.2f, 0.3f, 0.4f};
+  const auto created = scenario.editor.scene().create_point_light(args);
+  ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(scenario.editor.scene().rename(created.value().id, "Redo marker").ok());
+  ASSERT_TRUE(scenario.editor.history().undo().ok());
+  scenario.refresh();
+  const LightComponent baseline = *scenario.session.scene().light(created.value().id);
+  const std::string initial_name =
+      scenario.session.scene().name(created.value().id)->name;
+  const std::size_t undo_count = scenario.session.history().undo_count();
+  const std::size_t redo_count = scenario.session.history().redo_count();
+  ASSERT_GT(redo_count, 0u);
+  const std::string redo_label = *scenario.session.history().redo_label();
+  const auto run_dialog = [&](bool cancel) {
+    QPointer<QPushButton> color = scenario.panel.findChild<QPushButton *>(
+        QStringLiteral("inspector.light.color"));
+    ASSERT_NE(color, nullptr);
+    QTimer::singleShot(0, &scenario.panel, [&]() {
+      auto *dialog = scenario.panel.findChild<QColorDialog *>(
+          QStringLiteral("inspector.light.color.dialog"));
+      EXPECT_NE(dialog, nullptr);
+      if (dialog == nullptr) {
+        scenario.panel.abandon_runtime();
+        return;
+      }
+      dialog->setCurrentColor(QColor::fromRgbF(0.8, 0.2, 0.1));
+      scenario.refresh();
+      EXPECT_NE(color, nullptr);
+      // The dialog's integer channel controls normalize the requested RGB.
+      const QColor displayed = dialog->currentColor();
+      const QVec3 expected = light_srgb_to_linear(
+          {static_cast<float>(displayed.redF()),
+           static_cast<float>(displayed.greenF()),
+           static_cast<float>(displayed.blueF())});
+      const QVec3 current = scenario.session.scene().light(created.value().id)->color;
+      EXPECT_NEAR(current.x, expected.x, 0.0001);
+      EXPECT_NEAR(current.y, expected.y, 0.0001);
+      EXPECT_NEAR(current.z, expected.z, 0.0001);
+      EXPECT_FALSE(scenario.editor.history().can_redo());
+      EXPECT_EQ(scenario.session.history().undo_count(), undo_count);
+      EXPECT_EQ(scenario.session.history().redo_count(), redo_count);
+      EXPECT_NE(scenario.session.history().redo_label(), nullptr);
+      if (scenario.session.history().redo_label() != nullptr) {
+        EXPECT_EQ(*scenario.session.history().redo_label(), redo_label);
+      }
+      dialog->setCurrentColor(QColor::fromRgbF(0.1, 0.9, 0.5));
+      if (cancel) {
+        dialog->reject();
+      } else {
+        dialog->accept();
+      }
+    });
+    color->click();
+    scenario.refresh();
+  };
+  run_dialog(true);
+  EXPECT_EQ(*scenario.session.scene().light(created.value().id), baseline);
+  EXPECT_TRUE(scenario.editor.history().can_redo());
+  EXPECT_EQ(scenario.session.history().redo_count(), redo_count);
+  ASSERT_TRUE(scenario.editor.history().redo().ok());
+  EXPECT_EQ(scenario.session.scene().name(created.value().id)->name, "Redo marker");
+  ASSERT_TRUE(scenario.editor.history().undo().ok());
+  EXPECT_EQ(scenario.session.scene().name(created.value().id)->name, initial_name);
+  EXPECT_EQ(scenario.session.history().redo_count(), redo_count);
+  run_dialog(false);
+  const LightComponent accepted = *scenario.session.scene().light(created.value().id);
+  EXPECT_NE(accepted.color.x, baseline.color.x);
+  EXPECT_FALSE(scenario.editor.history().can_redo());
+  ASSERT_TRUE(scenario.editor.history().undo().ok());
+  EXPECT_EQ(*scenario.session.scene().light(created.value().id), baseline);
+  ASSERT_TRUE(scenario.editor.history().redo().ok());
+  EXPECT_EQ(*scenario.session.scene().light(created.value().id), accepted);
+}
+
+TEST(InspectorMaterialTests, EnvironmentColorDialogPreviewsAndCancelsOnSelectionChange) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-environment-live-color";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  InspectorLightScenario scenario;
+  const EntityId root = scenario.session.scene().scene_root();
+  ASSERT_TRUE(scenario.editor.scene().select(root).ok());
+  scenario.refresh();
+  const QVec3 baseline = scenario.session.scene().scene_settings(root)->environment.clear_color;
+  auto *color = scenario.panel.findChild<QPushButton *>(
+      QStringLiteral("inspector.environment.clear_color"));
+  ASSERT_NE(color, nullptr);
+  QTimer::singleShot(0, &scenario.panel, [&]() {
+    auto *dialog = scenario.panel.findChild<QColorDialog *>(
+        QStringLiteral("inspector.environment.clear_color.dialog"));
+    EXPECT_NE(dialog, nullptr);
+    if (dialog == nullptr) {
+      scenario.panel.abandon_runtime();
+      return;
+    }
+    dialog->setCurrentColor(QColor::fromRgbF(0.7, 0.2, 0.3));
+    scenario.refresh();
+    EXPECT_NE(scenario.session.scene().scene_settings(root)->environment.clear_color.x,
+              baseline.x);
+    EXPECT_NE(scenario.panel.findChild<QPushButton *>(
+                  QStringLiteral("inspector.environment.clear_color")), nullptr);
+    EXPECT_TRUE(scenario.editor.scene().select({}).ok());
+    scenario.refresh();
+  });
+  color->click();
+  expect_inspector_color(
+      scenario.session.scene().scene_settings(root)->environment.clear_color,
+      baseline);
+  EXPECT_TRUE(scenario.session.scene().selected_entities().empty());
+}
 
 TEST(InspectorMaterialTests, DISABLED_PointLightRangeRefreshPerformance) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);

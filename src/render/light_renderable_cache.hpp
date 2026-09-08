@@ -90,7 +90,7 @@ public:
                        std::uint64_t transform_signature);
     void update_light_transform(const LightProxy &proxy,
                                 const QMat4 &world_transform);
-    bool try_update_point_light_range(LightProxy &proxy,
+    bool try_update_light_properties(LightProxy &proxy,
                                      const LightComponent &light);
     void destroy_light_proxy(LightProxy &proxy);
 
