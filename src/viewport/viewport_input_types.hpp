@@ -19,6 +19,9 @@ namespace quader {
 /** Selects toolkit-neutral pointer feedback requested by an active tool. */
 enum class ViewportPointerCursor {
   Default,
+  SelectionDefault,
+  SelectionAdd,
+  SelectionSubtract,
   PrecisionCross,
   OpenHand,
   ClosedHand,

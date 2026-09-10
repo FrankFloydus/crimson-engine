@@ -10,6 +10,7 @@
 #include "platform/fatal_error_handler.hpp"
 #include "platform/sentry_client.hpp"
 #include "quader_app_version.hpp"
+#include "ui/qt_application_cursor.hpp"
 #include "ui/qt_application_theme.hpp"
 
 #include <QApplication>
@@ -139,6 +140,7 @@ int main(int argc, char** argv) {
   // application palette provides Quader's deterministic dark presentation.
   quader::apply_qt_obsidian_application_theme(
       fusion_style->standardPalette());
+  quader::install_qt_application_default_cursor(qt_application);
   const QIcon application_icon = quader_application_icon();
   if (application_icon.isNull()) {
     return 1;

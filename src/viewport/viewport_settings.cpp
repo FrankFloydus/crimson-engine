@@ -172,7 +172,7 @@ const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBool
         {ViewportBoolSettingId::BackfaceSelection, ViewportSettingsSectionId::Selection, "Backface Selection", key("BackfaceSelection"), false},
         {ViewportBoolSettingId::TextureLock, ViewportSettingsSectionId::Texturing, "Texture Lock", key("TextureLock"), true},
         {ViewportBoolSettingId::TextureLockScale, ViewportSettingsSectionId::Texturing, "Texture Lock Scale", key("TextureLockScale"), false},
-        {ViewportBoolSettingId::ShowCollisions, ViewportSettingsSectionId::Overlay, "Display Collisions", key("ShowCollisions"), true},
+        {ViewportBoolSettingId::ShowCollisions, ViewportSettingsSectionId::Overlay, "Collisions", key("ShowCollisions"), true},
 }};
 
 std::string full_key(std::string_view suffix) {

@@ -212,6 +212,19 @@ const ContextActionSnapshot *find_top_level(const ContextMenuSnapshot &menu,
   return found == menu.actions.end() ? nullptr : &*found;
 }
 
+std::optional<std::size_t> top_level_index(const ContextMenuSnapshot &menu,
+                                           const QString &object_name) {
+  const auto found =
+      std::find_if(menu.actions.begin(), menu.actions.end(),
+                   [&object_name](const ContextActionSnapshot &action) {
+                     return action.object_name == object_name;
+                   });
+  return found == menu.actions.end()
+             ? std::nullopt
+             : std::optional<std::size_t>(static_cast<std::size_t>(
+                   std::distance(menu.actions.begin(), found)));
+}
+
 const ContextActionSnapshot *find_submenu(const ContextMenuSnapshot &menu,
                                           const QString &submenu_object_name) {
   const auto found =
@@ -239,6 +252,11 @@ TEST(QtViewportContextMenuTests,
   quader::SceneSession session;
   quader::QuaderEditorApi editor(
       quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto context_mesh = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Context Menu Mesh");
+  ASSERT_TRUE(context_mesh.ok()) << context_mesh.error_message();
+  ASSERT_TRUE(editor.selection().select_object(context_mesh.value()).ok());
   quader::ViewportInputRouter input_router;
   quader::LocalizationService localization = loaded_localization();
   quader::QtViewportContextMenuPresenter presenter;
@@ -361,6 +379,12 @@ TEST(QtViewportContextMenuTests,
   EXPECT_NE(find_top_level(object_menu, QStringLiteral("combine_mesh")),
             nullptr);
   EXPECT_NE(find_top_level(object_menu, QStringLiteral("half_cut")), nullptr);
+  const ContextActionSnapshot *apply_current_material = find_top_level(
+      object_menu, QStringLiteral("edit.apply_material"));
+  ASSERT_NE(apply_current_material, nullptr);
+  EXPECT_EQ(apply_current_material->text,
+            QStringLiteral("Apply Current Material\tShift+T"));
+  EXPECT_TRUE(apply_current_material->enabled);
   const ContextActionSnapshot *sample_material = find_top_level(
       object_menu, QStringLiteral("viewport.material.sample_face"));
   ASSERT_NE(sample_material, nullptr);
@@ -372,6 +396,19 @@ TEST(QtViewportContextMenuTests,
       find_top_level(object_menu,
                      QStringLiteral("viewport.material.edit_under_mouse")),
       nullptr);
+  const auto apply_material_index =
+      top_level_index(object_menu, QStringLiteral("edit.apply_material"));
+  const auto sample_material_index = top_level_index(
+      object_menu, QStringLiteral("viewport.material.sample_face"));
+  const auto edit_material_index = top_level_index(
+      object_menu, QStringLiteral("viewport.material.edit_under_mouse"));
+  ASSERT_TRUE(apply_material_index.has_value());
+  ASSERT_TRUE(sample_material_index.has_value());
+  ASSERT_TRUE(edit_material_index.has_value());
+  ASSERT_GT(*apply_material_index, 0u);
+  EXPECT_TRUE(object_menu.actions[*apply_material_index - 1u].separator);
+  EXPECT_EQ(*sample_material_index, *apply_material_index + 1u);
+  EXPECT_EQ(*edit_material_index, *sample_material_index + 1u);
   EXPECT_NE(find_top_level(object_menu, QStringLiteral("edit.cut")), nullptr);
   EXPECT_NE(find_top_level(object_menu, QStringLiteral("edit.copy")), nullptr);
   ASSERT_FALSE(object_menu.actions.empty());
@@ -392,6 +429,10 @@ TEST(QtViewportContextMenuTests,
   EXPECT_EQ(group_menu.actions.front().object_name,
             QStringLiteral("edit.duplicate"));
   EXPECT_NE(find_top_level(group_menu, QStringLiteral("edit.ungroup")),
+            nullptr);
+  EXPECT_EQ(find_top_level(
+                group_menu,
+                QStringLiteral("edit.apply_material")),
             nullptr);
   EXPECT_EQ(group_menu.actions.back().text,
             QStringLiteral("Delete Groups\tDelete"));
@@ -443,6 +484,10 @@ TEST(QtViewportContextMenuTests,
       nullptr);
   EXPECT_EQ(vertex_menu.actions.back().text,
             QStringLiteral("Delete Vertices\tDelete"));
+  EXPECT_EQ(find_top_level(
+                vertex_menu,
+                QStringLiteral("edit.apply_material")),
+            nullptr);
 
   const quader::QuaderActionSet edge_actions = action_set(
       "edge",
@@ -501,6 +546,10 @@ TEST(QtViewportContextMenuTests,
             nullptr);
   EXPECT_EQ(edge_menu.actions.back().text,
             QStringLiteral("Delete Edges\tDelete"));
+  EXPECT_EQ(find_top_level(
+                edge_menu,
+                QStringLiteral("edit.apply_material")),
+            nullptr);
 
   const quader::QuaderActionSet face_actions = action_set(
       "face",
@@ -515,14 +564,20 @@ TEST(QtViewportContextMenuTests,
                       "Bridge Selected Faces with Interpolation"),
        enabled_action("collapse_faces", "Collapse Selected Faces"),
        enabled_action("radial_align_faces", "Radially Align Selected Faces"),
+       enabled_action("apply_active_material", "Apply Active Material"),
        enabled_action("delete_selection", "Delete Selection")});
+
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(context_mesh.value(), 1).ok());
 
   const ContextMenuSnapshot face_menu = show_and_snapshot(
       owner, presenter, editor, input_router, localization, face_actions,
       selection(quader::QuaderSelectionMode::Face), true);
   ASSERT_TRUE(face_menu.opened);
-  ASSERT_GE(face_menu.actions.size(), 6u);
-  EXPECT_EQ(face_menu.actions[0].object_name, QStringLiteral("thicken_faces"));
+  ASSERT_GE(face_menu.actions.size(), 4u);
+  EXPECT_EQ(face_menu.actions[0].object_name,
+            QStringLiteral("thicken_faces"));
   EXPECT_EQ(face_menu.actions[1].object_name, QStringLiteral("bridge_faces"));
   EXPECT_EQ(face_menu.actions[2].object_name, QStringLiteral("combine_faces"));
   EXPECT_EQ(face_menu.actions[3].object_name, QStringLiteral("extract_faces"));
@@ -535,8 +590,42 @@ TEST(QtViewportContextMenuTests,
   EXPECT_NE(find_child(*face_topology, QStringLiteral("detach_faces")),
             nullptr);
   EXPECT_NE(find_child(*face_normals, QStringLiteral("invert_faces")), nullptr);
+  const auto apply_current_material_count = static_cast<std::size_t>(
+      std::count_if(face_menu.actions.begin(), face_menu.actions.end(),
+                    [](const ContextActionSnapshot &action) {
+                      return action.object_name == QStringLiteral(
+                                                       "edit.apply_material");
+                    }));
+  EXPECT_EQ(apply_current_material_count, 1u);
+  ASSERT_NE(find_top_level(
+                face_menu,
+                QStringLiteral("edit.apply_material")),
+            nullptr);
+  EXPECT_EQ(find_top_level(
+                face_menu,
+                QStringLiteral("edit.apply_material"))
+                ->text,
+            QStringLiteral("Apply Current Material\tShift+T"));
+  const auto face_apply_material_index =
+      top_level_index(face_menu, QStringLiteral("edit.apply_material"));
+  ASSERT_TRUE(face_apply_material_index.has_value());
+  ASSERT_GT(*face_apply_material_index, 0u);
+  EXPECT_TRUE(face_menu.actions[*face_apply_material_index - 1u].separator);
   EXPECT_EQ(face_menu.actions.back().text,
             QStringLiteral("Delete Faces\tDelete"));
+
+  const auto light = editor.scene().create_point_light();
+  ASSERT_TRUE(light.ok()) << light.error_message();
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  ASSERT_TRUE(editor.selection().select_object(light.value().id).ok());
+  const ContextMenuSnapshot light_only_menu = show_and_snapshot(
+      owner, presenter, editor, input_router, localization, object_actions,
+      editor.selection().summary(), true);
+  EXPECT_EQ(find_top_level(light_only_menu,
+                           QStringLiteral("edit.apply_material")),
+            nullptr);
 
   const std::array<const ContextMenuSnapshot *, 6> menus{
       &empty_menu,  &object_menu, &group_menu,

@@ -896,6 +896,7 @@ add_library(quader_ui STATIC
     src/ui/layer_panel.cpp
     src/ui/outliner_panel.cpp
     src/ui/qt_active_material_panel.cpp
+    src/ui/qt_application_cursor.cpp
     src/ui/qt_application_theme.cpp
     src/ui/qt_command_event_filter.cpp
     src/ui/qt_command_palette.cpp
@@ -951,6 +952,14 @@ qt_add_resources(quader_ui "quader_dimension_fonts"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts"
     FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/HomeVideo-Regular.ttf")
+
+qt_add_resources(quader_ui "quader_selection_cursors"
+    PREFIX "/quader/cursors"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/cursors"
+    FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/cursors/selection_default.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/cursors/selection_add.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/cursors/selection_subtract.png")
 
 quader_enable_common_pch(quader_ui)
 target_include_directories(quader_ui

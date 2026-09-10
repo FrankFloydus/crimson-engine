@@ -407,9 +407,8 @@ void clear_layout(QLayout &layout) {
   }
 }
 
-void present_inline_message(QtStatusMessage &label, const QString &message,
-                            bool error) {
-  label.present(message, error && !message.isEmpty());
+void present_inline_message(QtStatusMessage &label, const QString &message) {
+  label.present(message, false);
   if (label.isHidden() == !message.isEmpty()) {
     label.setVisible(!message.isEmpty());
   }
@@ -1074,10 +1073,8 @@ struct QtToolSettingsPanel::Impl {
     last_target_.reset();
     texture_revision_.reset();
     texture_settings_.reset();
-    texture_action_error_.clear();
     uv_peel_revision_.reset();
     uv_peel_settings_.reset();
-    uv_peel_error_.clear();
     refresh();
   }
 
@@ -1098,9 +1095,7 @@ struct QtToolSettingsPanel::Impl {
     // the selected locale changes instead of updating only the dock title.
     last_target_.reset();
     texture_revision_.reset();
-    texture_action_error_.clear();
     uv_peel_revision_.reset();
-    uv_peel_error_.clear();
     localized_text_dirty_ = true;
     refresh_localized_text();
     refresh();
@@ -1146,7 +1141,6 @@ struct QtToolSettingsPanel::Impl {
         edit_texture_section_->hide();
       }
       synchronize_target_heading_visibility();
-      texture_action_error_.clear();
       return;
     }
 
@@ -1171,11 +1165,6 @@ struct QtToolSettingsPanel::Impl {
     const bool selection_changed =
         !texture_settings_.has_value() ||
         texture_settings_->selection_token != settings.selection_token;
-    if (selection_changed ||
-        (texture_revision_.has_value() && *texture_revision_ != revision)) {
-      texture_action_error_.clear();
-    }
-
     texture_synchronizing_ = true;
     for (TextureControlWidget &binding : texture_controls_) {
       if (selection_changed ||
@@ -1211,9 +1200,7 @@ struct QtToolSettingsPanel::Impl {
     if (texture_disabled_reason_->isHidden() == !disabled_reason.isEmpty()) {
       texture_disabled_reason_->setVisible(!disabled_reason.isEmpty());
     }
-    present_texture_action_message(disabled_reason.isEmpty()
-                                       ? texture_action_error_
-                                       : disabled_reason);
+    present_texture_action_message(disabled_reason);
 
     const bool single_face = settings.selected_face_count == 1;
     const std::array<std::optional<double>, 5> values{
@@ -1258,7 +1245,6 @@ struct QtToolSettingsPanel::Impl {
       discard_uv_peel_dispatch();
       uv_peel_settings_.reset();
       uv_peel_revision_.reset();
-      uv_peel_error_.clear();
       if (!uv_peel_section_->isHidden()) {
         uv_peel_section_->hide();
       }
@@ -1285,10 +1271,6 @@ struct QtToolSettingsPanel::Impl {
         (uv_peel_draft_revision_.has_value() &&
          *uv_peel_draft_revision_ != revision)) {
       discard_uv_peel_dispatch();
-    }
-    if (selection_changed ||
-        (uv_peel_revision_.has_value() && *uv_peel_revision_ != revision)) {
-      uv_peel_error_.clear();
     }
     uv_peel_synchronizing_ = true;
     const bool visible = settings.selected_edge_count > 0;
@@ -1327,7 +1309,7 @@ struct QtToolSettingsPanel::Impl {
         binding.spin->present(options.*kUvPeelControls[index].value);
       }
     }
-    QString message = uv_peel_error_;
+    QString message;
     if (visible && !settings.editable) {
       message = settings.block_reason == QuaderUvPeelBlockReason::PreviewActive
                     ? localized_text(
@@ -1338,7 +1320,7 @@ struct QtToolSettingsPanel::Impl {
                           "The selected edges are unavailable, locked, hidden, "
                           "or outside the instance edit scope.");
     }
-    present_inline_message(*uv_peel_message_, message, settings.editable);
+    present_inline_message(*uv_peel_message_, message);
     QString tooltip = uv_peel_apply_->accessibleName();
     const std::string shortcut =
         editor_->commands().shortcut_for(quader_command::kModelingUvPeel);
@@ -1571,7 +1553,6 @@ private:
         editor_->modeling().set_uv_peel_options(*uv_peel_draft_);
     present_failure(editor_, "UV Peel options", result);
     if (result.ok()) {
-      uv_peel_error_.clear();
       uv_peel_draft_revision_ =
           editor_->modeling().uv_peel_settings_revision();
       if (!uv_peel_number_editing()) {
@@ -1581,10 +1562,6 @@ private:
       discard_uv_peel_dispatch();
     }
     refresh_uv_peel_settings(true);
-    if (!result.ok()) {
-      uv_peel_error_ = qtext(result.error_message());
-      present_inline_message(*uv_peel_message_, uv_peel_error_, true);
-    }
     return result.ok();
   }
 
@@ -1609,22 +1586,20 @@ private:
     if (*uv_peel_revision_ != revision && uv_peel_draft_revision_ != revision) {
       discard_uv_peel_dispatch();
       refresh_uv_peel_settings(true);
-      uv_peel_error_ = localized_text(
+      const QString error = localized_text(
           localization_, "tool_settings.uv_peel.stale_selection",
           "The edge selection or UV Peel settings changed. Review the current "
           "selection and try again.");
       present_failure(editor_, "UV Peel",
-                      {.ok = false, .message = uv_peel_error_.toStdString()});
-      present_inline_message(*uv_peel_message_, uv_peel_error_, true);
+                      {.ok = false, .message = error.toStdString()});
       return;
     }
     if (uv_peel_invalid_draft()) {
-      uv_peel_error_ = localized_text(
+      const QString error = localized_text(
           localization_, "tool_settings.uv_peel.invalid_edit",
           "Repeat values must be positive and offsets must be finite.");
       present_failure(editor_, "UV Peel",
-                      {.ok = false, .message = uv_peel_error_.toStdString()});
-      present_inline_message(*uv_peel_message_, uv_peel_error_, true);
+                      {.ok = false, .message = error.toStdString()});
       return;
     }
     if (!flush_uv_peel_options()) {
@@ -1640,8 +1615,6 @@ private:
                             .selection_token = uv_peel_settings_->selection_token});
     present_failure(editor_, "UV Peel", result);
     refresh_uv_peel_settings(true);
-    uv_peel_error_ = result.ok() ? QString{} : qtext(result.error_message());
-    present_inline_message(*uv_peel_message_, uv_peel_error_, true);
     uv_peel_apply_->setFocus(Qt::MouseFocusReason);
   }
 
@@ -1730,7 +1703,7 @@ private:
   }
 
   void present_texture_action_message(const QString &message) {
-    present_inline_message(*texture_action_message_, message, !texture_action_error_.isEmpty() && message == texture_action_error_);
+    present_inline_message(*texture_action_message_, message);
   }
 
   void refresh_texture_action_tooltips(double rotation_step) {
@@ -1870,9 +1843,6 @@ private:
                                   .merge_key = binding.merge_key});
     present_failure(editor_, "Face texture settings update", result);
     if (result.ok()) {
-      // Accepted corrections also dismiss a validation error when they restore
-      // the already-stored value and therefore do not advance owner revisions.
-      texture_action_error_.clear();
       present_texture_action_message({});
       const QuaderFaceTextureRevision revision =
           editor_->modeling().face_texture_settings_revision();
@@ -1882,7 +1852,6 @@ private:
         }
       }
     } else {
-      texture_action_error_ = qtext(result.error_message());
       discard_texture_dispatch(binding);
     }
     schedule_texture_refresh();
@@ -1914,30 +1883,27 @@ private:
     if (!current_capture || stale_draft) {
       discard_texture_dispatches();
       refresh_texture_settings(true);
-      texture_action_error_ = localized_text(
+      const QString error = localized_text(
           localization_, "tool_settings.edit_texture.stale_selection",
           "The face selection or texture settings changed. Review the current "
           "selection and try again.");
       present_failure(editor_, "Face texture action",
-                      {.ok = false, .message = texture_action_error_.toStdString()});
-      present_texture_action_message(texture_action_error_);
+                      {.ok = false, .message = error.toStdString()});
       return false;
     }
     if (std::any_of(texture_controls_.begin(), texture_controls_.end(),
                     [](const TextureControlWidget &binding) {
                       return binding.invalid_value;
                     })) {
-      texture_action_error_ = localized_text(
+      const QString error = localized_text(
           localization_, "tool_settings.edit_texture.invalid_edit",
           "Finish a valid texture value before applying an action.");
       present_failure(editor_, "Face texture action",
-                      {.ok = false, .message = texture_action_error_.toStdString()});
-      present_texture_action_message(texture_action_error_);
+                      {.ok = false, .message = error.toStdString()});
       return false;
     }
     for (std::size_t index = 0; index < texture_controls_.size(); ++index) {
       if (!flush_texture_dispatch(index)) {
-        present_texture_action_message(texture_action_error_);
         return false;
       }
     }
@@ -1963,8 +1929,6 @@ private:
                 .selection_token = selection_token});
     present_failure(editor_, "Face texture action", result);
     refresh_texture_settings(true);
-    texture_action_error_ = result.ok() ? QString{} : qtext(result.error_message());
-    present_texture_action_message(texture_action_error_);
     texture_action_buttons_[index]->setFocus(Qt::MouseFocusReason);
   }
 
@@ -3590,14 +3554,12 @@ private:
   std::optional<QuaderFaceTextureRevision> texture_revision_;
   std::uint64_t texture_keybindings_revision_ = 0;
   double texture_rotation_step_ = 0.0;
-  QString texture_action_error_;
   std::array<UvPeelControlWidget, 4> uv_peel_controls_;
   std::optional<QuaderUvPeelSettings> uv_peel_settings_;
   std::optional<QuaderUvPeelRevision> uv_peel_revision_;
   std::optional<QuaderUvPeelOptions> uv_peel_draft_;
   std::optional<QuaderUvPeelRevision> uv_peel_draft_revision_;
   std::uint64_t uv_peel_keybindings_revision_ = 0;
-  QString uv_peel_error_;
   std::optional<QuaderToolSettingsTarget> last_target_;
   bool synchronizing_ = false;
   bool refresh_scheduled_ = false;

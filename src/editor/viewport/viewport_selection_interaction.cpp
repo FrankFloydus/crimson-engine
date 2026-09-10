@@ -934,6 +934,47 @@ const ViewportSelectionMarquee &ViewportSelectionInteraction::marquee() const {
   return marquee_cache_;
 }
 
+std::optional<quader_editor_core::SelectionEditOperation>
+ViewportSelectionInteraction::pointer_edit_operation(
+    const ViewportInteractionFrame &frame) const {
+  using Edit = quader_editor_core::SelectionEditOperation;
+  const auto from_modifiers = [](ViewportModifiers modifiers) {
+    return quader_editor_core::selection_edit_operation_from_modifiers(
+        modifiers.primary, modifiers.shift);
+  };
+
+  if (box_state_.active) {
+    return box_cycle_depth_ ? from_modifiers(box_cycle_modifiers_) : box_edit_;
+  }
+  if (paint_selection_active_) {
+    return frame.input.modifiers.primary ? Edit::Remove : Edit::Add;
+  }
+  if (pending_first_pick_.has_value()) {
+    const ModelingPickSelectRequest &request = pending_first_pick_->request;
+    if (request.edge_traversal_requested(
+            to_modeling_selection_mode(frame.selection_state.summary.mode)) !=
+        ModelingEdgeSelectionTraversal::None) {
+      return std::nullopt;
+    }
+    if (request.control_pressed || request.command_pressed) {
+      return Edit::Remove;
+    }
+    return request.shift_pressed ? Edit::Add : Edit::Replace;
+  }
+  if (frame.input.cycle_selection_depth_pressed) {
+    return frame.input.cycle_selection_depth_modifiers.alt
+               ? std::nullopt
+               : std::optional<Edit>(
+                     from_modifiers(frame.input.cycle_selection_depth_modifiers));
+  }
+  // Alt modifies traversal, texture, and Curve gestures. Those are not
+  // additive/subtractive selection operations even when Ctrl or Shift is held.
+  if (frame.input.modifiers.alt) {
+    return std::nullopt;
+  }
+  return from_modifiers(frame.input.modifiers);
+}
+
 bool ViewportSelectionInteraction::cancel_lasso_drag() {
   if (!lasso_context_.has_value()) {
     return false;
@@ -1567,7 +1608,8 @@ void ViewportSelectionInteraction::handle_frame(
                                        frame.input.mouse_local, hover_request,
                                        curve, &scene_surface_scratch_);
     const ModelingCommandResult hover =
-        selection_owner(editor).preview_spatial_hover(hover_target);
+        selection_owner(editor).preview_spatial_hover(
+            hover_target, frame.input.modifiers.primary);
     if (!hover.ok) {
       LOG_ERROR("Viewport hover failed: {}",
                 hover.message.empty() ? "Hover failed." : hover.message);

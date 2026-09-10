@@ -237,6 +237,31 @@ ViewportInteractionController::handle_before_active_tool_impl(
     (void)transform_gizmo_.cancel_active_drag(editor, curve);
     return {.gizmo_consumed = true};
   }
+  const bool selection_pointer_available =
+      frame.active_tool_allows_selection_fallback ||
+      frame.input.curve_controls_editable;
+  const bool selection_pointer_blocked =
+      !frame.input.viewport_hovered || !frame.input.viewport_focused ||
+      frame.input.text_input_active || frame.input.navigation_active ||
+      frame.input_result.navigation_active ||
+      frame.input.pointer_interaction_canceled ||
+      frame.input.operation_preview_active || frame.input.active_transform_drag ||
+      frame.input_result.cancel_requested || frame.input_result.camera_changed ||
+      frame.input_result.view_changed ||
+      (!frame.input.curve_controls_editable &&
+       (frame.input.modal_tool_active || frame.input.active_tool_owns_viewport));
+  if (selection_pointer_available && !selection_pointer_blocked) {
+    const std::optional<quader_editor_core::SelectionEditOperation> edit =
+        selection_.pointer_edit_operation(prepared);
+    if (edit.has_value()) {
+      interaction_cursor_ = ViewportPointerCursor::SelectionDefault;
+    }
+    if (edit == quader_editor_core::SelectionEditOperation::Add) {
+      interaction_cursor_ = ViewportPointerCursor::SelectionAdd;
+    } else if (edit == quader_editor_core::SelectionEditOperation::Remove) {
+      interaction_cursor_ = ViewportPointerCursor::SelectionSubtract;
+    }
+  }
   if (frame.input_router.state().active_tool == ViewportToolId::LassoSelect ||
       selection_.lasso_pointer_active()) {
     return {.selection_after_pending_pick = resolved_selection};
@@ -260,12 +285,18 @@ ViewportInteractionController::handle_before_active_tool_impl(
       range_hovered ||
       (gizmo_frame != nullptr &&
        gizmo_frame->info.hover_axis != quader_editor_core::TransformAxis::None);
-  interaction_cursor_ = result.gizmo_consumed ||
-                                transform_gizmo_.pointer_interaction_active() ||
-                                point_light_range_.pointer_cursor() ==
-                                    ViewportPointerCursor::Default
-                            ? transform_gizmo_.pointer_cursor()
-                            : point_light_range_.pointer_cursor();
+  const ViewportPointerCursor direct_manipulation_cursor =
+      result.gizmo_consumed ||
+              transform_gizmo_.pointer_interaction_active() ||
+              point_light_range_.pointer_cursor() ==
+                  ViewportPointerCursor::Default
+          ? transform_gizmo_.pointer_cursor()
+          : point_light_range_.pointer_cursor();
+  if (result.gizmo_hovered || result.gizmo_consumed ||
+      transform_gizmo_.pointer_interaction_active() ||
+      direct_manipulation_cursor != ViewportPointerCursor::Default) {
+    interaction_cursor_ = direct_manipulation_cursor;
+  }
   result.selection_after_pending_pick = resolved_selection;
   return result;
 }

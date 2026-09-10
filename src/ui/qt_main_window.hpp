@@ -8,6 +8,11 @@
 
 #include <QCloseEvent>
 #include <QMainWindow>
+#include <QPaintEvent>
+#include <QPainter>
+#include <QPalette>
+
+#include <algorithm>
 
 #include <functional>
 #include <utility>
@@ -28,6 +33,21 @@ public:
   }
 
 protected:
+  void paintEvent(QPaintEvent *event) override {
+    QMainWindow::paintEvent(event);
+    const QWidget *content = centralWidget();
+    if (content == nullptr || content->geometry().top() <= 0) {
+      return;
+    }
+
+    QPainter painter(this);
+    const qreal extent =
+        1.0 / std::max<qreal>(1.0, painter.device()->devicePixelRatioF());
+    painter.fillRect(
+        QRectF(0.0, content->geometry().top() - extent, width(), extent),
+        palette().brush(QPalette::Midlight));
+  }
+
   void closeEvent(QCloseEvent *event) override {
     if (close_request_handler_ && !close_request_handler_()) {
       event->ignore();

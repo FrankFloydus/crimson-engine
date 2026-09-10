@@ -18,6 +18,7 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <array>
 #include <utility>
 
 namespace quader {
@@ -31,6 +32,35 @@ QFont hint_font(const QWidget &widget) {
     font.setPixelSize(std::max(1, static_cast<int>(font.pixelSize() * 0.85)));
   }
   return font;
+}
+
+QString friendly_pointer_badge(QString shortcut) {
+  const std::array<std::pair<QString, QString>, 12> pointer_names{{
+      {QStringLiteral("LeftMouseDoubleClick"), QStringLiteral("Double LMB")},
+      {QStringLiteral("RightMouseDoubleClick"), QStringLiteral("Double RMB")},
+      {QStringLiteral("MiddleMouseDoubleClick"), QStringLiteral("Double MMB")},
+      {QStringLiteral("LeftMouseClick"), QStringLiteral("LMB")},
+      {QStringLiteral("RightMouseClick"), QStringLiteral("RMB")},
+      {QStringLiteral("MiddleMouseClick"), QStringLiteral("MMB")},
+      {QStringLiteral("LeftMouseDrag"), QStringLiteral("LMB")},
+      {QStringLiteral("RightMouseDrag"), QStringLiteral("RMB")},
+      {QStringLiteral("MiddleMouseDrag"), QStringLiteral("MMB")},
+      {QStringLiteral("LMouse"), QStringLiteral("LMB")},
+      {QStringLiteral("RMouse"), QStringLiteral("RMB")},
+      {QStringLiteral("MMouse"), QStringLiteral("MMB")},
+  }};
+  bool pointer_binding = false;
+  for (const auto &[canonical, friendly] : pointer_names) {
+    if (shortcut.contains(canonical)) {
+      shortcut.replace(canonical, friendly);
+      pointer_binding = true;
+      break;
+    }
+  }
+  if (pointer_binding) {
+    shortcut.replace(QStringLiteral("+"), QStringLiteral(" + "));
+  }
+  return shortcut;
 }
 
 } // namespace
@@ -68,8 +98,17 @@ void QtOperationInputHints::refresh(const QuaderToolsApi &tools,
       badge = QString::fromStdString(localization.text(
           "operation.hints.key.primary_click", "LMB"));
       break;
+    case QuaderOperationInputGesture::ShiftPrimaryClick:
+      badge = QString::fromStdString(localization.text(
+          "operation.hints.key.shift_primary_click", "Shift + LMB"));
+      break;
+    case QuaderOperationInputGesture::ControlPrimaryClick:
+      badge = QString::fromStdString(localization.text(
+          "operation.hints.key.control_primary_click", "Ctrl + LMB"));
+      break;
     case QuaderOperationInputGesture::Keybinding:
-      badge = QString::fromStdString(commands.shortcut_for(hint.command));
+      badge = friendly_pointer_badge(
+          QString::fromStdString(commands.shortcut_for(hint.command)));
       if (badge.isEmpty()) {
         continue;
       }

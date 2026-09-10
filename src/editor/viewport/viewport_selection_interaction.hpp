@@ -76,6 +76,10 @@ public:
     [[nodiscard]] bool lasso_pointer_active() const {
       return lasso_context_.has_value();
     }
+    /// Projects the exact selection edit represented by the current pointer
+    /// lifecycle. Toggle/non-selection gestures deliberately return no intent.
+    [[nodiscard]] std::optional<quader_editor_core::SelectionEditOperation>
+    pointer_edit_operation(const ViewportInteractionFrame &frame) const;
     /// Cancels the owned gesture while reserving its eventual button release.
     bool cancel_lasso_drag();
     /// Reports ownership of a deferred click, marquee, or held paint gesture.

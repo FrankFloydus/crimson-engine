@@ -22,8 +22,10 @@
 #include <QTemporaryDir>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <memory>
+#include <string_view>
 
 #ifndef QUADER_SOURCE_DIR
 #define QUADER_SOURCE_DIR "."
@@ -66,6 +68,7 @@ TEST(OperationInputHintTests, MetadataSelectsOnlyApplicableKeyboardCommands) {
     EXPECT_EQ(contains_command(pending, kToolsTogglePrimitiveCaps),
               shape == Shape::Cylinder || shape == Shape::Cone);
     EXPECT_EQ(contains_command(pending, kToolsTogglePrimitiveHemisphere), shape == Shape::Sphere);
+    EXPECT_TRUE(contains_gesture(pending, QuaderOperationInputGesture::PrimaryDrag));
     EXPECT_FALSE(contains_gesture(pending, QuaderOperationInputGesture::Wheel));
     const auto live = primitive_creation_input_hints(shape, true);
     EXPECT_TRUE(contains_command(live, kToolsApplyPrimitiveCreation));
@@ -98,7 +101,12 @@ TEST(OperationInputHintTests, LassoHintsDescribeSelectionModifiersAndTrackToolCh
   EXPECT_EQ(tools.active_input_hints_revision(), revision);
   ASSERT_TRUE(tools.activate(ViewportToolId::Select).ok());
   EXPECT_GT(tools.active_input_hints_revision(), revision);
-  EXPECT_TRUE(tools.active_input_hints().empty());
+  EXPECT_TRUE(contains_gesture(tools.active_input_hints(),
+                               QuaderOperationInputGesture::PrimaryClick));
+  EXPECT_TRUE(contains_gesture(tools.active_input_hints(),
+                               QuaderOperationInputGesture::ShiftPrimaryClick));
+  EXPECT_TRUE(contains_gesture(tools.active_input_hints(),
+                               QuaderOperationInputGesture::ControlPrimaryClick));
 }
 
 TEST(OperationInputHintTests, OwnerRevisionTracksKindSelectionFootprintAndCancel) {
@@ -120,7 +128,10 @@ TEST(OperationInputHintTests, OwnerRevisionTracksKindSelectionFootprintAndCancel
   EXPECT_FALSE(contains_gesture(tools.active_input_hints(), QuaderOperationInputGesture::Wheel));
   EXPECT_TRUE(contains_command(tools.active_input_hints(), quader_command::kToolsFlipPrimitiveFaces));
   ASSERT_TRUE(tools.cancel_active_tool_preview().ok());
-  EXPECT_TRUE(tools.active_input_hints().empty());
+  EXPECT_FALSE(contains_command(tools.active_input_hints(),
+                                quader_command::kToolsFlipPrimitiveFaces));
+  EXPECT_TRUE(contains_gesture(tools.active_input_hints(),
+                               QuaderOperationInputGesture::PrimaryClick));
 
   auto selected_fixture = test::CommandBehaviorFixture::create(*contract);
   auto &selected_editor = selected_fixture->editor();
@@ -129,6 +140,29 @@ TEST(OperationInputHintTests, OwnerRevisionTracksKindSelectionFootprintAndCancel
   EXPECT_GT(selected_editor.tools().active_input_hints_revision(), selected_revision);
   EXPECT_FALSE(contains_gesture(selected_editor.tools().active_input_hints(),
                                 QuaderOperationInputGesture::PrimaryClick));
+}
+
+TEST(OperationInputHintTests, AuditedViewportToolsPublishLocalizedActions) {
+  const std::array<std::string_view, 13> tool_ids{
+      "select",          "lasso_select", "move",   "rotate", "scale",
+      "extrude",         "insert_edge_loop", "knife", "cut", "poly",
+      "mirror",          "pivot",        "linear_array"};
+  for (const std::string_view tool_id : tool_ids) {
+    SCOPED_TRACE(tool_id);
+    const auto hints = viewport_tool_input_hints(tool_id);
+    EXPECT_FALSE(hints.empty());
+    for (const char *locale : {"en-US", "it-IT"}) {
+      const auto localization = localization_for(locale);
+      for (const auto &hint : hints) {
+        EXPECT_NE(localization.text(hint.label_key, "missing"), "missing")
+            << hint.label_key;
+      }
+    }
+  }
+  for (const std::string_view tool_id : {"path_array", "curve"}) {
+    EXPECT_FALSE(viewport_tool_input_hints(tool_id).empty());
+  }
+  EXPECT_EQ(viewport_navigation_input_hints().size(), 5u);
 }
 
 /// Supplies Qt services without activating or showing a native window.
@@ -154,7 +188,7 @@ TEST_F(QtOperationInputHintTests, RebindingUnassignmentAndLocaleRefreshWithoutId
   QWidget parent;
   QtOperationInputHints widget(&parent);
   widget.refresh(editor.tools(), editor.commands(), localization);
-  EXPECT_TRUE(contains_badge(widget, QStringLiteral("F")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Shift+F")));
   EXPECT_TRUE(contains_badge(widget, QString::fromStdString(
       editor.commands().shortcut_for(quader_command::kToolsCancelPrimitiveCreation))));
   const auto revision = widget.projection_revision();
@@ -168,20 +202,21 @@ TEST_F(QtOperationInputHintTests, RebindingUnassignmentAndLocaleRefreshWithoutId
 
   ASSERT_TRUE(editor.commands().set_shortcut(quader_command::kToolsFlipPrimitiveFaces, "Ctrl+K D").ok());
   widget.refresh(editor.tools(), editor.commands(), localization);
-  EXPECT_FALSE(contains_badge(widget, QStringLiteral("F")));
+  EXPECT_FALSE(contains_badge(widget, QStringLiteral("Shift+F")));
   EXPECT_TRUE(contains_badge(widget, QStringLiteral("Ctrl+K D")));
   ASSERT_TRUE(editor.commands().remove_shortcut(quader_command::kToolsFlipPrimitiveFaces).ok());
   ASSERT_TRUE(editor.commands().descriptor(quader_command::kToolsFlipPrimitiveFaces));
   EXPECT_TRUE(editor.commands().descriptor(quader_command::kToolsFlipPrimitiveFaces)->shortcut.empty());
   widget.refresh(editor.tools(), editor.commands(), localization);
-  EXPECT_FALSE(contains_badge(widget, QStringLiteral("F")));
+  EXPECT_FALSE(contains_badge(widget, QStringLiteral("Shift+F")));
   EXPECT_FALSE(contains_badge(widget, QStringLiteral("Ctrl+K D")));
   ASSERT_TRUE(editor.commands().reset_shortcut(quader_command::kToolsFlipPrimitiveFaces).ok());
   ASSERT_TRUE(localization.select_locale("it-IT"));
   widget.refresh(editor.tools(), editor.commands(), localization);
-  EXPECT_TRUE(contains_badge(widget, QStringLiteral("F")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Shift+F")));
   EXPECT_TRUE(std::ranges::any_of(widget.hints(), [](const auto &hint) {
-    return hint.badge == QStringLiteral("F") && hint.label == QStringLiteral("Inverti");
+    return hint.badge == QStringLiteral("Shift+F") &&
+           hint.label == QStringLiteral("Inverti");
   }));
 }
 
@@ -211,6 +246,10 @@ TEST_F(QtOperationInputHintTests,
                                QuaderOperationInputGesture::PrimaryClick));
   widget.refresh(editor.tools(), editor.commands(), localization);
   EXPECT_TRUE(contains_badge(widget, QStringLiteral("LMB")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("MMB")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Shift + MMB")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Alt + MMB")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("RMB")));
   EXPECT_TRUE(contains_badge(widget, QStringLiteral("Shift+WheelUp")));
   EXPECT_TRUE(contains_badge(widget, QStringLiteral("Shift+WheelDown")));
   EXPECT_TRUE(contains_badge(widget, QStringLiteral("Ctrl+WheelUp")));
@@ -229,7 +268,7 @@ TEST_F(QtOperationInputHintTests,
   widget.refresh(editor.tools(), editor.commands(), localization);
   EXPECT_TRUE(contains_badge(widget, QString::fromStdString(
       editor.commands().shortcut_for(finalize))));
-  ASSERT_EQ(widget.hints().size(), 8u);
+  ASSERT_EQ(widget.hints().size(), 13u);
   const auto full_projection_revision = widget.projection_revision();
   for (const float scale : {1.0f, 1.5f, 2.0f}) {
     widget.apply_ui_scale(QtUiScaleMetrics(scale));
@@ -304,7 +343,35 @@ TEST_F(QtOperationInputHintTests,
   }
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   widget.refresh(editor.tools(), editor.commands(), localization);
-  EXPECT_TRUE(widget.hints().empty());
+  EXPECT_FALSE(widget.hints().empty());
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("LMB")));
+  EXPECT_FALSE(widget.isHidden());
+}
+
+TEST_F(QtOperationInputHintTests,
+       SelectionAndNavigationUseConventionalMouseButtonNames) {
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  auto localization = localization_for();
+  QWidget parent;
+  QtOperationInputHints widget(&parent);
+  widget.refresh(editor.tools(), editor.commands(), localization);
+
+  for (const QString &badge : {QStringLiteral("LMB"),
+                               QStringLiteral("Shift + LMB"),
+                               QStringLiteral("Ctrl + LMB"),
+                               QStringLiteral("MMB"),
+                               QStringLiteral("Shift + MMB"),
+                               QStringLiteral("Alt + MMB"),
+                               QStringLiteral("RMB"),
+                               QStringLiteral("Shift + RMB"),
+                               QStringLiteral("Ctrl + RMB")}) {
+    EXPECT_TRUE(contains_badge(widget, badge)) << badge.toStdString();
+  }
+  for (const auto &hint : widget.hints()) {
+    EXPECT_FALSE(hint.badge.contains(QStringLiteral("Mouse")));
+  }
 }
 
 TEST_F(QtOperationInputHintTests, FitsOneStatusBarRowAtNarrowWidthsAndDifferentScales) {
@@ -392,11 +459,12 @@ TEST_F(QtOperationInputHintTests, SameFacadeSceneRebindRetiresPreviousHints) {
   EXPECT_EQ(&editor.tools(), tools);
   widget.refresh(editor.tools(), editor.commands(), localization);
   EXPECT_GT(widget.projection_revision(), revision);
-  EXPECT_TRUE(widget.hints().empty());
-  EXPECT_TRUE(widget.isHidden());
+  EXPECT_FALSE(widget.hints().empty());
+  EXPECT_FALSE(widget.isHidden());
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("LMB")));
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
   widget.refresh(editor.tools(), editor.commands(), localization);
-  EXPECT_TRUE(contains_badge(widget, QStringLiteral("F")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Shift+F")));
   EXPECT_FALSE(contains_badge(widget, QStringLiteral("H")));
 }
 

@@ -1387,23 +1387,21 @@ std::uint64_t QuaderToolsApi::active_input_hints_revision() const {
 
 std::vector<QuaderOperationInputHint> QuaderToolsApi::active_input_hints() const {
   const SceneSession &session = scene_session(session_);
-  if (active_tool_id(session) == "lasso_select") {
-    return lasso_selection_input_hints();
-  }
+  std::vector<QuaderOperationInputHint> hints;
   if (session.radial_array().active()) {
-    return radial_array_input_hints(session.radial_array().has_valid_center(),
-                                   session.radial_array().center_locked());
+    hints = radial_array_input_hints(session.radial_array().has_valid_center(),
+                                     session.radial_array().center_locked());
+  } else {
+    const auto &primitive = session.primitive_creation();
+    const auto kind = primitive.active_kind();
+    const auto shape = kind ? primitive_creation_shape(*kind) : std::nullopt;
+    hints = shape ? primitive_creation_input_hints(*shape, primitive.can_apply())
+                  : viewport_tool_input_hints(active_tool_id(session));
   }
-  const auto &primitive = session.primitive_creation();
-  const auto kind = primitive.active_kind();
-  if (!kind) {
-    return {};
-  }
-  const auto shape = primitive_creation_shape(*kind);
-  if (!shape) {
-    return {};
-  }
-  return primitive_creation_input_hints(*shape, primitive.can_apply());
+  std::vector<QuaderOperationInputHint> navigation =
+      viewport_navigation_input_hints();
+  hints.insert(hints.end(), navigation.begin(), navigation.end());
+  return hints;
 }
 
 QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,

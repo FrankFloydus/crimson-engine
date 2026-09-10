@@ -2369,12 +2369,11 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_EQ(editor.revisions().modeling_content_revision, invalid_revision);
   EXPECT_TRUE(editor.history().can_redo());
   EXPECT_TRUE(panel.numeric_interaction_active());
-  EXPECT_FALSE(message->isHidden());
-  EXPECT_FALSE(message->text().isEmpty());
-  EXPECT_TRUE(error_message->is_error());
+  EXPECT_TRUE(message->isHidden());
+  EXPECT_FALSE(error_message->is_error());
   ASSERT_EQ(notifications.size(), 1u);
   EXPECT_EQ(notifications.back().level, quader::QuaderNotificationLevel::Error);
-  EXPECT_EQ(notifications.back().message, message->text().toStdString());
+  EXPECT_FALSE(notifications.back().message.empty());
   panel.refresh_texture_settings();
   process_events_for(75);
   EXPECT_EQ(notifications.size(), 1u);
@@ -2382,9 +2381,8 @@ TEST(QtToolSettingsPanelTests,
   type_spin_text(*scale, QStringLiteral("1"));
   // The correction is dispatched by a timer even though the stored value is
   // unchanged. Wait for its observable completion, not another timer's expiry.
-  ASSERT_TRUE(process_events_until([message] { return message->isHidden(); },
-                                  1000))
-      << message->text().toStdString();
+  process_events_for(75);
+  EXPECT_TRUE(message->isHidden());
   EXPECT_EQ(editor.revisions().modeling_content_revision, invalid_revision);
   EXPECT_TRUE(editor.history().can_redo());
   type_spin_text(*scale, QStringLiteral("-"));
@@ -2394,7 +2392,7 @@ TEST(QtToolSettingsPanelTests,
                    Qt::LeftButton, Qt::NoButton);
   EXPECT_EQ(editor.revisions().modeling_content_revision, invalid_revision);
   EXPECT_TRUE(editor.history().can_redo());
-  EXPECT_FALSE(message->isHidden());
+  EXPECT_TRUE(message->isHidden());
   type_spin_text(*scale, QStringLiteral("3.0"));
   up->click();
   EXPECT_EQ(editor.modeling().face_texture_settings().scale_x,
@@ -2409,7 +2407,7 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_EQ(editor.modeling().face_texture_settings().scale_x,
             std::optional<double>(1.0));
   EXPECT_FALSE(panel.numeric_interaction_active());
-  EXPECT_FALSE(message->isHidden());
+  EXPECT_TRUE(message->isHidden());
   process_events_for(75);
   EXPECT_EQ(editor.revisions().modeling_content_revision, stale_revision);
   // The rejected click refreshed the presentation, so a deliberate second
@@ -2433,12 +2431,11 @@ TEST(QtToolSettingsPanelTests,
   const auto notifications_before_failure = notifications.size();
   flip->click();
   EXPECT_EQ(editor.revisions().modeling_content_revision, failure_revision);
-  EXPECT_FALSE(message->isHidden());
-  EXPECT_FALSE(message->text().isEmpty());
-  EXPECT_TRUE(error_message->is_error());
+  EXPECT_TRUE(message->isHidden());
+  EXPECT_FALSE(error_message->is_error());
   ASSERT_EQ(notifications.size(), notifications_before_failure + 1u);
   EXPECT_EQ(notifications.back().level, quader::QuaderNotificationLevel::Error);
-  EXPECT_EQ(notifications.back().message, message->text().toStdString());
+  EXPECT_FALSE(notifications.back().message.empty());
   panel.refresh_texture_settings();
   process_events_for(75);
   EXPECT_EQ(notifications.size(), notifications_before_failure + 1u);
@@ -2912,12 +2909,12 @@ TEST(QtToolSettingsPanelTests,
     EXPECT_EQ(editor.modeling().uv_peel_settings().options,
               quader::QuaderUvPeelOptions{});
     EXPECT_EQ(editor.history().snapshot().undo_label, before_history.undo_label);
-    EXPECT_FALSE(message->isHidden());
+    EXPECT_TRUE(message->isHidden());
     EXPECT_TRUE(panel.numeric_interaction_active());
-    EXPECT_TRUE(error_message->is_error());
+    EXPECT_FALSE(error_message->is_error());
     ASSERT_EQ(notifications.size(), announcements_before + 1u);
     EXPECT_EQ(notifications.back().level, quader::QuaderNotificationLevel::Error);
-    EXPECT_EQ(notifications.back().message, message->text().toStdString());
+    EXPECT_FALSE(notifications.back().message.empty());
   }
   for (int toggle = 0; toggle < 2; ++toggle) {
     const QPoint indicator(7, world_space->height() / 2);
@@ -2934,11 +2931,9 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_EQ(editor.modeling().uv_peel_settings().options,
             quader::QuaderUvPeelOptions{});
   EXPECT_TRUE(panel.numeric_interaction_active());
-  // Accepting a correction to the stored value clears the validation message
-  // even when the owner need not advance its settings revision.
+  // Tool-setting validation failures are presented only by the bottom bar.
   type_spin_text(*repeat, QStringLiteral("1"));
-  ASSERT_TRUE(process_events_until([&] { return message->isHidden(); }, 1000))
-      << message->text().toStdString();
+  process_events_for(75);
   EXPECT_TRUE(message->isHidden());
   finish_spin_edit(*repeat);
   repeat->setValue(3.0);
@@ -2947,7 +2942,7 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_EQ(editor.revisions().modeling_content_revision, before);
   EXPECT_EQ(editor.modeling().uv_peel_settings().options,
             quader::QuaderUvPeelOptions{});
-  EXPECT_FALSE(message->isHidden());
+  EXPECT_TRUE(message->isHidden());
   EXPECT_FALSE(panel.numeric_interaction_active());
   process_events_for(125);
   EXPECT_EQ(editor.modeling().uv_peel_settings().options.u_repeat, 1.0);
@@ -2960,7 +2955,7 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_EQ(editor.revisions().modeling_content_revision, before);
   EXPECT_EQ(editor.modeling().uv_peel_settings().options, external_options);
   EXPECT_DOUBLE_EQ(repeat->value(), 5.0);
-  EXPECT_FALSE(message->isHidden());
+  EXPECT_TRUE(message->isHidden());
 
   repeat->setValue(3.0);
   ASSERT_TRUE(editor.modeling().begin_transform_preview().ok());
@@ -3001,12 +2996,11 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_EQ(editor.revisions().modeling_content_revision, branched_revision);
   EXPECT_EQ(editor.history().snapshot().undo_label, branched_history.undo_label);
   EXPECT_EQ(editor.modeling().uv_peel_settings().options, accepted_options);
-  EXPECT_FALSE(message->isHidden());
-  EXPECT_FALSE(message->text().isEmpty());
-  EXPECT_TRUE(error_message->is_error());
+  EXPECT_TRUE(message->isHidden());
+  EXPECT_FALSE(error_message->is_error());
   ASSERT_EQ(notifications.size(), announcements_before + 1u);
   EXPECT_EQ(notifications.back().level, quader::QuaderNotificationLevel::Error);
-  EXPECT_EQ(notifications.back().message, message->text().toStdString());
+  EXPECT_FALSE(notifications.back().message.empty());
   panel.refresh_uv_peel_settings();
   process_events_for(125);
   EXPECT_EQ(notifications.size(), announcements_before + 1u);

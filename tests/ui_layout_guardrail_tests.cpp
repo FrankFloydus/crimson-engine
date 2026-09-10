@@ -1646,6 +1646,34 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
+     TopToolbarSeparatorsShareTheStatusBarSubtleEdgeColor) {
+  const std::string button_presentation =
+      read_source_file("src/ui/qt_toolbar_button_presentation.cpp");
+  const std::string main_window =
+      read_source_file("src/ui/qt_main_window.hpp");
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+
+  expect_contains(button_presentation,
+                  "element == PE_IndicatorToolBarSeparator");
+  expect_contains(button_presentation,
+                  "option->palette.brush(QPalette::Midlight)");
+  expect_contains(button_presentation,
+                  "option->palette.brush(QPalette::Window)");
+  expect_contains(button_presentation, "bounds.top()");
+  expect_contains(button_presentation, "element != CE_ToolBar");
+  expect_contains(button_presentation,
+                  "toolbar->orientation() == Qt::Horizontal");
+  expect_contains(button_presentation, "toolbar.setStyle(presentation)");
+  expect_contains(main_window, "QMainWindow::paintEvent(event)");
+  expect_contains(main_window, "content->geometry().top() - extent");
+  expect_contains(main_window, "palette().brush(QPalette::Midlight)");
+  expect_contains(ui_system, "class QtMainMenuBar final : public QMenuBar");
+  expect_contains(ui_system, "QMenuBar::paintEvent(event)");
+  expect_contains(ui_system, "class QtMainStatusBar final : public QStatusBar");
+  expect_contains(ui_system, "palette().brush(QPalette::Midlight)");
+}
+
+TEST(UiLayoutGuardrailTests,
      SelectionToolbarUsesNativeMovableChromeAndPublicSelectionIntent) {
   const std::string toolbar_header =
       read_source_file("src/ui/qt_selection_toolbar.hpp");

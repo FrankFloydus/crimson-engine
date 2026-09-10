@@ -267,7 +267,8 @@ public:
    * explicit lifecycle clears still use clear_hover().
    */
   ModelingCommandResult preview_spatial_hover(
-      std::optional<ResolvedSelectionTarget> target);
+      std::optional<ResolvedSelectionTarget> target,
+      bool selected_modifier_pressed = false);
   [[nodiscard]] std::optional<ResolvedSelectionTarget>
   resolved_hover_target() const { return resolved_hover_target_; }
   /**
@@ -335,6 +336,8 @@ private:
   ModelingCommandResult publish_resolved_hover(
       std::optional<ResolvedSelectionTarget> target,
       bool explicit_modeling_element_request,
+      bool selected_modifier_pressed = false,
+      bool face_plane_hover = false,
       const ModelingHoverSummary *modeling_preview = nullptr);
   [[nodiscard]] EntityId nearest_group_ancestor(EntityId entity) const;
   [[nodiscard]] ModelingSelectionSummary

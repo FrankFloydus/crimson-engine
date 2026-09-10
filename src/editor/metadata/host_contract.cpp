@@ -742,7 +742,7 @@ shortcut(std::string_view id, HostShortcutContext context, std::string_view key,
 
 std::span<const HostShortcutDescriptor> shortcut_descriptors()
 {
-  static const std::array<HostShortcutDescriptor, 40> kDescriptors{{
+  static const std::array<HostShortcutDescriptor, 42> kDescriptors{{
       shortcut("undo", HostShortcutContext::Global, "Z", true, false, false,
                HostShortcutTargetKind::EditorAction, "undo"),
       shortcut("redo_shift_z", HostShortcutContext::Global, "Z", true, false,
@@ -794,6 +794,9 @@ std::span<const HostShortcutDescriptor> shortcut_descriptors()
       shortcut("focus_all_home", HostShortcutContext::Viewport, "Home", false,
                false, false, HostShortcutTargetKind::ViewportAction,
                "focus_all"),
+      shortcut("focus_selection", HostShortcutContext::Viewport, "F", false,
+               false, false, HostShortcutTargetKind::ViewportAction,
+               "focus_selection"),
       shortcut("focus_origin", HostShortcutContext::Viewport, "Home", false,
                false, true, HostShortcutTargetKind::ViewportAction,
                "focus_origin"),
@@ -809,6 +812,9 @@ std::span<const HostShortcutDescriptor> shortcut_descriptors()
       shortcut("mirror_axis_z", HostShortcutContext::Viewport, "Z", false,
                false, true, HostShortcutTargetKind::ViewportAction,
                "mirror_axis_z"),
+      shortcut("flip_horizontal", HostShortcutContext::Viewport, "H", false,
+               false, true, HostShortcutTargetKind::ViewportAction,
+               "flip_horizontal"),
       shortcut("flip_vertical", HostShortcutContext::Viewport, "V", false,
                false, true, HostShortcutTargetKind::ViewportAction,
                "flip_vertical"),
@@ -822,7 +828,7 @@ std::span<const HostShortcutDescriptor> shortcut_descriptors()
       shortcut("knife_tool", HostShortcutContext::Viewport, "C", false, false,
                false, HostShortcutTargetKind::Action, "knife_tool"),
       shortcut("flip_mesh_normals", HostShortcutContext::Viewport, "F", false,
-               false, false, HostShortcutTargetKind::Action, "invert_mesh"),
+               false, true, HostShortcutTargetKind::Action, "invert_mesh"),
       shortcut("move_tool", HostShortcutContext::Viewport, "W", false, false,
                false, HostShortcutTargetKind::Tool, "move"),
       shortcut("rotate_tool", HostShortcutContext::Viewport, "R", false, false,

@@ -907,7 +907,7 @@ private:
   }
 
   Section add_section(std::string stable_id, const QString &title,
-                      bool default_expanded = false) {
+                      bool default_expanded = true) {
     const auto state =
         expanded_sections_.try_emplace(stable_id, default_expanded).first;
     auto *item = new QTreeWidgetItem(tree_);
@@ -1210,7 +1210,8 @@ private:
       Section &section, const std::string &stable_id, const QString &label,
       double value, double minimum, double slider_maximum,
       double numeric_maximum, double step,
-      std::function<void(double, std::string)> changed, bool with_slider = true) {
+      std::function<void(double, std::string)> changed, bool with_slider = true,
+      bool integer_slider = false) {
     auto *container = new QWidget(section.editor_parent);
     auto *layout = new QHBoxLayout(container);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -1229,7 +1230,7 @@ private:
     spin->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     if (with_slider) {
       field.mapping = qt_tool_settings_number_slider_mapping(
-          minimum, slider_maximum, false, step);
+          minimum, slider_maximum, integer_slider, step);
       auto *slider = new QtToolSettingsNumberSlider(Qt::Horizontal, container);
       field.slider = slider;
       slider->setObjectName(stable_name(stable_id + ".slider"));
@@ -1280,10 +1281,16 @@ private:
     if (field.slider != nullptr) {
       QObject::connect(field.slider.data(), &QSlider::valueChanged, &panel_,
                        [this, field, update, finish](int position) {
+                         const double value =
+                             qt_tool_settings_number_slider_value(
+                                 field.mapping, position);
+                         // QSlider and its paired number editor are one
+                         // control. Keep the visible value in lockstep before
+                         // dispatching the continuous scene edit.
+                         synchronize_number_slider(field, value);
                          const std::uint64_t generation = runtime_binding_generation_;
                          QPointer<InspectorPanel> panel_guard(&panel_);
-                         update(qt_tool_settings_number_slider_value(
-                             field.mapping, position));
+                         update(value);
                          if (panel_guard == nullptr ||
                              generation != runtime_binding_generation_) {
                            return;
@@ -1974,19 +1981,18 @@ private:
               },
               std::move(merge_key));
         });
-    add_continuous_number(environment, "environment.rotation",
-                          localized("ui.inspector.rotation", "Rotation"),
-                          settings->environment.rotation_y * kRadToDeg, -360.0,
-                          360.0, 0.5, 2,
-                          [this, entity](double value, std::string merge_key) {
-                            apply_scene_settings(
-                                entity,
-                                [value](SceneSettingsComponent &next) {
-                                  next.environment.rotation_y =
-                                      static_cast<float>(value) * kDegToRad;
-                                },
-                                std::move(merge_key));
-                          });
+    add_number_slider(environment, "environment.rotation",
+                      localized("ui.inspector.rotation", "Rotation"),
+                      settings->environment.rotation_y * kRadToDeg, -180.0,
+                      180.0, 180.0, 1.0,
+                      [this, entity](double value, std::string merge_key) {
+                        apply_scene_settings(
+                            entity, [value](SceneSettingsComponent &next) {
+                              next.environment.rotation_y =
+                                  static_cast<float>(value) * kDegToRad;
+                            },
+                            std::move(merge_key));
+                      }, true, true);
 
     Section camera =
         add_section("camera", localized("ui.inspector.camera", "Camera"));

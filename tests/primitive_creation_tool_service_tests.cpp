@@ -4324,7 +4324,9 @@ TEST(PrimitiveCreationToolServiceTests, PrimitiveFlipFacesDuringFootprintLeavesP
   const auto before = quader::test::capture_command_observable_state(editor);
   for (const bool expected : {true, false}) {
     const auto dispatch = editor.commands().dispatch_viewport_input_binding(
-        QuaderInputChord{.device = QuaderInputDevice::Keyboard, .key = QuaderKeyCode::F},
+        QuaderInputChord{.shift = true,
+                         .device = QuaderInputDevice::Keyboard,
+                         .key = QuaderKeyCode::F},
         {.active_tool = quader::ViewportToolId::CreatePrimitive}, true, false,
         {.modal_tool_active = true, .active_tool_owns_viewport = true});
     ASSERT_EQ(dispatch.command_id, kFlip.string());

@@ -17,6 +17,8 @@
 #include <QToolBar>
 #include <QToolButton>
 
+#include <algorithm>
+
 namespace quader {
 namespace {
 
@@ -54,9 +56,62 @@ public:
     return scaled_metrics_style_.pixelMetric(metric, option, widget);
   }
 
+  void drawControl(ControlElement element, const QStyleOption *option,
+                   QPainter *painter,
+                   const QWidget *widget = nullptr) const override {
+    QProxyStyle::drawControl(element, option, painter, widget);
+    if (element != CE_ToolBar || option == nullptr || painter == nullptr) {
+      return;
+    }
+    const auto *toolbar = qobject_cast<const QToolBar *>(widget);
+    const bool horizontal =
+        toolbar != nullptr
+            ? toolbar->orientation() == Qt::Horizontal
+            : option->state.testFlag(State_Horizontal);
+    if (!horizontal) {
+      return;
+    }
+    const qreal device_pixel_ratio =
+        painter->device() != nullptr
+            ? painter->device()->devicePixelRatioF()
+            : 1.0;
+    const qreal extent =
+        1.0 / std::max<qreal>(1.0, device_pixel_ratio);
+    const QRectF bounds(option->rect);
+    // Fusion paints a bright bevel along the toolbar's top edge. It sits
+    // immediately below QtMainMenuBar's subtle one-pixel separator and makes
+    // that boundary look like a thick white line. Erase only that bevel with
+    // the toolbar surface; the menu bar remains the single separator owner.
+    painter->fillRect(
+        QRectF(bounds.left(), bounds.top(), bounds.width(), extent),
+        option->palette.brush(QPalette::Window));
+    painter->fillRect(
+        QRectF(bounds.left(), bounds.top() + bounds.height() - extent,
+               bounds.width(), extent),
+        option->palette.brush(QPalette::Midlight));
+  }
+
   void drawPrimitive(PrimitiveElement element, const QStyleOption *option,
                      QPainter *painter,
                      const QWidget *widget = nullptr) const override {
+    if (element == PE_IndicatorToolBarSeparator && option != nullptr &&
+        painter != nullptr) {
+      const qreal device_pixel_ratio =
+          painter->device() != nullptr
+              ? painter->device()->devicePixelRatioF()
+              : 1.0;
+      const qreal extent = 1.0 / std::max<qreal>(1.0, device_pixel_ratio);
+      const QRectF bounds(option->rect);
+      const bool horizontal = option->state.testFlag(State_Horizontal);
+      const QRectF line =
+          horizontal
+              ? QRectF(bounds.center().x(), bounds.top(), extent,
+                       bounds.height())
+              : QRectF(bounds.left(), bounds.center().y(), bounds.width(),
+                       extent);
+      painter->fillRect(line, option->palette.brush(QPalette::Midlight));
+      return;
+    }
     if (element != PE_PanelButtonCommand || option == nullptr ||
         painter == nullptr) {
       QProxyStyle::drawPrimitive(element, option, painter, widget);
@@ -139,7 +194,9 @@ QPalette::ColorGroup qt_toolbar_button_color_group(QStyle::State state) {
 }
 
 QStyle &install_native_toolbar_button_presentation(QToolBar &toolbar) {
-  return *new QtToolbarButtonPresentationStyle(&toolbar);
+  auto *presentation = new QtToolbarButtonPresentationStyle(&toolbar);
+  toolbar.setStyle(presentation);
+  return *presentation;
 }
 
 void configure_native_toolbar_button_face(QToolBar &toolbar, QAction &action,

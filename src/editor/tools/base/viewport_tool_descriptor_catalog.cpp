@@ -136,6 +136,7 @@ constexpr std::array<ToolDescriptor, 17> kViewportToolDescriptors{{
         .modeling_tool = ModelingViewportTool::Mirror,
         .id = "mirror",
         .label = "Mirror",
+        .shortcut = "M",
         .kind = ToolKind::Modal,
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,

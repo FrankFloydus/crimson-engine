@@ -362,7 +362,7 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
     : QMainWindow(parent, Qt::Tool) {
   setObjectName(QStringLiteral("materialBrowser.window"));
   setAttribute(Qt::WA_DeleteOnClose, false);
-  setWindowFlag(Qt::WindowMaximizeButtonHint, false);
+  setWindowFlag(Qt::WindowMaximizeButtonHint, true);
   resize(760, 520);
 
   file_menu_ = menuBar()->addMenu(QString{});

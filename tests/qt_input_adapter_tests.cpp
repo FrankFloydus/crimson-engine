@@ -26,6 +26,7 @@
 #include "editor/viewport/primitive_creation_api_adapter.hpp"
 #include "editor/tools/viewport_native_tool_interaction.hpp"
 #include "math/glm_bridge.hpp"
+#include "ui/qt_application_cursor.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_panel.hpp"
@@ -44,6 +45,7 @@
 #include <QMouseEvent>
 #include <QPoint>
 #include <QPointF>
+#include <QPixmap>
 #include <QPushButton>
 #include <QTemporaryDir>
 #include <QWheelEvent>
@@ -478,6 +480,93 @@ TEST(QtViewportSurfaceCursorPolicyTests,
     EXPECT_EQ(quader::qt_viewport_cursor_presentation(cursor, false, false, true),
               Presentation::Hidden);
   }
+  for (const auto cursor : {Cursor::SelectionDefault, Cursor::SelectionAdd,
+                             Cursor::SelectionSubtract}) {
+    const Presentation expected =
+        cursor == Cursor::SelectionDefault
+            ? Presentation::SelectionDefault
+            : (cursor == Cursor::SelectionAdd ? Presentation::SelectionAdd
+                                               : Presentation::SelectionSubtract);
+    EXPECT_EQ(
+        quader::qt_viewport_cursor_presentation(cursor, true, true, false),
+        expected);
+    EXPECT_EQ(
+        quader::qt_viewport_cursor_presentation(cursor, false, true, false),
+        Presentation::Default);
+    EXPECT_EQ(
+        quader::qt_viewport_cursor_presentation(cursor, true, false, false),
+        Presentation::Default);
+    EXPECT_EQ(
+        quader::qt_viewport_cursor_presentation(cursor, true, true, true),
+        Presentation::Hidden);
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     SelectionCursorsUsePixelExactAuthoredAssetsAndTipAlignedHotspots) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-selection-cursor-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  QEnterEvent enter(QPointF{40, 40}, QPointF{40, 40}, QPointF{40, 40});
+  QFocusEvent focus_in(QEvent::FocusIn);
+  QApplication::sendEvent(&surface, &enter);
+  QApplication::sendEvent(&surface, &focus_in);
+
+  const qreal scale = std::max<qreal>(1.0, surface.devicePixelRatio());
+  const auto expected_pixmap = [scale](
+                                   quader::QtApplicationCursorVariant variant) {
+    return quader::qt_application_cursor_pixmap(variant, scale);
+  };
+
+  surface.set_interaction_cursor(
+      quader::ViewportPointerCursor::SelectionDefault);
+  EXPECT_EQ(surface.cursor().shape(), Qt::BitmapCursor);
+  const QPixmap selection_default = surface.cursor().pixmap();
+  const QPixmap expected_default =
+      expected_pixmap(quader::QtApplicationCursorVariant::Default);
+  ASSERT_FALSE(selection_default.isNull());
+  ASSERT_FALSE(expected_default.isNull());
+  EXPECT_EQ(selection_default.toImage(), expected_default.toImage());
+  EXPECT_EQ(surface.cursor().hotSpot(), QPoint(0, 0));
+
+  surface.set_interaction_cursor(quader::ViewportPointerCursor::SelectionAdd);
+  const QPixmap additive = surface.cursor().pixmap();
+  const QPixmap expected_add =
+      expected_pixmap(quader::QtApplicationCursorVariant::SelectionAdd);
+  ASSERT_FALSE(additive.isNull());
+  ASSERT_FALSE(expected_add.isNull());
+  EXPECT_EQ(additive.toImage(), expected_add.toImage());
+  EXPECT_EQ(surface.cursor().hotSpot(), QPoint(0, 0));
+  EXPECT_DOUBLE_EQ(additive.devicePixelRatio(), scale);
+  const auto stable_revision = surface.pointer_cursor_presentation_revision();
+  surface.set_interaction_cursor(quader::ViewportPointerCursor::SelectionAdd);
+  EXPECT_EQ(surface.pointer_cursor_presentation_revision(), stable_revision);
+
+  surface.set_interaction_cursor(
+      quader::ViewportPointerCursor::SelectionSubtract);
+  EXPECT_EQ(surface.cursor().shape(), Qt::BitmapCursor);
+  const QPixmap subtractive = surface.cursor().pixmap();
+  const QPixmap expected_subtract = expected_pixmap(
+      quader::QtApplicationCursorVariant::SelectionSubtract);
+  ASSERT_FALSE(subtractive.isNull());
+  ASSERT_FALSE(expected_subtract.isNull());
+  EXPECT_EQ(subtractive.toImage(), expected_subtract.toImage());
+  EXPECT_EQ(surface.cursor().hotSpot(), QPoint(0, 0));
+  EXPECT_NE(selection_default.cacheKey(), additive.cacheKey());
+  EXPECT_NE(additive.cacheKey(), subtractive.cacheKey());
+
+  QFocusEvent focus_out(QEvent::FocusOut);
+  QApplication::sendEvent(&surface, &focus_out);
+  EXPECT_EQ(surface.cursor().shape(), Qt::ArrowCursor);
+  QApplication::sendEvent(&surface, &focus_in);
+  EXPECT_EQ(surface.cursor().shape(), Qt::BitmapCursor);
+  QEvent leave(QEvent::Leave);
+  QApplication::sendEvent(&surface, &leave);
+  EXPECT_EQ(surface.cursor().shape(), Qt::ArrowCursor);
 }
 
 TEST(QtViewportSurfaceInputTests,
@@ -597,7 +686,7 @@ TEST(QtViewportSurfaceInputTests,
   };
 
   process_input();
-  EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+  EXPECT_EQ(surface->cursor().shape(), Qt::BitmapCursor);
   ASSERT_TRUE(
       editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
   process_input();
@@ -633,7 +722,7 @@ TEST(QtViewportSurfaceInputTests,
 
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
   process_input();
-  EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+  EXPECT_EQ(surface->cursor().shape(), Qt::BitmapCursor);
 }
 
 TEST(QtViewportSurfaceInputTests,
@@ -1024,8 +1113,8 @@ TEST(QtViewportSurfaceInputTests,
       quader::kBoxSubdivisionsXSetting, 2.0).ok());
   const auto before_click = editor.tools().live_primitive_cube();
   ASSERT_TRUE(before_click);
-  QKeyEvent flip_press(QEvent::KeyPress, Qt::Key_F, Qt::NoModifier);
-  QKeyEvent flip_release(QEvent::KeyRelease, Qt::Key_F, Qt::NoModifier);
+  QKeyEvent flip_press(QEvent::KeyPress, Qt::Key_F, Qt::ShiftModifier);
+  QKeyEvent flip_release(QEvent::KeyRelease, Qt::Key_F, Qt::ShiftModifier);
   QApplication::sendEvent(surface, &flip_press);
   QApplication::sendEvent(surface, &flip_release);
   send_ctrl(true);
@@ -1114,7 +1203,7 @@ TEST(QtViewportSurfaceInputTests,
   for (int frame = 0; frame < 20; ++frame) process_input();
   EXPECT_EQ(panel.primitive_feedback_update_count(), feedback_updates);
 
-  // F during a held resize keeps its owner and allows subsequent movement.
+  // Shift+F during a held resize keeps its owner and allows subsequent movement.
   const auto before_resize = editor.tools().live_primitive_cube();
   ASSERT_TRUE(before_resize);
   const QPointF dot = control_point(0);
@@ -1129,8 +1218,9 @@ TEST(QtViewportSurfaceInputTests,
   ASSERT_TRUE(editor.tools().live_primitive_cube());
   ASSERT_TRUE(editor.tools().live_primitive_cube()->resizing);
   EXPECT_EQ(surface->cursor().shape(), Qt::OpenHandCursor);
-  QKeyEvent drag_flip_press(QEvent::KeyPress, Qt::Key_F, Qt::NoModifier);
-  QKeyEvent drag_flip_release(QEvent::KeyRelease, Qt::Key_F, Qt::NoModifier);
+  QKeyEvent drag_flip_press(QEvent::KeyPress, Qt::Key_F, Qt::ShiftModifier);
+  QKeyEvent drag_flip_release(QEvent::KeyRelease, Qt::Key_F,
+                              Qt::ShiftModifier);
   QApplication::sendEvent(surface, &drag_flip_press);
   QApplication::sendEvent(surface, &drag_flip_release);
   process_input();
@@ -1198,9 +1288,10 @@ TEST(QtViewportSurfaceInputTests, CylinderCapsFlipRadiusAndCtrlSegmentsShareNati
                      type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, modifiers);
     QApplication::sendEvent(surface, &event);
   };
-  const auto key = [&](int code) {
-    QKeyEvent press(QEvent::KeyPress, code, Qt::NoModifier);
-    QKeyEvent release(QEvent::KeyRelease, code, Qt::NoModifier);
+  const auto key = [&](int code,
+                       Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    QKeyEvent press(QEvent::KeyPress, code, modifiers);
+    QKeyEvent release(QEvent::KeyRelease, code, modifiers);
     QApplication::sendEvent(surface, &press);
     QApplication::sendEvent(surface, &release);
   };
@@ -1215,7 +1306,7 @@ TEST(QtViewportSurfaceInputTests, CylinderCapsFlipRadiusAndCtrlSegmentsShareNati
   process();
   ASSERT_TRUE(editor.tools().live_primitive_creation()->resizing);
   key(Qt::Key_C);
-  key(Qt::Key_F);
+  key(Qt::Key_F, Qt::ShiftModifier);
   process();
   ASSERT_TRUE(editor.tools().live_primitive_creation());
   EXPECT_FALSE(editor.tools().live_primitive_creation()->caps);

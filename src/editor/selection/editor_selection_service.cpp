@@ -1632,26 +1632,32 @@ ModelingCommandResult EditorSelectionService::preview_resolved_hover(
 }
 
 ModelingCommandResult EditorSelectionService::preview_spatial_hover(
-    std::optional<ResolvedSelectionTarget> target) {
+    std::optional<ResolvedSelectionTarget> target,
+    bool selected_modifier_pressed) {
   if (target.has_value() ||
       !is_component_selection_mode(modeling_.selection_mode())) {
-    return publish_resolved_hover(std::move(target), false);
+    return publish_resolved_hover(std::move(target), false,
+                                  selected_modifier_pressed);
   }
 
   const ModelingHoverSummary current = modeling_.selection_hover_summary();
   if (current.candidate_object_id <= 0) {
-    return publish_resolved_hover(std::nullopt, false);
+    return publish_resolved_hover(std::nullopt, false,
+                                  selected_modifier_pressed);
   }
 
   ModelingHoverSummary empty_spatial_sample;
   empty_spatial_sample.candidate_object_id = current.candidate_object_id;
+  empty_spatial_sample.selected_modifier_pressed = selected_modifier_pressed;
   return publish_resolved_hover(std::nullopt, false,
+                                selected_modifier_pressed, false,
                                 &empty_spatial_sample);
 }
 
 ModelingCommandResult EditorSelectionService::publish_resolved_hover(
     std::optional<ResolvedSelectionTarget> target,
     bool explicit_modeling_element_request,
+    bool selected_modifier_pressed, bool face_plane_hover,
     const ModelingHoverSummary *modeling_preview) {
   if (target.has_value() &&
       target->domain == ResolvedSelectionDomain::SceneEntity &&
@@ -1730,6 +1736,8 @@ ModelingCommandResult EditorSelectionService::publish_resolved_hover(
         .vertex_id = before.vertex_id,
         .edge = {before.edge_a, before.edge_b},
         .face_id = before.face_id,
+        .selected_modifier_pressed = modeling_before.selected_modifier_pressed,
+        .face_plane_hover = modeling_before.face_plane_hover,
     });
   };
   const auto rollback_failure = [&](std::string message,
@@ -1802,6 +1810,9 @@ ModelingCommandResult EditorSelectionService::publish_resolved_hover(
         .vertex_id = preview_target.vertex_id,
         .edge = {preview_target.edge_a, preview_target.edge_b},
         .face_id = preview_target.face_id,
+        .selected_modifier_pressed =
+            modeling_preview->selected_modifier_pressed,
+        .face_plane_hover = modeling_preview->face_plane_hover,
     });
   } else if (modeling_hover_target) {
     modeling = modeling_.set_selection_hover({
@@ -1812,6 +1823,8 @@ ModelingCommandResult EditorSelectionService::publish_resolved_hover(
         .vertex_id = target->vertex,
         .edge = {target->edge_a, target->edge_b},
         .face_id = target->face,
+        .selected_modifier_pressed = selected_modifier_pressed,
+        .face_plane_hover = face_plane_hover,
     });
   } else {
     modeling = modeling_.clear_selection_hover();
@@ -1926,6 +1939,7 @@ EditorSelectionService::update_hover(const ModelingHoverRequest &request) {
       modeling_.preview_selection_hover(request);
   return publish_resolved_hover(
       resolved_modeling_hover_target(preview.target, modeling_), true,
+      request.selected_modifier_pressed, request.face_plane_hover,
       &preview);
 }
 
@@ -1942,7 +1956,7 @@ EditorSelectionService::set_hover(const ModelingDirectHoverRequest &request) {
               .face_id = request.face_id,
           },
           modeling_),
-      true);
+      true, request.selected_modifier_pressed, request.face_plane_hover);
 }
 
 ModelingHoverSummary EditorSelectionService::preview_hover(

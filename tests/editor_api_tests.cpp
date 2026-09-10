@@ -882,7 +882,7 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
               "Home");
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kViewportFrameSelection),
-              "");
+              "F");
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kViewportFocusOrigin),
               "Shift+Home");
@@ -906,6 +906,15 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kToolsActivatePivot),
               "P");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kToolsActivateMirror),
+              "M");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kModelingInvertMesh),
+              "Shift+F");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kModelingFlipHorizontal),
+              "Shift+H");
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kModelingApplyActivePreview),
               "Space");
@@ -2376,14 +2385,14 @@ TEST(EditorApiTests, UvProjectionAvailabilitySharesAtomicTargetValidation) {
   });
   ASSERT_TRUE(curve.ok()) << curve.error_message();
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
-  constexpr std::array commands{
+  constexpr std::array kCommands{
       quader::quader_command::kModelingTextureProjectCube,
       quader::quader_command::kModelingTextureProjectCylinder,
       quader::quader_command::kModelingTextureProjectSphere,
   };
   const auto expect_availability = [&](bool expected) {
     EXPECT_EQ(editor.modeling().can_project_uv(), expected);
-    for (const auto command : commands) {
+    for (const auto command : kCommands) {
       const auto descriptor = editor.commands().descriptor(command);
       ASSERT_TRUE(descriptor.has_value());
       EXPECT_EQ(descriptor->enabled, expected) << command.string();
@@ -4588,10 +4597,9 @@ TEST(EditorApiTests,
       editor.preferences().set_shortcut(
           quader::quader_command::kViewportFrameSelection, "Ctrl+Shift+C");
   EXPECT_FALSE(rejected.ok());
-  EXPECT_TRUE(editor.commands()
-                  .shortcut_for(
-                      quader::quader_command::kViewportFrameSelection)
-                  .empty());
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader::quader_command::kViewportFrameSelection),
+            "F");
 
   quader::ViewportToolState state;
   const quader::QuaderViewportKeybindingDispatch dispatch =
@@ -4633,6 +4641,12 @@ TEST(EditorApiTests, FocusSelectionUserShortcutUsesViewportContext) {
             quader::QuaderViewportKeybindingDispatch::Kind::Command);
   EXPECT_EQ(with_viewport_focus.command_id,
             quader::quader_command::kViewportFrameSelection.string());
+  const quader::QuaderViewportKeybindingDispatch during_modal_tool =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Alt+F"), state, true, false,
+          {.modal_tool_active = true, .active_tool_owns_viewport = true});
+  EXPECT_EQ(during_modal_tool.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
 }
 
 #ifndef NDEBUG
@@ -5071,11 +5085,11 @@ TEST(EditorApiTests, PrimitiveKeyboardCommandsUseViewportEligibilityBeforeDrawin
   constexpr auto kHemisphere = quader::quader_command::kToolsTogglePrimitiveHemisphere;
   using Dispatch = quader::QuaderViewportKeybindingDispatch;
   for (const auto &[kind, key, command, setting, initial] : {
-           std::tuple{"box", "F", kFlip, "primitive.flip_faces", false},
-           std::tuple{"cylinder", "F", kFlip, "primitive.flip_faces", false},
-           std::tuple{"sphere", "F", kFlip, "primitive.flip_faces", false},
-           std::tuple{"cone", "F", kFlip, "primitive.flip_faces", false},
-           std::tuple{"torus", "F", kFlip, "primitive.flip_faces", false},
+           std::tuple{"box", "Shift+F", kFlip, "primitive.flip_faces", false},
+           std::tuple{"cylinder", "Shift+F", kFlip, "primitive.flip_faces", false},
+           std::tuple{"sphere", "Shift+F", kFlip, "primitive.flip_faces", false},
+           std::tuple{"cone", "Shift+F", kFlip, "primitive.flip_faces", false},
+           std::tuple{"torus", "Shift+F", kFlip, "primitive.flip_faces", false},
            std::tuple{"cylinder", "C", kCaps, "primitive.cylinder.caps", true},
            std::tuple{"cone", "C", kCaps, "primitive.cone.caps", true},
            std::tuple{"sphere", "H", kHemisphere, "primitive.sphere.hemisphere", false}}) {
@@ -5299,7 +5313,7 @@ TEST(EditorApiTests, PrimitiveKeyboardCommandsDuringRepeatFootprintLeavePrevious
     const auto before = quader::test::capture_command_observable_state(editor);
     const auto selected = selected_entities(editor);
     for (const auto &[key, command, setting, initial, eligible] : {
-             std::tuple{"F", kFlip, "primitive.flip_faces", false, true},
+             std::tuple{"Shift+F", kFlip, "primitive.flip_faces", false, true},
              std::tuple{"C", kCaps, "primitive.cylinder.caps", true,
                         std::string_view(kind) == "cylinder"},
              std::tuple{"C", kCaps, "primitive.cone.caps", true,
@@ -5359,13 +5373,13 @@ TEST(EditorApiTests, PrimitiveFlipFacesHasTypedLocalizedContextualBinding) {
             "keybindings.target.tools.primitive.flip_faces.label");
   EXPECT_EQ(entry->context, quader::QuaderKeybindingContextKind::ModalTool);
   EXPECT_EQ(entry->scope_id, "viewport.tool.modal");
-  EXPECT_EQ(entry->shortcut, "F");
-  EXPECT_EQ(entry->default_shortcut, "F");
+  EXPECT_EQ(entry->shortcut, "Shift+F");
+  EXPECT_EQ(entry->default_shortcut, "Shift+F");
   EXPECT_FALSE(entry->customized);
   EXPECT_FALSE(quader::keybinding_detail::when_expressions_overlap(
       entry->when, invert->when));
   const auto analysis =
-      editor.commands().analyze_shortcut_assignment(entry->key, "F");
+      editor.commands().analyze_shortcut_assignment(entry->key, "Shift+F");
   ASSERT_TRUE(analysis.ok) << analysis.message;
   EXPECT_TRUE(analysis.conflicts.empty());
   EXPECT_NE(std::find_if(analysis.compatible_reuses.begin(),
@@ -5394,7 +5408,7 @@ TEST(EditorApiTests, PrimitiveFlipFacesHasTypedLocalizedContextualBinding) {
   EXPECT_TRUE(editor.commands().descriptor(kFlip)->enabled);
   for (const bool expected : {true, false}) {
     const auto dispatch = editor.commands().dispatch_viewport_input_binding(
-        single_input_chord("F"), state, true, false);
+        single_input_chord("Shift+F"), state, true, false);
     ASSERT_EQ(dispatch.kind,
               quader::QuaderViewportKeybindingDispatch::Kind::Command);
     ASSERT_EQ(dispatch.command_id, kFlip.string());
@@ -5422,7 +5436,7 @@ TEST(EditorApiTests, PrimitiveFlipFacesUsesOwnerKindAndViewportEligibility) {
       .active_tool = quader::ViewportToolId::CreatePrimitive};
   // A stale caller tool ID cannot manufacture an active Box session.
   EXPECT_NE(editor.commands()
-                .dispatch_viewport_input_binding(single_input_chord("F"),
+                .dispatch_viewport_input_binding(single_input_chord("Shift+F"),
                                                  state, true, false)
                 .command_id,
             kFlip.string());
@@ -5431,7 +5445,7 @@ TEST(EditorApiTests, PrimitiveFlipFacesUsesOwnerKindAndViewportEligibility) {
   for (const auto [focused, text] :
        {std::pair{false, false}, std::pair{true, true}}) {
     EXPECT_EQ(editor.commands()
-                  .dispatch_viewport_input_binding(single_input_chord("F"),
+                  .dispatch_viewport_input_binding(single_input_chord("Shift+F"),
                                                    state, focused, text)
                   .kind,
               Dispatch::Kind::NoMatch);
@@ -5445,21 +5459,21 @@ TEST(EditorApiTests, PrimitiveFlipFacesUsesOwnerKindAndViewportEligibility) {
            quader::QuaderViewportKeybindingContext{
                .navigation_active = true, .pan_navigation_active = true}}) {
     EXPECT_EQ(editor.commands()
-                  .dispatch_viewport_input_binding(single_input_chord("F"),
+                  .dispatch_viewport_input_binding(single_input_chord("Shift+F"),
                                                    state, true, false, context)
                   .kind,
               Dispatch::Kind::NoMatch);
   }
   EXPECT_EQ(editor.commands()
                 .dispatch_viewport_input_binding(
-                    single_input_chord("F"), state, true, false,
+                    single_input_chord("Shift+F"), state, true, false,
                     {.modal_tool_active = true,
                      .active_tool_owns_viewport = true,
                      .active_transform_drag = true})
                 .command_id,
             kFlip.string());
   EXPECT_FALSE(editor.commands().resolve_immediate_global_command(
-      single_input_chord("F"), state, false));
+      single_input_chord("Shift+F"), state, false));
 
   for (const char *kind : {"box", "cylinder", "sphere", "cone", "torus"}) {
     SCOPED_TRACE(kind);
@@ -5468,14 +5482,14 @@ TEST(EditorApiTests, PrimitiveFlipFacesUsesOwnerKindAndViewportEligibility) {
                     .ok());
     EXPECT_TRUE(editor.commands().descriptor(kFlip)->enabled);
     const auto dispatch = editor.commands().dispatch_viewport_input_binding(
-        single_input_chord("F"), state, true, false);
+        single_input_chord("Shift+F"), state, true, false);
     EXPECT_FALSE(editor.commands().descriptor(kInvert)->enabled);
     EXPECT_EQ(dispatch.kind, Dispatch::Kind::Command);
     EXPECT_EQ(dispatch.command_id, kFlip.string());
   }
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   EXPECT_EQ(editor.commands()
-                .dispatch_viewport_input_binding(single_input_chord("F"),
+                .dispatch_viewport_input_binding(single_input_chord("Shift+F"),
                                                  {}, true, false)
                 .command_id,
             kInvert.string());
@@ -5526,7 +5540,7 @@ TEST(EditorApiTests,
         kFlip.string());
   }
   EXPECT_EQ(reloaded.commands()
-                .dispatch_viewport_input_binding(single_input_chord("F"),
+                .dispatch_viewport_input_binding(single_input_chord("Shift+F"),
                                                  state, true, false)
                 .kind,
             quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
@@ -5538,7 +5552,7 @@ TEST(EditorApiTests,
   ASSERT_NE(removed, nullptr);
   EXPECT_TRUE(removed->unassigned);
   EXPECT_TRUE(removed->customized);
-  for (const char *shortcut : {"F", "Ctrl+Alt+F19"}) {
+  for (const char *shortcut : {"Shift+F", "Ctrl+Alt+F19"}) {
     EXPECT_EQ(reloaded.commands()
                   .dispatch_viewport_input_binding(single_input_chord(shortcut),
                                                    state, true, false)
@@ -5552,7 +5566,7 @@ TEST(EditorApiTests,
                 .command_id,
             kInvert.string());
   ASSERT_TRUE(reloaded.preferences().reset_action_shortcut(action).ok());
-  EXPECT_EQ(reloaded.commands().shortcut_for(kFlip), "F");
+  EXPECT_EQ(reloaded.commands().shortcut_for(kFlip), "Shift+F");
   EXPECT_EQ(reloaded.commands().shortcut_for(kInvert), "Ctrl+Alt+F19");
 }
 
@@ -5584,7 +5598,7 @@ TEST(EditorApiTests, PrimitiveFlipFacesLoadsLegacyOverridesWithCurrentScope) {
       editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
   for (const char *kind : {"box", "cylinder", "sphere", "cone", "torus"}) {
     ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", kind).ok());
-    for (const char *shortcut : {"F", "Ctrl+Alt+F18"}) {
+    for (const char *shortcut : {"Shift+F", "Ctrl+Alt+F18"}) {
       EXPECT_EQ(editor.commands()
                     .dispatch_viewport_input_binding(
                         single_input_chord(shortcut),
@@ -5680,7 +5694,7 @@ TEST(EditorApiTests, PrimitiveFlipFacesUpdatesLiveCubeWithinCreationHistory) {
 
   quader::ViewportInputFrame input;
   input.viewport_focused = true;
-  input.pressed_input_chords = {single_input_chord("F")};
+  input.pressed_input_chords = {single_input_chord("Shift+F")};
   ASSERT_TRUE(editor.tools()
                   .begin_primitive_cube_resize(quader::QuaderPrimitiveCubeAxis::X,
                                                true)
@@ -6650,8 +6664,13 @@ TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
     const std::optional<quader::QuaderCommandDescriptor> command =
         editor.commands().descriptor(*command_target);
     if (command.has_value() && !command->enabled) {
-      EXPECT_EQ(dispatch.kind,
-                quader::QuaderViewportKeybindingDispatch::Kind::NoMatch)
+      // Another compatible default may own the same physical chord in this
+      // fixture's active selection scope. The disabled target itself must not
+      // be the dispatched command.
+      EXPECT_TRUE(
+          dispatch.kind ==
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch ||
+          dispatch.command_id != *command_target)
           << descriptor.target_id << " -> " << *command_target;
       ++checked;
       continue;
@@ -9166,7 +9185,8 @@ TEST(EditorApiTests, ViewportModalToolGesturesUseKeybindingTargets) {
   EXPECT_EQ(action, quader::ViewportInputActionKind::ModalToolFinalize);
 
   ASSERT_TRUE(editor.preferences()
-                  .set_shortcut("viewport.modal_tool.mode_cycle", "Shift+F")
+                  .set_shortcut("viewport.modal_tool.mode_cycle",
+                                "Ctrl+Alt+F20")
                   .ok());
   action = quader::ViewportInputActionKind::None;
   EXPECT_FALSE(editor.commands().resolve_viewport_input_action(
@@ -9174,8 +9194,8 @@ TEST(EditorApiTests, ViewportModalToolGesturesUseKeybindingTargets) {
       modal_context));
   action = quader::ViewportInputActionKind::None;
   ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
-      *quader::quader_input_parse_chord("Shift+F"), state, true, false, action,
-      modal_context));
+      *quader::quader_input_parse_chord("Ctrl+Alt+F20"), state, true, false,
+      action, modal_context));
   EXPECT_EQ(action, quader::ViewportInputActionKind::ModalToolModeCycle);
 }
 

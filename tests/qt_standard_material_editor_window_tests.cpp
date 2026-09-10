@@ -287,7 +287,7 @@ TEST(QtStandardMaterialEditorWindowTests,
   window->setAttribute(Qt::WA_DontShowOnScreen, true);
   EXPECT_EQ(window->windowType(), Qt::Tool);
   EXPECT_FALSE(window->testAttribute(Qt::WA_DeleteOnClose));
-  EXPECT_FALSE(window->windowFlags().testFlag(Qt::WindowMaximizeButtonHint));
+  EXPECT_TRUE(window->windowFlags().testFlag(Qt::WindowMaximizeButtonHint));
   EXPECT_FALSE(window->has_document());
 
   const std::array file_actions{
@@ -1234,13 +1234,13 @@ TEST(QtStandardMaterialEditorWindowTests,
   auto *group = window.findChild<QGroupBox *>(
       QStringLiteral("standardMaterialEditor.textureTransform"));
   ASSERT_NE(group, nullptr);
-  constexpr std::array<const char *, 7> names{
+  constexpr std::array<const char *, 7> kNames{
       "centerU", "centerV", "scaleU", "scaleV", "offsetU", "offsetV", "rotation"};
-  std::array<QPointer<QDoubleSpinBox>, names.size()> retained;
-  for (std::size_t index = 0; index < names.size(); ++index) {
+  std::array<QPointer<QDoubleSpinBox>, kNames.size()> retained;
+  for (std::size_t index = 0; index < kNames.size(); ++index) {
     retained[index] = window.findChild<QDoubleSpinBox *>(
         QStringLiteral("standardMaterialEditor.textureTransform.%1")
-            .arg(QString::fromUtf8(names[index])));
+            .arg(QString::fromUtf8(kNames[index])));
     ASSERT_NE(retained[index], nullptr);
   }
   EXPECT_EQ(retained[2]->accessibleName(), QStringLiteral("UV Tiling U"));
@@ -1281,10 +1281,10 @@ TEST(QtStandardMaterialEditorWindowTests,
     EXPECT_EQ(group->toolTip(), labels.texture_transform_tooltip);
     MaterialTooltipEvents events;
     group->installEventFilter(&events);
-    for (std::size_t index = 0; index < names.size(); ++index) {
+    for (std::size_t index = 0; index < kNames.size(); ++index) {
       const auto stable_name =
           QStringLiteral("standardMaterialEditor.textureTransform.%1")
-              .arg(QString::fromUtf8(names[index]));
+              .arg(QString::fromUtf8(kNames[index]));
       auto *spin = window.findChild<QDoubleSpinBox *>(stable_name);
       auto *slider = window.findChild<QSlider *>(stable_name + QStringLiteral(".slider"));
       ASSERT_EQ(spin, retained[index].data());

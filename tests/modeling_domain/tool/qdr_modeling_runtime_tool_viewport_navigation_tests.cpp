@@ -9,6 +9,7 @@
 #include <editor/interactions/interaction_api.hpp>
 
 #include <cmath>
+#include <numbers>
 
 namespace {
 
@@ -427,6 +428,67 @@ TEST(QdrModelingRuntimeToolViewportNavigationTests,
 		after_camera, anchor, after_anchor_screen));
 	EXPECT_NEAR(after_anchor_screen.x, before_anchor_screen.x, 0.001F);
 	EXPECT_NEAR(after_anchor_screen.y, before_anchor_screen.y, 0.001F);
+}
+
+TEST(QdrModelingRuntimeToolViewportNavigationTests,
+	FrameBoundsFitsTheProjectedSelectionInsteadOfItsBoundingSphere)
+{
+	quader_editor_core::ViewportFrameBoundsInput input;
+	input.camera.transform.origin = { 0.0F, 0.0F, 20.0F };
+	input.camera.viewport_size = { 1600.0F, 800.0F };
+	input.camera.fov_degrees = 60.0;
+	input.min_bounds = { -10.0F, -1.0F, 0.0F };
+	input.max_bounds = { 10.0F, 1.0F, 0.0F };
+	input.margin = 1.4;
+
+	const quader_editor_core::ViewportNavigationResult result =
+		quader_editor_core::viewport_frame_bounds(input);
+
+	ASSERT_TRUE(result.ok);
+	expect_vector_near(result.pivot, {});
+	const double distance =
+		vector_length(result.camera_transform.origin - result.pivot);
+	const double expected =
+		10.0 * input.margin / (std::tan(std::numbers::pi / 6.0) * 2.0);
+	EXPECT_NEAR(distance, expected, 0.001);
+	EXPECT_LT(distance, 15.0);
+
+	quader_editor_core::ViewportCameraState framed_camera = input.camera;
+	framed_camera.transform = result.camera_transform;
+	for (const quader::QVec3 corner :
+		 {quader::QVec3{-10.0F, -1.0F, 0.0F},
+		  quader::QVec3{-10.0F, 1.0F, 0.0F},
+		  quader::QVec3{10.0F, -1.0F, 0.0F},
+		  quader::QVec3{10.0F, 1.0F, 0.0F}}) {
+		quader::QVec2 projected;
+		ASSERT_TRUE(quader_editor_core::project_viewport_point(
+			framed_camera, corner, projected));
+		EXPECT_GE(projected.x, 0.0F);
+		EXPECT_LE(projected.x, input.camera.viewport_size.x);
+		EXPECT_GE(projected.y, 0.0F);
+		EXPECT_LE(projected.y, input.camera.viewport_size.y);
+	}
+}
+
+TEST(QdrModelingRuntimeToolViewportNavigationTests,
+	PointFrameBoundsRecentersWithoutResettingOrthographicZoom)
+{
+	quader_editor_core::ViewportFrameBoundsInput input;
+	input.camera.projection = quader_editor_core::CameraProjection::Orthographic;
+	input.camera.transform.origin = { 0.0F, 0.0F, 20.0F };
+	input.camera.viewport_size = { 800.0F, 600.0F };
+	input.camera.orthographic_size = 37.5;
+	input.min_bounds = { 4.0F, -3.0F, 2.0F };
+	input.max_bounds = input.min_bounds;
+	input.margin = 1.4;
+
+	const quader_editor_core::ViewportNavigationResult result =
+		quader_editor_core::viewport_frame_bounds(input);
+
+	ASSERT_TRUE(result.ok);
+	ASSERT_TRUE(result.has_camera_size);
+	expect_vector_near(result.pivot, input.min_bounds);
+	EXPECT_DOUBLE_EQ(result.camera_size, input.camera.orthographic_size);
 }
 
 TEST(QdrModelingRuntimeToolViewportNavigationTests,

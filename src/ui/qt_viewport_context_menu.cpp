@@ -349,9 +349,23 @@ void QtViewportContextMenuPresenter::show(
           return submenu;
         };
 
+    const bool can_apply_current_material =
+        selection.has_selection &&
+        ((selection.mode == QuaderSelectionMode::Object &&
+          selection.selected_object_count > 0U) ||
+         (selection.mode == QuaderSelectionMode::Face &&
+          selection.selected_face_count > 0U));
     const auto add_material_actions = [&]() {
+      bool added = false;
+      if (can_apply_current_material) {
+        added = add_command_action(
+                    menu,
+                    "ui.viewport.context_menu.command.apply_current_material",
+                    "Apply Current Material", quader_command::kApplyMaterial,
+                    quader_command::kApplyMaterial.string(), true) != nullptr;
+      }
       if (!material_under_mouse.has_value()) {
-        return false;
+        return added;
       }
       const std::string sample_shortcut =
           editor.commands().shortcut_for("viewport.material.sample_face");
@@ -362,6 +376,7 @@ void QtViewportContextMenuPresenter::show(
           sample_shortcut));
       set_material_action->setObjectName(
           QStringLiteral("viewport.material.sample_face"));
+      added = true;
 
       if (open_material_editor) {
         edit_material_action =
@@ -371,7 +386,7 @@ void QtViewportContextMenuPresenter::show(
         edit_material_action->setObjectName(
             QStringLiteral("viewport.material.edit_under_mouse"));
       }
-      return true;
+      return added;
     };
 
     if (!target_hit) {
@@ -447,7 +462,7 @@ void QtViewportContextMenuPresenter::show(
           "Center View on Selection", quader_command::kViewportFrameSelection,
           "viewport.frame_selection");
 
-      if (material_under_mouse.has_value()) {
+      if (can_apply_current_material || material_under_mouse.has_value()) {
         add_separator_after_content(menu);
         (void)add_material_actions();
       }

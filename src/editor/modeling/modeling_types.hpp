@@ -623,6 +623,8 @@ struct ModelingHoverSummary {
   ModelingHoverTarget target;
   bool target_selected = false;
   int candidate_object_id = -1;
+  bool selected_modifier_pressed = false;
+  bool face_plane_hover = false;
 };
 
 /**

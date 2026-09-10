@@ -16,6 +16,8 @@ namespace quader {
 enum class QuaderOperationInputGesture {
   Command,
   PrimaryClick,
+  ShiftPrimaryClick,
+  ControlPrimaryClick,
   Wheel,
   PrimaryDrag,
   ShiftPrimaryDrag,

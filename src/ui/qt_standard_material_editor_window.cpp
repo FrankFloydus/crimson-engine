@@ -336,7 +336,7 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
     : QMainWindow(parent, Qt::Tool) {
   setObjectName(QStringLiteral("standardMaterialEditor.window"));
   setAttribute(Qt::WA_DeleteOnClose, false);
-  setWindowFlag(Qt::WindowMaximizeButtonHint, false);
+  setWindowFlag(Qt::WindowMaximizeButtonHint, true);
   resize(kDefaultWidth, kDefaultHeight);
 
   QMenu *file_menu = menuBar()->addMenu(QString());

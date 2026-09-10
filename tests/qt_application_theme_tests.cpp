@@ -6,10 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
+#include "ui/qt_application_cursor.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
 #include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
+#include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QAccessibilityHints>
@@ -26,9 +28,13 @@
 #include <QObject>
 #include <QPalette>
 #include <QPainter>
+#include <QPoint>
+#include <QRect>
 #include <QStyle>
 #include <QStyleFactory>
 #include <QStyleHints>
+#include <QToolBar>
+#include <QWidget>
 
 #include <algorithm>
 #include <array>
@@ -127,7 +133,116 @@ QImage render_icon(const QIcon &icon, const QSize &logical_size, qreal dpr) {
   return image;
 }
 
+QRect visible_alpha_bounds(const QPixmap &pixmap) {
+  const QImage image =
+      pixmap.toImage().convertToFormat(QImage::Format_ARGB32);
+  int left = image.width();
+  int top = image.height();
+  int right = -1;
+  int bottom = -1;
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x) {
+      if (image.pixelColor(x, y).alpha() == 0) {
+        continue;
+      }
+      left = std::min(left, x);
+      top = std::min(top, y);
+      right = std::max(right, x);
+      bottom = std::max(bottom, y);
+    }
+  }
+  return right >= left && bottom >= top
+             ? QRect(QPoint(left, top), QPoint(right, bottom))
+             : QRect{};
+}
+
 } // namespace
+
+TEST(QtApplicationCursorTests,
+     AuthoredVariantsRemainPixelExactAtOneHundredPercentDpi) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-application-cursor-size-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  struct CursorCase {
+    quader::QtApplicationCursorVariant variant;
+    const char *resource_path;
+    QSize visible_size;
+  };
+  constexpr std::array kCursorCases{
+      CursorCase{quader::QtApplicationCursorVariant::Default,
+                 ":/quader/cursors/selection_default.png", QSize(16, 23)},
+      CursorCase{quader::QtApplicationCursorVariant::SelectionAdd,
+                 ":/quader/cursors/selection_add.png", QSize(26, 23)},
+      CursorCase{quader::QtApplicationCursorVariant::SelectionSubtract,
+                 ":/quader/cursors/selection_subtract.png", QSize(25, 23)}};
+  for (const CursorCase &cursor_case : kCursorCases) {
+    const QPixmap authored(QString::fromUtf8(cursor_case.resource_path));
+    const QPixmap pixmap =
+        quader::qt_application_cursor_pixmap(cursor_case.variant, 1.0);
+    ASSERT_FALSE(authored.isNull());
+    ASSERT_FALSE(pixmap.isNull());
+    EXPECT_EQ(pixmap.toImage(), authored.toImage());
+    EXPECT_EQ(pixmap.size(), QSize(32, 32));
+    EXPECT_DOUBLE_EQ(pixmap.devicePixelRatio(), 1.0);
+    const QRect visible = visible_alpha_bounds(pixmap);
+    ASSERT_FALSE(visible.isEmpty());
+    EXPECT_EQ(visible.topLeft(), QPoint(0, 0));
+    EXPECT_EQ(visible.size(), cursor_case.visible_size);
+
+    const QCursor cursor =
+        quader::qt_application_cursor(cursor_case.variant, 1.0);
+    EXPECT_EQ(cursor.shape(), Qt::BitmapCursor);
+    EXPECT_EQ(cursor.hotSpot(), QPoint(0, 0));
+  }
+}
+
+TEST(QtApplicationCursorTests,
+     InstallsTheAuthoredDefaultForAllWindowsAndPreservesSpecialCursors) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-application-cursor-filter-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::install_qt_application_default_cursor(application);
+  quader::install_qt_application_default_cursor(application);
+
+  QMainWindow main_window;
+  QWidget child(&main_window);
+  child.setCursor(Qt::CrossCursor);
+  main_window.show();
+  QApplication::processEvents();
+  EXPECT_EQ(main_window.cursor().shape(), Qt::BitmapCursor);
+  EXPECT_EQ(main_window.cursor().hotSpot(), QPoint(0, 0));
+  EXPECT_EQ(child.cursor().shape(), Qt::CrossCursor);
+
+  child.unsetCursor();
+  EXPECT_EQ(child.cursor().shape(), Qt::BitmapCursor);
+
+  QMainWindow auxiliary_window;
+  auxiliary_window.show();
+  QApplication::processEvents();
+  EXPECT_EQ(auxiliary_window.cursor().shape(), Qt::BitmapCursor);
+
+  main_window.setCursor(Qt::WaitCursor);
+  EXPECT_EQ(main_window.cursor().shape(), Qt::WaitCursor);
+  main_window.unsetCursor();
+  EXPECT_EQ(main_window.cursor().shape(), Qt::BitmapCursor);
+
+  QPixmap authored_special(8, 8);
+  authored_special.fill(Qt::red);
+  main_window.setCursor(QCursor(authored_special, 2, 3));
+  main_window.hide();
+  main_window.show();
+  QApplication::processEvents();
+  EXPECT_EQ(main_window.cursor().shape(), Qt::BitmapCursor);
+  EXPECT_EQ(main_window.cursor().hotSpot(), QPoint(2, 3));
+  main_window.unsetCursor();
+  EXPECT_EQ(main_window.cursor().hotSpot(), QPoint(0, 0));
+}
 
 TEST(QtUiScaleMetricsTests, ScalesDesignValuesWithoutCompounding) {
   const quader::QtUiScaleMetrics metrics(2.0F, 7U);
@@ -809,6 +924,43 @@ TEST(QtApplicationThemeTests,
         contrast_ratio(marker_text, quader::qt_semantic_axis_color(axis)),
         4.5);
   }
+}
+
+TEST(QtApplicationThemeTests,
+     ToolbarErasesFusionBrightTopBevelBelowTheSubtleMenuSeparator) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-toolbar-edge-render-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QStyle *fusion = QStyleFactory::create(QStringLiteral("Fusion"));
+  ASSERT_NE(fusion, nullptr);
+  QApplication::setStyle(fusion);
+  quader::apply_qt_obsidian_application_theme(fusion->standardPalette());
+
+  QMainWindow window;
+  QToolBar toolbar(&window);
+  window.addToolBar(Qt::TopToolBarArea, &toolbar);
+  quader::install_native_toolbar_button_presentation(toolbar);
+  window.resize(240, 120);
+  toolbar.resize(240, 40);
+  window.ensurePolished();
+  toolbar.ensurePolished();
+  QImage rendered(toolbar.size(), QImage::Format_ARGB32_Premultiplied);
+  rendered.fill(Qt::transparent);
+  QPainter painter(&rendered);
+  toolbar.render(&painter);
+  painter.end();
+
+  const int sample_x = toolbar.width() / 2;
+  const QColor surface = toolbar.palette().color(QPalette::Window);
+  const QColor subtle_edge = toolbar.palette().color(QPalette::Midlight);
+  EXPECT_EQ(rendered.pixelColor(sample_x, 0), surface)
+      << "the toolbar must erase Fusion's bright bevel below the menu line";
+  EXPECT_EQ(rendered.pixelColor(sample_x, toolbar.height() - 1), subtle_edge);
+  EXPECT_NE(rendered.pixelColor(sample_x, 0),
+            toolbar.palette().color(QPalette::Light));
 }
 
 TEST(QtApplicationThemeTests,

@@ -356,6 +356,9 @@ default_keybinding_context_for_command(std::string_view command_id) {
            "!transformDrag.active && !operationPreview.active && "
            "selection.allowedByTool";
   }
+  if (command_id == quader_command::kViewportFrameSelection.string()) {
+    return unobstructed_viewport_keybinding_context();
+  }
   if (command_id == quader_command::kToolsFlipPrimitiveFaces.string()) {
     return primitive_flip_keybinding_context();
   }
@@ -2418,7 +2421,7 @@ void QuaderCommandsApi::Impl::register_commands() {
                    });
   register_command(quader_command::kToolsFlipPrimitiveFaces,
                    "Flip Primitive Faces",
-                   [this] { return tools_.flip_primitive_faces(); }, "F",
+                   [this] { return tools_.flip_primitive_faces(); }, "Shift+F",
                    [this] {
                      return !tools_.active_primitive_type().empty();
                    });
@@ -2709,7 +2712,7 @@ void QuaderCommandsApi::Impl::register_commands() {
   // These display switches are bindable commands, deliberately unassigned by
   // default. Menus and other retained controls dispatch through these routes.
   register_command(quader_command::kViewportToggleCollisions,
-                   "Display Collisions", [this] {
+                   "Collisions", [this] {
                      return preferences_.set_collisions_visible(
                          !preferences_.collisions_visible());
                    });
@@ -2816,6 +2819,9 @@ void QuaderCommandsApi::Impl::register_commands() {
                                "modeling.preview.interpolated_bridge");
     }
   }
+  set_keybinding_selection_modes(
+      quader_command::kModelingFlipHorizontal.string(),
+      kSelectionModeObject | kSelectionModeGroup);
   for (const ViewportTool *tool : viewport_tool_catalog()) {
     if (tool == nullptr) {
       continue;

@@ -27,6 +27,9 @@ enum class ViewportPaneFocusTrigger;
 /** Resolved Qt presentation after focus and navigation-capture precedence. */
 enum class QtViewportCursorPresentation {
   Default,
+  SelectionDefault,
+  SelectionAdd,
+  SelectionSubtract,
   PrecisionCross,
   OpenHand,
   ClosedHand,
@@ -172,6 +175,7 @@ private:
   ViewportPointerCursor interaction_cursor_ = ViewportPointerCursor::Default;
   QtViewportCursorPresentation presented_cursor_ =
       QtViewportCursorPresentation::Default;
+  qreal presented_cursor_device_pixel_ratio_ = 0.0;
   std::uint64_t pointer_cursor_presentation_revision_ = 0u;
   bool initialized_ = false;
   bool native_surface_available_ = false;

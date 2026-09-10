@@ -96,7 +96,7 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractSelectionModeCatalogExpo
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutTargetsResolveToDescriptorOnlyCatalogs) {
 	const std::span<const qhc::HostShortcutDescriptor> shortcuts = qhc::shortcut_catalog();
-	EXPECT_TRUE(shortcuts.size() == 40U);
+	EXPECT_TRUE(shortcuts.size() == 42U);
 
 	for (const qhc::HostShortcutDescriptor& shortcut : shortcuts) {
 		EXPECT_FALSE(shortcut.id.empty());
@@ -251,7 +251,7 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogPreserves
                     qhc::HostShortcutContext::Viewport);
         EXPECT_TRUE(same_text(flip_mesh_normals.key, "F"));
 	EXPECT_FALSE(flip_mesh_normals.primary_modifier);
-	EXPECT_FALSE(flip_mesh_normals.shift);
+	EXPECT_TRUE(flip_mesh_normals.shift);
         EXPECT_TRUE(flip_mesh_normals.target_kind ==
                     qhc::HostShortcutTargetKind::Action);
         EXPECT_TRUE(same_text(flip_mesh_normals.target_id, "invert_mesh"));
@@ -302,7 +302,15 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogKeepsOver
 
 	EXPECT_TRUE(same_text(require_shortcut("mirror_axis_y").key, "Y"));
 	EXPECT_TRUE(same_text(require_shortcut("mirror_axis_z").key, "Z"));
-	EXPECT_FALSE(has_shortcut("flip_horizontal"));
+	const qhc::HostShortcutDescriptor& focus_selection =
+		require_shortcut("focus_selection");
+	EXPECT_TRUE(same_text(focus_selection.key, "F"));
+	EXPECT_FALSE(focus_selection.shift);
+	EXPECT_TRUE(same_text(focus_selection.target_id, "focus_selection"));
+	const qhc::HostShortcutDescriptor& flip_horizontal =
+		require_shortcut("flip_horizontal");
+	EXPECT_TRUE(same_text(flip_horizontal.key, "H"));
+	EXPECT_TRUE(flip_horizontal.shift);
 	EXPECT_TRUE(same_text(require_shortcut("flip_vertical").key, "V"));
 }
 

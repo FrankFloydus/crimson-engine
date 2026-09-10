@@ -1455,7 +1455,11 @@ QtViewportPanel::frame_selection(const ModelingSessionService &modeling,
     return {
         .ok = false, .changed = false, .message = "Select something to focus."};
   }
-  (void)workspace_->camera(pane_id).focus_optional_bounds(bounds);
+  // Blender's Frame Selected uses a deliberate 1.4 framing margin. Keep the
+  // selected geometry comfortably readable while the camera owner performs
+  // the tighter view-oriented bounds fit.
+  (void)workspace_->camera(pane_id).focus_optional_bounds(
+      bounds, ViewportEmptyFocusBehavior::KeepCamera, 1.4f);
   return {.ok = true,
           .changed = true,
           .message = "Focus Selection",

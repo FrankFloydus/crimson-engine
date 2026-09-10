@@ -1197,6 +1197,8 @@ from_runtime_hover_summary(const ModelingSelectionProjectionSnapshot &session,
           quader_editor_core::selection_hover_target_matches_selection(
               session.objects(), session.selection_mode(), hover),
       .candidate_object_id = hover.candidate_object_id,
+      .selected_modifier_pressed = hover.selected_modifier_pressed,
+      .face_plane_hover = hover.face_plane_hover,
   };
 }
 

@@ -58,12 +58,14 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QSlider>
 #include <QStackedWidget>
 #include <QStringList>
 #include <QTableView>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QTreeView>
+#include <QTreeWidget>
 #include <QVariant>
 #include <QWheelEvent>
 
@@ -2381,6 +2383,11 @@ TEST(QtSettingsDialogTests,
   const std::vector<QuaderKeybindingCatalogEntry> catalog =
       editor.commands().keybinding_catalog();
   ASSERT_EQ(model->rowCount(), static_cast<int>(catalog.size()));
+  const QuaderKeybindingCatalogEntry *mirror = find_keybinding_catalog_entry(
+      catalog, quader_command::kToolsActivateMirror.string());
+  ASSERT_NE(mirror, nullptr);
+  EXPECT_EQ(mirror->default_shortcut, "M");
+  EXPECT_EQ(mirror->shortcut, "M");
   std::multiset<std::string> expected_rows;
   for (const QuaderKeybindingCatalogEntry &entry : catalog) {
     expected_rows.insert(entry.action_id + "|" +
@@ -3707,7 +3714,111 @@ TEST(InspectorPanelTests,
 }
 
 TEST(InspectorPanelTests,
-     CameraClipEditsPreserveInactivePhotographicMetadata) {
+     SectionsDefaultExpandedRememberChoiceAndEnvironmentRotationUsesSlider) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-section-rotation-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const EntityId root = session.scene().scene_root();
+  ASSERT_TRUE(editor.selection()
+                  .select_objects_for_inspection(
+                      std::span<const EntityId>(&root, 1u), root)
+                  .ok());
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  UIInspectorPreviewContext preview{.document = session.scene(),
+                                    .assets = session.assets()};
+  UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .inspector_preview = &preview,
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+  InspectorPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.refresh(context);
+
+  auto *tree = panel.findChild<QTreeWidget *>(QStringLiteral("inspector.tree"));
+  auto *rotation = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("inspector.environment.rotation"));
+  auto *rotation_slider = panel.findChild<QSlider *>(
+      QStringLiteral("inspector.environment.rotation.slider"));
+  ASSERT_NE(tree, nullptr);
+  ASSERT_NE(rotation, nullptr);
+  ASSERT_NE(rotation_slider, nullptr);
+  ASSERT_GT(tree->topLevelItemCount(), 0);
+  for (int row = 0; row < tree->topLevelItemCount(); ++row) {
+    EXPECT_TRUE(tree->topLevelItem(row)->isExpanded())
+        << tree->topLevelItem(row)->text(0).toStdString();
+  }
+  EXPECT_DOUBLE_EQ(rotation->minimum(), -180.0);
+  EXPECT_DOUBLE_EQ(rotation->maximum(), 180.0);
+  EXPECT_DOUBLE_EQ(rotation->singleStep(), 1.0);
+  EXPECT_DOUBLE_EQ(rotation->value(), 0.0);
+  EXPECT_EQ(rotation_slider->minimum(), -180);
+  EXPECT_EQ(rotation_slider->maximum(), 180);
+  EXPECT_EQ(rotation_slider->value(), 0);
+
+  rotation_slider->setValue(rotation_slider->minimum());
+  EXPECT_DOUBLE_EQ(rotation->value(), -180.0);
+  EXPECT_NEAR(session.scene().scene_settings(root)->environment.rotation_y,
+              -3.14159265358979323846, 1.0e-5);
+  rotation_slider->setValue(rotation_slider->maximum());
+  EXPECT_DOUBLE_EQ(rotation->value(), 180.0);
+  EXPECT_NEAR(session.scene().scene_settings(root)->environment.rotation_y,
+              3.14159265358979323846, 1.0e-5);
+  rotation_slider->setValue(0);
+  EXPECT_DOUBLE_EQ(rotation->value(), 0.0);
+  EXPECT_FLOAT_EQ(
+      session.scene().scene_settings(root)->environment.rotation_y, 0.0f);
+  rotation->setValue(45.0);
+  rotation->editingFinished();
+  EXPECT_NEAR(session.scene().scene_settings(root)->environment.rotation_y,
+              0.78539816339744830962, 1.0e-5);
+
+  const auto find_section = [tree](const QString &stable_id) {
+    for (int row = 0; row < tree->topLevelItemCount(); ++row) {
+      QTreeWidgetItem *item = tree->topLevelItem(row);
+      if (item->data(0, Qt::UserRole).toString() == stable_id) {
+        return item;
+      }
+    }
+    return static_cast<QTreeWidgetItem *>(nullptr);
+  };
+  QTreeWidgetItem *environment = find_section(QStringLiteral("environment"));
+  ASSERT_NE(environment, nullptr);
+  environment->setExpanded(false);
+  ASSERT_TRUE(localization.select_locale("it-IT"));
+  panel.refresh(context);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  tree = panel.findChild<QTreeWidget *>(QStringLiteral("inspector.tree"));
+  ASSERT_NE(tree, nullptr);
+  QTreeWidgetItem *rebuilt_environment = nullptr;
+  for (int row = 0; row < tree->topLevelItemCount(); ++row) {
+    QTreeWidgetItem *item = tree->topLevelItem(row);
+    if (item->data(0, Qt::UserRole).toString() ==
+        QStringLiteral("environment")) {
+      rebuilt_environment = item;
+      break;
+    }
+  }
+  ASSERT_NE(rebuilt_environment, nullptr);
+  EXPECT_FALSE(rebuilt_environment->isExpanded());
+}
+
+TEST(InspectorPanelTests,
+      CameraClipEditsPreserveInactivePhotographicMetadata) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-inspector-exposure-tests";
@@ -4017,7 +4128,7 @@ TEST(QtMainMenuTests,
   ASSERT_TRUE(view->actions().contains(display->menuAction()));
   ASSERT_TRUE(display->actions().contains(action));
   ASSERT_TRUE(QMetaObject::invokeMethod(view, "aboutToShow", Qt::DirectConnection));
-  EXPECT_EQ(action->text(), QStringLiteral("Display Collisions"));
+  EXPECT_EQ(action->text(), QStringLiteral("Collisions"));
   EXPECT_TRUE(action->isCheckable());
   EXPECT_TRUE(action->isChecked());
   EXPECT_TRUE(action->shortcut().isEmpty());
@@ -4048,7 +4159,7 @@ TEST(QtMainMenuTests,
   EXPECT_TRUE(binding->default_shortcut.empty());
   EXPECT_TRUE(binding->unassigned);
   EXPECT_EQ(loaded_localization("it-IT").text("ui.menu.view.collisions", ""),
-            "Mostra collisioni");
+            "Collisioni");
 }
 
 TEST(QtMainMenuTests,

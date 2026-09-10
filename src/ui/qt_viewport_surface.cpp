@@ -9,6 +9,7 @@
 #include "viewport/viewport_host_interaction_policy.hpp"
 
 #include "core/logger.hpp"
+#include "ui/qt_application_cursor.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "viewport/viewport_layout.hpp"
 
@@ -29,7 +30,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
@@ -92,6 +92,19 @@ bool viewport_surface_diagnostics_enabled() {
   return kEnabled;
 }
 
+QtApplicationCursorVariant
+application_cursor_variant(QtViewportCursorPresentation presentation) {
+  switch (presentation) {
+  case QtViewportCursorPresentation::SelectionAdd:
+    return QtApplicationCursorVariant::SelectionAdd;
+  case QtViewportCursorPresentation::SelectionSubtract:
+    return QtApplicationCursorVariant::SelectionSubtract;
+  case QtViewportCursorPresentation::SelectionDefault:
+  default:
+    return QtApplicationCursorVariant::Default;
+  }
+}
+
 } // namespace
 
 QtViewportCursorPresentation
@@ -104,6 +117,12 @@ qt_viewport_cursor_presentation(ViewportPointerCursor requested,
     return QtViewportCursorPresentation::Default;
   }
   switch (requested) {
+  case ViewportPointerCursor::SelectionDefault:
+    return QtViewportCursorPresentation::SelectionDefault;
+  case ViewportPointerCursor::SelectionAdd:
+    return QtViewportCursorPresentation::SelectionAdd;
+  case ViewportPointerCursor::SelectionSubtract:
+    return QtViewportCursorPresentation::SelectionSubtract;
   case ViewportPointerCursor::PrecisionCross:
     return QtViewportCursorPresentation::PrecisionCross;
   case ViewportPointerCursor::OpenHand:
@@ -178,13 +197,27 @@ void QtViewportSurface::synchronize_interaction_cursor() {
   const QtViewportCursorPresentation next = qt_viewport_cursor_presentation(
       interaction_cursor_, input_ != nullptr && input_->hovered,
       input_ != nullptr && input_->focused, pointer_captured());
-  if (presented_cursor_ == next) {
+  const bool custom_selection_cursor =
+      next == QtViewportCursorPresentation::SelectionDefault ||
+      next == QtViewportCursorPresentation::SelectionAdd ||
+      next == QtViewportCursorPresentation::SelectionSubtract;
+  const qreal next_device_pixel_ratio =
+      custom_selection_cursor ? std::max<qreal>(1.0, devicePixelRatio()) : 0.0;
+  if (presented_cursor_ == next &&
+      qFuzzyCompare(presented_cursor_device_pixel_ratio_ + 1.0,
+                    next_device_pixel_ratio + 1.0)) {
     return;
   }
 
   switch (next) {
   case QtViewportCursorPresentation::Default:
     unsetCursor();
+    break;
+  case QtViewportCursorPresentation::SelectionDefault:
+  case QtViewportCursorPresentation::SelectionAdd:
+  case QtViewportCursorPresentation::SelectionSubtract:
+    setCursor(qt_application_cursor(application_cursor_variant(next),
+                                    next_device_pixel_ratio));
     break;
   case QtViewportCursorPresentation::PrecisionCross:
     setCursor(QCursor(Qt::CrossCursor));
@@ -200,6 +233,7 @@ void QtViewportSurface::synchronize_interaction_cursor() {
     break;
   }
   presented_cursor_ = next;
+  presented_cursor_device_pixel_ratio_ = next_device_pixel_ratio;
   ++pointer_cursor_presentation_revision_;
 }
 

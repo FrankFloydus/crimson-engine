@@ -67,6 +67,7 @@
 #include <QLocale>
 #include <QMainWindow>
 #include <QMenuBar>
+#include <QPaintEvent>
 #include <QPainter>
 #include <QPointer>
 #include <QRect>
@@ -101,6 +102,21 @@ namespace {
 
 constexpr int kQtWindowStateVersion = 1;
 constexpr int kDockContentMinimumWidth = 220;
+
+/** Keeps the menu/toolbar boundary on the same quiet palette role as the status bar. */
+class QtMainMenuBar final : public QMenuBar {
+public:
+  using QMenuBar::QMenuBar;
+
+protected:
+  void paintEvent(QPaintEvent *event) override {
+    QMenuBar::paintEvent(event);
+    QPainter painter(this);
+    const qreal extent = 1.0 / std::max<qreal>(1.0, devicePixelRatioF());
+    painter.fillRect(QRectF(0.0, height() - extent, width(), extent),
+                     palette().brush(QPalette::Midlight));
+  }
+};
 
 /** Keeps the native status bar layout with a quiet, palette-aware top edge. */
 class QtMainStatusBar final : public QStatusBar {
@@ -387,6 +403,7 @@ bool UISystem::initialize(RenderSystem &render_system,
   main_window_->setDockOptions(QMainWindow::AllowNestedDocks |
                                QMainWindow::AllowTabbedDocks |
                                QMainWindow::AnimatedDocks);
+  main_window_->setMenuBar(new QtMainMenuBar(main_window_.get()));
 
   unsaved_confirmation_ =
       new QtUnsavedConfirmationDialog(main_window_.get());

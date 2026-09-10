@@ -452,6 +452,9 @@ TEST(ViewportToolCatalogTests, ExposesToolMetadataAndConversions) {
   const Tool *cut = find_viewport_tool("cut");
   ASSERT_NE(cut, nullptr);
   EXPECT_TRUE(cut->shortcut().empty());
+  const Tool *mirror = find_viewport_tool("mirror");
+  ASSERT_NE(mirror, nullptr);
+  EXPECT_EQ(mirror->shortcut(), "M");
 
   EXPECT_EQ(viewport_tool_transform_tool(ViewportToolId::Move),
             ModelingTransformTool::Move);

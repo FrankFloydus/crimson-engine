@@ -1217,41 +1217,78 @@ ViewportNavigationResult viewport_fly_move(const ViewportFlyMoveInput& input)
 ViewportNavigationResult viewport_frame_bounds(const ViewportFrameBoundsInput& input)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.viewport_frame_bounds");
-	const quader::QVec3 center = geometry_scale(input.min_bounds + input.max_bounds, 0.5);
-	const quader::QVec3 extents = geometry_scale(input.max_bounds - input.min_bounds, 0.5);
-	double radius = geometry_length(extents);
-	if (radius <= 0.0001) {
-		radius = 1.0;
+	const quader::QVec3 minimum{
+		std::min(input.min_bounds.x, input.max_bounds.x),
+		std::min(input.min_bounds.y, input.max_bounds.y),
+		std::min(input.min_bounds.z, input.max_bounds.z),
+	};
+	const quader::QVec3 maximum{
+		std::max(input.min_bounds.x, input.max_bounds.x),
+		std::max(input.min_bounds.y, input.max_bounds.y),
+		std::max(input.min_bounds.z, input.max_bounds.z),
+	};
+	const quader::QVec3 center = geometry_scale(minimum + maximum, 0.5);
+	const quader::QVec3 span = maximum - minimum;
+	const double largest_span = std::max({
+		static_cast<double>(span.x),
+		static_cast<double>(span.y),
+		static_cast<double>(span.z),
+	});
+	const double margin = std::max(1.0, input.margin);
+	const double aspect = viewport_aspect_for_size(input.camera.viewport_size);
+	const quader::QVec3 forward = viewport_camera_forward(input.camera.transform);
+	const quader::QVec3 right = viewport_camera_right(input.camera.transform);
+	const quader::QVec3 up = viewport_camera_up(input.camera.transform);
+	double half_width = 0.0;
+	double half_height = 0.0;
+	double half_depth = 0.0;
+	double perspective_distance = kNavigationMinCameraDistance * 1.5;
+	const double vertical_tangent = std::max(
+		0.0001,
+		std::tan(viewport_vertical_fov_radians(input.camera.fov_degrees) * 0.5));
+	const double horizontal_tangent = std::max(0.0001, vertical_tangent * aspect);
+
+	for (const float x : {minimum.x, maximum.x}) {
+		for (const float y : {minimum.y, maximum.y}) {
+			for (const float z : {minimum.z, maximum.z}) {
+				const quader::QVec3 offset = quader::QVec3{x, y, z} - center;
+				const double horizontal = std::abs(geometry_dot(offset, right));
+				const double vertical = std::abs(geometry_dot(offset, up));
+				const double depth = geometry_dot(offset, forward);
+				half_width = std::max(half_width, horizontal);
+				half_height = std::max(half_height, vertical);
+				half_depth = std::max(half_depth, std::abs(depth));
+				perspective_distance = std::max({
+					perspective_distance,
+					(horizontal * margin) / horizontal_tangent - depth,
+					(vertical * margin) / vertical_tangent - depth,
+					kNavigationMinCameraDistance * 1.5 - depth,
+				});
+			}
+		}
 	}
 
-	const double margin = std::max(1.0, input.margin);
 	quader_poly::Transform3 result_transform = input.camera.transform;
-        if (input.camera.projection == CameraProjection::Orthographic) {
-          const double aspect =
-              viewport_aspect_for_size(input.camera.viewport_size);
-          const double needed_height =
-              std::max(static_cast<double>(extents.y) * 2.0,
-                       (static_cast<double>(extents.x) * 2.0) / aspect);
-          const double size = std::clamp(
-              std::max(needed_height, radius * 2.0) * margin,
-              kNavigationMinOrthographicSize, kNavigationMaxOrthographicSize);
-          const double distance = std::max(
-              kNavigationDefaultFrameDistance, radius * 2.0);
-          result_transform.origin =
-              center - geometry_scale(
-                           viewport_camera_forward(input.camera.transform),
-                           distance);
-          return navigation_result(result_transform, center, size);
-        }
+	if (input.camera.projection == CameraProjection::Orthographic) {
+		// Like Blender's Frame Selected, a point selection recenters an
+		// orthographic view without destroying the user's existing zoom.
+		const bool point_bounds = largest_span < 0.0001;
+		const double needed_height =
+			2.0 * std::max(half_height, half_width / aspect) * margin;
+		const double size = point_bounds
+			? std::clamp(input.camera.orthographic_size,
+				kNavigationMinOrthographicSize, kNavigationMaxOrthographicSize)
+			: std::clamp(needed_height, kNavigationMinOrthographicSize,
+				kNavigationMaxOrthographicSize);
+		const double distance = std::max(
+			kNavigationDefaultFrameDistance,
+			half_depth + kNavigationDefaultFrameDistance);
+		result_transform.origin = center - geometry_scale(forward, distance);
+		return navigation_result(result_transform, center, size);
+	}
 
-        const double aspect = viewport_aspect_for_size(input.camera.viewport_size);
-	const double vertical_fov = viewport_vertical_fov_radians(input.camera.fov_degrees);
-	const double horizontal_fov = 2.0 * std::atan(std::tan(vertical_fov * 0.5) * aspect);
-	const double fitting_fov = std::max(0.01, std::min(vertical_fov, horizontal_fov));
-        const double distance = std::max(
-            kNavigationMinCameraDistance,
-            (radius * margin) / std::sin(fitting_fov * 0.5));
-        result_transform.origin = center - geometry_scale(viewport_camera_forward(input.camera.transform), distance);
+	result_transform.origin =
+		center - geometry_scale(forward, perspective_distance);
 	return navigation_result(result_transform, center);
 }
 
