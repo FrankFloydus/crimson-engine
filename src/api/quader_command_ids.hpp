@@ -224,6 +224,8 @@ inline constexpr QuaderCommandId kModelingShadeFacesSmooth{
     "modeling.shade_faces_smooth"};
 inline constexpr QuaderCommandId kModelingShadeFacesFlat{
     "modeling.shade_faces_flat"};
+inline constexpr QuaderCommandId kModelingDefaultEdgeNormals{
+    "modeling.default_edge_normals"};
 inline constexpr QuaderCommandId kModelingHardenEdgeNormals{
     "modeling.harden_edge_normals"};
 inline constexpr QuaderCommandId kModelingSoftenEdgeNormals{
@@ -509,6 +511,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kModelingRecalculateFaceNormals,
     kModelingShadeFacesSmooth,
     kModelingShadeFacesFlat,
+    kModelingDefaultEdgeNormals,
     kModelingHardenEdgeNormals,
     kModelingSoftenEdgeNormals,
     kModelingAlignXMin,

@@ -24,6 +24,7 @@ void expect_same_authored_topology(const quader_poly::Document &actual,
   EXPECT_EQ(actual.next_vertex_id, expected.next_vertex_id);
   EXPECT_EQ(actual.next_face_id, expected.next_face_id);
   EXPECT_EQ(actual.hard_normal_edges, expected.hard_normal_edges);
+  EXPECT_EQ(actual.soft_normal_edges, expected.soft_normal_edges);
   ASSERT_EQ(actual.vertices.size(), expected.vertices.size());
   ASSERT_EQ(actual.faces.size(), expected.faces.size());
   for (std::size_t index = 0; index < actual.vertices.size(); ++index) {

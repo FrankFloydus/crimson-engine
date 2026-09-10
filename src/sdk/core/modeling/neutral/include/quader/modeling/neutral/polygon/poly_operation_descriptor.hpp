@@ -64,6 +64,7 @@ enum class PolyOperationKey : std::size_t {
   ExtractSelectedFaces,
   BridgeSelectedFaces,
   ThickenSelectedFaces,
+  ResetSelectedEdgeNormalsToDefault,
   Count,
 };
 
@@ -149,6 +150,9 @@ inline constexpr std::array<PolyOperationMetadata,
          "BridgeFacesOperation"},
         {"thicken_selected_faces", "Thicken Selected Faces",
          "ThickenFacesOperation"},
+        {"reset_selected_edge_normals_to_default",
+         "Set Selected Edge Normals to Default",
+         "EdgeNormalHardnessOperation"},
     }};
 
 [[nodiscard]] inline const PolyOperationMetadata &

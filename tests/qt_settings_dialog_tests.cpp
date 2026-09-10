@@ -4346,6 +4346,12 @@ TEST(QtMainMenuTests,
       QStringLiteral("command_modeling_combine_mesh"));
   auto *merge_edges = menu_bar.findChild<QAction *>(
       QStringLiteral("command_modeling_merge_edges"));
+  auto *default_edge_normals = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_default_edge_normals"));
+  auto *harden_edge_normals = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_harden_edge_normals"));
+  auto *soften_edge_normals = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_soften_edge_normals"));
   auto *mirror_selection_x = menu_bar.findChild<QAction *>(
       QStringLiteral("command_modeling_mirror_selection_x"));
   auto *recalculate_normals = menu_bar.findChild<QAction *>(
@@ -4362,6 +4368,9 @@ TEST(QtMainMenuTests,
   ASSERT_NE(duplicate_meshes, nullptr);
   ASSERT_NE(combine_mesh, nullptr);
   ASSERT_NE(merge_edges, nullptr);
+  ASSERT_NE(default_edge_normals, nullptr);
+  ASSERT_NE(harden_edge_normals, nullptr);
+  ASSERT_NE(soften_edge_normals, nullptr);
   ASSERT_NE(mirror_selection_x, nullptr);
   ASSERT_NE(recalculate_normals, nullptr);
   ASSERT_NE(shade_faces_smooth, nullptr);
@@ -4369,6 +4378,10 @@ TEST(QtMainMenuTests,
             mesh_menu->actions().indexOf(combine_mesh));
   EXPECT_LT(edge_menu->actions().indexOf(merge_edges),
             edge_menu->actions().indexOf(edge_normals_menu->menuAction()));
+  EXPECT_LT(edge_normals_menu->actions().indexOf(default_edge_normals),
+            edge_normals_menu->actions().indexOf(harden_edge_normals));
+  EXPECT_LT(edge_normals_menu->actions().indexOf(harden_edge_normals),
+            edge_normals_menu->actions().indexOf(soften_edge_normals));
 
   const std::array<QMenu *, 5> component_menus{
       mesh_menu, vertex_menu, edge_menu, face_menu, uv_menu};
@@ -4433,7 +4446,7 @@ TEST(QtMainMenuTests,
     QuaderCommandId command_id;
     std::optional<QuaderSelectionMode> operand_mode;
   };
-  const std::array<ComponentActionExpectation, 15> component_actions{{
+  const std::array<ComponentActionExpectation, 18> component_actions{{
       {connect_vertices, quader_command::kModelingConnectVertices,
        QuaderSelectionMode::Vertex},
       {bevel_vertices, quader_command::kModelingBevelVertices,
@@ -4447,6 +4460,12 @@ TEST(QtMainMenuTests,
       {fill_hole, quader_command::kModelingFillHole,
        QuaderSelectionMode::Edge},
       {dissolve_edges, quader_command::kModelingDissolveEdges,
+       QuaderSelectionMode::Edge},
+      {default_edge_normals, quader_command::kModelingDefaultEdgeNormals,
+       QuaderSelectionMode::Edge},
+      {harden_edge_normals, quader_command::kModelingHardenEdgeNormals,
+       QuaderSelectionMode::Edge},
+      {soften_edge_normals, quader_command::kModelingSoftenEdgeNormals,
        QuaderSelectionMode::Edge},
       {uv_peel, quader_command::kModelingUvPeel, QuaderSelectionMode::Edge},
       {extract_faces, quader_command::kModelingExtractFaces,
@@ -4525,6 +4544,9 @@ TEST(QtMainMenuTests,
                                         Qt::DirectConnection));
   EXPECT_FALSE(connect_vertices->isEnabled());
   EXPECT_FALSE(bevel_edges->isEnabled());
+  EXPECT_FALSE(default_edge_normals->isEnabled());
+  EXPECT_FALSE(harden_edge_normals->isEnabled());
+  EXPECT_FALSE(soften_edge_normals->isEnabled());
   EXPECT_FALSE(invert_faces->isEnabled());
   EXPECT_FALSE(uv_peel->isEnabled());
   EXPECT_TRUE(project_texture_cube->isEnabled());
@@ -4546,6 +4568,14 @@ TEST(QtMainMenuTests,
   EXPECT_TRUE(bevel_vertices->isEnabled());
 
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  ASSERT_EQ(editor.selection().summary().selected_edge_count, 0u);
+  ASSERT_TRUE(QMetaObject::invokeMethod(edge_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_FALSE(default_edge_normals->isEnabled());
+  EXPECT_FALSE(harden_edge_normals->isEnabled());
+  EXPECT_FALSE(soften_edge_normals->isEnabled());
+
   ASSERT_TRUE(editor.selection().select_edge(box.value(), 1, 2).ok());
   ASSERT_TRUE(editor.selection().select_all().ok());
   ASSERT_GT(editor.selection().summary().selected_edge_count, 0u);
@@ -4554,6 +4584,9 @@ TEST(QtMainMenuTests,
   ASSERT_TRUE(QMetaObject::invokeMethod(uv_menu, "aboutToShow",
                                         Qt::DirectConnection));
   EXPECT_TRUE(bevel_edges->isEnabled());
+  EXPECT_TRUE(default_edge_normals->isEnabled());
+  EXPECT_TRUE(harden_edge_normals->isEnabled());
+  EXPECT_TRUE(soften_edge_normals->isEnabled());
   EXPECT_TRUE(uv_peel->isEnabled());
   EXPECT_FALSE(project_texture_cube->isEnabled());
   EXPECT_FALSE(align_texture_to_grid->isEnabled());

@@ -842,6 +842,44 @@ TEST(QdrDocumentOperationBevelEdgesTests, TopEdgeLoopBevelSharesSegmentedCornerC
     EXPECT_TRUE(all_faces_point_relative_to_center(document));
 }
 
+bool point_lies_on_segment(
+	quader::QVec3 point,
+	quader::QVec3 first,
+	quader::QVec3 second,
+	float epsilon = 0.0002F)
+{
+	const quader::QVec3 segment = second - first;
+	const float segment_length_squared = length_squared(segment);
+	if (segment_length_squared <= epsilon * epsilon) {
+		return vec_nearly_equal(point, first, epsilon);
+	}
+	const float factor = dot(point - first, segment) / segment_length_squared;
+	if (factor < -epsilon || factor > 1.0F + epsilon) {
+		return false;
+	}
+	const quader::QVec3 closest =
+		first + (segment * std::clamp(factor, 0.0F, 1.0F));
+	return length_squared(point - closest) <= epsilon * epsilon;
+}
+
+bool edge_lies_on_source_segment(
+	const Document& source,
+	Edge source_edge,
+	const Document& candidate,
+	Edge candidate_edge)
+{
+	const Vertex* source_first = find_vertex(source, source_edge.a);
+	const Vertex* source_second = find_vertex(source, source_edge.b);
+	const Vertex* first = find_vertex(candidate, candidate_edge.a);
+	const Vertex* second = find_vertex(candidate, candidate_edge.b);
+	return source_first != nullptr && source_second != nullptr &&
+		first != nullptr && second != nullptr &&
+		point_lies_on_segment(
+			first->position, source_first->position, source_second->position) &&
+		point_lies_on_segment(
+			second->position, source_first->position, source_second->position);
+}
+
 TEST(QdrDocumentOperationBevelEdgesTests, RetainedSurfacesKeepDistinctAuthoredChartsAcrossBevelSeams) {
     for (const int segments : {1, 3}) {
         SCOPED_TRACE(segments);
@@ -1552,4 +1590,92 @@ TEST(QdrDocumentOperationBevelEdgesTests, OppositeSideAndBottomOpeningBevelClose
     for (const auto& [source_face_neighbor, bevel_profile_position] : forbidden_bottom_wall_diagonals) {
         EXPECT_TRUE(edge_use_count_between_positions(document, source_face_neighbor, bevel_profile_position) == 0);
     }
+}
+
+TEST(QdrDocumentOperationBevelEdgesTests,
+	 BevelEdgesPreservesOnlyIdentifiableHardAndSoftSourceDescendants) {
+	Document document = make_cube({});
+	const Document source = document;
+	const Edge selected_edge = document_edges(document).front();
+	const auto source_face = std::ranges::find_if(
+		document.faces,
+		[selected_edge](const Face& face) {
+			for (std::size_t index = 0U; index < face.vertices.size(); ++index) {
+				if (make_edge(
+						face.vertices[index],
+						face.vertices[(index + 1U) % face.vertices.size()]) ==
+				    selected_edge) {
+					return true;
+				}
+			}
+			return false;
+		});
+	ASSERT_NE(source_face, document.faces.end());
+	std::size_t selected_index = source_face->vertices.size();
+	for (std::size_t index = 0U; index < source_face->vertices.size(); ++index) {
+		if (make_edge(
+				source_face->vertices[index],
+				source_face->vertices[
+					(index + 1U) % source_face->vertices.size()]) == selected_edge) {
+			selected_index = index;
+			break;
+		}
+	}
+	ASSERT_LT(selected_index, source_face->vertices.size());
+	const std::size_t previous_index =
+		(selected_index + source_face->vertices.size() - 1U) %
+		source_face->vertices.size();
+	const std::size_t next_index =
+		(selected_index + 1U) % source_face->vertices.size();
+	const Edge hard_neighbor = make_edge(
+		source_face->vertices[previous_index],
+		source_face->vertices[(previous_index + 1U) %
+		                      source_face->vertices.size()]);
+	const Edge soft_neighbor = make_edge(
+		source_face->vertices[next_index],
+		source_face->vertices[
+			(next_index + 1U) % source_face->vertices.size()]);
+	document.hard_normal_edges = {selected_edge, hard_neighbor};
+	document.soft_normal_edges = {soft_neighbor};
+	Selection selection = edge_selection_for_edge(selected_edge);
+	EdgeBevelSettings settings;
+	settings.width = 0.25F;
+	settings.segments = 2;
+
+	const OperationResult result = bevel_selected_edges(
+		document, selection, settings);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
+	ASSERT_FALSE(document.hard_normal_edges.empty());
+	for (const Edge edge : document.hard_normal_edges) {
+		EXPECT_TRUE(edge_lies_on_source_segment(
+			source, hard_neighbor, document, edge));
+	}
+	ASSERT_FALSE(document.soft_normal_edges.empty());
+	for (const Edge edge : document.soft_normal_edges) {
+		EXPECT_TRUE(edge_lies_on_source_segment(
+			source, soft_neighbor, document, edge));
+	}
+	for (const ElementId face_id : selection.faces) {
+		const Face* generated_face = find_face(document, face_id);
+		ASSERT_NE(generated_face, nullptr);
+		for (std::size_t index = 0U;
+		     index < generated_face->vertices.size(); ++index) {
+			const Edge edge = make_edge(
+				generated_face->vertices[index],
+				generated_face->vertices[
+					(index + 1U) % generated_face->vertices.size()]);
+			if (edge_lies_on_source_segment(
+					source, hard_neighbor, document, edge) ||
+			    edge_lies_on_source_segment(
+					source, soft_neighbor, document, edge)) {
+				continue;
+			}
+			EXPECT_FALSE(qdr_test::contains_edge(
+				document.hard_normal_edges, edge));
+			EXPECT_FALSE(qdr_test::contains_edge(
+				document.soft_normal_edges, edge));
+		}
+	}
 }

@@ -5,31 +5,16 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
 #include <quader/modeling/neutral/polygon/poly_operation_descriptor.hpp>
 
 #include <diagnostics/profile.hpp>
 
-#include <algorithm>
 #include <set>
 #include <string_view>
 
 namespace quader_poly {
 namespace {
-
-/**
- * Represents an Edge Less value used by the polygon document and mesh editing core.
- */
-struct EdgeLess {
-    bool operator()(Edge left, Edge right) const
-    {
-        left = make_edge(left.a, left.b);
-        right = make_edge(right.a, right.b);
-        if (left.a != right.a) {
-            return left.a < right.a;
-        }
-        return left.b < right.b;
-    }
-};
 
 /**
  * Implements the Shade Faces Operation modeling operation for the polygon document and mesh editing core.
@@ -67,7 +52,7 @@ private:
  */
 class EdgeNormalHardnessOperation final : public PolyOperation {
 public:
-    explicit EdgeNormalHardnessOperation(bool hard) : hard_(hard) {}
+    explicit EdgeNormalHardnessOperation(EdgeNormalMode mode) : mode_(mode) {}
 
     [[nodiscard]] std::string_view id() const override
     {
@@ -84,11 +69,22 @@ public:
 private:
     [[nodiscard]] const PolyOperationMetadata& metadata() const
     {
+        switch (mode_) {
+        case EdgeNormalMode::Default:
+          return poly_operation_descriptor(
+              PolyOperationKey::ResetSelectedEdgeNormalsToDefault);
+        case EdgeNormalMode::Hard:
+          return poly_operation_descriptor(
+              PolyOperationKey::HardenSelectedEdgeNormals);
+        case EdgeNormalMode::Soft:
+          return poly_operation_descriptor(
+              PolyOperationKey::SoftenSelectedEdgeNormals);
+        }
         return poly_operation_descriptor(
-                hard_ ? PolyOperationKey::HardenSelectedEdgeNormals : PolyOperationKey::SoftenSelectedEdgeNormals);
+            PolyOperationKey::ResetSelectedEdgeNormalsToDefault);
     }
 
-    bool hard_ = false;
+    EdgeNormalMode mode_ = EdgeNormalMode::Default;
 };
 
 OperationResult set_selected_face_shading(Document& document, const Selection& selection, SurfaceShading shading)
@@ -123,86 +119,77 @@ OperationResult set_selected_face_shading(Document& document, const Selection& s
     return { true, {} };
 }
 
-std::set<Edge, EdgeLess> document_edge_set(const Document& document)
+bool smooth_faces_touching_edges(
+    Document& document, std::span<const Edge> edges)
 {
-    std::set<Edge, EdgeLess> edges;
-    for (Edge edge : document_edges(document)) {
-        edges.insert(make_edge(edge.a, edge.b));
-    }
-    return edges;
-}
-
-bool face_contains_edge(const Face& face, Edge edge)
-{
-    if (face.vertices.size() < 2U) {
-        return false;
-    }
-
-    edge = make_edge(edge.a, edge.b);
-    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
-        const Edge face_edge = make_edge(face.vertices[index], face.vertices[(index + 1U) % face.vertices.size()]);
-        if (face_edge == edge) {
-            return true;
+    std::set<std::pair<ElementId, ElementId>> selected_edges;
+    for (Edge edge : edges) {
+        edge = make_edge(edge.a, edge.b);
+        if (edge.a != kInvalidElementId && edge.a != edge.b) {
+            selected_edges.emplace(edge.a, edge.b);
         }
     }
-    return false;
-}
 
-bool smooth_faces_touching_edge(Document& document, Edge edge)
-{
     bool changed = false;
     for (Face& face : document.faces) {
-      if (!face_contains_edge(face, edge) ||
-          face.normal_shading == SurfaceShading::Smooth) {
-        continue;
-      }
-      face.normal_shading = SurfaceShading::Smooth;
-      changed = true;
+        if (face.normal_shading == SurfaceShading::Smooth) {
+            continue;
+        }
+        for (std::size_t index = 0U; index < face.vertices.size(); ++index) {
+            const Edge edge = make_edge(
+                face.vertices[index],
+                face.vertices[(index + 1U) % face.vertices.size()]);
+            if (!selected_edges.contains({edge.a, edge.b})) {
+                continue;
+            }
+            face.normal_shading = SurfaceShading::Smooth;
+            changed = true;
+            break;
+        }
     }
     return changed;
 }
 
-OperationResult set_selected_edge_normal_hardness(Document& document, const Selection& selection, bool hard)
+OperationResult set_selected_edge_normal_mode(
+    Document& document, const Selection& selection, EdgeNormalMode mode)
 {
-    QDR_PROFILE_SCOPE("qdr_document.set_selected_edge_normal_hardness");
+    QDR_PROFILE_SCOPE("qdr_document.set_selected_edge_normal_mode");
     if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
       return OperationResult::failure(
-          "Select one or more edges before changing normal hardness.");
+          "Select one or more edges before changing normal mode.");
     }
 
-    const std::set<Edge, EdgeLess> valid_edges = document_edge_set(document);
-    std::set<Edge, EdgeLess> hard_edges;
-    for (Edge edge : document.hard_normal_edges) {
-        edge = make_edge(edge.a, edge.b);
-        if (valid_edges.find(edge) != valid_edges.end()) {
-            hard_edges.insert(edge);
-        }
-    }
-
-    bool changed = false;
+    std::vector<document_internal::EdgeNormalModeAssignment> assignments;
+    assignments.reserve(selection.edges.size());
     for (Edge edge : selection.edges) {
         edge = make_edge(edge.a, edge.b);
-        if (valid_edges.find(edge) == valid_edges.end()) {
-            continue;
-        }
-        if (hard) {
-            changed = hard_edges.insert(edge).second || changed;
-        } else {
-            changed = hard_edges.erase(edge) > 0U || changed;
-            changed = smooth_faces_touching_edge(document, edge) || changed;
-        }
+        assignments.push_back({edge, mode});
+    }
+    bool changed = document_internal::set_edge_normal_modes(
+        document, assignments);
+    if (mode == EdgeNormalMode::Soft) {
+        changed = smooth_faces_touching_edges(document, selection.edges) ||
+                  changed;
     }
 
     if (!changed) {
+        const char* message = "Selected edges already use default normals.";
+        switch (mode) {
+        case EdgeNormalMode::Default:
+          message = "Selected edges already use default normals.";
+          break;
+        case EdgeNormalMode::Hard:
+          message = "Selected edges already have hard normals.";
+          break;
+        case EdgeNormalMode::Soft:
+          message = "Selected edges already have soft normals.";
+          break;
+        }
         return {
             false,
-            hard ?
-                "Selected edges already have hard normals." :
-                "Selected edges already have soft normals.",
+            message,
         };
     }
-
-    document.hard_normal_edges.assign(hard_edges.begin(), hard_edges.end());
     return { true, {} };
 }
 
@@ -213,7 +200,7 @@ OperationResult ShadeFacesOperation::apply(Document& document, Selection& select
 
 OperationResult EdgeNormalHardnessOperation::apply(Document& document, Selection& selection) const
 {
-    return set_selected_edge_normal_hardness(document, selection, hard_);
+    return set_selected_edge_normal_mode(document, selection, mode_);
 }
 
 } // namespace
@@ -235,13 +222,23 @@ OperationResult shade_selected_faces_flat(Document& document, const Selection& s
 OperationResult harden_selected_edge_normals(Document& document, const Selection& selection)
 {
     Selection selection_copy = selection;
-    return EdgeNormalHardnessOperation { true }.apply(document, selection_copy);
+    return EdgeNormalHardnessOperation { EdgeNormalMode::Hard }.apply(
+        document, selection_copy);
 }
 
 OperationResult soften_selected_edge_normals(Document& document, const Selection& selection)
 {
     Selection selection_copy = selection;
-    return EdgeNormalHardnessOperation { false }.apply(document, selection_copy);
+    return EdgeNormalHardnessOperation { EdgeNormalMode::Soft }.apply(
+        document, selection_copy);
+}
+
+OperationResult reset_selected_edge_normals_to_default(
+    Document& document, const Selection& selection)
+{
+    Selection selection_copy = selection;
+    return EdgeNormalHardnessOperation { EdgeNormalMode::Default }.apply(
+        document, selection_copy);
 }
 
 } // namespace quader_poly

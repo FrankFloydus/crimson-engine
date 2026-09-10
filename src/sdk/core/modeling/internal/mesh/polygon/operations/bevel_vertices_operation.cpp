@@ -203,6 +203,33 @@ OperationResult BevelVerticesOperation::apply(Document& document, Selection& sel
     candidate.faces = std::move(rebuilt_faces);
     prune_invalid_faces(candidate);
     prune_unused_vertices(candidate);
+    const auto bevel_descendant_vertex =
+        [&split_by_vertex_neighbor](ElementId endpoint_id,
+                                    ElementId neighbor_id) {
+            const auto endpoint_splits =
+                split_by_vertex_neighbor.find(endpoint_id);
+            if (endpoint_splits == split_by_vertex_neighbor.end()) {
+                return endpoint_id;
+            }
+            const auto split = endpoint_splits->second.find(neighbor_id);
+            return split == endpoint_splits->second.end()
+                       ? endpoint_id
+                       : split->second;
+        };
+    const std::vector<Edge> source_edges = document_edges(document);
+    std::vector<EdgeNormalModeCopy> normal_mode_copies;
+    normal_mode_copies.reserve(source_edges.size());
+    for (const Edge source_edge : source_edges) {
+        const Edge descendant = make_edge(
+            bevel_descendant_vertex(source_edge.a, source_edge.b),
+            bevel_descendant_vertex(source_edge.b, source_edge.a));
+        if (descendant.a == descendant.b || !edge_exists(candidate, descendant)) {
+            continue;
+        }
+        normal_mode_copies.push_back({source_edge, descendant});
+    }
+    (void)copy_edge_normal_modes(document, candidate, normal_mode_copies);
+    prune_normal_edge_states(candidate);
     restore_source_face_orientation(document, candidate);
     if (!every_face_triangulates(candidate)) {
         return OperationResult::failure("Bevel would create invalid face geometry.");

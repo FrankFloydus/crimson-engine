@@ -83,6 +83,7 @@ using quader::test::guardrail::read_file;
   face.normal_shading = quader_poly::SurfaceShading::Authored;
   document.faces.push_back(std::move(face));
   document.hard_normal_edges.push_back(quader_poly::make_edge(10u, 11u));
+  document.soft_normal_edges.push_back(quader_poly::make_edge(11u, 12u));
   return document;
 }
 

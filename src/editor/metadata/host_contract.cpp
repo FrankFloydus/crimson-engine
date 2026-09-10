@@ -169,7 +169,7 @@ HostActionDescriptor tool_action(
 
 std::span<const HostActionDescriptor> action_descriptors()
 {
-  static const std::array<HostActionDescriptor, 43> kDescriptors{{
+  static const std::array<HostActionDescriptor, 44> kDescriptors{{
       operation_action("invert_mesh", "Flip Selected Mesh Normals", "flip_face_normals",
                        action_availability(HostSelectionMode::Object, 0, 0,
                                            HostActiveSelectionKind::None, false,
@@ -243,6 +243,11 @@ std::span<const HostActionDescriptor> action_descriptors()
                        action_availability(HostSelectionMode::Edge, 0, 1,
                                            HostActiveSelectionKind::None,
                                            false)),
+      operation_action(
+          "default_edge_normals", "Set Selected Edge Normals to Default",
+          "default_edge_normals",
+          action_availability(HostSelectionMode::Edge, 0, 1,
+                              HostActiveSelectionKind::None, false)),
       operation_action(
           "harden_edge_normals", "Harden Selected Edge Normals", "harden_edge_normals",
           action_availability(HostSelectionMode::Edge, 0, 1,
@@ -375,10 +380,11 @@ std::span<const HostOperationPanelDescriptor> operation_panel_descriptors()
       "dissolve_vertices",
       "radial_align_vertices",
   }};
-  static constexpr std::array<std::string_view, 13> kEdgeActions{{
+  static constexpr std::array<std::string_view, 14> kEdgeActions{{
       "snap_edges_to_active",
       "connect_edges",
       "split_edges",
+      "default_edge_normals",
       "harden_edge_normals",
       "soften_edge_normals",
       "bevel_edges",

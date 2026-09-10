@@ -231,6 +231,7 @@ TEST(QdrDocumentOperationAutoMergeVerticesTests,
   document.faces.push_back({.id = document.next_face_id++,
                              .vertices = {1U, 2U}});
   document.hard_normal_edges = {make_edge(1U, 2U)};
+  document.soft_normal_edges = {make_edge(2U, 3U)};
   const Document before = document;
   Selection selection = qdr_test::vertex_selection({4U});
   const Selection before_selection = selection;
@@ -243,6 +244,7 @@ TEST(QdrDocumentOperationAutoMergeVerticesTests,
   EXPECT_EQ(document.next_vertex_id, before.next_vertex_id);
   EXPECT_EQ(document.next_face_id, before.next_face_id);
   EXPECT_EQ(document.hard_normal_edges, before.hard_normal_edges);
+  EXPECT_EQ(document.soft_normal_edges, before.soft_normal_edges);
   ASSERT_EQ(document.vertices.size(), before.vertices.size());
   ASSERT_EQ(document.faces.size(), before.faces.size());
   for (std::size_t index = 0; index < document.vertices.size(); ++index) {
@@ -258,4 +260,120 @@ TEST(QdrDocumentOperationAutoMergeVerticesTests,
   EXPECT_EQ(selection.vertices, before_selection.vertices);
   EXPECT_EQ(selection.active_vertex, before_selection.active_vertex);
   EXPECT_EQ(selection.has_active, before_selection.has_active);
+}
+
+TEST(QdrDocumentOperationAutoMergeVerticesTests,
+     WeldTransfersAnExplicitSoftDonorToTheReplacementEdge) {
+  Document document;
+  const ElementId target = add_vertex(document, {0.0F, 0.0F, 0.0F});
+  const ElementId source = add_vertex(document, {0.0F, 0.0F, 0.0F});
+  const ElementId right = add_vertex(document, {1.0F, 0.0F, 0.0F});
+  const ElementId top = add_vertex(document, {0.0F, 1.0F, 0.0F});
+  ASSERT_NE(add_face(document, std::array{source, right, top}),
+            kInvalidElementId);
+  document.soft_normal_edges = {make_edge(source, right)};
+  document.hard_normal_edges = {make_edge(right, top)};
+  Selection selection = qdr_test::vertex_selection({source});
+
+  const OperationResult result =
+      auto_merge_selected_vertices(document, selection);
+
+  ASSERT_TRUE(result.success) << result.message;
+  ASSERT_TRUE(result.changed);
+  EXPECT_EQ(find_vertex(document, source), nullptr);
+  EXPECT_NE(find_vertex(document, target), nullptr);
+  EXPECT_TRUE(qdr_test::contains_edge(document.soft_normal_edges,
+                                      make_edge(target, right)));
+  EXPECT_FALSE(qdr_test::contains_edge(document.hard_normal_edges,
+                                       make_edge(target, right)));
+  EXPECT_TRUE(qdr_test::contains_edge(document.hard_normal_edges,
+                                      make_edge(right, top)));
+}
+
+TEST(QdrDocumentOperationAutoMergeVerticesTests,
+     ExistingDefaultSurvivorEdgeWinsOverMappedHardDonor) {
+  Document document;
+  const ElementId target = add_vertex(document, {0.0F, 0.0F, 0.0F});
+  const ElementId source = add_vertex(document, {0.0F, 0.0F, 0.0F});
+  const ElementId right = add_vertex(document, {1.0F, 0.0F, 0.0F});
+  const ElementId upper = add_vertex(document, {0.0F, 1.0F, 0.0F});
+  const ElementId lower = add_vertex(document, {0.0F, -1.0F, 0.0F});
+  ASSERT_NE(add_face(document, std::array{target, right, upper}),
+            kInvalidElementId);
+  ASSERT_NE(add_face(document, std::array{source, lower, right}),
+            kInvalidElementId);
+  document.hard_normal_edges = {make_edge(source, right)};
+  Selection selection = qdr_test::vertex_selection({source});
+
+  const OperationResult result =
+      auto_merge_selected_vertices(document, selection);
+
+  ASSERT_TRUE(result.success) << result.message;
+  ASSERT_TRUE(result.changed);
+  const Edge survivor_edge = make_edge(target, right);
+  EXPECT_TRUE(qdr_test::document_has_edge(document, survivor_edge));
+  EXPECT_FALSE(qdr_test::contains_edge(document.hard_normal_edges,
+                                       survivor_edge));
+  EXPECT_FALSE(qdr_test::contains_edge(document.soft_normal_edges,
+                                       survivor_edge));
+}
+
+TEST(QdrDocumentOperationAutoMergeVerticesTests,
+     WeldCollisionUsesTheLastOrderedDonorWithoutHardBias) {
+  Document document;
+  const ElementId target = add_vertex(document, {0.0F, 0.0F, 0.0F});
+  const ElementId first_source = add_vertex(document, {0.0F, 0.0F, 0.0F});
+  const ElementId second_source = add_vertex(document, {0.0F, 0.0F, 0.0F});
+  const ElementId right = add_vertex(document, {1.0F, 0.0F, 0.0F});
+  const ElementId upper = add_vertex(document, {0.0F, 1.0F, 0.0F});
+  const ElementId lower = add_vertex(document, {0.0F, -1.0F, 0.0F});
+  ASSERT_NE(add_face(document, std::array{first_source, right, upper}),
+            kInvalidElementId);
+  ASSERT_NE(add_face(document, std::array{second_source, lower, right}),
+            kInvalidElementId);
+  document.hard_normal_edges = {make_edge(first_source, right)};
+  document.soft_normal_edges = {make_edge(second_source, right)};
+  Selection selection =
+      qdr_test::vertex_selection({first_source, second_source});
+
+  const OperationResult result =
+      auto_merge_selected_vertices(document, selection);
+
+  ASSERT_TRUE(result.success) << result.message;
+  ASSERT_TRUE(result.changed);
+  const Edge survivor_edge = make_edge(target, right);
+  EXPECT_TRUE(qdr_test::contains_edge(document.soft_normal_edges,
+                                      survivor_edge));
+  EXPECT_FALSE(qdr_test::contains_edge(document.hard_normal_edges,
+                                       survivor_edge));
+}
+
+TEST(QdrDocumentOperationAutoMergeVerticesTests,
+     DefaultLastDonorClearsAnEarlierHardDonor) {
+  Document document;
+  const ElementId target = add_vertex(document, {0.0F, 0.0F, 0.0F});
+  const ElementId first_source = add_vertex(document, {0.0F, 0.0F, 0.0F});
+  const ElementId second_source = add_vertex(document, {0.0F, 0.0F, 0.0F});
+  const ElementId right = add_vertex(document, {1.0F, 0.0F, 0.0F});
+  const ElementId upper = add_vertex(document, {0.0F, 1.0F, 0.0F});
+  const ElementId lower = add_vertex(document, {0.0F, -1.0F, 0.0F});
+  ASSERT_NE(add_face(document, std::array{first_source, right, upper}),
+            kInvalidElementId);
+  ASSERT_NE(add_face(document, std::array{second_source, lower, right}),
+            kInvalidElementId);
+  document.hard_normal_edges = {make_edge(first_source, right)};
+  Selection selection =
+      qdr_test::vertex_selection({first_source, second_source});
+
+  const OperationResult result =
+      auto_merge_selected_vertices(document, selection);
+
+  ASSERT_TRUE(result.success) << result.message;
+  ASSERT_TRUE(result.changed);
+  const Edge survivor_edge = make_edge(target, right);
+  EXPECT_TRUE(qdr_test::document_has_edge(document, survivor_edge));
+  EXPECT_FALSE(qdr_test::contains_edge(document.hard_normal_edges,
+                                       survivor_edge));
+  EXPECT_FALSE(qdr_test::contains_edge(document.soft_normal_edges,
+                                       survivor_edge));
 }

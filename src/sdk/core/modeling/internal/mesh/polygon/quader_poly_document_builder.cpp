@@ -7,6 +7,7 @@
 #include <quader/modeling/neutral/polygon/document_builder.hpp>
 
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_constants.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
 
 #include <algorithm>
 #include <array>
@@ -172,6 +173,14 @@ void append_document(
             target.hard_normal_edges.push_back(make_edge(a->second, b->second));
         }
     }
+    for (const Edge& edge : source.soft_normal_edges) {
+        const auto a = vertex_id_map.find(edge.a);
+        const auto b = vertex_id_map.find(edge.b);
+        if (a != vertex_id_map.end() && b != vertex_id_map.end()) {
+            target.soft_normal_edges.push_back(make_edge(a->second, b->second));
+        }
+    }
+    document_internal::prune_normal_edge_states(target);
 }
 
 bool resolve_vertex_refs(

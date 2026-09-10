@@ -72,6 +72,7 @@ inline bool same_polygon_document(const quader_poly::Document &left,
          std::equal(left.faces.begin(), left.faces.end(), right.faces.begin(),
                     same_polygon_face) &&
          left.hard_normal_edges == right.hard_normal_edges &&
+         left.soft_normal_edges == right.soft_normal_edges &&
          left.next_vertex_id == right.next_vertex_id &&
          left.next_face_id == right.next_face_id;
 }
@@ -131,6 +132,11 @@ polygon_document_hash(const quader_poly::Document &document) {
   }
   hash = append_authored_hash(hash, document.hard_normal_edges.size());
   for (const quader_poly::Edge edge : document.hard_normal_edges) {
+    hash = append_authored_hash(hash, edge.a);
+    hash = append_authored_hash(hash, edge.b);
+  }
+  hash = append_authored_hash(hash, document.soft_normal_edges.size());
+  for (const quader_poly::Edge edge : document.soft_normal_edges) {
     hash = append_authored_hash(hash, edge.a);
     hash = append_authored_hash(hash, edge.b);
   }

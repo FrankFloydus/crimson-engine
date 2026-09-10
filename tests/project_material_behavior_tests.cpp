@@ -596,6 +596,7 @@ void expect_same_authored_document(const quader_poly::Document &actual,
   EXPECT_EQ(actual.next_vertex_id, expected.next_vertex_id);
   EXPECT_EQ(actual.next_face_id, expected.next_face_id);
   EXPECT_EQ(actual.hard_normal_edges, expected.hard_normal_edges);
+  EXPECT_EQ(actual.soft_normal_edges, expected.soft_normal_edges);
   for (std::size_t index = 0; index < actual.vertices.size(); ++index) {
     EXPECT_EQ(actual.vertices[index].id, expected.vertices[index].id);
     EXPECT_EQ(actual.vertices[index].position.x, expected.vertices[index].position.x);

@@ -575,6 +575,30 @@ Tests: [theme](tests/qt_application_theme_tests.cpp), [Qt settings](tests/qt_set
 [dimension HUD](tests/qt_viewport_edge_length_hud_tests.cpp), [startup](tests/qt_startup_presentation_tests.cpp),
 [first-paint scheduling](tests/app_frame_clock_tests.cpp).
 
+## Polygon face and edge normals
+
+- Face `Flat`/`Smooth` shading controls whether a face participates in shared normals. Edge-normal
+  mode is a separate authored attribute: Hard and Soft live in canonical disjoint edge vectors;
+  Default is their absence. The Soft command also makes its incident faces Smooth as an editing
+  convenience. Hard and Default do not rewrite face shading.
+- Authored compilation never joins a boundary edge. Hard always splits, Soft always joins eligible
+  faces, and Default joins eligible faces only when `dot(normalA, normalB) > cos(40 degrees) + 1e-5`.
+  Do not restore the old rule that treated every non-Hard edge as Soft.
+- Topology operations transfer exact modes. Split descendants inherit their source edge; an existing
+  merge survivor keeps its mode; otherwise ordered donors apply in operation order and the last valid
+  donor wins, including Default. New connectors, walls, rails and caps begin Default. Never combine
+  modes with a Hard-wins rule, and prune both override vectors after removed topology.
+- QGEO 1.2 stores sorted Hard rows followed by Soft rows. QGEO 1.0/1.1 and legacy CSR scenes migrate
+  every live non-Hard edge shared by two Smooth faces to explicit Soft so their old rendering remains
+  unchanged.
+
+Owners: [normal compiler](src/sdk/core/modeling/internal/mesh/polygon/quader_poly_document_mesh_api.cpp),
+[edge-mode helpers](src/sdk/core/modeling/internal/mesh/polygon/quader_poly_document_topology_helpers.cpp),
+[QGEO codec](src/sdk/core/modeling/src/qdr_document.cpp).
+Tests: [normal behavior](tests/modeling_domain/operation/qdr_document_operation_normal_shading_tests.cpp),
+[primitive normals](tests/modeling_domain/qdr_document_primitive_tests.cpp),
+[SDK persistence](tests/sdk/modeling_sdk_consumer_tests.cpp).
+
 ## Curves and UV geometry
 
 - Curve controls share canonical component selection and the transform gizmo. The native Curve

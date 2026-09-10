@@ -343,6 +343,7 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
         }
     }
 
+    prune_normal_edge_states(candidate);
     if (bridged_face_ids.empty() || !every_face_triangulates(candidate)) {
         return OperationResult::failure("Bridge would create invalid face geometry.");
     }

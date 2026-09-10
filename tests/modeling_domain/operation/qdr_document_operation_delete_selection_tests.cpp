@@ -32,3 +32,20 @@ TEST(QdrDocumentOperationDeleteSelectionTests, DeleteSelectionPrunesAffectedFace
 	EXPECT_TRUE(find_vertex(fixture.document, loose_vertex) == nullptr);
 	EXPECT_TRUE(fixture.document.vertices.empty());
 }
+
+TEST(QdrDocumentOperationDeleteSelectionTests, DeletePrunesHardAndSoftStateForRemovedEdges) {
+	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	const Face& face = fixture.document.faces.front();
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(
+		fixture.document, make_edge(face.vertices[0], face.vertices[1]), EdgeNormalMode::Hard));
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(
+		fixture.document, make_edge(face.vertices[2], face.vertices[3]), EdgeNormalMode::Soft));
+	Selection selection = qdr_test::face_selection({ fixture.face }, fixture.face);
+
+	const OperationResult result = delete_selection(fixture.document, selection);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	EXPECT_TRUE(fixture.document.hard_normal_edges.empty());
+	EXPECT_TRUE(fixture.document.soft_normal_edges.empty());
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
+}

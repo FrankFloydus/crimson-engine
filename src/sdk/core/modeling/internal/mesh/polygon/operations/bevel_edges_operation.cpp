@@ -19,6 +19,7 @@
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -145,6 +146,75 @@ void orient_generated_faces_from_source_adjacency(const Document& source, Docume
         }
         reverse_face_winding(candidate.faces[face_index]);
     }
+}
+
+bool bevel_point_lies_on_source_edge(
+    quader::QVec3 point,
+    quader::QVec3 source_first,
+    quader::QVec3 source_second)
+{
+    const quader::QVec3 segment = source_second - source_first;
+    const float segment_length_squared = length_squared(segment);
+    if (segment_length_squared <= kEpsilon) {
+        return false;
+    }
+    const float factor = dot(point - source_first, segment) /
+                         segment_length_squared;
+    if (factor < -0.0001F || factor > 1.0001F) {
+        return false;
+    }
+    const quader::QVec3 closest =
+        source_first + (segment * std::clamp(factor, 0.0F, 1.0F));
+    const float tolerance_squared =
+        std::max(0.00000001F, segment_length_squared * 0.00000001F);
+    return length_squared(point - closest) <= tolerance_squared;
+}
+
+void preserve_bevel_edge_descendant_normal_modes(
+    const Document& source,
+    Document& candidate)
+{
+    prune_normal_edge_states(candidate);
+    const EdgeNormalModeLookup source_modes(source);
+    std::vector<EdgeNormalModeCopy> normal_mode_copies;
+    for (const Edge source_edge : document_edges(source)) {
+        if (source_modes.mode(source_edge) == EdgeNormalMode::Default) {
+            continue;
+        }
+        const Vertex* source_first = find_vertex(source, source_edge.a);
+        const Vertex* source_second = find_vertex(source, source_edge.b);
+        if (source_first == nullptr || source_second == nullptr) {
+            continue;
+        }
+
+        for (const Face& source_face : source.faces) {
+            if (!face_uses_edge(source_face, source_edge)) {
+                continue;
+            }
+            const Face* retained_face = find_face(candidate, source_face.id);
+            if (retained_face == nullptr) {
+                continue;
+            }
+            for (const Edge candidate_edge : face_edges(*retained_face)) {
+                const Vertex* first = find_vertex(candidate, candidate_edge.a);
+                const Vertex* second = find_vertex(candidate, candidate_edge.b);
+                if (first == nullptr || second == nullptr ||
+                    !bevel_point_lies_on_source_edge(
+                        first->position,
+                        source_first->position,
+                        source_second->position) ||
+                    !bevel_point_lies_on_source_edge(
+                        second->position,
+                        source_first->position,
+                        source_second->position)) {
+                    continue;
+                }
+                normal_mode_copies.push_back({source_edge, candidate_edge});
+            }
+        }
+    }
+    (void)copy_edge_normal_modes(source, candidate, normal_mode_copies);
+    prune_normal_edge_states(candidate);
 }
 
 
@@ -1922,6 +1992,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             return OperationResult::failure("Bevel could not preserve the source texture mapping.");
         }
     }
+    preserve_bevel_edge_descendant_normal_modes(document, candidate);
 
     std::vector<ElementId> selected_generated_faces;
     selected_generated_faces.reserve(generated_face_ids.size());

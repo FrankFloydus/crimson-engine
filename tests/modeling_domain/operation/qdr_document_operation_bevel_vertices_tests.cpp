@@ -7,6 +7,9 @@
 #include "operation_validation_test_helpers.hpp"
 
 #include <algorithm>
+#include <cstddef>
+#include <ranges>
+#include <vector>
 
 using namespace quader_poly;
 
@@ -102,4 +105,88 @@ TEST(QdrDocumentOperationBevelVerticesTests, BevelVerticesOnACubeCreatesAnOutwar
 	EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), qdr_test::face_has_repeated_vertices));
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 	EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
+}
+
+TEST(QdrDocumentOperationBevelVerticesTests,
+	 BevelVerticesPreservesIncidentHardSoftAndDefaultDescendants) {
+	Document document = make_cube({});
+	const ElementId corner = document.vertices.front().id;
+	std::vector<Edge> incident;
+	for (const Edge edge : document_edges(document)) {
+		if (edge.a == corner || edge.b == corner) {
+			incident.push_back(edge);
+		}
+	}
+	ASSERT_EQ(incident.size(), 3U);
+	const Edge hard_source = incident[0];
+	const Edge soft_source = incident[1];
+	const Edge default_source = incident[2];
+	document.hard_normal_edges = {hard_source};
+	document.soft_normal_edges = {soft_source};
+	for (Face& face : document.faces) {
+		face.normal_shading = SurfaceShading::Smooth;
+	}
+	const std::vector<Face> source_faces = document.faces;
+	Selection selection = qdr_test::vertex_selection({corner}, corner);
+
+	const OperationResult result = bevel_selected_vertices(
+		document, selection, 0.25F);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
+	ASSERT_EQ(selection.vertices.size(), 3U);
+	const auto descendant_for = [&](Edge source_edge) {
+		const ElementId neighbor =
+			source_edge.a == corner ? source_edge.b : source_edge.a;
+		for (const Edge candidate : document_edges(document)) {
+			const ElementId other = candidate.a == neighbor
+				? candidate.b
+				: (candidate.b == neighbor ? candidate.a
+				                           : kInvalidElementId);
+			if (other != kInvalidElementId &&
+			    std::ranges::find(selection.vertices, other) !=
+				    selection.vertices.end()) {
+				return candidate;
+			}
+		}
+		return Edge {};
+	};
+	const Edge hard_descendant = descendant_for(hard_source);
+	const Edge soft_descendant = descendant_for(soft_source);
+	const Edge default_descendant = descendant_for(default_source);
+	ASSERT_NE(hard_descendant.a, kInvalidElementId);
+	ASSERT_NE(soft_descendant.a, kInvalidElementId);
+	ASSERT_NE(default_descendant.a, kInvalidElementId);
+	EXPECT_TRUE(qdr_test::contains_edge(
+		document.hard_normal_edges, hard_descendant));
+	EXPECT_TRUE(qdr_test::contains_edge(
+		document.soft_normal_edges, soft_descendant));
+	EXPECT_FALSE(qdr_test::contains_edge(
+		document.hard_normal_edges, default_descendant));
+	EXPECT_FALSE(qdr_test::contains_edge(
+		document.soft_normal_edges, default_descendant));
+	EXPECT_FALSE(qdr_test::contains_edge(
+		document.hard_normal_edges, hard_source));
+	EXPECT_FALSE(qdr_test::contains_edge(
+		document.soft_normal_edges, soft_source));
+
+	for (std::size_t first = 0U; first < selection.vertices.size(); ++first) {
+		for (std::size_t second = first + 1U;
+		     second < selection.vertices.size(); ++second) {
+			const Edge cap_edge = make_edge(
+				selection.vertices[first], selection.vertices[second]);
+			if (!qdr_test::document_has_edge(document, cap_edge)) {
+				continue;
+			}
+			EXPECT_FALSE(qdr_test::contains_edge(
+				document.hard_normal_edges, cap_edge));
+			EXPECT_FALSE(qdr_test::contains_edge(
+				document.soft_normal_edges, cap_edge));
+		}
+	}
+	for (const Face& source_face : source_faces) {
+		const Face* retained = find_face(document, source_face.id);
+		ASSERT_NE(retained, nullptr);
+		EXPECT_EQ(retained->normal_shading, SurfaceShading::Smooth);
+	}
 }

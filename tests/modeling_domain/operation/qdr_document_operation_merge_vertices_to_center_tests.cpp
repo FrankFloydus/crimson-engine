@@ -110,3 +110,33 @@ TEST(QdrDocumentOperationMergeVerticesToCenterTests, MergeVerticesToCenterFansFo
 		return primitive.index_count == 6U;
 	}));
 }
+
+TEST(QdrDocumentOperationMergeVerticesToCenterTests,
+     MergeRecoveryPreservesChosenFaceShadingAndExactEdgeModes) {
+    Document document = make_cube({});
+    for (Face& face : document.faces) {
+        face.normal_shading = SurfaceShading::Smooth;
+    }
+    const Edge hard_edge = make_edge(1U, 2U);
+    const Edge soft_edge = make_edge(1U, 5U);
+    ASSERT_TRUE(qdr_test::document_has_edge(document, hard_edge));
+    ASSERT_TRUE(qdr_test::document_has_edge(document, soft_edge));
+    document.hard_normal_edges = {hard_edge};
+    document.soft_normal_edges = {soft_edge};
+    Selection selection = qdr_test::vertex_selection({4U, 7U}, 7U);
+
+    const OperationResult result =
+        merge_selected_vertices_to_center(document, selection);
+
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    ASSERT_EQ(document.faces.size(), 5U);
+    for (const Face& face : document.faces) {
+        EXPECT_EQ(face.normal_shading, SurfaceShading::Smooth);
+    }
+    EXPECT_EQ(qdr_test::edge_normal_mode(document, hard_edge),
+              EdgeNormalMode::Hard);
+    EXPECT_EQ(qdr_test::edge_normal_mode(document, soft_edge),
+              EdgeNormalMode::Soft);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+}

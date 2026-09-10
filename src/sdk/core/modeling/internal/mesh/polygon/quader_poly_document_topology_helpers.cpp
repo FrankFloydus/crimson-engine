@@ -554,6 +554,431 @@ ElementId next_valid_face_id(Document& document)
     return document.next_face_id++;
 }
 
+namespace {
+
+bool normal_edge_less(Edge left, Edge right)
+{
+    left = make_edge(left.a, left.b);
+    right = make_edge(right.a, right.b);
+    return std::tie(left.a, left.b) < std::tie(right.a, right.b);
+}
+
+struct NormalEdgeLess {
+    bool operator()(Edge left, Edge right) const
+    {
+        return normal_edge_less(left, right);
+    }
+};
+
+void sort_unique_normal_edges(std::vector<Edge>& edges)
+{
+    for (Edge& edge : edges) {
+        edge = make_edge(edge.a, edge.b);
+    }
+    std::ranges::sort(edges, normal_edge_less);
+    const auto duplicate_begin = std::ranges::unique(edges);
+    edges.erase(duplicate_begin.begin(), edges.end());
+}
+
+bool normal_edge_vector_is_canonical(
+    std::span<const Edge> edges,
+    std::span<const Edge> live_edges)
+{
+    for (std::size_t index = 0U; index < edges.size(); ++index) {
+        const Edge edge = make_edge(edges[index].a, edges[index].b);
+        if (edges[index] != edge || edge.a == kInvalidElementId ||
+            edge.a == edge.b ||
+            !std::ranges::binary_search(live_edges, edge, normal_edge_less) ||
+            (index > 0U && !normal_edge_less(edges[index - 1U], edge))) {
+          return false;
+        }
+    }
+    return true;
+}
+
+bool normal_edge_states_are_canonical(
+    const Document& document,
+    std::span<const Edge> live_edges)
+{
+    if (!normal_edge_vector_is_canonical(
+            document.hard_normal_edges, live_edges) ||
+        !normal_edge_vector_is_canonical(
+            document.soft_normal_edges, live_edges)) {
+      return false;
+    }
+
+    std::size_t hard_index = 0U;
+    std::size_t soft_index = 0U;
+    while (hard_index < document.hard_normal_edges.size() &&
+           soft_index < document.soft_normal_edges.size()) {
+        const Edge hard = document.hard_normal_edges[hard_index];
+        const Edge soft = document.soft_normal_edges[soft_index];
+        if (hard == soft) {
+            return false;
+        }
+        if (normal_edge_less(hard, soft)) {
+            ++hard_index;
+        } else {
+            ++soft_index;
+        }
+    }
+    return true;
+}
+
+bool normalized_edge_vector_contains(std::span<const Edge> edges, Edge target)
+{
+    target = make_edge(target.a, target.b);
+    return std::ranges::any_of(edges, [target](Edge edge) {
+        return make_edge(edge.a, edge.b) == target;
+    });
+}
+
+std::map<std::pair<ElementId, ElementId>, EdgeNormalMode>
+build_normal_edge_mode_lookup(
+    const Document& document)
+{
+    std::map<std::pair<ElementId, ElementId>, unsigned int> flags;
+    for (Edge edge : document.hard_normal_edges) {
+        edge = make_edge(edge.a, edge.b);
+        if (edge.a != kInvalidElementId && edge.a != edge.b) {
+            flags[{edge.a, edge.b}] |= 1U;
+        }
+    }
+    for (Edge edge : document.soft_normal_edges) {
+        edge = make_edge(edge.a, edge.b);
+        if (edge.a != kInvalidElementId && edge.a != edge.b) {
+            flags[{edge.a, edge.b}] |= 2U;
+        }
+    }
+
+    std::map<std::pair<ElementId, ElementId>, EdgeNormalMode> modes;
+    for (const auto& [edge, state_flags] : flags) {
+        if (state_flags == 1U) {
+            modes.emplace(edge, EdgeNormalMode::Hard);
+        } else if (state_flags == 2U) {
+            modes.emplace(edge, EdgeNormalMode::Soft);
+        }
+    }
+    return modes;
+}
+
+void erase_sorted_normal_edge(std::vector<Edge>& edges, Edge target)
+{
+    const auto found =
+        std::ranges::lower_bound(edges, target, normal_edge_less);
+    if (found != edges.end() && *found == target) {
+        edges.erase(found);
+    }
+}
+
+void insert_sorted_normal_edge(std::vector<Edge>& edges, Edge target)
+{
+    const auto position =
+        std::ranges::lower_bound(edges, target, normal_edge_less);
+    if (position == edges.end() || *position != target) {
+        edges.insert(position, target);
+    }
+}
+
+std::vector<ElementId> verified_split_path(
+    Edge source_edge,
+    const Document& candidate,
+    std::span<const ElementId> split_vertex_ids)
+{
+    const auto find_path = [&](std::span<const ElementId> ordered_splits) {
+        std::vector<ElementId> nodes;
+        nodes.reserve(ordered_splits.size() + 2U);
+        nodes.push_back(source_edge.a);
+        for (const ElementId vertex_id : ordered_splits) {
+            if (vertex_id == kInvalidElementId ||
+                vertex_id == source_edge.a || vertex_id == source_edge.b ||
+                find_vertex(candidate, vertex_id) == nullptr ||
+                std::ranges::find(nodes, vertex_id) != nodes.end()) {
+              continue;
+            }
+            nodes.push_back(vertex_id);
+        }
+        nodes.push_back(source_edge.b);
+
+        // Looking backward avoids choosing a surviving but disconnected
+        // intermediate that would hide later live descendants.
+        std::vector<std::size_t> next(nodes.size(), nodes.size());
+        std::vector<bool> reaches_end(nodes.size(), false);
+        reaches_end.back() = true;
+        for (std::size_t index = nodes.size() - 1U; index-- > 0U;) {
+            for (std::size_t candidate_index = index + 1U;
+                 candidate_index < nodes.size(); ++candidate_index) {
+                if (!reaches_end[candidate_index] ||
+                    !edge_exists(
+                        candidate,
+                        make_edge(nodes[index], nodes[candidate_index]))) {
+                  continue;
+                }
+                reaches_end[index] = true;
+                next[index] = candidate_index;
+                break;
+            }
+        }
+
+        std::vector<ElementId> path;
+        if (!reaches_end.front()) {
+            return path;
+        }
+        for (std::size_t index = 0U; index < nodes.size(); index = next[index]) {
+            path.push_back(nodes[index]);
+            if (index == nodes.size() - 1U) {
+                break;
+            }
+        }
+        return path;
+    };
+
+    std::vector<ElementId> forward = find_path(split_vertex_ids);
+    std::vector<ElementId> reversed_splits(
+        split_vertex_ids.begin(), split_vertex_ids.end());
+    std::ranges::reverse(reversed_splits);
+    std::vector<ElementId> reverse = find_path(reversed_splits);
+    return reverse.size() > forward.size() ? reverse : forward;
+}
+
+} // namespace
+
+EdgeNormalModeLookup::EdgeNormalModeLookup(const Document& document)
+    : modes_(build_normal_edge_mode_lookup(document))
+{
+}
+
+EdgeNormalMode EdgeNormalModeLookup::mode(Edge edge) const
+{
+    edge = make_edge(edge.a, edge.b);
+    const auto found = modes_.find({edge.a, edge.b});
+    return found == modes_.end() ? EdgeNormalMode::Default : found->second;
+}
+
+EdgeNormalMode edge_normal_mode(const Document& document, Edge edge)
+{
+    edge = make_edge(edge.a, edge.b);
+    const bool hard =
+        normalized_edge_vector_contains(document.hard_normal_edges, edge);
+    const bool soft =
+        normalized_edge_vector_contains(document.soft_normal_edges, edge);
+    if (hard == soft) {
+        return EdgeNormalMode::Default;
+    }
+    return hard ? EdgeNormalMode::Hard : EdgeNormalMode::Soft;
+}
+
+bool set_edge_normal_modes(
+    Document& document,
+    std::span<const EdgeNormalModeAssignment> assignments)
+{
+    std::vector<Edge> live_edges = document_edges(document);
+    sort_unique_normal_edges(live_edges);
+
+    std::map<Edge, unsigned int, NormalEdgeLess> authored_flags;
+    const auto collect_flags = [&](std::span<const Edge> edges,
+                                   unsigned int flag) {
+        for (Edge edge : edges) {
+            edge = make_edge(edge.a, edge.b);
+            if (edge.a == kInvalidElementId || edge.a == edge.b ||
+                !std::ranges::binary_search(
+                    live_edges, edge, normal_edge_less)) {
+              continue;
+            }
+            authored_flags[edge] |= flag;
+        }
+    };
+    collect_flags(document.hard_normal_edges, 1U);
+    collect_flags(document.soft_normal_edges, 2U);
+
+    std::map<Edge, EdgeNormalMode, NormalEdgeLess> modes;
+    for (const auto& [edge, flags] : authored_flags) {
+        if (flags == 1U) {
+            modes.emplace(edge, EdgeNormalMode::Hard);
+        } else if (flags == 2U) {
+            modes.emplace(edge, EdgeNormalMode::Soft);
+        }
+    }
+
+    // Ordered assignments are intentional: topology donor policies can rely
+    // on the last valid donor winning without repeated vector rebuilding.
+    for (const EdgeNormalModeAssignment& assignment : assignments) {
+        const Edge edge = make_edge(assignment.edge.a, assignment.edge.b);
+        if (edge.a == kInvalidElementId || edge.a == edge.b ||
+            !std::ranges::binary_search(live_edges, edge, normal_edge_less)) {
+          continue;
+        }
+        if (assignment.mode == EdgeNormalMode::Default) {
+            modes.erase(edge);
+        } else {
+            modes[edge] = assignment.mode;
+        }
+    }
+
+    std::vector<Edge> hard;
+    std::vector<Edge> soft;
+    hard.reserve(modes.size());
+    soft.reserve(modes.size());
+    for (const auto& [edge, mode] : modes) {
+        if (mode == EdgeNormalMode::Hard) {
+            hard.push_back(edge);
+        } else if (mode == EdgeNormalMode::Soft) {
+            soft.push_back(edge);
+        }
+    }
+
+    const bool changed = hard != document.hard_normal_edges ||
+                         soft != document.soft_normal_edges;
+    document.hard_normal_edges = std::move(hard);
+    document.soft_normal_edges = std::move(soft);
+    return changed;
+}
+
+bool set_edge_normal_mode(Document& document, Edge edge, EdgeNormalMode mode)
+{
+    edge = make_edge(edge.a, edge.b);
+    if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+        edge.a == edge.b) {
+      return false;
+    }
+
+    std::vector<Edge> live_edges = document_edges(document);
+    sort_unique_normal_edges(live_edges);
+    if (!std::ranges::binary_search(live_edges, edge, normal_edge_less)) {
+        return false;
+    }
+    if (!normal_edge_states_are_canonical(document, live_edges)) {
+        const EdgeNormalModeAssignment assignment {edge, mode};
+        return set_edge_normal_modes(
+            document,
+            std::span<const EdgeNormalModeAssignment>(&assignment, 1U));
+    }
+
+    const EdgeNormalMode previous = edge_normal_mode(document, edge);
+    if (previous == mode) {
+        return false;
+    }
+    erase_sorted_normal_edge(document.hard_normal_edges, edge);
+    erase_sorted_normal_edge(document.soft_normal_edges, edge);
+    if (mode == EdgeNormalMode::Hard) {
+        insert_sorted_normal_edge(document.hard_normal_edges, edge);
+    } else if (mode == EdgeNormalMode::Soft) {
+        insert_sorted_normal_edge(document.soft_normal_edges, edge);
+    }
+    return true;
+}
+
+bool copy_edge_normal_modes(
+    const Document& source,
+    Document& target,
+    std::span<const EdgeNormalModeCopy> copies)
+{
+    const EdgeNormalModeLookup source_modes(source);
+    std::vector<EdgeNormalModeAssignment> assignments;
+    assignments.reserve(copies.size());
+    for (const EdgeNormalModeCopy& copy : copies) {
+        const Edge source_edge =
+            make_edge(copy.source_edge.a, copy.source_edge.b);
+        assignments.push_back({
+            copy.target_edge,
+            source_modes.mode(source_edge),
+        });
+    }
+    return set_edge_normal_modes(target, assignments);
+}
+
+bool copy_edge_normal_mode(const Document& source, Edge source_edge,
+                           Document& target, Edge target_edge)
+{
+    return set_edge_normal_mode(
+        target, target_edge, edge_normal_mode(source, source_edge));
+}
+
+void prune_normal_edge_states(Document& document)
+{
+    static_cast<void>(set_edge_normal_modes(
+        document, std::span<const EdgeNormalModeAssignment>{}));
+}
+
+std::vector<Edge> remap_normal_edges_after_edge_splits(
+    std::span<const Edge> source_edges,
+    const Document& candidate,
+    const std::map<std::pair<ElementId, ElementId>, std::vector<ElementId>>&
+        split_vertex_ids_by_edge)
+{
+    std::vector<Edge> remapped_edges;
+    remapped_edges.reserve(source_edges.size() + split_vertex_ids_by_edge.size());
+    for (Edge edge : source_edges) {
+        edge = make_edge(edge.a, edge.b);
+        if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+            edge.a == edge.b) {
+          continue;
+        }
+
+        if (edge_exists(candidate, edge)) {
+            add_unique_edge(remapped_edges, edge);
+        }
+
+        auto found = split_vertex_ids_by_edge.find({edge.a, edge.b});
+        if (found == split_vertex_ids_by_edge.end()) {
+            found = split_vertex_ids_by_edge.find({edge.b, edge.a});
+        }
+        if (found == split_vertex_ids_by_edge.end()) {
+            continue;
+        }
+
+        const std::vector<ElementId> path =
+            verified_split_path(edge, candidate, found->second);
+        for (std::size_t index = 1U; index < path.size(); ++index) {
+            add_unique_edge(
+                remapped_edges, make_edge(path[index - 1U], path[index]));
+        }
+    }
+    sort_unique_normal_edges(remapped_edges);
+    return remapped_edges;
+}
+
+std::vector<Edge> remap_normal_edges_after_edge_splits(
+    std::span<const Edge> source_edges,
+    const Document& candidate,
+    const std::map<std::pair<ElementId, ElementId>, ElementId>& split_vertices)
+{
+    std::map<std::pair<ElementId, ElementId>, std::vector<ElementId>>
+        split_vertex_ids_by_edge;
+    for (const auto& [edge, vertex_id] : split_vertices) {
+        if (vertex_id != kInvalidElementId) {
+            split_vertex_ids_by_edge[edge].push_back(vertex_id);
+        }
+    }
+    return remap_normal_edges_after_edge_splits(
+        source_edges, candidate, split_vertex_ids_by_edge);
+}
+
+void remap_normal_edge_states_after_edge_splits(
+    const Document& source,
+    Document& candidate,
+    const std::map<std::pair<ElementId, ElementId>, std::vector<ElementId>>&
+        split_vertex_ids_by_edge)
+{
+    candidate.hard_normal_edges = remap_normal_edges_after_edge_splits(
+        source.hard_normal_edges, candidate, split_vertex_ids_by_edge);
+    candidate.soft_normal_edges = remap_normal_edges_after_edge_splits(
+        source.soft_normal_edges, candidate, split_vertex_ids_by_edge);
+    prune_normal_edge_states(candidate);
+}
+
+void remap_normal_edge_states_after_edge_splits(
+    const Document& source,
+    Document& candidate,
+    const std::map<std::pair<ElementId, ElementId>, ElementId>& split_vertices)
+{
+    candidate.hard_normal_edges = remap_normal_edges_after_edge_splits(
+        source.hard_normal_edges, candidate, split_vertices);
+    candidate.soft_normal_edges = remap_normal_edges_after_edge_splits(
+        source.soft_normal_edges, candidate, split_vertices);
+    prune_normal_edge_states(candidate);
+}
+
 static ElementId
 remap_vertex_id(ElementId vertex_id,
                 const std::map<ElementId, ElementId> &merged_vertex_ids) {

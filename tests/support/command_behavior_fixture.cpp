@@ -759,6 +759,9 @@ private:
     case CanonicalCommandFixture::CurveSelection:
       configure_curve_selection();
       break;
+    case CanonicalCommandFixture::AuthoredHardEdgeSelection:
+      configure_authored_hard_edge_selection();
+      break;
     case CanonicalCommandFixture::HiddenObject:
       configure_hidden_object();
       break;
@@ -1045,6 +1048,22 @@ private:
                    object, api_element(vertices[2]), api_element(vertices[5]),
                    QuaderSelectionEdit::Add),
                "Select active canonical edge");
+  }
+
+  void configure_authored_hard_edge_selection() {
+    PolygonFixture polygon = make_two_quad_plane();
+    const quader_poly::Edge selected_edge{polygon.vertices[1],
+                                          polygon.vertices[4]};
+    for (quader_poly::Face &face : polygon.document.faces) {
+      face.normal_shading = quader_poly::SurfaceShading::Smooth;
+    }
+    polygon.document.hard_normal_edges.push_back(selected_edge);
+    const QuaderModelingObjectRef object = create_polygon_object(
+        std::move(polygon), "Authored Hard Edge Selection Plane");
+    require_ok(editor().selection().select_edge(
+                   object, api_element(selected_edge.a),
+                   api_element(selected_edge.b)),
+               "Select canonical authored Hard edge");
   }
 
   void configure_boundary_loop() {

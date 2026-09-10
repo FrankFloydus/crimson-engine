@@ -89,14 +89,18 @@ public:
         vertices(&document_, &quader_poly::Document::vertices),
         faces(&document_, &quader_poly::Document::faces),
         hard_normal_edges(&document_,
-                          &quader_poly::Document::hard_normal_edges) {}
+                          &quader_poly::Document::hard_normal_edges),
+        soft_normal_edges(&document_,
+                          &quader_poly::Document::soft_normal_edges) {}
 
   CowPolygonDocument(quader_poly::Document document)
       : document_(std::make_shared<quader_poly::Document>(std::move(document))),
         vertices(&document_, &quader_poly::Document::vertices),
         faces(&document_, &quader_poly::Document::faces),
         hard_normal_edges(&document_,
-                          &quader_poly::Document::hard_normal_edges) {}
+                          &quader_poly::Document::hard_normal_edges),
+        soft_normal_edges(&document_,
+                          &quader_poly::Document::soft_normal_edges) {}
 
   explicit CowPolygonDocument(
       std::shared_ptr<const quader_poly::Document> document)
@@ -105,21 +109,27 @@ public:
         vertices(&document_, &quader_poly::Document::vertices),
         faces(&document_, &quader_poly::Document::faces),
         hard_normal_edges(&document_,
-                          &quader_poly::Document::hard_normal_edges) {}
+                          &quader_poly::Document::hard_normal_edges),
+        soft_normal_edges(&document_,
+                          &quader_poly::Document::soft_normal_edges) {}
 
   CowPolygonDocument(const CowPolygonDocument &other) noexcept
       : document_(other.document_),
         vertices(&document_, &quader_poly::Document::vertices),
         faces(&document_, &quader_poly::Document::faces),
         hard_normal_edges(&document_,
-                          &quader_poly::Document::hard_normal_edges) {}
+                          &quader_poly::Document::hard_normal_edges),
+        soft_normal_edges(&document_,
+                          &quader_poly::Document::soft_normal_edges) {}
 
   CowPolygonDocument(CowPolygonDocument &&other) noexcept
       : document_(std::move(other.document_)),
         vertices(&document_, &quader_poly::Document::vertices),
         faces(&document_, &quader_poly::Document::faces),
         hard_normal_edges(&document_,
-                          &quader_poly::Document::hard_normal_edges) {
+                          &quader_poly::Document::hard_normal_edges),
+        soft_normal_edges(&document_,
+                          &quader_poly::Document::soft_normal_edges) {
     if (!document_) {
       document_ = std::make_shared<quader_poly::Document>();
     }
@@ -188,6 +198,7 @@ public:
   CowPolygonDocumentVectorView<quader_poly::Vertex> vertices;
   CowPolygonDocumentVectorView<quader_poly::Face> faces;
   CowPolygonDocumentVectorView<quader_poly::Edge> hard_normal_edges;
+  CowPolygonDocumentVectorView<quader_poly::Edge> soft_normal_edges;
 };
 
 } // namespace quader_editor_core

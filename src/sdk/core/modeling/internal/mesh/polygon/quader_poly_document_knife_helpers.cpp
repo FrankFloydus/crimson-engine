@@ -272,6 +272,30 @@ std::size_t knife_edge_split_count(const KnifeEdgeSplitMap& split_vertices)
     return count;
 }
 
+std::map<std::pair<ElementId, ElementId>, std::vector<ElementId>>
+ordered_knife_split_vertex_ids_by_edge(const KnifeEdgeSplitMap& split_vertices)
+{
+    std::map<std::pair<ElementId, ElementId>, std::vector<ElementId>> ids_by_edge;
+    for (const auto& [edge, splits] : split_vertices) {
+        std::vector<KnifeEdgeSplit> ordered_splits = splits;
+        const auto factor_less = [](const KnifeEdgeSplit& left, const KnifeEdgeSplit& right) {
+            if (std::abs(left.factor - right.factor) > 0.0001F) {
+                return left.factor < right.factor;
+            }
+            return left.vertex_id < right.vertex_id;
+        };
+        std::ranges::sort(ordered_splits, factor_less);
+        std::vector<ElementId>& ids = ids_by_edge[edge];
+        ids.reserve(ordered_splits.size());
+        for (const KnifeEdgeSplit& split : ordered_splits) {
+            if (split.vertex_id != kInvalidElementId) {
+                ids.push_back(split.vertex_id);
+            }
+        }
+    }
+    return ids_by_edge;
+}
+
 float knife_edge_factor_for_key(Edge edge, float factor)
 {
     factor = std::clamp(std::isfinite(factor) ? factor : 0.5F, 0.01F, 0.99F);
@@ -358,6 +382,86 @@ bool knife_target_is_edge(const KnifePointTarget& target)
 bool knife_targets_use_same_edge(const KnifePointTarget& left, const KnifePointTarget& right)
 {
     return knife_target_is_edge(left) && knife_target_is_edge(right) && edge_key(left.edge) == edge_key(right.edge);
+}
+
+std::optional<Edge> knife_target_normal_mode_donor(
+    const Document& document,
+    const KnifePointTarget& target)
+{
+    if (target.kind == KnifePointTargetKind::ExistingEdge) {
+        const Edge edge = make_edge(target.edge.a, target.edge.b);
+        return edge_exists(document, edge) ? std::optional<Edge> {edge}
+                                           : std::nullopt;
+    }
+    if (target.kind != KnifePointTargetKind::FacePoint) {
+        return std::nullopt;
+    }
+
+    const Face* face = find_face(document, target.face_id);
+    if (face == nullptr) {
+        return std::nullopt;
+    }
+    const int dropped_axis = dropped_axis_for_normal(face_normal(document, *face));
+    const std::optional<KnifeBoundaryTarget> boundary =
+        knife_face_boundary_target_at_position(
+            document, *face, target.position, dropped_axis);
+    if (!boundary.has_value() ||
+        boundary->vertex_id != kInvalidElementId ||
+        !edge_exists(document, boundary->edge)) {
+        return std::nullopt;
+    }
+    return make_edge(boundary->edge.a, boundary->edge.b);
+}
+
+void append_knife_connector_normal_mode_copies(
+    const Document& source,
+    const KnifePointTarget& first_target,
+    const KnifePointTarget& second_target,
+    const Document& candidate,
+    Edge connector,
+    std::vector<EdgeNormalModeCopy>& copies)
+{
+    if (!edge_exists(candidate, connector)) {
+        return;
+    }
+    if (const std::optional<Edge> donor =
+            knife_target_normal_mode_donor(source, first_target)) {
+        copies.push_back({*donor, connector});
+    }
+    if (const std::optional<Edge> donor =
+            knife_target_normal_mode_donor(source, second_target)) {
+        copies.push_back({*donor, connector});
+    }
+}
+
+bool knife_edge_lies_on_segment(
+    const Document& document,
+    Edge edge,
+    quader::QVec3 segment_first,
+    quader::QVec3 segment_second)
+{
+    const Vertex* first = find_vertex(document, edge.a);
+    const Vertex* second = find_vertex(document, edge.b);
+    const quader::QVec3 segment = segment_second - segment_first;
+    const float segment_length_squared = length_squared(segment);
+    if (first == nullptr || second == nullptr ||
+        segment_length_squared <= kEpsilon) {
+        return false;
+    }
+    const auto point_lies_on_segment = [&](quader::QVec3 point) {
+        const float factor = dot(point - segment_first, segment) /
+                             segment_length_squared;
+        if (factor < -0.0001F || factor > 1.0001F) {
+            return false;
+        }
+        const quader::QVec3 closest = segment_first +
+            (segment * std::clamp(factor, 0.0F, 1.0F));
+        const float tolerance_squared =
+            std::max(0.00000001F, segment_length_squared * 0.00000001F);
+        return length_squared(point - closest) <= tolerance_squared;
+    };
+    return point_lies_on_segment(first->position) &&
+           point_lies_on_segment(second->position);
 }
 
 std::optional<ResolvedKnifeTarget> resolve_knife_target(
@@ -1738,6 +1842,7 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
 
     std::vector<Face> rebuilt_faces;
     rebuilt_faces.reserve(build.document.faces.size() + stroke_segments.size());
+    std::vector<Edge> final_cut_edges;
     std::size_t split_face_count = 0;
     for (const Face& face : build.document.faces) {
         const auto graph = face_graphs.find(face.id);
@@ -1762,6 +1867,9 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
         if (loops.size() < 2U) {
             rebuilt_faces.push_back(face);
             continue;
+        }
+        for (const Edge edge : cut_edges) {
+            add_unique_edge(final_cut_edges, edge);
         }
 
         ++split_face_count;
@@ -1793,6 +1901,43 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
     prune_invalid_faces(build.document);
     prune_unused_vertices(build.document);
     restore_source_face_orientation(document, build.document);
+    remap_normal_edge_states_after_edge_splits(
+        document,
+        build.document,
+        ordered_knife_split_vertex_ids_by_edge(split_vertices));
+    std::vector<EdgeNormalModeCopy> connector_normal_mode_copies;
+    connector_normal_mode_copies.reserve(
+        build.segments.size() * final_cut_edges.size() * 2U);
+    for (const KnifeResolvedStrokeSegment& segment : build.segments) {
+        if (segment.first_point >= targets.size() ||
+            segment.second_point >= targets.size() ||
+            segment.first_point >= build.points.size() ||
+            segment.second_point >= build.points.size()) {
+            continue;
+        }
+        const KnifeResolvedStrokePoint& first =
+            build.points[segment.first_point];
+        const KnifeResolvedStrokePoint& second =
+            build.points[segment.second_point];
+        for (const Edge descendant : final_cut_edges) {
+            if (!knife_edge_lies_on_segment(
+                    build.document,
+                    descendant,
+                    first.position,
+                    second.position)) {
+                continue;
+            }
+            append_knife_connector_normal_mode_copies(
+                document,
+                targets[segment.first_point],
+                targets[segment.second_point],
+                build.document,
+                descendant,
+                connector_normal_mode_copies);
+        }
+    }
+    (void)copy_edge_normal_modes(
+        document, build.document, connector_normal_mode_copies);
     for (const ElementId vertex_id : build.selected_vertices) {
         if (find_vertex(build.document, vertex_id) == nullptr ||
             !std::ranges::any_of(build.document.faces, [vertex_id](const Face& face) {
@@ -1915,6 +2060,7 @@ KnifeSegmentCandidate build_knife_segment_candidate(
     second_face.id = build.document.next_face_id++;
     second_face.vertices = std::move(second_loop);
     second_face.material_slot = source_face.material_slot;
+    second_face.normal_shading = source_face.normal_shading;
     second_face.texture_transform = source_face.texture_transform;
 
     const Face* original_face = find_face(document, source_face.id);
@@ -1930,6 +2076,19 @@ KnifeSegmentCandidate build_knife_segment_candidate(
     prune_invalid_faces(build.document);
     prune_unused_vertices(build.document);
     restore_source_face_orientation(document, build.document);
+    remap_normal_edge_states_after_edge_splits(
+        document, build.document, split_vertices);
+    std::vector<EdgeNormalModeCopy> connector_normal_mode_copies;
+    connector_normal_mode_copies.reserve(2U);
+    append_knife_connector_normal_mode_copies(
+        document,
+        previous,
+        current,
+        build.document,
+        make_edge(build.previous_vertex, build.current_vertex),
+        connector_normal_mode_copies);
+    (void)copy_edge_normal_modes(
+        document, build.document, connector_normal_mode_copies);
     if (!every_face_triangulates(build.document)) {
         build.message = "Knife segment would create invalid face geometry.";
         return build;

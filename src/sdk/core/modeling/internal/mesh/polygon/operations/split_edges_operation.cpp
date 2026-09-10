@@ -67,6 +67,7 @@ OperationResult SplitEdgesOperation::apply(Document& document, Selection& select
     Document candidate = document;
     std::map<std::pair<ElementId, ElementId>, ElementId> duplicate_vertices;
     std::vector<Edge> split_open_edges;
+    std::vector<EdgeNormalModeCopy> normal_mode_copies;
     OperationResult result;
     bool changed = false;
 
@@ -74,6 +75,11 @@ OperationResult SplitEdgesOperation::apply(Document& document, Selection& select
         const auto found_edges = split_edges_by_face_id.find(face.id);
         if (found_edges == split_edges_by_face_id.end()) {
             continue;
+        }
+        const Face* source_face = find_face(document, face.id);
+        if (source_face == nullptr || source_face->vertices.size() != face.vertices.size()) {
+            return OperationResult::failure(
+                "Edge Split could not resolve the source face boundary.");
         }
 
         std::map<ElementId, ElementId> replacements;
@@ -115,6 +121,17 @@ OperationResult SplitEdgesOperation::apply(Document& document, Selection& select
             face_changed = true;
         }
         if (face_changed) {
+            for (std::size_t edge_index = 0;
+                 edge_index < source_face->vertices.size(); ++edge_index) {
+                const Edge source_edge = make_edge(
+                    source_face->vertices[edge_index],
+                    source_face->vertices[
+                        (edge_index + 1U) % source_face->vertices.size()]);
+                const Edge target_edge = make_edge(
+                    face.vertices[edge_index],
+                    face.vertices[(edge_index + 1U) % face.vertices.size()]);
+                normal_mode_copies.push_back({source_edge, target_edge});
+            }
             add_unique_id(result.affected.faces, face.id);
             changed = true;
         }
@@ -125,8 +142,10 @@ OperationResult SplitEdgesOperation::apply(Document& document, Selection& select
             "No splittable selected edges were found.");
     }
 
+    (void)copy_edge_normal_modes(document, candidate, normal_mode_copies);
     prune_invalid_faces(candidate);
     prune_unused_vertices(candidate);
+    prune_normal_edge_states(candidate);
     restore_source_face_orientation(document, candidate);
     if (!every_face_triangulates(candidate)) {
         return OperationResult::failure(

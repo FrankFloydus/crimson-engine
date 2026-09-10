@@ -448,6 +448,8 @@ TEST(QtViewportContextMenuTests,
       "edge",
       {enabled_action("collapse_edges", "Collapse Selected Edges"),
        enabled_action("soften_edge_normals", "Soften Selected Edge Normals"),
+       enabled_action("default_edge_normals",
+                      "Set Selected Edge Normals to Default"),
        enabled_action("connect_edges", "Connect Selected Edges"),
        enabled_action("bridge_edges", "Bridge Selected Edges"),
        enabled_action("snap_edges_to_active",
@@ -484,9 +486,18 @@ TEST(QtViewportContextMenuTests,
   ASSERT_NE(edge_topology, nullptr);
   ASSERT_NE(edge_merge, nullptr);
   ASSERT_NE(edge_normals, nullptr);
+  ASSERT_EQ(edge_normals->children.size(), 3u);
+  EXPECT_EQ(edge_normals->children[0].object_name,
+            QStringLiteral("default_edge_normals"));
+  EXPECT_EQ(edge_normals->children[1].object_name,
+            QStringLiteral("harden_edge_normals"));
+  EXPECT_EQ(edge_normals->children[2].object_name,
+            QStringLiteral("soften_edge_normals"));
   EXPECT_NE(find_child(*edge_topology, QStringLiteral("split_edges")), nullptr);
   EXPECT_NE(find_child(*edge_merge, QStringLiteral("merge_edges")), nullptr);
   EXPECT_NE(find_child(*edge_normals, QStringLiteral("harden_edge_normals")),
+            nullptr);
+  EXPECT_NE(find_child(*edge_normals, QStringLiteral("default_edge_normals")),
             nullptr);
   EXPECT_EQ(edge_menu.actions.back().text,
             QStringLiteral("Delete Edges\tDelete"));
@@ -623,6 +634,108 @@ TEST(QtViewportContextMenuTests,
   EXPECT_EQ(editor.commands().last_status_revision(), command_status_revision)
       << "A context-menu action must not execute after the selection used to "
          "build the menu changes inside QMenu's nested event loop.";
+}
+
+TEST(QtViewportContextMenuTests,
+     EdgeNormalActionsShareSelectionAvailabilityAndDisabledTooltip) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-edge-normal-actions-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  quader::ViewportInputRouter input_router;
+  quader::LocalizationService localization = loaded_localization();
+  quader::QtViewportContextMenuPresenter presenter;
+
+  QWidget owner;
+  owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  owner.resize(320, 240);
+  owner.show();
+  QCoreApplication::processEvents();
+
+  const auto box = editor.modeling().create_box(
+      quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                           .max = {1.0f, 1.0f, 1.0f}},
+      "Edge Normal Availability Box");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+
+  const auto context_actions = [&]() {
+    return editor.modeling().available_action_set({
+        .surface = quader::QuaderActionSurface::ViewportContextMenu,
+        .include_disabled = true,
+    });
+  };
+  const auto expect_normal_actions = [](const ContextMenuSnapshot &menu,
+                                        bool enabled,
+                                        const QString &tool_tip) {
+    const ContextActionSnapshot *normals = find_submenu(
+        menu, QStringLiteral("viewport_context_normals_submenu"));
+    ASSERT_NE(normals, nullptr);
+    for (const QString &action_id :
+         {QStringLiteral("default_edge_normals"),
+          QStringLiteral("harden_edge_normals"),
+          QStringLiteral("soften_edge_normals")}) {
+      const ContextActionSnapshot *action = find_child(*normals, action_id);
+      ASSERT_NE(action, nullptr) << action_id.toStdString();
+      EXPECT_EQ(action->enabled, enabled) << action_id.toStdString();
+      if (enabled) {
+        EXPECT_FALSE(action->tool_tip.isEmpty()) << action_id.toStdString();
+      } else {
+        EXPECT_EQ(action->tool_tip, tool_tip) << action_id.toStdString();
+      }
+    }
+  };
+
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  quader::QuaderSelectionSummary empty_edge_summary =
+      editor.selection().summary();
+  empty_edge_summary.has_selection = true;
+  empty_edge_summary.selected_object_count = 1;
+  const ContextMenuSnapshot empty_edge_menu = show_and_snapshot(
+      owner, presenter, editor, input_router, localization, context_actions(),
+      empty_edge_summary, true);
+  ASSERT_TRUE(empty_edge_menu.opened);
+  expect_normal_actions(empty_edge_menu, false,
+                        QStringLiteral("Select at least 1 edge."));
+
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  quader::QuaderSelectionSummary wrong_mode_summary =
+      editor.selection().summary();
+  wrong_mode_summary.has_selection = true;
+  wrong_mode_summary.selected_object_count = 1;
+  const ContextMenuSnapshot wrong_mode_menu = show_and_snapshot(
+      owner, presenter, editor, input_router, localization, context_actions(),
+      wrong_mode_summary, true);
+  ASSERT_TRUE(wrong_mode_menu.opened);
+  const ContextActionSnapshot *wrong_mode_normals = find_submenu(
+      wrong_mode_menu, QStringLiteral("viewport_context_normals_submenu"));
+  ASSERT_NE(wrong_mode_normals, nullptr);
+  EXPECT_EQ(find_child(*wrong_mode_normals,
+                       QStringLiteral("default_edge_normals")),
+            nullptr);
+  EXPECT_EQ(find_child(*wrong_mode_normals,
+                       QStringLiteral("harden_edge_normals")),
+            nullptr);
+  EXPECT_EQ(find_child(*wrong_mode_normals,
+                       QStringLiteral("soften_edge_normals")),
+            nullptr);
+
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(box.value(), 1, 2).ok());
+  const ContextMenuSnapshot selected_edge_menu = show_and_snapshot(
+      owner, presenter, editor, input_router, localization, context_actions(),
+      editor.selection().summary(), true);
+  ASSERT_TRUE(selected_edge_menu.opened);
+  expect_normal_actions(selected_edge_menu, true, QString{});
 }
 
 TEST(QtViewportContextMenuTests, MaterialRejectionPublishesOneErrorPerAttempt) {

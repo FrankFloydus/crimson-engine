@@ -11,6 +11,7 @@
 #include <map>
 #include <set>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -148,6 +149,30 @@ bool edge_lies_on_source_edge(const Document& source, quader_poly::Edge edge,
 	return false;
 }
 
+bool edge_lies_on_specific_source_edge(
+	const Document& source,
+	quader_poly::Edge source_edge,
+	const Document& candidate,
+	quader_poly::Edge candidate_edge)
+{
+	const quader_poly::Vertex* source_first =
+		quader_poly::find_vertex(source, source_edge.a);
+	const quader_poly::Vertex* source_second =
+		quader_poly::find_vertex(source, source_edge.b);
+	const quader_poly::Vertex* candidate_first =
+		quader_poly::find_vertex(candidate, candidate_edge.a);
+	const quader_poly::Vertex* candidate_second =
+		quader_poly::find_vertex(candidate, candidate_edge.b);
+	return source_first != nullptr && source_second != nullptr &&
+		candidate_first != nullptr && candidate_second != nullptr &&
+		point_lies_on_segment(candidate_first->position,
+		                      source_first->position,
+		                      source_second->position) &&
+		point_lies_on_segment(candidate_second->position,
+		                      source_first->position,
+		                      source_second->position);
+}
+
 bool edge_lies_on_plane(const Document& document, quader_poly::Edge edge,
                         const PlaneCutRequest& request)
 {
@@ -243,6 +268,65 @@ TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSplitsACubeAndKeepsBothClosedHal
 
 	const Face* back_cap = selected_cap_face(result.back_document, result.back_selection);
 	EXPECT_TRUE(dot(face_normal(result.back_document, *back_cap), quader::QVec3 { 1.0F, 0.0F, 0.0F }) > 0.9F);
+}
+
+TEST(QdrDocumentOperationPlaneCutTests,
+	 PlaneCutAndSurfaceCutPreserveHardAndSoftClippedEdgeDescendants) {
+	Document source = quader_poly::make_cube({});
+	std::vector<quader_poly::Edge> crossing_edges;
+	for (const quader_poly::Edge edge : quader_poly::document_edges(source)) {
+		const quader_poly::Vertex* first =
+			quader_poly::find_vertex(source, edge.a);
+		const quader_poly::Vertex* second =
+			quader_poly::find_vertex(source, edge.b);
+		if (first != nullptr && second != nullptr &&
+		    first->position.x * second->position.x < 0.0F) {
+			crossing_edges.push_back(edge);
+		}
+	}
+	ASSERT_GE(crossing_edges.size(), 3U);
+	const quader_poly::Edge hard_source = crossing_edges[0];
+	const quader_poly::Edge soft_source = crossing_edges[1];
+	source.hard_normal_edges = {hard_source};
+	source.soft_normal_edges = {soft_source};
+
+	const PlaneCutRequest request = center_x_cut(PlaneCutMode::KeepBoth);
+	const PlaneCutResult solid = quader_poly::plane_cut(source, request);
+	ASSERT_TRUE(solid.changed) << solid.message;
+	for (const Document* half : {&solid.front_document,
+	                             &solid.back_document}) {
+		ASSERT_EQ(half->hard_normal_edges.size(), 1U);
+		EXPECT_TRUE(edge_lies_on_specific_source_edge(
+			source, hard_source, *half, half->hard_normal_edges.front()));
+		ASSERT_EQ(half->soft_normal_edges.size(), 1U);
+		EXPECT_TRUE(edge_lies_on_specific_source_edge(
+			source, soft_source, *half, half->soft_normal_edges.front()));
+		for (const quader_poly::Edge edge : quader_poly::document_edges(*half)) {
+			if (!edge_lies_on_plane(*half, edge, request)) {
+				continue;
+			}
+			EXPECT_FALSE(qdr_test::contains_edge(
+				half->hard_normal_edges, edge));
+			EXPECT_FALSE(qdr_test::contains_edge(
+				half->soft_normal_edges, edge));
+		}
+	}
+
+	Document surface = source;
+	quader_poly::Selection selection;
+	const OperationResult surface_result = quader_poly::plane_surface_cut(
+		surface, selection, request);
+	ASSERT_TRUE(surface_result.changed) << surface_result.message;
+	ASSERT_EQ(surface.hard_normal_edges.size(), 2U);
+	for (const quader_poly::Edge edge : surface.hard_normal_edges) {
+		EXPECT_TRUE(edge_lies_on_specific_source_edge(
+			source, hard_source, surface, edge));
+	}
+	ASSERT_EQ(surface.soft_normal_edges.size(), 2U);
+	for (const quader_poly::Edge edge : surface.soft_normal_edges) {
+		EXPECT_TRUE(edge_lies_on_specific_source_edge(
+			source, soft_source, surface, edge));
+	}
 }
 
 TEST(QdrDocumentOperationPlaneCutTests,

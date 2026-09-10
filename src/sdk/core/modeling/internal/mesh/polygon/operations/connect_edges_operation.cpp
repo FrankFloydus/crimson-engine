@@ -79,6 +79,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
     }
 
     std::map<std::pair<ElementId, ElementId>, ElementId> split_vertices;
+    std::map<ElementId, Edge> source_edge_by_split_vertex;
     Document candidate = document;
     for (const auto& entry : cut_edges_by_face_id) {
         for (const Edge& edge : entry.second) {
@@ -86,12 +87,29 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             if (split_vertex == kInvalidElementId) {
               return OperationResult::failure("Connect Edges could not split a selected edge.");
             }
+            source_edge_by_split_vertex[split_vertex] = make_edge(edge.a, edge.b);
         }
     }
 
     std::vector<Face> rebuilt_faces;
     rebuilt_faces.reserve(document.faces.size() + split_vertices.size());
     std::vector<Edge> connected_edges;
+    std::map<std::pair<ElementId, ElementId>, std::pair<Edge, Edge>>
+        connector_donors;
+    const auto add_connected_edge =
+        [&](ElementId first_vertex, ElementId second_vertex) {
+            const Edge connector = make_edge(first_vertex, second_vertex);
+            add_unique_edge(connected_edges, connector);
+            const auto first_donor =
+                source_edge_by_split_vertex.find(first_vertex);
+            const auto second_donor =
+                source_edge_by_split_vertex.find(second_vertex);
+            if (first_donor != source_edge_by_split_vertex.end() &&
+                second_donor != source_edge_by_split_vertex.end()) {
+                connector_donors[edge_key(connector)] =
+                    {first_donor->second, second_donor->second};
+            }
+        };
     bool changed = false;
 
     for (const Face& face : document.faces) {
@@ -154,12 +172,14 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             second_face.id = candidate.next_face_id++;
             second_face.vertices = std::move(second_loop);
             second_face.material_slot = face.material_slot;
+            second_face.normal_shading = face.normal_shading;
             second_face.texture_transform = face.texture_transform;
             if (!preserve_face_uvs(document, face, candidate, second_face)) {
                 return OperationResult::failure("Connect Edges could not preserve the source face UVs.");
             }
             rebuilt_faces.push_back(std::move(second_face));
-            add_unique_edge(connected_edges, make_edge(expanded_loop[cut_indices[0]], expanded_loop[cut_indices[1]]));
+            add_connected_edge(
+                expanded_loop[cut_indices[0]], expanded_loop[cut_indices[1]]);
             changed = true;
             continue;
         }
@@ -167,6 +187,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
         Face center_face;
         center_face.id = face.id;
         center_face.material_slot = face.material_slot;
+        center_face.normal_shading = face.normal_shading;
         center_face.texture_transform = face.texture_transform;
         center_face.vertices.reserve(cut_indices.size());
         for (const std::size_t cut_index : cut_indices) {
@@ -193,12 +214,13 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             side_face.id = candidate.next_face_id++;
             side_face.vertices = std::move(side_loop);
             side_face.material_slot = face.material_slot;
+            side_face.normal_shading = face.normal_shading;
             side_face.texture_transform = face.texture_transform;
             if (!preserve_face_uvs(document, face, candidate, side_face)) {
                 return OperationResult::failure("Connect Edges could not preserve the source face UVs.");
             }
             rebuilt_faces.push_back(std::move(side_face));
-            add_unique_edge(connected_edges, make_edge(expanded_loop[start], expanded_loop[end]));
+            add_connected_edge(expanded_loop[start], expanded_loop[end]);
         }
         changed = true;
     }
@@ -210,6 +232,21 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
     candidate.faces = std::move(rebuilt_faces);
     prune_invalid_faces(candidate);
     restore_source_face_orientation(document, candidate);
+    remap_normal_edge_states_after_edge_splits(
+        document, candidate, split_vertices);
+    std::vector<EdgeNormalModeCopy> connector_normal_mode_copies;
+    connector_normal_mode_copies.reserve(connected_edges.size() * 2U);
+    for (const Edge connector : connected_edges) {
+        const auto donors = connector_donors.find(edge_key(connector));
+        if (donors != connector_donors.end()) {
+            connector_normal_mode_copies.push_back(
+                {donors->second.first, connector});
+            connector_normal_mode_copies.push_back(
+                {donors->second.second, connector});
+        }
+    }
+    (void)copy_edge_normal_modes(
+        document, candidate, connector_normal_mode_copies);
     if (!every_face_triangulates(candidate)) {
         return OperationResult::failure("Connect Edges would create invalid face geometry.");
     }

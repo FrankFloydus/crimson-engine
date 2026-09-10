@@ -397,6 +397,39 @@ historical_legacy_object_record_fixture() {
   return {begin, begin + builder.GetSize()};
 }
 
+[[nodiscard]] std::vector<std::byte>
+legacy_smooth_csr_geometry_fixture(bool hard_shared_edge) {
+  flatbuffers::FlatBufferBuilder builder;
+  const std::vector<qdr_fb::PolygonVertex> vertices{
+      {10u, qdr_fb::Vec3(0.0f, 0.0f, 0.0f)},
+      {20u, qdr_fb::Vec3(1.0f, 0.0f, 0.0f)},
+      {30u, qdr_fb::Vec3(0.0f, 1.0f, 0.0f)},
+      {40u, qdr_fb::Vec3(1.0f, 1.0f, 0.0f)},
+  };
+  const std::vector<std::uint32_t> face_ids{9u, 10u};
+  const std::vector<std::uint32_t> offsets{0u, 3u, 6u};
+  const std::vector<std::uint32_t> face_vertices{
+      10u, 20u, 30u, 20u, 40u, 30u};
+  const std::vector<qdr_fb::Vec2> face_uvs{
+      {0.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 1.0f},
+      {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}};
+  const std::vector<std::uint32_t> material_slots{4u, 4u};
+  const std::vector<qdr_fb::SurfaceShading> shading{
+      qdr_fb::SurfaceShading::Smooth, qdr_fb::SurfaceShading::Smooth};
+  std::vector<qdr_fb::PolygonEdge> hard_edges;
+  if (hard_shared_edge) {
+    hard_edges.emplace_back(20u, 30u);
+  }
+  const auto root = qdr_fb::CreateGeometryPayloadDirect(
+      builder, qdr_fb::GeometryKind::AuthoredPolygon, 41u, 11u, &vertices,
+      &face_ids, &offsets, &face_vertices, &offsets, &face_uvs,
+      &material_slots, &shading, &hard_edges);
+  builder.Finish(root, "QDRG");
+  const auto *begin =
+      reinterpret_cast<const std::byte *>(builder.GetBufferPointer());
+  return {begin, begin + builder.GetSize()};
+}
+
 [[nodiscard]] quader_poly::Document legacy_csr_topology() {
   quader_poly::Document document;
   document.next_vertex_id = 31u;
@@ -451,6 +484,7 @@ void expect_polygon_topology_exact(const quader_poly::Document &actual,
     EXPECT_EQ(actual_face.texture_transform, expected_face.texture_transform);
   }
   EXPECT_EQ(actual.hard_normal_edges, expected.hard_normal_edges);
+  EXPECT_EQ(actual.soft_normal_edges, expected.soft_normal_edges);
 }
 
 TEST(QdrBinarySceneCodecTests, RoundTripPreservesExplicitUuidAndSceneData) {
@@ -814,7 +848,45 @@ TEST(QdrBinarySceneCodecTests,
     EXPECT_EQ(topology.hard_normal_edges,
               (std::vector<quader_poly::Edge>{
                   quader_poly::make_edge(10u, 20u)}));
+    EXPECT_TRUE(topology.soft_normal_edges.empty());
     EXPECT_FALSE(mesh->geometry().indices.empty());
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     LegacyCsrSmoothEdgesMigrateToExplicitSoftUnlessAuthoredHard) {
+  for (const bool hard_shared_edge : {false, true}) {
+    SceneContentDocument document = simple_scene();
+    ASSERT_TRUE(document.assets().replace_mesh(
+        10u, authored_triangle_mesh("Legacy Smooth CSR", 0.0f)));
+    const quader_io::QdrBinaryContainerReadResult parsed =
+        parse_written_scene(document);
+    ASSERT_TRUE(parsed.ok) << parsed.message;
+    std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
+    for (quader_io::QdrBinaryChunkInput &chunk : chunks) {
+      if (chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata) {
+        chunk.schema_version = 3u;
+      } else if (chunk.type == quader_io::QdrBinaryChunkType::Geometry) {
+        chunk.bytes = legacy_smooth_csr_geometry_fixture(hard_shared_edge);
+        chunk.content_hash = quader_io::qdr_binary_content_hash(chunk.bytes);
+      }
+    }
+
+    const QdrProjectReadResult read =
+        QdrDocumentReader::deserialize_project_document(
+            quader_io::build_qdr_binary_container(test_uuid(),
+                                                  std::move(chunks)));
+    ASSERT_TRUE(read.ok) << read.message;
+    const MeshAsset *mesh = read.document.assets().mesh(10u);
+    ASSERT_NE(mesh, nullptr);
+    ASSERT_TRUE(mesh->authored_polygon_document);
+    const quader_poly::Edge shared = quader_poly::make_edge(20u, 30u);
+    EXPECT_EQ(mesh->authored_polygon_document->hard_normal_edges,
+              hard_shared_edge ? std::vector<quader_poly::Edge>{shared}
+                               : std::vector<quader_poly::Edge>{});
+    EXPECT_EQ(mesh->authored_polygon_document->soft_normal_edges,
+              hard_shared_edge ? std::vector<quader_poly::Edge>{}
+                               : std::vector<quader_poly::Edge>{shared});
   }
 }
 
@@ -847,8 +919,11 @@ TEST(QdrBinarySceneCodecTests,
      SchemasFourAndSevenAcceptSdkAuthoredGeometryPayload) {
   for (const std::uint16_t schema_version : {4u, 7u}) {
     SceneContentDocument document = simple_scene();
+    MeshAsset authored = authored_triangle_mesh("SDK Authored", 0.0f);
+    authored.edit_authored_polygon_document().soft_normal_edges = {
+        quader_poly::make_edge(1u, 2u)};
     ASSERT_TRUE(document.assets().replace_mesh(
-        10u, authored_triangle_mesh("SDK Authored", 0.0f)));
+        10u, std::move(authored)));
     const quader_io::QdrBinaryContainerReadResult parsed =
         parse_written_scene(document);
     ASSERT_TRUE(parsed.ok) << parsed.message;
@@ -867,7 +942,10 @@ TEST(QdrBinarySceneCodecTests,
                          << read.message;
     const MeshAsset *mesh = read.document.assets().mesh(10u);
     ASSERT_NE(mesh, nullptr);
-    EXPECT_TRUE(mesh->authored_polygon_document);
+    ASSERT_TRUE(mesh->authored_polygon_document);
+    EXPECT_EQ(mesh->authored_polygon_document->soft_normal_edges,
+              (std::vector<quader_poly::Edge>{
+                  quader_poly::make_edge(1u, 2u)}));
   }
 }
 

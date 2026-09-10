@@ -27,6 +27,12 @@ enum class FaceExtrudeSourcePolicy {
     RetainFullyOpenRegion,
 };
 
+/** Controls face shading for the side region generated around a copied cap. */
+enum class FaceSideShadingPolicy {
+    Default,
+    InheritSource,
+};
+
 quader::QVec3 basis_transform_point(const Transform3& transform, quader::QVec3 point)
 {
     return {
@@ -303,6 +309,20 @@ bool append_closed_edge_ledge_extrusion_with_copied_vertices(
     };
     [[maybe_unused]] const bool from_cap_added = append_renderable_face_oriented(document, from_cap, *cap_source, edge_direction * -1.0F);
 
+    const std::array normal_mode_copies {
+        EdgeNormalModeCopy {edge, make_edge(root_cap_from, root_cap_to)},
+        EdgeNormalModeCopy {
+            make_edge(cap_from, from_neighbor),
+            make_edge(root_cap_from, from_inner),
+        },
+        EdgeNormalModeCopy {
+            make_edge(cap_to, to_neighbor),
+            make_edge(root_cap_to, to_inner),
+        },
+    };
+    static_cast<void>(
+        copy_edge_normal_modes(document, document, normal_mode_copies));
+
     add_unique_edge(selected_edges, make_edge(copied_a, copied_b));
     return true;
 }
@@ -313,6 +333,7 @@ OperationResult extrude_selected_faces_with_copied_vertices(
     Selection& selection,
     CopyVertex&& copy_vertex,
     FaceExtrudeSourcePolicy source_policy,
+    FaceSideShadingPolicy side_shading_policy,
     std::string_view empty_message,
     std::string_view missing_message,
     std::string_view unchanged_message)
@@ -420,8 +441,13 @@ OperationResult extrude_selected_faces_with_copied_vertices(
                 copied_to->second,
                 copied_from->second,
             };
-            [[maybe_unused]] const ElementId side_face_id = add_face_with_texture_transform(
+            const ElementId side_face_id = add_face_with_texture_transform(
                 document, side, original_face.material_slot, original_face.texture_transform);
+            if (side_shading_policy == FaceSideShadingPolicy::InheritSource) {
+                if (Face* side_face = find_face(document, side_face_id)) {
+                    side_face->normal_shading = original_face.normal_shading;
+                }
+            }
         }
     }
 
@@ -447,7 +473,26 @@ OperationResult extrude_selected_faces_with_copied_vertices(
         }
     }
 
+    std::vector<EdgeNormalModeCopy> normal_mode_copies;
+    for (const Face& original_face : faces) {
+        for (const Edge source_edge : face_edges(original_face)) {
+            const auto copied_a = copied_vertices.find(source_edge.a);
+            const auto copied_b = copied_vertices.find(source_edge.b);
+            if (copied_a == copied_vertices.end() ||
+                copied_b == copied_vertices.end()) {
+                continue;
+            }
+            normal_mode_copies.push_back({
+                source_edge,
+                make_edge(copied_a->second, copied_b->second),
+            });
+        }
+    }
+    static_cast<void>(
+        copy_edge_normal_modes(document, document, normal_mode_copies));
+
     prune_invalid_faces(document);
+    prune_normal_edge_states(document);
     selection.clear();
     selection.mode = SelectionMode::Face;
     selection.faces = std::move(selected_faces);
@@ -541,7 +586,24 @@ OperationResult extrude_selected_edges_with_copied_vertices(
         return OperationResult::failure(std::string(unchanged_message));
     }
 
+    std::vector<EdgeNormalModeCopy> normal_mode_copies;
+    for (const Edge source_edge : edges) {
+        const auto copied_a = copied_vertices.find(source_edge.a);
+        const auto copied_b = copied_vertices.find(source_edge.b);
+        if (copied_a == copied_vertices.end() ||
+            copied_b == copied_vertices.end()) {
+            continue;
+        }
+        normal_mode_copies.push_back({
+            source_edge,
+            make_edge(copied_a->second, copied_b->second),
+        });
+    }
+    static_cast<void>(
+        copy_edge_normal_modes(document, document, normal_mode_copies));
+
     prune_invalid_faces(document);
+    prune_normal_edge_states(document);
     selection.clear();
     selection.mode = SelectionMode::Edge;
     selection.edges = std::move(selected_edges);
@@ -569,6 +631,7 @@ OperationResult extrude_selected_elements_impl(Document& document, Selection& se
                                              source_id, offset);
           },
           FaceExtrudeSourcePolicy::RetainFullyOpenRegion,
+          FaceSideShadingPolicy::Default,
           "Select one or more faces to extrude.",
           "No selected faces were found.", "No selected faces were extruded.");
     }
@@ -602,6 +665,7 @@ OperationResult transform_extrude_selected_elements_impl(Document& document, Sel
                                                 source_id, transform, pivot);
           },
           FaceExtrudeSourcePolicy::RetainFullyOpenRegion,
+          FaceSideShadingPolicy::Default,
           "Select one or more faces to extrude.",
           "No selected faces were found.", "No selected faces were extruded.");
     }
@@ -636,6 +700,7 @@ OperationResult inset_selected_elements_impl(Document& document, Selection& sele
                                                 source_id, transform, pivot);
           },
           FaceExtrudeSourcePolicy::Discard,
+          FaceSideShadingPolicy::InheritSource,
           "Select one or more faces to inset.", "No selected faces were found.",
           "No selected faces were inset.");
     }

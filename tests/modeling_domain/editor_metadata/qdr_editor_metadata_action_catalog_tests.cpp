@@ -30,7 +30,7 @@ const qhc::HostActionDescriptor& require_action(std::string_view id)
 
 TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogLinksPanelActionsToDescriptorOnlyOperationsOrTools) {
 	const std::span<const qhc::HostActionDescriptor> actions = qhc::action_catalog();
-	EXPECT_TRUE(actions.size() == 43U);
+	EXPECT_TRUE(actions.size() == 44U);
 
 	for (const qhc::HostActionDescriptor& action : actions) {
 		EXPECT_FALSE(action.id.empty());
@@ -105,11 +105,19 @@ TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogDescribesSele
         EXPECT_TRUE(snap_vertices.availability.required_active_kind ==
                     qhc::HostActiveSelectionKind::Vertex);
 
-        const qhc::HostActionDescriptor& fill_hole = require_action("fill_hole");
+	const qhc::HostActionDescriptor& fill_hole = require_action("fill_hole");
         EXPECT_TRUE(fill_hole.availability.selection_mode ==
                     qhc::HostSelectionMode::Edge);
         EXPECT_TRUE(fill_hole.availability.minimum_selected_edges == 3U);
 	EXPECT_TRUE(fill_hole.availability.requires_single_object);
+
+	const qhc::HostActionDescriptor& default_edge_normals =
+		require_action("default_edge_normals");
+	EXPECT_TRUE(default_edge_normals.availability.selection_mode ==
+		qhc::HostSelectionMode::Edge);
+	EXPECT_TRUE(default_edge_normals.availability.minimum_selected_edges == 1U);
+	EXPECT_TRUE(same_text(default_edge_normals.operation_id,
+		"default_edge_normals"));
 
 	const qhc::HostActionDescriptor& bridge_faces = require_action("bridge_faces");
         EXPECT_TRUE(bridge_faces.availability.selection_mode ==

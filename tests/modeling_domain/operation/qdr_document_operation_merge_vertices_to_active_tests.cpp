@@ -29,6 +29,32 @@ TEST(QdrDocumentOperationMergeVerticesToActiveTests, MergeVerticesToActivePreser
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
 
+TEST(QdrDocumentOperationMergeVerticesToActiveTests,
+     MergeVerticesToActiveTransfersExplicitSoftEdgeState) {
+    Document document;
+    const ElementId active = add_vertex(document, {0.0F, 0.0F, 0.0F});
+    const ElementId removed = add_vertex(document, {-1.0F, 0.0F, 0.0F});
+    const ElementId right = add_vertex(document, {1.0F, 0.0F, 0.0F});
+    const ElementId top = add_vertex(document, {0.0F, 1.0F, 0.0F});
+    ASSERT_NE(add_face(document, std::array{removed, right, top}),
+              kInvalidElementId);
+    document.soft_normal_edges = {make_edge(removed, right)};
+    Selection selection = qdr_test::vertex_selection({active, removed}, active);
+
+    const OperationResult result =
+        merge_selected_vertices_to_active(document, selection);
+
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    EXPECT_EQ(find_vertex(document, removed), nullptr);
+    const Edge replacement = make_edge(active, right);
+    EXPECT_TRUE(qdr_test::document_has_edge(document, replacement));
+    EXPECT_TRUE(qdr_test::contains_edge(document.soft_normal_edges,
+                                        replacement));
+    EXPECT_FALSE(qdr_test::contains_edge(document.hard_normal_edges,
+                                         replacement));
+}
+
 TEST(QdrDocumentOperationMergeVerticesToActiveTests, MergeVerticesToActivePreservesCubeTopologyAndSlopedUVLoopsAdjacentCubeVerticesCollapseIntoTheActiveIdWithoutOpeningTheHull) {
 	{
 		Document document = make_cube({});

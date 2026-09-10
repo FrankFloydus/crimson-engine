@@ -268,6 +268,12 @@ to_sdk_topology(const quader_poly::Document &document) {
         quader::modeling::make_id<quader::modeling::VertexTag>(edge.a),
         quader::modeling::make_id<quader::modeling::VertexTag>(edge.b)));
   }
+  topology.soft_normal_edges.reserve(document.soft_normal_edges.size());
+  for (const quader_poly::Edge edge : document.soft_normal_edges) {
+    topology.soft_normal_edges.push_back(quader::modeling::make_edge_key(
+        quader::modeling::make_id<quader::modeling::VertexTag>(edge.a),
+        quader::modeling::make_id<quader::modeling::VertexTag>(edge.b)));
+  }
   return topology;
 }
 
@@ -312,6 +318,11 @@ to_native_topology(const quader::modeling::AuthoredTopology &topology) {
     document.hard_normal_edges.push_back(
         quader_poly::make_edge(edge.a.index, edge.b.index));
   }
+  document.soft_normal_edges.reserve(topology.soft_normal_edges.size());
+  for (const quader::modeling::EdgeKey edge : topology.soft_normal_edges) {
+    document.soft_normal_edges.push_back(
+        quader_poly::make_edge(edge.a.index, edge.b.index));
+  }
   return document;
 }
 
@@ -320,6 +331,7 @@ bool same_topology_layout(const quader_poly::Document &left,
   if (left.vertices.size() != right.vertices.size() ||
       left.faces.size() != right.faces.size() ||
       left.hard_normal_edges != right.hard_normal_edges ||
+      left.soft_normal_edges != right.soft_normal_edges ||
       left.next_vertex_id != right.next_vertex_id ||
       left.next_face_id != right.next_face_id) {
     return false;

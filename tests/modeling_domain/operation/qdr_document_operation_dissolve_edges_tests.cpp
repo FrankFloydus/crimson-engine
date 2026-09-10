@@ -257,6 +257,36 @@ TEST(QdrDocumentOperationDissolveEdgesTests, DissolveRemovesSupportVerticesDespi
     qdr_test::expect_valid_polygon_document_after_success(document, result);
 }
 
+TEST(QdrDocumentOperationDissolveEdgesTests,
+     DissolveSupportVertexUsesTheLastOrderedNormalModeDonor) {
+    Document document;
+    const ElementId a = add_vertex(document, {0.0F, 0.0F, 0.0F});
+    const ElementId e = add_vertex(document, {1.0F, 0.0F, 0.0F});
+    const ElementId b = add_vertex(document, {2.0F, 0.0F, 0.0F});
+    const ElementId d = add_vertex(document, {0.0F, 2.0F, 0.0F});
+    const ElementId f = add_vertex(document, {1.0F, 2.0F, 0.0F});
+    const ElementId c = add_vertex(document, {2.0F, 2.0F, 0.0F});
+    ASSERT_NE(add_face(document, std::array{a, e, f, d}),
+              kInvalidElementId);
+    ASSERT_NE(add_face(document, std::array{e, b, c, f}),
+              kInvalidElementId);
+    document.hard_normal_edges = {make_edge(a, e)};
+    document.soft_normal_edges = {make_edge(e, b)};
+    Selection selection = qdr_test::edge_selection({make_edge(e, f)});
+
+    const OperationResult result =
+        dissolve_selected_edges(document, selection);
+
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    const Edge replacement = make_edge(a, b);
+    EXPECT_TRUE(qdr_test::document_has_edge(document, replacement));
+    EXPECT_TRUE(qdr_test::contains_edge(document.soft_normal_edges,
+                                        replacement));
+    EXPECT_FALSE(qdr_test::contains_edge(document.hard_normal_edges,
+                                         replacement));
+}
+
 TEST(QdrDocumentOperationDissolveEdgesTests, DissolveKeepsBoundaryUvsAcrossANoncoplanarQuadJoin) {
     Document document;
     const ElementId a = add_vertex(document, {-1.0F, 0.0F, 0.0F});
@@ -329,7 +359,8 @@ TEST(QdrDocumentOperationDissolveEdgesTests, DissolveCompletesTheSelectedBatchBe
     source.hard_normal_edges = {make_edge(center, right), make_edge(right, upper),
         make_edge(upper_left, left), make_edge(left, lower_left)};
     const std::array selected_edges{make_edge(center, right), make_edge(center, upper_left)};
-    const std::array expected_hard_edges{make_edge(lower, upper), make_edge(upper, left),
+    const Edge expected_default_edge = make_edge(lower, upper);
+    const std::array expected_hard_edges{make_edge(upper, left),
         make_edge(left, lower_left)};
 
     for (const bool reverse_order : {false, true}) {
@@ -365,6 +396,11 @@ TEST(QdrDocumentOperationDissolveEdgesTests, DissolveCompletesTheSelectedBatchBe
             EXPECT_NE(std::ranges::find(document.hard_normal_edges, edge), document.hard_normal_edges.end());
             EXPECT_TRUE(qdr_test::document_has_edge(document, edge));
         }
+        EXPECT_TRUE(qdr_test::document_has_edge(document, expected_default_edge));
+        EXPECT_FALSE(qdr_test::contains_edge(
+            document.hard_normal_edges, expected_default_edge));
+        EXPECT_FALSE(qdr_test::contains_edge(
+            document.soft_normal_edges, expected_default_edge));
         EXPECT_EQ(selection.mode, SelectionMode::Face);
         EXPECT_EQ(selection.faces, std::vector<ElementId>{first});
         EXPECT_EQ(selection.active_face, first);

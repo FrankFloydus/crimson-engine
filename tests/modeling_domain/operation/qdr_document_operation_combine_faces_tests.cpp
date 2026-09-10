@@ -12,6 +12,63 @@
 
 using namespace quader_poly;
 
+namespace {
+
+struct RedundantSharedEdgeFixture {
+	Document document;
+	ElementId first_face = kInvalidElementId;
+	ElementId second_face = kInvalidElementId;
+	ElementId middle = kInvalidElementId;
+	Edge first_donor;
+	Edge second_donor;
+	Edge replacement;
+};
+
+RedundantSharedEdgeFixture make_redundant_shared_edge_fixture(
+	bool add_pre_existing_replacement,
+	bool reverse_face_rows = false)
+{
+	RedundantSharedEdgeFixture fixture;
+	const ElementId a = add_vertex(fixture.document, { 0.0F, 0.0F, 0.0F });
+	fixture.middle = add_vertex(fixture.document, { 1.0F, 0.0F, 0.0F });
+	const ElementId b = add_vertex(fixture.document, { 2.0F, 0.0F, 0.0F });
+	const ElementId upper = add_vertex(fixture.document, { 0.0F, 2.0F, 0.0F });
+	fixture.first_face = add_face(
+		fixture.document, std::array { a, fixture.middle, upper });
+	fixture.second_face = add_face(
+		fixture.document, std::array { fixture.middle, b, upper });
+	EXPECT_NE(fixture.first_face, kInvalidElementId);
+	EXPECT_NE(fixture.second_face, kInvalidElementId);
+	if (add_pre_existing_replacement) {
+		const ElementId lower =
+			add_vertex(fixture.document, { 2.0F, -1.0F, 0.0F });
+		EXPECT_NE(
+			add_face(fixture.document, std::array { b, a, lower }),
+			kInvalidElementId);
+	}
+	if (reverse_face_rows) {
+		std::ranges::reverse(fixture.document.faces);
+	}
+	fixture.first_donor = make_edge(a, fixture.middle);
+	fixture.second_donor = make_edge(fixture.middle, b);
+	fixture.replacement = make_edge(a, b);
+	return fixture;
+}
+
+void finish_redundant_vertex_removal(RedundantSharedEdgeFixture& fixture)
+{
+	Selection selection = qdr_test::face_selection(
+		{ fixture.first_face, fixture.second_face }, fixture.first_face);
+	const OperationResult result =
+		combine_selected_faces(fixture.document, selection);
+	ASSERT_TRUE(result.changed) << result.message;
+	EXPECT_EQ(find_vertex(fixture.document, fixture.middle), nullptr);
+	qdr_test::expect_valid_polygon_document_after_success(
+		fixture.document, result);
+}
+
+} // namespace
+
 TEST(QdrDocumentOperationCombineFacesTests, CombineFacesRemovesASupportEdgeBetweenAdjacentSelectedFaces) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 	Selection split = qdr_test::edge_selection({
@@ -219,4 +276,124 @@ TEST(QdrDocumentOperationCombineFacesTests, CombineValidatesContinuousBilinearSu
         EXPECT_FLOAT_EQ(face.uvs[index].y, 0.5F * position.y);
     }
     qdr_test::expect_valid_polygon_document_after_success(document, result);
+}
+
+TEST(QdrDocumentOperationCombineFacesTests, CombineUsesFaceDonorShadingAndOrderedEdgeModeTransfer) {
+	Document document;
+	const ElementId a = add_vertex(document, { 0.0F, 0.0F, 0.0F });
+	const ElementId middle = add_vertex(document, { 1.0F, 0.0F, 0.0F });
+	const ElementId b = add_vertex(document, { 2.0F, 0.0F, 0.0F });
+	const ElementId c = add_vertex(document, { 0.0F, 2.0F, 0.0F });
+	const ElementId first = add_face(document, std::array { a, middle, c });
+	const ElementId second = add_face(document, std::array { middle, b, c });
+	ASSERT_NE(first, kInvalidElementId);
+	ASSERT_NE(second, kInvalidElementId);
+	find_face(document, first)->normal_shading = SurfaceShading::Smooth;
+	find_face(document, second)->normal_shading = SurfaceShading::Flat;
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(
+		document, make_edge(a, middle), EdgeNormalMode::Hard));
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(
+		document, make_edge(middle, b), EdgeNormalMode::Soft));
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(
+		document, make_edge(middle, c), EdgeNormalMode::Hard));
+	Selection selection = qdr_test::face_selection({ first, second }, first);
+
+	const OperationResult result = combine_selected_faces(document, selection);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	ASSERT_EQ(document.faces.size(), 1U);
+	EXPECT_EQ(document.faces.front().normal_shading, SurfaceShading::Smooth);
+	EXPECT_EQ(find_vertex(document, middle), nullptr);
+	EXPECT_EQ(qdr_test::edge_normal_mode(document, make_edge(a, b)), EdgeNormalMode::Soft);
+	EXPECT_EQ(document.hard_normal_edges.size(), 0U);
+	EXPECT_EQ(document.soft_normal_edges, std::vector<Edge> { make_edge(a, b) });
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
+}
+
+TEST(QdrDocumentOperationCombineFacesTests,
+	 RedundantSharedEdgeModeDoesNotDependOnFaceRowOrder) {
+	for (const bool reverse_face_rows : { false, true }) {
+		SCOPED_TRACE(reverse_face_rows);
+		RedundantSharedEdgeFixture fixture =
+			make_redundant_shared_edge_fixture(false, reverse_face_rows);
+		ASSERT_TRUE(qdr_test::set_edge_normal_mode(
+			fixture.document, fixture.first_donor, EdgeNormalMode::Hard));
+		ASSERT_TRUE(qdr_test::set_edge_normal_mode(
+			fixture.document, fixture.second_donor, EdgeNormalMode::Soft));
+
+		finish_redundant_vertex_removal(fixture);
+
+		EXPECT_EQ(
+			qdr_test::edge_normal_mode(
+				fixture.document, fixture.replacement),
+			EdgeNormalMode::Soft);
+		qdr_test::expect_valid_polygon_document(
+			fixture.document, "redundant shared-edge removal");
+	}
+}
+
+TEST(QdrDocumentOperationCombineFacesTests,
+	 RedundantSharedEdgeUsesCanonicalDonorOrderIncludingDefault) {
+	struct DonorCase {
+		EdgeNormalMode first = EdgeNormalMode::Default;
+		EdgeNormalMode second = EdgeNormalMode::Default;
+		EdgeNormalMode expected = EdgeNormalMode::Default;
+	};
+	const std::array cases {
+		DonorCase {
+			EdgeNormalMode::Hard,
+			EdgeNormalMode::Default,
+			EdgeNormalMode::Default,
+		},
+		DonorCase {
+			EdgeNormalMode::Default,
+			EdgeNormalMode::Soft,
+			EdgeNormalMode::Soft,
+		},
+	};
+
+	for (const DonorCase& donor_case : cases) {
+		SCOPED_TRACE(static_cast<int>(donor_case.expected));
+		RedundantSharedEdgeFixture fixture =
+			make_redundant_shared_edge_fixture(false);
+		if (donor_case.first != EdgeNormalMode::Default) {
+			ASSERT_TRUE(qdr_test::set_edge_normal_mode(
+				fixture.document,
+				fixture.first_donor,
+				donor_case.first));
+		}
+		if (donor_case.second != EdgeNormalMode::Default) {
+			ASSERT_TRUE(qdr_test::set_edge_normal_mode(
+				fixture.document,
+				fixture.second_donor,
+				donor_case.second));
+		}
+
+		finish_redundant_vertex_removal(fixture);
+
+		EXPECT_EQ(
+			qdr_test::edge_normal_mode(
+				fixture.document, fixture.replacement),
+			donor_case.expected);
+		qdr_test::expect_valid_polygon_document(
+			fixture.document, "canonical redundant-edge donors");
+	}
+}
+
+TEST(QdrDocumentOperationCombineFacesTests,
+	 RedundantSharedEdgePreservesAPreExistingReplacementMode) {
+	RedundantSharedEdgeFixture fixture =
+		make_redundant_shared_edge_fixture(true);
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(
+		fixture.document, fixture.second_donor, EdgeNormalMode::Soft));
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(
+		fixture.document, fixture.replacement, EdgeNormalMode::Hard));
+
+	finish_redundant_vertex_removal(fixture);
+
+	EXPECT_EQ(
+		qdr_test::edge_normal_mode(fixture.document, fixture.replacement),
+		EdgeNormalMode::Hard);
+	qdr_test::expect_valid_polygon_document(
+		fixture.document, "pre-existing redundant-edge replacement");
 }

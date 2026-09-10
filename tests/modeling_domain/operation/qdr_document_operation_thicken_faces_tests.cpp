@@ -135,3 +135,53 @@ TEST(QdrDocumentOperationThickenFacesTests, NegativeThickenIgnoresLegacyFromCent
 	EXPECT_TRUE(minmax.second->position.z > 0.49F);
 	EXPECT_TRUE(qdr_test::every_edge_is_closed(fixture.document));
 }
+
+TEST(QdrDocumentOperationThickenFacesTests, ThickenCopiesFaceShadingAndExactModesToTheOffsetCap) {
+	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	Face& source = fixture.document.faces.front();
+	source.normal_shading = SurfaceShading::Smooth;
+	const std::vector<ElementId> source_vertices = source.vertices;
+	const Edge hard_source = make_edge(source_vertices[0], source_vertices[1]);
+	const Edge soft_source = make_edge(source_vertices[2], source_vertices[3]);
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(fixture.document, hard_source, EdgeNormalMode::Hard));
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(fixture.document, soft_source, EdgeNormalMode::Soft));
+	Selection selection = qdr_test::face_selection({ fixture.face }, fixture.face);
+
+	const OperationResult result = thicken_selected_faces(
+		fixture.document, selection, 0.5F, false);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	ASSERT_FALSE(result.created.faces.empty());
+	const Face* offset_cap = find_face(fixture.document, result.created.faces.front());
+	ASSERT_NE(offset_cap, nullptr);
+	EXPECT_EQ(offset_cap->normal_shading, SurfaceShading::Smooth);
+	auto offset_vertex_for = [&](ElementId source_id) {
+		const Vertex* source_vertex = find_vertex(fixture.document, source_id);
+		if (source_vertex == nullptr) {
+			return kInvalidElementId;
+		}
+		const auto found = std::ranges::find_if(
+			fixture.document.vertices,
+			[&](const Vertex& candidate) {
+				return candidate.id != source_id &&
+					qdr_test::vec_nearly_equal(
+						candidate.position,
+						source_vertex->position + quader::QVec3 { 0.0F, 0.0F, -0.5F });
+			});
+		return found == fixture.document.vertices.end() ? kInvalidElementId : found->id;
+	};
+	const Edge hard_copy = make_edge(
+		offset_vertex_for(source_vertices[0]), offset_vertex_for(source_vertices[1]));
+	const Edge soft_copy = make_edge(
+		offset_vertex_for(source_vertices[2]), offset_vertex_for(source_vertices[3]));
+	ASSERT_NE(hard_copy.a, kInvalidElementId);
+	ASSERT_NE(soft_copy.a, kInvalidElementId);
+	EXPECT_EQ(qdr_test::edge_normal_mode(fixture.document, hard_copy), EdgeNormalMode::Hard);
+	EXPECT_EQ(qdr_test::edge_normal_mode(fixture.document, soft_copy), EdgeNormalMode::Soft);
+	EXPECT_EQ(
+		qdr_test::edge_normal_mode(
+			fixture.document,
+			make_edge(source_vertices[0], offset_vertex_for(source_vertices[0]))),
+		EdgeNormalMode::Default);
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
+}

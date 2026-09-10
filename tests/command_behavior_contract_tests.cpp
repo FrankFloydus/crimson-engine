@@ -614,9 +614,9 @@ TEST(CommandBehaviorContractTests,
   EXPECT_EQ(contracted, registered)
       << "The registry and explicit behavior-contract catalog diverged.";
 #ifndef NDEBUG
-  EXPECT_EQ(contracted.size(), 207u);
+  EXPECT_EQ(contracted.size(), 208u);
 #else
-  EXPECT_EQ(contracted.size(), 206u);
+  EXPECT_EQ(contracted.size(), 207u);
 #endif
 }
 
@@ -824,6 +824,71 @@ TEST(CommandBehaviorContractTests,
             restored.domain(CommandObservableDomain::Geometry));
   EXPECT_EQ(before.domain(CommandObservableDomain::Selection),
             restored.domain(CommandObservableDomain::Selection));
+}
+
+TEST(CommandBehaviorContractTests,
+     DefaultEdgeNormalsRestoresAuthoredHardStateThroughHistory) {
+  const CommandBehaviorContract *contract = find_command_behavior_contract(
+      quader_command::kModelingDefaultEdgeNormals.string());
+  ASSERT_NE(contract, nullptr);
+  EXPECT_EQ(contract->fixture,
+            CanonicalCommandFixture::AuthoredHardEdgeSelection);
+  EXPECT_EQ(contract->outcome, CommandOutcomePolicy::ChangeRequired);
+  EXPECT_EQ(contract->undo_repeat,
+            CommandUndoRepeatPolicy::UndoableAndRepeatable);
+
+  std::unique_ptr<CommandBehaviorFixture> fixture =
+      CommandBehaviorFixture::create(*contract);
+  QuaderEditorApi &editor = fixture->editor();
+  const QuaderApiVoidResult already_hard = editor.commands().execute(
+      quader_command::kModelingHardenEdgeNormals);
+  ASSERT_TRUE(already_hard.ok()) << already_hard.error_message();
+  ASSERT_FALSE(already_hard.changed());
+
+  const CommandObservableState before =
+      capture_command_observable_state(editor);
+  const QuaderApiVoidResult reset = editor.commands().execute(
+      quader_command::kModelingDefaultEdgeNormals);
+  ASSERT_TRUE(reset.ok()) << reset.error_message();
+  ASSERT_TRUE(reset.changed());
+  const QuaderApiVoidResult already_default = editor.commands().execute(
+      quader_command::kModelingDefaultEdgeNormals);
+  ASSERT_TRUE(already_default.ok()) << already_default.error_message();
+  ASSERT_FALSE(already_default.changed());
+  const CommandObservableState defaulted =
+      capture_command_observable_state(editor);
+  EXPECT_EQ(before.domain(CommandObservableDomain::Geometry),
+            defaulted.domain(CommandObservableDomain::Geometry));
+
+  const QuaderApiVoidResult undone = editor.history().undo();
+  ASSERT_TRUE(undone.ok()) << undone.error_message();
+  ASSERT_TRUE(undone.changed());
+  const QuaderApiVoidResult restored_hard = editor.commands().execute(
+      quader_command::kModelingHardenEdgeNormals);
+  ASSERT_TRUE(restored_hard.ok()) << restored_hard.error_message();
+  ASSERT_FALSE(restored_hard.changed());
+  EXPECT_EQ(before.domain(CommandObservableDomain::Geometry),
+            capture_command_observable_state(editor).domain(
+                CommandObservableDomain::Geometry));
+
+  const QuaderApiVoidResult redone = editor.history().redo();
+  ASSERT_TRUE(redone.ok()) << redone.error_message();
+  ASSERT_TRUE(redone.changed());
+  const QuaderApiVoidResult restored_default = editor.commands().execute(
+      quader_command::kModelingDefaultEdgeNormals);
+  ASSERT_TRUE(restored_default.ok()) << restored_default.error_message();
+  ASSERT_FALSE(restored_default.changed());
+  EXPECT_EQ(defaulted.domain(CommandObservableDomain::Geometry),
+            capture_command_observable_state(editor).domain(
+                CommandObservableDomain::Geometry));
+
+  const QuaderApiVoidResult repeated = editor.history().repeat_last_action();
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_FALSE(repeated.changed());
+  const QuaderApiVoidResult remains_default = editor.commands().execute(
+      quader_command::kModelingDefaultEdgeNormals);
+  ASSERT_TRUE(remains_default.ok()) << remains_default.error_message();
+  EXPECT_FALSE(remains_default.changed());
 }
 
 TEST(CommandBehaviorContractTests,

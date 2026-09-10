@@ -94,6 +94,21 @@ OperationResult detach_selected_faces_impl(Document& document, Selection& select
         return OperationResult::failure("Detach would create invalid face geometry.");
     }
 
+    std::vector<EdgeNormalModeCopy> normal_mode_copies;
+    for (const Face& source_face : selected_faces) {
+        for (const Edge source_edge : face_edges(source_face)) {
+            const auto mapped_a = duplicate_vertices.find(source_edge.a);
+            const auto mapped_b = duplicate_vertices.find(source_edge.b);
+            const Edge detached_edge = make_edge(
+                mapped_a == duplicate_vertices.end() ? source_edge.a : mapped_a->second,
+                mapped_b == duplicate_vertices.end() ? source_edge.b : mapped_b->second);
+            normal_mode_copies.push_back({source_edge, detached_edge});
+        }
+    }
+    static_cast<void>(
+        copy_edge_normal_modes(document, candidate, normal_mode_copies));
+    prune_normal_edge_states(candidate);
+
     document = std::move(candidate);
     selection.clear();
     selection.mode = SelectionMode::Face;

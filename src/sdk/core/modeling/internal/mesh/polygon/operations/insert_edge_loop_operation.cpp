@@ -76,8 +76,10 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
     std::map<std::pair<ElementId, ElementId>, ElementId> split_vertices;
     std::vector<Face> split_faces;
     std::vector<Edge> inserted_edges;
+    std::vector<std::pair<Edge, std::pair<Edge, Edge>>> inserted_edge_donors;
     split_faces.reserve(splits.size() * 2U);
     inserted_edges.reserve(splits.size());
+    inserted_edge_donors.reserve(splits.size());
 
     for (const EdgeLoopFaceSplit& split : splits) {
         const Face* face = find_face_copy(original_faces, split.face_id);
@@ -108,6 +110,7 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
         first_split_face.id = face->id;
         first_split_face.vertices = { face->vertices[i1], face->vertices[i2], opposite_vertex, entry_vertex };
         first_split_face.material_slot = face->material_slot;
+        first_split_face.normal_shading = face->normal_shading;
         first_split_face.texture_transform = face->texture_transform;
         if (!preserve_face_uvs(document, *face, candidate, first_split_face)) {
             return OperationResult::failure("Edge loop insertion could not preserve the source face UVs.");
@@ -118,12 +121,18 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
         second_split_face.id = candidate.next_face_id++;
         second_split_face.vertices = { face->vertices[i0], entry_vertex, opposite_vertex, face->vertices[i3] };
         second_split_face.material_slot = face->material_slot;
+        second_split_face.normal_shading = face->normal_shading;
         second_split_face.texture_transform = face->texture_transform;
         if (!preserve_face_uvs(document, *face, candidate, second_split_face)) {
             return OperationResult::failure("Edge loop insertion could not preserve the source face UVs.");
         }
         split_faces.push_back(std::move(second_split_face));
-        inserted_edges.push_back(make_edge(entry_vertex, opposite_vertex));
+        const Edge inserted_edge = make_edge(entry_vertex, opposite_vertex);
+        inserted_edges.push_back(inserted_edge);
+        inserted_edge_donors.push_back(
+            {inserted_edge,
+             {make_edge(entry_edge.a, entry_edge.b),
+              make_edge(opposite_edge.a, opposite_edge.b)}});
     }
 
     if (split_faces.empty()) {
@@ -145,6 +154,18 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
     prune_invalid_faces(candidate);
     prune_unused_vertices(candidate);
     restore_source_face_orientation(document, candidate);
+    remap_normal_edge_states_after_edge_splits(
+        document, candidate, split_vertices);
+    std::vector<EdgeNormalModeCopy> connector_normal_mode_copies;
+    connector_normal_mode_copies.reserve(inserted_edge_donors.size() * 2U);
+    for (const auto& [inserted_edge, donors] : inserted_edge_donors) {
+        connector_normal_mode_copies.push_back(
+            {donors.first, inserted_edge});
+        connector_normal_mode_copies.push_back(
+            {donors.second, inserted_edge});
+    }
+    (void)copy_edge_normal_modes(
+        document, candidate, connector_normal_mode_copies);
     if (!every_face_triangulates(candidate)) {
         return OperationResult::failure("Edge loop insertion would create invalid face geometry.");
     }

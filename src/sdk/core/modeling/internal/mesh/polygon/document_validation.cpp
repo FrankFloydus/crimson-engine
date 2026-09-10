@@ -16,7 +16,9 @@
 #include <map>
 #include <ranges>
 #include <set>
+#include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -301,34 +303,86 @@ void validate_nonmanifold_edges(
     }
 }
 
-void validate_hard_normal_edges(
-    const Document& document,
+void validate_normal_edges(
+    std::span<const Edge> normal_edges,
+    PolygonDocumentDiagnosticCode invalid_code,
+    std::string_view label,
     const std::set<ElementId>& vertex_ids,
     const std::map<EdgeIdPair, int>& edge_counts,
     PolygonDocumentValidationReport& report)
 {
-    static_cast<void>(document);
-    for (const Edge& hard_edge : document.hard_normal_edges) {
-        const Edge normalized = make_edge(hard_edge.a, hard_edge.b);
+    std::set<EdgeIdPair> seen;
+    for (const Edge& authored_edge : normal_edges) {
+        const Edge normalized = make_edge(authored_edge.a, authored_edge.b);
         const bool valid_edge =
             normalized.a != normalized.b &&
             valid_vertex_id(normalized.a, vertex_ids) &&
             valid_vertex_id(normalized.b, vertex_ids) &&
-            edge_counts.contains(edge_key(normalized));
+            edge_counts.contains(edge_key(normalized)) &&
+            authored_edge == normalized &&
+            seen.insert(edge_key(normalized)).second;
         if (valid_edge) {
             continue;
         }
 
         add_diagnostic(
             report,
-            PolygonDocumentDiagnosticCode::InvalidHardNormalEdge,
+            invalid_code,
             PolygonDocumentDiagnosticSeverity::Error,
-            "Hard normal edge " + std::to_string(hard_edge.a) + "-" + std::to_string(hard_edge.b) +
-                " is not a valid document edge.",
+            std::string(label) + " normal edge " +
+                std::to_string(authored_edge.a) + "-" +
+                std::to_string(authored_edge.b) +
+                " is not a unique canonical live document edge.",
             kInvalidElementId,
             kInvalidElementId,
-            hard_edge,
-            { hard_edge.a, hard_edge.b });
+            authored_edge,
+            { authored_edge.a, authored_edge.b });
+    }
+}
+
+void validate_normal_edge_states(
+    const Document& document,
+    const std::set<ElementId>& vertex_ids,
+    const std::map<EdgeIdPair, int>& edge_counts,
+    PolygonDocumentValidationReport& report)
+{
+    validate_normal_edges(
+        document.hard_normal_edges,
+        PolygonDocumentDiagnosticCode::InvalidHardNormalEdge,
+        "Hard",
+        vertex_ids,
+        edge_counts,
+        report);
+    validate_normal_edges(
+        document.soft_normal_edges,
+        PolygonDocumentDiagnosticCode::InvalidSoftNormalEdge,
+        "Soft",
+        vertex_ids,
+        edge_counts,
+        report);
+
+    std::set<EdgeIdPair> hard_edges;
+    for (const Edge edge : document.hard_normal_edges) {
+        hard_edges.insert(edge_key(edge));
+    }
+    std::set<EdgeIdPair> reported_conflicts;
+    for (const Edge edge : document.soft_normal_edges) {
+        const Edge normalized = make_edge(edge.a, edge.b);
+        const EdgeIdPair key = edge_key(normalized);
+        if (!hard_edges.contains(key) || !reported_conflicts.insert(key).second) {
+            continue;
+        }
+        add_diagnostic(
+            report,
+            PolygonDocumentDiagnosticCode::ConflictingNormalEdgeState,
+            PolygonDocumentDiagnosticSeverity::Error,
+            "Normal edge " + std::to_string(normalized.a) + "-" +
+                std::to_string(normalized.b) +
+                " cannot be both hard and soft.",
+            kInvalidElementId,
+            kInvalidElementId,
+            normalized,
+            { normalized.a, normalized.b });
     }
 }
 
@@ -387,7 +441,7 @@ PolygonDocumentValidationReport validate_polygon_document(
     validate_faces(document, vertex_ids, vertex_lookup, report, policy);
     const std::map<EdgeIdPair, int> edge_counts = edge_incidence_counts_for_valid_faces(document, vertex_ids);
     validate_nonmanifold_edges(edge_counts, report);
-    validate_hard_normal_edges(document, vertex_ids, edge_counts, report);
+    validate_normal_edge_states(document, vertex_ids, edge_counts, report);
     validate_unreferenced_vertices(document, vertex_ids, report);
     return report;
 }

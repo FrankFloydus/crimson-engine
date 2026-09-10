@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "operation_validation_test_helpers.hpp"
 
+#include <array>
+
 using namespace quader_poly;
 
 TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBoundaryEdgeTargets) {
@@ -13,6 +15,7 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
 	Face* source_face = find_face(fixture.document, fixture.face);
 	EXPECT_TRUE(source_face != nullptr);
 	source_face->material_slot = 7;
+	source_face->normal_shading = SurfaceShading::Smooth;
 	const FaceTextureTransform texture{{2.0F, 0.5F}, {-0.25F, 0.75F}, -30.0F};
 	source_face->texture_transform = texture;
 	source_face->uvs = {{2.0F, 3.0F}, {6.0F, 3.0F},
@@ -58,6 +61,7 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
 	EXPECT_TRUE(qdr_test::edge_positions_match_unordered(fixture.document, make_edge(selection.vertices[0], selection.vertices[1]), { -0.5F, -1.0F, 0.0F }, { -0.5F, 1.0F, 0.0F }));
 	for (const Face& face : fixture.document.faces) {
 		EXPECT_TRUE(face.material_slot == 7U);
+		EXPECT_EQ(face.normal_shading, SurfaceShading::Smooth);
 		EXPECT_EQ(face.texture_transform, texture);
 		ASSERT_EQ(face.uvs.size(), face.vertices.size());
 		for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
@@ -91,6 +95,7 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
 	EXPECT_TRUE(fixture.document.faces.size() == 3U);
 	for (const Face& face : fixture.document.faces) {
 		EXPECT_EQ(face.texture_transform, texture);
+		EXPECT_EQ(face.normal_shading, SurfaceShading::Smooth);
 		ASSERT_EQ(face.uvs.size(), face.vertices.size());
 		for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
 			const Vertex* vertex = find_vertex(fixture.document, face.vertices[corner]);
@@ -100,6 +105,124 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
 		}
 	}
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
+}
+
+TEST(QdrDocumentOperationKnifeSegmentTests,
+     KnifeSegmentAndStrokePreserveSplitModesAndUseTheSecondConnectorDonor) {
+	for (const bool use_stroke : { false, true }) {
+		SCOPED_TRACE(use_stroke ? "stroke" : "segment");
+		qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+		const Edge bottom_edge =
+			make_edge(fixture.bottom_left, fixture.bottom_right);
+		const Edge top_edge =
+			make_edge(fixture.top_right, fixture.top_left);
+		fixture.document.hard_normal_edges = { bottom_edge };
+		fixture.document.soft_normal_edges = { top_edge };
+		const KnifePointTarget previous {
+			KnifePointTargetKind::ExistingEdge,
+			kInvalidElementId,
+			bottom_edge,
+			0.25F,
+			fixture.face,
+			{},
+		};
+		const KnifePointTarget current {
+			KnifePointTargetKind::ExistingEdge,
+			kInvalidElementId,
+			top_edge,
+			0.75F,
+			fixture.face,
+			{},
+		};
+		Selection selection;
+		const std::array<KnifePointTarget, 2> points { previous, current };
+		const std::array<KnifeStrokeSegment, 1> segments { {
+			{ 0U, 1U },
+		} };
+
+		const OperationResult result =
+			use_stroke
+				? knife_stroke(fixture.document, selection, points, segments)
+				: knife_segment(fixture.document, selection, previous, current);
+
+		ASSERT_TRUE(result.changed) << result.message;
+		qdr_test::expect_valid_polygon_document_after_success(
+			fixture.document, result);
+		const ElementId bottom_split = qdr_test::vertex_at_position(
+			fixture.document, { -0.5F, -1.0F, 0.0F });
+		const ElementId top_split = qdr_test::vertex_at_position(
+			fixture.document, { -0.5F, 1.0F, 0.0F });
+		ASSERT_NE(bottom_split, kInvalidElementId);
+		ASSERT_NE(top_split, kInvalidElementId);
+		const std::array<Edge, 2> expected_hard_edges {
+			make_edge(fixture.bottom_left, bottom_split),
+			make_edge(bottom_split, fixture.bottom_right),
+		};
+		const Edge connector = make_edge(bottom_split, top_split);
+		const std::array<Edge, 3> expected_soft_edges {
+			make_edge(fixture.top_right, top_split),
+			make_edge(top_split, fixture.top_left),
+			connector,
+		};
+		ASSERT_EQ(fixture.document.hard_normal_edges.size(),
+		          expected_hard_edges.size());
+		for (const Edge edge : expected_hard_edges) {
+			EXPECT_TRUE(qdr_test::contains_edge(
+				fixture.document.hard_normal_edges, edge));
+		}
+		ASSERT_EQ(fixture.document.soft_normal_edges.size(),
+		          expected_soft_edges.size());
+		for (const Edge edge : expected_soft_edges) {
+			EXPECT_TRUE(qdr_test::contains_edge(
+				fixture.document.soft_normal_edges, edge));
+		}
+		EXPECT_FALSE(qdr_test::contains_edge(
+			fixture.document.hard_normal_edges, bottom_edge));
+		EXPECT_FALSE(qdr_test::contains_edge(
+			fixture.document.hard_normal_edges, top_edge));
+		EXPECT_FALSE(qdr_test::contains_edge(
+			fixture.document.hard_normal_edges, connector));
+	}
+}
+
+TEST(QdrDocumentOperationKnifeSegmentTests,
+     KnifeSegmentSecondDefaultDonorClearsTheConnectorMode) {
+	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	const Edge bottom_edge =
+		make_edge(fixture.bottom_left, fixture.bottom_right);
+	const Edge top_edge = make_edge(fixture.top_right, fixture.top_left);
+	fixture.document.soft_normal_edges = {bottom_edge};
+	const KnifePointTarget previous {
+		KnifePointTargetKind::ExistingEdge,
+		kInvalidElementId,
+		bottom_edge,
+		0.25F,
+		fixture.face,
+		{},
+	};
+	const KnifePointTarget current {
+		KnifePointTargetKind::ExistingEdge,
+		kInvalidElementId,
+		top_edge,
+		0.75F,
+		fixture.face,
+		{},
+	};
+	Selection selection;
+
+	const OperationResult result = knife_segment(
+		fixture.document, selection, previous, current);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	qdr_test::expect_valid_polygon_document_after_success(
+		fixture.document, result);
+	ASSERT_EQ(selection.vertices.size(), 2U);
+	const Edge connector =
+		make_edge(selection.vertices[0], selection.vertices[1]);
+	EXPECT_FALSE(qdr_test::contains_edge(
+		fixture.document.hard_normal_edges, connector));
+	EXPECT_FALSE(qdr_test::contains_edge(
+		fixture.document.soft_normal_edges, connector));
 }
 
 TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentRejectsTwoTargetsOnTheSameSourceEdgeWithoutMutation) {

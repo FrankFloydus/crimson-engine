@@ -95,6 +95,7 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
         }
 
         prune_unused_vertices(candidate);
+        prune_normal_edge_states(candidate);
         if (bridge_face_ids.empty() || !every_face_triangulates(candidate)) {
             return OperationResult::failure("Bridge Faces would create invalid face geometry.");
         }
@@ -153,6 +154,7 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
     }
 
     prune_unused_vertices(candidate);
+    prune_normal_edge_states(candidate);
     if (bridge_face_ids.empty() || !every_face_triangulates(candidate)) {
         return OperationResult::failure("Bridge Faces would create invalid face geometry.");
     }

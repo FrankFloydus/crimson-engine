@@ -124,6 +124,7 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
     std::vector<ElementId> created_cap_face_ids;
     cap_face_ids.reserve(selected_faces.size() * 2U);
     created_cap_face_ids.reserve(selected_faces.size());
+    std::vector<EdgeNormalModeCopy> normal_mode_copies;
     ElementId active_cap_face_id = active_face_id;
     const bool flip_normals = thickness < 0.0F;
     for (const Face& source_face : selected_faces) {
@@ -137,6 +138,7 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
         Face cap_face;
         cap_face.id = candidate.next_face_id++;
         cap_face.material_slot = source_face.material_slot;
+        cap_face.normal_shading = source_face.normal_shading;
         cap_face.texture_transform = source_face.texture_transform;
         cap_face.vertices.reserve(source_face.vertices.size());
         for (const ElementId vertex_id : source_face.vertices) {
@@ -158,7 +160,22 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
         cap_face_ids.push_back(cap_face.id);
         created_cap_face_ids.push_back(cap_face.id);
         candidate.faces.push_back(std::move(cap_face));
+        for (const Edge source_edge : face_edges(source_face)) {
+            const auto mapped_a = duplicate_vertices.find(source_edge.a);
+            const auto mapped_b = duplicate_vertices.find(source_edge.b);
+            if (mapped_a == duplicate_vertices.end() ||
+                mapped_b == duplicate_vertices.end()) {
+                continue;
+            }
+            normal_mode_copies.push_back({
+                source_edge,
+                make_edge(mapped_a->second, mapped_b->second),
+            });
+        }
     }
+
+    static_cast<void>(
+        copy_edge_normal_modes(document, candidate, normal_mode_copies));
 
     const quader::QVec3 selected_center = [&source_positions]() {
         quader::QVec3 center;
@@ -200,6 +217,7 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
 
     prune_invalid_faces(candidate);
     prune_unused_vertices(candidate);
+    prune_normal_edge_states(candidate);
     if (cap_face_ids.empty() || !every_face_triangulates(candidate)) {
         return OperationResult::failure(
             "Thicken Faces would create invalid face geometry.");

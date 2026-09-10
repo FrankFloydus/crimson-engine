@@ -1528,13 +1528,15 @@ TEST(BuildGuardrailTests,
   const std::string retired_quoted_include = joined("#include \"me", "sh/");
   const std::string neutral_internal_include =
       joined("quader/modeling/neutral/polygon/", "internal/");
-  constexpr std::array<std::string_view, 6> kNeutralInternalConsumers = {
+  constexpr std::array<std::string_view, 7> kNeutralInternalConsumers = {
       "src/editor/modeling/runtime/session_picking.cpp",
       "src/editor/modeling/runtime/session_selection_overlay.cpp",
       "src/editor/projection/mesh_projection_service.cpp",
       "tests/modeling_domain/"
       "qdr_document_openmesh_topology_query_tests.cpp",
       "tests/modeling_domain/qdr_poly_geometry_characterization_tests.cpp",
+      "tests/modeling_domain/operation/"
+      "qdr_document_operation_normal_shading_tests.cpp",
       "tests/modeling_domain/tool/"
       "qdr_modeling_runtime_tool_knife_tests.cpp",
   };

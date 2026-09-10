@@ -43,6 +43,8 @@ using OpenMeshVertexIdProperty = OpenMesh::VPropHandleT<ElementId>;
 using OpenMeshFaceIdProperty = OpenMesh::FPropHandleT<ElementId>;
 using OpenMeshFaceIndexProperty = OpenMesh::FPropHandleT<std::size_t>;
 using OpenMeshFaceMaterialProperty = OpenMesh::FPropHandleT<std::uint32_t>;
+using OpenMeshFaceShadingProperty = OpenMesh::FPropHandleT<std::uint8_t>;
+using OpenMeshEdgeNormalModeProperty = OpenMesh::EPropHandleT<std::uint8_t>;
 
 /**
  * Represents an Open Mesh Topology Document value used by the polygon document and mesh editing core.
@@ -53,6 +55,8 @@ struct OpenMeshTopologyDocument {
     OpenMeshFaceIdProperty face_ids;
     OpenMeshFaceIndexProperty face_indices;
     OpenMeshFaceMaterialProperty face_materials;
+    OpenMeshFaceShadingProperty face_shading;
+    OpenMeshEdgeNormalModeProperty edge_normal_modes;
     std::vector<FaceTextureTransform> face_texture_transforms;
     std::map<ElementId, OpenMeshTopologyMesh::VertexHandle> vertices_by_id;
 };
@@ -76,6 +80,8 @@ bool build_openmesh_topology_document(const Document& document, OpenMeshTopology
     topology.mesh.add_property(topology.face_ids, "qdr:face_id");
     topology.mesh.add_property(topology.face_indices, "qdr:face_index");
     topology.mesh.add_property(topology.face_materials, "qdr:face_material");
+    topology.mesh.add_property(topology.face_shading, "qdr:face_shading");
+    topology.mesh.add_property(topology.edge_normal_modes, "qdr:edge_normal_mode");
 
     for (const Vertex& vertex : document.vertices) {
       if (vertex.id == kInvalidElementId ||
@@ -116,6 +122,8 @@ bool build_openmesh_topology_document(const Document& document, OpenMeshTopology
             topology.mesh.property(topology.face_ids, handle) = face.id;
             topology.mesh.property(topology.face_indices, handle) = face_index;
             topology.mesh.property(topology.face_materials, handle) = face.material_slot;
+            topology.mesh.property(topology.face_shading, handle) =
+                static_cast<std::uint8_t>(face.normal_shading);
             if (face.texture_transform != FaceTextureTransform{}) {
                 if (topology.face_texture_transforms.empty()) {
                     topology.face_texture_transforms.resize(document.faces.size());
@@ -126,6 +134,36 @@ bool build_openmesh_topology_document(const Document& document, OpenMeshTopology
             message = exception.what();
             return false;
         }
+    }
+
+    std::map<std::pair<ElementId, ElementId>, std::uint8_t> normal_edge_flags;
+    for (const Edge edge : document.hard_normal_edges) {
+        const Edge canonical = make_edge(edge.a, edge.b);
+        normal_edge_flags[{canonical.a, canonical.b}] |= 1U;
+    }
+    for (const Edge edge : document.soft_normal_edges) {
+        const Edge canonical = make_edge(edge.a, edge.b);
+        normal_edge_flags[{canonical.a, canonical.b}] |= 2U;
+    }
+    for (const auto& [edge, flags] : normal_edge_flags) {
+        const auto first = topology.vertices_by_id.find(edge.first);
+        const auto second = topology.vertices_by_id.find(edge.second);
+        if (first == topology.vertices_by_id.end() ||
+            second == topology.vertices_by_id.end()) {
+            continue;
+        }
+        const auto halfedge = topology.mesh.find_halfedge(first->second, second->second);
+        if (!halfedge.is_valid()) {
+            continue;
+        }
+        // Match the document owner's conflict policy while keeping all valid
+        // Hard/Soft states attached to their OpenMesh edge through compaction.
+        const EdgeNormalMode mode = flags == 1U ? EdgeNormalMode::Hard
+                                   : flags == 2U ? EdgeNormalMode::Soft
+                                                 : EdgeNormalMode::Default;
+        topology.mesh.property(topology.edge_normal_modes,
+                               topology.mesh.edge_handle(halfedge)) =
+            static_cast<std::uint8_t>(mode);
     }
 
     return true;
@@ -157,6 +195,8 @@ Document document_from_openmesh_topology(OpenMeshTopologyDocument& topology, Ele
           face.id = next_valid_face_id(document);
         }
         face.material_slot = topology.mesh.property(topology.face_materials, face_handle);
+        face.normal_shading = static_cast<SurfaceShading>(
+            topology.mesh.property(topology.face_shading, face_handle));
         for (const OpenMeshTopologyMesh::VertexHandle vertex_handle : topology.mesh.fv_range(face_handle)) {
             const ElementId vertex_id = topology.mesh.property(topology.vertex_ids, vertex_handle);
             if (vertex_id != kInvalidElementId) {
@@ -168,6 +208,26 @@ Document document_from_openmesh_topology(OpenMeshTopologyDocument& topology, Ele
             document.faces.push_back(std::move(face));
         }
     }
+
+    for (const OpenMeshTopologyMesh::EdgeHandle edge_handle : topology.mesh.edges()) {
+        const EdgeNormalMode mode = static_cast<EdgeNormalMode>(
+            topology.mesh.property(topology.edge_normal_modes, edge_handle));
+        if (mode == EdgeNormalMode::Default) {
+            continue;
+        }
+        const auto halfedge = topology.mesh.halfedge_handle(edge_handle, 0);
+        const Edge edge = make_edge(
+            topology.mesh.property(topology.vertex_ids,
+                                   topology.mesh.from_vertex_handle(halfedge)),
+            topology.mesh.property(topology.vertex_ids,
+                                   topology.mesh.to_vertex_handle(halfedge)));
+        if (mode == EdgeNormalMode::Hard) {
+            document.hard_normal_edges.push_back(edge);
+        } else if (mode == EdgeNormalMode::Soft) {
+            document.soft_normal_edges.push_back(edge);
+        }
+    }
+    prune_normal_edge_states(document);
 
     return document;
 }

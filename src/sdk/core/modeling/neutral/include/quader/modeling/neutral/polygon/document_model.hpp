@@ -67,6 +67,18 @@ enum class SurfaceShading {
 };
 
 /**
+ * Describes how an authored edge controls normal sharing between its faces.
+ * Default delegates to the mesh smoothing-angle rule, Hard always splits the
+ * normals, and Soft always joins them. Face shading remains an independent
+ * eligibility decision.
+ */
+enum class EdgeNormalMode {
+  Default,
+  Hard,
+  Soft,
+};
+
+/**
  * Stores the persistent rotation, signed scale, and normalized shift applied
  * after a face's authored or generated base UVs.
  */
@@ -103,6 +115,7 @@ struct Document {
     std::vector<Vertex> vertices;
     std::vector<Face> faces;
     std::vector<Edge> hard_normal_edges;
+    std::vector<Edge> soft_normal_edges;
     ElementId next_vertex_id = 1;
     ElementId next_face_id = 1;
 };

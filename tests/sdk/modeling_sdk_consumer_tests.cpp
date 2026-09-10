@@ -250,6 +250,21 @@ void write_u32_le(std::vector<std::byte> &bytes, std::size_t offset,
   }
 }
 
+[[nodiscard]] std::uint32_t read_u32_le(std::span<const std::byte> bytes,
+                                        std::size_t offset) {
+  EXPECT_LE(offset + 4U, bytes.size());
+  if (offset + 4U > bytes.size()) {
+    return 0U;
+  }
+  std::uint32_t value = 0U;
+  for (unsigned int index = 0; index < 4; ++index) {
+    value |= static_cast<std::uint32_t>(
+                 std::to_integer<std::uint8_t>(bytes[offset + index]))
+             << (index * 8U);
+  }
+  return value;
+}
+
 [[nodiscard]] std::vector<std::byte> byte_string(std::string_view value) {
   std::vector<std::byte> bytes;
   bytes.reserve(value.size());
@@ -2769,6 +2784,73 @@ TEST(ModelingSdkConsumerTests,
   EXPECT_EQ(imported.summary().name, "Imported");
 }
 
+TEST(ModelingSdkConsumerTests,
+     ModelingApiProjectsDefaultHardAndSoftEdgeNormalSelections) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle mesh = quader.create_box({.name = "Edge modes"});
+  ASSERT_TRUE(mesh.valid());
+  const EdgeSelection all = mesh.edges().all();
+  ASSERT_FALSE(all.empty());
+  EXPECT_EQ(mesh.edges().defaults().count(), all.count());
+  EXPECT_TRUE(mesh.edges().hard().empty());
+  EXPECT_TRUE(mesh.edges().soft().empty());
+
+  const std::array<EdgeKey, 1> edge{all.edges().front()};
+  const EdgeSelection selected = mesh.edges().only(edge);
+  ASSERT_TRUE(selected.harden_normals().success);
+  EXPECT_EQ(mesh.edges().hard().count(), 1U);
+  EXPECT_EQ(mesh.edges().defaults().count(), all.count() - 1U);
+
+  ASSERT_TRUE(selected.soften_normals().success);
+  EXPECT_TRUE(mesh.edges().hard().empty());
+  EXPECT_EQ(mesh.edges().soft().count(), 1U);
+  EXPECT_EQ(mesh.edges().defaults().count(), all.count() - 1U);
+
+  ASSERT_TRUE(selected.replace().success);
+  const OperationReceipt defaulted =
+      quader.operations().default_edge_normals();
+  ASSERT_TRUE(defaulted.success) << defaulted.error.message;
+  EXPECT_TRUE(mesh.edges().hard().empty());
+  EXPECT_TRUE(mesh.edges().soft().empty());
+  EXPECT_EQ(mesh.edges().defaults().count(), all.count());
+
+  ASSERT_TRUE(selected.harden_normals().success);
+  ASSERT_EQ(mesh.edges().hard().count(), 1U);
+  const OperationReceipt command_defaulted =
+      quader.commands().execute("default_edge_normals");
+  ASSERT_TRUE(command_defaulted.success) << command_defaulted.error.message;
+  EXPECT_TRUE(mesh.edges().hard().empty());
+  EXPECT_TRUE(mesh.edges().soft().empty());
+  EXPECT_EQ(mesh.edges().defaults().count(), all.count());
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiCombinePreservesExplicitSoftEdgesThroughUndoRedo) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle survivor = quader.create_box({.name = "Survivor"});
+  MeshHandle source = quader.create_box({.name = "Source"});
+  ASSERT_TRUE(survivor.valid());
+  ASSERT_TRUE(source.valid());
+  const EdgeSelection source_edges = source.edges().all();
+  ASSERT_FALSE(source_edges.empty());
+  const std::array<EdgeKey, 1> source_edge{source_edges.edges().front()};
+  ASSERT_TRUE(source.edges().only(source_edge).soften_normals().success);
+  ASSERT_EQ(source.edges().soft().count(), 1U);
+
+  const std::array<MeshHandle, 1> sources{source};
+  const OperationReceipt combined = survivor.combine_with(sources);
+  ASSERT_TRUE(combined.success) << combined.error.message;
+  EXPECT_FALSE(source.valid());
+  EXPECT_EQ(survivor.edges().soft().count(), 1U);
+
+  ASSERT_TRUE(quader.undo().success);
+  EXPECT_TRUE(source.valid());
+  EXPECT_EQ(source.edges().soft().count(), 1U);
+  ASSERT_TRUE(quader.redo().success);
+  EXPECT_FALSE(source.valid());
+  EXPECT_EQ(survivor.edges().soft().count(), 1U);
+}
+
 TEST(ModelingSdkConsumerTests, ModelingSelectionContractIsSharedByTypedSelections) {
   ModelingApi quader = ModelingApi::create();
   MeshHandle mesh = quader.create_box({.name = "Selection Box"});
@@ -4880,6 +4962,8 @@ TEST(ModelingSdkConsumerTests,
   EXPECT_EQ(reexported.value().faces.size(), exported.value().faces.size());
   EXPECT_EQ(reexported.value().hard_normal_edges,
             exported.value().hard_normal_edges);
+  EXPECT_EQ(reexported.value().soft_normal_edges,
+            exported.value().soft_normal_edges);
 
   Result<std::vector<std::byte>> original_bytes =
       serialize_qdr_authored_topology(document);
@@ -7481,6 +7565,7 @@ TEST(ModelingSdkConsumerTests,
   EXPECT_EQ(prepared->document.face_count(), 2U);
   EXPECT_EQ(prepared->document.edge_ids().size(), 7U);
   EXPECT_EQ(prepared->document.hard_edge_ids(), created.value().hard_edge_ids());
+  EXPECT_EQ(prepared->document.soft_edge_ids(), created.value().soft_edge_ids());
   EXPECT_EQ(prepared->document.selection().faces, created.value().selection().faces);
   EXPECT_TRUE(prepared->document.validate().ok());
   expect_reversed_face_winding(created.value(), prepared->document);
@@ -7798,7 +7883,7 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
-     Qgeo11PreservesTextureSettingsAndReadsLegacy10IdentityDefaults) {
+     Qgeo12PreservesTextureSettingsAndReadsLegacyFormats) {
   auto created = PolygonDocument::make_box({});
   ASSERT_TRUE(created.ok());
   auto document = std::move(created).value();
@@ -7811,7 +7896,7 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_TRUE(document.set_face_texture_transforms(updates).ok());
   const auto encoded = serialize_qdr_authored_topology(document);
   ASSERT_TRUE(encoded.ok()) << encoded.error_message();
-  EXPECT_EQ(encoded.value()[6], std::byte{1});
+  EXPECT_EQ(encoded.value()[6], std::byte{2});
   const auto decoded = deserialize_qdr_authored_topology(encoded.value());
   ASSERT_TRUE(decoded.ok()) << decoded.error_message();
   const auto original = document.face_texture_settings(ids);
@@ -7826,8 +7911,21 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_TRUE(reencoded.ok());
   EXPECT_EQ(reencoded.value(), encoded.value());
 
+  // Version 1.1 stored face transforms but reserved the soft-edge count.
+  auto legacy11 = encoded.value();
+  legacy11[6] = std::byte{1};
+  write_u32_le(legacy11, 52U, 0U);
+  const auto migrated11 = deserialize_qdr_authored_topology(legacy11);
+  ASSERT_TRUE(migrated11.ok()) << migrated11.error_message();
+  const auto restored11 = migrated11.value().face_texture_settings(ids);
+  ASSERT_TRUE(restored11.ok());
+  for (std::size_t index = 0U; index < ids.size(); ++index) {
+    EXPECT_EQ(restored11.value()[index].texture_transform,
+              original.value()[index].texture_transform);
+  }
+
   // Version 1.0 ended after the hard-edge array and stored no face transforms.
-  auto legacy = encoded.value();
+  auto legacy = legacy11;
   legacy.resize(legacy.size() - ids.size() * 20U);
   legacy[6] = std::byte{0};
   write_u32_le(legacy, 16U, static_cast<std::uint32_t>(legacy.size()));
@@ -7844,8 +7942,113 @@ TEST(ModelingSdkConsumerTests,
   write_u32_le(invalid, invalid.size() - ids.size() * 20U, 0U);
   EXPECT_FALSE(deserialize_qdr_authored_topology(invalid).ok());
   auto unsupported = encoded.value();
-  unsupported[6] = std::byte{2};
+  unsupported[6] = std::byte{3};
   EXPECT_FALSE(deserialize_qdr_authored_topology(unsupported).ok());
+}
+
+TEST(ModelingSdkConsumerTests,
+     Qgeo12RoundTripsThreeEdgeModesAndMigratesLegacySmoothTransitions) {
+  auto created = PolygonDocument::make_box({});
+  ASSERT_TRUE(created.ok());
+  auto topology = created.value().authored_topology().or_throw();
+  for (auto &face : topology.faces) {
+    face.shading = AuthoredSurfaceShading::Smooth;
+  }
+  const auto edges = created.value().edge_ids();
+  ASSERT_GE(edges.size(), 5U);
+  topology.hard_normal_edges = {edges[3], edges[0]};
+  topology.soft_normal_edges = {edges[4], edges[1]};
+
+  auto imported = PolygonDocument::from_authored_topology(topology);
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  auto topology_hard = topology.hard_normal_edges;
+  auto topology_soft = topology.soft_normal_edges;
+  std::ranges::sort(topology_hard);
+  std::ranges::sort(topology_soft);
+  EXPECT_EQ(imported.value().hard_edge_ids(), topology_hard);
+  EXPECT_EQ(imported.value().soft_edge_ids(), topology_soft);
+  const auto imported_defaults = imported.value().default_edge_ids();
+  EXPECT_NE(std::ranges::find(imported_defaults, edges[2]),
+            imported_defaults.end());
+
+  const auto encoded = serialize_qdr_authored_topology(imported.value());
+  ASSERT_TRUE(encoded.ok()) << encoded.error_message();
+  EXPECT_EQ(encoded.value()[6], std::byte{2});
+  EXPECT_EQ(read_u32_le(encoded.value(), 52U), 2U);
+  auto reordered_topology = topology;
+  std::ranges::reverse(reordered_topology.hard_normal_edges);
+  std::ranges::reverse(reordered_topology.soft_normal_edges);
+  auto reordered = PolygonDocument::from_authored_topology(reordered_topology);
+  ASSERT_TRUE(reordered.ok());
+  EXPECT_EQ(reordered.value().hard_edge_ids(), topology_hard);
+  EXPECT_EQ(reordered.value().soft_edge_ids(), topology_soft);
+  const auto reordered_encoded =
+      serialize_qdr_authored_topology(reordered.value());
+  ASSERT_TRUE(reordered_encoded.ok());
+  EXPECT_EQ(reordered_encoded.value(), encoded.value());
+  auto decoded = deserialize_qdr_authored_topology(encoded.value());
+  ASSERT_TRUE(decoded.ok()) << decoded.error_message();
+  auto expected_hard = topology.hard_normal_edges;
+  auto expected_explicit_soft = topology.soft_normal_edges;
+  std::ranges::sort(expected_hard);
+  std::ranges::sort(expected_explicit_soft);
+  EXPECT_EQ(decoded.value().hard_edge_ids(), expected_hard);
+  EXPECT_EQ(decoded.value().soft_edge_ids(), expected_explicit_soft);
+
+  auto conflicting_bytes = encoded.value();
+  const std::size_t first_soft_offset =
+      conflicting_bytes.size() - topology.faces.size() * 20U - 2U * 8U;
+  write_u32_le(conflicting_bytes, first_soft_offset,
+               expected_hard.front().a.index);
+  write_u32_le(conflicting_bytes, first_soft_offset + 4U,
+               expected_hard.front().b.index);
+  EXPECT_FALSE(deserialize_qdr_authored_topology(conflicting_bytes).ok());
+
+  ASSERT_TRUE(decoded.value().select_edge(edges[1]).ok());
+  const auto reset = decoded.value().reset_selected_edge_normals_to_default();
+  ASSERT_TRUE(reset.ok()) << reset.error_message();
+  EXPECT_TRUE(reset.value().changed);
+  EXPECT_EQ(decoded.value().soft_edge_ids(),
+            std::vector<EdgeKey>{edges[4]});
+  const auto reset_defaults = decoded.value().default_edge_ids();
+  EXPECT_NE(std::ranges::find(reset_defaults, edges[1]),
+            reset_defaults.end());
+
+  // Version 1.1 had no explicit Soft rows. Its compiler smoothed every
+  // non-Hard shared transition whose two faces were authored Smooth.
+  topology.soft_normal_edges.clear();
+  imported = PolygonDocument::from_authored_topology(topology);
+  ASSERT_TRUE(imported.ok());
+  auto legacy11 = serialize_qdr_authored_topology(imported.value()).or_throw();
+  ASSERT_EQ(read_u32_le(legacy11, 52U), 0U);
+  legacy11[6] = std::byte{1};
+  const auto migrated = deserialize_qdr_authored_topology(legacy11);
+  ASSERT_TRUE(migrated.ok()) << migrated.error_message();
+  EXPECT_EQ(migrated.value().hard_edge_ids(), expected_hard);
+  auto expected_soft = edges;
+  std::erase(expected_soft, edges[0]);
+  std::erase(expected_soft, edges[3]);
+  auto actual_soft = migrated.value().soft_edge_ids();
+  std::ranges::sort(expected_soft);
+  std::ranges::sort(actual_soft);
+  EXPECT_EQ(actual_soft, expected_soft);
+  EXPECT_TRUE(migrated.value().default_edge_ids().empty());
+
+  auto legacy10 = legacy11;
+  legacy10.resize(legacy10.size() - topology.faces.size() * 20U);
+  legacy10[6] = std::byte{0};
+  write_u32_le(legacy10, 16U,
+               static_cast<std::uint32_t>(legacy10.size()));
+  const auto migrated10 = deserialize_qdr_authored_topology(legacy10);
+  ASSERT_TRUE(migrated10.ok()) << migrated10.error_message();
+  auto actual_soft10 = migrated10.value().soft_edge_ids();
+  std::ranges::sort(actual_soft10);
+  EXPECT_EQ(actual_soft10, expected_soft);
+  EXPECT_TRUE(migrated10.value().default_edge_ids().empty());
+
+  auto conflicting = topology;
+  conflicting.soft_normal_edges = conflicting.hard_normal_edges;
+  EXPECT_FALSE(PolygonDocument::from_authored_topology(conflicting).ok());
 }
 
 TEST(ModelingSdkConsumerTests,
@@ -8160,6 +8363,7 @@ void expect_uv_peel_preserves_document(const PolygonDocument &source,
   EXPECT_EQ(prepared.document.edge_ids(), source.edge_ids());
   EXPECT_EQ(prepared.document.face_ids(), source.face_ids());
   EXPECT_EQ(prepared.document.hard_edge_ids(), source.hard_edge_ids());
+  EXPECT_EQ(prepared.document.soft_edge_ids(), source.soft_edge_ids());
   EXPECT_EQ(prepared.document.selection_revision(), source.selection_revision());
   EXPECT_TRUE(prepared.document.shares_selection_with(source));
   const auto before = source.authored_topology();

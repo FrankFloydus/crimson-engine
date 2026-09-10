@@ -16,8 +16,15 @@ TEST(QdrDocumentOperationConnectVerticesTests, ConnectVerticesSplitsASharedQuadF
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 	const FaceTextureTransform texture{{2.0F, 0.5F}, {0.25F, -0.75F}, 15.0F};
 	fixture.document.faces.front().texture_transform = texture;
+	fixture.document.faces.front().normal_shading = SurfaceShading::Smooth;
 	fixture.document.faces.front().uvs = {
 		{0.0F, 1.0F}, {2.0F, 0.0F}, {3.0F, 4.0F}, {-1.0F, 2.0F}};
+	const Edge hard_perimeter =
+		make_edge(fixture.bottom_left, fixture.bottom_right);
+	const Edge soft_perimeter =
+		make_edge(fixture.bottom_right, fixture.top_right);
+	fixture.document.hard_normal_edges = {hard_perimeter};
+	fixture.document.soft_normal_edges = {soft_perimeter};
 	const Face source = fixture.document.faces.front();
 	Selection selection = qdr_test::vertex_selection({ fixture.bottom_left, fixture.top_right });
 
@@ -28,6 +35,7 @@ TEST(QdrDocumentOperationConnectVerticesTests, ConnectVerticesSplitsASharedQuadF
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
 	for (const Face& face : fixture.document.faces) {
 		EXPECT_EQ(face.texture_transform, texture);
+		EXPECT_EQ(face.normal_shading, SurfaceShading::Smooth);
 		ASSERT_EQ(face.uvs.size(), face.vertices.size());
 		for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
 			const auto source_corner = std::ranges::find(source.vertices, face.vertices[corner]);
@@ -41,6 +49,14 @@ TEST(QdrDocumentOperationConnectVerticesTests, ConnectVerticesSplitsASharedQuadF
         EXPECT_TRUE(selection.mode == SelectionMode::Edge);
         EXPECT_TRUE(selection.edges.size() == 1U);
 	EXPECT_TRUE(selection_contains(selection, make_edge(fixture.bottom_left, fixture.top_right)));
+	EXPECT_TRUE(qdr_test::contains_edge(
+		fixture.document.hard_normal_edges, hard_perimeter));
+	EXPECT_TRUE(qdr_test::contains_edge(
+		fixture.document.soft_normal_edges, soft_perimeter));
+	EXPECT_FALSE(qdr_test::contains_edge(
+		fixture.document.hard_normal_edges, selection.edges.front()));
+	EXPECT_FALSE(qdr_test::contains_edge(
+		fixture.document.soft_normal_edges, selection.edges.front()));
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
 

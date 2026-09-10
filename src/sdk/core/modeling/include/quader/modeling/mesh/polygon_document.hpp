@@ -216,6 +216,7 @@ public:
   [[nodiscard]] std::vector<FaceId> face_ids() const;
   [[nodiscard]] std::vector<EdgeKey> hard_edge_ids() const;
   [[nodiscard]] std::vector<EdgeKey> soft_edge_ids() const;
+  [[nodiscard]] std::vector<EdgeKey> default_edge_ids() const;
   [[nodiscard]] std::vector<FaceId>
   face_ids_by_material_slot(std::uint32_t material_slot) const;
   [[nodiscard]] std::vector<FaceId>
@@ -299,6 +300,8 @@ public:
   [[nodiscard]] Result<OperationResult> shade_selected_faces_flat();
   [[nodiscard]] Result<OperationResult> harden_selected_edge_normals();
   [[nodiscard]] Result<OperationResult> soften_selected_edge_normals();
+  [[nodiscard]] Result<OperationResult>
+  reset_selected_edge_normals_to_default();
   [[nodiscard]] Result<OperationResult> delete_selection();
   [[nodiscard]] Result<OperationResult>
   insert_edge_loop(float factor = 0.5F);

@@ -43,3 +43,23 @@ TEST(QdrDocumentOperationBridgeFacesTests, InterpolatedBridgeFacesCreatesOneRing
 	EXPECT_TRUE(selection.faces.size() == 12U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }
+
+TEST(QdrDocumentOperationBridgeFacesTests, BridgeRetainsBoundaryModesAndLeavesNewRailsDefault) {
+	Document document = qdr_test::make_parallel_quad_document();
+	const Edge hard_boundary =
+		qdr_test::face_edges_for_test(document.faces[0]).front();
+	const Edge soft_boundary =
+		qdr_test::face_edges_for_test(document.faces[1]).front();
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(document, hard_boundary, EdgeNormalMode::Hard));
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(document, soft_boundary, EdgeNormalMode::Soft));
+	Selection selection = qdr_test::all_face_selection(document);
+
+	const OperationResult result = bridge_selected_faces(document, selection, 2);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	EXPECT_EQ(qdr_test::edge_normal_mode(document, hard_boundary), EdgeNormalMode::Hard);
+	EXPECT_EQ(qdr_test::edge_normal_mode(document, soft_boundary), EdgeNormalMode::Soft);
+	EXPECT_EQ(document.hard_normal_edges, std::vector<Edge> { hard_boundary });
+	EXPECT_EQ(document.soft_normal_edges, std::vector<Edge> { soft_boundary });
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
+}

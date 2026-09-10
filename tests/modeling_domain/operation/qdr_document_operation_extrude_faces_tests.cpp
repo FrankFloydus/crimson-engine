@@ -37,3 +37,33 @@ TEST(QdrDocumentOperationExtrudeFacesTests, ExtrudeFacesCreatesACapAndSideWallsW
 	EXPECT_TRUE(selection.faces.front() == fixture.face);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
+
+TEST(QdrDocumentOperationExtrudeFacesTests, ExtrudeCopiesExactModesToTheCapAndDefaultsNewConnectors) {
+	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	Face& source = fixture.document.faces.front();
+	source.normal_shading = SurfaceShading::Smooth;
+	const std::vector<ElementId> source_vertices = source.vertices;
+	const Edge hard_source = make_edge(source_vertices[0], source_vertices[1]);
+	const Edge soft_source = make_edge(source_vertices[2], source_vertices[3]);
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(fixture.document, hard_source, EdgeNormalMode::Hard));
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(fixture.document, soft_source, EdgeNormalMode::Soft));
+	Selection selection = qdr_test::face_selection({ fixture.face }, fixture.face);
+
+	const OperationResult result = extrude_selected_faces(fixture.document, selection, 0.5F);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	const Face* cap = find_face(fixture.document, fixture.face);
+	ASSERT_NE(cap, nullptr);
+	ASSERT_EQ(cap->vertices.size(), source_vertices.size());
+	EXPECT_EQ(cap->normal_shading, SurfaceShading::Smooth);
+	EXPECT_EQ(
+		qdr_test::edge_normal_mode(fixture.document, make_edge(cap->vertices[0], cap->vertices[1])),
+		EdgeNormalMode::Hard);
+	EXPECT_EQ(
+		qdr_test::edge_normal_mode(fixture.document, make_edge(cap->vertices[2], cap->vertices[3])),
+		EdgeNormalMode::Soft);
+	EXPECT_EQ(
+		qdr_test::edge_normal_mode(fixture.document, make_edge(source_vertices[0], cap->vertices[0])),
+		EdgeNormalMode::Default);
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
+}

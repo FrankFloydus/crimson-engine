@@ -250,6 +250,8 @@ shade_selected_faces_flat(Document &document, const Selection &selection);
 harden_selected_edge_normals(Document &document, const Selection &selection);
 [[nodiscard]] OperationResult
 soften_selected_edge_normals(Document &document, const Selection &selection);
+[[nodiscard]] OperationResult reset_selected_edge_normals_to_default(
+    Document &document, const Selection &selection);
 [[nodiscard]] OperationResult delete_selection(Document &document,
                                                const Selection &selection);
 [[nodiscard]] PlaneCutResult plane_cut(const Document &document,

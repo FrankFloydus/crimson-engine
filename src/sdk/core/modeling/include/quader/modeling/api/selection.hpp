@@ -97,6 +97,7 @@ public:
   [[nodiscard]] OperationReceipt snap_to_active() const;
   [[nodiscard]] OperationReceipt connect() const;
   [[nodiscard]] OperationReceipt split() const;
+  [[nodiscard]] OperationReceipt reset_normals_to_default() const;
   [[nodiscard]] OperationReceipt harden_normals() const;
   [[nodiscard]] OperationReceipt soften_normals() const;
   [[nodiscard]] PreviewHandle bevel(EdgeBevelOptions options = {}) const;

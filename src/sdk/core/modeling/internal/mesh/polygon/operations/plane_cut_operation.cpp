@@ -628,56 +628,60 @@ bool append_surface_face_by_plane(
     return true;
 }
 
-bool face_contains_edge(const Face& face, Edge edge)
+std::map<std::pair<ElementId, ElementId>, ElementId>
+plane_cut_split_vertices(
+    const std::map<std::pair<ElementId, ElementId>, PlaneCutIntersection>&
+        intersections)
 {
-    edge = make_edge(edge.a, edge.b);
-    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
-        const Edge candidate = make_edge(
-            face.vertices[index],
-            face.vertices[(index + 1U) % face.vertices.size()]);
-        if (candidate == edge) {
-            return true;
+    std::map<std::pair<ElementId, ElementId>, ElementId> split_vertices;
+    for (const auto& [edge, intersection] : intersections) {
+        if (intersection.id != kInvalidElementId) {
+            split_vertices[edge] = intersection.id;
         }
     }
-    return false;
+    return split_vertices;
 }
 
-bool document_contains_edge(const Document& document, Edge edge)
-{
-    edge = make_edge(edge.a, edge.b);
-    for (const Face& face : document.faces) {
-        if (face_contains_edge(face, edge)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-std::vector<Edge> surface_cut_hard_normal_edges(
+void preserve_clipped_plane_cut_edge_normal_modes(
     const Document& source,
-    const Document& candidate,
-    const std::map<std::pair<ElementId, ElementId>, PlaneCutIntersection>& intersections)
+    Document& candidate,
+    const std::map<std::pair<ElementId, ElementId>, PlaneCutIntersection>&
+        intersections)
 {
-    std::vector<Edge> hard_edges;
-    for (Edge edge : source.hard_normal_edges) {
-        edge = make_edge(edge.a, edge.b);
-        const auto found = intersections.find({edge.a, edge.b});
-        if (found != intersections.end() && found->second.id != kInvalidElementId) {
-            const Edge first = make_edge(edge.a, found->second.id);
-            const Edge second = make_edge(found->second.id, edge.b);
-            if (document_contains_edge(candidate, first)) {
-                add_unique_edge(hard_edges, first);
-            }
-            if (document_contains_edge(candidate, second)) {
-                add_unique_edge(hard_edges, second);
-            }
-            continue;
+    candidate.hard_normal_edges.clear();
+    candidate.soft_normal_edges.clear();
+    std::vector<EdgeNormalModeCopy> normal_mode_copies;
+    normal_mode_copies.reserve(
+        (source.hard_normal_edges.size() + source.soft_normal_edges.size()) *
+        3U);
+    const auto preserve_mode = [&](Edge source_edge) {
+        source_edge = make_edge(source_edge.a, source_edge.b);
+        if (edge_exists(candidate, source_edge)) {
+            normal_mode_copies.push_back({source_edge, source_edge});
         }
-        if (document_contains_edge(candidate, edge)) {
-            add_unique_edge(hard_edges, edge);
+        const auto intersection =
+            intersections.find({source_edge.a, source_edge.b});
+        if (intersection == intersections.end() ||
+            intersection->second.id == kInvalidElementId) {
+            return;
         }
+        for (const Edge descendant : {
+                 make_edge(source_edge.a, intersection->second.id),
+                 make_edge(intersection->second.id, source_edge.b),
+            }) {
+            if (edge_exists(candidate, descendant)) {
+                normal_mode_copies.push_back({source_edge, descendant});
+            }
+        }
+    };
+    for (const Edge edge : source.hard_normal_edges) {
+        preserve_mode(edge);
     }
-    return hard_edges;
+    for (const Edge edge : source.soft_normal_edges) {
+        preserve_mode(edge);
+    }
+    (void)copy_edge_normal_modes(source, candidate, normal_mode_copies);
+    prune_normal_edge_states(candidate);
 }
 
 std::optional<std::vector<std::vector<ElementId>>> cap_loops_from_segments(std::span<const Edge> segments, std::string& message)
@@ -900,6 +904,11 @@ PlaneCutResult plane_cut_impl(const Document& document, const PlaneCutRequest& r
         }
     }
 
+    preserve_clipped_plane_cut_edge_normal_modes(
+        document, front.document, work.intersections);
+    preserve_clipped_plane_cut_edge_normal_modes(
+        document, back.document, work.intersections);
+
     if (!finalize_cut_document(front, request.cap, message) ||
         !finalize_cut_document(back, request.cap, message)) {
         result.message = message.empty() ? "Cut would create invalid mesh geometry." : std::move(message);
@@ -1002,8 +1011,10 @@ OperationResult plane_surface_cut(Document &document, Selection &selection,
     return {false, "Cut plane did not create any face cuts."};
   }
 
-  builder.document.hard_normal_edges =
-      surface_cut_hard_normal_edges(document, builder.document, work.intersections);
+  remap_normal_edge_states_after_edge_splits(
+      document,
+      builder.document,
+      plane_cut_split_vertices(work.intersections));
   prune_unused_vertices(builder.document);
   restore_source_face_orientation(document, builder.document);
   if (!every_face_triangulates(builder.document)) {

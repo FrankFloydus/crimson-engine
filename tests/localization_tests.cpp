@@ -547,7 +547,7 @@ TEST(LocalizationResourceTests,
     std::string_view english;
     std::string_view italian;
   };
-  constexpr std::array<LabelExpectation, 42> kExpectedLabels{{
+  constexpr std::array<LabelExpectation, 43> kExpectedLabels{{
       {"delete_selection", "Delete", "Elimina"},
       {"duplicate_meshes", "Duplicate", "Duplica"},
       {"snap_meshes_to_floor", "Snap to Floor", "Aggancia al pavimento"},
@@ -572,6 +572,7 @@ TEST(LocalizationResourceTests,
       {"snap_edges_to_active", "Snap to Edge", "Aggancia allo spigolo"},
       {"connect_edges", "Connect Edges", "Connetti spigoli"},
       {"split_edges", "Edge Split", "Dividi spigoli"},
+      {"default_edge_normals", "Default Normals", "Normali predefinite"},
       {"harden_edge_normals", "Harden Normals", "Indurisci normali"},
       {"soften_edge_normals", "Soften Normals", "Ammorbidisci normali"},
       {"bevel_edges", "Bevel Edges", "Smussa spigoli"},

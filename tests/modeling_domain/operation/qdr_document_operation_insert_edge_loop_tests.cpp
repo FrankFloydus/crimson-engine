@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstddef>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <vector>
@@ -158,7 +159,195 @@ void expect_edge_set(std::span<const Edge> actual,
 	}
 }
 
+std::optional<ElementId> edge_endpoint_at_position(
+	const Document& document,
+	Edge edge,
+	quader::QVec3 position) {
+	for (const ElementId vertex_id : std::array { edge.a, edge.b }) {
+		const Vertex* vertex = find_vertex(document, vertex_id);
+		if (vertex != nullptr &&
+		    qdr_test::vec_nearly_equal(vertex->position, position)) {
+			return vertex_id;
+		}
+	}
+	return std::nullopt;
+}
+
+std::vector<quader::QVec3> compiled_normals_for_vertex(
+	const CompiledMesh& mesh,
+	ElementId vertex_id) {
+	std::vector<quader::QVec3> normals;
+	for (const CompiledVertex& vertex : mesh.vertices) {
+		if (vertex.source_vertex_id == vertex_id) {
+			normals.push_back(vertex.normal);
+		}
+	}
+	return normals;
+}
+
 } // namespace
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+	 InsertEdgeLoopPreservesSmoothAuthoredShadingAndCompiledContinuity) {
+	Document document;
+	const ElementId near_left = add_vertex(document, { 0.0F, 0.0F, 0.0F });
+	const ElementId near_right = add_vertex(document, { 1.0F, 0.0F, 0.0F });
+	const ElementId bend_right = add_vertex(document, { 1.0F, 1.0F, 0.0F });
+	const ElementId bend_left = add_vertex(document, { 0.0F, 1.0F, 0.0F });
+	const ElementId far_right = add_vertex(document, { 1.0F, 1.0F, 1.0F });
+	const ElementId far_left = add_vertex(document, { 0.0F, 1.0F, 1.0F });
+	ASSERT_NE(add_face(document,
+	                   std::array<ElementId, 4> {
+		                   near_left, near_right, bend_right, bend_left }),
+	          kInvalidElementId);
+	ASSERT_NE(add_face(document,
+	                   std::array<ElementId, 4> {
+		                   bend_left, bend_right, far_right, far_left }),
+	          kInvalidElementId);
+	for (Face& face : document.faces) {
+		face.normal_shading = SurfaceShading::Smooth;
+	}
+	document.soft_normal_edges = {make_edge(bend_left, bend_right)};
+	Selection selection = qdr_test::edge_selection(
+		{ make_edge(near_left, near_right) });
+
+	const OperationResult result = insert_edge_loop(document, selection, 0.5F);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
+	ASSERT_EQ(document.faces.size(), 4U);
+	EXPECT_TRUE(std::ranges::all_of(document.faces, [](const Face& face) {
+		return face.normal_shading == SurfaceShading::Smooth;
+	}));
+	ASSERT_EQ(selection.edges.size(), 2U);
+	ElementId shared_midpoint = kInvalidElementId;
+	for (const ElementId candidate :
+	     std::array { selection.edges[0].a, selection.edges[0].b }) {
+		if (candidate == selection.edges[1].a ||
+		    candidate == selection.edges[1].b) {
+			shared_midpoint = candidate;
+			break;
+		}
+	}
+	ASSERT_NE(shared_midpoint, kInvalidElementId);
+	const CompiledMesh mesh =
+		compile_document(document, SurfaceShading::Authored);
+	const std::vector<quader::QVec3> midpoint_normals =
+		compiled_normals_for_vertex(mesh, shared_midpoint);
+	ASSERT_EQ(midpoint_normals.size(), 4U);
+	for (const quader::QVec3 normal : midpoint_normals) {
+		EXPECT_TRUE(qdr_test::vec_nearly_equal(normal, midpoint_normals.front()));
+	}
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+	 InsertEdgeLoopRemapsASplitHardEdgeToBothLiveDescendants) {
+	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	const Edge hard_seed =
+		make_edge(fixture.bottom_left, fixture.bottom_right);
+	fixture.document.hard_normal_edges = { hard_seed };
+	Selection selection = qdr_test::edge_selection({ hard_seed }, hard_seed);
+
+	const OperationResult result =
+		insert_edge_loop(fixture.document, selection, 0.5F);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	qdr_test::expect_valid_polygon_document_after_success(
+		fixture.document, result);
+	ASSERT_EQ(selection.edges.size(), 1U);
+	const std::optional<ElementId> midpoint = edge_endpoint_at_position(
+		fixture.document,
+		selection.edges.front(),
+		{ 0.0F, -1.0F, 0.0F });
+	ASSERT_TRUE(midpoint.has_value());
+	const Edge first_descendant =
+		make_edge(fixture.bottom_left, *midpoint);
+	const Edge second_descendant =
+		make_edge(*midpoint, fixture.bottom_right);
+	EXPECT_FALSE(qdr_test::document_has_edge(fixture.document, hard_seed));
+	EXPECT_FALSE(qdr_test::contains_edge(
+		fixture.document.hard_normal_edges, hard_seed));
+	ASSERT_EQ(fixture.document.hard_normal_edges.size(), 2U);
+	EXPECT_TRUE(qdr_test::document_has_edge(
+		fixture.document, first_descendant));
+	EXPECT_TRUE(qdr_test::document_has_edge(
+		fixture.document, second_descendant));
+	EXPECT_TRUE(qdr_test::contains_edge(
+		fixture.document.hard_normal_edges, first_descendant));
+	EXPECT_TRUE(qdr_test::contains_edge(
+		fixture.document.hard_normal_edges, second_descendant));
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+	 InsertEdgeLoopRetainsAStoppedTriangleHardEdgeAndUsesItAsTheSecondConnectorDonor) {
+	NonQuadLoopPathFixture fixture = make_nonquad_loop_path_fixture(3U);
+	fixture.document.hard_normal_edges = { fixture.shared_edge };
+	Selection selection =
+		qdr_test::edge_selection({ fixture.seed }, fixture.seed);
+
+	const OperationResult result =
+		insert_edge_loop(fixture.document, selection, 0.5F);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	qdr_test::expect_valid_polygon_document_after_success(
+		fixture.document, result);
+	ASSERT_EQ(selection.edges.size(), 1U);
+	const std::optional<ElementId> midpoint = edge_endpoint_at_position(
+		fixture.document,
+		selection.edges.front(),
+		{ 0.5F, 1.0F, 0.0F });
+	ASSERT_TRUE(midpoint.has_value());
+	const Edge first_descendant =
+		make_edge(fixture.shared_edge.a, *midpoint);
+	const Edge second_descendant =
+		make_edge(*midpoint, fixture.shared_edge.b);
+	ASSERT_EQ(fixture.document.hard_normal_edges.size(), 4U);
+	EXPECT_TRUE(qdr_test::contains_edge(
+		fixture.document.hard_normal_edges, fixture.shared_edge));
+	EXPECT_TRUE(qdr_test::contains_edge(
+		fixture.document.hard_normal_edges, first_descendant));
+	EXPECT_TRUE(qdr_test::contains_edge(
+		fixture.document.hard_normal_edges, second_descendant));
+	EXPECT_TRUE(qdr_test::contains_edge(
+		fixture.document.hard_normal_edges, selection.edges.front()));
+	EXPECT_TRUE(qdr_test::document_has_edge(
+		fixture.document, fixture.shared_edge));
+	EXPECT_TRUE(qdr_test::document_has_edge(
+		fixture.document, first_descendant));
+	EXPECT_TRUE(qdr_test::document_has_edge(
+		fixture.document, second_descendant));
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+	 InsertEdgeLoopPreservesSoftSplitDescendantsAndLeavesADefaultDonorConnectorDefault) {
+	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	const Edge soft_seed =
+		make_edge(fixture.bottom_left, fixture.bottom_right);
+	fixture.document.soft_normal_edges = {soft_seed};
+	Selection selection = qdr_test::edge_selection({soft_seed}, soft_seed);
+
+	const OperationResult result =
+		insert_edge_loop(fixture.document, selection, 0.5F);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	qdr_test::expect_valid_polygon_document_after_success(
+		fixture.document, result);
+	ASSERT_EQ(selection.edges.size(), 1U);
+	const ElementId midpoint = qdr_test::vertex_at_position(
+		fixture.document, {0.0F, -1.0F, 0.0F});
+	ASSERT_NE(midpoint, kInvalidElementId);
+	EXPECT_EQ(fixture.document.soft_normal_edges.size(), 2U);
+	EXPECT_TRUE(qdr_test::contains_edge(
+		fixture.document.soft_normal_edges,
+		make_edge(fixture.bottom_left, midpoint)));
+	EXPECT_TRUE(qdr_test::contains_edge(
+		fixture.document.soft_normal_edges,
+		make_edge(midpoint, fixture.bottom_right)));
+	EXPECT_FALSE(qdr_test::contains_edge(
+		fixture.document.hard_normal_edges, selection.edges.front()));
+	EXPECT_FALSE(qdr_test::contains_edge(
+		fixture.document.soft_normal_edges, selection.edges.front()));
+}
 
 TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopSplitsAQuadThroughTheSelectedEdgeFactor) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document(7);

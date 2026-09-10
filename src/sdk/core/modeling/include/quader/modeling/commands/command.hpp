@@ -67,6 +67,7 @@ enum class OperationKind : std::uint8_t {
   RecalculateFaceNormals,
   AssignMaterialSlot,
   DeleteSelection,
+  DefaultEdgeNormals,
 };
 
 /// Classifies a portable operation parameter's scalar representation.
@@ -119,7 +120,7 @@ inline constexpr DirtyFlags kGeometryDirty{
     .overlays = true,
 };
 
-inline constexpr std::array<OperationDescriptor, 35>
+inline constexpr std::array<OperationDescriptor, 36>
     kOperationDescriptors{{
         {OperationKind::Bridge, "bridge", "bridge", "bridge", true, false,
          kTopologyDirty,
@@ -202,6 +203,9 @@ inline constexpr std::array<OperationDescriptor, 35>
          kGeometryDirty},
         {OperationKind::ShadeFacesFlat, "shade_faces_flat",
          "shade_faces_flat", "shade_faces_flat", false, false,
+         kGeometryDirty},
+        {OperationKind::DefaultEdgeNormals, "default_edge_normals",
+         "default_edge_normals", "default_edge_normals", false, false,
          kGeometryDirty},
         {OperationKind::HardenEdgeNormals, "harden_edge_normals",
          "harden_edge_normals", "harden_edge_normals", false, false,

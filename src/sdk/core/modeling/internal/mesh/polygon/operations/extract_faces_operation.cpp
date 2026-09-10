@@ -63,6 +63,23 @@ ExtractFacesResult extract_selected_faces_impl(Document& document, Selection& se
             return ExtractFacesResult::failure("Extract could not copy selected face geometry.");
         }
     }
+    std::vector<EdgeNormalModeCopy> normal_mode_copies;
+    for (const Face& face : selected_faces) {
+        for (const Edge source_edge : face_edges(face)) {
+            const auto mapped_a = vertex_map.find(source_edge.a);
+            const auto mapped_b = vertex_map.find(source_edge.b);
+            if (mapped_a == vertex_map.end() || mapped_b == vertex_map.end()) {
+                continue;
+            }
+            normal_mode_copies.push_back({
+                source_edge,
+                make_edge(mapped_a->second, mapped_b->second),
+            });
+        }
+    }
+    static_cast<void>(
+        copy_edge_normal_modes(document, extracted_document, normal_mode_copies));
+    prune_normal_edge_states(extracted_document);
 
     if (extracted_document.faces.empty() || !every_face_triangulates(extracted_document)) {
         return ExtractFacesResult::failure("Extract would create invalid face geometry.");
@@ -78,6 +95,7 @@ ExtractFacesResult extract_selected_faces_impl(Document& document, Selection& se
         return selected_face_ids.contains(face.id);
     });
     prune_unused_vertices(candidate);
+    prune_normal_edge_states(candidate);
     if (!candidate.faces.empty() && !every_face_triangulates(candidate)) {
         return ExtractFacesResult::failure("Extract would leave invalid source face geometry.");
     }

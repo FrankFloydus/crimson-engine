@@ -276,6 +276,7 @@ OperationResult bridge_edge_boundaries_impl(
     }
 
     prune_invalid_faces(candidate);
+    prune_normal_edge_states(candidate);
     if (bridge_face_ids.empty() || !every_face_triangulates(candidate)) {
         return OperationResult::failure("Bridge would create invalid boundary geometry.");
     }

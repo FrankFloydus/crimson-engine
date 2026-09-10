@@ -89,6 +89,7 @@ enum class ModelingInstantOperationId {
   ShadeFacesFlat,
   HardenEdgeNormals,
   SoftenEdgeNormals,
+  DefaultEdgeNormals,
 };
 
 /**

@@ -12,7 +12,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <ranges>
+#include <vector>
 
 namespace {
 
@@ -21,6 +23,13 @@ using namespace quader_poly;
 bool nearly_equal(float left, float right, float epsilon = 0.0001F)
 {
     return std::abs(left - right) <= epsilon;
+}
+
+bool vec_nearly_equal(quader::QVec3 left, quader::QVec3 right, float epsilon = 0.0001F)
+{
+    return nearly_equal(left.x, right.x, epsilon) &&
+        nearly_equal(left.y, right.y, epsilon) &&
+        nearly_equal(left.z, right.z, epsilon);
 }
 
 ::testing::AssertionResult require_document_compiles(
@@ -161,6 +170,19 @@ int edge_face_incidence(const Document& document, Edge edge)
         }
     }
     return result;
+}
+
+std::vector<quader::QVec3> compiled_normals_for_source_vertex(
+    const CompiledMesh& mesh,
+    ElementId vertex_id)
+{
+    std::vector<quader::QVec3> normals;
+    for (const CompiledVertex& vertex : mesh.vertices) {
+        if (vertex.source_vertex_id == vertex_id) {
+            normals.push_back(vertex.normal);
+        }
+    }
+    return normals;
 }
 
 ::testing::AssertionResult require_faces_reversed(
@@ -310,6 +332,22 @@ void cylinder_factory_honors_side_caps_dimensions_and_shading()
         return face.normal_shading == SurfaceShading::Smooth;
     }), "open cylinder should retain smooth side shading"));
     ASSERT_TRUE(require_document_compiles(open, "open cylinder"));
+
+    CylinderPrimitiveSpec smooth_spec;
+    smooth_spec.side_count = 32;
+    smooth_spec.capped = false;
+    const Document smooth = make_cylinder(smooth_spec);
+    const CompiledMesh smooth_mesh = compile_document(smooth);
+    for (const Vertex& vertex : smooth.vertices) {
+        const std::vector<quader::QVec3> normals =
+            compiled_normals_for_source_vertex(smooth_mesh, vertex.id);
+        ASSERT_TRUE(require_test(
+            normals.size() == 2U,
+            "open cylinder wall vertex should be shared by two side corners"));
+        ASSERT_TRUE(require_test(
+            vec_nearly_equal(normals.front(), normals.back()),
+            "open 32-side cylinder wall corners should share a smoothed normal"));
+    }
 }
 
 void cone_factory_honors_side_cap_dimensions_and_shading()
@@ -593,6 +631,67 @@ TEST(QdrDocumentPrimitiveTests, CubeDimensionsAreSanitized)
 TEST(QdrDocumentPrimitiveTests, CylinderSettingsProduceExpectedTopology)
 {
     cylinder_factory_honors_side_caps_dimensions_and_shading();
+}
+
+TEST(QdrDocumentPrimitiveTests,
+     ThirtyTwoSideCylinderKeepsContinuousWallsAndSharpCapsInAuthoredCompilation)
+{
+    CylinderPrimitiveSpec spec;
+    spec.side_count = 32;
+    const Document cylinder = make_cylinder(spec);
+
+    ASSERT_TRUE(require_test(cylinder.hard_normal_edges.empty(),
+                             "new cylinder should not author hard wall edges"));
+    ASSERT_TRUE(require_test(cylinder.soft_normal_edges.empty(),
+                             "new cylinder should rely on default wall edges"));
+    const CompiledMesh mesh =
+        compile_document(cylinder, SurfaceShading::Authored);
+    std::map<ElementId, std::vector<quader::QVec3>> normals_by_vertex;
+    for (const CompiledVertex& vertex : mesh.vertices) {
+        normals_by_vertex[vertex.source_vertex_id].push_back(vertex.normal);
+    }
+
+    ASSERT_EQ(normals_by_vertex.size(), cylinder.vertices.size());
+    for (const Vertex& authored_vertex : cylinder.vertices) {
+        const auto found = normals_by_vertex.find(authored_vertex.id);
+        ASSERT_NE(found, normals_by_vertex.end());
+        const std::vector<quader::QVec3>& normals = found->second;
+        ASSERT_EQ(normals.size(), 3U);
+
+        std::vector<quader::QVec3> wall_normals;
+        std::vector<quader::QVec3> cap_normals;
+        for (const quader::QVec3 normal : normals) {
+            if (std::abs(normal.y) < 0.0001F) {
+                wall_normals.push_back(normal);
+            } else {
+                cap_normals.push_back(normal);
+            }
+        }
+        ASSERT_EQ(wall_normals.size(), 2U);
+        ASSERT_EQ(cap_normals.size(), 1U);
+        EXPECT_TRUE(nearly_equal(wall_normals[0].x, wall_normals[1].x) &&
+                    nearly_equal(wall_normals[0].y, wall_normals[1].y) &&
+                    nearly_equal(wall_normals[0].z, wall_normals[1].z));
+
+        const float radial_length = std::sqrt(
+            authored_vertex.position.x * authored_vertex.position.x +
+            authored_vertex.position.z * authored_vertex.position.z);
+        ASSERT_GT(radial_length, 0.0F);
+        const quader::QVec3 expected_radial {
+            authored_vertex.position.x / radial_length,
+            0.0F,
+            authored_vertex.position.z / radial_length,
+        };
+        EXPECT_TRUE(nearly_equal(
+                        wall_normals.front().x, expected_radial.x, 0.0002F) &&
+                    nearly_equal(
+                        wall_normals.front().y, expected_radial.y, 0.0002F) &&
+                    nearly_equal(
+                        wall_normals.front().z, expected_radial.z, 0.0002F));
+        EXPECT_GT(std::abs(cap_normals.front().y), 0.999F);
+        EXPECT_LT(std::abs(quader::dot(
+            wall_normals.front(), cap_normals.front())), 0.0001F);
+    }
 }
 
 TEST(QdrDocumentPrimitiveTests, SphereSettingsProduceExpectedTopology)

@@ -82,18 +82,32 @@ authored_polygon_json(const quader_poly::Document &document) {
   }
 
   Json hard_normal_edges = Json::array();
+  Json soft_normal_edges = Json::array();
   const std::vector<quader_poly::Edge> document_edges =
       quader_poly::document_edges(document);
   std::set<std::pair<quader_poly::ElementId, quader_poly::ElementId>>
-      emitted_edges;
+      emitted_hard_edges;
   for (quader_poly::Edge edge : document.hard_normal_edges) {
     edge = quader_poly::make_edge(edge.a, edge.b);
     if (std::find(document_edges.begin(), document_edges.end(), edge) ==
             document_edges.end() ||
-        !emitted_edges.insert({edge.a, edge.b}).second) {
+        !emitted_hard_edges.insert({edge.a, edge.b}).second) {
       continue;
     }
     hard_normal_edges.push_back({{"a", edge.a}, {"b", edge.b}});
+  }
+  std::set<std::pair<quader_poly::ElementId, quader_poly::ElementId>>
+      emitted_soft_edges;
+  for (quader_poly::Edge edge : document.soft_normal_edges) {
+    edge = quader_poly::make_edge(edge.a, edge.b);
+    const std::pair key{edge.a, edge.b};
+    if (std::find(document_edges.begin(), document_edges.end(), edge) ==
+            document_edges.end() ||
+        emitted_hard_edges.contains(key) ||
+        !emitted_soft_edges.insert(key).second) {
+      continue;
+    }
+    soft_normal_edges.push_back({{"a", edge.a}, {"b", edge.b}});
   }
 
   return {
@@ -102,6 +116,7 @@ authored_polygon_json(const quader_poly::Document &document) {
       {"vertices", std::move(vertices)},
       {"faces", std::move(faces)},
       {"hardNormalEdges", std::move(hard_normal_edges)},
+      {"softNormalEdges", std::move(soft_normal_edges)},
   };
 }
 

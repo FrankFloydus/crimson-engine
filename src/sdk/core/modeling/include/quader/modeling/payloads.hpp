@@ -191,9 +191,13 @@ struct AuthoredTopologyFace {
 struct AuthoredTopology {
   std::vector<AuthoredTopologyVertex> vertices;
   std::vector<AuthoredTopologyFace> faces;
+  /// Canonical live edges explicitly authored Hard. Absence from both edge
+  /// mode sets means Default.
   std::vector<EdgeKey> hard_normal_edges;
   std::uint32_t next_vertex_id = 1U;
   std::uint32_t next_face_id = 1U;
+  /// Canonical live edges explicitly authored Soft; disjoint from Hard.
+  std::vector<EdgeKey> soft_normal_edges;
 };
 
 /**

@@ -236,6 +236,36 @@ TEST(QdrDocumentValidationTests, ReportsInvalidHardNormalEdges)
     EXPECT_TRUE(invalid_count == 2U);
 }
 
+TEST(QdrDocumentValidationTests,
+     ReportsInvalidAndConflictingSoftNormalEdgeStates)
+{
+    Document document;
+    ASSERT_TRUE(make_triangle_document(document));
+    const ElementId a = document.vertices[0].id;
+    const ElementId b = document.vertices[1].id;
+    const Edge edge = make_edge(a, b);
+    document.hard_normal_edges = { edge };
+    document.soft_normal_edges = {
+        edge,
+        { edge.b, edge.a },
+        make_edge(a, 99U),
+    };
+
+    const PolygonDocumentValidationReport report =
+        validate_polygon_document(document);
+
+    EXPECT_FALSE(report.ok());
+    EXPECT_EQ(std::ranges::count_if(
+                  report.diagnostics,
+                  [](const PolygonDocumentDiagnostic& diagnostic) {
+                      return diagnostic.code ==
+                             PolygonDocumentDiagnosticCode::InvalidSoftNormalEdge;
+                  }),
+              2);
+    EXPECT_TRUE(has_code(
+        report, PolygonDocumentDiagnosticCode::ConflictingNormalEdgeState));
+}
+
 TEST(QdrDocumentValidationTests, ReportsUnreferencedVerticesAsWarnings)
 {
     Document document;

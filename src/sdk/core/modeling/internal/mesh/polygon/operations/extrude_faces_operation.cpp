@@ -60,6 +60,7 @@ OperationResult extrude_selected_faces_impl(Document& document, Selection& selec
 
     std::vector<ElementId> selected_faces;
     selected_faces.reserve(faces.size());
+    std::vector<EdgeNormalModeCopy> normal_mode_copies;
     OperationResult result;
     bool changed = false;
     for (const Face& original_face : faces) {
@@ -90,6 +91,12 @@ OperationResult extrude_selected_faces_impl(Document& document, Selection& selec
             result.created.vertices.end(), cap_vertices.begin(), cap_vertices.end());
         face->vertices = cap_vertices;
         for (std::size_t index = 0; index < original_face.vertices.size(); ++index) {
+            const Edge source_edge = make_edge(
+                original_face.vertices[index],
+                original_face.vertices[(index + 1U) % original_face.vertices.size()]);
+            const Edge cap_edge = make_edge(
+                cap_vertices[index],
+                cap_vertices[(index + 1U) % cap_vertices.size()]);
             const std::array side {
                 original_face.vertices[index],
                 original_face.vertices[(index + 1U) % original_face.vertices.size()],
@@ -101,6 +108,7 @@ OperationResult extrude_selected_faces_impl(Document& document, Selection& selec
             if (side_face_id != kInvalidElementId) {
                 result.created.faces.push_back(side_face_id);
             }
+            normal_mode_copies.push_back({source_edge, cap_edge});
         }
 
         selected_faces.push_back(original_face.id);
@@ -112,7 +120,10 @@ OperationResult extrude_selected_faces_impl(Document& document, Selection& selec
         return OperationResult::failure("No selected faces were extruded.");
     }
 
+    static_cast<void>(
+        copy_edge_normal_modes(document, document, normal_mode_copies));
     prune_invalid_faces(document);
+    prune_normal_edge_states(document);
     selection.clear();
     selection.mode = SelectionMode::Face;
     selection.faces = std::move(selected_faces);

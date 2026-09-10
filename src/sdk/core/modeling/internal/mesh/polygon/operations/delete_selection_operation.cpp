@@ -122,6 +122,7 @@ OperationResult delete_selection_impl(Document& document, const Selection& selec
     if (!changed) {
         return OperationResult::failure("No selected polygon elements were found.");
     }
+    prune_normal_edge_states(document);
     OperationResult result;
     result.changed = true;
     result.deleted = deleted_element_delta(before_elements, document_element_delta(document));

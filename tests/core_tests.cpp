@@ -4983,6 +4983,9 @@ TEST(ViewportContextMenuPolicyTests,
   EXPECT_EQ(viewport_context_menu_action_disposition(QuaderSelectionMode::Edge,
                                                      "harden_edge_normals"),
             ViewportContextMenuActionDisposition::Catalog);
+  EXPECT_EQ(viewport_context_menu_action_disposition(QuaderSelectionMode::Edge,
+                                                     "default_edge_normals"),
+            ViewportContextMenuActionDisposition::Catalog);
   EXPECT_EQ(viewport_context_menu_action_disposition(QuaderSelectionMode::Face,
                                                      "detach_faces"),
             ViewportContextMenuActionDisposition::Catalog);
@@ -12514,6 +12517,43 @@ TEST(AssetRegistryTests,
       registry.mesh(duplicate_id)->authored_polygon_document.get(),
       registry.mesh(variants[kDuplicateIndex])
           ->authored_polygon_document.get());
+}
+
+TEST(AssetRegistryTests,
+     AuthoredInterningKeepsDistinctSoftNormalOverrides) {
+  AssetRegistry registry;
+  MeshAsset prototype = make_test_triangle_mesh("Default Edge Mode");
+  quader_poly::Document authored;
+  authored.vertices = {
+      {.id = 1u, .position = {-0.5f, 0.0f, 0.0f}},
+      {.id = 2u, .position = {0.5f, 0.0f, 0.0f}},
+      {.id = 3u, .position = {0.0f, 0.0f, 1.0f}},
+  };
+  authored.faces = {{.id = 1u, .vertices = {1u, 2u, 3u}}};
+  authored.next_vertex_id = 4u;
+  authored.next_face_id = 2u;
+  prototype.replace_authored_polygon_document(authored);
+
+  MeshAsset softened = prototype;
+  softened.name = "Soft Edge Mode";
+  authored.soft_normal_edges = {quader_poly::make_edge(1u, 2u)};
+  softened.replace_authored_polygon_document(authored);
+  const AssetId default_id = registry.add_mesh(std::move(prototype));
+  const AssetId soft_id = registry.add_mesh(std::move(softened));
+  ASSERT_NE(default_id, kInvalidAssetId);
+  ASSERT_NE(soft_id, kInvalidAssetId);
+  ASSERT_NE(registry.mesh(default_id), nullptr);
+  ASSERT_NE(registry.mesh(soft_id), nullptr);
+  EXPECT_NE(registry.mesh(default_id)->authored_polygon_document.get(),
+            registry.mesh(soft_id)->authored_polygon_document.get());
+
+  MeshAsset duplicate = *registry.mesh(soft_id);
+  duplicate.name = "Duplicate Soft Edge Mode";
+  const AssetId duplicate_id = registry.add_mesh(std::move(duplicate));
+  ASSERT_NE(duplicate_id, kInvalidAssetId);
+  ASSERT_NE(registry.mesh(duplicate_id), nullptr);
+  EXPECT_EQ(registry.mesh(soft_id)->authored_polygon_document.get(),
+            registry.mesh(duplicate_id)->authored_polygon_document.get());
 }
 
 TEST(AssetRegistryTests,

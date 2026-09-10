@@ -198,6 +198,7 @@ OperationResult FillHoleFromEdgesOperation::apply(Document& document, Selection&
 
         trial.faces.push_back(fill_face);
         prune_invalid_faces(trial);
+        prune_normal_edge_states(trial);
         if (find_face(trial, fill_face_id) == nullptr || !every_face_triangulates(trial)) {
             continue;
         }

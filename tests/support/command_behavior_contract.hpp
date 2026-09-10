@@ -85,6 +85,8 @@ enum class CanonicalCommandFixture : std::uint8_t {
   UvPeelEdgeSelection,
   /// One visible, unlocked, nondegenerate Curve selected in Object mode.
   CurveSelection,
+  /// One explicitly Hard manifold edge selected between Smooth faces.
+  AuthoredHardEdgeSelection,
 };
 
 /**

@@ -456,6 +456,67 @@ std::vector<HullFace> split_hull_face_by_source_edges(
     return faces;
 }
 
+namespace {
+
+Edge mapped_edge_for_vertex_merge(
+        Edge edge,
+        const std::set<ElementId>& merge_vertex_ids,
+        ElementId survivor_vertex_id)
+{
+    edge.a = mapped_vertex_for_merge(
+        edge.a, merge_vertex_ids, survivor_vertex_id);
+    edge.b = mapped_vertex_for_merge(
+        edge.b, merge_vertex_ids, survivor_vertex_id);
+    return make_edge(edge.a, edge.b);
+}
+
+/// Transfers edge-normal state through a vertex weld without conflating the
+/// three authored modes. A pre-existing surviving edge keeps its exact state;
+/// otherwise the deterministic document-edge order supplies donors and the
+/// last donor wins.
+void remap_edge_normal_modes_after_vertex_merge(
+        const Document& source,
+        Document& candidate,
+        const std::set<ElementId>& merge_vertex_ids,
+        ElementId survivor_vertex_id)
+{
+    const std::vector<Edge> source_edges = document_edges(source);
+    const std::vector<Edge> candidate_edges = document_edges(candidate);
+    const EdgeNormalModeLookup source_modes(source);
+    std::set<std::pair<ElementId, ElementId>> source_edge_keys;
+    std::map<std::pair<ElementId, ElementId>, EdgeNormalMode> donor_modes;
+    for (const Edge source_edge : source_edges) {
+        source_edge_keys.emplace(source_edge.a, source_edge.b);
+        const Edge mapped = mapped_edge_for_vertex_merge(
+            source_edge, merge_vertex_ids, survivor_vertex_id);
+        if (mapped.a != mapped.b) {
+            donor_modes[{mapped.a, mapped.b}] =
+                source_modes.mode(source_edge);
+        }
+    }
+
+    candidate.hard_normal_edges.clear();
+    candidate.soft_normal_edges.clear();
+
+    std::vector<EdgeNormalModeAssignment> assignments;
+    assignments.reserve(candidate_edges.size());
+    for (const Edge target_edge : candidate_edges) {
+        EdgeNormalMode target_mode = EdgeNormalMode::Default;
+        const std::pair target_key{target_edge.a, target_edge.b};
+        if (source_edge_keys.contains(target_key)) {
+            target_mode = source_modes.mode(target_edge);
+        } else if (const auto donor = donor_modes.find(target_key);
+                   donor != donor_modes.end()) {
+            target_mode = donor->second;
+        }
+        assignments.push_back({target_edge, target_mode});
+    }
+    static_cast<void>(set_edge_normal_modes(candidate, assignments));
+    prune_normal_edge_states(candidate);
+}
+
+} // namespace
+
 Document document_from_hull_geometry(
         const Document& source_document,
         const HullGeometry& hull,
@@ -485,13 +546,23 @@ Document document_from_hull_geometry(
                 source_document,
                 merge_vertex_ids,
                 survivor_vertex_id);
-            if (assignment.has_value() &&
-                assign_face_uvs_from_projection_assignment(document, document.faces.back(), *assignment)) {
-                uv_assignments.push_back({ document.faces.back().id, *assignment });
+            if (assignment.has_value()) {
+                if (const Face* source_face =
+                        find_face(source_document, assignment->source_face_id)) {
+                    document.faces.back().normal_shading =
+                        source_face->normal_shading;
+                }
+                if (assign_face_uvs_from_projection_assignment(
+                        document, document.faces.back(), *assignment)) {
+                    uv_assignments.push_back(
+                        {document.faces.back().id, *assignment});
+                }
             }
         }
     }
     stitch_merge_split_uv_density(document, uv_assignments);
+    remap_edge_normal_modes_after_vertex_merge(
+        source_document, document, merge_vertex_ids, survivor_vertex_id);
     return document;
 }
 
@@ -932,6 +1003,9 @@ OperationResult build_topology_vertex_merge_candidate(
     std::erase_if(candidate.vertices, [&merge_vertex_ids](const Vertex& vertex) {
         return merge_vertex_ids.contains(vertex.id);
     });
+
+    remap_edge_normal_modes_after_vertex_merge(
+        document, candidate, merge_vertex_ids, survivor_vertex_id);
 
     changed = changed || candidate.vertices.size() != document.vertices.size();
     if (!changed) {

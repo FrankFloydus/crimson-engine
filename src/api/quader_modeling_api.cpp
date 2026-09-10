@@ -1002,6 +1002,10 @@ QuaderApiVoidResult QuaderEdgeSelection::split() const {
   return execute_after_replace("split_edges");
 }
 
+QuaderApiVoidResult QuaderEdgeSelection::reset_normals_to_default() const {
+  return execute_after_replace("default_edge_normals");
+}
+
 QuaderApiVoidResult QuaderEdgeSelection::harden_normals() const {
   return execute_after_replace("harden_edge_normals");
 }

@@ -43,6 +43,8 @@ enum class PolygonDocumentDiagnosticCode {
   NonmanifoldEdge,
   FaceUvCountMismatch,
   InvalidHardNormalEdge,
+  InvalidSoftNormalEdge,
+  ConflictingNormalEdgeState,
   UnreferencedVertex,
   TriangulationFailure,
   InvalidFaceTextureTransform,

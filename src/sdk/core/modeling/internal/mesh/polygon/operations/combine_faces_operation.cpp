@@ -79,6 +79,9 @@ OperationResult combine_selected_faces_impl(Document& document, Selection& selec
         merged_face.vertices = std::move(merged_loop);
         merged_face.material_slot = island.material_slot;
         merged_face.texture_transform = island.texture_transform;
+        if (const Face* donor_face = find_face(document, island.face_ids.front())) {
+            merged_face.normal_shading = donor_face->normal_shading;
+        }
         orient_face_toward_normal(document, merged_face, island.normal);
         // Boundary corners can carry UV breakpoints even when their geometry is collinear.
         // Give optional loop simplification the inherited chart before it decides what to remove.
@@ -116,11 +119,13 @@ OperationResult combine_selected_faces_impl(Document& document, Selection& selec
     });
     candidate.faces.insert(candidate.faces.end(), merged_faces.begin(), merged_faces.end());
     for (const ElementId vertex_id : vertices_to_prune) {
-        [[maybe_unused]] const bool removed = remove_redundant_vertex_from_all_face_loops(candidate, vertex_id);
+        [[maybe_unused]] const bool removed =
+            remove_redundant_vertex_from_all_face_loops(candidate, vertex_id);
     }
 
     prune_invalid_faces(candidate);
     prune_unused_vertices(candidate);
+    prune_normal_edge_states(candidate);
     for (const FaceIslandBoundary& island : islands) {
         if (island.face_ids.size() < 2U) {
             continue;

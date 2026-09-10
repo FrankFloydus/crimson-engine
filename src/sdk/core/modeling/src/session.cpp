@@ -784,6 +784,17 @@ struct AppendedDocument {
                         make_id<VertexTag>(b->second)));
     }
   }
+  for (const quader_poly::Edge edge : source.soft_normal_edges) {
+    const auto a = appended.vertex_ids.find(edge.a);
+    const auto b = appended.vertex_ids.find(edge.b);
+    if (a != appended.vertex_ids.end() && b != appended.vertex_ids.end()) {
+      target.soft_normal_edges.push_back(
+          quader_poly::make_edge(a->second, b->second));
+      appended.created.edges.push_back(
+          make_edge_key(make_id<VertexTag>(a->second),
+                        make_id<VertexTag>(b->second)));
+    }
+  }
   return Result<AppendedDocument>::success(std::move(appended));
 }
 

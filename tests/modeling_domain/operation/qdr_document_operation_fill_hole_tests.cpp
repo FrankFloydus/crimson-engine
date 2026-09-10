@@ -94,6 +94,10 @@ TEST(QdrDocumentOperationFillHoleTests, FillHoleIgnoresExtraSelectedNonBoundaryE
 	for (std::size_t index = 0; index < removed_face.vertices.size(); ++index) {
 		selection.edges.push_back(make_edge(removed_face.vertices[index], removed_face.vertices[(index + 1U) % removed_face.vertices.size()]));
 	}
+	const Edge hard_boundary = selection.edges[0];
+	const Edge soft_boundary = selection.edges[2];
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(document, hard_boundary, EdgeNormalMode::Hard));
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(document, soft_boundary, EdgeNormalMode::Soft));
 
 	Edge extra_non_boundary_edge {};
 	bool found_extra_non_boundary_edge = false;
@@ -126,6 +130,8 @@ TEST(QdrDocumentOperationFillHoleTests, FillHoleIgnoresExtraSelectedNonBoundaryE
 	EXPECT_TRUE(fill_face != nullptr);
 	EXPECT_TRUE(dot(face_normal(document, *fill_face), removed_face_normal) > 0.5F);
 	EXPECT_TRUE(qdr_test::edge_incidence_count(document, extra_non_boundary_edge) == 2);
+	EXPECT_EQ(qdr_test::edge_normal_mode(document, hard_boundary), EdgeNormalMode::Hard);
+	EXPECT_EQ(qdr_test::edge_normal_mode(document, soft_boundary), EdgeNormalMode::Soft);
 	EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
 	EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));

@@ -54,6 +54,7 @@ bool face_uses_vertex(const Face& face, ElementId vertex_id);
 bool face_uses_any_vertex(const Face& face, std::span<const ElementId> vertex_ids);
 bool face_uses_any_vertex(const Face& face, const std::set<ElementId>& vertex_ids);
 bool face_uses_edge(const Face& face, Edge edge);
+bool edge_exists(const Document& document, Edge edge);
 std::vector<Edge> face_edges(const Face& face);
 bool face_uses_any_edge(const Face& face, std::span<const Edge> edges);
 std::array<double, 2> projected_point_for_axis(const quader::QVec3& position, int dropped_axis);
@@ -68,4 +69,69 @@ bool document_has_unreferenced_vertices(const Document& document);
 std::vector<ElementId> compact_face_vertices_for_merge(const Face& face, const std::set<ElementId>& merge_vertex_ids, ElementId active_vertex_id);
 void restore_source_face_orientation(const Document& source, Document& candidate);
 ElementId next_valid_face_id(Document& document);
+/**
+ * Assigns one exact authored edge-normal mode during a batch update.
+ * Assignments are evaluated in order so the last live assignment for an edge
+ * determines its final Hard, Soft, or Default state.
+ */
+struct EdgeNormalModeAssignment {
+    Edge edge;
+    EdgeNormalMode mode = EdgeNormalMode::Default;
+};
+/**
+ * Captures an immutable tri-state lookup for repeated edge-normal queries.
+ * Conflicting Hard and Soft source entries resolve to Default, matching the
+ * canonical document conflict policy without rescanning both vectors.
+ */
+class EdgeNormalModeLookup {
+public:
+    explicit EdgeNormalModeLookup(const Document& document);
+    [[nodiscard]] EdgeNormalMode mode(Edge edge) const;
+
+private:
+    std::map<std::pair<ElementId, ElementId>, EdgeNormalMode> modes_;
+};
+[[nodiscard]] EdgeNormalMode edge_normal_mode(const Document& document,
+                                              Edge edge);
+[[nodiscard]] bool set_edge_normal_modes(
+    Document& document,
+    std::span<const EdgeNormalModeAssignment> assignments);
+[[nodiscard]] bool set_edge_normal_mode(Document& document, Edge edge,
+                                        EdgeNormalMode mode);
+/**
+ * Describes one exact edge-normal transfer from a source edge to a target.
+ * Batch copies resolve every source row from one immutable lookup before any
+ * target state changes, including when source and target are the same document.
+ */
+struct EdgeNormalModeCopy {
+    Edge source_edge;
+    Edge target_edge;
+};
+[[nodiscard]] bool copy_edge_normal_modes(
+    const Document& source,
+    Document& target,
+    std::span<const EdgeNormalModeCopy> copies);
+[[nodiscard]] bool copy_edge_normal_mode(const Document& source,
+                                         Edge source_edge,
+                                         Document& target,
+                                         Edge target_edge);
+void prune_normal_edge_states(Document& document);
+std::vector<Edge> remap_normal_edges_after_edge_splits(
+    std::span<const Edge> source_edges,
+    const Document& candidate,
+    const std::map<std::pair<ElementId, ElementId>, ElementId>& split_vertices);
+std::vector<Edge> remap_normal_edges_after_edge_splits(
+    std::span<const Edge> source_edges,
+    const Document& candidate,
+    const std::map<std::pair<ElementId, ElementId>, std::vector<ElementId>>&
+        split_vertex_ids_by_edge);
+void remap_normal_edge_states_after_edge_splits(
+    const Document& source,
+    Document& candidate,
+    const std::map<std::pair<ElementId, ElementId>, ElementId>& split_vertices);
+void remap_normal_edge_states_after_edge_splits(
+    const Document& source,
+    Document& candidate,
+    const std::map<std::pair<ElementId, ElementId>, std::vector<ElementId>>&
+        split_vertex_ids_by_edge);
 } // namespace quader_poly::document_internal

@@ -60,6 +60,7 @@ enum class EditorOperationId {
   RecalculateFaceNormals,
   AssignMaterial,
   DeleteSelection,
+  DefaultEdgeNormals,
 };
 
 /// Maps native preview presentation categories to portable transactions.

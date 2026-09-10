@@ -60,13 +60,14 @@ private:
 };
 
 template <typename VertexLookup>
-quader::QVec3 face_normal_from_lookup(
+bool try_face_geometric_normal_from_lookup(
     const Face& face,
-    const VertexLookup& vertex_lookup)
+    const VertexLookup& vertex_lookup,
+    quader::QVec3& normal)
 {
-    quader::QVec3 normal;
+    normal = {};
     if (face.vertices.size() < 3) {
-        return { 0.0F, 1.0F, 0.0F };
+        return false;
     }
 
     for (std::size_t index = 0; index < face.vertices.size(); ++index) {
@@ -87,19 +88,33 @@ quader::QVec3 face_normal_from_lookup(
 
     normal = normalize_or_zero(normal);
     if (length_squared(normal) > kEpsilon) {
-        return normal;
+        return true;
     }
 
     const Vertex* a = vertex_lookup.find(face.vertices[0]);
     const Vertex* b = vertex_lookup.find(face.vertices[1]);
     const Vertex* c = vertex_lookup.find(face.vertices[2]);
     if (a == nullptr || b == nullptr || c == nullptr) {
-        return { 0.0F, 1.0F, 0.0F };
+        normal = {};
+        return false;
     }
 
     normal = poly_vec3(quader_geometry::triangle_unit_normal(
         geometry_triangle(a->position, b->position, c->position)));
-    return length_squared(normal) > kEpsilon
+    if (length_squared(normal) > kEpsilon) {
+        return true;
+    }
+    normal = {};
+    return false;
+}
+
+template <typename VertexLookup>
+quader::QVec3 face_normal_from_lookup(
+    const Face& face,
+    const VertexLookup& vertex_lookup)
+{
+    quader::QVec3 normal;
+    return try_face_geometric_normal_from_lookup(face, vertex_lookup, normal)
                ? normal
                : quader::QVec3 { 0.0F, 1.0F, 0.0F };
 }
@@ -115,8 +130,11 @@ std::map<ElementId, quader::QVec3> build_smooth_normals(
             continue;
         }
 
-        const quader::QVec3 normal =
-            face_normal_from_lookup(face, vertex_lookup);
+        quader::QVec3 normal;
+        if (!try_face_geometric_normal_from_lookup(
+                face, vertex_lookup, normal)) {
+            continue;
+        }
         for (const ElementId vertex_id : face.vertices) {
             normals[vertex_id] += normal;
         }
@@ -221,20 +239,49 @@ std::map<CornerKey, quader::QVec3> build_authored_smooth_corner_normals(
     std::map<ElementId, const Face*> smooth_faces;
     std::map<ElementId, quader::QVec3> face_normals;
     std::map<Edge, std::vector<ElementId>, EdgeLess> faces_by_edge;
+    std::map<Edge, std::size_t, EdgeLess> incidence_by_edge;
     std::set<Edge, EdgeLess> hard_edges;
+    std::set<Edge, EdgeLess> soft_edges;
+
+    // Hammer's mesh default is a fixed 40-degree smoothing angle. Authored
+    // hard and soft states override this threshold without changing whether a
+    // face itself participates in smooth shading.
+    constexpr float kDefaultNormalJoinDot = 0.7660444431F;
+    constexpr float kNormalJoinDotEpsilon = 1.0e-5F;
 
     for (Edge edge : document.hard_normal_edges) {
         hard_edges.insert(make_edge(edge.a, edge.b));
     }
+    for (Edge edge : document.soft_normal_edges) {
+        soft_edges.insert(make_edge(edge.a, edge.b));
+    }
 
     for (const Face& face : document.faces) {
-        if (!face_uses_smooth_normals(face, shading) || face.vertices.size() < 3U) {
+        if (face.vertices.size() >= 2U) {
+            for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+                const Edge edge = make_edge(
+                    face.vertices[index],
+                    face.vertices[(index + 1U) % face.vertices.size()]);
+                ++incidence_by_edge[edge];
+            }
+        }
+
+        // Authored-topology persistence deliberately permits finite collapsed
+        // faces. Keep their incidence for boundary/non-manifold classification,
+        // but never let the public +Y face-normal fallback become an authored
+        // fan member or connect otherwise independent visible corners.
+        quader::QVec3 normal;
+        if (!try_face_geometric_normal_from_lookup(
+                face, vertex_lookup, normal)) {
+            continue;
+        }
+
+        if (!face_uses_smooth_normals(face, shading)) {
             continue;
         }
 
         smooth_faces[face.id] = &face;
-        face_normals[face.id] =
-            face_normal_from_lookup(face, vertex_lookup);
+        face_normals[face.id] = normal;
         for (ElementId vertex_id : face.vertices) {
             corners.add({ face.id, vertex_id });
         }
@@ -245,14 +292,25 @@ std::map<CornerKey, quader::QVec3> build_authored_smooth_corner_normals(
     }
 
     for (const auto& [edge, face_ids] : faces_by_edge) {
-        if (hard_edges.find(edge) != hard_edges.end() || face_ids.size() < 2U) {
+        const auto incidence = incidence_by_edge.find(edge);
+        if (incidence == incidence_by_edge.end() || incidence->second != 2U ||
+            face_ids.size() != 2U || hard_edges.contains(edge)) {
             continue;
         }
 
-        for (std::size_t index = 1; index < face_ids.size(); ++index) {
-            corners.unite({ face_ids.front(), edge.a }, { face_ids[index], edge.a });
-            corners.unite({ face_ids.front(), edge.b }, { face_ids[index], edge.b });
+        if (!soft_edges.contains(edge)) {
+            const auto first_normal = face_normals.find(face_ids[0]);
+            const auto second_normal = face_normals.find(face_ids[1]);
+            if (first_normal == face_normals.end() ||
+                second_normal == face_normals.end() ||
+                dot(first_normal->second, second_normal->second) <=
+                    kDefaultNormalJoinDot + kNormalJoinDotEpsilon) {
+              continue;
+            }
         }
+
+        corners.unite({ face_ids[0], edge.a }, { face_ids[1], edge.a });
+        corners.unite({ face_ids[0], edge.b }, { face_ids[1], edge.b });
     }
 
     std::map<CornerKey, quader::QVec3> normal_sums_by_root;

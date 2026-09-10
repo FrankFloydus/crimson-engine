@@ -143,6 +143,91 @@ TEST(QdrDocumentOperationExtrudeElementsTests, TransformExtrudeSelectedFaceCopie
 	EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(fixture.document));
 }
 
+TEST(QdrDocumentOperationExtrudeElementsTests, EdgeExtrudeCopiesExactModeAndDefaultsItsConnectors) {
+	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	const Edge source = make_edge(fixture.bottom_left, fixture.bottom_right);
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(fixture.document, source, EdgeNormalMode::Soft));
+	Selection selection = qdr_test::edge_selection({ source }, source);
+
+	const OperationResult result = extrude_selected_elements(
+		fixture.document, selection, { 0.0F, -0.5F, 0.0F });
+
+	ASSERT_TRUE(result.changed) << result.message;
+	ASSERT_EQ(selection.edges.size(), 1U);
+	const Edge copied = selection.edges.front();
+	EXPECT_EQ(qdr_test::edge_normal_mode(fixture.document, source), EdgeNormalMode::Soft);
+	EXPECT_EQ(qdr_test::edge_normal_mode(fixture.document, copied), EdgeNormalMode::Soft);
+	const Face& strip = fixture.document.faces.back();
+	for (const Edge edge : qdr_test::face_edges_for_test(strip)) {
+		if (edge == source || edge == copied) {
+			continue;
+		}
+		EXPECT_EQ(qdr_test::edge_normal_mode(fixture.document, edge), EdgeNormalMode::Default);
+	}
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests, ClosedEdgeLedgeCopiesSelectedAndClippedCapModes) {
+	Document document;
+	const ElementId bottom_left = add_vertex(document, { -1.0F, -1.0F, 0.0F });
+	const ElementId bottom_middle = add_vertex(document, { 0.0F, -1.0F, 0.0F });
+	const ElementId bottom_right = add_vertex(document, { 1.0F, -1.0F, 0.0F });
+	const ElementId top_left = add_vertex(document, { -1.0F, 1.0F, 0.0F });
+	const ElementId top_middle = add_vertex(document, { 0.0F, 1.0F, 0.0F });
+	const ElementId top_right = add_vertex(document, { 1.0F, 1.0F, 0.0F });
+	ASSERT_NE(add_face(document, std::array { bottom_left, bottom_middle, top_middle, top_left }), kInvalidElementId);
+	ASSERT_NE(add_face(document, std::array { bottom_middle, bottom_right, top_right, top_middle }), kInvalidElementId);
+	const Edge source = make_edge(bottom_middle, top_middle);
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(document, source, EdgeNormalMode::Hard));
+	for (const Edge edge : document_edges(document)) {
+		if (edge != source) {
+			ASSERT_TRUE(qdr_test::set_edge_normal_mode(document, edge, EdgeNormalMode::Soft));
+		}
+	}
+	const ElementId last_source_vertex_id = document.next_vertex_id - 1U;
+	const quader::QVec3 source_a_position = find_vertex(document, source.a)->position;
+	const quader::QVec3 source_b_position = find_vertex(document, source.b)->position;
+	Selection selection = qdr_test::edge_selection({ source }, source);
+
+	const OperationResult result = extrude_selected_elements(
+		document, selection, { 0.0F, 0.0F, 1.0F }, 0.25F);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	ASSERT_EQ(selection.edges.size(), 1U);
+	EXPECT_EQ(qdr_test::edge_normal_mode(document, selection.edges.front()), EdgeNormalMode::Hard);
+	auto new_vertex_at = [&](quader::QVec3 position) {
+		const auto found = std::ranges::find_if(document.vertices, [&](const Vertex& vertex) {
+			return vertex.id > last_source_vertex_id &&
+				qdr_test::vec_nearly_equal(vertex.position, position);
+		});
+		return found == document.vertices.end() ? kInvalidElementId : found->id;
+	};
+	const ElementId root_a = new_vertex_at(source_a_position);
+	const ElementId root_b = new_vertex_at(source_b_position);
+	ASSERT_NE(root_a, kInvalidElementId);
+	ASSERT_NE(root_b, kInvalidElementId);
+	const Edge root_edge = make_edge(root_a, root_b);
+	EXPECT_EQ(qdr_test::edge_normal_mode(document, root_edge), EdgeNormalMode::Hard);
+	for (const ElementId root : { root_a, root_b }) {
+		bool found_clipped_cap_edge = false;
+		for (const Edge edge : document_edges(document)) {
+			if ((edge.a != root && edge.b != root) || edge == root_edge) {
+				continue;
+			}
+			const ElementId other_id = edge.a == root ? edge.b : edge.a;
+			const Vertex* other = find_vertex(document, other_id);
+			if (other == nullptr || other_id <= last_source_vertex_id ||
+				!qdr_test::nearly_equal(other->position.z, 0.0F)) {
+				continue;
+			}
+			found_clipped_cap_edge = true;
+			EXPECT_EQ(qdr_test::edge_normal_mode(document, edge), EdgeNormalMode::Soft);
+		}
+		EXPECT_TRUE(found_clipped_cap_edge);
+	}
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
+}
+
 TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedStandaloneFaceRetainsSourceCapAndClosesVolume) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document(7U);
 	Face* original_face = find_face(fixture.document, fixture.face);
@@ -154,6 +239,10 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedStandaloneFaceReta
 		{ 1.0F, 1.0F },
 		{ 0.0F, 1.0F },
 	};
+	const Edge hard_source = make_edge(fixture.bottom_left, fixture.bottom_right);
+	const Edge soft_source = make_edge(fixture.top_right, fixture.top_left);
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(fixture.document, hard_source, EdgeNormalMode::Hard));
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(fixture.document, soft_source, EdgeNormalMode::Soft));
 	Selection selection = qdr_test::face_selection({ fixture.face }, fixture.face);
 
 	const OperationResult result =
@@ -171,6 +260,16 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedStandaloneFaceReta
 
 	const Face* moved_cap = find_face(fixture.document, fixture.face);
 	ASSERT_NE(moved_cap, nullptr);
+	EXPECT_EQ(
+		qdr_test::edge_normal_mode(
+			fixture.document,
+			make_edge(moved_cap->vertices[0], moved_cap->vertices[1])),
+		EdgeNormalMode::Hard);
+	EXPECT_EQ(
+		qdr_test::edge_normal_mode(
+			fixture.document,
+			make_edge(moved_cap->vertices[2], moved_cap->vertices[3])),
+		EdgeNormalMode::Soft);
     const std::vector<quader::QVec2> expected_moved_uvs{{0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F}};
     ASSERT_EQ(moved_cap->uvs.size(), expected_moved_uvs.size());
     for (std::size_t corner = 0; corner < expected_moved_uvs.size(); ++corner) {

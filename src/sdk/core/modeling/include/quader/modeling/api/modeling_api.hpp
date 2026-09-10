@@ -190,6 +190,7 @@ public:
   [[nodiscard]] OperationReceipt snap_edges_to_active();
   [[nodiscard]] OperationReceipt connect_edges();
   [[nodiscard]] OperationReceipt split_edges();
+  [[nodiscard]] OperationReceipt default_edge_normals();
   [[nodiscard]] OperationReceipt harden_edge_normals();
   [[nodiscard]] OperationReceipt soften_edge_normals();
   [[nodiscard]] PreviewHandle bevel_edges(EdgeBevelOptions options = {});
@@ -351,6 +352,7 @@ public:
   [[nodiscard]] Result<OperationReceipt> snap_edges_to_active();
   [[nodiscard]] Result<OperationReceipt> connect_edges();
   [[nodiscard]] Result<OperationReceipt> split_edges();
+  [[nodiscard]] Result<OperationReceipt> default_edge_normals();
   [[nodiscard]] Result<OperationReceipt> harden_edge_normals();
   [[nodiscard]] Result<OperationReceipt> soften_edge_normals();
   [[nodiscard]] Result<PreviewHandle>

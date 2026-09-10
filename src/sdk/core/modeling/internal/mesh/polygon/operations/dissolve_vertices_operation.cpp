@@ -34,6 +34,87 @@ using namespace document_internal;
 
 namespace {
 
+using EdgeKey = std::pair<ElementId, ElementId>;
+
+EdgeKey edge_key(Edge edge)
+{
+    edge = make_edge(edge.a, edge.b);
+    return {edge.a, edge.b};
+}
+
+std::map<EdgeKey, std::set<EdgeKey>> collapsed_edge_donors(
+    const Document& source,
+    const std::set<ElementId>& removed_vertices)
+{
+    std::map<EdgeKey, std::set<EdgeKey>> donors_by_replacement;
+    for (const Face& face : source.faces) {
+        for (std::size_t start = 0; start < face.vertices.size(); ++start) {
+            if (removed_vertices.contains(face.vertices[start])) {
+                continue;
+            }
+            std::vector<Edge> path;
+            std::size_t index = start;
+            for (std::size_t step = 0; step < face.vertices.size(); ++step) {
+                const std::size_t next =
+                    (index + 1U) % face.vertices.size();
+                path.push_back(
+                    make_edge(face.vertices[index], face.vertices[next]));
+                if (!removed_vertices.contains(face.vertices[next])) {
+                    if (path.size() > 1U && next != start) {
+                        auto& donors = donors_by_replacement[edge_key(
+                            make_edge(face.vertices[start],
+                                      face.vertices[next]))];
+                        for (const Edge donor : path) {
+                            donors.insert(edge_key(donor));
+                        }
+                    }
+                    break;
+                }
+                index = next;
+            }
+        }
+    }
+    return donors_by_replacement;
+}
+
+void remap_edge_normal_modes_after_vertex_dissolve(
+    const Document& source, Document& candidate,
+    const std::set<ElementId>& removed_vertices)
+{
+    const std::vector<Edge> source_edges = document_edges(source);
+    const std::vector<Edge> candidate_edges = document_edges(candidate);
+    const EdgeNormalModeLookup source_modes(source);
+    const auto donors_by_replacement =
+        collapsed_edge_donors(source, removed_vertices);
+    std::set<EdgeKey> source_edge_keys;
+    for (const Edge edge : source_edges) {
+        source_edge_keys.insert(edge_key(edge));
+    }
+    candidate.hard_normal_edges.clear();
+    candidate.soft_normal_edges.clear();
+
+    std::vector<EdgeNormalModeAssignment> assignments;
+    assignments.reserve(candidate_edges.size());
+    for (const Edge target_edge : candidate_edges) {
+        EdgeNormalMode target_mode = EdgeNormalMode::Default;
+        const EdgeKey target_key = edge_key(target_edge);
+        if (source_edge_keys.contains(target_key)) {
+            target_mode = source_modes.mode(target_edge);
+        } else if (const auto donors =
+                       donors_by_replacement.find(target_key);
+                   donors != donors_by_replacement.end()) {
+            for (const Edge donor : source_edges) {
+                if (donors->second.contains(edge_key(donor))) {
+                    target_mode = source_modes.mode(donor);
+                }
+            }
+        }
+        assignments.push_back({target_edge, target_mode});
+    }
+    static_cast<void>(set_edge_normal_modes(candidate, assignments));
+    prune_normal_edge_states(candidate);
+}
+
 /**
  * Implements the Dissolve Vertices Operation modeling operation for the polygon document and mesh editing core.
  */
@@ -66,9 +147,6 @@ OperationResult DissolveVerticesOperation::apply(Document& document, Selection& 
             used_by_face = true;
             if (!loop_vertex_is_redundant(document, face.vertices, vertex_id)) {
                 return OperationResult::failure("Dissolve Vertex only removes redundant straight-line vertices.");
-            }
-            if (!face_vertex_uv_is_redundant(document, face, vertex_id)) {
-                return OperationResult::failure("Dissolve Vertex would remove a texture mapping corner.");
             }
         }
 
@@ -105,7 +183,7 @@ OperationResult DissolveVerticesOperation::apply(Document& document, Selection& 
         const Face source_face = face;
         face.vertices = std::move(dissolved_loop);
         if (!preserve_face_uvs(document, source_face, candidate, face)) {
-            return OperationResult::failure("Dissolve Vertex could not preserve the source texture mapping.");
+            face.uvs.clear();
         }
         changed = true;
     }
@@ -116,6 +194,10 @@ OperationResult DissolveVerticesOperation::apply(Document& document, Selection& 
 
     prune_invalid_faces(candidate);
     prune_unused_vertices(candidate);
+    remap_edge_normal_modes_after_vertex_dissolve(
+        document, candidate,
+        std::set<ElementId>(dissolved_vertices.begin(),
+                            dissolved_vertices.end()));
     restore_source_face_orientation(document, candidate);
     if (!every_face_triangulates(candidate)) {
         return OperationResult::failure("Dissolve Vertex would create invalid face geometry.");

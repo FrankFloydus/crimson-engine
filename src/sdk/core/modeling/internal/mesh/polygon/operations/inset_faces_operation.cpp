@@ -57,6 +57,7 @@ OperationResult inset_selected_faces_impl(Document& document, Selection& selecti
 
     std::vector<ElementId> selected_faces;
     selected_faces.reserve(faces.size());
+    std::vector<EdgeNormalModeCopy> normal_mode_copies;
     bool changed = false;
     for (const Face& original_face : faces) {
         Face* face = find_face(document, original_face.id);
@@ -84,14 +85,24 @@ OperationResult inset_selected_faces_impl(Document& document, Selection& selecti
 
         face->vertices = inner_vertices;
         for (std::size_t index = 0; index < original_face.vertices.size(); ++index) {
+            const Edge source_edge = make_edge(
+                original_face.vertices[index],
+                original_face.vertices[(index + 1U) % original_face.vertices.size()]);
+            const Edge inner_edge = make_edge(
+                inner_vertices[index],
+                inner_vertices[(index + 1U) % inner_vertices.size()]);
             const std::array rim {
                 original_face.vertices[index],
                 original_face.vertices[(index + 1U) % original_face.vertices.size()],
                 inner_vertices[(index + 1U) % inner_vertices.size()],
                 inner_vertices[index],
             };
-            [[maybe_unused]] const ElementId rim_face_id = add_face_with_texture_transform(
+            const ElementId rim_face_id = add_face_with_texture_transform(
                 document, rim, original_face.material_slot, original_face.texture_transform);
+            if (Face* rim_face = find_face(document, rim_face_id)) {
+                rim_face->normal_shading = original_face.normal_shading;
+            }
+            normal_mode_copies.push_back({source_edge, inner_edge});
         }
 
         selected_faces.push_back(original_face.id);
@@ -102,7 +113,10 @@ OperationResult inset_selected_faces_impl(Document& document, Selection& selecti
         return OperationResult::failure("No selected faces were inset.");
     }
 
+    static_cast<void>(
+        copy_edge_normal_modes(document, document, normal_mode_copies));
     prune_invalid_faces(document);
+    prune_normal_edge_states(document);
     selection.clear();
     selection.mode = SelectionMode::Face;
     selection.faces = std::move(selected_faces);

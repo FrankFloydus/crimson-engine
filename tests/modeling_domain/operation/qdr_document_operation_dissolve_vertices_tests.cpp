@@ -71,7 +71,7 @@ TEST(QdrDocumentOperationDissolveVerticesTests, DissolveVerticesRejectsTrueFaceC
 	EXPECT_TRUE(fixture.document.faces.size() == face_count_before);
 }
 
-TEST(QdrDocumentOperationDissolveVerticesTests, DissolveRejectsACollinearCornerThatCarriesAUvBreakpoint) {
+TEST(QdrDocumentOperationDissolveVerticesTests, DissolveRemovesACollinearCornerThatCarriesAUvBreakpoint) {
     Document document;
     const ElementId left = add_vertex(document, {-1.0F, 0.0F, 0.0F});
     const ElementId middle = add_vertex(document, {0.0F, 0.0F, 0.0F});
@@ -81,21 +81,77 @@ TEST(QdrDocumentOperationDissolveVerticesTests, DissolveRejectsACollinearCornerT
     Face* face = find_face(document, face_id);
     ASSERT_NE(face, nullptr);
     face->uvs = {{2.0F, 3.0F}, {8.0F, 4.0F}, {6.0F, 5.0F}, {-1.0F, 8.0F}};
-    const Face original = *face;
+    const std::vector<quader::QVec2> expected_uvs{
+        face->uvs[0], face->uvs[2], face->uvs[3]};
     Selection selection = qdr_test::vertex_selection({middle});
 
     const OperationResult result = dissolve_selected_vertices(document, selection);
 
-    EXPECT_FALSE(result.success);
-    EXPECT_FALSE(result.changed);
-    EXPECT_NE(find_vertex(document, middle), nullptr);
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    EXPECT_EQ(find_vertex(document, middle), nullptr);
     face = find_face(document, face_id);
     ASSERT_NE(face, nullptr);
-    EXPECT_EQ(face->vertices, original.vertices);
-    ASSERT_EQ(face->uvs.size(), original.uvs.size());
-    for (std::size_t corner = 0; corner < original.uvs.size(); ++corner) {
-        EXPECT_FLOAT_EQ(face->uvs[corner].x, original.uvs[corner].x);
-        EXPECT_FLOAT_EQ(face->uvs[corner].y, original.uvs[corner].y);
+    EXPECT_EQ(face->vertices, (std::vector<ElementId>{left, right, top}));
+    ASSERT_EQ(face->uvs.size(), expected_uvs.size());
+    for (std::size_t corner = 0; corner < expected_uvs.size(); ++corner) {
+        EXPECT_FLOAT_EQ(face->uvs[corner].x, expected_uvs[corner].x);
+        EXPECT_FLOAT_EQ(face->uvs[corner].y, expected_uvs[corner].y);
     }
-    EXPECT_EQ(selection.vertices, std::vector<ElementId>{middle});
+    EXPECT_EQ(selection.vertices, (std::vector<ElementId>{left, right}));
+}
+
+TEST(QdrDocumentOperationDissolveVerticesTests,
+     DissolveCompositeEdgeUsesTheLastOrderedNormalModeDonor) {
+    Document document;
+    const ElementId left = add_vertex(document, {-1.0F, 0.0F, 0.0F});
+    const ElementId middle = add_vertex(document, {0.0F, 0.0F, 0.0F});
+    const ElementId right = add_vertex(document, {1.0F, 0.0F, 0.0F});
+    const ElementId top = add_vertex(document, {0.0F, 1.0F, 0.0F});
+    ASSERT_NE(add_face(document, std::array{left, middle, right, top}),
+              kInvalidElementId);
+    document.hard_normal_edges = {make_edge(left, middle)};
+    document.soft_normal_edges = {make_edge(middle, right)};
+    Selection selection = qdr_test::vertex_selection({middle});
+
+    const OperationResult result =
+        dissolve_selected_vertices(document, selection);
+
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    const Edge replacement = make_edge(left, right);
+    EXPECT_TRUE(qdr_test::document_has_edge(document, replacement));
+    EXPECT_TRUE(qdr_test::contains_edge(document.soft_normal_edges,
+                                        replacement));
+    EXPECT_FALSE(qdr_test::contains_edge(document.hard_normal_edges,
+                                         replacement));
+}
+
+TEST(QdrDocumentOperationDissolveVerticesTests,
+     DissolveKeepsAnExistingDefaultReplacementOverAuthoredDonors) {
+    Document document;
+    const ElementId left = add_vertex(document, {-1.0F, 0.0F, 0.0F});
+    const ElementId middle = add_vertex(document, {0.0F, 0.0F, 0.0F});
+    const ElementId right = add_vertex(document, {1.0F, 0.0F, 0.0F});
+    const ElementId top = add_vertex(document, {0.0F, 1.0F, 0.0F});
+    const ElementId bottom = add_vertex(document, {0.0F, -1.0F, 0.0F});
+    ASSERT_NE(add_face(document, std::array{left, middle, right, top}),
+              kInvalidElementId);
+    ASSERT_NE(add_face(document, std::array{left, bottom, right}),
+              kInvalidElementId);
+    document.hard_normal_edges = {make_edge(left, middle)};
+    document.soft_normal_edges = {make_edge(middle, right)};
+    Selection selection = qdr_test::vertex_selection({middle});
+
+    const OperationResult result =
+        dissolve_selected_vertices(document, selection);
+
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    const Edge replacement = make_edge(left, right);
+    EXPECT_TRUE(qdr_test::document_has_edge(document, replacement));
+    EXPECT_FALSE(qdr_test::contains_edge(document.hard_normal_edges,
+                                         replacement));
+    EXPECT_FALSE(qdr_test::contains_edge(document.soft_normal_edges,
+                                         replacement));
 }

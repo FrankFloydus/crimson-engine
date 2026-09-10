@@ -31,6 +31,25 @@ Document make_two_quad_strip_document() {
   return document;
 }
 
+TEST(QdrDocumentOperationDetachFacesTests, DetachCopiesExactEdgeNormalModeToTheDetachedBoundary) {
+	Document document = make_two_quad_strip_document();
+	const Face selected_before = document.faces.front();
+	const Edge shared = make_edge(selected_before.vertices[1], selected_before.vertices[2]);
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(document, shared, EdgeNormalMode::Soft));
+	Selection selection = qdr_test::face_selection({ selected_before.id }, selected_before.id);
+
+	const OperationResult result = detach_selected_faces(document, selection);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	const Face* detached = find_face(document, selected_before.id);
+	ASSERT_NE(detached, nullptr);
+	const Edge detached_copy = make_edge(detached->vertices[1], detached->vertices[2]);
+	EXPECT_NE(detached_copy, shared);
+	EXPECT_EQ(qdr_test::edge_normal_mode(document, shared), EdgeNormalMode::Soft);
+	EXPECT_EQ(qdr_test::edge_normal_mode(document, detached_copy), EdgeNormalMode::Soft);
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
+}
+
 } // namespace
 
 TEST(QdrDocumentOperationDetachFacesTests, DetachFacesDuplicatesSharedBoundaryVerticesAndKeepsOneObjectDocument) {

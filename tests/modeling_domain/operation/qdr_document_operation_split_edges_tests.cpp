@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "operation_validation_test_helpers.hpp"
 
+#include <ranges>
+
 using namespace quader_poly;
 
 TEST(QdrDocumentOperationSplitEdgesTests, SplitEdgesSeparatesAdjacentFacesWithoutDeletingEitherSide) {
@@ -57,4 +59,81 @@ TEST(QdrDocumentOperationSplitEdgesTests, SplitEdgesSeparatesAdjacentFacesWithou
 				find_vertex(source, before->vertices[corner])->position));
 		}
 	}
+}
+
+TEST(QdrDocumentOperationSplitEdgesTests,
+	 SplitEdgesCopiesHardSoftAndDefaultModesToEveryRekeyedFaceEdge) {
+	Document document = make_cube({});
+	const Edge selected_edge = document_edges(document).front();
+	const auto source_face_it = std::ranges::find_if(
+		document.faces,
+		[selected_edge](const Face& face) {
+			for (std::size_t index = 0U; index < face.vertices.size(); ++index) {
+				if (make_edge(
+						face.vertices[index],
+						face.vertices[(index + 1U) % face.vertices.size()]) ==
+				    selected_edge) {
+					return true;
+				}
+			}
+			return false;
+		});
+	ASSERT_NE(source_face_it, document.faces.end());
+	const Face source_face = *source_face_it;
+	std::size_t selected_index = source_face.vertices.size();
+	for (std::size_t index = 0U; index < source_face.vertices.size(); ++index) {
+		if (make_edge(source_face.vertices[index],
+		              source_face.vertices[(index + 1U) %
+		                                   source_face.vertices.size()]) ==
+		    selected_edge) {
+			selected_index = index;
+			break;
+		}
+	}
+	ASSERT_LT(selected_index, source_face.vertices.size());
+	const std::size_t previous_index =
+		(selected_index + source_face.vertices.size() - 1U) %
+		source_face.vertices.size();
+	const std::size_t next_index =
+		(selected_index + 1U) % source_face.vertices.size();
+	const std::size_t default_index =
+		(selected_index + 2U) % source_face.vertices.size();
+	const Edge hard_neighbor = make_edge(
+		source_face.vertices[previous_index],
+		source_face.vertices[(previous_index + 1U) % source_face.vertices.size()]);
+	const Edge soft_neighbor = make_edge(
+		source_face.vertices[next_index],
+		source_face.vertices[(next_index + 1U) % source_face.vertices.size()]);
+	document.hard_normal_edges = {selected_edge, hard_neighbor};
+	document.soft_normal_edges = {soft_neighbor};
+	Selection selection = qdr_test::edge_selection({selected_edge}, selected_edge);
+
+	const OperationResult result = split_selected_edges(document, selection);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
+	const Face* rekeyed_face = find_face(document, source_face.id);
+	ASSERT_NE(rekeyed_face, nullptr);
+	ASSERT_EQ(rekeyed_face->vertices.size(), source_face.vertices.size());
+	const auto rekeyed_edge = [&](std::size_t index) {
+		return make_edge(
+			rekeyed_face->vertices[index],
+			rekeyed_face->vertices[(index + 1U) % rekeyed_face->vertices.size()]);
+	};
+	EXPECT_TRUE(qdr_test::contains_edge(
+		document.hard_normal_edges, rekeyed_edge(selected_index)));
+	EXPECT_TRUE(qdr_test::contains_edge(
+		document.hard_normal_edges, rekeyed_edge(previous_index)));
+	EXPECT_TRUE(qdr_test::contains_edge(
+		document.soft_normal_edges, rekeyed_edge(next_index)));
+	EXPECT_FALSE(qdr_test::contains_edge(
+		document.hard_normal_edges, rekeyed_edge(default_index)));
+	EXPECT_FALSE(qdr_test::contains_edge(
+		document.soft_normal_edges, rekeyed_edge(default_index)));
+	EXPECT_TRUE(qdr_test::contains_edge(
+		document.hard_normal_edges, selected_edge));
+	EXPECT_TRUE(qdr_test::contains_edge(
+		document.hard_normal_edges, hard_neighbor));
+	EXPECT_TRUE(qdr_test::contains_edge(
+		document.soft_normal_edges, soft_neighbor));
 }

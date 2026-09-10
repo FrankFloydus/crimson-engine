@@ -29,7 +29,7 @@ struct PortableOperationMapping {
 
 namespace detail {
 
-inline constexpr std::array<PortableOperationMapping, 35>
+inline constexpr std::array<PortableOperationMapping, 36>
     kPortableOperationMappings{{
         {EditorOperationId::Bridge, quader::modeling::OperationKind::Bridge,
          "Bridge"},
@@ -84,6 +84,9 @@ inline constexpr std::array<PortableOperationMapping, 35>
         {EditorOperationId::ShadeFacesFlat,
          quader::modeling::OperationKind::ShadeFacesFlat,
          "Shade Faces Flat"},
+        {EditorOperationId::DefaultEdgeNormals,
+         quader::modeling::OperationKind::DefaultEdgeNormals,
+         "Set Edge Normals to Default"},
         {EditorOperationId::HardenEdgeNormals,
          quader::modeling::OperationKind::HardenEdgeNormals,
          "Harden Edge Normals"},

@@ -2651,6 +2651,11 @@ public:
         return document.soften_selected_edge_normals();
       };
       break;
+    case Id::DefaultEdgeNormals:
+      mutation = [](PolygonDocument &document) {
+        return document.reset_selected_edge_normals_to_default();
+      };
+      break;
     case Id::DetachFaces:
       mutation = [](PolygonDocument &document) {
         return document.detach_selected_faces();

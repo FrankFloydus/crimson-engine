@@ -15,6 +15,7 @@
 
 #include <quader/modeling/io/qdr_document.hpp>
 #include <quader/modeling/curves/curve_document.hpp>
+#include <quader/modeling/neutral/polygon/document_topology.hpp>
 #include <quader/modeling/neutral/polygon/document_validation.hpp>
 
 #include <flatbuffers/flatbuffers.h>
@@ -1087,6 +1088,49 @@ void require_csr_offsets(
   }
 }
 
+void migrate_legacy_csr_edge_normal_modes(quader_poly::Document &document) {
+  std::set<std::pair<quader_poly::ElementId, quader_poly::ElementId>>
+      hard_edges;
+  for (const quader_poly::Edge edge : document.hard_normal_edges) {
+    const quader_poly::Edge canonical = quader_poly::make_edge(edge.a, edge.b);
+    hard_edges.emplace(canonical.a, canonical.b);
+  }
+  document.hard_normal_edges.clear();
+  document.hard_normal_edges.reserve(hard_edges.size());
+  for (const auto &[a, b] : hard_edges) {
+    document.hard_normal_edges.push_back(quader_poly::make_edge(a, b));
+  }
+
+  std::map<std::pair<quader_poly::ElementId, quader_poly::ElementId>,
+           std::size_t>
+      smooth_face_count_by_edge;
+  for (const quader_poly::Face &face : document.faces) {
+    if (face.normal_shading != quader_poly::SurfaceShading::Smooth ||
+        face.vertices.size() < 3u) {
+      continue;
+    }
+    std::set<std::pair<quader_poly::ElementId, quader_poly::ElementId>>
+        face_edges;
+    for (std::size_t corner = 0u; corner < face.vertices.size(); ++corner) {
+      const quader_poly::Edge edge = quader_poly::make_edge(
+          face.vertices[corner],
+          face.vertices[(corner + 1u) % face.vertices.size()]);
+      face_edges.emplace(edge.a, edge.b);
+    }
+    for (const auto &edge : face_edges) {
+      ++smooth_face_count_by_edge[edge];
+    }
+  }
+
+  document.soft_normal_edges.clear();
+  for (const auto &[edge, smooth_face_count] : smooth_face_count_by_edge) {
+    if (smooth_face_count >= 2u && !hard_edges.contains(edge)) {
+      document.soft_normal_edges.push_back(
+          quader_poly::make_edge(edge.first, edge.second));
+    }
+  }
+}
+
 [[nodiscard]] quader_poly::Document
 decode_polygon_document(const fb::GeometryPayload &payload) {
   const auto *vertices = payload.polygon_vertices();
@@ -1159,6 +1203,10 @@ decode_polygon_document(const fb::GeometryPayload &payload) {
       document.hard_normal_edges.push_back({edge->a(), edge->b()});
     }
   }
+
+  // CSR scenes predate explicit Soft overrides. Their renderer joined every
+  // shared edge between Smooth faces unless the edge was authored Hard.
+  migrate_legacy_csr_edge_normal_modes(document);
 
   const quader_poly::PolygonDocumentValidationReport validation =
       quader_poly::validate_polygon_document(document);

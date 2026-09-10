@@ -90,6 +90,7 @@ void expect_document(const quader_poly::Document &actual,
     expect_face_attributes(actual.faces[index], expected.faces[index]);
   }
   EXPECT_EQ(actual.hard_normal_edges, expected.hard_normal_edges);
+  EXPECT_EQ(actual.soft_normal_edges, expected.soft_normal_edges);
   EXPECT_EQ(actual.next_vertex_id, expected.next_vertex_id);
   EXPECT_EQ(actual.next_face_id, expected.next_face_id);
 }

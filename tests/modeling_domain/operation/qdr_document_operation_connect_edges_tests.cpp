@@ -7,6 +7,7 @@
 #include "operation_validation_test_helpers.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iterator>
 #include <ranges>
@@ -17,12 +18,17 @@ TEST(QdrDocumentOperationConnectEdgesTests, ConnectEdgesCutsBetweenOppositeQuadE
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 	const FaceTextureTransform texture{{2.0F, 0.5F}, {0.25F, 0.75F}, 15.0F};
 	fixture.document.faces.front().texture_transform = texture;
+	fixture.document.faces.front().normal_shading = SurfaceShading::Smooth;
 	fixture.document.faces.front().uvs = {
 		{0.0F, 0.0F}, {4.0F, 0.0F}, {6.0F, 2.0F}, {0.0F, 4.0F}};
+	const Edge bottom_edge = make_edge(fixture.bottom_left, fixture.bottom_right);
+	const Edge top_edge = make_edge(fixture.top_right, fixture.top_left);
+	fixture.document.hard_normal_edges = {bottom_edge};
+	fixture.document.soft_normal_edges = {top_edge};
 	const Face source = fixture.document.faces.front();
 	Selection selection = qdr_test::edge_selection({
-		make_edge(fixture.bottom_left, fixture.bottom_right),
-		make_edge(fixture.top_right, fixture.top_left),
+		bottom_edge,
+		top_edge,
 	});
 	const std::size_t vertex_count_before = fixture.document.vertices.size();
 
@@ -35,6 +41,7 @@ TEST(QdrDocumentOperationConnectEdgesTests, ConnectEdgesCutsBetweenOppositeQuadE
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
 	for (const Face& face : fixture.document.faces) {
 		EXPECT_EQ(face.texture_transform, texture);
+		EXPECT_EQ(face.normal_shading, SurfaceShading::Smooth);
 		ASSERT_EQ(face.uvs.size(), face.vertices.size());
 		for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
 			const auto before = std::ranges::find(source.vertices, face.vertices[corner]);
@@ -56,8 +63,58 @@ TEST(QdrDocumentOperationConnectEdgesTests, ConnectEdgesCutsBetweenOppositeQuadE
         EXPECT_TRUE(selection.mode == SelectionMode::Edge);
         EXPECT_TRUE(selection.edges.size() == 1U);
 	EXPECT_TRUE(qdr_test::edge_positions_match_unordered(fixture.document, selection.edges.front(), { 0.0F, -1.0F, 0.0F }, { 0.0F, 1.0F, 0.0F }));
+	const ElementId bottom_midpoint =
+		qdr_test::vertex_at_position(fixture.document, {0.0F, -1.0F, 0.0F});
+	const ElementId top_midpoint =
+		qdr_test::vertex_at_position(fixture.document, {0.0F, 1.0F, 0.0F});
+	ASSERT_NE(bottom_midpoint, kInvalidElementId);
+	ASSERT_NE(top_midpoint, kInvalidElementId);
+	const std::array<Edge, 2> expected_hard_edges{
+		make_edge(fixture.bottom_left, bottom_midpoint),
+		make_edge(bottom_midpoint, fixture.bottom_right),
+	};
+	const std::array<Edge, 3> expected_soft_edges{
+		make_edge(fixture.top_right, top_midpoint),
+		make_edge(top_midpoint, fixture.top_left),
+		selection.edges.front(),
+	};
+	ASSERT_EQ(fixture.document.hard_normal_edges.size(),
+	          expected_hard_edges.size());
+	for (const Edge edge : expected_hard_edges) {
+		EXPECT_TRUE(qdr_test::contains_edge(
+			fixture.document.hard_normal_edges, edge));
+	}
+	ASSERT_EQ(fixture.document.soft_normal_edges.size(),
+	          expected_soft_edges.size());
+	for (const Edge edge : expected_soft_edges) {
+		EXPECT_TRUE(qdr_test::contains_edge(
+			fixture.document.soft_normal_edges, edge));
+	}
 	EXPECT_TRUE(qdr_test::edge_incidence_count(fixture.document, selection.edges.front()) == 2);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
+}
+
+TEST(QdrDocumentOperationConnectEdgesTests,
+	 ConnectEdgesSecondDefaultDonorOverridesTheFirstExplicitMode) {
+	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	const Edge bottom_edge =
+		make_edge(fixture.bottom_left, fixture.bottom_right);
+	const Edge top_edge = make_edge(fixture.top_right, fixture.top_left);
+	fixture.document.soft_normal_edges = {bottom_edge};
+	Selection selection = qdr_test::edge_selection({bottom_edge, top_edge});
+
+	const OperationResult result = connect_selected_edges(
+		fixture.document, selection);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	qdr_test::expect_valid_polygon_document_after_success(
+		fixture.document, result);
+	ASSERT_EQ(selection.edges.size(), 1U);
+	EXPECT_FALSE(qdr_test::contains_edge(
+		fixture.document.hard_normal_edges, selection.edges.front()));
+	EXPECT_FALSE(qdr_test::contains_edge(
+		fixture.document.soft_normal_edges, selection.edges.front()));
+	EXPECT_EQ(fixture.document.soft_normal_edges.size(), 2U);
 }
 
 TEST(QdrDocumentOperationConnectEdgesTests, ConnectEdgesSplitsSharedCubeEdgesWithoutOpeningTheHull) {

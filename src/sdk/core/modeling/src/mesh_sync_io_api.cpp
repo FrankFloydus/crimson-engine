@@ -392,6 +392,11 @@ Result<OperationReceipt> CheckedOperationsApi::split_edges() {
   return checked_receipt([&] { return OperationsApi(context_).split_edges(); });
 }
 
+Result<OperationReceipt> CheckedOperationsApi::default_edge_normals() {
+  return checked_receipt(
+      [&] { return OperationsApi(context_).default_edge_normals(); });
+}
+
 Result<OperationReceipt> CheckedOperationsApi::harden_edge_normals() {
   return checked_receipt(
       [&] { return OperationsApi(context_).harden_edge_normals(); });

@@ -79,6 +79,7 @@ command_schema_for_operation(EditorOperationId operation_id) {
   case EditorOperationId::FlipFaceNormals:
   case EditorOperationId::ShadeFacesSmooth:
   case EditorOperationId::ShadeFacesFlat:
+  case EditorOperationId::DefaultEdgeNormals:
   case EditorOperationId::HardenEdgeNormals:
   case EditorOperationId::SoftenEdgeNormals:
   case EditorOperationId::CombineMeshes:

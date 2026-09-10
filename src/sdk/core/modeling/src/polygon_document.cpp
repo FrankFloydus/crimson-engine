@@ -1212,6 +1212,24 @@ PolygonDocument::from_authored_topology(const AuthoredTopology &topology) {
         quader_poly::make_edge(edge.a.index, edge.b.index));
   }
 
+  document.soft_normal_edges.reserve(topology.soft_normal_edges.size());
+  for (EdgeKey edge : topology.soft_normal_edges) {
+    if (!edge.valid() || edge.a.generation != 1U ||
+        edge.b.generation != 1U) {
+      return Result<PolygonDocument>::failure(make_error(
+          ErrorCode::ValidationFailed,
+          "Authored topology contains an invalid soft edge."));
+    }
+    document.soft_normal_edges.push_back(
+        quader_poly::make_edge(edge.a.index, edge.b.index));
+  }
+  const auto edge_less = [](quader_poly::Edge left,
+                            quader_poly::Edge right) noexcept {
+    return left.a < right.a || (left.a == right.a && left.b < right.b);
+  };
+  std::ranges::sort(document.hard_normal_edges, edge_less);
+  std::ranges::sort(document.soft_normal_edges, edge_less);
+
   PolygonDocument result = PolygonDocumentNativeAccess::from_native(
       std::move(document));
   // Imports are lossless authored-state transfers, including finite collapsed
@@ -1645,12 +1663,21 @@ std::vector<EdgeKey> PolygonDocument::hard_edge_ids() const {
 }
 
 std::vector<EdgeKey> PolygonDocument::soft_edge_ids() const {
+  std::vector<EdgeKey> ids;
+  ids.reserve(impl_->document->soft_normal_edges.size());
+  for (const quader_poly::Edge edge : impl_->document->soft_normal_edges) {
+    ids.push_back(edge_id(edge));
+  }
+  return ids;
+}
+
+std::vector<EdgeKey> PolygonDocument::default_edge_ids() const {
   std::vector<EdgeKey> ids = edge_ids();
   const std::vector<EdgeKey> hard = hard_edge_ids();
+  const std::vector<EdgeKey> soft = soft_edge_ids();
   std::erase_if(ids, [&](const EdgeKey edge) {
-    return std::ranges::any_of(hard, [edge](const EdgeKey hard_edge) {
-      return hard_edge == edge;
-    });
+    return std::ranges::find(hard, edge) != hard.end() ||
+           std::ranges::find(soft, edge) != soft.end();
   });
   return ids;
 }
@@ -1773,6 +1800,10 @@ Result<AuthoredTopology> PolygonDocument::authored_topology() const {
   topology.hard_normal_edges.reserve(impl_->document->hard_normal_edges.size());
   for (quader_poly::Edge edge : impl_->document->hard_normal_edges) {
     topology.hard_normal_edges.push_back(edge_id(edge));
+  }
+  topology.soft_normal_edges.reserve(impl_->document->soft_normal_edges.size());
+  for (quader_poly::Edge edge : impl_->document->soft_normal_edges) {
+    topology.soft_normal_edges.push_back(edge_id(edge));
   }
   return Result<AuthoredTopology>::success(std::move(topology));
 }
@@ -2778,6 +2809,16 @@ Result<OperationResult> PolygonDocument::soften_selected_edge_normals() {
       *impl_,
       [](quader_poly::Document &document, quader_poly::Selection &selection) {
         return quader_poly::soften_selected_edge_normals(document, selection);
+      });
+}
+
+Result<OperationResult>
+PolygonDocument::reset_selected_edge_normals_to_default() {
+  return apply_operation(
+      *impl_,
+      [](quader_poly::Document &document, quader_poly::Selection &selection) {
+        return quader_poly::reset_selected_edge_normals_to_default(document,
+                                                                   selection);
       });
 }
 

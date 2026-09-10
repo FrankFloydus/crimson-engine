@@ -134,6 +134,7 @@ std::vector<CommandDescriptor> OperationsApi::catalog() const {
       {"snap_edges_to_active", "Snap Edges To Active", "Edge"},
       {"connect_edges", "Connect Edges", "Edge"},
       {"split_edges", "Split Edges", "Edge"},
+      {"default_edge_normals", "Set Edge Normals to Default", "Edge"},
       {"harden_edge_normals", "Harden Edge Normals", "Edge"},
       {"soften_edge_normals", "Soften Edge Normals", "Edge"},
       {"bevel_edges", "Bevel Edges", "Edge", true, "", true},
@@ -305,6 +306,9 @@ OperationReceipt OperationsApi::execute(std::string_view id,
   }
   if (id == "split_edges") {
     return finish(split_edges());
+  }
+  if (id == "default_edge_normals") {
+    return finish(default_edge_normals());
   }
   if (id == "harden_edge_normals") {
     return finish(harden_edge_normals());
@@ -612,6 +616,12 @@ OperationReceipt OperationsApi::connect_edges() {
 OperationReceipt OperationsApi::split_edges() {
   MeshHandle mesh = MeshCollection(context_).first_selected();
   return mesh.valid() ? mesh.edges().selected().split()
+                      : unsupported(*context_, "No selected mesh.");
+}
+
+OperationReceipt OperationsApi::default_edge_normals() {
+  MeshHandle mesh = MeshCollection(context_).first_selected();
+  return mesh.valid() ? mesh.edges().selected().reset_normals_to_default()
                       : unsupported(*context_, "No selected mesh.");
 }
 

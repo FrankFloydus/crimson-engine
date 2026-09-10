@@ -526,6 +526,18 @@ inline bool document_has_edge(const Document& document, Edge edge)
 	return std::find(edges.begin(), edges.end(), normalized) != edges.end();
 }
 
+inline std::vector<Edge> face_edges_for_test(const Face& face)
+{
+	std::vector<Edge> edges;
+	edges.reserve(face.vertices.size());
+	for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+		edges.push_back(make_edge(
+			face.vertices[index],
+			face.vertices[(index + 1U) % face.vertices.size()]));
+	}
+	return edges;
+}
+
 inline bool contains_element_id(const std::vector<ElementId>& ids, ElementId id)
 {
 	return std::find(ids.begin(), ids.end(), id) != ids.end();
@@ -537,6 +549,56 @@ inline bool contains_edge(const std::vector<Edge>& edges, Edge edge)
 	return std::find(edges.begin(), edges.end(), normalized) != edges.end();
 }
 
+inline EdgeNormalMode edge_normal_mode(const Document& document, Edge edge)
+{
+	edge = make_edge(edge.a, edge.b);
+	const bool hard = contains_edge(document.hard_normal_edges, edge);
+	const bool soft = contains_edge(document.soft_normal_edges, edge);
+	if (hard == soft) {
+		return EdgeNormalMode::Default;
+	}
+	return hard ? EdgeNormalMode::Hard : EdgeNormalMode::Soft;
+}
+
+inline bool set_edge_normal_mode(Document& document, Edge edge,
+                                 EdgeNormalMode mode)
+{
+	edge = make_edge(edge.a, edge.b);
+	if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+		edge.a == edge.b || !document_has_edge(document, edge)) {
+		return false;
+	}
+
+	const std::vector<Edge> previous_hard = document.hard_normal_edges;
+	const std::vector<Edge> previous_soft = document.soft_normal_edges;
+	const auto remove_edge = [edge](std::vector<Edge>& edges) {
+		std::erase_if(edges, [edge](Edge candidate) {
+			return make_edge(candidate.a, candidate.b) == edge;
+		});
+	};
+	remove_edge(document.hard_normal_edges);
+	remove_edge(document.soft_normal_edges);
+	if (mode == EdgeNormalMode::Hard) {
+		document.hard_normal_edges.push_back(edge);
+	} else if (mode == EdgeNormalMode::Soft) {
+		document.soft_normal_edges.push_back(edge);
+	}
+
+	const auto canonicalize = [](std::vector<Edge>& edges) {
+		for (Edge& candidate : edges) {
+			candidate = make_edge(candidate.a, candidate.b);
+		}
+		std::sort(edges.begin(), edges.end(), [](Edge left, Edge right) {
+			return std::pair{left.a, left.b} < std::pair{right.a, right.b};
+		});
+		edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+	};
+	canonicalize(document.hard_normal_edges);
+	canonicalize(document.soft_normal_edges);
+	return document.hard_normal_edges != previous_hard ||
+		document.soft_normal_edges != previous_soft;
+}
+
 inline bool edge_positions_match_unordered(const Document& document, Edge edge, quader::QVec3 first_position, quader::QVec3 second_position)
 {
 	const Vertex* first = find_vertex(document, edge.a);
@@ -546,6 +608,16 @@ inline bool edge_positions_match_unordered(const Document& document, Edge edge, 
 	}
 	return (vec_nearly_equal(first->position, first_position) && vec_nearly_equal(second->position, second_position)) ||
 		(vec_nearly_equal(first->position, second_position) && vec_nearly_equal(second->position, first_position));
+}
+
+inline ElementId vertex_at_position(const Document& document, quader::QVec3 position)
+{
+	for (const Vertex& vertex : document.vertices) {
+		if (vec_nearly_equal(vertex.position, position)) {
+			return vertex.id;
+		}
+	}
+	return kInvalidElementId;
 }
 
 inline std::size_t open_edge_count(const Document& document)

@@ -68,9 +68,11 @@ units, color modes, and source presets are rejected. Source presets are editable
 not spectral simulations, and retain their stable enum identities when saved.
 
 Curves need at least two anchors and cannot be instance-definition members. Curve samples and tool
-drafts are derived/transient. Face texture scale/shift/rotation use QGEO 1.1; QGEO 1.0 reads identity
-values. Current writers omit legacy `ScenePayload.objects`: old records may fill missing entity
-editor-object IDs, but explicit conflicting IDs fail.
+drafts are derived/transient. QGEO 1.2 stores explicit disjoint Hard and Soft edge-normal rows plus
+face texture scale/shift/rotation. QGEO 1.0 reads identity texture transforms; QGEO 1.0 and 1.1
+migrate every live non-Hard edge shared by at least two Smooth faces to explicit Soft so older scenes
+retain their rendered normals. Current writers omit legacy `ScenePayload.objects`: old records may
+fill missing entity editor-object IDs, but explicit conflicting IDs fail.
 
 Selection, hover, history, tools, and previews are not persisted. The stored perspective camera is
 an explicit exception to otherwise transient viewport state. JSON `.qdr` input is unsupported;

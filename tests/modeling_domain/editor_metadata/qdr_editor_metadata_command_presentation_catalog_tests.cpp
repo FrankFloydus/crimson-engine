@@ -412,7 +412,7 @@ TEST(QdrEditorMetadataCommandPresentationCatalogTests,
     }
   }
 
-  EXPECT_EQ(checked_operation_count, 37u);
+  EXPECT_EQ(checked_operation_count, 38u);
   EXPECT_EQ(unique_operation_commands.size(), checked_operation_count);
 }
 

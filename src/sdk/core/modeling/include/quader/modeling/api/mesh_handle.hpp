@@ -119,6 +119,7 @@ public:
   [[nodiscard]] EdgeSelection boundary() const;
   [[nodiscard]] EdgeSelection hard() const;
   [[nodiscard]] EdgeSelection soft() const;
+  [[nodiscard]] EdgeSelection defaults() const;
 
 private:
   friend class MeshHandle;

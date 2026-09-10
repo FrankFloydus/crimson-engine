@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <new>
 #include <span>
@@ -36,7 +37,7 @@ using ByteSpan = std::span<const std::byte>;
 
 constexpr std::uint16_t kFormatMajor = 1;
 constexpr std::uint16_t kFormatMinor = 0;
-constexpr std::uint16_t kQgeoFormatMinor = 1;
+constexpr std::uint16_t kQgeoFormatMinor = 2;
 constexpr std::uint32_t kNoFlags = 0;
 constexpr std::size_t kQgeoHeaderSize = 56;
 constexpr std::size_t kQpolHeaderSize = 88;
@@ -648,14 +649,70 @@ void validate_polygon_document(const quader_poly::Document &document,
     reject("Polygon next face ID is not greater than every live face ID.");
   }
 
-  std::unordered_set<std::uint64_t> hard_edges;
-  hard_edges.reserve(document.hard_normal_edges.size());
-  for (quader_poly::Edge edge : document.hard_normal_edges) {
-    const quader_poly::Edge canonical = quader_poly::make_edge(edge.a, edge.b);
-    const std::uint64_t key =
-        static_cast<std::uint64_t>(canonical.a) << 32U | canonical.b;
-    if (edge != canonical || !hard_edges.insert(key).second) {
-      reject("Polygon document contains a noncanonical or duplicate hard edge.");
+  std::unordered_set<std::uint64_t> edge_modes;
+  edge_modes.reserve(document.hard_normal_edges.size() +
+                     document.soft_normal_edges.size());
+  const auto validate_edge_mode = [&](std::span<const quader_poly::Edge> edges,
+                                      std::string_view mode) {
+    for (quader_poly::Edge edge : edges) {
+      const quader_poly::Edge canonical = quader_poly::make_edge(edge.a, edge.b);
+      const std::uint64_t key =
+          static_cast<std::uint64_t>(canonical.a) << 32U | canonical.b;
+      if (edge != canonical || !edge_modes.insert(key).second) {
+        reject("Polygon document contains a noncanonical, duplicate, or "
+               "conflicting " +
+               std::string(mode) + " edge.");
+      }
+    }
+  };
+  validate_edge_mode(document.hard_normal_edges, "hard");
+  validate_edge_mode(document.soft_normal_edges, "soft");
+}
+
+[[nodiscard]] bool edge_less(quader_poly::Edge left,
+                             quader_poly::Edge right) noexcept {
+  return left.a < right.a || (left.a == right.a && left.b < right.b);
+}
+
+[[nodiscard]] std::vector<quader_poly::Edge>
+sorted_edges(std::span<const quader_poly::Edge> edges) {
+  std::vector<quader_poly::Edge> sorted(edges.begin(), edges.end());
+  std::ranges::sort(sorted, edge_less);
+  return sorted;
+}
+
+void migrate_legacy_soft_normal_edges(quader_poly::Document &document) {
+  struct Incidence {
+    quader_poly::Edge edge{};
+    std::uint32_t smooth_face_count = 0;
+  };
+  std::map<std::uint64_t, Incidence> incidences;
+  for (const quader_poly::Face &face : document.faces) {
+    if (face.vertices.size() < 2U) {
+      continue;
+    }
+    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+      const quader_poly::Edge edge = quader_poly::make_edge(
+          face.vertices[index], face.vertices[(index + 1U) % face.vertices.size()]);
+      const std::uint64_t key = static_cast<std::uint64_t>(edge.a) << 32U |
+                                static_cast<std::uint64_t>(edge.b);
+      Incidence &incidence = incidences[key];
+      incidence.edge = edge;
+      if (face.normal_shading == quader_poly::SurfaceShading::Smooth) {
+        ++incidence.smooth_face_count;
+      }
+    }
+  }
+
+  const std::vector<quader_poly::Edge> hard_edges =
+      sorted_edges(document.hard_normal_edges);
+  document.soft_normal_edges.clear();
+  document.soft_normal_edges.reserve(incidences.size());
+  for (const auto &[key, incidence] : incidences) {
+    static_cast<void>(key);
+    if (incidence.smooth_face_count >= 2U &&
+        !std::ranges::binary_search(hard_edges, incidence.edge, edge_less)) {
+      document.soft_normal_edges.push_back(incidence.edge);
     }
   }
 }
@@ -666,12 +723,19 @@ encode_authored_topology(const PolygonDocument &polygon) {
       PolygonDocumentNativeAccess::document(polygon);
   validate_polygon_document(document, false);
 
+  const std::vector<quader_poly::Edge> hard_edges =
+      sorted_edges(document.hard_normal_edges);
+  const std::vector<quader_poly::Edge> soft_edges =
+      sorted_edges(document.soft_normal_edges);
+
   const std::uint32_t vertex_count =
       require_u32(document.vertices.size(), "Polygon vertex count");
   const std::uint32_t face_count =
       require_u32(document.faces.size(), "Polygon face count");
   const std::uint32_t hard_edge_count =
-      require_u32(document.hard_normal_edges.size(), "Polygon hard-edge count");
+      require_u32(hard_edges.size(), "Polygon hard-edge count");
+  const std::uint32_t soft_edge_count =
+      require_u32(soft_edges.size(), "Polygon soft-edge count");
 
   std::uint64_t corner_count = 0;
   std::uint64_t uv_count = 0;
@@ -721,6 +785,10 @@ encode_authored_topology(const PolygonDocument &polygon) {
       require_multiply(hard_edge_count, 8, "Polygon hard edges"),
       "Authored topology");
   total_size = require_add(
+      total_size,
+      require_multiply(soft_edge_count, 8, "Polygon soft edges"),
+      "Authored topology");
+  total_size = require_add(
       total_size, require_multiply(face_count, 20, "Face texture transforms"),
       "Authored topology");
   if (total_size > kMaxPayloadSize) {
@@ -737,7 +805,7 @@ encode_authored_topology(const PolygonDocument &polygon) {
   writer.write_u32(static_cast<std::uint32_t>(corner_count));
   writer.write_u32(static_cast<std::uint32_t>(uv_count));
   writer.write_u32(hard_edge_count);
-  writer.write_u32(0);
+  writer.write_u32(soft_edge_count);
 
   for (const quader_poly::Vertex &vertex : document.vertices) {
     writer.write_u32(vertex.id);
@@ -780,7 +848,11 @@ encode_authored_topology(const PolygonDocument &polygon) {
     writer.write_u8(shading_byte(face.normal_shading));
   }
   writer.pad_to(4);
-  for (const quader_poly::Edge edge : document.hard_normal_edges) {
+  for (const quader_poly::Edge edge : hard_edges) {
+    writer.write_u32(edge.a);
+    writer.write_u32(edge.b);
+  }
+  for (const quader_poly::Edge edge : soft_edges) {
     writer.write_u32(edge.a);
     writer.write_u32(edge.b);
   }
@@ -813,7 +885,10 @@ encode_authored_topology(const PolygonDocument &polygon) {
   const std::uint32_t corner_count = reader.read_u32("corner count");
   const std::uint32_t uv_count = reader.read_u32("UV count");
   const std::uint32_t hard_edge_count = reader.read_u32("hard-edge count");
-  if (reader.read_u32("authored topology reserved field") != 0) {
+  const std::uint32_t soft_edge_count =
+      reader.read_u32(minor >= 2U ? "soft-edge count"
+                                  : "authored topology reserved field");
+  if (minor < 2U && soft_edge_count != 0U) {
     malformed("Authored topology reserved field must be zero.");
   }
 
@@ -851,6 +926,10 @@ encode_authored_topology(const PolygonDocument &polygon) {
                       "authored topology padding");
   const ByteSpan hard_edges = reader.read_bytes(
       require_multiply(hard_edge_count, 8, "hard edges"), "hard edges");
+  const ByteSpan soft_edges = minor >= 2U
+      ? reader.read_bytes(require_multiply(soft_edge_count, 8, "soft edges"),
+                          "soft edges")
+      : ByteSpan{};
   const ByteSpan texture_transforms = minor >= 1U
       ? reader.read_bytes(require_multiply(face_count, 20,
                                            "face texture transforms"),
@@ -951,6 +1030,21 @@ encode_authored_topology(const PolygonDocument &polygon) {
                     "hard-edge endpoint"),
     });
   }
+  if (minor >= 2U) {
+    document.soft_normal_edges.reserve(soft_edge_count);
+    for (std::uint32_t index = 0; index < soft_edge_count; ++index) {
+      document.soft_normal_edges.push_back({
+          read_u32_at(soft_edges, static_cast<std::size_t>(index) * 8U,
+                      "soft-edge endpoint"),
+          read_u32_at(soft_edges, static_cast<std::size_t>(index) * 8U + 4U,
+                      "soft-edge endpoint"),
+      });
+    }
+  } else {
+    migrate_legacy_soft_normal_edges(document);
+  }
+  std::ranges::sort(document.hard_normal_edges, edge_less);
+  std::ranges::sort(document.soft_normal_edges, edge_less);
   validate_polygon_document(document, true);
   return PolygonDocumentNativeAccess::from_native(std::move(document));
 }

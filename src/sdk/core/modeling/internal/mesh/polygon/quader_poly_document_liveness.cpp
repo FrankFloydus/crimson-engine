@@ -148,7 +148,16 @@ PolygonDocumentLiveness build_polygon_document_liveness(const Document& document
             append_revision_value(revision, vertex_id);
         }
     }
+    append_revision_value(revision, 0x48415244ULL);
+    append_revision_value(
+        revision, static_cast<std::uint64_t>(document.hard_normal_edges.size()));
     for (Edge edge : document.hard_normal_edges) {
+        append_revision_edge(revision, edge);
+    }
+    append_revision_value(revision, 0x534f4654ULL);
+    append_revision_value(
+        revision, static_cast<std::uint64_t>(document.soft_normal_edges.size()));
+    for (Edge edge : document.soft_normal_edges) {
         append_revision_edge(revision, edge);
     }
     liveness.revision = revision;

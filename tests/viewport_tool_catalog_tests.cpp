@@ -2413,6 +2413,7 @@ public:
       const auto &original = expected[index].second;
       EXPECT_TRUE(quader_poly::has_same_geometry(current, original));
       EXPECT_EQ(current.hard_normal_edges, original.hard_normal_edges);
+      EXPECT_EQ(current.soft_normal_edges, original.soft_normal_edges);
       ASSERT_EQ(current.vertices.size(), original.vertices.size());
       for (std::size_t vertex = 0; vertex < original.vertices.size(); ++vertex) {
         EXPECT_EQ(current.vertices[vertex].id, original.vertices[vertex].id);

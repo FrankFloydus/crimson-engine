@@ -38,3 +38,32 @@ TEST(QdrDocumentOperationExtractFacesTests, ExtractFacesRemovesSourceFacesAndRet
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(result.extracted_document));
 }
+
+TEST(QdrDocumentOperationExtractFacesTests, ExtractCopiesFaceShadingAndExactEdgeNormalModes) {
+	Document document = make_cube({});
+	Face& source_face = document.faces.front();
+	source_face.normal_shading = SurfaceShading::Smooth;
+	const Edge hard_source = make_edge(source_face.vertices[0], source_face.vertices[1]);
+	const Edge soft_source = make_edge(source_face.vertices[2], source_face.vertices[3]);
+	const ElementId source_face_id = source_face.id;
+	const std::size_t source_vertex_count = source_face.vertices.size();
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(document, hard_source, EdgeNormalMode::Hard));
+	ASSERT_TRUE(qdr_test::set_edge_normal_mode(document, soft_source, EdgeNormalMode::Soft));
+	Selection selection = qdr_test::face_selection({ source_face_id }, source_face_id);
+
+	const ExtractFacesResult result = extract_selected_faces(document, selection);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	ASSERT_EQ(result.extracted_document.faces.size(), 1U);
+	const Face& extracted = result.extracted_document.faces.front();
+	EXPECT_EQ(extracted.normal_shading, SurfaceShading::Smooth);
+	ASSERT_EQ(extracted.vertices.size(), source_vertex_count);
+	EXPECT_EQ(
+		qdr_test::edge_normal_mode(result.extracted_document, make_edge(extracted.vertices[0], extracted.vertices[1])),
+		EdgeNormalMode::Hard);
+	EXPECT_EQ(
+		qdr_test::edge_normal_mode(result.extracted_document, make_edge(extracted.vertices[2], extracted.vertices[3])),
+		EdgeNormalMode::Soft);
+	qdr_test::expect_valid_polygon_document(
+		result.extracted_document, "extract should preserve edge-normal state");
+}

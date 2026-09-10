@@ -286,6 +286,15 @@ EdgeSelection MeshEdges::soft() const {
   return only(edges);
 }
 
+EdgeSelection MeshEdges::defaults() const {
+  std::vector<EdgeKey> edges;
+  if (Result<PolygonDocument> document =
+          mesh_.context_->session.document_copy(mesh_.id())) {
+    edges = document.value().default_edge_ids();
+  }
+  return only(edges);
+}
+
 MeshFaces::MeshFaces(MeshHandle mesh) : mesh_(std::move(mesh)) {}
 
 FaceSelection MeshFaces::all() const {

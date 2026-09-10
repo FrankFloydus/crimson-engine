@@ -3264,6 +3264,57 @@ bool remove_redundant_vertex_from_all_face_loops(Document& document, ElementId v
         }
     }
 
+    const EdgeNormalModeLookup source_modes(document);
+    std::map<std::pair<ElementId, ElementId>, EdgeNormalMode>
+        replacement_modes_by_edge;
+    for (const Face& face : document.faces) {
+        const std::optional<std::size_t> index =
+            loop_vertex_index(face.vertices, vertex_id);
+        if (!index.has_value()) {
+            continue;
+        }
+
+        const ElementId previous = face.vertices[
+            (*index + face.vertices.size() - 1U) % face.vertices.size()];
+        const ElementId next = face.vertices[(*index + 1U) % face.vertices.size()];
+        const Edge replacement = make_edge(previous, next);
+        const auto replacement_key =
+            std::pair{replacement.a, replacement.b};
+        if (replacement_modes_by_edge.contains(replacement_key)) {
+            continue;
+        }
+
+        EdgeNormalMode mode = EdgeNormalMode::Default;
+        if (edge_exists(document, replacement)) {
+            mode = source_modes.mode(replacement);
+        } else {
+            std::array<Edge, 2> donors {
+                make_edge(previous, vertex_id),
+                make_edge(vertex_id, next),
+            };
+            std::ranges::sort(donors, [](Edge left, Edge right) {
+                return std::pair{left.a, left.b} <
+                       std::pair{right.a, right.b};
+            });
+            // Resolve the replacement once from canonical donor order so
+            // opposite face winding and face storage order cannot change it.
+            // Default is a real donor state and can therefore clear an
+            // earlier explicit assignment.
+            for (const Edge donor : donors) {
+                if (edge_exists(document, donor)) {
+                    mode = source_modes.mode(donor);
+                }
+            }
+        }
+        replacement_modes_by_edge.emplace(replacement_key, mode);
+    }
+
+    std::vector<EdgeNormalModeAssignment> replacement_modes;
+    replacement_modes.reserve(replacement_modes_by_edge.size());
+    for (const auto& [edge, mode] : replacement_modes_by_edge) {
+        replacement_modes.push_back({make_edge(edge.first, edge.second), mode});
+    }
+
     bool changed = false;
     const std::set<ElementId> vertex_to_remove { vertex_id };
     for (Face& face : document.faces) {
@@ -3287,6 +3338,11 @@ bool remove_redundant_vertex_from_all_face_loops(Document& document, ElementId v
         }
         face = std::move(dissolved_face);
         changed = true;
+    }
+    if (changed) {
+        static_cast<void>(
+            set_edge_normal_modes(document, replacement_modes));
+        prune_normal_edge_states(document);
     }
     return changed;
 }
@@ -3504,6 +3560,7 @@ bool append_copied_face(
         copied_face.uvs = source_face.uvs;
     }
     copied_face.material_slot = source_face.material_slot;
+    copied_face.normal_shading = source_face.normal_shading;
     copied_face.texture_transform = source_face.texture_transform;
     if (triangulate_face_local_indices(target, copied_face).empty()) {
         return false;

@@ -181,6 +181,9 @@ bool shared_chain_endpoints(
 bool dissolve_edge_endpoints(Document& document, const std::set<ElementId>& candidates)
 {
     const VertexNeighbors joined_neighbors = vertex_neighbors(document);
+    const EdgeNormalModeLookup source_modes(document);
+    std::map<EdgeKey, EdgeNormalMode> pending_modes;
+    std::vector<EdgeNormalModeAssignment> assignments;
     std::vector<ElementId> eligible;
     for (const Vertex& vertex : document.vertices) {
         const auto found = joined_neighbors.find(vertex.id);
@@ -188,6 +191,7 @@ bool dissolve_edge_endpoints(Document& document, const std::set<ElementId>& cand
             eligible.push_back(vertex.id);
         }
     }
+    assignments.reserve(eligible.size());
     for (const ElementId vertex_id : eligible) {
         std::vector<ElementId> neighbors;
         bool preserves_faces = true;
@@ -201,8 +205,32 @@ bool dissolve_edge_endpoints(Document& document, const std::set<ElementId>& cand
         if (neighbors.size() != 2U || !preserves_faces) {
             continue;
         }
-        const bool hard = contains_edge(document.hard_normal_edges, make_edge(vertex_id, neighbors[0])) ||
-                          contains_edge(document.hard_normal_edges, make_edge(vertex_id, neighbors[1]));
+        const Edge replacement_edge = make_edge(neighbors[0], neighbors[1]);
+        EdgeNormalMode replacement_mode = EdgeNormalMode::Default;
+        if (edge_exists(document, replacement_edge)) {
+            const auto pending = pending_modes.find(
+                edge_key(replacement_edge.a, replacement_edge.b));
+            replacement_mode = pending == pending_modes.end()
+                                   ? source_modes.mode(replacement_edge)
+                                   : pending->second;
+        } else {
+            std::array<Edge, 2> donor_edges{
+                make_edge(vertex_id, neighbors[0]),
+                make_edge(vertex_id, neighbors[1]),
+            };
+            std::ranges::sort(donor_edges, [](Edge left, Edge right) {
+                return std::pair{left.a, left.b} < std::pair{right.a, right.b};
+            });
+            for (const Edge donor_edge : donor_edges) {
+                if (edge_exists(document, donor_edge)) {
+                    const auto pending = pending_modes.find(
+                        edge_key(donor_edge.a, donor_edge.b));
+                    replacement_mode = pending == pending_modes.end()
+                                           ? source_modes.mode(donor_edge)
+                                           : pending->second;
+                }
+            }
+        }
         for (Face& face : document.faces) {
             const auto corner = loop_vertex_index(face.vertices, vertex_id);
             if (!corner.has_value()) {
@@ -213,13 +241,16 @@ bool dissolve_edge_endpoints(Document& document, const std::set<ElementId>& cand
             if (source.uvs.size() == source.vertices.size()) {
                 face.uvs.erase(face.uvs.begin() + static_cast<std::ptrdiff_t>(*corner));
             } else if (!preserve_face_uvs(document, source, document, face)) {
-                return false;
+                face.uvs.clear();
             }
         }
-        if (hard) {
-            add_unique_edge(document.hard_normal_edges, make_edge(neighbors[0], neighbors[1]));
-        }
+        const EdgeKey replacement_key =
+            edge_key(replacement_edge.a, replacement_edge.b);
+        pending_modes[replacement_key] = replacement_mode;
+        assignments.push_back({replacement_edge, replacement_mode});
     }
+    static_cast<void>(set_edge_normal_modes(document, assignments));
+    prune_normal_edge_states(document);
     return true;
 }
 
@@ -312,10 +343,10 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
         merged_face.uvs.clear();
         orient_face_toward_normal(candidate, merged_face, face_normal(candidate, first_face) + face_normal(candidate, second_face));
         // Joining faces retains boundary corners before the separate vertex cleanup.
-        if (!assign_merged_face_texture_boundary(
-                candidate, std::array<ElementId, 2>{first_face.id, second_face.id}, merged_face)) {
-            return OperationResult::failure("Dissolve could not preserve the source texture mapping.");
-        }
+        static_cast<void>(assign_merged_face_texture_boundary(
+            candidate,
+            std::array<ElementId, 2>{first_face.id, second_face.id},
+            merged_face));
 
         affected_vertices.insert(first_face.vertices.begin(), first_face.vertices.end());
         affected_vertices.insert(second_face.vertices.begin(), second_face.vertices.end());
@@ -348,7 +379,7 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
     std::erase_if(candidate.vertices, [&](const Vertex& vertex) {
         return affected_vertices.contains(vertex.id) && !used_vertices.contains(vertex.id);
     });
-    std::erase_if(candidate.hard_normal_edges, [&](Edge edge) { return !edge_exists(candidate, edge); });
+    prune_normal_edge_states(candidate);
     std::erase_if(merged_face_ids, [&](ElementId face_id) { return find_face(candidate, face_id) == nullptr; });
 
     document = std::move(candidate);

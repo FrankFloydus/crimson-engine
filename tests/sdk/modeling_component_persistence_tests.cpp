@@ -35,7 +35,14 @@ AuthoredTopology decorated_box() {
                          static_cast<float>(index) * 0.125F});
     }
   }
-  topology.hard_normal_edges = document.edge_ids();
+  const auto edges = document.edge_ids();
+  for (std::size_t index = 0; index < edges.size(); ++index) {
+    (index % 2U == 0U ? topology.hard_normal_edges
+                      : topology.soft_normal_edges)
+        .push_back(edges[index]);
+  }
+  std::ranges::sort(topology.hard_normal_edges);
+  std::ranges::sort(topology.soft_normal_edges);
   // Preserve retired allocation space as well as the live component IDs.
   topology.next_vertex_id += 19U;
   topology.next_face_id += 23U;
@@ -50,6 +57,7 @@ void expect_exact_topology(const AuthoredTopology &expected,
   EXPECT_EQ(actual.next_vertex_id, expected.next_vertex_id);
   EXPECT_EQ(actual.next_face_id, expected.next_face_id);
   EXPECT_EQ(actual.hard_normal_edges, expected.hard_normal_edges);
+  EXPECT_EQ(actual.soft_normal_edges, expected.soft_normal_edges);
   ASSERT_EQ(actual.vertices.size(), expected.vertices.size());
   ASSERT_EQ(actual.faces.size(), expected.faces.size());
   for (std::size_t index = 0; index < expected.vertices.size(); ++index) {

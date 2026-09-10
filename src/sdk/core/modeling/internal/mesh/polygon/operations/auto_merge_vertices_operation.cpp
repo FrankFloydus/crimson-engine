@@ -287,19 +287,6 @@ OperationResult auto_merge_selected_vertices(Document &document,
     candidate = std::move(next);
   }
 
-  candidate.hard_normal_edges.clear();
-  for (Edge edge : document.hard_normal_edges) {
-    if (const auto found = remap.find(edge.a); found != remap.end()) {
-      edge.a = found->second;
-    }
-    if (const auto found = remap.find(edge.b); found != remap.end()) {
-      edge.b = found->second;
-    }
-    edge = make_edge(edge.a, edge.b);
-    if (edge.a != edge.b && edge_exists(candidate, edge)) {
-      add_unique_edge(candidate.hard_normal_edges, edge);
-    }
-  }
   // A weld changes vertex identity without changing the authored corner UV.
   // Keep projection-based repair only for faces actually split or collapsed.
   std::map<ElementId, const Face *> source_faces;

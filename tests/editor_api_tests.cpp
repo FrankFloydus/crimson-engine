@@ -9686,6 +9686,100 @@ TEST(EditorApiTests, CommandRegistryCoversEveryAppOperationAndViewportTool) {
     }
 }
 
+TEST(EditorApiTests,
+     DefaultEdgeNormalsCommandUsesCanonicalRoutingAndUndoableEdgeState) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("default-edge-normals"))
+                  .ok());
+
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Default Edge Normals");
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
+
+  EXPECT_TRUE(typed_command_ids().contains(std::string(
+      quader::quader_command::kModelingDefaultEdgeNormals.string())));
+  EXPECT_EQ(editor.commands().command_id_for_modeling_action(
+                "default_edge_normals"),
+            quader::quader_command::kModelingDefaultEdgeNormals.string());
+  const std::optional<quader::QuaderCommandDescriptor> descriptor =
+      editor.commands().descriptor(
+          quader::quader_command::kModelingDefaultEdgeNormals);
+  ASSERT_TRUE(descriptor.has_value());
+  EXPECT_TRUE(descriptor->enabled);
+  EXPECT_EQ(descriptor->label, "Set Selected Edge Normals to Default");
+  EXPECT_TRUE(descriptor->shortcut.empty());
+
+  const std::vector<quader::QuaderKeybindingCatalogEntry> keybindings =
+      editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *keybinding =
+      find_keybinding_catalog_entry(
+          keybindings,
+          quader::quader_command::kModelingDefaultEdgeNormals.string());
+  ASSERT_NE(keybinding, nullptr);
+  EXPECT_EQ(keybinding->scope_id, "viewport.selection.edge");
+  EXPECT_TRUE(keybinding->default_shortcut.empty());
+  EXPECT_TRUE(keybinding->unassigned);
+
+  const quader::QuaderActionSet action_set =
+      editor.modeling().available_action_set({
+          .surface = quader::QuaderActionSurface::OperationsPanel,
+          .include_disabled = true,
+      });
+  const quader::QuaderActionPanel *panel =
+      find_action_panel(action_set, "edge_operations");
+  ASSERT_NE(panel, nullptr);
+  const auto action_index = [&](std::string_view action_id) {
+    return std::find_if(panel->actions.begin(), panel->actions.end(),
+                        [&](const quader::QuaderActionItem &action) {
+                          return action.action_id == action_id;
+                        });
+  };
+  const auto default_action = action_index("default_edge_normals");
+  const auto hard_action = action_index("harden_edge_normals");
+  const auto soft_action = action_index("soften_edge_normals");
+  ASSERT_NE(default_action, panel->actions.end());
+  ASSERT_NE(hard_action, panel->actions.end());
+  ASSERT_NE(soft_action, panel->actions.end());
+  EXPECT_LT(default_action, hard_action);
+  EXPECT_LT(hard_action, soft_action);
+
+  const quader::QuaderApiVoidResult hardened = editor.commands().execute(
+      quader::quader_command::kModelingHardenEdgeNormals);
+  ASSERT_TRUE(hardened.ok()) << hardened.error_message();
+  ASSERT_TRUE(hardened.changed());
+
+  const quader::QuaderApiVoidResult reset = editor.commands().execute(
+      quader::quader_command::kModelingDefaultEdgeNormals);
+  ASSERT_TRUE(reset.ok()) << reset.error_message();
+  EXPECT_TRUE(reset.changed());
+  EXPECT_EQ(editor.query().history().undo_label,
+            "Set Selected Edge Normals to Default");
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.history().redo().ok());
+  const quader::QuaderHistorySnapshot history_after_redo =
+      editor.history().snapshot();
+  const quader::QuaderApiVoidResult unchanged = editor.commands().execute(
+      quader::quader_command::kModelingDefaultEdgeNormals);
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(editor.history().snapshot().undo_label,
+            history_after_redo.undo_label);
+
+  quader::QuaderEdgeSelection selected_edge =
+      editor.modeling().mesh(box).edges().only({{1, 2}});
+  ASSERT_TRUE(selected_edge.harden_normals().ok());
+  const quader::QuaderApiVoidResult direct_reset =
+      selected_edge.reset_normals_to_default();
+  ASSERT_TRUE(direct_reset.ok()) << direct_reset.error_message();
+  EXPECT_TRUE(direct_reset.changed());
+}
+
 TEST(EditorApiTests, ModelingActionSetExposesActiveOperationPanelForSelectionModeShelf) {
   const quader::QuaderActionQuery query{
       .surface = quader::QuaderActionSurface::OperationsPanel,
@@ -19395,9 +19489,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 207u);
+  EXPECT_EQ(commands.size(), 208u);
 #else
-  EXPECT_EQ(commands.size(), 206u);
+  EXPECT_EQ(commands.size(), 207u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
