@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
+#include "core/localization_service.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_standard_material_editor_window.hpp"
 
@@ -16,6 +17,7 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDoubleSpinBox>
+#include <QEvent>
 #include <QGroupBox>
 #include <QImage>
 #include <QKeySequence>
@@ -37,11 +39,26 @@
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
 #include <utility>
 #include <vector>
 
 namespace quader {
 namespace {
+
+/// Observes tooltip publications independently of paint scheduling.
+class MaterialTooltipEvents final : public QObject {
+public:
+  int changes = 0;
+
+protected:
+  bool eventFilter(QObject *, QEvent *event) override {
+    if (event->type() == QEvent::ToolTipChange) {
+      ++changes;
+    }
+    return false;
+  }
+};
 
 QAction *find_action(QtStandardMaterialEditorWindow &window,
                      const char *object_name) {
@@ -1196,6 +1213,94 @@ TEST(QtStandardMaterialEditorWindowTests,
   EXPECT_FALSE(rejected_begin_opened_dialog);
   EXPECT_EQ(color_count, colors_before_rejected_begin);
   EXPECT_EQ(finish_count, 0);
+}
+
+TEST(QtStandardMaterialEditorWindowTests,
+     MaterialUvHelpExplainsSharedTilingAndRetainsLocalizedControls) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-material-uv-help-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QtStandardMaterialEditorWindow window;
+  int edits = 0;
+  window.set_texture_transform_edited_callback(
+      [&](QtStandardMaterialTextureTransformComponent, double) { ++edits; });
+  const QtStandardMaterialEditorDocument document{
+      .stable_id = QStringLiteral("uv-help-material"),
+      .name = QStringLiteral("UV Help"),
+  };
+  window.set_document(document);
+  auto *group = window.findChild<QGroupBox *>(
+      QStringLiteral("standardMaterialEditor.textureTransform"));
+  ASSERT_NE(group, nullptr);
+  constexpr std::array<const char *, 7> names{
+      "centerU", "centerV", "scaleU", "scaleV", "offsetU", "offsetV", "rotation"};
+  std::array<QPointer<QDoubleSpinBox>, names.size()> retained;
+  for (std::size_t index = 0; index < names.size(); ++index) {
+    retained[index] = window.findChild<QDoubleSpinBox *>(
+        QStringLiteral("standardMaterialEditor.textureTransform.%1")
+            .arg(QString::fromUtf8(names[index])));
+    ASSERT_NE(retained[index], nullptr);
+  }
+  EXPECT_EQ(retained[2]->accessibleName(), QStringLiteral("UV Tiling U"));
+  EXPECT_TRUE(retained[2]->toolTip().contains(QStringLiteral("smaller")));
+  EXPECT_TRUE(group->toolTip().contains(QStringLiteral("every surface")));
+
+  LocalizationService localization;
+  ASSERT_TRUE(localization.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "en-US"));
+  for (const char *locale : {"en-US", "it-IT"}) {
+    SCOPED_TRACE(locale);
+    ASSERT_TRUE(localization.select_locale(locale));
+    const auto text = [&](std::string_view suffix) {
+      const auto value = localization.text(
+          std::string("ui.standard_material_editor.texture_transform") +
+              std::string(suffix), "");
+      EXPECT_FALSE(value.empty());
+      return QString::fromStdString(value);
+    };
+    QtStandardMaterialEditorLabels labels;
+    labels.texture_transform = text("");
+    labels.texture_center = text(".center");
+    labels.texture_scale = text(".scale");
+    labels.texture_offset = text(".offset");
+    labels.texture_rotation = text(".rotation");
+    labels.texture_transform_tooltip = text(".tooltip");
+    labels.texture_center_tooltip = text(".center.tooltip");
+    labels.texture_scale_tooltip = text(".scale.tooltip");
+    labels.texture_offset_tooltip = text(".offset.tooltip");
+    labels.texture_rotation_tooltip = text(".rotation.tooltip");
+    window.set_labels(labels);
+    QCoreApplication::processEvents();
+    const std::array<QString, 7> tooltips{
+        labels.texture_center_tooltip, labels.texture_center_tooltip,
+        labels.texture_scale_tooltip, labels.texture_scale_tooltip,
+        labels.texture_offset_tooltip, labels.texture_offset_tooltip,
+        labels.texture_rotation_tooltip};
+    EXPECT_EQ(group->toolTip(), labels.texture_transform_tooltip);
+    MaterialTooltipEvents events;
+    group->installEventFilter(&events);
+    for (std::size_t index = 0; index < names.size(); ++index) {
+      const auto stable_name =
+          QStringLiteral("standardMaterialEditor.textureTransform.%1")
+              .arg(QString::fromUtf8(names[index]));
+      auto *spin = window.findChild<QDoubleSpinBox *>(stable_name);
+      auto *slider = window.findChild<QSlider *>(stable_name + QStringLiteral(".slider"));
+      ASSERT_EQ(spin, retained[index].data());
+      ASSERT_NE(slider, nullptr);
+      EXPECT_EQ(spin->toolTip(), tooltips[index]);
+      EXPECT_EQ(slider->toolTip(), tooltips[index]);
+      spin->installEventFilter(&events);
+      slider->installEventFilter(&events);
+    }
+    EXPECT_EQ(retained[2]->accessibleName(), labels.texture_scale + QStringLiteral(" U"));
+    for (int frame = 0; frame < 20; ++frame) {
+      window.set_document(document);
+    }
+    EXPECT_EQ(events.changes, 0);
+    EXPECT_EQ(edits, 0);
+  }
 }
 
 } // namespace

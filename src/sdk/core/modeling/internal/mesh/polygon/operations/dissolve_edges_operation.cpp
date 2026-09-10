@@ -10,12 +10,11 @@
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
-#include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_backend.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstddef>
 #include <map>
 #include <optional>
@@ -23,7 +22,6 @@
 #include <set>
 #include <span>
 #include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -32,6 +30,198 @@ namespace quader_poly {
 using namespace document_internal;
 
 namespace {
+
+using EdgeKey = std::pair<ElementId, ElementId>;
+using VertexNeighbors = std::map<ElementId, std::vector<ElementId>>;
+
+/// Canonical keys let the original edge tags survive the face joins.
+EdgeKey edge_key(ElementId first, ElementId second)
+{
+    const Edge edge = make_edge(first, second);
+    return {edge.a, edge.b};
+}
+
+/// Derive vertex degree from authored edges, not face-corner multiplicity.
+VertexNeighbors vertex_neighbors(const Document& document)
+{
+    VertexNeighbors neighbors;
+    for (const Edge edge : document_edges(document)) {
+        neighbors[edge.a].push_back(edge.b);
+        neighbors[edge.b].push_back(edge.a);
+    }
+    return neighbors;
+}
+
+/// Follow a degree-two chain and optionally extend the original dissolve tags.
+std::optional<ElementId> chain_endpoint(
+    const VertexNeighbors& neighbors, ElementId previous, ElementId current,
+    std::set<EdgeKey>* tagged_edges = nullptr)
+{
+    std::set<ElementId> visited;
+    while (true) {
+        const auto found = neighbors.find(current);
+        if (found == neighbors.end() || found->second.size() != 2U) {
+            return current;
+        }
+        if (!visited.insert(current).second) {
+            return std::nullopt;
+        }
+        const ElementId next = found->second[0] == previous ? found->second[1] : found->second[0];
+        if (tagged_edges != nullptr) {
+            tagged_edges->insert(edge_key(current, next));
+        }
+        previous = current;
+        current = next;
+    }
+}
+
+/// Capture Blender's endpoint eligibility before any selected edge is removed.
+std::set<ElementId> dissolve_vertex_candidates(
+    const Document& document, std::span<const Edge> edges,
+    const std::map<EdgeKey, std::vector<std::size_t>>& adjacent_faces)
+{
+    const VertexNeighbors neighbors = vertex_neighbors(document);
+    std::set<EdgeKey> tagged_edges;
+    for (const Edge edge : edges) {
+        tagged_edges.insert(edge_key(edge.a, edge.b));
+    }
+    for (const Edge edge : edges) {
+        chain_endpoint(neighbors, edge.b, edge.a, &tagged_edges);
+        chain_endpoint(neighbors, edge.a, edge.b, &tagged_edges);
+    }
+
+    std::set<ElementId> candidates;
+    const auto tagged_count = [&](ElementId vertex_id) {
+        const auto found = neighbors.find(vertex_id);
+        return found == neighbors.end() ? 0U : static_cast<unsigned>(std::ranges::count_if(
+            found->second, [&](ElementId neighbor) { return tagged_edges.contains(edge_key(vertex_id, neighbor)); }));
+    };
+    for (const Edge edge : edges) {
+        const auto& faces = adjacent_faces.at(edge_key(edge.a, edge.b));
+        for (const ElementId endpoint : std::array{edge.a, edge.b}) {
+            if (document.faces[faces[0]].vertices.size() == 3U &&
+                document.faces[faces[1]].vertices.size() == 3U && tagged_count(endpoint) == 1U) {
+                continue;
+            }
+            const auto vertex_id = chain_endpoint(neighbors, endpoint == edge.a ? edge.b : edge.a, endpoint);
+            if (!vertex_id.has_value() || candidates.contains(*vertex_id)) {
+                continue;
+            }
+            bool incidental_contact = false;
+            if (tagged_count(*vertex_id) != 1U) {
+                for (const Face& face : document.faces) {
+                    const auto corner = loop_vertex_index(face.vertices, *vertex_id);
+                    if (corner.has_value() &&
+                        !tagged_edges.contains(edge_key(*vertex_id, face.vertices[(*corner + face.vertices.size() - 1U) % face.vertices.size()])) &&
+                        !tagged_edges.contains(edge_key(*vertex_id, face.vertices[(*corner + 1U) % face.vertices.size()]))) {
+                        incidental_contact = true;
+                        break;
+                    }
+                }
+            }
+            if (!incidental_contact) {
+                candidates.insert(*vertex_id);
+            }
+        }
+    }
+    return candidates;
+}
+
+/// A face pair can share a whole subdivided edge chain after earlier joins.
+bool shared_chain_endpoints(
+    const Document& document, const Face& first, const Face& second, Edge selected,
+    ElementId& from_id, ElementId& to_id, std::vector<Edge>& removed_edges)
+{
+    const auto oriented = oriented_edge_in_face(first, selected);
+    if (!oriented.has_value()) {
+        return false;
+    }
+    const std::size_t count = first.vertices.size();
+    const auto edge_at = [&](std::size_t index) {
+        return make_edge(first.vertices[index], first.vertices[(index + 1U) % count]);
+    };
+    const auto shared = [&](std::size_t index) { return oriented_edge_in_face(second, edge_at(index)).has_value(); };
+    std::size_t start = *directed_face_edge_index(first, oriented->first, oriented->second);
+    std::size_t length = 1U;
+    while (length < count && shared((start + count - 1U) % count)) {
+        start = (start + count - 1U) % count;
+        ++length;
+    }
+    while (length < count && shared((start + length) % count)) {
+        ++length;
+    }
+    if (length == count) {
+        return false;
+    }
+    for (std::size_t offset = length; offset < count; ++offset) {
+        if (shared((start + offset) % count)) {
+            return false;
+        }
+    }
+    const VertexNeighbors neighbors = vertex_neighbors(document);
+    for (std::size_t offset = 1U; offset < length; ++offset) {
+        if (neighbors.at(first.vertices[(start + offset) % count]).size() != 2U) {
+            return false;
+        }
+    }
+    const auto adjacency = face_indices_by_edge(document);
+    for (std::size_t offset = 0; offset < length; ++offset) {
+        const Edge edge = edge_at((start + offset) % count);
+        if (adjacency.at(edge_key(edge.a, edge.b)).size() != 2U) {
+            return false;
+        }
+        removed_edges.push_back(edge);
+    }
+    from_id = first.vertices[start];
+    to_id = first.vertices[(start + length) % count];
+    return true;
+}
+
+/// Collapse only the captured degree-two vertices, retaining surviving corner data.
+bool dissolve_edge_endpoints(Document& document, const std::set<ElementId>& candidates)
+{
+    const VertexNeighbors joined_neighbors = vertex_neighbors(document);
+    std::vector<ElementId> eligible;
+    for (const Vertex& vertex : document.vertices) {
+        const auto found = joined_neighbors.find(vertex.id);
+        if (candidates.contains(vertex.id) && found != joined_neighbors.end() && found->second.size() == 2U) {
+            eligible.push_back(vertex.id);
+        }
+    }
+    for (const ElementId vertex_id : eligible) {
+        std::vector<ElementId> neighbors;
+        bool preserves_faces = true;
+        for (const Face& face : document.faces) {
+            if (contains_id(face.vertices, vertex_id)) {
+                preserves_faces &= face.vertices.size() > 3U;
+                append_loop_neighbors_for_vertex(face.vertices, vertex_id, neighbors);
+            }
+        }
+        // Polygon documents cannot retain a face collapsed to a wire edge.
+        if (neighbors.size() != 2U || !preserves_faces) {
+            continue;
+        }
+        const bool hard = contains_edge(document.hard_normal_edges, make_edge(vertex_id, neighbors[0])) ||
+                          contains_edge(document.hard_normal_edges, make_edge(vertex_id, neighbors[1]));
+        for (Face& face : document.faces) {
+            const auto corner = loop_vertex_index(face.vertices, vertex_id);
+            if (!corner.has_value()) {
+                continue;
+            }
+            const Face source = face;
+            face.vertices.erase(face.vertices.begin() + static_cast<std::ptrdiff_t>(*corner));
+            if (source.uvs.size() == source.vertices.size()) {
+                face.uvs.erase(face.uvs.begin() + static_cast<std::ptrdiff_t>(*corner));
+            } else if (!preserve_face_uvs(document, source, document, face)) {
+                return false;
+            }
+        }
+        if (hard) {
+            add_unique_edge(document.hard_normal_edges, make_edge(neighbors[0], neighbors[1]));
+        }
+    }
+    return true;
+}
 
 /**
  * Implements the Dissolve Edges Operation modeling operation for the polygon document and mesh editing core.
@@ -49,12 +239,28 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
     return OperationResult::failure("Select one or more edges to dissolve.");
   }
 
+    std::vector<Edge> selected_edges;
+    const auto original_adjacency = face_indices_by_edge(document);
+    for (Edge edge : selection.edges) {
+        edge = make_edge(edge.a, edge.b);
+        if (edge.a == kInvalidElementId || edge.b == kInvalidElementId || edge.a == edge.b ||
+            contains_edge(selected_edges, edge)) {
+            continue;
+        }
+        const auto adjacent = original_adjacency.find(edge_key(edge.a, edge.b));
+        if (adjacent == original_adjacency.end() || adjacent->second.size() != 2U) {
+            return OperationResult::failure("Dissolve needs selected interior edges with exactly two adjacent faces.");
+        }
+        selected_edges.push_back(edge);
+    }
+    const std::set<ElementId> vertex_candidates = dissolve_vertex_candidates(document, selected_edges, original_adjacency);
     Document candidate = document;
     std::vector<ElementId> merged_face_ids;
     std::vector<Edge> processed_edges;
+    std::set<ElementId> affected_vertices;
     bool changed = false;
 
-    for (Edge edge : selection.edges) {
+    for (Edge edge : selected_edges) {
         edge = make_edge(edge.a, edge.b);
         if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
             edge.a == edge.b || contains_edge(processed_edges, edge)) {
@@ -82,18 +288,18 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
             return OperationResult::failure("Selected edge was not found.");
         }
 
-        const ElementId from_id = first_edge->first;
-        const ElementId to_id = first_edge->second;
+        ElementId from_id = first_edge->first;
+        ElementId to_id = first_edge->second;
         if (!directed_face_edge_index(second_face, to_id, from_id).has_value()) {
             if (!directed_face_edge_index(second_face, from_id, to_id).has_value()) {
                 return OperationResult::failure("Selected edge adjacency is invalid.");
             }
-            std::ranges::reverse(second_face.vertices);
-            if (second_face.uvs.size() == second_face.vertices.size()) {
-                std::ranges::reverse(second_face.uvs);
-            } else {
-                second_face.uvs.clear();
-            }
+            reverse_face_winding(second_face);
+        }
+
+        std::vector<Edge> removed_edges;
+        if (!shared_chain_endpoints(candidate, first_face, second_face, edge, from_id, to_id, removed_edges)) {
+            return OperationResult::failure("Dissolve would create invalid face geometry.");
         }
 
         std::vector<ElementId> merged_loop = merged_face_loop_for_dissolved_edge(first_face, second_face, from_id, to_id);
@@ -105,32 +311,45 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
         merged_face.vertices = std::move(merged_loop);
         merged_face.uvs.clear();
         orient_face_toward_normal(candidate, merged_face, face_normal(candidate, first_face) + face_normal(candidate, second_face));
-
-        Document next_candidate = candidate;
-        next_candidate.faces[first_index] = std::move(merged_face);
-        next_candidate.faces.erase(next_candidate.faces.begin() + static_cast<std::ptrdiff_t>(second_index));
-        [[maybe_unused]] const bool removed_first_endpoint = remove_redundant_vertex_from_all_face_loops(next_candidate, edge.a);
-        [[maybe_unused]] const bool removed_second_endpoint = remove_redundant_vertex_from_all_face_loops(next_candidate, edge.b);
-        prune_invalid_faces(next_candidate);
-        prune_unused_vertices(next_candidate);
-        if (Face* result_face = find_face(next_candidate, first_face.id);
-            result_face != nullptr && !inherit_merged_face_texture(
-                candidate, std::array<ElementId, 2>{first_face.id, second_face.id}, *result_face)) {
+        // Joining faces retains boundary corners before the separate vertex cleanup.
+        if (!assign_merged_face_texture_boundary(
+                candidate, std::array<ElementId, 2>{first_face.id, second_face.id}, merged_face)) {
             return OperationResult::failure("Dissolve could not preserve the source texture mapping.");
         }
-        if (!every_face_triangulates(next_candidate)) {
+
+        affected_vertices.insert(first_face.vertices.begin(), first_face.vertices.end());
+        affected_vertices.insert(second_face.vertices.begin(), second_face.vertices.end());
+        candidate.faces[first_index] = std::move(merged_face);
+        candidate.faces.erase(candidate.faces.begin() + static_cast<std::ptrdiff_t>(second_index));
+        // Removing the edge also removes its interior UV seam. Retain the stored
+        // boundary corners while allowing the merged face's interpolation to change.
+        if (!every_face_triangulates(candidate)) {
             return OperationResult::failure("Dissolve would create invalid face geometry.");
         }
 
         add_unique_id(merged_face_ids, first_face.id);
-        add_unique_edge(processed_edges, edge);
-        candidate = std::move(next_candidate);
+        for (const Edge removed_edge : removed_edges) {
+            add_unique_edge(processed_edges, removed_edge);
+        }
         changed = true;
     }
 
     if (!changed || merged_face_ids.empty()) {
         return OperationResult::failure("No dissolvable selected edges were found.");
     }
+
+    if (!dissolve_edge_endpoints(candidate, vertex_candidates) || !every_face_triangulates(candidate)) {
+        return OperationResult::failure("Dissolve would create invalid face geometry.");
+    }
+    std::set<ElementId> used_vertices;
+    for (const Face& face : candidate.faces) {
+        used_vertices.insert(face.vertices.begin(), face.vertices.end());
+    }
+    std::erase_if(candidate.vertices, [&](const Vertex& vertex) {
+        return affected_vertices.contains(vertex.id) && !used_vertices.contains(vertex.id);
+    });
+    std::erase_if(candidate.hard_normal_edges, [&](Edge edge) { return !edge_exists(candidate, edge); });
+    std::erase_if(merged_face_ids, [&](ElementId face_id) { return find_face(candidate, face_id) == nullptr; });
 
     document = std::move(candidate);
     selection.clear();

@@ -33,6 +33,208 @@
 
 namespace quader_poly::document_internal {
 
+namespace {
+
+constexpr float kCornerPositionTolerance = 0.00001F;
+
+quader::QVec2 interpolate_corner_uv(quader::QVec2 first,
+                                  quader::QVec2 second, float factor)
+{
+    return { first.x + (second.x - first.x) * factor,
+             first.y + (second.y - first.y) * factor };
+}
+
+std::optional<quader::QVec3> triangle_weights(
+    quader::QVec3 point, quader::QVec3 a, quader::QVec3 b, quader::QVec3 c)
+{
+    const quader::QVec3 ab = b - a;
+    const quader::QVec3 ac = c - a;
+    const quader::QVec3 ap = point - a;
+    const double aa = dot(ab, ab);
+    const double bb = dot(ac, ac);
+    const double cross = dot(ab, ac);
+    const double determinant = aa * bb - cross * cross;
+    if (determinant <= std::numeric_limits<double>::epsilon() * aa * bb) {
+        return std::nullopt;
+    }
+    const double pa = dot(ap, ab);
+    const double pb = dot(ap, ac);
+    const float wb = static_cast<float>((pa * bb - pb * cross) / determinant);
+    const float wc = static_cast<float>((pb * aa - pa * cross) / determinant);
+    const float wa = 1.0F - wb - wc;
+    if (wa < -kCornerPositionTolerance || wb < -kCornerPositionTolerance ||
+        wc < -kCornerPositionTolerance) {
+        return std::nullopt;
+    }
+    const quader::QVec3 projected = a + ab * wb + ac * wc;
+    const float tolerance = kCornerPositionTolerance *
+        std::max(1.0F, std::sqrt(static_cast<float>(std::max(aa, bb))));
+    if (length_squared(point - projected) > tolerance * tolerance) {
+        return std::nullopt;
+    }
+    return quader::QVec3 { wa, wb, wc };
+}
+
+} // namespace
+
+FaceUvSampler::FaceUvSampler(const Document& document, const Face& face)
+    : FaceUvSampler(document, face, VertexLookupIndex(document))
+{
+}
+
+FaceUvSampler::FaceUvSampler(const Document& document, const Face& face,
+                            const VertexLookupIndex& vertex_lookup)
+    : transform_(face.texture_transform)
+{
+    if (face.vertices.size() < 3U) {
+        return;
+    }
+    const bool authored = face_has_loop_uvs(face);
+    const quader::QVec3 normal = face_normal(document, face);
+    positions_.reserve(face.vertices.size());
+    base_uvs_.reserve(face.vertices.size());
+    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+        const Vertex* vertex = vertex_lookup.find(face.vertices[index]);
+        if (vertex == nullptr) {
+            positions_.clear();
+            base_uvs_.clear();
+            return;
+        }
+        positions_.push_back(vertex->position);
+        base_uvs_.push_back(authored ? face.uvs[index]
+            : generated_texture_uv(vertex->position, normal));
+    }
+    triangles_ = triangulate_face_local_indices(document, face, vertex_lookup, normal);
+    if (positions_.size() == 4U && triangles_.size() == 2U) {
+        std::array<quader_geometry::QVec3f, 4> points;
+        std::array<quader_geometry::QVec2f, 4> effective_uvs;
+        for (std::size_t index = 0; index < points.size(); ++index) {
+            points[index] = geometry_vec3(positions_[index]);
+            const quader::QVec2 uv = apply_face_texture_transform(base_uvs_[index], transform_);
+            effective_uvs[index] = {uv.x, uv.y};
+        }
+        quad_ = quader_geometry::build_quad_uv_interpolation(points, effective_uvs);
+    }
+}
+
+std::optional<quader::QVec2> FaceUvSampler::sample(quader::QVec3 position) const
+{
+    // Edges are evaluated before triangles to keep adjacent source triangles
+    // from perturbing the interpolation on a face boundary.
+    for (std::size_t index = 0; index < positions_.size(); ++index) {
+        const std::size_t next = (index + 1U) % positions_.size();
+        const quader::QVec3 first = positions_[index];
+        const quader::QVec3 second = positions_[next];
+        const quader::QVec3 edge = second - first;
+        const float edge_length_squared = length_squared(edge);
+        const float tolerance_squared = kCornerPositionTolerance *
+            kCornerPositionTolerance * std::max(1.0F, edge_length_squared);
+        if (length_squared(position - first) <= tolerance_squared) {
+            return base_uvs_[index];
+        }
+        if (edge_length_squared == 0.0F) {
+            continue;
+        }
+        const float factor = dot(position - first, edge) / edge_length_squared;
+        if (factor >= 0.0F && factor <= 1.0F &&
+            length_squared(position - (first + edge * factor)) <= tolerance_squared) {
+            return interpolate_corner_uv(base_uvs_[index], base_uvs_[next], factor);
+        }
+    }
+    for (const Triangle& triangle : triangles_) {
+        const auto weights = triangle_weights(position, positions_[triangle.a],
+                                               positions_[triangle.b], positions_[triangle.c]);
+        if (!weights.has_value()) {
+            continue;
+        }
+        const quader::QVec2 ua = base_uvs_[triangle.a];
+        const quader::QVec2 ub = base_uvs_[triangle.b];
+        const quader::QVec2 uc = base_uvs_[triangle.c];
+        const quader::QVec2 triangle_uv {
+            ua.x * weights->x + ub.x * weights->y + uc.x * weights->z,
+            ua.y * weights->x + ub.y * weights->y + uc.y * weights->z };
+        if (!quad_.has_value()) {
+            return triangle_uv;
+        }
+        const auto coordinate = quad_->coordinates[triangle.a] * weights->x +
+            quad_->coordinates[triangle.b] * weights->y + quad_->coordinates[triangle.c] * weights->z;
+        const quader::QVec2 effective_uv = apply_face_texture_transform(triangle_uv, transform_);
+        const auto interpolated = quader_geometry::evaluate_quad_uv_interpolation(
+            {effective_uv.x, effective_uv.y}, coordinate, quad_->geometry_warp, quad_->uv_correction);
+        return unapply_face_texture_transform({interpolated.x, interpolated.y}, transform_);
+    }
+    return std::nullopt;
+}
+
+std::optional<quader::QVec2> sample_face_base_uv(
+    const Document& document, const Face& face, quader::QVec3 position)
+{
+    return FaceUvSampler(document, face).sample(position);
+}
+
+bool face_vertex_uv_is_redundant(
+    const Document& document, const Face& face, ElementId vertex_id)
+{
+    if (!face_has_loop_uvs(face)) {
+        return true;
+    }
+    const auto index = face_vertex_index(face, vertex_id);
+    if (!index.has_value() || face.vertices.size() < 3U) {
+        return false;
+    }
+    const std::size_t previous = (*index + face.vertices.size() - 1U) % face.vertices.size();
+    const std::size_t next = (*index + 1U) % face.vertices.size();
+    const Vertex* a = find_vertex(document, face.vertices[previous]);
+    const Vertex* b = find_vertex(document, face.vertices[next]);
+    const Vertex* vertex = find_vertex(document, vertex_id);
+    if (a == nullptr || b == nullptr || vertex == nullptr) {
+        return false;
+    }
+    const quader::QVec3 edge = b->position - a->position;
+    const float denominator = length_squared(edge);
+    if (denominator == 0.0F) {
+        return false;
+    }
+    const float factor = dot(vertex->position - a->position, edge) / denominator;
+    const quader::QVec2 expected = interpolate_corner_uv(face.uvs[previous], face.uvs[next], factor);
+    const quader::QVec2 actual = face.uvs[*index];
+    return std::abs(expected.x - actual.x) <= 0.00001F &&
+           std::abs(expected.y - actual.y) <= 0.00001F;
+}
+
+bool preserve_face_uvs(const Document& source_document, const Face& source_face,
+    const Document& destination_document, Face& destination_face)
+{
+    if (!face_has_loop_uvs(source_face)) {
+        destination_face.uvs.clear();
+        return true;
+    }
+    std::vector<quader::QVec2> corners;
+    corners.reserve(destination_face.vertices.size());
+    std::optional<FaceUvSampler> sampler;
+    for (const ElementId vertex_id : destination_face.vertices) {
+        const auto original = face_uv_for_vertex_id(source_face, vertex_id);
+        if (original.has_value()) {
+            corners.push_back(*original);
+            continue;
+        }
+        const Vertex* vertex = find_vertex(destination_document, vertex_id);
+        if (vertex == nullptr) {
+            return false;
+        }
+        if (!sampler.has_value()) {
+            sampler.emplace(source_document, source_face);
+        }
+        const auto interpolated = sampler->sample(vertex->position);
+        if (!interpolated.has_value()) {
+            return false;
+        }
+        corners.push_back(*interpolated);
+    }
+    destination_face.uvs = std::move(corners);
+    return true;
+}
+
 quader_geometry::QVec2f geometry_uv(quader::QVec2 value)
 {
     return { value.x, value.y };
@@ -632,16 +834,140 @@ texture_linear_transform(const FaceTextureTransform &transform) {
           sine / transform.scale.y, cosine / transform.scale.y};
 }
 
-[[nodiscard]] bool is_identity_texture_mapping(const Transform3 &mapping) {
+[[nodiscard]] bool is_translation_texture_mapping(const Transform3 &mapping) {
   return mapping.x_axis.x == 1.0F && mapping.x_axis.y == 0.0F &&
          mapping.x_axis.z == 0.0F && mapping.y_axis.x == 0.0F &&
          mapping.y_axis.y == 1.0F && mapping.y_axis.z == 0.0F &&
          mapping.z_axis.x == 0.0F && mapping.z_axis.y == 0.0F &&
-         mapping.z_axis.z == 1.0F && mapping.origin.x == 0.0F &&
+         mapping.z_axis.z == 1.0F;
+}
+
+[[nodiscard]] bool is_identity_texture_mapping(const Transform3 &mapping) {
+  return is_translation_texture_mapping(mapping) && mapping.origin.x == 0.0F &&
          mapping.origin.y == 0.0F && mapping.origin.z == 0.0F;
 }
 
+/** Centered, column-scaled QR keeps narrow valid charts distinct from rank loss. */
+struct TextureChartFit {
+  std::vector<std::array<double, 2>> columns;
+  double scale_x = 0.0;
+  double scale_y = 0.0;
+  double correlation = 0.0;
+  double residual_norm = 0.0;
+
+  [[nodiscard]] std::array<double, 2> sensitivity(std::size_t index) const {
+    const double y = columns[index][1] / residual_norm;
+    return {(columns[index][0] - correlation * y) / scale_x, y / scale_y};
+  }
+
+  [[nodiscard]] std::array<double, 4> fit(
+      std::span<const quader::QVec2> values) const {
+    std::array<double, 2> mean{};
+    for (const auto value : values) {
+      mean[0] += value.x;
+      mean[1] += value.y;
+    }
+    mean[0] /= static_cast<double>(values.size());
+    mean[1] /= static_cast<double>(values.size());
+    std::array<double, 4> result{};
+    for (std::size_t index = 0U; index < values.size(); ++index) {
+      const auto weight = sensitivity(index);
+      const double u = static_cast<double>(values[index].x) - mean[0];
+      const double v = static_cast<double>(values[index].y) - mean[1];
+      result[0] += weight[0] * u;
+      result[1] += weight[1] * u;
+      result[2] += weight[0] * v;
+      result[3] += weight[1] * v;
+    }
+    return result;
+  }
+};
+
+template <typename CoordinateAt>
+[[nodiscard]] std::optional<TextureChartFit> prepare_texture_chart_fit(
+    std::size_t count, CoordinateAt coordinate_at) {
+  if (count < 3U) {
+    return std::nullopt;
+  }
+  TextureChartFit fit;
+  fit.columns.reserve(count);
+  std::array<double, 2> mean{};
+  for (std::size_t index = 0U; index < count; ++index) {
+    const auto coordinate = coordinate_at(index);
+    fit.columns.push_back(coordinate);
+    mean[0] += coordinate[0];
+    mean[1] += coordinate[1];
+  }
+  mean[0] /= static_cast<double>(count);
+  mean[1] /= static_cast<double>(count);
+  for (auto &column : fit.columns) {
+    column[0] -= mean[0];
+    column[1] -= mean[1];
+    fit.scale_x += column[0] * column[0];
+    fit.scale_y += column[1] * column[1];
+  }
+  fit.scale_x = std::sqrt(fit.scale_x);
+  fit.scale_y = std::sqrt(fit.scale_y);
+  if (!std::isfinite(fit.scale_x) || !std::isfinite(fit.scale_y) ||
+      fit.scale_x == 0.0 || fit.scale_y == 0.0) {
+    return std::nullopt;
+  }
+  for (auto &column : fit.columns) {
+    column[0] /= fit.scale_x;
+    column[1] /= fit.scale_y;
+    fit.correlation += column[0] * column[1];
+  }
+  double correction = 0.0;
+  for (auto &column : fit.columns) {
+    column[1] -= fit.correlation * column[0];
+    correction += column[0] * column[1];
+  }
+  fit.correlation += correction;
+  for (auto &column : fit.columns) {
+    column[1] -= correction * column[0];
+    fit.residual_norm += column[1] * column[1];
+  }
+  fit.residual_norm = std::sqrt(fit.residual_norm);
+  const double rank_roundoff = 32.0 * std::numeric_limits<double>::epsilon() *
+                               static_cast<double>(count);
+  if (!std::isfinite(fit.residual_norm) || fit.residual_norm <= rank_roundoff) {
+    return std::nullopt;
+  }
+  for (auto &column : fit.columns) {
+    column[1] /= fit.residual_norm;
+  }
+  return fit;
+}
+
+[[nodiscard]] std::optional<TextureChartFit> prepare_texture_chart_fit(
+    std::span<const quader::QVec3> positions, quader::QVec3 normal) {
+  return prepare_texture_chart_fit(positions.size(), [&](std::size_t index) {
+    const auto q = generated_texture_uv(positions[index], normal);
+    return std::array<double, 2>{q.x, q.y};
+  });
+}
+
+[[nodiscard]] double texture_half_ulp(float value) noexcept {
+  if (!std::isfinite(value)) {
+    return std::numeric_limits<double>::infinity();
+  }
+  const double down = static_cast<double>(value) -
+      std::nextafter(value, -std::numeric_limits<float>::infinity());
+  const double up = static_cast<double>(std::nextafter(
+      value, std::numeric_limits<float>::infinity())) - value;
+  return 0.5 * std::max(std::isfinite(down) ? down : 0.0,
+                        std::isfinite(up) ? up : 0.0);
+}
+
 } // namespace
+
+bool texture_uv_coordinate_close(double fitted, float stored, double span) noexcept {
+  const double tolerance = 8.0 * std::numeric_limits<float>::epsilon() *
+                               std::max(1.0, std::abs(span)) +
+                           texture_half_ulp(stored);
+  return std::isfinite(fitted) && std::isfinite(stored) &&
+         std::abs(fitted - stored) <= tolerance;
+}
 
 bool valid_face_texture_transform(
     const FaceTextureTransform &transform) noexcept {
@@ -687,6 +1013,36 @@ quader::QVec2 unapply_face_texture_transform(
           static_cast<float>(-sine * x + cosine * y)};
 }
 
+std::optional<TextureAffineChart> fit_texture_affine_chart(
+    std::span<const std::array<double, 2>> coordinates,
+    std::span<const quader::QVec2> uvs) {
+  if (coordinates.size() != uvs.size()) {
+    return std::nullopt;
+  }
+  const auto fit = prepare_texture_chart_fit(coordinates.size(),
+      [&](std::size_t index) { return coordinates[index]; });
+  if (!fit.has_value()) {
+    return std::nullopt;
+  }
+  TextureAffineChart chart{.carrier = fit->fit(uvs)};
+  std::array<double, 2> mean_q{};
+  std::array<double, 2> mean_uv{};
+  for (std::size_t index = 0U; index < coordinates.size(); ++index) {
+    mean_q[0] += coordinates[index][0];
+    mean_q[1] += coordinates[index][1];
+    mean_uv[0] += uvs[index].x;
+    mean_uv[1] += uvs[index].y;
+  }
+  const double count = static_cast<double>(coordinates.size());
+  chart.offset = {
+      (mean_uv[0] - chart.carrier[0] * mean_q[0] - chart.carrier[1] * mean_q[1]) / count,
+      (mean_uv[1] - chart.carrier[2] * mean_q[0] - chart.carrier[3] * mean_q[1]) / count};
+  const auto finite = [](double value) { return std::isfinite(value); };
+  return std::ranges::all_of(chart.carrier, finite) &&
+         std::ranges::all_of(chart.offset, finite)
+      ? std::optional{chart} : std::nullopt;
+}
+
 std::array<float, 4> face_texture_carrier(
     std::span<const quader::QVec3> positions,
     std::span<const quader::QVec2> base_uvs,
@@ -700,53 +1056,24 @@ std::array<float, 4> face_texture_carrier(
     if (positions.size() != base_uvs.size() || positions.size() < 3U) {
       return {};
     }
-    double mean_qx = 0.0;
-    double mean_qy = 0.0;
-    double mean_u = 0.0;
-    double mean_v = 0.0;
-    for (std::size_t index = 0; index < positions.size(); ++index) {
-      const auto q = generated_texture_uv(positions[index], geometric_normal);
-      mean_qx += q.x;
-      mean_qy += q.y;
-      mean_u += base_uvs[index].x;
-      mean_v += base_uvs[index].y;
-    }
-    const double inverse_count = 1.0 / static_cast<double>(positions.size());
-    mean_qx *= inverse_count;
-    mean_qy *= inverse_count;
-    mean_u *= inverse_count;
-    mean_v *= inverse_count;
-    double xx = 0.0;
-    double xy = 0.0;
-    double yy = 0.0;
-    double ux = 0.0;
-    double uy = 0.0;
-    double vx = 0.0;
-    double vy = 0.0;
-    for (std::size_t index = 0; index < positions.size(); ++index) {
-      const auto q = generated_texture_uv(positions[index], geometric_normal);
-      const double x = q.x - mean_qx;
-      const double y = q.y - mean_qy;
-      const double u = base_uvs[index].x - mean_u;
-      const double v = base_uvs[index].y - mean_v;
-      xx += x * x;
-      xy += x * y;
-      yy += y * y;
-      ux += u * x;
-      uy += u * y;
-      vx += v * x;
-      vy += v * y;
-    }
-    const double determinant = xx * yy - xy * xy;
-    const double trace = xx + yy;
-    if (!std::isfinite(determinant) ||
-        determinant <= 1.0e-12 * trace * trace) {
+    const auto fit = prepare_texture_chart_fit(positions, geometric_normal);
+    if (!fit.has_value()) {
       return {};
     }
-    carrier = {(ux * yy - uy * xy) / determinant,
-               (uy * xx - ux * xy) / determinant,
-               (vx * yy - vy * xy) / determinant,
-               (vy * xx - vx * xy) / determinant};
+    bool authored_generated_chart = true;
+    for (std::size_t index = 0U; index < positions.size(); ++index) {
+      const auto generated = generated_texture_uv(positions[index], geometric_normal);
+      if (base_uvs[index].x != generated.x || base_uvs[index].y != generated.y) {
+        authored_generated_chart = false;
+        break;
+      }
+    }
+    // Storing an unchanged procedural chart must retain its exact carrier.
+    // Do not manufacture tiny cross-axis terms by refitting the identity map.
+    // The rank gate above remains identical to every other authored chart.
+    if (!authored_generated_chart) {
+      carrier = fit->fit(base_uvs);
+    }
   }
   const std::array<float, 4> result{
       static_cast<float>(linear[0] * carrier[0] + linear[1] * carrier[2]),
@@ -780,13 +1107,23 @@ std::array<float, 4> face_texture_carrier(
                               face.texture_transform);
 }
 
-quader::QVec2 evaluate_texture_mapping(
-    quader::QVec2 uv0, quader::QVec3 position,
-    quader::QVec3 geometric_normal, const std::array<float, 4> &carrier,
-    const Transform3 &sampling_from_local) {
-  if (is_identity_texture_mapping(sampling_from_local) ||
-      carrier == std::array<float, 4>{}) {
-    return uv0;
+namespace {
+
+/** Affine generated-chart difference, shared by evaluation and its error bound. */
+struct TextureMappingDelta {
+  quader::QVec2 x;
+  quader::QVec2 y;
+  quader::QVec2 z;
+  quader::QVec2 origin;
+};
+
+[[nodiscard]] TextureMappingDelta texture_mapping_coefficients(
+    quader::QVec3 geometric_normal, const Transform3 &sampling_from_local) {
+  if (is_translation_texture_mapping(sampling_from_local)) {
+    // The generated chart is linear for a fixed normal. Evaluate translation
+    // directly so rounded (p + t) - p cannot invent a varying chart gradient.
+    return {.origin = generated_texture_uv(sampling_from_local.origin,
+                                            geometric_normal)};
   }
   const auto cross_product = [](quader::QVec3 a, quader::QVec3 b) {
     return quader::QVec3{a.y * b.z - a.z * b.y,
@@ -812,13 +1149,221 @@ quader::QVec2 evaluate_texture_mapping(
   } else {
     mapped_normal = {0.0F, 1.0F, 0.0F};
   }
-  const auto mapped_position =
-      document_internal::transform_point(sampling_from_local, position);
-  const auto before = generated_texture_uv(position, geometric_normal);
-  const auto after = generated_texture_uv(mapped_position, mapped_normal);
-  const auto delta = after - before;
+  // Difference the projection coefficients before multiplying large positions.
+  // This is the same affine evaluation used by the material shaders.
+  const auto x = generated_texture_uv(sampling_from_local.x_axis, mapped_normal) -
+                 generated_texture_uv({1.0F, 0.0F, 0.0F}, geometric_normal);
+  const auto y = generated_texture_uv(sampling_from_local.y_axis, mapped_normal) -
+                 generated_texture_uv({0.0F, 1.0F, 0.0F}, geometric_normal);
+  const auto z = generated_texture_uv(sampling_from_local.z_axis, mapped_normal) -
+                 generated_texture_uv({0.0F, 0.0F, 1.0F}, geometric_normal);
+  return {x, y, z,
+          generated_texture_uv(sampling_from_local.origin, mapped_normal)};
+}
+
+[[nodiscard]] quader::QVec2 texture_mapping_delta(
+    quader::QVec3 position, quader::QVec3 geometric_normal,
+    const Transform3 &sampling_from_local) {
+  const auto coefficients = texture_mapping_coefficients(geometric_normal,
+                                                         sampling_from_local);
+  if (is_translation_texture_mapping(sampling_from_local)) {
+    return coefficients.origin;
+  }
+  return coefficients.x * position.x + coefficients.y * position.y +
+         coefficients.z * position.z + coefficients.origin;
+}
+
+[[nodiscard]] double delta_evaluation_roundoff(
+    float x, float y, float z, float origin, quader::QVec3 position) {
+  const float px = x * position.x;
+  const float py = y * position.y;
+  const float pz = z * position.z;
+  // Zero coefficients and additions have exact results; do not charge the
+  // translation fast path with uncertainty in operations it never performs.
+  const float xy = px + py;
+  const float xyz = xy + pz;
+  return (x != 0.0F ? texture_half_ulp(px) : 0.0) +
+         (y != 0.0F ? texture_half_ulp(py) : 0.0) +
+         (z != 0.0F ? texture_half_ulp(pz) : 0.0) +
+         (px != 0.0F && py != 0.0F ? texture_half_ulp(xy) : 0.0) +
+         (xy != 0.0F && pz != 0.0F ? texture_half_ulp(xyz) : 0.0) +
+         (xyz != 0.0F && origin != 0.0F ? texture_half_ulp(xyz + origin) : 0.0);
+}
+
+} // namespace
+
+quader::QVec2 evaluate_texture_mapping(
+    quader::QVec2 uv0, quader::QVec3 position,
+    quader::QVec3 geometric_normal, const std::array<float, 4> &carrier,
+    const Transform3 &sampling_from_local) {
+  if (is_identity_texture_mapping(sampling_from_local) ||
+      carrier == std::array<float, 4>{}) {
+    return uv0;
+  }
+  const auto delta = texture_mapping_delta(position, geometric_normal,
+                                            sampling_from_local);
   return {uv0.x + carrier[0] * delta.x + carrier[1] * delta.y,
           uv0.y + carrier[2] * delta.x + carrier[3] * delta.y};
+}
+
+std::vector<std::array<double, 2>> face_texture_precision_bounds(
+    std::span<const quader::QVec3> positions,
+    std::span<const quader::QVec2> base_uvs, quader::QVec3 geometric_normal,
+    const FaceTextureTransform &transform, const Transform3 &sampling_from_local,
+    TextureUvPrecision precision) {
+  if ((!base_uvs.empty() && positions.size() != base_uvs.size()) ||
+      !valid_face_texture_transform(transform)) {
+    return {};
+  }
+  const auto fit = prepare_texture_chart_fit(positions, geometric_normal);
+  if (!fit.has_value()) {
+    return {};
+  }
+  const auto linear = texture_linear_transform(transform);
+  const auto carrier = face_texture_carrier(positions, base_uvs, geometric_normal,
+                                           transform);
+  const auto coefficients = texture_mapping_coefficients(geometric_normal,
+                                                         sampling_from_local);
+  const bool mapped = !is_identity_texture_mapping(sampling_from_local) &&
+                      carrier != std::array<float, 4>{};
+  std::vector<std::array<double, 2>> input_error(positions.size());
+  std::array<double, 4> carrier_error{};
+  for (std::size_t index = 0U; index < positions.size(); ++index) {
+    if (!base_uvs.empty()) {
+      const double u = texture_half_ulp(base_uvs[index].x);
+      const double v = texture_half_ulp(base_uvs[index].y);
+      input_error[index] = {std::abs(linear[0]) * u + std::abs(linear[1]) * v,
+                            std::abs(linear[2]) * u + std::abs(linear[3]) * v};
+      const auto weight = fit->sensitivity(index);
+      carrier_error[0] += std::abs(weight[0]) * input_error[index][0];
+      carrier_error[1] += std::abs(weight[1]) * input_error[index][0];
+      carrier_error[2] += std::abs(weight[0]) * input_error[index][1];
+      carrier_error[3] += std::abs(weight[1]) * input_error[index][1];
+    }
+  }
+  for (std::size_t component = 0U; component < carrier.size(); ++component) {
+    carrier_error[component] += texture_half_ulp(carrier[component]);
+  }
+  auto result = input_error;
+  for (std::size_t index = 0U; index < positions.size(); ++index) {
+    const auto base = base_uvs.empty()
+        ? generated_texture_uv(positions[index], geometric_normal) : base_uvs[index];
+    const auto uv = apply_face_texture_transform(base, transform);
+    if (!(transform == FaceTextureTransform{})) {
+      result[index][0] += texture_half_ulp(uv.x);
+      result[index][1] += texture_half_ulp(uv.y);
+    }
+    if (!mapped) {
+      continue;
+    }
+    const auto delta = texture_mapping_delta(positions[index], geometric_normal,
+                                             sampling_from_local);
+    const std::array<double, 2> delta_error{
+        delta_evaluation_roundoff(coefficients.x.x, coefficients.y.x,
+            coefficients.z.x, coefficients.origin.x, positions[index]),
+        delta_evaluation_roundoff(coefficients.x.y, coefficients.y.y,
+            coefficients.z.y, coefficients.origin.y, positions[index])};
+    for (std::size_t axis = 0U; axis < 2U; ++axis) {
+      const float value = axis == 0U ? uv.x : uv.y;
+      const float cx = carrier[axis * 2U];
+      const float cy = carrier[axis * 2U + 1U];
+      const float first = cx * delta.x;
+      const float second = cy * delta.y;
+      const float sum = value + first;
+      result[index][axis] += std::abs(cx) * delta_error[0] +
+                             std::abs(cy) * delta_error[1];
+      if (first != 0.0F) {
+        result[index][axis] += texture_half_ulp(first) + texture_half_ulp(sum);
+      }
+      if (second != 0.0F) {
+        result[index][axis] += texture_half_ulp(second) + texture_half_ulp(sum + second);
+      }
+      if (precision == TextureUvPrecision::Reconstruction) {
+        result[index][axis] +=
+            std::abs(delta.x) * carrier_error[axis * 2U] +
+            std::abs(delta.y) * carrier_error[axis * 2U + 1U];
+      }
+    }
+  }
+  if (precision == TextureUvPrecision::AffineResidual) {
+    // The affine projector removes carrier quantization, including potentially
+    // large translated phase terms. Only non-affine corner uncertainty remains.
+    const auto local_error = result;
+    const double inverse_count = 1.0 / static_cast<double>(positions.size());
+    for (std::size_t row = 0U; row < positions.size(); ++row) {
+      result[row] = {};
+      for (std::size_t column = 0U; column < positions.size(); ++column) {
+        const double projector = inverse_count +
+            fit->columns[row][0] * fit->columns[column][0] +
+            fit->columns[row][1] * fit->columns[column][1];
+        const double residual_weight =
+            std::abs((row == column ? 1.0 : 0.0) - projector);
+        result[row][0] += residual_weight * local_error[column][0];
+        result[row][1] += residual_weight * local_error[column][1];
+      }
+    }
+  }
+  // Storage uncertainty is not permission to accept visibly wrong charts.
+  // Preserve the solver's existing sub-millitexel ceiling even when a very
+  // narrow face or distant occurrence amplifies its mathematical error bound.
+  constexpr double kMaximumStorageError = 5.0e-4;
+  for (auto &corner : result) {
+    for (auto &axis : corner) {
+      if (std::isfinite(axis)) {
+        axis = std::min(axis, kMaximumStorageError);
+      }
+    }
+  }
+  return result;
+}
+
+bool face_texture_uvs_reconstruct(
+    std::span<const quader::QVec3> positions,
+    std::span<const quader::QVec2> base_uvs,
+    std::span<const quader::QVec2> desired_uvs, quader::QVec3 geometric_normal,
+    const FaceTextureTransform &transform, const Transform3 &sampling_from_local) {
+  if (positions.size() != desired_uvs.size() || positions.empty()) {
+    return false;
+  }
+  const auto bounds = face_texture_precision_bounds(
+      positions, base_uvs, geometric_normal, transform, sampling_from_local,
+      TextureUvPrecision::Reconstruction);
+  if (bounds.size() != positions.size()) {
+    return false;
+  }
+  auto minimum = desired_uvs.front();
+  auto maximum = minimum;
+  for (const auto desired : desired_uvs) {
+    minimum.x = std::min(minimum.x, desired.x);
+    minimum.y = std::min(minimum.y, desired.y);
+    maximum.x = std::max(maximum.x, desired.x);
+    maximum.y = std::max(maximum.y, desired.y);
+  }
+  const std::array<double, 2> span{static_cast<double>(maximum.x) - minimum.x,
+                                  static_cast<double>(maximum.y) - minimum.y};
+  const auto carrier = face_texture_carrier(positions, base_uvs, geometric_normal,
+                                           transform);
+  for (std::size_t index = 0U; index < positions.size(); ++index) {
+    const auto base = base_uvs.empty()
+        ? generated_texture_uv(positions[index], geometric_normal) : base_uvs[index];
+    const auto actual = evaluate_texture_mapping(
+        apply_face_texture_transform(base, transform), positions[index],
+        geometric_normal, carrier, sampling_from_local);
+    for (std::size_t axis = 0U; axis < 2U; ++axis) {
+      const double value = axis == 0U ? actual.x : actual.y;
+      const float desired = axis == 0U ? desired_uvs[index].x : desired_uvs[index].y;
+      const double error = value - desired;
+      const double uncertainty = bounds[index][axis];
+      if (!std::isfinite(value) || !std::isfinite(desired) ||
+          !std::isfinite(uncertainty) ||
+          (std::abs(error) > uncertainty &&
+           !texture_uv_coordinate_close(value - std::copysign(uncertainty, error),
+                                         desired, span[axis]))) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 std::optional<std::vector<quader::QVec2>> solve_face_texture_base_uvs(
@@ -833,10 +1378,19 @@ std::optional<std::vector<quader::QVec2>> solve_face_texture_base_uvs(
   const auto finite_uv = [](quader::QVec2 uv) {
     return std::isfinite(uv.x) && std::isfinite(uv.y);
   };
-  constexpr std::array<float, 4> kIdentityCarrier{1.0F, 0.0F, 0.0F, 1.0F};
   std::vector<quader::QVec2> base_uvs;
   base_uvs.reserve(positions.size());
-  double solve_condition = 1.0;
+  std::optional<std::vector<quader::QVec2>> certified_uvs;
+  std::vector<quader::QVec2> deltas;
+  std::optional<TextureChartFit> inverse_fit;
+  std::array<double, 4> inverse_mapping{};
+  const auto inverse_carrier = [&](const std::array<double, 4> &carrier) {
+    return std::array<double, 4>{
+        carrier[0] * inverse_mapping[0] + carrier[1] * inverse_mapping[2],
+        carrier[0] * inverse_mapping[1] + carrier[1] * inverse_mapping[3],
+        carrier[2] * inverse_mapping[0] + carrier[3] * inverse_mapping[2],
+        carrier[2] * inverse_mapping[1] + carrier[3] * inverse_mapping[3]};
+  };
   if (is_identity_texture_mapping(sampling_from_local)) {
     for (const auto uv : effective_uvs) {
       const auto base = unapply_face_texture_transform(uv, transform);
@@ -846,22 +1400,25 @@ std::optional<std::vector<quader::QVec2>> solve_face_texture_base_uvs(
       base_uvs.push_back(base);
     }
   } else {
-    std::vector<quader::QVec2> deltas;
     deltas.reserve(positions.size());
     for (std::size_t index = 0U; index < positions.size(); ++index) {
       const auto position = positions[index];
-      const auto q = generated_texture_uv(position, geometric_normal);
-      const auto mapped = evaluate_texture_mapping(
-          q, position, geometric_normal, kIdentityCarrier, sampling_from_local);
-      if (!finite_uv(mapped) || !finite_uv(effective_uvs[index])) {
+      const auto delta = texture_mapping_delta(position, geometric_normal,
+                                                 sampling_from_local);
+      if (!finite_uv(delta) || !finite_uv(effective_uvs[index])) {
         return std::nullopt;
       }
-      deltas.push_back(mapped - q);
+      deltas.push_back(delta);
     }
-    const auto delta_carrier = face_texture_carrier(
-        positions, deltas, geometric_normal, {});
-    const auto target_carrier = face_texture_carrier(
-        positions, effective_uvs, geometric_normal, {});
+    inverse_fit = prepare_texture_chart_fit(positions, geometric_normal);
+    if (!inverse_fit.has_value()) {
+      return std::nullopt;
+    }
+    // The inverse identity requires the linear, unrounded fit. Quantizing
+    // either fitted operand before inversion introduces a slope error that
+    // the forward storage/evaluation precision contract does not cover.
+    const auto delta_carrier = inverse_fit->fit(deltas);
+    const auto target_carrier = inverse_fit->fit(effective_uvs);
     // K(E) = K(f) * (I + K(d)); solve by RIGHT multiplication. Do not
     // invert K(E): constant and rank-one authored targets are legitimate.
     const std::array<double, 4> matrix{
@@ -886,16 +1443,12 @@ std::optional<std::vector<quader::QVec2>> solve_face_texture_base_uvs(
         std::max(std::abs(d) + std::abs(b),
                  std::abs(c) + std::abs(a)) /
         std::abs(determinant);
-    solve_condition = matrix_norm * inverse_norm;
-    if (!std::isfinite(solve_condition)) {
+    if (!std::isfinite(matrix_norm * inverse_norm)) {
       return std::nullopt;
     }
     const double inverse = 1.0 / (determinant * scale);
-    const std::array<double, 4> carrier{
-        (target_carrier[0] * d - target_carrier[1] * c) * inverse,
-        (target_carrier[1] * a - target_carrier[0] * b) * inverse,
-        (target_carrier[2] * d - target_carrier[3] * c) * inverse,
-        (target_carrier[3] * a - target_carrier[2] * b) * inverse};
+    inverse_mapping = {d * inverse, -b * inverse, -c * inverse, a * inverse};
+    const auto carrier = inverse_carrier(target_carrier);
     for (std::size_t index = 0U; index < positions.size(); ++index) {
       const auto target = effective_uvs[index];
       const auto delta = deltas[index];
@@ -912,53 +1465,125 @@ std::optional<std::vector<quader::QVec2>> solve_face_texture_base_uvs(
       base_uvs.push_back(base);
     }
   }
-  const auto actual_carrier = face_texture_carrier(
-      positions, base_uvs, geometric_normal, transform);
-  for (std::size_t index = 0U; index < positions.size(); ++index) {
-    const auto transformed =
-        apply_face_texture_transform(base_uvs[index], transform);
-    const auto actual = evaluate_texture_mapping(
-        transformed,
-        positions[index], geometric_normal, actual_carrier,
-        sampling_from_local);
-    const auto q = generated_texture_uv(positions[index], geometric_normal);
-    const auto mapped_q = evaluate_texture_mapping(
-        q, positions[index], geometric_normal, kIdentityCarrier,
-        sampling_from_local);
-    const auto delta = mapped_q - q;
-    // Base UVs and carriers are stored as floats. Small or anisotropic
-    // sampling transforms can therefore produce large intermediate terms that
-    // cancel to a valid UV, with roundoff proportional to both the solve
-    // condition and those terms. Keep the strict floor for normal mappings,
-    // but allow small reconstruction error up to a bounded ceiling.
-    const auto close = [](float left, float right, double roundoff_scale) {
-      constexpr float kAbsoluteTolerance = 2.0e-5F;
-      constexpr float kMaximumRoundoffTolerance = 5.0e-4F;
-      constexpr float kRoundoffOperations = 8.0F;
-      constexpr float kRelativeTolerance =
-          16.0F * std::numeric_limits<float>::epsilon();
-      const double roundoff_tolerance = std::min<double>(
-          kMaximumRoundoffTolerance,
-          kAbsoluteTolerance + kRoundoffOperations *
-              std::numeric_limits<float>::epsilon() * roundoff_scale);
-      return std::isfinite(left) && std::isfinite(right) &&
-             std::abs(left - right) <= roundoff_tolerance +
-                 kRelativeTolerance * std::max(std::abs(left), std::abs(right));
+  if (!is_identity_texture_mapping(sampling_from_local)) {
+    // Quantizing the stored chart changes its fitted carrier slightly. A
+    // distant occurrence multiplies that difference into a phase residual,
+    // especially on thin faces. Correct against the actual float evaluator;
+    // retain the best candidate and leave the strict reconstruction test below
+    // responsible for accepting it. Neither texture settings nor rank change.
+    const auto retain_certified = [&](const std::vector<quader::QVec2> &candidate) {
+      if (face_texture_uvs_reconstruct(positions, candidate, effective_uvs,
+              geometric_normal, transform, sampling_from_local)) {
+        certified_uvs = candidate;
+      }
     };
-    const float evaluation_scale_x =
-        std::abs(transformed.x) +
-        std::abs(actual_carrier[0] * delta.x) +
-        std::abs(actual_carrier[1] * delta.y);
-    const float evaluation_scale_y =
-        std::abs(transformed.y) +
-        std::abs(actual_carrier[2] * delta.x) +
-        std::abs(actual_carrier[3] * delta.y);
-    if (!close(actual.x, effective_uvs[index].x,
-               solve_condition * evaluation_scale_x) ||
-        !close(actual.y, effective_uvs[index].y,
-               solve_condition * evaluation_scale_y)) {
-      return std::nullopt;
+    retain_certified(base_uvs);
+    const auto measure = [&](std::span<const quader::QVec2> candidate) {
+      const auto carrier = face_texture_carrier(
+          positions, candidate, geometric_normal, transform);
+      std::array<double, 4> result{};
+      for (std::size_t index = 0U; index < positions.size(); ++index) {
+        const auto actual = evaluate_texture_mapping(
+            apply_face_texture_transform(candidate[index], transform),
+            positions[index], geometric_normal, carrier, sampling_from_local);
+        const double x = static_cast<double>(effective_uvs[index].x) - actual.x;
+        const double y = static_cast<double>(effective_uvs[index].y) - actual.y;
+        if (!finite_uv(candidate[index]) || !std::isfinite(x) || !std::isfinite(y)) {
+          return std::array<double, 4>{0.0, 0.0,
+              std::numeric_limits<double>::infinity(),
+              std::numeric_limits<double>::infinity()};
+        }
+        result[0] += x;
+        result[1] += y;
+        result[2] = std::max({result[2], std::abs(x), std::abs(y)});
+        result[3] += x * x + y * y;
+      }
+      return result;
+    };
+    FaceTextureTransform linear_transform = transform;
+    linear_transform.shift_uv = {};
+    auto score = measure(base_uvs);
+    auto candidate = base_uvs;
+    auto best = base_uvs;
+    std::vector<quader::QVec2> residuals(positions.size());
+    const bool translation = is_translation_texture_mapping(sampling_from_local);
+    constexpr std::size_t kMaximumStorageCorrections = 8U;
+    for (std::size_t iteration = 0U; iteration < kMaximumStorageCorrections;
+         ++iteration) {
+      if (score[2] == 0.0 || !std::isfinite(score[3])) {
+        break;
+      }
+      auto best_score = score;
+      const double count = static_cast<double>(positions.size());
+      if (!translation) {
+        const auto carrier = face_texture_carrier(
+            positions, base_uvs, geometric_normal, transform);
+        for (std::size_t index = 0U; index < positions.size(); ++index) {
+          const auto actual = evaluate_texture_mapping(
+              apply_face_texture_transform(base_uvs[index], transform),
+              positions[index], geometric_normal, carrier, sampling_from_local);
+          residuals[index] = effective_uvs[index] - actual;
+        }
+      }
+      const auto residual_carrier = translation ? std::array<double, 4>{}
+          : inverse_carrier(inverse_fit->fit(residuals));
+      // Float binades differ between U and V. Test independent phase corrections
+      // as well as their combination so rounding in one axis cannot discard an
+      // improvement in the other. The constant correction preserves the chart's
+      // ideal slopes; a general occurrence also tests the inverse of its full
+      // measured residual, retaining non-affine corner detail.
+      for (unsigned axes = 1U; axes <= 3U; ++axes) {
+        const auto correction = unapply_face_texture_transform(
+            {static_cast<float>((axes & 1U) != 0U ? score[0] / count : 0.0),
+             static_cast<float>((axes & 2U) != 0U ? score[1] / count : 0.0)},
+            linear_transform);
+        for (std::size_t index = 0U; index < base_uvs.size(); ++index) {
+          candidate[index] = base_uvs[index] + correction;
+        }
+        const auto candidate_score = measure(candidate);
+        if (candidate_score[2] < best_score[2] ||
+            (candidate_score[2] == best_score[2] && candidate_score[3] < best_score[3])) {
+          best_score = candidate_score;
+          best = candidate;
+          retain_certified(candidate);
+        }
+        if (translation) {
+          continue;
+        }
+        for (std::size_t index = 0U; index < positions.size(); ++index) {
+          const auto delta = deltas[index];
+          const auto residual = residuals[index];
+          const quader::QVec2 local_correction{
+              static_cast<float>((axes & 1U) != 0U
+                  ? residual.x - residual_carrier[0] * delta.x -
+                                     residual_carrier[1] * delta.y : 0.0),
+              static_cast<float>((axes & 2U) != 0U
+                  ? residual.y - residual_carrier[2] * delta.x -
+                                     residual_carrier[3] * delta.y : 0.0)};
+          candidate[index] = base_uvs[index] + unapply_face_texture_transform(
+              local_correction, linear_transform);
+        }
+        const auto refined_score = measure(candidate);
+        if (refined_score[2] < best_score[2] ||
+            (refined_score[2] == best_score[2] && refined_score[3] < best_score[3])) {
+          best_score = refined_score;
+          best = candidate;
+          retain_certified(candidate);
+        }
+      }
+      if (best_score[2] == score[2] && best_score[3] == score[3]) {
+        break;
+      }
+      base_uvs = best;
+      score = best_score;
     }
+  }
+  if (!face_texture_uvs_reconstruct(positions, base_uvs, effective_uvs,
+                                    geometric_normal, transform,
+                                    sampling_from_local)) {
+    // Minimizing the largest raw residual need not improve every corner's
+    // individual bound. A previously certified stored candidate stays valid.
+    return certified_uvs;
   }
   return base_uvs;
 }

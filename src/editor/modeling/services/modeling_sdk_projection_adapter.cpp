@@ -20,9 +20,12 @@
 #include "math/glm_bridge.hpp"
 #include "render/viewport_overlay_frame.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_material_surface.hpp"
 #include "scene/scene_transform.hpp"
+#include "scene/scene_texture_mapping.hpp"
 
 #include <quader/modeling/modeling.hpp>
+#include <quader/modeling/neutral/polygon/document_topology.hpp>
 
 #include <algorithm>
 #include <array>
@@ -406,6 +409,60 @@ scene_transform_from_modeling_transform(const ModelingTransform3 &transform) {
   return {.ok = false, .changed = false, .message = std::move(message)};
 }
 
+/** Classifies the canonical affine request without inferring from planar points. */
+[[nodiscard]] bool has_nonsingular_transform(
+    const modeling::Transform3 &transform) {
+  const auto &x = transform.x_axis;
+  const auto &y = transform.y_axis;
+  const auto &z = transform.z_axis;
+  const double determinant =
+      static_cast<double>(x.x) * (static_cast<double>(y.y) * z.z -
+                                  static_cast<double>(y.z) * z.y) -
+      static_cast<double>(y.x) * (static_cast<double>(x.y) * z.z -
+                                  static_cast<double>(x.z) * z.y) +
+      static_cast<double>(z.x) * (static_cast<double>(x.y) * y.z -
+                                  static_cast<double>(x.z) * y.y);
+  return std::isfinite(determinant) && determinant != 0.0;
+}
+
+/** Compares canonical affine inputs without padding or hash collisions. */
+[[nodiscard]] bool same_transform_request(
+    const std::optional<modeling::Transform3> &left,
+    const std::optional<modeling::Transform3> &right) {
+  if (left.has_value() != right.has_value()) return false;
+  if (!left.has_value()) return true;
+  const auto same_vector = [](modeling::Vec3 first, modeling::Vec3 second) {
+    return first.x == second.x && first.y == second.y && first.z == second.z;
+  };
+  return same_vector(left->x_axis, right->x_axis) &&
+         same_vector(left->y_axis, right->y_axis) &&
+         same_vector(left->z_axis, right->z_axis) &&
+         same_vector(left->origin, right->origin);
+}
+
+/** Completes authored layout preservation only for a committed document edit. */
+[[nodiscard]] Result<OperationResult> transform_document_for_commit(
+    PolygonDocument &document, const modeling::Transform3 &transform) {
+  const PolygonDocument before = document;
+  auto result = document.transform_selection(transform);
+  if (!result.ok() || !result.value().success || !result.value().changed ||
+      !has_nonsingular_transform(transform)) {
+    return result;
+  }
+  auto preserved = MeshProjectionService::preserve_transformed_sdk_document_uv_layout(
+      before, document);
+  if (!preserved.ok()) return preserved;
+  if (preserved.value().changed) {
+    result.value().dirty.topology = true;
+    result.value().dirty.materials = true;
+    result.value().dirty.overlays = true;
+    result.value().modified.faces.insert(result.value().modified.faces.end(),
+        preserved.value().modified.faces.begin(),
+        preserved.value().modified.faces.end());
+  }
+  return result;
+}
+
 [[nodiscard]] ModelingCommandResult from_sdk(
     const Result<OperationResult> &result, std::string fallback = {}) {
   if (!result.ok()) {
@@ -510,6 +567,7 @@ private:
     bool double_sided = false;
     std::uint64_t layout_key = 0u;
     std::uint64_t position_revision = 0u;
+    bool preserve_preview_uv_layout = false;
     PolygonDocument preview_document;
     MeshAsset preview_mesh;
     std::vector<QVec3> base_mesh_positions;
@@ -684,6 +742,11 @@ private:
 
   /** Bounded native projection baseline keyed to the SDK preview identity. */
   struct MeshPreviewHostBaseline {
+    /// Retains only the last accepted canonical request for one participant.
+    struct AffineInput {
+      ObjectId object;
+      std::optional<modeling::Transform3> transform;
+    };
     PreviewId preview_id{};
     // Only used to transfer a committed transform into native history. It is
     // never a rollback cursor; the active SDK preview is the rollback owner.
@@ -694,6 +757,10 @@ private:
     std::vector<EntityId> created_entities;
     std::vector<AssetId> created_assets;
     std::vector<PreviewHistoryAssetIdentity> history_asset_identities;
+    // Canonical affine eligibility for final document preparation; no geometry.
+    std::vector<ObjectId> preserve_uv_layout_objects;
+    std::vector<AffineInput> affine_inputs;
+    std::optional<std::uint64_t> affine_input_revision;
     PreviewSdkFence acknowledged_sdk;
     bool fence_acknowledged = false;
 
@@ -830,6 +897,11 @@ public:
   void set_modeling_object_world_transform_resolver(
       std::function<std::optional<QMat4>(int)> resolver) {
     modeling_object_world_transform_resolver_ = std::move(resolver);
+  }
+
+  void set_modeling_object_texture_sampling_resolver(
+      std::function<std::optional<QMat4>(int)> resolver) {
+    modeling_object_texture_sampling_resolver_ = std::move(resolver);
   }
 
   [[nodiscard]] Result<PolygonDocument> reconciled_sdk_document(
@@ -4729,14 +4801,14 @@ public:
         [sdk_transform, mode](PolygonDocument &document) {
           if (mode != ModelingSelectionMode::Object &&
               mode != ModelingSelectionMode::Group) {
-            return document.transform_selection(sdk_transform);
+            return transform_document_for_commit(document, sdk_transform);
           }
           Result<OperationResult> selected = document.select_all_faces();
           if (!selected.ok()) {
             return selected;
           }
           Result<OperationResult> transformed =
-              document.transform_selection(sdk_transform);
+              transform_document_for_commit(document, sdk_transform);
           if (!transformed.ok()) {
             return transformed;
           }
@@ -4833,7 +4905,9 @@ public:
         }
         auto transformed = apply_with_whole_object_face_selection(
             selection_mode_, document.value(),
-            [&transform](PolygonDocument &mesh) { return mesh.transform_selection(transform); });
+            [&transform](PolygonDocument &mesh) {
+              return transform_document_for_commit(mesh, transform);
+            });
         if (!transformed.ok()) {
           return rollback(transformed.error_message());
         }
@@ -5554,9 +5628,15 @@ public:
       }
       std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
           face_vertices;
+      bool preserve_preview_uv_layout = false;
       face_vertices.reserve(authored.value().faces.size());
       for (const quader::modeling::AuthoredTopologyFace &face :
            authored.value().faces) {
+        preserve_preview_uv_layout = preserve_preview_uv_layout ||
+            (face.vertices.size() > 4U && face.uvs.size() == face.vertices.size() &&
+             std::ranges::all_of(face.vertices, [&](modeling::VertexId vertex) {
+               return selected_vertices.contains(vertex.index);
+             }));
         std::vector<std::uint32_t> vertices;
         vertices.reserve(face.vertices.size());
         for (const quader::modeling::VertexId vertex : face.vertices) {
@@ -5615,6 +5695,7 @@ public:
           .layout_key = transform_mesh_layout_key(
               object, base_mesh.geometry().vertices),
           .position_revision = transient_transform_payload_revision_,
+          .preserve_preview_uv_layout = preserve_preview_uv_layout,
           .preview_document = document,
           .preview_mesh = std::move(base_mesh),
           .base_mesh_positions = std::move(base_mesh_positions),
@@ -5757,12 +5838,35 @@ public:
         if (!positioned.ok()) {
           return failure(positioned.error_message());
         }
+        std::optional<PolygonDocument> derived_document;
+        const PolygonDocument *render_document = &participant.preview_document;
+        if (participant.preserve_preview_uv_layout &&
+            transforms[participant_index].has_value() &&
+            has_nonsingular_transform(*transforms[participant_index])) {
+          if (!mesh_preview_host_baseline_.has_value()) {
+            return failure("Transform preview baseline is unavailable.");
+          }
+          auto baseline = session_.preview_base_document_copy(
+              mesh_preview_host_baseline_->preview_id, participant.object);
+          if (!baseline.ok()) return failure(baseline.error_message());
+          derived_document.emplace(participant.preview_document);
+          auto preserved =
+              MeshProjectionService::preserve_transformed_sdk_document_uv_layout(
+                  baseline.value(), *derived_document,
+                  selection_mode_ == ModelingSelectionMode::Object ||
+                      selection_mode_ == ModelingSelectionMode::Group);
+          if (!preserved.ok() || !preserved.value().success) {
+            return failure(preserved.ok() ? preserved.value().message
+                                          : preserved.error_message());
+          }
+          render_document = &*derived_document;
+        }
         std::optional<MeshAsset> projected =
             MeshProjectionService::update_sdk_document_mesh_positions(
-                participant.preview_document, participant.preview_mesh);
+                *render_document, participant.preview_mesh);
         if (!projected.has_value()) {
           projected = MeshProjectionService::compile_sdk_document_mesh(
-              participant.preview_document);
+              *render_document);
         }
         if (!projected.has_value() ||
             projected->geometry().vertices.size() !=
@@ -5771,6 +5875,27 @@ public:
               "Could not derive the transient transform mesh attributes.");
         }
         projected->name = participant.preview_mesh.name;
+        if (participant.preserve_preview_uv_layout &&
+            !std::ranges::equal(projected->geometry().vertices,
+                participant.preview_mesh.geometry().vertices,
+                [](const MeshVertex &left, const MeshVertex &right) {
+                  return left.source_vertex_id == right.source_vertex_id;
+                })) {
+          participant.layout_key = transform_mesh_layout_key(
+              participant.object, projected->geometry().vertices);
+          for (auto &vertex : participant.selected_vertices) {
+            vertex.compiled_vertex_indices.clear();
+          }
+          for (std::size_t index = 0; index < projected->geometry().vertices.size();
+               ++index) {
+            const auto selected = participant.selected_vertex_lookup.find(
+                projected->geometry().vertices[index].source_vertex_id);
+            if (selected != participant.selected_vertex_lookup.end()) {
+              participant.selected_vertices[selected->second]
+                  .compiled_vertex_indices.push_back(index);
+            }
+          }
+        }
 
         std::vector<QVec3> &packed_positions =
             *participant.position_buffers[buffer_index];
@@ -6134,7 +6259,8 @@ public:
       std::string_view fallback_message,
       bool position_only_projection = false,
       const CurveDocumentMutationByObject &curve_mutation = {},
-      bool preview_preflighted = false) {
+      bool preview_preflighted = false,
+      const WorkspaceTransformResolver &layout_transform = {}) {
     if (!session_.preview_active()) {
       return failure("No active SDK workspace transform preview.");
     }
@@ -6143,6 +6269,30 @@ public:
     if (!preview_preflighted && !preflight_preview_mutation(preview.id)) {
       return failure(
           "Transform preview participants changed outside this preview.");
+    }
+    if (layout_transform && mesh_preview_host_baseline_.has_value() &&
+        mesh_preview_host_baseline_->active_for(preview.id) &&
+        mesh_preview_host_baseline_->affine_input_revision ==
+            preview.content_revision) {
+      const auto &inputs = mesh_preview_host_baseline_->affine_inputs;
+      std::size_t index = 0U;
+      bool unchanged = true;
+      for (const auto &participant : preview.objects) {
+        if (participant.action == modeling::SessionPreviewAction::RemoveExisting) {
+          continue;
+        }
+        if (index == inputs.size() || inputs[index].object != participant.object_id ||
+            !same_transform_request(inputs[index].transform,
+                                    layout_transform(participant.object_id))) {
+          unchanged = false;
+          break;
+        }
+        ++index;
+      }
+      if (unchanged && index == inputs.size()) {
+        return {.ok = true, .changed = false,
+                .message = "Transform preview unchanged."};
+      }
     }
     std::vector<modeling::SessionPreviewDocumentUpdate> updates;
     updates.reserve(preview.objects.size());
@@ -6205,6 +6355,28 @@ public:
     if (!updated.ok()) {
       return failure(updated.error_message());
     }
+    if (mesh_preview_host_baseline_.has_value()) {
+      auto &baseline = *mesh_preview_host_baseline_;
+      auto &layout_objects = baseline.preserve_uv_layout_objects;
+      layout_objects.clear();
+      baseline.affine_inputs.clear();
+      baseline.affine_input_revision.reset();
+      if (layout_transform) {
+        layout_objects.reserve(preview.objects.size());
+        baseline.affine_inputs.reserve(preview.objects.size());
+        for (const auto &participant : preview.objects) {
+          if (participant.action == modeling::SessionPreviewAction::RemoveExisting) {
+            continue;
+          }
+          const auto transform = layout_transform(participant.object_id);
+          baseline.affine_inputs.push_back({participant.object_id, transform});
+          if (participant.kind == modeling::SessionObjectKind::Mesh &&
+              transform.has_value() && has_nonsingular_transform(*transform)) {
+            layout_objects.push_back(participant.object_id);
+          }
+        }
+      }
+    }
     const bool publish_host_projection =
         !position_only_projection && (preview_changed_ || changed);
     if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
@@ -6221,6 +6393,11 @@ public:
       return abort_preview_publication(
           preview.id,
           "Transform preview publication could not be acknowledged.");
+    }
+    if (layout_transform && updated.value().success &&
+        mesh_preview_host_baseline_.has_value()) {
+      mesh_preview_host_baseline_->affine_input_revision =
+          mesh_preview_host_baseline_->acknowledged_sdk.preview_content_revision;
     }
     return {.ok = updated.value().success,
             .changed = updated.value().changed,
@@ -6306,7 +6483,9 @@ public:
         [curve_transform](ObjectId, modeling::CurveDocument &document) {
           return document.transform(curve_transform);
         },
-        preview_preflighted);
+        preview_preflighted, [curve_transform](ObjectId) {
+          return std::optional{curve_transform};
+        });
     if (!result.ok && position_only_projection &&
         !initialize_transient_transform_payload()) {
       result.changed = true;
@@ -6376,7 +6555,9 @@ public:
         [sdk_transform](ObjectId, modeling::CurveDocument &document) {
           return document.transform(sdk_transform);
         },
-        preview_preflighted);
+        preview_preflighted, [sdk_transform](ObjectId) {
+          return std::optional{sdk_transform};
+        });
     if (!result.ok && position_only_projection &&
         !initialize_transient_transform_payload()) {
       result.changed = true;
@@ -6491,9 +6672,21 @@ public:
         return transient;
       }
     }
+    WorkspaceTransformResolver layout_transform;
+    if (kind == ModelingSdkTransformPreviewKind::Transform) {
+      layout_transform = [resolved_transforms](ObjectId object)
+          -> std::optional<modeling::Transform3> {
+        const auto found = std::ranges::lower_bound(
+            *resolved_transforms, object, {}, &SdkTransform::object);
+        return found != resolved_transforms->end() && found->object == object
+                   ? std::optional{found->transform}
+                   : std::nullopt;
+      };
+    }
     ModelingCommandResult result = update_workspace_transform_preview_by_object(
         mutation, "SDK object-local transform preview failed.",
-        position_only_projection, curve_mutation, preview_preflighted);
+        position_only_projection, curve_mutation, preview_preflighted,
+        layout_transform);
     if (!result.ok && position_only_projection &&
         !initialize_transient_transform_payload()) {
       result.changed = true;
@@ -6571,19 +6764,29 @@ public:
            });
   }
 
-  /** Prepares welding without changing any published or preview owner. */
-  [[nodiscard]] ModelingCommandResult prepare_move_auto_merge(
+  /** Stages texture layout and welding on the same detached commit documents. */
+  [[nodiscard]] ModelingCommandResult prepare_transform_acceptance(
       const modeling::PreviewTransactionSummary &preview,
       std::vector<modeling::SessionPreviewDocumentUpdate> &updates,
-      ModelingSdkTransformHistoryDelta &history_delta) const {
-    if (selection_mode_ == ModelingSelectionMode::Object ||
-        selection_mode_ == ModelingSelectionMode::Group) {
+      ModelingSdkTransformHistoryDelta &history_delta,
+      bool auto_merge_vertices) const {
+    const bool whole_objects = selection_mode_ == ModelingSelectionMode::Object ||
+                               selection_mode_ == ModelingSelectionMode::Group;
+    const bool merge_vertices = auto_merge_vertices && !whole_objects;
+    std::unordered_set<std::uint64_t> preserve_layout_objects;
+    if (mesh_preview_host_baseline_.has_value()) {
+      for (const auto object : mesh_preview_host_baseline_->preserve_uv_layout_objects) {
+        preserve_layout_objects.insert(sdk_object_key(object));
+      }
+    }
+    if (!merge_vertices && preserve_layout_objects.empty()) {
       return {.ok = true};
     }
     auto data = history_delta.valid()
                     ? std::make_shared<ModelingSdkTransformHistoryDelta::Impl>(
                           *history_delta.impl_)
                     : std::make_shared<ModelingSdkTransformHistoryDelta::Impl>();
+    const bool record_document_history = history_delta.valid() || merge_vertices;
     bool changed = false;
     for (const auto &participant : preview.objects) {
       if (participant.action == modeling::SessionPreviewAction::RemoveExisting) {
@@ -6605,20 +6808,43 @@ public:
       if (!document.ok()) {
         return failure(document.error_message());
       }
-      Result<OperationResult> merged =
-          document.value().auto_merge_selected_vertices(0.001F);
-      if (!merged.ok() || !merged.value().success) {
-        return failure(merged.ok() ? merged.value().message
-                                   : merged.error_message());
+      OperationResult receipt;
+      if (preserve_layout_objects.contains(sdk_object_key(participant.object_id))) {
+        auto baseline = session_.preview_base_document_copy(
+            preview.id, participant.object_id);
+        if (!baseline.ok()) return failure(baseline.error_message());
+        auto preserved =
+            MeshProjectionService::preserve_transformed_sdk_document_uv_layout(
+                baseline.value(), document.value(), whole_objects);
+        if (!preserved.ok() || !preserved.value().success) {
+          return failure(preserved.ok() ? preserved.value().message
+                                        : preserved.error_message());
+        }
+        receipt = std::move(preserved).value();
       }
-      if (!merged.value().changed) {
+      if (merge_vertices) {
+        auto merged = document.value().auto_merge_selected_vertices(0.001F);
+        if (!merged.ok() || !merged.value().success) {
+          return failure(merged.ok() ? merged.value().message
+                                     : merged.error_message());
+        }
+        if (merged.value().changed) {
+          const bool layout_changed = receipt.changed;
+          receipt = std::move(merged).value();
+          receipt.dirty.materials = receipt.dirty.materials || layout_changed;
+        } else if (!receipt.changed) {
+          receipt = std::move(merged).value();
+        }
+      }
+      if (!receipt.changed) {
         updates.push_back({.object = participant.object_id,
                            .document = std::move(document).value(),
-                           .receipt = std::move(merged).value()});
+                           .receipt = std::move(receipt)});
         continue;
       }
       changed = true;
-      if (participant.action == modeling::SessionPreviewAction::ReplaceExisting) {
+      if (record_document_history &&
+          participant.action == modeling::SessionPreviewAction::ReplaceExisting) {
         Result<PolygonDocument> before =
             session_.document_copy(participant.object_id);
         if (!before.ok()) {
@@ -6638,7 +6864,7 @@ public:
       }
       updates.push_back({.object = participant.object_id,
                          .document = std::move(document).value(),
-                         .receipt = std::move(merged).value()});
+                         .receipt = std::move(receipt)});
     }
     if (changed) {
       history_delta = ModelingSdkTransformHistoryDelta(std::move(data));
@@ -6674,21 +6900,19 @@ public:
     ModelingSdkTransformHistoryDelta transform_history_delta =
         transient_transform_payload_active_ ? build_transform_history_delta()
                                             : ModelingSdkTransformHistoryDelta{};
-    std::vector<modeling::SessionPreviewDocumentUpdate> auto_merge_updates;
-    if (auto_merge_vertices) {
-      const ModelingCommandResult prepared = prepare_move_auto_merge(
-          preview, auto_merge_updates, transform_history_delta);
-      if (!prepared.ok) {
-        return prepared;
+    std::vector<modeling::SessionPreviewDocumentUpdate> prepared_updates;
+    const ModelingCommandResult prepared = prepare_transform_acceptance(
+        preview, prepared_updates, transform_history_delta, auto_merge_vertices);
+    if (!prepared.ok) {
+      return prepared;
+    }
+    if (!preview_changed_ && !prepared.changed) {
+      ModelingCommandResult canceled = cancel_translate_preview();
+      if (canceled.ok) {
+        canceled.changed = false;
+        canceled.message = "Preview unchanged.";
       }
-      if (!preview_changed_ && !prepared.changed) {
-        ModelingCommandResult canceled = cancel_translate_preview();
-        if (canceled.ok) {
-          canceled.changed = false;
-          canceled.message = "Preview unchanged.";
-        }
-        return canceled;
-      }
+      return canceled;
     }
     const std::optional<std::size_t> transform_history_undo_mark =
         transform_history_delta.valid()
@@ -6746,19 +6970,19 @@ public:
         fails(ModelingSdkProjectionFailurePoint::CommittedSceneNotify)) {
       return failure("Committed preview projection could not be published.");
     }
-    const bool auto_merged = !auto_merge_updates.empty();
-    if (auto_merged) {
+    const bool prepared_document_changes = !prepared_updates.empty();
+    if (prepared_document_changes) {
       Result<OperationResult> updated = session_.update_preview_transaction(
-          preview.id, std::move(auto_merge_updates));
+          preview.id, std::move(prepared_updates));
       if (!updated.ok() || !updated.value().success ||
           fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
         return abort_preview_publication(
-            preview.id, updated.ok() ? "Auto merge preview could not publish."
+            preview.id, updated.ok() ? "Prepared transform could not publish."
                                      : updated.error_message());
       }
       preview_changed_ = true;
     }
-    if ((transient_transform_payload_active_ || auto_merged) &&
+    if ((transient_transform_payload_active_ || prepared_document_changes) &&
         !project_preview_object(true, true)) {
       return abort_preview_publication(
           preview.id,
@@ -9479,6 +9703,31 @@ private:
     if (!survivor_from_world.has_value()) {
       return failure("Combine Mesh survivor transform is not invertible.");
     }
+    const auto survivor_sampling = modeling_object_texture_sampling_resolver_
+        ? modeling_object_texture_sampling_resolver_(*survivor_native)
+        : effective_texture_sampling_from_local(scene_, *survivor_entity);
+    if (!survivor_sampling.has_value()) {
+      return failure("Combine Mesh survivor texture placement is unavailable.");
+    }
+    const auto *survivor_material = scene_.material(*survivor_entity);
+    MaterialComponent combined_material = survivor_material != nullptr
+        ? *survivor_material : MaterialComponent{};
+    const MaterialComponent material_before = combined_material;
+    const auto survivor_document = session_.document_copy(survivor);
+    if (!survivor_document.ok()) return failure(survivor_document.error_message());
+    const auto survivor_faces = survivor_document.value().face_ids();
+    const auto survivor_settings =
+        survivor_document.value().face_texture_settings(survivor_faces);
+    if (!survivor_settings.ok()) return failure(survivor_settings.error_message());
+    // An unbound nonzero slot still uses the survivor's fallback material.
+    // Reserve those live indices before adding bindings from other entities.
+    for (const auto &face : survivor_settings.value()) {
+      if (face.material_slot != 0U) {
+        combined_material.material_slots.try_emplace(
+            face.material_slot,
+            combined_material.material_for_slot(face.material_slot));
+      }
+    }
 
     std::vector<int> affected_modeling_ids;
     std::vector<EntityId> affected_entities;
@@ -9551,6 +9800,23 @@ private:
       if (!copied.ok()) {
         return rollback(copied.error_message());
       }
+      const auto source_sampling = modeling_object_texture_sampling_resolver_
+          ? modeling_object_texture_sampling_resolver_(*source_native)
+          : effective_texture_sampling_from_local(scene_, *source_entity);
+      if (!source_sampling.has_value()) {
+        return rollback("Combine Mesh source texture placement is unavailable.");
+      }
+      const bool rebase_textures =
+          survivor_from_object.values != QMat4{}.values ||
+          source_sampling->values != survivor_sampling->values;
+      std::optional<quader_poly::Document> source_authored;
+      if (rebase_textures) {
+        source_authored = MeshProjectionService::polygon_document_from_sdk_document(
+            copied.value());
+        if (!source_authored.has_value()) {
+          return rollback("Combine Mesh source texture topology is unavailable.");
+        }
+      }
       PolygonDocument working = std::move(copied).value();
       Result<OperationResult> selected = working.select_all_faces();
       if (!selected.ok()) {
@@ -9561,11 +9827,37 @@ private:
       if (!transformed.ok()) {
         return rollback(transformed.error_message());
       }
-      if (glm::determinant(glm::mat3{to_glm(survivor_from_object)}) < 0.0F) {
-        Result<OperationResult> reversed =
-            working.flip_selected_face_normals();
-        if (!reversed.ok()) {
-          return rollback(reversed.error_message());
+      if (source_authored.has_value()) {
+        const bool reflected_geometry =
+            glm::determinant(glm::mat3{to_glm(survivor_from_object)}) < 0.0F;
+        auto preserved =
+            MeshProjectionService::rebase_sdk_document_texture_mapping(
+                *source_authored, working, *source_sampling, *survivor_sampling,
+                reflected_geometry);
+        if (!preserved.ok()) {
+          return rollback(preserved.error_message());
+        }
+        working = std::move(preserved).value();
+      }
+      // Face slots are local to each scene entity. Preserve every source's
+      // resolved material while its table is folded into the survivor's table.
+      const MaterialComponent *source_material = scene_.material(*source_entity);
+      const auto source_faces = working.face_ids();
+      const auto settings = working.face_texture_settings(source_faces);
+      if (!settings.ok()) return rollback(settings.error_message());
+      for (const auto &face : settings.value()) {
+        const MaterialReference material = source_material != nullptr
+            ? source_material->material_for_slot(face.material_slot)
+            : MaterialReference{};
+        std::uint32_t slot = 0U;
+        try {
+          slot = stage_scene_material_slot(combined_material, material);
+        } catch (const std::overflow_error &error) {
+          return rollback(error.what());
+        }
+        if (slot != face.material_slot) {
+          const auto assigned = working.assign_face_material_slot(face.face, slot);
+          if (!assigned.ok()) return rollback(assigned.error_message());
         }
       }
       Result<OperationResult> cleared = working.clear_selection();
@@ -9590,6 +9882,11 @@ private:
         !combined.value().changed) {
       return rollback(combined.ok() ? combined.value().message
                                     : combined.error_message());
+    }
+    if (combined_material != material_before &&
+        !mesh_sync_.set_projected_material(scene_, *survivor_entity,
+                                           &combined_material)) {
+      return rollback("Combine Mesh material bindings could not be published.");
     }
     if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
         !project_committed_object(publication, survivor)) {
@@ -10651,7 +10948,7 @@ private:
           return entry.topology_before.has_value();
         })) {
       return mutate_documents_by_object(
-          objects, exact_mutation, "Move auto merge history failed.", false,
+          objects, exact_mutation, "Transform document history failed.", false,
           false, false, true, true);
     }
 
@@ -12061,9 +12358,31 @@ private:
       if (!authored.ok()) {
         return false;
       }
-      std::optional<MeshAsset> mesh =
-          MeshProjectionService::mesh_asset_from_sdk_payload(
-              payload->mesh, authored.value());
+      std::optional<MeshAsset> mesh;
+      if (!committed_publication && mesh_preview_host_baseline_.has_value() &&
+          mesh_preview_host_baseline_->active_for(transaction.value().id) &&
+          std::ranges::find(mesh_preview_host_baseline_->preserve_uv_layout_objects,
+                            object.object_id) !=
+              mesh_preview_host_baseline_->preserve_uv_layout_objects.end()) {
+        auto baseline = session_.preview_base_document_copy(
+            transaction.value().id, object.object_id);
+        if (!baseline.ok()) return false;
+        auto preserved =
+            MeshProjectionService::preserve_transformed_sdk_document_uv_layout(
+                baseline.value(), authored.value(),
+                selection_mode_ == ModelingSelectionMode::Object ||
+                    selection_mode_ == ModelingSelectionMode::Group);
+        if (!preserved.ok() || !preserved.value().success) return false;
+        if (preserved.value().changed) {
+          ++stats_.mesh_compile_count;
+          mesh = MeshProjectionService::compile_sdk_document_mesh(authored.value());
+          if (!mesh.has_value()) return false;
+        }
+      }
+      if (!mesh.has_value()) {
+        mesh = MeshProjectionService::mesh_asset_from_sdk_payload(
+            payload->mesh, authored.value());
+      }
       if (!mesh.has_value() ||
           !publish_projected_mesh(nullptr, object.object_id,
                                   std::move(*mesh), !committed_publication,
@@ -12096,6 +12415,8 @@ private:
   ModelingMeshSyncService &mesh_sync_;
   std::function<std::optional<QMat4>(int)>
       modeling_object_world_transform_resolver_;
+  std::function<std::optional<QMat4>(int)>
+      modeling_object_texture_sampling_resolver_;
   quader::modeling::ModelingSession session_;
   int next_native_object_id_ = 1;
   int active_native_object_id_ = kInvalidModelingObjectId;
@@ -12146,6 +12467,11 @@ ModelingSdkProjectionAdapter::~ModelingSdkProjectionAdapter() = default;
 void ModelingSdkProjectionAdapter::set_modeling_object_world_transform_resolver(
     std::function<std::optional<QMat4>(int)> resolver) {
   impl_->set_modeling_object_world_transform_resolver(std::move(resolver));
+}
+
+void ModelingSdkProjectionAdapter::set_modeling_object_texture_sampling_resolver(
+    std::function<std::optional<QMat4>(int)> resolver) {
+  impl_->set_modeling_object_texture_sampling_resolver(std::move(resolver));
 }
 
 void ModelingSdkProjectionAdapter::reset_from_scene() {

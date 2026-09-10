@@ -6,9 +6,16 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
+#include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_editor_api.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/session/scene_session.hpp"
+#include "render/scene_render_bridge.hpp"
 #include "render/render_signature_builder.hpp"
 #include "ui/qt_viewport_edge_length_hud.hpp"
+#include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
@@ -19,6 +26,7 @@
 #include <QEnterEvent>
 #include <QEvent>
 #include <QFile>
+#include <QFocusEvent>
 #include <QFrame>
 #include <QFontInfo>
 #include <QImage>
@@ -37,6 +45,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <utility>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -237,6 +246,96 @@ protected:
   std::array<QLabel *, 2> footprint_labels_ = {};
   quader::ViewportCameraController camera_;
 };
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       TransformHandleHoverHidesUnderlyingEdgeDimensionUntilPointerLeaves) {
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  editor.preferences().set_runtime_hooks({.gizmos_visible = [] { return true; }});
+  quader_poly::Document topology;
+  const std::array vertices{
+      quader_poly::add_vertex(topology, {-2, 0, 0}),
+      quader_poly::add_vertex(topology, {-2, -2, 0}),
+      quader_poly::add_vertex(topology, {2, -2, 0}),
+      quader_poly::add_vertex(topology, {2, 0, 0})};
+  ASSERT_NE(quader_poly::add_face(topology, vertices), quader_poly::kInvalidElementId);
+  const auto mesh = editor.modeling().create_mesh(
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(std::move(topology)));
+  ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+  ASSERT_TRUE(editor.selection().select_object(mesh.value()).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(mesh.value(), vertices[0], vertices[3]).ok());
+  ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Back).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+  session.history().clear();
+
+  parent_->resize(800, 600);
+  quader::QtViewportPanel panel(parent_.get());
+  panel.setGeometry(parent_->rect());
+  panel.attach_workspace(session.viewport_workspace());
+  panel.set_startup_presentation_blocked(false);
+  panel.show();
+  QCoreApplication::processEvents();
+  auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  // Native-child exposure is intentionally disabled in this headless host.
+  // Give its QWindow the geometry normally applied by the startup renderer.
+  surface->resize(800, 600);
+  auto *label = panel.findChild<QLabel *>(QStringLiteral("viewportEdgeLength_perspective"));
+  ASSERT_NE(label, nullptr);
+  auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+  camera.focus_origin(8);
+  QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &enter);
+  QApplication::sendEvent(surface, &focus);
+  quader::SceneRenderBridge bridge;
+  quader::RenderOverlaySnapshotCache cache;
+  const auto frame = [&] {
+    panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
+                        session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+    panel.prepare_viewports(editor, bridge, cache, session.scene(), session.assets(),
+                            session.modeling(), session.native_tools());
+  };
+  frame();
+  const auto hover = [&](quader::QVec3 world) {
+    const auto projected = camera.project_world_point(world);
+    EXPECT_TRUE(projected.visible);
+    const QPointF local{projected.position.x / surface->devicePixelRatio(),
+                         projected.position.y / surface->devicePixelRatio()};
+    QMouseEvent event(QEvent::MouseMove, local,
+                      QPointF(surface->mapToGlobal(local.toPoint())),
+                      Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(surface, &event);
+    frame();
+  };
+  // The selected edge spans the Move pivot; its positive half is beneath X.
+  hover({-1, 0, 0});
+  ASSERT_EQ(session.modeling().selection_hover_summary().target.kind,
+            quader::ModelingActiveSelectionKind::Edge);
+  ASSERT_FALSE(label->isHidden());
+  EXPECT_EQ(label->text(), QStringLiteral("128.00"));
+  hover({0.6f, 0, 0});
+  EXPECT_TRUE(label->isHidden());
+  for (int idle = 0; idle < 8; ++idle) frame();
+  EXPECT_TRUE(label->isHidden());
+
+  // Verify an eligible edge is actually under the same screen position.
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+  frame();
+  ASSERT_FALSE(label->isHidden());
+  EXPECT_EQ(label->text(), QStringLiteral("128.00"));
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+  frame();
+  EXPECT_TRUE(label->isHidden());
+  hover({-1, 0, 0});
+  EXPECT_FALSE(label->isHidden());
+  EXPECT_EQ(label->text(), QStringLiteral("128.00"));
+  EXPECT_FALSE(session.modeling().transform_drag_active());
+  EXPECT_EQ(session.history().undo_count(), 0u);
+}
 
 TEST_F(QtViewportEdgeLengthHudTests,
        UsesFullWorldSpaceLengthInMapUnitsWithOutlinedShapedLabels) {

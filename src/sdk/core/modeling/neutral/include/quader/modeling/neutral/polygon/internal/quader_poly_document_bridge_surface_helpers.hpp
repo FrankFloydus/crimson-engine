@@ -25,6 +25,8 @@
 
 namespace quader_poly::document_internal {
 
+class VertexLookupIndex;
+
 std::vector<ElementId> selected_valid_vertices(const Document& document, const Selection& selection);
 std::vector<Edge> selected_valid_edges(const Document& document, const Selection& selection);
 quader::QVec3 document_vertex_centroid(const Document& document);
@@ -41,6 +43,10 @@ const Face* face_for_open_edge(const Document& document, Edge edge);
 std::uint32_t material_slot_for_open_edge(const Document& document, Edge edge);
 ElementId add_face_with_texture_transform(Document& document, std::span<const ElementId> vertices, std::uint32_t material_slot, const FaceTextureTransform& texture_transform);
 bool inherit_merged_face_texture(const Document& source_document, std::span<const ElementId> source_face_ids, Face& merged_face);
+bool assign_merged_face_texture_boundary(const Document& source_document,
+    std::span<const ElementId> source_face_ids, Face& merged_face);
+bool merged_face_preserves_source_textures(const Document& source_document,
+    std::span<const ElementId> source_face_ids, const Face& merged_face);
 std::vector<ElementId> face_vertices_between(const Face& face, std::size_t start_index, std::size_t end_index);
 std::vector<ElementId> unique_valid_face_loop(std::vector<ElementId> vertices);
 std::optional<std::size_t> directed_face_edge_index(const Face& face, ElementId from_id, ElementId to_id);
@@ -126,7 +132,33 @@ bool vertex_is_redundant_in_every_face_that_uses_it(const Document& document, El
 std::vector<ElementId> remove_redundant_vertices_from_loop( const Document& document, std::vector<ElementId> loop, const std::set<ElementId>& vertices_to_remove, std::vector<ElementId>& removed_vertices);
 bool remove_redundant_vertex_from_all_face_loops(Document& document, ElementId vertex_id);
 void orient_face_toward_normal(const Document& document, Face& face, quader::QVec3 expected_normal);
-void reverse_face_winding(Face& face);
+/// Selects the loop anchor that preserves tessellation for a winding change.
+enum class FaceWindingChange {
+    OrientationOnly,
+    ReflectedGeometry,
+};
+void reverse_face_winding(Face& face,
+    FaceWindingChange change = FaceWindingChange::OrientationOnly);
+// Reverses an affine-reflected face without reinterpreting its authored chart.
+// Failure leaves result_face unchanged when neither existing anchor can retain
+// the source triangulation and its chart is not a planar affine mapping.
+bool reverse_reflected_face_winding(const Document& source_document,
+    const Face& source_face, const Document& result_document, Face& result_face);
+bool reverse_reflected_face_winding(const Document& source_document,
+    const Face& source_face, const Document& result_document, Face& result_face,
+    const VertexLookupIndex& source_lookup, const VertexLookupIndex& result_lookup);
+/// States whether an affine rebase also needs to reverse the face orientation.
+enum class FaceRebaseWinding {
+    Preserve,
+    Reverse,
+};
+// Retains authored n-gon triangle identities across an affine rebase, trying
+// only the current and adjacent loop anchors. Affine charts need no fixed
+// triangulation. Failure leaves result_face unchanged.
+bool preserve_rebased_face_texture_triangulation(const Document& source_document,
+    const Face& source_face, const Document& result_document, Face& result_face,
+    FaceRebaseWinding winding, const VertexLookupIndex& source_lookup,
+    const VertexLookupIndex& result_lookup);
 std::vector<Face> selected_face_copies(const Document& document, const Selection& selection);
 ElementId copied_vertex_id( const Document& source, Document& target, std::map<ElementId, ElementId>& vertex_map, ElementId source_vertex_id);
 bool append_copied_face( const Document& source, Document& target, const Face& source_face, std::map<ElementId, ElementId>& vertex_map, std::map<ElementId, ElementId>& face_map, Selection& target_selection);

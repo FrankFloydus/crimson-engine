@@ -16,6 +16,14 @@ TEST(QdrDocumentOperationThickenFacesTests, ThickenFacesTurnsOneOpenFaceIntoAClo
 	fixture.document.faces.front().texture_transform = texture;
 	ensure_face_uvs(fixture.document);
 	const std::vector<quader::QVec2> source_uvs = fixture.document.faces.front().uvs;
+	const std::vector<ElementId> source_vertices = fixture.document.faces.front().vertices;
+	const quader::QVec3 source_normal = face_normal(fixture.document, fixture.document.faces.front());
+	std::vector<quader::QVec3> source_positions;
+	for (const ElementId vertex_id : source_vertices) {
+		const Vertex* vertex = find_vertex(fixture.document, vertex_id);
+		ASSERT_NE(vertex, nullptr);
+		source_positions.push_back(vertex->position);
+	}
 	Selection selection = qdr_test::face_selection({ fixture.face }, fixture.face);
 
 	const OperationResult result = thicken_selected_faces(fixture.document, selection, 0.5F, false);
@@ -40,10 +48,29 @@ TEST(QdrDocumentOperationThickenFacesTests, ThickenFacesTurnsOneOpenFaceIntoAClo
 	const Face* offset_cap = find_face(fixture.document, result.created.faces.front());
 	ASSERT_NE(offset_cap, nullptr);
 	ASSERT_EQ(offset_cap->uvs.size(), source_uvs.size());
+	EXPECT_LT(dot(face_normal(fixture.document, *offset_cap), source_normal), -0.99F);
 	for (std::size_t index = 0U; index < source_uvs.size(); ++index) {
-		const auto &expected = source_uvs[source_uvs.size() - 1U - index];
+		const Vertex* offset_vertex = find_vertex(fixture.document, offset_cap->vertices[index]);
+		ASSERT_NE(offset_vertex, nullptr);
+		EXPECT_EQ(std::ranges::find(source_vertices, offset_vertex->id), source_vertices.end());
+		const auto original = std::ranges::find_if(source_positions, [&](quader::QVec3 position) {
+			return qdr_test::vec_nearly_equal(offset_vertex->position, position - source_normal * 0.5F);
+		});
+		ASSERT_NE(original, source_positions.end());
+		const auto source_index = static_cast<std::size_t>(original - source_positions.begin());
+		const auto &expected = source_uvs[source_index];
 		EXPECT_EQ(offset_cap->uvs[index].x, expected.x);
 		EXPECT_EQ(offset_cap->uvs[index].y, expected.y);
+	}
+	const Face* source_cap = find_face(fixture.document, fixture.face);
+	ASSERT_NE(source_cap, nullptr);
+	ASSERT_EQ(source_cap->uvs.size(), source_uvs.size());
+	for (std::size_t index = 0U; index < source_vertices.size(); ++index) {
+		const auto retained = std::ranges::find(source_cap->vertices, source_vertices[index]);
+		ASSERT_NE(retained, source_cap->vertices.end());
+		const auto corner = static_cast<std::size_t>(retained - source_cap->vertices.begin());
+		EXPECT_EQ(source_cap->uvs[corner].x, source_uvs[index].x);
+		EXPECT_EQ(source_cap->uvs[corner].y, source_uvs[index].y);
 	}
         EXPECT_TRUE(selection.mode == SelectionMode::Face);
         EXPECT_TRUE(selection.faces.size() == 6U);

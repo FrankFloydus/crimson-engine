@@ -21,7 +21,12 @@ enum class UvPeelAxis {
   V,
 };
 
-/// Captures peel orientation, physical density, repetitions, and UV offsets.
+/// Captures guided flow, repetitions and offsets measured in UV tiles.
+/// World space rebuilds density at 0.5 tiles per world unit before repetition;
+/// it does not preserve incoming density. Quad walks normalize transverse
+/// widths to the widest station. Fit mode spans the requested repeats along
+/// each guide and across its two signed sides, with the guide at its offset.
+/// Disconnected guides map independently; neither mode performs atlas packing.
 struct UvPeelOptions {
   UvPeelAxis axis = UvPeelAxis::U;
   bool world_space = true;
@@ -66,9 +71,12 @@ validate_uv_peel_options(const UvPeelOptions &options);
 
 /**
  * Prepares guided surface UVs without mutating input documents, topology,
- * selection, materials, or occurrence transforms. Only edge-connected face
- * patches of faces incident to guide edges participate. Unsupported or ambiguous
- * chart topology and unsafe numerical results fail the entire batch.
+ * selection, materials, or occurrence transforms. Each selected edge walks both
+ * sides through opposite quad edges until a boundary, non-quad, or its directed
+ * seed returns. Direct corner writes retain closed-profile seams and later-write
+ * ownership without requiring a nonoverlapping global chart. A guide without
+ * quad sides retains the guarded conformal incident-patch extension. Invalid
+ * topology, collapsed corner mappings, or unsafe storage fail the entire batch.
  */
 [[nodiscard]] Result<PreparedUvPeel> prepare_uv_peel(
     std::span<const UvPeelTarget> targets, const UvPeelOptions &options);

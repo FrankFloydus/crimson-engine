@@ -66,7 +66,13 @@ void QtOperationInputHints::refresh(const QuaderToolsApi &tools,
     }
     case QuaderOperationInputGesture::PrimaryClick:
       badge = QString::fromStdString(localization.text(
-          "operation.hints.key.primary_click", "Ctrl + Click"));
+          "operation.hints.key.primary_click", "LMB"));
+      break;
+    case QuaderOperationInputGesture::Keybinding:
+      badge = QString::fromStdString(commands.shortcut_for(hint.command));
+      if (badge.isEmpty()) {
+        continue;
+      }
       break;
     case QuaderOperationInputGesture::Wheel:
       badge = QString::fromStdString(localization.text(

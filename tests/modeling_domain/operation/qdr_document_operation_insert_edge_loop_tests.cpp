@@ -190,7 +190,13 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopSplitsAQuadThroughTh
 	for (const Face& split_face : fixture.document.faces) {
 		EXPECT_TRUE(split_face.material_slot == 7U);
 		EXPECT_EQ(split_face.texture_transform, texture);
-		EXPECT_TRUE(split_face.uvs.empty());
+		ASSERT_EQ(split_face.uvs.size(), split_face.vertices.size());
+		for (std::size_t corner = 0U; corner < split_face.vertices.size(); ++corner) {
+			const Vertex* vertex = find_vertex(fixture.document, split_face.vertices[corner]);
+			ASSERT_NE(vertex, nullptr);
+			EXPECT_FLOAT_EQ(split_face.uvs[corner].x, (vertex->position.x + 1.0F) * 0.5F);
+			EXPECT_FLOAT_EQ(split_face.uvs[corner].y, (vertex->position.y + 1.0F) * 0.5F);
+		}
 	}
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
@@ -247,6 +253,35 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopTraversesAClosedCube
         EXPECT_TRUE(selection.edges.size() == 4U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 	EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests, LoopInsertionPreservesSeparateChartsAtASharedEdge) {
+	QuadGridFixture fixture = make_quad_grid(1U, 2U);
+	for (std::size_t index = 0U; index < fixture.document.faces.size(); ++index) {
+		Face& face = fixture.document.faces[index];
+		face.material_slot = static_cast<std::uint32_t>(index);
+		const float offset = static_cast<float>(index) * 100.0F;
+		for (const ElementId vertex_id : face.vertices) {
+			const auto position = find_vertex(fixture.document, vertex_id)->position;
+			face.uvs.push_back({position.x * 4.0F + offset, position.y * 3.0F - offset});
+		}
+	}
+	const Edge seed = make_edge(fixture.vertex(0U, 0U), fixture.vertex(1U, 0U));
+	Selection selection = qdr_test::edge_selection({seed}, seed);
+
+	const OperationResult result = insert_edge_loop(fixture.document, selection, 0.25F);
+
+	ASSERT_TRUE(result.changed) << result.message;
+	ASSERT_EQ(fixture.document.faces.size(), 4U);
+	for (const Face& face : fixture.document.faces) {
+		ASSERT_EQ(face.uvs.size(), face.vertices.size());
+		const float offset = static_cast<float>(face.material_slot) * 100.0F;
+		for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+			const auto position = find_vertex(fixture.document, face.vertices[corner])->position;
+			EXPECT_FLOAT_EQ(face.uvs[corner].x, position.x * 4.0F + offset);
+			EXPECT_FLOAT_EQ(face.uvs[corner].y, position.y * 3.0F - offset);
+		}
+	}
 }
 
 TEST(QdrDocumentOperationInsertEdgeLoopTests,

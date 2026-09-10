@@ -9,6 +9,7 @@
 #include <quader/modeling/mesh/polygon_document.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -51,6 +52,9 @@ struct FaceTextureActionFace {
   FaceId face{};
   std::uint32_t texture_width = 64;
   std::uint32_t texture_height = 64;
+  /// Exact final angle for rotation actions, e.g. a host's baseline + offset.
+  /// Unset uses the action's signed delta; other actions ignore this field.
+  std::optional<float> target_rotation_degrees;
 };
 
 /**
@@ -112,8 +116,11 @@ struct PreparedFaceTextureAction {
     const FaceTextureActionOptions &options);
 
 /**
- * Continues the source's affine texture chart by rotating it onto the target
- * plane about their intersection. Parallel/opposed planes retain world axes
+ * Continues a source texture chart by rotating it onto the target plane about
+ * their intersection. A shared edge in the same document uses its endpoint UVs
+ * and a geometrically conditioned third corner, preserving that local seam
+ * even for non-affine source UVs. Otherwise the source must supply an affine
+ * chart. Parallel/opposed planes retain world axes
  * and phase. Copies the source face settings and the host-resolved material
  * slot without changing geometry, component IDs, selection, or sampling.
  * Returns only the immutable target replacement; neither input is modified.

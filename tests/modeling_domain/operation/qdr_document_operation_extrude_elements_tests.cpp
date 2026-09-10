@@ -104,6 +104,8 @@ TEST(QdrDocumentOperationExtrudeElementsTests, TransformExtrudeSelectedFaceCopie
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 	const FaceTextureTransform texture{{-2.0F, 0.5F}, {0.25F, 0.75F}, 40.0F};
 	fixture.document.faces.front().texture_transform = texture;
+    const std::vector<quader::QVec2> authored_uvs{{2.0F, 3.0F}, {6.0F, 4.0F}, {9.0F, 10.0F}, {1.0F, 8.0F}};
+    fixture.document.faces.front().uvs = authored_uvs;
 	Selection selection = qdr_test::face_selection({ fixture.face }, fixture.face);
 	Transform3 transform;
 	transform.x_axis = { 0.0F, 1.0F, 0.0F };
@@ -127,6 +129,11 @@ TEST(QdrDocumentOperationExtrudeElementsTests, TransformExtrudeSelectedFaceCopie
 	const Face* cap = find_face(fixture.document, fixture.face);
 	ASSERT_NE(cap, nullptr);
 	ASSERT_EQ(cap->vertices.size(), 4U);
+    ASSERT_EQ(cap->uvs.size(), authored_uvs.size());
+    for (std::size_t corner = 0; corner < authored_uvs.size(); ++corner) {
+        EXPECT_FLOAT_EQ(cap->uvs[corner].x, authored_uvs[corner].x);
+        EXPECT_FLOAT_EQ(cap->uvs[corner].y, authored_uvs[corner].y);
+    }
 	EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, cap->vertices[0])->position, { 1.0F, -1.0F, 1.0F }));
 	EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, cap->vertices[1])->position, { 1.0F, 1.0F, 1.0F }));
 	EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, cap->vertices[2])->position, { -1.0F, 1.0F, 1.0F }));
@@ -164,6 +171,12 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedStandaloneFaceReta
 
 	const Face* moved_cap = find_face(fixture.document, fixture.face);
 	ASSERT_NE(moved_cap, nullptr);
+    const std::vector<quader::QVec2> expected_moved_uvs{{0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F}};
+    ASSERT_EQ(moved_cap->uvs.size(), expected_moved_uvs.size());
+    for (std::size_t corner = 0; corner < expected_moved_uvs.size(); ++corner) {
+        EXPECT_FLOAT_EQ(moved_cap->uvs[corner].x, expected_moved_uvs[corner].x);
+        EXPECT_FLOAT_EQ(moved_cap->uvs[corner].y, expected_moved_uvs[corner].y);
+    }
 	EXPECT_TRUE(std::ranges::all_of(moved_cap->vertices, [&fixture](ElementId vertex_id) {
 		const Vertex* vertex = find_vertex(fixture.document, vertex_id);
 		return vertex != nullptr && qdr_test::nearly_equal(vertex->position.z, 2.0F);

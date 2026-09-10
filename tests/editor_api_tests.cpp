@@ -2364,6 +2364,72 @@ TEST(EditorApiTests, UvProjectionCommandsExecuteInMeshAndFaceModes) {
   }
 }
 
+TEST(EditorApiTests, UvProjectionAvailabilitySharesAtomicTargetValidation) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto box = create_selected_box(editor, "Projection eligibility");
+  const auto light = editor.scene().create_point_light({.name = "No UVs"});
+  ASSERT_TRUE(light.ok()) << light.error_message();
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0, 0, 0}}, {.position = {2, 0, 0}}},
+      .name = "Curve has no polygon UV projection",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  constexpr std::array commands{
+      quader::quader_command::kModelingTextureProjectCube,
+      quader::quader_command::kModelingTextureProjectCylinder,
+      quader::quader_command::kModelingTextureProjectSphere,
+  };
+  const auto expect_availability = [&](bool expected) {
+    EXPECT_EQ(editor.modeling().can_project_uv(), expected);
+    for (const auto command : commands) {
+      const auto descriptor = editor.commands().descriptor(command);
+      ASSERT_TRUE(descriptor.has_value());
+      EXPECT_EQ(descriptor->enabled, expected) << command.string();
+    }
+  };
+  for (const auto unsupported : {light.value().id, curve.value().entity}) {
+    ASSERT_TRUE(editor.selection().select_objects({unsupported}).ok());
+    expect_availability(false);
+    ASSERT_TRUE(editor.selection().select_objects({box.entity, unsupported}).ok());
+    expect_availability(false);
+    const auto before = editor.history().snapshot();
+    const auto rejected = editor.modeling().apply_face_texture_action({
+        .action = quader::QuaderFaceTextureAction::ProjectCube,
+        .selection_token = editor.selection().summary().selection_revision,
+    });
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_FALSE(rejected.changed());
+    EXPECT_EQ(editor.history().snapshot().undo_label, before.undo_label);
+    EXPECT_EQ(editor.history().snapshot().redo_label, before.redo_label);
+    EXPECT_EQ(editor.history().snapshot().can_undo, before.can_undo);
+    EXPECT_EQ(editor.history().snapshot().can_redo, before.can_redo);
+  }
+  ASSERT_TRUE(editor.selection().select_object(box).ok());
+  expect_availability(true);
+  ASSERT_TRUE(editor.scene().set_locked(box.entity, true).ok());
+  expect_availability(false);
+  ASSERT_TRUE(editor.scene().set_locked(box.entity, false).ok());
+  ASSERT_TRUE(editor.selection().select_object(box).ok());
+  expect_availability(true);
+  ASSERT_TRUE(editor.scene().set_visible(box.entity, false).ok());
+  expect_availability(false);
+  ASSERT_TRUE(editor.scene().set_visible(box.entity, true).ok());
+  ASSERT_TRUE(editor.selection().select_object(box).ok());
+  expect_availability(true);
+  ASSERT_TRUE(editor.tools().activate("radial_array").ok());
+  expect_availability(false);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  ASSERT_TRUE(editor.selection().select_object(box).ok());
+  expect_availability(true);
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(box, 1).ok());
+  expect_availability(true);
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+  expect_availability(false);
+}
+
 TEST(EditorApiTests,
      TextureScaleCommandEndpointsPreserveRevisionsAndUndoRedoForBothAxes) {
   CommandTestHarness harness;
@@ -3270,7 +3336,7 @@ TEST(EditorApiTests, UvPeelCommandUsesTypedEdgeScopeAndUnassignedDefault) {
   EXPECT_TRUE(typed_command_ids().contains(std::string(kCommand.string())));
   const auto descriptor = editor.commands().descriptor(kCommand);
   ASSERT_TRUE(descriptor.has_value());
-  EXPECT_EQ(descriptor->label, "UV Peel");
+  EXPECT_EQ(descriptor->label, "Guided UV Peel");
   EXPECT_FALSE(descriptor->enabled);
 
   const auto catalog = editor.commands().keybinding_catalog();
@@ -6160,6 +6226,12 @@ TEST(EditorApiTests, InputBindingsSupportPunctuationAndMouseChords) {
   wheel_undo_seed.name = "Wheel Undo Binding Seed";
   ASSERT_TRUE(editor.scene().create_entity(wheel_undo_seed).ok());
   ASSERT_TRUE(editor.preferences()
+                  .remove_shortcut("viewport.radial_array.increase_copies")
+                  .ok());
+  ASSERT_TRUE(editor.preferences()
+                  .remove_shortcut("viewport.radial_array.decrease_copies")
+                  .ok());
+  ASSERT_TRUE(editor.preferences()
                   .set_shortcut(quader::quader_command::kEditUndo, "WheelUp")
                   .ok());
   const quader::QuaderViewportKeybindingDispatch wheel_command_dispatch =
@@ -8947,6 +9019,15 @@ TEST(EditorApiTests,
   EXPECT_EQ(action,
             quader::ViewportInputActionKind::RadialArrayDecreaseCopies);
 
+  for (const auto &[shortcut, expected] : {
+           std::pair{"Ctrl+WheelUp", quader::ViewportInputActionKind::RadialArrayIncreaseRepeats},
+           std::pair{"Ctrl+WheelDown", quader::ViewportInputActionKind::RadialArrayDecreaseRepeats}}) {
+    action = quader::ViewportInputActionKind::None;
+    ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+        single_input_chord(shortcut), state, true, false, action));
+    EXPECT_EQ(action, expected);
+  }
+
   state.active_tool = quader::ViewportToolId::LinearArray;
   action = quader::ViewportInputActionKind::None;
   ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
@@ -8969,12 +9050,64 @@ TEST(EditorApiTests,
       action));
 
   state.active_tool = quader::ViewportToolId::RadialArray;
-  action = quader::ViewportInputActionKind::None;
-  EXPECT_FALSE(editor.commands().resolve_viewport_input_action(
-      *quader::quader_input_parse_chord("Shift+WheelUp"), state, true, false,
-      action, quader::QuaderViewportKeybindingContext{
-                  .navigation_active = true,
-              }));
+  for (const auto shortcut : {"Shift+WheelUp", "Shift+WheelDown",
+                              "Ctrl+WheelUp", "Ctrl+WheelDown"}) {
+    SCOPED_TRACE(shortcut);
+    action = quader::ViewportInputActionKind::None;
+    EXPECT_FALSE(editor.commands().resolve_viewport_input_action(
+        single_input_chord(shortcut), state, true, false, action,
+        {.navigation_active = true}));
+    EXPECT_FALSE(editor.commands().resolve_viewport_input_action(
+        single_input_chord(shortcut), state, true, true, action));
+    EXPECT_FALSE(editor.commands().resolve_viewport_input_action(
+        single_input_chord(shortcut), state, false, false, action));
+  }
+}
+
+TEST(EditorApiTests, RadialWheelDefaultsPreservePlainWheelOverridesAndUnassignment) {
+  const auto path = keybinding_test_path("radial-wheel-modifier-overrides");
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  constexpr auto kCopiesUp = "viewport.radial_array.increase_copies";
+  constexpr auto kCopiesDown = "viewport.radial_array.decrease_copies";
+  constexpr auto kRepeatsUp = "viewport.radial_array.increase_repeats";
+  constexpr auto kRepeatsDown = "viewport.radial_array.decrease_repeats";
+  for (const auto &[target, shortcut] : {
+           std::pair{kCopiesUp, "Shift+WheelUp"},
+           std::pair{kCopiesDown, "Shift+WheelDown"},
+           std::pair{kRepeatsUp, "Ctrl+WheelUp"},
+           std::pair{kRepeatsDown, "Ctrl+WheelDown"}}) {
+    EXPECT_EQ(editor.commands().shortcut_for(target), shortcut);
+  }
+  ASSERT_TRUE(editor.preferences().set_shortcut(kCopiesUp, "WheelUp").ok());
+  ASSERT_TRUE(editor.preferences().remove_shortcut(kCopiesDown).ok());
+  ASSERT_TRUE(editor.preferences().set_shortcut(kRepeatsUp, "Ctrl+Alt+F21").ok());
+  ASSERT_TRUE(editor.preferences().remove_shortcut(kRepeatsDown).ok());
+
+  CommandTestHarness reloaded_harness;
+  auto &reloaded = reloaded_harness.editor;
+  ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(reloaded.commands().shortcut_for(kCopiesUp), "WheelUp");
+  EXPECT_TRUE(reloaded.commands().shortcut_for(kCopiesDown).empty());
+  EXPECT_EQ(reloaded.commands().shortcut_for(kRepeatsUp), "Ctrl+Alt+F21");
+  EXPECT_TRUE(reloaded.commands().shortcut_for(kRepeatsDown).empty());
+  quader::ViewportToolState state{.active_tool = quader::ViewportToolId::RadialArray};
+  for (const auto &[shortcut, expected] : {
+           std::pair{"WheelUp", quader::ViewportInputActionKind::RadialArrayIncreaseCopies},
+           std::pair{"Ctrl+Alt+F21", quader::ViewportInputActionKind::RadialArrayIncreaseRepeats}}) {
+    quader::ViewportInputActionKind action = quader::ViewportInputActionKind::None;
+    ASSERT_TRUE(reloaded.commands().resolve_viewport_input_action(
+        single_input_chord(shortcut), state, true, false, action));
+    EXPECT_EQ(action, expected);
+  }
+  for (const auto shortcut : {"Shift+WheelUp", "Shift+WheelDown",
+                              "Ctrl+WheelUp", "Ctrl+WheelDown"}) {
+    quader::ViewportInputActionKind action = quader::ViewportInputActionKind::None;
+    EXPECT_FALSE(reloaded.commands().resolve_viewport_input_action(
+        single_input_chord(shortcut), state, true, false, action));
+  }
+  std::filesystem::remove(path);
 }
 
 TEST(EditorApiTests, ViewportModalToolGesturesUseKeybindingTargets) {
@@ -15835,10 +15968,25 @@ TEST(EditorApiTests,
       find_tool_setting_control(settings, "radial_array.repeats");
   const quader::QuaderToolSettingControl *spacing =
       find_tool_setting_control(settings, "radial_array.repeat_spacing");
+  const quader::QuaderToolSettingControl *mode =
+      find_tool_setting_control(settings, "radial_array.mode");
+  const quader::QuaderToolSettingControl *instances =
+      find_tool_setting_control(settings, "radial_array.create_instances");
   ASSERT_NE(degrees, nullptr);
   ASSERT_NE(copies, nullptr);
   ASSERT_NE(repeats, nullptr);
   ASSERT_NE(spacing, nullptr);
+  ASSERT_NE(mode, nullptr);
+  ASSERT_NE(instances, nullptr);
+  EXPECT_EQ(mode->choice_presentation,
+            quader::QuaderToolSettingChoicePresentation::Buttons);
+  EXPECT_EQ(mode->choice_value, "total");
+  ASSERT_EQ(mode->choices.size(), 2u);
+  EXPECT_EQ(mode->choices[0].id, "total");
+  EXPECT_EQ(mode->choices[1].id, "spacing");
+  EXPECT_FALSE(instances->bool_value);
+  EXPECT_EQ(degrees->label, "Total Angle (°)");
+  EXPECT_EQ(degrees->label_key, "radial_array.total_angle");
   EXPECT_DOUBLE_EQ(degrees->number_value, 360.0);
   EXPECT_DOUBLE_EQ(degrees->min_value, 0.0);
   EXPECT_DOUBLE_EQ(degrees->max_value, 360.0);
@@ -15866,8 +16014,21 @@ TEST(EditorApiTests,
       editor.tools()
           .set_setting("radial_array", "radial_array.repeat_spacing", 2.5)
           .ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("radial_array", "radial_array.mode", "spacing")
+                  .ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("radial_array", "radial_array.create_instances",
+                               1.0)
+                  .ok());
 
   settings = editor.tools().active_settings();
+  mode = find_tool_setting_control(settings, "radial_array.mode");
+  instances = find_tool_setting_control(settings, "radial_array.create_instances");
+  ASSERT_NE(mode, nullptr);
+  ASSERT_NE(instances, nullptr);
+  EXPECT_EQ(mode->choice_value, "spacing");
+  EXPECT_TRUE(instances->bool_value);
   const quader::QuaderToolSettingControl *changed_degrees =
       find_tool_setting_control(settings, "radial_array.degrees");
   const quader::QuaderToolSettingControl *changed_copies =
@@ -15880,6 +16041,8 @@ TEST(EditorApiTests,
   ASSERT_NE(changed_copies, nullptr);
   ASSERT_NE(changed_repeats, nullptr);
   ASSERT_NE(changed_spacing, nullptr);
+  EXPECT_EQ(changed_degrees->label, "Angle Spacing (°)");
+  EXPECT_EQ(changed_degrees->label_key, "radial_array.angle_spacing");
   EXPECT_DOUBLE_EQ(changed_degrees->number_value, 270.0);
   EXPECT_DOUBLE_EQ(changed_copies->number_value, 16.0);
   EXPECT_DOUBLE_EQ(changed_repeats->number_value, 2.0);
@@ -15896,10 +16059,16 @@ TEST(EditorApiTests,
   repeats = find_tool_setting_control(settings, "radial_array.repeats");
   spacing =
       find_tool_setting_control(settings, "radial_array.repeat_spacing");
+  mode = find_tool_setting_control(settings, "radial_array.mode");
+  instances = find_tool_setting_control(settings, "radial_array.create_instances");
   ASSERT_NE(degrees, nullptr);
   ASSERT_NE(copies, nullptr);
   ASSERT_NE(repeats, nullptr);
   ASSERT_NE(spacing, nullptr);
+  ASSERT_NE(mode, nullptr);
+  ASSERT_NE(instances, nullptr);
+  EXPECT_EQ(mode->choice_value, "total");
+  EXPECT_FALSE(instances->bool_value);
   EXPECT_DOUBLE_EQ(degrees->number_value, 360.0);
   EXPECT_DOUBLE_EQ(copies->number_value, 8.0);
   EXPECT_DOUBLE_EQ(repeats->number_value, 1.0);
@@ -16700,6 +16869,48 @@ TEST(EditorApiTests,
   }
 }
 
+TEST(EditorApiTests, RadialArraySpacingModePreservesNeighborAnglesThroughUndoRedo) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto source = create_selected_box(editor, "Radial Spacing API Source");
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(source.entity,
+                                 {.position = {2.0f, 0.0f, 0.0f}})
+                  .ok());
+  const auto array = editor.modeling().create_radial_array(
+      quader::QuaderRadialArrayArgs{
+          .sources = {source},
+          .degrees = 270.0,
+          .copies = 4u,
+          .mode = quader::QuaderRadialArrayMode::Spacing,
+      });
+  ASSERT_TRUE(array.ok()) << array.error_message();
+  ASSERT_TRUE(array.changed());
+  ASSERT_EQ(array.value().source_arrays.size(), 1u);
+  const auto &elements = array.value().source_arrays.front().elements;
+  ASSERT_EQ(elements.size(), 4u);
+  const std::array<quader::QVec3, 4> expected_positions{{
+      {2.0f, 0.0f, 0.0f},
+      {0.0f, 0.0f, 2.0f},
+      {-2.0f, 0.0f, 0.0f},
+      {0.0f, 0.0f, -2.0f},
+  }};
+  for (std::size_t index = 0; index < elements.size(); ++index) {
+    const auto snapshot = editor.query().entity(elements[index].entity);
+    ASSERT_TRUE(snapshot.has_value());
+    expect_vec3_near(snapshot->transform.position, expected_positions[index]);
+  }
+  EXPECT_EQ(editor.query().history().undo_label, "Radial Array");
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(user_entity_count(editor), 1u);
+  ASSERT_TRUE(editor.history().redo().ok());
+  for (std::size_t index = 0; index < elements.size(); ++index) {
+    const auto snapshot = editor.query().entity(elements[index].entity);
+    ASSERT_TRUE(snapshot.has_value());
+    expect_vec3_near(snapshot->transform.position, expected_positions[index]);
+  }
+}
+
 TEST(EditorApiTests, RadialArrayRejectsDuplicateSourcesAndOversizedBatches) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
@@ -16707,6 +16918,15 @@ TEST(EditorApiTests, RadialArrayRejectsDuplicateSourcesAndOversizedBatches) {
       create_selected_box(editor, "Radial Array Validation Source");
   const quader::QuaderHistorySnapshot history_before =
       editor.query().history();
+
+  const auto invalid_mode = editor.modeling().create_radial_array(
+      quader::QuaderRadialArrayArgs{
+          .sources = {source},
+          .mode = static_cast<quader::QuaderRadialArrayMode>(99),
+      });
+  EXPECT_FALSE(invalid_mode.ok());
+  EXPECT_FALSE(invalid_mode.changed());
+  EXPECT_EQ(user_entity_count(editor), 1u);
 
   const quader::QuaderApiResult<quader::QuaderRadialArrayResult> duplicate =
       editor.modeling().create_radial_array(quader::QuaderRadialArrayArgs{
@@ -19243,7 +19463,7 @@ TEST(EditorApiTests,
           [&](const std::string &target_id) {
             return !command_ids.contains(target_id);
           }));
-  EXPECT_EQ(non_command_target_count, 49u);
+  EXPECT_EQ(non_command_target_count, 53u);
 
   for (const std::string &typed_id : typed_command_ids()) {
     EXPECT_TRUE(actual_target_ids.contains(typed_id)) << typed_id;
@@ -19356,6 +19576,16 @@ TEST(EditorApiTests,
             quader::QuaderKeybindingContextKind::ModalTool);
   EXPECT_EQ(finalize_primitive->scope_id, "viewport.tool.modal");
   EXPECT_EQ(finalize_primitive->shortcut, "Space");
+
+  const quader::QuaderKeybindingCatalogEntry *finalize_radial =
+      find_keybinding_catalog_entry(catalog, "viewport.radial_array.finalize");
+  ASSERT_NE(finalize_radial, nullptr);
+  EXPECT_NE(finalize_radial, finalize_modal);
+  EXPECT_EQ(finalize_radial->action_id, "tools.finalize");
+  EXPECT_EQ(finalize_radial->context,
+            quader::QuaderKeybindingContextKind::RadialArrayTool);
+  EXPECT_EQ(finalize_radial->scope_id, "viewport.tool.radial_array");
+  EXPECT_EQ(finalize_radial->shortcut, "Enter");
 
   const quader::QuaderKeybindingCatalogEntry *cancel_primitive =
       find_keybinding_catalog_entry(

@@ -1631,7 +1631,9 @@ QuaderModelingApi::create_linear_array(const QuaderLinearArrayArgs &args) {
           }},
           .span_world =
               args.endpoint_world -
-              transform_point(scene.world_transform_matrix(args.source.entity),
+              transform_point(session.instances()
+                                  .effective_member_world_transform(args.source.entity)
+                                  .value_or(scene.world_transform_matrix(args.source.entity)),
                               {}),
           .count = args.count,
       });
@@ -1664,6 +1666,12 @@ QuaderModelingApi::create_radial_array(const QuaderRadialArrayArgs &args) {
                            "Radial Array needs at least one source mesh."),
         {});
   }
+  if (args.mode != QuaderRadialArrayMode::Total &&
+      args.mode != QuaderRadialArrayMode::Spacing) {
+    return quader_api_result_from_status<QuaderRadialArrayResult>(
+        invalid_api_status(session_, "Radial Array angle mode is invalid."),
+        {});
+  }
 
   std::unordered_set<EntityId> source_entities;
   source_entities.reserve(args.sources.size());
@@ -1676,6 +1684,9 @@ QuaderModelingApi::create_radial_array(const QuaderRadialArrayArgs &args) {
       .copies = args.copies,
       .repeats = args.repeats,
       .repeat_spacing = args.repeat_spacing,
+      .mode = args.mode == QuaderRadialArrayMode::Spacing
+                  ? RadialArrayMode::Spacing
+                  : RadialArrayMode::Total,
   };
   request.sources.reserve(args.sources.size());
   for (const QuaderModelingObjectRef &source : args.sources) {
@@ -2492,6 +2503,15 @@ QuaderFaceTextureRevision QuaderModelingApi::face_texture_settings_revision() co
       session.modeling().face_texture_settings_revision() * 2u +
       (session.native_tools().has_pending_tool() ? 1u : 0u);
   return revision;
+}
+
+bool QuaderModelingApi::can_project_uv() const {
+  if (!mutations_.available()) {
+    return false;
+  }
+  const SceneSession &session = scene_session(session_);
+  return !session.native_tools().has_pending_tool() &&
+         session.modeling().can_project_uv();
 }
 
 QuaderFaceTextureSettings QuaderModelingApi::face_texture_settings() const {

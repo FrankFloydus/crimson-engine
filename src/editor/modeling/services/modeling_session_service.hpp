@@ -204,6 +204,7 @@ public:
   [[nodiscard]] std::uint64_t selection_revision() const;
   [[nodiscard]] std::uint64_t face_texture_settings_revision() const;
   [[nodiscard]] ModelingFaceTextureSettings face_texture_settings() const;
+  [[nodiscard]] bool can_project_uv() const;
   ModelingCommandResult
   set_face_texture_setting(const ModelingFaceTextureEdit &edit);
   ModelingCommandResult
@@ -230,6 +231,8 @@ public:
       std::function<std::uint64_t()> revision_provider = {});
   void set_texture_lock_settings_provider(
       std::function<TextureLockSettings()> provider);
+  /// Returns the scene's current texture-lock policy for array preview/acceptance.
+  [[nodiscard]] TextureLockSettings texture_lock_settings() const;
   [[nodiscard]] ModelingSelectionExport export_selection() const;
   [[nodiscard]] ModelingSelectedVerticesSnapshot
   selected_vertices_snapshot() const;

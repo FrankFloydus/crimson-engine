@@ -12,7 +12,7 @@
 
 namespace quader {
 
-/// A command binding or an intrinsic gesture owned by a tool/operation.
+/// A command, canonical input binding, or intrinsic tool/operation gesture.
 enum class QuaderOperationInputGesture {
   Command,
   PrimaryClick,
@@ -20,6 +20,8 @@ enum class QuaderOperationInputGesture {
   PrimaryDrag,
   ShiftPrimaryDrag,
   ControlPrimaryDrag,
+  /// A canonical input target whose binding is resolved without a command.
+  Keybinding,
 };
 
 /// Presentation metadata only; commands and tool owners still resolve input.

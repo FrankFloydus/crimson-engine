@@ -842,6 +842,49 @@ TEST(QdrDocumentOperationBevelEdgesTests, TopEdgeLoopBevelSharesSegmentedCornerC
     EXPECT_TRUE(all_faces_point_relative_to_center(document));
 }
 
+TEST(QdrDocumentOperationBevelEdgesTests, RetainedSurfacesKeepDistinctAuthoredChartsAcrossBevelSeams) {
+    for (const int segments : {1, 3}) {
+        SCOPED_TRACE(segments);
+        CubePrimitiveSpec spec;
+        spec.width = 8.0F;
+        spec.height = 8.0F;
+        spec.depth = 8.0F;
+        Document document = make_cube(spec);
+        const auto uv_at = [](quader::QVec3 position, ElementId face_id) {
+            return quader::QVec2{
+                0.2F * position.x + 0.3F * position.y + 0.4F * position.z + 10.0F * static_cast<float>(face_id),
+                0.5F * position.x - 0.7F * position.y + 0.8F * position.z - 3.0F * static_cast<float>(face_id)};
+        };
+        for (Face& face : document.faces) {
+            for (const ElementId id : face.vertices) {
+                face.uvs.push_back(uv_at(find_vertex(document, id)->position, face.id));
+            }
+        }
+        const Document original = document;
+        Selection selection = top_face_loop_selection(document);
+        EdgeBevelSettings settings;
+        settings.width = 0.5F;
+        settings.segments = segments;
+
+        const OperationResult result = bevel_selected_edges(document, selection, settings);
+
+        ASSERT_TRUE(result.changed) << result.message;
+        for (const Face& source : original.faces) {
+            const Face* retained = find_face(document, source.id);
+            ASSERT_NE(retained, nullptr);
+            ASSERT_EQ(retained->uvs.size(), retained->vertices.size());
+            for (std::size_t corner = 0; corner < retained->vertices.size(); ++corner) {
+                const Vertex* vertex = find_vertex(document, retained->vertices[corner]);
+                ASSERT_NE(vertex, nullptr);
+                const quader::QVec2 expected = uv_at(vertex->position, source.id);
+                EXPECT_NEAR(retained->uvs[corner].x, expected.x, 0.0001F);
+                EXPECT_NEAR(retained->uvs[corner].y, expected.y, 0.0001F);
+            }
+        }
+        qdr_test::expect_valid_polygon_document_after_success(document, result);
+    }
+}
+
 TEST(QdrDocumentOperationBevelEdgesTests, TopEdgeLoopSquareProfileKeepsClosedOutwardQuads) {
     CubePrimitiveSpec spec;
     spec.width = 128.0F;

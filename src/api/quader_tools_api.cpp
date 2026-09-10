@@ -693,23 +693,38 @@ path_array_tool_settings_target(const PathArrayToolService &path_array) {
 
 QuaderToolSettingsTarget radial_array_tool_settings_target(
     const RadialArrayToolService &radial_array) {
-  const bool center_locked = radial_array.center_locked();
+  const bool has_center = radial_array.has_valid_center();
   QuaderToolSettingsTarget result{
       .active = true,
-      .preview_active = center_locked,
+      .preview_active = has_center,
       .tool_id = std::string(kRadialArrayToolId),
       .title = "Radial Array",
       .description =
           "Choose a center and arrange copies around its axis.",
       .can_reset = true,
       .apply_visible = true,
-      .can_apply = center_locked,
+      .can_apply = has_center,
       .can_cancel = true,
   };
+  result.controls.push_back(choice_control(
+      std::string(kRadialArrayModeSetting), "Mode",
+      radial_array.mode() == RadialArrayMode::Total ? "total" : "spacing",
+      {{.id = "total",
+        .label = "Total",
+        .tooltip = "Set the total angle covered by the copies."},
+       {.id = "spacing",
+        .label = "Spacing",
+        .tooltip = "Set the angle between consecutive copies."}},
+      QuaderToolSettingChoicePresentation::Buttons));
   result.controls.push_back(number_control(
-      std::string(kRadialArrayDegreesSetting), "Degrees",
+      std::string(kRadialArrayDegreesSetting),
+      radial_array.mode() == RadialArrayMode::Spacing
+          ? "Angle Spacing (°)" : "Total Angle (°)",
       radial_array.degrees(), kRadialArrayMinimumDegrees,
       kRadialArrayMaximumDegrees, 1.0));
+  result.controls.back().label_key =
+      radial_array.mode() == RadialArrayMode::Spacing
+          ? "radial_array.angle_spacing" : "radial_array.total_angle";
   result.controls.push_back(number_control(
       std::string(kRadialArrayCopiesSetting), "Number of Copies",
       radial_array.copies(), kRadialArrayMinimumCopies,
@@ -723,6 +738,11 @@ QuaderToolSettingsTarget radial_array_tool_settings_target(
       std::string(kRadialArrayRepeatSpacingSetting), "Repeat Spacing",
       radial_array.repeat_spacing(), kRadialArrayMinimumRepeatSpacing,
       kRadialArrayMaximumRepeatSpacing, 0.001));
+  result.controls.push_back(toggle_control(
+      std::string(kRadialArrayCreateInstancesSetting), "Create Instances",
+      radial_array.create_instances()));
+  result.controls.back().tooltip =
+      "Create linked instances so geometry edits update every copy.";
   return result;
 }
 
@@ -1366,10 +1386,15 @@ std::uint64_t QuaderToolsApi::active_input_hints_revision() const {
 }
 
 std::vector<QuaderOperationInputHint> QuaderToolsApi::active_input_hints() const {
-  if (active_tool_id(scene_session(session_)) == "lasso_select") {
+  const SceneSession &session = scene_session(session_);
+  if (active_tool_id(session) == "lasso_select") {
     return lasso_selection_input_hints();
   }
-  const auto &primitive = scene_session(session_).primitive_creation();
+  if (session.radial_array().active()) {
+    return radial_array_input_hints(session.radial_array().has_valid_center(),
+                                   session.radial_array().center_locked());
+  }
+  const auto &primitive = session.primitive_creation();
   const auto kind = primitive.active_kind();
   if (!kind) {
     return {};
@@ -1606,6 +1631,15 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
   }
   const bool radial_array_tool =
       tool_id.empty() || tool_id == kRadialArrayToolId;
+  if (radial_array_tool && name == kRadialArrayCreateInstancesSetting) {
+    if (value != 0.0 && value != 1.0) {
+      return quader_api_failure_status(
+          session, "Invalid Radial Array Create Instances setting.");
+    }
+    return api_status_from_command(
+        session, session.radial_array().set_create_instances(value != 0.0),
+        QuaderMutationKind::Runtime, "Set Radial Array Create Instances");
+  }
   if (radial_array_tool && name == kRadialArrayDegreesSetting) {
     if (!std::isfinite(value) || value < kRadialArrayMinimumDegrees ||
         value > kRadialArrayMaximumDegrees) {
@@ -1704,6 +1738,17 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  std::string_view name,
                                                  std::string_view value) {
   SceneSession &session = scene_session(session_);
+  if ((tool_id.empty() || tool_id == kRadialArrayToolId) &&
+      name == kRadialArrayModeSetting) {
+    if (value != "total" && value != "spacing") {
+      return quader_api_failure_status(session, "Invalid Radial Array mode.");
+    }
+    return api_status_from_command(
+        session, session.radial_array().set_mode(
+                     value == "total" ? RadialArrayMode::Total
+                                      : RadialArrayMode::Spacing),
+        QuaderMutationKind::Runtime, "Set Radial Array Mode");
+  }
   if (session.path_array().active() &&
       name == kPathArrayForwardAxisSetting) {
     if (!tool_id.empty() && tool_id != kPathArrayToolId) {

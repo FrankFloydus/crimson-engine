@@ -772,14 +772,14 @@ bool append_cap_face(
     }
 
     if (triangulate_face_local_indices(builder.document, face).empty()) {
-        std::ranges::reverse(face.vertices);
+        reverse_face_winding(face);
         if (triangulate_face_local_indices(builder.document, face).empty()) {
             message = "Cut cap could not be triangulated.";
             return false;
         }
     }
     if (dot(face_normal(builder.document, face), expected_normal) < 0.0F) {
-        std::ranges::reverse(face.vertices);
+        reverse_face_winding(face);
     }
     if (triangulate_face_local_indices(builder.document, face).empty()) {
         message = "Cut cap could not be triangulated.";

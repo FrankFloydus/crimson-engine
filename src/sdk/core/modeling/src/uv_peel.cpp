@@ -46,6 +46,9 @@ using quader::QVec2;
 using quader::QVec3;
 
 constexpr std::size_t kNoIndex = std::numeric_limits<std::size_t>::max();
+// Repeated native corner stores count too, bounding cyclic walk work rather
+// than merely the number of unique faces eventually written.
+constexpr std::size_t kUvPeelMaxCornerWrites = detail::kUvPeelMaxChartTriangles * 3U;
 
 [[nodiscard]] NativeEdge edge_key(NativeId a, NativeId b) {
   return std::minmax(a, b);
@@ -318,6 +321,202 @@ struct ChartWork {
     patch.guides.push_back(std::move(guide));
   }
   return std::nullopt;
+}
+
+/// Retains authored corner records and arc lengths along one transverse walk.
+struct PeelLane {
+  std::vector<EdgeUse> corners;
+  std::vector<double> distances;
+};
+
+/// Pairs the two independently walked sides at one guide endpoint occurrence.
+struct PeelStation {
+  std::array<PeelLane, 2> sides;
+  double guide_distance = 0.0;
+  double span = 0.0;
+};
+
+/// Keeps deliberate repeated corner writes in guide and lane traversal order.
+struct StructuredPeel {
+  std::vector<PeelStation> stations;
+  double guide_length = 0.0;
+  double maximum_span = 0.0;
+};
+
+[[nodiscard]] bool same_corner(const EdgeUse &a, const EdgeUse &b) {
+  return a.face == b.face && a.corner == b.corner;
+}
+
+[[nodiscard]] bool supports_structured_guide(
+    const NativeDocument &document, const EdgeUses &all_edges,
+    const GuidePath &guide) {
+  for (std::size_t index = 1U; index < guide.vertices.size(); ++index) {
+    const auto &uses = all_edges.at(edge_key(guide.vertices[index - 1U],
+                                             guide.vertices[index]));
+    if (std::ranges::any_of(uses, [&](const EdgeUse &use) {
+          return document.faces[use.face].vertices.size() == 4U;
+        })) {
+      return true;
+    }
+  }
+  return false;
+}
+
+[[nodiscard]] Result<std::array<PeelLane, 2>> walk_quad_side(
+    const NativeDocument &document, const EdgeUses &all_edges,
+    std::optional<EdgeUse> seed, bool reverse, std::size_t &remaining_corner_writes) {
+  using WalkResult = Result<std::array<PeelLane, 2>>;
+  std::array<PeelLane, 2> lanes;
+  if (!seed.has_value()) {
+    return WalkResult::success(std::move(lanes));
+  }
+  auto current = *seed;
+  std::set<std::pair<std::size_t, std::size_t>> visited;
+  for (;;) {
+    const auto &face = document.faces[current.face];
+    if (face.vertices.size() != 4U) {
+      break;
+    }
+    if (remaining_corner_writes < 4U) {
+      return WalkResult::failure(peel_error("UV Peel exceeds the supported corner-write budget."));
+    }
+    remaining_corner_writes -= 4U;
+    if (!visited.emplace(current.face, current.corner).second) {
+      return WalkResult::failure(peel_error(
+          "UV Peel found a transverse walk that repeats before returning to its seed."));
+    }
+    const auto corner = current.corner;
+    lanes[0].corners.push_back({current.face, (corner + (reverse ? 1U : 0U)) % 4U});
+    lanes[0].corners.push_back({current.face, (corner + (reverse ? 2U : 3U)) % 4U});
+    lanes[1].corners.push_back({current.face, (corner + (reverse ? 0U : 1U)) % 4U});
+    lanes[1].corners.push_back({current.face, (corner + (reverse ? 3U : 2U)) % 4U});
+    const auto opposite = (corner + 2U) % 4U;
+    const auto &uses = all_edges.at(edge_key(face.vertices[opposite],
+                                             face.vertices[(opposite + 1U) % 4U]));
+    if (uses.size() > 2U) {
+      return WalkResult::failure(peel_error("UV Peel requires manifold authored edges."));
+    }
+    const auto next = std::ranges::find_if(uses, [&](const EdgeUse &use) {
+      return use.face != current.face;
+    });
+    if (next == uses.end()) {
+      break;
+    }
+    if (document.faces[next->face].vertices[next->corner] == face.vertices[opposite]) {
+      return WalkResult::failure(peel_error(
+          "UV Peel requires consistently oriented shared face edges."));
+    }
+    current = *next;
+    // A closed transverse profile is a valid pair of corner walks. The two
+    // sides can revisit the same faces in reverse, including quad end caps.
+    if (same_corner(current, *seed)) {
+      break;
+    }
+  }
+  return WalkResult::success(std::move(lanes));
+}
+
+[[nodiscard]] Result<StructuredPeel> prepare_structured_guide(
+    const NativeDocument &document, const VertexLookup &vertices,
+    const NativeTransform &world, const EdgeUses &all_edges, GuidePath guide,
+    std::size_t &remaining_corner_writes) {
+  const auto fail = [](std::string message) {
+    return Result<StructuredPeel>::failure(peel_error(std::move(message)));
+  };
+  if (guide.vertices.size() - 1U > kUvPeelMaxCornerWrites / 4U) {
+    return fail("UV Peel exceeds the supported guide-sample budget.");
+  }
+  if (guide.closed) {
+    std::array<std::set<std::size_t>, 2> adjacent_faces;
+    for (std::size_t index = 1U; index < guide.vertices.size(); ++index) {
+      const auto a = guide.vertices[index - 1U];
+      for (const auto &use : all_edges.at(edge_key(a, guide.vertices[index]))) {
+        const auto side = document.faces[use.face].vertices[use.corner] == a ? 0U : 1U;
+        adjacent_faces[side].insert(use.face);
+      }
+    }
+    if (adjacent_faces[1].size() < adjacent_faces[0].size()) {
+      std::ranges::reverse(guide.vertices);
+    }
+  }
+  StructuredPeel result;
+  result.stations.reserve((guide.vertices.size() - 1U) * 2U);
+  for (std::size_t index = 1U; index < guide.vertices.size(); ++index) {
+    const auto a = guide.vertices[index - 1U];
+    const auto b = guide.vertices[index];
+    const auto &uses = all_edges.at(edge_key(a, b));
+    if (uses.size() > 2U) {
+      return fail("UV Peel requires manifold authored edges.");
+    }
+    std::array<std::optional<EdgeUse>, 2> seeds;
+    for (const auto &use : uses) {
+      const auto side = document.faces[use.face].vertices[use.corner] == a ? 0U : 1U;
+      if (seeds[side].has_value()) {
+        return fail("UV Peel requires consistently oriented shared face edges.");
+      }
+      seeds[side] = use;
+    }
+    std::array<std::array<PeelLane, 2>, 2> walks;
+    for (std::size_t side = 0U; side < 2U; ++side) {
+      auto walked = walk_quad_side(document, all_edges, seeds[side], side != 0U,
+                                    remaining_corner_writes);
+      if (!walked.ok()) {
+        return Result<StructuredPeel>::failure(walked.error());
+      }
+      walks[side] = std::move(walked).value();
+    }
+    const double edge_length = world_distance(
+        world, vertices.find(a)->position, vertices.find(b)->position);
+    if (!std::isfinite(edge_length) || edge_length <= 0.0) {
+      return fail("UV Peel requires guide edges with finite positive length.");
+    }
+    for (std::size_t endpoint = 0U; endpoint < 2U; ++endpoint) {
+      PeelStation station;
+      station.guide_distance = result.guide_length + (endpoint == 0U ? 0.0 : edge_length);
+      for (std::size_t side = 0U; side < 2U; ++side) {
+        auto &lane = station.sides[side];
+        lane = std::move(walks[side][endpoint]);
+        double distance = 0.0;
+        lane.distances.reserve(lane.corners.size());
+        for (std::size_t corner = 0U; corner < lane.corners.size(); ++corner) {
+          if (corner != 0U) {
+            const auto current = lane.corners[corner];
+            const auto previous = lane.corners[corner - 1U];
+            distance += world_distance(world,
+                vertices.find(document.faces[current.face].vertices[current.corner])->position,
+                vertices.find(document.faces[previous.face].vertices[previous.corner])->position);
+          }
+          lane.distances.push_back(distance);
+        }
+        if (!std::isfinite(distance)) {
+          return fail("UV Peel found a non-finite transverse distance.");
+        }
+      }
+      const auto &side_a = station.sides[0];
+      const auto &side_b = station.sides[1];
+      if (side_a.corners.empty() && side_b.corners.empty()) {
+        // Nonquad-only guide segments still advance the selected guide's
+        // distance, but neither native corner writer has anything to store.
+        continue;
+      }
+      station.span = side_a.distances.empty() ? 0.0 : side_a.distances.back();
+      if (side_a.corners.empty() || side_b.corners.empty() ||
+          !same_corner(side_a.corners.front(), side_b.corners.back())) {
+        station.span += side_b.distances.empty() ? 0.0 : side_b.distances.back();
+      }
+      if (!std::isfinite(station.span) || station.span <= 0.0) {
+        return fail("UV Peel requires a finite positive transverse span.");
+      }
+      result.maximum_span = std::max(result.maximum_span, station.span);
+      result.stations.push_back(std::move(station));
+    }
+    result.guide_length += edge_length;
+  }
+  if (!std::isfinite(result.guide_length) || result.guide_length <= 0.0 ||
+      result.stations.empty()) {
+    return fail("UV Peel requires a nonempty finite guide.");
+  }
+  return Result<StructuredPeel>::success(std::move(result));
 }
 
 [[nodiscard]] Result<ChartWork> build_chart(
@@ -813,6 +1012,90 @@ struct TransversePath {
           kRelativeRoundoff * (maximum.v - minimum.v)};
 }
 
+/// Carries canonical storage certification back to each Peel output policy.
+struct StoredFaceUvs {
+  std::vector<QVec2> effective;
+  std::vector<QVec2> desired;
+  std::vector<std::array<double, 2>> precision;
+};
+
+[[nodiscard]] Result<StoredFaceUvs> prepare_face_storage(
+    const NativeDocument &document, const VertexLookup &vertices,
+    const NativeTransform &sampling, std::size_t face_index,
+    std::span<const PeelPoint2> coordinates, PeelPoint2 axis_tolerances,
+    std::map<std::size_t, std::vector<QVec2>> &updates) {
+  const auto fail = [](std::string message) {
+    return Result<StoredFaceUvs>::failure(peel_error(std::move(message)));
+  };
+  const auto &face = document.faces[face_index];
+  if (!quader_poly::valid_face_texture_transform(face.texture_transform) ||
+      coordinates.size() != face.vertices.size() ||
+      (!face.uvs.empty() && face.uvs.size() != coordinates.size())) {
+    return fail("UV Peel found invalid source face texture settings.");
+  }
+  StoredFaceUvs result;
+  std::vector<QVec3> positions;
+  positions.reserve(coordinates.size());
+  result.desired.reserve(coordinates.size());
+  for (std::size_t corner = 0U; corner < coordinates.size(); ++corner) {
+    positions.push_back(vertices.find(face.vertices[corner])->position);
+    const auto &coordinate = coordinates[corner];
+    const QVec2 target{static_cast<float>(coordinate.u), static_cast<float>(coordinate.v)};
+    if (!finite(target)) {
+      return fail("UV Peel coordinates exceed the supported stored UV range.");
+    }
+    result.desired.push_back(target);
+  }
+  const auto normal = quader_poly::face_normal(document, face);
+  if (!finite(normal) || quader::length_squared(normal) == 0.0F) {
+    return fail("UV Peel found a face without a usable geometric normal.");
+  }
+  result.effective = effective_uvs(positions, face.uvs, normal,
+                                   face.texture_transform, sampling);
+  // Later guide components own their final corner writes, including restoring
+  // the original values after an earlier component would have changed them.
+  updates.erase(face_index);
+  std::span<const QVec2> stored_base_uvs = face.uvs;
+  // A long U span must not hide a material V change, or vice versa.
+  if (!same_uvs(result.effective, result.desired, axis_tolerances) ||
+      !quader_poly::face_texture_uvs_reconstruct(
+          positions, stored_base_uvs, result.desired, normal,
+          face.texture_transform, sampling)) {
+    auto base = quader_poly::solve_face_texture_base_uvs(
+        positions, result.desired, normal, face.texture_transform, sampling);
+    if (!base.has_value()) {
+      return fail("UV Peel cannot preserve the occurrence sampling transform for face " +
+                  std::to_string(face.id) + ".");
+    }
+    // Identical geometry/options retain exact base storage on repeat, even
+    // when occurrence compensation carries a certified float residual.
+    if (!same_uvs(face.uvs, *base, {})) {
+      result.effective = effective_uvs(positions, *base, normal,
+                                       face.texture_transform, sampling);
+      stored_base_uvs = updates.emplace(face_index, std::move(*base)).first->second;
+    }
+  }
+  if (!quader_poly::face_texture_uvs_reconstruct(
+          positions, stored_base_uvs, result.desired, normal,
+          face.texture_transform, sampling)) {
+    return fail("UV Peel cannot reconstruct its intended coordinates for face " +
+                std::to_string(face.id) + ".");
+  }
+  result.precision = quader_poly::face_texture_precision_bounds(
+      positions, stored_base_uvs, normal, face.texture_transform, sampling,
+      quader_poly::TextureUvPrecision::Reconstruction);
+  if (result.precision.size() != coordinates.size()) {
+    return fail("UV Peel cannot determine stored coordinate precision for face " +
+                std::to_string(face.id) + ".");
+  }
+  for (const auto coordinate : result.effective) {
+    if (!finite(coordinate)) {
+      return fail("UV Peel produced a non-finite effective stored UV.");
+    }
+  }
+  return Result<StoredFaceUvs>::success(std::move(result));
+}
+
 [[nodiscard]] std::optional<Error> prepare_face_uvs(
     const NativeDocument &document, const VertexLookup &vertices,
     const NativeTransform &sampling, const IncidentPatch &patch,
@@ -821,67 +1104,57 @@ struct TransversePath {
     std::map<std::size_t, std::vector<QVec2>> &updates) {
   const auto axis_tolerances = chart_float_tolerances(desired_coordinates);
   const double tolerance = std::max(axis_tolerances.u, axis_tolerances.v);
+  double stored_contact_tolerance = tolerance;
   std::vector<PeelPoint2> stored_coordinates(chart.chart.positions.size());
+  std::vector<PeelPoint2> stored_error_bounds(chart.chart.positions.size());
   std::vector<bool> populated(chart.chart.positions.size(), false);
   std::vector<std::array<PeelPoint2, 3>> stored_triangles;
   stored_triangles.reserve(chart.chart.triangles.size());
   for (std::size_t slot = 0; slot < patch.faces.size(); ++slot) {
     const auto face_index = patch.faces[slot];
-    const auto &face = document.faces[face_index];
     const auto &nodes = chart.face_nodes[slot];
-    if (!quader_poly::valid_face_texture_transform(face.texture_transform) ||
-        (!face.uvs.empty() && face.uvs.size() != nodes.size())) {
-      return peel_error("UV Peel found invalid source face texture settings.");
+    std::vector<PeelPoint2> coordinates;
+    coordinates.reserve(nodes.size());
+    for (const auto node : nodes) {
+      coordinates.push_back(desired_coordinates[node]);
     }
-    std::vector<QVec3> positions;
-    std::vector<QVec2> desired;
-    positions.reserve(nodes.size());
-    desired.reserve(nodes.size());
-    for (std::size_t corner = 0; corner < nodes.size(); ++corner) {
-      positions.push_back(vertices.find(face.vertices[corner])->position);
-      const auto &coordinate = desired_coordinates[nodes[corner]];
-      const QVec2 target{static_cast<float>(coordinate.u),
-                         static_cast<float>(coordinate.v)};
-      if (!finite(target)) {
-        return peel_error("UV Peel coordinates exceed the supported stored UV range.");
-      }
-      desired.push_back(target);
+    auto stored = prepare_face_storage(document, vertices, sampling, face_index,
+                                        coordinates, axis_tolerances, updates);
+    if (!stored.ok()) {
+      return stored.error();
     }
-    const auto normal = quader_poly::face_normal(document, face);
-    if (!finite(normal) || quader::length_squared(normal) == 0.0F) {
-      return peel_error("UV Peel found a face without a usable geometric normal.");
-    }
-    auto actual = effective_uvs(positions, face.uvs, normal,
-                                face.texture_transform, sampling);
-    // A long U span must not hide a material V change, or vice versa.
-    if (!same_uvs(actual, desired, axis_tolerances)) {
-      auto base = quader_poly::solve_face_texture_base_uvs(
-          positions, desired, normal, face.texture_transform, sampling);
-      if (!base.has_value()) {
-        return peel_error("UV Peel cannot preserve the occurrence sampling transform for face " +
-                           std::to_string(face.id) + ".");
-      }
-      // Repeating identical geometry/options produces identical base storage,
-      // even when float compensation has residual error at a large UV offset.
-      if (!same_uvs(face.uvs, *base, {})) {
-        actual = effective_uvs(positions, *base, normal,
-                               face.texture_transform, sampling);
-        updates.emplace(face_index, std::move(*base));
-      }
-    }
+    const auto &actual = stored.value().effective;
+    const auto &desired = stored.value().desired;
+    const auto &reconstruction_bounds = stored.value().precision;
     for (std::size_t corner = 0; corner < nodes.size(); ++corner) {
       const auto node = nodes[corner];
       const auto coordinate = actual[corner];
       if (!finite(coordinate)) {
         return peel_error("UV Peel produced a non-finite effective stored UV.");
       }
+      // Each face was independently certified against the same desired node.
+      // Include only its certified residual beyond the derived storage bound;
+      // this retains the canonical validator's roundoff allowance without
+      // introducing another precision formula or semantic no-op tolerance.
+      const PeelPoint2 error_bound{
+          std::max(reconstruction_bounds[corner][0],
+              std::abs(static_cast<double>(coordinate.x) - desired[corner].x)),
+          std::max(reconstruction_bounds[corner][1],
+              std::abs(static_cast<double>(coordinate.y) - desired[corner].y))};
       if (populated[node]) {
-        if (std::abs(stored_coordinates[node].u - coordinate.x) > tolerance ||
-            std::abs(stored_coordinates[node].v - coordinate.y) > tolerance) {
+        const double u_error = std::abs(stored_coordinates[node].u - coordinate.x);
+        const double v_error = std::abs(stored_coordinates[node].v - coordinate.y);
+        if (u_error > stored_error_bounds[node].u + error_bound.u ||
+            v_error > stored_error_bounds[node].v + error_bound.v) {
           return peel_error("UV Peel cannot keep shared UV corners continuous after occurrence compensation.");
         }
+        // The overlap owner admits contact only between identical chart nodes
+        // and tests the actual displaced endpoints. Give it the measured
+        // contact budget, rather than the larger reconstruction error bound.
+        stored_contact_tolerance = std::max({stored_contact_tolerance, u_error, v_error});
       } else {
         stored_coordinates[node] = {coordinate.x, coordinate.y};
+        stored_error_bounds[node] = error_bound;
         populated[node] = true;
       }
     }
@@ -893,9 +1166,100 @@ struct TransversePath {
   }
   if (auto error = detail::validate_uv_peel_chart(
           chart.chart, stored_coordinates, options.axis == UvPeelAxis::U,
-          stored_triangles, tolerance)) {
+          stored_triangles, stored_contact_tolerance)) {
     error->message = "Stored effective UVs: " + error->message;
     return error;
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<Error> validate_corner_mapping(
+    const NativeDocument &document, const VertexLookup &vertices,
+    std::size_t face_index, std::span<const QVec2> coordinates) {
+  const auto &face = document.faces[face_index];
+  const auto triangles = quader_poly::document_internal::triangulate_face_local_indices(
+      document, face, vertices);
+  if (triangles.size() != face.vertices.size() - 2U) {
+    return peel_error("UV Peel could not preserve the canonical polygon triangulation.");
+  }
+  double orientation = 0.0;
+  for (const auto &triangle : triangles) {
+    if (triangle.a >= coordinates.size() || triangle.b >= coordinates.size() ||
+        triangle.c >= coordinates.size()) {
+      return peel_error("UV Peel found an invalid canonical polygon triangle.");
+    }
+    const auto a = coordinates[triangle.a];
+    const auto b = coordinates[triangle.b];
+    const auto c = coordinates[triangle.c];
+    const double ab_u = static_cast<double>(b.x) - a.x;
+    const double ab_v = static_cast<double>(b.y) - a.y;
+    const double ac_u = static_cast<double>(c.x) - a.x;
+    const double ac_v = static_cast<double>(c.y) - a.y;
+    const double area = ab_u * ac_v - ab_v * ac_u;
+    if (!std::isfinite(area) || area == 0.0 ||
+        (orientation != 0.0 && std::signbit(area) != std::signbit(orientation))) {
+      return peel_error("UV Peel produced collapsed or folded texture coordinates for face " +
+                         std::to_string(face.id) + ".");
+    }
+    orientation = area;
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<Error> prepare_structured_uvs(
+    const NativeDocument &document, const VertexLookup &vertices,
+    const NativeTransform &sampling, const StructuredPeel &peel,
+    const UvPeelOptions &options,
+    std::map<std::size_t, std::vector<QVec2>> &updates) {
+  constexpr double kTextureDensity =
+      quader_poly::document_internal::kGeneratedUvTilesPerWorldUnit;
+  const double along_repeat = options.axis == UvPeelAxis::U ? options.u_repeat : options.v_repeat;
+  const double across_repeat = options.axis == UvPeelAxis::U ? options.v_repeat : options.u_repeat;
+  const double along_offset = options.axis == UvPeelAxis::U ? options.u_offset : options.v_offset;
+  const double across_offset = options.axis == UvPeelAxis::U ? options.v_offset : options.u_offset;
+  const double along_gain = along_repeat *
+      (options.world_space ? kTextureDensity : 1.0 / peel.guide_length);
+  const double across_gain = across_repeat *
+      (options.world_space ? kTextureDensity * peel.maximum_span : 1.0);
+  std::map<std::size_t, std::array<PeelPoint2, 4>> face_coordinates;
+  const double unset = std::numeric_limits<double>::quiet_NaN();
+  for (const auto &station : peel.stations) {
+    const double along = along_offset + along_gain * station.guide_distance;
+    for (std::size_t side = 0U; side < 2U; ++side) {
+      const auto &lane = station.sides[side];
+      const double sign = side == 0U ? 1.0 : -1.0;
+      for (std::size_t corner = 0U; corner < lane.corners.size(); ++corner) {
+        const auto destination = lane.corners[corner];
+        const double across = across_offset +
+            sign * across_gain * lane.distances[corner] / station.span;
+        const PeelPoint2 coordinate = options.axis == UvPeelAxis::U
+                                          ? PeelPoint2{along, across}
+                                          : PeelPoint2{across, along};
+        auto [entry, inserted] = face_coordinates.try_emplace(destination.face);
+        if (inserted) {
+          entry->second.fill({unset, unset});
+        }
+        // Native Peel writes A, then B, then the next station. Cyclic
+        // transverse profiles deliberately overwrite the same corner records.
+        entry->second[destination.corner] = coordinate;
+      }
+    }
+  }
+  for (const auto &[face_index, coordinates] : face_coordinates) {
+    auto stored = prepare_face_storage(document, vertices, sampling, face_index,
+                                        coordinates, chart_float_tolerances(coordinates), updates);
+    if (!stored.ok()) {
+      return stored.error();
+    }
+    if (auto error = validate_corner_mapping(document, vertices, face_index,
+                                              stored.value().desired)) {
+      return error;
+    }
+    if (auto error = validate_corner_mapping(document, vertices, face_index,
+                                              stored.value().effective)) {
+      error->message = "Stored effective UVs: " + error->message;
+      return error;
+    }
   }
   return std::nullopt;
 }
@@ -912,7 +1276,8 @@ struct TransversePath {
     return fail(make_error(ErrorCode::InvalidArgument,
         "UV Peel requires finite, invertible world and sampling transforms."));
   }
-  const auto source_validation = target.document->validate();
+  const auto source_validation =
+      PolygonDocumentNativeAccess::validate_authored_topology(*target.document);
   if (!source_validation.ok()) {
     return fail(source_validation.error());
   }
@@ -949,23 +1314,49 @@ struct TransversePath {
           "The active UV Peel guide no longer belongs to the selection."));
     }
   }
-  auto patches = incident_patches(document, all_edges, selected_edges);
-  if (!patches.ok()) {
-    return fail(patches.error());
+  IncidentPatch selected;
+  selected.selected_edges = selected_edges;
+  if (auto error = order_guides(selected, active_edge)) {
+    return fail(std::move(*error));
   }
   std::map<std::size_t, std::vector<QVec2>> updates;
-  for (auto &patch : patches.value()) {
-    auto chart = prepare_chart(document, vertices, world, patch, active_edge);
-    if (!chart.ok()) {
-      return fail(chart.error());
+  std::size_t remaining_corner_writes = kUvPeelMaxCornerWrites;
+  for (const auto &guide : selected.guides) {
+    if (supports_structured_guide(document, all_edges, guide)) {
+      auto peel = prepare_structured_guide(document, vertices, world, all_edges, guide,
+                                           remaining_corner_writes);
+      if (!peel.ok()) {
+        return fail(peel.error());
+      }
+      if (auto error = prepare_structured_uvs(document, vertices, sampling,
+                                               peel.value(), options, updates)) {
+        return fail(std::move(*error));
+      }
+      continue;
     }
-    const auto coordinates = solve_chart(chart.value().chart, options);
-    if (!coordinates.ok()) {
-      return fail(coordinates.error());
+    // The conformal extension remains available for a guide that cannot be
+    // represented by quad-side walks. It retains its own chart safeguards.
+    std::set<NativeEdge> fallback_edges;
+    for (std::size_t index = 1U; index < guide.vertices.size(); ++index) {
+      fallback_edges.insert(edge_key(guide.vertices[index - 1U], guide.vertices[index]));
     }
-    if (auto error = prepare_face_uvs(document, vertices, sampling, patch,
-                                      chart.value(), coordinates.value(), options, updates)) {
-      return fail(std::move(*error));
+    auto patches = incident_patches(document, all_edges, fallback_edges);
+    if (!patches.ok()) {
+      return fail(patches.error());
+    }
+    for (auto &patch : patches.value()) {
+      auto chart = prepare_chart(document, vertices, world, patch, active_edge);
+      if (!chart.ok()) {
+        return fail(chart.error());
+      }
+      const auto coordinates = solve_chart(chart.value().chart, options);
+      if (!coordinates.ok()) {
+        return fail(coordinates.error());
+      }
+      if (auto error = prepare_face_uvs(document, vertices, sampling, patch,
+                                         chart.value(), coordinates.value(), options, updates)) {
+        return fail(std::move(*error));
+      }
     }
   }
   PreparedUvPeelDocument result{.key = target.key, .document = *target.document};
@@ -979,7 +1370,8 @@ struct TransversePath {
     }
     PolygonDocumentNativeAccess::replace_document(result.document, std::move(candidate));
     ++PolygonDocumentNativeAccess::impl(result.document).content_revision;
-    const auto validation = result.document.validate();
+    const auto validation =
+        PolygonDocumentNativeAccess::validate_authored_topology(result.document);
     if (!validation.ok()) {
       return fail(validation.error());
     }

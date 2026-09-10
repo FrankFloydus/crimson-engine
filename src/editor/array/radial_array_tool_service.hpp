@@ -11,6 +11,8 @@
 #include "core/command_result.hpp"
 #include "core/types.hpp"
 #include "editor/array/instance_array_source.hpp"
+#include "editor/array/array_texture_mapping.hpp"
+#include "editor/modeling/radial_array_mode.hpp"
 #include "math/types.hpp"
 
 #include <cstdint>
@@ -27,8 +29,12 @@ class EditorSelectionService;
 class ModelingSessionService;
 class SceneInstanceService;
 class SceneDocument;
+class SceneStructuralLifecycleService;
 
 inline constexpr std::string_view kRadialArrayToolId = "radial_array";
+inline constexpr std::string_view kRadialArrayModeSetting = "radial_array.mode";
+inline constexpr std::string_view kRadialArrayCreateInstancesSetting =
+    "radial_array.create_instances";
 inline constexpr std::string_view kRadialArrayDegreesSetting =
     "radial_array.degrees";
 inline constexpr std::string_view kRadialArrayCopiesSetting =
@@ -67,11 +73,14 @@ struct RadialArrayCenterState {
  */
 struct RadialArrayPreviewSource {
   EntityId source_entity = kInvalidEntityId;
+  /// Public occurrence used for visibility and member sampling composition.
+  EntityId visibility_entity = kInvalidEntityId;
   /// Canonical scene entity that owns this preview mesh and material.
   EntityId material_entity = kInvalidEntityId;
   AssetId mesh = kInvalidAssetId;
   MaterialReference material;
   std::vector<QMat4> generated_world_transforms;
+  std::vector<QMat4> generated_sampling_from_local;
 };
 
 /**
@@ -92,7 +101,8 @@ public:
                          EditorHistoryService &history,
                          ModelingSessionService &modeling,
                          EditorSelectionService &selection,
-                         SceneInstanceService &instances);
+                         SceneInstanceService &instances,
+                         SceneStructuralLifecycleService &structural_lifecycle);
 
   [[nodiscard]] bool active() const;
   [[nodiscard]] bool has_session() const { return session_.has_value(); }
@@ -101,6 +111,9 @@ public:
     return tool_settings_revision_counter_;
   }
   [[nodiscard]] bool center_locked() const;
+  [[nodiscard]] bool has_valid_center() const;
+  [[nodiscard]] RadialArrayMode mode() const;
+  [[nodiscard]] bool create_instances() const;
   [[nodiscard]] double degrees() const;
   [[nodiscard]] std::uint32_t copies() const;
   [[nodiscard]] std::uint32_t repeats() const;
@@ -121,9 +134,12 @@ public:
   CommandResult clear_center_candidate();
   CommandResult lock_center();
   CommandResult set_degrees(double degrees);
+  CommandResult set_mode(RadialArrayMode mode);
+  CommandResult set_create_instances(bool enabled);
   CommandResult set_copies(std::uint32_t copies);
   CommandResult adjust_copies(int delta);
   CommandResult set_repeats(std::uint32_t repeats);
+  CommandResult adjust_repeats(int delta);
   CommandResult set_repeat_spacing(double spacing);
   CommandResult reset_settings();
 
@@ -142,6 +158,7 @@ private:
     QVec3 visible_pivot_world = {};
     EntityId instance_definition = kInvalidEntityId;
     std::vector<InstanceArrayPreviewMeshSnapshot> instance_meshes;
+    mutable ArrayTextureMappingCache texture_mapping_cache;
   };
 
   /// Stores one center-placement and live-preview transaction.
@@ -162,6 +179,8 @@ private:
     std::uint64_t generation = 0;
     std::uint64_t revision = 0;
     bool instance_occurrences = false;
+    RadialArrayMode mode = RadialArrayMode::Total;
+    bool create_instances = false;
   };
 
   [[nodiscard]] bool
@@ -183,6 +202,7 @@ private:
   [[nodiscard]] std::uint64_t issue_revision();
   void issue_tool_settings_revision();
   void clear_preview_cache();
+  CommandResult apply_instance_array(const Session &session);
 
   SceneDocument &scene_;
   AssetRegistry &assets_;
@@ -190,6 +210,7 @@ private:
   ModelingSessionService &modeling_;
   EditorSelectionService &selection_;
   SceneInstanceService &instances_;
+  SceneStructuralLifecycleService &structural_lifecycle_;
   std::optional<Session> session_;
   std::uint64_t revision_counter_ = 0;
   std::uint64_t tool_settings_revision_counter_ = 0;
@@ -204,6 +225,9 @@ private:
   mutable bool can_activate_cached_value_ = false;
   mutable bool can_activate_cache_valid_ = false;
   mutable std::uint64_t cached_preview_revision_ = 0;
+  mutable std::uint64_t cached_preview_scene_revision_ = 0;
+  mutable std::uint64_t preview_generation_counter_ = 0;
+  mutable TextureLockSettings cached_preview_texture_locks_;
   mutable RadialArrayPreviewState cached_preview_;
 };
 

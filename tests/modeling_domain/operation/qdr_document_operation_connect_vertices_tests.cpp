@@ -7,6 +7,8 @@
 #include "operation_validation_test_helpers.hpp"
 
 #include <algorithm>
+#include <iterator>
+#include <ranges>
 
 using namespace quader_poly;
 
@@ -14,6 +16,9 @@ TEST(QdrDocumentOperationConnectVerticesTests, ConnectVerticesSplitsASharedQuadF
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 	const FaceTextureTransform texture{{2.0F, 0.5F}, {0.25F, -0.75F}, 15.0F};
 	fixture.document.faces.front().texture_transform = texture;
+	fixture.document.faces.front().uvs = {
+		{0.0F, 1.0F}, {2.0F, 0.0F}, {3.0F, 4.0F}, {-1.0F, 2.0F}};
+	const Face source = fixture.document.faces.front();
 	Selection selection = qdr_test::vertex_selection({ fixture.bottom_left, fixture.top_right });
 
 	const OperationResult result = connect_selected_vertices(fixture.document, selection);
@@ -23,7 +28,15 @@ TEST(QdrDocumentOperationConnectVerticesTests, ConnectVerticesSplitsASharedQuadF
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
 	for (const Face& face : fixture.document.faces) {
 		EXPECT_EQ(face.texture_transform, texture);
-		EXPECT_TRUE(face.uvs.empty());
+		ASSERT_EQ(face.uvs.size(), face.vertices.size());
+		for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+			const auto source_corner = std::ranges::find(source.vertices, face.vertices[corner]);
+			ASSERT_NE(source_corner, source.vertices.end());
+			const auto expected = source.uvs[static_cast<std::size_t>(
+				std::distance(source.vertices.begin(), source_corner))];
+			EXPECT_EQ(face.uvs[corner].x, expected.x);
+			EXPECT_EQ(face.uvs[corner].y, expected.y);
+		}
 	}
         EXPECT_TRUE(selection.mode == SelectionMode::Edge);
         EXPECT_TRUE(selection.edges.size() == 1U);

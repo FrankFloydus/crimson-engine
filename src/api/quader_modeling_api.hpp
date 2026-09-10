@@ -183,7 +183,9 @@ struct QuaderFaceTextureRevision final {
                          const QuaderFaceTextureRevision &) = default;
 };
 
-/// Presents shared scales, pixel shifts, and selection-relative rotation.
+/// Presents face-transform scale modifiers, pixel shifts and selection-relative
+/// rotation. Scale does not measure the combined world density of authored UVs,
+/// occurrence sampling and the material's separate UV tiling transform.
 struct QuaderFaceTextureSettings final {
   std::size_t selected_face_count = 0;
   bool editable = false;
@@ -648,6 +650,8 @@ public:
   QuaderApiVoidResult set_selection_mode(QuaderSelectionMode mode);
   [[nodiscard]] QuaderFaceTextureRevision face_texture_settings_revision() const;
   [[nodiscard]] QuaderFaceTextureSettings face_texture_settings() const;
+  /// Uses the same cached target validation as whole-mesh or selected-face UV projection.
+  [[nodiscard]] bool can_project_uv() const;
   QuaderApiVoidResult
   set_face_texture_setting(const QuaderFaceTextureEdit &edit);
   QuaderApiVoidResult

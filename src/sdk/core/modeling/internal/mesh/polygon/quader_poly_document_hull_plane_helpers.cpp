@@ -677,7 +677,17 @@ Face make_repaired_merge_face(const Face& source_face, std::vector<ElementId> ve
     repaired.material_slot = source_face.material_slot;
     repaired.normal_shading = source_face.normal_shading;
     repaired.texture_transform = source_face.texture_transform;
-    repaired.uvs.clear();
+    if (face_has_loop_uvs(source_face)) {
+        repaired.uvs.reserve(repaired.vertices.size());
+        for (const ElementId vertex_id : repaired.vertices) {
+            const auto uv = face_uv_for_vertex_id(source_face, vertex_id);
+            if (!uv.has_value()) {
+                repaired.uvs.clear();
+                break;
+            }
+            repaired.uvs.push_back(*uv);
+        }
+    }
     return repaired;
 }
 
@@ -767,7 +777,11 @@ std::vector<Face> repaired_faces_for_vertex_merge(
 {
     std::vector<ElementId> compact_vertices = compact_face_vertices_for_merge(source_face, merge_vertex_ids, active_vertex_id);
     if (face_loop_is_valid_after_merge(candidate_document, compact_vertices)) {
-        return { make_repaired_merge_face(source_face, std::move(compact_vertices)) };
+        Face mapped_source = source_face;
+        for (ElementId& vertex_id : mapped_source.vertices) {
+            vertex_id = mapped_vertex_for_merge(vertex_id, merge_vertex_ids, active_vertex_id);
+        }
+        return { make_repaired_merge_face(mapped_source, std::move(compact_vertices)) };
     }
 
     // Blender's weld operator splits a face between a source corner and its
@@ -780,9 +794,7 @@ std::vector<Face> repaired_faces_for_vertex_merge(
     if (split_paths.has_value()) {
         std::vector<Face> repaired_faces;
         const auto append_split_path = [&](const std::vector<ElementId>& path) {
-            Face split_source = source_face;
-            split_source.vertices = path;
-            split_source.uvs.clear();
+            Face split_source = make_repaired_merge_face(source_face, path);
             std::vector<Face> split_repair = repaired_faces_for_vertex_merge(
                     source_document, candidate_document, split_source,
                     merge_vertex_ids, active_vertex_id);
@@ -818,7 +830,13 @@ std::vector<Face> repaired_faces_for_vertex_merge(
             continue;
         }
 
-        repaired_faces.push_back(make_repaired_merge_face(source_face, { vertices[0], vertices[1], vertices[2] }));
+        Face triangle_source = source_face;
+        triangle_source.vertices.assign(vertices.begin(), vertices.end());
+        if (face_has_loop_uvs(source_face)) {
+            triangle_source.uvs = { source_face.uvs[triangle.a],
+                                    source_face.uvs[triangle.b], source_face.uvs[triangle.c] };
+        }
+        repaired_faces.push_back(std::move(triangle_source));
     }
 
     return repaired_faces;
@@ -890,24 +908,21 @@ OperationResult build_topology_vertex_merge_candidate(
             merge_touched_face_ids.insert(repaired_face.id);
             repaired_face.material_slot = face.material_slot;
             repaired_face.texture_transform = face.texture_transform;
-            repaired_face.uvs.clear();
-            const std::optional<FaceUvProjectionAssignment> assignment = face_uv_projection_assignment_from_source(
-                    candidate,
-                    repaired_face,
-                    document,
-                    merge_vertex_ids,
-                    survivor_vertex_id);
-            if (assignment.has_value() &&
-                    assign_face_uvs_from_projection_assignment(candidate, repaired_face, *assignment)) {
-                uv_assignments.push_back({ repaired_face.id, *assignment });
+            if (!face_has_loop_uvs(face)) {
+                const std::optional<FaceUvProjectionAssignment> assignment = face_uv_projection_assignment_from_source(
+                        candidate, repaired_face, document, merge_vertex_ids,
+                        survivor_vertex_id);
+                if (assignment.has_value() &&
+                        assign_face_uvs_from_projection_assignment(candidate, repaired_face, *assignment)) {
+                    uv_assignments.push_back({ repaired_face.id, *assignment });
+                }
             }
             rebuilt_faces.push_back(std::move(repaired_face));
         }
 
         changed = changed ||
             repaired_faces.size() != 1 ||
-            rebuilt_faces.back().vertices != face.vertices ||
-            !face.uvs.empty();
+            rebuilt_faces.back().vertices != face.vertices;
     }
 
     candidate.faces = std::move(rebuilt_faces);
@@ -963,6 +978,11 @@ OperationResult build_vertex_merge_candidate(
         return topology_result;
     }
 
+    // Rebuilding a convex hull loses authored face/corner correspondence.
+    // Keep a failed topology repair atomic instead of inventing charts for it.
+    if (std::ranges::any_of(document.faces, face_has_loop_uvs)) {
+        return topology_result;
+    }
     if (build_convex_hull_vertex_merge_candidate(document, candidate, merge_vertex_ids, survivor_vertex_id, target_position)) {
         return { true, {} };
     }

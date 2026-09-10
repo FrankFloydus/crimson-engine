@@ -136,6 +136,7 @@ enum class QuaderToolSettingControlKind {
 enum class QuaderToolSettingChoicePresentation {
   Radio,
   Dropdown,
+  Buttons,
 };
 
 /**
@@ -166,6 +167,7 @@ enum class QuaderToolSettingNumberPresentation {
 struct QuaderToolSettingChoiceOption {
   std::string id;
   std::string label;
+  std::string tooltip;
   double value = 0.0;
 };
 
@@ -200,6 +202,7 @@ struct QuaderToolSettingControl {
   std::string id;
   std::string label;
   std::string group_id;
+  std::string tooltip;
   bool enabled = true;
   bool bool_value = false;
   double number_value = 0.0;
@@ -215,6 +218,8 @@ struct QuaderToolSettingControl {
   QuaderToolSettingChoicePresentation choice_presentation =
       QuaderToolSettingChoicePresentation::Radio;
   std::array<QuaderToolSettingNumberComponent, 3> vector3_components;
+  // Optional presentation key; the writable setting identity remains id.
+  std::string label_key;
 };
 
 /**

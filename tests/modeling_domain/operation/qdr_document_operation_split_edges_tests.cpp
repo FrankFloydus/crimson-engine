@@ -10,6 +10,12 @@ using namespace quader_poly;
 
 TEST(QdrDocumentOperationSplitEdgesTests, SplitEdgesSeparatesAdjacentFacesWithoutDeletingEitherSide) {
 	Document document = make_cube({});
+	for (Face& face : document.faces) {
+		const float island = static_cast<float>(face.id) * 10.0F;
+		face.uvs = {{island, 0.0F}, {island + 2.0F, 0.0F},
+		            {island + 3.0F, 1.0F}, {island, 4.0F}};
+	}
+	const Document source = document;
 	const Edge source_edge = document_edges(document).front();
 	Selection selection = qdr_test::edge_selection({ source_edge }, source_edge);
 	const std::size_t vertex_count_before = document.vertices.size();
@@ -38,4 +44,17 @@ TEST(QdrDocumentOperationSplitEdgesTests, SplitEdgesSeparatesAdjacentFacesWithou
 		EXPECT_TRUE(qdr_test::edge_incidence_count(document, edge) == 1);
 	}
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+	for (const Face& face : document.faces) {
+		const Face* before = find_face(source, face.id);
+		ASSERT_NE(before, nullptr);
+		ASSERT_EQ(face.uvs.size(), before->uvs.size());
+		ASSERT_EQ(face.vertices.size(), before->vertices.size());
+		for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+			EXPECT_EQ(face.uvs[corner].x, before->uvs[corner].x);
+			EXPECT_EQ(face.uvs[corner].y, before->uvs[corner].y);
+			EXPECT_TRUE(qdr_test::vec_nearly_equal(
+				find_vertex(document, face.vertices[corner])->position,
+				find_vertex(source, before->vertices[corner])->position));
+		}
+	}
 }

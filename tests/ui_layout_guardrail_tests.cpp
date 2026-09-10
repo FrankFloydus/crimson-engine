@@ -4321,7 +4321,9 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(prepare_selection, "query().entities(");
   expect_contains(native_tools, "linear_array_drag_point(");
   expect_contains(native_tools, "pivot_handle_hit(");
-  expect_contains(native_tools, "radial_array->lock_center()");
+  expect_contains(native_tools, "radial_array->has_valid_center()");
+  expect_contains(native_tools,
+                  "record_commit(\"Radial Array apply\", lifecycle.commit_active())");
   expect_contains(scene_projection, "point_light_pick_candidates(");
 
   expect_missing(panel, "float screen_distance_squared(");

@@ -12,6 +12,7 @@
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_backend.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
 #include <algorithm>
 #include <array>
@@ -127,8 +128,8 @@ OperationResult BevelVerticesOperation::apply(Document& document, Selection& sel
 
         Face rebuilt_face = face;
         rebuilt_face.vertices = std::move(rebuilt_loop);
-        if (face_changed) {
-            rebuilt_face.uvs.clear();
+        if (face_changed && !preserve_face_uvs(document, face, candidate, rebuilt_face)) {
+            return OperationResult::failure("Bevel could not preserve the source texture mapping.");
         }
         rebuilt_faces.push_back(std::move(rebuilt_face));
         changed = changed || face_changed;

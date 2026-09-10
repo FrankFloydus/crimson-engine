@@ -12,10 +12,14 @@
 #include <array>
 #include <limits>
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include <utility>
 
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document_selection.hpp>
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 
 namespace quader {
@@ -570,6 +574,204 @@ std::optional<MeshAsset> MeshProjectionService::mesh_asset_from_sdk_payload(
   }
   mesh.replace_authored_polygon_document(std::move(authored));
   return mesh;
+}
+
+std::optional<quader_poly::Document>
+MeshProjectionService::polygon_document_from_sdk_document(
+    const quader::modeling::PolygonDocument &document) {
+  quader_poly::Document authored;
+  if (!sdk_document_authored_topology(document, authored)) {
+    return std::nullopt;
+  }
+  return authored;
+}
+
+modeling::Result<modeling::PolygonDocument>
+MeshProjectionService::rebase_sdk_document_texture_mapping(
+    const quader_poly::Document &before,
+    const modeling::PolygonDocument &transformed,
+    const QMat4 &source_sampling, const QMat4 &destination_sampling,
+    bool reflected_geometry) {
+  const auto rejected = [](std::string message) {
+    return modeling::Result<modeling::PolygonDocument>::failure(
+        {.code = modeling::ErrorCode::ValidationFailed,
+         .message = std::move(message)});
+  };
+  auto after = MeshProjectionService::polygon_document_from_sdk_document(
+      transformed);
+  if (!after.has_value()) {
+    return rejected(
+        "Combine Mesh authored texture topology is unavailable.");
+  }
+  const quader_poly::document_internal::VertexLookupIndex before_lookup(before);
+  const quader_poly::document_internal::VertexLookupIndex after_lookup(*after);
+  std::unordered_map<quader_poly::ElementId, const quader_poly::Face *> faces;
+  for (const auto &face : before.faces) faces.emplace(face.id, &face);
+  const auto from_source =
+      MeshProjectionService::texture_mapping_transform(source_sampling);
+  const auto from_destination =
+      MeshProjectionService::texture_mapping_transform(destination_sampling);
+  for (auto &face : after->faces) {
+    const auto found = faces.find(face.id);
+    if (found == faces.end()) {
+      return rejected(
+          "Combine Mesh source texture face is unavailable.");
+    }
+    const auto &source_face = *found->second;
+    const auto winding = reflected_geometry
+        ? quader_poly::document_internal::FaceRebaseWinding::Reverse
+        : quader_poly::document_internal::FaceRebaseWinding::Preserve;
+    if (!quader_poly::document_internal::preserve_rebased_face_texture_triangulation(
+            before, source_face, *after, face, winding, before_lookup,
+            after_lookup)) {
+      return rejected(
+          "Combine Mesh cannot preserve this rebased face's texture interior.");
+    }
+    const QVec3 before_normal = quader_poly::face_normal(before, source_face);
+    const QVec3 after_normal = quader_poly::face_normal(*after, face);
+    const auto carrier =
+        quader_poly::face_texture_carrier(before, source_face, before_normal);
+    std::unordered_map<quader_poly::ElementId, QVec2> source_uvs;
+    source_uvs.reserve(source_face.vertices.size());
+    for (std::size_t corner = 0; corner < source_face.vertices.size(); ++corner) {
+      const auto id = source_face.vertices[corner];
+      const auto *vertex = before_lookup.find(id);
+      if (vertex == nullptr) {
+        return rejected(
+            "Combine Mesh source texture corner is unavailable.");
+      }
+      const QVec2 base = source_face.uvs.empty()
+                            ? quader_poly::generated_texture_uv(
+                                  vertex->position, before_normal)
+                            : source_face.uvs[corner];
+      const QVec2 uv = quader_poly::apply_face_texture_transform(
+          base, source_face.texture_transform);
+      source_uvs.emplace(id, quader_poly::evaluate_texture_mapping(
+                                  uv, vertex->position, before_normal, carrier,
+                                  from_source));
+    }
+    std::vector<QVec3> positions;
+    std::vector<QVec2> desired;
+    positions.reserve(face.vertices.size());
+    desired.reserve(face.vertices.size());
+    for (const auto id : face.vertices) {
+      const auto *vertex = after_lookup.find(id);
+      const auto uv = source_uvs.find(id);
+      if (vertex == nullptr || uv == source_uvs.end()) {
+        return rejected(
+            "Combine Mesh texture corner correspondence was lost.");
+      }
+      positions.push_back(vertex->position);
+      desired.push_back(uv->second);
+    }
+    auto solved = quader_poly::solve_face_texture_base_uvs(
+        positions, desired, after_normal, face.texture_transform,
+        from_destination);
+    if (!solved.has_value()) {
+      return rejected(
+          "Combine Mesh cannot preserve this source's displayed texture mapping.");
+    }
+    face.uvs = std::move(*solved);
+  }
+  return MeshProjectionService::sdk_document_from_polygon_document(*after);
+}
+
+modeling::Result<modeling::OperationResult>
+MeshProjectionService::preserve_transformed_sdk_document_uv_layout(
+    const modeling::PolygonDocument &before,
+    modeling::PolygonDocument &transformed, bool whole_object) {
+  const auto rejected = [](std::string message) {
+    return modeling::Result<modeling::OperationResult>::failure(
+        {.code = modeling::ErrorCode::ValidationFailed,
+         .message = std::move(message)});
+  };
+  modeling::OperationResult receipt;
+  auto source = polygon_document_from_sdk_document(before);
+  if (!source.has_value()) {
+    return rejected("Transform source authored topology is unavailable.");
+  }
+  if (std::ranges::none_of(source->faces, [](const quader_poly::Face &face) {
+        return face.vertices.size() > 4U &&
+               face.uvs.size() == face.vertices.size();
+      })) {
+    return modeling::Result<modeling::OperationResult>::success(
+        std::move(receipt));
+  }
+  quader_poly::Selection selected;
+  if (whole_object) {
+    selected.vertices.reserve(source->vertices.size());
+    for (const auto &vertex : source->vertices) {
+      selected.vertices.push_back(vertex.id);
+    }
+  } else {
+    const auto selection = before.selection();
+    for (const auto vertex : selection.vertices) {
+      selected.vertices.push_back(vertex.index);
+    }
+    for (const auto edge : selection.edges) {
+      selected.edges.push_back(quader_poly::make_edge(edge.a.index, edge.b.index));
+    }
+    for (const auto face : selection.faces) {
+      selected.faces.push_back(face.index);
+    }
+  }
+  const auto selected_vertices =
+      quader_poly::selected_vertex_ids(*source, selected);
+  const auto complete_face = [&](const quader_poly::Face &face) {
+    return face.vertices.size() > 4U &&
+           face.uvs.size() == face.vertices.size() &&
+           std::ranges::all_of(face.vertices, [&](quader_poly::ElementId id) {
+             return std::ranges::binary_search(selected_vertices, id);
+           });
+  };
+  if (std::ranges::none_of(source->faces, complete_face)) {
+    return modeling::Result<modeling::OperationResult>::success(
+        std::move(receipt));
+  }
+  auto destination = polygon_document_from_sdk_document(transformed);
+  if (!destination.has_value()) {
+    return rejected("Transform candidate authored topology is unavailable.");
+  }
+  std::unordered_map<quader_poly::ElementId, quader_poly::Face *> faces;
+  for (auto &face : destination->faces) faces.emplace(face.id, &face);
+  const quader_poly::document_internal::VertexLookupIndex source_lookup(*source);
+  const quader_poly::document_internal::VertexLookupIndex destination_lookup(
+      *destination);
+  for (const auto &face : source->faces) {
+    if (!complete_face(face)) continue;
+    const auto found = faces.find(face.id);
+    if (found == faces.end()) {
+      return rejected("Transform candidate face identity is unavailable.");
+    }
+    auto &candidate = *found->second;
+    const auto previous_loop = candidate.vertices;
+    if (!quader_poly::document_internal::preserve_rebased_face_texture_triangulation(
+            *source, face, *destination, candidate,
+            quader_poly::document_internal::FaceRebaseWinding::Preserve,
+            source_lookup, destination_lookup)) {
+      return rejected("Transform cannot preserve this face's texture interior.");
+    }
+    if (candidate.vertices != previous_loop) {
+      receipt.modified.faces.push_back(modeling::make_id<modeling::FaceTag>(face.id));
+    }
+  }
+  if (receipt.modified.faces.empty()) {
+    return modeling::Result<modeling::OperationResult>::success(
+        std::move(receipt));
+  }
+  auto imported = sdk_document_from_polygon_document(*destination);
+  if (!imported.ok()) return rejected(imported.error_message());
+  const auto restored = imported.value().apply_selection(transformed.selection());
+  if (!restored.ok()) return rejected(restored.error_message());
+  imported.value().preserve_identity_high_water(transformed);
+  transformed = std::move(imported).value();
+  receipt.changed = true;
+  receipt.dirty = {.topology = true,
+                   .geometry = true,
+                   .materials = true,
+                   .overlays = true};
+  receipt.message = "Transformed face texture layout preserved.";
+  return modeling::Result<modeling::OperationResult>::success(std::move(receipt));
 }
 
 bool MeshProjectionService::initialize_compiled_texture_mapping(MeshAsset &mesh) {

@@ -2360,10 +2360,7 @@ void QuaderCommandsApi::Impl::register_commands() {
         },
         {}, [this, mesh_level = command.mesh_level] {
           if (mesh_level) {
-            const QuaderSelectionSummary selection = api_.selection().summary();
-            if (selection.mode == QuaderSelectionMode::Object) {
-              return selection.selected_object_count > 0u;
-            }
+            return api_.modeling().can_project_uv();
           }
           return api_.modeling().face_texture_settings().editable;
         });
@@ -2373,7 +2370,7 @@ void QuaderCommandsApi::Impl::register_commands() {
                                        : kSelectionModeFace);
   }
   register_command(
-      quader_command::kModelingUvPeel, "UV Peel",
+      quader_command::kModelingUvPeel, "Guided UV Peel",
       [this] {
         const auto settings = api_.modeling().uv_peel_settings();
         return api_.modeling().peel_uv(

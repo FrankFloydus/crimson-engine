@@ -62,12 +62,15 @@ void append_linear_array_preview(
         session.scene().mesh(source.source_entity);
     previews.push_back(ModelingToolPreviewMesh{
         .source_entity = source.source_entity,
+        .visibility_entity = source.visibility_entity,
         .material = source_material != nullptr
                         ? *source_material
                         : MaterialComponent{.material = source.material},
         .mesh = *mesh,
         .transform = {},
         .instance_transforms = source.generated_world_transforms,
+        .instance_sampling_from_local = source.generated_sampling_from_local,
+        .double_sided = source_mesh == nullptr || source_mesh->double_sided,
         .cast_shadows = source_mesh != nullptr && source_mesh->cast_shadows,
     });
   }
@@ -91,12 +94,15 @@ void append_radial_array_preview(
         session.scene().mesh(source.source_entity);
     previews.push_back(ModelingToolPreviewMesh{
         .source_entity = source.source_entity,
+        .visibility_entity = source.visibility_entity,
         .material = source_material != nullptr
                         ? *source_material
                         : MaterialComponent{.material = source.material},
         .mesh = *mesh,
         .transform = {},
         .instance_transforms = source.generated_world_transforms,
+        .instance_sampling_from_local = source.generated_sampling_from_local,
+        .double_sided = source_mesh == nullptr || source_mesh->double_sided,
         .cast_shadows = source_mesh != nullptr && source_mesh->cast_shadows,
     });
   }

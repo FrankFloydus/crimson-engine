@@ -10,6 +10,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "core/localization_service.hpp"
+#include "editor/array/radial_array_tool_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
@@ -23,6 +24,7 @@
 #include "ui/ui_panel_manager.hpp"
 
 #include <QApplication>
+#include <QButtonGroup>
 #include <QCoreApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -1303,6 +1305,208 @@ TEST(QtToolSettingsNumberSliderTests,
 }
 
 TEST(QtToolSettingsPanelTests,
+     RadialChoiceButtonsPreserveDegreesAndRetainLocalizedInstanceSettings) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-radial-settings-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto source = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Radial Settings Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::RadialArray).ok());
+  quader::LocalizationService localization;
+  ASSERT_TRUE(localization.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales",
+      "en-US"));
+
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.set_localization(localization);
+  panel.bind(editor);
+  panel.show();
+  QCoreApplication::processEvents();
+  auto *total = panel.findChild<QPushButton *>(QStringLiteral(
+      "tool_settings.control.radial_array.mode.option.total"));
+  auto *spacing = panel.findChild<QPushButton *>(QStringLiteral(
+      "tool_settings.control.radial_array.mode.option.spacing"));
+  auto *instances = panel.findChild<QCheckBox *>(QStringLiteral(
+      "tool_settings.control.radial_array.create_instances"));
+  auto *degrees = panel.findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.radial_array.degrees"));
+  auto *degrees_label = panel.findChild<QLabel *>(QStringLiteral(
+      "tool_settings.control.radial_array.degrees.label"));
+  auto *group = panel.findChild<QButtonGroup *>(QStringLiteral(
+      "tool_settings.control.radial_array.mode.group"));
+  auto *apply = panel.findChild<QPushButton *>(
+      QStringLiteral("tool_settings.apply"));
+  ASSERT_NE(total, nullptr);
+  ASSERT_NE(spacing, nullptr);
+  ASSERT_NE(instances, nullptr);
+  ASSERT_NE(degrees, nullptr);
+  ASSERT_NE(degrees_label, nullptr);
+  ASSERT_NE(group, nullptr);
+  ASSERT_NE(apply, nullptr);
+  EXPECT_TRUE(group->exclusive());
+  EXPECT_TRUE(total->isCheckable());
+  EXPECT_TRUE(spacing->isCheckable());
+  EXPECT_TRUE(total->isChecked());
+  EXPECT_FALSE(spacing->isChecked());
+  EXPECT_FALSE(instances->isChecked());
+  EXPECT_FALSE(apply->isEnabled());
+  EXPECT_EQ(degrees_label->text(), QStringLiteral("Total Angle (°)"));
+  QPointer<QPushButton> retained_total(total);
+  QPointer<QPushButton> retained_spacing(spacing);
+  QPointer<QCheckBox> retained_instances(instances);
+  QPointer<QSpinBox> retained_degrees(degrees);
+  QPointer<QLabel> retained_degrees_label(degrees_label);
+  const auto expect_retained_angle_controls = [&] {
+    EXPECT_EQ(panel.findChild<QPushButton *>(total->objectName()), retained_total.data());
+    EXPECT_EQ(panel.findChild<QPushButton *>(spacing->objectName()), retained_spacing.data());
+    EXPECT_EQ(panel.findChild<QSpinBox *>(degrees->objectName()), retained_degrees.data());
+    EXPECT_EQ(panel.findChild<QLabel *>(degrees_label->objectName()), retained_degrees_label.data());
+    EXPECT_EQ(degrees->value(), 137);
+  };
+
+  // A mode click consumes the numeric draft before changing interpretation.
+  degrees->setValue(137);
+  spacing->click();
+  panel.refresh();
+  EXPECT_EQ(session.radial_array().mode(), quader::RadialArrayMode::Spacing);
+  EXPECT_DOUBLE_EQ(session.radial_array().degrees(), 137.0);
+  EXPECT_FALSE(total->isChecked());
+  EXPECT_TRUE(spacing->isChecked());
+  EXPECT_EQ(degrees_label->text(), QStringLiteral("Angle Spacing (°)"));
+  expect_retained_angle_controls();
+  total->click();
+  panel.refresh();
+  EXPECT_EQ(session.radial_array().mode(), quader::RadialArrayMode::Total);
+  EXPECT_DOUBLE_EQ(session.radial_array().degrees(), 137.0);
+  EXPECT_TRUE(total->isChecked());
+  EXPECT_FALSE(spacing->isChecked());
+  EXPECT_EQ(degrees_label->text(), QStringLiteral("Total Angle (°)"));
+  expect_retained_angle_controls();
+  const auto unchanged_settings = editor.tools().active_settings_revision();
+  total->click();
+  EXPECT_TRUE(total->isChecked());
+  EXPECT_EQ(editor.tools().active_settings_revision(), unchanged_settings);
+
+  ASSERT_TRUE(session.radial_array()
+                  .update_center_candidate({}, {0.0f, 1.0f, 0.0f}, 1.0)
+                  .ok);
+  panel.refresh();
+  EXPECT_TRUE(apply->isEnabled());
+  EXPECT_TRUE(editor.tools().active_settings().preview_active);
+  const auto preview_revision = session.radial_array().preview_state().revision;
+  instances->click();
+  panel.refresh();
+  EXPECT_TRUE(session.radial_array().create_instances());
+  EXPECT_TRUE(instances->isChecked());
+  EXPECT_EQ(session.radial_array().preview_state().revision, preview_revision);
+  EXPECT_EQ(panel.findChild<QPushButton *>(total->objectName()),
+            retained_total.data());
+  EXPECT_EQ(panel.findChild<QCheckBox *>(instances->objectName()),
+            retained_instances.data());
+
+  // Presentation sentinels expose redundant Qt writes even when owner setters
+  // would independently reject an unchanged value.
+  const auto retained_revision = editor.tools().active_settings_revision();
+  {
+    const QSignalBlocker block_total(total);
+    const QSignalBlocker block_spacing(spacing);
+    const QSignalBlocker block_instances(instances);
+    spacing->setChecked(true);
+    instances->setChecked(false);
+  }
+  degrees_label->setText(QStringLiteral("unchanged angle label sentinel"));
+  for (int frame = 0; frame < 20; ++frame) {
+    panel.refresh();
+  }
+  EXPECT_TRUE(spacing->isChecked());
+  EXPECT_FALSE(instances->isChecked());
+  EXPECT_EQ(degrees_label->text(), QStringLiteral("unchanged angle label sentinel"));
+  EXPECT_EQ(editor.tools().active_settings_revision(), retained_revision);
+  EXPECT_EQ(session.radial_array().preview_state().revision, preview_revision);
+  {
+    const QSignalBlocker block_total(total);
+    const QSignalBlocker block_spacing(spacing);
+    const QSignalBlocker block_instances(instances);
+    total->setChecked(true);
+    instances->setChecked(true);
+  }
+  degrees_label->setText(QStringLiteral("Total Angle"));
+
+  for (const char *locale : {"it-IT", "en-US"}) {
+    ASSERT_TRUE(localization.select_locale(locale));
+    panel.set_localization(localization);
+    total = panel.findChild<QPushButton *>(QStringLiteral(
+        "tool_settings.control.radial_array.mode.option.total"));
+    spacing = panel.findChild<QPushButton *>(QStringLiteral(
+        "tool_settings.control.radial_array.mode.option.spacing"));
+    instances = panel.findChild<QCheckBox *>(QStringLiteral(
+        "tool_settings.control.radial_array.create_instances"));
+    degrees = panel.findChild<QSpinBox *>(QStringLiteral(
+        "tool_settings.control.radial_array.degrees"));
+    degrees_label = panel.findChild<QLabel *>(QStringLiteral(
+        "tool_settings.control.radial_array.degrees.label"));
+    ASSERT_NE(total, nullptr);
+    ASSERT_NE(spacing, nullptr);
+    ASSERT_NE(instances, nullptr);
+    ASSERT_NE(degrees, nullptr);
+    ASSERT_NE(degrees_label, nullptr);
+    const QPointer<QSpinBox> locale_degrees(degrees);
+    const QPointer<QLabel> locale_label(degrees_label);
+    const QPointer<QPushButton> locale_total(total);
+    const QPointer<QPushButton> locale_spacing(spacing);
+    for (const auto &[button, key] :
+         {std::pair{total, "radial_array.mode.total"},
+          std::pair{spacing, "radial_array.mode.spacing"}}) {
+      EXPECT_EQ(button->text(),
+                QString::fromStdString(localization.text(key, "missing")));
+      EXPECT_EQ(button->toolTip(), QString::fromStdString(
+          localization.text(std::string(key) + ".tooltip", "missing")));
+      EXPECT_FALSE(button->toolTip().isEmpty());
+    }
+    EXPECT_EQ(instances->text(), QString::fromStdString(
+        localization.text("radial_array.create_instances", "missing")));
+    EXPECT_EQ(instances->toolTip(), QString::fromStdString(
+        localization.text("radial_array.create_instances.tooltip", "missing")));
+    EXPECT_TRUE(total->isChecked());
+    EXPECT_FALSE(spacing->isChecked());
+    EXPECT_TRUE(instances->isChecked());
+    for (const auto &[button, label_key] :
+         {std::pair{spacing, "radial_array.angle_spacing"},
+          std::pair{total, "radial_array.total_angle"}}) {
+      button->click();
+      panel.refresh();
+      EXPECT_EQ(degrees_label->text(), QString::fromStdString(
+          localization.text(label_key, "missing")));
+      EXPECT_EQ(degrees->value(), 137);
+      EXPECT_DOUBLE_EQ(session.radial_array().degrees(), 137.0);
+      EXPECT_EQ(panel.findChild<QSpinBox *>(degrees->objectName()), locale_degrees.data());
+      EXPECT_EQ(panel.findChild<QLabel *>(degrees_label->objectName()), locale_label.data());
+      EXPECT_EQ(panel.findChild<QPushButton *>(total->objectName()), locale_total.data());
+      EXPECT_EQ(panel.findChild<QPushButton *>(spacing->objectName()), locale_spacing.data());
+    }
+  }
+
+  ASSERT_TRUE(editor.tools().reset_active_settings().ok());
+  panel.refresh();
+  EXPECT_TRUE(total->isChecked());
+  EXPECT_FALSE(instances->isChecked());
+  EXPECT_DOUBLE_EQ(session.radial_array().degrees(), 360.0);
+  panel.unbind();
+  panel.hide();
+}
+
+TEST(QtToolSettingsPanelTests,
      CollapsibleSectionsDescribeAndResetTheActiveToolWithoutClosingThePanel) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -1519,8 +1723,8 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_NE(edit_content, nullptr);
   ASSERT_NE(treat_as_one, nullptr);
   ASSERT_NE(shift_left, nullptr);
-  EXPECT_EQ(shift_x->accessibleName(), QStringLiteral("Shift X"));
-  EXPECT_EQ(shift_y->accessibleName(), QStringLiteral("Shift Y"));
+  EXPECT_EQ(shift_x->accessibleName(), QStringLiteral("Shift X (px)"));
+  EXPECT_EQ(shift_y->accessibleName(), QStringLiteral("Shift Y (px)"));
   ASSERT_EQ(scale_y->locale().decimalPoint(), QStringLiteral("."));
   EXPECT_TRUE(section->isHidden());
   EXPECT_TRUE(edit_section->isHidden());
@@ -1715,8 +1919,8 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_FALSE(shift_left->accessibleName().isEmpty());
   EXPECT_TRUE(shift_left->toolTip().startsWith(shift_left->accessibleName()));
   EXPECT_EQ(scale_x->accessibleName(), QStringLiteral("Scala X"));
-  EXPECT_EQ(shift_x->accessibleName(), QStringLiteral("Spostamento X"));
-  EXPECT_EQ(shift_y->accessibleName(), QStringLiteral("Spostamento Y"));
+  EXPECT_EQ(shift_x->accessibleName(), QStringLiteral("Spostamento X (px)"));
+  EXPECT_EQ(shift_y->accessibleName(), QStringLiteral("Spostamento Y (px)"));
   EXPECT_EQ(scale_y->locale().decimalPoint(), QStringLiteral("."));
   EXPECT_TRUE(content->isHidden());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
@@ -2350,10 +2554,10 @@ TEST(QtToolSettingsPanelTests,
   rotate->click();
   EXPECT_EQ(editor.modeling().face_texture_settings().scale_x,
             std::optional<double>(5.0));
-  EXPECT_DOUBLE_EQ(editor.modeling().face_texture_settings().rotation_degrees, 22.5);
+  EXPECT_DOUBLE_EQ(editor.modeling().face_texture_settings().rotation_degrees, -22.5);
   EXPECT_FALSE(panel->numeric_interaction_active());
   process_events_for(75);
-  EXPECT_DOUBLE_EQ(editor.modeling().face_texture_settings().rotation_degrees, 22.5);
+  EXPECT_DOUBLE_EQ(editor.modeling().face_texture_settings().rotation_degrees, -22.5);
 
   TexturePresentationEvents presentation_events;
   for (QPushButton *button : buttons) {
@@ -2530,11 +2734,11 @@ TEST(QtToolSettingsPanelTests,
   const QPointer<QDoubleSpinBox> retained_repeat(spins[0]);
   panel->set_localization(italian);
   QCoreApplication::processEvents();
-  EXPECT_EQ(header->text(), QStringLiteral("Distendi UV"));
+  EXPECT_EQ(header->text(), QStringLiteral("Distensione UV guidata"));
   EXPECT_EQ(axis->accessibleName(), QStringLiteral("Asse"));
-  EXPECT_EQ(world_space->text(), QStringLiteral("Spazio globale"));
+  EXPECT_EQ(world_space->text(), QStringLiteral("Densit\u00E0 globale"));
   EXPECT_EQ(spins[0]->accessibleName(), QStringLiteral("Ripetizioni U"));
-  EXPECT_EQ(apply->accessibleName(), QStringLiteral("Distendi UV"));
+  EXPECT_EQ(apply->accessibleName(), QStringLiteral("Distensione UV guidata"));
   EXPECT_TRUE(apply->toolTip().contains(QStringLiteral("F11")));
   EXPECT_EQ(retained_repeat.data(), spins[0]);
   for (QDoubleSpinBox *spin : spins) {
@@ -4488,4 +4692,93 @@ TEST(QtToolSettingsNumberSliderTests,
 
   window.unbind();
   window.hide();
+}
+
+TEST(QtToolSettingsPanelTests,
+     UvSemanticHelpIsLocalizedRetainedAndSkippedOnUnchangedFrames) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-uv-semantic-help-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  const auto created = create_texture_action_surface(editor);
+  ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
+  quader::QtToolSettingsPanel panel;
+  panel.bind(editor);
+
+  const std::array<std::pair<const char *, const char *>, 17> help_bindings{{
+      {"tool_settings.edit_texture.align_to_grid",
+       "tool_settings.edit_texture.align_to_grid.tooltip"},
+      {"tool_settings.edit_texture.align_to_face",
+       "tool_settings.edit_texture.align_to_face.tooltip"},
+      {"tool_settings.edit_texture.align_to_view",
+       "tool_settings.edit_texture.align_to_view.tooltip"},
+      {"tool_settings.edit_texture.flip_face_horizontal",
+       "tool_settings.edit_texture.flip_face_horizontal.tooltip"},
+      {"tool_settings.edit_texture.justify_left",
+       "tool_settings.edit_texture.justify_left.tooltip"},
+      {"tool_settings.edit_texture.rotate_clockwise",
+       "tool_settings.edit_texture.rotate_clockwise.tooltip"},
+      {"tool_settings.edit_texture.treat_as_one",
+       "tool_settings.edit_texture.treat_as_one_tooltip"},
+      {"tool_settings.texture.scale_x", "tool_settings.texture_scale_x.tooltip"},
+      {"tool_settings.texture.scale_y", "tool_settings.texture_scale_y.tooltip"},
+      {"tool_settings.texture.shift_x", "tool_settings.texture_shift_x.tooltip"},
+      {"tool_settings.texture.shift_y", "tool_settings.texture_shift_y.tooltip"},
+      {"tool_settings.texture.rotate", "tool_settings.texture_rotate.tooltip"},
+      {"tool_settings.uv_peel.world_space",
+       "tool_settings.uv_peel.world_space_tooltip"},
+      {"tool_settings.uv_peel.u_repeat", "tool_settings.uv_peel.u_repeat.tooltip"},
+      {"tool_settings.uv_peel.v_repeat", "tool_settings.uv_peel.v_repeat.tooltip"},
+      {"tool_settings.uv_peel.u_offset", "tool_settings.uv_peel.u_offset.tooltip"},
+      {"tool_settings.uv_peel.v_offset", "tool_settings.uv_peel.v_offset.tooltip"},
+  }};
+  std::array<QPointer<QWidget>, help_bindings.size()> retained;
+  for (std::size_t index = 0; index < help_bindings.size(); ++index) {
+    retained[index] = panel.findChild<QWidget *>(
+        QString::fromUtf8(help_bindings[index].first));
+    ASSERT_NE(retained[index], nullptr);
+  }
+  quader::LocalizationService localization;
+  ASSERT_TRUE(localization.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "en-US"));
+  const auto content_revision = editor.revisions().modeling_content_revision;
+  for (const char *locale : {"en-US", "it-IT"}) {
+    SCOPED_TRACE(locale);
+    ASSERT_TRUE(localization.select_locale(locale));
+    panel.set_localization(localization);
+    QCoreApplication::processEvents();
+    for (std::size_t index = 0; index < help_bindings.size(); ++index) {
+      auto *widget = panel.findChild<QWidget *>(
+          QString::fromUtf8(help_bindings[index].first));
+      ASSERT_EQ(widget, retained[index].data());
+      const auto help = localization.text(help_bindings[index].second, "");
+      ASSERT_FALSE(help.empty());
+      EXPECT_TRUE(widget->toolTip().contains(QString::fromStdString(help)));
+    }
+    EXPECT_EQ(retained[9]->accessibleName(), QString::fromStdString(
+        localization.text("tool_settings.texture_shift_x", "")));
+    EXPECT_EQ(retained[11]->accessibleName(), QString::fromStdString(
+        localization.text("tool_settings.texture_rotate", "")));
+    EXPECT_EQ(retained[12]->accessibleName(), QString::fromStdString(
+        localization.text("tool_settings.uv_peel.world_space", "")));
+    EXPECT_TRUE(retained[0]->toolTip().contains(QStringLiteral("0.125")) ||
+                retained[0]->toolTip().contains(QStringLiteral("0,125")));
+    EXPECT_TRUE(retained[12]->toolTip().contains(QStringLiteral("64")));
+    TexturePresentationEvents events;
+    for (const auto &widget : retained) {
+      widget->installEventFilter(&events);
+    }
+    for (int frame = 0; frame < 20; ++frame) {
+      panel.refresh_texture_settings();
+      panel.refresh_uv_peel_settings();
+    }
+    EXPECT_EQ(events.changes, 0);
+    EXPECT_EQ(editor.revisions().modeling_content_revision, content_revision);
+  }
+  panel.unbind();
 }

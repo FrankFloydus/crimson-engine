@@ -9,6 +9,7 @@
 #include "assets/material_reference.hpp"
 #include "assets/mesh_asset.hpp"
 #include "core/types.hpp"
+#include "editor/modeling/radial_array_mode.hpp"
 #include "editor/modeling/modeling_preview_types.hpp"
 #include "editor/modeling/modeling_result_types.hpp"
 #include "math/types.hpp"
@@ -973,6 +974,7 @@ struct ModelingRadialArrayRequest {
   std::uint32_t copies = 8u;
   std::uint32_t repeats = 1u;
   double repeat_spacing = 1.0;
+  RadialArrayMode mode = RadialArrayMode::Total;
 };
 
 /**

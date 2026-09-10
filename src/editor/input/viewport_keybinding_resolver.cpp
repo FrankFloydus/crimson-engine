@@ -128,10 +128,24 @@ void mark_action_pressed(ViewportInputFrame &input,
     --input.linear_array_copy_delta;
     break;
   case ViewportInputActionKind::RadialArrayIncreaseCopies:
-    ++input.radial_array_copy_delta;
+    input.radial_array_events.push_back({
+        ViewportRadialArrayInputEventKind::CopiesStep, 1.0});
     break;
   case ViewportInputActionKind::RadialArrayDecreaseCopies:
-    --input.radial_array_copy_delta;
+    input.radial_array_events.push_back({
+        ViewportRadialArrayInputEventKind::CopiesStep, -1.0});
+    break;
+  case ViewportInputActionKind::RadialArrayIncreaseRepeats:
+    input.radial_array_events.push_back({
+        ViewportRadialArrayInputEventKind::RepeatsStep, 1.0});
+    break;
+  case ViewportInputActionKind::RadialArrayDecreaseRepeats:
+    input.radial_array_events.push_back({
+        ViewportRadialArrayInputEventKind::RepeatsStep, -1.0});
+    break;
+  case ViewportInputActionKind::RadialArrayToggleInstances:
+    input.radial_array_events.push_back({
+        ViewportRadialArrayInputEventKind::ToggleInstances});
     break;
   case ViewportInputActionKind::SampleFaceMaterial:
     input.sample_face_material_pressed = true;
@@ -723,7 +737,7 @@ void ViewportKeybindingResolver::resolve(
   input.navigation_bindings = {};
   input.transform_vertex_snap_down = false;
   input.linear_array_copy_delta = 0;
-  input.radial_array_copy_delta = 0;
+  input.radial_array_events.clear();
   input.sample_face_material_pressed = false;
   input.apply_active_material_to_selection_pressed = false;
   input.apply_active_material_delay_for_double_click = false;
@@ -828,6 +842,10 @@ void ViewportKeybindingResolver::resolve(
                 const bool radial_decrease =
                     action ==
                     ViewportInputActionKind::RadialArrayDecreaseCopies;
+                const bool radial_repeats_increase =
+                    action == ViewportInputActionKind::RadialArrayIncreaseRepeats;
+                const bool radial_repeats_decrease =
+                    action == ViewportInputActionKind::RadialArrayDecreaseRepeats;
                 if (linear_increase || linear_decrease) {
                   wheel_event_resolved_linear_array_action = true;
                   input.keybinding_input_consumed = true;
@@ -837,15 +855,18 @@ void ViewportKeybindingResolver::resolve(
                   input.linear_array_copy_delta +=
                       accumulate_discrete_wheel_steps(
                           semantic_delta, linear_array_wheel_remainder);
-                } else if (radial_increase || radial_decrease) {
+                } else if (radial_increase || radial_decrease ||
+                           radial_repeats_increase || radial_repeats_decrease) {
                   wheel_event_resolved_radial_array_action = true;
                   input.keybinding_input_consumed = true;
                   const double semantic_delta =
                       std::abs(wheel_step_delta) *
-                      (radial_increase ? 1.0 : -1.0);
-                  input.radial_array_copy_delta +=
-                      accumulate_discrete_wheel_steps(
-                          semantic_delta, radial_array_wheel_remainder);
+                      (radial_increase || radial_repeats_increase ? 1.0 : -1.0);
+                  input.radial_array_events.push_back({
+                      radial_increase || radial_decrease
+                          ? ViewportRadialArrayInputEventKind::CopiesWheel
+                          : ViewportRadialArrayInputEventKind::RepeatsWheel,
+                      semantic_delta});
                 } else {
                   mark_navigation_down(input.navigation_bindings, action);
                   if (action == ViewportInputActionKind::Zoom ||
@@ -952,9 +973,10 @@ void ViewportKeybindingResolver::resolve(
               wheel_event_resolved_linear_array_action,
               linear_array_wheel_remainder);
         } else if (state.active_tool == ViewportToolId::RadialArray) {
-          finish_array_wheel_event(
-              wheel_event_resolved_radial_array_action,
-              radial_array_wheel_remainder);
+          if (!wheel_event_resolved_radial_array_action) {
+            input.radial_array_events.push_back({
+                ViewportRadialArrayInputEventKind::ResetWheel});
+          }
         }
         wheel_event_resolved_linear_array_action = false;
         wheel_event_resolved_radial_array_action = false;

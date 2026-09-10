@@ -809,70 +809,124 @@ ViewportNativeToolInteraction::handle_frame(
     output.radial_array_consumed = true;
     output.consumed = true;
     output.blocks_transform_gizmo = true;
-    if (input.radial_array_copy_delta != 0) {
-      record_change(radial_array->adjust_copies(input.radial_array_copy_delta));
-    }
-    if (frame.radial_array_wheel_remainder != nullptr) {
+    double unused_wheel_remainder = 0.0;
+    double &wheel_remainder = frame.radial_array_wheel_remainder != nullptr
+                                  ? *frame.radial_array_wheel_remainder
+                                  : unused_wheel_remainder;
+    const auto reconcile_wheel = [&](bool repeats) {
       reconcile_bounded_wheel_remainder(
-          radial_array->copies() <= kRadialArrayMinimumCopies,
-          radial_array->copies() >= radial_array->maximum_copies(),
-          *frame.radial_array_wheel_remainder);
+          repeats ? radial_array->repeats() <= kRadialArrayMinimumRepeats
+                  : radial_array->copies() <= kRadialArrayMinimumCopies,
+          repeats ? radial_array->repeats() >= radial_array->maximum_repeats()
+                  : radial_array->copies() >= radial_array->maximum_copies(),
+          wheel_remainder);
+    };
+    const auto adjust_count = [&](double amount, bool repeats, bool wheel) {
+      const auto kind = repeats ? ViewportRadialArrayInputEventKind::RepeatsWheel
+                                : ViewportRadialArrayInputEventKind::CopiesWheel;
+      if (radial_array_wheel_kind_ != kind) {
+        wheel_remainder = 0.0;
+        radial_array_wheel_kind_ = kind;
+      }
+      reconcile_wheel(repeats);
+      const int delta = wheel
+          ? accumulate_discrete_wheel_steps(amount, wheel_remainder)
+          : amount > 0.0 ? 1 : amount < 0.0 ? -1 : 0;
+      record_change(repeats ? radial_array->adjust_repeats(delta)
+                            : radial_array->adjust_copies(delta));
+      // Evaluate limits per physical event, preserving a following reversal.
+      reconcile_wheel(repeats);
+    };
+    const bool can_accept_input = !native_pointer_interrupted(frame) &&
+                                  !input.navigation_active;
+    if (can_accept_input) {
+      for (const ViewportRadialArrayInputEvent &event :
+           input.radial_array_events) {
+        switch (event.kind) {
+        case ViewportRadialArrayInputEventKind::CopiesStep:
+          adjust_count(event.amount, false, false);
+          break;
+        case ViewportRadialArrayInputEventKind::CopiesWheel:
+          adjust_count(event.amount, false, true);
+          break;
+        case ViewportRadialArrayInputEventKind::RepeatsStep:
+          adjust_count(event.amount, true, false);
+          break;
+        case ViewportRadialArrayInputEventKind::RepeatsWheel:
+          adjust_count(event.amount, true, true);
+          break;
+        case ViewportRadialArrayInputEventKind::ResetWheel:
+          wheel_remainder = 0.0;
+          radial_array_wheel_kind_.reset();
+          break;
+        case ViewportRadialArrayInputEventKind::ToggleInstances:
+          record_change(radial_array->set_create_instances(
+              !radial_array->create_instances()));
+          break;
+        }
+      }
+    } else {
+      wheel_remainder = 0.0;
+      radial_array_wheel_kind_.reset();
     }
 
-    if (input.modal_tool_finalize_pressed && radial_array->center_locked()) {
-      record_commit("Radial Array apply",
-                    lifecycle.commit_active());
-    } else if (!radial_array->center_locked()) {
-      const bool can_place = point_placement != nullptr &&
-                             input.viewport_hovered &&
-                             !native_pointer_interrupted(frame) &&
-                             !frame.suppress_hover_work;
-      if (!can_place) {
-        (void)radial_array->clear_center_candidate();
-      } else {
-        output.claim_interaction_pane = true;
-        const float grid_size =
-            viewport_grid_world_size_for_preset(input.grid_preset);
-        const auto resolve_center = [&](QVec2 mouse_local) {
-          return point_placement->resolve(
-              document, assets, camera,
-              ViewportPointPlacementRequest{
-                  .mouse_local = mouse_local,
-                  .viewport_pixel_scale = frame.viewport_pixel_scale,
-                  .active_grid = viewport_active_grid_placement_plane(camera),
-                  .grid_size = grid_size,
-                  .policy = ViewportPointPlacementPolicy::radial_array(),
-              });
-        };
-        const ViewportPointPlacementResult hover =
-            resolve_center(input.mouse_local);
-        if (hover.valid) {
-          if (frame.handles_visible) {
-            pointer_cursor_ = ViewportPointerCursor::OpenHand;
-          }
-          const CommandResult changed = radial_array->update_center_candidate(
-              hover.world_position, hover.world_normal, grid_size);
-          output.mark_overlay_dirty =
-              output.mark_overlay_dirty || changed.changed;
-        } else {
-          (void)radial_array->clear_center_candidate();
-        }
+    // Hover placement may follow a toolbar activation while keyboard focus
+    // remains in Qt. Fixing the center and accepting require viewport focus.
+    const bool can_place = point_placement != nullptr &&
+                           input.viewport_hovered &&
+                           !input.pointer_interaction_canceled &&
+                           !input.text_input_active &&
+                           !input.navigation_active &&
+                           !input_result.cancel_requested &&
+                           !input_result.navigation_active &&
+                           !input_result.camera_changed &&
+                           !input_result.view_changed &&
+                           !frame.navigation_gizmo_consumed &&
+                           !frame.suppress_hover_work;
+    const float grid_size =
+        viewport_grid_world_size_for_preset(input.grid_preset);
+    const auto resolve_center = [&](QVec2 mouse_local) {
+      return point_placement->resolve(
+          document, assets, camera,
+          ViewportPointPlacementRequest{
+              .mouse_local = mouse_local,
+              .viewport_pixel_scale = frame.viewport_pixel_scale,
+              .active_grid = viewport_active_grid_placement_plane(camera),
+              .grid_size = grid_size,
+              .policy = ViewportPointPlacementPolicy::radial_array(),
+          });
+    };
 
-        if (frame.left_pressed) {
-          const ViewportPointPlacementResult clicked =
-              resolve_center(frame.left_click_local);
-          if (clicked.valid) {
-            (void)radial_array->update_center_candidate(
-                clicked.world_position, clicked.world_normal, grid_size);
-            const CommandResult locked = radial_array->lock_center();
-            pointer_cursor_ = ViewportPointerCursor::Default;
-            if (locked.changed) {
-              output.claim_interaction_pane = true;
-              output.invalidate_hover = true;
-              output.mark_overlay_dirty = true;
-            }
-          }
+    if (frame.left_pressed && can_accept_input && can_place &&
+        !canceled_left_release && !radial_array->center_locked()) {
+      // A complete click can arrive in one host frame. Its press position,
+      // rather than the current hover or a retained valid center, fixes placement.
+      const ViewportPointPlacementResult clicked =
+          resolve_center(frame.left_click_local);
+      if (clicked.valid) {
+        const CommandResult updated = radial_array->update_center_candidate(
+            clicked.world_position, clicked.world_normal, grid_size);
+        if (updated.ok && radial_array->has_valid_center()) {
+          left_release_suppression_.begin(QuaderMouseButton::Left,
+                                          frame.left_down);
+          output.claim_interaction_pane = true;
+          record_change(radial_array->lock_center());
         }
+      }
+    } else if (!frame.left_pressed && can_accept_input &&
+               input.modal_tool_finalize_pressed &&
+               radial_array->has_valid_center()) {
+      record_commit("Radial Array apply", lifecycle.commit_active());
+    } else if (can_place && !radial_array->center_locked()) {
+      output.claim_interaction_pane = true;
+      const ViewportPointPlacementResult hover =
+          resolve_center(input.mouse_local);
+      if (hover.valid) {
+        if (frame.handles_visible) {
+          pointer_cursor_ = ViewportPointerCursor::OpenHand;
+        }
+        record_change(radial_array->update_center_candidate(
+            hover.world_position, hover.world_normal, grid_size));
       }
     }
   }
@@ -1128,6 +1182,7 @@ ViewportNativeToolInteraction::handle_frame(
 
 void ViewportNativeToolInteraction::clear_drag_state() {
   pointer_cursor_ = ViewportPointerCursor::Default;
+  radial_array_wheel_kind_.reset();
   curve_control_hover_key_.reset();
   curve_control_hover_target_.reset();
   linear_array_hover_key_.reset();

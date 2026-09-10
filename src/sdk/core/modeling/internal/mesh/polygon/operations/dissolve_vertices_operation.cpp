@@ -12,6 +12,7 @@
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_backend.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
 #include <algorithm>
 #include <array>
@@ -66,6 +67,9 @@ OperationResult DissolveVerticesOperation::apply(Document& document, Selection& 
             if (!loop_vertex_is_redundant(document, face.vertices, vertex_id)) {
                 return OperationResult::failure("Dissolve Vertex only removes redundant straight-line vertices.");
             }
+            if (!face_vertex_uv_is_redundant(document, face, vertex_id)) {
+                return OperationResult::failure("Dissolve Vertex would remove a texture mapping corner.");
+            }
         }
 
         if (!used_by_face) {
@@ -98,8 +102,11 @@ OperationResult DissolveVerticesOperation::apply(Document& document, Selection& 
             append_loop_neighbors_for_vertex(source_loop, vertex_id, neighbor_vertices);
             add_unique_id(dissolved_vertices, vertex_id);
         }
+        const Face source_face = face;
         face.vertices = std::move(dissolved_loop);
-        face.uvs.clear();
+        if (!preserve_face_uvs(document, source_face, candidate, face)) {
+            return OperationResult::failure("Dissolve Vertex could not preserve the source texture mapping.");
+        }
         changed = true;
     }
 

@@ -119,6 +119,20 @@ inline bool scene_matrix_is_finite(const QMat4 &matrix) {
                      [](float value) { return std::isfinite(value); });
 }
 
+/// Checks whether a decomposed placement still represents its requested world matrix.
+inline bool scene_matrix_near_equal(const QMat4 &left, const QMat4 &right) {
+  if (!scene_matrix_is_finite(left) || !scene_matrix_is_finite(right)) return false;
+  constexpr float kAbsoluteTolerance = 0.0001f;
+  constexpr float kRelativeTolerance = 0.00001f;
+  for (std::size_t index = 0; index < left.values.size(); ++index) {
+    const float magnitude =
+        std::max(std::abs(left.values[index]), std::abs(right.values[index]));
+    if (std::abs(left.values[index] - right.values[index]) >
+        kAbsoluteTolerance + kRelativeTolerance * magnitude) return false;
+  }
+  return true;
+}
+
 /**
  * Extracts the finite, right-handed rotation represented by a world matrix.
  *

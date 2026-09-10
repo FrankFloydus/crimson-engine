@@ -14,6 +14,7 @@
 #include "api/quader_command_ids.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "core/localization_service.hpp"
+#include "editor/array/radial_array_tool_service.hpp"
 #include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
@@ -26,6 +27,7 @@
 #include "editor/tools/viewport_native_tool_interaction.hpp"
 #include "math/glm_bridge.hpp"
 #include "ui/qt_input_adapter.hpp"
+#include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
 #include "viewport/viewport_input_router.hpp"
@@ -42,6 +44,7 @@
 #include <QMouseEvent>
 #include <QPoint>
 #include <QPointF>
+#include <QPushButton>
 #include <QTemporaryDir>
 #include <QWheelEvent>
 
@@ -1416,6 +1419,381 @@ TEST(QtViewportSurfaceInputTests,
     EXPECT_TRUE(label->isHidden());
     process();
     EXPECT_TRUE(label->isHidden());
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     InsertEdgeLoopRepeatsPhysicalClicksAndRetainsToolAcrossInterruptions) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-persistent-edge-loop-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Persistent loop input box");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Back).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::InsertEdgeLoop).ok());
+  session.history().clear();
+
+  quader::QtViewportPanel panel;
+  auto settings = quader::ViewportSettings::defaults();
+  (void)settings.set_bool_value(quader::ViewportBoolSettingId::SnappingEnabled, false);
+  panel.set_viewport_settings(settings);
+  panel.attach_workspace(session.viewport_workspace());
+  auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+  auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+  camera.focus_origin(5);
+  QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &enter);
+  QApplication::sendEvent(surface, &focus);
+  const auto process = [&] {
+    panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
+                        session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+  };
+  const auto point_at_height = [&](float height) {
+    const auto projected = camera.project_world_point({1, height, 1});
+    EXPECT_TRUE(projected.visible);
+    return QPointF{projected.position.x / surface->devicePixelRatio(),
+                   projected.position.y / surface->devicePixelRatio()};
+  };
+  const auto mouse = [&](QEvent::Type type, QPointF local) {
+    QMouseEvent event(type, local, QPointF(surface->mapToGlobal(local.toPoint())),
+                     type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                     type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton,
+                     Qt::NoModifier);
+    QApplication::sendEvent(surface, &event);
+  };
+  const auto expect_active = [&] {
+    EXPECT_EQ(panel.tool_state().active_tool, quader::ViewportToolId::InsertEdgeLoop);
+    EXPECT_EQ(session.modeling().tool_status().active_tool,
+              quader::ModelingViewportTool::InsertEdgeLoop);
+  };
+  const auto document = [&] {
+    return *session.assets().mesh(box.value().mesh)->authored_polygon_document;
+  };
+  process();
+  const auto original = document();
+  for (int index = 0; index < 3; ++index) {
+    SCOPED_TRACE(index);
+    const auto local = point_at_height(-0.5f + 0.5f * static_cast<float>(index));
+    mouse(QEvent::MouseMove, local);
+    process();
+    ASSERT_TRUE(session.modeling().tool_status().insert_edge_loop_has_preview);
+    mouse(QEvent::MouseButtonPress, local);
+    if (index != 1) process();
+    // The middle insertion's complete click arrives between two input frames.
+    mouse(QEvent::MouseButtonRelease, local);
+    process();
+    expect_active();
+    EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_dragging);
+    EXPECT_EQ(session.history().undo_count(), static_cast<std::size_t>(index + 1));
+    EXPECT_EQ(document().vertices.size(), original.vertices.size() + 4u * (index + 1));
+    process();
+    EXPECT_EQ(session.history().undo_count(), static_cast<std::size_t>(index + 1))
+        << "Trailing release and idle frames must not insert another loop";
+  }
+  const auto inserted = document();
+  const auto hover = [&] {
+    mouse(QEvent::MouseMove, point_at_height(0.75f));
+    process();
+    ASSERT_TRUE(session.modeling().tool_status().insert_edge_loop_has_preview);
+  };
+  hover();
+  QKeyEvent escape_press(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QKeyEvent escape_release(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+  QApplication::sendEvent(surface, &escape_press);
+  QApplication::sendEvent(surface, &escape_release);
+  process();
+  expect_active();
+  EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_has_preview);
+  EXPECT_TRUE(quader_poly::has_same_geometry(document(), inserted));
+
+  hover();
+  QFocusEvent blur(QEvent::FocusOut);
+  QApplication::sendEvent(surface, &blur);
+  process();
+  expect_active();
+  EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_dragging);
+  EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_has_preview);
+  EXPECT_TRUE(quader_poly::has_same_geometry(document(), inserted));
+  QApplication::sendEvent(surface, &focus);
+  hover();
+  QEvent leave(QEvent::Leave);
+  QApplication::sendEvent(surface, &leave);
+  QWidget outside;
+  QMouseEvent outside_press(QEvent::MouseButtonPress, {10, 10}, {-100, -100},
+                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+  QMouseEvent outside_release(QEvent::MouseButtonRelease, {10, 10}, {-100, -100},
+                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(&outside, &outside_press);
+  QApplication::sendEvent(&outside, &outside_release);
+  process();
+  expect_active();
+  EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_has_preview);
+  EXPECT_TRUE(quader_poly::has_same_geometry(document(), inserted));
+  EXPECT_EQ(session.history().undo_count(), 3u);
+
+  QApplication::sendEvent(surface, &enter);
+  QApplication::sendEvent(surface, &focus);
+  for (const int delta : {120, -120}) {
+    const auto before_size = camera.state().orthographic_size;
+    QWheelEvent wheel({400, 300}, {500, 400}, {}, {0, delta}, Qt::NoButton,
+                      Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(surface, &wheel);
+    process();
+    if (delta > 0) EXPECT_LT(camera.state().orthographic_size, before_size);
+    else EXPECT_GT(camera.state().orthographic_size, before_size);
+    expect_active();
+    EXPECT_TRUE(quader_poly::has_same_geometry(document(), inserted));
+    EXPECT_EQ(session.history().undo_count(), 3u);
+  }
+  hover();
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+  process();
+  EXPECT_EQ(panel.tool_state().active_tool, quader::ViewportToolId::Move);
+  EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_has_preview);
+  EXPECT_EQ(session.history().undo_count(), 3u);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     RadialToolbarPreviewLocksOnClickAndWaitsForSettingsApply) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-radial-toolbar-preview-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  for (const bool coalesced : {false, true}) {
+    SCOPED_TRACE(coalesced);
+    quader::SceneSession session;
+    quader::QuaderEditorApi editor(
+        quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    editor.preferences().set_runtime_hooks({.gizmos_visible = [] { return true; }});
+    const auto source = editor.modeling().create_box(
+        {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Radial toolbar source");
+    ASSERT_TRUE(source.ok()) << source.error_message();
+    ASSERT_TRUE(editor.scene().set_transform(source.value().entity, {.position = {6, 0, 0}}).ok());
+    ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+    ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Top).ok());
+    session.history().clear();
+
+    QWidget host;
+    host.setAttribute(Qt::WA_DontShowOnScreen, true);
+    host.resize(900, 650);
+    quader::QtViewportPanel panel(&host);
+    panel.setGeometry(100, 0, 800, 600);
+    panel.attach_workspace(session.viewport_workspace());
+    QPushButton activate("Radial Array", &host);
+    activate.setGeometry(0, 0, 95, 30);
+    QObject::connect(&activate, &QPushButton::clicked, [&] {
+      ASSERT_TRUE(editor.commands().execute(quader::quader_command::kToolsActivateRadialArray).ok());
+    });
+    host.show();
+    QApplication::setActiveWindow(&host);
+    activate.setFocus();
+    ASSERT_EQ(QApplication::focusWidget(), &activate);
+    activate.click();
+    ASSERT_TRUE(session.radial_array().active());
+    ASSERT_TRUE(editor.tools().set_setting("radial_array", "radial_array.copies", 3.0).ok());
+    auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+    ASSERT_NE(surface, nullptr);
+    surface->resize(800, 600);
+    auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+    camera.focus_origin(16);
+    const auto render_size = surface->render_size_pixels();
+    camera.set_viewport_size(render_size.x, render_size.y);
+    const auto camera_before = camera.pose();
+    const auto frame = [&] {
+      panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
+                          session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+    };
+    const auto local_at = [&](quader::QVec3 world) {
+      const auto projected = camera.project_world_point(world);
+      EXPECT_TRUE(projected.visible);
+      return QPointF{projected.position.x / surface->devicePixelRatio(),
+                     projected.position.y / surface->devicePixelRatio()};
+    };
+    const auto mouse = [&](QEvent::Type type, QPointF local, Qt::MouseButton button,
+                            Qt::MouseButtons held) {
+      QMouseEvent event(type, local, QPointF(surface->mapToGlobal(local.toPoint())),
+                       button, held, Qt::NoModifier);
+      QApplication::sendEvent(surface, &event);
+    };
+    const auto origin = local_at({});
+    QEnterEvent enter(origin, origin, QPointF(surface->mapToGlobal(origin.toPoint())));
+    QApplication::sendEvent(surface, &enter);
+    mouse(QEvent::MouseMove, origin, Qt::NoButton, Qt::NoButton);
+    frame();
+    auto &tool = session.radial_array();
+    ASSERT_TRUE(tool.center_state().visible);
+    ASSERT_FALSE(tool.center_locked());
+    ASSERT_TRUE(tool.preview_state().active);
+    ASSERT_EQ(tool.preview_state().sources.size(), 1u);
+    ASSERT_EQ(tool.preview_state().sources.front().generated_world_transforms.size(), 2u);
+    EXPECT_EQ(QApplication::focusWidget(), &activate)
+        << "Hover placement must not take keyboard focus away from tool UI";
+    EXPECT_FLOAT_EQ(quader::length_squared(camera.pose().eye - camera_before.eye), 0.0f);
+    EXPECT_FLOAT_EQ(quader::length_squared(camera.pose().target - camera_before.target), 0.0f);
+    EXPECT_EQ(editor.query().modeling_objects().size(), 1u);
+    EXPECT_EQ(session.history().undo_count(), 0u);
+    const auto candidate = tool.center_state();
+
+    // Settings and temporarily ineligible pointer frames retain the last preview.
+    QEvent leave(QEvent::Leave);
+    QApplication::sendEvent(surface, &leave);
+    activate.setFocus();
+    ASSERT_TRUE(editor.tools().set_setting("radial_array", "radial_array.copies", 4.0).ok());
+    frame();
+    ASSERT_TRUE(tool.preview_state().active);
+    EXPECT_EQ(tool.preview_state().sources.front().generated_world_transforms.size(), 3u);
+    EXPECT_FLOAT_EQ(quader::length_squared(tool.center_state().world_position -
+                                          candidate.world_position), 0.0f);
+    QApplication::sendEvent(surface, &enter);
+    QFocusEvent focus(QEvent::FocusIn);
+    QApplication::sendEvent(surface, &focus);
+    frame();
+    for (const int delta : {120, -120}) {
+      const auto copies_before = tool.copies();
+      const auto zoom_before = camera.state().orthographic_size;
+      QWheelEvent wheel(origin, QPointF(surface->mapToGlobal(origin.toPoint())),
+                        {}, {0, delta}, Qt::NoButton, Qt::ShiftModifier,
+                        Qt::NoScrollPhase, false);
+      QApplication::sendEvent(surface, &wheel);
+      frame();
+      EXPECT_EQ(tool.copies(), delta > 0 ? copies_before + 1u : copies_before - 1u);
+      EXPECT_FLOAT_EQ(camera.state().orthographic_size, zoom_before);
+      EXPECT_TRUE(tool.preview_state().active);
+    }
+    for (const int delta : {120, -120}) {
+      const auto repeats_before = tool.repeats();
+      const auto copies_before = tool.copies();
+      const auto zoom_before = camera.state().orthographic_size;
+      QWheelEvent wheel(origin, QPointF(surface->mapToGlobal(origin.toPoint())),
+                        {}, {0, delta}, Qt::NoButton, Qt::ControlModifier,
+                        Qt::NoScrollPhase, false);
+      QApplication::sendEvent(surface, &wheel);
+      frame();
+      EXPECT_EQ(tool.repeats(), delta > 0 ? repeats_before + 1u : repeats_before - 1u);
+      EXPECT_EQ(tool.copies(), copies_before);
+      EXPECT_FLOAT_EQ(camera.state().orthographic_size, zoom_before);
+      ASSERT_TRUE(tool.preview_state().active);
+      EXPECT_EQ(tool.preview_state().sources.front().generated_world_transforms.size(),
+                tool.copies() * tool.repeats() - 1u);
+    }
+    const auto zoom_before_plain_wheel = camera.state().orthographic_size;
+    QWheelEvent plain_wheel(origin, QPointF(surface->mapToGlobal(origin.toPoint())),
+                            {}, {0, 120}, Qt::NoButton, Qt::NoModifier,
+                            Qt::NoScrollPhase, false);
+    QApplication::sendEvent(surface, &plain_wheel);
+    frame();
+    EXPECT_LT(camera.state().orthographic_size, zoom_before_plain_wheel);
+    EXPECT_EQ(tool.copies(), 4u);
+    EXPECT_EQ(tool.repeats(), 1u);
+    EXPECT_TRUE(tool.preview_state().active);
+    ASSERT_FALSE(tool.create_instances());
+    for (const bool expected_instances : {true, false}) {
+      QKeyEvent press(QEvent::KeyPress, Qt::Key_I, Qt::NoModifier);
+      QKeyEvent release(QEvent::KeyRelease, Qt::Key_I, Qt::NoModifier);
+      QApplication::sendEvent(surface, &press);
+      QApplication::sendEvent(surface, &release);
+      frame();
+      EXPECT_EQ(tool.create_instances(), expected_instances);
+      EXPECT_TRUE(tool.preview_state().active);
+    }
+    const auto before_navigation = tool.center_state().world_position;
+    mouse(QEvent::MouseButtonPress, origin, Qt::MiddleButton, Qt::MiddleButton);
+    frame();
+    mouse(QEvent::MouseMove, origin + QPointF{20, 10}, Qt::NoButton, Qt::MiddleButton);
+    frame();
+    EXPECT_TRUE(panel.command_input_context().navigation_active);
+    EXPECT_TRUE(tool.preview_state().active);
+    EXPECT_FLOAT_EQ(quader::length_squared(tool.center_state().world_position -
+                                          before_navigation), 0.0f);
+    mouse(QEvent::MouseButtonRelease, origin + QPointF{20, 10}, Qt::MiddleButton, Qt::NoButton);
+    frame();
+    camera.focus_origin(16);
+    camera.view_axis(quader::ViewportViewAxis::Y, 1);
+    frame();
+
+    const auto placement = local_at({2, 0, 2});
+    mouse(QEvent::MouseMove, placement, Qt::NoButton, Qt::NoButton);
+    frame();
+    ASSERT_TRUE(tool.preview_state().active);
+    const auto placed_center = tool.center_state().world_position;
+    const auto placed_preview = tool.preview_state().sources.front().generated_world_transforms;
+    ASSERT_EQ(placed_preview.size(), 3u);
+    const auto content_before_placement = session.scene().content_revision();
+    mouse(QEvent::MouseButtonPress, placement, Qt::LeftButton, Qt::LeftButton);
+    if (!coalesced) frame();
+    mouse(QEvent::MouseButtonRelease, placement, Qt::LeftButton, Qt::NoButton);
+    // A newer hover position cannot move the center belonging to the queued click.
+    mouse(QEvent::MouseMove, local_at({-2, 0, -2}), Qt::NoButton, Qt::NoButton);
+    frame();
+    ASSERT_TRUE(tool.active());
+    ASSERT_TRUE(tool.center_locked());
+    ASSERT_TRUE(tool.preview_state().active);
+    EXPECT_EQ(panel.tool_state().active_tool, quader::ViewportToolId::RadialArray);
+    EXPECT_FLOAT_EQ(quader::length_squared(tool.center_state().world_position - placed_center), 0.0f);
+    ASSERT_EQ(tool.preview_state().sources.front().generated_world_transforms.size(), placed_preview.size());
+    for (std::size_t index = 0; index < placed_preview.size(); ++index) {
+      EXPECT_EQ(tool.preview_state().sources.front().generated_world_transforms[index].values,
+                placed_preview[index].values);
+    }
+    frame();
+    EXPECT_EQ(session.scene().content_revision(), content_before_placement);
+    EXPECT_EQ(editor.query().modeling_objects().size(), 1u);
+    EXPECT_EQ(session.history().undo_count(), 0u);
+
+    const auto locked_preview_revision = tool.preview_state().revision;
+    ASSERT_TRUE(editor.tools().set_setting("radial_array", "radial_array.copies", 5.0).ok());
+    ASSERT_TRUE(editor.tools().set_setting("radial_array", "radial_array.degrees", 180.0).ok());
+    frame();
+    ASSERT_TRUE(tool.center_locked());
+    ASSERT_TRUE(tool.preview_state().active);
+    EXPECT_GT(tool.preview_state().revision, locked_preview_revision);
+    EXPECT_FLOAT_EQ(quader::length_squared(tool.center_state().world_position - placed_center), 0.0f);
+    const auto expected = tool.preview_state().sources.front().generated_world_transforms;
+    ASSERT_EQ(expected.size(), 4u);
+    EXPECT_EQ(session.scene().content_revision(), content_before_placement);
+    EXPECT_EQ(session.history().undo_count(), 0u);
+
+    // Use the real retained Apply button after editing the locked preview.
+    quader::QtToolSettingsPanel settings(&host);
+    settings.bind(editor);
+    settings.refresh();
+    auto *apply = settings.findChild<QPushButton *>(QStringLiteral("tool_settings.apply"));
+    ASSERT_NE(apply, nullptr);
+    ASSERT_TRUE(apply->isEnabled());
+    apply->click();
+    frame();
+    EXPECT_FALSE(tool.has_session());
+    EXPECT_EQ(panel.tool_state().active_tool, quader::ViewportToolId::Select);
+    EXPECT_EQ(session.history().undo_count(), 1u);
+    EXPECT_EQ(editor.query().history().undo_label, "Radial Array");
+    std::vector<quader::EntityId> generated;
+    for (const auto &object : editor.query().modeling_objects()) {
+      if (object.entity != source.value().entity) generated.push_back(object.entity);
+    }
+    std::sort(generated.begin(), generated.end());
+    ASSERT_EQ(generated.size(), expected.size());
+    for (std::size_t index = 0; index < generated.size(); ++index) {
+      const auto actual = session.scene().world_transform_matrix(generated[index]);
+      for (std::size_t component = 0; component < actual.values.size(); ++component) {
+        EXPECT_NEAR(actual.values[component], expected[index].values[component], 0.0001f);
+      }
+    }
+    frame();
+    EXPECT_EQ(session.history().undo_count(), 1u);
+    EXPECT_EQ(editor.query().modeling_objects().size(), 5u);
   }
 }
 

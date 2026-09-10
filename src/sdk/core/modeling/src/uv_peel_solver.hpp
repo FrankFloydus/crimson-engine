@@ -80,9 +80,10 @@ solve_guided_uv_peel(const GuidedPeelChart &chart);
  * Returns no error for a valid chart; does not require absolute reference pins.
  * Optional triangle samples check actual stored face corners for folds and
  * overlaps while shared-node representatives retain the guide constraints.
- * A nonzero stored_coordinate_tolerance is the caller's existing span-relative
- * shared-corner budget. It permits only measured edge or vertex contact between
- * triangles sharing chart nodes; the default double-coordinate solve is strict.
+ * A nonzero stored_coordinate_tolerance bounds measured shared-corner displacement
+ * after the caller certifies each stored sample against the desired coordinates.
+ * It permits only geometrically bounded edge or vertex contact between triangles
+ * sharing chart nodes; the default double-coordinate solve is strict.
  */
 [[nodiscard]] std::optional<Error> validate_uv_peel_chart(
     const GuidedPeelChart &chart, std::span<const PeelPoint2> coordinates,

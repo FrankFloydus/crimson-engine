@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
 
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_backend.hpp>
@@ -539,12 +540,7 @@ void restore_source_face_orientation(const Document& source, Document& candidate
             continue;
         }
 
-        std::ranges::reverse(face.vertices);
-        if (face.uvs.size() == face.vertices.size()) {
-            std::ranges::reverse(face.uvs);
-        } else {
-            face.uvs.clear();
-        }
+        reverse_face_winding(face);
     }
 }
 

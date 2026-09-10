@@ -384,7 +384,8 @@ OperationResult extrude_selected_faces_with_copied_vertices(
         }
 
         face->vertices = cap_vertices;
-        face->uvs.clear();
+        // Copied cap corners retain their source order even when the extrusion transforms them.
+        face->uvs = original_face.uvs;
         selected_faces.push_back(original_face.id);
         changed = true;
     }

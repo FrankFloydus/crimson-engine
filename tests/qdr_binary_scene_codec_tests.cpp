@@ -37,6 +37,7 @@
 #include <memory>
 #include <ranges>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -2170,9 +2171,27 @@ TEST(QdrBinarySceneCodecTests,
   sampling.values[12] = 1.0f;
   MeshProjectionService::apply_mesh_texture_mapping(exported, sampling);
   const std::string obj = ObjMeshWriter::serialize_mesh(exported, "Legacy");
-  EXPECT_NE(obj.find("\nvt 1 0\n"), std::string::npos);
-  EXPECT_NE(obj.find("\nvt 3 0\n"), std::string::npos);
-  EXPECT_NE(obj.find("\nvt 1 3\n"), std::string::npos);
+  std::vector<QVec2> exported_uvs;
+  std::istringstream lines{obj};
+  std::string line;
+  while (std::getline(lines, line)) {
+    if (!line.starts_with("vt ")) {
+      continue;
+    }
+    std::istringstream coordinates{line.substr(3)};
+    QVec2 uv;
+    ASSERT_TRUE(static_cast<bool>(coordinates >> uv.x >> uv.y)) << line;
+    exported_uvs.push_back(uv);
+  }
+  constexpr std::array<QVec2, 3> expected_uvs{{{1.0f, 0.0f},
+                                             {3.0f, 0.0f},
+                                             {1.0f, 3.0f}}};
+  ASSERT_EQ(exported_uvs.size(), expected_uvs.size());
+  // Carrier reconstruction can retain roundoff-sized cross terms at zero.
+  for (std::size_t index = 0; index < expected_uvs.size(); ++index) {
+    EXPECT_NEAR(exported_uvs[index].x, expected_uvs[index].x, 1.0e-7f);
+    EXPECT_NEAR(exported_uvs[index].y, expected_uvs[index].y, 1.0e-7f);
+  }
   EXPECT_NE(obj.find("\nv 1 0 0\n"), std::string::npos);
   EXPECT_FLOAT_EQ(loaded->geometry().vertices[1].uv.x, 1.0f);
 }

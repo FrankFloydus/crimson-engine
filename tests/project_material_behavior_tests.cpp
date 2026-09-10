@@ -10,12 +10,14 @@
 #include "editor/material/project_material_persistence.hpp"
 #include "editor/material/project_material_texture_snapshot.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/projection/mesh_projection_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "io/project/project_manifest.hpp"
 #include "io/project/qmat_codec.hpp"
 #include "io/qdr/qdr_binary_container.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "scene/scene_texture_mapping.hpp"
+#include "render/mesh_quad_uv_interpolation.hpp"
 #include "support/project_material_fixture.hpp"
 
 #include <gtest/gtest.h>
@@ -25,6 +27,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -468,6 +471,122 @@ quader_poly::Document texture_transfer_quad(bool folded = false) {
   document.faces.front().uvs = {
       {0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}};
   return document;
+}
+
+quader_poly::Document sloped_texture_continuation_document() {
+  // Captured sloped wall, its tapered side faces, and the separated thin cap.
+  // Stable sparse IDs retain the original edge relationships without a scene file.
+  quader_poly::Document document;
+  constexpr float left = 0.16870377957820892F;
+  constexpr float right = 1.5481683015823364F;
+  constexpr float lower_seam = 2.270589828491211F;
+  constexpr float upper_seam = 0.6056923866271973F;
+  constexpr float cap_front = 0.5279415249824524F;
+  constexpr float cap_back = 0.45275720953941345F;
+  document.vertices = {
+      {26, {right, 1.5F, 0.5F}}, {32, {left, 1.5F, 0.5F}},
+      {53, {right, 1.5F, lower_seam}}, {55, {left, 1.5F, lower_seam}},
+      {1381, {right, 3.75F, cap_front}}, {1382, {right, 3.75F, cap_back}},
+      {1383, {left, 3.75F, cap_back}}, {1384, {left, 3.75F, cap_front}},
+      {1385, {left, 3.75F, upper_seam}}, {1386, {right, 3.75F, upper_seam}}};
+  document.faces = {
+      {.id = 68, .vertices = {1381, 1382, 1383, 1384}},
+      {.id = 1381, .vertices = {32, 55, 1385, 1384},
+       .uvs = {{5.375F, 0.125F}, {5.817647457122803F, 0.125F},
+               {5.40142297744751F, -0.4375F}, {5.381985187530518F, -0.4375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = 1382, .vertices = {55, 53, 1386, 1385},
+       .uvs = {{-0.1562500149011612F, 0.019437480717897415F},
+               {-0.1131417453289032F, 0.019437480717897415F},
+               {-0.1131417453289032F, -0.0680311769247055F},
+               {-0.1562500149011612F, -0.0680311769247055F}},
+       .material_slot = 1,
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = 1383, .vertices = {53, 26, 1381, 1386}}};
+  document.next_vertex_id = 1387;
+  document.next_face_id = 1384;
+  return document;
+}
+
+quader_poly::Document tapered_side_texture_continuation_document(float rotation) {
+  auto document = sloped_texture_continuation_document();
+  auto &source = *quader_poly::find_face(document, 1381);
+  source.uvs = {{0.4863211214542389F, 0.3792925179004669F},
+                {0.5307994484901428F, 0.41220441460609436F},
+                {0.5307994484901428F, 0.32473576068878174F},
+                {0.528846263885498F, 0.32329052686691284F}};
+  source.material_slot = 1;
+  source.texture_transform.rotation_degrees = rotation;
+  document.vertices.insert(document.vertices.end(), {
+      {15, {0.0F, 1.5F, 0.5F}},
+      {38, {-0.16089105606079102F, 1.5F, 0.5F}},
+      {73, {0.0F, 1.5F, -1.2121429443359375F}},
+      {75, {-0.16089105606079102F, 1.5F, -1.2121429443359375F}},
+      {1377, {-0.16089105606079102F, 1.75F, 0.5F}},
+      {1380, {-0.8606553077697754F, 1.75F, 0.5F}},
+      {1387, {-0.8606553077697754F, 1.75F, 2.270589828491211F}},
+      {1388, {-0.16089105606079102F, 1.75F, 2.270589828491211F}}});
+  document.faces.insert(document.faces.end(), {
+      {.id = 35, .vertices = {1377, 1380, 1387, 1388},
+       .uvs = {{-0.16654984652996063F, 0.6126062273979187F},
+               {-0.1884174793958664F, 0.6126062273979187F},
+               {-0.1884174793958664F, 0.667937159538269F},
+               {-0.16654984652996063F, 0.667937159538269F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = 72, .vertices = {15, 73, 75, 38},
+       .uvs = {{-0.1615220010280609F, 0.6165440678596497F},
+               {-0.1615220010280609F, 0.5630396008491516F},
+               {-0.16654984652996063F, 0.5630396008491516F},
+               {-0.16654984652996063F, 0.6165440678596497F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}}});
+  document.next_vertex_id = 1389;
+  return document;
+}
+
+std::optional<QVec2> rendered_face_uv_at(ProjectSession &project, EntityId entity,
+                                        quader_poly::ElementId face_id, QVec3 point) {
+  const auto &scene = project.active_scene()->session->scene();
+  const auto *binding = scene.mesh(entity);
+  if (binding == nullptr) return std::nullopt;
+  const auto *asset = project.active_scene()->session->assets().mesh(binding->mesh);
+  const auto sampling = effective_texture_sampling_from_local(scene, entity);
+  if (asset == nullptr || !asset->authored_polygon_document || !sampling) return std::nullopt;
+  const auto *face = quader_poly::find_face(*asset->authored_polygon_document, face_id);
+  if (face == nullptr) return std::nullopt;
+  MeshAsset mesh = *asset;
+  MeshProjectionService::apply_mesh_texture_mapping(mesh, *sampling);
+  const auto &geometry = mesh.geometry();
+  const auto quad = build_mesh_quad_uv_interpolations(
+      geometry.vertices, geometry.indices, geometry.primitives);
+  for (std::size_t index = 0; index + 2U < geometry.indices.size(); index += 3U) {
+    const std::array indices{geometry.indices[index], geometry.indices[index + 1U],
+                             geometry.indices[index + 2U]};
+    if (!std::ranges::all_of(indices, [&](std::uint32_t corner) {
+          return std::ranges::find(face->vertices, geometry.vertices[corner].source_vertex_id) !=
+                 face->vertices.end();
+        })) continue;
+    const auto &a = geometry.vertices[indices[0]];
+    const auto &b = geometry.vertices[indices[1]];
+    const auto &c = geometry.vertices[indices[2]];
+    const auto ab = b.position - a.position;
+    const auto ac = c.position - a.position;
+    const auto relative = point - a.position;
+    const float aa = dot(ab, ab), cc = dot(ac, ac), mixed = dot(ab, ac);
+    const float determinant = aa * cc - mixed * mixed;
+    if (determinant <= 1.0e-10F) continue;
+    const float wb = (dot(relative, ab) * cc - dot(relative, ac) * mixed) / determinant;
+    const float wc = (dot(relative, ac) * aa - dot(relative, ab) * mixed) / determinant;
+    const float wa = 1.0F - wb - wc;
+    if (wa < -0.0001F || wb < -0.0001F || wc < -0.0001F ||
+        length_squared(relative - ab * wb - ac * wc) > 1.0e-8F) continue;
+    const QVec2 linear = a.uv * wa + b.uv * wb + c.uv * wc;
+    auto interpolation = quad[indices[0]];
+    interpolation.coordinates = quad[indices[0]].coordinates * wa +
+                                quad[indices[1]].coordinates * wb +
+                                quad[indices[2]].coordinates * wc;
+    return evaluate_mesh_quad_uv_interpolation(linear, interpolation);
+  }
+  return std::nullopt;
 }
 
 void expect_same_authored_document(const quader_poly::Document &actual,
@@ -2525,6 +2644,302 @@ TEST(ProjectMaterialBehaviorTests,
   expect_same_authored_document(
       *authored_document(harness.project(), box.value().entity), after_second);
   expect_same_selection_identity(exact_selection(harness.project()), selection_before);
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     FaceTextureTransferContinuesTranslatedSlopeOntoTaperedSidesAndThinCap) {
+  ProjectMaterialBehaviorHarness harness("sloped-face-continuation");
+  harness.create();
+  const InstalledMaterial beige{
+      .path = project_path("Materials/beige.qmat"),
+      .material = project_material(kAmberMaterialId, "Beige", {0.8F, 0.7F, 0.5F})};
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue", {0.1F, 0.2F, 1.0F})};
+  const std::array materials{beige, blue};
+  harness.install_and_reopen(materials);
+  auto &editor = harness.editor();
+  const auto original = sloped_texture_continuation_document();
+  const auto created = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(original),
+      {.name = "Sloped texture continuation"});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto object = created.value();
+  editor.preferences().set_runtime_hooks({
+      .texture_lock_enabled = [] { return false; },
+      .texture_lock_scale_enabled = [] { return false; }});
+  ASSERT_TRUE(editor.scene().set_transform(object.entity,
+      {.position = {5.0F, 0.5F, -21.5F}}).ok());
+  const auto placed = editor.query().entity(object.entity);
+  ASSERT_TRUE(placed.has_value());
+  ASSERT_TRUE(placed->texture_sampling_from_local.has_value());
+  QMat4 expected_sampling;
+  expected_sampling.values[12] = 5.0F;
+  expected_sampling.values[13] = 0.5F;
+  expected_sampling.values[14] = -21.5F;
+  EXPECT_EQ(placed->texture_sampling_from_local->values, expected_sampling.values);
+  auto &session = *harness.project().active_scene()->session;
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.set_material(object.entity, {
+      .material = MaterialReference::project(blue.material.id),
+      .material_slots = {{1U, MaterialReference::project(beige.material.id)}}}));
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(object, 1382).ok());
+  const auto before = *authored_document(harness.project(), object.entity);
+  expect_same_authored_document(before, original);
+  const auto selected = exact_selection(harness.project());
+  const auto source_uv = effective_face_corner_uvs(harness.project(), object.entity, 1382);
+  ASSERT_EQ(source_uv.size(), 4U);
+  const auto a = quader_poly::find_vertex(before, 55)->position;
+  const auto b = quader_poly::find_vertex(before, 53)->position;
+  const auto d = quader_poly::find_vertex(before, 1385)->position;
+  const float width = b.x - a.x;
+  const float slope_length = std::sqrt(length_squared(d - a));
+  const auto along_seam = (d - a) * (1.0F / slope_length);
+  const QVec3 side_tangent{0, -along_seam.z, along_seam.y};
+  const auto across_uv = source_uv[1] - source_uv[0];
+  const auto along_uv = source_uv[3] - source_uv[0];
+  const auto expected_uv = [&](QuaderElementId target, QVec3 point) {
+    if (target == 68) {
+      // The cap lies beyond the source's upper plane intersection. Its gap
+      // and depth extend the source's slope distance without changing density.
+      return source_uv[3] + across_uv * ((point.x - d.x) / width) +
+             along_uv * ((d.z - point.z) / slope_length);
+    }
+    const bool left = target == 1381;
+    const auto relative = point - (left ? a : b);
+    return (left ? source_uv[0] : source_uv[1]) +
+           along_uv * (dot(relative, along_seam) / slope_length) +
+           across_uv * ((left ? 1.0F : -1.0F) * dot(relative, side_tangent) / width);
+  };
+  std::vector<quader_poly::Document> documents{before};
+  std::vector<MaterialComponent> bindings{*scene_material(harness.project(), object.entity)};
+  const auto history_depth = session.history().undo_count();
+  for (const QuaderElementId target : {1381, 1383, 68}) {
+    SCOPED_TRACE(target);
+    const auto history_before = editor.query().history();
+    const auto revisions_before = editor.query().revisions();
+    ASSERT_TRUE(fixture.set_projection_failure(
+        ProjectMaterialFixture::ProjectionFailurePoint::BeforeCommit));
+    const auto failed = editor.modeling().transfer_face_texture_to_face(
+        object.modeling_object_id, target);
+    ASSERT_TRUE(fixture.set_projection_failure(
+        ProjectMaterialFixture::ProjectionFailurePoint::None));
+    EXPECT_FALSE(failed.ok());
+    EXPECT_FALSE(failed.changed());
+    expect_same_authored_document(*authored_document(harness.project(), object.entity),
+                                  documents.back());
+    EXPECT_EQ(*scene_material(harness.project(), object.entity), bindings.back());
+    expect_same_selection_identity(exact_selection(harness.project()), selected);
+    expect_same_history(editor.query().history(), history_before);
+    expect_same_revisions(editor.query().revisions(), revisions_before);
+
+    const auto applied = editor.modeling().transfer_face_texture_to_face(
+        object.modeling_object_id, target);
+    ASSERT_TRUE(applied.ok()) << applied.error_message();
+    ASSERT_TRUE(applied.changed());
+    const auto after = *authored_document(harness.project(), object.entity);
+    const auto *face = quader_poly::find_face(after, static_cast<quader_poly::ElementId>(target));
+    ASSERT_NE(face, nullptr);
+    const auto material = *scene_material(harness.project(), object.entity);
+    EXPECT_EQ(material.material_for_slot(face->material_slot),
+              MaterialReference::project(beige.material.id));
+    EXPECT_EQ(face->texture_transform, quader_poly::find_face(before, 1382)->texture_transform);
+    auto unchanged_faces = after;
+    *quader_poly::find_face(unchanged_faces, static_cast<quader_poly::ElementId>(target)) =
+        *quader_poly::find_face(documents.back(), static_cast<quader_poly::ElementId>(target));
+    expect_same_authored_document(unchanged_faces, documents.back());
+    expect_same_selection_identity(exact_selection(harness.project()), selected);
+    const auto corners = effective_face_corner_uvs(harness.project(), object.entity,
+        static_cast<quader_poly::ElementId>(target));
+    ASSERT_EQ(corners.size(), 4U);
+    QVec3 interior{};
+    constexpr std::array weights{0.12F, 0.28F, 0.42F, 0.18F};
+    for (std::size_t corner = 0; corner < corners.size(); ++corner) {
+      const auto position = quader_poly::find_vertex(after, face->vertices[corner])->position;
+      const auto expected = expected_uv(target, position);
+      EXPECT_NEAR(corners[corner].x, expected.x, 2.0e-5F) << corner;
+      EXPECT_NEAR(corners[corner].y, expected.y, 2.0e-5F) << corner;
+      interior += position * weights[corner];
+    }
+    const auto rendered = rendered_face_uv_at(harness.project(), object.entity,
+        static_cast<quader_poly::ElementId>(target), interior);
+    ASSERT_TRUE(rendered.has_value());
+    const auto expected_interior = expected_uv(target, interior);
+    EXPECT_NEAR(rendered->x, expected_interior.x, 2.0e-5F);
+    EXPECT_NEAR(rendered->y, expected_interior.y, 2.0e-5F);
+    documents.push_back(after);
+    bindings.push_back(material);
+    EXPECT_EQ(session.history().undo_count(), history_depth + documents.size() - 1U);
+    EXPECT_EQ(editor.query().history().undo_label, "Transfer Face Texture");
+    const auto no_op_history = editor.query().history();
+    const auto no_op_revisions = editor.query().revisions();
+    const auto repeated = editor.modeling().transfer_face_texture_to_face(
+        object.modeling_object_id, target);
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.changed());
+    expect_same_authored_document(*authored_document(harness.project(), object.entity), after);
+    expect_same_history(editor.query().history(), no_op_history);
+    expect_same_revisions(editor.query().revisions(), no_op_revisions);
+  }
+  for (std::size_t index = documents.size() - 1U; index > 0U; --index) {
+    ASSERT_TRUE(editor.history().undo().ok());
+    expect_same_authored_document(*authored_document(harness.project(), object.entity),
+                                  documents[index - 1U]);
+    EXPECT_EQ(*scene_material(harness.project(), object.entity), bindings[index - 1U]);
+    expect_same_selection_identity(exact_selection(harness.project()), selected);
+  }
+  EXPECT_EQ(session.history().undo_count(), history_depth);
+  for (std::size_t index = 1U; index < documents.size(); ++index) {
+    ASSERT_TRUE(editor.history().redo().ok());
+    expect_same_authored_document(*authored_document(harness.project(), object.entity),
+                                  documents[index]);
+    EXPECT_EQ(*scene_material(harness.project(), object.entity), bindings[index]);
+    expect_same_selection_identity(exact_selection(harness.project()), selected);
+  }
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     FaceTextureTransferContinuesTaperedSideOntoHorizontalLips) {
+  for (const float rotation : {0.0F, 31.0F}) {
+    SCOPED_TRACE(rotation);
+    ProjectMaterialBehaviorHarness harness("tapered-side-lip-continuation");
+    harness.create();
+    const InstalledMaterial beige{
+        .path = project_path("Materials/beige.qmat"),
+        .material = project_material(kAmberMaterialId, "Beige", {0.8F, 0.7F, 0.5F})};
+    const InstalledMaterial blue{
+        .path = project_path("Materials/blue.qmat"),
+        .material = project_material(kBlueMaterialId, "Blue", {0.1F, 0.2F, 1.0F})};
+    const std::array materials{beige, blue};
+    harness.install_and_reopen(materials);
+    auto &editor = harness.editor();
+    const auto original = tapered_side_texture_continuation_document(rotation);
+    const auto created = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(original),
+        {.name = "Tapered side and horizontal lips"});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    const auto object = created.value();
+    editor.preferences().set_runtime_hooks({
+        .texture_lock_enabled = [] { return false; },
+        .texture_lock_scale_enabled = [] { return false; }});
+    ASSERT_TRUE(editor.scene().set_transform(object.entity,
+        {.position = {5.0F, 0.5F, -21.5F}}).ok());
+    const ProjectMaterialFixture fixture(harness.project());
+    ASSERT_TRUE(fixture.set_material(object.entity, {
+        .material = MaterialReference::project(blue.material.id),
+        .material_slots = {{1U, MaterialReference::project(beige.material.id)}}}));
+    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(editor.selection().select_face(object, 1381).ok());
+    expect_same_authored_document(*authored_document(harness.project(), object.entity),
+                                  original);
+    const auto selected = exact_selection(harness.project());
+    const auto source_uv = effective_face_corner_uvs(harness.project(), object.entity, 1381);
+    ASSERT_EQ(source_uv.size(), 4U);
+    const auto a = quader_poly::find_vertex(original, 32)->position;
+    const auto b = quader_poly::find_vertex(original, 55)->position;
+    const auto d = quader_poly::find_vertex(original, 1384)->position;
+    const auto along_z = (source_uv[1] - source_uv[0]) * (1.0F / (b.z - a.z));
+    const auto along_y = (source_uv[3] - source_uv[0] - along_z * (d.z - a.z)) *
+                         (1.0F / (d.y - a.y));
+    const auto expected_uv = [&](QVec3 point) {
+      // Unfold a +Y lip into the -X source plane through their intersection:
+      // horizontal +X distance becomes source +Y distance. Retain the phase
+      // across the gap as well as the diagonal chart's two independent axes.
+      return source_uv[0] + along_y * (point.y + point.x - a.x - a.y) +
+             along_z * (point.z - a.z);
+    };
+    const auto source_edge = rendered_face_uv_at(harness.project(), object.entity,
+                                                1381, (a + b) * 0.5F);
+    ASSERT_TRUE(source_edge.has_value());
+    EXPECT_NEAR(source_edge->x, (source_uv[0].x + source_uv[1].x) * 0.5F, 2.0e-5F);
+    EXPECT_NEAR(source_edge->y, (source_uv[0].y + source_uv[1].y) * 0.5F, 2.0e-5F);
+    auto &session = *harness.project().active_scene()->session;
+    for (const QuaderElementId target : {35, 72}) {
+      SCOPED_TRACE(target);
+      const auto before = *authored_document(harness.project(), object.entity);
+      const auto material_before = *scene_material(harness.project(), object.entity);
+      const auto history_before = editor.query().history();
+      const auto revisions_before = editor.query().revisions();
+      const auto depth_before = session.history().undo_count();
+      ASSERT_TRUE(fixture.set_projection_failure(
+          ProjectMaterialFixture::ProjectionFailurePoint::BeforeCommit));
+      const auto failed = editor.modeling().transfer_face_texture_to_face(
+          object.modeling_object_id, target);
+      ASSERT_TRUE(fixture.set_projection_failure(
+          ProjectMaterialFixture::ProjectionFailurePoint::None));
+      EXPECT_FALSE(failed.ok());
+      EXPECT_FALSE(failed.changed());
+      expect_same_authored_document(*authored_document(harness.project(), object.entity), before);
+      EXPECT_EQ(*scene_material(harness.project(), object.entity), material_before);
+      expect_same_selection_identity(exact_selection(harness.project()), selected);
+      expect_same_history(editor.query().history(), history_before);
+      expect_same_revisions(editor.query().revisions(), revisions_before);
+
+      const auto applied = editor.modeling().transfer_face_texture_to_face(
+          object.modeling_object_id, target);
+      ASSERT_TRUE(applied.ok()) << applied.error_message();
+      ASSERT_TRUE(applied.changed());
+      const auto after = *authored_document(harness.project(), object.entity);
+      const auto *face = quader_poly::find_face(after, static_cast<quader_poly::ElementId>(target));
+      ASSERT_NE(face, nullptr);
+      const auto material_after = *scene_material(harness.project(), object.entity);
+      EXPECT_EQ(material_after.material_for_slot(face->material_slot),
+                MaterialReference::project(beige.material.id));
+      EXPECT_EQ(face->texture_transform, quader_poly::find_face(original, 1381)->texture_transform);
+      auto unchanged_faces = after;
+      *quader_poly::find_face(unchanged_faces, static_cast<quader_poly::ElementId>(target)) =
+          *quader_poly::find_face(before, static_cast<quader_poly::ElementId>(target));
+      expect_same_authored_document(unchanged_faces, before);
+      expect_same_selection_identity(exact_selection(harness.project()), selected);
+      const auto corners = effective_face_corner_uvs(harness.project(), object.entity,
+          static_cast<quader_poly::ElementId>(target));
+      ASSERT_EQ(corners.size(), 4U);
+      QVec3 interior{};
+      constexpr std::array weights{0.12F, 0.28F, 0.42F, 0.18F};
+      for (std::size_t corner = 0; corner < corners.size(); ++corner) {
+        const auto position = quader_poly::find_vertex(after, face->vertices[corner])->position;
+        const auto expected = expected_uv(position);
+        EXPECT_NEAR(corners[corner].x, expected.x, 2.0e-5F) << corner;
+        EXPECT_NEAR(corners[corner].y, expected.y, 2.0e-5F) << corner;
+        interior += position * weights[corner];
+      }
+      // Sample both the visible interior and the edge facing the source plane.
+      // These lips are disjoint, so continuation extrapolates across the gap.
+      const auto edge_start = quader_poly::find_vertex(after, face->vertices[0])->position;
+      const auto edge_end = quader_poly::find_vertex(after,
+          face->vertices[target == 35 ? 3U : 1U])->position;
+      for (const auto sample : {interior, (edge_start + edge_end) * 0.5F}) {
+        const auto rendered = rendered_face_uv_at(harness.project(), object.entity,
+            static_cast<quader_poly::ElementId>(target), sample);
+        ASSERT_TRUE(rendered.has_value());
+        const auto expected = expected_uv(sample);
+        EXPECT_NEAR(rendered->x, expected.x, 2.0e-5F);
+        EXPECT_NEAR(rendered->y, expected.y, 2.0e-5F);
+      }
+      EXPECT_EQ(session.history().undo_count(), depth_before + 1U);
+      EXPECT_EQ(editor.query().history().undo_label, "Transfer Face Texture");
+      const auto no_op_history = editor.query().history();
+      const auto no_op_revisions = editor.query().revisions();
+      const auto repeated = editor.modeling().transfer_face_texture_to_face(
+          object.modeling_object_id, target);
+      ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+      EXPECT_FALSE(repeated.changed());
+      expect_same_authored_document(*authored_document(harness.project(), object.entity), after);
+      expect_same_history(editor.query().history(), no_op_history);
+      expect_same_revisions(editor.query().revisions(), no_op_revisions);
+      ASSERT_TRUE(editor.history().undo().ok());
+      expect_same_authored_document(*authored_document(harness.project(), object.entity), before);
+      EXPECT_EQ(*scene_material(harness.project(), object.entity), material_before);
+      EXPECT_EQ(session.history().undo_count(), depth_before);
+      expect_same_selection_identity(exact_selection(harness.project()), selected);
+      ASSERT_TRUE(editor.history().redo().ok());
+      expect_same_authored_document(*authored_document(harness.project(), object.entity), after);
+      EXPECT_EQ(*scene_material(harness.project(), object.entity), material_after);
+      EXPECT_EQ(session.history().undo_count(), depth_before + 1U);
+      expect_same_selection_identity(exact_selection(harness.project()), selected);
+    }
+  }
 }
 
 TEST(ProjectMaterialBehaviorTests,

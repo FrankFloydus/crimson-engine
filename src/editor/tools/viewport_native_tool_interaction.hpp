@@ -248,6 +248,8 @@ private:
   std::optional<HandleHoverKey> pivot_hover_key_;
   bool linear_array_hover_hit_ = false;
   bool pivot_hover_hit_ = false;
+  // The next adjustment family owns the pending physical wheel fraction.
+  std::optional<ViewportRadialArrayInputEventKind> radial_array_wheel_kind_;
 };
 
 } // namespace quader

@@ -43,7 +43,7 @@ ElementId find_face_with_normal(const Document& document, quader::QVec3 directio
 TEST(QdrDocumentOperationSliceQuadTests, SliceQuadSubdividesASelectedQuadIntoAnXAndYGrid) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document(11);
 	Face* face = find_face(fixture.document, fixture.face);
-	EXPECT_TRUE(face != nullptr);
+	ASSERT_NE(face, nullptr);
 	const FaceTextureTransform texture{{2.0F, -0.5F}, {0.25F, -0.75F}, 35.0F};
 	face->texture_transform = texture;
 	face->uvs = {
@@ -71,7 +71,15 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadSubdividesASelectedQuadIntoAnX
 		EXPECT_TRUE(sliced_face.vertices.size() == 4U);
 		EXPECT_TRUE(sliced_face.material_slot == 11U);
 		EXPECT_EQ(sliced_face.texture_transform, texture);
-		EXPECT_TRUE(sliced_face.uvs.empty());
+		ASSERT_EQ(sliced_face.uvs.size(), sliced_face.vertices.size());
+		for (std::size_t corner = 0U; corner < sliced_face.vertices.size(); ++corner) {
+			const Vertex* vertex = find_vertex(fixture.document, sliced_face.vertices[corner]);
+			ASSERT_NE(vertex, nullptr);
+			// The original [-1,1] square carries one authored UV tile. New
+			// edge and center corners stay on that chart; slicing adds no tiles.
+			EXPECT_NEAR(sliced_face.uvs[corner].x, (vertex->position.x + 1.0F) * 0.5F, 0.000001F);
+			EXPECT_NEAR(sliced_face.uvs[corner].y, (vertex->position.y + 1.0F) * 0.5F, 0.000001F);
+		}
 		EXPECT_FALSE(qdr_test::face_has_repeated_vertices(sliced_face));
 	}
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));

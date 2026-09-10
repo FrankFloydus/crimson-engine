@@ -1029,13 +1029,14 @@ void ViewportSelectionInteraction::handle_frame(
   }
   const bool paint_selection_was_active = paint_selection_active_;
   const bool gizmo_consumed = before_tool.gizmo_consumed;
+  const bool gizmo_blocks_hover = gizmo_consumed || before_tool.gizmo_hovered;
   const bool selection_fallback_active =
       frame.active_tool_allows_selection_fallback;
   const bool suppress_hover_work =
       frame.input_result.navigation_active ||
       frame.input_result.camera_changed || frame.input.text_input_active ||
       frame.input.modal_tool_active || frame.input.active_tool_owns_viewport ||
-      gizmo_consumed;
+      gizmo_blocks_hover;
   const bool can_use_selection_fallback =
       selection_fallback_active && !frame.input.text_input_active &&
       !frame.input.modal_tool_active &&
@@ -1580,7 +1581,7 @@ void ViewportSelectionInteraction::handle_frame(
       frame.input_router.state().active_tool == ViewportToolId::Knife &&
       frame.input.viewport_hovered && !frame.input.text_input_active &&
       !frame.input_result.navigation_active &&
-      !frame.input_result.camera_changed && !gizmo_consumed;
+      !frame.input_result.camera_changed && !gizmo_blocks_hover;
   if (knife_authored_hover_this_frame) {
     // Knife owns component hover while its point resolver is eligible to run.
     // Re-arm clearing so a later suppressed frame or pointer leave cannot retain
@@ -1592,16 +1593,16 @@ void ViewportSelectionInteraction::handle_frame(
   const bool requires_full_hover_clear =
       !selection_fallback_active || frame.input.text_input_active ||
       frame.input.modal_tool_active || frame.input.active_tool_owns_viewport ||
-      tool_result.handled;
+      gizmo_blocks_hover || tool_result.handled;
   const bool should_clear_hover =
       !frame.input.viewport_hovered || requires_full_hover_clear;
-  const bool ordinary_pointer_leave =
+  const bool preserve_component_candidate =
       pointer_left_viewport && selection_fallback_active &&
       !requires_full_hover_clear;
   const bool needs_spatial_clear =
-      ordinary_pointer_leave && hover_clear_state_ == HoverClearState::Armed;
+      preserve_component_candidate && hover_clear_state_ == HoverClearState::Armed;
   const bool needs_full_clear =
-      !ordinary_pointer_leave &&
+      !preserve_component_candidate &&
       (hover_clear_state_ == HoverClearState::Armed ||
        (hover_clear_state_ == HoverClearState::SpatialCandidatePreserved &&
         requires_full_hover_clear));
@@ -1618,13 +1619,18 @@ void ViewportSelectionInteraction::handle_frame(
         tool_hover->invalidate();
       }
     }
-    if (ordinary_pointer_leave) {
-      // Moving from the native viewport surface onto editor UI is an empty
-      // spatial sample, just like moving over the grid/background. Clear the
-      // immediate element hover without discarding the component mesh wire.
+    if (preserve_component_candidate) {
+      // Leaving the viewport retains the last component candidate wire.
       clear_spatial_hover();
     } else {
+      // A gizmo is a different hover target, not an empty spatial sample.
+      // Drop hover-only mesh wires; selected components retain their own wires.
       clear_hover();
+    }
+    if (gizmo_blocks_hover && tool_hover != nullptr) {
+      // A handle can disappear under a stationary pointer. Re-arm once so
+      // scene hover resumes even when its spatial work key has not changed.
+      tool_hover->invalidate();
     }
   }
 }

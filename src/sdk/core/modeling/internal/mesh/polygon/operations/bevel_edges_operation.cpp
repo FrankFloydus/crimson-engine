@@ -17,6 +17,7 @@
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_backend.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
 #include <array>
 #include <cmath>
@@ -1912,6 +1913,15 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
     restore_source_face_orientation(document, candidate);
     orient_generated_faces_from_source_adjacency(document, candidate);
     restore_source_face_orientation(document, candidate);
+
+    // The retained surfaces keep their own corner charts, including seams between faces.
+    // Sample after terminal patches and winding repair have finalized each old face loop.
+    for (Face& face : candidate.faces) {
+        if (const Face* source_face = find_face(document, face.id);
+            source_face != nullptr && !preserve_face_uvs(document, *source_face, candidate, face)) {
+            return OperationResult::failure("Bevel could not preserve the source texture mapping.");
+        }
+    }
 
     std::vector<ElementId> selected_generated_faces;
     selected_generated_faces.reserve(generated_face_ids.size());

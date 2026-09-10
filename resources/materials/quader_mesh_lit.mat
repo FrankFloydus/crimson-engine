@@ -178,8 +178,7 @@ vertex {
 
         highp vec3 position = getPosition().xyz;
         highp vec3 geometricNormal = getCustom2().xyz;
-        highp vec3 samplingPosition =
-                (samplingFromLocal * vec4(position, 1.0)).xyz;
+        bool linearSampling = mat3(samplingFromLocal) != mat3(1.0);
         highp vec3 samplingNormal =
                 materialParams.textureSamplingCofactor[instanceIndex]
                         * geometricNormal;
@@ -191,9 +190,27 @@ vertex {
         samplingNormal = !isnan(normalMagnitude) && !isinf(normalMagnitude)
                         && normalMagnitude > 0.0
                 ? samplingNormal / normalMagnitude : vec3(0.0, 1.0, 0.0);
-        highp vec2 chartDelta =
-                generatedTextureUv(samplingPosition, samplingNormal)
-                        - generatedTextureUv(position, geometricNormal);
+        // Subtract chart coefficients before multiplying by position. This
+        // retains small affine changes at distant coordinates and keeps the
+        // translation constant across thin faces.
+        highp vec2 chartDelta;
+        if (linearSampling) {
+            highp vec2 deltaX =
+                    generatedTextureUv(samplingFromLocal[0].xyz, samplingNormal)
+                    - generatedTextureUv(vec3(1.0, 0.0, 0.0), geometricNormal);
+            highp vec2 deltaY =
+                    generatedTextureUv(samplingFromLocal[1].xyz, samplingNormal)
+                    - generatedTextureUv(vec3(0.0, 1.0, 0.0), geometricNormal);
+            highp vec2 deltaZ =
+                    generatedTextureUv(samplingFromLocal[2].xyz, samplingNormal)
+                    - generatedTextureUv(vec3(0.0, 0.0, 1.0), geometricNormal);
+            chartDelta = deltaX * position.x + deltaY * position.y
+                    + deltaZ * position.z
+                    + generatedTextureUv(samplingFromLocal[3].xyz, samplingNormal);
+        } else {
+            chartDelta = generatedTextureUv(
+                    samplingFromLocal[3].xyz, geometricNormal);
+        }
         highp vec2 uvCorrection = vec2(
                 dot(carrier.xy, chartDelta), dot(carrier.zw, chartDelta));
         if (any(isnan(uvCorrection)) || any(isinf(uvCorrection))) {
@@ -203,7 +220,7 @@ vertex {
         // V delta lets the existing fragment flip recover UV0 + K * chartDelta.
         material.uv0 += vec2(uvCorrection.x, -uvCorrection.y);
         material.textureSamplingCorrection.x =
-                mat3(samplingFromLocal) == mat3(1.0) ? 0.0 : 1.0;
+                linearSampling ? 1.0 : 0.0;
     }
 
     void materialVertex(inout MaterialVertexInputs material) {

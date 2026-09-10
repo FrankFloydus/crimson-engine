@@ -4097,6 +4097,55 @@ TEST(RadialArrayLayoutTests,
 }
 
 TEST(RadialArrayLayoutTests,
+     SpacingUsesNeighborAnglesBeyondOneRevolutionWithoutChangingTotal) {
+  RadialArrayLayoutRequest request{
+      .source_world_transform = compose_transform(QTransform{
+          .position = {2.0f, 0.0f, 0.0f},
+      }),
+      .source_pivot_world = {2.0f, 0.0f, 0.0f},
+      .degrees = 90.0,
+      .copies = 4u,
+      .mode = RadialArrayMode::Spacing,
+  };
+  const RadialArrayLayoutResult spacing = build_radial_array_layout(request);
+  ASSERT_TRUE(spacing.ok) << spacing.message;
+  ASSERT_EQ(spacing.generated_world_transforms.size(), 3u);
+  expect_vec3_near(transform_point(spacing.generated_world_transforms[0], {}),
+                   {0.0f, 0.0f, -2.0f});
+  expect_vec3_near(transform_point(spacing.generated_world_transforms[1], {}),
+                   {-2.0f, 0.0f, 0.0f});
+  expect_vec3_near(transform_point(spacing.generated_world_transforms[2], {}),
+                   {0.0f, 0.0f, 2.0f});
+
+  request.degrees = 270.0;
+  const RadialArrayLayoutResult revolutions =
+      build_radial_array_layout(request);
+  ASSERT_TRUE(revolutions.ok) << revolutions.message;
+  expect_vec3_near(
+      transform_point(revolutions.generated_world_transforms[2], {}),
+      {0.0f, 0.0f, -2.0f});
+
+  request.mode = RadialArrayMode::Total;
+  const RadialArrayLayoutResult total = build_radial_array_layout(request);
+  ASSERT_TRUE(total.ok) << total.message;
+  expect_vec3_near(transform_point(total.generated_world_transforms[2], {}),
+                   {0.0f, 0.0f, 2.0f});
+
+  request.mode = RadialArrayMode::Spacing;
+  request.degrees = 360.0;
+  const RadialArrayLayoutResult full_step = build_radial_array_layout(request);
+  ASSERT_TRUE(full_step.ok) << full_step.message;
+  for (const QMat4 &world : full_step.generated_world_transforms) {
+    expect_vec3_near(transform_point(world, {}), {2.0f, 0.0f, 0.0f});
+  }
+  request.mode = static_cast<RadialArrayMode>(99);
+  EXPECT_FALSE(build_radial_array_layout(request).ok);
+  request.mode = RadialArrayMode::Spacing;
+  request.degrees = 361.0;
+  EXPECT_FALSE(build_radial_array_layout(request).ok);
+}
+
+TEST(RadialArrayLayoutTests,
      ResolvesAxisCenteredFallbackOnArbitraryPlaneNormals) {
   const QVec3 tilted_normal = normalize(QVec3{1.0f, 1.0f, 1.0f});
   const QVec3 source_position = {2.0f, -2.0f, 0.0f};
@@ -4138,7 +4187,7 @@ TEST(RadialArrayLayoutTests,
 }
 
 TEST(RadialArrayToolServiceTests,
-     CenterLockBuildsTransformOnlyPreviewAndCommitUsesIdenticalMatrices) {
+     LiveCenterBuildsTransformOnlyPreviewAndCommitUsesIdenticalMatrices) {
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -4159,8 +4208,8 @@ TEST(RadialArrayToolServiceTests,
   ASSERT_TRUE(tool.update_center_candidate({}, {0.0f, 1.0f, 0.0f}, 1.0).ok);
   EXPECT_TRUE(tool.center_state().visible);
   EXPECT_FALSE(tool.center_state().locked);
-  EXPECT_FALSE(tool.preview_state().active);
-  EXPECT_TRUE(editor.render().tool_preview_meshes().empty());
+  EXPECT_TRUE(tool.preview_state().active);
+  EXPECT_FALSE(editor.render().tool_preview_meshes().empty());
   ASSERT_TRUE(tool.adjust_copies(3).ok);
   EXPECT_EQ(tool.copies(), 11u);
   ASSERT_TRUE(tool.adjust_copies(-100).ok);
@@ -4171,7 +4220,6 @@ TEST(RadialArrayToolServiceTests,
   ASSERT_TRUE(tool.set_copies(3u).ok);
   ASSERT_TRUE(tool.set_repeats(2u).ok);
   ASSERT_TRUE(tool.set_repeat_spacing(0.75).ok);
-  ASSERT_TRUE(tool.lock_center().ok);
   EXPECT_DOUBLE_EQ(tool.repeat_spacing(), 0.75);
 
   const RadialArrayPreviewState preview = tool.preview_state();
@@ -4213,6 +4261,51 @@ TEST(RadialArrayToolServiceTests,
   }
   EXPECT_EQ(session.scene().selected_entities().size(), 6u);
   EXPECT_EQ(session.scene().primary_selection(), generated.back());
+}
+
+TEST(RadialArrayToolServiceTests,
+     LiveCenterUpdatesAutomaticSpacingUntilItIsEditedAndKeepsAngleOnModeSwitch) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto source = editor.modeling().create_box(
+      QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+      "Live Radial Spacing Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(source.value().entity,
+                                 {.position = {3.0f, 0.0f, 0.0f}})
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
+  RadialArrayToolService &tool = session.radial_array();
+  EXPECT_EQ(tool.mode(), RadialArrayMode::Total);
+  EXPECT_FALSE(tool.create_instances());
+  ASSERT_TRUE(tool.update_center_candidate({}, {0.0f, 1.0f, 0.0f}, 1.0).ok);
+  EXPECT_DOUBLE_EQ(tool.repeat_spacing(), 3.0);
+  const std::uint64_t revision = tool.preview_state().revision;
+  EXPECT_FALSE(tool.update_center_candidate({}, {0.0f, 1.0f, 0.0f}, 1.0)
+                   .changed);
+  EXPECT_EQ(tool.preview_state().revision, revision);
+  ASSERT_TRUE(tool.update_center_candidate({1.0f, 0.0f, 0.0f},
+                                           {0.0f, 1.0f, 0.0f}, 1.0).ok);
+  EXPECT_DOUBLE_EQ(tool.repeat_spacing(), 2.0);
+  ASSERT_TRUE(tool.set_repeat_spacing(0.5).ok);
+  ASSERT_TRUE(tool.update_center_candidate({-1.0f, 0.0f, 0.0f},
+                                           {0.0f, 1.0f, 0.0f}, 1.0).ok);
+  EXPECT_DOUBLE_EQ(tool.repeat_spacing(), 0.5);
+  ASSERT_TRUE(tool.set_degrees(90.0).ok);
+  ASSERT_TRUE(tool.set_copies(4u).ok);
+  ASSERT_TRUE(tool.set_mode(RadialArrayMode::Spacing).ok);
+  EXPECT_DOUBLE_EQ(tool.degrees(), 90.0);
+  ASSERT_TRUE(tool.set_mode(RadialArrayMode::Total).ok);
+  EXPECT_DOUBLE_EQ(tool.degrees(), 90.0);
+  ASSERT_TRUE(tool.set_create_instances(true).ok);
+  ASSERT_TRUE(tool.reset_settings().ok);
+  EXPECT_EQ(tool.mode(), RadialArrayMode::Total);
+  EXPECT_FALSE(tool.create_instances());
+  EXPECT_DOUBLE_EQ(tool.repeat_spacing(), 4.0);
 }
 
 TEST(RadialArrayToolServiceTests,
@@ -18282,7 +18375,7 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopDragCommitsMesh) {
   command = service.commit_insert_edge_loop_drag();
   ASSERT_TRUE(command.ok) << command.message;
   EXPECT_TRUE(command.changed);
-  EXPECT_FALSE(service.tool_status().insert_edge_loop_active);
+  EXPECT_TRUE(service.tool_status().insert_edge_loop_active);
   EXPECT_FALSE(service.tool_status().insert_edge_loop_dragging);
   EXPECT_FALSE(service.tool_status().insert_edge_loop_has_preview);
   EXPECT_EQ(service.selection_summary().mode, ModelingSelectionMode::Edge);
@@ -18326,7 +18419,7 @@ TEST(ModelingSessionServiceTests,
   command = service.commit_insert_edge_loop_drag();
   ASSERT_TRUE(command.ok) << command.message;
   EXPECT_TRUE(command.changed);
-  EXPECT_FALSE(service.tool_status().insert_edge_loop_active);
+  EXPECT_TRUE(service.tool_status().insert_edge_loop_active);
 
   std::optional<MeshAsset> after =
       service.compile_object_mesh(box.object.modeling_object_id);
@@ -18360,7 +18453,7 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopUsesViewportPickRadius) {
   command = service.commit_insert_edge_loop_drag();
   ASSERT_TRUE(command.ok) << command.message;
   EXPECT_TRUE(command.changed);
-  EXPECT_FALSE(service.tool_status().insert_edge_loop_active);
+  EXPECT_TRUE(service.tool_status().insert_edge_loop_active);
 }
 
 TEST(ModelingSessionServiceTests,

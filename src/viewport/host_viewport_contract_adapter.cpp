@@ -627,6 +627,58 @@ viewport_input_action_binding_catalog() {
           .weight = 40,
           .action = ViewportInputActionKind::RadialArrayDecreaseCopies,
       },
+      {
+          .target_id = viewport_input_action_target_id(
+              "radial_array.increase_repeats"),
+          .label = "Increase Radial Array Repeats",
+          .localization_key = "keybindings.target.viewport.radial_array."
+                              "increase_repeats.label",
+          .context = ViewportInputBindingContext::RadialArrayTool,
+          .shortcut = "Ctrl+WheelUp",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "activeTool.radial_array",
+          .weight = 40,
+          .action = ViewportInputActionKind::RadialArrayIncreaseRepeats,
+      },
+      {
+          .target_id = viewport_input_action_target_id(
+              "radial_array.decrease_repeats"),
+          .label = "Decrease Radial Array Repeats",
+          .localization_key = "keybindings.target.viewport.radial_array."
+                              "decrease_repeats.label",
+          .context = ViewportInputBindingContext::RadialArrayTool,
+          .shortcut = "Ctrl+WheelDown",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "activeTool.radial_array",
+          .weight = 40,
+          .action = ViewportInputActionKind::RadialArrayDecreaseRepeats,
+      },
+      {
+          .target_id = viewport_input_action_target_id(
+              "radial_array.toggle_instances"),
+          .label = "Toggle Radial Array Instances",
+          .localization_key = "keybindings.target.viewport.radial_array."
+                              "toggle_instances.label",
+          .context = ViewportInputBindingContext::RadialArrayTool,
+          .shortcut = "I",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "activeTool.radial_array",
+          .weight = 40,
+          .action = ViewportInputActionKind::RadialArrayToggleInstances,
+      },
+      {
+          .target_id = viewport_input_action_target_id("radial_array.finalize"),
+          .action_id = "tools.finalize",
+          .label = "Finalize Radial Array",
+          .localization_key =
+              "keybindings.target.viewport.radial_array.finalize.label",
+          .context = ViewportInputBindingContext::RadialArrayTool,
+          .shortcut = "Enter",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "activeTool.radial_array",
+          .weight = 40,
+          .action = ViewportInputActionKind::ModalToolFinalize,
+      },
   };
 }
 

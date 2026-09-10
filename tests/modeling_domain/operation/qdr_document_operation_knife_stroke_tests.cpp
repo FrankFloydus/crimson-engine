@@ -10,6 +10,8 @@ using namespace quader_poly;
 
 TEST(QdrDocumentOperationKnifeStrokeTests, KnifeStrokeAppliesConnectedStrokeSegmentsInOneOperation) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	fixture.document.faces.front().uvs = {
+		{2.0F, 3.0F}, {6.0F, 3.0F}, {6.0F, 9.0F}, {2.0F, 9.0F}};
         const std::vector<KnifePointTarget> points{
             {
                 KnifePointTargetKind::ExistingEdge,
@@ -51,6 +53,15 @@ TEST(QdrDocumentOperationKnifeStrokeTests, KnifeStrokeAppliesConnectedStrokeSegm
         EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
         EXPECT_TRUE(selection.vertices.size() == 3U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
+	for (const Face& face : fixture.document.faces) {
+		ASSERT_EQ(face.uvs.size(), face.vertices.size());
+		for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+			const Vertex* vertex = find_vertex(fixture.document, face.vertices[corner]);
+			ASSERT_NE(vertex, nullptr);
+			EXPECT_FLOAT_EQ(face.uvs[corner].x, vertex->position.x * 2.0F + 4.0F);
+			EXPECT_FLOAT_EQ(face.uvs[corner].y, vertex->position.y * 3.0F + 6.0F);
+		}
+	}
 }
 
 TEST(QdrDocumentOperationKnifeStrokeTests, KnifeStrokeSupportsTwoSplitPointsOnTheSameSourceEdge) {

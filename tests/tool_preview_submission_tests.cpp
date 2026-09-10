@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
+#include "editor/array/radial_array_tool_service.hpp"
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
@@ -143,6 +144,86 @@ struct RenderPreviewTestHarness final {
 };
 
 } // namespace
+
+TEST(ToolPreviewSubmissionTests,
+     RadialCandidateAndLockedSettingsPublishWithoutMutatingScene) {
+  RenderPreviewTestHarness harness;
+  auto &editor = harness.editor;
+  const auto source = create_selected_box(editor, "Live radial preview source");
+  ASSERT_TRUE(editor.scene().set_transform(source.entity, {.position = {6, 0, 0}}).ok());
+  harness.session.history().clear();
+  ASSERT_TRUE(harness.sync().ok());
+  ASSERT_TRUE(harness.published.empty());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::RadialArray).ok());
+  auto &tool = harness.session.radial_array();
+  ASSERT_TRUE(tool.set_copies(3).ok);
+  ASSERT_TRUE(harness.sync().ok());
+  const auto before_candidate = harness.publication_attempts;
+
+  ASSERT_TRUE(tool.update_center_candidate({}, {0, 1, 0}, 1.0).ok);
+  ASSERT_FALSE(tool.center_locked());
+  ASSERT_TRUE(tool.preview_state().active);
+  ASSERT_EQ(tool.preview_state().sources.size(), 1u);
+  const auto first_revision = tool.preview_state().revision;
+  ASSERT_TRUE(harness.sync().ok());
+  EXPECT_EQ(harness.publication_attempts, before_candidate + 1u);
+  ASSERT_EQ(harness.published.size(), 1u);
+  EXPECT_EQ(harness.published.front().source_entity, source.entity);
+  const auto first_transforms = harness.published.front().instance_transforms;
+  ASSERT_EQ(first_transforms.size(), 2u);
+  for (int frame = 0; frame < 16; ++frame) {
+    EXPECT_FALSE(tool.update_center_candidate({}, {0, 1, 0}, 1.0).changed);
+    ASSERT_TRUE(harness.sync().ok());
+    EXPECT_EQ(tool.preview_state().revision, first_revision);
+  }
+  EXPECT_EQ(harness.publication_attempts, before_candidate + 1u);
+
+  ASSERT_TRUE(tool.update_center_candidate({0, 0, 2}, {0, 1, 0}, 1.0).changed);
+  const auto moved_revision = tool.preview_state().revision;
+  EXPECT_GT(moved_revision, first_revision);
+  ASSERT_TRUE(harness.sync().ok());
+  EXPECT_EQ(harness.publication_attempts, before_candidate + 2u);
+  ASSERT_EQ(harness.published.size(), 1u);
+  ASSERT_EQ(harness.published.front().instance_transforms.size(), first_transforms.size());
+  EXPECT_NE(harness.published.front().instance_transforms.front().values,
+            first_transforms.front().values);
+  EXPECT_FALSE(tool.center_locked());
+  ASSERT_TRUE(harness.sync().ok());
+  EXPECT_EQ(harness.publication_attempts, before_candidate + 2u);
+  EXPECT_EQ(editor.query().modeling_objects().size(), 1u);
+  EXPECT_EQ(harness.session.history().undo_count(), 0u);
+
+  ASSERT_TRUE(tool.lock_center().ok);
+  ASSERT_TRUE(harness.sync().ok());
+  EXPECT_TRUE(tool.active());
+  EXPECT_TRUE(tool.center_locked());
+  ASSERT_TRUE(tool.preview_state().active);
+  const auto locked_revision = tool.preview_state().revision;
+  const auto locked_publications = harness.publication_attempts;
+  ASSERT_TRUE(tool.set_copies(4).ok);
+  ASSERT_TRUE(harness.sync().ok());
+  EXPECT_GT(tool.preview_state().revision, locked_revision);
+  EXPECT_EQ(harness.publication_attempts, locked_publications + 1u);
+  ASSERT_EQ(harness.published.size(), 1u);
+  EXPECT_EQ(harness.published.front().instance_transforms.size(), 3u);
+  EXPECT_FALSE(tool.update_center_candidate({5, 0, 5}, {0, 1, 0}, 1.0).changed);
+  expect_vec3_near(tool.center_state().world_position, {0, 0, 2});
+  ASSERT_TRUE(harness.sync().ok());
+  EXPECT_EQ(harness.publication_attempts, locked_publications + 1u);
+  EXPECT_EQ(editor.query().modeling_objects().size(), 1u);
+  EXPECT_EQ(harness.session.history().undo_count(), 0u);
+
+  const auto before_cancel = harness.publication_attempts;
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  ASSERT_TRUE(harness.sync().ok());
+  EXPECT_TRUE(harness.published.empty());
+  EXPECT_FALSE(tool.preview_state().active);
+  EXPECT_EQ(harness.publication_attempts, before_cancel + 1u);
+  ASSERT_TRUE(harness.sync().ok());
+  EXPECT_EQ(harness.publication_attempts, before_cancel + 1u);
+  EXPECT_EQ(editor.query().modeling_objects().size(), 1u);
+  EXPECT_EQ(harness.session.history().undo_count(), 0u);
+}
 
 TEST(ToolPreviewSubmissionTests,
      MirrorPreviewRenderSubmissionTracksPlaneEditsAfterIdleSync) {

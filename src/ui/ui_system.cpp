@@ -4439,16 +4439,31 @@ void UISystem::refresh_localized_chrome() {
                 "Texture Transform"),
             .texture_center = text(
                 "ui.standard_material_editor.texture_transform.center",
-                "Center"),
+                "Center (tiles)"),
             .texture_scale = text(
                 "ui.standard_material_editor.texture_transform.scale",
-                "Scale"),
+                "UV Tiling"),
             .texture_offset = text(
                 "ui.standard_material_editor.texture_transform.offset",
-                "Offset"),
+                "Offset (tiles)"),
             .texture_rotation = text(
                 "ui.standard_material_editor.texture_transform.rotation",
-                "Rotation"),
+                "Rotation (\xC2\xB0)"),
+            .texture_transform_tooltip = text(
+                "ui.standard_material_editor.texture_transform.tooltip",
+                "Shared material transform: affects every texture channel and every surface using this material, after face UV mapping."),
+            .texture_center_tooltip = text(
+                "ui.standard_material_editor.texture_transform.center.tooltip",
+                "Pivot for material UV tiling and rotation, measured in texture tiles. The default 0.5, 0.5 is the image center."),
+            .texture_scale_tooltip = text(
+                "ui.standard_material_editor.texture_transform.scale.tooltip",
+                "Multiply material UV repetitions. Larger magnitudes make the texture smaller; negative values mirror it. Applies to every surface using this material."),
+            .texture_offset_tooltip = text(
+                "ui.standard_material_editor.texture_transform.offset.tooltip",
+                "Offset the material UV coordinates in texture tiles after tiling and rotation. One unit equals a full texture tile."),
+            .texture_rotation_tooltip = text(
+                "ui.standard_material_editor.texture_transform.rotation.tooltip",
+                "Rotate material UV coordinates around Center, after tiling and before Offset. Applies to every surface using this material."),
             .texture_inspector = text(
                 "ui.standard_material_editor.texture_inspector",
                 "Texture Inspector"),

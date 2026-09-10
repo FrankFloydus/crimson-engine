@@ -1006,10 +1006,10 @@ void divide(std::span<double> values, double divisor) {
   return !separates(first, second) && !separates(second, first);
 }
 
-/// Limits an actual intersection to a measured, budget-capped corner neighborhood.
+/// Limits actual intersection to the contact extent implied by displaced corner rays.
 [[nodiscard]] bool intersection_near_corner(
     const PeelTriangleCoordinates &first, const PeelTriangleCoordinates &second,
-    double sign, PeelPoint2 corner, double radius, double budget, double roundoff) {
+    double sign, PeelPoint2 corner, double radius, double roundoff) {
   std::array<PeelPoint2, 8> polygon{};
   std::array<PeelPoint2, 8> clipped{};
   std::copy(first.begin(), first.end(), polygon.begin());
@@ -1053,8 +1053,7 @@ void divide(std::span<double> values, double divisor) {
   for (std::size_t index = 0U; index < count; ++index) {
     const double u = polygon[index].u - corner.u;
     const double v = polygon[index].v - corner.v;
-    if (std::abs(u) > budget + roundoff || std::abs(v) > budget + roundoff ||
-        std::hypot(u, v) > radius + roundoff) {
+    if (std::hypot(u, v) > radius + roundoff) {
       return false;
     }
   }
@@ -1064,7 +1063,7 @@ void divide(std::span<double> values, double divisor) {
 /// Admits only displacement-induced contact at one shared chart corner.
 [[nodiscard]] bool shared_corner_float_contact(
     const PeelTriangleCoordinates &first, const PeelTriangleCoordinates &second,
-    std::size_t first_corner, std::size_t second_corner, double sign, double budget) {
+    std::size_t first_corner, std::size_t second_corner, double sign) {
   const auto first_point = first[first_corner];
   const auto second_point = second[second_corner];
   const double displacement =
@@ -1112,18 +1111,20 @@ void divide(std::span<double> values, double divisor) {
       shortest_ray = std::min({shortest_ray, first_length, second_length});
     }
   }
-  // With an angular gap alpha, a displacement d can cause contact only within
-  // d / sin(alpha / 2). Nearly touching rays still cannot exceed the float budget.
+  // Stitching moves one corner in each triangle by d. The triangles lie within
+  // d of their disjoint stitched wedges, so a gap alpha permits intersection
+  // only within d / sin(alpha / 2). The input float budget bounds d, not this
+  // spatial extent: narrow wedges amplify displacement geometrically.
   const double half_gap_sine = std::sqrt(std::max(0.0, (1.0 - maximum_cosine) * 0.5));
-  double radius = std::hypot(budget, budget);
-  if (half_gap_sine > 0.0) {
-    radius = std::min(radius, displacement / half_gap_sine);
+  if (!(half_gap_sine > 0.0)) {
+    return false;
   }
+  const double radius = displacement / half_gap_sine;
   const double roundoff = 64.0 * std::numeric_limits<double>::epsilon() * longest_ray;
   if (!(shortest_ray > radius + roundoff)) {
     return false;
   }
-  return intersection_near_corner(first, second, sign, midpoint, radius, budget, roundoff);
+  return intersection_near_corner(first, second, sign, midpoint, radius, roundoff);
 }
 
 /// Keeps both opposite corners outside the measured band between shared edge copies.
@@ -1167,7 +1168,7 @@ void divide(std::span<double> values, double divisor) {
     }
   }
   if (shared_count == 1U) {
-    return shared_corner_float_contact(first, second, first_corner, second_corner, sign, budget);
+    return shared_corner_float_contact(first, second, first_corner, second_corner, sign);
   }
   if (shared_count != 2U) {
     return false;

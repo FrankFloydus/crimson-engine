@@ -12,6 +12,7 @@
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_backend.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
 #include <algorithm>
 #include <array>
@@ -134,6 +135,12 @@ OperationResult ConnectVerticesOperation::apply(Document& document, Selection& s
 
         if (replacement_faces.size() < 2 || connected_edges.empty()) {
             continue;
+        }
+
+        for (Face& replacement : replacement_faces) {
+            if (!preserve_face_uvs(source, face, source, replacement)) {
+                return OperationResult::failure("Connect could not preserve the source face UVs.");
+            }
         }
 
         Document candidate = source;

@@ -15,7 +15,8 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
 	source_face->material_slot = 7;
 	const FaceTextureTransform texture{{2.0F, 0.5F}, {-0.25F, 0.75F}, -30.0F};
 	source_face->texture_transform = texture;
-	ensure_face_uvs(fixture.document);
+	source_face->uvs = {{2.0F, 3.0F}, {6.0F, 3.0F},
+	                    {6.0F, 9.0F}, {2.0F, 9.0F}};
 	const ElementId bottom_right = fixture.bottom_right;
         const KnifePointTarget previous{
             KnifePointTargetKind::ExistingEdge,
@@ -58,7 +59,13 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
 	for (const Face& face : fixture.document.faces) {
 		EXPECT_TRUE(face.material_slot == 7U);
 		EXPECT_EQ(face.texture_transform, texture);
-		EXPECT_TRUE(face.uvs.empty());
+		ASSERT_EQ(face.uvs.size(), face.vertices.size());
+		for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+			const Vertex* vertex = find_vertex(fixture.document, face.vertices[corner]);
+			ASSERT_NE(vertex, nullptr);
+			EXPECT_FLOAT_EQ(face.uvs[corner].x, vertex->position.x * 2.0F + 4.0F);
+			EXPECT_FLOAT_EQ(face.uvs[corner].y, vertex->position.y * 3.0F + 6.0F);
+		}
 	}
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 
@@ -84,6 +91,13 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
 	EXPECT_TRUE(fixture.document.faces.size() == 3U);
 	for (const Face& face : fixture.document.faces) {
 		EXPECT_EQ(face.texture_transform, texture);
+		ASSERT_EQ(face.uvs.size(), face.vertices.size());
+		for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+			const Vertex* vertex = find_vertex(fixture.document, face.vertices[corner]);
+			ASSERT_NE(vertex, nullptr);
+			EXPECT_FLOAT_EQ(face.uvs[corner].x, vertex->position.x * 2.0F + 4.0F);
+			EXPECT_FLOAT_EQ(face.uvs[corner].y, vertex->position.y * 3.0F + 6.0F);
+		}
 	}
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
@@ -112,4 +126,54 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentRejectsTwoTargetsOnTheSa
 	EXPECT_FALSE(result.changed);
 	EXPECT_TRUE(fixture.document.vertices.size() == vertices_before);
 	EXPECT_TRUE(fixture.document.faces.size() == faces_before);
+}
+
+TEST(QdrDocumentOperationKnifeSegmentTests, SegmentAndStrokeRetainDifferentChartsAcrossASplitBoundary) {
+	for (const bool use_stroke : {false, true}) {
+		SCOPED_TRACE(use_stroke ? "stroke" : "segment");
+		qdr_test::QuadFixture fixture = qdr_test::make_quad_document(1U);
+		const ElementId right_bottom = add_vertex(fixture.document, {3.0F, -1.0F, 0.0F});
+		const ElementId right_top = add_vertex(fixture.document, {3.0F, 1.0F, 0.0F});
+		const ElementId neighbor_id = add_face(fixture.document, std::array<ElementId, 4>{
+			fixture.bottom_right, right_bottom, right_top, fixture.top_right});
+		ASSERT_NE(neighbor_id, kInvalidElementId);
+		find_face(fixture.document, neighbor_id)->material_slot = 2U;
+		for (Face& face : fixture.document.faces) {
+			for (const ElementId vertex_id : face.vertices) {
+				const auto position = find_vertex(fixture.document, vertex_id)->position;
+				face.uvs.push_back(face.material_slot == 1U
+					? quader::QVec2{position.x * 2.0F + 4.0F, position.y * 3.0F + 6.0F}
+					: quader::QVec2{position.x * 10.0F + 100.0F, position.y * -5.0F + 20.0F});
+			}
+		}
+		const std::array<KnifePointTarget, 2> points{{
+			{KnifePointTargetKind::ExistingEdge, kInvalidElementId,
+			 make_edge(fixture.bottom_left, fixture.bottom_right), 0.5F, fixture.face, {}},
+			{KnifePointTargetKind::ExistingEdge, kInvalidElementId,
+			 make_edge(fixture.bottom_right, fixture.top_right), 0.5F, fixture.face, {}},
+		}};
+		const std::array<KnifeStrokeSegment, 1> segments{{{0U, 1U}}};
+		Selection selection;
+
+		const OperationResult result = use_stroke
+			? knife_stroke(fixture.document, selection, points, segments)
+			: knife_segment(fixture.document, selection, points[0], points[1]);
+
+		ASSERT_TRUE(result.changed) << result.message;
+		ASSERT_EQ(fixture.document.faces.size(), 3U);
+		const Face* neighbor = find_face(fixture.document, neighbor_id);
+		ASSERT_NE(neighbor, nullptr);
+		EXPECT_EQ(neighbor->vertices.size(), 5U);
+		for (const Face& face : fixture.document.faces) {
+			ASSERT_EQ(face.uvs.size(), face.vertices.size());
+			for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+				const auto position = find_vertex(fixture.document, face.vertices[corner])->position;
+				const auto expected = face.material_slot == 1U
+					? quader::QVec2{position.x * 2.0F + 4.0F, position.y * 3.0F + 6.0F}
+					: quader::QVec2{position.x * 10.0F + 100.0F, position.y * -5.0F + 20.0F};
+				EXPECT_FLOAT_EQ(face.uvs[corner].x, expected.x);
+				EXPECT_FLOAT_EQ(face.uvs[corner].y, expected.y);
+			}
+		}
+	}
 }

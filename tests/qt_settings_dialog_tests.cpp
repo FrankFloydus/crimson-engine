@@ -4534,7 +4534,7 @@ TEST(QtMainMenuTests,
   ASSERT_TRUE(shared_face_shading.has_value());
   EXPECT_TRUE(shared_face_shading->enabled);
   EXPECT_FALSE(shade_faces_smooth->isEnabled());
-  EXPECT_EQ(uv_peel->text(), QStringLiteral("UV Peel"));
+  EXPECT_EQ(uv_peel->text(), QStringLiteral("Guided UV Peel"));
   EXPECT_EQ(align_texture_to_grid->text(), QStringLiteral("To Grid"));
 
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());

@@ -1539,6 +1539,9 @@ void QtStandardMaterialEditorWindow::refresh_labels() {
     controls.clear->setAccessibleName(labels_.clear_texture);
   }
   texture_transform_group_->setTitle(labels_.texture_transform);
+  if (texture_transform_group_->toolTip() != labels_.texture_transform_tooltip) {
+    texture_transform_group_->setToolTip(labels_.texture_transform_tooltip);
+  }
   const std::array<QString, 7> transform_labels{
       labels_.texture_center + QStringLiteral(" U"),
       labels_.texture_center + QStringLiteral(" V"),
@@ -1547,8 +1550,25 @@ void QtStandardMaterialEditorWindow::refresh_labels() {
       labels_.texture_offset + QStringLiteral(" U"),
       labels_.texture_offset + QStringLiteral(" V"),
       labels_.texture_rotation};
+  const std::array<QString, 7> transform_tooltips{
+      labels_.texture_center_tooltip, labels_.texture_center_tooltip,
+      labels_.texture_scale_tooltip, labels_.texture_scale_tooltip,
+      labels_.texture_offset_tooltip, labels_.texture_offset_tooltip,
+      labels_.texture_rotation_tooltip};
   for (std::size_t index = 0; index < transform_labels.size(); ++index) {
-    texture_transform_controls_[index].label->setText(transform_labels[index]);
+    TextureTransformControls &controls = texture_transform_controls_[index];
+    if (controls.label->text() != transform_labels[index]) {
+      controls.label->setText(transform_labels[index]);
+    }
+    if (controls.spin->accessibleName() != transform_labels[index]) {
+      controls.spin->setAccessibleName(transform_labels[index]);
+      controls.slider->setAccessibleName(transform_labels[index]);
+    }
+    if (controls.spin->toolTip() != transform_tooltips[index]) {
+      controls.label->setToolTip(transform_tooltips[index]);
+      controls.spin->setToolTip(transform_tooltips[index]);
+      controls.slider->setToolTip(transform_tooltips[index]);
+    }
   }
   refresh_document_controls();
   refresh_texture_inspector();

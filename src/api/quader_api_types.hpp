@@ -259,6 +259,11 @@ struct QuaderLinearArrayResult {
 };
 
 /**
+ * Selects a total angular sweep or the angle between neighboring positions.
+ */
+enum class QuaderRadialArrayMode { Total, Spacing };
+
+/**
  * Describes one atomic radial-array operation for independent source meshes.
  */
 struct QuaderRadialArrayArgs {
@@ -269,6 +274,7 @@ struct QuaderRadialArrayArgs {
   std::uint32_t copies = 8u;
   std::uint32_t repeats = 1u;
   double repeat_spacing = 1.0;
+  QuaderRadialArrayMode mode = QuaderRadialArrayMode::Total;
 };
 
 /**

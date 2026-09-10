@@ -87,21 +87,6 @@ quader::QVec3 to_runtime(QVec3 value) { return {value.x, value.y, value.z}; }
 
 quader::QVec2 to_runtime(QVec2 value) { return {value.x, value.y}; }
 
-bool transformed_duplicate_world_matches(const QMat4 &left,
-                                         const QMat4 &right) {
-  constexpr float kAbsoluteTolerance = 0.0001f;
-  constexpr float kRelativeTolerance = 0.00001f;
-  for (std::size_t index = 0; index < left.values.size(); ++index) {
-    const float magnitude =
-        std::max(std::abs(left.values[index]), std::abs(right.values[index]));
-    if (std::abs(left.values[index] - right.values[index]) >
-        kAbsoluteTolerance + kRelativeTolerance * magnitude) {
-      return false;
-    }
-  }
-  return true;
-}
-
 quader_poly::Ray to_runtime(const ModelingRay &ray) {
   return {
       .origin = to_runtime(ray.origin),
@@ -1495,6 +1480,18 @@ public:
         [this](int modeling_object_id) {
           return modeling_object_world_transform(modeling_object_id);
         });
+    sdk_projection_adapter_.set_modeling_object_texture_sampling_resolver(
+        [this](int modeling_object_id) -> std::optional<QMat4> {
+          const auto entity =
+              object_registry_.entity_for_modeling_object(modeling_object_id);
+          if (!entity.has_value()) return std::nullopt;
+          const ModelingInstanceEditScope scope = instance_edit_scope_provider_
+              ? instance_edit_scope_provider_() : ModelingInstanceEditScope{};
+          const EntityId occurrence = scope.active() &&
+                  scene_.containing_instance_definition(*entity) == scope.definition
+              ? scope.occurrence : kInvalidEntityId;
+          return effective_texture_sampling_from_local(scene_, *entity, occurrence);
+        });
   }
 
   ~Impl() {
@@ -2334,99 +2331,24 @@ public:
     return face_texture_settings_cache_;
   }
 
-  ModelingCommandResult set_face_texture_setting(
-      const ModelingFaceTextureEdit &edit) {
-    const ModelingFaceTextureSettings settings = face_texture_settings();
-    if (!settings.editable) {
-      return {.ok = false,
-              .changed = false,
-              .message = settings.disabled_reason.empty()
-                             ? "Select one or more editable faces first."
-                             : settings.disabled_reason};
-    }
-    std::vector<ModelingFaceTextureUpdateBatch> batches;
-    const ModelingCommandResult prepared = face_texture_context_.prepare_edit(
-        edit, face_texture_selection_cache_, face_texture_extent_cache_, batches);
-    if (!prepared.ok) {
-      return prepared;
-    }
-    ModelingCommandResult result =
-        sdk_projection_adapter_.apply_face_texture_updates(batches);
-    if (result.ok && result.changed) {
-      face_texture_context_.record_applied_edit(edit);
-      invalidate_selection_overlay_caches();
-    }
-    return result;
-  }
-
-  ModelingCommandResult apply_face_texture_action(
-      const ModelingFaceTextureActionRequest &request) {
-    if (modeling_face_texture_action_label(request.options.action).empty()) {
-      return {.ok = false, .message = "Unknown face texture action."};
-    }
-
-    const bool whole_meshes =
-        modeling_face_texture_action_is_projection(request.options.action) &&
-        selection_mode() == ModelingSelectionMode::Object;
-    ModelingSelectedFaceTextureSnapshot action_selection;
-    if (whole_meshes) {
-      if (sdk_projection_adapter_.preview_active() || transform_drag_active() ||
-          modal_tool_owns_viewport()) {
-        return {.ok = false,
-                .changed = false,
-                .message = "Commit or cancel the active tool or preview before projecting UVs."};
-      }
-      if (request.selection_token == 0 ||
-          request.selection_token != selection_revision()) {
-        return {.ok = false,
-                .changed = false,
-                .message = "The mesh selection changed before the UV projection."};
-      }
-      action_selection =
-          sdk_projection_adapter_.selected_face_texture_settings(true);
-      if (!action_selection.command.ok) {
-        return action_selection.command;
-      }
-      if (action_selection.objects.empty()) {
-        return {.ok = false,
-                .changed = false,
-                .message = "Select one or more editable meshes first."};
-      }
-    } else {
-      const ModelingFaceTextureSettings settings = face_texture_settings();
-      if (!settings.editable) {
-        return {.ok = false,
-                .changed = false,
-                .message = settings.disabled_reason.empty()
-                               ? "Select one or more editable faces first."
-                               : settings.disabled_reason};
-      }
-      if (request.selection_token == 0 ||
-          request.selection_token != settings.selection_token) {
-        return {.ok = false,
-                .changed = false,
-                .message =
-                    "The face selection changed before the texture action."};
-      }
-      action_selection = face_texture_selection_cache_;
-    }
-
-    const ModelingInstanceEditScope scope =
-        instance_edit_scope_provider_ ? instance_edit_scope_provider_()
-                                      : ModelingInstanceEditScope{};
+  /// Resolves image dimensions and occurrence frames once for either command or
+  /// numeric UV actions. Both paths prepare through the same portable owner.
+  ModelingCommandResult prepare_face_texture_action_targets(
+      const ModelingSelectedFaceTextureSnapshot &action_selection,
+      modeling::FaceTextureActionOptions &options,
+      std::vector<ModelingFaceTextureActionTarget> &targets) const {
+    const ModelingInstanceEditScope scope = instance_edit_scope_provider_
+        ? instance_edit_scope_provider_() : ModelingInstanceEditScope{};
     const ModelingSelectionSummary selection = selection_summary();
-    modeling::FaceTextureActionOptions options = request.options;
     options.active_target_key = 0;
     options.active_face = {};
-    std::vector<ModelingFaceTextureActionTarget> targets;
+    targets.clear();
     targets.reserve(action_selection.objects.size());
     for (const auto &object : action_selection.objects) {
       const auto world = modeling_object_world_transform(object.modeling_object_id);
-      const EntityId occurrence =
-          scope.active() && scene_.containing_instance_definition(object.entity) ==
-                                scope.definition
-              ? scope.occurrence
-              : kInvalidEntityId;
+      const EntityId occurrence = scope.active() &&
+              scene_.containing_instance_definition(object.entity) == scope.definition
+          ? scope.occurrence : kInvalidEntityId;
       const auto sampling =
           effective_texture_sampling_from_local(scene_, object.entity, occurrence);
       if (!world.has_value() || !sampling.has_value()) {
@@ -2458,13 +2380,177 @@ public:
       }
       targets.push_back(std::move(target));
     }
+    return {.ok = true, .changed = false};
+  }
+
+  ModelingCommandResult set_face_texture_setting(
+      const ModelingFaceTextureEdit &edit) {
+    const ModelingFaceTextureSettings settings = face_texture_settings();
+    if (!settings.editable) {
+      return {.ok = false,
+              .changed = false,
+              .message = settings.disabled_reason.empty()
+                             ? "Select one or more editable faces first."
+                             : settings.disabled_reason};
+    }
+    std::vector<ModelingFaceTextureUpdateBatch> batches;
+    const ModelingCommandResult prepared = face_texture_context_.prepare_edit(
+        edit, face_texture_selection_cache_, face_texture_extent_cache_, batches);
+    if (!prepared.ok) {
+      return prepared;
+    }
+    ModelingCommandResult result;
+    if (edit.field == ModelingFaceTextureField::Rotate) {
+      modeling::FaceTextureActionOptions options{
+          .action = ModelingFaceTextureAction::RotateCounterClockwise,
+      };
+      std::vector<ModelingFaceTextureActionTarget> targets;
+      const auto resolved = prepare_face_texture_action_targets(
+          face_texture_selection_cache_, options, targets);
+      if (!resolved.ok) return resolved;
+      // The context validates exact per-face baseline+offset floats. Supplying
+      // them determines the actual rotation (including negative/no-op edits)
+      // without accumulating rounding across a continuous numeric gesture.
+      for (std::size_t object = 0; object < targets.size(); ++object) {
+        for (std::size_t face = 0; face < targets[object].faces.size(); ++face) {
+          targets[object].faces[face].target_rotation_degrees =
+              batches[object].updates[face].rotation_degrees;
+        }
+      }
+      result = sdk_projection_adapter_.apply_face_texture_action(targets, options);
+    } else {
+      result = sdk_projection_adapter_.apply_face_texture_updates(batches);
+    }
+    if (result.ok && result.changed) {
+      face_texture_context_.record_applied_edit(edit);
+      invalidate_selection_overlay_caches();
+    }
+    return result;
+  }
+
+  [[nodiscard]] const ModelingSelectedFaceTextureSnapshot &
+  mesh_uv_projection_selection() const {
+    const TextureSettingsCacheKey key = texture_settings_cache_key(0);
+    if (mesh_uv_projection_cache_key_ == key) {
+      return mesh_uv_projection_cache_;
+    }
+    ModelingSelectedFaceTextureSnapshot candidate;
+    if (key.preview_active) {
+      candidate.command = {.ok = false,
+          .message = "Commit or cancel the active tool or preview before projecting UVs."};
+    } else {
+      candidate = sdk_projection_adapter_.selected_face_texture_settings(true);
+      std::vector<EntityId> selected = scene_.selected_entities();
+      std::ranges::sort(selected);
+      if (candidate.command.ok &&
+          (candidate.objects.empty() ||
+           candidate.objects.size() != selected.size())) {
+        candidate.command = {.ok = false,
+            .message = "Select only editable meshes with faces for UV projection."};
+      }
+      for (const auto &object : candidate.objects) {
+        if (!candidate.command.ok) {
+          break;
+        }
+        if (!std::ranges::binary_search(selected, object.entity)) {
+          candidate.command = {.ok = false,
+              .message = "The selected UV projection meshes are no longer current."};
+          break;
+        }
+        const FaceTarget target = resolve_face_object_target(object.modeling_object_id);
+        if (!target.command.ok) {
+          candidate.command = target.command;
+          break;
+        }
+        const EntityId occurrence =
+            key.instance_scope.active() &&
+                    scene_.containing_instance_definition(object.entity) ==
+                        key.instance_scope.definition
+                ? key.instance_scope.occurrence : kInvalidEntityId;
+        if (!modeling_object_world_transform(object.modeling_object_id).has_value() ||
+            !effective_texture_sampling_from_local(
+                scene_, object.entity, occurrence).has_value()) {
+          candidate.command = {.ok = false,
+              .message = "A selected mesh has no usable texture mapping frame."};
+        }
+      }
+    }
+    mesh_uv_projection_cache_ = std::move(candidate);
+    mesh_uv_projection_cache_key_ = key;
+    return mesh_uv_projection_cache_;
+  }
+
+  [[nodiscard]] bool can_project_uv() const {
+    if (selection_mode() == ModelingSelectionMode::Object) {
+      return mesh_uv_projection_selection().command.ok;
+    }
+    return selection_mode() == ModelingSelectionMode::Face &&
+           face_texture_settings().editable;
+  }
+
+  ModelingCommandResult apply_face_texture_action(
+      const ModelingFaceTextureActionRequest &request) {
+    if (modeling_face_texture_action_label(request.options.action).empty()) {
+      return {.ok = false, .message = "Unknown face texture action."};
+    }
+
+    const bool whole_meshes =
+        modeling_face_texture_action_is_projection(request.options.action) &&
+        selection_mode() == ModelingSelectionMode::Object;
+    ModelingSelectedFaceTextureSnapshot action_selection;
+    if (whole_meshes) {
+      if (sdk_projection_adapter_.preview_active() || transform_drag_active() ||
+          modal_tool_owns_viewport()) {
+        return {.ok = false,
+                .changed = false,
+                .message = "Commit or cancel the active tool or preview before projecting UVs."};
+      }
+      if (request.selection_token == 0 ||
+          request.selection_token != selection_revision()) {
+        return {.ok = false,
+                .changed = false,
+                .message = "The mesh selection changed before the UV projection."};
+      }
+      action_selection = mesh_uv_projection_selection();
+      if (!action_selection.command.ok) {
+        return action_selection.command;
+      }
+      if (action_selection.objects.empty()) {
+        return {.ok = false,
+                .changed = false,
+                .message = "Select one or more editable meshes first."};
+      }
+    } else {
+      const ModelingFaceTextureSettings settings = face_texture_settings();
+      if (!settings.editable) {
+        return {.ok = false,
+                .changed = false,
+                .message = settings.disabled_reason.empty()
+                               ? "Select one or more editable faces first."
+                               : settings.disabled_reason};
+      }
+      if (request.selection_token == 0 ||
+          request.selection_token != settings.selection_token) {
+        return {.ok = false,
+                .changed = false,
+                .message =
+                    "The face selection changed before the texture action."};
+      }
+      action_selection = face_texture_selection_cache_;
+    }
+
+    modeling::FaceTextureActionOptions options = request.options;
+    std::vector<ModelingFaceTextureActionTarget> targets;
+    const auto resolved =
+        prepare_face_texture_action_targets(action_selection, options, targets);
+    if (!resolved.ok) return resolved;
     ModelingCommandResult result =
         sdk_projection_adapter_.apply_face_texture_action(targets, options);
     if (result.ok && result.changed) {
       if (options.action == ModelingFaceTextureAction::RotateClockwise) {
-        face_texture_context_.record_applied_rotation_delta(options.rotation_degrees);
-      } else if (options.action == ModelingFaceTextureAction::RotateCounterClockwise) {
         face_texture_context_.record_applied_rotation_delta(-options.rotation_degrees);
+      } else if (options.action == ModelingFaceTextureAction::RotateCounterClockwise) {
+        face_texture_context_.record_applied_rotation_delta(options.rotation_degrees);
       } else if (options.action == ModelingFaceTextureAction::AlignToGrid ||
                  modeling_face_texture_action_is_projection(options.action)) {
         face_texture_context_.invalidate();
@@ -3137,6 +3223,10 @@ public:
       document_command_apply_selection(scene_, *memento.impl_->group_selection);
       app_selection_mode_ = ModelingSelectionMode::Group;
     }
+    if (runtime_.active_tool() == quader_editor_core::ViewportInteractionTool::InsertEdgeLoop) {
+      runtime_.reset_insert_edge_loop_state(true);
+      runtime_.clear_hover();
+    }
     face_texture_context_.invalidate();
     uv_peel_context_.invalidate_selection();
     invalidate_selection_overlay_caches();
@@ -3170,6 +3260,10 @@ public:
     }
     if (memento.impl_->group_selection.has_value()) {
       app_selection_mode_ = ModelingSelectionMode::Group;
+    }
+    if (runtime_.active_tool() == quader_editor_core::ViewportInteractionTool::InsertEdgeLoop) {
+      runtime_.reset_insert_edge_loop_state(true);
+      runtime_.clear_hover();
     }
     face_texture_context_.invalidate();
     uv_peel_context_.invalidate_selection();
@@ -4293,29 +4387,7 @@ public:
 
   static std::uint32_t stage_material_slot(MaterialComponent &component,
                                            MaterialReference material) {
-    if (component.material_for_slot(0u) == material) {
-      return 0u;
-    }
-    const auto bound = std::min_element(
-        component.material_slots.begin(), component.material_slots.end(),
-        [&](const auto &left, const auto &right) {
-          const bool left_matches = left.second == material;
-          const bool right_matches = right.second == material;
-          if (left_matches != right_matches) {
-            return left_matches;
-          }
-          return left.first < right.first;
-        });
-    if (bound != component.material_slots.end() &&
-        bound->second == material) {
-      return bound->first;
-    }
-    std::uint32_t slot = 1u;
-    while (component.material_slots.contains(slot)) {
-      ++slot;
-    }
-    component.material_slots.emplace(slot, material);
-    return slot;
+    return stage_scene_material_slot(component, material);
   }
 
   /// Pins every renderable material surface selected by Object or Group mode.
@@ -6562,10 +6634,8 @@ public:
     case quader_editor_core::ViewportInteractionTool::Box:
       return cancel_box();
     case quader_editor_core::ViewportInteractionTool::InsertEdgeLoop:
-      (void)execute_runtime_command(
+      return execute_runtime_command(
           RuntimeToolCommandService::cancel_insert_edge_loop(), false);
-      return set_active_runtime_tool(
-          quader_editor_core::ViewportInteractionTool::Select);
     case quader_editor_core::ViewportInteractionTool::Knife:
       runtime_.reset_knife_state();
       invalidate_selection_overlay_caches();
@@ -7438,18 +7508,11 @@ public:
       return result;
     }
 
-    runtime_.reset_insert_edge_loop_state();
-    const ModelingCommandResult selected = set_active_runtime_tool(
-        quader_editor_core::ViewportInteractionTool::Select);
+    runtime_.reset_insert_edge_loop_state(true);
     runtime_.clear_hover();
     runtime_.clear_gizmo_hover();
     runtime_.clear_transform_drag_state();
     invalidate_selection_overlay_caches();
-    result.ok = result.ok && selected.ok;
-    result.changed = result.changed || selected.changed;
-    if (result.message.empty()) {
-      result.message = selected.message;
-    }
     return result;
   }
 
@@ -8310,6 +8373,44 @@ public:
       source_object_ids.push_back(source.source_modeling_object_id);
     }
 
+    // Evaluate each copy from the captured source placement. Reusing the scene
+    // transform owner keeps arrays consistent with ordinary duplicate/move and
+    // Path Array without changing the source or consulting new duplicates.
+    const TextureLockSettings texture_locks = texture_lock_settings();
+    std::vector<std::vector<std::optional<TextureMappingComponent>>>
+        duplicate_mappings;
+    duplicate_mappings.reserve(source_plans.size());
+    for (const TransformedDuplicateSourcePlan &source : source_plans) {
+      const TransformComponent *before = scene_.transform(source.source_entity);
+      const auto plan = SceneTextureMappingPlan::capture(
+          scene_, std::span<const EntityId>(&source.source_entity, 1U),
+          texture_locks);
+      if (before == nullptr || !plan.has_value()) {
+        return failure(std::string(operation_name) +
+                       " could not capture source texture placement.");
+      }
+      auto &mappings = duplicate_mappings.emplace_back();
+      mappings.reserve(copies_per_source);
+      for (const TransformComponent &after : source.duplicate_local_transforms) {
+        const DocumentTransformEdit edit{
+            .entity = source.source_entity, .before = *before, .after = after};
+        const auto evaluated = plan->evaluate(
+            std::span<const DocumentTransformEdit>(&edit, 1U),
+            SceneTextureTransformKind::Combined);
+        if (!evaluated.has_value()) {
+          return failure(std::string(operation_name) +
+                         " could not resolve copy texture placement.");
+        }
+        const auto mapping = std::ranges::find(
+            *evaluated, source.source_entity, &DocumentTextureMappingEdit::entity);
+        if (mapping == evaluated->end()) {
+          return failure(std::string(operation_name) +
+                         " source texture placement is unavailable.");
+        }
+        mappings.push_back(mapping->after);
+      }
+    }
+
     const ModelingSessionMemento rollback = capture_history_memento();
     const auto rollback_after_failure =
         [&](std::string message) -> TransformedDuplicateBatchResult {
@@ -8410,6 +8511,14 @@ public:
             .entity = entity,
             .transform = source.duplicate_local_transforms[copy_index],
         });
+        const auto &mapping = duplicate_mappings[source_index][copy_index];
+        if (mapping.has_value()
+                ? !scene_.set_texture_mapping(entity, *mapping)
+                : (scene_.texture_mapping(entity) != nullptr &&
+                   !scene_.clear_texture_mapping(entity))) {
+          return rollback_after_failure(std::string(operation_name) +
+                                        " could not publish texture placement.");
+        }
         object_registry_.remember_scene_entity(object_id, scene_, entity);
         elements.push_back(object_record(object_id, entity));
       }
@@ -8436,7 +8545,7 @@ public:
             object_registry_.entity_for_modeling_object(object_id);
         if (!entity.has_value() ||
             (!source.expected_duplicate_world_transforms.empty() &&
-             !transformed_duplicate_world_matches(
+             !scene_matrix_near_equal(
                  scene_.world_transform_matrix(*entity),
                  source.expected_duplicate_world_transforms[copy_index]))) {
           return rollback_after_failure(
@@ -8487,6 +8596,8 @@ public:
 
     std::vector<int> source_ids;
     source_ids.reserve(request.sources.size());
+    const ModelingInstanceEditScope array_edit_scope = instance_edit_scope_provider_
+        ? instance_edit_scope_provider_() : ModelingInstanceEditScope{};
     std::unordered_set<EntityId> source_entities;
     source_entities.reserve(request.sources.size());
     std::unordered_set<int> source_object_ids;
@@ -8515,7 +8626,11 @@ public:
           assets_.mesh(mesh->mesh) == nullptr) {
         return failure("Linear Array source is not a live modeling mesh.");
       }
-      if (!scene_.is_effectively_visible(source.entity) ||
+      const bool active_definition_member = array_edit_scope.active() &&
+          scene_.containing_instance_definition(source.entity) ==
+              array_edit_scope.definition;
+      if ((!active_definition_member &&
+           !scene_.is_effectively_visible(source.entity)) ||
           scene_.is_effectively_locked(source.entity)) {
         return failure("Linear Array sources must be visible and unlocked.");
       }
@@ -8545,9 +8660,19 @@ public:
       if (source_transform == nullptr) {
         return failure("Linear Array source transform was not found.");
       }
+      const auto source_display_world =
+          modeling_object_world_transform(source.modeling_object_id);
+      const bool active_definition_member = array_edit_scope.active() &&
+          scene_.containing_instance_definition(source.entity) ==
+              array_edit_scope.definition;
+      const auto scene_from_display = active_definition_member
+          ? try_scene_matrix_inverse(scene_selection_display_from_scene())
+          : std::optional<QMat4>{QMat4{}};
+      if (!source_display_world.has_value() || !scene_from_display.has_value()) {
+        return failure("Linear Array source display placement is unavailable.");
+      }
       const LinearArrayLayoutResult layout = build_linear_array_layout({
-          .source_world_transform =
-              scene_.world_transform_matrix(source.entity),
+          .source_world_transform = *source_display_world,
           .span_world = request.span_world,
           .count = request.count,
       });
@@ -8566,12 +8691,15 @@ public:
           .source_entity = source.entity,
           .source_modeling_object_id = source.modeling_object_id,
           .identity = identity,
-          .expected_duplicate_world_transforms =
-              layout.generated_world_transforms,
       };
+      prepared.expected_duplicate_world_transforms.reserve(
+          layout.generated_world_transforms.size());
       prepared.duplicate_local_transforms.reserve(
           layout.generated_world_transforms.size());
-      for (const QMat4 &desired_world : layout.generated_world_transforms) {
+      for (const QMat4 &display_world : layout.generated_world_transforms) {
+        const QMat4 desired_world =
+            scene_transform_multiply(*scene_from_display, display_world);
+        prepared.expected_duplicate_world_transforms.push_back(desired_world);
         const std::optional<TransformComponent> local_transform =
             try_scene_local_transform_preserving_world(
                 parent_world, desired_world, *source_transform);
@@ -8582,7 +8710,7 @@ public:
         const QMat4 recomposed_world = scene_transform_multiply(
             parent_world,
             compose_transform(local_transform->spatial_transform()));
-        if (!transformed_duplicate_world_matches(recomposed_world,
+        if (!scene_matrix_near_equal(recomposed_world,
                                                  desired_world)) {
           return failure(
               "Linear Array transform cannot be represented under its "
@@ -8640,6 +8768,10 @@ public:
     if (!std::isfinite(request.degrees) || request.degrees < 0.0 ||
         request.degrees > 360.0) {
       return failure("Radial Array degrees must be between 0 and 360.");
+    }
+    if (request.mode != RadialArrayMode::Total &&
+        request.mode != RadialArrayMode::Spacing) {
+      return failure("Radial Array angle mode is invalid.");
     }
     if (request.copies < kRadialArrayLayoutMinimumCopies ||
         request.copies > kRadialArrayLayoutMaximumCopies) {
@@ -8739,6 +8871,7 @@ public:
           .copies = request.copies,
           .repeats = request.repeats,
           .repeat_spacing = request.repeat_spacing,
+          .mode = request.mode,
       });
       if (!layout.ok ||
           layout.generated_world_transforms.size() !=
@@ -8773,7 +8906,7 @@ public:
         const QMat4 recomposed_world = scene_transform_multiply(
             parent_world,
             compose_transform(local_transform->spatial_transform()));
-        if (!transformed_duplicate_world_matches(recomposed_world,
+        if (!scene_matrix_near_equal(recomposed_world,
                                                  desired_world)) {
           return failure(
               "Radial Array transform cannot be represented under its "
@@ -9765,6 +9898,8 @@ private:
   mutable std::uint64_t face_texture_presented_revision_ = 0;
   mutable ModelingSelectedFaceTextureSnapshot face_texture_selection_cache_;
   mutable ModelingFaceTextureSettings face_texture_settings_cache_;
+  mutable std::optional<TextureSettingsCacheKey> mesh_uv_projection_cache_key_;
+  mutable ModelingSelectedFaceTextureSnapshot mesh_uv_projection_cache_;
   mutable QVec2 face_texture_extent_cache_{64.0f, 64.0f};
   mutable UvPeelEditContext uv_peel_context_;
   mutable std::optional<TextureSettingsCacheKey> uv_peel_cache_key_;
@@ -9983,6 +10118,10 @@ ModelingFaceTextureSettings ModelingSessionService::face_texture_settings() cons
   return impl_->face_texture_settings();
 }
 
+bool ModelingSessionService::can_project_uv() const {
+  return impl_->can_project_uv();
+}
+
 ModelingCommandResult ModelingSessionService::set_face_texture_setting(
     const ModelingFaceTextureEdit &edit) {
   return impl_->set_face_texture_setting(edit);
@@ -10062,6 +10201,10 @@ void ModelingSessionService::set_face_texture_extent_provider(
 void ModelingSessionService::set_texture_lock_settings_provider(
     std::function<TextureLockSettings()> provider) {
   impl_->set_texture_lock_settings_provider(std::move(provider));
+}
+
+TextureLockSettings ModelingSessionService::texture_lock_settings() const {
+  return impl_->texture_lock_settings();
 }
 
 ModelingSelectionExport ModelingSessionService::export_selection() const {

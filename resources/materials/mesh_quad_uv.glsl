@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 // Renderer-derived inverse bilinear coordinates for one convex planar quad.
-// Keep the numerical counterpart in mesh_quad_uv_interpolation.cpp aligned.
+// Keep the numerical counterpart in geometry/quad_uv_interpolation.cpp aligned.
 // P = p0 + e*s + f*t + (e*hx + f*hy)*s*t. With delta=s*t-wl, we have
 // s=sl-hx*delta and t=tl-hy*delta. The correction R*delta converts triangle UV
 // interpolation to four-corner bilinear interpolation, and is zero on every

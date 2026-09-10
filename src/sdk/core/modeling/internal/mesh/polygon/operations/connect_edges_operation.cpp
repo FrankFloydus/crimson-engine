@@ -12,6 +12,7 @@
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_backend.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
 #include <algorithm>
 #include <array>
@@ -127,7 +128,9 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
         if (cut_indices.size() < 2) {
             Face expanded_face = face;
             expanded_face.vertices = std::move(expanded_loop);
-            expanded_face.uvs.clear();
+            if (!preserve_face_uvs(document, face, candidate, expanded_face)) {
+                return OperationResult::failure("Connect Edges could not preserve the source face UVs.");
+            }
             rebuilt_faces.push_back(std::move(expanded_face));
             changed = true;
             continue;
@@ -142,7 +145,9 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
 
             Face first_face = face;
             first_face.vertices = std::move(first_loop);
-            first_face.uvs.clear();
+            if (!preserve_face_uvs(document, face, candidate, first_face)) {
+                return OperationResult::failure("Connect Edges could not preserve the source face UVs.");
+            }
             rebuilt_faces.push_back(std::move(first_face));
 
             Face second_face;
@@ -150,6 +155,9 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             second_face.vertices = std::move(second_loop);
             second_face.material_slot = face.material_slot;
             second_face.texture_transform = face.texture_transform;
+            if (!preserve_face_uvs(document, face, candidate, second_face)) {
+                return OperationResult::failure("Connect Edges could not preserve the source face UVs.");
+            }
             rebuilt_faces.push_back(std::move(second_face));
             add_unique_edge(connected_edges, make_edge(expanded_loop[cut_indices[0]], expanded_loop[cut_indices[1]]));
             changed = true;
@@ -168,6 +176,9 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
         if (center_face.vertices.size() < 3) {
             return OperationResult::failure("Connect Edges would create invalid face geometry.");
         }
+        if (!preserve_face_uvs(document, face, candidate, center_face)) {
+            return OperationResult::failure("Connect Edges could not preserve the source face UVs.");
+        }
         rebuilt_faces.push_back(std::move(center_face));
 
         for (std::size_t cut_index = 0; cut_index < cut_indices.size(); ++cut_index) {
@@ -183,6 +194,9 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             side_face.vertices = std::move(side_loop);
             side_face.material_slot = face.material_slot;
             side_face.texture_transform = face.texture_transform;
+            if (!preserve_face_uvs(document, face, candidate, side_face)) {
+                return OperationResult::failure("Connect Edges could not preserve the source face UVs.");
+            }
             rebuilt_faces.push_back(std::move(side_face));
             add_unique_edge(connected_edges, make_edge(expanded_loop[start], expanded_loop[end]));
         }

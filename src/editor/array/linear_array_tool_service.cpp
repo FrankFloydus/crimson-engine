@@ -557,6 +557,7 @@ CommandResult LinearArrayToolService::apply() {
   if (committed.instance_occurrences) {
     std::vector<LinkedInstanceArraySource> sources;
     sources.reserve(committed.sources.size());
+    const TextureLockSettings texture_locks = modeling_.texture_lock_settings();
     const QVec3 span_world =
         committed.endpoint_world - committed.anchor_world;
     for (const SourceSnapshot &source : committed.sources) {
@@ -568,10 +569,18 @@ CommandResult LinearArrayToolService::apply() {
       if (!layout.ok) {
         return command_invalid_result(layout.message);
       }
+      const auto &mapping_plan = source.texture_mapping_cache.resolve(
+          scene_, source.entity, texture_locks, source.world_transform);
+      auto mappings = mapping_plan.has_value()
+          ? mapping_plan->evaluate(layout.generated_world_transforms) : std::nullopt;
+      if (!mappings.has_value()) {
+        return command_invalid_result("Linear Array texture placement cannot be represented.");
+      }
       sources.push_back(LinkedInstanceArraySource{
           .source = source.entity,
           .generated_world_transforms =
               std::move(layout.generated_world_transforms),
+          .generated_sampling_from_local = std::move(*mappings),
       });
     }
     return history_.execute(std::make_unique<LinkedInstanceArrayCommand>(
@@ -718,14 +727,18 @@ const LinearArrayPreviewState &LinearArrayToolService::preview_state() const {
     cached_preview_ = {};
     return cached_preview_;
   }
+  const TextureLockSettings texture_locks = modeling_.texture_lock_settings();
   if (cached_preview_revision_ == session_->revision &&
+      cached_preview_scene_revision_ == scene_.revision() &&
+      cached_preview_texture_locks_.texture_lock == texture_locks.texture_lock &&
+      cached_preview_texture_locks_.texture_lock_scale == texture_locks.texture_lock_scale &&
       cached_preview_.active) {
     return cached_preview_;
   }
 
   LinearArrayPreviewState preview{
       .active = true,
-      .revision = session_->revision,
+      .revision = ++preview_generation_counter_,
   };
   preview.sources.reserve(session_->sources.size());
   const QVec3 span_world = session_->endpoint_world - session_->anchor_world;
@@ -740,6 +753,18 @@ const LinearArrayPreviewState &LinearArrayToolService::preview_state() const {
       cached_preview_ = {};
       return cached_preview_;
     }
+    const auto &mapping_plan = source.texture_mapping_cache.resolve(
+        scene_, source.entity, texture_locks, source.world_transform);
+    auto mappings = mapping_plan.has_value()
+        ? mapping_plan->evaluate(layout.generated_world_transforms)
+        : std::nullopt;
+    if (!mappings.has_value()) {
+      // Keep an unrepresentable placement visible so acceptance can report its
+      // existing transform error without destroying the editable preview.
+      const auto *direct = scene_.texture_mapping(source.entity);
+      mappings = std::vector<QMat4>(layout.generated_world_transforms.size(),
+          direct != nullptr ? direct->sampling_from_local : QMat4{});
+    }
     if (session_->instance_occurrences) {
       for (const InstanceArrayPreviewMeshSnapshot &mesh :
            source.instance_meshes) {
@@ -750,26 +775,51 @@ const LinearArrayPreviewState &LinearArrayToolService::preview_state() const {
           member_world.push_back(scene_transform_multiply(
               occurrence_world, mesh.member_from_definition));
         }
+        const auto member_mappings = array_member_sampling(
+            scene_, mesh.member, source.entity, *mappings, true);
+        if (!member_mappings.has_value()) {
+          cached_preview_revision_ = 0;
+          cached_preview_ = {};
+          return cached_preview_;
+        }
         preview.sources.push_back({
-            .source_entity = source.entity,
+            .source_entity = mesh.member,
+            .visibility_entity = source.entity,
             .material_entity = mesh.member,
             .mesh = mesh.mesh,
             .material = mesh.material,
             .generated_world_transforms = std::move(member_world),
+            .generated_sampling_from_local = *member_mappings,
         });
       }
       continue;
     }
+    const auto scope = instances_.instance_edit_scope();
+    const EntityId occurrence = scope.active() &&
+            scene_.containing_instance_definition(source.entity) == scope.definition()
+        ? scope.occurrence() : kInvalidEntityId;
+    const auto member_mappings = array_member_sampling(
+        scene_, source.entity, occurrence, *mappings, false,
+        layout.generated_world_transforms);
+    if (!member_mappings.has_value()) {
+      cached_preview_revision_ = 0;
+      cached_preview_ = {};
+      return cached_preview_;
+    }
     preview.sources.push_back({
         .source_entity = source.entity,
+        .visibility_entity = occurrence == kInvalidEntityId ? source.entity : occurrence,
         .material_entity = source.entity,
         .mesh = source.mesh,
         .material = source.material,
         .generated_world_transforms =
             std::move(layout.generated_world_transforms),
+        .generated_sampling_from_local = *member_mappings,
     });
   }
   cached_preview_revision_ = session_->revision;
+  cached_preview_scene_revision_ = scene_.revision();
+  cached_preview_texture_locks_ = texture_locks;
   cached_preview_ = std::move(preview);
   return cached_preview_;
 }

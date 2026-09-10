@@ -134,6 +134,23 @@ struct ViewportSemanticPointerEdge {
 using ViewportCurveConversionEdgeKind = ViewportSemanticPointerEdgeKind;
 using ViewportCurveConversionEdge = ViewportSemanticPointerEdge;
 
+/// Preserves bounded Radial Array adjustments in physical event order.
+enum class ViewportRadialArrayInputEventKind {
+  CopiesStep,
+  CopiesWheel,
+  ResetWheel,
+  ToggleInstances,
+  RepeatsStep,
+  RepeatsWheel,
+};
+
+/// Carries signed array adjustments or one instance toggle to the native tool owner.
+struct ViewportRadialArrayInputEvent {
+  ViewportRadialArrayInputEventKind kind =
+      ViewportRadialArrayInputEventKind::CopiesStep;
+  double amount = 0.0;
+};
+
 /**
  * Stores the Viewport Input Frame data contract used by the viewport input, layout, and camera layer.
  */
@@ -164,7 +181,7 @@ struct ViewportInputFrame {
   bool tool_constraint_y_pressed = false;
   bool tool_constraint_z_pressed = false;
   int linear_array_copy_delta = 0;
-  int radial_array_copy_delta = 0;
+  std::vector<ViewportRadialArrayInputEvent> radial_array_events;
   bool sample_face_material_pressed = false;
   bool apply_active_material_to_selection_pressed = false;
   bool apply_active_material_delay_for_double_click = false;

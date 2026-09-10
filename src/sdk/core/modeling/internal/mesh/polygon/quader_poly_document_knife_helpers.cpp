@@ -442,8 +442,12 @@ bool apply_knife_edge_splits_to_faces(Document& candidate, const std::map<std::p
             return false;
         }
 
-        face.vertices = std::move(expanded_loop);
-        face.uvs.clear();
+        Face expanded_face = face;
+        expanded_face.vertices = std::move(expanded_loop);
+        if (!preserve_face_uvs(candidate, face, candidate, expanded_face)) {
+            return false;
+        }
+        face = std::move(expanded_face);
         changed = true;
     }
 
@@ -504,8 +508,12 @@ bool apply_knife_edge_splits_to_faces(Document& candidate, const KnifeEdgeSplitM
             return false;
         }
 
-        face.vertices = std::move(expanded_loop);
-        face.uvs.clear();
+        Face expanded_face = face;
+        expanded_face.vertices = std::move(expanded_loop);
+        if (!preserve_face_uvs(candidate, face, candidate, expanded_face)) {
+            return false;
+        }
+        face = std::move(expanded_face);
         changed = true;
     }
 
@@ -1766,7 +1774,12 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
             Face rebuilt_face = face;
             rebuilt_face.id = loop_index == 0 ? face.id : next_face_id();
             rebuilt_face.vertices = std::move(loop);
-            rebuilt_face.uvs.clear();
+            const Face* original_face = find_face(document, face.id);
+            if (original_face == nullptr ||
+                !preserve_face_uvs(document, *original_face, build.document, rebuilt_face)) {
+                build.message = "Knife could not preserve the source face UVs.";
+                return build;
+            }
             rebuilt_faces.push_back(std::move(rebuilt_face));
         }
     }
@@ -1897,14 +1910,20 @@ KnifeSegmentCandidate build_knife_segment_candidate(
 
     Face first_face = source_face;
     first_face.vertices = std::move(first_loop);
-    first_face.uvs.clear();
 
     Face second_face;
     second_face.id = build.document.next_face_id++;
     second_face.vertices = std::move(second_loop);
     second_face.material_slot = source_face.material_slot;
     second_face.texture_transform = source_face.texture_transform;
-    second_face.uvs.clear();
+
+    const Face* original_face = find_face(document, source_face.id);
+    if (original_face == nullptr ||
+        !preserve_face_uvs(document, *original_face, build.document, first_face) ||
+        !preserve_face_uvs(document, *original_face, build.document, second_face)) {
+        build.message = "Knife segment could not preserve the source face UVs.";
+        return build;
+    }
 
     build.document.faces[face_index] = std::move(first_face);
     build.document.faces.push_back(std::move(second_face));

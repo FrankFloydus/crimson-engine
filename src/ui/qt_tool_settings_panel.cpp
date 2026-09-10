@@ -21,6 +21,7 @@
 
 #include <QApplication>
 #include <QByteArray>
+#include <QAbstractButton>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
@@ -272,7 +273,7 @@ int decimal_places_for_step(double step) {
 bool same_choice_structure(const QuaderToolSettingChoiceOption &left,
                            const QuaderToolSettingChoiceOption &right) {
   return left.id == right.id && left.label == right.label &&
-         left.value == right.value;
+         left.tooltip == right.tooltip && left.value == right.value;
 }
 
 bool same_vector_component_structure(
@@ -290,7 +291,8 @@ bool same_group_structure(const QuaderToolSettingGroup &left,
 bool same_control_structure(const QuaderToolSettingControl &left,
                             const QuaderToolSettingControl &right) {
   if (left.kind != right.kind || left.id != right.id ||
-      left.label != right.label || left.group_id != right.group_id ||
+      left.group_id != right.group_id ||
+      left.tooltip != right.tooltip ||
       left.number_interaction != right.number_interaction ||
       left.number_presentation != right.number_presentation ||
       left.choice_presentation != right.choice_presentation ||
@@ -635,19 +637,25 @@ struct TextureControlDescription {
   std::string_view fallback;
   double step;
   double step_origin;
+  std::string_view tooltip;
 };
 
 constexpr std::array<TextureControlDescription, 5> kTextureControls{{
     {QuaderFaceTextureField::ScaleX, "scale_x",
-     "tool_settings.texture_scale_x", "Scale X", 1.0, 1.0},
+     "tool_settings.texture_scale_x", "Scale X", 1.0, 1.0,
+     "Face UV scale modifier: a larger magnitude enlarges the texture horizontally; a negative value mirrors it. Authored UVs and material tiling also affect visible density."},
     {QuaderFaceTextureField::ScaleY, "scale_y",
-     "tool_settings.texture_scale_y", "Scale Y", 1.0, 1.0},
+     "tool_settings.texture_scale_y", "Scale Y", 1.0, 1.0,
+     "Face UV scale modifier: a larger magnitude enlarges the texture vertically; a negative value mirrors it. Authored UVs and material tiling also affect visible density."},
     {QuaderFaceTextureField::ShiftX, "shift_x",
-     "tool_settings.texture_shift_x", "Shift X", 1.0, 0.0},
+     "tool_settings.texture_shift_x", "Shift X (px)", 1.0, 0.0,
+     "Horizontal texture shift in image pixels. Numeric shifts require one selected face; the shift buttons also work on multiple faces."},
     {QuaderFaceTextureField::ShiftY, "shift_y",
-     "tool_settings.texture_shift_y", "Shift Y", 1.0, 0.0},
+     "tool_settings.texture_shift_y", "Shift Y (px)", 1.0, 0.0,
+     "Vertical texture shift in image pixels. Numeric shifts require one selected face; the shift buttons also work on multiple faces."},
     {QuaderFaceTextureField::Rotate, "rotate",
-     "tool_settings.texture_rotate", "Rotate (\xC2\xB0)", 1.0, 0.0},
+     "tool_settings.texture_rotate", "Rotation Offset (\xC2\xB0)", 1.0, 0.0,
+     "Rotation offset from each face's angle when the current selection was made. Selecting faces again resets this field to zero without changing their mapping."},
 }};
 
 /// Retained presentation only; each button dispatches the same public action
@@ -657,84 +665,110 @@ struct TextureActionDescription {
   QuaderCommandId command;
   std::string_view id;
   std::string_view caption;
+  std::string_view tooltip;
 };
 
 constexpr std::array<TextureActionDescription, 25> kTextureActions{{
     {QuaderFaceTextureAction::AlignToGrid,
      quader_command::kModelingTextureAlignToGrid,
-     "align_to_grid", "Grid"},
+     "align_to_grid", "Grid",
+     "Project on world axes and reset scale to 0.125 map units per texel, rotation to zero, and shifts to zero."},
     {QuaderFaceTextureAction::AlignToFace,
      quader_command::kModelingTextureAlignToFace,
-     "align_to_face", "Face"},
+     "align_to_face", "Face",
+     "Project on the face plane while retaining scale, rotation, and shifts. The texture origin moves to a face corner."},
     {QuaderFaceTextureAction::AlignToView,
      quader_command::kModelingTextureAlignToView,
-     "align_to_view", "View"},
+     "align_to_view", "View",
+     "Project using the captured view axes while retaining scale, rotation, and shifts. Angled surfaces can appear stretched."},
     {QuaderFaceTextureAction::ScaleXUp,
      quader_command::kModelingTextureScaleXUp,
-     "scale_x_up", "X +"},
+     "scale_x_up", "X +",
+     "Double horizontal texture size by doubling the face scale magnitude. Retain its mirror sign."},
     {QuaderFaceTextureAction::ScaleXDown,
      quader_command::kModelingTextureScaleXDown,
-     "scale_x_down", "X -"},
+     "scale_x_down", "X -",
+     "Halve horizontal texture size by halving the face scale magnitude. Retain its mirror sign."},
     {QuaderFaceTextureAction::ScaleYUp,
      quader_command::kModelingTextureScaleYUp,
-     "scale_y_up", "Y +"},
+     "scale_y_up", "Y +",
+     "Double vertical texture size by doubling the face scale magnitude. Retain its mirror sign."},
     {QuaderFaceTextureAction::ScaleYDown,
      quader_command::kModelingTextureScaleYDown,
-     "scale_y_down", "Y -"},
+     "scale_y_down", "Y -",
+     "Halve vertical texture size by halving the face scale magnitude. Retain its mirror sign."},
     {QuaderFaceTextureAction::ShiftLeft,
      quader_command::kModelingTextureShiftLeft,
-     "shift_left", "Left"},
+     "shift_left", "Left",
+     "Move the texture left by one image pixel along its texture axis, accounting for rotation and mirroring."},
     {QuaderFaceTextureAction::ShiftRight,
      quader_command::kModelingTextureShiftRight,
-     "shift_right", "Right"},
+     "shift_right", "Right",
+     "Move the texture right by one image pixel along its texture axis, accounting for rotation and mirroring."},
     {QuaderFaceTextureAction::ShiftUp,
      quader_command::kModelingTextureShiftUp,
-     "shift_up", "Up"},
+     "shift_up", "Up",
+     "Move the texture up by one image pixel along its texture axis, accounting for rotation and mirroring."},
     {QuaderFaceTextureAction::ShiftDown,
      quader_command::kModelingTextureShiftDown,
-     "shift_down", "Down"},
+     "shift_down", "Down",
+     "Move the texture down by one image pixel along its texture axis, accounting for rotation and mirroring."},
     {QuaderFaceTextureAction::RotateClockwise,
      quader_command::kModelingTextureRotateClockwise,
-     "rotate_clockwise", "CW"},
+     "rotate_clockwise", "CW",
+     "Rotate the texture image clockwise by the current rotation step, viewed from the face front."},
     {QuaderFaceTextureAction::RotateCounterClockwise,
      quader_command::kModelingTextureRotateCounterClockwise,
-     "rotate_counter_clockwise", "CCW"},
+     "rotate_counter_clockwise", "CCW",
+     "Rotate the texture image counterclockwise by the current rotation step, viewed from the face front."},
     {QuaderFaceTextureAction::FlipTextureHorizontal,
      quader_command::kModelingTextureFlipTextureHorizontal,
-     "flip_texture_horizontal", "Flip Tex H"},
+     "flip_texture_horizontal", "Flip Tex H",
+     "Mirror the texture horizontally about its chart origin. Keep the current shifts."},
     {QuaderFaceTextureAction::FlipTextureVertical,
      quader_command::kModelingTextureFlipTextureVertical,
-     "flip_texture_vertical", "Flip Tex V"},
+     "flip_texture_vertical", "Flip Tex V",
+     "Mirror the texture vertically about its chart origin. Keep the current shifts."},
     {QuaderFaceTextureAction::FlipFaceHorizontal,
      quader_command::kModelingTextureFlipFaceHorizontal,
-     "flip_face_horizontal", "Flip Face H"},
+     "flip_face_horizontal", "Flip Face H",
+     "Reflect the actual face geometry horizontally in the face plane, carrying its UVs with it. Treat as One uses a shared plane."},
     {QuaderFaceTextureAction::FlipFaceVertical,
      quader_command::kModelingTextureFlipFaceVertical,
-     "flip_face_vertical", "Flip Face V"},
+     "flip_face_vertical", "Flip Face V",
+     "Reflect the actual face geometry vertically in the face plane, carrying its UVs with it. Treat as One uses a shared plane."},
     {QuaderFaceTextureAction::FitBoth,
      quader_command::kModelingTextureFitBoth,
-     "fit_both", "Both"},
+     "fit_both", "Both",
+     "Scale and shift both texture axes to fit one tile to the face bounds. Treat as One uses shared projection and combined bounds."},
     {QuaderFaceTextureAction::FitX,
      quader_command::kModelingTextureFitX,
-     "fit_x", "X"},
+     "fit_x", "X",
+     "Scale and shift the horizontal texture axis to fit one tile. Keep the vertical mapping. Treat as One uses a shared projection."},
     {QuaderFaceTextureAction::FitY,
      quader_command::kModelingTextureFitY,
-     "fit_y", "Y"},
+     "fit_y", "Y",
+     "Scale and shift the vertical texture axis to fit one tile. Keep the horizontal mapping. Treat as One uses a shared projection."},
     {QuaderFaceTextureAction::JustifyLeft,
      quader_command::kModelingTextureJustifyLeft,
-     "justify_left", "Left"},
+     "justify_left", "Left",
+     "Shift the texture to the left bound without scaling each face. Treat as One can change density through its shared projection."},
     {QuaderFaceTextureAction::JustifyRight,
      quader_command::kModelingTextureJustifyRight,
-     "justify_right", "Right"},
+     "justify_right", "Right",
+     "Shift the texture to the right bound without scaling each face. Treat as One can change density through its shared projection."},
     {QuaderFaceTextureAction::JustifyTop,
      quader_command::kModelingTextureJustifyTop,
-     "justify_top", "Top"},
+     "justify_top", "Top",
+     "Shift the texture to the top bound without scaling each face. Treat as One can change density through its shared projection."},
     {QuaderFaceTextureAction::JustifyBottom,
      quader_command::kModelingTextureJustifyBottom,
-     "justify_bottom", "Bottom"},
+     "justify_bottom", "Bottom",
+     "Shift the texture to the bottom bound without scaling each face. Treat as One can change density through its shared projection."},
     {QuaderFaceTextureAction::JustifyCenter,
      quader_command::kModelingTextureJustifyCenter,
-     "justify_center", "Center"},
+     "justify_center", "Center",
+     "Center the texture within the face bounds without scaling. Treat as One can change density through its shared projection."},
 }};
 
 /// Groups consecutive texture actions into one compact retained button grid.
@@ -760,13 +794,18 @@ struct UvPeelControlDescription {
   std::string_view id;
   std::string_view label;
   bool positive;
+  std::string_view tooltip;
 };
 
 constexpr std::array<UvPeelControlDescription, 4> kUvPeelControls{{
-    {&QuaderUvPeelOptions::u_repeat, "u_repeat", "U Repeat", true},
-    {&QuaderUvPeelOptions::v_repeat, "v_repeat", "V Repeat", true},
-    {&QuaderUvPeelOptions::u_offset, "u_offset", "U Offset", false},
-    {&QuaderUvPeelOptions::v_offset, "v_offset", "V Offset", false},
+    {&QuaderUvPeelOptions::u_repeat, "u_repeat", "U Repeat", true,
+     "Multiply U repetitions after World Density or per-patch normalization. Larger values make the texture smaller."},
+    {&QuaderUvPeelOptions::v_repeat, "v_repeat", "V Repeat", true,
+     "Multiply V repetitions after World Density or per-patch normalization. Larger values make the texture smaller."},
+    {&QuaderUvPeelOptions::u_offset, "u_offset", "U Offset (tiles)", false,
+     "Shift the generated U coordinates in texture tiles after Repeat. One unit equals a full texture tile."},
+    {&QuaderUvPeelOptions::v_offset, "v_offset", "V Offset (tiles)", false,
+     "Shift the generated V coordinates in texture tiles after Repeat. One unit equals a full texture tile."},
 }};
 
 } // namespace
@@ -784,7 +823,7 @@ struct QtToolSettingsPanel::Impl {
 
   /// Associates one choice button with its stable option and numeric value.
   struct ChoiceWidget {
-    QRadioButton *button = nullptr;
+    QAbstractButton *button = nullptr;
     std::string option_id;
     double value = 0.0;
   };
@@ -807,6 +846,11 @@ struct QtToolSettingsPanel::Impl {
         QuaderToolSettingControlKind::Toggle;
     std::string id;
     QWidget *container = nullptr;
+    QLabel *field_label = nullptr;
+    QAbstractButton *label_button = nullptr;
+    QGroupBox *label_group = nullptr;
+    std::string presented_label;
+    std::string presented_label_key;
     QCheckBox *toggle = nullptr;
     QSpinBox *integer = nullptr;
     QDoubleSpinBox *floating = nullptr;
@@ -820,6 +864,8 @@ struct QtToolSettingsPanel::Impl {
     std::function<void(double, QuaderToolSettingEditOptions)> number_dispatch;
     std::string continuous_number_merge_key;
     std::vector<ChoiceWidget> choices;
+    std::optional<std::string> presented_choice_value;
+    std::optional<bool> presented_toggle_value;
     std::array<Vector3ComponentWidget, 3> vector3_components;
   };
 
@@ -1701,6 +1747,10 @@ private:
       if (!shortcut.empty()) {
         tooltip.append(QStringLiteral(" [%1]").arg(qtext(shortcut)));
       }
+      tooltip.append(QStringLiteral("\n") + localized_text(
+          localization_, std::string("tool_settings.edit_texture.") +
+                             std::string(description.id) + ".tooltip",
+          description.tooltip));
       if (button->toolTip() != tooltip) {
         button->setToolTip(tooltip);
       }
@@ -2361,11 +2411,12 @@ private:
     edit_texture_section_->set_title(localized_text(
         localization_, "tool_settings.edit_texture_section", "Edit Texture"));
     uv_peel_section_->set_title(localized_text(
-        localization_, "tool_settings.uv_peel_section", "UV Peel"));
+        localization_, "tool_settings.uv_peel_section", "Guided UV Peel"));
     const QString peel_help = localized_text(
         localization_, "tool_settings.uv_peel.help",
-        "Selected edge chains guide texture flow across the faces touching "
-        "those edges. Choose U or V for the flow direction.");
+        "Selected edge chains guide U or V texture flow across their adjacent "
+        "faces; they are flow guides, not unwrap seams. Connected patches are "
+        "mapped independently and can overlap.");
     if (uv_peel_help_->text() != peel_help) {
       uv_peel_help_->setText(peel_help);
     }
@@ -2376,15 +2427,16 @@ private:
       uv_peel_axis_->setAccessibleName(peel_axis);
     }
     const QString world_space = localized_text(
-        localization_, "tool_settings.uv_peel.world_space", "World Space");
+        localization_, "tool_settings.uv_peel.world_space", "World Density");
     if (uv_peel_world_space_->text() != world_space) {
       uv_peel_world_space_->setText(world_space);
       uv_peel_world_space_->setAccessibleName(world_space);
     }
     const QString world_space_tooltip = localized_text(
         localization_, "tool_settings.uv_peel.world_space_tooltip",
-        "Preserve texture density in world units. Turn off to fit each "
-        "connected patch to one tile before Repeat and Offset.");
+        "Generate one texture tile per 64 displayed map units before Repeat "
+        "and Offset. Turn off to stretch each connected patch independently "
+        "to one tile in U and V; aspect ratio is not preserved and patches can overlap.");
     if (uv_peel_world_space_->toolTip() != world_space_tooltip) {
       uv_peel_world_space_->setToolTip(world_space_tooltip);
     }
@@ -2401,9 +2453,17 @@ private:
       if (binding.spin->accessibleName() != label) {
         binding.spin->setAccessibleName(label);
       }
+      const QString tooltip = localized_text(
+          localization_, std::string("tool_settings.uv_peel.") +
+                             std::string(description.id) + ".tooltip",
+          description.tooltip);
+      if (binding.spin->toolTip() != tooltip) {
+        binding.spin->setToolTip(tooltip);
+        binding.label->setToolTip(tooltip);
+      }
     }
     const QString peel_action = localized_text(
-        localization_, "command.modeling.uv_peel", "UV Peel");
+        localization_, "command.modeling.uv_peel", "Guided UV Peel");
     if (uv_peel_apply_->text() != peel_action) {
       uv_peel_apply_->setText(peel_action);
       uv_peel_apply_->setAccessibleName(peel_action);
@@ -2444,7 +2504,9 @@ private:
     }
     const QString treat_as_one_tooltip = localized_text(
         localization_, "tool_settings.edit_texture.treat_as_one_tooltip",
-        "Use combined selected-face bounds for Fit, Justify, and Flip Face.");
+        "Use the active face's shared projection and combined bounds for Fit, "
+        "Justify, and Flip Face. Justify can change other faces' density and "
+        "orientation along the edited axis. Other actions remain relative to each face.");
     if (texture_treat_as_one_->toolTip() != treat_as_one_tooltip) {
       texture_treat_as_one_->setToolTip(treat_as_one_tooltip);
     }
@@ -2459,6 +2521,13 @@ private:
       }
       if (binding.spin->accessibleName() != label) {
         binding.spin->setAccessibleName(label);
+      }
+      const QString tooltip = localized_text(
+          localization_, std::string(description.localization_key) + ".tooltip",
+          description.tooltip);
+      if (binding.spin->toolTip() != tooltip) {
+        binding.spin->setToolTip(tooltip);
+        binding.label->setToolTip(tooltip);
       }
     }
     reset_button_->setText(localized_text(
@@ -2584,7 +2653,10 @@ private:
     const QString object_name =
         control_object_name(control.id, control_index);
     const QString label =
-        localized_descriptor_label(localization_, control.id, control.label);
+        localized_descriptor_label(
+            localization_,
+            control.label_key.empty() ? control.id : control.label_key,
+            control.label);
 
     switch (control.kind) {
     case QuaderToolSettingControlKind::Toggle: {
@@ -2602,11 +2674,13 @@ private:
                                                           checked);
                          present_failure(editor_, "Tool settings update", result);
                          if (!result.ok()) {
+                           invalidate_control_value(control_id);
                            schedule_refresh();
                          }
                        });
       control_layout.addWidget(toggle);
       binding.container = toggle;
+      binding.label_button = toggle;
       binding.toggle = toggle;
       break;
     }
@@ -2618,6 +2692,7 @@ private:
       auto *field_label = new QLabel(label, row);
       field_label->setObjectName(object_name + QStringLiteral(".label"));
       field_label->setWordWrap(true);
+      binding.field_label = field_label;
       row_layout->addWidget(field_label, 0, 0, 1, 2);
 
       const bool integer_control = uses_integer_spin_box(control);
@@ -2862,6 +2937,7 @@ private:
       auto *field_label = new QLabel(label, row);
       field_label->setObjectName(object_name + QStringLiteral(".label"));
       field_label->setWordWrap(true);
+      binding.field_label = field_label;
       row_layout->addWidget(field_label);
 
       auto *fields = new QWidget(row);
@@ -2971,12 +3047,72 @@ private:
     }
     case QuaderToolSettingControlKind::Choice: {
       if (control.choice_presentation ==
+          QuaderToolSettingChoicePresentation::Buttons) {
+        auto *row = new QWidget(control_parent);
+        row->setObjectName(object_name);
+        auto *row_layout = new QVBoxLayout(row);
+        set_scalable_margins(*row_layout, QMargins(0, 0, 0, 0));
+        set_scalable_spacing(*row_layout, 4);
+        auto *field_label = new QLabel(label, row);
+        field_label->setObjectName(object_name + QStringLiteral(".label"));
+        binding.field_label = field_label;
+        row_layout->addWidget(field_label);
+        auto *buttons_layout = new QHBoxLayout();
+        set_scalable_margins(*buttons_layout, QMargins(0, 0, 0, 0));
+        set_scalable_spacing(*buttons_layout, 4);
+        row_layout->addLayout(buttons_layout);
+        auto *button_group = new QButtonGroup(row);
+        button_group->setObjectName(object_name + QStringLiteral(".group"));
+        button_group->setExclusive(true);
+        for (std::size_t option_index = 0;
+             option_index < control.choices.size(); ++option_index) {
+          const QuaderToolSettingChoiceOption &option =
+              control.choices[option_index];
+          const std::string option_key = control.id + "." + option.id;
+          const QString option_label = localized_descriptor_label(
+              localization_, option_key, option.label);
+          auto *button = new QPushButton(option_label, row);
+          button->setObjectName(
+              option_object_name(object_name, option.id, option_index));
+          button->setAccessibleName(option_label);
+          button->setCheckable(true);
+          if (!option.tooltip.empty()) {
+            button->setToolTip(localized_descriptor_label(
+                localization_, option_key + ".tooltip", option.tooltip));
+          }
+          button_group->addButton(button);
+          buttons_layout->addWidget(button, 1);
+          QObject::connect(
+              button, &QPushButton::toggled, &panel_,
+              [this, tool_id = target.tool_id, control_id = control.id,
+               option_id = option.id](bool checked) {
+                if (!checked || editor_ == nullptr || synchronizing_) {
+                  return;
+                }
+                flush_pending_number_dispatches();
+                const QuaderApiVoidResult result = editor_->tools().set_setting(
+                    tool_id, control_id, std::string_view(option_id));
+                present_failure(editor_, "Tool settings update", result);
+                if (!result.ok()) {
+                  invalidate_control_value(control_id);
+                  schedule_refresh();
+                }
+              });
+          binding.choices.push_back(
+              ChoiceWidget{button, option.id, option.value});
+        }
+        control_layout.addWidget(row);
+        binding.container = row;
+        break;
+      }
+      if (control.choice_presentation ==
           QuaderToolSettingChoicePresentation::Dropdown) {
         auto *row = new QWidget(control_parent);
         row->setObjectName(object_name + QStringLiteral(".row"));
         auto *row_layout = new QHBoxLayout(row);
         auto *field_label = new QLabel(label, row);
         field_label->setObjectName(object_name + QStringLiteral(".label"));
+        binding.field_label = field_label;
         row_layout->addWidget(field_label);
 
         auto *dropdown = new QComboBox(row);
@@ -2990,6 +3126,13 @@ private:
                                 localization_, option_localization_key,
                                 option.label),
                             qtext(option.id));
+          if (!option.tooltip.empty()) {
+            dropdown->setItemData(
+                dropdown->count() - 1,
+                localized_descriptor_label(localization_,
+                    option_localization_key + ".tooltip", option.tooltip),
+                Qt::ToolTipRole);
+          }
         }
         field_label->setBuddy(dropdown);
         row_layout->addWidget(dropdown, 1);
@@ -3038,6 +3181,11 @@ private:
         radio->setObjectName(
             option_object_name(object_name, option.id, option_index));
         radio->setAccessibleName(option_label);
+        if (!option.tooltip.empty()) {
+          radio->setToolTip(localized_descriptor_label(
+              localization_, control.id + "." + option.id + ".tooltip",
+              option.tooltip));
+        }
         button_group->addButton(radio);
         choice_layout->addWidget(radio);
         QObject::connect(radio, &QRadioButton::toggled, &panel_,
@@ -3053,6 +3201,7 @@ private:
                                                             value);
                            present_failure(editor_, "Tool settings update", result);
                            if (!result.ok()) {
+                             invalidate_control_value(control_id);
                              schedule_refresh();
                            }
                          });
@@ -3061,6 +3210,7 @@ private:
       }
       control_layout.addWidget(group);
       binding.container = group;
+      binding.label_group = group;
       break;
     }
     case QuaderToolSettingControlKind::Action: {
@@ -3086,11 +3236,78 @@ private:
                        });
       control_layout.addWidget(button);
       binding.container = button;
+      binding.label_button = button;
       break;
     }
     }
 
+    if (binding.container != nullptr && !control.tooltip.empty()) {
+      binding.container->setToolTip(localized_descriptor_label(
+          localization_, control.id + ".tooltip", control.tooltip));
+    }
+    binding.presented_label = control.label;
+    binding.presented_label_key = control.label_key;
     controls_.push_back(std::move(binding));
+  }
+
+  /// Updates descriptor text without rebuilding editors or revisiting idle labels.
+  void synchronize_control_label(ControlWidget &binding,
+                                 const QuaderToolSettingControl &control) {
+    if (binding.presented_label == control.label &&
+        binding.presented_label_key == control.label_key) {
+      return;
+    }
+    const QString label = localized_descriptor_label(
+        localization_,
+        control.label_key.empty() ? control.id : control.label_key,
+        control.label);
+    if (binding.field_label != nullptr &&
+        binding.field_label->text() != label) {
+      binding.field_label->setText(label);
+    }
+    if (binding.label_button != nullptr &&
+        binding.label_button->text() != label) {
+      binding.label_button->setText(label);
+    }
+    if (binding.label_group != nullptr &&
+        binding.label_group->title() != label) {
+      binding.label_group->setTitle(label);
+    }
+    const auto update_accessible_name = [](QWidget *widget,
+                                          const QString &name) {
+      if (widget != nullptr && widget->accessibleName() != name) {
+        widget->setAccessibleName(name);
+      }
+    };
+    update_accessible_name(binding.label_button, label);
+    update_accessible_name(binding.integer, label);
+    update_accessible_name(binding.floating, label);
+    update_accessible_name(binding.number_slider, label);
+    update_accessible_name(binding.dropdown, label);
+    if (binding.number_drag_spinner != nullptr &&
+        binding.number_drag_spinner->accessibleName() != label) {
+      binding.number_drag_spinner->set_accessible_label(label);
+    }
+    constexpr std::array<const char *, 3> kAxisNames{{"X", "Y", "Z"}};
+    for (std::size_t axis = 0; axis < binding.vector3_components.size(); ++axis) {
+      if (binding.vector3_components[axis].spin != nullptr) {
+        update_accessible_name(binding.vector3_components[axis].spin,
+            QStringLiteral("%1 %2").arg(
+                label, QString::fromLatin1(kAxisNames[axis])));
+      }
+    }
+    binding.presented_label = control.label;
+    binding.presented_label_key = control.label_key;
+  }
+
+  void invalidate_control_value(std::string_view control_id) {
+    for (ControlWidget &binding : controls_) {
+      if (binding.id == control_id) {
+        binding.presented_choice_value.reset();
+        binding.presented_toggle_value.reset();
+        break;
+      }
+    }
   }
 
   void synchronize_values(const QuaderToolSettingsTarget &target) {
@@ -3131,6 +3348,7 @@ private:
     for (std::size_t index = 0; index < count; ++index) {
       const QuaderToolSettingControl &control = target.controls[index];
       ControlWidget &binding = controls_[index];
+      synchronize_control_label(binding, control);
       if (binding.container != nullptr &&
           binding.container->isEnabled() != control.enabled) {
         binding.container->setEnabled(control.enabled);
@@ -3253,9 +3471,13 @@ private:
         binding.number_slider_mapping = desired_mapping;
       }
 
-      if (binding.toggle != nullptr) {
-        const QSignalBlocker blocker(binding.toggle);
-        binding.toggle->setChecked(control.bool_value);
+      if (binding.toggle != nullptr &&
+          binding.presented_toggle_value != control.bool_value) {
+        if (binding.toggle->isChecked() != control.bool_value) {
+          const QSignalBlocker blocker(binding.toggle);
+          binding.toggle->setChecked(control.bool_value);
+        }
+        binding.presented_toggle_value = control.bool_value;
       }
       if (binding.integer != nullptr &&
           binding.number_drag_spinner == nullptr && !integer_editing &&
@@ -3307,15 +3529,21 @@ private:
         }
         binding.dropdown->setCurrentIndex(selected_index);
       }
-      for (std::size_t option_index = 0;
-           option_index < binding.choices.size() &&
-           option_index < control.choices.size();
-           ++option_index) {
-        ChoiceWidget &choice = binding.choices[option_index];
-        const QSignalBlocker blocker(choice.button);
-        choice.button->setChecked(
-            choice_matches(control.choice_value,
-                           control.choices[option_index]));
+      if (!binding.choices.empty() &&
+          binding.presented_choice_value != control.choice_value) {
+        for (std::size_t option_index = 0;
+             option_index < binding.choices.size() &&
+             option_index < control.choices.size();
+             ++option_index) {
+          ChoiceWidget &choice = binding.choices[option_index];
+          const bool checked = choice_matches(
+              control.choice_value, control.choices[option_index]);
+          if (choice.button->isChecked() != checked) {
+            const QSignalBlocker blocker(choice.button);
+            choice.button->setChecked(checked);
+          }
+        }
+        binding.presented_choice_value = control.choice_value;
       }
     }
     synchronizing_ = false;

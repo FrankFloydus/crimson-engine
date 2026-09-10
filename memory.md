@@ -174,8 +174,11 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
 - Viewport geometry acceptance uses the API-backed commit port and the existing modeling memento
   command owner. SDK history alone does not register an editor Undo step. Transient modeling ports
   expose no implicit commit fallback; previews and cancellation do not publish history. Returning
-  to Select without changing content must preserve the redo branch. Insert Edge Loop synchronizes
-  the active tool after both click and release acceptance.
+  to Select without changing content must preserve the redo branch. Insert Edge Loop retains its
+  active tool after each single-cut acceptance and cancellation; only the completed gesture/preview
+  resets. Normal undo/redo clears its stale seed after successful restoration without exiting the
+  tool; failure compensation preserves transient state. Shared cancellation reports actual tool
+  changes instead of assuming every modal cancellation returns to Select.
 
 Owners: [publication transaction](src/editor/modeling/services/modeling_host_publication_transaction.cpp),
 [object bindings](src/editor/modeling/runtime/modeling_object_binding_registry.cpp).
@@ -267,6 +270,13 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
 - An empty spatial hover sample differs from explicit lifecycle clear. Component misses and leaving
   the viewport retain the last candidate mesh wire; meshes with selected components remain sticky
   independently. Object-mode hover emits no mesh outline and never changes click-owned selection.
+  Gizmo hover owns immediate feedback separately from gesture consumption: the shared interaction
+  controller suppresses scene picks and clears the entire hover candidate while a handle is hovered
+  or consumed. Hover-only mesh wires disappear; meshes with selected components retain their wires.
+  This also clears candidates retained by a prior empty-space sample or viewport leave.
+  Clear once and re-arm the hover work key so hiding a handle under a stationary pointer restores
+  scene hover. Preserve short-click selection/depth cycling; coverage:
+  [interaction tests](tests/viewport_interaction_controller_tests.cpp).
 - Component source topology remains complete in semantic overlays. The revision-gated
   [submission coordinator](src/render/overlay/viewport_overlay_submission_coordinator.cpp) removes
   a source-wire draw beneath an opaque selected edge or face boundary with matching object,
@@ -322,6 +332,15 @@ Tests: [viewport workflows](tests/viewport_interaction_controller_tests.cpp),
   and [keybinding API tests](tests/editor_api_tests.cpp).
 - Knife resolves each accepted segment on a shared existing face, rebasing from the last accepted
   point. Host hits/misses are authoritative; a second differently configured picker breaks locality.
+- Radial placement hover must not require keyboard focus after toolbar activation. Retain the
+  last valid center during UI editing/navigation, but resolve the queued press position again
+  before locking placement; an invalid click cannot lock the retained preview. A placement click
+  only fixes the center: settings continue updating the transient preview until Apply (or the
+  finalize shortcut) commits the operation. Ordered wheel events must clamp separately so
+  outward motion at a limit does not swallow a later inward step. Switching between copy and
+  repeat wheel adjustments clears the pending fraction in the native interaction owner.
+  See [native interaction](src/editor/tools/viewport_native_tool_interaction.cpp) and
+  [Qt gesture tests](tests/qt_input_adapter_tests.cpp).
 
 Owners: [selection interaction](src/editor/viewport/viewport_selection_interaction.cpp),
 [Qt command filter](src/ui/qt_command_event_filter.cpp).
@@ -357,6 +376,66 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
   (64-pixel fallback), independently of snap spacing and face size. Keep occurrence compensation.
   Owner/tests: [texture actions](src/sdk/core/modeling/src/face_texture_actions.cpp),
   [SDK texture workflows](tests/sdk/modeling_sdk_consumer_tests.cpp).
+- Face/View alignment retains settings but uses the same image-axis texel units as Grid:
+  rotate/scale the generated chart, normalize by image width/height, then add UV shift.
+  Subsequent rotation must use image-axis units too. Numeric rotation shares action preparation
+  with exact baseline-plus-offset targets, including negative/no-op edits and merged history.
+  Test non-square images and front-view feature movement for named CW/CCW actions.
+- Continue Texture retains the selected source; target material and UVs publish in one history
+  step. A shared source/target edge supplies its endpoint UVs plus a conditioned third corner,
+  following Hammer's recovered same-mesh operation. Other corners need not fit that local chart.
+  Keep exact seam phase and self-transfer no-ops; separately placed occurrences are not shared edges.
+  Fit transient charts in double precision with normalized axes. CPU and both mesh shaders
+  difference affine sampling coefficients before evaluating positions, preserving small changes
+  at large coordinates. Semantic no-op comparisons depend on UV span/ULP, while reconstruction
+  and source-fit checks use bounded float uncertainty. Do not reuse one tolerance for all three.
+  UV-only publication and Peel validate authored connectivity/attributes/selection, allowing
+  unrelated finite collapsed faces; geometric edits and public strict validation remain strict.
+  Cover diagonal lip continuation, thin local and oblique geometry, transferred faces reused as
+  sources, distant local edits, million-tile phase edits, rendered interiors and publication rollback.
+  Contracts: [portable transfer](tests/sdk/modeling_sdk_consumer_tests.cpp),
+  [native continuation](tests/project_material_behavior_tests.cpp).
+- Position edits retain authored face-corner UVs; procedural faces remain procedural. Topology
+  edits keep surviving corners, sample new corners in their source chart, and preserve seams
+  that remain in the resulting topology. Merged boundaries receive UVs before UV-aware
+  simplification. Dissolve Edges deliberately removes an interior edge and any seam on it:
+  inherit stored boundary corners from outgoing edge donors in the survivor's texture frame,
+  then remove captured affected vertices with two remaining edges after the complete edge batch.
+  UV breakpoints and bends do not block this cleanup. Capture triangle-pair and incidental
+  untouched-face corner protections before merging; do not sweep unrelated vertices. Preserve
+  surviving corner values, combine hard-edge flags, and return only live face IDs. Quader retains
+  a candidate if removing it would leave a neighboring face with fewer than three corners.
+  Do not require the removed faces' entire interior UV fields to survive retriangulation;
+  that rejects valid peeled, discontinuous and nonplanar joins. Keep finite and topology checks.
+  Stored-corner preservation does not certify displayed UVs under nonidentity occurrence mapping
+  when a merge changes the face carrier. Generic topology publication currently refits that
+  carrier; do not claim occurrence-space invariance from local UV tests.
+  Operations promising exact chart preservation validate after the final loop is established
+  and reject incompatible mappings atomically, without clearing charts or taking a hull fallback.
+  Sampling and rendering share
+  neutral quad interpolation math; prepare lookup/triangulation once per source face.
+  Retaining corner values alone does not preserve nonaffine interior UVs. Quads retain their
+  diagonal on winding reversal; affine n-gon rebases compare source/result triangulation before
+  choosing an anchor. Proper rotations can reverse dominant-plane projection too; test them
+  alongside face-plane/oblique reflections and negative scales.
+  Contracts: [preservation](tests/sdk/uv_preservation_foundation_tests.cpp),
+  [quad sampling](tests/mesh_quad_uv_interpolation_tests.cpp).
+- Complete-face native transform acceptance preserves n-gon UV interiors on detached documents,
+  staging any Move weld in the same publication. Cyclic corner-order changes need exact document
+  history; ordinary transforms retain sparse positions, and full-memento previews must not retain
+  a second sparse delta. Keep authored drag previews position-only. Derived render correction is
+  gated by captured n-gon eligibility and changed frames; changed packing refreshes its layout key
+  and source-to-compiled vertex lookup together. Eligibility belongs to the existing preview
+  baseline so explicit Object geometry previews share it, and clears on non-transform transitions.
+  Group transforms remain scene-owned; Group selection intentionally has no SDK geometry-preview
+  participants and that low-level preview API rejects it unchanged.
+  Contract: [transform UV acceptance and preview](tests/uv_transform_acceptance_tests.cpp).
+- Combine Mesh bakes each source's effective sampling into survivor coordinates and remaps source
+  material slots into the survivor table in the same transaction. Array preview and publication
+  share texture-lock plans; retain both definition-member and occurrence identity when resolving
+  generated sampling, including recentered linked sources and independent materialization.
+  Contracts: [native sampling](tests/uv_native_sampling_tests.cpp),
+  [array preview equality](tests/uv_instance_preview_tests.cpp).
 - Legacy local-frame migration runs only during scene installation before hydration/clean baseline.
   Its exact old-cube signature is deliberate because old files lack provenance; generic runtime
   resets must not silently migrate assets or arbitrary geometry.
@@ -371,6 +450,15 @@ Tests: [transform/texture workflows](tests/editor_api_tests.cpp),
 - Formal occurrences reference scene-local definition members. All world projection and scope
   checks retain both occurrence and geometry identity. Cross-scene paste clones an independent
   definition; flattening must not sever surviving occurrence links.
+- Radial Array converts explicit source roots only inside acceptance, one linked family per
+  source. Conversion recenters occurrences: apply captured preview placement deltas to the new
+  occurrence frame, using the original visible pivot for radial repeats. Independent copies of
+  existing instances materialize generated placements directly, preserving the original's links;
+  canonical hierarchy duplication must begin before the caller enlists any other command.
+  Failure compensation must restore exact modeling, scene, and asset checkpoints, including
+  explicitly created mesh assets that ordinary undo retains for redo, to keep the preview
+  retryable. See [array owner](src/editor/array/radial_array_tool_service.cpp) and
+  [instance array tests](tests/radial_array_instance_tests.cpp).
 - Local Visibility is a transient additional allow-filter, never durable visibility or history.
   Persistent object/ancestor/layer visibility still wins. Picking, overlays, preview suppression,
   bounds, statistics, and camera caches include its revision; removal of the last member exits it.
@@ -497,10 +585,24 @@ Tests: [theme](tests/qt_application_theme_tests.cpp), [Qt settings](tests/qt_set
   restores Curve subselection exactly. Layout-only edits do not rescan source hierarchy/texture plans.
 - Solidified Curves participate in the shared material-surface policy. Material-only changes rebind
   without retessellation; eligibility changes advance material-binding revision, point edits do not.
-- UV Peel guides specify flow, not cuts in geometry. Complete quad strips use station/width
-  constraints; irregular patches use guided LSCM with fold/overlap rejection. Renderer-owned inverse
-  bilinear correction fixes safe planar quad interpolation without changing persisted UV topology.
-  Preserve per-axis no-op tolerances and floating-point stationarity checks.
+- Guided UV Peel orders selected connected edge guides and walks opposite edges through quads on
+  both sides, including front/back bands and quad end caps. Stop at a boundary, non-quad or the
+  starting directed edge. Never restrict structured Peel to incident faces or n-gon rim cases.
+  Direct face-corner lanes preserve seam identities, normalize transverse spans by H/Hj, and write
+  A then B in guide order; later writes can intentionally replace earlier cyclic-strip values.
+  Mixed guides retain the length of edges with empty quad walks; those stations make no stores.
+  Do not send structured output through a global chart-overlap veto or authored transverse-cut
+  search. Non-quad-only guides retain the irregular guided-LSCM extension and its validation.
+  World Density uses Quader's world metric and one tile per 64 displayed map units before repeat;
+  these public control units differ from Hammer's local metric/material-based reciprocal scales.
+  Fit keeps the guide at its offset with signed transverse sides, without island packing.
+  Preserve canonical inverse-sampling certification, per-axis semantic no-op tests and exact
+  repeated-output stationarity. Corner storage conversion must not weld intentional UV seams.
+  Inverse occurrence compensation fits in double before inversion and certifies actual float
+  storage through the existing forward evaluator. Rotated occurrences can require bounded
+  residual refinement; preserve an already certified candidate and the canonical error ceiling.
+  Saved-scene edge sweeps protect this boundary in
+  [uv_peel_saved_scene_tests.cpp](tests/sdk/uv_peel_saved_scene_tests.cpp).
 
 Owners: [Curve tool](src/editor/curve/curve_tool_service.cpp),
 [path arrays](src/editor/array/path_array_tool_service.cpp), [UV Peel](src/sdk/core/modeling/src/uv_peel.cpp).

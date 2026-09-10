@@ -77,7 +77,12 @@ OperationResult TranslateSelectionOperation::apply(Document& document, Selection
         if (!selected_ids.contains(vertex.id)) {
             continue;
         }
-        vertex.position += delta_;
+        const quader::QVec3 desired = vertex.position + delta_;
+        if (desired.x == vertex.position.x && desired.y == vertex.position.y &&
+            desired.z == vertex.position.z) {
+            continue;
+        }
+        vertex.position = desired;
         changed = true;
     }
     return { changed, {} };

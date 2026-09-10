@@ -241,15 +241,25 @@ ViewportInteractionController::handle_before_active_tool_impl(
       selection_.lasso_pointer_active()) {
     return {.selection_after_pending_pick = resolved_selection};
   }
-  if (!transform_gizmo_.pointer_interaction_active() &&
-      point_light_range_.handle_frame(editor, prepared)) {
-    interaction_cursor_ = point_light_range_.pointer_cursor();
-    selection_.cancel_pending_click();
-    return {.selection_after_pending_pick = resolved_selection,
-            .gizmo_consumed = true};
+  bool range_hovered = false;
+  if (!transform_gizmo_.pointer_interaction_active()) {
+    const bool range_consumed = point_light_range_.handle_frame(editor, prepared);
+    range_hovered = point_light_range_.hovered();
+    if (range_consumed) {
+      interaction_cursor_ = point_light_range_.pointer_cursor();
+      selection_.cancel_pending_click();
+      return {.selection_after_pending_pick = resolved_selection,
+              .gizmo_consumed = true,
+              .gizmo_hovered = range_hovered};
+    }
   }
   ViewportBeforeToolInteractionResult result =
       transform_gizmo_.handle_frame(editor, prepared, curve);
+  const auto *gizmo_frame = transform_gizmo_.frame();
+  result.gizmo_hovered =
+      range_hovered ||
+      (gizmo_frame != nullptr &&
+       gizmo_frame->info.hover_axis != quader_editor_core::TransformAxis::None);
   interaction_cursor_ = result.gizmo_consumed ||
                                 transform_gizmo_.pointer_interaction_active() ||
                                 point_light_range_.pointer_cursor() ==

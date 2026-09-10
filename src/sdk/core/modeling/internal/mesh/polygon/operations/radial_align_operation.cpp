@@ -371,7 +371,6 @@ OperationResult radial_align_selection_impl(Document& document, Selection& selec
     if (!changed) {
         return { false, "Selected vertices are already radially aligned." };
     }
-    clear_face_uvs(candidate);
     if (!every_face_triangulates(candidate)) {
         return OperationResult::failure(
             "Radial Align would create invalid face geometry.");

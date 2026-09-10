@@ -18,6 +18,41 @@ std::vector<QuaderOperationInputHint> lasso_selection_input_hints() {
 }
 
 std::vector<QuaderOperationInputHint>
+radial_array_input_hints(bool can_finalize, bool center_locked) {
+  using Gesture = QuaderOperationInputGesture;
+  std::vector<QuaderOperationInputHint> hints;
+  hints.reserve(8);
+  if (!center_locked) {
+    hints.push_back({Gesture::PrimaryClick, {},
+                     "operation.hints.radial_array.choose_center", "Choose center"});
+  }
+  if (can_finalize) {
+    hints.push_back({Gesture::Keybinding,
+                     QuaderCommandId{"viewport.radial_array.finalize"},
+                     "operation.hints.finalize", "Finalize"});
+  }
+  hints.push_back({Gesture::Keybinding,
+                   QuaderCommandId{"viewport.cancel_active_tool"},
+                   "operation.hints.cancel", "Cancel"});
+  hints.push_back({Gesture::Keybinding,
+                   QuaderCommandId{"viewport.radial_array.increase_copies"},
+                   "operation.hints.radial_array.increase_copies", "More copies"});
+  hints.push_back({Gesture::Keybinding,
+                   QuaderCommandId{"viewport.radial_array.decrease_copies"},
+                   "operation.hints.radial_array.decrease_copies", "Fewer copies"});
+  hints.push_back({Gesture::Keybinding,
+                   QuaderCommandId{"viewport.radial_array.increase_repeats"},
+                   "operation.hints.radial_array.increase_repeats", "More repeats"});
+  hints.push_back({Gesture::Keybinding,
+                   QuaderCommandId{"viewport.radial_array.decrease_repeats"},
+                   "operation.hints.radial_array.decrease_repeats", "Fewer repeats"});
+  hints.push_back({Gesture::Keybinding,
+                   QuaderCommandId{"viewport.radial_array.toggle_instances"},
+                   "operation.hints.radial_array.toggle_instances", "Toggle instances"});
+  return hints;
+}
+
+std::vector<QuaderOperationInputHint>
 primitive_creation_input_hints(QuaderPrimitiveCreationShape kind, bool can_finalize) {
   using Gesture = QuaderOperationInputGesture;
   using namespace quader_command;

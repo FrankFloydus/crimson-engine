@@ -80,6 +80,11 @@ OperationResult combine_selected_faces_impl(Document& document, Selection& selec
         merged_face.material_slot = island.material_slot;
         merged_face.texture_transform = island.texture_transform;
         orient_face_toward_normal(document, merged_face, island.normal);
+        // Boundary corners can carry UV breakpoints even when their geometry is collinear.
+        // Give optional loop simplification the inherited chart before it decides what to remove.
+        if (!assign_merged_face_texture_boundary(document, island.face_ids, merged_face)) {
+            return OperationResult::failure("Combine Faces could not preserve the source texture mapping.");
+        }
 
         for (const ElementId face_id : island.face_ids) {
             combined_source_face_ids.insert(face_id);
@@ -121,7 +126,7 @@ OperationResult combine_selected_faces_impl(Document& document, Selection& selec
             continue;
         }
         if (Face* merged_face = find_face(candidate, island.face_ids.front());
-            merged_face != nullptr && !inherit_merged_face_texture(document, island.face_ids, *merged_face)) {
+            merged_face != nullptr && !merged_face_preserves_source_textures(document, island.face_ids, *merged_face)) {
             return OperationResult::failure("Combine Faces could not preserve the source texture mapping.");
         }
     }

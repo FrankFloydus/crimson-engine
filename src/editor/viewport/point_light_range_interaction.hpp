@@ -27,6 +27,7 @@ public:
     return gesture_.has_value() || release_suppression_.active();
   }
   [[nodiscard]] bool dragging() const { return edit_.has_value(); }
+  [[nodiscard]] bool hovered() const { return hovered_; }
   [[nodiscard]] ViewportPointerCursor pointer_cursor() const {
     if (edit_) return ViewportPointerCursor::ClosedHand;
     return gesture_ || hovered_ ? ViewportPointerCursor::OpenHand

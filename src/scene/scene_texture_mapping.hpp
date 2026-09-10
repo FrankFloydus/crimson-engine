@@ -22,10 +22,24 @@ inline bool texture_mapping_is_valid(const TextureMappingComponent &mapping) {
          try_scene_matrix_inverse(matrix).has_value();
 }
 
+/** Applies an occurrence correction in the supplied member's definition frame. */
+inline std::optional<QMat4> compose_texture_sampling_in_definition(
+    const QMat4 &direct, const QMat4 &definition_from_member,
+    const QMat4 &occurrence_sampling_from_local) {
+  if (occurrence_sampling_from_local.values == QMat4{}.values) return direct;
+  const auto member_from_definition = try_scene_matrix_inverse(definition_from_member);
+  if (!member_from_definition.has_value()) return std::nullopt;
+  const QMat4 result = scene_transform_multiply(
+      scene_transform_multiply(direct, *member_from_definition),
+      scene_transform_multiply(occurrence_sampling_from_local, definition_from_member));
+  return scene_matrix_is_finite(result) ? std::optional<QMat4>{result} : std::nullopt;
+}
+
 /** Composes a supplied member chart with its occurrence's sampling correction. */
-inline std::optional<QMat4> compose_texture_sampling_from_local(
+inline std::optional<QMat4> compose_texture_sampling_with_occurrence_mapping(
     const SceneDocument &scene, EntityId member,
-    const QMat4 &direct, EntityId occurrence) {
+    const QMat4 &direct, EntityId occurrence,
+    const QMat4 &occurrence_sampling_from_local) {
   if (!scene.exists(member)) {
     return std::nullopt;
   }
@@ -38,9 +52,7 @@ inline std::optional<QMat4> compose_texture_sampling_from_local(
       scene.containing_instance_definition(member) != instance->definition) {
     return std::nullopt;
   }
-  const TextureMappingComponent *occurrence_mapping =
-      scene.texture_mapping(occurrence);
-  if (occurrence_mapping == nullptr) {
+  if (occurrence_sampling_from_local.values == QMat4{}.values) {
     return direct;
   }
   const std::optional<QMat4> definition_from_world =
@@ -50,17 +62,18 @@ inline std::optional<QMat4> compose_texture_sampling_from_local(
   }
   const QMat4 definition_from_member = scene_transform_multiply(
       *definition_from_world, scene.world_transform_matrix(member));
-  const std::optional<QMat4> member_from_definition =
-      try_scene_matrix_inverse(definition_from_member);
-  if (!member_from_definition.has_value()) {
-    return std::nullopt;
-  }
-  const QMat4 result = scene_transform_multiply(
-      scene_transform_multiply(direct, *member_from_definition),
-      scene_transform_multiply(occurrence_mapping->sampling_from_local,
-                               definition_from_member));
-  return scene_matrix_is_finite(result) ? std::optional<QMat4>{result}
-                                        : std::nullopt;
+  return compose_texture_sampling_in_definition(
+      direct, definition_from_member, occurrence_sampling_from_local);
+}
+
+/** Resolves the authored occurrence correction through the shared composition. */
+inline std::optional<QMat4> compose_texture_sampling_from_local(
+    const SceneDocument &scene, EntityId member,
+    const QMat4 &direct, EntityId occurrence) {
+  const TextureMappingComponent *mapping = scene.texture_mapping(occurrence);
+  return compose_texture_sampling_with_occurrence_mapping(
+      scene, member, direct, occurrence,
+      mapping != nullptr ? mapping->sampling_from_local : QMat4{});
 }
 
 /** Resolves ordinary or definition-member sampling in one scene owner. */

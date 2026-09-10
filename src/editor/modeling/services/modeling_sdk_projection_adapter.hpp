@@ -261,6 +261,9 @@ public:
 
   void set_modeling_object_world_transform_resolver(
       std::function<std::optional<QMat4>(int)> resolver);
+  /// Resolves displayed sampling while retaining the active occurrence scope.
+  void set_modeling_object_texture_sampling_resolver(
+      std::function<std::optional<QMat4>(int)> resolver);
   void reset_from_scene();
   [[nodiscard]] ModelingCommandResult
   restore_mesh_documents_from_scene(std::span<const EntityId> entities);

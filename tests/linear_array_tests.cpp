@@ -10,6 +10,8 @@
 #include "assets/texture_asset.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
+#include "editor/input/quader_input_binding.hpp"
+#include "editor/input/viewport_keybinding_resolver.hpp"
 #include "editor/modeling/linear_array_layout.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
@@ -33,8 +35,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -313,14 +318,493 @@ TEST(NativeViewportToolCursorTests,
   EXPECT_EQ(session.native_tools().pointer_cursor(),
             ViewportPointerCursor::Default);
 
+  const auto entity_count_before = session.scene().entities().size();
+  const auto undo_count_before = session.history().undo_count();
   const auto locked = frame(true);
   EXPECT_TRUE(locked.radial_array_consumed);
+  EXPECT_FALSE(locked.sync_active_tool);
   EXPECT_TRUE(session.radial_array().active());
   EXPECT_TRUE(session.radial_array().center_locked());
   expect_vec3_near(session.radial_array().center_state().world_position,
                    moved_center);
+  EXPECT_EQ(session.scene().entities().size(), entity_count_before);
+  EXPECT_EQ(session.history().undo_count(), undo_count_before);
   EXPECT_EQ(session.native_tools().pointer_cursor(),
             ViewportPointerCursor::Default);
+}
+
+class RadialArrayViewportInputTests : public testing::Test {
+protected:
+  void SetUp() override {
+    keybindings_path_ = std::filesystem::temp_directory_path() /
+                       (std::string("quader-radial-input-") +
+                        testing::UnitTest::GetInstance()->current_test_info()->name() +
+                        ".json");
+    std::error_code ignored;
+    std::filesystem::remove(keybindings_path_, ignored);
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings_path_).ok());
+    const auto created = editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        "Radial Input Source");
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    source = created.value().entity;
+    ASSERT_TRUE(editor.scene().set_transform(source,
+        {.position = {6.0f, 0.0f, 0.0f}}).ok());
+    ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
+    camera.set_viewport_size(800.0f, 600.0f);
+    camera.focus_origin(16.0f);
+    camera.view_axis(ViewportViewAxis::Y, 1);
+    input.viewport_hovered = true;
+    input.viewport_focused = true;
+    input.active_tool_owns_viewport = true;
+    input.viewport_size = {800.0f, 600.0f};
+    input.mouse_local = camera.project_world_point({}).position;
+    initial_entities = session.scene().entities();
+  }
+
+  void TearDown() override {
+    std::error_code ignored;
+    std::filesystem::remove(keybindings_path_, ignored);
+  }
+
+  ViewportNativeToolInteractionResult frame(
+      bool pressed = false, bool down = false, bool released = false,
+      std::optional<QVec2> click = std::nullopt,
+      bool suppress_hover = false) {
+    input.mouse_screen = input.mouse_local;
+    return session.native_tools().handle_pointer_frame(
+        session.scene(), session.assets(), &session.point_placement(), camera,
+        {.input = input,
+         .input_result = input_result,
+         .suppress_hover_work = suppress_hover,
+         .left_pressed = pressed,
+         .left_down = down,
+         .left_released = released,
+         .left_click_local = click.value_or(input.mouse_local),
+         .radial_array_wheel_remainder = &radial_wheel_remainder});
+  }
+
+  static QuaderInputChord chord(std::string_view text) {
+    return *quader_input_parse_chord(text);
+  }
+
+  static std::vector<QuaderWheelInputEdge> wheel(
+      double delta, std::string_view base_chord = "Shift+Wheel") {
+    const std::string direction =
+        std::string(base_chord) + (delta >= 0.0 ? "Up" : "Down");
+    return {{chord(base_chord), delta}, {chord(direction), delta}};
+  }
+
+  void resolve(std::vector<QuaderInputChord> pressed = {},
+               std::vector<QuaderWheelInputEdge> wheels = {}) {
+    input.pressed_input_chords = std::move(pressed);
+    input.wheel_input_edges = std::move(wheels);
+    input.keybinding_input_consumed = false;
+    input.modal_tool_finalize_pressed = false;
+    ViewportKeybindingResolver::resolve(
+        editor, {.active_tool = ViewportToolId::RadialArray}, input,
+        suppressed_chords, linear_wheel_remainder, radial_wheel_remainder);
+  }
+
+  SceneSession session;
+  QuaderEditorApi editor{
+      QuaderApiSessionInternalAccess::from_scene_session(session)};
+  EntityId source = kInvalidEntityId;
+  std::vector<EntityId> initial_entities;
+  ViewportCameraController camera;
+  ViewportInputFrame input;
+  ViewportInputResult input_result;
+  double radial_wheel_remainder = 0.0;
+  double linear_wheel_remainder = 0.0;
+  std::vector<QuaderInputChord> suppressed_chords;
+
+private:
+  std::filesystem::path keybindings_path_;
+};
+
+TEST_F(RadialArrayViewportInputTests,
+       PassivePreviewNeedsNoKeyboardFocusAndFreezesWhileIneligible) {
+  input.viewport_focused = false;
+  const auto initial = frame();
+  ASSERT_TRUE(session.radial_array().has_valid_center());
+  ASSERT_TRUE(session.radial_array().preview_state().active);
+  EXPECT_TRUE(initial.mark_overlay_dirty);
+  const auto center = session.radial_array().center_state();
+  const auto preview_revision = session.radial_array().preview_state().revision;
+  EXPECT_FALSE(frame().mark_overlay_dirty);
+  EXPECT_EQ(session.radial_array().preview_state().revision, preview_revision);
+
+  input.mouse_local = camera.project_world_point({0.0f, 0.0f, 3.0f}).position;
+  const auto expect_retained = [&]() {
+    EXPECT_FALSE(frame().mark_overlay_dirty);
+    EXPECT_EQ(session.radial_array().center_state().revision, center.revision);
+    EXPECT_EQ(session.radial_array().preview_state().revision, preview_revision);
+    expect_vec3_near(session.radial_array().center_state().world_position,
+                     center.world_position);
+  };
+  input.viewport_hovered = false;
+  expect_retained();
+  input.viewport_hovered = true;
+  input.text_input_active = true;
+  expect_retained();
+  input.text_input_active = false;
+  input.navigation_active = true;
+  expect_retained();
+  input.navigation_active = false;
+  input_result.navigation_active = true;
+  expect_retained();
+  input_result.navigation_active = false;
+  input_result.camera_changed = true;
+  expect_retained();
+  input_result.camera_changed = false;
+  EXPECT_FALSE(frame(false, false, false, std::nullopt, true).mark_overlay_dirty);
+  EXPECT_EQ(session.radial_array().center_state().revision, center.revision);
+
+  EXPECT_TRUE(frame().mark_overlay_dirty);
+  expect_vec3_near(session.radial_array().center_state().world_position,
+                   {0.0f, 0.0f, 3.0f});
+  EXPECT_GT(session.radial_array().preview_state().revision, preview_revision);
+  EXPECT_EQ(session.scene().entities().size(), initial_entities.size());
+}
+
+TEST_F(RadialArrayViewportInputTests,
+       CompleteClickLocksPressPositionAndApplyPublishesOneUndoStep) {
+  (void)frame();
+  const QVec2 press = input.mouse_local;
+  const auto center_before = session.radial_array().center_state().world_position;
+  const auto undo_count_before = session.history().undo_count();
+  input.mouse_local = camera.project_world_point({0.0f, 0.0f, 3.0f}).position;
+  const auto locked = frame(true, false, true, press);
+  EXPECT_FALSE(locked.sync_active_tool);
+  ASSERT_TRUE(session.radial_array().active());
+  ASSERT_TRUE(session.radial_array().center_locked());
+  const auto locked_center = session.radial_array().center_state();
+  expect_vec3_near(locked_center.world_position, center_before);
+  const auto locked_preview_revision = session.radial_array().preview_state().revision;
+  EXPECT_FALSE(frame().mark_overlay_dirty);
+  EXPECT_EQ(session.radial_array().center_state().revision, locked_center.revision);
+  EXPECT_EQ(session.radial_array().preview_state().revision, locked_preview_revision);
+  EXPECT_FALSE(frame(true, false, true).sync_active_tool);
+  EXPECT_TRUE(session.radial_array().active());
+  EXPECT_EQ(session.radial_array().center_state().revision, locked_center.revision);
+  EXPECT_EQ(session.scene().entities(), initial_entities);
+  EXPECT_EQ(session.history().undo_count(), undo_count_before);
+
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("radial_array", "radial_array.degrees", 180.0)
+                  .ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("radial_array", "radial_array.copies", 4.0)
+                  .ok());
+  ASSERT_TRUE(session.radial_array().active());
+  ASSERT_TRUE(session.radial_array().center_locked());
+  const auto &edited_preview = session.radial_array().preview_state();
+  EXPECT_GT(edited_preview.revision, locked_preview_revision);
+  const auto expected = edited_preview.sources.front().generated_world_transforms;
+  ASSERT_EQ(expected.size(), 3u);
+  expect_vec3_near(session.radial_array().center_state().world_position, center_before);
+  EXPECT_EQ(session.scene().entities(), initial_entities);
+  EXPECT_EQ(session.history().undo_count(), undo_count_before);
+
+  const auto applied = editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  ASSERT_TRUE(applied.changed());
+  ASSERT_FALSE(session.radial_array().active());
+  ASSERT_EQ(session.scene().entities().size(),
+            initial_entities.size() + expected.size());
+  std::size_t generated = 0u;
+  for (const EntityId entity : session.scene().entities()) {
+    if (std::find(initial_entities.begin(), initial_entities.end(), entity) !=
+        initial_entities.end()) {
+      continue;
+    }
+    ASSERT_LT(generated, expected.size());
+    expect_matrix_near(session.scene().world_transform_matrix(entity),
+                        expected[generated++]);
+  }
+  EXPECT_EQ(generated, expected.size());
+  EXPECT_EQ(editor.query().history().undo_label, "Radial Array");
+  EXPECT_EQ(session.history().undo_count(), undo_count_before + 1u);
+  EXPECT_FALSE(frame().consumed);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(session.scene().entities().size(), initial_entities.size());
+  EXPECT_EQ(session.history().undo_count(), undo_count_before);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(session.scene().entities().size(),
+            initial_entities.size() + expected.size());
+  EXPECT_EQ(session.history().undo_count(), undo_count_before + 1u);
+}
+
+TEST_F(RadialArrayViewportInputTests,
+       HeldCenterLockPreservesReleaseOwnershipAndInvalidPressCannotLockRetainedCenter) {
+  (void)frame();
+  const auto retained = session.radial_array().center_state();
+  const float invalid = std::numeric_limits<float>::quiet_NaN();
+  input.modal_tool_finalize_pressed = true;
+  EXPECT_FALSE(frame(true, false, true, QVec2{invalid, invalid}).sync_active_tool);
+  ASSERT_TRUE(session.radial_array().active());
+  EXPECT_FALSE(session.radial_array().center_locked());
+  EXPECT_EQ(session.scene().entities().size(), initial_entities.size());
+  EXPECT_EQ(session.radial_array().center_state().revision, retained.revision);
+
+  input.modal_tool_finalize_pressed = false;
+  input.viewport_focused = false;
+  EXPECT_FALSE(frame(true, false, true).sync_active_tool);
+  EXPECT_TRUE(session.radial_array().active());
+  EXPECT_FALSE(session.radial_array().center_locked());
+  input.viewport_focused = true;
+  EXPECT_FALSE(frame(true, true, false).sync_active_tool);
+  ASSERT_TRUE(session.radial_array().active());
+  ASSERT_TRUE(session.radial_array().center_locked());
+  EXPECT_EQ(session.scene().entities(), initial_entities);
+  EXPECT_TRUE(frame(false, true, false).consumed);
+  resolve({chord("Enter")});
+  EXPECT_TRUE(frame(false, true, false).sync_active_tool);
+  ASSERT_FALSE(session.radial_array().active());
+  EXPECT_TRUE(frame(false, false, true).consumed);
+  EXPECT_FALSE(frame().consumed);
+  EXPECT_EQ(session.scene().entities().size(),
+            initial_entities.size() + kRadialArrayDefaultCopies - 1u);
+}
+
+TEST_F(RadialArrayViewportInputTests, EnterAppliesTheRetainedValidCenter) {
+  resolve({chord("Enter")});
+  (void)frame();
+  ASSERT_TRUE(session.radial_array().active());
+  ASSERT_TRUE(session.radial_array().has_valid_center());
+  input.viewport_hovered = false;
+  resolve({chord("Enter")});
+  EXPECT_TRUE(frame().sync_active_tool);
+  EXPECT_FALSE(session.radial_array().active());
+  EXPECT_EQ(session.scene().entities().size(),
+            initial_entities.size() + kRadialArrayDefaultCopies - 1u);
+}
+
+TEST_F(RadialArrayViewportInputTests,
+       WheelStepsKeepPhysicalOrderAtBoundsAndRetainOnlyEligibleFractions) {
+  ASSERT_TRUE(session.radial_array().set_copies(kRadialArrayMaximumCopies).ok);
+  auto events = wheel(0.75);
+  const auto down = wheel(-1.0);
+  events.insert(events.end(), down.begin(), down.end());
+  resolve({}, events);
+  EXPECT_FLOAT_EQ(input.mouse_wheel, 0.0f);
+  (void)frame();
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayMaximumCopies - 1u);
+  EXPECT_DOUBLE_EQ(radial_wheel_remainder, 0.0);
+
+  ASSERT_TRUE(session.radial_array().set_copies(kRadialArrayMinimumCopies).ok);
+  events = wheel(-2.0);
+  const auto up = wheel(1.0);
+  events.insert(events.end(), up.begin(), up.end());
+  resolve({}, events);
+  (void)frame();
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayMinimumCopies + 1u);
+  resolve({}, wheel(0.4));
+  (void)frame();
+  EXPECT_NEAR(radial_wheel_remainder, 0.4, 0.000001);
+  resolve({}, wheel(0.6));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayMinimumCopies + 2u);
+  EXPECT_DOUBLE_EQ(radial_wheel_remainder, 0.0);
+
+  resolve({}, wheel(0.7));
+  (void)frame();
+  input.text_input_active = true;
+  resolve({}, wheel(1.0));
+  (void)frame();
+  EXPECT_DOUBLE_EQ(radial_wheel_remainder, 0.0);
+  input.text_input_active = false;
+  resolve({}, wheel(0.3));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayMinimumCopies + 2u);
+  input.navigation_active = true;
+  resolve({}, wheel(1.0));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayMinimumCopies + 2u);
+  EXPECT_DOUBLE_EQ(radial_wheel_remainder, 0.0);
+}
+
+TEST_F(RadialArrayViewportInputTests,
+       RepeatWheelStepsPreserveLimitsFractionsAndPhysicalReversals) {
+  const std::uint32_t maximum_repeats = session.radial_array().maximum_repeats();
+  ASSERT_TRUE(session.radial_array().set_repeats(maximum_repeats).ok);
+  auto events = wheel(0.75, "Ctrl+Wheel");
+  const auto down = wheel(-1.0, "Ctrl+Wheel");
+  events.insert(events.end(), down.begin(), down.end());
+  resolve({}, events);
+  EXPECT_FLOAT_EQ(input.mouse_wheel, 0.0f);
+  (void)frame();
+  EXPECT_EQ(session.radial_array().repeats(), maximum_repeats - 1u);
+  EXPECT_DOUBLE_EQ(radial_wheel_remainder, 0.0);
+
+  ASSERT_TRUE(session.radial_array().set_repeats(1u).ok);
+  events = wheel(-2.0, "Ctrl+Wheel");
+  const auto up = wheel(1.0, "Ctrl+Wheel");
+  events.insert(events.end(), up.begin(), up.end());
+  resolve({}, events);
+  (void)frame();
+  EXPECT_EQ(session.radial_array().repeats(), 2u);
+  resolve({}, wheel(0.4, "Ctrl+Wheel"));
+  (void)frame();
+  EXPECT_NEAR(radial_wheel_remainder, 0.4, 0.000001);
+  resolve({}, wheel(0.6, "Ctrl+Wheel"));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().repeats(), 3u);
+  EXPECT_DOUBLE_EQ(radial_wheel_remainder, 0.0);
+
+  resolve({}, wheel(0.75, "Ctrl+Wheel"));
+  (void)frame();
+  resolve({}, wheel(-0.25, "Ctrl+Wheel"));
+  (void)frame();
+  EXPECT_NEAR(radial_wheel_remainder, 0.5, 0.000001);
+  resolve({}, wheel(-1.5, "Ctrl+Wheel"));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().repeats(), 2u);
+  EXPECT_DOUBLE_EQ(radial_wheel_remainder, 0.0);
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayDefaultCopies);
+
+  ASSERT_TRUE(session.radial_array().set_copies(kRadialArrayMaximumCopies).ok);
+  resolve({}, wheel(1000.0, "Ctrl+Wheel"));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().repeats(),
+            session.radial_array().maximum_repeats());
+  resolve({}, wheel(-1000.0, "Ctrl+Wheel"));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().repeats(), kRadialArrayMinimumRepeats);
+}
+
+TEST_F(RadialArrayViewportInputTests,
+       CopyAndRepeatFractionsNeverTransferWithinOrBetweenFrames) {
+  resolve({}, wheel(0.6));
+  (void)frame();
+  EXPECT_NEAR(radial_wheel_remainder, 0.6, 0.000001);
+  resolve({}, wheel(0.4, "Ctrl+Wheel"));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayDefaultCopies);
+  EXPECT_EQ(session.radial_array().repeats(), kRadialArrayDefaultRepeats);
+  EXPECT_NEAR(radial_wheel_remainder, 0.4, 0.000001);
+  resolve({}, wheel(0.6, "Ctrl+Wheel"));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().repeats(), kRadialArrayDefaultRepeats + 1u);
+  resolve({}, wheel(0.7, "Ctrl+Wheel"));
+  (void)frame();
+  resolve({}, wheel(0.3));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayDefaultCopies);
+  EXPECT_NEAR(radial_wheel_remainder, 0.3, 0.000001);
+  resolve({}, wheel(0.7));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayDefaultCopies + 1u);
+  EXPECT_DOUBLE_EQ(radial_wheel_remainder, 0.0);
+
+  auto events = wheel(0.8);
+  const auto repeat_fraction = wheel(0.8, "Ctrl+Wheel");
+  const auto copy_fraction = wheel(0.2);
+  events.insert(events.end(), repeat_fraction.begin(), repeat_fraction.end());
+  events.insert(events.end(), copy_fraction.begin(), copy_fraction.end());
+  resolve({}, events);
+  (void)frame();
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayDefaultCopies + 1u);
+  EXPECT_EQ(session.radial_array().repeats(), kRadialArrayDefaultRepeats + 1u);
+  EXPECT_NEAR(radial_wheel_remainder, 0.2, 0.000001);
+}
+
+TEST_F(RadialArrayViewportInputTests,
+       RepeatFractionsClearWhenTextNavigationOrFocusBlocksInput) {
+  ASSERT_TRUE(session.radial_array().set_repeats(4u).ok);
+  const auto check_blocked = [&](bool &state, bool blocked) {
+    const auto repeats_before = session.radial_array().repeats();
+    resolve({}, wheel(0.75, "Ctrl+Wheel"));
+    (void)frame();
+    EXPECT_NEAR(radial_wheel_remainder, 0.75, 0.000001);
+    state = blocked;
+    resolve({}, wheel(1.0, "Ctrl+Wheel"));
+    (void)frame();
+    EXPECT_EQ(session.radial_array().repeats(), repeats_before);
+    EXPECT_DOUBLE_EQ(radial_wheel_remainder, 0.0);
+    state = !blocked;
+    resolve({}, wheel(0.25, "Ctrl+Wheel"));
+    (void)frame();
+    EXPECT_EQ(session.radial_array().repeats(), repeats_before);
+    resolve({}, wheel(0.75, "Ctrl+Wheel"));
+    (void)frame();
+    EXPECT_EQ(session.radial_array().repeats(), repeats_before + 1u);
+    EXPECT_DOUBLE_EQ(radial_wheel_remainder, 0.0);
+  };
+  check_blocked(input.text_input_active, true);
+  check_blocked(input.navigation_active, true);
+  check_blocked(input.viewport_focused, false);
+}
+
+TEST_F(RadialArrayViewportInputTests,
+       PlainWheelRemainsNavigationAndClearsPendingArrayFractions) {
+  resolve({}, wheel(0.75));
+  (void)frame();
+  resolve({}, wheel(1.0, "Wheel"));
+  EXPECT_FLOAT_EQ(input.mouse_wheel, 1.0f);
+  (void)frame();
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayDefaultCopies);
+  EXPECT_EQ(session.radial_array().repeats(), kRadialArrayDefaultRepeats);
+  EXPECT_DOUBLE_EQ(radial_wheel_remainder, 0.0);
+  resolve({}, wheel(0.25));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayDefaultCopies);
+}
+
+TEST_F(RadialArrayViewportInputTests,
+       RepeatedInstanceTogglesAndRemappedCopyKeysStaySemantic) {
+  const bool initial = session.radial_array().create_instances();
+  resolve({chord("I"), chord("I")});
+  (void)frame();
+  EXPECT_EQ(session.radial_array().create_instances(), initial);
+  resolve({chord("I"), chord("I"), chord("I")});
+  (void)frame();
+  EXPECT_EQ(session.radial_array().create_instances(), !initial);
+  input.text_input_active = true;
+  resolve({chord("I")});
+  (void)frame();
+  EXPECT_EQ(session.radial_array().create_instances(), !initial);
+  input.text_input_active = false;
+  input.navigation_active = true;
+  resolve({chord("I")});
+  (void)frame();
+  EXPECT_EQ(session.radial_array().create_instances(), !initial);
+  input.navigation_active = false;
+  ASSERT_TRUE(editor.preferences().set_shortcut(
+      "viewport.radial_array.increase_copies", "Ctrl+Shift+WheelUp").ok());
+  resolve({}, wheel(1.0));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayDefaultCopies);
+  const auto remapped_wheel = wheel(1.0, "Ctrl+Shift+Wheel");
+  resolve({}, remapped_wheel);
+  (void)frame();
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayDefaultCopies + 1u);
+  ASSERT_TRUE(editor.preferences().set_shortcut(
+      "viewport.radial_array.increase_copies", "K").ok());
+  resolve({chord("K"), chord("K")});
+  (void)frame();
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayDefaultCopies + 3u);
+}
+
+TEST_F(RadialArrayViewportInputTests,
+       RepeatShortcutOverridesDriveTheSameBoundedService) {
+  ASSERT_TRUE(editor.preferences().set_shortcut(
+      "viewport.radial_array.increase_repeats", "Ctrl+Shift+WheelUp").ok());
+  resolve({}, wheel(1.0, "Ctrl+Wheel"));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().repeats(), kRadialArrayDefaultRepeats);
+  resolve({}, wheel(1.0, "Ctrl+Shift+Wheel"));
+  (void)frame();
+  EXPECT_EQ(session.radial_array().repeats(), kRadialArrayDefaultRepeats + 1u);
+  ASSERT_TRUE(editor.preferences().set_shortcut(
+      "viewport.radial_array.increase_repeats", "K").ok());
+  ASSERT_TRUE(editor.preferences().set_shortcut(
+      "viewport.radial_array.decrease_repeats", "J").ok());
+  resolve({chord("K"), chord("K"), chord("J")});
+  (void)frame();
+  EXPECT_EQ(session.radial_array().repeats(), kRadialArrayDefaultRepeats + 2u);
+  EXPECT_EQ(session.radial_array().copies(), kRadialArrayDefaultCopies);
 }
 
 TEST(LinearArrayPerformanceTests,
@@ -462,7 +946,7 @@ TEST(RadialArrayToolServiceTests,
   EXPECT_DOUBLE_EQ(tool.degrees(), kRadialArrayDefaultDegrees);
   EXPECT_EQ(tool.copies(), kRadialArrayDefaultCopies);
   EXPECT_EQ(tool.repeats(), kRadialArrayDefaultRepeats);
-  EXPECT_DOUBLE_EQ(tool.repeat_spacing(), 2.5);
+  EXPECT_DOUBLE_EQ(tool.repeat_spacing(), 6.0);
   EXPECT_EQ(tool.tool_settings_revision(), unlocked_revision + 1u);
 
   ASSERT_TRUE(tool.lock_center().ok);
@@ -858,7 +1342,8 @@ TEST(LinearArrayToolServiceTests,
   ASSERT_TRUE(preview.active);
   ASSERT_EQ(preview.sources.size(), members.size());
   for (const LinearArrayPreviewSource &source : preview.sources) {
-    EXPECT_EQ(source.source_entity, occurrence);
+    EXPECT_EQ(source.visibility_entity, occurrence);
+    EXPECT_EQ(source.source_entity, source.material_entity);
     EXPECT_EQ(source.generated_world_transforms.size(), 2u);
   }
 
@@ -988,6 +1473,7 @@ TEST(RadialArrayToolServiceTests,
   ASSERT_TRUE(tool.update_center_candidate({}, {0.0f, 1.0f, 0.0f}, 1.0).ok);
   ASSERT_TRUE(tool.set_degrees(150.0).ok);
   ASSERT_TRUE(tool.set_copies(3u).ok);
+  ASSERT_TRUE(tool.set_create_instances(true).ok);
   ASSERT_TRUE(tool.lock_center().ok);
   const RadialArrayPreviewState preview = tool.preview_state();
   ASSERT_TRUE(preview.active);

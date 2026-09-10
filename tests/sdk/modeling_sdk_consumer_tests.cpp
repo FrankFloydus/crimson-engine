@@ -109,9 +109,16 @@ void expect_reversed_face_winding(const PolygonDocument &regular,
 
   for (std::size_t index = 0; index < regular_payload.value().faces.size();
        ++index) {
-    const std::vector<VertexId> expected(
+    std::vector<VertexId> expected(
         regular_payload.value().faces[index].vertices.rbegin(),
         regular_payload.value().faces[index].vertices.rend());
+    const auto& actual = flipped_payload.value().faces[index].vertices;
+    ASSERT_EQ(actual.size(), expected.size());
+    if (!actual.empty()) {
+      const auto start = std::ranges::find(expected, actual.front());
+      ASSERT_NE(start, expected.end());
+      std::rotate(expected.begin(), start, expected.end());
+    }
     EXPECT_EQ(flipped_payload.value().faces[index].vertices, expected);
   }
 }
@@ -381,7 +388,7 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
-     PositionChangingOperationsRestoreProceduralFaceUvs) {
+     PositionChangingOperationsPreserveAuthoredFaceUvs) {
   for (int operation = 0; operation < 3; ++operation) {
     SCOPED_TRACE(operation);
     Result<PolygonDocument> box = PolygonDocument::make_box({});
@@ -433,10 +440,15 @@ TEST(ModelingSdkConsumerTests,
 
     Result<AuthoredTopology> result = document.authored_topology();
     ASSERT_TRUE(result.ok()) << result.error_message();
-    EXPECT_TRUE(std::ranges::all_of(
-        result.value().faces,
-        [](const AuthoredTopologyFace &face) { return face.uvs.empty(); }));
     for (const auto &face : result.value().faces) {
+      const auto source = std::ranges::find(authored.value().faces, face.id,
+                                            &AuthoredTopologyFace::id);
+      ASSERT_NE(source, authored.value().faces.end());
+      ASSERT_EQ(face.uvs.size(), source->uvs.size());
+      for (std::size_t corner = 0; corner < face.uvs.size(); ++corner) {
+        EXPECT_EQ(face.uvs[corner].x, source->uvs[corner].x);
+        EXPECT_EQ(face.uvs[corner].y, source->uvs[corner].y);
+      }
       EXPECT_EQ(face.texture_transform, authored.value().faces.front().texture_transform);
     }
   }
@@ -5295,6 +5307,107 @@ void expect_compiled_texture_uvs(const PolygonDocument &document,
 }
 
 TEST(ModelingSdkConsumerTests,
+     FaceTextureTransferContinuesTranslatedSlopedRoomFaces) {
+  // Captured authored coordinates from the sloped room face and its two sides
+  // plus the thin top cap. A shared translation must not distort their charts.
+  constexpr std::array<Vec3, 4> source_points{{
+      {0.16870377957820892F, 1.5F, 2.270589828491211F},
+      {1.5481683015823364F, 1.5F, 2.270589828491211F},
+      {1.5481683015823364F, 3.75F, 0.6056923866271973F},
+      {0.16870377957820892F, 3.75F, 0.6056923866271973F}}};
+  constexpr std::array<Vec2, 4> source_uvs{{
+      {-0.1562500149011612F, 0.019437480717897415F},
+      {-0.1131417453289032F, 0.019437480717897415F},
+      {-0.1131417453289032F, -0.0680311769247055F},
+      {-0.1562500149011612F, -0.0680311769247055F}}};
+  constexpr std::array<std::array<Vec3, 4>, 3> target_points{{
+      {{{0.16870377957820892F, 1.5F, 0.5F},
+        {0.16870377957820892F, 1.5F, 2.270589828491211F},
+        {0.16870377957820892F, 3.75F, 0.6056923866271973F},
+        {0.16870377957820892F, 3.75F, 0.5279415249824524F}}},
+      {{{1.5481683015823364F, 1.5F, 2.270589828491211F},
+        {1.5481683015823364F, 1.5F, 0.5F},
+        {1.5481683015823364F, 3.75F, 0.5279415249824524F},
+        {1.5481683015823364F, 3.75F, 0.6056923866271973F}}},
+      {{{1.5481683015823364F, 3.75F, 0.5279415249824524F},
+        {1.5481683015823364F, 3.75F, 0.45275720953941345F},
+        {0.16870377957820892F, 3.75F, 0.45275720953941345F},
+        {0.16870377957820892F, 3.75F, 0.5279415249824524F}}}}};
+  const FaceTextureTransform settings{.scale = {0.125F, 0.125F}};
+  auto source = make_texture_action_face(source_points, source_uvs, settings).or_throw();
+  const auto source_bytes = serialize_qdr_authored_topology(source).or_throw();
+  auto from = texture_transfer_face(source);
+  from.world_from_local.origin = {5.0F, 0.5F, -21.5F};
+  from.sampling_from_local = from.world_from_local;
+  for (std::size_t target_index = 0; target_index < target_points.size(); ++target_index) {
+    SCOPED_TRACE(target_index);
+    auto target = make_texture_action_face(target_points[target_index]).or_throw();
+    auto to = texture_transfer_face(target, 2U);
+    to.world_from_local = from.world_from_local;
+    to.sampling_from_local = from.sampling_from_local;
+    const auto result = prepare_face_texture_transfer(from, to, 1U);
+    EXPECT_TRUE(result.ok()) << result.error_message();
+    if (!result.ok()) continue;
+    ASSERT_TRUE(result.value().changed);
+    const auto &prepared = result.value().documents.front().document;
+    EXPECT_EQ(prepared.authored_topology().or_throw().faces.front().texture_transform,
+              settings);
+    to.document = &prepared;
+    const auto repeated = prepare_face_texture_transfer(from, to, 1U);
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.value().changed);
+  }
+  EXPECT_EQ(serialize_qdr_authored_topology(source).or_throw(), source_bytes);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureTransferContinuesStoredRotatedChartOntoHorizontalLips) {
+  constexpr std::array<Vec3, 4> source_points{{
+      {0.16870377957820892F, 1.5F, 0.5F},
+      {0.16870377957820892F, 1.5F, 2.270589828491211F},
+      {0.16870377957820892F, 3.75F, 0.6056923866271973F},
+      {0.16870377957820892F, 3.75F, 0.5279415249824524F}}};
+  constexpr std::array<Vec2, 4> source_uvs{{
+      {0.4863211214542389F, 0.3792925179004669F},
+      {0.5307994484901428F, 0.41220441460609436F},
+      {0.5307994484901428F, 0.32473576068878174F},
+      {0.528846263885498F, 0.32329052686691284F}}};
+  constexpr std::array<std::array<Vec3, 4>, 2> target_points{{
+      {{{-0.16089105606079102F, 1.75F, 0.5F},
+        {-0.8606553077697754F, 1.75F, 0.5F},
+        {-0.8606553077697754F, 1.75F, 2.270589828491211F},
+        {-0.16089105606079102F, 1.75F, 2.270589828491211F}}},
+      {{{0.0F, 1.5F, 0.5F}, {0.0F, 1.5F, -1.2121429443359375F},
+        {-0.16089105606079102F, 1.5F, -1.2121429443359375F},
+        {-0.16089105606079102F, 1.5F, 0.5F}}}}};
+  const FaceTextureTransform settings{.scale = {0.125F, 0.125F}};
+  auto source = make_texture_action_face(source_points, source_uvs, settings).or_throw();
+  PolygonDocument chained_source = source;
+  auto from = texture_transfer_face(source);
+  from.world_from_local.origin = {5.0F, 0.5F, -21.5F};
+  from.sampling_from_local = from.world_from_local;
+  for (std::size_t index = 0U; index < target_points.size(); ++index) {
+    SCOPED_TRACE(index);
+    auto target = make_texture_action_face(target_points[index]).or_throw();
+    auto to = texture_transfer_face(target, 2U);
+    to.world_from_local = from.world_from_local;
+    to.sampling_from_local = from.sampling_from_local;
+    const auto result = prepare_face_texture_transfer(from, to, 1U);
+    EXPECT_TRUE(result.ok()) << result.error_message();
+    if (!result.ok()) continue;
+    const auto &prepared = result.value().documents.front().document;
+    to.document = &prepared;
+    const auto repeated = prepare_face_texture_transfer(from, to, 1U);
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.value().changed);
+    // A continued target must itself remain a valid source for the next face.
+    chained_source = prepared;
+    from = to;
+    from.document = &chained_source;
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
      FaceTextureTransferRotatesAroundTheSeamAndCopiesAttributesOnlyOnTarget) {
   constexpr std::array<Vec3, 4> kSourcePoints{{
       {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
@@ -5729,13 +5842,18 @@ TEST(ModelingSdkConsumerTests,
       case FaceTextureAction::ShiftRight: expected.shift_uv.x -= 1.0F / 128.0F; break;
       case FaceTextureAction::ShiftUp: expected.shift_uv.y += 1.0F / 32.0F; break;
       case FaceTextureAction::ShiftDown: expected.shift_uv.y -= 1.0F / 32.0F; break;
-      case FaceTextureAction::RotateClockwise: expected.rotation_degrees = 52.5F; break;
-      case FaceTextureAction::RotateCounterClockwise: expected.rotation_degrees = 7.5F; break;
+      case FaceTextureAction::RotateClockwise: expected.rotation_degrees = 7.5F; break;
+      case FaceTextureAction::RotateCounterClockwise: expected.rotation_degrees = 52.5F; break;
       case FaceTextureAction::FlipTextureHorizontal: expected.scale.x = 2.0F; break;
       case FaceTextureAction::FlipTextureVertical: expected.scale.y = -0.5F; break;
       default: FAIL() << "Unexpected incremental action";
       }
-      const std::array targets{texture_action_target(original, 1U, 128U, 32U)};
+      // Square images retain the original rotation/base-chart contract;
+      // rectangular image rotations additionally preserve physical texel size.
+      const bool rotation = action == FaceTextureAction::RotateClockwise ||
+                            action == FaceTextureAction::RotateCounterClockwise;
+      const std::array targets{texture_action_target(original, 1U,
+          rotation ? 64U : 128U, rotation ? 64U : 32U)};
       const auto result = prepare_face_texture_action(
           targets, {.action = action, .treat_as_one = true,
                     .rotation_degrees = 22.5});
@@ -5771,6 +5889,88 @@ TEST(ModelingSdkConsumerTests,
       expect_compiled_texture_uvs(prepared->document, face.vertices, expected_uvs);
       EXPECT_EQ(original.content_identity(), source_identity);
       EXPECT_EQ(original.content_revision(), source_revision);
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureRotationActionsMoveAnImageFeatureInTheirNamedFrontViewDirection) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {-2.0F, -2.0F, 0.0F}, {2.0F, -2.0F, 0.0F},
+      {2.0F, 2.0F, 0.0F}, {-2.0F, 2.0F, 0.0F},
+  }};
+  const FaceTextureTransform initial{
+      .scale = {-2.0F, 0.5F}, .shift_uv = {0.25F, -0.375F},
+      .rotation_degrees = 37.0F,
+  };
+  auto created = make_texture_action_face(kPoints, {}, initial);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto topology = created.value().authored_topology();
+  ASSERT_TRUE(topology.ok());
+  const auto &corners = topology.value().faces.front().vertices;
+  const auto sample_marker = [&](const PolygonDocument &document, Vec2 position) {
+    const auto compiled = document.compile_mesh();
+    EXPECT_TRUE(compiled.ok());
+    if (!compiled.ok()) {
+      return Vec2{};
+    }
+    std::array<Vec2, 4> uvs{};
+    for (const auto &vertex : compiled.value().vertices) {
+      const auto found = std::ranges::find(corners, vertex.source_vertex);
+      EXPECT_NE(found, corners.end());
+      if (found != corners.end()) {
+        uvs[static_cast<std::size_t>(found - corners.begin())] = vertex.uv0;
+      }
+    }
+    // Interpolate the compiled chart at the feature's position on this wall.
+    const float x = (position.x + 2.0F) / 4.0F;
+    const float y = (position.y + 2.0F) / 4.0F;
+    return Vec2{uvs[0].x + x * (uvs[1].x - uvs[0].x) +
+                              y * (uvs[3].x - uvs[0].x),
+                uvs[0].y + x * (uvs[1].y - uvs[0].y) +
+                              y * (uvs[3].y - uvs[0].y)};
+  };
+  // Looking at the +Z front, X is right and Y is up. A quarter-turn carries
+  // this asymmetric marker down/right for CW and up/left for CCW.
+  constexpr std::array<std::array<std::uint32_t, 2>, 3> kResolutions{{
+      {64U, 64U}, {128U, 512U}, {512U, 128U},
+  }};
+  for (const auto resolution : kResolutions) {
+    SCOPED_TRACE(resolution[0]);
+    SCOPED_TRACE(resolution[1]);
+    const auto aligned = prepare_face_texture_action(
+        std::array{texture_action_target(created.value(), 1U,
+                                        resolution[0], resolution[1])},
+        {.action = FaceTextureAction::AlignToView});
+    ASSERT_TRUE(aligned.ok()) << aligned.error_message();
+    const auto &original = aligned.value().documents.front().document;
+    const Vec2 marker_uv = sample_marker(original, {1.0F, 0.25F});
+    for (const bool clockwise : {false, true}) {
+      SCOPED_TRACE(clockwise);
+      const auto action = clockwise ? FaceTextureAction::RotateClockwise
+                                    : FaceTextureAction::RotateCounterClockwise;
+      const auto result = prepare_face_texture_action(
+          std::array{texture_action_target(original, 1U,
+                                          resolution[0], resolution[1])},
+          {.action = action, .rotation_degrees = 90.0});
+      ASSERT_TRUE(result.ok()) << result.error_message();
+      ASSERT_TRUE(result.value().changed);
+      const auto &rotated = result.value().documents.front().document;
+      expect_vec2_near(sample_marker(rotated, clockwise ? Vec2{0.25F, -1.0F}
+                                                       : Vec2{-0.25F, 1.0F}),
+                       marker_uv);
+      const auto inverse = prepare_face_texture_action(
+          std::array{texture_action_target(rotated, 1U,
+                                          resolution[0], resolution[1])},
+          {.action = clockwise ? FaceTextureAction::RotateCounterClockwise
+                               : FaceTextureAction::RotateClockwise,
+           .rotation_degrees = 90.0});
+      ASSERT_TRUE(inverse.ok()) << inverse.error_message();
+      const auto &restored = inverse.value().documents.front().document;
+      const auto settings = restored.face_texture_settings(restored.face_ids());
+      ASSERT_TRUE(settings.ok());
+      EXPECT_EQ(settings.value().front().texture_transform, initial);
+      expect_vec2_near(sample_marker(restored, {1.0F, 0.25F}), marker_uv);
     }
   }
 }
@@ -6204,6 +6404,297 @@ TEST(ModelingSdkConsumerTests,
   }
   expect_compiled_texture_uvs(prepared->document,
                               topology.value().faces.front().vertices, expected);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureAlignmentKeepsImageAxisTexelUnitsThroughRotationAndOccurrences) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {4.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kAuthored{{
+      {0.2F, 0.1F}, {1.8F, 0.35F}, {2.1F, 1.7F}, {0.4F, 1.2F},
+  }};
+  constexpr std::array<std::array<std::uint32_t, 2>, 5> kResolutions{{
+      {128U, 128U}, {512U, 512U}, {256U, 512U}, {0U, 128U}, {128U, 0U},
+  }};
+  for (const auto action : {FaceTextureAction::AlignToGrid,
+                           FaceTextureAction::AlignToFace,
+                           FaceTextureAction::AlignToView}) {
+    for (const float rotation : {37.0F, 90.0F}) {
+      const FaceTextureTransform initial{
+          .scale = {-2.0F, 0.5F}, .shift_uv = {0.25F, -0.375F},
+          .rotation_degrees = rotation,
+      };
+      auto created = make_texture_action_face(kPoints, kAuthored, initial);
+      ASSERT_TRUE(created.ok()) << created.error_message();
+      for (const float world_direction : {-1.0F, 1.0F}) {
+        for (const bool compensated : {false, true}) {
+          SCOPED_TRACE(static_cast<int>(action));
+          SCOPED_TRACE(rotation);
+          SCOPED_TRACE(world_direction);
+          SCOPED_TRACE(compensated);
+          auto target = texture_action_target(created.value());
+          target.world_from_local = {
+              .x_axis = {0.0F, 0.0F, 2.0F * world_direction},
+              .y_axis = {0.0F, 3.0F, 0.0F}, .z_axis = {-1.0F, 0.0F, 0.0F},
+              .origin = {5.0F, 7.0F, 11.0F},
+          };
+          if (compensated) {
+            target.sampling_from_local = {
+                .x_axis = {-1.5F, 0.0F, 0.0F}, .y_axis = {0.0F, 2.0F, 0.0F},
+                .z_axis = {0.0F, 0.0F, 1.0F}, .origin = {3.0F, -4.0F, 1.0F},
+            };
+          }
+          const FaceTextureActionOptions options{
+              .action = action, .view_right = {0.0F, 0.0F, 1.0F},
+              .view_up = {0.0F, 1.0F, 0.0F},
+          };
+          const auto reference = prepare_face_texture_action(std::array{target}, options);
+          ASSERT_TRUE(reference.ok()) << reference.error_message();
+          const auto &reference_document = reference.value().documents.front().document;
+          const auto reference_mesh = reference_document.compile_mesh();
+          ASSERT_TRUE(reference_mesh.ok());
+          const FaceTextureTransform expected_settings =
+              action == FaceTextureAction::AlignToGrid
+                  ? FaceTextureTransform{.scale = {0.125F, 0.125F}} : initial;
+          const auto effective_uv = [compensated](const MeshVertexPayload &vertex) {
+            Vec2 uv = vertex.uv0;
+            if (compensated) {
+              // Difference between the canonical +Z chart at p and the
+              // mirrored sampling chart at C*p, as consumed by rendering.
+              const Vec2 delta{0.25F * vertex.position.x - 1.5F,
+                               2.0F - 0.5F * vertex.position.y};
+              uv.x += vertex.uv_carrier[0] * delta.x +
+                      vertex.uv_carrier[1] * delta.y;
+              uv.y += vertex.uv_carrier[2] * delta.x +
+                      vertex.uv_carrier[3] * delta.y;
+            }
+            return uv;
+          };
+          for (const auto resolution : kResolutions) {
+            SCOPED_TRACE(resolution[0]);
+            SCOPED_TRACE(resolution[1]);
+            auto sized_target = target;
+            sized_target.faces.front().texture_width = resolution[0];
+            sized_target.faces.front().texture_height = resolution[1];
+            const auto result = prepare_face_texture_action(
+                std::array{sized_target}, options);
+            ASSERT_TRUE(result.ok()) << result.error_message();
+            const auto &prepared = result.value().documents.front();
+            EXPECT_TRUE(prepared.document.has_same_geometry(created.value()));
+            const auto settings = prepared.document.face_texture_settings(
+                prepared.document.face_ids());
+            ASSERT_TRUE(settings.ok());
+            EXPECT_EQ(settings.value().front().texture_transform, expected_settings);
+            const auto compiled = prepared.document.compile_mesh();
+            ASSERT_TRUE(compiled.ok());
+            const float width = resolution[0] == 0U ? 64.0F
+                : static_cast<float>(resolution[0]);
+            const float height = resolution[1] == 0U ? 64.0F
+                : static_cast<float>(resolution[1]);
+            for (const auto &vertex : compiled.value().vertices) {
+              const auto found = std::ranges::find(reference_mesh.value().vertices,
+                  vertex.source_vertex, &MeshVertexPayload::source_vertex);
+              ASSERT_NE(found, reference_mesh.value().vertices.end());
+              const Vec2 uv = effective_uv(vertex);
+              const Vec2 reference_uv = effective_uv(*found);
+              // Changing image dimensions cannot change physical texel
+              // coordinates; normalized shifts remain an independent offset.
+              expect_vec2_near(
+                  {(uv.x - expected_settings.shift_uv.x) * width,
+                   (uv.y - expected_settings.shift_uv.y) * height},
+                  {(reference_uv.x - expected_settings.shift_uv.x) * 64.0F,
+                   (reference_uv.y - expected_settings.shift_uv.y) * 64.0F},
+                  0.002F);
+            }
+            sized_target.document = &prepared.document;
+            const auto repeated = prepare_face_texture_action(
+                std::array{sized_target}, options);
+            ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+            EXPECT_FALSE(repeated.value().changed);
+            EXPECT_EQ(repeated.value().documents.front().document.content_identity(),
+                      prepared.document.content_identity());
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureGridToFaceAndViewRetainsDensityFor512PixelMaterials) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {4.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  auto created = make_texture_action_face(kPoints);
+  ASSERT_TRUE(created.ok());
+  const auto grid = prepare_face_texture_action(
+      std::array{texture_action_target(created.value(), 1U, 512U, 512U)},
+      {.action = FaceTextureAction::AlignToGrid});
+  ASSERT_TRUE(grid.ok()) << grid.error_message();
+  const auto &grid_document = grid.value().documents.front().document;
+  for (const auto action : {FaceTextureAction::AlignToFace,
+                           FaceTextureAction::AlignToView}) {
+    const auto result = prepare_face_texture_action(
+        std::array{texture_action_target(grid_document, 1U, 512U, 512U)},
+        {.action = action});
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    const auto &document = result.value().documents.front().document;
+    const auto compiled = document.compile_mesh();
+    ASSERT_TRUE(compiled.ok());
+    for (const auto &vertex : compiled.value().vertices) {
+      // 0.125 map units/texel * 512 texels is one tile per 64 map units,
+      // or two internal world units, for every alignment basis on this wall.
+      expect_vec2_near(vertex.uv0,
+                      {vertex.position.x * 0.5F, vertex.position.y * -0.5F});
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureRectangularRotationMatchesRealignmentWithoutRescaling) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {4.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  constexpr std::array<std::array<std::uint32_t, 2>, 2> kResolutions{{
+      {128U, 512U}, {512U, 128U},
+  }};
+  for (const auto alignment : {FaceTextureAction::AlignToGrid,
+                               FaceTextureAction::AlignToFace,
+                               FaceTextureAction::AlignToView}) {
+    for (const auto resolution : kResolutions) {
+      for (const Vec2 scale : {Vec2{0.125F, 0.125F}, Vec2{-0.25F, 0.5F}}) {
+        for (const float angle : {0.0F, 37.0F}) {
+          auto created = make_texture_action_face(kPoints, {},
+              {.scale = scale, .shift_uv = {0.25F, -0.375F},
+               .rotation_degrees = angle});
+          ASSERT_TRUE(created.ok());
+          const auto aligned = prepare_face_texture_action(
+              std::array{texture_action_target(created.value(), 1U,
+                                              resolution[0], resolution[1])},
+              {.action = alignment});
+          ASSERT_TRUE(aligned.ok()) << aligned.error_message();
+          const auto &original = aligned.value().documents.front().document;
+          for (const auto rotation : {FaceTextureAction::RotateClockwise,
+                                      FaceTextureAction::RotateCounterClockwise}) {
+            SCOPED_TRACE(static_cast<int>(alignment));
+            SCOPED_TRACE(static_cast<int>(rotation));
+            SCOPED_TRACE(resolution[0]);
+            SCOPED_TRACE(resolution[1]);
+            SCOPED_TRACE(scale.x);
+            SCOPED_TRACE(angle);
+            const auto rotated = prepare_face_texture_action(
+                std::array{texture_action_target(original, 1U,
+                                                resolution[0], resolution[1])},
+                {.action = rotation, .rotation_degrees = 90.0});
+            ASSERT_TRUE(rotated.ok()) << rotated.error_message();
+            ASSERT_TRUE(rotated.value().changed);
+            const auto &document = rotated.value().documents.front().document;
+            const auto realigned = prepare_face_texture_action(
+                std::array{texture_action_target(document, 1U,
+                                                resolution[0], resolution[1])},
+                {.action = FaceTextureAction::AlignToFace});
+            ASSERT_TRUE(realigned.ok()) << realigned.error_message();
+            // These three bases coincide on this wall at the origin.
+            // Rebuilding the chosen angle must not change either tile size.
+            EXPECT_FALSE(realigned.value().changed);
+            const auto before_settings = original.face_texture_settings(original.face_ids());
+            const auto after_settings = document.face_texture_settings(document.face_ids());
+            ASSERT_TRUE(before_settings.ok());
+            ASSERT_TRUE(after_settings.ok());
+            auto expected = before_settings.value().front().texture_transform;
+            expected.rotation_degrees =
+                after_settings.value().front().texture_transform.rotation_degrees;
+            EXPECT_EQ(after_settings.value().front().texture_transform, expected);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureRectangularRotationRoundTripsNonAffineAuthoredCornersAndSampling) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {4.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kAuthored{{
+      {0.2F, 0.1F}, {1.8F, 0.35F}, {2.1F, 1.7F}, {0.4F, 1.2F},
+  }};
+  const FaceTextureTransform initial{
+      .scale = {-2.0F, 0.5F}, .shift_uv = {0.25F, -0.375F},
+      .rotation_degrees = 37.0F,
+  };
+  auto created = make_texture_action_face(kPoints, kAuthored, initial);
+  ASSERT_TRUE(created.ok());
+  const auto identity = created.value().content_identity();
+  auto target = texture_action_target(created.value(), 1U, 128U, 512U);
+  target.sampling_from_local = {
+      .x_axis = {-1.5F, 0.0F, 0.0F}, .y_axis = {0.0F, 2.0F, 0.0F},
+      .z_axis = {0.0F, 0.0F, 1.0F}, .origin = {3.0F, -4.0F, 1.0F},
+  };
+  const auto rotated = prepare_face_texture_action(std::array{target},
+      {.action = FaceTextureAction::RotateClockwise, .rotation_degrees = 90.0});
+  ASSERT_TRUE(rotated.ok()) << rotated.error_message();
+  ASSERT_TRUE(rotated.value().changed);
+  target.document = &rotated.value().documents.front().document;
+  const auto restored = prepare_face_texture_action(std::array{target},
+      {.action = FaceTextureAction::RotateCounterClockwise, .rotation_degrees = 90.0});
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  const auto topology = restored.value().documents.front().document.authored_topology();
+  ASSERT_TRUE(topology.ok());
+  const auto &face = topology.value().faces.front();
+  EXPECT_EQ(face.texture_transform, initial);
+  ASSERT_EQ(face.uvs.size(), kAuthored.size());
+  for (std::size_t corner = 0; corner < kAuthored.size(); ++corner) {
+    expect_vec2_near(face.uvs[corner], kAuthored[corner]);
+  }
+  EXPECT_EQ(created.value().content_identity(), identity);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureRotationExactTargetRetainsNumericBaselinePrecisionAndValidatesInput) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {4.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  for (const std::uint32_t height : {128U, 512U}) {
+    auto created = make_texture_action_face(kPoints, {},
+        {.rotation_degrees = 1000.0F});
+    ASSERT_TRUE(created.ok());
+    PolygonDocument document = created.value();
+    for (const double offset : {0.1, 0.2}) {
+      auto target = texture_action_target(document, 1U, 128U, height);
+      const float requested = static_cast<float>(1000.0 + offset);
+      target.faces.front().target_rotation_degrees = requested;
+      const auto result = prepare_face_texture_action(std::array{target},
+          {.action = FaceTextureAction::RotateCounterClockwise, .rotation_degrees = 0.1});
+      ASSERT_TRUE(result.ok()) << result.error_message();
+      document = result.value().documents.front().document;
+      const auto settings = document.face_texture_settings(document.face_ids());
+      ASSERT_TRUE(settings.ok());
+      EXPECT_FLOAT_EQ(settings.value().front().texture_transform.rotation_degrees, requested);
+      target.document = &document;
+      const auto noop = prepare_face_texture_action(std::array{target},
+          {.action = FaceTextureAction::RotateCounterClockwise, .rotation_degrees = 0.1});
+      ASSERT_TRUE(noop.ok()) << noop.error_message();
+      EXPECT_FALSE(noop.value().changed);
+    }
+    const auto identity = document.content_identity();
+    for (const float invalid : {std::numeric_limits<float>::quiet_NaN(),
+                                std::numeric_limits<float>::infinity()}) {
+      auto target = texture_action_target(document, 1U, 128U, height);
+      target.faces.front().target_rotation_degrees = invalid;
+      const auto rejected = prepare_face_texture_action(std::array{target},
+          {.action = FaceTextureAction::RotateClockwise});
+      EXPECT_FALSE(rejected.ok());
+      EXPECT_EQ(document.content_identity(), identity);
+    }
+  }
 }
 
 TEST(ModelingSdkConsumerTests,
@@ -7603,7 +8094,7 @@ void expect_uv_peel_guide(const AuthoredTopology &topology,
 void expect_uv_peel_strip_station_metric(
     const AuthoredTopology &topology,
     const std::vector<std::vector<VertexId>> &rails, std::size_t reference,
-    const Transform3 &world_from_local, bool preserve_cross_edge_widths = true) {
+    const Transform3 &world_from_local) {
   ASSERT_LT(reference, rails.size());
   ASSERT_FALSE(rails[reference].empty());
   for (const auto &rail : rails) {
@@ -7611,6 +8102,19 @@ void expect_uv_peel_strip_station_metric(
   }
   Transform3 linear_world = world_from_local;
   linear_world.origin = {};
+  std::vector<float> station_widths(rails[reference].size(), 0.0F);
+  for (std::size_t station = 0U; station < station_widths.size(); ++station) {
+    for (std::size_t rail = 1U; rail < rails.size(); ++rail) {
+      const auto first = uv_peel_position(topology, rails[rail - 1U][station]);
+      const auto second = uv_peel_position(topology, rails[rail][station]);
+      ASSERT_TRUE(first.has_value());
+      ASSERT_TRUE(second.has_value());
+      station_widths[station] += uv_peel_distance(
+          uv_peel_transform_point(linear_world, *first),
+          uv_peel_transform_point(linear_world, *second));
+    }
+  }
+  const float maximum_width = *std::ranges::max_element(station_widths);
   float reference_u = 0.0F;
   for (std::size_t station = 0U; station < rails[reference].size(); ++station) {
     SCOPED_TRACE(station);
@@ -7633,12 +8137,12 @@ void expect_uv_peel_strip_station_metric(
         EXPECT_NEAR(uv.x, reference_u, 2.0e-5F);
         expect_vec2_near(uv, samples.front(), 2.0e-5F);
       }
-      if (previous.has_value() && preserve_cross_edge_widths) {
+      if (previous.has_value()) {
         const auto first = uv_peel_position(topology, rails[rail - 1U][station]);
         const auto second = uv_peel_position(topology, rails[rail][station]);
         ASSERT_TRUE(first.has_value());
         ASSERT_TRUE(second.has_value());
-        const float expected_width = 0.5F * uv_peel_distance(
+        const float expected_width = 0.5F * maximum_width / station_widths[station] * uv_peel_distance(
             uv_peel_transform_point(linear_world, *first),
             uv_peel_transform_point(linear_world, *second));
         EXPECT_NEAR(std::abs(samples.front().y - previous->y), expected_width,
@@ -7809,7 +8313,7 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
-     UvPeelSupportsParallelGuidesWithoutCuttingTheirSharedFaceCorners) {
+     UvPeelIndependentParallelGuidesUseTheirOwnMetricAndLaterCornerWrites) {
   const auto fixture = make_uv_peel_curved_strip();
   auto document = PolygonDocument::from_authored_topology(fixture.topology);
   ASSERT_TRUE(document.ok());
@@ -7827,28 +8331,20 @@ TEST(ModelingSdkConsumerTests,
   expect_uv_peel_preserves_document(document.value(), *prepared);
   const auto topology = prepared->document.authored_topology();
   ASSERT_TRUE(topology.ok());
-  expect_uv_peel_guide(topology.value(), fixture.rails[1], {}, UvPeelAxis::U);
-  expect_uv_peel_strip_station_metric(topology.value(), fixture.rails, 1U, {});
-  for (const auto &rail : fixture.rails) {
-    std::optional<Vec2> previous;
-    for (const VertexId vertex : rail) {
-      const auto samples = uv_peel_effective_vertex_samples(topology.value(), vertex);
-      ASSERT_FALSE(samples.empty());
-      for (const Vec2 uv : samples) {
-        expect_vec2_near(uv, samples.front(), 0.002F);
-      }
-      if (previous.has_value()) {
-        EXPECT_NEAR(samples.front().y, previous->y, 0.002F);
-        EXPECT_GT(samples.front().x, previous->x);
-      }
-      previous = samples.front();
-    }
-  }
-  const auto inner = uv_peel_effective_vertex_samples(topology.value(), fixture.rails[0][0]);
-  const auto outer = uv_peel_effective_vertex_samples(topology.value(), fixture.rails[2][0]);
-  ASSERT_FALSE(inner.empty());
-  ASSERT_FALSE(outer.empty());
-  EXPECT_GT(std::abs(inner.front().y - outer.front().y), 0.25F);
+
+  // Independent guides revisit the same corners. Deterministic guide order
+  // writes the outer guide last, using that guide's own arc length.
+  const auto last_edges = uv_peel_rail_edges(fixture.rails.back(), false);
+  const std::array last_targets{
+      uv_peel_target(document.value(), 1U, last_edges, last_edges.front())};
+  const auto last_only = prepare_uv_peel(last_targets, {});
+  ASSERT_TRUE(last_only.ok()) << last_only.error_message();
+  const auto *last_document = prepared_uv_peel_document(last_only.value(), 1U);
+  ASSERT_NE(last_document, nullptr);
+  expect_uv_peel_relation(last_document->document, prepared->document,
+                          1.0F, 0.0F, 0.0F, 1.0F, {}, 2.0e-5F);
+  expect_uv_peel_guide(topology.value(), fixture.rails.back(), {}, UvPeelAxis::U);
+  expect_uv_peel_strip_station_metric(topology.value(), fixture.rails, 2U, {});
   expect_uv_peel_unfolded_faces(topology.value());
 }
 
@@ -7940,7 +8436,7 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
-     UvPeelVariableRoadWidthsRemainPhysicalUnlessExplicitGuidesConstrainThem) {
+     UvPeelVariableRoadWidthsNormalizeEachStationToTheLargestTransverseSpan) {
   constexpr std::array<float, 6> kInnerWidths{{1.0F, 0.75F, 0.5F, 1.0F, 1.25F, 0.875F}};
   constexpr std::array<float, 6> kOuterWidths{{0.5F, 0.75F, 1.25F, 1.0F, 0.75F, 1.5F}};
   auto fixture = make_uv_peel_curved_strip();
@@ -7975,25 +8471,25 @@ TEST(ModelingSdkConsumerTests,
     expect_uv_peel_preserves_document(document.value(), *prepared);
     const auto topology = prepared->document.authored_topology();
     ASSERT_TRUE(topology.ok());
-    expect_uv_peel_strip_station_metric(topology.value(), fixture.rails, 1U, {},
-                                        !explicit_guides);
+    expect_uv_peel_strip_station_metric(topology.value(), fixture.rails,
+                                        explicit_guides ? 2U : 1U, {});
     expect_uv_peel_unfolded_faces(topology.value());
-    if (explicit_guides) {
-      for (const auto &rail : fixture.rails) {
-        const auto start = uv_peel_effective_vertex_samples(topology.value(), rail.front());
-        ASSERT_FALSE(start.empty());
-        for (const VertexId vertex : rail) {
-          const auto samples = uv_peel_effective_vertex_samples(topology.value(), vertex);
-          ASSERT_FALSE(samples.empty());
-          EXPECT_NEAR(samples.front().y, start.front().y, 2.0e-5F);
-        }
-      }
+    for (std::size_t station = 0U; station < kInnerWidths.size(); ++station) {
+      const auto inner = uv_peel_effective_vertex_samples(
+          topology.value(), fixture.rails.front()[station]);
+      const auto outer = uv_peel_effective_vertex_samples(
+          topology.value(), fixture.rails.back()[station]);
+      ASSERT_FALSE(inner.empty());
+      ASSERT_FALSE(outer.empty());
+      // The longest paired width is 2.375. Every station spans half that
+      // amount even where the physical cross section is narrower.
+      EXPECT_NEAR(std::abs(outer.front().y - inner.front().y), 1.1875F, 2.0e-5F);
     }
   }
 }
 
 TEST(ModelingSdkConsumerTests,
-     UvPeelRetainsConformalFallbackForTriangleAndMixedFacePatches) {
+     UvPeelUsesQuadWalkingBeforeTheTriangleOnlyConformalFallback) {
   constexpr std::array<Vec3, 4> kQuad{{
       {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
       {2.0F, 1.0F, 0.0F}, {0.0F, 1.0F, 0.0F}}};
@@ -8034,10 +8530,42 @@ TEST(ModelingSdkConsumerTests,
     ASSERT_TRUE(after.ok());
     expect_uv_peel_guide(after.value(), guide, {}, UvPeelAxis::U);
     expect_uv_peel_unfolded_faces(after.value());
-    if (triangulated) {
-      const auto *outside = uv_peel_face(after.value(), make_id<FaceTag>(3U));
-      ASSERT_NE(outside, nullptr);
-      EXPECT_TRUE(outside->uvs.empty());
+    const auto *outside = uv_peel_face(
+        after.value(), make_id<FaceTag>(triangulated ? 3U : 2U));
+    ASSERT_NE(outside, nullptr);
+    EXPECT_TRUE(outside->uvs.empty());
+    if (!triangulated) {
+      // The second selected edge has no quad side. It contributes to the
+      // connected guide's length, while its two empty lanes write nothing.
+      const EdgeKey triangle_edge = make_edge_key(
+          make_id<VertexTag>(3U), make_id<VertexTag>(5U));
+      const std::array mixed_targets{
+          uv_peel_target(document.value(), 1U, {edge, triangle_edge}, edge)};
+      const auto mixed = prepare_uv_peel(mixed_targets, {.world_space = false});
+      ASSERT_TRUE(mixed.ok()) << mixed.error_message();
+      const auto *mixed_document = prepared_uv_peel_document(mixed.value(), 1U);
+      ASSERT_NE(mixed_document, nullptr);
+      expect_uv_peel_preserves_document(document.value(), *mixed_document);
+      EXPECT_EQ(mixed_document->receipt.affected.faces,
+                (std::vector<FaceId>{make_id<FaceTag>(1U)}));
+      const auto mixed_topology = mixed_document->document.authored_topology();
+      ASSERT_TRUE(mixed_topology.ok());
+      const auto *mixed_quad = uv_peel_face(mixed_topology.value(), make_id<FaceTag>(1U));
+      const auto *mixed_triangle = uv_peel_face(mixed_topology.value(), make_id<FaceTag>(2U));
+      ASSERT_NE(mixed_quad, nullptr);
+      ASSERT_NE(mixed_triangle, nullptr);
+      EXPECT_TRUE(mixed_triangle->uvs.empty());
+      const float quad_guide_span = 1.0F / (1.0F + std::sqrt(1.25F));
+      constexpr std::array<std::uint32_t, 4> kCorners{1U, 2U, 3U, 4U};
+      const std::array<Vec2, 4> expected{{{0.0F, 1.0F}, {0.0F, 0.0F},
+                                          {quad_guide_span, 0.0F},
+                                          {quad_guide_span, 1.0F}}};
+      for (std::size_t corner = 0U; corner < kCorners.size(); ++corner) {
+        const auto actual = uv_peel_effective_corner(
+            *mixed_quad, make_id<VertexTag>(kCorners[corner]));
+        ASSERT_TRUE(actual.has_value());
+        expect_vec2_near(*actual, expected[corner], 2.0e-6F);
+      }
     }
   }
 }
@@ -8060,7 +8588,7 @@ TEST(ModelingSdkConsumerTests,
   const auto *vertical_document = prepared_uv_peel_document(vertical.value(), 1U);
   ASSERT_NE(vertical_document, nullptr);
   expect_uv_peel_relation(baseline_document->document, vertical_document->document,
-                           0.0F, -1.0F, 1.0F, 0.0F, {});
+                           0.0F, 1.0F, 1.0F, 0.0F, {});
   const auto repeated = prepare_uv_peel(
       targets, {.u_repeat = 2.0, .v_repeat = 3.0,
                 .u_offset = 0.25, .v_offset = -0.4});
@@ -8094,8 +8622,12 @@ TEST(ModelingSdkConsumerTests,
         maximum.y = std::max(maximum.y, uv->y);
       }
     }
-    expect_vec2_near(minimum, {0.25F, -0.4F}, 0.002F);
-    expect_vec2_near(maximum, {2.25F, 2.6F}, 0.002F);
+    expect_vec2_near(minimum,
+                     axis == UvPeelAxis::U ? Vec2{0.25F, -1.9F}
+                                           : Vec2{-0.75F, -0.4F}, 0.002F);
+    expect_vec2_near(maximum,
+                     axis == UvPeelAxis::U ? Vec2{2.25F, 1.1F}
+                                           : Vec2{1.25F, 2.6F}, 0.002F);
   }
 
   constexpr double kTinyRepeat = 1.0e-8;
@@ -8131,10 +8663,11 @@ TEST(ModelingSdkConsumerTests,
       tiny_maximum.y = std::max(tiny_maximum.y, uv.y);
     }
   }
-  expect_vec2_near(tiny_minimum, {}, 1.0e-12F);
+  expect_vec2_near(tiny_minimum,
+                    {0.0F, static_cast<float>(-0.5 * kTinyRepeat)}, 1.0e-12F);
   expect_vec2_near(tiny_maximum,
                     {static_cast<float>(kTinyRepeat),
-                     static_cast<float>(kTinyRepeat)},
+                     static_cast<float>(0.5 * kTinyRepeat)},
                     1.0e-12F);
   const std::array tiny_again_targets{
       uv_peel_target(tiny_document->document, 1U, edges, edges.front())};
@@ -8197,7 +8730,7 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
-     UvPeelTouchesOnlyIncidentRoadFacesOnAClosedSolid) {
+     UvPeelWalksTheClosedSolidProfileBeyondIncidentRoadFaces) {
   const auto fixture = make_uv_peel_curved_strip();
   const auto solid = close_uv_peel_strip(fixture.topology, 0.5F);
   auto document = PolygonDocument::from_authored_topology(solid);
@@ -8215,21 +8748,190 @@ TEST(ModelingSdkConsumerTests,
   expect_uv_peel_preserves_document(document.value(), *prepared);
   const auto after = prepared->document.authored_topology();
   ASSERT_TRUE(after.ok());
+  std::size_t affected = 0U;
   for (const auto &face : solid.faces) {
     const auto *changed = uv_peel_face(after.value(), face.id);
     ASSERT_NE(changed, nullptr);
-    if (uv_peel_face(fixture.topology, face.id) != nullptr) {
-      EXPECT_EQ(changed->uvs.size(), changed->vertices.size());
-    } else {
+    // A longitudinal guide circles the closed radial/depth profile. The
+    // transverse walks never reach the four faces at its two arc ends.
+    const bool end_face = std::ranges::all_of(face.vertices, [&](VertexId vertex) {
+      const std::uint32_t station = (vertex.index - 1U) % 6U;
+      return station == 0U;
+    }) || std::ranges::all_of(face.vertices, [&](VertexId vertex) {
+      return (vertex.index - 1U) % 6U == 5U;
+    });
+    if (end_face) {
       EXPECT_TRUE(changed->uvs.empty());
-      EXPECT_EQ(changed->vertices, face.vertices);
-      EXPECT_EQ(changed->material_slot, face.material_slot);
-      EXPECT_EQ(changed->texture_transform, face.texture_transform);
-      EXPECT_EQ(std::ranges::find(prepared->receipt.affected.faces, face.id),
-                prepared->receipt.affected.faces.end());
+    } else {
+      ++affected;
+      EXPECT_EQ(changed->uvs.size(), changed->vertices.size());
     }
   }
-  expect_uv_peel_guide(after.value(), fixture.rails[1], {}, UvPeelAxis::U);
+  EXPECT_EQ(affected, 30U);
+  EXPECT_EQ(prepared->receipt.affected.faces.size(), affected);
+}
+
+// Uneven arc stations expose distance accumulation that equal segments can hide.
+[[nodiscard]] UvPeelStripFixture make_uv_peel_solid_arch(bool depth_midpoint) {
+  constexpr std::array<float, 10> kAngles{
+      0.0F, 0.12F, 0.35F, 0.64F, 1.02F, 1.47F, 1.94F, 2.38F, 2.77F,
+      3.14159265358979323846F};
+  const std::vector<Vec2> profile = depth_midpoint
+      ? std::vector<Vec2>{{2.0F, -0.75F}, {2.0F, 0.0F}, {2.0F, 0.75F},
+                          {3.0F, 0.75F}, {3.0F, 0.0F}, {3.0F, -0.75F}}
+      : std::vector<Vec2>{{2.0F, -0.75F}, {2.0F, 0.75F},
+                          {3.0F, 0.75F}, {3.0F, -0.75F}};
+  std::vector<std::vector<Vec3>> points;
+  for (const Vec2 section : profile) {
+    std::vector<Vec3> rail;
+    for (const float angle : kAngles) {
+      rail.push_back({section.x * std::cos(angle),
+                      section.x * std::sin(angle), section.y});
+    }
+    points.push_back(std::move(rail));
+  }
+  auto fixture = make_uv_peel_strip(points, false);
+  for (std::size_t station = 0U; station + 1U < kAngles.size(); ++station) {
+    fixture.topology.faces.push_back({
+        .id = make_id<FaceTag>(fixture.topology.next_face_id++),
+        .vertices = {fixture.rails.back()[station], fixture.rails.front()[station],
+                     fixture.rails.front()[station + 1U], fixture.rails.back()[station + 1U]},
+        .material_slot = 99U});
+  }
+  for (const bool terminal : {false, true}) {
+    AuthoredTopologyFace cap{.id = make_id<FaceTag>(fixture.topology.next_face_id++),
+                             .material_slot = 101U};
+    for (const auto &rail : fixture.rails) {
+      cap.vertices.push_back(terminal ? rail.back() : rail.front());
+    }
+    if (!terminal) {
+      std::ranges::reverse(cap.vertices);
+    }
+    fixture.topology.faces.push_back(std::move(cap));
+  }
+  return fixture;
+}
+
+[[nodiscard]] std::vector<float> uv_peel_rail_distances(
+    const AuthoredTopology &topology, std::span<const VertexId> rail) {
+  std::vector<float> distances(rail.size(), 0.0F);
+  for (std::size_t station = 1U; station < rail.size(); ++station) {
+    const auto first = uv_peel_position(topology, rail[station - 1U]);
+    const auto second = uv_peel_position(topology, rail[station]);
+    if (!first.has_value() || !second.has_value()) {
+      return {};
+    }
+    distances[station] = distances[station - 1U] + uv_peel_distance(*first, *second);
+  }
+  return distances;
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelArchInsideGuideWalksFrontBackAndOuterFacesWithCyclicCornerWrites) {
+  const auto fixture = make_uv_peel_solid_arch(true);
+  auto document = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  const auto guide = uv_peel_rail_edges(fixture.rails[1], false);
+  ASSERT_TRUE(document.value().select_edges(guide).ok());
+  const auto distances = uv_peel_rail_distances(fixture.topology, fixture.rails[1]);
+  ASSERT_EQ(distances.size(), 10U);
+  // B is the reverse of A and writes last. Its perimeter distances start at
+  // the inside midpoint, cross the back/outer/front, then return to the seed.
+  constexpr std::array<float, 6> kProfileDistances{4.25F, 0.0F, 0.75F,
+                                                  1.75F, 2.5F, 3.25F};
+  for (const bool world_space : {false, true}) {
+    for (const auto axis : {UvPeelAxis::U, UvPeelAxis::V}) {
+      SCOPED_TRACE(world_space);
+      SCOPED_TRACE(static_cast<int>(axis));
+      const std::array targets{uv_peel_target(document.value(), 1U, guide, guide.front())};
+      const UvPeelOptions options{.axis = axis, .world_space = world_space};
+      const auto result = prepare_uv_peel(targets, options);
+      ASSERT_TRUE(result.ok()) << result.error_message();
+      const auto *prepared = prepared_uv_peel_document(result.value(), 1U);
+      ASSERT_NE(prepared, nullptr);
+      expect_uv_peel_preserves_document(document.value(), *prepared);
+      EXPECT_EQ(prepared->receipt.affected.faces.size(), 54U);
+      const auto after = prepared->document.authored_topology();
+      ASSERT_TRUE(after.ok());
+      for (const auto &face : after.value().faces) {
+        SCOPED_TRACE(face.id.index);
+        if (face.id.index > 54U) {
+          EXPECT_TRUE(face.uvs.empty());
+          continue;
+        }
+        ASSERT_EQ(face.uvs.size(), 4U);
+        const std::size_t face_profile = (face.id.index - 1U) / 9U;
+        for (const auto vertex : face.vertices) {
+          const std::size_t rail = (vertex.index - 1U) / 10U;
+          const std::size_t station = (vertex.index - 1U) % 10U;
+          const float along = distances[station] *
+              (world_space ? 0.5F : 1.0F / distances.back());
+          const float transverse_distance = rail == 1U && face_profile == 0U
+                                                ? 5.0F : kProfileDistances[rail];
+          const float across = -transverse_distance * (world_space ? 0.5F : 0.2F);
+          const auto actual = uv_peel_effective_corner(face, vertex);
+          ASSERT_TRUE(actual.has_value());
+          expect_vec2_near(*actual, axis == UvPeelAxis::U ? Vec2{along, across}
+                                                         : Vec2{across, along},
+                           2.0e-5F);
+        }
+      }
+      const std::array again_targets{
+          uv_peel_target(prepared->document, 1U, guide, guide.front())};
+      const auto again = prepare_uv_peel(again_targets, options);
+      ASSERT_TRUE(again.ok()) << again.error_message();
+      EXPECT_FALSE(again.value().changed);
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelSingleArchWidthEdgeWalksBothArcSurfacesAndQuadEndCaps) {
+  const auto fixture = make_uv_peel_solid_arch(false);
+  auto document = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  constexpr std::size_t kSeedStation = 4U;
+  const auto edge = make_edge_key(fixture.rails[0][kSeedStation],
+                                  fixture.rails[1][kSeedStation]);
+  const std::array targets{uv_peel_target(document.value(), 1U, {edge}, edge)};
+  const auto result = prepare_uv_peel(targets, {});
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  const auto *prepared = prepared_uv_peel_document(result.value(), 1U);
+  ASSERT_NE(prepared, nullptr);
+  expect_uv_peel_preserves_document(document.value(), *prepared);
+  EXPECT_EQ(prepared->receipt.affected.faces.size(), 20U);
+  const auto after = prepared->document.authored_topology();
+  ASSERT_TRUE(after.ok());
+  const auto inner = uv_peel_rail_distances(fixture.topology, fixture.rails[0]);
+  const auto outer = uv_peel_rail_distances(fixture.topology, fixture.rails[2]);
+  ASSERT_EQ(inner.size(), 10U);
+  ASSERT_EQ(outer.size(), 10U);
+  const float circumference = inner.back() + outer.back() + 2.0F;
+  for (const auto &face : after.value().faces) {
+    SCOPED_TRACE(face.id.index);
+    const std::size_t profile = (face.id.index - 1U) / 9U;
+    const std::size_t segment = (face.id.index - 1U) % 9U;
+    if (profile == 1U || profile == 3U) {
+      EXPECT_TRUE(face.uvs.empty());
+      continue;
+    }
+    ASSERT_EQ(face.uvs.size(), 4U);
+    for (const auto vertex : face.vertices) {
+      const std::size_t rail = (vertex.index - 1U) / 10U;
+      const std::size_t station = (vertex.index - 1U) % 10U;
+      float distance = inner[kSeedStation] + 1.0F + outer[station];
+      if (rail < 2U) {
+        const bool before_seed = profile == 0U ? segment < kSeedStation
+                                               : station == 0U;
+        distance = inner[kSeedStation] - inner[station] +
+                   (before_seed ? 0.0F : circumference);
+      }
+      const float along = rail == 1U || rail == 2U ? 0.75F : 0.0F;
+      const auto actual = uv_peel_effective_corner(face, vertex);
+      ASSERT_TRUE(actual.has_value());
+      expect_vec2_near(*actual, {along, -0.5F * distance}, 2.0e-5F);
+    }
+  }
 }
 
 [[nodiscard]] UvPeelStripFixture make_uv_peel_tube() {
@@ -8246,6 +8948,510 @@ TEST(ModelingSdkConsumerTests,
     rails.push_back(std::move(ring));
   }
   return make_uv_peel_strip(rails, true);
+}
+
+// Saved cylinder regression: exact authored positions, face loops and UV corners.
+[[nodiscard]] UvPeelStripFixture make_uv_peel_saved_cylinder() {
+  UvPeelStripFixture fixture;
+  fixture.topology.vertices = {
+      {.id = make_id<VertexTag>(1U), .position = {0.5F, -0.125F, 0.0F}},
+      {.id = make_id<VertexTag>(2U), .position = {0.49039262533187866F, -0.125F, 0.09754516184329987F}},
+      {.id = make_id<VertexTag>(3U), .position = {0.4619397521018982F, -0.125F, 0.19134172797203064F}},
+      {.id = make_id<VertexTag>(4U), .position = {0.41573479771614075F, -0.125F, 0.27778512239456177F}},
+      {.id = make_id<VertexTag>(5U), .position = {0.3535533845424652F, -0.125F, 0.3535533845424652F}},
+      {.id = make_id<VertexTag>(6U), .position = {0.2777850925922394F, -0.125F, 0.41573482751846313F}},
+      {.id = make_id<VertexTag>(7U), .position = {0.19134171307086945F, -0.125F, 0.4619397521018982F}},
+      {.id = make_id<VertexTag>(8U), .position = {0.09754511713981628F, -0.125F, 0.49039265513420105F}},
+      {.id = make_id<VertexTag>(9U), .position = {-2.1855694143368964e-08F, -0.125F, 0.5F}},
+      {.id = make_id<VertexTag>(10U), .position = {-0.09754516184329987F, -0.125F, 0.49039262533187866F}},
+      {.id = make_id<VertexTag>(11U), .position = {-0.19134175777435303F, -0.125F, 0.4619397521018982F}},
+      {.id = make_id<VertexTag>(12U), .position = {-0.27778518199920654F, -0.125F, 0.41573476791381836F}},
+      {.id = make_id<VertexTag>(13U), .position = {-0.3535533845424652F, -0.125F, 0.3535533845424652F}},
+      {.id = make_id<VertexTag>(14U), .position = {-0.41573482751846313F, -0.125F, 0.2777850925922394F}},
+      {.id = make_id<VertexTag>(15U), .position = {-0.46193981170654297F, -0.125F, 0.19134163856506348F}},
+      {.id = make_id<VertexTag>(16U), .position = {-0.49039265513420105F, -0.125F, 0.09754515439271927F}},
+      {.id = make_id<VertexTag>(17U), .position = {-0.5F, -0.125F, -4.371138828673793e-08F}},
+      {.id = make_id<VertexTag>(18U), .position = {-0.49039262533187866F, -0.125F, -0.09754524379968643F}},
+      {.id = make_id<VertexTag>(19U), .position = {-0.4619397521018982F, -0.125F, -0.19134171307086945F}},
+      {.id = make_id<VertexTag>(20U), .position = {-0.41573476791381836F, -0.125F, -0.27778515219688416F}},
+      {.id = make_id<VertexTag>(21U), .position = {-0.35355332493782043F, -0.125F, -0.35355344414711F}},
+      {.id = make_id<VertexTag>(22U), .position = {-0.2777850031852722F, -0.125F, -0.4157348871231079F}},
+      {.id = make_id<VertexTag>(23U), .position = {-0.1913415640592575F, -0.125F, -0.46193984150886536F}},
+      {.id = make_id<VertexTag>(24U), .position = {-0.09754519164562225F, -0.125F, -0.49039262533187866F}},
+      {.id = make_id<VertexTag>(25U), .position = {5.962440319251527e-09F, -0.125F, -0.5F}},
+      {.id = make_id<VertexTag>(26U), .position = {0.09754520654678345F, -0.125F, -0.49039262533187866F}},
+      {.id = make_id<VertexTag>(27U), .position = {0.1913418024778366F, -0.125F, -0.4619397222995758F}},
+      {.id = make_id<VertexTag>(28U), .position = {0.27778521180152893F, -0.125F, -0.41573473811149597F}},
+      {.id = make_id<VertexTag>(29U), .position = {0.35355350375175476F, -0.125F, -0.35355326533317566F}},
+      {.id = make_id<VertexTag>(30U), .position = {0.41573479771614075F, -0.125F, -0.27778515219688416F}},
+      {.id = make_id<VertexTag>(31U), .position = {0.4619397819042206F, -0.125F, -0.19134171307086945F}},
+      {.id = make_id<VertexTag>(32U), .position = {0.49039265513420105F, -0.125F, -0.09754511713981628F}},
+      {.id = make_id<VertexTag>(33U), .position = {0.5F, 0.875F, 0.0F}},
+      {.id = make_id<VertexTag>(34U), .position = {0.49039262533187866F, 0.875F, 0.09754516184329987F}},
+      {.id = make_id<VertexTag>(35U), .position = {0.4619397521018982F, 0.875F, 0.19134172797203064F}},
+      {.id = make_id<VertexTag>(36U), .position = {0.41573479771614075F, 0.875F, 0.27778512239456177F}},
+      {.id = make_id<VertexTag>(37U), .position = {0.3535533845424652F, 0.875F, 0.3535533845424652F}},
+      {.id = make_id<VertexTag>(38U), .position = {0.2777850925922394F, 0.875F, 0.41573482751846313F}},
+      {.id = make_id<VertexTag>(39U), .position = {0.19134171307086945F, 0.875F, 0.4619397521018982F}},
+      {.id = make_id<VertexTag>(40U), .position = {0.09754511713981628F, 0.875F, 0.49039265513420105F}},
+      {.id = make_id<VertexTag>(41U), .position = {-2.1855694143368964e-08F, 0.875F, 0.5F}},
+      {.id = make_id<VertexTag>(42U), .position = {-0.09754516184329987F, 0.875F, 0.49039262533187866F}},
+      {.id = make_id<VertexTag>(43U), .position = {-0.19134175777435303F, 0.875F, 0.4619397521018982F}},
+      {.id = make_id<VertexTag>(44U), .position = {-0.27778518199920654F, 0.875F, 0.41573476791381836F}},
+      {.id = make_id<VertexTag>(45U), .position = {-0.3535533845424652F, 0.875F, 0.3535533845424652F}},
+      {.id = make_id<VertexTag>(46U), .position = {-0.41573482751846313F, 0.875F, 0.2777850925922394F}},
+      {.id = make_id<VertexTag>(47U), .position = {-0.46193981170654297F, 0.875F, 0.19134163856506348F}},
+      {.id = make_id<VertexTag>(48U), .position = {-0.49039265513420105F, 0.875F, 0.09754515439271927F}},
+      {.id = make_id<VertexTag>(49U), .position = {-0.5F, 0.875F, -4.371138828673793e-08F}},
+      {.id = make_id<VertexTag>(50U), .position = {-0.49039262533187866F, 0.875F, -0.09754524379968643F}},
+      {.id = make_id<VertexTag>(51U), .position = {-0.4619397521018982F, 0.875F, -0.19134171307086945F}},
+      {.id = make_id<VertexTag>(52U), .position = {-0.41573476791381836F, 0.875F, -0.27778515219688416F}},
+      {.id = make_id<VertexTag>(53U), .position = {-0.35355332493782043F, 0.875F, -0.35355344414711F}},
+      {.id = make_id<VertexTag>(54U), .position = {-0.2777850031852722F, 0.875F, -0.4157348871231079F}},
+      {.id = make_id<VertexTag>(55U), .position = {-0.1913415640592575F, 0.875F, -0.46193984150886536F}},
+      {.id = make_id<VertexTag>(56U), .position = {-0.09754519164562225F, 0.875F, -0.49039262533187866F}},
+      {.id = make_id<VertexTag>(57U), .position = {5.962440319251527e-09F, 0.875F, -0.5F}},
+      {.id = make_id<VertexTag>(58U), .position = {0.09754520654678345F, 0.875F, -0.49039262533187866F}},
+      {.id = make_id<VertexTag>(59U), .position = {0.1913418024778366F, 0.875F, -0.4619397222995758F}},
+      {.id = make_id<VertexTag>(60U), .position = {0.27778521180152893F, 0.875F, -0.41573473811149597F}},
+      {.id = make_id<VertexTag>(61U), .position = {0.35355350375175476F, 0.875F, -0.35355326533317566F}},
+      {.id = make_id<VertexTag>(62U), .position = {0.41573479771614075F, 0.875F, -0.27778515219688416F}},
+      {.id = make_id<VertexTag>(63U), .position = {0.4619397819042206F, 0.875F, -0.19134171307086945F}},
+      {.id = make_id<VertexTag>(64U), .position = {0.49039265513420105F, 0.875F, -0.09754511713981628F}},
+      {.id = make_id<VertexTag>(65U), .position = {-0.19134175777435303F, 0.375F, 0.4619397521018982F}},
+      {.id = make_id<VertexTag>(66U), .position = {-0.09754516184329987F, 0.375F, 0.49039262533187866F}},
+      {.id = make_id<VertexTag>(67U), .position = {-0.27778518199920654F, 0.375F, 0.41573476791381836F}},
+      {.id = make_id<VertexTag>(68U), .position = {-2.1855694143368964e-08F, 0.375F, 0.5F}},
+      {.id = make_id<VertexTag>(69U), .position = {-0.3535533845424652F, 0.375F, 0.3535533845424652F}},
+      {.id = make_id<VertexTag>(70U), .position = {0.09754511713981628F, 0.375F, 0.49039265513420105F}},
+      {.id = make_id<VertexTag>(71U), .position = {-0.41573482751846313F, 0.375F, 0.2777850925922394F}},
+      {.id = make_id<VertexTag>(72U), .position = {0.19134171307086945F, 0.375F, 0.4619397521018982F}},
+      {.id = make_id<VertexTag>(73U), .position = {-0.46193981170654297F, 0.375F, 0.19134163856506348F}},
+      {.id = make_id<VertexTag>(74U), .position = {0.2777850925922394F, 0.375F, 0.41573482751846313F}},
+      {.id = make_id<VertexTag>(75U), .position = {-0.49039265513420105F, 0.375F, 0.09754515439271927F}},
+      {.id = make_id<VertexTag>(76U), .position = {0.3535533845424652F, 0.375F, 0.3535533845424652F}},
+      {.id = make_id<VertexTag>(77U), .position = {-0.5F, 0.375F, -4.371138828673793e-08F}},
+      {.id = make_id<VertexTag>(78U), .position = {0.41573479771614075F, 0.375F, 0.27778512239456177F}},
+      {.id = make_id<VertexTag>(79U), .position = {-0.49039262533187866F, 0.375F, -0.09754524379968643F}},
+      {.id = make_id<VertexTag>(80U), .position = {0.4619397521018982F, 0.375F, 0.19134172797203064F}},
+      {.id = make_id<VertexTag>(81U), .position = {-0.4619397521018982F, 0.375F, -0.19134171307086945F}},
+      {.id = make_id<VertexTag>(82U), .position = {0.49039262533187866F, 0.375F, 0.09754516184329987F}},
+      {.id = make_id<VertexTag>(83U), .position = {-0.41573476791381836F, 0.375F, -0.27778515219688416F}},
+      {.id = make_id<VertexTag>(84U), .position = {0.5F, 0.375F, 0.0F}},
+      {.id = make_id<VertexTag>(85U), .position = {-0.35355332493782043F, 0.375F, -0.35355344414711F}},
+      {.id = make_id<VertexTag>(86U), .position = {0.49039265513420105F, 0.375F, -0.09754511713981628F}},
+      {.id = make_id<VertexTag>(87U), .position = {-0.2777850031852722F, 0.375F, -0.4157348871231079F}},
+      {.id = make_id<VertexTag>(88U), .position = {0.4619397819042206F, 0.375F, -0.19134171307086945F}},
+      {.id = make_id<VertexTag>(89U), .position = {-0.1913415640592575F, 0.375F, -0.46193984150886536F}},
+      {.id = make_id<VertexTag>(90U), .position = {0.41573479771614075F, 0.375F, -0.27778515219688416F}},
+      {.id = make_id<VertexTag>(91U), .position = {-0.09754519164562225F, 0.375F, -0.49039262533187866F}},
+      {.id = make_id<VertexTag>(92U), .position = {0.35355350375175476F, 0.375F, -0.35355326533317566F}},
+      {.id = make_id<VertexTag>(93U), .position = {5.962440319251527e-09F, 0.375F, -0.5F}},
+      {.id = make_id<VertexTag>(94U), .position = {0.27778521180152893F, 0.375F, -0.41573473811149597F}},
+      {.id = make_id<VertexTag>(95U), .position = {0.09754520654678345F, 0.375F, -0.49039262533187866F}},
+      {.id = make_id<VertexTag>(96U), .position = {0.1913418024778366F, 0.375F, -0.4619397222995758F}},
+  };
+  fixture.topology.faces = {
+      {.id = make_id<FaceTag>(33U),
+       .vertices = {make_id<VertexTag>(1U), make_id<VertexTag>(2U), make_id<VertexTag>(3U), make_id<VertexTag>(4U), make_id<VertexTag>(5U), make_id<VertexTag>(6U), make_id<VertexTag>(7U), make_id<VertexTag>(8U), make_id<VertexTag>(9U), make_id<VertexTag>(10U), make_id<VertexTag>(11U), make_id<VertexTag>(12U), make_id<VertexTag>(13U), make_id<VertexTag>(14U), make_id<VertexTag>(15U), make_id<VertexTag>(16U), make_id<VertexTag>(17U), make_id<VertexTag>(18U), make_id<VertexTag>(19U), make_id<VertexTag>(20U), make_id<VertexTag>(21U), make_id<VertexTag>(22U), make_id<VertexTag>(23U), make_id<VertexTag>(24U), make_id<VertexTag>(25U), make_id<VertexTag>(26U), make_id<VertexTag>(27U), make_id<VertexTag>(28U), make_id<VertexTag>(29U), make_id<VertexTag>(30U), make_id<VertexTag>(31U), make_id<VertexTag>(32U)},
+       .uvs = {{0.015625011175870895F, 3.577628504558561e-08F}, {0.015324782580137253F, -0.0030482648871839046F}, {0.014435630291700363F, -0.005979382898658514F}, {0.012991722673177719F, -0.00868072547018528F}, {0.01104855164885521F, -0.011048519983887672F}, {0.008680801838636398F, -0.012991691008210182F}, {0.005979437846690416F, -0.014435553923249245F}, {0.0030482972506433725F, -0.015324736014008522F}, {1.1409294842223972e-08F, -0.015624964609742165F}, {-0.0030482744332402945F, -0.015324736014008522F}, {-0.005979422014206648F, -0.014435553923249245F}, {-0.008680779486894608F, -0.012991691008210182F}, {-0.011048529297113419F, -0.011048519983887672F}, {-0.012991700321435928F, -0.00868072547018528F}, {-0.014435607939958572F, -0.005979382898658514F}, {-0.015324760228395462F, -0.0030482648871839046F}, {-0.015624988824129105F, 3.577628504558561e-08F}, {-0.015324760228395462F, 0.00304833659902215F}, {-0.014435607939958572F, 0.005979454610496759F}, {-0.012991700321435928F, 0.00868079625070095F}, {-0.011048529297113419F, 0.011048590764403343F}, {-0.00868077203631401F, 0.012991761788725853F}, {-0.005979414563626051F, 0.01443568430840969F}, {-0.0030482744332402945F, 0.015324806794524193F}, {1.1409294842223972e-08F, 0.015625035390257835F}, {0.0030482972506433725F, 0.015324806794524193F}, {0.005979445297271013F, 0.014435624703764915F}, {0.008680801838636398F, 0.012991761788725853F}, {0.01104855164885521F, 0.011048590764403343F}, {0.012991722673177719F, 0.00868079625070095F}, {0.014435630291700363F, 0.005979454610496759F}, {0.015324782580137253F, 0.00304833659902215F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(34U),
+       .vertices = {make_id<VertexTag>(64U), make_id<VertexTag>(63U), make_id<VertexTag>(62U), make_id<VertexTag>(61U), make_id<VertexTag>(60U), make_id<VertexTag>(59U), make_id<VertexTag>(58U), make_id<VertexTag>(57U), make_id<VertexTag>(56U), make_id<VertexTag>(55U), make_id<VertexTag>(54U), make_id<VertexTag>(53U), make_id<VertexTag>(52U), make_id<VertexTag>(51U), make_id<VertexTag>(50U), make_id<VertexTag>(49U), make_id<VertexTag>(48U), make_id<VertexTag>(47U), make_id<VertexTag>(46U), make_id<VertexTag>(45U), make_id<VertexTag>(44U), make_id<VertexTag>(43U), make_id<VertexTag>(42U), make_id<VertexTag>(41U), make_id<VertexTag>(40U), make_id<VertexTag>(39U), make_id<VertexTag>(38U), make_id<VertexTag>(37U), make_id<VertexTag>(36U), make_id<VertexTag>(35U), make_id<VertexTag>(34U), make_id<VertexTag>(33U)},
+       .uvs = {{0.015324782580137253F, -0.00304833659902215F}, {0.014435630291700363F, -0.005979454610496759F}, {0.012991722673177719F, -0.00868079625070095F}, {0.01104855164885521F, -0.011048590764403343F}, {0.008680801838636398F, -0.012991761788725853F}, {0.005979445297271013F, -0.014435624703764915F}, {0.0030482972506433725F, -0.015324806794524193F}, {1.1409294842223972e-08F, -0.015625035390257835F}, {-0.0030482744332402945F, -0.015324806794524193F}, {-0.005979414563626051F, -0.01443568430840969F}, {-0.00868077203631401F, -0.012991761788725853F}, {-0.011048529297113419F, -0.011048590764403343F}, {-0.012991700321435928F, -0.00868079625070095F}, {-0.014435607939958572F, -0.005979454610496759F}, {-0.015324760228395462F, -0.00304833659902215F}, {-0.015624988824129105F, -3.577628504558561e-08F}, {-0.015324760228395462F, 0.0030482648871839046F}, {-0.014435607939958572F, 0.005979382898658514F}, {-0.012991700321435928F, 0.00868072547018528F}, {-0.011048529297113419F, 0.011048519983887672F}, {-0.008680779486894608F, 0.012991691008210182F}, {-0.005979422014206648F, 0.014435553923249245F}, {-0.0030482744332402945F, 0.015324736014008522F}, {1.1409294842223972e-08F, 0.015624964609742165F}, {0.0030482972506433725F, 0.015324736014008522F}, {0.005979437846690416F, 0.014435553923249245F}, {0.008680801838636398F, 0.012991691008210182F}, {0.01104855164885521F, 0.011048519983887672F}, {0.012991722673177719F, 0.00868072547018528F}, {0.014435630291700363F, 0.005979382898658514F}, {0.015324782580137253F, 0.0030482648871839046F}, {0.015625011175870895F, -3.577628504558561e-08F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(10U),
+       .vertices = {make_id<VertexTag>(11U), make_id<VertexTag>(10U), make_id<VertexTag>(66U), make_id<VertexTag>(65U)},
+       .uvs = {{-0.007812485098838806F, 0.2612493932247162F}, {-0.007812485098838806F, 0.2551233172416687F}, {0.023437514901161194F, 0.2551233172416687F}, {0.023437514901161194F, 0.2612493932247162F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(35U),
+       .vertices = {make_id<VertexTag>(43U), make_id<VertexTag>(65U), make_id<VertexTag>(66U), make_id<VertexTag>(42U)},
+       .uvs = {{0.054687514901161194F, 0.2612493932247162F}, {0.023437514901161194F, 0.2612493932247162F}, {0.023437514901161194F, 0.2551233172416687F}, {0.054687514901161194F, 0.2551233172416687F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(11U),
+       .vertices = {make_id<VertexTag>(43U), make_id<VertexTag>(44U), make_id<VertexTag>(67U), make_id<VertexTag>(65U)},
+       .uvs = {{0.054687514901161194F, 0.2834721505641937F}, {0.054687514901161194F, 0.2895982265472412F}, {0.023437514901161194F, 0.2895982265472412F}, {0.023437514901161194F, 0.2834721505641937F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(36U),
+       .vertices = {make_id<VertexTag>(11U), make_id<VertexTag>(65U), make_id<VertexTag>(67U), make_id<VertexTag>(12U)},
+       .uvs = {{-0.007812485098838806F, 0.2834721505641937F}, {0.023437514901161194F, 0.2834721505641937F}, {0.023437514901161194F, 0.2895982265472412F}, {-0.007812485098838806F, 0.2895982265472412F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(9U),
+       .vertices = {make_id<VertexTag>(10U), make_id<VertexTag>(9U), make_id<VertexTag>(68U), make_id<VertexTag>(66U)},
+       .uvs = {{-0.0030482998117804527F, 0.00390625F}, {-1.3969838619232178e-08F, 0.00390625F}, {-1.3969838619232178e-08F, -0.01171875F}, {-0.0030482998117804527F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(37U),
+       .vertices = {make_id<VertexTag>(42U), make_id<VertexTag>(66U), make_id<VertexTag>(68U), make_id<VertexTag>(41U)},
+       .uvs = {{-0.0030482998117804527F, -0.02734375F}, {-0.0030482998117804527F, -0.01171875F}, {-1.3969838619232178e-08F, -0.01171875F}, {-1.3969838619232178e-08F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(12U),
+       .vertices = {make_id<VertexTag>(44U), make_id<VertexTag>(45U), make_id<VertexTag>(69U), make_id<VertexTag>(67U)},
+       .uvs = {{-0.00868046935647726F, -0.02734375F}, {-0.011048219166696072F, -0.02734375F}, {-0.011048219166696072F, -0.01171875F}, {-0.00868046935647726F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(38U),
+       .vertices = {make_id<VertexTag>(12U), make_id<VertexTag>(67U), make_id<VertexTag>(69U), make_id<VertexTag>(13U)},
+       .uvs = {{-0.00868046935647726F, 0.00390625F}, {-0.00868046935647726F, -0.01171875F}, {-0.011048219166696072F, -0.01171875F}, {-0.011048219166696072F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(8U),
+       .vertices = {make_id<VertexTag>(9U), make_id<VertexTag>(8U), make_id<VertexTag>(70U), make_id<VertexTag>(68U)},
+       .uvs = {{-1.3969838619232178e-08F, 0.00390625F}, {0.0030482718721032143F, 0.00390625F}, {0.0030482718721032143F, -0.01171875F}, {-1.3969838619232178e-08F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(39U),
+       .vertices = {make_id<VertexTag>(41U), make_id<VertexTag>(68U), make_id<VertexTag>(70U), make_id<VertexTag>(40U)},
+       .uvs = {{-1.3969838619232178e-08F, -0.02734375F}, {-1.3969838619232178e-08F, -0.01171875F}, {0.0030482718721032143F, -0.01171875F}, {0.0030482718721032143F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(13U),
+       .vertices = {make_id<VertexTag>(45U), make_id<VertexTag>(46U), make_id<VertexTag>(71U), make_id<VertexTag>(69U)},
+       .uvs = {{0.011056937277317047F, -0.02734375F}, {0.008689142763614655F, -0.02734375F}, {0.008689142763614655F, -0.01171875F}, {0.011056937277317047F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(40U),
+       .vertices = {make_id<VertexTag>(13U), make_id<VertexTag>(69U), make_id<VertexTag>(71U), make_id<VertexTag>(14U)},
+       .uvs = {{0.011056937277317047F, 0.00390625F}, {0.011056937277317047F, -0.01171875F}, {0.008689142763614655F, -0.01171875F}, {0.008689142763614655F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(7U),
+       .vertices = {make_id<VertexTag>(8U), make_id<VertexTag>(7U), make_id<VertexTag>(72U), make_id<VertexTag>(70U)},
+       .uvs = {{0.003048418555408716F, 0.00390625F}, {0.005979558918625116F, 0.00390625F}, {0.005979558918625116F, -0.01171875F}, {0.003048418555408716F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(41U),
+       .vertices = {make_id<VertexTag>(40U), make_id<VertexTag>(70U), make_id<VertexTag>(72U), make_id<VertexTag>(39U)},
+       .uvs = {{0.003048418555408716F, -0.02734375F}, {0.003048418555408716F, -0.01171875F}, {0.005979558918625116F, -0.01171875F}, {0.005979558918625116F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(14U),
+       .vertices = {make_id<VertexTag>(46U), make_id<VertexTag>(47U), make_id<VertexTag>(73U), make_id<VertexTag>(71U)},
+       .uvs = {{0.008677475154399872F, -0.02734375F}, {0.005976133048534393F, -0.02734375F}, {0.005976133048534393F, -0.01171875F}, {0.008677475154399872F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(42U),
+       .vertices = {make_id<VertexTag>(14U), make_id<VertexTag>(71U), make_id<VertexTag>(73U), make_id<VertexTag>(15U)},
+       .uvs = {{0.008677475154399872F, 0.00390625F}, {0.008677475154399872F, -0.01171875F}, {0.005976133048534393F, -0.01171875F}, {0.005976133048534393F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(6U),
+       .vertices = {make_id<VertexTag>(7U), make_id<VertexTag>(6U), make_id<VertexTag>(74U), make_id<VertexTag>(72U)},
+       .uvs = {{0.005979049019515514F, 0.00390625F}, {0.008680413477122784F, 0.00390625F}, {0.008680413477122784F, -0.01171875F}, {0.005979049019515514F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(43U),
+       .vertices = {make_id<VertexTag>(39U), make_id<VertexTag>(72U), make_id<VertexTag>(74U), make_id<VertexTag>(38U)},
+       .uvs = {{0.005979049019515514F, -0.02734375F}, {0.005979049019515514F, -0.01171875F}, {0.008680413477122784F, -0.01171875F}, {0.008680413477122784F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(15U),
+       .vertices = {make_id<VertexTag>(47U), make_id<VertexTag>(48U), make_id<VertexTag>(75U), make_id<VertexTag>(73U)},
+       .uvs = {{0.005975160747766495F, -0.02734375F}, {0.0030440427362918854F, -0.02734375F}, {0.0030440427362918854F, -0.01171875F}, {0.005975160747766495F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(44U),
+       .vertices = {make_id<VertexTag>(15U), make_id<VertexTag>(73U), make_id<VertexTag>(75U), make_id<VertexTag>(16U)},
+       .uvs = {{0.005975160747766495F, 0.00390625F}, {0.005975160747766495F, -0.01171875F}, {0.0030440427362918854F, -0.01171875F}, {0.0030440427362918854F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(5U),
+       .vertices = {make_id<VertexTag>(6U), make_id<VertexTag>(5U), make_id<VertexTag>(76U), make_id<VertexTag>(74U)},
+       .uvs = {{0.008681251667439938F, 0.00390625F}, {0.011049001477658749F, 0.00390625F}, {0.011049001477658749F, -0.01171875F}, {0.008681251667439938F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(45U),
+       .vertices = {make_id<VertexTag>(38U), make_id<VertexTag>(74U), make_id<VertexTag>(76U), make_id<VertexTag>(37U)},
+       .uvs = {{0.008681251667439938F, -0.02734375F}, {0.008681251667439938F, -0.01171875F}, {0.011049001477658749F, -0.01171875F}, {0.011049001477658749F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(16U),
+       .vertices = {make_id<VertexTag>(48U), make_id<VertexTag>(49U), make_id<VertexTag>(77U), make_id<VertexTag>(75U)},
+       .uvs = {{0.003050781786441803F, -0.02734375F}, {2.4810433387756348e-06F, -0.02734375F}, {2.4810433387756348e-06F, -0.01171875F}, {0.003050781786441803F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(46U),
+       .vertices = {make_id<VertexTag>(16U), make_id<VertexTag>(75U), make_id<VertexTag>(77U), make_id<VertexTag>(17U)},
+       .uvs = {{0.003050781786441803F, 0.00390625F}, {0.003050781786441803F, -0.01171875F}, {2.4810433387756348e-06F, -0.01171875F}, {2.4810433387756348e-06F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(4U),
+       .vertices = {make_id<VertexTag>(5U), make_id<VertexTag>(4U), make_id<VertexTag>(78U), make_id<VertexTag>(76U)},
+       .uvs = {{-0.011057205498218536F, 0.00390625F}, {-0.008689410984516144F, 0.00390625F}, {-0.008689410984516144F, -0.01171875F}, {-0.011057205498218536F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(47U),
+       .vertices = {make_id<VertexTag>(37U), make_id<VertexTag>(76U), make_id<VertexTag>(78U), make_id<VertexTag>(36U)},
+       .uvs = {{-0.011057205498218536F, -0.02734375F}, {-0.011057205498218536F, -0.01171875F}, {-0.008689410984516144F, -0.01171875F}, {-0.008689410984516144F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(17U),
+       .vertices = {make_id<VertexTag>(49U), make_id<VertexTag>(50U), make_id<VertexTag>(79U), make_id<VertexTag>(77U)},
+       .uvs = {{2.4139881134033203e-06F, -0.02734375F}, {-0.003045886754989624F, -0.02734375F}, {-0.003045886754989624F, -0.01171875F}, {2.4139881134033203e-06F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(48U),
+       .vertices = {make_id<VertexTag>(17U), make_id<VertexTag>(77U), make_id<VertexTag>(79U), make_id<VertexTag>(18U)},
+       .uvs = {{2.4139881134033203e-06F, 0.00390625F}, {2.4139881134033203e-06F, -0.01171875F}, {-0.003045886754989624F, -0.01171875F}, {-0.003045886754989624F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(3U),
+       .vertices = {make_id<VertexTag>(4U), make_id<VertexTag>(3U), make_id<VertexTag>(80U), make_id<VertexTag>(78U)},
+       .uvs = {{-0.00867784395813942F, 0.00390625F}, {-0.005976501852273941F, 0.00390625F}, {-0.005976501852273941F, -0.01171875F}, {-0.00867784395813942F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(49U),
+       .vertices = {make_id<VertexTag>(36U), make_id<VertexTag>(78U), make_id<VertexTag>(80U), make_id<VertexTag>(35U)},
+       .uvs = {{-0.00867784395813942F, -0.02734375F}, {-0.00867784395813942F, -0.01171875F}, {-0.005976501852273941F, -0.01171875F}, {-0.005976501852273941F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(18U),
+       .vertices = {make_id<VertexTag>(50U), make_id<VertexTag>(51U), make_id<VertexTag>(81U), make_id<VertexTag>(79U)},
+       .uvs = {{-0.003052458167076111F, -0.02734375F}, {-0.00598357617855072F, -0.02734375F}, {-0.00598357617855072F, -0.01171875F}, {-0.003052458167076111F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(50U),
+       .vertices = {make_id<VertexTag>(18U), make_id<VertexTag>(79U), make_id<VertexTag>(81U), make_id<VertexTag>(19U)},
+       .uvs = {{-0.003052458167076111F, 0.00390625F}, {-0.003052458167076111F, -0.01171875F}, {-0.00598357617855072F, -0.01171875F}, {-0.00598357617855072F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(2U),
+       .vertices = {make_id<VertexTag>(3U), make_id<VertexTag>(2U), make_id<VertexTag>(82U), make_id<VertexTag>(80U)},
+       .uvs = {{-0.0059746913611888885F, 0.00390625F}, {-0.003043573349714279F, 0.00390625F}, {-0.003043573349714279F, -0.01171875F}, {-0.0059746913611888885F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(51U),
+       .vertices = {make_id<VertexTag>(35U), make_id<VertexTag>(80U), make_id<VertexTag>(82U), make_id<VertexTag>(34U)},
+       .uvs = {{-0.0059746913611888885F, -0.02734375F}, {-0.0059746913611888885F, -0.01171875F}, {-0.003043573349714279F, -0.01171875F}, {-0.003043573349714279F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(19U),
+       .vertices = {make_id<VertexTag>(51U), make_id<VertexTag>(52U), make_id<VertexTag>(83U), make_id<VertexTag>(81U)},
+       .uvs = {{-0.005982603877782822F, -0.02734375F}, {-0.0086839459836483F, -0.02734375F}, {-0.0086839459836483F, -0.01171875F}, {-0.005982603877782822F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(52U),
+       .vertices = {make_id<VertexTag>(19U), make_id<VertexTag>(81U), make_id<VertexTag>(83U), make_id<VertexTag>(20U)},
+       .uvs = {{-0.005982603877782822F, 0.00390625F}, {-0.005982603877782822F, -0.01171875F}, {-0.0086839459836483F, -0.01171875F}, {-0.0086839459836483F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(1U),
+       .vertices = {make_id<VertexTag>(2U), make_id<VertexTag>(1U), make_id<VertexTag>(84U), make_id<VertexTag>(82U)},
+       .uvs = {{-0.00305098295211792F, 0.00390625F}, {-2.682209014892578e-06F, 0.00390625F}, {-2.682209014892578e-06F, -0.01171875F}, {-0.00305098295211792F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(53U),
+       .vertices = {make_id<VertexTag>(34U), make_id<VertexTag>(82U), make_id<VertexTag>(84U), make_id<VertexTag>(33U)},
+       .uvs = {{-0.00305098295211792F, -0.02734375F}, {-0.00305098295211792F, -0.01171875F}, {-2.682209014892578e-06F, -0.01171875F}, {-2.682209014892578e-06F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(20U),
+       .vertices = {make_id<VertexTag>(52U), make_id<VertexTag>(53U), make_id<VertexTag>(85U), make_id<VertexTag>(83U)},
+       .uvs = {{-0.008672378957271576F, -0.02734375F}, {-0.011040173470973969F, -0.02734375F}, {-0.011040173470973969F, -0.01171875F}, {-0.008672378957271576F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(54U),
+       .vertices = {make_id<VertexTag>(20U), make_id<VertexTag>(83U), make_id<VertexTag>(85U), make_id<VertexTag>(21U)},
+       .uvs = {{-0.008672378957271576F, 0.00390625F}, {-0.008672378957271576F, -0.01171875F}, {-0.011040173470973969F, -0.01171875F}, {-0.011040173470973969F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(32U),
+       .vertices = {make_id<VertexTag>(1U), make_id<VertexTag>(32U), make_id<VertexTag>(86U), make_id<VertexTag>(84U)},
+       .uvs = {{-2.950429916381836e-06F, 0.00390625F}, {0.0030453503131866455F, 0.00390625F}, {0.0030453503131866455F, -0.01171875F}, {-2.950429916381836e-06F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(55U),
+       .vertices = {make_id<VertexTag>(33U), make_id<VertexTag>(84U), make_id<VertexTag>(86U), make_id<VertexTag>(64U)},
+       .uvs = {{-2.950429916381836e-06F, -0.02734375F}, {-2.950429916381836e-06F, -0.01171875F}, {0.0030453503131866455F, -0.01171875F}, {0.0030453503131866455F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(21U),
+       .vertices = {make_id<VertexTag>(53U), make_id<VertexTag>(54U), make_id<VertexTag>(87U), make_id<VertexTag>(85U)},
+       .uvs = {{0.011048400774598122F, -0.02734375F}, {0.008680643513798714F, -0.02734375F}, {0.008680643513798714F, -0.01171875F}, {0.011048400774598122F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(56U),
+       .vertices = {make_id<VertexTag>(21U), make_id<VertexTag>(85U), make_id<VertexTag>(87U), make_id<VertexTag>(22U)},
+       .uvs = {{0.011048400774598122F, 0.00390625F}, {0.011048400774598122F, -0.01171875F}, {0.008680643513798714F, -0.01171875F}, {0.008680643513798714F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(31U),
+       .vertices = {make_id<VertexTag>(32U), make_id<VertexTag>(31U), make_id<VertexTag>(88U), make_id<VertexTag>(86U)},
+       .uvs = {{0.0030532293021678925F, 0.00390625F}, {0.005984347313642502F, 0.00390625F}, {0.005984347313642502F, -0.01171875F}, {0.0030532293021678925F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(57U),
+       .vertices = {make_id<VertexTag>(64U), make_id<VertexTag>(86U), make_id<VertexTag>(88U), make_id<VertexTag>(63U)},
+       .uvs = {{0.0030532293021678925F, -0.02734375F}, {0.0030532293021678925F, -0.01171875F}, {0.005984347313642502F, -0.01171875F}, {0.005984347313642502F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(22U),
+       .vertices = {make_id<VertexTag>(54U), make_id<VertexTag>(55U), make_id<VertexTag>(89U), make_id<VertexTag>(87U)},
+       .uvs = {{0.008680785074830055F, -0.02734375F}, {0.0059794276021420956F, -0.02734375F}, {0.0059794276021420956F, -0.01171875F}, {0.008680785074830055F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(58U),
+       .vertices = {make_id<VertexTag>(22U), make_id<VertexTag>(87U), make_id<VertexTag>(89U), make_id<VertexTag>(23U)},
+       .uvs = {{0.008680785074830055F, 0.00390625F}, {0.008680785074830055F, -0.01171875F}, {0.0059794276021420956F, -0.01171875F}, {0.0059794276021420956F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(30U),
+       .vertices = {make_id<VertexTag>(31U), make_id<VertexTag>(30U), make_id<VertexTag>(90U), make_id<VertexTag>(88U)},
+       .uvs = {{0.005982603877782822F, 0.00390625F}, {0.0086839459836483F, 0.00390625F}, {0.0086839459836483F, -0.01171875F}, {0.005982603877782822F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(59U),
+       .vertices = {make_id<VertexTag>(63U), make_id<VertexTag>(88U), make_id<VertexTag>(90U), make_id<VertexTag>(62U)},
+       .uvs = {{0.005982603877782822F, -0.02734375F}, {0.005982603877782822F, -0.01171875F}, {0.0086839459836483F, -0.01171875F}, {0.0086839459836483F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(23U),
+       .vertices = {make_id<VertexTag>(55U), make_id<VertexTag>(56U), make_id<VertexTag>(91U), make_id<VertexTag>(89U)},
+       .uvs = {{0.005979579873383045F, -0.02734375F}, {0.003048439510166645F, -0.02734375F}, {0.003048439510166645F, -0.01171875F}, {0.005979579873383045F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(60U),
+       .vertices = {make_id<VertexTag>(23U), make_id<VertexTag>(89U), make_id<VertexTag>(91U), make_id<VertexTag>(24U)},
+       .uvs = {{0.005979579873383045F, 0.00390625F}, {0.005979579873383045F, -0.01171875F}, {0.003048439510166645F, -0.01171875F}, {0.003048439510166645F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(29U),
+       .vertices = {make_id<VertexTag>(30U), make_id<VertexTag>(29U), make_id<VertexTag>(92U), make_id<VertexTag>(90U)},
+       .uvs = {{0.00867103785276413F, 0.00390625F}, {0.011038832366466522F, 0.00390625F}, {0.011038832366466522F, -0.01171875F}, {0.00867103785276413F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(61U),
+       .vertices = {make_id<VertexTag>(62U), make_id<VertexTag>(90U), make_id<VertexTag>(92U), make_id<VertexTag>(61U)},
+       .uvs = {{0.00867103785276413F, -0.02734375F}, {0.00867103785276413F, -0.01171875F}, {0.011038832366466522F, -0.01171875F}, {0.011038832366466522F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(24U),
+       .vertices = {make_id<VertexTag>(56U), make_id<VertexTag>(57U), make_id<VertexTag>(93U), make_id<VertexTag>(91U)},
+       .uvs = {{0.003048222977668047F, -0.02734375F}, {-6.28642737865448e-08F, -0.02734375F}, {-6.28642737865448e-08F, -0.01171875F}, {0.003048222977668047F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(62U),
+       .vertices = {make_id<VertexTag>(24U), make_id<VertexTag>(91U), make_id<VertexTag>(93U), make_id<VertexTag>(25U)},
+       .uvs = {{0.003048222977668047F, 0.00390625F}, {0.003048222977668047F, -0.01171875F}, {-6.28642737865448e-08F, -0.01171875F}, {-6.28642737865448e-08F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(28U),
+       .vertices = {make_id<VertexTag>(29U), make_id<VertexTag>(28U), make_id<VertexTag>(94U), make_id<VertexTag>(92U)},
+       .uvs = {{-0.011049001477658749F, 0.00390625F}, {-0.008681251667439938F, 0.00390625F}, {-0.008681251667439938F, -0.01171875F}, {-0.011049001477658749F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(63U),
+       .vertices = {make_id<VertexTag>(61U), make_id<VertexTag>(92U), make_id<VertexTag>(94U), make_id<VertexTag>(60U)},
+       .uvs = {{-0.011049001477658749F, -0.02734375F}, {-0.011049001477658749F, -0.01171875F}, {-0.008681251667439938F, -0.01171875F}, {-0.008681251667439938F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(25U),
+       .vertices = {make_id<VertexTag>(57U), make_id<VertexTag>(58U), make_id<VertexTag>(95U), make_id<VertexTag>(93U)},
+       .uvs = {{-6.28642737865448e-08F, -0.02734375F}, {-0.00304834870621562F, -0.02734375F}, {-0.00304834870621562F, -0.01171875F}, {-6.28642737865448e-08F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(64U),
+       .vertices = {make_id<VertexTag>(25U), make_id<VertexTag>(93U), make_id<VertexTag>(95U), make_id<VertexTag>(26U)},
+       .uvs = {{-6.28642737865448e-08F, 0.00390625F}, {-6.28642737865448e-08F, -0.01171875F}, {-0.00304834870621562F, -0.01171875F}, {-0.00304834870621562F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(27U),
+       .vertices = {make_id<VertexTag>(28U), make_id<VertexTag>(27U), make_id<VertexTag>(96U), make_id<VertexTag>(94U)},
+       .uvs = {{-0.008680776692926884F, 0.00390625F}, {-0.005979419685900211F, 0.00390625F}, {-0.005979419685900211F, -0.01171875F}, {-0.008680776692926884F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(65U),
+       .vertices = {make_id<VertexTag>(60U), make_id<VertexTag>(94U), make_id<VertexTag>(96U), make_id<VertexTag>(59U)},
+       .uvs = {{-0.008680776692926884F, -0.02734375F}, {-0.008680776692926884F, -0.01171875F}, {-0.005979419685900211F, -0.01171875F}, {-0.005979419685900211F, -0.02734375F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(26U),
+       .vertices = {make_id<VertexTag>(58U), make_id<VertexTag>(59U), make_id<VertexTag>(96U), make_id<VertexTag>(95U)},
+       .uvs = {{-0.0030481182038784027F, -0.02734375F}, {-0.0059792660176754F, -0.02734375F}, {-0.0059792660176754F, -0.01171875F}, {-0.0030481182038784027F, -0.01171875F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+      {.id = make_id<FaceTag>(66U),
+       .vertices = {make_id<VertexTag>(26U), make_id<VertexTag>(95U), make_id<VertexTag>(96U), make_id<VertexTag>(27U)},
+       .uvs = {{-0.0030481182038784027F, 0.00390625F}, {-0.0030481182038784027F, -0.01171875F}, {-0.0059792660176754F, -0.01171875F}, {-0.0059792660176754F, 0.00390625F}},
+       .texture_transform = {.scale = {0.125F, 0.125F}}},
+  };
+  fixture.topology.next_vertex_id = 97U;
+  fixture.topology.next_face_id = 67U;
+  for (const std::uint32_t first : {1U, 65U, 33U}) {
+    std::vector<VertexId> ring;
+    for (std::uint32_t index = 0U; index < 32U; ++index) {
+      ring.push_back(make_id<VertexTag>(first + index));
+    }
+    fixture.rails.push_back(std::move(ring));
+  }
+  // The inserted middle loop has stable IDs allocated in traversal order.
+  fixture.rails[1].clear();
+  for (const std::uint32_t id : {84U, 82U, 80U, 78U, 76U, 74U, 72U, 70U,
+       68U, 66U, 65U, 67U, 69U, 71U, 73U, 75U, 77U, 79U, 81U, 83U, 85U,
+       87U, 89U, 91U, 93U, 95U, 96U, 94U, 92U, 90U, 88U, 86U}) {
+    fixture.rails[1].push_back(make_id<VertexTag>(id));
+  }
+  return fixture;
+}
+
+// A primitive cylinder before the user inserts its intermediate height loop.
+[[nodiscard]] UvPeelStripFixture make_uv_peel_saved_cylinder_without_middle_ring() {
+  auto fixture = make_uv_peel_saved_cylinder();
+  std::erase_if(fixture.topology.vertices,
+                [](const auto &vertex) { return vertex.id.index >= 65U; });
+  fixture.topology.faces.resize(2U);
+  for (std::uint32_t side = 0U; side < 32U; ++side) {
+    const auto next = (side + 1U) % 32U;
+    fixture.topology.faces.push_back({
+        .id = make_id<FaceTag>(side + 1U),
+        .vertices = {make_id<VertexTag>(side + 1U), make_id<VertexTag>(side + 33U),
+                     make_id<VertexTag>(next + 33U), make_id<VertexTag>(next + 1U)},
+        .uvs = {{0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F}},
+        .texture_transform = {.scale = {0.125F, 0.125F}}});
+  }
+  fixture.rails.erase(fixture.rails.begin() + 1);
+  fixture.topology.next_vertex_id = 65U;
+  fixture.topology.next_face_id = 35U;
+  return fixture;
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelCylinderRimNeedsNoIntermediateLoopAndPreservesCaps) {
+  const auto fixture = make_uv_peel_saved_cylinder_without_middle_ring();
+  const auto source = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  for (const auto &rail : fixture.rails) {
+    for (const std::size_t segments : {1U, 16U, 32U}) {
+      const bool closed = segments == rail.size();
+      const auto guide = closed ? rail :
+          std::vector<VertexId>(rail.begin(), rail.begin() + segments + 1U);
+      const auto edges = uv_peel_rail_edges(guide, closed);
+      for (const auto axis : {UvPeelAxis::U, UvPeelAxis::V}) {
+        SCOPED_TRACE(rail.front().index);
+        SCOPED_TRACE(segments);
+        SCOPED_TRACE(static_cast<int>(axis));
+        const std::array targets{uv_peel_target(source.value(), 156U, edges, edges.front())};
+        const auto result = prepare_uv_peel(targets, {.axis = axis});
+        EXPECT_TRUE(result.ok()) << result.error_message();
+        if (!result.ok()) {
+          continue;
+        }
+        const auto *prepared = prepared_uv_peel_document(result.value(), 156U);
+        ASSERT_NE(prepared, nullptr);
+        expect_uv_peel_preserves_document(source.value(), *prepared);
+        const auto after = prepared->document.authored_topology();
+        ASSERT_TRUE(after.ok());
+        EXPECT_EQ(prepared->receipt.affected.faces.size(), edges.size());
+        for (const std::uint32_t cap : {33U, 34U}) {
+          const auto *before_cap = uv_peel_face(fixture.topology, make_id<FaceTag>(cap));
+          const auto *after_cap = uv_peel_face(after.value(), make_id<FaceTag>(cap));
+          ASSERT_NE(before_cap, nullptr);
+          ASSERT_NE(after_cap, nullptr);
+          ASSERT_EQ(before_cap->uvs.size(), after_cap->uvs.size());
+          for (std::size_t corner = 0U; corner < before_cap->uvs.size(); ++corner) {
+            EXPECT_EQ(before_cap->uvs[corner].x, after_cap->uvs[corner].x);
+            EXPECT_EQ(before_cap->uvs[corner].y, after_cap->uvs[corner].y);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelSavedCylinderMiddleRingPreservesOccurrenceContinuity) {
+  const auto fixture = make_uv_peel_saved_cylinder();
+  const auto source = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  const auto edges = uv_peel_rail_edges(fixture.rails[1], true);
+  const Transform3 occurrence{.origin = {4.0F, 0.1249997615814209F, -18.0F}};
+  for (const auto axis : {UvPeelAxis::U, UvPeelAxis::V}) {
+    for (const bool world_space : {true, false}) {
+      for (const std::size_t active : {0U, 4U, 8U, 9U, 12U, 16U, 20U, 24U, 28U}) {
+        SCOPED_TRACE(static_cast<int>(axis));
+        SCOPED_TRACE(world_space);
+        SCOPED_TRACE(active);
+        const std::array targets{uv_peel_target(source.value(), 156U, edges, edges[active],
+                                               occurrence, occurrence)};
+        const UvPeelOptions options{.axis = axis, .world_space = world_space};
+        const auto result = prepare_uv_peel(targets, options);
+        EXPECT_TRUE(result.ok()) << result.error_message();
+        if (!result.ok()) {
+          continue;
+        }
+        ASSERT_TRUE(result.value().changed);
+        const auto *prepared = prepared_uv_peel_document(result.value(), 156U);
+        ASSERT_NE(prepared, nullptr);
+        expect_uv_peel_preserves_document(source.value(), *prepared);
+        const auto after = prepared->document.authored_topology();
+        ASSERT_TRUE(after.ok()) << after.error_message();
+        for (const std::uint32_t cap : {33U, 34U}) {
+          const auto *before_cap = uv_peel_face(fixture.topology, make_id<FaceTag>(cap));
+          const auto *after_cap = uv_peel_face(after.value(), make_id<FaceTag>(cap));
+          ASSERT_NE(before_cap, nullptr);
+          ASSERT_NE(after_cap, nullptr);
+          ASSERT_EQ(before_cap->uvs.size(), after_cap->uvs.size());
+          for (std::size_t corner = 0U; corner < before_cap->uvs.size(); ++corner) {
+            EXPECT_EQ(before_cap->uvs[corner].x, after_cap->uvs[corner].x);
+            EXPECT_EQ(before_cap->uvs[corner].y, after_cap->uvs[corner].y);
+          }
+        }
+        const std::array repeated_targets{uv_peel_target(
+            prepared->document, 156U, edges, edges[active], occurrence, occurrence)};
+        const auto repeated = prepare_uv_peel(repeated_targets, options);
+        ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+        EXPECT_FALSE(repeated.value().changed);
+        ASSERT_EQ(repeated.value().documents.size(), 1U);
+        EXPECT_EQ(repeated.value().documents.front().document.content_identity(),
+                  prepared->document.content_identity());
+        EXPECT_EQ(repeated.value().documents.front().document.content_revision(),
+                  prepared->document.content_revision());
+
+      }
+    }
+  }
 }
 
 TEST(ModelingSdkConsumerTests,
@@ -8317,33 +9523,37 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
-     UvPeelOpenTubeGuideKeepsBothIncidentSidesContinuousAndOtherFacesUntouched) {
+     UvPeelSingleTubeWidthEdgeWalksTheWholeClosedCircumferenceWithoutAuthoredCuts) {
   const auto fixture = make_uv_peel_tube();
   auto document = PolygonDocument::from_authored_topology(fixture.topology);
   ASSERT_TRUE(document.ok());
-  const std::array guide{fixture.rails[0].front(), fixture.rails[1].front()};
-  const EdgeKey edge = make_edge_key(guide[0], guide[1]);
+  const auto edge = make_edge_key(fixture.rails[0].front(), fixture.rails[1].front());
   const std::array targets{uv_peel_target(document.value(), 1U, {edge}, edge)};
   const auto result = prepare_uv_peel(targets, {});
   ASSERT_TRUE(result.ok()) << result.error_message();
   const auto *prepared = prepared_uv_peel_document(result.value(), 1U);
   ASSERT_NE(prepared, nullptr);
   expect_uv_peel_preserves_document(document.value(), *prepared);
+  EXPECT_EQ(prepared->receipt.affected.faces.size(), 8U);
   const auto topology = prepared->document.authored_topology();
   ASSERT_TRUE(topology.ok());
-  std::size_t changed_faces = 0U;
+  const auto distances = uv_peel_rail_distances(fixture.topology, fixture.rails[0]);
+  const float circumference = distances.back() + uv_peel_distance(
+      *uv_peel_position(fixture.topology, fixture.rails[0].back()),
+      *uv_peel_position(fixture.topology, fixture.rails[0].front()));
   for (const auto &face : topology.value().faces) {
-    const bool first = std::ranges::find(face.vertices, guide[0]) != face.vertices.end();
-    const bool second = std::ranges::find(face.vertices, guide[1]) != face.vertices.end();
-    if (first && second) {
-      ++changed_faces;
-      EXPECT_EQ(face.uvs.size(), face.vertices.size());
-    } else {
-      EXPECT_TRUE(face.uvs.empty());
+    ASSERT_EQ(face.uvs.size(), 4U);
+    for (const auto vertex : face.vertices) {
+      const std::size_t rail = (vertex.index - 1U) / 8U;
+      const std::size_t station = (vertex.index - 1U) % 8U;
+      const float distance = station == 0U && face.id.index == 8U
+                                 ? 0.0F : circumference - distances[station];
+      const auto uv = uv_peel_effective_corner(face, vertex);
+      ASSERT_TRUE(uv.has_value());
+      expect_vec2_near(*uv, {2.0F * static_cast<float>(rail), -0.5F * distance},
+                       2.0e-5F);
     }
   }
-  EXPECT_EQ(changed_faces, 2U);
-  expect_uv_peel_guide(topology.value(), guide, {}, UvPeelAxis::U);
 }
 
 TEST(ModelingSdkConsumerTests,
@@ -8452,7 +9662,7 @@ TEST(ModelingSdkConsumerTests,
         ASSERT_TRUE(position.has_value());
         ASSERT_TRUE(uv.has_value());
         const float along = axis == UvPeelAxis::U ? uv->x : uv->y;
-        const float across = axis == UvPeelAxis::U ? uv->y : -uv->x;
+        const float across = axis == UvPeelAxis::U ? uv->y : uv->x;
         EXPECT_NEAR(along, 0.5F * position->x, 1.0e-4F);
         EXPECT_NEAR(across, 0.5F * position->y, 1.0e-9F);
       }
@@ -8492,7 +9702,7 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_NE(fallback_document, nullptr);
   const auto fallback_topology = fallback_document->document.authored_topology();
   ASSERT_TRUE(fallback_topology.ok());
-  expect_uv_peel_guide(fallback_topology.value(), fixture.rails[0], {}, UvPeelAxis::U);
+  expect_uv_peel_guide(fallback_topology.value(), fixture.rails[2], {}, UvPeelAxis::U);
   std::ranges::reverse(edges);
   const std::array explicit_targets{uv_peel_target(document.value(), 1U, edges, inner)};
   const auto explicit_reference = prepare_uv_peel(explicit_targets, {});
@@ -8584,8 +9794,8 @@ TEST(ModelingSdkConsumerTests,
         maximum.y = std::max(maximum.y, uv->y);
       }
     }
-    expect_vec2_near(minimum, {0.0F, 0.0F}, 0.002F);
-    expect_vec2_near(maximum, {1.0F, 1.0F}, 0.002F);
+    expect_vec2_near(minimum, {0.0F, -0.5F}, 0.002F);
+    expect_vec2_near(maximum, {1.0F, 0.5F}, 0.002F);
   }
 }
 
@@ -8731,7 +9941,7 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
-     UvPeelRejectsPinchedConnectedPatchesButAcceptsSeparatePointTouchingPatches) {
+     UvPeelKeepsDistinctCornerUvsAtPinchedAndPointTouchingGeometry) {
   auto pinched = make_uv_peel_strip(
       {{{0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
         {2.0F, 2.0F, 0.0F}, {0.0F, 2.0F, 2.0F}},
@@ -8749,9 +9959,16 @@ TEST(ModelingSdkConsumerTests,
   const auto edges = uv_peel_rail_edges(pinched.rails[0], false);
   const std::array invalid_targets{
       uv_peel_target(invalid_document.value(), 1U, edges, edges.front())};
-  const auto rejected = prepare_uv_peel(invalid_targets, {});
-  ASSERT_FALSE(rejected.ok());
-  EXPECT_FALSE(rejected.error_message().empty());
+  const auto peeled = prepare_uv_peel(invalid_targets, {});
+  ASSERT_TRUE(peeled.ok()) << peeled.error_message();
+  const auto *pinched_result = prepared_uv_peel_document(peeled.value(), 1U);
+  ASSERT_NE(pinched_result, nullptr);
+  expect_uv_peel_preserves_document(invalid_document.value(), *pinched_result);
+  const auto pinched_after = pinched_result->document.authored_topology();
+  ASSERT_TRUE(pinched_after.ok());
+  const auto shared_samples = uv_peel_effective_vertex_samples(pinched_after.value(), shared);
+  ASSERT_EQ(shared_samples.size(), 2U);
+  EXPECT_GT(std::abs(shared_samples[0].x - shared_samples[1].x), 1.0F);
   EXPECT_EQ(invalid_document.value().content_identity(), identity);
 
   AuthoredTopology disconnected;
@@ -8792,13 +10009,14 @@ TEST(ModelingSdkConsumerTests,
     const auto second = uv_peel_effective_corner(face, face.vertices[1]);
     ASSERT_TRUE(first.has_value());
     ASSERT_TRUE(second.has_value());
-    EXPECT_NEAR(second->x - first->x, 1.0F, 0.002F);
+    EXPECT_NEAR(std::abs(second->x - first->x), 1.0F, 0.002F);
+    EXPECT_NEAR(first->x, 1.0F, 0.002F);
     EXPECT_NEAR(second->y, first->y, 0.002F);
   }
 }
 
 TEST(ModelingSdkConsumerTests,
-     UvPeelRejectsClosedDiskGuidesAndBoundarylessPatchesAtomically) {
+     UvPeelRevisitedQuadCornersUseLastWritesWhileUnsafeFallbacksRemainAtomic) {
   constexpr std::array<Vec3, 4> kSquare{{
       {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
       {2.0F, 2.0F, 0.0F}, {0.0F, 2.0F, 0.0F}}};
@@ -8808,7 +10026,11 @@ TEST(ModelingSdkConsumerTests,
   const std::array disk_targets{
       uv_peel_target(disk.value(), 1U, disk.value().edge_ids())};
   const auto disk_result = prepare_uv_peel(disk_targets, {});
-  ASSERT_FALSE(disk_result.ok());
+  ASSERT_TRUE(disk_result.ok()) << disk_result.error_message();
+  const auto *closed_quad = prepared_uv_peel_document(disk_result.value(), 1U);
+  ASSERT_NE(closed_quad, nullptr);
+  expect_uv_peel_preserves_document(disk.value(), *closed_quad);
+  EXPECT_EQ(closed_quad->receipt.affected.faces.size(), 1U);
   EXPECT_EQ(disk.value().content_identity(), disk_identity);
 
   const auto disk_topology = disk.value().authored_topology();
@@ -8822,9 +10044,11 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_TRUE(disk_before.ok());
   const std::array collapsed_guide_targets{
       uv_peel_target(disk.value(), 1U, open_edges, open_edges.front())};
-  const auto collapsed_guide = prepare_uv_peel(collapsed_guide_targets, {});
-  ASSERT_FALSE(collapsed_guide.ok());
-  EXPECT_FALSE(collapsed_guide.error_message().empty());
+  const auto repeated_quad = prepare_uv_peel(collapsed_guide_targets, {});
+  ASSERT_TRUE(repeated_quad.ok()) << repeated_quad.error_message();
+  const auto *open_quad = prepared_uv_peel_document(repeated_quad.value(), 1U);
+  ASSERT_NE(open_quad, nullptr);
+  expect_uv_peel_preserves_document(disk.value(), *open_quad);
   EXPECT_EQ(disk.value().content_identity(), disk_identity);
   EXPECT_EQ(disk.value().content_revision(), disk_revision);
   EXPECT_EQ(disk.value().selection_revision(), disk_selection_revision);

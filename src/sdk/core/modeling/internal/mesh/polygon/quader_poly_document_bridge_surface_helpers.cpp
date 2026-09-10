@@ -11,6 +11,7 @@
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
 #include <diagnostics/profile.hpp>
 #include <quader/modeling/neutral/geometry/geometry.hpp>
@@ -503,7 +504,121 @@ ElementId add_face_with_texture_transform(
     return id;
 }
 
-bool inherit_merged_face_texture(
+namespace {
+
+bool uv_values_match(quader::QVec2 left, quader::QVec2 right)
+{
+    return std::abs(left.x - right.x) <= 0.0001F &&
+           std::abs(left.y - right.y) <= 0.0001F;
+}
+
+std::vector<std::pair<quader::QVec3, quader::QVec3>> chart_triangle_edges(
+    const FaceUvSampler& sampler)
+{
+    std::vector<std::pair<quader::QVec3, quader::QVec3>> edges;
+    for (const Triangle& triangle : sampler.triangles()) {
+        const std::array<std::size_t, 3> indices { triangle.a, triangle.b, triangle.c };
+        for (std::size_t index = 0; index < indices.size(); ++index) {
+            edges.emplace_back(sampler.positions()[indices[index]],
+                sampler.positions()[indices[(index + 1U) % indices.size()]]);
+        }
+    }
+    return edges;
+}
+
+bool merged_chart_preserves_source(
+    const Document& document, const Face& source, const Face& merged,
+    const VertexLookupIndex& vertex_lookup, const FaceUvSampler& target_sampler)
+{
+    const FaceUvSampler source_sampler(document, source, vertex_lookup);
+    const auto effective_uv = [](quader::QVec2 uv, const Face& face) {
+        return apply_face_texture_transform(uv, face.texture_transform);
+    };
+    for (std::size_t index = 0; index < source.vertices.size(); ++index) {
+        const Vertex* vertex = find_vertex(document, source.vertices[index]);
+        if (vertex == nullptr) {
+            return false;
+        }
+        const quader::QVec2 source_uv = face_has_loop_uvs(source)
+            ? source.uvs[index]
+            : generated_texture_uv(vertex->position, face_normal(document, source));
+        const auto target_uv = target_sampler.sample(vertex->position);
+        if (!target_uv.has_value() ||
+            !uv_values_match(effective_uv(source_uv, source), effective_uv(*target_uv, merged))) {
+            return false;
+        }
+    }
+    const auto matches_at = [&](quader::QVec3 position) {
+        const auto source_uv = source_sampler.sample(position);
+        const auto target_uv = target_sampler.sample(position);
+        return source_uv.has_value() && target_uv.has_value() &&
+            uv_values_match(effective_uv(*source_uv, source), effective_uv(*target_uv, merged));
+    };
+    for (const ElementId vertex_id : merged.vertices) {
+        const Vertex* vertex = find_vertex(document, vertex_id);
+        if (vertex != nullptr && source_sampler.sample(vertex->position).has_value() &&
+            !matches_at(vertex->position)) {
+            return false;
+        }
+    }
+    if (source_sampler.has_quad_interpolation() || target_sampler.has_quad_interpolation()) {
+        // Nonlinear quad charts survive a merge exactly when each source is a
+        // rectangular parameter subpatch of the resulting bilinear quad.
+        // Triangles and arbitrary cuts cannot carry that nonlinear field.
+        if (source.vertices.size() != 4U || merged.vertices.size() != 4U ||
+            !source_sampler.has_quad_interpolation() || !target_sampler.has_quad_interpolation()) {
+            return false;
+        }
+        Face parameter_face = merged;
+        parameter_face.texture_transform = {};
+        parameter_face.uvs = {{0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F}};
+        const FaceUvSampler parameters(document, parameter_face, vertex_lookup);
+        std::array<quader::QVec2, 4> corners;
+        for (std::size_t index = 0; index < corners.size(); ++index) {
+            const auto corner = parameters.sample(source_sampler.positions()[index]);
+            if (!corner.has_value()) {
+                return false;
+            }
+            corners[index] = *corner;
+        }
+        const quader::QVec2 first = corners[1] - corners[0];
+        const quader::QVec2 second = corners[3] - corners[0];
+        const bool coordinate_edges =
+            (std::abs(first.x) <= 0.00001F && std::abs(second.y) <= 0.00001F) ||
+            (std::abs(first.y) <= 0.00001F && std::abs(second.x) <= 0.00001F);
+        return coordinate_edges && uv_values_match(corners[2], corners[0] + first + second);
+    }
+    // Each remaining chart is affine inside each rendered triangle. Their difference is
+    // therefore affine on every triangle-overlap polygon: corners plus edge
+    // intersections establish equality, including nonaffine authored charts.
+    const auto source_edges = chart_triangle_edges(source_sampler);
+    const auto target_edges = chart_triangle_edges(target_sampler);
+    const quader::QVec3 normal = normalize_or_zero(face_normal(document, merged));
+    for (const auto& [a, b] : source_edges) {
+        const quader::QVec3 ab = b - a;
+        for (const auto& [c, d] : target_edges) {
+            const quader::QVec3 cd = d - c;
+            const double denominator = dot(cross(ab, cd), normal);
+            const double scale = std::sqrt(static_cast<double>(length_squared(ab)) * length_squared(cd));
+            if (std::abs(denominator) <= std::numeric_limits<double>::epsilon() * scale) {
+                continue;
+            }
+            const quader::QVec3 ac = c - a;
+            const double source_factor = dot(cross(ac, cd), normal) / denominator;
+            const double target_factor = dot(cross(ac, ab), normal) / denominator;
+            if (source_factor >= 0.0 && source_factor <= 1.0 &&
+                target_factor >= 0.0 && target_factor <= 1.0 &&
+                !matches_at(a + ab * static_cast<float>(source_factor))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+bool assign_merged_face_texture_boundary(
     const Document& source_document,
     std::span<const ElementId> source_face_ids,
     Face& merged_face)
@@ -520,19 +635,33 @@ bool inherit_merged_face_texture(
     }
 
     merged_face.texture_transform = sources.front()->texture_transform;
-    const bool has_texture_edits = std::ranges::any_of(sources, [](const Face* source) {
-        return source->texture_transform != FaceTextureTransform{};
-    });
-    const bool needs_corner_mapping = std::ranges::any_of(sources, [&merged_face](const Face* source) {
+    bool needs_corner_mapping = std::ranges::any_of(sources, [&merged_face](const Face* source) {
         return face_has_loop_uvs(*source) || source->texture_transform != merged_face.texture_transform;
     });
-    if (!has_texture_edits || !needs_corner_mapping) {
+    if (!needs_corner_mapping) {
+        const quader::QVec3 merged_normal = face_normal(source_document, merged_face);
+        for (const Face* source : sources) {
+            const quader::QVec3 source_normal = face_normal(source_document, *source);
+            for (const ElementId vertex_id : source->vertices) {
+                const Vertex* vertex = find_vertex(source_document, vertex_id);
+                if (vertex == nullptr || !uv_values_match(
+                    apply_face_texture_transform(generated_texture_uv(vertex->position, source_normal),
+                                                  source->texture_transform),
+                    apply_face_texture_transform(generated_texture_uv(vertex->position, merged_normal),
+                                                  merged_face.texture_transform))) {
+                    needs_corner_mapping = true;
+                    break;
+                }
+            }
+        }
+    }
+    if (!needs_corner_mapping) {
         return true;
     }
 
-    // One merged face cannot keep an interior UV seam. Preserve each surviving
-    // boundary corner in the first material donor's base space, choosing the
-    // outgoing boundary edge's source deterministically at shared vertices.
+    // Preserve boundary corners in the first material donor's base space,
+    // then reject interior seams or chart changes the resulting face cannot
+    // represent. Source transform identity does not imply procedural UVs.
     std::vector<quader::QVec2> inherited_uvs;
     inherited_uvs.reserve(merged_face.vertices.size());
     for (std::size_t index = 0; index < merged_face.vertices.size(); ++index) {
@@ -570,6 +699,28 @@ bool inherit_merged_face_texture(
     }
     merged_face.uvs = std::move(inherited_uvs);
     return true;
+}
+
+bool merged_face_preserves_source_textures(const Document& source_document,
+    std::span<const ElementId> source_face_ids, const Face& merged_face)
+{
+    if (source_face_ids.empty()) {
+        return false;
+    }
+    const VertexLookupIndex vertex_lookup(source_document);
+    const FaceUvSampler merged_sampler(source_document, merged_face, vertex_lookup);
+    return std::ranges::all_of(source_face_ids, [&](ElementId face_id) {
+        const Face* source = find_face(source_document, face_id);
+        return source != nullptr && merged_chart_preserves_source(source_document, *source, merged_face,
+                                             vertex_lookup, merged_sampler);
+    });
+}
+
+bool inherit_merged_face_texture(const Document& source_document,
+    std::span<const ElementId> source_face_ids, Face& merged_face)
+{
+    return assign_merged_face_texture_boundary(source_document, source_face_ids, merged_face) &&
+        merged_face_preserves_source_textures(source_document, source_face_ids, merged_face);
 }
 
 std::vector<ElementId> face_vertices_between(const Face& face, std::size_t start_index, std::size_t end_index)
@@ -3106,6 +3257,12 @@ bool remove_redundant_vertex_from_all_face_loops(Document& document, ElementId v
     if (!vertex_is_redundant_in_every_face_that_uses_it(document, vertex_id)) {
         return false;
     }
+    for (const Face& face : document.faces) {
+        if (contains_id(face.vertices, vertex_id) &&
+            !face_vertex_uv_is_redundant(document, face, vertex_id)) {
+            return false;
+        }
+    }
 
     bool changed = false;
     const std::set<ElementId> vertex_to_remove { vertex_id };
@@ -3123,8 +3280,12 @@ bool remove_redundant_vertex_from_all_face_loops(Document& document, ElementId v
             return false;
         }
 
-        face.vertices = std::move(dissolved_loop);
-        face.uvs.clear();
+        Face dissolved_face = face;
+        dissolved_face.vertices = std::move(dissolved_loop);
+        if (!preserve_face_uvs(document, face, document, dissolved_face)) {
+            return false;
+        }
+        face = std::move(dissolved_face);
         changed = true;
     }
     return changed;
@@ -3140,22 +3301,141 @@ void orient_face_toward_normal(const Document& document, Face& face, quader::QVe
         dot(normal, expected_normal) >= 0.0F) {
       return;
     }
-    std::ranges::reverse(face.vertices);
-    if (face.uvs.size() == face.vertices.size()) {
-        std::ranges::reverse(face.uvs);
+    reverse_face_winding(face);
+}
+
+void reverse_face_winding(Face& face, FaceWindingChange change)
+{
+    if (face.vertices.empty()) {
+        face.uvs.clear();
+        return;
+    }
+    // Quads use the first-to-third diagonal; retain its anchor. Earcut changes
+    // its traversal with projected winding, so a normal-only reversal needs
+    // the old end anchor while already-reflected geometry keeps its first.
+    const std::ptrdiff_t first = face.vertices.size() == 4U ||
+        change == FaceWindingChange::ReflectedGeometry ? 1 : 0;
+    std::reverse(face.vertices.begin() + first, face.vertices.end());
+    if (face_has_loop_uvs(face)) {
+        std::reverse(face.uvs.begin() + first, face.uvs.end());
     } else {
         face.uvs.clear();
     }
 }
 
-void reverse_face_winding(Face& face)
+bool reverse_reflected_face_winding(const Document& source_document,
+    const Face& source_face, const Document& result_document, Face& result_face)
 {
-    std::ranges::reverse(face.vertices);
-    if (face_has_loop_uvs(face)) {
-        std::ranges::reverse(face.uvs);
-    } else {
-        face.uvs.clear();
+    if (source_face.vertices.size() <= 4U || !face_has_loop_uvs(source_face)) {
+        reverse_face_winding(result_face, FaceWindingChange::ReflectedGeometry);
+        return true;
     }
+    const VertexLookupIndex source_lookup(source_document);
+    const VertexLookupIndex result_lookup(result_document);
+    return reverse_reflected_face_winding(source_document, source_face, result_document,
+                                          result_face, source_lookup, result_lookup);
+}
+
+bool reverse_reflected_face_winding(const Document& source_document,
+    const Face& source_face, const Document& result_document, Face& result_face,
+    const VertexLookupIndex& source_lookup, const VertexLookupIndex& result_lookup)
+{
+    return preserve_rebased_face_texture_triangulation(source_document, source_face,
+        result_document, result_face, FaceRebaseWinding::Reverse, source_lookup,
+        result_lookup);
+}
+
+bool preserve_rebased_face_texture_triangulation(const Document& source_document,
+    const Face& source_face, const Document& result_document, Face& result_face,
+    FaceRebaseWinding winding, const VertexLookupIndex& source_lookup,
+    const VertexLookupIndex& result_lookup)
+{
+    if (source_face.vertices.size() <= 4U || !face_has_loop_uvs(source_face)) {
+        if (winding == FaceRebaseWinding::Reverse) {
+            reverse_face_winding(result_face, FaceWindingChange::ReflectedGeometry);
+        }
+        return true;
+    }
+    const FaceUvSampler source_sampler(source_document, source_face, source_lookup);
+    const auto triangle_identities = [](const Face& face, std::span<const Triangle> triangles) {
+        std::vector<std::array<ElementId, 3>> identities;
+        identities.reserve(triangles.size());
+        for (const Triangle& triangle : triangles) {
+            std::array ids { face.vertices[triangle.a], face.vertices[triangle.b], face.vertices[triangle.c] };
+            std::ranges::sort(ids);
+            identities.push_back(ids);
+        }
+        std::ranges::sort(identities);
+        return identities;
+    };
+    const auto source_triangles = triangle_identities(source_face, source_sampler.triangles());
+    if (source_triangles.empty()) {
+        return false;
+    }
+    Face preferred = result_face;
+    if (winding == FaceRebaseWinding::Reverse) {
+        reverse_face_winding(preferred, FaceWindingChange::ReflectedGeometry);
+    }
+    const auto matches_source = [&](const Face& candidate) {
+        const auto triangles = triangulate_face_local_indices(result_document, candidate, result_lookup);
+        return triangle_identities(candidate, triangles) == source_triangles;
+    };
+    if (matches_source(preferred)) {
+        result_face = std::move(preferred);
+        return true;
+    }
+    if (winding == FaceRebaseWinding::Reverse) {
+        Face alternate = result_face;
+        reverse_face_winding(alternate, FaceWindingChange::OrientationOnly);
+        if (matches_source(alternate)) {
+            result_face = std::move(alternate);
+            return true;
+        }
+    } else {
+        // Proper rotations can reverse the dominant-plane projection too.
+        // Retain winding and try the adjacent starts in either direction;
+        // moving each UV with its vertex preserves corner identity.
+        for (const std::size_t offset : std::array<std::size_t, 2>{1U, preferred.vertices.size() - 1U}) {
+            Face alternate = preferred;
+            const auto shift = static_cast<std::ptrdiff_t>(offset);
+            std::rotate(alternate.vertices.begin(), alternate.vertices.begin() + shift,
+                        alternate.vertices.end());
+            std::rotate(alternate.uvs.begin(), alternate.uvs.begin() + shift,
+                        alternate.uvs.end());
+            if (matches_source(alternate)) {
+                result_face = std::move(alternate);
+                return true;
+            }
+        }
+    }
+    // A planar affine UV field is independent of its triangulation, including
+    // constant or one-axis-collapsed charts. Do not reject those valid rebases.
+    const Triangle first = source_sampler.triangles().front();
+    const auto positions = source_sampler.positions();
+    const quader_geometry::QTriangle3<float> plane {
+        geometry_vec3(positions[first.a]), geometry_vec3(positions[first.b]),
+        geometry_vec3(positions[first.c]) };
+    const auto normal = quader_geometry::triangle_unit_normal(plane);
+    const float extent = std::max({1.0F, length(positions[first.b] - positions[first.a]),
+                                        length(positions[first.c] - positions[first.a])});
+    for (std::size_t corner = 0; corner < positions.size(); ++corner) {
+        const auto point = geometry_vec3(positions[corner]);
+        if (std::abs(quader_geometry::dot(point - plane.a, normal)) > extent * 0.00001F) {
+            return false;
+        }
+        const auto weights = quader_geometry::barycentric_coordinates(point, plane);
+        if (!weights.valid) {
+            return false;
+        }
+        const quader::QVec2 expected = source_face.uvs[first.a] * weights.u +
+            source_face.uvs[first.b] * weights.v + source_face.uvs[first.c] * weights.w;
+        if (std::abs(expected.x - source_face.uvs[corner].x) > 0.00001F ||
+            std::abs(expected.y - source_face.uvs[corner].y) > 0.00001F) {
+            return false;
+        }
+    }
+    result_face = std::move(preferred);
+    return true;
 }
 
 std::vector<Face> selected_face_copies(const Document& document, const Selection& selection)

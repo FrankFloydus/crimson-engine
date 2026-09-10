@@ -39,9 +39,22 @@ ViewportToolResult DragCommitTool::handle_event(
   ViewportToolPreviewPort &preview_port = *context.ports.preview;
   ViewportToolCommitPort &commit_port = *context.ports.commit;
   const ViewportPointerToolEvent &pointer = event.pointer;
+  const ModelingToolStatus status = preview_port.tool_status();
   const bool dragging =
       context.modal_state->insert_edge_loop_drag_active ||
-      preview_port.tool_status().insert_edge_loop_dragging;
+      status.insert_edge_loop_dragging;
+  const bool interrupted = pointer.pointer_interaction_canceled ||
+      !pointer.viewport_focused || pointer.navigation_active ||
+      pointer.text_input_active || pointer.gizmo_consumed ||
+      (dragging && pointer.left_released && !pointer.can_interact);
+  if (interrupted) {
+    if (dragging || status.insert_edge_loop_has_preview) {
+      context.modal_state->primary_release_suppression.begin(
+          QuaderMouseButton::Left, pointer.left_down);
+      return cancel_active_modal_tool(context, false);
+    }
+    return {.handled = true};
+  }
 
   if (pointer.can_interact && !pointer.left_down && !pointer.left_released &&
       !dragging && !pointer.suppress_hover_work &&
@@ -72,8 +85,6 @@ ViewportToolResult DragCommitTool::handle_event(
       return {
           .handled = true,
           .modal_state_changed = true,
-          .active_tool_changed = commit_command.ok,
-          .sync_active_tool_from_modeling = commit_command.ok,
       };
     }
   } else if (pointer.can_interact && pointer.left_down && dragging) {
@@ -95,8 +106,6 @@ ViewportToolResult DragCommitTool::handle_event(
     return {
         .handled = true,
         .modal_state_changed = true,
-        .active_tool_changed = command.ok,
-        .sync_active_tool_from_modeling = command.ok,
     };
   }
 

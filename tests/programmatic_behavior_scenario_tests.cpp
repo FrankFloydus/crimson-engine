@@ -155,6 +155,287 @@ quader::QuaderPolygonDocument uv_peel_strip_document() {
       std::move(document));
 }
 
+quader_poly::Document uv_peel_cylinder_document() {
+  // Saved 32-sided cylinder coordinates and split-face IDs, independent of a scene file.
+  constexpr std::array<quader::QVec2, 32> ring{{
+      {0.5F, 0.0F},
+      {0.49039262533187866F, 0.09754516184329987F},
+      {0.4619397521018982F, 0.19134172797203064F},
+      {0.41573479771614075F, 0.27778512239456177F},
+      {0.3535533845424652F, 0.3535533845424652F},
+      {0.2777850925922394F, 0.41573482751846313F},
+      {0.19134171307086945F, 0.4619397521018982F},
+      {0.09754511713981628F, 0.49039265513420105F},
+      {-2.1855694143368964e-08F, 0.5F},
+      {-0.09754516184329987F, 0.49039262533187866F},
+      {-0.19134175777435303F, 0.4619397521018982F},
+      {-0.27778518199920654F, 0.41573476791381836F},
+      {-0.3535533845424652F, 0.3535533845424652F},
+      {-0.41573482751846313F, 0.2777850925922394F},
+      {-0.46193981170654297F, 0.19134163856506348F},
+      {-0.49039265513420105F, 0.09754515439271927F},
+      {-0.5F, -4.371138828673793e-08F},
+      {-0.49039262533187866F, -0.09754524379968643F},
+      {-0.4619397521018982F, -0.19134171307086945F},
+      {-0.41573476791381836F, -0.27778515219688416F},
+      {-0.35355332493782043F, -0.35355344414711F},
+      {-0.2777850031852722F, -0.4157348871231079F},
+      {-0.1913415640592575F, -0.46193984150886536F},
+      {-0.09754519164562225F, -0.49039262533187866F},
+      {5.962440319251527e-09F, -0.5F},
+      {0.09754520654678345F, -0.49039262533187866F},
+      {0.1913418024778366F, -0.4619397222995758F},
+      {0.27778521180152893F, -0.41573473811149597F},
+      {0.35355350375175476F, -0.35355326533317566F},
+      {0.41573479771614075F, -0.27778515219688416F},
+      {0.4619397819042206F, -0.19134171307086945F},
+      {0.49039265513420105F, -0.09754511713981628F}}};
+  constexpr std::array<std::size_t, 32> middle_stations{{
+      10, 9, 11, 8, 12, 7, 13, 6, 14, 5, 15, 4, 16, 3, 17, 2, 18, 1, 19, 0, 20, 31, 21, 30, 22, 29, 23, 28, 24, 27, 25, 26}};
+  constexpr std::array<std::array<quader_poly::ElementId, 5>, 64> side_faces{{
+      {{10, 11, 10, 66, 65}},
+      {{35, 43, 65, 66, 42}},
+      {{11, 43, 44, 67, 65}},
+      {{36, 11, 65, 67, 12}},
+      {{9, 10, 9, 68, 66}},
+      {{37, 42, 66, 68, 41}},
+      {{12, 44, 45, 69, 67}},
+      {{38, 12, 67, 69, 13}},
+      {{8, 9, 8, 70, 68}},
+      {{39, 41, 68, 70, 40}},
+      {{13, 45, 46, 71, 69}},
+      {{40, 13, 69, 71, 14}},
+      {{7, 8, 7, 72, 70}},
+      {{41, 40, 70, 72, 39}},
+      {{14, 46, 47, 73, 71}},
+      {{42, 14, 71, 73, 15}},
+      {{6, 7, 6, 74, 72}},
+      {{43, 39, 72, 74, 38}},
+      {{15, 47, 48, 75, 73}},
+      {{44, 15, 73, 75, 16}},
+      {{5, 6, 5, 76, 74}},
+      {{45, 38, 74, 76, 37}},
+      {{16, 48, 49, 77, 75}},
+      {{46, 16, 75, 77, 17}},
+      {{4, 5, 4, 78, 76}},
+      {{47, 37, 76, 78, 36}},
+      {{17, 49, 50, 79, 77}},
+      {{48, 17, 77, 79, 18}},
+      {{3, 4, 3, 80, 78}},
+      {{49, 36, 78, 80, 35}},
+      {{18, 50, 51, 81, 79}},
+      {{50, 18, 79, 81, 19}},
+      {{2, 3, 2, 82, 80}},
+      {{51, 35, 80, 82, 34}},
+      {{19, 51, 52, 83, 81}},
+      {{52, 19, 81, 83, 20}},
+      {{1, 2, 1, 84, 82}},
+      {{53, 34, 82, 84, 33}},
+      {{20, 52, 53, 85, 83}},
+      {{54, 20, 83, 85, 21}},
+      {{32, 1, 32, 86, 84}},
+      {{55, 33, 84, 86, 64}},
+      {{21, 53, 54, 87, 85}},
+      {{56, 21, 85, 87, 22}},
+      {{31, 32, 31, 88, 86}},
+      {{57, 64, 86, 88, 63}},
+      {{22, 54, 55, 89, 87}},
+      {{58, 22, 87, 89, 23}},
+      {{30, 31, 30, 90, 88}},
+      {{59, 63, 88, 90, 62}},
+      {{23, 55, 56, 91, 89}},
+      {{60, 23, 89, 91, 24}},
+      {{29, 30, 29, 92, 90}},
+      {{61, 62, 90, 92, 61}},
+      {{24, 56, 57, 93, 91}},
+      {{62, 24, 91, 93, 25}},
+      {{28, 29, 28, 94, 92}},
+      {{63, 61, 92, 94, 60}},
+      {{25, 57, 58, 95, 93}},
+      {{64, 25, 93, 95, 26}},
+      {{27, 28, 27, 96, 94}},
+      {{65, 60, 94, 96, 59}},
+      {{26, 58, 59, 96, 95}},
+      {{66, 26, 95, 96, 27}}}};
+  quader_poly::Document document;
+  constexpr std::array heights{-0.125F, 0.875F, 0.375F};
+  for (std::size_t rail = 0; rail < heights.size(); ++rail) {
+    for (std::size_t index = 0; index < ring.size(); ++index) {
+      const auto station = rail == 2U ? middle_stations[index] : index;
+      document.vertices.push_back({
+          static_cast<quader_poly::ElementId>(rail * ring.size() + index + 1U),
+          {ring[station].x, heights[rail], ring[station].y}});
+    }
+  }
+  quader_poly::Face bottom{.id = 33};
+  quader_poly::Face top{.id = 34};
+  for (quader_poly::ElementId index = 0; index < 32; ++index) {
+    bottom.vertices.push_back(index + 1);
+    top.vertices.push_back(64 - index);
+    bottom.uvs.push_back({ring[index].x * 0.03125F, -ring[index].y * 0.03125F});
+    top.uvs.push_back({ring[31U - index].x * 0.03125F, ring[31U - index].y * 0.03125F});
+  }
+  bottom.texture_transform.scale = top.texture_transform.scale = {0.125F, 0.125F};
+  document.faces = {std::move(bottom), std::move(top)};
+  for (const auto &entry : side_faces) {
+    document.faces.push_back({.id = entry[0],
+        .vertices = {entry[1], entry[2], entry[3], entry[4]},
+        .uvs = {{0.0F, 0.0F}, {0.125F, 0.0F}, {0.125F, 0.125F}, {0.0F, 0.125F}},
+        .texture_transform = {.scale = {0.125F, 0.125F}}});
+  }
+  document.next_vertex_id = 97;
+  document.next_face_id = 67;
+  return document;
+}
+
+quader_poly::Document uv_peel_unsplit_cylinder_document() {
+  auto document = uv_peel_cylinder_document();
+  document.vertices.resize(64U);
+  document.faces.resize(2U);
+  for (quader_poly::ElementId index = 0; index < 32; ++index) {
+    const auto first = index + 1;
+    const auto next = (index + 1) % 32 + 1;
+    document.faces.push_back({.id = first,
+        .vertices = {next, first, first + 32, next + 32},
+        .uvs = {{0.0F, 0.0F}, {0.125F, 0.0F}, {0.125F, 0.125F}, {0.0F, 0.125F}},
+        .texture_transform = {.scale = {0.125F, 0.125F}}});
+  }
+  document.next_vertex_id = 65;
+  document.next_face_id = 35;
+  return document;
+}
+
+quader_poly::Document uv_peel_arch_document(bool split_depth) {
+  constexpr std::array angles{
+      0.0, 0.12, 0.35, 0.64, 1.02, 1.47, 1.94, 2.38, 2.77,
+      3.14159265358979323846};
+  const std::vector<quader::QVec2> profile = split_depth
+      ? std::vector<quader::QVec2>{{2.0F, -0.75F}, {2.0F, 0.0F},
+                                 {2.0F, 0.75F}, {3.0F, 0.75F},
+                                 {3.0F, 0.0F}, {3.0F, -0.75F}}
+      : std::vector<quader::QVec2>{{2.0F, -0.75F}, {2.0F, 0.75F},
+                                 {3.0F, 0.75F}, {3.0F, -0.75F}};
+  quader_poly::Document document;
+  for (const auto point : profile) {
+    for (const double angle : angles) {
+      (void)quader_poly::add_vertex(document,
+          {point.x * static_cast<float>(std::cos(angle)),
+           point.x * static_cast<float>(std::sin(angle)), point.y});
+    }
+  }
+  const auto vertex_id = [&angles](std::size_t rail, std::size_t station) {
+    return static_cast<quader_poly::ElementId>(rail * angles.size() + station + 1U);
+  };
+  for (std::size_t rail = 0; rail < profile.size(); ++rail) {
+    const auto next_rail = (rail + 1U) % profile.size();
+    for (std::size_t station = 0; station + 1U < angles.size(); ++station) {
+      (void)quader_poly::add_face(document,
+          std::array{vertex_id(rail, station), vertex_id(next_rail, station),
+                     vertex_id(next_rail, station + 1U), vertex_id(rail, station + 1U)},
+          static_cast<std::uint32_t>(rail % 3U));
+    }
+  }
+  std::vector<quader_poly::ElementId> first_cap;
+  std::vector<quader_poly::ElementId> last_cap;
+  for (std::size_t rail = 0; rail < profile.size(); ++rail) {
+    first_cap.push_back(vertex_id(profile.size() - 1U - rail, 0U));
+    last_cap.push_back(vertex_id(rail, angles.size() - 1U));
+  }
+  (void)quader_poly::add_face(document, first_cap, 1U);
+  (void)quader_poly::add_face(document, last_cap, 2U);
+  for (auto &face : document.faces) {
+    face.texture_transform = {.scale = {0.5F, 0.75F},
+                              .shift_uv = {4.0F, -5.0F},
+                              .rotation_degrees = 17.0F};
+  }
+  return document;
+}
+
+void expect_uv_peel_preserves_mesh_geometry(
+    const quader::QuaderMeshAsset &actual,
+    const quader::QuaderMeshAsset &expected) {
+  EXPECT_EQ(actual.indices, expected.indices);
+  ASSERT_EQ(actual.primitives.size(), expected.primitives.size());
+  for (std::size_t index = 0; index < actual.primitives.size(); ++index) {
+    EXPECT_EQ(actual.primitives[index].index_offset, expected.primitives[index].index_offset);
+    EXPECT_EQ(actual.primitives[index].index_count, expected.primitives[index].index_count);
+    EXPECT_EQ(actual.primitives[index].material_slot, expected.primitives[index].material_slot);
+  }
+  ASSERT_EQ(actual.vertices.size(), expected.vertices.size());
+  for (std::size_t index = 0; index < actual.vertices.size(); ++index) {
+    const auto &vertex = actual.vertices[index];
+    const auto &reference = expected.vertices[index];
+    EXPECT_EQ(vertex.position.x, reference.position.x);
+    EXPECT_EQ(vertex.position.y, reference.position.y);
+    EXPECT_EQ(vertex.position.z, reference.position.z);
+    EXPECT_EQ(vertex.normal.x, reference.normal.x);
+    EXPECT_EQ(vertex.normal.y, reference.normal.y);
+    EXPECT_EQ(vertex.normal.z, reference.normal.z);
+    EXPECT_EQ(vertex.rgba, reference.rgba);
+    EXPECT_EQ(vertex.uv_geometric_normal.x, reference.uv_geometric_normal.x);
+    EXPECT_EQ(vertex.uv_geometric_normal.y, reference.uv_geometric_normal.y);
+    EXPECT_EQ(vertex.uv_geometric_normal.z, reference.uv_geometric_normal.z);
+  }
+  ASSERT_EQ(actual.face_textures.size(), expected.face_textures.size());
+  for (std::size_t index = 0; index < actual.face_textures.size(); ++index) {
+    const auto &face = actual.face_textures[index];
+    const auto &reference = expected.face_textures[index];
+    EXPECT_EQ(face.face, reference.face);
+    EXPECT_EQ(face.scale.x, reference.scale.x);
+    EXPECT_EQ(face.scale.y, reference.scale.y);
+    EXPECT_EQ(face.shift_uv.x, reference.shift_uv.x);
+    EXPECT_EQ(face.shift_uv.y, reference.shift_uv.y);
+    EXPECT_EQ(face.rotation_degrees, reference.rotation_degrees);
+  }
+}
+
+void expect_uv_peel_arch_face_changes(
+    const quader_poly::Document &document,
+    const quader::QuaderMeshAsset &before,
+    const quader::QuaderMeshAsset &after,
+    const std::vector<bool> &changed_faces) {
+  ASSERT_EQ(document.faces.size(), changed_faces.size());
+  ASSERT_EQ(before.indices, after.indices);
+  ASSERT_EQ(before.vertices.size(), after.vertices.size());
+  for (std::size_t face_index = 0; face_index < document.faces.size(); ++face_index) {
+    SCOPED_TRACE(document.faces[face_index].id);
+    const auto &face = document.faces[face_index];
+    const auto belongs_to_face = [&](const quader::QVec3 &position) {
+      return std::any_of(face.vertices.begin(), face.vertices.end(),
+          [&](quader_poly::ElementId id) {
+            const auto &expected = document.vertices[static_cast<std::size_t>(id - 1U)].position;
+            return position.x == expected.x && position.y == expected.y && position.z == expected.z;
+          });
+    };
+    bool found_triangle = false;
+    bool changed = false;
+    for (std::size_t index = 0; index + 2U < before.indices.size(); index += 3U) {
+      const std::array corners{
+          before.indices[index], before.indices[index + 1U], before.indices[index + 2U]};
+      if (!std::all_of(corners.begin(), corners.end(), [&](std::uint32_t corner) {
+            return belongs_to_face(before.vertices[corner].position);
+          })) {
+        continue;
+      }
+      found_triangle = true;
+      for (const auto corner : corners) {
+        const auto &a = after.vertices[corner];
+        const auto &b = before.vertices[corner];
+        EXPECT_TRUE(std::isfinite(a.uv.x));
+        EXPECT_TRUE(std::isfinite(a.uv.y));
+        changed |= a.uv.x != b.uv.x || a.uv.y != b.uv.y;
+        if (!changed_faces[face_index]) {
+          EXPECT_EQ(a.uv.x, b.uv.x);
+          EXPECT_EQ(a.uv.y, b.uv.y);
+          EXPECT_EQ(a.uv_carrier, b.uv_carrier);
+        }
+      }
+    }
+    EXPECT_TRUE(found_triangle);
+    EXPECT_EQ(changed, changed_faces[face_index]);
+  }
+}
+
 quader::QuaderApiVoidResult peel_uv(
     quader::QuaderApi &api, const quader::QuaderUvPeelOptions &options) {
   return api.modeling().peel_uv({
@@ -204,6 +485,79 @@ void expect_texture_uv_bounds(const std::optional<quader::QuaderMeshAsset> &mesh
   EXPECT_NEAR(maximum.x, maximum_u, 0.00001f);
   EXPECT_NEAR(minimum.y, minimum_v, 0.00001f);
   EXPECT_NEAR(maximum.y, maximum_v, 0.00001f);
+}
+
+void expect_uv_peel_arch_operation(bool split_depth) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  const auto original = uv_peel_arch_document(split_depth);
+  s.given().mesh("arch",
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(original));
+  auto &api = s.api();
+  const auto object = s.object("arch");
+  quader::QuaderComponentSelectionArgs guide{
+      .object = object, .kind = quader::QuaderComponentKind::Edge,
+      .active = {.object = object, .kind = quader::QuaderComponentKind::Edge,
+                 .edge_a = split_depth ? 11U : 5U,
+                 .edge_b = split_depth ? 12U : 15U}};
+  if (split_depth) {
+    for (quader::QuaderElementId station = 0; station < 9U; ++station) {
+      guide.edges.emplace_back(11U + station, 12U + station);
+    }
+  } else {
+    guide.edges.emplace_back(5U, 15U);
+  }
+  ASSERT_TRUE(api.selection().select_components(guide).ok());
+  const auto before = api.query().compiled_object_mesh(object);
+  const auto effective_before = effective_texture_mesh(api, object);
+  ASSERT_TRUE(before.has_value());
+  ASSERT_TRUE(effective_before.has_value());
+  const auto selection_revision = api.revisions().modeling_selection_revision;
+  const auto history_before = api.history().snapshot();
+  const quader::QuaderUvPeelOptions options{
+      .world_space = false, .u_repeat = 2.0, .v_repeat = 3.0,
+      .u_offset = 0.25, .v_offset = -0.5};
+  const auto peeled = peel_uv(api, options);
+  ASSERT_TRUE(peeled.ok()) << peeled.error_message();
+  ASSERT_TRUE(peeled.changed());
+  const auto after = api.query().compiled_object_mesh(object);
+  const auto effective_after = effective_texture_mesh(api, object);
+  ASSERT_TRUE(after.has_value());
+  ASSERT_TRUE(effective_after.has_value());
+  expect_uv_peel_preserves_mesh_geometry(*after, *before);
+  std::vector<bool> changed_faces(original.faces.size(), false);
+  if (split_depth) {
+    // A longitudinal guide walks both depth halves and around front, outer,
+    // and back faces. Only the two six-sided arch ends stop traversal.
+    std::fill_n(changed_faces.begin(), 54U, true);
+  } else {
+    // One width edge walks the whole inner arch, both quad ends, and the
+    // opposite outer arch; neither front nor back strip is in that walk.
+    std::fill_n(changed_faces.begin(), 9U, true);
+    std::fill_n(changed_faces.begin() + 18U, 9U, true);
+    changed_faces[36U] = changed_faces[37U] = true;
+  }
+  expect_uv_peel_arch_face_changes(
+      original, *effective_before, *effective_after, changed_faces);
+  EXPECT_EQ(api.revisions().modeling_selection_revision, selection_revision);
+  s.then().selection().mode(quader::QuaderSelectionMode::Edge)
+      .edge_count(guide.edges.size()).active_alias("arch");
+  EXPECT_EQ(api.history().snapshot().undo_label, "UV Peel");
+  const auto revisions_after = api.revisions();
+  const auto repeated = peel_uv(api, options);
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_FALSE(repeated.changed());
+  expect_document_revisions_equal(api.revisions(), revisions_after);
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(object), *after);
+  ASSERT_TRUE(api.history().undo().ok());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(object), *before);
+  EXPECT_EQ(api.history().snapshot().undo_label, history_before.undo_label);
+  EXPECT_EQ(api.history().snapshot().redo_label, "UV Peel");
+  s.then().selection().mode(quader::QuaderSelectionMode::Edge)
+      .edge_count(guide.edges.size()).active_alias("arch");
+  ASSERT_TRUE(api.history().redo().ok());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(object), *after);
+  s.then().selection().mode(quader::QuaderSelectionMode::Edge)
+      .edge_count(guide.edges.size()).active_alias("arch");
 }
 
 /// Describes one synthetic component gizmo workflow so the same behavior can be
@@ -1118,37 +1472,37 @@ TEST(ProgrammaticBehaviorScenarioTests,
       api, quader::QuaderFaceTextureAction::RotateClockwise);
   ASSERT_TRUE(rotated.ok()) << rotated.error_message();
   ASSERT_TRUE(rotated.changed());
-  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 52.5f);
-  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 7.5f);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 7.5f);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, -37.5f);
   EXPECT_EQ(api.modeling().face_texture_settings().selection_token, token);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 22.5);
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, -22.5);
   EXPECT_EQ(api.history().snapshot().undo_label, "Rotate Texture Clockwise");
 
   rotation_snap_degrees = 90.0;
   const auto repeated = api.history().repeat_last_action();
   ASSERT_TRUE(repeated.ok()) << repeated.error_message();
   ASSERT_TRUE(repeated.changed());
-  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 75.0f);
-  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 30.0f);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 45.0);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, -15.0f);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, -60.0f);
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, -45.0);
   ASSERT_TRUE(api.history().undo().ok());
-  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 52.5f);
-  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 7.5f);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 22.5);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 7.5f);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, -37.5f);
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, -22.5);
   ASSERT_TRUE(api.history().redo().ok());
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 45.0);
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, -45.0);
 
   ASSERT_TRUE(api.selection().select_face(object, 2).ok());
   EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0.0);
   const auto new_selection_repeat = api.history().repeat_last_action();
   ASSERT_TRUE(new_selection_repeat.ok()) << new_selection_repeat.error_message();
-  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 75.0f);
-  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 52.5f);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 22.5);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, -15.0f);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, -82.5f);
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, -22.5);
   ASSERT_TRUE(api.history().undo().ok());
   const auto repeat_after_undo = api.history().repeat_last_action();
   ASSERT_TRUE(repeat_after_undo.ok()) << repeat_after_undo.error_message();
-  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 52.5f);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, -82.5f);
 }
 
 TEST(ProgrammaticBehaviorScenarioTests,
@@ -1630,8 +1984,9 @@ TEST(ProgrammaticBehaviorScenarioTests,
   const auto second_result = api.query().compiled_object_mesh(second);
   ASSERT_TRUE(first_result.has_value());
   ASSERT_TRUE(second_result.has_value());
-  expect_texture_uv_bounds(first_result, 0.25f, 2.25f, -0.5f, 2.5f);
-  expect_texture_uv_bounds(second_result, 0.25f, 2.25f, -0.5f, 2.5f);
+  // The two equal transverse sides straddle the guide's V offset.
+  expect_texture_uv_bounds(first_result, 0.25f, 2.25f, -2.0f, 1.0f);
+  expect_texture_uv_bounds(second_result, 0.25f, 2.25f, -2.0f, 1.0f);
   ASSERT_EQ(first_result->indices.size(), original_first->indices.size());
   for (std::size_t index = 0; index < first_result->indices.size(); ++index) {
     const auto actual =
@@ -1712,7 +2067,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
   const auto second_result = api.query().compiled_object_mesh(second);
   ASSERT_TRUE(second_result.has_value());
   expect_texture_uv_bounds(
-      effective_texture_mesh(api, second), 0.25f, 2.25f, -0.5f, 2.5f);
+      effective_texture_mesh(api, second), -0.75f, 1.25f, -0.5f, 2.5f);
   expect_texture_mesh_equal(api.query().compiled_object_mesh(first), *first_result);
   EXPECT_EQ(api.modeling().uv_peel_settings().options, displayed);
   ASSERT_TRUE(api.history().undo().ok());
@@ -1725,6 +2080,229 @@ TEST(ProgrammaticBehaviorScenarioTests,
   EXPECT_TRUE(repeated_after_undo.changed());
   expect_texture_mesh_equal(api.query().compiled_object_mesh(second), *second_result);
   EXPECT_EQ(api.modeling().uv_peel_settings().options, displayed);
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     UvPeelLongitudinalArchGuideWalksFrontBackAndOuterFaces) {
+  expect_uv_peel_arch_operation(true);
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     UvPeelSingleWidthEdgeWalksWholeArchThroughQuadEnds) {
+  expect_uv_peel_arch_operation(false);
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     UvPeelCylinderRimNeedsNoIntermediateLoopAndPreservesCaps) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  s.given().mesh("cylinder", quader::QuaderPolygonDocumentInternalAccess::from_backend(
+      uv_peel_unsplit_cylinder_document()));
+  auto &api = s.api();
+  const auto object = s.object("cylinder");
+  quader::QuaderComponentSelectionArgs guide{
+      .object = object, .kind = quader::QuaderComponentKind::Edge,
+      .active = {.object = object, .kind = quader::QuaderComponentKind::Edge,
+                 .edge_a = 1, .edge_b = 2}};
+  for (quader::QuaderElementId index = 0; index < 32; ++index) {
+    guide.edges.emplace_back(index + 1, (index + 1) % 32 + 1);
+  }
+  ASSERT_TRUE(api.selection().select_components(guide).ok());
+  const auto settings = api.modeling().uv_peel_settings();
+  ASSERT_TRUE(settings.editable) << settings.disabled_reason;
+  ASSERT_EQ(settings.selected_edge_count, 32U);
+  const auto before = api.query().compiled_object_mesh(object);
+  ASSERT_TRUE(before.has_value());
+  const auto selection_revision = api.revisions().modeling_selection_revision;
+  const auto peeled = peel_uv(api, {});
+  ASSERT_TRUE(peeled.ok()) << peeled.error_message();
+  ASSERT_TRUE(peeled.changed());
+  const auto after = api.query().compiled_object_mesh(object);
+  ASSERT_TRUE(after.has_value());
+  EXPECT_EQ(after->indices, before->indices);
+  ASSERT_EQ(after->vertices.size(), before->vertices.size());
+  ASSERT_EQ(after->primitives.size(), before->primitives.size());
+  for (std::size_t index = 0; index < after->primitives.size(); ++index) {
+    EXPECT_EQ(after->primitives[index].material_slot, before->primitives[index].material_slot);
+  }
+  std::size_t cap_corners = 0;
+  for (std::size_t index = 0; index < before->vertices.size(); ++index) {
+    const auto &a = after->vertices[index];
+    const auto &b = before->vertices[index];
+    EXPECT_EQ(a.position.x, b.position.x);
+    EXPECT_EQ(a.position.y, b.position.y);
+    EXPECT_EQ(a.position.z, b.position.z);
+    EXPECT_EQ(a.normal.x, b.normal.x);
+    EXPECT_EQ(a.normal.y, b.normal.y);
+    EXPECT_EQ(a.normal.z, b.normal.z);
+    if (std::abs(b.uv_geometric_normal.y) > 0.9F) {
+      ++cap_corners;
+      EXPECT_EQ(a.uv.x, b.uv.x);
+      EXPECT_EQ(a.uv.y, b.uv.y);
+      EXPECT_EQ(a.uv_carrier, b.uv_carrier);
+    }
+  }
+  EXPECT_GE(cap_corners, 64U);
+  for (const quader::QuaderElementId cap : {33, 34}) {
+    const auto texture = face_texture(api, object, cap);
+    EXPECT_EQ(texture.scale.x, 0.125F);
+    EXPECT_EQ(texture.scale.y, 0.125F);
+    EXPECT_EQ(texture.shift_uv.x, 0.0F);
+    EXPECT_EQ(texture.shift_uv.y, 0.0F);
+    EXPECT_EQ(texture.rotation_degrees, 0.0F);
+  }
+  EXPECT_EQ(api.revisions().modeling_selection_revision, selection_revision);
+  s.then().selection().mode(quader::QuaderSelectionMode::Edge).edge_count(32).active_alias("cylinder");
+  EXPECT_EQ(api.history().snapshot().undo_label, "UV Peel");
+  ASSERT_TRUE(api.history().undo().ok());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(object), *before);
+  ASSERT_TRUE(api.history().redo().ok());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(object), *after);
+  s.then().selection().mode(quader::QuaderSelectionMode::Edge).edge_count(32).active_alias("cylinder");
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     UvPeelTranslatedCylinderRingPreservesSharedCornersAndCapAttributes) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  const auto original = uv_peel_cylinder_document();
+  s.given().mesh("cylinder",
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(original));
+  auto &api = s.api();
+  const auto object = s.object("cylinder");
+  s.editor().preferences().set_runtime_hooks({
+      .texture_lock_enabled = [] { return false; },
+      .texture_lock_scale_enabled = [] { return false; }});
+  ASSERT_TRUE(api.scene().set_transform(object.entity,
+      {.position = {4.0F, 0.1249997615814209F, -18.0F}}).ok());
+  const auto entity_before = api.query().entity(object.entity);
+  ASSERT_TRUE(entity_before.has_value());
+  ASSERT_TRUE(entity_before->texture_sampling_from_local.has_value());
+  quader::QMat4 expected_sampling;
+  expected_sampling.values[12] = 4.0F;
+  expected_sampling.values[13] = 0.1249997615814209F;
+  expected_sampling.values[14] = -18.0F;
+  EXPECT_EQ(entity_before->texture_sampling_from_local->values, expected_sampling.values);
+  constexpr std::array<quader::QuaderElementId, 32> middle_ring{
+      84, 82, 80, 78, 76, 74, 72, 70, 68, 66, 65, 67, 69, 71, 73, 75,
+      77, 79, 81, 83, 85, 87, 89, 91, 93, 95, 96, 94, 92, 90, 88, 86};
+  quader::QuaderComponentSelectionArgs guide{
+      .object = object, .kind = quader::QuaderComponentKind::Edge,
+      .active = {.object = object, .kind = quader::QuaderComponentKind::Edge,
+                 .edge_a = 65, .edge_b = 66}};
+  for (std::size_t index = 0; index < middle_ring.size(); ++index) {
+    guide.edges.emplace_back(middle_ring[index], middle_ring[(index + 1U) % middle_ring.size()]);
+  }
+  ASSERT_TRUE(api.selection().select_components(guide).ok());
+  const auto settings = api.modeling().uv_peel_settings();
+  ASSERT_TRUE(settings.editable) << settings.disabled_reason;
+  ASSERT_EQ(settings.selected_edge_count, 32U);
+  const auto before = api.query().compiled_object_mesh(object);
+  ASSERT_TRUE(before.has_value());
+  const auto selection_revision = api.revisions().modeling_selection_revision;
+  const quader::QuaderUvPeelOptions options;
+  const auto peeled = peel_uv(api, options);
+  ASSERT_TRUE(peeled.ok()) << peeled.error_message();
+  ASSERT_TRUE(peeled.changed());
+  const auto after = api.query().compiled_object_mesh(object);
+  ASSERT_TRUE(after.has_value());
+  const auto effective = effective_texture_mesh(api, object);
+  ASSERT_TRUE(effective.has_value());
+  EXPECT_EQ(after->indices, before->indices);
+  ASSERT_EQ(after->vertices.size(), before->vertices.size());
+  ASSERT_EQ(after->face_textures.size(), before->face_textures.size());
+  for (std::size_t index = 0; index < before->face_textures.size(); ++index) {
+    const auto &a = after->face_textures[index];
+    const auto &b = before->face_textures[index];
+    EXPECT_EQ(a.face, b.face);
+    EXPECT_EQ(a.scale.x, b.scale.x);
+    EXPECT_EQ(a.scale.y, b.scale.y);
+    EXPECT_EQ(a.shift_uv.x, b.shift_uv.x);
+    EXPECT_EQ(a.shift_uv.y, b.shift_uv.y);
+    EXPECT_EQ(a.rotation_degrees, b.rotation_degrees);
+  }
+  using Position = std::array<float, 3>;
+  std::map<Position, std::vector<quader::QVec2>> side_samples;
+  for (std::size_t index = 0; index < before->vertices.size(); ++index) {
+    const auto &a = after->vertices[index];
+    const auto &b = before->vertices[index];
+    EXPECT_EQ(a.position.x, b.position.x);
+    EXPECT_EQ(a.position.y, b.position.y);
+    EXPECT_EQ(a.position.z, b.position.z);
+    EXPECT_EQ(a.normal.x, b.normal.x);
+    EXPECT_EQ(a.normal.y, b.normal.y);
+    EXPECT_EQ(a.normal.z, b.normal.z);
+    if (std::abs(b.uv_geometric_normal.y) > 0.9F) {
+      // The middle guide touches only side quads; cap corner UVs stay exact.
+      EXPECT_EQ(a.uv.x, b.uv.x);
+      EXPECT_EQ(a.uv.y, b.uv.y);
+      EXPECT_EQ(a.uv_carrier, b.uv_carrier);
+    } else {
+      side_samples[{a.position.x, a.position.y, a.position.z}].push_back(
+          effective->vertices[index].uv);
+    }
+  }
+  ASSERT_EQ(side_samples.size(), 96U);
+  double circumference = 0.0;
+  for (std::size_t index = 0; index < 32U; ++index) {
+    const auto &a = original.vertices[index].position;
+    const auto &b = original.vertices[(index + 1U) % 32U].position;
+    circumference += std::hypot(static_cast<double>(a.x) - b.x,
+                                static_cast<double>(a.z) - b.z);
+  }
+  constexpr float tolerance = 1.0e-5F;
+  std::optional<std::array<float, 2>> seam_position;
+  std::size_t seam_rows = 0;
+  float minimum_v = std::numeric_limits<float>::infinity();
+  float maximum_v = -minimum_v;
+  for (const auto &[position, samples] : side_samples) {
+    ASSERT_GE(samples.size(), 2U);
+    float minimum_u = samples.front().x;
+    float maximum_u = minimum_u;
+    for (const auto uv : samples) {
+      minimum_u = std::min(minimum_u, uv.x);
+      maximum_u = std::max(maximum_u, uv.x);
+      minimum_v = std::min(minimum_v, uv.y);
+      maximum_v = std::max(maximum_v, uv.y);
+      EXPECT_NEAR(uv.y, samples.front().y, tolerance);
+      EXPECT_NEAR(std::abs(uv.y), std::abs(position[1] - 0.375F) * 0.5F, tolerance);
+    }
+    if (maximum_u - minimum_u > circumference * 0.25) {
+      ++seam_rows;
+      EXPECT_NEAR(maximum_u - minimum_u, circumference * 0.5, tolerance);
+      const std::array xz{position[0], position[2]};
+      if (seam_position.has_value()) {
+        EXPECT_EQ(xz, *seam_position);
+      } else {
+        seam_position = xz;
+      }
+    } else {
+      EXPECT_NEAR(maximum_u, minimum_u, tolerance);
+    }
+  }
+  EXPECT_EQ(seam_rows, 3U);
+  EXPECT_NEAR(minimum_v, -0.25F, tolerance);
+  EXPECT_NEAR(maximum_v, 0.25F, tolerance);
+  EXPECT_EQ(api.revisions().modeling_selection_revision, selection_revision);
+  s.then().selection().mode(quader::QuaderSelectionMode::Edge).edge_count(32).active_alias("cylinder");
+  EXPECT_EQ(api.query().entity(object.entity)->texture_sampling_from_local->values,
+            expected_sampling.values);
+  EXPECT_EQ(api.history().snapshot().undo_label, "UV Peel");
+  const auto revisions_after = api.revisions();
+  const auto rejected = api.modeling().peel_uv({
+      .options = options, .selection_token = settings.selection_token});
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+  expect_document_revisions_equal(api.revisions(), revisions_after);
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(object), *after);
+  const auto repeated = peel_uv(api, options);
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_FALSE(repeated.changed());
+  expect_document_revisions_equal(api.revisions(), revisions_after);
+  ASSERT_TRUE(api.history().undo().ok());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(object), *before);
+  s.then().selection().mode(quader::QuaderSelectionMode::Edge).edge_count(32).active_alias("cylinder");
+  ASSERT_TRUE(api.history().redo().ok());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(object), *after);
+  s.then().selection().mode(quader::QuaderSelectionMode::Edge).edge_count(32).active_alias("cylinder");
 }
 
 TEST(ProgrammaticBehaviorScenarioTests,

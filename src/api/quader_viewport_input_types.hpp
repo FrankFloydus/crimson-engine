@@ -197,6 +197,9 @@ enum class ViewportInputActionKind {
     RemoveSelectionDepth,
     ToggleCurvePointSmoothness,
     TransformVertexSnap,
+    RadialArrayToggleInstances,
+    RadialArrayIncreaseRepeats,
+    RadialArrayDecreaseRepeats,
 };
 
 /**

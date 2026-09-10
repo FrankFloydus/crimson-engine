@@ -115,7 +115,6 @@ OperationResult SplitEdgesOperation::apply(Document& document, Selection& select
             face_changed = true;
         }
         if (face_changed) {
-            face.uvs.clear();
             add_unique_id(result.affected.faces, face.id);
             changed = true;
         }

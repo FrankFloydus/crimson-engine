@@ -10,6 +10,39 @@
 
 using namespace quader_poly;
 
+TEST(QdrDocumentOperationBevelVerticesTests, RetainedFaceInterpolatesAuthoredCornersWithoutResettingTheChart) {
+    qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+    Face& source = fixture.document.faces.front();
+    source.uvs = {{2.0F, 3.0F}, {6.0F, 4.0F}, {9.0F, 10.0F}, {1.0F, 8.0F}};
+    const Face original = source;
+    Selection selection = qdr_test::vertex_selection({fixture.bottom_left});
+
+    const OperationResult result = bevel_selected_vertices(fixture.document, selection, 0.5F);
+
+    ASSERT_TRUE(result.changed) << result.message;
+    const Face* retained = find_face(fixture.document, fixture.face);
+    ASSERT_NE(retained, nullptr);
+    ASSERT_EQ(retained->uvs.size(), retained->vertices.size());
+    for (std::size_t corner = 0; corner < retained->vertices.size(); ++corner) {
+        const ElementId id = retained->vertices[corner];
+        const auto old_corner = std::ranges::find(original.vertices, id);
+        if (old_corner != original.vertices.end()) {
+            const auto index = static_cast<std::size_t>(old_corner - original.vertices.begin());
+            EXPECT_FLOAT_EQ(retained->uvs[corner].x, original.uvs[index].x);
+            EXPECT_FLOAT_EQ(retained->uvs[corner].y, original.uvs[index].y);
+        } else {
+            const Vertex* vertex = find_vertex(fixture.document, id);
+            ASSERT_NE(vertex, nullptr);
+            const quader::QVec2 expected = vertex->position.y == -1.0F
+                ? quader::QVec2{3.0F, 3.25F}
+                : quader::QVec2{1.75F, 4.25F};
+            EXPECT_NEAR(retained->uvs[corner].x, expected.x, 0.0001F);
+            EXPECT_NEAR(retained->uvs[corner].y, expected.y, 0.0001F);
+        }
+    }
+    qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
+}
+
 TEST(QdrDocumentOperationBevelVerticesTests, BevelVerticesTrimsTheSourceCornerAndSelectsGeneratedReplacements) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 	Selection selection = qdr_test::vertex_selection({ fixture.bottom_left }, fixture.bottom_left);

@@ -3854,7 +3854,7 @@ void QtViewportPanel::process_viewport_input(
   set_modal_tool_owns_viewport_snapshot(modal_tool_owns_viewport());
   edge_length_hud_enabled_ =
       input.viewport_hovered && !input.text_input_active &&
-      !suppress_hover_work && !gizmo_consumed &&
+      !suppress_hover_work && !gizmo_consumed && !before_tool.gizmo_hovered &&
       !modal_tool_owns_viewport_snapshot_ && !modal_tool_dragging_ &&
       !interaction_controller_.transform_gizmo_pointer_active() &&
       !interaction_controller_.point_light_range_pointer_active() &&

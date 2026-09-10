@@ -28,8 +28,12 @@ ModalViewportTool::cancel_active_modal_tool(ViewportToolContext &context,
   if (context.ports.cancel == nullptr) {
     return {};
   }
+  const ModelingViewportTool active_before = context.ports.preview != nullptr
+      ? context.ports.preview->tool_status().active_tool : modeling_tool();
   const ModelingCommandResult cancel =
       context.ports.cancel->cancel_active_modal_tool();
+  const bool active_tool_changed = exit_tool && context.ports.preview != nullptr &&
+      context.ports.preview->tool_status().active_tool != active_before;
   if (!cancel.ok) {
     if (context.ports.command_result != nullptr) {
       context.ports.command_result->handle_tool_command_result(
@@ -53,8 +57,8 @@ ModalViewportTool::cancel_active_modal_tool(ViewportToolContext &context,
       .handled = true,
       .consumed = true,
       .modal_state_changed = true,
-      .active_tool_changed = exit_tool,
-      .sync_active_tool_from_modeling = exit_tool,
+      .active_tool_changed = active_tool_changed,
+      .sync_active_tool_from_modeling = active_tool_changed,
   };
 }
 

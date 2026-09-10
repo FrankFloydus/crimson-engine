@@ -5,7 +5,9 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
+#include "api/quader_api_session_internal_access.hpp"
 #include "core/localization_service.hpp"
+#include "editor/array/radial_array_tool_service.hpp"
 #include "editor/metadata/operation_input_hint_catalog.hpp"
 #include "editor/session/project_session.hpp"
 #include "support/command_behavior_fixture.hpp"
@@ -181,6 +183,128 @@ TEST_F(QtOperationInputHintTests, RebindingUnassignmentAndLocaleRefreshWithoutId
   EXPECT_TRUE(std::ranges::any_of(widget.hints(), [](const auto &hint) {
     return hint.badge == QStringLiteral("F") && hint.label == QStringLiteral("Inverti");
   }));
+}
+
+TEST_F(QtOperationInputHintTests,
+       RadialHintsTrackValidCenterBindingsAndLocaleWithoutIdleProjection) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto source = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Radial Hint Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
+  auto localization = localization_for();
+  QWidget parent;
+  QtOperationInputHints widget(&parent);
+  const QuaderCommandId finalize{"viewport.radial_array.finalize"};
+  const QuaderCommandId increase{"viewport.radial_array.increase_copies"};
+  const QuaderCommandId decrease{"viewport.radial_array.decrease_copies"};
+  const QuaderCommandId increase_repeats{"viewport.radial_array.increase_repeats"};
+  const QuaderCommandId decrease_repeats{"viewport.radial_array.decrease_repeats"};
+  const QuaderCommandId toggle{"viewport.radial_array.toggle_instances"};
+  EXPECT_FALSE(contains_command(editor.tools().active_input_hints(), finalize));
+  EXPECT_TRUE(contains_gesture(editor.tools().active_input_hints(),
+                               QuaderOperationInputGesture::PrimaryClick));
+  widget.refresh(editor.tools(), editor.commands(), localization);
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("LMB")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Shift+WheelUp")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Shift+WheelDown")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Ctrl+WheelUp")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Ctrl+WheelDown")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("I")));
+  EXPECT_TRUE(contains_badge(widget, QString::fromStdString(
+      editor.commands().shortcut_for("viewport.cancel_active_tool"))));
+  const auto pending_revision = editor.tools().active_input_hints_revision();
+  ASSERT_TRUE(session.radial_array()
+                  .update_center_candidate({}, {0.0f, 1.0f, 0.0f}, 1.0)
+                  .ok);
+  EXPECT_GT(editor.tools().active_input_hints_revision(), pending_revision);
+  EXPECT_TRUE(contains_command(editor.tools().active_input_hints(), finalize));
+  EXPECT_TRUE(contains_gesture(editor.tools().active_input_hints(),
+                               QuaderOperationInputGesture::PrimaryClick));
+  widget.refresh(editor.tools(), editor.commands(), localization);
+  EXPECT_TRUE(contains_badge(widget, QString::fromStdString(
+      editor.commands().shortcut_for(finalize))));
+  ASSERT_EQ(widget.hints().size(), 8u);
+  const auto full_projection_revision = widget.projection_revision();
+  for (const float scale : {1.0f, 1.5f, 2.0f}) {
+    widget.apply_ui_scale(QtUiScaleMetrics(scale));
+    const int row_height = widget.sizeHint().height();
+    for (const int width : {240, 480, 1200}) {
+      widget.resize(width, row_height);
+      EXPECT_FALSE(widget.hasHeightForWidth());
+      EXPECT_EQ(widget.sizeHint().height(), row_height);
+      EXPECT_EQ(widget.minimumHeight(), row_height);
+      EXPECT_EQ(widget.maximumHeight(), row_height);
+    }
+  }
+  widget.apply_ui_scale(QtUiScaleMetrics(1.0f));
+  EXPECT_EQ(widget.projection_revision(), full_projection_revision);
+  const auto placing_revision = editor.tools().active_input_hints_revision();
+  ASSERT_TRUE(session.radial_array().lock_center().ok);
+  EXPECT_GT(editor.tools().active_input_hints_revision(), placing_revision);
+  EXPECT_TRUE(session.radial_array().active());
+  EXPECT_TRUE(contains_command(editor.tools().active_input_hints(), finalize));
+  EXPECT_FALSE(contains_gesture(editor.tools().active_input_hints(),
+                                QuaderOperationInputGesture::PrimaryClick));
+  widget.refresh(editor.tools(), editor.commands(), localization);
+  EXPECT_FALSE(contains_badge(widget, QStringLiteral("LMB")));
+  EXPECT_TRUE(contains_badge(widget, QString::fromStdString(
+      editor.commands().shortcut_for(finalize))));
+  const auto projection_revision = widget.projection_revision();
+  const auto *items = widget.hints().data();
+  for (int frame = 0; frame < 20; ++frame) {
+    widget.refresh(editor.tools(), editor.commands(), localization);
+  }
+  EXPECT_EQ(widget.projection_revision(), projection_revision);
+  EXPECT_EQ(widget.hints().data(), items);
+
+  const auto rebound_increase =
+      editor.commands().set_shortcut(increase, "Ctrl+Alt+WheelUp");
+  ASSERT_TRUE(rebound_increase.ok()) << rebound_increase.error_message();
+  const auto rebound_toggle =
+      editor.commands().set_shortcut(toggle, "Ctrl+K I");
+  ASSERT_TRUE(rebound_toggle.ok()) << rebound_toggle.error_message();
+  const auto rebound_repeats =
+      editor.commands().set_shortcut(increase_repeats, "Shift+Alt+WheelUp");
+  ASSERT_TRUE(rebound_repeats.ok()) << rebound_repeats.error_message();
+  const auto removed_decrease = editor.commands().remove_shortcut(decrease);
+  ASSERT_TRUE(removed_decrease.ok()) << removed_decrease.error_message();
+  const auto removed_repeats = editor.commands().remove_shortcut(decrease_repeats);
+  ASSERT_TRUE(removed_repeats.ok()) << removed_repeats.error_message();
+  widget.refresh(editor.tools(), editor.commands(), localization);
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Ctrl+Alt+WheelUp")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Ctrl+K I")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Shift+Alt+WheelUp")));
+  EXPECT_FALSE(contains_badge(widget, QStringLiteral("Shift+WheelUp")));
+  EXPECT_FALSE(contains_badge(widget, QStringLiteral("Shift+WheelDown")));
+  EXPECT_FALSE(contains_badge(widget, QStringLiteral("Ctrl+WheelUp")));
+  EXPECT_FALSE(contains_badge(widget, QStringLiteral("Ctrl+WheelDown")));
+  EXPECT_FALSE(contains_badge(widget, QStringLiteral("I")));
+  for (const char *locale : {"it-IT", "en-US"}) {
+    ASSERT_TRUE(localization.select_locale(locale));
+    widget.refresh(editor.tools(), editor.commands(), localization);
+    for (const auto &hint : editor.tools().active_input_hints()) {
+      EXPECT_NE(localization.text(hint.label_key, "missing"), "missing");
+    }
+    EXPECT_TRUE(std::ranges::any_of(widget.hints(), [&](const auto &hint) {
+      return hint.badge == QStringLiteral("Ctrl+K I") &&
+             hint.label == QString::fromStdString(localization.text(
+                 "operation.hints.radial_array.toggle_instances", "missing"));
+    }));
+    EXPECT_TRUE(std::ranges::any_of(widget.hints(), [&](const auto &hint) {
+      return hint.badge == QStringLiteral("Shift+Alt+WheelUp") &&
+             hint.label == QString::fromStdString(localization.text(
+                 "operation.hints.radial_array.increase_repeats", "missing"));
+    }));
+  }
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  widget.refresh(editor.tools(), editor.commands(), localization);
+  EXPECT_TRUE(widget.hints().empty());
 }
 
 TEST_F(QtOperationInputHintTests, FitsOneStatusBarRowAtNarrowWidthsAndDifferentScales) {

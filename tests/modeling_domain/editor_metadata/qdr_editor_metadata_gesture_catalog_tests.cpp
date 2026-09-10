@@ -176,8 +176,8 @@ TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogDescribesMo
 	EXPECT_TRUE(has_tool(primitive, "create_primitive"));
 
 	const qhc::HostGestureDescriptor& insert_edge_loop = require_gesture("insert_edge_loop_gesture");
-	EXPECT_TRUE(insert_edge_loop.returns_to_select_on_cancel);
-	EXPECT_TRUE(insert_edge_loop.returns_to_select_on_success);
+	EXPECT_FALSE(insert_edge_loop.returns_to_select_on_cancel);
+	EXPECT_FALSE(insert_edge_loop.returns_to_select_on_success);
 	EXPECT_TRUE(has_modifier_meaning(insert_edge_loop, "primary_modifier:bypass_snap"));
 
 	const qhc::HostGestureDescriptor& knife = require_gesture("knife_tool_gesture");

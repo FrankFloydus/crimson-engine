@@ -11,6 +11,7 @@
 #include "core/command_result.hpp"
 #include "core/types.hpp"
 #include "editor/array/instance_array_source.hpp"
+#include "editor/array/array_texture_mapping.hpp"
 #include "editor/modeling/linear_array_layout.hpp"
 #include "math/types.hpp"
 
@@ -68,11 +69,14 @@ struct LinearArrayHandleState {
  */
 struct LinearArrayPreviewSource {
   EntityId source_entity = kInvalidEntityId;
+  /// Public occurrence used for visibility and member sampling composition.
+  EntityId visibility_entity = kInvalidEntityId;
   /// Canonical scene entity that owns this preview mesh and material.
   EntityId material_entity = kInvalidEntityId;
   AssetId mesh = kInvalidAssetId;
   MaterialReference material;
   std::vector<QMat4> generated_world_transforms;
+  std::vector<QMat4> generated_sampling_from_local;
 };
 
 /**
@@ -135,6 +139,7 @@ private:
     QVec3 visible_pivot_world = {};
     EntityId instance_definition = kInvalidEntityId;
     std::vector<InstanceArrayPreviewMeshSnapshot> instance_meshes;
+    mutable ArrayTextureMappingCache texture_mapping_cache;
   };
 
   /// Stores one shared-span live-preview transaction.
@@ -188,6 +193,9 @@ private:
   mutable bool can_activate_cached_value_ = false;
   mutable bool can_activate_cache_valid_ = false;
   mutable std::uint64_t cached_preview_revision_ = 0;
+  mutable std::uint64_t cached_preview_scene_revision_ = 0;
+  mutable std::uint64_t preview_generation_counter_ = 0;
+  mutable TextureLockSettings cached_preview_texture_locks_;
   mutable LinearArrayPreviewState cached_preview_;
 };
 

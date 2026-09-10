@@ -150,10 +150,7 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
         if (face_has_loop_uvs(source_face)) {
             cap_face.uvs = source_face.uvs;
         }
-        std::ranges::reverse(cap_face.vertices);
-        if (face_has_loop_uvs(cap_face)) {
-            std::ranges::reverse(cap_face.uvs);
-        }
+        reverse_face_winding(cap_face);
         if (triangulate_face_local_indices(candidate, cap_face).empty()) {
             return OperationResult::failure(
                 "Thicken Faces would create invalid cap geometry.");

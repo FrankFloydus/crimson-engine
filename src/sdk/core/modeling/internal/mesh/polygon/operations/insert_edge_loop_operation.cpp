@@ -15,6 +15,7 @@
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_backend.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
 #include <algorithm>
 #include <array>
@@ -108,7 +109,9 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
         first_split_face.vertices = { face->vertices[i1], face->vertices[i2], opposite_vertex, entry_vertex };
         first_split_face.material_slot = face->material_slot;
         first_split_face.texture_transform = face->texture_transform;
-        first_split_face.uvs.clear();
+        if (!preserve_face_uvs(document, *face, candidate, first_split_face)) {
+            return OperationResult::failure("Edge loop insertion could not preserve the source face UVs.");
+        }
         split_faces.push_back(std::move(first_split_face));
 
         Face second_split_face;
@@ -116,7 +119,9 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
         second_split_face.vertices = { face->vertices[i0], entry_vertex, opposite_vertex, face->vertices[i3] };
         second_split_face.material_slot = face->material_slot;
         second_split_face.texture_transform = face->texture_transform;
-        second_split_face.uvs.clear();
+        if (!preserve_face_uvs(document, *face, candidate, second_split_face)) {
+            return OperationResult::failure("Edge loop insertion could not preserve the source face UVs.");
+        }
         split_faces.push_back(std::move(second_split_face));
         inserted_edges.push_back(make_edge(entry_vertex, opposite_vertex));
     }

@@ -10,18 +10,21 @@
 #include "assets/mesh_asset.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/array/linked_instance_array_command.hpp"
+#include "editor/commands/scene_structural_lifecycle_service.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/radial_array_layout.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
+#include "editor/selection/checked_selection_publication_command.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_transform.hpp"
 #include "scene/scene_transform_pivot.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <memory>
 #include <utility>
@@ -68,9 +71,11 @@ double sanitized_grid_size(double grid_size) {
 RadialArrayToolService::RadialArrayToolService(
     SceneDocument &scene, AssetRegistry &assets, EditorHistoryService &history,
     ModelingSessionService &modeling, EditorSelectionService &selection,
-    SceneInstanceService &instances)
+    SceneInstanceService &instances,
+    SceneStructuralLifecycleService &structural_lifecycle)
     : scene_(scene), assets_(assets), history_(history), modeling_(modeling),
-      selection_(selection), instances_(instances) {}
+      selection_(selection), instances_(instances),
+      structural_lifecycle_(structural_lifecycle) {}
 
 void RadialArrayToolService::clear_preview_cache() {
   cached_preview_revision_ = 0;
@@ -360,9 +365,21 @@ std::uint32_t RadialArrayToolService::maximum_repeats_for(
       std::min<std::size_t>(kRadialArrayMaximumRepeats, maximum));
 }
 
+bool RadialArrayToolService::has_valid_center() const {
+  return active() && session_->candidate_valid;
+}
+
+RadialArrayMode RadialArrayToolService::mode() const {
+  return session_.has_value() ? session_->mode : RadialArrayMode::Total;
+}
+
+bool RadialArrayToolService::create_instances() const {
+  return session_.has_value() && session_->create_instances;
+}
+
 double RadialArrayToolService::automatic_repeat_spacing(
     const Session &session) {
-  if (session.center_locked && !session.sources.empty()) {
+  if (session.candidate_valid && !session.sources.empty()) {
     const SourceSnapshot &primary = session.sources.back();
     const QVec3 delta = primary.visible_pivot_world - session.center_world;
     const QVec3 planar =
@@ -370,7 +387,7 @@ double RadialArrayToolService::automatic_repeat_spacing(
                     dot(delta, session.plane_normal_world);
     const double radius = static_cast<double>(length(planar));
     if (std::isfinite(radius) && radius > kRadialArrayToolEpsilon) {
-      return radius;
+      return std::min(radius, kRadialArrayMaximumRepeatSpacing);
     }
   }
   return session.fallback_grid_size;
@@ -525,58 +542,265 @@ CommandResult RadialArrayToolService::apply() {
     return command_invalid_result(
         "Radial Array sources changed before the operation was applied.");
   }
-  if (!session_->center_locked) {
+  if (!session_->candidate_valid) {
     return command_invalid_result("Choose a Radial Array center first.");
   }
 
   const Session committed = *session_;
-  session_.reset();
-  clear_preview_cache();
-  issue_tool_settings_revision();
-  if (committed.instance_occurrences) {
-    std::vector<LinkedInstanceArraySource> sources;
-    sources.reserve(committed.sources.size());
+  CommandResult result;
+  if (committed.instance_occurrences || committed.create_instances) {
+    result = apply_instance_array(committed);
+  } else {
+    ModelingRadialArrayRequest request{
+        .center_world = committed.center_world,
+        .plane_normal_world = committed.plane_normal_world,
+        .degrees = committed.degrees,
+        .copies = committed.copies,
+        .repeats = committed.repeats,
+        .repeat_spacing = committed.repeat_spacing,
+        .mode = committed.mode,
+    };
+    request.sources.reserve(committed.sources.size());
     for (const SourceSnapshot &source : committed.sources) {
-      RadialArrayLayoutResult layout = build_radial_array_layout({
-          .source_world_transform = source.world_transform,
-          .source_pivot_world = source.visible_pivot_world,
-          .center_world = committed.center_world,
-          .plane_normal_world = committed.plane_normal_world,
-          .degrees = committed.degrees,
-          .copies = committed.copies,
-          .repeats = committed.repeats,
-          .repeat_spacing = committed.repeat_spacing,
-      });
-      if (!layout.ok) {
-        return command_invalid_result(layout.message);
-      }
-      sources.push_back(LinkedInstanceArraySource{
-          .source = source.entity,
-          .generated_world_transforms =
-              std::move(layout.generated_world_transforms),
+      request.sources.push_back({
+          .entity = source.entity,
+          .modeling_object_id = source.modeling_object_id,
       });
     }
-    return history_.execute(std::make_unique<LinkedInstanceArrayCommand>(
-        scene_, "Radial Array", std::move(sources)));
+    result = history_.execute(std::make_unique<RadialArrayHistoryCommand>(
+        modeling_, std::move(request)));
+  }
+  if (result.ok && result.changed) {
+    session_.reset();
+    clear_preview_cache();
+    issue_tool_settings_revision();
+  }
+  return result;
+}
+
+CommandResult RadialArrayToolService::apply_instance_array(
+    const Session &session) {
+  if (session.create_instances && !session.instance_occurrences &&
+      std::ranges::any_of(session.sources, [this](const SourceSnapshot &source) {
+        return scene_.has_children(source.entity);
+      })) {
+    // Independent arrays copy only selected meshes. A visible occurrence cannot
+    // retain their ordinary children, so conversion must not absorb an unseen
+    // subtree or change the authored hierarchy.
+    return command_invalid_result(
+        "Create Instances requires source meshes without child entities. "
+        "Disable Create Instances to keep the existing hierarchy.");
+  }
+  std::vector<LinkedInstanceArraySource> sources;
+  sources.reserve(session.sources.size());
+  const TextureLockSettings texture_locks = modeling_.texture_lock_settings();
+  for (const SourceSnapshot &source : session.sources) {
+    RadialArrayLayoutResult layout = build_radial_array_layout({
+        .source_world_transform = source.world_transform,
+        .source_pivot_world = source.visible_pivot_world,
+        .center_world = session.center_world,
+        .plane_normal_world = session.plane_normal_world,
+        .degrees = session.degrees,
+        .copies = session.copies,
+        .repeats = session.repeats,
+        .repeat_spacing = session.repeat_spacing,
+        .mode = session.mode,
+    });
+    if (!layout.ok) return command_invalid_result(layout.message);
+    const auto &mapping_plan = source.texture_mapping_cache.resolve(
+        scene_, source.entity, texture_locks, source.world_transform);
+    auto mappings = mapping_plan.has_value()
+        ? mapping_plan->evaluate(layout.generated_world_transforms) : std::nullopt;
+    if (!mappings.has_value()) {
+      return command_invalid_result("Radial Array texture placement cannot be represented.");
+    }
+    sources.push_back({source.entity,
+                       std::move(layout.generated_world_transforms),
+                       std::move(*mappings)});
   }
 
-  ModelingRadialArrayRequest request{
-      .center_world = committed.center_world,
-      .plane_normal_world = committed.plane_normal_world,
-      .degrees = committed.degrees,
-      .copies = committed.copies,
-      .repeats = committed.repeats,
-      .repeat_spacing = committed.repeat_spacing,
-  };
-  request.sources.reserve(committed.sources.size());
-  for (const SourceSnapshot &source : committed.sources) {
-    request.sources.push_back({
-        .entity = source.entity,
-        .modeling_object_id = source.modeling_object_id,
-    });
+  SceneStructuralCompensationScope compensation =
+      structural_lifecycle_.begin_compensation_scope();
+  if (!compensation.valid()) {
+    return command_invalid_result("Scene scalar compensation is unavailable.");
   }
-  return history_.execute(std::make_unique<RadialArrayHistoryCommand>(
-      modeling_, std::move(request)));
+  const DocumentSelectionState selection_before =
+      document_command_capture_selection(scene_);
+  const ModelingSessionMemento modeling_before =
+      modeling_.capture_history_memento();
+  std::optional<ModelingAssetProjectionCheckpoint> assets_before;
+  std::vector<AssetId> created_mesh_assets;
+  if (!session.create_instances) {
+    std::vector<AssetId> source_mesh_assets;
+    for (const SourceSnapshot &source : session.sources) {
+      for (const InstanceArrayPreviewMeshSnapshot &mesh : source.instance_meshes) {
+        source_mesh_assets.push_back(mesh.mesh);
+      }
+    }
+    std::ranges::sort(source_mesh_assets);
+    source_mesh_assets.erase(
+        std::unique(source_mesh_assets.begin(), source_mesh_assets.end()),
+        source_mesh_assets.end());
+    assets_before = assets_.capture_modeling_projection_checkpoint(
+        source_mesh_assets);
+    if (!assets_before->valid()) {
+      return command_invalid_result("Radial Array asset checkpoint is unavailable.");
+    }
+  }
+  EditorTransaction transaction = history_.begin_transaction("Radial Array");
+  if (!transaction.active()) {
+    return command_invalid_result(
+        "Cannot apply Radial Array while another transaction is active.");
+  }
+  const auto rollback = [&](CommandResult failure) {
+    if (transaction.active() && transaction.empty() && !failure.changed) {
+      // A rejected preflight published nothing. Replaying a full modeling
+      // memento here would unnecessarily reproject untouched instance frames.
+      (void)transaction.cancel();
+      (void)compensation.release();
+      failure.ok = false;
+      return failure;
+    }
+    if (!compensation.seal_forward() || !compensation.open_inverse()) {
+      (void)compensation.release();
+      const CommandResult retained = transaction.active()
+                                         ? transaction.commit()
+                                         : command_unchanged_result();
+      failure.ok = false;
+      failure.changed = true;
+      failure.message += "; Radial Array rollback boundary was invalidated";
+      if (!retained.ok) failure.message += "; " + retained.message;
+      return failure;
+    }
+    const CommandResult canceled = transaction.active()
+                                       ? transaction.cancel()
+                                       : command_unchanged_result();
+    const ModelingCommandResult restored =
+        modeling_.restore_history_memento_exact_for_failure_compensation(
+            modeling_before);
+    document_command_apply_selection(scene_, selection_before);
+    const bool restored_selection = document_command_same_selection(
+        selection_before, document_command_capture_selection(scene_));
+    // An empty lease means preflight rejected or the inner publication already
+    // compensated its allocations. Its monotonic allocation fence must not be
+    // replayed as a new, empty exclusive lease.
+    const bool restored_assets =
+        canceled.ok && restored.ok &&
+        (!assets_before.has_value() || created_mesh_assets.empty() ||
+         assets_.restore_modeling_projection_checkpoint(*assets_before,
+                                                        created_mesh_assets));
+    const bool restored_all = restored_assets && restored_selection;
+    const bool restored_scalars = restored_all && compensation.restore();
+    failure.ok = false;
+    failure.changed = !restored_scalars;
+    if (!restored_scalars) {
+      (void)compensation.release();
+      failure.message += "; Radial Array rollback failed";
+      if (!canceled.ok) failure.message += ": " + canceled.message;
+      if (!restored.ok) failure.message += ": " + restored.message;
+      if (!restored_assets) failure.message += "; asset compensation failed";
+    }
+    return failure;
+  };
+
+  if (!session.instance_occurrences) {
+    for (std::size_t index = 0; index < sources.size(); ++index) {
+      const SourceSnapshot &source = session.sources[index];
+      const std::optional<QMat4> source_inverse =
+          try_scene_matrix_inverse(source.world_transform);
+      if (!source_inverse.has_value()) {
+        return rollback(command_invalid_result(
+            "Radial Array source transform cannot be inverted."));
+      }
+      const std::array<EntityId, 1> root{source.entity};
+      const SceneInstanceMutationResult converted =
+          instances_.create_instance_from_roots_in_transaction(transaction, root);
+      if (!converted.ok || !converted.changed) {
+        return rollback(converted.command_result());
+      }
+      sources[index].source = converted.occurrence;
+      const QMat4 occurrence_world =
+          scene_.world_transform_matrix(converted.occurrence);
+      const auto occurrence_from_world = try_scene_matrix_inverse(occurrence_world);
+      const auto *member_mapping = scene_.texture_mapping(source.entity);
+      const auto inverse_member_mapping = try_scene_matrix_inverse(
+          member_mapping != nullptr ? member_mapping->sampling_from_local : QMat4{});
+      if (!occurrence_from_world.has_value() || !inverse_member_mapping.has_value()) {
+        return rollback(command_invalid_result("Radial Array instance texture frame is invalid."));
+      }
+      const QMat4 occurrence_from_member = scene_transform_multiply(
+          *occurrence_from_world, source.world_transform);
+      const auto member_from_occurrence = try_scene_matrix_inverse(occurrence_from_member);
+      if (!member_from_occurrence.has_value()) {
+        return rollback(command_invalid_result("Radial Array member texture frame is invalid."));
+      }
+      // Conversion retains the member chart while recentering its occurrence.
+      // Solve its correction from the already previewed effective mesh chart.
+      for (QMat4 &mapping : sources[index].generated_sampling_from_local) {
+        mapping = scene_transform_multiply(
+            scene_transform_multiply(occurrence_from_member, *inverse_member_mapping),
+            scene_transform_multiply(mapping, *member_from_occurrence));
+      }
+      // Conversion recenters the occurrence. Preserve each preview placement
+      // delta, including its captured visible pivot and radial repeat offset.
+      for (QMat4 &world : sources[index].generated_world_transforms) {
+        world = scene_transform_multiply(
+            scene_transform_multiply(world, *source_inverse), occurrence_world);
+      }
+    }
+  }
+  std::vector<EntityId> final_selection;
+  final_selection.reserve(sources.size() * session.copies * session.repeats);
+  for (const LinkedInstanceArraySource &source : sources) {
+    final_selection.push_back(source.source);
+  }
+  if (session.create_instances) {
+    auto command = std::make_unique<LinkedInstanceArrayCommand>(
+        scene_, "Radial Array", std::move(sources));
+    const auto *generated_command = command.get();
+    const CommandResult duplicated = transaction.execute(
+        with_checked_selection_publication(
+            scene_, std::move(command),
+            [this]() { return selection_.publish_scene_selection(); }));
+    if (!duplicated.ok || !duplicated.changed) return rollback(duplicated);
+    const std::vector<EntityId> &generated =
+        generated_command->generated_occurrences();
+    final_selection.insert(final_selection.end(), generated.begin(),
+                            generated.end());
+  } else {
+    std::vector<SceneInstanceMaterializationRequest> requests;
+    for (const LinkedInstanceArraySource &source : sources) {
+      for (std::size_t index = 0; index < source.generated_world_transforms.size(); ++index) {
+        requests.push_back({.occurrence = source.source,
+                            .world_transform = source.generated_world_transforms[index],
+                            .occurrence_sampling_from_local =
+                                source.generated_sampling_from_local[index]});
+      }
+    }
+    const SceneInstanceMutationResult materialized =
+        instances_.materialize_instance_copies_in_transaction(transaction,
+                                                              requests);
+    created_mesh_assets = materialized.created_mesh_assets;
+    if (!materialized.ok || !materialized.changed) {
+      return rollback(materialized.command_result());
+    }
+    final_selection.insert(final_selection.end(), materialized.entities.begin(),
+                            materialized.entities.end());
+  }
+  const CommandResult selected = selection_.set_inspection_scene_selection(
+      final_selection, final_selection[session.sources.size() - 1u]);
+  if (!selected.ok) return rollback(selected);
+  if (!compensation.seal_forward()) {
+    return rollback(command_invalid_result(
+        "Radial Array scalar compensation boundary could not be acknowledged."));
+  }
+  const CommandResult committed = transaction.commit();
+  if (!committed.ok || !committed.changed) return rollback(committed);
+  if (!compensation.open_inverse() || !compensation.release()) {
+    return {.ok = false, .changed = true,
+            .message = "Scene changed while Radial Array history was committed."};
+  }
+  return committed;
 }
 
 CommandResult RadialArrayToolService::update_center_candidate(
@@ -593,8 +817,9 @@ CommandResult RadialArrayToolService::update_center_candidate(
     return command_invalid_result("Radial Array center placement is invalid.");
   }
   world_normal = normalize(world_normal);
-  session_->fallback_grid_size = sanitized_grid_size(fallback_grid_size);
+  const double grid_size = sanitized_grid_size(fallback_grid_size);
   const bool unchanged = session_->candidate_valid &&
+                         session_->fallback_grid_size == grid_size &&
                          length_squared(session_->center_world -
                                         world_position) <=
                              kRadialArrayToolEpsilon * kRadialArrayToolEpsilon &&
@@ -604,10 +829,19 @@ CommandResult RadialArrayToolService::update_center_candidate(
   if (unchanged) {
     return command_unchanged_result();
   }
+  const bool first_candidate = !session_->candidate_valid;
+  const double previous_spacing = session_->repeat_spacing;
+  session_->fallback_grid_size = grid_size;
   session_->candidate_valid = true;
   session_->center_world = world_position;
   session_->plane_normal_world = world_normal;
+  if (!session_->repeat_spacing_edited) {
+    session_->repeat_spacing = automatic_repeat_spacing(*session_);
+  }
   session_->revision = issue_revision();
+  if (first_candidate || previous_spacing != session_->repeat_spacing) {
+    issue_tool_settings_revision();
+  }
   return command_changed_result();
 }
 
@@ -618,6 +852,7 @@ CommandResult RadialArrayToolService::clear_center_candidate() {
   }
   session_->candidate_valid = false;
   session_->revision = issue_revision();
+  issue_tool_settings_revision();
   return command_changed_result();
 }
 
@@ -654,6 +889,30 @@ CommandResult RadialArrayToolService::set_degrees(double degrees) {
   }
   session_->degrees = degrees;
   session_->revision = issue_revision();
+  issue_tool_settings_revision();
+  return command_changed_result();
+}
+
+CommandResult RadialArrayToolService::set_mode(RadialArrayMode mode) {
+  if (!session_.has_value()) {
+    return command_invalid_result("Radial Array tool is not active.");
+  }
+  if (mode != RadialArrayMode::Total && mode != RadialArrayMode::Spacing) {
+    return command_invalid_result("Radial Array distribution mode is invalid.");
+  }
+  if (session_->mode == mode) return command_unchanged_result();
+  session_->mode = mode;
+  session_->revision = issue_revision();
+  issue_tool_settings_revision();
+  return command_changed_result();
+}
+
+CommandResult RadialArrayToolService::set_create_instances(bool enabled) {
+  if (!session_.has_value()) {
+    return command_invalid_result("Radial Array tool is not active.");
+  }
+  if (session_->create_instances == enabled) return command_unchanged_result();
+  session_->create_instances = enabled;
   issue_tool_settings_revision();
   return command_changed_result();
 }
@@ -707,6 +966,19 @@ CommandResult RadialArrayToolService::set_repeats(std::uint32_t repeats) {
   return command_changed_result();
 }
 
+CommandResult RadialArrayToolService::adjust_repeats(int delta) {
+  if (!session_.has_value()) {
+    return command_invalid_result("Radial Array tool is not active.");
+  }
+  const std::int64_t adjusted =
+      static_cast<std::int64_t>(session_->repeats) +
+      static_cast<std::int64_t>(delta);
+  const std::uint32_t clamped = static_cast<std::uint32_t>(std::clamp(
+      adjusted, static_cast<std::int64_t>(kRadialArrayMinimumRepeats),
+      static_cast<std::int64_t>(maximum_repeats())));
+  return set_repeats(clamped);
+}
+
 CommandResult RadialArrayToolService::set_repeat_spacing(double spacing) {
   if (!session_.has_value()) {
     return command_invalid_result("Radial Array tool is not active.");
@@ -741,7 +1013,8 @@ CommandResult RadialArrayToolService::reset_settings() {
       session_->copies != default_copies ||
       session_->repeats != default_repeats ||
       session_->repeat_spacing != default_spacing ||
-      session_->repeat_spacing_edited;
+      session_->repeat_spacing_edited ||
+      session_->mode != RadialArrayMode::Total || session_->create_instances;
   if (!changed) {
     return command_unchanged_result();
   }
@@ -750,6 +1023,8 @@ CommandResult RadialArrayToolService::reset_settings() {
   session_->repeats = default_repeats;
   session_->repeat_spacing = default_spacing;
   session_->repeat_spacing_edited = false;
+  session_->mode = RadialArrayMode::Total;
+  session_->create_instances = false;
   session_->revision = issue_revision();
   issue_tool_settings_revision();
   return command_changed_result();
@@ -771,18 +1046,22 @@ RadialArrayCenterState RadialArrayToolService::center_state() const {
 
 const RadialArrayPreviewState &RadialArrayToolService::preview_state() const {
   if (!session_.has_value() || !session_sources_are_valid(*session_) ||
-      !session_->center_locked) {
+      !session_->candidate_valid) {
     cached_preview_revision_ = 0;
     cached_preview_ = {};
     return cached_preview_;
   }
+  const TextureLockSettings texture_locks = modeling_.texture_lock_settings();
   if (cached_preview_revision_ == session_->revision &&
+      cached_preview_scene_revision_ == scene_.revision() &&
+      cached_preview_texture_locks_.texture_lock == texture_locks.texture_lock &&
+      cached_preview_texture_locks_.texture_lock_scale == texture_locks.texture_lock_scale &&
       cached_preview_.active) {
     return cached_preview_;
   }
   RadialArrayPreviewState preview{
       .active = true,
-      .revision = session_->revision,
+      .revision = ++preview_generation_counter_,
   };
   preview.sources.reserve(session_->sources.size());
   for (const SourceSnapshot &source : session_->sources) {
@@ -795,11 +1074,24 @@ const RadialArrayPreviewState &RadialArrayToolService::preview_state() const {
         .copies = session_->copies,
         .repeats = session_->repeats,
         .repeat_spacing = session_->repeat_spacing,
+        .mode = session_->mode,
     });
     if (!layout.ok) {
       cached_preview_revision_ = 0;
       cached_preview_ = {};
       return cached_preview_;
+    }
+    const auto &mapping_plan = source.texture_mapping_cache.resolve(
+        scene_, source.entity, texture_locks, source.world_transform);
+    auto mappings = mapping_plan.has_value()
+        ? mapping_plan->evaluate(layout.generated_world_transforms)
+        : std::nullopt;
+    if (!mappings.has_value()) {
+      // Keep an unrepresentable placement visible so acceptance can report its
+      // existing transform error without destroying the editable preview.
+      const auto *direct = scene_.texture_mapping(source.entity);
+      mappings = std::vector<QMat4>(layout.generated_world_transforms.size(),
+          direct != nullptr ? direct->sampling_from_local : QMat4{});
     }
     if (session_->instance_occurrences) {
       for (const InstanceArrayPreviewMeshSnapshot &mesh :
@@ -811,25 +1103,50 @@ const RadialArrayPreviewState &RadialArrayToolService::preview_state() const {
           member_world.push_back(scene_transform_multiply(
               occurrence_world, mesh.member_from_definition));
         }
+        const auto member_mappings = array_member_sampling(
+            scene_, mesh.member, source.entity, *mappings, true);
+        if (!member_mappings.has_value()) {
+          cached_preview_revision_ = 0;
+          cached_preview_ = {};
+          return cached_preview_;
+        }
         preview.sources.push_back({
-            .source_entity = source.entity,
+            .source_entity = mesh.member,
+            .visibility_entity = source.entity,
             .material_entity = mesh.member,
             .mesh = mesh.mesh,
             .material = mesh.material,
             .generated_world_transforms = std::move(member_world),
+            .generated_sampling_from_local = *member_mappings,
         });
       }
       continue;
     }
+    const auto scope = instances_.instance_edit_scope();
+    const EntityId occurrence = scope.active() &&
+            scene_.containing_instance_definition(source.entity) == scope.definition()
+        ? scope.occurrence() : kInvalidEntityId;
+    const auto member_mappings = array_member_sampling(
+        scene_, source.entity, occurrence, *mappings, false,
+        layout.generated_world_transforms);
+    if (!member_mappings.has_value()) {
+      cached_preview_revision_ = 0;
+      cached_preview_ = {};
+      return cached_preview_;
+    }
     preview.sources.push_back({
         .source_entity = source.entity,
+        .visibility_entity = occurrence == kInvalidEntityId ? source.entity : occurrence,
         .material_entity = source.entity,
         .mesh = source.mesh,
         .material = source.material,
         .generated_world_transforms = layout.generated_world_transforms,
+        .generated_sampling_from_local = *member_mappings,
     });
   }
   cached_preview_revision_ = session_->revision;
+  cached_preview_scene_revision_ = scene_.revision();
+  cached_preview_texture_locks_ = texture_locks;
   cached_preview_ = std::move(preview);
   return cached_preview_;
 }

@@ -118,6 +118,8 @@ struct ViewportBeforeToolInteractionResult {
   /// A resolved earlier single click can change the selection before gizmo work.
   std::optional<ViewportInteractionSelectionState> selection_after_pending_pick;
   bool gizmo_consumed = false;
+  /// A visible handle owns hover feedback without consuming an ordinary click.
+  bool gizmo_hovered = false;
   /// Distinguishes a texture transfer's pointer claim from a transform gizmo.
   bool transfer_face_texture_consumed = false;
   /// Only an eligible semantic action may dispatch; cancelled releases cannot.

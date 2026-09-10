@@ -221,10 +221,20 @@ struct QtStandardMaterialEditorLabels final {
   QString unsaved = QStringLiteral("Unsaved");
   QString inspect_texture = QStringLiteral("Inspect texture");
   QString texture_transform = QStringLiteral("Texture Transform");
-  QString texture_center = QStringLiteral("Center");
-  QString texture_scale = QStringLiteral("Scale");
-  QString texture_offset = QStringLiteral("Offset");
-  QString texture_rotation = QStringLiteral("Rotation");
+  QString texture_center = QStringLiteral("Center (tiles)");
+  QString texture_scale = QStringLiteral("UV Tiling");
+  QString texture_offset = QStringLiteral("Offset (tiles)");
+  QString texture_rotation = QStringLiteral("Rotation (\u00B0)");
+  QString texture_transform_tooltip = QStringLiteral(
+      "Shared material transform: affects every texture channel and every surface using this material, after face UV mapping.");
+  QString texture_center_tooltip = QStringLiteral(
+      "Pivot for material UV tiling and rotation, measured in texture tiles. The default 0.5, 0.5 is the image center.");
+  QString texture_scale_tooltip = QStringLiteral(
+      "Multiply material UV repetitions. Larger magnitudes make the texture smaller; negative values mirror it. Applies to every surface using this material.");
+  QString texture_offset_tooltip = QStringLiteral(
+      "Offset the material UV coordinates in texture tiles after tiling and rotation. One unit equals a full texture tile.");
+  QString texture_rotation_tooltip = QStringLiteral(
+      "Rotate material UV coordinates around Center, after tiling and before Offset. Applies to every surface using this material.");
   QString texture_inspector = QStringLiteral("Texture Inspector");
 };
 

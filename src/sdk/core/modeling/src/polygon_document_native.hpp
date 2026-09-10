@@ -78,6 +78,13 @@ public:
     return *document.impl_->selection;
   }
 
+  /**
+   * Validates authored connectivity, finite attributes and selection liveness
+   * for attribute-only edits that preserve unrelated collapsed geometry.
+   */
+  [[nodiscard]] static Result<OperationResult>
+  validate_authored_topology(const PolygonDocument &document);
+
   static void replace_document(PolygonDocument &document,
                                quader_poly::Document replacement) {
     document.impl_->document =

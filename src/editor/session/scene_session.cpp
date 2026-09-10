@@ -169,7 +169,7 @@ void SceneSession::rebuild_services() {
       *selection_, *instances_);
   radial_array_ = std::make_unique<RadialArrayToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_,
-      *selection_, *instances_);
+      *selection_, *instances_, *structural_lifecycle_);
   curve_ = std::make_unique<CurveToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_,
       *selection_, *document_commands_);

@@ -44,6 +44,8 @@ struct SceneInstanceMutationResult {
   EntityId occurrence = kInvalidEntityId;
   EntityId definition = kInvalidEntityId;
   std::vector<EntityId> entities;
+  /// Exact independently allocated mesh participants for caller failure compensation.
+  std::vector<AssetId> created_mesh_assets;
 
   /// Adapts the domain mutation status for command/history API boundaries.
   [[nodiscard]] CommandResult command_result() const {
@@ -53,6 +55,14 @@ struct SceneInstanceMutationResult {
         .message = message,
     };
   }
+};
+
+/// Places one independent copy of an occurrence's canonical member hierarchy.
+struct SceneInstanceMaterializationRequest final {
+  EntityId occurrence = kInvalidEntityId;
+  QMat4 world_transform;
+  /// Optional planned occurrence correction, baked without mutating the source.
+  std::optional<QMat4> occurrence_sampling_from_local;
 };
 
 /**
@@ -333,20 +343,23 @@ private:
   std::optional<DocumentEntitySnapshot> definition_snapshot_;
 };
 
-/// Places independent modeling duplicates and removes one linked occurrence.
+/// Places independent modeling duplicates, optionally removing their occurrence.
 class FinalizeFlattenSceneInstanceCommand final : public SceneCommand {
 public:
   FinalizeFlattenSceneInstanceCommand(SceneDocument &scene,
                                       EntityId occurrence,
-                                      std::vector<MemberPlacement> duplicates)
+                                      std::vector<MemberPlacement> duplicates,
+                                      bool remove_occurrence = true)
       : SceneCommand(scene, "Flatten Instance"), occurrence_(occurrence),
         duplicates_(std::move(duplicates)),
         before_selection_(document_command_capture_selection(scene)),
-        occurrence_snapshot_(root_only_snapshot(scene, occurrence)) {}
+        occurrence_snapshot_(remove_occurrence ? root_only_snapshot(scene, occurrence)
+                                               : std::nullopt),
+        remove_occurrence_(remove_occurrence) {}
 
   CommandResult undo() override {
-    if (!occurrence_snapshot_.has_value() ||
-        restore_root(scene(), *occurrence_snapshot_) == kInvalidEntityId) {
+    if (remove_occurrence_ && (!occurrence_snapshot_.has_value() ||
+        restore_root(scene(), *occurrence_snapshot_) == kInvalidEntityId)) {
       return command_invalid_result("Instance occurrence could not be restored.");
     }
     const CommandResult restored =
@@ -364,7 +377,7 @@ public:
       (void)restore_placements(scene(), duplicates_, false);
       return placed;
     }
-    if (!scene().destroy_entity(occurrence_)) {
+    if (remove_occurrence_ && !scene().destroy_entity(occurrence_)) {
       (void)restore_placements(scene(), duplicates_, false);
       return command_invalid_result("Instance occurrence could not be removed.");
     }
@@ -382,6 +395,7 @@ private:
   std::vector<MemberPlacement> duplicates_;
   DocumentSelectionState before_selection_;
   std::optional<DocumentEntitySnapshot> occurrence_snapshot_;
+  bool remove_occurrence_ = true;
 };
 
 } // namespace scene_instance_detail
@@ -407,6 +421,41 @@ public:
 
   [[nodiscard]] bool can_create_instance() const {
     return prepare_create().has_value();
+  }
+
+  /// Validates explicit roots without changing the editor selection.
+  [[nodiscard]] bool can_create_instance_from_roots(
+      std::span<const EntityId> roots) const {
+    return prepare_create(roots).has_value();
+  }
+
+  /// Converts roots inside the caller's transaction; the caller owns rollback.
+  SceneInstanceMutationResult create_instance_from_roots_in_transaction(
+      EditorTransaction &transaction, std::span<const EntityId> roots) {
+    if (!transaction.active()) {
+      return invalid("Instance creation requires an active editor transaction.");
+    }
+    const std::optional<CreatePlan> plan = prepare_create(roots);
+    if (!plan.has_value()) {
+      return invalid("Instance sources must be visible, unlocked, unnested meshes "
+                     "or mesh groups with a common parent in Object mode.");
+    }
+    auto command =
+        std::make_unique<scene_instance_detail::CreateSceneInstanceCommand>(
+            scene_, plan->occurrence_name, plan->definition_name,
+            plan->occurrence_parent, plan->occurrence_transform, plan->members);
+    auto *created = command.get();
+    const CommandResult status = transaction.execute(
+        with_checked_selection_publication(
+            scene_, std::move(command),
+            [this]() { return selection_.publish_scene_selection(); }));
+    if (!status.ok || !status.changed) return from_status(status);
+    return {.ok = true,
+            .changed = true,
+            .message = "Instance created.",
+            .occurrence = created->occurrence(),
+            .definition = created->definition(),
+            .entities = std::vector<EntityId>(roots.begin(), roots.end())};
   }
 
   [[nodiscard]] bool can_flatten_instance() const {
@@ -498,70 +547,6 @@ public:
                      "with no active preview or instance edit scope.");
     }
 
-    /** Captures the identities and authored state needed to flatten one instance occurrence. */
-    struct FlattenPlan final {
-      EntityId occurrence = kInvalidEntityId;
-      EntityId definition = kInvalidEntityId;
-      std::optional<std::string> occurrence_name;
-      std::vector<EntityId> members;
-      std::vector<scene_instance_detail::FlattenTextureMapping>
-          texture_mappings;
-      bool adopts_canonical_members = false;
-      std::size_t duplicate_batch = 0u;
-    };
-
-    bool definitions_are_common = true;
-    EntityId common_definition = kInvalidEntityId;
-    std::vector<FlattenPlan> plans;
-    std::vector<SceneStructuralDuplicateBatch> duplicate_batches;
-    plans.reserve(selected->size());
-    for (const EntityId occurrence : *selected) {
-      const InstanceOccurrenceComponent *component =
-          scene_.instance_occurrence(occurrence);
-      if (component == nullptr) {
-        return invalid("Selected entity is no longer an instance occurrence.");
-      }
-      const EntityId definition = component->definition;
-      std::optional<std::string> occurrence_name;
-      if (const NameComponent *name = scene_.name(occurrence)) {
-        occurrence_name = name->name;
-      }
-      if (common_definition == kInvalidEntityId) {
-        common_definition = definition;
-      } else if (common_definition != definition) {
-        definitions_are_common = false;
-      }
-
-      const auto texture_mappings =
-          capture_flatten_texture_mappings(occurrence, definition);
-      if (!texture_mappings.has_value()) {
-        return invalid("Instance texture mapping could not be resolved.");
-      }
-      const std::vector<EntityId> members = scene_.children(definition);
-      if (members.empty()) {
-        return invalid("Instance definition has no members.");
-      }
-      const std::size_t prior_selected = static_cast<std::size_t>(
-          std::ranges::count(plans, definition, &FlattenPlan::definition));
-      const std::size_t occurrence_count =
-          scene_.instance_occurrences_for_definition(definition).size();
-      const bool adopts_canonical_members =
-          occurrence_count == prior_selected + 1u;
-      FlattenPlan plan{
-          .occurrence = occurrence,
-          .definition = definition,
-          .occurrence_name = std::move(occurrence_name),
-          .members = members,
-          .texture_mappings = *texture_mappings,
-          .adopts_canonical_members = adopts_canonical_members,
-      };
-      if (!adopts_canonical_members) {
-        plan.duplicate_batch = duplicate_batches.size();
-        duplicate_batches.push_back({.roots = members});
-      }
-      plans.push_back(std::move(plan));
-    }
-
     SceneStructuralCompensationScope compensation_scope =
         structural_lifecycle_.begin_compensation_scope();
     if (!compensation_scope.valid()) {
@@ -639,78 +624,10 @@ public:
       return from_status(failure);
     };
 
-    SceneStructuralDuplicateBatchResult duplicated;
-    if (!duplicate_batches.empty()) {
-      duplicated = structural_lifecycle_.duplicate_hierarchy_batches_in_transaction(
-          transaction, duplicate_batches, ModelingSelectionMode::Object,
-          "Flatten Instance", true);
-      if (!duplicated.ok || !duplicated.changed ||
-          duplicated.batches.size() != duplicate_batches.size()) {
-        return rollback(CommandResult{
-            .ok = duplicated.ok,
-            .changed = duplicated.changed,
-            .message = duplicated.message.empty()
-                           ? "Flatten duplicate batches were incomplete."
-                           : duplicated.message,
-        });
-      }
-    }
-    const ModelingSessionMemento after_duplicates =
-        modeling_.capture_history_memento();
-
-    bool baked_modeling = false;
-    std::vector<EntityId> flattened_entities;
-    for (const FlattenPlan &plan : plans) {
-      SceneInstanceMutationResult flattened =
-          plan.adopts_canonical_members
-              ? flatten_last_occurrence(plan.occurrence, plan.definition)
-              : finalize_linked_occurrence_in_transaction(
-                    plan.occurrence, plan.definition, plan.members,
-                    duplicated.batches[plan.duplicate_batch]);
-      if (!flattened.ok || !flattened.changed) {
-        return rollback(CommandResult{.ok = flattened.ok,
-                                      .changed = flattened.changed,
-                                      .message = flattened.message});
-      }
-      const ModelingCommandResult baked =
-          bake_flatten_texture_mappings(flattened.entities,
-                                        plan.texture_mappings);
-      if (!baked.ok) {
-        return rollback(modeling_memento_command_result(baked));
-      }
-      if (plan.occurrence_name.has_value() &&
-          flattened.entities.size() == 1u) {
-        const CommandResult renamed = document_commands_.rename_entity(
-            flattened.entities.front(), *plan.occurrence_name);
-        if (!renamed.ok) {
-          return rollback(renamed);
-        }
-      }
-      baked_modeling = baked_modeling || baked.changed;
-      flattened_entities.insert(flattened_entities.end(),
-                                 flattened.entities.begin(),
-                                flattened.entities.end());
-    }
-
-    if (flattened_entities.empty()) {
-      return rollback(command_invalid_result(
-          "Flatten did not produce any ordinary scene entities."));
-    }
-    const CommandResult selected_outputs =
-        selection_.set_inspection_scene_selection(flattened_entities,
-                                                  flattened_entities.front());
-    if (!selected_outputs.ok) {
-      return rollback(selected_outputs);
-    }
-    if (baked_modeling) {
-      const CommandResult recorded =
-          transaction.record_executed(
-              std::make_unique<RecordedModelingMementoCommand>(
-                  modeling_, "Flatten Instance", after_duplicates,
-                  modeling_.capture_history_memento(), true));
-      if (!recorded.ok) {
-        return rollback(recorded);
-      }
+    SceneInstanceMutationResult flattened =
+        flatten_occurrences_in_transaction(transaction, *selected);
+    if (!flattened.ok || !flattened.changed) {
+      return rollback(flattened.command_result());
     }
 
     if (!compensation_scope.seal_forward()) {
@@ -738,17 +655,261 @@ public:
       failure.changed = true;
       return from_status(failure);
     }
+    return flattened;
+  }
+
+  /// Materializes explicit occurrences in a caller-owned transaction.
+  /// Output roots follow request order, then definition-member order. The caller
+  /// must cancel its transaction and restore its compensation scope on failure.
+  /// Canonical hierarchy copies require this to precede other transaction commands.
+  SceneInstanceMutationResult flatten_occurrences_in_transaction(
+      EditorTransaction &transaction, std::span<const EntityId> occurrences) {
+    return materialize_occurrences_in_transaction(transaction, occurrences, {}, {});
+  }
+
+  /// Copies canonical members into independent placements without removing sources.
+  /// This must be the first operation in the caller-owned transaction. Outputs
+  /// follow request order, then member order; the caller owns failure compensation.
+  SceneInstanceMutationResult materialize_instance_copies_in_transaction(
+      EditorTransaction &transaction,
+      std::span<const SceneInstanceMaterializationRequest> requests) {
+    if (!transaction.active() || !transaction.empty()) {
+      return invalid("Instance copies require an empty active editor transaction.");
+    }
+    std::vector<EntityId> occurrences;
+    std::vector<QMat4> worlds;
+    std::vector<std::optional<QMat4>> mappings;
+    occurrences.reserve(requests.size());
+    worlds.reserve(requests.size());
+    mappings.reserve(requests.size());
+    for (const auto &request : requests) {
+      if (!scene_matrix_is_finite(request.world_transform)) {
+        return invalid("Instance copy placement must be finite.");
+      }
+      if (request.occurrence_sampling_from_local.has_value() &&
+          !texture_mapping_is_valid({*request.occurrence_sampling_from_local})) {
+        return invalid("Instance copy texture mapping must be invertible affine data.");
+      }
+      occurrences.push_back(request.occurrence);
+      worlds.push_back(request.world_transform);
+      mappings.push_back(request.occurrence_sampling_from_local);
+    }
+    return materialize_occurrences_in_transaction(transaction, occurrences, worlds, mappings);
+  }
+
+private:
+  /// Shares duplication, placement, sampling bake, and history for flatten and copies.
+  SceneInstanceMutationResult materialize_occurrences_in_transaction(
+      EditorTransaction &transaction, std::span<const EntityId> occurrences,
+      std::span<const QMat4> copy_worlds,
+      std::span<const std::optional<QMat4>> copy_mappings) {
+    sanitize_edit_context();
+    if (!transaction.active() || edit_context_.active() || occurrences.empty() ||
+        modeling_.selection_mode() != ModelingSelectionMode::Object ||
+        modeling_.can_cancel_active_tool_or_preview()) {
+      return invalid("Instance materialization requires an active transaction "
+                     "with no modeling preview or instance edit scope.");
+    }
+    std::vector<EntityId> unique(occurrences.begin(), occurrences.end());
+    std::ranges::sort(unique);
+    if (copy_worlds.empty() &&
+        std::adjacent_find(unique.begin(), unique.end()) != unique.end()) {
+      return invalid("Instance materialization sources must be unique.");
+    }
+    for (const EntityId occurrence : occurrences) {
+      if (!valid_occurrence(occurrence) ||
+          scene_.is_effectively_locked(occurrence) ||
+          !scene_.is_effectively_visible(occurrence)) {
+        return invalid("Instance materialization source is no longer eligible.");
+      }
+    }
+
+    /** Captures the identities and authored state needed to flatten one instance occurrence. */
+    struct FlattenPlan final {
+      EntityId occurrence = kInvalidEntityId;
+      EntityId definition = kInvalidEntityId;
+      std::optional<std::string> occurrence_name;
+      std::vector<EntityId> members;
+      std::vector<scene_instance_detail::FlattenTextureMapping>
+          texture_mappings;
+      bool adopts_canonical_members = false;
+      std::size_t duplicate_batch = 0u;
+      std::optional<QMat4> copy_world;
+    };
+
+    bool definitions_are_common = true;
+    EntityId common_definition = kInvalidEntityId;
+    std::vector<FlattenPlan> plans;
+    std::vector<SceneStructuralDuplicateBatch> duplicate_batches;
+    plans.reserve(occurrences.size());
+    for (std::size_t index = 0; index < occurrences.size(); ++index) {
+      const EntityId occurrence = occurrences[index];
+      const InstanceOccurrenceComponent *component =
+          scene_.instance_occurrence(occurrence);
+      if (component == nullptr) {
+        return invalid("Selected entity is no longer an instance occurrence.");
+      }
+      const EntityId definition = component->definition;
+      std::optional<std::string> occurrence_name;
+      if (const NameComponent *name = scene_.name(occurrence);
+          name != nullptr && copy_worlds.empty()) {
+        occurrence_name = name->name;
+      }
+      if (common_definition == kInvalidEntityId) {
+        common_definition = definition;
+      } else if (common_definition != definition) {
+        definitions_are_common = false;
+      }
+
+      const auto texture_mappings =
+          capture_flatten_texture_mappings(occurrence, definition,
+              copy_mappings.empty() ? std::nullopt : copy_mappings[index]);
+      if (!texture_mappings.has_value()) {
+        return invalid("Instance texture mapping could not be resolved.");
+      }
+      const std::vector<EntityId> members = scene_.children(definition);
+      if (members.empty()) {
+        return invalid("Instance definition has no members.");
+      }
+      const QMat4 *desired_world = copy_worlds.empty() ? nullptr : &copy_worlds[index];
+      for (const EntityId member : members) {
+        if (!flatten_placement(occurrence, member, member, desired_world).has_value()) {
+          return invalid("Instance member placement cannot be represented.");
+        }
+      }
+      const std::size_t prior_selected = static_cast<std::size_t>(
+          std::ranges::count(plans, definition, &FlattenPlan::definition));
+      const std::size_t occurrence_count =
+          scene_.instance_occurrences_for_definition(definition).size();
+      const bool adopts_canonical_members = copy_worlds.empty() &&
+          occurrence_count == prior_selected + 1u;
+      FlattenPlan plan{
+          .occurrence = occurrence,
+          .definition = definition,
+          .occurrence_name = std::move(occurrence_name),
+          .members = members,
+          .texture_mappings = *texture_mappings,
+          .adopts_canonical_members = adopts_canonical_members,
+          .copy_world = copy_worlds.empty() ? std::nullopt
+                                          : std::optional{copy_worlds[index]},
+      };
+      if (!adopts_canonical_members) {
+        plan.duplicate_batch = duplicate_batches.size();
+        duplicate_batches.push_back({.roots = members});
+      }
+      plans.push_back(std::move(plan));
+    }
+
+    SceneStructuralDuplicateBatchResult duplicated;
+    if (!duplicate_batches.empty()) {
+      duplicated = structural_lifecycle_.duplicate_hierarchy_batches_in_transaction(
+          transaction, duplicate_batches, ModelingSelectionMode::Object,
+          "Flatten Instance", true);
+      if (!duplicated.ok || !duplicated.changed ||
+          duplicated.batches.size() != duplicate_batches.size()) {
+        return from_status(CommandResult{
+            .ok = duplicated.ok,
+            .changed = duplicated.changed,
+            .message = duplicated.message.empty()
+                           ? "Flatten duplicate batches were incomplete."
+                           : duplicated.message,
+        });
+      }
+    }
+    std::vector<AssetId> created_mesh_assets;
+    for (const auto &batch : duplicated.batches) {
+      for (const auto &clone : batch.modeling_clones) {
+        if (const MeshComponent *mesh = scene_.mesh(clone.duplicate)) {
+          created_mesh_assets.push_back(mesh->mesh);
+        }
+      }
+    }
+    std::ranges::sort(created_mesh_assets);
+    created_mesh_assets.erase(
+        std::unique(created_mesh_assets.begin(), created_mesh_assets.end()),
+        created_mesh_assets.end());
+    const auto with_created_assets = [&](SceneInstanceMutationResult result) {
+      result.created_mesh_assets = created_mesh_assets;
+      return result;
+    };
+    const bool has_texture_mappings = std::ranges::any_of(
+        plans, [](const FlattenPlan &plan) { return !plan.texture_mappings.empty(); });
+    const std::optional<ModelingSessionMemento> before_bake =
+        has_texture_mappings
+            ? std::optional{modeling_.capture_history_memento()}
+            : std::nullopt;
+    bool baked_modeling = false;
+    const auto record_bakes = [&]() {
+      return baked_modeling && before_bake.has_value()
+          ? transaction.record_executed(
+                std::make_unique<RecordedModelingMementoCommand>(
+                    modeling_, "Flatten Instance", *before_bake,
+                    modeling_.capture_history_memento(), true))
+          : command_unchanged_result();
+    };
+    const auto fail_after_bake = [&](CommandResult failure) {
+      const CommandResult recorded = record_bakes();
+      return with_created_assets(from_status(recorded.ok ? failure : recorded));
+    };
+    std::vector<EntityId> flattened_entities;
+    for (const FlattenPlan &plan : plans) {
+      SceneInstanceMutationResult flattened =
+          plan.adopts_canonical_members
+              ? flatten_last_occurrence(plan.occurrence, plan.definition)
+              : finalize_linked_occurrence_in_transaction(
+                    plan.occurrence, plan.definition, plan.members,
+                    duplicated.batches[plan.duplicate_batch],
+                    plan.copy_world.has_value() ? &*plan.copy_world : nullptr);
+      if (!flattened.ok || !flattened.changed) {
+        return fail_after_bake(CommandResult{.ok = flattened.ok,
+                                             .changed = flattened.changed,
+                                             .message = flattened.message});
+      }
+      const ModelingCommandResult baked =
+          bake_flatten_texture_mappings(flattened.entities,
+                                        plan.texture_mappings);
+      baked_modeling = baked_modeling || baked.changed || !baked.ok;
+      if (!baked.ok) {
+        return fail_after_bake(modeling_memento_command_result(baked));
+      }
+      if (plan.occurrence_name.has_value() &&
+          flattened.entities.size() == 1u) {
+        const CommandResult renamed = document_commands_.rename_entity(
+            flattened.entities.front(), *plan.occurrence_name);
+        if (!renamed.ok) {
+          return fail_after_bake(renamed);
+        }
+      }
+      flattened_entities.insert(flattened_entities.end(),
+                                 flattened.entities.begin(),
+                                flattened.entities.end());
+    }
+
+    if (flattened_entities.empty()) {
+      return fail_after_bake(command_invalid_result(
+          "Flatten did not produce any ordinary scene entities."));
+    }
+    const CommandResult selected_outputs =
+        selection_.set_inspection_scene_selection(flattened_entities,
+                                                  flattened_entities.front());
+    if (!selected_outputs.ok) {
+      return fail_after_bake(selected_outputs);
+    }
+    const CommandResult recorded = record_bakes();
+    if (!recorded.ok) return with_created_assets(from_status(recorded));
     return {
         .ok = true,
         .changed = true,
-        .message = selected->size() == 1u ? "Instance flattened."
+        .message = occurrences.size() == 1u ? "Instance flattened."
                                          : "Instances flattened.",
         .definition = definitions_are_common ? common_definition
                                              : kInvalidEntityId,
         .entities = std::move(flattened_entities),
+        .created_mesh_assets = std::move(created_mesh_assets),
     };
   }
 
+public:
   SceneInstanceMutationResult enter_instance_edit(EntityId occurrence) {
     sanitize_edit_context();
     if (!can_enter_instance_edit(occurrence)) {
@@ -978,14 +1139,24 @@ private:
   };
 
   [[nodiscard]] std::optional<CreatePlan> prepare_create() const {
+    const std::vector<EntityId> selected = scene_.selected_entities();
+    return prepare_create(selected);
+  }
+
+  [[nodiscard]] std::optional<CreatePlan> prepare_create(
+      std::span<const EntityId> selected) const {
     sanitize_edit_context();
     if (edit_context_.active() ||
         modeling_.selection_mode() != ModelingSelectionMode::Object ||
         modeling_.can_cancel_active_tool_or_preview()) {
       return std::nullopt;
     }
-    const std::vector<EntityId> selected = scene_.selected_entities();
     if (selected.empty()) {
+      return std::nullopt;
+    }
+    std::vector<EntityId> unique(selected.begin(), selected.end());
+    std::ranges::sort(unique);
+    if (std::adjacent_find(unique.begin(), unique.end()) != unique.end()) {
       return std::nullopt;
     }
     const EntityId common_parent = scene_.parent(selected.front());
@@ -995,8 +1166,16 @@ private:
             : scene_.world_transform_matrix(common_parent);
     const std::optional<QMat4> inverse_parent =
         try_scene_matrix_inverse(parent_world);
-    const std::optional<SceneBounds> selected_bounds =
-        selected_transform_world_bounds(scene_, assets_);
+    std::optional<SceneBounds> selected_bounds;
+    for (const EntityId root : selected) {
+      const auto bounds = entity_hierarchy_world_bounds(scene_, assets_, root);
+      if (!bounds.has_value()) return std::nullopt;
+      if (!selected_bounds.has_value()) selected_bounds = bounds;
+      else {
+        include_point(*selected_bounds, bounds->min);
+        include_point(*selected_bounds, bounds->max);
+      }
+    }
     if (!inverse_parent.has_value() || !selected_bounds.has_value()) {
       return std::nullopt;
     }
@@ -1185,7 +1364,8 @@ private:
   [[nodiscard]] std::optional<
       std::vector<scene_instance_detail::FlattenTextureMapping>>
   capture_flatten_texture_mappings(EntityId occurrence,
-                                    EntityId definition) const {
+                                    EntityId definition,
+                                    std::optional<QMat4> occurrence_mapping = std::nullopt) const {
     std::vector<scene_instance_detail::FlattenTextureMapping> mappings;
     const std::vector<EntityId> members = scene_.children(definition);
     for (std::size_t member_index = 0; member_index < members.size();
@@ -1197,8 +1377,12 @@ private:
         if (scene_.mesh(entity) == nullptr) {
           continue;
         }
-        const auto mapping =
-            effective_texture_sampling_from_local(scene_, entity, occurrence);
+        const TextureMappingComponent *direct = scene_.texture_mapping(entity);
+        const auto mapping = occurrence_mapping.has_value()
+            ? compose_texture_sampling_with_occurrence_mapping(
+                  scene_, entity, direct != nullptr ? direct->sampling_from_local : QMat4{},
+                  occurrence, *occurrence_mapping)
+            : effective_texture_sampling_from_local(scene_, entity, occurrence);
         if (!mapping.has_value()) {
           return std::nullopt;
         }
@@ -1266,7 +1450,8 @@ private:
 
   [[nodiscard]] std::optional<scene_instance_detail::MemberPlacement>
   flatten_placement(EntityId occurrence, EntityId member,
-                    EntityId output_entity) const {
+                    EntityId output_entity,
+                    const QMat4 *occurrence_world = nullptr) const {
     const EntityId output_parent = scene_.parent(occurrence);
     const TransformComponent *current = scene_.transform(output_entity);
     const EntityId definition = scene_.containing_instance_definition(member);
@@ -1276,7 +1461,9 @@ private:
       return std::nullopt;
     }
     const QMat4 desired_world = scene_transform_multiply(
-        scene_.world_transform_matrix(occurrence), *relative);
+        occurrence_world != nullptr ? *occurrence_world
+                                    : scene_.world_transform_matrix(occurrence),
+        *relative);
     const QMat4 parent_world =
         output_parent == kInvalidEntityId
             ? scene_transform_identity_matrix()
@@ -1284,7 +1471,11 @@ private:
     const std::optional<TransformComponent> output_local =
         try_scene_local_transform_preserving_world(parent_world, desired_world,
                                                    *current);
-    if (!output_local.has_value()) {
+    if (!output_local.has_value() ||
+        !scene_matrix_near_equal(
+            scene_transform_multiply(
+                parent_world, compose_transform(output_local->spatial_transform())),
+            desired_world)) {
       return std::nullopt;
     }
     return scene_instance_detail::MemberPlacement{
@@ -1340,7 +1531,8 @@ private:
   SceneInstanceMutationResult finalize_linked_occurrence_in_transaction(
       EntityId occurrence, EntityId definition,
       std::span<const EntityId> members,
-      const SceneStructuralDuplicateResult &duplicated) {
+      const SceneStructuralDuplicateResult &duplicated,
+      const QMat4 *occurrence_world = nullptr) {
     std::vector<EntityId> duplicates;
     duplicates.reserve(members.size());
     for (const EntityId member : members) {
@@ -1361,7 +1553,8 @@ private:
     placements.reserve(duplicates.size());
     for (std::size_t index = 0; index < duplicates.size(); ++index) {
       const std::optional<scene_instance_detail::MemberPlacement> placement =
-          flatten_placement(occurrence, members[index], duplicates[index]);
+          flatten_placement(occurrence, members[index], duplicates[index],
+                            occurrence_world);
       if (!placement.has_value()) {
         return invalid("Flattened mesh placement could not be resolved.");
       }
@@ -1370,7 +1563,7 @@ private:
 
     auto finalize = std::make_unique<
         scene_instance_detail::FinalizeFlattenSceneInstanceCommand>(
-        scene_, occurrence, placements);
+        scene_, occurrence, placements, occurrence_world == nullptr);
     const CommandResult finalized = history_.execute(
         with_checked_selection_publication(
             scene_, std::move(finalize),

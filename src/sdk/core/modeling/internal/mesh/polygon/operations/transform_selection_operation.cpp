@@ -75,7 +75,12 @@ OperationResult TransformSelectionOperation::apply(Document& document, Selection
         if (!selected_ids.contains(vertex.id)) {
             continue;
         }
-        vertex.position = transform_point(transform_, vertex.position);
+        const quader::QVec3 desired = transform_point(transform_, vertex.position);
+        if (desired.x == vertex.position.x && desired.y == vertex.position.y &&
+            desired.z == vertex.position.z) {
+            continue;
+        }
+        vertex.position = desired;
         changed = true;
     }
     return { changed, {} };

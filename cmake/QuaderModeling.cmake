@@ -113,7 +113,8 @@ if(QUADER_USE_OPENMESH_TOPOLOGY)
 endif()
 
 add_library(quader_geometry STATIC
-    "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/geometry/geometry.cpp")
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/geometry/geometry.cpp"
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/geometry/quad_uv_interpolation.cpp")
 
 quader_enable_common_pch(quader_geometry)
 target_compile_features(quader_geometry PUBLIC cxx_std_20)
@@ -222,7 +223,8 @@ endfunction()
 
 add_library(quader_modeling_sdk_geometry STATIC
     src/sdk/core/modeling/src/geometry.cpp
-    src/sdk/core/modeling/internal/mesh/geometry/geometry.cpp)
+    src/sdk/core/modeling/internal/mesh/geometry/geometry.cpp
+    src/sdk/core/modeling/internal/mesh/geometry/quad_uv_interpolation.cpp)
 add_library(quader::modeling_sdk_geometry ALIAS quader_modeling_sdk_geometry)
 set_target_properties(quader_modeling_sdk_geometry PROPERTIES
     EXPORT_NAME modeling_sdk_geometry)
@@ -621,7 +623,13 @@ if(QUADER_BUILD_TESTS)
         tests/sdk/modeling_curve_document_tests.cpp
         tests/sdk/modeling_curve_session_tests.cpp
         tests/sdk/modeling_curve_tube_tests.cpp
-        tests/sdk/modeling_sdk_consumer_tests.cpp)
+        tests/sdk/modeling_sdk_consumer_tests.cpp
+        tests/sdk/dissolve_saved_scene_tests.cpp
+        tests/sdk/uv_peel_saved_scene_tests.cpp
+        tests/sdk/uv_preservation_foundation_tests.cpp
+        tests/sdk/uv_action_reliability_tests.cpp
+        tests/sdk/uv_precision_reliability_tests.cpp
+        tests/sdk/face_texture_wrap_tests.cpp)
     set_source_files_properties(
         tests/sdk/headers/mesh_handle_header_compile.cpp
         tests/sdk/headers/previews_header_compile.cpp

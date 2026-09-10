@@ -4828,6 +4828,53 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
+     MeshUvProjectionEligibilityReusesTargetsUntilOwnerRevisionsChange) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto created = service.create_box_from_bounds({
+      .bounds = {.min = {-1, -1, -1}, .max = {1, 1, 1}},
+      .name = "Cached UV projection targets",
+  });
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Object).ok);
+  const std::array selected{created.object.entity};
+  ASSERT_TRUE(service.set_object_selection(selected).ok);
+  ASSERT_TRUE(service.can_project_uv());
+  const auto before = service.modeling_sdk_projection_stats_for_tests();
+  for (int frame = 0; frame < 20; ++frame) {
+    EXPECT_TRUE(service.can_project_uv());
+  }
+  const auto after = service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after.face_texture_summary_build_count, before.face_texture_summary_build_count);
+  EXPECT_EQ(after.mesh_compile_count, before.mesh_compile_count);
+  EXPECT_EQ(after.asset_publication_count, before.asset_publication_count);
+  EXPECT_EQ(after.selection_summary_build_count, before.selection_summary_build_count);
+  ASSERT_TRUE(scene.set_locked(created.object.entity, true));
+  EXPECT_FALSE(service.can_project_uv());
+  const auto locked = service.modeling_sdk_projection_stats_for_tests();
+  for (int frame = 0; frame < 20; ++frame) {
+    EXPECT_FALSE(service.can_project_uv());
+  }
+  EXPECT_EQ(service.modeling_sdk_projection_stats_for_tests().face_texture_summary_build_count,
+            locked.face_texture_summary_build_count);
+  ASSERT_TRUE(scene.set_locked(created.object.entity, false));
+  ASSERT_TRUE(service.set_object_selection(selected).ok);
+  EXPECT_TRUE(service.can_project_uv());
+  const auto reusable = service.modeling_sdk_projection_stats_for_tests();
+  const auto projected = service.apply_face_texture_action({
+      .options = {.action = ModelingFaceTextureAction::ProjectCube},
+      .selection_token = service.selection_revision(),
+  });
+  ASSERT_TRUE(projected.ok) << projected.message;
+  EXPECT_EQ(service.modeling_sdk_projection_stats_for_tests().face_texture_summary_build_count,
+            reusable.face_texture_summary_build_count);
+  EXPECT_TRUE(service.can_project_uv());
+  EXPECT_GT(service.modeling_sdk_projection_stats_for_tests().face_texture_summary_build_count,
+            reusable.face_texture_summary_build_count);
+}
+
+TEST(ModelingSessionServiceSplitTests,
      FaceTextureSummaryIsRevisionGatedAndUsesTexturePixelDimensions) {
   SceneDocument scene;
   AssetRegistry assets;

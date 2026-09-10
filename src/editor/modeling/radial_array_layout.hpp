@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "editor/modeling/radial_array_mode.hpp"
 #include "scene/scene_transform.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -36,6 +37,7 @@ struct RadialArrayLayoutRequest {
   std::uint32_t copies = 8u;
   std::uint32_t repeats = 1u;
   double repeat_spacing = 1.0;
+  RadialArrayMode mode = RadialArrayMode::Total;
 };
 
 /**
@@ -108,7 +110,10 @@ inline QVec3 source_outward_direction(const RadialArrayLayoutRequest &request,
 }
 
 inline double angle_degrees(std::uint32_t index, std::uint32_t copies,
-                            double degrees) {
+                            double degrees, RadialArrayMode mode) {
+  if (mode == RadialArrayMode::Spacing) {
+    return static_cast<double>(index) * degrees;
+  }
   constexpr double kFullCircleDegrees = 360.0;
   constexpr double kFullCircleEpsilon = 0.000001;
   const double divisor =
@@ -142,6 +147,10 @@ build_radial_array_layout(const RadialArrayLayoutRequest &request) {
   if (!std::isfinite(request.degrees) || request.degrees < 0.0 ||
       request.degrees > 360.0) {
     return failure("Radial Array degrees must be between 0 and 360.");
+  }
+  if (request.mode != RadialArrayMode::Total &&
+      request.mode != RadialArrayMode::Spacing) {
+    return failure("Radial Array angle mode is invalid.");
   }
   if (request.copies < kRadialArrayLayoutMinimumCopies ||
       request.copies > kRadialArrayLayoutMaximumCopies) {
@@ -193,7 +202,7 @@ build_radial_array_layout(const RadialArrayLayoutRequest &request) {
         continue;
       }
       const double degrees = radial_array_layout_detail::angle_degrees(
-          copy, request.copies, request.degrees);
+          copy, request.copies, request.degrees, request.mode);
       const glm::mat4 rotation = glm::rotate(
           glm::mat4{1.0f}, glm::radians(static_cast<float>(degrees)),
           to_glm(normal));

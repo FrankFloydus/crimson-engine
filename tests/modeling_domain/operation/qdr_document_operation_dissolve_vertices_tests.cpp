@@ -8,6 +8,32 @@
 
 using namespace quader_poly;
 
+TEST(QdrDocumentOperationDissolveVerticesTests, DissolveRetainsAuthoredUvsAtEverySurvivingCorner) {
+    Document document;
+    const ElementId left = add_vertex(document, {-1.0F, 0.0F, 0.0F});
+    const ElementId middle = add_vertex(document, {0.0F, 0.0F, 0.0F});
+    const ElementId right = add_vertex(document, {1.0F, 0.0F, 0.0F});
+    const ElementId top = add_vertex(document, {0.0F, 1.0F, 0.0F});
+    const ElementId face_id = add_face(document, std::array{left, middle, right, top});
+    Face* face = find_face(document, face_id);
+    ASSERT_NE(face, nullptr);
+    face->uvs = {{2.0F, 3.0F}, {4.0F, 4.0F}, {6.0F, 5.0F}, {-1.0F, 8.0F}};
+    Selection selection = qdr_test::vertex_selection({middle});
+
+    const OperationResult result = dissolve_selected_vertices(document, selection);
+
+    ASSERT_TRUE(result.changed) << result.message;
+    face = find_face(document, face_id);
+    ASSERT_NE(face, nullptr);
+    const std::vector<quader::QVec2> expected{{2.0F, 3.0F}, {6.0F, 5.0F}, {-1.0F, 8.0F}};
+    ASSERT_EQ(face->uvs.size(), expected.size());
+    for (std::size_t corner = 0; corner < expected.size(); ++corner) {
+        EXPECT_FLOAT_EQ(face->uvs[corner].x, expected[corner].x);
+        EXPECT_FLOAT_EQ(face->uvs[corner].y, expected[corner].y);
+    }
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+}
+
 TEST(QdrDocumentOperationDissolveVerticesTests, DissolveVerticesRemovesRedundantInlineVerticesAndSelectsNeighbors) {
 	Document document;
 	const ElementId left = add_vertex(document, { -1.0F, 0.0F, 0.0F });
@@ -43,4 +69,33 @@ TEST(QdrDocumentOperationDissolveVerticesTests, DissolveVerticesRejectsTrueFaceC
 	EXPECT_FALSE(result.changed);
 	EXPECT_TRUE(fixture.document.vertices.size() == vertex_count_before);
 	EXPECT_TRUE(fixture.document.faces.size() == face_count_before);
+}
+
+TEST(QdrDocumentOperationDissolveVerticesTests, DissolveRejectsACollinearCornerThatCarriesAUvBreakpoint) {
+    Document document;
+    const ElementId left = add_vertex(document, {-1.0F, 0.0F, 0.0F});
+    const ElementId middle = add_vertex(document, {0.0F, 0.0F, 0.0F});
+    const ElementId right = add_vertex(document, {1.0F, 0.0F, 0.0F});
+    const ElementId top = add_vertex(document, {0.0F, 1.0F, 0.0F});
+    const ElementId face_id = add_face(document, std::array{left, middle, right, top});
+    Face* face = find_face(document, face_id);
+    ASSERT_NE(face, nullptr);
+    face->uvs = {{2.0F, 3.0F}, {8.0F, 4.0F}, {6.0F, 5.0F}, {-1.0F, 8.0F}};
+    const Face original = *face;
+    Selection selection = qdr_test::vertex_selection({middle});
+
+    const OperationResult result = dissolve_selected_vertices(document, selection);
+
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.changed);
+    EXPECT_NE(find_vertex(document, middle), nullptr);
+    face = find_face(document, face_id);
+    ASSERT_NE(face, nullptr);
+    EXPECT_EQ(face->vertices, original.vertices);
+    ASSERT_EQ(face->uvs.size(), original.uvs.size());
+    for (std::size_t corner = 0; corner < original.uvs.size(); ++corner) {
+        EXPECT_FLOAT_EQ(face->uvs[corner].x, original.uvs[corner].x);
+        EXPECT_FLOAT_EQ(face->uvs[corner].y, original.uvs[corner].y);
+    }
+    EXPECT_EQ(selection.vertices, std::vector<ElementId>{middle});
 }

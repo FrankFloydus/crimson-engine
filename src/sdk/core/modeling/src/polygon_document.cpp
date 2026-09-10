@@ -16,6 +16,8 @@
 #include <quader/modeling/neutral/polygon/document_topology.hpp>
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
 #include <quader/modeling/neutral/polygon/document_validation.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1827,6 +1829,12 @@ Result<OperationResult> PolygonDocument::validate() const {
       *impl_, quader_poly::PolygonDocumentValidationPolicy::Strict);
 }
 
+Result<OperationResult> PolygonDocumentNativeAccess::validate_authored_topology(
+    const PolygonDocument &document) {
+  return validate_document(
+      *document.impl_, quader_poly::PolygonDocumentValidationPolicy::AuthoredTopology);
+}
+
 Result<OperationResult>
 PolygonDocument::set_selection_mode(SelectionMode mode) {
   quader_poly::Selection selection = *impl_->selection;
@@ -2207,12 +2215,6 @@ Result<OperationResult> PolygonDocument::translate_selection(Vec3 delta) {
         quader_poly::OperationResult result =
             quader_poly::translate_selection(document, selection,
                                              to_native(delta));
-        if (result.changed) {
-          // Component transforms preserve procedural mapping. Authored loop
-          // UVs are a materialized snapshot of the previous vertex layout and
-          // must not survive a geometry deformation.
-          quader_poly::clear_face_uvs(document);
-        }
         return result;
       });
 }
@@ -2224,9 +2226,6 @@ PolygonDocument::transform_selection(Transform3 transform) {
     quader_poly::OperationResult result =
         quader_poly::transform_selection(document, selection,
                                          to_native(transform));
-    if (result.changed) {
-      quader_poly::clear_face_uvs(document);
-    }
     return result;
   });
 }
@@ -2321,10 +2320,8 @@ Result<OperationResult> PolygonDocument::set_vertex_positions(
   result.message = "Vertex positions changed.";
   result.modified = result.affected;
   result.dirty.geometry = true;
-  // Absolute position updates are the retained transform-preview/commit
-  // route. Keep their UV semantics identical to translate/transform so a
-  // preview and its committed canonical compilation cannot diverge.
-  quader_poly::clear_face_uvs(document);
+  // Position edits keep authored UVs attached to their corners. Faces without
+  // authored corners continue to evaluate their procedural mapping.
   impl_->document =
       std::make_shared<const quader_poly::Document>(std::move(document));
   bump_content(*impl_, true);
@@ -2666,7 +2663,6 @@ Result<OperationResult> PolygonDocument::snap_selected_edges_to_active() {
     return operation_success(std::move(result));
   }
 
-  quader_poly::clear_face_uvs(updated_document);
   result.modified = result.affected;
   result.dirty.geometry = true;
   result.dirty.selection = true;
@@ -3002,9 +2998,10 @@ PolygonDocument::reflect_across_plane(Vec3 origin, Vec3 normal) {
   const quader::QVec3 native_normal = to_native(Vec3{
       normal.x * inverse_length, normal.y * inverse_length,
       normal.z * inverse_length});
+  const auto source_document = impl_->document;
   return apply_operation(
       *impl_,
-      [native_origin, native_normal](quader_poly::Document &document,
+      [native_origin, native_normal, source_document](quader_poly::Document &document,
                                      quader_poly::Selection &) {
         for (quader_poly::Vertex &vertex : document.vertices) {
           const quader::QVec3 offset = vertex.position - native_origin;
@@ -3014,10 +3011,15 @@ PolygonDocument::reflect_across_plane(Vec3 origin, Vec3 normal) {
           vertex.position =
               vertex.position - native_normal * (2.0F * distance);
         }
+        const quader_poly::document_internal::VertexLookupIndex source_lookup(*source_document);
+        const quader_poly::document_internal::VertexLookupIndex result_lookup(document);
         for (quader_poly::Face &face : document.faces) {
-          std::reverse(face.vertices.begin(), face.vertices.end());
-          if (face.uvs.size() == face.vertices.size()) {
-            std::reverse(face.uvs.begin(), face.uvs.end());
+          const auto* source_face = quader_poly::find_face(*source_document, face.id);
+          if (source_face == nullptr ||
+              !quader_poly::document_internal::reverse_reflected_face_winding(
+                  *source_document, *source_face, document, face, source_lookup, result_lookup)) {
+            return quader_poly::OperationResult::failure(
+                "Reflection cannot preserve this authored face's texture interpolation.");
           }
         }
         return quader_poly::OperationResult{

@@ -9,6 +9,7 @@
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "editor/commands/document/scene_command.hpp"
 #include "scene/scene_transform.hpp"
+#include "scene/scene_texture_mapping.hpp"
 
 #include <memory>
 #include <optional>
@@ -24,6 +25,8 @@ namespace quader {
 struct LinkedInstanceArraySource final {
   EntityId source = kInvalidEntityId;
   std::vector<QMat4> generated_world_transforms;
+  /// Captured per-placement occurrence sampling, parallel to the transforms.
+  std::vector<QMat4> generated_sampling_from_local;
 };
 
 /**
@@ -39,6 +42,11 @@ public:
       SceneDocument &scene, std::string label,
       std::vector<LinkedInstanceArraySource> sources)
       : SceneCommand(scene, std::move(label)), sources_(std::move(sources)) {}
+
+  /// Returns the generated occurrences without consulting mutable selection.
+  [[nodiscard]] const std::vector<EntityId> &generated_occurrences() const {
+    return duplicate_roots_;
+  }
 
   CommandResult undo() override {
     if (duplicate_roots_.empty()) {
@@ -99,6 +107,9 @@ private:
       const InstanceOccurrenceComponent *occurrence =
           scene().instance_occurrence(source.source);
       if (occurrence == nullptr || source.generated_world_transforms.empty() ||
+          (!source.generated_sampling_from_local.empty() &&
+           source.generated_sampling_from_local.size() !=
+               source.generated_world_transforms.size()) ||
           !scene().is_instance_definition_entity(occurrence->definition) ||
           scene().has_children(source.source)) {
         source_snapshots_.clear();
@@ -134,8 +145,8 @@ private:
           parent == kInvalidEntityId
               ? scene_transform_identity_matrix()
               : scene().world_transform_matrix(parent);
-      for (const QMat4 &generated_world :
-           source.generated_world_transforms) {
+      for (std::size_t index = 0; index < source.generated_world_transforms.size(); ++index) {
+        const QMat4 &generated_world = source.generated_world_transforms[index];
         const std::optional<TransformComponent> local =
             try_scene_local_transform_preserving_world(
                 parent_world, generated_world, snapshot.transform);
@@ -143,9 +154,24 @@ private:
           return command_invalid_result(
               "Instance array transform could not be represented.");
         }
+        const QMat4 recomposed = scene_transform_multiply(
+            parent_world, compose_transform(local->spatial_transform()));
+        if (!scene_matrix_near_equal(recomposed, generated_world)) {
+          return command_invalid_result(
+              "Instance array transform cannot be represented under its "
+              "source parent without shear.");
+        }
 
         DocumentEntitySnapshot generated = snapshot;
         generated.transform = *local;
+        if (!source.generated_sampling_from_local.empty()) {
+          const QMat4 &mapping = source.generated_sampling_from_local[index];
+          if (!texture_mapping_is_valid({mapping})) {
+            return command_invalid_result("Instance array texture mapping is invalid.");
+          }
+          generated.texture_mapping = mapping.values == QMat4{}.values
+              ? std::nullopt : std::optional{TextureMappingComponent{mapping}};
+        }
         generated.children.clear();
         const EntityId duplicate = document_command_duplicate_entity_snapshot_tree(
             scene(), generated, parent, false, nullptr, &name_allocator);

@@ -9,6 +9,7 @@
 // Source-only neutral modeling core contract shared by SDK and native owners.
 
 #include "quader_poly_document_mesh_internal.hpp"
+#include <quader/modeling/neutral/geometry/quad_uv_interpolation.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -22,6 +23,36 @@
 #include <vector>
 
 namespace quader_poly::document_internal {
+
+/** Prepares one immutable face chart for repeated topology-operation queries. */
+class FaceUvSampler final {
+public:
+    FaceUvSampler(const Document& document, const Face& face);
+    FaceUvSampler(const Document& document, const Face& face,
+                  const VertexLookupIndex& vertex_lookup);
+    [[nodiscard]] std::optional<quader::QVec2> sample(quader::QVec3 position) const;
+    [[nodiscard]] bool has_quad_interpolation() const noexcept { return quad_.has_value(); }
+    [[nodiscard]] std::span<const quader::QVec3> positions() const noexcept { return positions_; }
+    [[nodiscard]] std::span<const Triangle> triangles() const noexcept { return triangles_; }
+
+private:
+    std::vector<quader::QVec3> positions_;
+    std::vector<quader::QVec2> base_uvs_;
+    std::vector<Triangle> triangles_;
+    FaceTextureTransform transform_;
+    std::optional<quader_geometry::QuadUvInterpolation> quad_;
+};
+
+// Samples the displayed base chart, including eligible bilinear quads.
+// Positions outside the source face cannot be sampled.
+std::optional<quader::QVec2> sample_face_base_uv(
+    const Document& document, const Face& face, quader::QVec3 position);
+// Retains exact authored corners and interpolates newly inserted corners in
+// that face's own chart. Failure leaves the destination unchanged.
+bool preserve_face_uvs(const Document& source_document, const Face& source_face,
+    const Document& destination_document, Face& destination_face);
+bool face_vertex_uv_is_redundant(
+    const Document& document, const Face& face, ElementId vertex_id);
 
 std::vector<ElementId> unique_vertex_ids(std::vector<ElementId> ids);
 std::optional<quader::QVec3> uv_basis_origin_for_anchor(const quader::QVec3& position, const quader::QVec2& uv, const quader::QVec3& u_axis, const quader::QVec3& v_axis);

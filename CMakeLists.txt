@@ -1492,6 +1492,11 @@ if(QUADER_BUILD_TESTS)
         tests/curve_tool_service_tests.cpp
         tests/fatal_error_handler_behavior_tests.cpp
         tests/linear_array_tests.cpp
+        tests/radial_array_instance_tests.cpp
+        tests/uv_instance_preview_tests.cpp
+        tests/uv_native_sampling_tests.cpp
+        tests/uv_transform_acceptance_tests.cpp
+        tests/mesh_quad_uv_interpolation_tests.cpp
         tests/local_stress_tests.cpp
         tests/local_visibility_tests.cpp
         tests/localization_tests.cpp

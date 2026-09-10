@@ -280,10 +280,18 @@ TEST(QuaderMeshMaterialTests,
     EXPECT_NE(vertex.find("samplingNormal / normalMagnitude"),
               std::string::npos);
     EXPECT_LT(vertex.find("samplingNormal / normalMagnitude"),
-              vertex.find("generatedTextureUv(samplingPosition, samplingNormal)"));
+              vertex.find("generatedTextureUv(samplingFromLocal[0].xyz, samplingNormal)"));
     EXPECT_TRUE(source_contains_compact(
-        vertex, "generatedTextureUv(samplingPosition, samplingNormal)"
-                " - generatedTextureUv(position, geometricNormal)"));
+        vertex, "chartDelta = generatedTextureUv("
+                "samplingFromLocal[3].xyz, geometricNormal)"));
+    EXPECT_NE(vertex.find("if (linearSampling)"), std::string::npos);
+    EXPECT_TRUE(source_contains_compact(
+        vertex, "generatedTextureUv(samplingFromLocal[0].xyz, samplingNormal)"
+                " - generatedTextureUv(vec3(1.0, 0.0, 0.0), geometricNormal)"));
+    EXPECT_TRUE(source_contains_compact(
+        vertex, "chartDelta = deltaX * position.x + deltaY * position.y"
+                " + deltaZ * position.z"
+                " + generatedTextureUv(samplingFromLocal[3].xyz, samplingNormal)"));
     EXPECT_TRUE(source_contains_compact(
         vertex, "dot(carrier.xy, chartDelta), dot(carrier.zw, chartDelta)"));
     EXPECT_TRUE(source_contains_compact(

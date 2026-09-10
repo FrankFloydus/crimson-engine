@@ -15,6 +15,10 @@
 
 namespace quader_poly {
 
+/** Strict semantic equality uses chart span and stored precision, not tile offset. */
+[[nodiscard]] bool texture_uv_coordinate_close(
+    double fitted, float stored, double span) noexcept;
+
 [[nodiscard]] bool
 valid_face_texture_transform(const FaceTextureTransform &transform) noexcept;
 [[nodiscard]] quader::QVec2 apply_face_texture_transform(
@@ -37,6 +41,17 @@ valid_face_texture_transform(const FaceTextureTransform &transform) noexcept;
 [[nodiscard]] std::array<float, 4> face_texture_carrier(
     const Document &document, const Face &face, quader::QVec3 geometric_normal);
 
+/** Transient affine chart coefficients, before final authored float storage. */
+struct TextureAffineChart {
+  std::array<double, 4> carrier;
+  std::array<double, 2> offset;
+};
+
+/** Fits unrounded planar coordinates with the canonical normalized QR owner. */
+[[nodiscard]] std::optional<TextureAffineChart> fit_texture_affine_chart(
+    std::span<const std::array<double, 2>> coordinates,
+    std::span<const quader::QVec2> uvs);
+
 /**
  * Evaluates an occurrence's placement correction without baking geometry or
  * losing authored residuals. Identity correction returns uv0 exactly.
@@ -44,6 +59,31 @@ valid_face_texture_transform(const FaceTextureTransform &transform) noexcept;
 [[nodiscard]] quader::QVec2 evaluate_texture_mapping(
     quader::QVec2 uv0, quader::QVec3 position, quader::QVec3 geometric_normal,
     const std::array<float, 4> &carrier,
+    const Transform3 &sampling_from_local);
+
+/** Selects storage reconstruction or non-affine residual uncertainty. */
+enum class TextureUvPrecision {
+  Reconstruction,
+  AffineResidual,
+};
+
+/**
+ * Per-corner float error bounds from the stored chart, fitted carrier and
+ * evaluator. Affine residual bounds exclude affine carrier error, which cannot
+ * explain a warped source chart. These bounds never define semantic no-ops.
+ */
+[[nodiscard]] std::vector<std::array<double, 2>> face_texture_precision_bounds(
+    std::span<const quader::QVec3> positions,
+    std::span<const quader::QVec2> base_uvs,
+    quader::QVec3 geometric_normal, const FaceTextureTransform &transform,
+    const Transform3 &sampling_from_local, TextureUvPrecision precision);
+
+/** Validates reconstruction with the shared storage/evaluation error model. */
+[[nodiscard]] bool face_texture_uvs_reconstruct(
+    std::span<const quader::QVec3> positions,
+    std::span<const quader::QVec2> base_uvs,
+    std::span<const quader::QVec2> desired_uvs,
+    quader::QVec3 geometric_normal, const FaceTextureTransform &transform,
     const Transform3 &sampling_from_local);
 
 /**
