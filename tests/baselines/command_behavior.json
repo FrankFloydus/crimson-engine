@@ -11013,19 +11013,19 @@
       },
       "result": {
         "ok": true,
-        "changed": false,
-        "mutation_kind": 0,
+        "changed": true,
+        "mutation_kind": 2,
         "revisions": {
           "project": 0,
-          "scene": 7,
+          "scene": 8,
           "scene_layer": 0,
-          "assets": 1,
-          "modeling_content": 1,
+          "assets": 2,
+          "modeling_content": 2,
           "modeling_selection": 4
         }
       },
       "before": "574c21a952fba4ec928386e61365171b",
-      "after": "574c21a952fba4ec928386e61365171b",
+      "after": "7d519667de99fca71015c8d0f8508491",
       "before_domains": {
         "documents": "c203aebd33ef43901b5476e66d66fde9",
         "scene": "4807ac3255fe7e2d934636a0ed2b453b",
@@ -11046,16 +11046,149 @@
         "selection": "29cd952daebc98373b98d1e17bcfa77b",
         "overlay": "d660be32dc2be6a0f46e102e004d74ff",
         "assets": "6d7e42975a0deda918a78529b098ea3f",
-        "history": "149456ac50c57b034878e2c8e60ec8de",
+        "history": "c483ead1a948b574e975b0a84fd06799",
         "tools": "4f6814a82d727def9299cc506ab85861",
         "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
         "preferences": "e23e9e14bf747daa83518d3725f62665",
-        "revisions": "8957116e359100f4353ee5ae198e810b"
+        "revisions": "978a36825446a51fb36d3b3141499675"
       },
-      "changed_domains": 0,
+      "changed_domains": 1088,
       "external_calls_before": 0,
       "external_calls_after": 0,
-      "lifecycle": {}
+      "lifecycle": {
+        "undo": {
+          "result": {
+            "ok": true,
+            "changed": true,
+            "mutation_kind": 1,
+            "revisions": {
+              "project": 0,
+              "scene": 8,
+              "scene_layer": 0,
+              "assets": 3,
+              "modeling_content": 3,
+              "modeling_selection": 4
+            }
+          },
+          "before": "7d519667de99fca71015c8d0f8508491",
+          "after": "3fae4ad175b6cded4bf675df816a5317",
+          "before_domains": {
+            "documents": "c203aebd33ef43901b5476e66d66fde9",
+            "scene": "4807ac3255fe7e2d934636a0ed2b453b",
+            "geometry": "07c902954dc1635e3a54439612cd1e79",
+            "selection": "29cd952daebc98373b98d1e17bcfa77b",
+            "overlay": "d660be32dc2be6a0f46e102e004d74ff",
+            "assets": "6d7e42975a0deda918a78529b098ea3f",
+            "history": "c483ead1a948b574e975b0a84fd06799",
+            "tools": "4f6814a82d727def9299cc506ab85861",
+            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
+            "preferences": "e23e9e14bf747daa83518d3725f62665",
+            "revisions": "978a36825446a51fb36d3b3141499675"
+          },
+          "after_domains": {
+            "documents": "c203aebd33ef43901b5476e66d66fde9",
+            "scene": "4807ac3255fe7e2d934636a0ed2b453b",
+            "geometry": "07c902954dc1635e3a54439612cd1e79",
+            "selection": "29cd952daebc98373b98d1e17bcfa77b",
+            "overlay": "d660be32dc2be6a0f46e102e004d74ff",
+            "assets": "6d7e42975a0deda918a78529b098ea3f",
+            "history": "788163ae5bc2233eaabd88bfd515d0e2",
+            "tools": "4f6814a82d727def9299cc506ab85861",
+            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
+            "preferences": "e23e9e14bf747daa83518d3725f62665",
+            "revisions": "dc2b7de33832815729d625e7a2621625"
+          },
+          "changed_domains": 1088
+        },
+        "redo": {
+          "result": {
+            "ok": true,
+            "changed": true,
+            "mutation_kind": 1,
+            "revisions": {
+              "project": 0,
+              "scene": 8,
+              "scene_layer": 0,
+              "assets": 4,
+              "modeling_content": 4,
+              "modeling_selection": 4
+            }
+          },
+          "before": "3fae4ad175b6cded4bf675df816a5317",
+          "after": "79281d9274e7a54dbc76afdc233ddffd",
+          "before_domains": {
+            "documents": "c203aebd33ef43901b5476e66d66fde9",
+            "scene": "4807ac3255fe7e2d934636a0ed2b453b",
+            "geometry": "07c902954dc1635e3a54439612cd1e79",
+            "selection": "29cd952daebc98373b98d1e17bcfa77b",
+            "overlay": "d660be32dc2be6a0f46e102e004d74ff",
+            "assets": "6d7e42975a0deda918a78529b098ea3f",
+            "history": "788163ae5bc2233eaabd88bfd515d0e2",
+            "tools": "4f6814a82d727def9299cc506ab85861",
+            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
+            "preferences": "e23e9e14bf747daa83518d3725f62665",
+            "revisions": "dc2b7de33832815729d625e7a2621625"
+          },
+          "after_domains": {
+            "documents": "c203aebd33ef43901b5476e66d66fde9",
+            "scene": "4807ac3255fe7e2d934636a0ed2b453b",
+            "geometry": "07c902954dc1635e3a54439612cd1e79",
+            "selection": "29cd952daebc98373b98d1e17bcfa77b",
+            "overlay": "d660be32dc2be6a0f46e102e004d74ff",
+            "assets": "6d7e42975a0deda918a78529b098ea3f",
+            "history": "c483ead1a948b574e975b0a84fd06799",
+            "tools": "4f6814a82d727def9299cc506ab85861",
+            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
+            "preferences": "e23e9e14bf747daa83518d3725f62665",
+            "revisions": "eb96422cd5a6d02f056c2c8a6d45d45f"
+          },
+          "changed_domains": 1088
+        },
+        "repeat": {
+          "result": {
+            "ok": true,
+            "changed": false,
+            "mutation_kind": 0,
+            "revisions": {
+              "project": 0,
+              "scene": 8,
+              "scene_layer": 0,
+              "assets": 4,
+              "modeling_content": 4,
+              "modeling_selection": 4
+            }
+          },
+          "before": "79281d9274e7a54dbc76afdc233ddffd",
+          "after": "79281d9274e7a54dbc76afdc233ddffd",
+          "before_domains": {
+            "documents": "c203aebd33ef43901b5476e66d66fde9",
+            "scene": "4807ac3255fe7e2d934636a0ed2b453b",
+            "geometry": "07c902954dc1635e3a54439612cd1e79",
+            "selection": "29cd952daebc98373b98d1e17bcfa77b",
+            "overlay": "d660be32dc2be6a0f46e102e004d74ff",
+            "assets": "6d7e42975a0deda918a78529b098ea3f",
+            "history": "c483ead1a948b574e975b0a84fd06799",
+            "tools": "4f6814a82d727def9299cc506ab85861",
+            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
+            "preferences": "e23e9e14bf747daa83518d3725f62665",
+            "revisions": "eb96422cd5a6d02f056c2c8a6d45d45f"
+          },
+          "after_domains": {
+            "documents": "c203aebd33ef43901b5476e66d66fde9",
+            "scene": "4807ac3255fe7e2d934636a0ed2b453b",
+            "geometry": "07c902954dc1635e3a54439612cd1e79",
+            "selection": "29cd952daebc98373b98d1e17bcfa77b",
+            "overlay": "d660be32dc2be6a0f46e102e004d74ff",
+            "assets": "6d7e42975a0deda918a78529b098ea3f",
+            "history": "c483ead1a948b574e975b0a84fd06799",
+            "tools": "4f6814a82d727def9299cc506ab85861",
+            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
+            "preferences": "e23e9e14bf747daa83518d3725f62665",
+            "revisions": "eb96422cd5a6d02f056c2c8a6d45d45f"
+          },
+          "changed_domains": 0
+        }
+      }
     },
     "modeling.default_edge_normals": {
       "fixture": 32,
@@ -14756,19 +14889,19 @@
       },
       "result": {
         "ok": true,
-        "changed": false,
-        "mutation_kind": 0,
+        "changed": true,
+        "mutation_kind": 2,
         "revisions": {
           "project": 0,
-          "scene": 7,
+          "scene": 8,
           "scene_layer": 0,
-          "assets": 1,
-          "modeling_content": 1,
-          "modeling_selection": 2
+          "assets": 2,
+          "modeling_content": 2,
+          "modeling_selection": 3
         }
       },
       "before": "932115dcf3a424c81fa2ed1ffc77f858",
-      "after": "932115dcf3a424c81fa2ed1ffc77f858",
+      "after": "db3434e156e120ff7f27c4802a52e5f6",
       "before_domains": {
         "documents": "c203aebd33ef43901b5476e66d66fde9",
         "scene": "f6eb8a68bf03999637afd5a31d697535",
@@ -14789,16 +14922,149 @@
         "selection": "99634e3caaf07113f446d9f5ddeace12",
         "overlay": "2d247ba4c61215e52c530ea381f7cc32",
         "assets": "ea228d9c211686f9d952ad1257ae39ef",
-        "history": "4404c6ffdacf87205e55c2eaa73f0bec",
+        "history": "f9bfbe52c0b4d6ce9a1725cb709f72a9",
         "tools": "4f6814a82d727def9299cc506ab85861",
         "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
         "preferences": "e23e9e14bf747daa83518d3725f62665",
-        "revisions": "93eca924914054234354532dff821078"
+        "revisions": "2ce03bc54f49d1825d577a239b05726d"
       },
-      "changed_domains": 0,
+      "changed_domains": 1088,
       "external_calls_before": 0,
       "external_calls_after": 0,
-      "lifecycle": {}
+      "lifecycle": {
+        "undo": {
+          "result": {
+            "ok": true,
+            "changed": true,
+            "mutation_kind": 1,
+            "revisions": {
+              "project": 0,
+              "scene": 8,
+              "scene_layer": 0,
+              "assets": 3,
+              "modeling_content": 3,
+              "modeling_selection": 4
+            }
+          },
+          "before": "db3434e156e120ff7f27c4802a52e5f6",
+          "after": "190fa96c8a456ee7ce76853cf3484782",
+          "before_domains": {
+            "documents": "c203aebd33ef43901b5476e66d66fde9",
+            "scene": "f6eb8a68bf03999637afd5a31d697535",
+            "geometry": "2971f2760c7cb3cc672da53848b62c2f",
+            "selection": "99634e3caaf07113f446d9f5ddeace12",
+            "overlay": "2d247ba4c61215e52c530ea381f7cc32",
+            "assets": "ea228d9c211686f9d952ad1257ae39ef",
+            "history": "f9bfbe52c0b4d6ce9a1725cb709f72a9",
+            "tools": "4f6814a82d727def9299cc506ab85861",
+            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
+            "preferences": "e23e9e14bf747daa83518d3725f62665",
+            "revisions": "2ce03bc54f49d1825d577a239b05726d"
+          },
+          "after_domains": {
+            "documents": "c203aebd33ef43901b5476e66d66fde9",
+            "scene": "f6eb8a68bf03999637afd5a31d697535",
+            "geometry": "2971f2760c7cb3cc672da53848b62c2f",
+            "selection": "99634e3caaf07113f446d9f5ddeace12",
+            "overlay": "2d247ba4c61215e52c530ea381f7cc32",
+            "assets": "ea228d9c211686f9d952ad1257ae39ef",
+            "history": "d161d1fa5741ed5df24fc6ca7e75c4cf",
+            "tools": "4f6814a82d727def9299cc506ab85861",
+            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
+            "preferences": "e23e9e14bf747daa83518d3725f62665",
+            "revisions": "eb787b89c0720aa61680aedb0c7f0929"
+          },
+          "changed_domains": 1088
+        },
+        "redo": {
+          "result": {
+            "ok": true,
+            "changed": true,
+            "mutation_kind": 1,
+            "revisions": {
+              "project": 0,
+              "scene": 8,
+              "scene_layer": 0,
+              "assets": 4,
+              "modeling_content": 4,
+              "modeling_selection": 5
+            }
+          },
+          "before": "190fa96c8a456ee7ce76853cf3484782",
+          "after": "348b3134a9f410a1e42221415fd411d5",
+          "before_domains": {
+            "documents": "c203aebd33ef43901b5476e66d66fde9",
+            "scene": "f6eb8a68bf03999637afd5a31d697535",
+            "geometry": "2971f2760c7cb3cc672da53848b62c2f",
+            "selection": "99634e3caaf07113f446d9f5ddeace12",
+            "overlay": "2d247ba4c61215e52c530ea381f7cc32",
+            "assets": "ea228d9c211686f9d952ad1257ae39ef",
+            "history": "d161d1fa5741ed5df24fc6ca7e75c4cf",
+            "tools": "4f6814a82d727def9299cc506ab85861",
+            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
+            "preferences": "e23e9e14bf747daa83518d3725f62665",
+            "revisions": "eb787b89c0720aa61680aedb0c7f0929"
+          },
+          "after_domains": {
+            "documents": "c203aebd33ef43901b5476e66d66fde9",
+            "scene": "f6eb8a68bf03999637afd5a31d697535",
+            "geometry": "2971f2760c7cb3cc672da53848b62c2f",
+            "selection": "99634e3caaf07113f446d9f5ddeace12",
+            "overlay": "2d247ba4c61215e52c530ea381f7cc32",
+            "assets": "ea228d9c211686f9d952ad1257ae39ef",
+            "history": "f9bfbe52c0b4d6ce9a1725cb709f72a9",
+            "tools": "4f6814a82d727def9299cc506ab85861",
+            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
+            "preferences": "e23e9e14bf747daa83518d3725f62665",
+            "revisions": "a8eaaeca77f658de21d4bc859e560511"
+          },
+          "changed_domains": 1088
+        },
+        "repeat": {
+          "result": {
+            "ok": true,
+            "changed": false,
+            "mutation_kind": 0,
+            "revisions": {
+              "project": 0,
+              "scene": 8,
+              "scene_layer": 0,
+              "assets": 4,
+              "modeling_content": 4,
+              "modeling_selection": 5
+            }
+          },
+          "before": "348b3134a9f410a1e42221415fd411d5",
+          "after": "348b3134a9f410a1e42221415fd411d5",
+          "before_domains": {
+            "documents": "c203aebd33ef43901b5476e66d66fde9",
+            "scene": "f6eb8a68bf03999637afd5a31d697535",
+            "geometry": "2971f2760c7cb3cc672da53848b62c2f",
+            "selection": "99634e3caaf07113f446d9f5ddeace12",
+            "overlay": "2d247ba4c61215e52c530ea381f7cc32",
+            "assets": "ea228d9c211686f9d952ad1257ae39ef",
+            "history": "f9bfbe52c0b4d6ce9a1725cb709f72a9",
+            "tools": "4f6814a82d727def9299cc506ab85861",
+            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
+            "preferences": "e23e9e14bf747daa83518d3725f62665",
+            "revisions": "a8eaaeca77f658de21d4bc859e560511"
+          },
+          "after_domains": {
+            "documents": "c203aebd33ef43901b5476e66d66fde9",
+            "scene": "f6eb8a68bf03999637afd5a31d697535",
+            "geometry": "2971f2760c7cb3cc672da53848b62c2f",
+            "selection": "99634e3caaf07113f446d9f5ddeace12",
+            "overlay": "2d247ba4c61215e52c530ea381f7cc32",
+            "assets": "ea228d9c211686f9d952ad1257ae39ef",
+            "history": "f9bfbe52c0b4d6ce9a1725cb709f72a9",
+            "tools": "4f6814a82d727def9299cc506ab85861",
+            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
+            "preferences": "e23e9e14bf747daa83518d3725f62665",
+            "revisions": "a8eaaeca77f658de21d4bc859e560511"
+          },
+          "changed_domains": 0
+        }
+      }
     },
     "modeling.combine_mesh": {
       "fixture": 4,
@@ -24153,5 +24419,5 @@
       "lifecycle": {}
     }
   },
-  "approved_change_reason": "Update requested default shortcuts, operation hints, and Blender-inspired viewport framing"
+  "approved_change_reason": "Ordinary generated faces now use automatic edge-normal fans; explicit face shading remains separate and QGEO 1.3 records that distinction."
 }

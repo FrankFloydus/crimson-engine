@@ -271,8 +271,8 @@ void cube_factory_keeps_segment_counts()
     const Document cube = make_cube(cube_spec);
     ASSERT_TRUE(require_test(cube.faces.size() == 22U, "segmented cube face count should be stable"));
     ASSERT_TRUE(require_test(std::ranges::all_of(cube.faces, [](const Face& face) {
-        return face.normal_shading == SurfaceShading::Flat;
-    }), "cube faces should use flat authored shading"));
+        return face.normal_shading == SurfaceShading::Authored;
+    }), "cube faces should use automatic edge normals"));
     ASSERT_TRUE(require_document_compiles(cube, "segmented cube"));
     ASSERT_TRUE(require_valid_document(cube));
 }
@@ -308,10 +308,10 @@ void cylinder_factory_honors_side_caps_dimensions_and_shading()
     ASSERT_TRUE(require_test(capped.vertices.size() == 16U, "cylinder should create two vertices per side"));
     ASSERT_TRUE(require_test(capped.faces.size() == 10U, "capped cylinder should create one face per side and two caps"));
     ASSERT_TRUE(require_test(std::ranges::all_of(capped.faces.begin(), capped.faces.begin() + 8, [](const Face& face) {
-        return face.normal_shading == SurfaceShading::Smooth;
-    }), "cylinder side faces should use smooth authored shading"));
-    ASSERT_TRUE(require_test(capped.faces[8].normal_shading == SurfaceShading::Flat, "cylinder bottom cap should be flat"));
-    ASSERT_TRUE(require_test(capped.faces[9].normal_shading == SurfaceShading::Flat, "cylinder top cap should be flat"));
+        return face.normal_shading == SurfaceShading::Authored;
+    }), "cylinder side faces should use automatic edge normals"));
+    ASSERT_TRUE(require_test(capped.faces[8].normal_shading == SurfaceShading::Authored, "cylinder bottom cap should use automatic edge normals"));
+    ASSERT_TRUE(require_test(capped.faces[9].normal_shading == SurfaceShading::Authored, "cylinder top cap should use automatic edge normals"));
     ASSERT_TRUE(require_bounds(capped, spec.width, spec.height, spec.depth));
     quader::QVec3 bottom_cap_normal;
     ASSERT_TRUE(authored_face_normal(capped, capped.faces[8], bottom_cap_normal));
@@ -329,8 +329,8 @@ void cylinder_factory_honors_side_caps_dimensions_and_shading()
     ASSERT_TRUE(require_test(open.vertices.size() == 16U, "open cylinder should preserve its side vertices"));
     ASSERT_TRUE(require_test(open.faces.size() == 8U, "open cylinder should omit both cap faces"));
     ASSERT_TRUE(require_test(std::ranges::all_of(open.faces, [](const Face& face) {
-        return face.normal_shading == SurfaceShading::Smooth;
-    }), "open cylinder should retain smooth side shading"));
+        return face.normal_shading == SurfaceShading::Authored;
+    }), "open cylinder should retain automatic edge normals"));
     ASSERT_TRUE(require_document_compiles(open, "open cylinder"));
 
     CylinderPrimitiveSpec smooth_spec;
@@ -362,9 +362,9 @@ void cone_factory_honors_side_cap_dimensions_and_shading()
     ASSERT_TRUE(require_test(capped.vertices.size() == 9U, "cone should share one apex across all sides"));
     ASSERT_TRUE(require_test(capped.faces.size() == 9U, "capped cone should create one face per side and one cap"));
     ASSERT_TRUE(require_test(std::ranges::all_of(capped.faces.begin(), capped.faces.begin() + 8, [](const Face& face) {
-        return face.normal_shading == SurfaceShading::Smooth;
-    }), "cone side faces should use smooth authored shading"));
-    ASSERT_TRUE(require_test(capped.faces.back().normal_shading == SurfaceShading::Flat, "cone base cap should be flat"));
+        return face.normal_shading == SurfaceShading::Authored;
+    }), "cone side faces should use automatic edge normals"));
+    ASSERT_TRUE(require_test(capped.faces.back().normal_shading == SurfaceShading::Authored, "cone base cap should use automatic edge normals"));
     ASSERT_TRUE(require_test(std::ranges::all_of(capped.faces, [](const Face& face) {
         return face.uvs.empty();
     }), "cone should preserve the primitive authored-UV contract"));
@@ -403,8 +403,8 @@ void sphere_factory_honors_radial_ring_and_hemisphere_settings()
     ASSERT_TRUE(require_test(sphere.vertices.size() == 26U, "sphere should share its poles and radial ring vertices"));
     ASSERT_TRUE(require_test(sphere.faces.size() == 32U, "sphere face count should equal radial segments times rings"));
     ASSERT_TRUE(require_test(std::ranges::all_of(sphere.faces, [](const Face& face) {
-        return face.normal_shading == SurfaceShading::Smooth;
-    }), "full sphere faces should use smooth authored shading"));
+        return face.normal_shading == SurfaceShading::Authored;
+    }), "full sphere faces should use automatic edge normals"));
     ASSERT_TRUE(require_bounds(sphere, spec.width, spec.height, spec.depth));
     quader::QVec3 sphere_normal;
     ASSERT_TRUE(authored_face_normal(sphere, sphere.faces.front(), sphere_normal));
@@ -422,9 +422,9 @@ void sphere_factory_honors_radial_ring_and_hemisphere_settings()
     ASSERT_TRUE(require_test(hemisphere.faces.size() == 33U, "hemisphere should add one flat base to its curved faces"));
     ASSERT_TRUE(require_test(std::ranges::all_of(
         hemisphere.faces.begin(), hemisphere.faces.end() - 1, [](const Face& face) {
-            return face.normal_shading == SurfaceShading::Smooth;
-        }), "hemisphere curved faces should use smooth authored shading"));
-    ASSERT_TRUE(require_test(hemisphere.faces.back().normal_shading == SurfaceShading::Flat, "hemisphere base should be flat"));
+            return face.normal_shading == SurfaceShading::Authored;
+        }), "hemisphere curved faces should use automatic edge normals"));
+    ASSERT_TRUE(require_test(hemisphere.faces.back().normal_shading == SurfaceShading::Authored, "hemisphere base should use automatic edge normals"));
     quader::QVec3 hemisphere_base_normal;
     ASSERT_TRUE(authored_face_normal(
         hemisphere, hemisphere.faces.back(), hemisphere_base_normal));
@@ -450,8 +450,8 @@ void torus_factory_honors_segment_ratio_dimension_and_shading_settings()
     ASSERT_TRUE(require_test(torus.vertices.size() == 32U, "torus should create one vertex per major/minor segment pair"));
     ASSERT_TRUE(require_test(torus.faces.size() == 32U, "torus should create one quad per major/minor segment pair"));
     ASSERT_TRUE(require_test(std::ranges::all_of(torus.faces, [](const Face& face) {
-        return face.vertices.size() == 4U && face.normal_shading == SurfaceShading::Smooth;
-    }), "torus faces should be smooth quads"));
+        return face.vertices.size() == 4U && face.normal_shading == SurfaceShading::Authored;
+    }), "torus quads should use automatic edge normals"));
     ASSERT_TRUE(require_test(std::ranges::all_of(torus.faces, [](const Face& face) {
         return face.uvs.empty();
     }), "torus should preserve the primitive authored-UV contract"));

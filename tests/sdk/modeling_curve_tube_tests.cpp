@@ -269,7 +269,7 @@ TEST(ModelingCurveTubeTests,
     EXPECT_EQ(face.vertices.size(), 4U);
     EXPECT_EQ(face.uvs.size(), 4U);
     EXPECT_EQ(face.material_slot, 0U);
-    EXPECT_EQ(face.shading, AuthoredSurfaceShading::Smooth);
+    EXPECT_EQ(face.shading, AuthoredSurfaceShading::Authored);
   }
 
   // The radial UV seam uses the same authored vertices at V=0 and V=1.
@@ -495,7 +495,7 @@ TEST(ModelingCurveTubeTests,
                           [](const AuthoredTopologyFace &face) {
                             return face.material_slot == 0U &&
                                    face.shading ==
-                                       AuthoredSurfaceShading::Smooth;
+                                       AuthoredSurfaceShading::Authored;
                           }));
 }
 

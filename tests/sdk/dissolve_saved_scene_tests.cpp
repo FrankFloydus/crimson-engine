@@ -365,7 +365,7 @@ TEST(SavedArchDissolveSdkTests,
                              {1309U, topology.faces[3].uvs[0]}});
     for (const auto* face : {first, second}) {
       EXPECT_EQ(face->material_slot, 1U);
-      EXPECT_EQ(face->shading, AuthoredSurfaceShading::Flat);
+      EXPECT_EQ(face->shading, topology.faces[0].shading);
       EXPECT_EQ(face->texture_transform, topology.faces[0].texture_transform);
     }
     for (const auto index : {4U, 5U}) {

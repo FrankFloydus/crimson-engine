@@ -216,36 +216,22 @@ private:
     std::map<CornerKey, CornerKey> parents_;
 };
 
-bool face_uses_smooth_normals(const Face& face, SurfaceShading shading)
-{
-    switch (shading) {
-    case SurfaceShading::Flat:
-      return false;
-    case SurfaceShading::Smooth:
-      return true;
-    case SurfaceShading::Authored:
-      return face.normal_shading == SurfaceShading::Smooth;
-    }
-    return false;
-}
-
 std::map<CornerKey, quader::QVec3> build_authored_smooth_corner_normals(
     const Document& document,
-    SurfaceShading shading,
     const VertexLookupIndex& vertex_lookup)
 {
     QDR_PROFILE_SCOPE("qdr_document.build_authored_smooth_corner_normals");
     CornerDisjointSet corners;
-    std::map<ElementId, const Face*> smooth_faces;
+    std::map<ElementId, const Face*> fan_faces;
     std::map<ElementId, quader::QVec3> face_normals;
     std::map<Edge, std::vector<ElementId>, EdgeLess> faces_by_edge;
     std::map<Edge, std::size_t, EdgeLess> incidence_by_edge;
     std::set<Edge, EdgeLess> hard_edges;
     std::set<Edge, EdgeLess> soft_edges;
 
-    // Hammer's mesh default is a fixed 40-degree smoothing angle. Authored
-    // hard and soft states override this threshold without changing whether a
-    // face itself participates in smooth shading.
+    // Every valid face contributes to its connected geometric normal fan.
+    // Hard and Soft override the default 40-degree edge threshold. Explicit
+    // face shading affects output only, never connectivity or contributions.
     constexpr float kDefaultNormalJoinDot = 0.7660444431F;
     constexpr float kNormalJoinDotEpsilon = 1.0e-5F;
 
@@ -276,11 +262,7 @@ std::map<CornerKey, quader::QVec3> build_authored_smooth_corner_normals(
             continue;
         }
 
-        if (!face_uses_smooth_normals(face, shading)) {
-            continue;
-        }
-
-        smooth_faces[face.id] = &face;
+        fan_faces[face.id] = &face;
         face_normals[face.id] = normal;
         for (ElementId vertex_id : face.vertices) {
             corners.add({ face.id, vertex_id });
@@ -314,7 +296,7 @@ std::map<CornerKey, quader::QVec3> build_authored_smooth_corner_normals(
     }
 
     std::map<CornerKey, quader::QVec3> normal_sums_by_root;
-    for (const auto& [face_id, face] : smooth_faces) {
+    for (const auto& [face_id, face] : fan_faces) {
         const quader::QVec3 normal = face_normals[face_id];
         for (ElementId vertex_id : face->vertices) {
             normal_sums_by_root[corners.find({ face_id, vertex_id })] += normal;
@@ -322,7 +304,7 @@ std::map<CornerKey, quader::QVec3> build_authored_smooth_corner_normals(
     }
 
     std::map<CornerKey, quader::QVec3> normals;
-    for (const auto& [face_id, face] : smooth_faces) {
+    for (const auto& [face_id, face] : fan_faces) {
         for (ElementId vertex_id : face->vertices) {
             const CornerKey key { face_id, vertex_id };
             const quader::QVec3 normal = normalize_or_zero(normal_sums_by_root[corners.find(key)]);
@@ -377,7 +359,7 @@ void compile_document_into(const Document &document, CompiledMesh &mesh,
     const std::map<CornerKey, quader::QVec3> authored_smooth_corner_normals =
         shading == SurfaceShading::Authored
             ? build_authored_smooth_corner_normals(
-                  document, shading, vertex_lookup)
+                  document, vertex_lookup)
             : std::map<CornerKey, quader::QVec3>{};
 
     std::vector<std::uint32_t> compiled_face_vertices;
@@ -440,7 +422,8 @@ void compile_document_into(const Document &document, CompiledMesh &mesh,
                   length_squared(smooth_normal->second) > kEpsilon) {
                 vertex_normal = smooth_normal->second;
               }
-            } else if (face_uses_smooth_normals(face, shading)) {
+            } else if (shading == SurfaceShading::Authored &&
+                       face.normal_shading != SurfaceShading::Flat) {
               const auto smooth_normal =
                   authored_smooth_corner_normals.find({face.id, vertex_id});
               if (smooth_normal != authored_smooth_corner_normals.end() &&

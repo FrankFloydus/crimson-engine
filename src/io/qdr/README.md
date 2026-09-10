@@ -68,10 +68,15 @@ units, color modes, and source presets are rejected. Source presets are editable
 not spectral simulations, and retain their stable enum identities when saved.
 
 Curves need at least two anchors and cannot be instance-definition members. Curve samples and tool
-drafts are derived/transient. QGEO 1.2 stores explicit disjoint Hard and Soft edge-normal rows plus
-face texture scale/shift/rotation. QGEO 1.0 reads identity texture transforms; QGEO 1.0 and 1.1
-migrate every live non-Hard edge shared by at least two Smooth faces to explicit Soft so older scenes
-retain their rendered normals. Current writers omit legacy `ScenePayload.objects`: old records may
+drafts are derived/transient. QGEO 1.3 stores explicit disjoint Hard and Soft edge-normal rows,
+face texture scale/shift/rotation, and distinct automatic (`Authored`) and explicit Flat face output.
+Pre-1.3 encoding used Flat for both ordinary constructor defaults and explicit Shade Flat, so those
+indistinguishable values migrate to automatic edge normals. This also applies to legacy native CSR;
+explicit Flat survives unchanged once written as QGEO 1.3. QGEO 1.0 reads identity texture transforms.
+QGEO 1.0 and 1.1 first migrate every live non-Hard edge shared by at least two Smooth faces to
+explicit Soft, before migrating implicit face defaults. Deferred pre-1.3 geometry is materialized
+and canonicalized on save; subsequent reads may preserve the current encoded payload lazily.
+Current writers omit legacy `ScenePayload.objects`: old records may
 fill missing entity editor-object IDs, but explicit conflicting IDs fail.
 
 Selection, hover, history, tools, and previews are not persisted. The stored perspective camera is

@@ -41,21 +41,6 @@ float clamp_torus_tube_radius_ratio(float value)
     return std::clamp(value, 0.01F, 0.49F);
 }
 
-void set_face_shading(Document& document, ElementId face_id, SurfaceShading shading)
-{
-    if (Face* face = find_face(document, face_id); face != nullptr) {
-        face->normal_shading = shading;
-    }
-}
-
-void add_shaded_face(
-    Document& document,
-    std::span<const ElementId> vertices,
-    SurfaceShading shading)
-{
-    set_face_shading(document, add_face(document, vertices), shading);
-}
-
 void reverse_all_faces(Document& document)
 {
     for (Face& face : document.faces) {
@@ -99,7 +84,7 @@ void add_radial_band(
             upper_ring[next],
             lower_ring[next],
         };
-        add_shaded_face(document, face, SurfaceShading::Smooth);
+        add_face(document, face);
     }
 }
 
@@ -218,9 +203,9 @@ Document make_cylinder(const CylinderPrimitiveSpec& spec)
     add_radial_band(document, bottom_ring, top_ring);
 
     if (spec.capped) {
-        add_shaded_face(document, bottom_ring, SurfaceShading::Flat);
+        add_face(document, bottom_ring);
         const std::vector<ElementId> top_cap(top_ring.rbegin(), top_ring.rend());
-        add_shaded_face(document, top_cap, SurfaceShading::Flat);
+        add_face(document, top_cap);
     }
 
     if (spec.flip_faces) {
@@ -247,11 +232,11 @@ Document make_cone(const ConePrimitiveSpec& spec)
         const std::size_t current = static_cast<std::size_t>(segment);
         const std::size_t next = (current + 1U) % base_ring.size();
         const std::array face { base_ring[current], apex, base_ring[next] };
-        add_shaded_face(document, face, SurfaceShading::Smooth);
+        add_face(document, face);
     }
 
     if (spec.capped) {
-        add_shaded_face(document, base_ring, SurfaceShading::Flat);
+        add_face(document, base_ring);
     }
 
     if (spec.flip_faces) {
@@ -296,10 +281,10 @@ Document make_sphere(const SpherePrimitiveSpec& spec)
             const std::size_t current = static_cast<std::size_t>(segment);
             const std::size_t next = (current + 1U) % last_ring.size();
             const std::array face { last_ring[current], top, last_ring[next] };
-            add_shaded_face(document, face, SurfaceShading::Smooth);
+            add_face(document, face);
         }
 
-        add_shaded_face(document, radial_rings.front(), SurfaceShading::Flat);
+        add_face(document, radial_rings.front());
     } else {
         const ElementId bottom = add_vertex(document, { 0.0F, -half_height, 0.0F });
         std::vector<std::vector<ElementId>> radial_rings;
@@ -321,7 +306,7 @@ Document make_sphere(const SpherePrimitiveSpec& spec)
             const std::size_t current = static_cast<std::size_t>(segment);
             const std::size_t next = (current + 1U) % first_ring.size();
             const std::array face { bottom, first_ring[current], first_ring[next] };
-            add_shaded_face(document, face, SurfaceShading::Smooth);
+            add_face(document, face);
         }
 
         for (std::size_t ring_index = 0; ring_index + 1U < radial_rings.size(); ++ring_index) {
@@ -334,7 +319,7 @@ Document make_sphere(const SpherePrimitiveSpec& spec)
             const std::size_t current = static_cast<std::size_t>(segment);
             const std::size_t next = (current + 1U) % last_ring.size();
             const std::array face { last_ring[current], top, last_ring[next] };
-            add_shaded_face(document, face, SurfaceShading::Smooth);
+            add_face(document, face);
         }
     }
 
@@ -394,7 +379,7 @@ Document make_torus(const TorusPrimitiveSpec& spec)
                 rings[next_major][next_minor],
                 rings[next_major][current_minor],
             };
-            add_shaded_face(document, face, SurfaceShading::Smooth);
+            add_face(document, face);
         }
     }
 

@@ -737,7 +737,7 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_TRUE(topology.ok()) << topology.error_message();
   ASSERT_EQ(topology.value().faces.size(), 2U);
   for (const auto &face : topology.value().faces) {
-    EXPECT_EQ(face.shading, AuthoredSurfaceShading::Flat);
+    EXPECT_EQ(face.shading, AuthoredSurfaceShading::Authored);
   }
 }
 
@@ -7883,7 +7883,7 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
-     Qgeo12PreservesTextureSettingsAndReadsLegacyFormats) {
+     Qgeo13PreservesTextureSettingsAndReadsLegacyFormats) {
   auto created = PolygonDocument::make_box({});
   ASSERT_TRUE(created.ok());
   auto document = std::move(created).value();
@@ -7896,7 +7896,7 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_TRUE(document.set_face_texture_transforms(updates).ok());
   const auto encoded = serialize_qdr_authored_topology(document);
   ASSERT_TRUE(encoded.ok()) << encoded.error_message();
-  EXPECT_EQ(encoded.value()[6], std::byte{2});
+  EXPECT_EQ(encoded.value()[6], std::byte{3});
   const auto decoded = deserialize_qdr_authored_topology(encoded.value());
   ASSERT_TRUE(decoded.ok()) << decoded.error_message();
   const auto original = document.face_texture_settings(ids);
@@ -7942,12 +7942,12 @@ TEST(ModelingSdkConsumerTests,
   write_u32_le(invalid, invalid.size() - ids.size() * 20U, 0U);
   EXPECT_FALSE(deserialize_qdr_authored_topology(invalid).ok());
   auto unsupported = encoded.value();
-  unsupported[6] = std::byte{3};
+  unsupported[6] = std::byte{4};
   EXPECT_FALSE(deserialize_qdr_authored_topology(unsupported).ok());
 }
 
 TEST(ModelingSdkConsumerTests,
-     Qgeo12RoundTripsThreeEdgeModesAndMigratesLegacySmoothTransitions) {
+     Qgeo13RoundTripsThreeEdgeModesAndMigratesLegacySmoothTransitions) {
   auto created = PolygonDocument::make_box({});
   ASSERT_TRUE(created.ok());
   auto topology = created.value().authored_topology().or_throw();
@@ -7973,7 +7973,7 @@ TEST(ModelingSdkConsumerTests,
 
   const auto encoded = serialize_qdr_authored_topology(imported.value());
   ASSERT_TRUE(encoded.ok()) << encoded.error_message();
-  EXPECT_EQ(encoded.value()[6], std::byte{2});
+  EXPECT_EQ(encoded.value()[6], std::byte{3});
   EXPECT_EQ(read_u32_le(encoded.value(), 52U), 2U);
   auto reordered_topology = topology;
   std::ranges::reverse(reordered_topology.hard_normal_edges);

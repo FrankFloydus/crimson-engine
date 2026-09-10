@@ -69,8 +69,8 @@ enum class SurfaceShading {
 /**
  * Describes how an authored edge controls normal sharing between its faces.
  * Default delegates to the mesh smoothing-angle rule, Hard always splits the
- * normals, and Soft always joins them. Face shading remains an independent
- * eligibility decision.
+ * normals, and Soft always joins them. Explicit face shading controls the
+ * output normal independently of the geometric fan calculation.
  */
 enum class EdgeNormalMode {
   Default,
@@ -104,7 +104,7 @@ struct Face {
   std::vector<ElementId> vertices;
   std::vector<quader::QVec2> uvs;
   std::uint32_t material_slot = 0;
-  SurfaceShading normal_shading = SurfaceShading::Flat;
+  SurfaceShading normal_shading = SurfaceShading::Authored;
   FaceTextureTransform texture_transform{};
 };
 

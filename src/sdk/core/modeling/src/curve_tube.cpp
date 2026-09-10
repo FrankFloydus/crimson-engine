@@ -462,7 +462,6 @@ build_tube(const CurveDocument &document, CurveTubeOptions options,
           .uvs = {{first_u, first_v}, {first_u, next_v},
                   {next_u, next_v}, {next_u, first_v}},
           .material_slot = 0U,
-          .shading = AuthoredSurfaceShading::Smooth,
       });
     }
   }

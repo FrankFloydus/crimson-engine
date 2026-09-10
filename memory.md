@@ -577,20 +577,26 @@ Tests: [theme](tests/qt_application_theme_tests.cpp), [Qt settings](tests/qt_set
 
 ## Polygon face and edge normals
 
-- Face `Flat`/`Smooth` shading controls whether a face participates in shared normals. Edge-normal
-  mode is a separate authored attribute: Hard and Soft live in canonical disjoint edge vectors;
-  Default is their absence. The Soft command also makes its incident faces Smooth as an editing
-  convenience. Hard and Default do not rewrite face shading.
-- Authored compilation never joins a boundary edge. Hard always splits, Soft always joins eligible
-  faces, and Default joins eligible faces only when `dot(normalA, normalB) > cos(40 degrees) + 1e-5`.
-  Do not restore the old rule that treated every non-Hard edge as Soft.
+- Ordinary faces default to `Authored`: generated normals use connected geometric fans without
+  requiring Shade Smooth or Soften. Every valid incident face contributes its unit geometric normal
+  once, including explicitly Flat faces; explicit Flat changes only that face's output normals.
+  Do not restore a per-face eligibility gate in the fan builder. Polygon, Bridge, primitive and
+  split faces share this policy; topology edits regenerate fans rather than copy compiled normals.
+- Edge-normal mode is a separate authored attribute: Hard and Soft live in canonical disjoint edge
+  vectors; Default is their absence. All three edge commands leave face shading unchanged.
+  Authored compilation never joins boundary/nonmanifold edges. Hard splits, Soft joins, and Default
+  joins only when `dot(normalA, normalB) > cos(40 degrees) + 1e-5`. Do not treat every non-Hard edge
+  as Soft or gate the edge policy on an initial face-shading operation.
 - Topology operations transfer exact modes. Split descendants inherit their source edge; an existing
   merge survivor keeps its mode; otherwise ordered donors apply in operation order and the last valid
   donor wins, including Default. New connectors, walls, rails and caps begin Default. Never combine
   modes with a Hard-wins rule, and prune both override vectors after removed topology.
-- QGEO 1.2 stores sorted Hard rows followed by Soft rows. QGEO 1.0/1.1 and legacy CSR scenes migrate
-  every live non-Hard edge shared by two Smooth faces to explicit Soft so their old rendering remains
-  unchanged.
+- QGEO 1.3 stores the existing face-mode bytes and sorted Hard rows followed by Soft rows. Pre-1.3
+  encodings conflate constructor-default Flat with explicit Shade Flat: both migrate to Authored.
+  This intentionally repairs ordinary saved geometry; historical explicit Flat intent cannot be
+  recovered from those bytes. New explicit Flat overrides round-trip unchanged. Before that
+  migration, QGEO 1.0/1.1 and legacy CSR materialize Soft for non-Hard edges shared by two Smooth
+  faces to retain their old smooth behavior. Lazy native saves canonicalize migrated geometry.
 
 Owners: [normal compiler](src/sdk/core/modeling/internal/mesh/polygon/quader_poly_document_mesh_api.cpp),
 [edge-mode helpers](src/sdk/core/modeling/internal/mesh/polygon/quader_poly_document_topology_helpers.cpp),

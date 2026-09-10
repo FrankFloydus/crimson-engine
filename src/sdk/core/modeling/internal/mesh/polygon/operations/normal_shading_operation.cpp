@@ -10,7 +10,6 @@
 
 #include <diagnostics/profile.hpp>
 
-#include <set>
 #include <string_view>
 
 namespace quader_poly {
@@ -119,37 +118,6 @@ OperationResult set_selected_face_shading(Document& document, const Selection& s
     return { true, {} };
 }
 
-bool smooth_faces_touching_edges(
-    Document& document, std::span<const Edge> edges)
-{
-    std::set<std::pair<ElementId, ElementId>> selected_edges;
-    for (Edge edge : edges) {
-        edge = make_edge(edge.a, edge.b);
-        if (edge.a != kInvalidElementId && edge.a != edge.b) {
-            selected_edges.emplace(edge.a, edge.b);
-        }
-    }
-
-    bool changed = false;
-    for (Face& face : document.faces) {
-        if (face.normal_shading == SurfaceShading::Smooth) {
-            continue;
-        }
-        for (std::size_t index = 0U; index < face.vertices.size(); ++index) {
-            const Edge edge = make_edge(
-                face.vertices[index],
-                face.vertices[(index + 1U) % face.vertices.size()]);
-            if (!selected_edges.contains({edge.a, edge.b})) {
-                continue;
-            }
-            face.normal_shading = SurfaceShading::Smooth;
-            changed = true;
-            break;
-        }
-    }
-    return changed;
-}
-
 OperationResult set_selected_edge_normal_mode(
     Document& document, const Selection& selection, EdgeNormalMode mode)
 {
@@ -165,12 +133,8 @@ OperationResult set_selected_edge_normal_mode(
         edge = make_edge(edge.a, edge.b);
         assignments.push_back({edge, mode});
     }
-    bool changed = document_internal::set_edge_normal_modes(
+    const bool changed = document_internal::set_edge_normal_modes(
         document, assignments);
-    if (mode == EdgeNormalMode::Soft) {
-        changed = smooth_faces_touching_edges(document, selection.edges) ||
-                  changed;
-    }
 
     if (!changed) {
         const char* message = "Selected edges already use default normals.";

@@ -37,7 +37,7 @@ using ByteSpan = std::span<const std::byte>;
 
 constexpr std::uint16_t kFormatMajor = 1;
 constexpr std::uint16_t kFormatMinor = 0;
-constexpr std::uint16_t kQgeoFormatMinor = 2;
+constexpr std::uint16_t kQgeoFormatMinor = 3;
 constexpr std::uint32_t kNoFlags = 0;
 constexpr std::size_t kQgeoHeaderSize = 56;
 constexpr std::size_t kQpolHeaderSize = 88;
@@ -1042,6 +1042,17 @@ encode_authored_topology(const PolygonDocument &polygon) {
     }
   } else {
     migrate_legacy_soft_normal_edges(document);
+  }
+  if (minor < 3U) {
+    // Before 1.3, implicit constructor defaults and an explicit Shade Flat
+    // command both stored Flat. The encoding cannot distinguish them; recover
+    // automatic edge normals without guessing from geometry or edge overrides.
+    // Derive legacy explicit Soft edges above before changing face defaults.
+    for (quader_poly::Face &face : document.faces) {
+      if (face.normal_shading == quader_poly::SurfaceShading::Flat) {
+        face.normal_shading = quader_poly::SurfaceShading::Authored;
+      }
+    }
   }
   std::ranges::sort(document.hard_normal_edges, edge_less);
   std::ranges::sort(document.soft_normal_edges, edge_less);

@@ -476,6 +476,16 @@ encoded_geometry_write_disposition(const fb::GeometryPayload &payload,
     const bool has_legacy_fields =
         !legacy_authored_geometry_fields_are_empty(payload);
     if (has_sdk_payload && !has_legacy_fields) {
+      // SDK decoding owns migration and full validation. Only inspect the
+      // stable header here so deferred pre-1.3 topology cannot bypass migration
+      // by retaining its encoded bytes for the next save.
+      if (authored->size() >= 8u && authored->Get(0u) == 'Q' &&
+          authored->Get(1u) == 'G' && authored->Get(2u) == 'E' &&
+          authored->Get(3u) == 'O' && authored->Get(4u) == 1u &&
+          authored->Get(5u) == 0u && authored->Get(6u) < 3u &&
+          authored->Get(7u) == 0u) {
+        return EncodedGeometryWriteDisposition::CanonicalizeLegacyAuthored;
+      }
       return EncodedGeometryWriteDisposition::Preserve;
     }
     // Repository writers used the SDK authored payload from the first binary
@@ -500,17 +510,31 @@ encoded_geometry_write_disposition(const fb::GeometryPayload &payload,
 [[nodiscard]] std::vector<std::byte> encode_geometry(
     const QdrProjectMeshAssetWriteSnapshot &mesh) {
   QDR_PROFILE_FUNCTION();
+  std::optional<std::vector<std::byte>> upgraded_authored;
   if (mesh.encoded_geometry) {
     const fb::GeometryPayload *payload =
         verify_geometry_payload(*mesh.encoded_geometry);
-    (void)encoded_geometry_write_disposition(*payload,
-                                             kSceneChunkSchemaVersion);
-    return *mesh.encoded_geometry;
+    if (encoded_geometry_write_disposition(*payload, kSceneChunkSchemaVersion) ==
+        EncodedGeometryWriteDisposition::Preserve) {
+      return *mesh.encoded_geometry;
+    }
+    const auto *authored = payload->authored_payload();
+    const auto decoded = modeling::deserialize_qdr_authored_topology(
+        std::as_bytes(std::span(authored->data(), authored->size())));
+    if (!decoded.ok()) {
+      throw std::runtime_error("SDK authored-topology decoding failed: " +
+                               decoded.error_message());
+    }
+    auto encoded = modeling::serialize_qdr_authored_topology(decoded.value());
+    if (!encoded.ok()) {
+      throw std::runtime_error("SDK authored-topology encoding failed: " +
+                               encoded.error_message());
+    }
+    upgraded_authored = std::move(encoded).value();
   }
-  if (!mesh.geometry) {
+  if (!mesh.geometry && !upgraded_authored) {
     throw std::runtime_error("QDR mesh snapshot has no geometry payload.");
   }
-  const MeshGeometryPayload &geometry = *mesh.geometry;
   flatbuffers::FlatBufferBuilder builder;
 
   std::vector<fb::PolygonVertex> polygon_vertices;
@@ -531,7 +555,12 @@ encoded_geometry_write_disposition(const fb::GeometryPayload &payload,
   fb::GeometryKind kind = fb::GeometryKind::CompiledMesh;
   std::uint32_t next_vertex_id = 1u;
   std::uint32_t next_face_id = 1u;
-  if (mesh.has_authored_polygon_document &&
+  if (upgraded_authored) {
+    kind = fb::GeometryKind::AuthoredPolygon;
+    authored_payload = builder.CreateVector(
+        reinterpret_cast<const std::uint8_t *>(upgraded_authored->data()),
+        upgraded_authored->size());
+  } else if (mesh.has_authored_polygon_document &&
       mesh.authored_polygon_document) {
     kind = fb::GeometryKind::AuthoredPolygon;
     quader::modeling::Result<quader::modeling::PolygonDocument> imported =
@@ -555,6 +584,7 @@ encoded_geometry_write_disposition(const fb::GeometryPayload &payload,
     authored_payload = builder.CreateVector(
         reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size());
   } else {
+    const MeshGeometryPayload &geometry = *mesh.geometry;
     mesh_vertices.reserve(geometry.vertices.size());
     mesh_texture_mapping.reserve(geometry.vertices.size());
     for (const MeshVertex &vertex : geometry.vertices) {
@@ -1207,6 +1237,13 @@ decode_polygon_document(const fb::GeometryPayload &payload) {
   // CSR scenes predate explicit Soft overrides. Their renderer joined every
   // shared edge between Smooth faces unless the edge was authored Hard.
   migrate_legacy_csr_edge_normal_modes(document);
+  // CSR predates the distinction between implicit automatic shading and an
+  // explicit Flat output override. Preserve its Smooth-derived Soft rows first.
+  for (quader_poly::Face &face : document.faces) {
+    if (face.normal_shading == quader_poly::SurfaceShading::Flat) {
+      face.normal_shading = quader_poly::SurfaceShading::Authored;
+    }
+  }
 
   const quader_poly::PolygonDocumentValidationReport validation =
       quader_poly::validate_polygon_document(document);

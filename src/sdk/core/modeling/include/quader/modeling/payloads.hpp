@@ -112,7 +112,8 @@ struct AuthoredPolygonPayload {
 };
 
 /**
- * Enumerates portable authored face-normal shading modes.
+ * Enumerates portable face-normal output modes. Authored uses the connected
+ * edge-normal fans by default; Flat explicitly outputs the face normal.
  */
 enum class AuthoredSurfaceShading {
   Flat,
@@ -178,7 +179,7 @@ struct AuthoredTopologyFace {
   std::vector<VertexId> vertices;
   std::vector<Vec2> uvs;
   std::uint32_t material_slot = 0;
-  AuthoredSurfaceShading shading = AuthoredSurfaceShading::Flat;
+  AuthoredSurfaceShading shading = AuthoredSurfaceShading::Authored;
   FaceTextureTransform texture_transform{};
 };
 

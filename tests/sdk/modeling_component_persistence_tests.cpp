@@ -124,6 +124,78 @@ void write_u32_le(std::vector<std::byte> &bytes, std::size_t offset,
 }
 
 TEST(ModelingComponentPersistenceTests,
+     Qgeo13KeepsAutomaticSmoothAndExplicitFlatDistinct) {
+  auto topology = decorated_box();
+  topology.faces[2].shading = AuthoredSurfaceShading::Authored;
+  const auto document = PolygonDocument::from_authored_topology(topology);
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  const auto encoded = serialize_qdr_authored_topology(document.value());
+  ASSERT_TRUE(encoded.ok()) << encoded.error_message();
+  EXPECT_EQ(encoded.value()[6], std::byte{3});
+  const auto decoded = deserialize_qdr_authored_topology(encoded.value());
+  ASSERT_TRUE(decoded.ok()) << decoded.error_message();
+  expect_exact_topology(topology, decoded.value());
+  EXPECT_EQ(serialize_qdr_authored_topology(decoded.value()).or_throw(),
+            encoded.value());
+}
+
+TEST(ModelingComponentPersistenceTests,
+     Pre13FaceDefaultsMigrateAfterLegacySoftEdgesWithoutInventingOverrides) {
+  const auto vertex = [](std::uint32_t id) { return make_id<VertexTag>(id); };
+  const EdgeKey smooth_shared{vertex(2), vertex(3)};
+  const EdgeKey flat_shared{vertex(4), vertex(5)};
+  const EdgeKey hard{vertex(1), vertex(2)};
+  AuthoredTopology topology;
+  topology.next_vertex_id = 7;
+  topology.next_face_id = 5;
+  topology.vertices = {
+      {vertex(1), {0.0F, 0.0F, 0.0F}},
+      {vertex(2), {1.0F, 0.0F, 0.0F}},
+      {vertex(3), {0.0F, 1.0F, 0.0F}},
+      {vertex(4), {1.0F, 1.0F, 0.0F}},
+      {vertex(5), {2.0F, 0.0F, 0.0F}},
+      {vertex(6), {2.0F, 1.0F, 0.0F}},
+  };
+  topology.faces = {
+      {.id = make_id<FaceTag>(1), .vertices = {vertex(1), vertex(2), vertex(3)},
+       .shading = AuthoredSurfaceShading::Smooth},
+      {.id = make_id<FaceTag>(2), .vertices = {vertex(2), vertex(4), vertex(3)},
+       .shading = AuthoredSurfaceShading::Smooth},
+      {.id = make_id<FaceTag>(3), .vertices = {vertex(2), vertex(5), vertex(4)},
+       .shading = AuthoredSurfaceShading::Flat},
+      {.id = make_id<FaceTag>(4), .vertices = {vertex(5), vertex(6), vertex(4)},
+       .shading = AuthoredSurfaceShading::Flat},
+  };
+  topology.hard_normal_edges = {hard};
+  for (const unsigned minor : {0U, 1U, 2U}) {
+    SCOPED_TRACE(minor);
+    topology.soft_normal_edges = minor == 2U ? std::vector<EdgeKey>{flat_shared}
+                                             : std::vector<EdgeKey>{};
+    const auto document = PolygonDocument::from_authored_topology(topology);
+    ASSERT_TRUE(document.ok()) << document.error_message();
+    auto encoded = serialize_qdr_authored_topology(document.value()).or_throw();
+    encoded[6] = static_cast<std::byte>(minor);
+    if (minor == 0U) {
+      encoded.resize(encoded.size() - topology.faces.size() * 20U);
+      write_u32_le(encoded, 16U, static_cast<std::uint32_t>(encoded.size()));
+    }
+    const auto decoded = deserialize_qdr_authored_topology(encoded);
+    ASSERT_TRUE(decoded.ok()) << decoded.error_message();
+    auto expected = topology;
+    expected.faces[2].shading = AuthoredSurfaceShading::Authored;
+    expected.faces[3].shading = AuthoredSurfaceShading::Authored;
+    expected.soft_normal_edges = {minor == 2U ? flat_shared : smooth_shared};
+    expect_exact_topology(expected, decoded.value());
+    const auto canonical = serialize_qdr_authored_topology(decoded.value());
+    ASSERT_TRUE(canonical.ok()) << canonical.error_message();
+    EXPECT_EQ(canonical.value()[6], std::byte{3});
+    const auto reloaded = deserialize_qdr_authored_topology(canonical.value());
+    ASSERT_TRUE(reloaded.ok()) << reloaded.error_message();
+    expect_exact_topology(expected, reloaded.value());
+  }
+}
+
+TEST(ModelingComponentPersistenceTests,
      TranslatingBoxFaceOntoOppositeFaceRetainsCollapsedAuthoredGeometry) {
   const auto topology = decorated_box();
   auto imported = PolygonDocument::from_authored_topology(topology);

@@ -398,7 +398,8 @@ historical_legacy_object_record_fixture() {
 }
 
 [[nodiscard]] std::vector<std::byte>
-legacy_smooth_csr_geometry_fixture(bool hard_shared_edge) {
+legacy_smooth_csr_geometry_fixture(bool hard_shared_edge,
+                                  bool flat_second_face = false) {
   flatbuffers::FlatBufferBuilder builder;
   const std::vector<qdr_fb::PolygonVertex> vertices{
       {10u, qdr_fb::Vec3(0.0f, 0.0f, 0.0f)},
@@ -415,7 +416,9 @@ legacy_smooth_csr_geometry_fixture(bool hard_shared_edge) {
       {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}};
   const std::vector<std::uint32_t> material_slots{4u, 4u};
   const std::vector<qdr_fb::SurfaceShading> shading{
-      qdr_fb::SurfaceShading::Smooth, qdr_fb::SurfaceShading::Smooth};
+      qdr_fb::SurfaceShading::Smooth,
+      flat_second_face ? qdr_fb::SurfaceShading::Flat
+                       : qdr_fb::SurfaceShading::Smooth};
   std::vector<qdr_fb::PolygonEdge> hard_edges;
   if (hard_shared_edge) {
     hard_edges.emplace_back(20u, 30u);
@@ -855,7 +858,10 @@ TEST(QdrBinarySceneCodecTests,
 
 TEST(QdrBinarySceneCodecTests,
      LegacyCsrSmoothEdgesMigrateToExplicitSoftUnlessAuthoredHard) {
-  for (const bool hard_shared_edge : {false, true}) {
+  for (unsigned state = 0u; state < 4u; ++state) {
+    const bool flat_second_face = (state & 2u) != 0u;
+    const bool hard_shared_edge = (state & 1u) != 0u;
+    SCOPED_TRACE(state);
     SceneContentDocument document = simple_scene();
     ASSERT_TRUE(document.assets().replace_mesh(
         10u, authored_triangle_mesh("Legacy Smooth CSR", 0.0f)));
@@ -867,7 +873,8 @@ TEST(QdrBinarySceneCodecTests,
       if (chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata) {
         chunk.schema_version = 3u;
       } else if (chunk.type == quader_io::QdrBinaryChunkType::Geometry) {
-        chunk.bytes = legacy_smooth_csr_geometry_fixture(hard_shared_edge);
+        chunk.bytes = legacy_smooth_csr_geometry_fixture(hard_shared_edge,
+                                                         flat_second_face);
         chunk.content_hash = quader_io::qdr_binary_content_hash(chunk.bytes);
       }
     }
@@ -885,9 +892,92 @@ TEST(QdrBinarySceneCodecTests,
               hard_shared_edge ? std::vector<quader_poly::Edge>{shared}
                                : std::vector<quader_poly::Edge>{});
     EXPECT_EQ(mesh->authored_polygon_document->soft_normal_edges,
-              hard_shared_edge ? std::vector<quader_poly::Edge>{}
-                               : std::vector<quader_poly::Edge>{shared});
+              hard_shared_edge || flat_second_face
+                  ? std::vector<quader_poly::Edge>{}
+                  : std::vector<quader_poly::Edge>{shared});
+    ASSERT_EQ(mesh->authored_polygon_document->faces.size(), 2u);
+    EXPECT_EQ(mesh->authored_polygon_document->faces[1].normal_shading,
+              flat_second_face ? quader_poly::SurfaceShading::Authored
+                               : quader_poly::SurfaceShading::Smooth);
   }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     DeferredPre13GeometryMigratesOnceAndThenPreservesCurrentBytes) {
+  SceneContentDocument source(
+      SceneContentDocumentRecord{.id = 93u, .name = "Deferred Normal Migration"});
+  MeshAsset authored = authored_triangle_mesh("Unreferenced", 0.0f);
+  authored.edit_authored_polygon_document().faces.front().normal_shading =
+      quader_poly::SurfaceShading::Flat;
+  ASSERT_EQ(source.assets().add_mesh(10u, std::move(authored)), 10u);
+  const auto current = parse_written_scene(source);
+  ASSERT_TRUE(current.ok) << current.message;
+  auto chunks = copy_chunks(current);
+  std::shared_ptr<const std::vector<std::byte>> legacy_geometry;
+  for (auto &chunk : chunks) {
+    if (chunk.type != quader_io::QdrBinaryChunkType::Geometry) {
+      continue;
+    }
+    const auto *geometry =
+        flatbuffers::GetRoot<qdr_fb::GeometryPayload>(chunk.bytes.data());
+    ASSERT_NE(geometry->authored_payload(), nullptr);
+    ASSERT_GE(geometry->authored_payload()->size(), 8u);
+    const auto *authored_begin = reinterpret_cast<const std::byte *>(
+        geometry->authored_payload()->data());
+    const auto authored_offset =
+        static_cast<std::size_t>(authored_begin - chunk.bytes.data());
+    chunk.bytes[authored_offset + 6u] = std::byte{2};
+    chunk.content_hash = quader_io::qdr_binary_content_hash(chunk.bytes);
+    legacy_geometry =
+        std::make_shared<const std::vector<std::byte>>(chunk.bytes);
+  }
+  ASSERT_TRUE(legacy_geometry);
+  auto migrated = QdrDocumentReader::deserialize_project_document(
+      quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks)));
+  ASSERT_TRUE(migrated.ok) << migrated.message;
+  EXPECT_FALSE(migrated.document.assets().mesh_materialized(10u));
+  const auto snapshot = required_write_snapshot(migrated.document);
+  ASSERT_EQ(snapshot.meshes.size(), 1u);
+  EXPECT_TRUE(migrated.document.assets().mesh_materialized(10u));
+  EXPECT_FALSE(snapshot.meshes.front().encoded_geometry);
+  ASSERT_TRUE(snapshot.meshes.front().authored_polygon_document);
+  EXPECT_EQ(snapshot.meshes.front().authored_polygon_document->faces.front()
+                .normal_shading,
+            quader_poly::SurfaceShading::Authored);
+  const auto canonical_bytes =
+      QdrDocumentWriter::serialize_project_document_bytes(snapshot, test_uuid());
+  const auto canonical = quader_io::read_qdr_binary_container(canonical_bytes);
+  ASSERT_TRUE(canonical.ok) << canonical.message;
+  for (const auto &chunk : canonical.chunks) {
+    if (chunk.type != static_cast<std::uint32_t>(
+                          quader_io::QdrBinaryChunkType::Geometry)) {
+      continue;
+    }
+    const auto *geometry =
+        flatbuffers::GetRoot<qdr_fb::GeometryPayload>(chunk.bytes().data());
+    ASSERT_NE(geometry->authored_payload(), nullptr);
+    EXPECT_EQ(geometry->authored_payload()->Get(6u), 3u);
+  }
+  auto reloaded =
+      QdrDocumentReader::deserialize_project_document(canonical_bytes);
+  ASSERT_TRUE(reloaded.ok) << reloaded.message;
+  EXPECT_FALSE(reloaded.document.assets().mesh_materialized(10u));
+  const auto retained = required_write_snapshot(reloaded.document);
+  EXPECT_FALSE(reloaded.document.assets().mesh_materialized(10u));
+  ASSERT_EQ(retained.meshes.size(), 1u);
+  EXPECT_TRUE(retained.meshes.front().encoded_geometry);
+  EXPECT_EQ(QdrDocumentWriter::serialize_project_document_bytes(retained,
+                                                                test_uuid()),
+            canonical_bytes);
+
+  // A caller-provided snapshot cannot re-emit obsolete bytes either.
+  auto encoded_snapshot = required_write_snapshot(source);
+  encoded_snapshot.meshes.front().encoded_geometry = legacy_geometry;
+  encoded_snapshot.meshes.front().geometry.reset();
+  encoded_snapshot.meshes.front().authored_polygon_document.reset();
+  EXPECT_EQ(QdrDocumentWriter::serialize_project_document_bytes(encoded_snapshot,
+                                                                test_uuid()),
+            canonical_bytes);
 }
 
 TEST(QdrBinarySceneCodecTests,

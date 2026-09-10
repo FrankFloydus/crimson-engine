@@ -144,10 +144,8 @@ TEST(QdrDocumentOperationNormalShadingTests, ShadeSmoothAndFlatControlCompiledFa
     EXPECT_TRUE(shared_corner_normals_match(fixture));
 }
 
-TEST(QdrDocumentOperationNormalShadingTests, HardAndSoftNormalEdgeOperationsSplitAndRejoinSmoothNormals) {
+TEST(QdrDocumentOperationNormalShadingTests, HardAndSoftNormalEdgeOperationsSplitAndRejoinAutomaticNormals) {
     BentCornerFixture fixture = make_bent_corner_document();
-    Selection face_selection = all_faces(fixture);
-    EXPECT_TRUE(shade_selected_faces_smooth(fixture.document, face_selection).changed);
 
     Selection edge_selection = shared_edge_selection(fixture);
     const CompiledMesh default_mesh = compile_document(fixture.document);
@@ -181,35 +179,47 @@ TEST(QdrDocumentOperationNormalShadingTests, HardAndSoftNormalEdgeOperationsSpli
     EXPECT_TRUE(qdr_test::vec_nearly_equal(soft_after.vertices[1].normal, soft_after.vertices[4].normal));
 }
 
-TEST(QdrDocumentOperationNormalShadingTests, SoftNormalEdgeOperationSoftensAdjacentFlatFaces) {
-    BentCornerFixture fixture = make_bent_corner_document();
+TEST(QdrDocumentOperationNormalShadingTests,
+     EdgeNormalCommandsNeverRewriteIncidentFaceShading) {
+    constexpr std::array modes {
+        SurfaceShading::Authored,
+        SurfaceShading::Flat,
+        SurfaceShading::Smooth,
+    };
+    for (const SurfaceShading first : modes) {
+        for (const SurfaceShading second : modes) {
+            BentCornerFixture fixture = make_bent_corner_document();
+            fixture.document.faces[0].normal_shading = first;
+            fixture.document.faces[1].normal_shading = second;
+            Selection edge_selection = shared_edge_selection(fixture);
 
-    const CompiledMesh flat_before = compile_document(fixture.document);
-    EXPECT_TRUE(flat_before.vertices.size() == 8U);
-    EXPECT_FALSE(qdr_test::vec_nearly_equal(flat_before.vertices[1].normal, flat_before.vertices[4].normal));
+            ASSERT_TRUE(soften_selected_edge_normals(
+                            fixture.document, edge_selection).changed);
+            EXPECT_EQ(fixture.document.faces[0].normal_shading, first);
+            EXPECT_EQ(fixture.document.faces[1].normal_shading, second);
+            EXPECT_EQ(document_internal::edge_normal_mode(
+                          fixture.document, fixture.shared_edge),
+                      EdgeNormalMode::Soft);
+            EXPECT_FALSE(soften_selected_edge_normals(
+                             fixture.document, edge_selection).changed);
 
-    Selection edge_selection = shared_edge_selection(fixture);
-    const OperationResult soft = soften_selected_edge_normals(fixture.document, edge_selection);
+            ASSERT_TRUE(harden_selected_edge_normals(
+                            fixture.document, edge_selection).changed);
+            EXPECT_EQ(fixture.document.faces[0].normal_shading, first);
+            EXPECT_EQ(fixture.document.faces[1].normal_shading, second);
+            EXPECT_EQ(document_internal::edge_normal_mode(
+                          fixture.document, fixture.shared_edge),
+                      EdgeNormalMode::Hard);
 
-    EXPECT_TRUE(soft.changed);
-    EXPECT_TRUE(fixture.document.hard_normal_edges.empty());
-    EXPECT_TRUE(fixture.document.soft_normal_edges.size() == 1U);
-    EXPECT_TRUE(fixture.document.faces[0].normal_shading ==
-                SurfaceShading::Smooth);
-    EXPECT_TRUE(fixture.document.faces[1].normal_shading ==
-                SurfaceShading::Smooth);
-    const CompiledMesh soft_mesh = compile_document(fixture.document);
-    EXPECT_TRUE(soft_mesh.vertices.size() == 8U);
-    EXPECT_TRUE(qdr_test::vec_nearly_equal(soft_mesh.vertices[1].normal, soft_mesh.vertices[4].normal));
-
-    const OperationResult hard = harden_selected_edge_normals(fixture.document, edge_selection);
-
-    EXPECT_TRUE(hard.changed);
-    EXPECT_TRUE(fixture.document.hard_normal_edges.size() == 1U);
-    EXPECT_TRUE(fixture.document.soft_normal_edges.empty());
-    const CompiledMesh hard_mesh = compile_document(fixture.document);
-    EXPECT_TRUE(hard_mesh.vertices.size() == 8U);
-    EXPECT_FALSE(qdr_test::vec_nearly_equal(hard_mesh.vertices[1].normal, hard_mesh.vertices[4].normal));
+            ASSERT_TRUE(reset_selected_edge_normals_to_default(
+                            fixture.document, edge_selection).changed);
+            EXPECT_EQ(fixture.document.faces[0].normal_shading, first);
+            EXPECT_EQ(fixture.document.faces[1].normal_shading, second);
+            EXPECT_EQ(document_internal::edge_normal_mode(
+                          fixture.document, fixture.shared_edge),
+                      EdgeNormalMode::Default);
+        }
+    }
 }
 
 TEST(QdrDocumentOperationNormalShadingTests,
@@ -217,31 +227,26 @@ TEST(QdrDocumentOperationNormalShadingTests,
 {
     BentCornerFixture shallow = make_bent_corner_document();
     set_bend_angle(shallow, 30.0F);
-    Selection shallow_faces = all_faces(shallow);
-    ASSERT_TRUE(
-        shade_selected_faces_smooth(shallow.document, shallow_faces).changed);
+    ASSERT_EQ(shallow.document.faces[0].normal_shading,
+              SurfaceShading::Authored);
+    ASSERT_EQ(shallow.document.faces[1].normal_shading,
+              SurfaceShading::Authored);
     EXPECT_TRUE(shared_corner_normals_match(shallow));
 
     BentCornerFixture steep = make_bent_corner_document();
     set_bend_angle(steep, 50.0F);
-    Selection steep_faces = all_faces(steep);
-    ASSERT_TRUE(shade_selected_faces_smooth(steep.document, steep_faces).changed);
     EXPECT_FALSE(shared_corner_normals_match(steep));
 
     BentCornerFixture immediately_below = make_bent_corner_document();
     set_bend_angle(immediately_below, 39.99F);
-    Selection immediately_below_faces = all_faces(immediately_below);
-    ASSERT_TRUE(shade_selected_faces_smooth(
-                    immediately_below.document, immediately_below_faces)
-                    .changed);
     EXPECT_TRUE(shared_corner_normals_match(immediately_below));
+
+    BentCornerFixture within_epsilon = make_bent_corner_document();
+    set_bend_angle(within_epsilon, 39.9995F);
+    EXPECT_FALSE(shared_corner_normals_match(within_epsilon));
 
     BentCornerFixture exact_threshold = make_bent_corner_document();
     set_bend_angle(exact_threshold, 40.0F);
-    Selection exact_threshold_faces = all_faces(exact_threshold);
-    ASSERT_TRUE(shade_selected_faces_smooth(
-                    exact_threshold.document, exact_threshold_faces)
-                    .changed);
     EXPECT_FALSE(shared_corner_normals_match(exact_threshold));
 }
 
@@ -250,9 +255,6 @@ TEST(QdrDocumentOperationNormalShadingTests,
 {
     BentCornerFixture shallow = make_bent_corner_document();
     set_bend_angle(shallow, 30.0F);
-    Selection shallow_faces = all_faces(shallow);
-    ASSERT_TRUE(
-        shade_selected_faces_smooth(shallow.document, shallow_faces).changed);
     Selection shallow_edge = shared_edge_selection(shallow);
     ASSERT_TRUE(
         harden_selected_edge_normals(shallow.document, shallow_edge).changed);
@@ -260,12 +262,139 @@ TEST(QdrDocumentOperationNormalShadingTests,
 
     BentCornerFixture steep = make_bent_corner_document();
     set_bend_angle(steep, 50.0F);
-    Selection steep_faces = all_faces(steep);
-    ASSERT_TRUE(shade_selected_faces_smooth(steep.document, steep_faces).changed);
     Selection steep_edge = shared_edge_selection(steep);
     ASSERT_TRUE(
         soften_selected_edge_normals(steep.document, steep_edge).changed);
     EXPECT_TRUE(shared_corner_normals_match(steep));
+}
+
+TEST(QdrDocumentOperationNormalShadingTests,
+     AutomaticFanWeightsEachIncidentGeometricFaceOnceRegardlessOfArea)
+{
+    BentCornerFixture fixture = make_bent_corner_document();
+    set_bend_angle(fixture, 30.0F);
+    for (const ElementId id :
+         std::array { fixture.back_bottom, fixture.back_top }) {
+        Vertex* vertex = find_vertex(fixture.document, id);
+        ASSERT_NE(vertex, nullptr);
+        vertex->position.x = 1.0F + 100.0F * (vertex->position.x - 1.0F);
+        vertex->position.z *= 100.0F;
+    }
+
+    const CompiledMesh mesh = compile_document(fixture.document);
+
+    ASSERT_EQ(mesh.vertices.size(), 8U);
+    constexpr quader::QVec3 expected { 0.2588190451F, 0.0F, 0.9659258263F };
+    for (const std::size_t corner : std::array<std::size_t, 4> { 1U, 2U, 4U, 7U }) {
+        EXPECT_TRUE(qdr_test::vec_nearly_equal(mesh.vertices[corner].normal,
+                                              expected));
+    }
+}
+
+TEST(QdrDocumentOperationNormalShadingTests,
+     ExplicitFlatOutputStillContributesItsGeometryToAdjacentNormalFans)
+{
+    for (const std::size_t flat_face : std::array<std::size_t, 2> { 0U, 1U }) {
+        BentCornerFixture fixture = make_bent_corner_document();
+        set_bend_angle(fixture, 30.0F);
+        fixture.document.faces[flat_face].normal_shading = SurfaceShading::Flat;
+        const CompiledMesh mesh = compile_document(fixture.document);
+
+        ASSERT_EQ(mesh.vertices.size(), 8U);
+        constexpr quader::QVec3 expected_fan {
+            0.2588190451F, 0.0F, 0.9659258263F
+        };
+        const quader::QVec3 flat_normal = face_normal(
+            fixture.document, fixture.document.faces[flat_face]);
+        const std::array<std::size_t, 2> flat_corners =
+            flat_face == 0U ? std::array<std::size_t, 2> { 1U, 2U }
+                            : std::array<std::size_t, 2> { 4U, 7U };
+        const std::array<std::size_t, 2> automatic_corners =
+            flat_face == 0U ? std::array<std::size_t, 2> { 4U, 7U }
+                            : std::array<std::size_t, 2> { 1U, 2U };
+        for (const std::size_t corner : flat_corners) {
+            EXPECT_TRUE(qdr_test::vec_nearly_equal(mesh.vertices[corner].normal,
+                                                  flat_normal));
+        }
+        for (const std::size_t corner : automatic_corners) {
+            EXPECT_TRUE(qdr_test::vec_nearly_equal(mesh.vertices[corner].normal,
+                                                  expected_fan));
+        }
+    }
+}
+
+TEST(QdrDocumentOperationNormalShadingTests,
+     LoopInsertionRegeneratesAutomaticFansAndPreservesExplicitOverrides)
+{
+    constexpr std::array edge_modes {
+        EdgeNormalMode::Default,
+        EdgeNormalMode::Hard,
+        EdgeNormalMode::Soft,
+    };
+    constexpr std::array face_modes {
+        SurfaceShading::Authored,
+        SurfaceShading::Flat,
+        SurfaceShading::Smooth,
+    };
+    for (const EdgeNormalMode edge_mode : edge_modes) {
+        for (const SurfaceShading face_mode : face_modes) {
+            BentCornerFixture fixture = make_bent_corner_document();
+            set_bend_angle(fixture, 30.0F);
+            fixture.document.faces[0].normal_shading = face_mode;
+            if (edge_mode == EdgeNormalMode::Hard) {
+                fixture.document.hard_normal_edges = { fixture.shared_edge };
+            } else if (edge_mode == EdgeNormalMode::Soft) {
+                fixture.document.soft_normal_edges = { fixture.shared_edge };
+            }
+            const Document before = fixture.document;
+            const CompiledMesh compiled_before = compile_document(before);
+            Selection selection = shared_edge_selection(fixture);
+
+            const OperationResult result =
+                insert_edge_loop(fixture.document, selection, 0.5F);
+
+            ASSERT_TRUE(result.changed) << result.message;
+            ASSERT_EQ(fixture.document.faces.size(), 4U);
+            const ElementId midpoint = qdr_test::vertex_at_position(
+                fixture.document, { 1.0F, 0.5F, 0.0F });
+            ASSERT_NE(midpoint, kInvalidElementId);
+            for (const ElementId endpoint :
+                 std::array { fixture.shared_bottom, fixture.shared_top }) {
+                EXPECT_EQ(document_internal::edge_normal_mode(
+                              fixture.document, make_edge(endpoint, midpoint)),
+                          edge_mode);
+            }
+            for (const Face& face : fixture.document.faces) {
+                const quader::QVec3 normal = face_normal(fixture.document, face);
+                const bool floor_child = qdr_test::vec_nearly_equal(
+                    normal, face_normal(before, before.faces[0]));
+                EXPECT_EQ(face.normal_shading,
+                          floor_child ? face_mode : SurfaceShading::Authored);
+            }
+
+            const CompiledMesh compiled_after = compile_document(fixture.document);
+            ASSERT_EQ(compiled_after.vertices.size(), 16U);
+            for (const CompiledVertex& corner : compiled_before.vertices) {
+                EXPECT_TRUE(std::ranges::any_of(
+                    compiled_after.vertices, [&corner](const CompiledVertex& after) {
+                        return after.source_vertex_id == corner.source_vertex_id &&
+                               qdr_test::vec_nearly_equal(after.normal, corner.normal);
+                    }));
+            }
+            std::size_t midpoint_corners = 0U;
+            for (const CompiledVertex& corner : compiled_after.vertices) {
+                if (corner.source_vertex_id != midpoint) {
+                    continue;
+                }
+                ++midpoint_corners;
+                EXPECT_TRUE(qdr_test::vec_nearly_equal(
+                                corner.normal, compiled_before.vertices[1].normal) ||
+                            qdr_test::vec_nearly_equal(
+                                corner.normal, compiled_before.vertices[4].normal));
+            }
+            EXPECT_EQ(midpoint_corners, 4U);
+        }
+    }
 }
 
 TEST(QdrDocumentOperationNormalShadingTests,
@@ -282,7 +411,7 @@ TEST(QdrDocumentOperationNormalShadingTests,
     EXPECT_TRUE(fixture.document.hard_normal_edges.empty());
     EXPECT_TRUE(fixture.document.soft_normal_edges.empty());
     EXPECT_TRUE(std::ranges::all_of(fixture.document.faces, [](const Face& face) {
-        return face.normal_shading == SurfaceShading::Flat;
+        return face.normal_shading == SurfaceShading::Authored;
     }));
 
     ASSERT_TRUE(
@@ -293,7 +422,7 @@ TEST(QdrDocumentOperationNormalShadingTests,
     EXPECT_TRUE(fixture.document.hard_normal_edges.empty());
     EXPECT_TRUE(fixture.document.soft_normal_edges.empty());
     EXPECT_TRUE(std::ranges::all_of(fixture.document.faces, [](const Face& face) {
-        return face.normal_shading == SurfaceShading::Smooth;
+        return face.normal_shading == SurfaceShading::Authored;
     }));
 }
 
@@ -325,8 +454,6 @@ TEST(QdrDocumentOperationNormalShadingTests,
      BoundarySoftStateRemainsAuthoredWithoutJoiningUnrelatedFaceCorners)
 {
     BentCornerFixture fixture = make_bent_corner_document();
-    Selection faces = all_faces(fixture);
-    ASSERT_TRUE(shade_selected_faces_smooth(fixture.document, faces).changed);
     const Edge boundary = make_edge(fixture.left_bottom, fixture.shared_bottom);
     Selection boundary_selection =
         qdr_test::edge_selection({ boundary }, boundary);
@@ -346,7 +473,7 @@ TEST(QdrDocumentOperationNormalShadingTests,
 }
 
 TEST(QdrDocumentOperationNormalShadingTests,
-     SoftBoundaryEdgesDoNotJoinSmoothFansThatOnlyShareAVertex)
+     SoftBoundaryEdgesDoNotJoinFansThatOnlyShareAVertex)
 {
     Document document;
     const ElementId shared = add_vertex(document, { 0.0F, 0.0F, 0.0F });
@@ -360,8 +487,6 @@ TEST(QdrDocumentOperationNormalShadingTests,
         add_face(document, std::array { shared, second_b, second_a });
     ASSERT_NE(first_face, kInvalidElementId);
     ASSERT_NE(second_face, kInvalidElementId);
-    document.faces[0].normal_shading = SurfaceShading::Smooth;
-    document.faces[1].normal_shading = SurfaceShading::Smooth;
     document.soft_normal_edges = {
         make_edge(shared, first_a),
         make_edge(shared, second_b),
@@ -379,7 +504,7 @@ TEST(QdrDocumentOperationNormalShadingTests,
 }
 
 TEST(QdrDocumentOperationNormalShadingTests,
-     CollapsedSmoothFaceCannotBridgeOrContaminateVisibleNormalFans)
+     CollapsedFaceCannotBridgeOrContaminateVisibleNormalFans)
 {
     Document document;
     const ElementId shared = add_vertex(document, { 0.0F, 0.0F, 0.0F });
@@ -393,13 +518,10 @@ TEST(QdrDocumentOperationNormalShadingTests,
         add_face(document, std::array { shared, forward, left });
     ASSERT_NE(first_face, kInvalidElementId);
     ASSERT_NE(second_face, kInvalidElementId);
-    document.faces[0].normal_shading = SurfaceShading::Smooth;
-    document.faces[1].normal_shading = SurfaceShading::Smooth;
     const ElementId collapsed_face = document.next_face_id++;
     document.faces.push_back({
         .id = collapsed_face,
         .vertices = { right, shared, left },
-        .normal_shading = SurfaceShading::Smooth,
     });
     document.soft_normal_edges = {
         make_edge(shared, right),
@@ -422,8 +544,6 @@ TEST(QdrDocumentOperationNormalShadingTests,
      CollapsedThirdIncidenceKeepsVisibleSharedEdgeNonManifold)
 {
     BentCornerFixture fixture = make_bent_corner_document();
-    Selection faces = all_faces(fixture);
-    ASSERT_TRUE(shade_selected_faces_smooth(fixture.document, faces).changed);
     const ElementId collapsed_middle =
         add_vertex(fixture.document, { 1.0F, 0.5F, 0.0F });
     const ElementId collapsed_face = fixture.document.next_face_id++;
@@ -434,7 +554,6 @@ TEST(QdrDocumentOperationNormalShadingTests,
             fixture.shared_top,
             collapsed_middle,
         },
-        .normal_shading = SurfaceShading::Smooth,
     });
     fixture.document.soft_normal_edges = { fixture.shared_edge };
 
