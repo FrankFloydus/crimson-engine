@@ -203,6 +203,18 @@ TEST(QdrEditorMetadataCommandPresentationCatalogTests,
       primitive, CommandPresentationSurface::MainMenu));
   EXPECT_EQ(primitive.settings_route, "tool_settings");
 
+  for (const quader::QuaderCommandId light_command : {
+           quader::quader_command::kSceneCreatePointLight,
+           quader::quader_command::kSceneCreateDirectionalLight,
+       }) {
+    const CommandPresentationDescriptor &light =
+        require_presentation(light_command);
+    EXPECT_EQ(light.domain, CommandPresentationDomain::Create);
+    EXPECT_EQ(light.group, CommandPresentationGroup::Creation);
+    EXPECT_EQ(light.activation,
+              CommandPresentationActivation::InteractiveTool);
+  }
+
   const CommandPresentationDescriptor &vertex_bevel = require_presentation(
       quader::quader_command::kModelingBevelVertices);
   EXPECT_EQ(vertex_bevel.domain, CommandPresentationDomain::Vertex);

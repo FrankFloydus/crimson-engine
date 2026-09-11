@@ -22,6 +22,7 @@
 #include "editor/modeling/modeling_result_adapters.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
+#include "editor/tools/light_creation_tool_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
@@ -1302,6 +1303,42 @@ bool QuaderToolsApi::can_activate(std::string_view tool_id) const {
 
 bool QuaderToolsApi::can_activate(ViewportToolId tool) const {
   return can_activate(viewport_tool_catalog_id(tool));
+}
+
+QuaderApiVoidResult
+QuaderToolsApi::begin_light_creation(QuaderLightType type) {
+  QuaderApiMutationRunner mutations(session_);
+  SceneSession &session = scene_session(session_);
+  if (!mutations.available()) {
+    return quader_api_failure_status(session, "No scene is active.");
+  }
+  if (session.document_commands().property_edit_active()) {
+    return quader_api_failure_status(
+        session,
+        "Finish the active property edit before creating a light.");
+  }
+
+  LightCreationKind kind;
+  std::string_view operation;
+  switch (type) {
+  case QuaderLightType::Point:
+    kind = LightCreationKind::Point;
+    operation = "Create Point Light";
+    break;
+  case QuaderLightType::Directional:
+    kind = LightCreationKind::Directional;
+    operation = "Create Directional Light";
+    break;
+  case QuaderLightType::Spot:
+    return quader_api_failure_status(
+        session, "Spot-light viewport creation is not available.");
+  default:
+    return quader_api_failure_status(session, "Unknown light type.");
+  }
+
+  return api_status_from_command(
+      session, session.native_tools().begin_light_creation(kind),
+      QuaderMutationKind::Runtime, operation);
 }
 
 QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {

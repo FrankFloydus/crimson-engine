@@ -24,6 +24,7 @@ class AssetCommandService;
 class CurveToolService;
 class EditorSelectionService;
 class LinearArrayToolService;
+class LightCreationToolService;
 class ModelingSessionService;
 class NativeViewportToolCoordinator;
 struct PathArraySessionDefaults;
@@ -229,6 +230,7 @@ private:
   std::unique_ptr<PathArrayToolService> path_array_;
   std::unique_ptr<CurveToolService> curve_;
   std::unique_ptr<PrimitiveCreationToolService> primitive_creation_;
+  std::unique_ptr<LightCreationToolService> light_creation_;
   std::unique_ptr<NativeViewportToolCoordinator> native_tools_;
   ViewportWorkspaceService viewport_workspace_{
       ViewportWorkspaceLayoutPolicy::MultiPane};

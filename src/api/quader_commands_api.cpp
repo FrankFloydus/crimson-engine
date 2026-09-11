@@ -2511,20 +2511,16 @@ void QuaderCommandsApi::Impl::register_commands() {
       {}, [this] { return project_.can_export_selected_meshes_as_obj(); });
   register_command(quader_command::kSceneCreatePointLight, "Create Point Light",
                    [this] {
-                     QuaderCreatePointLightArgs args;
-                     args.select_created = true;
-                     const QuaderApiResult<QuaderEntityRef> result =
-                         api_.scene().create_point_light(args);
-                     return quader_api_status_from_result(result);
-                   });
+                     return tools_.begin_light_creation(
+                         QuaderLightType::Point);
+                   },
+                   {}, [this] { return scene_documents_.has_active_scene(); });
   register_command(quader_command::kSceneCreateDirectionalLight,
                    "Create Directional Light", [this] {
-                     QuaderCreateDirectionalLightArgs args;
-                     args.select_created = true;
-                     const QuaderApiResult<QuaderEntityRef> result =
-                         api_.scene().create_directional_light(args);
-                     return quader_api_status_from_result(result);
-                   });
+                     return tools_.begin_light_creation(
+                         QuaderLightType::Directional);
+                   },
+                   {}, [this] { return scene_documents_.has_active_scene(); });
   register_command(
       quader_command::kSceneHideSelection, "Hide Selection",
       [this] {

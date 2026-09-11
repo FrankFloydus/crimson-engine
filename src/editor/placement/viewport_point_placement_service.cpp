@@ -551,9 +551,11 @@ ViewportPointPlacementResult ViewportPointPlacementService::resolve(
         surface_grid_plane(closest_surface->world_position,
                            closest_surface->world_normal);
     const QVec3 surface_position =
-        snap_point_to_grid(closest_surface->world_position, surface_grid,
-                           request.grid_size)
-            .value_or(closest_surface->world_position);
+        request.policy.snap_surface_to_grid
+            ? snap_point_to_grid(closest_surface->world_position, surface_grid,
+                                 request.grid_size)
+                  .value_or(closest_surface->world_position)
+            : closest_surface->world_position;
     return make_placement(surface_position, closest_surface->world_normal,
                            ViewportPointSnapKind::Surface,
                            closest_surface->participant.display_entity,

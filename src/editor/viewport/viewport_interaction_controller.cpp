@@ -13,14 +13,63 @@
 #include "editor/viewport/primitive_creation_api_adapter.hpp"
 #include "editor/viewport/viewport_curve_picking.hpp"
 #include "editor/viewport/viewport_path_array_source_picking.hpp"
+#include "scene/scene_transform.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string_view>
 
 namespace quader {
 namespace {
+
+CommandResult place_active_light_at_world_position(
+    QuaderEditorApi &editor, SceneDocument &document, LightCreationKind kind,
+    QVec3 world_position) {
+  const EntityId root = document.scene_root();
+  if (root == kInvalidEntityId) {
+    return command_invalid_result("The scene root is unavailable.");
+  }
+  const std::optional<QMat4> root_inverse =
+      try_scene_matrix_inverse(document.world_transform_matrix(root));
+  if (!root_inverse.has_value()) {
+    return command_invalid_result("Scene root transform is not invertible.");
+  }
+  const QVec3 local_position = transform_point(*root_inverse, world_position);
+  if (!std::isfinite(local_position.x) || !std::isfinite(local_position.y) ||
+      !std::isfinite(local_position.z)) {
+    return command_invalid_result("Scene root transform is not invertible.");
+  }
+
+  CommandResult result;
+  if (kind == LightCreationKind::Point) {
+    QuaderCreatePointLightArgs args;
+    args.parent = root;
+    args.transform.position = local_position;
+    args.select_created = true;
+    const QuaderApiResult<QuaderEntityRef> created =
+        editor.scene().create_point_light(args);
+    result = {
+        .ok = created.ok(),
+        .changed = created.changed(),
+        .message = created.error_message(),
+    };
+  } else {
+    QuaderCreateDirectionalLightArgs args;
+    args.parent = root;
+    args.transform.position = local_position;
+    args.select_created = true;
+    const QuaderApiResult<QuaderEntityRef> created =
+        editor.scene().create_directional_light(args);
+    result = {
+        .ok = created.ok(),
+        .changed = created.changed(),
+        .message = created.error_message(),
+    };
+  }
+  return result;
+}
 
 bool material_face_source_gesture_mode(ViewportSelectionMode mode) {
   return mode == ViewportSelectionMode::Vertex ||
@@ -1165,6 +1214,35 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
   output.native_tool = handle_native_tools(
       editor, document, assets, native_tools, point_placement, camera,
       native_frame);
+  if (output.native_tool.light_creation_world_position.has_value()) {
+    output.native_tool.command_attempted = true;
+    const std::optional<LightCreationOperation> light_creation =
+        native_tools.active_light_creation();
+    if (!light_creation.has_value()) {
+      output.native_tool.command_result =
+          command_invalid_result("No light creation tool is active.");
+      return output;
+    }
+    output.native_tool.command_result = place_active_light_at_world_position(
+        editor, document, light_creation->kind,
+        *output.native_tool.light_creation_world_position);
+    if (!frame.runtime_binding.current()) {
+      return output;
+    }
+    if (output.native_tool.command_result.ok &&
+        output.native_tool.command_result.changed) {
+      const CommandResult completed =
+          native_tools.complete_active_light_creation(*light_creation);
+      if (!completed.ok) {
+        output.native_tool.command_result.ok = false;
+        output.native_tool.command_result.message = completed.message;
+        return output;
+      }
+      output.native_tool.sync_active_tool = true;
+      output.native_tool.invalidate_hover = true;
+      output.native_tool.mark_overlay_dirty = true;
+    }
+  }
 
   output.interaction_selection = {
       .summary = curve_prepass_selection.has_value()

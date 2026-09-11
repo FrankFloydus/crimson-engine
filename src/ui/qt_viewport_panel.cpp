@@ -2565,6 +2565,7 @@ void QtViewportPanel::process_viewport_input(
     hide_fly_navigation_huds();
     last_fly_navigation_active_ = false;
     set_modal_tool_owns_viewport_snapshot(
+        native_tools.light_creation_active() ||
         interaction_controller_.active_tool_owns_viewport(
             input_router_.state().active_tool) ||
         modeling.modal_tool_owns_viewport());
@@ -2613,6 +2614,7 @@ void QtViewportPanel::process_viewport_input(
   const bool resolved_grid_snap_enabled = viewport_grid_snap_active(
       viewport_settings, input.modifiers.primary);
   input.modal_tool_active =
+      native_tools.light_creation_active() ||
       interaction_controller_.has_active_modal_preview(
           *preview_ports.preview, resolved_grid_snap_enabled) ||
       modeling.modal_tool_owns_viewport();
@@ -2714,6 +2716,7 @@ void QtViewportPanel::process_viewport_input(
   input.right_released = sample.right_released;
   if (active_tool_changed) {
     input.modal_tool_active =
+        native_tools.light_creation_active() ||
         interaction_controller_.has_active_modal_preview(
             *preview_ports.preview, resolved_grid_snap_enabled) ||
         modeling.modal_tool_owns_viewport();
@@ -3203,14 +3206,16 @@ void QtViewportPanel::process_viewport_input(
   };
 
   auto modal_tool_owns_viewport = [&]() {
-    return interaction_controller_.active_tool_owns_viewport(
+    return native_tools.light_creation_active() ||
+           interaction_controller_.active_tool_owns_viewport(
                input_router_.state().active_tool) ||
            interaction_controller_.has_active_modal_preview(
                *preview_ports.preview, resolved_grid_snap_enabled) ||
            modeling.modal_tool_owns_viewport();
   };
   auto cancel_active_modal_tool = [&](bool exit_tool) {
-    if (interaction_controller_.active_tool_uses_editor_native_lifecycle(
+    if (native_tools.light_creation_active() ||
+        interaction_controller_.active_tool_uses_editor_native_lifecycle(
             input_router_.state().active_tool)) {
       const QuaderApiVoidResult canceled =
           editor.tools().cancel_active_tool_preview();
@@ -3302,6 +3307,7 @@ void QtViewportPanel::process_viewport_input(
           .external_pointer_event = external_pointer_event,
           .modal_tool_owns_viewport = modal_tool_owns_viewport(),
           .persistent_native_tool_active =
+              native_tools.light_creation_active() ||
               interaction_controller_
                   .active_tool_uses_editor_native_lifecycle(
                       input_router_.state().active_tool),
@@ -3347,12 +3353,28 @@ void QtViewportPanel::process_viewport_input(
                           &radial_array_wheel_remainder_,
                   },
               .cancel_consumed = cancel_consumed,
+              .runtime_binding =
+                  {.current_generation = &runtime_binding_generation_,
+                   .expected_generation = input_binding_generation},
           });
   if (runtime_binding_generation_ != input_binding_generation) {
     return;
   }
   const ViewportNativeToolInteractionResult &native_tool_result =
       pointer_lifecycle.native_tool;
+  if (native_tool_result.command_attempted &&
+      !native_tool_result.command_result.ok) {
+    const QuaderApiVoidResult placement_failure{
+        .ok = false,
+        .changed = native_tool_result.command_result.changed,
+        .message = native_tool_result.command_result.message,
+    };
+    log_command_failure("Light placement", placement_failure);
+    notify_command_failure(editor, placement_failure);
+    if (runtime_binding_generation_ != input_binding_generation) {
+      return;
+    }
+  }
   if (native_tool_result.sync_active_tool) {
     sync_active_tool_from_editor(
         editor, modeling, native_tools,

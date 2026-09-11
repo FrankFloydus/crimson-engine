@@ -165,6 +165,59 @@ ViewportNativeToolInteraction::handle_frame(
     output.mark_overlay_dirty = true;
   };
 
+  if (lifecycle.light_creation_active()) {
+    pointer_cursor_ = ViewportPointerCursor::PrecisionCross;
+    output.consumed = true;
+    output.blocks_transform_gizmo = true;
+
+    const bool can_place = point_placement != nullptr &&
+                           input.viewport_hovered &&
+                           input.viewport_focused &&
+                           !native_pointer_interrupted(frame) &&
+                           !input.navigation_active &&
+                           !frame.transform_gizmo_consumed &&
+                           !frame.suppress_hover_work;
+    if (frame.left_pressed && can_place && !canceled_left_release) {
+      output.claim_interaction_pane = true;
+      left_release_suppression_.begin(QuaderMouseButton::Left,
+                                      frame.left_down);
+
+      const float grid_size =
+          viewport_grid_world_size_for_preset(input.grid_preset);
+      const ViewportPointPlacementPlane active_grid =
+          viewport_active_grid_placement_plane(camera);
+      const ViewportPointPlacementResult placement = point_placement->resolve(
+          document, assets, camera,
+          ViewportPointPlacementRequest{
+              .mouse_local = frame.left_click_local,
+              .viewport_pixel_scale = frame.viewport_pixel_scale,
+              .active_grid = active_grid,
+              .grid_size = grid_size,
+              .policy = ViewportPointPlacementPolicy{
+                  .vertex = frame.scene_snap_enabled,
+                  .edge_midpoint = frame.scene_snap_enabled,
+                  .face_center = frame.scene_snap_enabled,
+                  .surface = true,
+                  .grid = frame.grid_snap_enabled,
+                  .prefer_surface_normal_for_features = true,
+                  .strict_kind_priority = true,
+                  .grid_requires_snap_radius = false,
+                  .snap_surface_to_grid = frame.grid_snap_enabled,
+              },
+              .fallback_plane = active_grid,
+          });
+
+      if (placement.valid) {
+        output.light_creation_world_position = placement.world_position;
+      } else {
+        output.command_attempted = true;
+        output.command_result = command_invalid_result(
+            "Unable to resolve a viewport position for the light.");
+      }
+    }
+    return output;
+  }
+
   if (path_array != nullptr && path_array->active()) {
     output.path_array_consumed = true;
     output.consumed = true;

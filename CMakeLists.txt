@@ -213,6 +213,7 @@ set(QUADER_EDITOR_VIEWPORT_TOOL_SOURCES
     src/editor/tools/viewport_tool.cpp
     src/editor/tools/viewport_tool_ports.cpp
     src/editor/tools/viewport_tool_runtime.cpp
+    src/editor/tools/light_creation_tool_service.cpp
     src/editor/tools/viewport_native_tool_interaction.cpp
     src/editor/tools/base/drag_commit_tool.cpp
     src/editor/tools/base/drawn_plane_tool.cpp

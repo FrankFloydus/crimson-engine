@@ -33,6 +33,7 @@ struct ViewportToolPointerLifecycleFrame final {
   const ViewportInteractionFrame &interaction;
   const ViewportNativeToolInteractionFrame &native_tool;
   bool cancel_consumed = false;
+  ViewportRuntimeBindingToken runtime_binding;
 };
 
 /** Reports every policy decision made during one native tool pointer frame. */

@@ -3235,9 +3235,9 @@
     },
     "scene.create_point_light": {
       "fixture": 1,
-      "allowed_domains": 4653,
+      "allowed_domains": 736,
       "outcome": 0,
-      "undo_repeat": 4,
+      "undo_repeat": 0,
       "flags": 0,
       "descriptor": {
         "shortcut": "",
@@ -3246,10 +3246,10 @@
       "result": {
         "ok": true,
         "changed": true,
-        "mutation_kind": 1,
+        "mutation_kind": 4,
         "revisions": {
           "project": 0,
-          "scene": 6,
+          "scene": 2,
           "scene_layer": 0,
           "assets": 0,
           "modeling_content": 0,
@@ -3257,7 +3257,7 @@
         }
       },
       "before": "5ddd3c1c8d8b18393fb9a37ee28107ba",
-      "after": "ba7697d0dbcfe0b77539076d89aac1f3",
+      "after": "47c265d729f4ca345a4dc7fa5150157e",
       "before_domains": {
         "documents": "cb7d04db18ca6a41249555bc3e726fdb",
         "scene": "a11cd26f5de885beb0f8333f4d8e3cfd",
@@ -3272,117 +3272,28 @@
         "revisions": "62bf944de7c50d8717435a074c3d6fb7"
       },
       "after_domains": {
-        "documents": "a8534c7dbfb061f972fc309415cfe561",
-        "scene": "b1f04efc68dac4c767988d895a454ad2",
+        "documents": "cb7d04db18ca6a41249555bc3e726fdb",
+        "scene": "a11cd26f5de885beb0f8333f4d8e3cfd",
         "geometry": "3ac16946e3a475abeb9ef14ea350d78c",
-        "selection": "1b6c2f273ba66aef48e3515a4c14c905",
+        "selection": "2c2ea3d330d26152ee3c3862ea9e8e59",
         "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
         "assets": "0485f3da46bea61728d201f466a2d4d6",
-        "history": "007073989248c8db5d1e5f4e689962da",
-        "tools": "4f6814a82d727def9299cc506ab85861",
+        "history": "0147e55dc7a5afa94125bb23b5c6bd24",
+        "tools": "fb55fa568286429183e6ac3c1b386d7b",
         "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
         "preferences": "ff2dfe8e34f7a36405cd33d6f4bd1634",
-        "revisions": "15547c0748a201f229b1b379d5dded61"
+        "revisions": "62bf944de7c50d8717435a074c3d6fb7"
       },
-      "changed_domains": 1099,
+      "changed_domains": 128,
       "external_calls_before": 0,
       "external_calls_after": 0,
-      "lifecycle": {
-        "undo": {
-          "result": {
-            "ok": true,
-            "changed": true,
-            "mutation_kind": 1,
-            "revisions": {
-              "project": 0,
-              "scene": 7,
-              "scene_layer": 0,
-              "assets": 0,
-              "modeling_content": 0,
-              "modeling_selection": 0
-            }
-          },
-          "before": "ba7697d0dbcfe0b77539076d89aac1f3",
-          "after": "9617de9dfb22085e40f0593d134dfb38",
-          "before_domains": {
-            "documents": "a8534c7dbfb061f972fc309415cfe561",
-            "scene": "b1f04efc68dac4c767988d895a454ad2",
-            "geometry": "3ac16946e3a475abeb9ef14ea350d78c",
-            "selection": "1b6c2f273ba66aef48e3515a4c14c905",
-            "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
-            "assets": "0485f3da46bea61728d201f466a2d4d6",
-            "history": "007073989248c8db5d1e5f4e689962da",
-            "tools": "4f6814a82d727def9299cc506ab85861",
-            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
-            "preferences": "ff2dfe8e34f7a36405cd33d6f4bd1634",
-            "revisions": "15547c0748a201f229b1b379d5dded61"
-          },
-          "after_domains": {
-            "documents": "a8534c7dbfb061f972fc309415cfe561",
-            "scene": "a11cd26f5de885beb0f8333f4d8e3cfd",
-            "geometry": "3ac16946e3a475abeb9ef14ea350d78c",
-            "selection": "2c2ea3d330d26152ee3c3862ea9e8e59",
-            "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
-            "assets": "0485f3da46bea61728d201f466a2d4d6",
-            "history": "ae4f525321be5e77fb947e35d1bde398",
-            "tools": "4f6814a82d727def9299cc506ab85861",
-            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
-            "preferences": "ff2dfe8e34f7a36405cd33d6f4bd1634",
-            "revisions": "cc8f76ed82772c6092bea8f0e41295ad"
-          },
-          "changed_domains": 1098
-        },
-        "redo": {
-          "result": {
-            "ok": true,
-            "changed": true,
-            "mutation_kind": 1,
-            "revisions": {
-              "project": 0,
-              "scene": 12,
-              "scene_layer": 0,
-              "assets": 0,
-              "modeling_content": 0,
-              "modeling_selection": 0
-            }
-          },
-          "before": "9617de9dfb22085e40f0593d134dfb38",
-          "after": "ace3b45744ede78c3fce171e822c8b89",
-          "before_domains": {
-            "documents": "a8534c7dbfb061f972fc309415cfe561",
-            "scene": "a11cd26f5de885beb0f8333f4d8e3cfd",
-            "geometry": "3ac16946e3a475abeb9ef14ea350d78c",
-            "selection": "2c2ea3d330d26152ee3c3862ea9e8e59",
-            "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
-            "assets": "0485f3da46bea61728d201f466a2d4d6",
-            "history": "ae4f525321be5e77fb947e35d1bde398",
-            "tools": "4f6814a82d727def9299cc506ab85861",
-            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
-            "preferences": "ff2dfe8e34f7a36405cd33d6f4bd1634",
-            "revisions": "cc8f76ed82772c6092bea8f0e41295ad"
-          },
-          "after_domains": {
-            "documents": "a8534c7dbfb061f972fc309415cfe561",
-            "scene": "b1f04efc68dac4c767988d895a454ad2",
-            "geometry": "3ac16946e3a475abeb9ef14ea350d78c",
-            "selection": "1b6c2f273ba66aef48e3515a4c14c905",
-            "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
-            "assets": "0485f3da46bea61728d201f466a2d4d6",
-            "history": "007073989248c8db5d1e5f4e689962da",
-            "tools": "4f6814a82d727def9299cc506ab85861",
-            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
-            "preferences": "ff2dfe8e34f7a36405cd33d6f4bd1634",
-            "revisions": "0362a4e1c8a320be8600cb66c821ae40"
-          },
-          "changed_domains": 1098
-        }
-      }
+      "lifecycle": {}
     },
     "scene.create_directional_light": {
       "fixture": 1,
-      "allowed_domains": 4653,
+      "allowed_domains": 736,
       "outcome": 0,
-      "undo_repeat": 4,
+      "undo_repeat": 0,
       "flags": 0,
       "descriptor": {
         "shortcut": "",
@@ -3391,10 +3302,10 @@
       "result": {
         "ok": true,
         "changed": true,
-        "mutation_kind": 1,
+        "mutation_kind": 4,
         "revisions": {
           "project": 0,
-          "scene": 6,
+          "scene": 2,
           "scene_layer": 0,
           "assets": 0,
           "modeling_content": 0,
@@ -3402,7 +3313,7 @@
         }
       },
       "before": "5ddd3c1c8d8b18393fb9a37ee28107ba",
-      "after": "2c8f62cd49f94321af9a8722cadf7dd2",
+      "after": "69906cdc982f7e12fa16e35d94ca8135",
       "before_domains": {
         "documents": "cb7d04db18ca6a41249555bc3e726fdb",
         "scene": "a11cd26f5de885beb0f8333f4d8e3cfd",
@@ -3417,111 +3328,22 @@
         "revisions": "62bf944de7c50d8717435a074c3d6fb7"
       },
       "after_domains": {
-        "documents": "a8534c7dbfb061f972fc309415cfe561",
-        "scene": "fc19b1792c166a868b15ff83f91d1faa",
+        "documents": "cb7d04db18ca6a41249555bc3e726fdb",
+        "scene": "a11cd26f5de885beb0f8333f4d8e3cfd",
         "geometry": "3ac16946e3a475abeb9ef14ea350d78c",
-        "selection": "b9c19097abe2145fa24a548a76e49b31",
+        "selection": "2c2ea3d330d26152ee3c3862ea9e8e59",
         "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
         "assets": "0485f3da46bea61728d201f466a2d4d6",
-        "history": "554f6dfc497ae29f48a6af71af21e2e6",
-        "tools": "4f6814a82d727def9299cc506ab85861",
+        "history": "0147e55dc7a5afa94125bb23b5c6bd24",
+        "tools": "bcd19a5905ff2075c495393442ad6cee",
         "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
         "preferences": "ff2dfe8e34f7a36405cd33d6f4bd1634",
-        "revisions": "15547c0748a201f229b1b379d5dded61"
+        "revisions": "62bf944de7c50d8717435a074c3d6fb7"
       },
-      "changed_domains": 1099,
+      "changed_domains": 128,
       "external_calls_before": 0,
       "external_calls_after": 0,
-      "lifecycle": {
-        "undo": {
-          "result": {
-            "ok": true,
-            "changed": true,
-            "mutation_kind": 1,
-            "revisions": {
-              "project": 0,
-              "scene": 7,
-              "scene_layer": 0,
-              "assets": 0,
-              "modeling_content": 0,
-              "modeling_selection": 0
-            }
-          },
-          "before": "2c8f62cd49f94321af9a8722cadf7dd2",
-          "after": "786af744a23de464207e2962180c93d9",
-          "before_domains": {
-            "documents": "a8534c7dbfb061f972fc309415cfe561",
-            "scene": "fc19b1792c166a868b15ff83f91d1faa",
-            "geometry": "3ac16946e3a475abeb9ef14ea350d78c",
-            "selection": "b9c19097abe2145fa24a548a76e49b31",
-            "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
-            "assets": "0485f3da46bea61728d201f466a2d4d6",
-            "history": "554f6dfc497ae29f48a6af71af21e2e6",
-            "tools": "4f6814a82d727def9299cc506ab85861",
-            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
-            "preferences": "ff2dfe8e34f7a36405cd33d6f4bd1634",
-            "revisions": "15547c0748a201f229b1b379d5dded61"
-          },
-          "after_domains": {
-            "documents": "a8534c7dbfb061f972fc309415cfe561",
-            "scene": "a11cd26f5de885beb0f8333f4d8e3cfd",
-            "geometry": "3ac16946e3a475abeb9ef14ea350d78c",
-            "selection": "2c2ea3d330d26152ee3c3862ea9e8e59",
-            "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
-            "assets": "0485f3da46bea61728d201f466a2d4d6",
-            "history": "915f8dc2f29b7d67d8f0ff0d746d5e5e",
-            "tools": "4f6814a82d727def9299cc506ab85861",
-            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
-            "preferences": "ff2dfe8e34f7a36405cd33d6f4bd1634",
-            "revisions": "cc8f76ed82772c6092bea8f0e41295ad"
-          },
-          "changed_domains": 1098
-        },
-        "redo": {
-          "result": {
-            "ok": true,
-            "changed": true,
-            "mutation_kind": 1,
-            "revisions": {
-              "project": 0,
-              "scene": 12,
-              "scene_layer": 0,
-              "assets": 0,
-              "modeling_content": 0,
-              "modeling_selection": 0
-            }
-          },
-          "before": "786af744a23de464207e2962180c93d9",
-          "after": "e530a4f809c1ad56d2105e3ecfa8fdc3",
-          "before_domains": {
-            "documents": "a8534c7dbfb061f972fc309415cfe561",
-            "scene": "a11cd26f5de885beb0f8333f4d8e3cfd",
-            "geometry": "3ac16946e3a475abeb9ef14ea350d78c",
-            "selection": "2c2ea3d330d26152ee3c3862ea9e8e59",
-            "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
-            "assets": "0485f3da46bea61728d201f466a2d4d6",
-            "history": "915f8dc2f29b7d67d8f0ff0d746d5e5e",
-            "tools": "4f6814a82d727def9299cc506ab85861",
-            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
-            "preferences": "ff2dfe8e34f7a36405cd33d6f4bd1634",
-            "revisions": "cc8f76ed82772c6092bea8f0e41295ad"
-          },
-          "after_domains": {
-            "documents": "a8534c7dbfb061f972fc309415cfe561",
-            "scene": "fc19b1792c166a868b15ff83f91d1faa",
-            "geometry": "3ac16946e3a475abeb9ef14ea350d78c",
-            "selection": "b9c19097abe2145fa24a548a76e49b31",
-            "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
-            "assets": "0485f3da46bea61728d201f466a2d4d6",
-            "history": "554f6dfc497ae29f48a6af71af21e2e6",
-            "tools": "4f6814a82d727def9299cc506ab85861",
-            "viewports": "d56085e38d8dbd5d88efaa324bc0533c",
-            "preferences": "ff2dfe8e34f7a36405cd33d6f4bd1634",
-            "revisions": "0362a4e1c8a320be8600cb66c821ae40"
-          },
-          "changed_domains": 1098
-        }
-      }
+      "lifecycle": {}
     },
     "scene.layers.remove_selection": {
       "fixture": 20,
@@ -24419,5 +24241,5 @@
       "lifecycle": {}
     }
   },
-  "approved_change_reason": "Document saves now resolve through focused editors; viewport camera navigation remains workspace state and no longer marks scenes dirty"
+  "approved_change_reason": "Light creation commands now arm one-shot viewport placement"
 }

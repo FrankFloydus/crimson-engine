@@ -71,10 +71,12 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
     PivotToolService &pivot, LinearArrayToolService &linear_array,
     RadialArrayToolService &radial_array, PathArrayToolService &path_array,
     PrimitiveCreationToolService &primitives,
+    LightCreationToolService &light_creation,
     EditorSelectionService &selection, ModelingSessionService &modeling,
     CurveToolService &curve)
     : pivot_(pivot), linear_array_(linear_array), radial_array_(radial_array),
-      path_array_(path_array), primitives_(primitives), selection_(selection),
+      path_array_(path_array), primitives_(primitives),
+      light_creation_(light_creation), selection_(selection),
       modeling_(modeling), curve_(curve),
       curve_interaction_(
           std::make_unique<CurveViewportInteractionAdapter>(curve_)) {
@@ -260,7 +262,7 @@ bool NativeViewportToolCoordinator::can_activate(
 }
 
 bool NativeViewportToolCoordinator::has_pending_tool() const {
-  return runtime_.has_pending_native_lifecycle();
+  return light_creation_.active() || runtime_.has_pending_native_lifecycle();
 }
 
 bool NativeViewportToolCoordinator::has_pending_history_preview() const {
@@ -268,7 +270,8 @@ bool NativeViewportToolCoordinator::has_pending_history_preview() const {
 }
 
 bool NativeViewportToolCoordinator::blocks_modeling_content_mutation() const {
-  return runtime_.native_lifecycle_blocks_modeling_content_mutation();
+  return light_creation_.active() ||
+         runtime_.native_lifecycle_blocks_modeling_content_mutation();
 }
 
 bool NativeViewportToolCoordinator::blocks_document_mutation(
@@ -277,6 +280,9 @@ bool NativeViewportToolCoordinator::blocks_document_mutation(
 }
 
 std::string_view NativeViewportToolCoordinator::active_tool_id() const {
+  if (light_creation_.active()) {
+    return light_creation_.active_tool_id();
+  }
   return runtime_.active_native_lifecycle_id();
 }
 
@@ -344,6 +350,9 @@ bool NativeViewportToolCoordinator::pointer_dragging() const {
 }
 
 ViewportPointerCursor NativeViewportToolCoordinator::pointer_cursor() const {
+  if (light_creation_.active()) {
+    return ViewportPointerCursor::PrecisionCross;
+  }
   return interaction_.pointer_cursor();
 }
 
@@ -366,6 +375,26 @@ CommandResult NativeViewportToolCoordinator::activate(
       [&] { return cancel_competing_state_for_tool_activation(); });
 }
 
+CommandResult NativeViewportToolCoordinator::begin_light_creation(
+    LightCreationKind kind) {
+  if (light_creation_.active_kind() == kind) {
+    return command_unchanged_result();
+  }
+  const CommandResult canceled =
+      cancel_competing_state_for_tool_activation();
+  if (!canceled.ok) {
+    return canceled;
+  }
+  CommandResult begun = light_creation_.begin(kind);
+  begun.changed = begun.changed || canceled.changed;
+  return begun;
+}
+
+CommandResult NativeViewportToolCoordinator::complete_active_light_creation(
+    LightCreationOperation operation) {
+  return light_creation_.complete(operation);
+}
+
 CommandResult
 NativeViewportToolCoordinator::cancel_competing_state_for_tool_activation() {
   const ModelingCommandResult modeling_cancel =
@@ -386,10 +415,20 @@ NativeViewportToolCoordinator::cancel_competing_state_for_tool_activation() {
         .message = native_cancel.message,
     };
   }
+  const CommandResult light_cancel = light_creation_.cancel();
+  if (!light_cancel.ok) {
+    return {
+        .ok = false,
+        .changed = modeling_cancel.changed || native_cancel.changed ||
+                   light_cancel.changed,
+        .message = light_cancel.message,
+    };
+  }
   interaction_.clear_drag_state();
   return {
       .ok = true,
-      .changed = modeling_cancel.changed || native_cancel.changed,
+      .changed = modeling_cancel.changed || native_cancel.changed ||
+                 light_cancel.changed,
   };
 }
 
@@ -410,7 +449,14 @@ CommandResult NativeViewportToolCoordinator::redo_active() {
 }
 
 CommandResult NativeViewportToolCoordinator::cancel_active() {
-  const CommandResult result = runtime_.cancel_native_lifecycles();
+  const CommandResult native = runtime_.cancel_native_lifecycles();
+  const CommandResult light = light_creation_.cancel();
+  const CommandResult result{
+      .ok = native.ok && light.ok,
+      .changed = native.changed || light.changed,
+      .message = !native.ok ? native.message
+                            : (!light.ok ? light.message : std::string{}),
+  };
   if (result.ok) {
     interaction_.clear_drag_state();
   }
@@ -429,6 +475,7 @@ CommandResult NativeViewportToolCoordinator::accept_active_primitive(
 void NativeViewportToolCoordinator::reset_transient_state() {
   clear_pointer_drag_state();
   runtime_.reset_native_lifecycles();
+  light_creation_.reset();
 }
 
 } // namespace quader

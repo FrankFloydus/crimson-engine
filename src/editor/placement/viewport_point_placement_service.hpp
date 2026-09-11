@@ -60,6 +60,8 @@ struct ViewportPointPlacementPolicy {
   bool strict_kind_priority = false;
   bool grid_requires_snap_radius = true;
   float snap_radius_pixels = 14.0f;
+  /// Preserves legacy surface quantization unless a caller requests raw hits.
+  bool snap_surface_to_grid = true;
 
   [[nodiscard]] static ViewportPointPlacementPolicy
   pivot(PivotSnapSettings settings);

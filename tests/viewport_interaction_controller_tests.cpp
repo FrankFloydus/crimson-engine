@@ -37,6 +37,7 @@
 #include "editor/session/project_session.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/components.hpp"
+#include "scene/scene_transform.hpp"
 #include "support/viewport_overlay_test_helpers.hpp"
 #include "ui/viewport_hover_controller.hpp"
 #include "viewport/viewport_host_interaction_policy.hpp"
@@ -1285,6 +1286,402 @@ TEST(ViewportInteractionControllerTests,
   EXPECT_TRUE(result.before_tool.gizmo_consumed);
   EXPECT_EQ(result.interaction_selection.summary.selection_revision,
             harness.editor.selection().summary().selection_revision);
+}
+
+TEST(ViewportInteractionControllerTests,
+     LightCreationCommandsPlaceAtFrozenViewportPressAndExitOneShot) {
+  struct LightCase final {
+    quader::QuaderCommandId command;
+    quader::QuaderLightType type;
+    std::string_view tool_id;
+  };
+
+  for (const LightCase light_case : {
+           LightCase{quader::quader_command::kSceneCreatePointLight,
+                     quader::QuaderLightType::Point,
+                     "create_point_light"},
+           LightCase{quader::quader_command::kSceneCreateDirectionalLight,
+                     quader::QuaderLightType::Directional,
+                     "create_directional_light"},
+       }) {
+    SCOPED_TRACE(light_case.tool_id);
+    int dirty_changed_events = 0;
+    std::optional<bool> last_dirty_state;
+    ViewportInteractionHarness harness;
+    harness.camera.view_axis(quader::ViewportViewAxis::Y, 1);
+    harness.input.orthographic_view = true;
+    const quader::EntityId root = harness.session.scene().scene_root();
+    ASSERT_NE(root, quader::kInvalidEntityId);
+    ASSERT_TRUE(harness.session.scene().set_transform(
+        root, quader::TransformComponent{
+                  .position = {10.0f, 2.0f, -4.0f},
+                  .rotation_euler = {0.0f, 0.25f, 0.0f},
+                  .scale = {1.5f, 0.75f, 2.0f},
+              }));
+    harness.session.mark_clean();
+    const quader::QuaderEventSubscription dirty_subscription =
+        harness.editor.events().subscribe(
+            quader::quader_event::kSceneDirtyChanged,
+            [&](const quader::QuaderEvent &event) {
+              ++dirty_changed_events;
+              last_dirty_state = event.scene_dirty;
+            });
+    ASSERT_TRUE(dirty_subscription.valid());
+
+    const std::size_t entity_count_before =
+        harness.editor.query().entities().size();
+    const std::size_t undo_count_before =
+        harness.session.history().undo_count();
+    const quader::QuaderApiVoidResult armed =
+        harness.editor.commands().execute(light_case.command);
+    ASSERT_TRUE(armed.ok()) << armed.error_message();
+    ASSERT_TRUE(armed.changed());
+    ASSERT_EQ(harness.editor.tools().active_tool(), light_case.tool_id);
+    EXPECT_EQ(dirty_changed_events, 0);
+
+    const auto dispatch = [&](bool pressed, bool down, bool released,
+                              quader::QVec2 click_local,
+                              quader::QVec2 current_local) {
+      harness.input.mouse_local = current_local;
+      harness.input.mouse_screen = current_local;
+      harness.input.modal_tool_active =
+          harness.session.native_tools().light_creation_active();
+      const quader::ViewportInteractionFrame interaction =
+          harness.frame(pressed, down, released, click_local);
+      return harness.controller.handle_tool_pointer_lifecycle(
+          harness.editor, harness.session.scene(), harness.session.assets(),
+          harness.session.native_tools(), &harness.session.point_placement(),
+          harness.camera,
+          quader::ViewportToolPointerLifecycleFrame{
+              .interaction = interaction,
+              .native_tool =
+                  {
+                      .input = harness.input,
+                      .input_result = harness.input_result,
+                      .left_pressed = pressed,
+                      .left_down = down,
+                      .left_released = released,
+                      .left_click_local = click_local,
+                      .scene_snap_enabled = false,
+                      .grid_snap_enabled = false,
+                  },
+          });
+    };
+
+    const auto idle = dispatch(false, false, false, {},
+                               harness.input.mouse_local);
+    EXPECT_TRUE(idle.native_tool.consumed);
+    EXPECT_TRUE(idle.native_tool.blocks_transform_gizmo);
+    EXPECT_EQ(harness.controller.active_tool_pointer_cursor(
+                  harness.router.state().active_tool),
+              quader::ViewportPointerCursor::PrecisionCross);
+    EXPECT_EQ(dirty_changed_events, 0);
+
+    constexpr quader::QVec3 kExpectedWorld{1.375f, 0.0f, -2.625f};
+    const quader::ViewportScreenPoint expected_screen =
+        harness.camera.project_world_point(kExpectedWorld);
+    ASSERT_TRUE(expected_screen.visible);
+    const quader::QVec2 later_hover =
+        expected_screen.position + quader::QVec2{75.0f, -45.0f};
+    const auto press = dispatch(true, true, false, expected_screen.position,
+                                later_hover);
+    EXPECT_TRUE(press.native_tool.consumed);
+    EXPECT_TRUE(press.native_tool.blocks_transform_gizmo);
+    EXPECT_TRUE(press.native_tool.claim_interaction_pane);
+    ASSERT_TRUE(press.native_tool.command_attempted);
+    ASSERT_TRUE(press.native_tool.command_result.ok)
+        << press.native_tool.command_result.message;
+    EXPECT_TRUE(press.native_tool.command_result.changed);
+    EXPECT_TRUE(press.native_tool.sync_active_tool);
+    EXPECT_EQ(dirty_changed_events, 1);
+    ASSERT_TRUE(last_dirty_state.has_value());
+    EXPECT_TRUE(*last_dirty_state);
+
+    const std::vector<quader::QuaderEntitySnapshot> entities =
+        harness.editor.query().entities();
+    ASSERT_EQ(entities.size(), entity_count_before + 1u);
+    const auto light = std::find_if(
+        entities.begin(), entities.end(),
+        [](const quader::QuaderEntitySnapshot &entity) {
+          return entity.has_light;
+        });
+    ASSERT_NE(light, entities.end());
+    EXPECT_EQ(light->light.type, light_case.type);
+    EXPECT_TRUE(light->selected);
+    EXPECT_TRUE(light->active);
+    const quader::QVec3 created_world = quader::transform_point(
+        harness.session.scene().world_transform_matrix(light->id), {});
+    EXPECT_NEAR(created_world.x, kExpectedWorld.x, 0.0001f);
+    EXPECT_NEAR(created_world.y, kExpectedWorld.y, 0.0001f);
+    EXPECT_NEAR(created_world.z, kExpectedWorld.z, 0.0001f);
+    EXPECT_EQ(harness.session.history().undo_count(), undo_count_before + 1u);
+    EXPECT_FALSE(harness.session.native_tools().light_creation_active());
+    EXPECT_EQ(harness.editor.tools().active_tool(), "select");
+
+    const auto release = dispatch(false, false, true, later_hover, later_hover);
+    EXPECT_TRUE(release.native_tool.consumed);
+    EXPECT_EQ(harness.editor.query().entities().size(),
+              entity_count_before + 1u);
+    EXPECT_EQ(harness.session.history().undo_count(), undo_count_before + 1u);
+    EXPECT_EQ(dirty_changed_events, 1);
+    EXPECT_NE(harness.controller.active_tool_pointer_cursor(
+                  harness.router.state().active_tool),
+              quader::ViewportPointerCursor::PrecisionCross);
+
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    EXPECT_FALSE(harness.editor.query().entity(light->id).has_value());
+    EXPECT_TRUE(selected_entities(harness).empty());
+    EXPECT_FALSE(harness.editor.selection().summary().has_selection);
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    const std::optional<quader::QuaderEntitySnapshot> restored =
+        harness.editor.query().entity(light->id);
+    ASSERT_TRUE(restored.has_value());
+    EXPECT_EQ(restored->light.type, light_case.type);
+    EXPECT_TRUE(restored->selected);
+    EXPECT_TRUE(restored->active);
+    EXPECT_EQ(selected_entities(harness),
+              std::vector<quader::EntityId>{light->id});
+    const quader::QVec3 restored_world = quader::transform_point(
+        harness.session.scene().world_transform_matrix(restored->id), {});
+    EXPECT_NEAR(restored_world.x, kExpectedWorld.x, 0.0001f);
+    EXPECT_NEAR(restored_world.y, kExpectedWorld.y, 0.0001f);
+    EXPECT_NEAR(restored_world.z, kExpectedWorld.z, 0.0001f);
+    EXPECT_EQ(dirty_changed_events, 1);
+    EXPECT_TRUE(harness.editor.events().unsubscribe(dirty_subscription));
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     LightCreationCompletionDoesNotClearReentrantSameKindRearm) {
+  ViewportInteractionHarness harness;
+  harness.camera.view_axis(quader::ViewportViewAxis::Y, 1);
+  harness.input.orthographic_view = true;
+  harness.session.mark_clean();
+
+  bool dirty_callback_entered = false;
+  bool cancel_succeeded = false;
+  bool rearm_succeeded = false;
+  const quader::QuaderEventSubscription dirty_subscription =
+      harness.editor.events().subscribe(
+          quader::quader_event::kSceneDirtyChanged,
+          [&](const quader::QuaderEvent &event) {
+            if (dirty_callback_entered || !event.scene_dirty.value_or(false)) {
+              return;
+            }
+            dirty_callback_entered = true;
+            const quader::QuaderApiVoidResult canceled =
+                harness.editor.tools().cancel_active_tool_preview();
+            cancel_succeeded = canceled.ok() && canceled.changed();
+            const quader::QuaderApiVoidResult rearmed =
+                harness.editor.commands().execute(
+                    quader::quader_command::kSceneCreatePointLight);
+            rearm_succeeded = rearmed.ok() && rearmed.changed();
+          });
+  ASSERT_TRUE(dirty_subscription.valid());
+
+  const std::size_t entity_count_before =
+      harness.editor.query().entities().size();
+  const std::size_t undo_count_before = harness.session.history().undo_count();
+  ASSERT_TRUE(harness.editor.commands()
+                  .execute(quader::quader_command::kSceneCreatePointLight)
+                  .ok());
+
+  constexpr quader::QVec3 kExpectedWorld{0.625f, 0.0f, -1.875f};
+  const quader::ViewportScreenPoint screen =
+      harness.camera.project_world_point(kExpectedWorld);
+  ASSERT_TRUE(screen.visible);
+  harness.input.mouse_local = screen.position;
+  harness.input.mouse_screen = screen.position;
+  harness.input.modal_tool_active = true;
+  const quader::ViewportInteractionFrame interaction =
+      harness.frame(true, true, false, screen.position);
+  const quader::ViewportToolPointerLifecycleResult placed =
+      harness.controller.handle_tool_pointer_lifecycle(
+          harness.editor, harness.session.scene(), harness.session.assets(),
+          harness.session.native_tools(), &harness.session.point_placement(),
+          harness.camera,
+          quader::ViewportToolPointerLifecycleFrame{
+              .interaction = interaction,
+              .native_tool =
+                  {
+                      .input = harness.input,
+                      .input_result = harness.input_result,
+                      .left_pressed = true,
+                      .left_down = true,
+                      .left_click_local = screen.position,
+                      .scene_snap_enabled = false,
+                      .grid_snap_enabled = false,
+                  },
+          });
+
+  ASSERT_TRUE(placed.native_tool.command_attempted);
+  ASSERT_TRUE(placed.native_tool.command_result.ok)
+      << placed.native_tool.command_result.message;
+  EXPECT_TRUE(placed.native_tool.command_result.changed);
+  EXPECT_TRUE(dirty_callback_entered);
+  EXPECT_TRUE(cancel_succeeded);
+  EXPECT_TRUE(rearm_succeeded);
+  EXPECT_EQ(harness.editor.query().entities().size(),
+            entity_count_before + 1u);
+  EXPECT_EQ(harness.session.history().undo_count(), undo_count_before + 1u);
+  EXPECT_TRUE(harness.session.native_tools().light_creation_active());
+  EXPECT_EQ(harness.editor.tools().active_tool(), "create_point_light");
+  EXPECT_EQ(harness.controller.active_tool_pointer_cursor(
+                harness.router.state().active_tool),
+            quader::ViewportPointerCursor::PrecisionCross);
+
+  EXPECT_TRUE(harness.editor.events().unsubscribe(dirty_subscription));
+  EXPECT_TRUE(harness.editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_FALSE(harness.session.native_tools().light_creation_active());
+}
+
+TEST(ViewportInteractionControllerTests,
+     LightCreationUsesRawPerspectiveSurfaceHitWithoutGridSnap) {
+  ViewportInteractionHarness harness;
+  ASSERT_EQ(harness.camera.state().projection,
+            quader::ViewportProjection::Perspective);
+  const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+  ASSERT_NE(box.entity, quader::kInvalidEntityId);
+  const std::size_t undo_count_before = harness.session.history().undo_count();
+
+  ASSERT_TRUE(harness.editor.commands()
+                  .execute(quader::quader_command::kSceneCreatePointLight)
+                  .ok());
+  constexpr quader::QVec3 kExpectedSurfaceWorld{0.37f, -0.22f, 1.0f};
+  const quader::ViewportScreenPoint surface_screen =
+      harness.camera.project_world_point(kExpectedSurfaceWorld);
+  ASSERT_TRUE(surface_screen.visible);
+  harness.input.mouse_local = surface_screen.position;
+  harness.input.mouse_screen = surface_screen.position;
+  harness.input.modal_tool_active = true;
+  const quader::ViewportInteractionFrame interaction =
+      harness.frame(true, true, false, surface_screen.position);
+  const quader::ViewportToolPointerLifecycleResult placed =
+      harness.controller.handle_tool_pointer_lifecycle(
+          harness.editor, harness.session.scene(), harness.session.assets(),
+          harness.session.native_tools(), &harness.session.point_placement(),
+          harness.camera,
+          quader::ViewportToolPointerLifecycleFrame{
+              .interaction = interaction,
+              .native_tool =
+                  {
+                      .input = harness.input,
+                      .input_result = harness.input_result,
+                      .left_pressed = true,
+                      .left_down = true,
+                      .left_click_local = surface_screen.position,
+                      .scene_snap_enabled = false,
+                      .grid_snap_enabled = false,
+                  },
+          });
+  ASSERT_TRUE(placed.native_tool.command_attempted);
+  ASSERT_TRUE(placed.native_tool.command_result.ok)
+      << placed.native_tool.command_result.message;
+
+  const std::vector<quader::QuaderEntitySnapshot> entities =
+      harness.editor.query().entities();
+  const auto light = std::find_if(
+      entities.begin(), entities.end(),
+      [](const quader::QuaderEntitySnapshot &entity) {
+        return entity.has_light;
+      });
+  ASSERT_NE(light, entities.end());
+  const quader::QVec3 placed_world = quader::transform_point(
+      harness.session.scene().world_transform_matrix(light->id), {});
+  EXPECT_NEAR(placed_world.x, kExpectedSurfaceWorld.x, 0.001f);
+  EXPECT_NEAR(placed_world.y, kExpectedSurfaceWorld.y, 0.001f);
+  EXPECT_NEAR(placed_world.z, kExpectedSurfaceWorld.z, 0.001f);
+  EXPECT_EQ(harness.session.history().undo_count(), undo_count_before + 1u);
+}
+
+TEST(ViewportInteractionControllerTests,
+     LightCreationRejectsNonInvertibleSceneRootWithoutMutation) {
+  int dirty_changed_events = 0;
+  ViewportInteractionHarness harness;
+  harness.camera.view_axis(quader::ViewportViewAxis::Y, 1);
+  harness.input.orthographic_view = true;
+  const quader::EntityId root = harness.session.scene().scene_root();
+  ASSERT_NE(root, quader::kInvalidEntityId);
+  ASSERT_TRUE(harness.session.scene().set_transform(
+      root, quader::TransformComponent{.scale = {0.0f, 1.0f, 1.0f}}));
+  harness.session.mark_clean();
+  const quader::QuaderEventSubscription dirty_subscription =
+      harness.editor.events().subscribe(
+          quader::quader_event::kSceneDirtyChanged,
+          [&](const quader::QuaderEvent &) { ++dirty_changed_events; });
+  ASSERT_TRUE(dirty_subscription.valid());
+  const std::size_t entity_count_before =
+      harness.editor.query().entities().size();
+  const std::size_t undo_count_before = harness.session.history().undo_count();
+
+  ASSERT_TRUE(harness.editor.commands()
+                  .execute(quader::quader_command::kSceneCreatePointLight)
+                  .ok());
+  constexpr quader::QVec3 kExpectedWorld{1.0f, 0.0f, -2.0f};
+  const quader::ViewportScreenPoint expected_screen =
+      harness.camera.project_world_point(kExpectedWorld);
+  ASSERT_TRUE(expected_screen.visible);
+  harness.input.mouse_local = expected_screen.position;
+  harness.input.mouse_screen = expected_screen.position;
+  harness.input.modal_tool_active = true;
+  const quader::ViewportInteractionFrame interaction =
+      harness.frame(true, true, false, expected_screen.position);
+  const quader::ViewportToolPointerLifecycleResult rejected =
+      harness.controller.handle_tool_pointer_lifecycle(
+          harness.editor, harness.session.scene(), harness.session.assets(),
+          harness.session.native_tools(), &harness.session.point_placement(),
+          harness.camera,
+          quader::ViewportToolPointerLifecycleFrame{
+              .interaction = interaction,
+              .native_tool =
+                  {
+                      .input = harness.input,
+                      .input_result = harness.input_result,
+                      .left_pressed = true,
+                      .left_down = true,
+                      .left_click_local = expected_screen.position,
+                      .scene_snap_enabled = false,
+                      .grid_snap_enabled = false,
+                  },
+          });
+  ASSERT_TRUE(rejected.native_tool.command_attempted);
+  EXPECT_FALSE(rejected.native_tool.command_result.ok);
+  EXPECT_EQ(rejected.native_tool.command_result.message,
+            "Scene root transform is not invertible.");
+  EXPECT_EQ(harness.editor.query().entities().size(), entity_count_before);
+  EXPECT_EQ(harness.session.history().undo_count(), undo_count_before);
+  EXPECT_TRUE(harness.session.native_tools().light_creation_active());
+  EXPECT_FALSE(harness.session.dirty());
+  EXPECT_EQ(dirty_changed_events, 0);
+  EXPECT_TRUE(harness.editor.events().unsubscribe(dirty_subscription));
+}
+
+TEST(ViewportInteractionControllerTests,
+     LightCreationModeCancelsAndToolSwitchesWithoutCreating) {
+  ViewportInteractionHarness harness;
+  const std::size_t entity_count_before =
+      harness.editor.query().entities().size();
+  const std::size_t undo_count_before = harness.session.history().undo_count();
+
+  ASSERT_TRUE(harness.editor.commands()
+                  .execute(quader::quader_command::kSceneCreatePointLight)
+                  .ok());
+  EXPECT_TRUE(harness.session.native_tools().light_creation_active());
+  ASSERT_TRUE(harness.editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_FALSE(harness.session.native_tools().light_creation_active());
+  EXPECT_EQ(harness.editor.tools().active_tool(), "select");
+
+  ASSERT_TRUE(harness.editor.commands()
+                  .execute(
+                      quader::quader_command::kSceneCreateDirectionalLight)
+                  .ok());
+  EXPECT_TRUE(harness.session.native_tools().light_creation_active());
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  EXPECT_FALSE(harness.session.native_tools().light_creation_active());
+  EXPECT_EQ(harness.editor.tools().active_tool(), "move");
+  EXPECT_EQ(harness.editor.query().entities().size(), entity_count_before);
+  EXPECT_EQ(harness.session.history().undo_count(), undo_count_before);
 }
 
 TEST(ViewportInteractionControllerTests,

@@ -10,11 +10,13 @@
 #include "core/types.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/placement/snap_to_floor_tool_state_port.hpp"
+#include "editor/tools/light_creation_tool_service.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
 #include "editor/tools/viewport_curve_interaction_port.hpp"
 #include "editor/tools/viewport_native_tool_interaction.hpp"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -58,6 +60,7 @@ public:
                                 RadialArrayToolService &radial_array,
                                 PathArrayToolService &path_array,
                                 PrimitiveCreationToolService &primitives,
+                                LightCreationToolService &light_creation,
                                 EditorSelectionService &selection,
                                 ModelingSessionService &modeling,
                                 CurveToolService &curve);
@@ -83,6 +86,13 @@ public:
   [[nodiscard]] bool blocks_modeling_content_mutation() const override;
   [[nodiscard]] bool blocks_document_mutation(EntityId entity) const;
   [[nodiscard]] std::string_view active_tool_id() const;
+  [[nodiscard]] bool light_creation_active() const override {
+    return light_creation_.active();
+  }
+  [[nodiscard]] std::optional<LightCreationOperation>
+  active_light_creation() const {
+    return light_creation_.active_operation();
+  }
   [[nodiscard]] std::optional<ViewportNativeToolCommitMetadata>
   active_commit_metadata() const {
     return runtime_.active_native_lifecycle_commit_metadata();
@@ -118,6 +128,9 @@ public:
   }
 
   CommandResult activate(std::string_view tool_id, double grid_world_size);
+  CommandResult begin_light_creation(LightCreationKind kind);
+  CommandResult
+  complete_active_light_creation(LightCreationOperation operation);
   CommandResult cancel_competing_state_for_tool_activation();
   CommandResult commit_active() override;
   CommandResult undo_active();
@@ -134,6 +147,7 @@ private:
   RadialArrayToolService &radial_array_;
   PathArrayToolService &path_array_;
   PrimitiveCreationToolService &primitives_;
+  LightCreationToolService &light_creation_;
   EditorSelectionService &selection_;
   ModelingSessionService &modeling_;
   CurveToolService &curve_;

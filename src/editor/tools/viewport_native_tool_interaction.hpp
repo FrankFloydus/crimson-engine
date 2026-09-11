@@ -43,6 +43,7 @@ class ViewportNativeToolLifecyclePort {
 public:
   virtual ~ViewportNativeToolLifecyclePort() = default;
   [[nodiscard]] virtual CommandResult commit_active() = 0;
+  [[nodiscard]] virtual bool light_creation_active() const { return false; }
 };
 
 /** Resolves Curve controls through the viewport spatial-query owner. */
@@ -109,6 +110,9 @@ struct ViewportNativeToolInteractionResult final {
   bool invalidate_hover = false;
   bool mark_overlay_dirty = false;
   bool curve_consumed = false;
+  std::optional<QVec3> light_creation_world_position;
+  bool command_attempted = false;
+  CommandResult command_result;
 };
 
 /**

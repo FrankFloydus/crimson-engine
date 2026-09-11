@@ -723,6 +723,24 @@ TEST(QtViewportSurfaceInputTests,
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
   process_input();
   EXPECT_EQ(surface->cursor().shape(), Qt::BitmapCursor);
+
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kSceneCreatePointLight)
+                  .ok());
+  process_input();
+  EXPECT_EQ(editor.tools().active_tool(), "create_point_light");
+  EXPECT_EQ(surface->cursor().shape(), Qt::CrossCursor);
+
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kSceneCreateDirectionalLight)
+                  .ok());
+  process_input();
+  EXPECT_EQ(editor.tools().active_tool(), "create_directional_light");
+  EXPECT_EQ(surface->cursor().shape(), Qt::CrossCursor);
+
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  process_input();
+  EXPECT_EQ(surface->cursor().shape(), Qt::BitmapCursor);
 }
 
 TEST(QtViewportSurfaceInputTests,

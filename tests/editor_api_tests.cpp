@@ -1127,6 +1127,34 @@ TEST(EditorApiTests,
   EXPECT_FALSE(project_documents.active_scene_id().has_value());
 }
 
+TEST(EditorApiTests, LightCreationRequiresAnActiveScene) {
+  quader::ProjectSession project;
+  quader::QuaderEditorApi editor(project);
+  ASSERT_FALSE(editor.scene_documents().has_active_scene());
+
+  for (const quader::QuaderCommandId command : {
+           quader::quader_command::kSceneCreatePointLight,
+           quader::quader_command::kSceneCreateDirectionalLight,
+       }) {
+    const std::optional<quader::QuaderCommandDescriptor> descriptor =
+        command_descriptor(editor, command);
+    ASSERT_TRUE(descriptor.has_value());
+    EXPECT_FALSE(descriptor->enabled);
+    const quader::QuaderApiVoidResult result =
+        editor.commands().execute(command);
+    EXPECT_FALSE(result.ok());
+    EXPECT_FALSE(result.changed());
+  }
+
+  const quader::QuaderApiVoidResult direct =
+      editor.tools().begin_light_creation(quader::QuaderLightType::Point);
+  EXPECT_FALSE(direct.ok());
+  EXPECT_FALSE(direct.changed());
+  EXPECT_EQ(direct.error_message(), "No scene is active.");
+  EXPECT_NE(editor.tools().active_tool(), "create_point_light");
+  EXPECT_NE(editor.tools().active_tool(), "create_directional_light");
+}
+
 TEST(EditorApiTests,
      DirtyProjectReplacementCancelPreservesStateAndDiscardUsesOneBoundary) {
   CommandTestHarness harness;
@@ -13089,58 +13117,68 @@ TEST(EditorApiTests, ScenePointLightLiveEditsApplyImmediatelyAndCoalesceByMergeK
                     after.intensity);
 }
 
-TEST(EditorApiTests, SceneCreatePointLightCommandCreatesSelectedPointLight) {
+TEST(EditorApiTests, SceneCreatePointLightCommandArmsViewportPlacement) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
+    const std::vector<quader::QuaderEntitySnapshot> before =
+        editor.query().entities();
+    const quader::QuaderHistorySnapshot history_before =
+        editor.query().history();
 
     const quader::QuaderApiVoidResult result = editor.commands().execute(
         quader::quader_command::kSceneCreatePointLight);
     ASSERT_TRUE(result.ok()) << result.error_message();
     EXPECT_TRUE(result.changed());
-
-    const std::optional<quader::QuaderEntitySnapshot> snapshot =
-        entity_named(editor, "Point Light");
-    ASSERT_TRUE(snapshot.has_value());
-    EXPECT_EQ(snapshot->kind, quader::QuaderEntityKind::Light);
-    EXPECT_TRUE(snapshot->has_light);
-    EXPECT_EQ(snapshot->light.type, quader::QuaderLightType::Point);
-    EXPECT_TRUE(snapshot->selected);
-    EXPECT_TRUE(snapshot->active);
-    ASSERT_TRUE(scene_root(editor).has_value());
-    EXPECT_EQ(snapshot->parent, scene_root(editor)->id);
+    EXPECT_EQ(result.mutation_kind, quader::QuaderMutationKind::Runtime);
+    EXPECT_EQ(editor.tools().active_tool(), "create_point_light");
+    EXPECT_EQ(editor.query().entities().size(), before.size());
+    EXPECT_FALSE(entity_named(editor, "Point Light").has_value());
+    EXPECT_EQ(editor.query().history().can_undo, history_before.can_undo);
+    EXPECT_EQ(editor.query().history().can_redo, history_before.can_redo);
+    EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+    EXPECT_EQ(editor.query().history().redo_label, history_before.redo_label);
 }
 
-TEST(EditorApiTests, SceneCreateDirectionalLightCommandCreatesSelectedDirectionalLight) {
+TEST(EditorApiTests,
+     SceneCreateDirectionalLightCommandArmsViewportPlacement) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
+    const std::vector<quader::QuaderEntitySnapshot> before =
+        editor.query().entities();
+    const quader::QuaderHistorySnapshot history_before =
+        editor.query().history();
 
     const quader::QuaderApiVoidResult result = editor.commands().execute(
         quader::quader_command::kSceneCreateDirectionalLight);
     ASSERT_TRUE(result.ok()) << result.error_message();
     EXPECT_TRUE(result.changed());
-
-    const std::optional<quader::QuaderEntitySnapshot> snapshot =
-        entity_named(editor, "Directional Light");
-    ASSERT_TRUE(snapshot.has_value());
-    EXPECT_EQ(snapshot->kind, quader::QuaderEntityKind::Light);
-    EXPECT_TRUE(snapshot->has_light);
-    EXPECT_EQ(snapshot->light.type, quader::QuaderLightType::Directional);
-    EXPECT_TRUE(snapshot->selected);
-    EXPECT_TRUE(snapshot->active);
-    ASSERT_TRUE(scene_root(editor).has_value());
-    EXPECT_EQ(snapshot->parent, scene_root(editor)->id);
+    EXPECT_EQ(result.mutation_kind, quader::QuaderMutationKind::Runtime);
+    EXPECT_EQ(editor.tools().active_tool(), "create_directional_light");
+    EXPECT_EQ(editor.query().entities().size(), before.size());
+    EXPECT_FALSE(entity_named(editor, "Directional Light").has_value());
+    EXPECT_EQ(editor.query().history().can_undo, history_before.can_undo);
+    EXPECT_EQ(editor.query().history().can_redo, history_before.can_redo);
+    EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+    EXPECT_EQ(editor.query().history().redo_label, history_before.redo_label);
 }
 
 TEST(EditorApiTests, DeleteSelectionDeletesSelectedLightsThroughSceneAwareRoute) {
-  auto exercise = [](quader::QuaderCommandId create_command,
-                     std::string_view expected_name,
+  auto exercise = [](std::string_view expected_name,
                      quader::QuaderLightType expected_type) {
     CommandTestHarness harness;
     quader::QuaderEditorApi &editor = harness.editor;
 
-    const quader::QuaderApiVoidResult created =
-        editor.commands().execute(create_command);
-    ASSERT_TRUE(created.ok()) << created.error_message();
+    if (expected_type == quader::QuaderLightType::Point) {
+      quader::QuaderCreatePointLightArgs args;
+      args.select_created = true;
+      const auto created = editor.scene().create_point_light(args);
+      ASSERT_TRUE(created.ok()) << created.error_message();
+    } else {
+      quader::QuaderCreateDirectionalLightArgs args;
+      args.select_created = true;
+      const auto created = editor.scene().create_directional_light(args);
+      ASSERT_TRUE(created.ok()) << created.error_message();
+    }
     const std::optional<quader::QuaderEntitySnapshot> before =
         entity_named(editor, expected_name);
     ASSERT_TRUE(before.has_value());
@@ -13174,10 +13212,8 @@ TEST(EditorApiTests, DeleteSelectionDeletesSelectedLightsThroughSceneAwareRoute)
     EXPECT_FALSE(entity_by_id(editor, before->id).has_value());
   };
 
-  exercise(quader::quader_command::kSceneCreatePointLight, "Point Light",
-           quader::QuaderLightType::Point);
-  exercise(quader::quader_command::kSceneCreateDirectionalLight,
-           "Directional Light", quader::QuaderLightType::Directional);
+  exercise("Point Light", quader::QuaderLightType::Point);
+  exercise("Directional Light", quader::QuaderLightType::Directional);
 }
 
 TEST(EditorApiTests, ScenePointLightSelectionFeedsQuerySummaryAndCenterInComponentMode) {

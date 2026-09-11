@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_api_types.hpp"
 #include "api/quader_api_session.hpp"
 #include "api/quader_editor_api_types.hpp"
 #include "api/quader_operation_input_hint_types.hpp"
@@ -44,6 +45,8 @@ public:
     QuaderApiVoidResult activate(ViewportToolId tool);
     [[nodiscard]] bool can_activate(std::string_view tool_id) const;
     [[nodiscard]] bool can_activate(ViewportToolId tool) const;
+    /** Arms one-shot viewport placement for a Point or Directional light. */
+    QuaderApiVoidResult begin_light_creation(QuaderLightType type);
     [[nodiscard]] QuaderToolSettingsTarget active_settings() const;
     [[nodiscard]] std::uint64_t active_settings_revision() const;
     [[nodiscard]] std::uint64_t active_tool_revision() const;

@@ -22,6 +22,7 @@
 #include "editor/placement/snap_to_floor_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
+#include "editor/tools/light_creation_tool_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/session/viewport_local_visibility_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
@@ -197,9 +198,10 @@ void SceneSession::rebuild_services() {
   selection_->set_scene_selection_history_suppression_provider([this]() {
     return primitive_creation_ && primitive_creation_->active();
   });
+  light_creation_ = std::make_unique<LightCreationToolService>();
   native_tools_ = std::make_unique<NativeViewportToolCoordinator>(
       *pivot_, *linear_array_, *radial_array_, *path_array_,
-      *primitive_creation_,
+      *primitive_creation_, *light_creation_,
       *selection_, *modeling_, *curve_);
   viewport_local_visibility_ =
       std::make_unique<ViewportLocalVisibilityService>(
