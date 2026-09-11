@@ -855,8 +855,11 @@ TEST(ProjectMaterialPublicApiTests,
     EXPECT_EQ(success.material.kind, QuaderProjectMaterialKind::Standard);
     EXPECT_NE(success.material.project_relative_path.find("Materials/"),
               std::string::npos);
-    EXPECT_EQ(project_path(success.material.project_relative_path)
-                  .native_path().filename(), "same.qmat");
+    EXPECT_EQ(success.material.project_relative_path,
+              imported_ids.size() == 1u
+                  ? "Materials/same.qmat"
+                  : "Materials/same_" + std::to_string(imported_ids.size()) +
+                        ".qmat");
 
     const std::filesystem::path qmat_path =
         harness.root() /
@@ -993,7 +996,7 @@ TEST(ProjectMaterialPublicApiTests,
 }
 
 TEST(ProjectMaterialPublicApiTests,
-     CaseInsensitiveNameCollisionsKeepReadableLeavesAndSeparateAssets) {
+     CaseInsensitiveNameCollisionsNumberMaterialsAndSeparateTextureAssets) {
   ProjectMaterialBehaviorHarness harness("texture-case-collision");
   harness.create();
   const auto original = read_bytes(source_resource_root() / "materials" /
@@ -1015,8 +1018,8 @@ TEST(ProjectMaterialPublicApiTests,
   EXPECT_EQ(two.name, "brick");
   EXPECT_EQ(one.project_relative_path, "Materials/Brick.qmat");
   const auto second_qmat = project_path(two.project_relative_path).native_path();
-  EXPECT_EQ(second_qmat.filename(), "brick.qmat");
-  EXPECT_NE(second_qmat.parent_path(), std::filesystem::path("Materials"));
+  EXPECT_EQ(second_qmat.filename(), "brick_2.qmat");
+  EXPECT_EQ(second_qmat.parent_path(), std::filesystem::path("Materials"));
   EXPECT_NE(one.id, two.id);
   const auto *first_entry = harness.project().material_catalog().find(one.id);
   const auto *second_entry = harness.project().material_catalog().find(two.id);

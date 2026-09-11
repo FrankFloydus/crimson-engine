@@ -18,6 +18,7 @@
 #include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_main_menu.hpp"
+#include "ui/qt_material_browser_window.hpp"
 #include "ui/qt_operation_input_hints.hpp"
 #include "ui/qt_project_home_page.hpp"
 #include "ui/qt_scene_workspace.hpp"
@@ -45,6 +46,8 @@
 #include <QCoreApplication>
 #include <QDataStream>
 #include <QDockWidget>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QHeaderView>
@@ -52,9 +55,11 @@
 #include <QIODevice>
 #include <QKeyEvent>
 #include <QMainWindow>
+#include <QListView>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMetaObject>
+#include <QMimeData>
 #include <QModelIndex>
 #include <QItemSelectionModel>
 #include <QLabel>
@@ -73,6 +78,8 @@
 #include <QTableView>
 #include <QToolBar>
 #include <QToolButton>
+#include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 
 #include <array>
 #include <chrono>
@@ -80,6 +87,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -1748,6 +1756,181 @@ TEST(QtProjectWorkspaceTests,
       bound_scene->modeling(), quader::kInvalidAssetId,
       bound_scene->native_tools(), &bound_scene->point_placement(), 1.0 / 60.0);
 
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
+     SameProjectReopenResetsMaterialFoldersAndRejectsDragBeforeNextFrame) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const std::filesystem::path isolated_profile =
+      std::filesystem::temp_directory_path() /
+      ("quader-ui-material-folder-lifecycle-" +
+       std::to_string(std::chrono::steady_clock::now()
+                          .time_since_epoch()
+                          .count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+
+  int argc = 1;
+  char application_name[] = "quader-material-folder-lifecycle-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  const std::filesystem::path resource_root =
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const std::filesystem::path project_root =
+      scoped_profile.profile() / "Material Folder Project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ASSERT_NE(ui.main_window(), nullptr);
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+  const auto bind_scene = [&](quader::SceneSession &scene) {
+    ui.install_runtime_hooks(
+        editor, scene.scene(), scene.assets(), scene.modeling(),
+        scene.selection(), scene.native_tools(), scene.point_placement(),
+        quader::kInvalidAssetId);
+  };
+  quader::QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, bind_scene);
+  bind_scene(project.fallback_scene());
+  ui.show();
+
+  const auto created = editor.project().create(project_root);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto first_scene = editor.scene_documents().active_scene_id();
+  ASSERT_TRUE(first_scene.has_value());
+  const auto first_path =
+      quader::ProjectRelativePath::parse_portable("Scenes/One.qdr");
+  ASSERT_TRUE(first_path.ok());
+  ASSERT_TRUE(editor.scene_documents().save_as(*first_scene, first_path.value()).ok());
+  const auto second_scene = editor.scene_documents().new_scene();
+  ASSERT_TRUE(second_scene.ok()) << second_scene.error_message();
+  const auto second_path =
+      quader::ProjectRelativePath::parse_portable("Scenes/Two.qdr");
+  ASSERT_TRUE(second_path.ok());
+  ASSERT_TRUE(editor.scene_documents().save_as(second_scene.value(), second_path.value()).ok());
+  ASSERT_TRUE(editor.project_assets().create_material_folder("Materials", "Dev").ok());
+  ASSERT_TRUE(editor.project_assets().create_material_folder("Materials/Dev", "Wood").ok());
+  ASSERT_TRUE(editor.project_assets().create_material_folder("Materials", "Other").ok());
+  const auto imported = editor.project_assets().import_textures_as_materials(
+      std::array{resource_root / "modeling_assets/materials/default/default_albedo.png"},
+      "Materials/Dev/Wood");
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  ASSERT_TRUE(imported.value().failed.empty());
+  ASSERT_EQ(imported.value().imported.size(), 1u);
+  const auto material = imported.value().imported.front().material;
+  ASSERT_FALSE(editor.scene_documents().has_dirty_scenes());
+  ui.refresh({}, {});
+
+  auto *browser = dynamic_cast<quader::QtMaterialBrowserWindow *>(
+      ui.main_window()->findChild<QWidget *>(QStringLiteral("materialBrowser.window")));
+  ASSERT_NE(browser, nullptr);
+  browser->setAttribute(Qt::WA_DontShowOnScreen, true);
+  // This fixture has no renderer, so the native-workspace menu stays disabled.
+  // Present the retained consumer directly and let UISystem supply its state.
+  browser->show();
+  ui.refresh_project_workspace();
+  application.processEvents();
+  ASSERT_TRUE(browser->isVisible());
+  auto *tree = browser->findChild<QTreeWidget *>(QStringLiteral("materialBrowser.folderTree"));
+  auto *grid = browser->findChild<QListView *>(QStringLiteral("materialBrowser.gridView"));
+  ASSERT_NE(tree, nullptr);
+  ASSERT_NE(grid, nullptr);
+  const auto find_folder = [&](const QString &path) -> QTreeWidgetItem * {
+    for (QTreeWidgetItemIterator it(tree); *it != nullptr; ++it) {
+      if ((*it)->data(0, Qt::UserRole).toString() == path) {
+        return *it;
+      }
+    }
+    return nullptr;
+  };
+  auto *dev = find_folder(QStringLiteral("Materials/Dev"));
+  ASSERT_NE(dev, nullptr);
+  dev->setExpanded(true);
+  browser->set_selected_folder(QStringLiteral("Materials/Dev/Wood"));
+  ASSERT_EQ(grid->model()->rowCount(), 1);
+
+  const auto activated = editor.scene_documents().activate(*first_scene);
+  ASSERT_TRUE(activated.ok()) << activated.error_message();
+  ui.refresh({}, {});
+  EXPECT_EQ(browser->selected_folder(), QStringLiteral("Materials/Dev/Wood"));
+  dev = find_folder(QStringLiteral("Materials/Dev"));
+  ASSERT_NE(dev, nullptr);
+  EXPECT_TRUE(dev->isExpanded())
+      << "a scene-tab rebind must retain this project's folder presentation";
+  ASSERT_EQ(grid->model()->rowCount(), 1);
+  std::unique_ptr<QMimeData> old_drag(
+      grid->model()->mimeData({grid->model()->index(0, 0)}));
+  ASSERT_NE(old_drag, nullptr);
+  application.processEvents();
+  auto *destination = find_folder(QStringLiteral("Materials/Other"));
+  ASSERT_NE(destination, nullptr);
+  ASSERT_FALSE(tree->visualItemRect(destination).isEmpty());
+  const auto catalog_before = editor.project_assets().materials();
+  ASSERT_TRUE(catalog_before.ok());
+  const std::filesystem::path manifest = editor.project().manifest_path();
+  const std::filesystem::path material_path = project_root / material.project_relative_path;
+  const std::filesystem::path moved_path =
+      project_root / "Materials/Other" / material_path.filename();
+  ASSERT_TRUE(std::filesystem::exists(material_path));
+  ASSERT_FALSE(std::filesystem::exists(moved_path));
+
+  const auto reopened = editor.project().open(manifest);
+  ASSERT_TRUE(reopened.ok()) << reopened.error_message();
+  ASSERT_TRUE(reopened.changed());
+  const auto drop_without_frame = [&](const QMimeData &mime) {
+    QTreeWidgetItem *target = find_folder(QStringLiteral("Materials/Other"));
+    EXPECT_NE(target, nullptr);
+    if (target == nullptr) {
+      return false;
+    }
+    const QPoint position = tree->visualItemRect(target).center();
+    QDragEnterEvent enter(position, Qt::MoveAction, &mime,
+                          Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(tree->viewport(), &enter);
+    QDropEvent drop(QPointF(position), Qt::MoveAction, &mime,
+                    Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(tree->viewport(), &drop);
+    return drop.isAccepted();
+  };
+  // No event processing or UI refresh may close the lifecycle-event race here.
+  // The semantic owner must reject a still-present old window's drag payload.
+  (void)drop_without_frame(*old_drag);
+  EXPECT_TRUE(std::filesystem::exists(material_path));
+  EXPECT_FALSE(std::filesystem::exists(moved_path));
+  const auto catalog_after = editor.project_assets().materials();
+  ASSERT_TRUE(catalog_after.ok());
+  ASSERT_EQ(catalog_after.value().size(), catalog_before.value().size());
+  for (std::size_t index = 0; index < catalog_before.value().size(); ++index) {
+    EXPECT_EQ(catalog_after.value()[index].id, catalog_before.value()[index].id);
+    EXPECT_EQ(catalog_after.value()[index].project_relative_path,
+              catalog_before.value()[index].project_relative_path);
+  }
+
+  ui.refresh({}, {});
+  EXPECT_EQ(browser->selected_folder(), QStringLiteral("Materials"));
+  dev = find_folder(QStringLiteral("Materials/Dev"));
+  ASSERT_NE(dev, nullptr);
+  EXPECT_FALSE(dev->isExpanded());
+  EXPECT_FALSE(drop_without_frame(*old_drag))
+      << "the refreshed view must also reject the previous project session's MIME";
+
+  // A new drag of the same material proves the destination and owner routing
+  // work; stale identity, rather than an unrelated move restriction, blocked it.
+  browser->set_selected_folder(QStringLiteral("Materials/Dev/Wood"));
+  ASSERT_EQ(grid->model()->rowCount(), 1);
+  std::unique_ptr<QMimeData> current_drag(
+      grid->model()->mimeData({grid->model()->index(0, 0)}));
+  ASSERT_NE(current_drag, nullptr);
+  EXPECT_TRUE(drop_without_frame(*current_drag));
+  EXPECT_FALSE(std::filesystem::exists(material_path));
+  EXPECT_TRUE(std::filesystem::exists(moved_path));
   ui.shutdown();
 }
 

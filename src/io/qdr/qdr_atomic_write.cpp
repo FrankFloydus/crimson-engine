@@ -638,6 +638,23 @@ write_file(const std::filesystem::path &temp_path, std::string_view bytes) {
 
 } // namespace
 
+QdrAtomicWriteResult move_project_entry_no_replace(
+    const std::filesystem::path &source,
+    const std::filesystem::path &destination) {
+  AtomicMoveResult moved =
+      atomic_move_no_replace(source, destination, "Could not move project entry");
+  if (moved.status == AtomicMoveStatus::Moved) {
+    return {true, std::move(moved.message)};
+  }
+  if (moved.status == AtomicMoveStatus::DestinationExists) {
+    return {false, "The destination already contains a project entry."};
+  }
+  if (moved.status == AtomicMoveStatus::SourceMissing) {
+    return {false, "The project entry no longer exists."};
+  }
+  return {false, std::move(moved.message)};
+}
+
 QdrAtomicFileTransaction::~QdrAtomicFileTransaction() {
   if (active_) {
     try {
@@ -711,7 +728,8 @@ QdrAtomicWriteResult QdrAtomicFileTransaction::prepare(
   return {false, "Could not allocate a unique QDR staging file."};
 }
 
-QdrAtomicWriteResult QdrAtomicFileTransaction::publish() {
+QdrAtomicWriteResult QdrAtomicFileTransaction::publish(
+    const QdrAtomicBeforeReplace &before_replace) {
   QDR_PROFILE_FUNCTION();
   if (!active_ || published_) {
     return {false, "QDR file transaction is not ready to publish."};
@@ -752,6 +770,21 @@ QdrAtomicWriteResult QdrAtomicFileTransaction::publish() {
       backup_.clear();
       return {false,
               "Could not prepare QDR rollback-backup diagnostics."};
+    }
+
+    if (before_replace) {
+      try {
+        QdrAtomicWriteResult recorded = before_replace(backup_);
+        if (!recorded.ok) {
+          backup_.clear();
+          backup_cleanup_failure_message_.clear();
+          return recorded;
+        }
+      } catch (...) {
+        backup_.clear();
+        backup_cleanup_failure_message_.clear();
+        return {false, "Could not record QDR rollback backup before replacement."};
+      }
     }
 
     QdrAtomicWriteResult replaced =

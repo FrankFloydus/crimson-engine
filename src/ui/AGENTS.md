@@ -17,6 +17,11 @@ file except through prior written authorization from Francesco Di Blasi.
   `scene().move_entities()` owning atomic hierarchy/order edits and history. The model must not
   apply Qt's trailing source-row removal after the scene has already moved those entities.
   Names depict visibility/lock state; the tree has no property checkbox columns.
+- The material browser presents the project catalog's physical folders, including empty ones.
+  All is a synthetic recursive filter and the root import/drop destination. Folder and material
+  drags carry a project generation; mutations go through `QuaderProjectAssetsApi`, and refreshed
+  owner snapshots supply the resulting tree. Permanent folder deletion requires the public
+  dependency preview and its matching revision. Picker mode only browses folders.
 - `QtViewportPanel` hosts one to four native-child `QtViewportSurface` panes. Workspace state and
   cameras belong to `ViewportWorkspaceService`; Filament resources belong to render.
 - `main.cpp` selects Fusion; `qt_application_theme.*` supplies the Obsidian palette and live system

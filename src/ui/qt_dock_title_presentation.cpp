@@ -169,7 +169,7 @@ QString dock_palette_fingerprint(const QPalette &palette) {
       QPalette::Active, QPalette::Inactive, QPalette::Disabled};
   constexpr std::array<QPalette::ColorRole, 6> kRoles{
       QPalette::AlternateBase, QPalette::Button,     QPalette::Text,
-      QPalette::ButtonText,    QPalette::Mid,        QPalette::Highlight};
+      QPalette::ButtonText,    QPalette::Mid,        QPalette::Accent};
 
   QString fingerprint = QStringLiteral("/* quader-dock-palette");
   for (const QPalette::ColorGroup group : kGroups) {
@@ -261,8 +261,8 @@ QString qt_dock_title_style_sheet(const QPalette &palette,
       qss_color(palette.color(QPalette::Active, QPalette::ButtonText));
   const QString active_title_border =
       qss_color(palette.color(QPalette::Active, QPalette::Mid));
-  const QString highlight =
-      qss_color(palette.color(QPalette::Active, QPalette::Highlight));
+  const QString accent =
+      qss_color(palette.color(QPalette::Active, QPalette::Accent));
   const QString pressed_background =
       glyph_policy.needs_contrast_tile ? button_background
                                        : active_title_background;
@@ -307,7 +307,7 @@ QDockWidget::float-button:pressed {
       .arg(active_title_text)
       .arg(active_title_border)
       .arg(button_background)
-      .arg(highlight)
+      .arg(accent)
       .arg(pressed_background)
       .arg(metrics.px(4))
       .arg(metrics.px(18))

@@ -53,6 +53,10 @@ public:
   entries() const noexcept {
     return entries_;
   }
+  /// Includes the Materials root and every validated folder, even when empty.
+  [[nodiscard]] std::span<const ProjectRelativePath> folders() const noexcept {
+    return folders_;
+  }
   [[nodiscard]] std::span<const std::string> warnings() const noexcept {
     return warnings_;
   }
@@ -71,6 +75,7 @@ public:
 
 private:
   std::vector<ProjectMaterialCatalogEntry> entries_;
+  std::vector<ProjectRelativePath> folders_;
   std::unordered_map<ProjectAssetId, std::size_t, ProjectAssetIdHash>
       entry_index_by_id_;
   std::vector<std::string> warnings_;

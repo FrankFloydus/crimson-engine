@@ -28,12 +28,16 @@ class QLabel;
 class QLineEdit;
 class QListView;
 class QMenu;
+class QMimeData;
 class QPushButton;
 class QShowEvent;
 class QSlider;
 class QStackedWidget;
+class QSplitter;
 class QTableView;
 class QToolButton;
+class QTreeWidget;
+class QTreeWidgetItem;
 
 namespace quader {
 
@@ -47,7 +51,6 @@ struct QtMaterialBrowserLabels final {
   QString list = QStringLiteral("List");
   QString tile_size = QStringLiteral("Preview size");
   QString tile_size_value = QStringLiteral("Preview size: %1 px");
-  QString file = QStringLiteral("File");
   QString import_textures = QStringLiteral("Import…");
   QString name_column = QStringLiteral("Name");
   QString type_column = QStringLiteral("Type");
@@ -57,6 +60,13 @@ struct QtMaterialBrowserLabels final {
   QString no_results = QStringLiteral("No materials match this search");
   QString accept = QStringLiteral("Accept");
   QString picker_window_title = QStringLiteral("Replace Material Browser");
+  QString folders = QStringLiteral("Folders");
+  QString all = QStringLiteral("All");
+  QString new_folder = QStringLiteral("New Folder");
+  QString rename_folder = QStringLiteral("Rename");
+  QString delete_folder = QStringLiteral("Delete");
+  QString folder_name = QStringLiteral("Folder name");
+  QString empty_folder = QStringLiteral("No materials in this folder");
 };
 
 enum class QtMaterialBrowserViewMode : std::uint8_t { Grid, List };
@@ -89,6 +99,11 @@ public:
   [[nodiscard]] QVariant
   headerData(int section, Qt::Orientation orientation,
              int role = Qt::DisplayRole) const override;
+  [[nodiscard]] Qt::ItemFlags flags(const QModelIndex &index) const override;
+  [[nodiscard]] QStringList mimeTypes() const override;
+  [[nodiscard]] QMimeData *mimeData(const QModelIndexList &indexes) const override;
+  [[nodiscard]] Qt::DropActions supportedDragActions() const override;
+  void set_drag_context(std::uint64_t generation, bool enabled);
 
   bool set_items(std::vector<QtMaterialBrowserItem> items);
   void set_labels(QtMaterialBrowserLabels labels);
@@ -119,6 +134,8 @@ private:
   mutable std::vector<PreviewIconCacheEntry> preview_icon_cache_;
   mutable std::uint64_t preview_icon_cache_cost_ = 0;
   mutable std::uint64_t preview_icon_cache_clock_ = 0;
+  std::uint64_t project_generation_ = 0;
+  bool organization_enabled_ = true;
 };
 
 /// Case-insensitive name/path filter with deterministic typed sorting.
@@ -127,6 +144,7 @@ public:
   explicit QtMaterialBrowserProxyModel(QObject *parent = nullptr);
 
   void set_search_text(QString text);
+  void set_folder(QString project_relative_folder);
 
 protected:
   [[nodiscard]] bool
@@ -137,6 +155,7 @@ protected:
 
 private:
   QString search_text_;
+  QString folder_;
 };
 
 /**
@@ -149,7 +168,14 @@ public:
       std::function<void(QuaderMaterialReference)>;
   using OpenMaterialCallback = std::function<void(QuaderMaterialReference)>;
   using AcceptMaterialCallback = std::function<void(QuaderMaterialReference)>;
-  using ImportTexturesCallback = std::function<void()>;
+  using ImportTexturesCallback = std::function<void(QString)>;
+  using CreateFolderCallback = std::function<void(QString, QString)>;
+  using RenameFolderCallback = std::function<void(QString, QString)>;
+  using DeleteFolderCallback = std::function<void(QString)>;
+  using MoveFolderCallback =
+      std::function<void(QString, QString, std::uint64_t)>;
+  using MoveMaterialsCallback = std::function<void(
+      std::vector<QuaderMaterialReference>, QString, std::uint64_t)>;
   using PresentationStateChangedCallback = std::function<void()>;
 
   explicit QtMaterialBrowserWindow(QWidget *parent = nullptr);
@@ -162,6 +188,11 @@ public:
   void set_materials(std::vector<QtMaterialBrowserItem> materials,
                      QuaderMaterialReference selected_material = {});
   void set_active_material(QuaderMaterialReference active_material);
+  void set_folders(std::vector<QString> project_relative_folders);
+  void set_project_generation(std::uint64_t generation);
+  [[nodiscard]] QString selected_folder() const;
+  void set_selected_folder(QString project_relative_folder);
+  void follow_moved_folder(const QString &source, const QString &destination);
   void clear_materials();
   void set_purpose(QtMaterialBrowserPurpose purpose);
   [[nodiscard]] QtMaterialBrowserPurpose purpose() const noexcept {
@@ -172,6 +203,11 @@ public:
   void set_open_material_callback(OpenMaterialCallback callback);
   void set_accept_material_callback(AcceptMaterialCallback callback);
   void set_import_textures_callback(ImportTexturesCallback callback);
+  void set_create_folder_callback(CreateFolderCallback callback);
+  void set_rename_folder_callback(RenameFolderCallback callback);
+  void set_delete_folder_callback(DeleteFolderCallback callback);
+  void set_move_folder_callback(MoveFolderCallback callback);
+  void set_move_materials_callback(MoveMaterialsCallback callback);
   void set_presentation_state_changed_callback(
       PresentationStateChangedCallback callback);
 
@@ -179,9 +215,12 @@ public:
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
 
   void restore_presentation_state(QtMaterialBrowserViewMode view_mode,
-                                  int tile_size);
+                                  int tile_size, bool sidebar_visible = true,
+                                  int sidebar_width = 200);
   [[nodiscard]] QtMaterialBrowserViewMode view_mode() const;
   [[nodiscard]] int tile_size() const;
+  [[nodiscard]] bool sidebar_visible() const;
+  [[nodiscard]] int sidebar_width() const;
 
 protected:
   bool event(QEvent *event) override;
@@ -204,6 +243,12 @@ private:
   void activate_index(const QModelIndex &index);
   void open_index(const QModelIndex &index);
   void accept_selected_material();
+  void rebuild_folder_tree();
+  void show_folder_menu(const QPoint &position);
+  void set_sidebar_visible(bool visible, bool notify);
+  [[nodiscard]] bool receive_folder_drop(const QMimeData *data,
+                                         const QString &destination,
+                                         bool execute);
 
   QtMaterialBrowserModel *model_ = nullptr;
   QtMaterialBrowserProxyModel *proxy_ = nullptr;
@@ -211,8 +256,10 @@ private:
   QToolButton *grid_button_ = nullptr;
   QToolButton *list_button_ = nullptr;
   QSlider *tile_slider_ = nullptr;
-  QMenu *file_menu_ = nullptr;
-  QAction *import_action_ = nullptr;
+  QToolButton *folders_button_ = nullptr;
+  QSplitter *splitter_ = nullptr;
+  QTreeWidget *folder_tree_ = nullptr;
+  QPushButton *import_button_ = nullptr;
   QStackedWidget *content_stack_ = nullptr;
   QListView *grid_view_ = nullptr;
   QTableView *list_view_ = nullptr;
@@ -226,6 +273,14 @@ private:
   OpenMaterialCallback open_material_;
   AcceptMaterialCallback accept_material_;
   ImportTexturesCallback import_textures_;
+  CreateFolderCallback create_folder_;
+  RenameFolderCallback rename_folder_;
+  DeleteFolderCallback delete_folder_;
+  MoveFolderCallback move_folder_;
+  MoveMaterialsCallback move_materials_;
+  std::vector<QString> folders_;
+  std::uint64_t project_generation_ = 0;
+  int sidebar_width_ = 200;
   PresentationStateChangedCallback presentation_state_changed_;
   QtUiScaleMetrics ui_scale_metrics_;
 };

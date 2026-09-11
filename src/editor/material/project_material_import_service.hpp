@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace quader {
@@ -47,7 +48,8 @@ public:
       : project_(&project) {}
 
   [[nodiscard]] ProjectMaterialImportReport import_textures_as_materials(
-      std::span<const std::filesystem::path> source_paths) const;
+      std::span<const std::filesystem::path> source_paths,
+      std::string_view destination_folder = "Materials") const;
 
 private:
   ProjectSession *project_ = nullptr;

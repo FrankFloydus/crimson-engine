@@ -24,6 +24,8 @@ struct QtAuxiliaryWindowState {
   QByteArray material_browser_geometry;
   bool material_browser_grid_mode = true;
   int material_browser_tile_size = 128;
+  bool material_browser_sidebar_visible = true;
+  int material_browser_sidebar_width = 200;
   QByteArray standard_material_editor_geometry;
   int standard_material_preview_mesh = 0;
   int standard_material_preview_shading = 2;

@@ -1598,6 +1598,23 @@ struct LegacyQdrObjectRecord final {
   MaterialReference material;
 };
 
+[[nodiscard]] MaterialReference
+decode_legacy_material_reference(const fb::ObjectRecord &stored) {
+  MaterialReference material(stored.material());
+  if (const flatbuffers::String *project_id = stored.project_material_id();
+      project_id != nullptr && !project_id->str().empty()) {
+    const std::optional<ProjectAssetId> parsed =
+        ProjectAssetId::parse(project_id->string_view());
+    if (!parsed.has_value() || material.valid()) {
+      throw std::runtime_error(
+          "QDR legacy object record contains an invalid or ambiguous "
+          "material reference.");
+    }
+    material = MaterialReference::project(*parsed);
+  }
+  return material;
+}
+
 [[nodiscard]] std::vector<LegacyQdrObjectRecord>
 decode_legacy_object_records(const SceneContentDocument &document,
                              const fb::ScenePayload &payload) {
@@ -1616,20 +1633,8 @@ decode_legacy_object_records(const SceneContentDocument &document,
         .editor_object_id = stored->editor_object_id(),
         .scene_entity = stored->scene_entity(),
         .mesh = stored->mesh(),
-        .material = MaterialReference(stored->material()),
+        .material = decode_legacy_material_reference(*stored),
     };
-    if (const flatbuffers::String *project_id =
-            stored->project_material_id();
-        project_id != nullptr && !project_id->str().empty()) {
-      const std::optional<ProjectAssetId> parsed =
-          ProjectAssetId::parse(project_id->string_view());
-      if (!parsed.has_value() || record.material.valid()) {
-        throw std::runtime_error(
-            "QDR legacy object record contains an invalid or ambiguous "
-            "material reference.");
-      }
-      record.material = MaterialReference::project(*parsed);
-    }
     if (record.editor_object_id == kInvalidEditorObjectId ||
         record.scene_entity == kInvalidEntityId ||
         !object_ids.insert(record.editor_object_id).second ||
@@ -1733,6 +1738,84 @@ decode_project_asset_dependencies(const fb::ScenePayload &payload) {
     });
   }
   return dependencies;
+}
+
+void decode_material_and_texture_assets(
+    SceneContentDocument &document, const fb::ScenePayload &payload,
+    std::uint16_t scene_schema_version) {
+  std::set<AssetId> texture_ids;
+  if (const auto *textures = payload.textures()) {
+    for (std::size_t index = 0u; index < textures->size(); ++index) {
+      const fb::TextureAsset *stored_texture = textures->Get(index);
+      const AssetId id = stored_texture->id();
+      if (id == kInvalidAssetId || !texture_ids.insert(id).second) {
+        throw std::runtime_error(
+            "QDR scene contains an invalid or duplicate texture asset id.");
+      }
+      TextureAsset texture;
+      texture.name = string_from_fb(stored_texture->name(), "Texture");
+      texture.usage = texture_usage_from_fb(stored_texture->usage());
+      texture.color_space =
+          texture_color_space_from_fb(stored_texture->color_space());
+      texture.width = stored_texture->width();
+      texture.height = stored_texture->height();
+      texture.source_path = std::filesystem::path(
+          string_from_fb(stored_texture->source_path()));
+      texture.generated = stored_texture->generated();
+      if (document.assets().add_texture(id, std::move(texture)) ==
+          kInvalidAssetId) {
+        throw std::runtime_error("QDR scene could not install a texture asset.");
+      }
+    }
+  }
+
+  std::set<AssetId> material_ids;
+  if (const auto *materials = payload.materials()) {
+    for (std::size_t index = 0u; index < materials->size(); ++index) {
+      const fb::MaterialAsset *stored_material = materials->Get(index);
+      const AssetId id = stored_material->id();
+      if (id == kInvalidAssetId || !material_ids.insert(id).second) {
+        throw std::runtime_error(
+            "QDR scene contains an invalid or duplicate material asset id.");
+      }
+      MaterialDocument material;
+      material.name = string_from_fb(stored_material->name(), "Material");
+      material.base_color = from_fb(stored_material->base_color(),
+                                    {1.0f, 1.0f, 1.0f});
+      material.roughness = stored_material->roughness();
+      material.metallic = stored_material->metallic();
+      if (scene_schema_version < 14u &&
+          stored_material->diffuse_model() != fb::MaterialDiffuseModel::Burley) {
+        throw std::runtime_error(
+            "QDR material diffuse model is unsupported before schema 14.");
+      }
+      material.diffuse_model =
+          static_cast<MaterialDiffuseModel>(stored_material->diffuse_model());
+      material.node_graph_reserved = stored_material->node_graph_reserved();
+      if (const auto *slots = stored_material->texture_slots()) {
+        for (std::size_t slot_index = 0u; slot_index < slots->size();
+             ++slot_index) {
+          const fb::TextureSlotBinding *slot = slots->Get(slot_index);
+          const std::string slot_name = string_from_fb(slot->slot());
+          if (!set_material_texture_slot(material, slot_name,
+                                         slot->texture_id())) {
+            throw std::runtime_error(
+                "QDR material contains an unsupported texture slot.");
+          }
+        }
+      }
+      const AssetRegistryValidationResult validation =
+          document.assets().validate_material(material);
+      if (!validation.ok) {
+        throw std::runtime_error("QDR material is invalid: " +
+                                 validation.message);
+      }
+      if (document.assets().add_material(id, std::move(material)) ==
+          kInvalidAssetId) {
+        throw std::runtime_error("QDR scene could not install a material asset.");
+      }
+    }
+  }
 }
 
 void decode_assets(
@@ -1862,79 +1945,7 @@ void decode_assets(
     }
   }
 
-  std::set<AssetId> texture_ids;
-  if (const auto *textures = payload.textures()) {
-    for (std::size_t index = 0u; index < textures->size(); ++index) {
-      const fb::TextureAsset *stored_texture = textures->Get(index);
-      const AssetId id = stored_texture->id();
-      if (id == kInvalidAssetId || !texture_ids.insert(id).second) {
-        throw std::runtime_error(
-            "QDR scene contains an invalid or duplicate texture asset id.");
-      }
-      TextureAsset texture;
-      texture.name = string_from_fb(stored_texture->name(), "Texture");
-      texture.usage = texture_usage_from_fb(stored_texture->usage());
-      texture.color_space =
-          texture_color_space_from_fb(stored_texture->color_space());
-      texture.width = stored_texture->width();
-      texture.height = stored_texture->height();
-      texture.source_path = std::filesystem::path(
-          string_from_fb(stored_texture->source_path()));
-      texture.generated = stored_texture->generated();
-      if (document.assets().add_texture(id, std::move(texture)) ==
-          kInvalidAssetId) {
-        throw std::runtime_error("QDR scene could not install a texture asset.");
-      }
-    }
-  }
-
-  std::set<AssetId> material_ids;
-  if (const auto *materials = payload.materials()) {
-    for (std::size_t index = 0u; index < materials->size(); ++index) {
-      const fb::MaterialAsset *stored_material = materials->Get(index);
-      const AssetId id = stored_material->id();
-      if (id == kInvalidAssetId || !material_ids.insert(id).second) {
-        throw std::runtime_error(
-            "QDR scene contains an invalid or duplicate material asset id.");
-      }
-      MaterialDocument material;
-      material.name = string_from_fb(stored_material->name(), "Material");
-      material.base_color = from_fb(stored_material->base_color(),
-                                    {1.0f, 1.0f, 1.0f});
-      material.roughness = stored_material->roughness();
-      material.metallic = stored_material->metallic();
-      if (scene_schema_version < 14u &&
-          stored_material->diffuse_model() != fb::MaterialDiffuseModel::Burley) {
-        throw std::runtime_error(
-            "QDR material diffuse model is unsupported before schema 14.");
-      }
-      material.diffuse_model =
-          static_cast<MaterialDiffuseModel>(stored_material->diffuse_model());
-      material.node_graph_reserved = stored_material->node_graph_reserved();
-      if (const auto *slots = stored_material->texture_slots()) {
-        for (std::size_t slot_index = 0u; slot_index < slots->size();
-             ++slot_index) {
-          const fb::TextureSlotBinding *slot = slots->Get(slot_index);
-          const std::string slot_name = string_from_fb(slot->slot());
-          if (!set_material_texture_slot(material, slot_name,
-                                         slot->texture_id())) {
-            throw std::runtime_error(
-                "QDR material contains an unsupported texture slot.");
-          }
-        }
-      }
-      const AssetRegistryValidationResult validation =
-          document.assets().validate_material(material);
-      if (!validation.ok) {
-        throw std::runtime_error("QDR material is invalid: " +
-                                 validation.message);
-      }
-      if (document.assets().add_material(id, std::move(material)) ==
-          kInvalidAssetId) {
-        throw std::runtime_error("QDR scene could not install a material asset.");
-      }
-    }
-  }
+  decode_material_and_texture_assets(document, payload, scene_schema_version);
 }
 
 void decode_curve_assets(SceneContentDocument &document,
@@ -2478,6 +2489,186 @@ QdrSceneBinaryDecodeResult decode_qdr_scene_binary_with_stats(
 SceneContentDocument decode_qdr_scene_binary(
     const quader_io::QdrBinaryContainerReadResult &container) {
   return decode_qdr_scene_binary_with_stats(container).document;
+}
+
+QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
+    const quader_io::QdrBinaryContainerReadResult &container) {
+  QDR_PROFILE_FUNCTION();
+  if (!container.ok) {
+    throw std::runtime_error(container.message.empty()
+                                 ? "QDR binary container is invalid."
+                                 : container.message);
+  }
+  const auto metadata_started = std::chrono::steady_clock::now();
+  const quader_io::QdrBinaryChunk &metadata =
+      require_scene_metadata_chunk(container);
+  const fb::ScenePayload *payload = verify_scene_payload(metadata.bytes());
+  QdrSceneBinaryDependencyDecodeResult result;
+  result.scene_name = string_from_fb(payload->scene_name(), "Untitled Scene");
+  result.project_asset_dependencies = decode_project_asset_dependencies(*payload);
+
+  std::set<ProjectAssetId> material_ids;
+  for (const ProjectAssetReference &reference :
+       result.project_asset_dependencies) {
+    if (reference.kind == ProjectAssetKind::Material) {
+      material_ids.insert(reference.stable_id);
+    }
+  }
+
+  // Geometry remains opaque. Accessing the bytes verifies lazy checksums but
+  // never constructs topology or invokes the modeling compiler.
+  std::unordered_map<std::uint64_t, const quader_io::QdrBinaryChunk *>
+      geometry_chunks;
+  for (const quader_io::QdrBinaryChunk &chunk : container.chunks) {
+    (void)chunk.bytes();
+    if (chunk.type ==
+        static_cast<std::uint32_t>(quader_io::QdrBinaryChunkType::Geometry)) {
+      if (chunk.schema_version != kGeometryChunkSchemaVersion ||
+          !geometry_chunks.emplace(chunk.id, &chunk).second) {
+        throw std::runtime_error(
+            "QDR scene contains unsupported or duplicate geometry chunks.");
+      }
+    }
+  }
+  std::set<AssetId> mesh_ids;
+  if (const auto *meshes = payload->meshes()) {
+    result.stats.logical_geometry_count = meshes->size();
+    for (const fb::MeshAsset *mesh : *meshes) {
+      if (mesh->id() == kInvalidAssetId ||
+          !mesh_ids.insert(mesh->id()).second) {
+        throw std::runtime_error(
+            "QDR scene contains an invalid or duplicate mesh asset id.");
+      }
+      (void)require_geometry_chunk(geometry_chunks, mesh->geometry_chunk_id());
+    }
+  }
+
+  SceneContentDocument metadata_document(
+      SceneContentDocumentRecord{.id = payload->scene_id(),
+                                 .name = result.scene_name},
+      SceneContentDocumentRootPolicy::DeferSceneRoot);
+  decode_material_and_texture_assets(metadata_document, *payload,
+                                     metadata.schema_version);
+  const auto collect_material = [&](const MaterialReference &reference,
+                                    bool slot) {
+    if ((slot && !reference.valid()) ||
+        (reference.embedded() &&
+         metadata_document.assets().material(reference.embedded_asset()) ==
+             nullptr)) {
+      throw std::runtime_error(
+          "QDR scene material binding references a missing material asset.");
+    }
+    if (reference.project_owned()) {
+      material_ids.insert(reference.project_asset());
+    }
+  };
+
+  std::map<EntityId, const fb::Entity *> entities;
+  std::set<EditorObjectId> editor_object_ids;
+  if (const auto *stored_entities = payload->entities()) {
+    for (const fb::Entity *entity : *stored_entities) {
+      if (entity->id() == kInvalidEntityId ||
+          !entities.emplace(entity->id(), entity).second ||
+          (entity->editor_object_id() != kInvalidEditorObjectId &&
+           !editor_object_ids.insert(entity->editor_object_id()).second)) {
+        throw std::runtime_error(
+            "QDR scene contains a duplicate or invalid entity identity.");
+      }
+      if (const fb::MeshComponent *mesh = entity->mesh();
+          mesh != nullptr && !mesh_ids.contains(mesh->mesh())) {
+        throw std::runtime_error("QDR entity references a missing mesh asset.");
+      }
+      if (const fb::MaterialComponent *stored = entity->material()) {
+        const MaterialComponent material = decode_material_component(*stored);
+        collect_material(material.material, false);
+        for (const auto &[slot, reference] : material.material_slots) {
+          (void)slot;
+          collect_material(reference, true);
+        }
+      }
+    }
+  }
+
+  std::set<EditorObjectId> legacy_object_ids;
+  std::set<EntityId> legacy_entity_ids;
+  std::map<EntityId, EditorObjectId> legacy_identity_by_entity;
+  if (const auto *objects = payload->objects()) {
+    for (const fb::ObjectRecord *object : *objects) {
+      const auto entity = entities.find(object->scene_entity());
+      if (object->editor_object_id() == kInvalidEditorObjectId ||
+          !legacy_object_ids.insert(object->editor_object_id()).second ||
+          !legacy_entity_ids.insert(object->scene_entity()).second ||
+          entity == entities.end() ||
+          (entity->second->editor_object_id() != kInvalidEditorObjectId &&
+           entity->second->editor_object_id() != object->editor_object_id()) ||
+          (entity->second->editor_object_id() == kInvalidEditorObjectId &&
+           editor_object_ids.contains(object->editor_object_id()))) {
+        throw std::runtime_error(
+            "QDR legacy object record has an invalid or conflicting identity.");
+      }
+      if (object->mesh() != kInvalidAssetId &&
+          !mesh_ids.contains(object->mesh())) {
+        throw std::runtime_error(
+            "QDR legacy object record references a missing mesh asset.");
+      }
+      legacy_identity_by_entity.emplace(object->scene_entity(),
+                                        object->editor_object_id());
+      collect_material(decode_legacy_material_reference(*object), false);
+    }
+  }
+
+  std::vector<SceneParentAssignment> parent_links;
+  if (const auto *stored_entities = payload->entities()) {
+    parent_links.reserve(stored_entities->size());
+    for (const fb::Entity *stored : *stored_entities) {
+      EditorObjectId object_id = stored->editor_object_id();
+      if (object_id == kInvalidEditorObjectId) {
+        if (const auto legacy = legacy_identity_by_entity.find(stored->id());
+            legacy != legacy_identity_by_entity.end()) {
+          object_id = legacy->second;
+        }
+      }
+      const EntityId entity = metadata_document.scene().create_entity_with_id(
+          stored->id(), string_from_fb(stored->name()), from_fb(stored->kind()),
+          object_id);
+      const std::string uuid = string_from_fb(stored->uuid());
+      if (entity == kInvalidEntityId ||
+          (!uuid.empty() &&
+           !metadata_document.scene().set_entity_uuid(entity, uuid))) {
+        throw std::runtime_error(
+            "QDR scene contains a duplicate or invalid entity identity.");
+      }
+      if (stored->scene_root() || stored->scene_settings() != nullptr) {
+        if (stored->scene_settings() == nullptr ||
+            !metadata_document.scene().set_scene_settings(
+                entity, decode_scene_settings(*stored->scene_settings(),
+                                               metadata.schema_version))) {
+          throw std::runtime_error(
+              "QDR scene contains invalid scene-root settings.");
+        }
+      }
+      parent_links.push_back({.child = entity, .parent = stored->parent()});
+    }
+  }
+  if (!metadata_document.scene().replace_hierarchy(parent_links)) {
+    throw std::runtime_error("QDR scene contains an invalid entity hierarchy.");
+  }
+  if (metadata_document.ensure_scene_root() == kInvalidEntityId) {
+    throw std::runtime_error("QDR scene could not establish its scene root.");
+  }
+  const SceneContentDocumentIdentityReport identity =
+      metadata_document.validate_object_identity_invariants();
+  if (!identity.ok()) {
+    throw std::runtime_error("QDR scene identity invariant failed: " +
+                             identity.issues.front().message);
+  }
+
+  result.material_ids.assign(material_ids.begin(), material_ids.end());
+  result.stats.metadata_access_ms = std::chrono::duration<double, std::milli>(
+                                        std::chrono::steady_clock::now() -
+                                        metadata_started)
+                                        .count();
+  return result;
 }
 
 } // namespace quader

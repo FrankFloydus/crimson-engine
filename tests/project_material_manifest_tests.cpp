@@ -9,9 +9,12 @@
 #include "io/project/project_manifest.hpp"
 #include "io/project/project_material_catalog.hpp"
 #include "io/project/project_material_provisioner.hpp"
+#include "io/project/project_material_reference_resolver.hpp"
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -19,6 +22,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <vector>
 
 using namespace quader;
 
@@ -163,6 +167,178 @@ TEST(ProjectMaterialManifestTests,
   EXPECT_NE(serialized.find("\"version\": 2"), std::string::npos);
   EXPECT_NE(serialized.find("\"activeMaterial\": null"),
             std::string::npos);
+}
+
+TEST(ProjectMaterialManifestTests,
+     FirstDeletionAuthorsV3WithStableSortedPermanentIdentities) {
+  auto created = ProjectManifest::create(ProjectId::generate(), "Manifest");
+  ASSERT_TRUE(created.ok());
+  ProjectManifest manifest = created.take_value();
+  const ProjectAssetId first =
+      *ProjectAssetId::parse("10000000-0000-4000-8000-000000000001");
+  const ProjectAssetId second =
+      *ProjectAssetId::parse("20000000-0000-4000-8000-000000000002");
+  const ProjectAssetId third =
+      *ProjectAssetId::parse("30000000-0000-4000-8000-000000000003");
+  EXPECT_EQ(nlohmann::json::parse(ProjectManifestStore::serialize(manifest))
+                .at("version"),
+            2u);
+  ASSERT_TRUE(manifest.mark_materials_deleted(
+                          std::array{third, first, third})
+                  .ok());
+  ASSERT_TRUE(manifest.mark_materials_deleted(std::array{second, first}).ok());
+  const std::string serialized = ProjectManifestStore::serialize(manifest);
+  const nlohmann::json document = nlohmann::json::parse(serialized);
+  EXPECT_EQ(document.at("version"), 3u);
+  EXPECT_EQ(document.at("deletedMaterialIds"),
+            nlohmann::json::array({std::string(first.str()),
+                                   std::string(second.str()),
+                                   std::string(third.str())}));
+
+  const auto decoded = ProjectManifestStore::deserialize(serialized);
+  ASSERT_TRUE(decoded.ok()) << decoded.error().message;
+  ASSERT_EQ(decoded.value().deleted_material_ids().size(), 3u);
+  EXPECT_TRUE(decoded.value().is_material_deleted(first));
+  EXPECT_TRUE(decoded.value().is_material_deleted(second));
+  EXPECT_TRUE(decoded.value().is_material_deleted(third));
+  EXPECT_EQ(ProjectManifestStore::serialize(decoded.value()), serialized);
+}
+
+TEST(ProjectMaterialManifestTests,
+     InvalidDeletionBatchesPreserveExistingIdentitiesAndActiveMaterial) {
+  auto created = ProjectManifest::create(ProjectId::generate(), "Manifest");
+  ASSERT_TRUE(created.ok());
+  ProjectManifest manifest = created.take_value();
+  const ProjectAssetId deleted = ProjectAssetId::generate();
+  const ProjectAssetId active = ProjectAssetId::generate();
+  const ProjectAssetId default_id =
+      *ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(manifest.mark_materials_deleted(std::array{deleted}).ok());
+  ASSERT_TRUE(manifest.set_active_material(active).ok());
+  const std::string before = ProjectManifestStore::serialize(manifest);
+
+  const auto reserved =
+      manifest.mark_materials_deleted(std::array{active, default_id});
+  EXPECT_FALSE(reserved.ok());
+  EXPECT_EQ(reserved.error().code, ProjectIoErrorCode::InvalidArgument);
+  EXPECT_EQ(ProjectManifestStore::serialize(manifest), before);
+  const auto invalid =
+      manifest.mark_materials_deleted(std::array{active, ProjectAssetId{}});
+  EXPECT_FALSE(invalid.ok());
+  EXPECT_EQ(invalid.error().code, ProjectIoErrorCode::InvalidUuid);
+  EXPECT_EQ(ProjectManifestStore::serialize(manifest), before);
+}
+
+TEST(ProjectMaterialManifestTests,
+     V3RejectsMalformedReservedAndDuplicateDeletedIdentities) {
+  const nlohmann::json base = nlohmann::json::parse(
+      manifest_without_active_material(ProjectId::generate(), 3u));
+  EXPECT_FALSE(ProjectManifestStore::deserialize(base.dump()).ok());
+  const std::string id = std::string(ProjectAssetId::generate().str());
+  const std::vector<nlohmann::json> invalid_values = {
+      nullptr,
+      id,
+      nlohmann::json::object(),
+      nlohmann::json::array({42}),
+      nlohmann::json::array({"not-a-uuid"}),
+      nlohmann::json::array({std::string(kDefaultProjectMaterialId)}),
+      nlohmann::json::array({id, id}),
+  };
+  for (const nlohmann::json &value : invalid_values) {
+    nlohmann::json document = base;
+    document["deletedMaterialIds"] = value;
+    const auto decoded = ProjectManifestStore::deserialize(document.dump());
+    EXPECT_FALSE(decoded.ok()) << document.dump();
+    EXPECT_EQ(decoded.error().code, ProjectIoErrorCode::ManifestMalformed);
+  }
+}
+
+TEST(ProjectMaterialManifestTests,
+     LegacyAndUnknownVersionsCannotSilentlyLosePermanentDeletionState) {
+  nlohmann::json document = nlohmann::json::parse(
+      manifest_without_active_material(ProjectId::generate(), 3u));
+  document["deletedMaterialIds"] = nlohmann::json::array(
+      {std::string(ProjectAssetId::generate().str())});
+  for (const std::uint32_t version : {1u, 2u}) {
+    document["version"] = version;
+    const auto decoded = ProjectManifestStore::deserialize(document.dump());
+    EXPECT_FALSE(decoded.ok());
+    EXPECT_EQ(decoded.error().code, ProjectIoErrorCode::ManifestMalformed);
+  }
+  for (const std::uint64_t version : {4ull, 4'294'967'299ull}) {
+    document["version"] = version;
+    const auto decoded = ProjectManifestStore::deserialize(document.dump());
+    EXPECT_FALSE(decoded.ok());
+    EXPECT_EQ(decoded.error().code, ProjectIoErrorCode::UnsupportedFormat);
+  }
+}
+
+TEST(ProjectMaterialManifestTests,
+     OpeningLegacyAndV3ManifestsDoesNotRewriteTheirBytes) {
+  ScopedTestDirectory temporary("read-only-open");
+  const auto root = temporary.make_empty_project("Manifest");
+  const auto workspace = create_workspace(root);
+  for (const std::uint32_t version : {1u, 2u, 3u}) {
+    nlohmann::json document = nlohmann::json::parse(
+        manifest_without_active_material(workspace.manifest.id(), version));
+    if (version == 3u) {
+      document["deletedMaterialIds"] = nlohmann::json::array(
+          {std::string(ProjectAssetId::generate().str())});
+    }
+    const std::string original = document.dump(4) + "\n";
+    write_bytes(workspace.manifest_path, original);
+    const auto opened = ProjectManifestStore::open(workspace.manifest_path);
+    ASSERT_TRUE(opened.ok()) << opened.error().message;
+    EXPECT_EQ(read_bytes(workspace.manifest_path), original);
+    EXPECT_EQ(opened.value().manifest.deleted_material_ids().size(),
+              version == 3u ? 1u : 0u);
+  }
+}
+
+TEST(ProjectMaterialReferenceResolverTests,
+     MapsDeletedIdsOnlyAndKeepsDefaultAndUnknownIdentitiesUnchanged) {
+  auto created = ProjectManifest::create(ProjectId::generate(), "Manifest");
+  ASSERT_TRUE(created.ok());
+  ProjectManifest manifest = created.take_value();
+  const ProjectAssetId deleted = ProjectAssetId::generate();
+  const ProjectAssetId unknown = ProjectAssetId::generate();
+  const ProjectAssetId default_id =
+      *ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(manifest.mark_materials_deleted(std::array{deleted}).ok());
+  EXPECT_EQ(ProjectMaterialReferenceResolver::canonical_material_id(manifest,
+                                                                    deleted),
+            default_id);
+  EXPECT_EQ(ProjectMaterialReferenceResolver::canonical_material_id(manifest,
+                                                                    unknown),
+            unknown);
+  EXPECT_EQ(ProjectMaterialReferenceResolver::canonical_material_id(manifest,
+                                                                    default_id),
+            default_id);
+  EXPECT_EQ(ProjectMaterialReferenceResolver::canonical_material_id(
+                manifest, ProjectAssetId{}),
+            ProjectAssetId{});
+}
+
+TEST(ProjectMaterialReferenceResolverTests,
+     DeletedActiveMaterialRemainsDefaultAfterSerializationAndLaterSelection) {
+  auto created = ProjectManifest::create(ProjectId::generate(), "Manifest");
+  ASSERT_TRUE(created.ok());
+  ProjectManifest manifest = created.take_value();
+  const ProjectAssetId deleted = ProjectAssetId::generate();
+  const ProjectAssetId default_id =
+      *ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(manifest.set_active_material(deleted).ok());
+  ASSERT_TRUE(manifest.mark_materials_deleted(std::array{deleted}).ok());
+  EXPECT_EQ(manifest.active_material_id(), default_id);
+
+  nlohmann::json document =
+      nlohmann::json::parse(ProjectManifestStore::serialize(manifest));
+  document["workspace"]["activeMaterial"] = std::string(deleted.str());
+  auto decoded = ProjectManifestStore::deserialize(document.dump());
+  ASSERT_TRUE(decoded.ok()) << decoded.error().message;
+  EXPECT_EQ(decoded.value().active_material_id(), default_id);
+  ASSERT_TRUE(decoded.value().set_active_material(deleted).ok());
+  EXPECT_EQ(decoded.value().active_material_id(), default_id);
 }
 
 TEST(ProjectMaterialManifestTests,

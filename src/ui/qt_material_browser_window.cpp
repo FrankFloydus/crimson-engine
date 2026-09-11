@@ -5,36 +5,49 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_material_browser_window.hpp"
+#include "ui/qt_tree_relationship_presentation.hpp"
 
 #include <QAction>
 #include <QButtonGroup>
 #include <QCloseEvent>
+#include <QDataStream>
+#include <QDrag>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QEvent>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QItemSelectionModel>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
 #include <QLocale>
 #include <QMenu>
-#include <QMenuBar>
+#include <QMimeData>
+#include <QPointer>
 #include <QPushButton>
 #include <QScopedValueRollback>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QSplitter>
 #include <QStackedWidget>
 #include <QStyle>
 #include <QTableView>
 #include <QToolButton>
+#include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <iterator>
+#include <map>
+#include <set>
 #include <utility>
 
 namespace quader {
@@ -44,6 +57,9 @@ constexpr std::array<int, 6> kTileSizes{16, 32, 64, 128, 256, 512};
 constexpr int kDefaultTileSize = 128;
 constexpr int kGridLabelHeight = 34;
 constexpr int kGridSpacing = 8;
+constexpr auto kMaterialDragMime = "application/x-quader-material-browser-materials";
+constexpr auto kFolderDragMime = "application/x-quader-material-browser-folder";
+constexpr int kFolderPathRole = Qt::UserRole;
 constexpr std::uint64_t kPreviewIconCacheBudgetBytes =
     96ULL * 1024ULL * 1024ULL;
 
@@ -97,6 +113,17 @@ public:
   }
 
 protected:
+  void startDrag(Qt::DropActions) override {
+    QMimeData *data = this->model()->mimeData(this->selectionModel()->selectedIndexes());
+    if (data == nullptr) {
+      return;
+    }
+    QDrag drag(this);
+    drag.setMimeData(data);
+    // The owner publishes the move. Never remove source rows after a drop.
+    (void)drag.exec(Qt::MoveAction, Qt::MoveAction);
+  }
+
   void keyPressEvent(QKeyEvent *event) override {
     const bool activation_key =
         event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter;
@@ -112,6 +139,99 @@ private:
 QString normalized_search_text(QString text) {
   return text.trimmed().toCaseFolded();
 }
+
+QString normalized_folder(QString folder) {
+  folder.replace(QLatin1Char('\\'), QLatin1Char('/'));
+  while (folder.endsWith(QLatin1Char('/'))) {
+    folder.chop(1);
+  }
+  if (folder == QStringLiteral("Materials")) {
+    return folder;
+  }
+  if (!folder.startsWith(QStringLiteral("Materials/"))) {
+    return {};
+  }
+  const QStringList components = folder.split(QLatin1Char('/'));
+  for (const QString &component : components) {
+    if (component.isEmpty() || component == QStringLiteral(".") ||
+        component == QStringLiteral("..")) {
+      return {};
+    }
+  }
+  return folder;
+}
+
+/// Tree drops dispatch semantic intent; immutable snapshots alone change rows.
+class MaterialFolderTree final : public QTreeWidget {
+public:
+  explicit MaterialFolderTree(QWidget *parent = nullptr)
+      : QTreeWidget(parent) {
+    install_qt_tree_relationship_presentation(*this);
+  }
+
+  std::uint64_t generation = 0;
+  bool organization_enabled = true;
+  std::function<bool(const QMimeData *, const QString &, bool)> receive_drop;
+
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    apply_ui_scale_to_qt_tree_relationship_presentation(*this, metrics);
+  }
+
+protected:
+  void startDrag(Qt::DropActions) override {
+    if (!organization_enabled || currentItem() == nullptr) {
+      return;
+    }
+    const QString source = currentItem()->data(0, kFolderPathRole).toString();
+    if (source == QStringLiteral("Materials")) {
+      return;
+    }
+    QByteArray bytes;
+    QDataStream stream(&bytes, QIODevice::WriteOnly);
+    stream << static_cast<quint64>(generation) << source;
+    auto *data = new QMimeData;
+    data->setData(QString::fromLatin1(kFolderDragMime), bytes);
+    QDrag drag(this);
+    drag.setMimeData(data);
+    (void)drag.exec(Qt::MoveAction, Qt::MoveAction);
+  }
+
+  void dragEnterEvent(QDragEnterEvent *event) override {
+    if (organization_enabled &&
+        (event->mimeData()->hasFormat(QString::fromLatin1(kMaterialDragMime)) ||
+         event->mimeData()->hasFormat(QString::fromLatin1(kFolderDragMime)))) {
+      event->setDropAction(Qt::MoveAction);
+      event->accept();
+    } else {
+      event->ignore();
+    }
+  }
+
+  void dragMoveEvent(QDragMoveEvent *event) override {
+    QTreeWidgetItem *target = itemAt(event->position().toPoint());
+    if (organization_enabled && target != nullptr && receive_drop &&
+        receive_drop(event->mimeData(),
+                     target->data(0, kFolderPathRole).toString(), false)) {
+      QTreeWidget::dragMoveEvent(event);
+      event->setDropAction(Qt::MoveAction);
+      event->accept();
+    } else {
+      event->ignore();
+    }
+  }
+
+  void dropEvent(QDropEvent *event) override {
+    QTreeWidgetItem *target = itemAt(event->position().toPoint());
+    if (organization_enabled && target != nullptr && receive_drop &&
+        receive_drop(event->mimeData(),
+                     target->data(0, kFolderPathRole).toString(), true)) {
+      event->setDropAction(Qt::MoveAction);
+      event->accept();
+    } else {
+      event->ignore();
+    }
+  }
+};
 
 } // namespace
 
@@ -186,6 +306,61 @@ QVariant QtMaterialBrowserModel::headerData(int section,
   default:
     return {};
   }
+}
+
+Qt::ItemFlags QtMaterialBrowserModel::flags(const QModelIndex &index) const {
+  Qt::ItemFlags result = QAbstractTableModel::flags(index);
+  if (organization_enabled_ && index.isValid() && index.row() < rowCount()) {
+    const auto &item = items_[static_cast<std::size_t>(index.row())];
+    if (item.valid() && item.reference.project_owned() && item.available) {
+      result |= Qt::ItemIsDragEnabled;
+    }
+  }
+  return result;
+}
+
+QStringList QtMaterialBrowserModel::mimeTypes() const {
+  return {QString::fromLatin1(kMaterialDragMime)};
+}
+
+QMimeData *QtMaterialBrowserModel::mimeData(const QModelIndexList &indexes) const {
+  if (!organization_enabled_) {
+    return nullptr;
+  }
+  std::set<int> rows;
+  QStringList identities;
+  QStringList paths;
+  for (const QModelIndex &index : indexes) {
+    if (!index.isValid() || index.row() >= rowCount() ||
+        !rows.insert(index.row()).second) {
+      continue;
+    }
+    if (!flags(index).testFlag(Qt::ItemIsDragEnabled)) {
+      return nullptr;
+    }
+    const auto &item = items_[static_cast<std::size_t>(index.row())];
+    identities.append(item.stable_id);
+    paths.append(item.project_relative_path);
+  }
+  if (identities.isEmpty()) {
+    return nullptr;
+  }
+  QByteArray bytes;
+  QDataStream stream(&bytes, QIODevice::WriteOnly);
+  stream << static_cast<quint64>(project_generation_) << identities << paths;
+  auto *data = new QMimeData;
+  data->setData(QString::fromLatin1(kMaterialDragMime), bytes);
+  return data;
+}
+
+Qt::DropActions QtMaterialBrowserModel::supportedDragActions() const {
+  return Qt::MoveAction;
+}
+
+void QtMaterialBrowserModel::set_drag_context(std::uint64_t generation,
+                                             bool enabled) {
+  project_generation_ = generation;
+  organization_enabled_ = enabled;
 }
 
 bool QtMaterialBrowserModel::set_items(
@@ -300,14 +475,31 @@ void QtMaterialBrowserProxyModel::set_search_text(QString text) {
   invalidateRowsFilter();
 }
 
+void QtMaterialBrowserProxyModel::set_folder(QString project_relative_folder) {
+  if (project_relative_folder == QStringLiteral("Materials")) {
+    project_relative_folder.clear();
+  }
+  if (folder_ == project_relative_folder) {
+    return;
+  }
+  folder_ = std::move(project_relative_folder);
+  invalidateRowsFilter();
+}
+
 bool QtMaterialBrowserProxyModel::filterAcceptsRow(
     int source_row, const QModelIndex &source_parent) const {
-  if (search_text_.isEmpty()) {
-    return true;
-  }
   const QModelIndex source_index =
       sourceModel()->index(source_row, QtMaterialBrowserModel::NameColumn,
                            source_parent);
+  if (!folder_.isEmpty() &&
+      !source_index.data(QtMaterialBrowserModel::RelativePathRole)
+           .toString().startsWith(folder_ + QLatin1Char('/'),
+                                  Qt::CaseInsensitive)) {
+    return false;
+  }
+  if (search_text_.isEmpty()) {
+    return true;
+  }
   return sourceModel()
       ->data(source_index, QtMaterialBrowserModel::SearchTextRole)
       .toString()
@@ -365,16 +557,17 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   setWindowFlag(Qt::WindowMaximizeButtonHint, true);
   resize(760, 520);
 
-  file_menu_ = menuBar()->addMenu(QString{});
-  file_menu_->setObjectName(QStringLiteral("materialBrowser.fileMenu"));
-  import_action_ = file_menu_->addAction(QString{});
-  import_action_->setObjectName(
-      QStringLiteral("materialBrowser.file.import"));
-
   auto *central_widget = new QWidget(this);
   setCentralWidget(central_widget);
   auto *root_layout = new QVBoxLayout(central_widget);
   auto *toolbar = new QHBoxLayout();
+  folders_button_ = new QToolButton(central_widget);
+  folders_button_->setObjectName(QStringLiteral("materialBrowser.folders"));
+  folders_button_->setCheckable(true);
+  folders_button_->setChecked(true);
+  folders_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  folders_button_->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
+  toolbar->addWidget(folders_button_);
   search_ = new QLineEdit(central_widget);
   search_->setObjectName(QStringLiteral("materialBrowser.search"));
   search_->setClearButtonEnabled(true);
@@ -414,7 +607,24 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   proxy_->sort(QtMaterialBrowserModel::NameColumn, Qt::AscendingOrder);
   auto *selection = new QItemSelectionModel(proxy_, central_widget);
 
-  content_stack_ = new QStackedWidget(central_widget);
+  splitter_ = new QSplitter(Qt::Horizontal, central_widget);
+  splitter_->setObjectName(QStringLiteral("materialBrowser.splitter"));
+  auto *folder_tree = new MaterialFolderTree(splitter_);
+  folder_tree_ = folder_tree;
+  folder_tree_->setObjectName(QStringLiteral("materialBrowser.folderTree"));
+  folder_tree_->setHeaderHidden(true);
+  folder_tree_->setRootIsDecorated(true);
+  folder_tree_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  folder_tree_->setSelectionMode(QAbstractItemView::SingleSelection);
+  folder_tree_->setDragDropMode(QAbstractItemView::DragDrop);
+  folder_tree_->setDefaultDropAction(Qt::MoveAction);
+  folder_tree_->setAutoExpandDelay(650);
+  folder_tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+  folder_tree->receive_drop =
+      [this](const QMimeData *data, const QString &destination, bool execute) {
+        return receive_folder_drop(data, destination, execute);
+      };
+  content_stack_ = new QStackedWidget(splitter_);
   content_stack_->setObjectName(QStringLiteral("materialBrowser.content"));
   auto *keyboard_grid =
       new KeyboardActivationView<QListView>(content_stack_);
@@ -429,7 +639,9 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   grid_view_->setUniformItemSizes(true);
   grid_view_->setWordWrap(true);
   grid_view_->setSpacing(kGridSpacing);
-  grid_view_->setSelectionMode(QAbstractItemView::SingleSelection);
+  grid_view_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  grid_view_->setDragDropMode(QAbstractItemView::DragOnly);
+  grid_view_->setDefaultDropAction(Qt::MoveAction);
   grid_view_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   grid_view_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
   grid_view_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -445,7 +657,9 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   list_view_->setWordWrap(false);
   list_view_->setAlternatingRowColors(true);
   list_view_->setSelectionBehavior(QAbstractItemView::SelectRows);
-  list_view_->setSelectionMode(QAbstractItemView::SingleSelection);
+  list_view_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  list_view_->setDragDropMode(QAbstractItemView::DragOnly);
+  list_view_->setDefaultDropAction(Qt::MoveAction);
   list_view_->setSortingEnabled(true);
   list_view_->sortByColumn(QtMaterialBrowserModel::NameColumn,
                            Qt::AscendingOrder);
@@ -464,10 +678,17 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   empty_label_->setAlignment(Qt::AlignCenter);
   empty_label_->setWordWrap(true);
   content_stack_->addWidget(empty_label_);
-  root_layout->addWidget(content_stack_, 1);
+  splitter_->setStretchFactor(0, 0);
+  splitter_->setStretchFactor(1, 1);
+  splitter_->setCollapsible(1, false);
+  splitter_->setSizes({sidebar_width_, 540});
+  root_layout->addWidget(splitter_, 1);
 
   auto *footer = new QHBoxLayout();
   footer->addStretch(1);
+  import_button_ = new QPushButton(central_widget);
+  import_button_->setObjectName(QStringLiteral("materialBrowser.import"));
+  footer->addWidget(import_button_);
   accept_button_ = new QPushButton(central_widget);
   accept_button_->setObjectName(QStringLiteral("materialBrowser.accept"));
   accept_button_->setEnabled(false);
@@ -495,10 +716,34 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
                        presentation_state_changed_();
                      }
                    });
-  QObject::connect(import_action_, &QAction::triggered, this, [this]() {
-    if (import_textures_) {
-      import_textures_();
+  QObject::connect(import_button_, &QPushButton::clicked, this, [this]() {
+    if (purpose_ == QtMaterialBrowserPurpose::ActiveMaterial && import_textures_) {
+      import_textures_(selected_folder());
     }
+  });
+  QObject::connect(folders_button_, &QToolButton::toggled, this,
+                   [this](bool visible) { set_sidebar_visible(visible, true); });
+  QObject::connect(splitter_, &QSplitter::splitterMoved, this,
+                   [this](int, int) {
+    const int width = splitter_->sizes().value(0);
+    if (width > 0) {
+      sidebar_width_ = width;
+    }
+    const QSignalBlocker blocker(folders_button_);
+    folders_button_->setChecked(width > 0);
+    if (presentation_state_changed_) {
+      presentation_state_changed_();
+    }
+  });
+  QObject::connect(folder_tree_, &QTreeWidget::currentItemChanged, this,
+                   [this](QTreeWidgetItem *, QTreeWidgetItem *) {
+    proxy_->set_folder(selected_folder());
+    refresh_content_page();
+    update_accept_enabled();
+  });
+  QObject::connect(folder_tree_, &QTreeWidget::customContextMenuRequested,
+                   this, [this](const QPoint &position) {
+    show_folder_menu(position);
   });
   QObject::connect(grid_view_, &QListView::clicked, this,
                    [this](const QModelIndex &index) { activate_index(index); });
@@ -525,6 +770,7 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   QObject::connect(accept_button_, &QPushButton::clicked, this,
                    [this]() { accept_selected_material(); });
 
+  rebuild_folder_tree();
   set_labels(labels_);
   set_view_mode(QtMaterialBrowserViewMode::Grid, false);
   set_tile_size(kDefaultTileSize);
@@ -543,8 +789,15 @@ void QtMaterialBrowserWindow::set_labels(QtMaterialBrowserLabels labels) {
   list_button_->setText(labels_.list);
   list_button_->setToolTip(labels_.list);
   list_button_->setAccessibleName(labels_.list);
-  file_menu_->setTitle(labels_.file);
-  import_action_->setText(labels_.import_textures);
+  folders_button_->setText(labels_.folders);
+  folders_button_->setToolTip(labels_.folders);
+  folders_button_->setAccessibleName(labels_.folders);
+  folder_tree_->setAccessibleName(labels_.folders);
+  if (folder_tree_->topLevelItemCount() > 0) {
+    folder_tree_->topLevelItem(0)->setText(0, labels_.all);
+  }
+  import_button_->setText(labels_.import_textures);
+  import_button_->setAccessibleName(labels_.import_textures);
   accept_button_->setText(labels_.accept);
   accept_button_->setAccessibleName(labels_.accept);
   update_tile_size_text();
@@ -563,9 +816,25 @@ void QtMaterialBrowserWindow::set_materials(
       !search_->text().isEmpty()) {
     search_->clear();
   }
-  (void)model_->set_items(std::move(materials));
-  proxy_->sort(proxy_->sortColumn(), proxy_->sortOrder());
-  select_material(selected_material);
+  const QuaderMaterialReference previous_current = this->selected_material();
+  QStringList selected_ids;
+  for (const QModelIndex &index : grid_view_->selectionModel()->selectedIndexes()) {
+    if (index.column() == QtMaterialBrowserModel::NameColumn) {
+      selected_ids.append(index.data(QtMaterialBrowserModel::StableIdRole).toString());
+    }
+  }
+  if (model_->set_items(std::move(materials))) {
+    rebuild_folder_tree();
+    proxy_->sort(proxy_->sortColumn(), proxy_->sortOrder());
+    auto *selection = grid_view_->selectionModel();
+    for (int row = 0; row < proxy_->rowCount(); ++row) {
+      const QModelIndex index = proxy_->index(row, 0);
+      if (selected_ids.contains(index.data(QtMaterialBrowserModel::StableIdRole).toString())) {
+        selection->select(index, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+      }
+    }
+  }
+  select_material(selected_material.valid() ? selected_material : previous_current);
   refresh_content_page();
   update_accept_enabled();
 }
@@ -576,12 +845,62 @@ void QtMaterialBrowserWindow::set_active_material(
 }
 
 void QtMaterialBrowserWindow::clear_materials() {
+  folders_.clear();
+  folder_tree_->clear();
+  search_->clear();
+  proxy_->set_folder({});
   set_materials({});
+  rebuild_folder_tree();
+}
+
+void QtMaterialBrowserWindow::set_folders(std::vector<QString> folders) {
+  std::vector<QString> normalized;
+  for (QString &folder : folders) {
+    folder = normalized_folder(std::move(folder));
+    if (!folder.isEmpty() && folder != QStringLiteral("Materials")) {
+      normalized.push_back(std::move(folder));
+    }
+  }
+  std::sort(normalized.begin(), normalized.end());
+  normalized.erase(std::unique(normalized.begin(), normalized.end()), normalized.end());
+  if (folders_ == normalized) {
+    return;
+  }
+  folders_ = std::move(normalized);
+  rebuild_folder_tree();
+}
+
+void QtMaterialBrowserWindow::set_project_generation(std::uint64_t generation) {
+  if (project_generation_ == generation) {
+    return;
+  }
+  project_generation_ = generation;
+  static_cast<MaterialFolderTree *>(folder_tree_)->generation = generation;
+  model_->set_drag_context(generation,
+      purpose_ == QtMaterialBrowserPurpose::ActiveMaterial);
+  clear_materials();
+}
+
+QString QtMaterialBrowserWindow::selected_folder() const {
+  const auto *item = folder_tree_->currentItem();
+  return item == nullptr ? QStringLiteral("Materials")
+                        : item->data(0, kFolderPathRole).toString();
 }
 
 void QtMaterialBrowserWindow::set_purpose(QtMaterialBrowserPurpose purpose) {
+  if (purpose_ == purpose) {
+    return;
+  }
   purpose_ = purpose;
   update_purpose_presentation();
+  if (purpose == QtMaterialBrowserPurpose::Picker) {
+    auto *selection = grid_view_->selectionModel();
+    const QModelIndex current = selection->currentIndex();
+    selection->clearSelection();
+    if (current.isValid()) {
+      selection->select(current, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+    }
+  }
 }
 
 QuaderMaterialReference QtMaterialBrowserWindow::selected_material() const {
@@ -610,6 +929,26 @@ void QtMaterialBrowserWindow::set_import_textures_callback(
   import_textures_ = std::move(callback);
 }
 
+void QtMaterialBrowserWindow::set_create_folder_callback(CreateFolderCallback callback) {
+  create_folder_ = std::move(callback);
+}
+
+void QtMaterialBrowserWindow::set_rename_folder_callback(RenameFolderCallback callback) {
+  rename_folder_ = std::move(callback);
+}
+
+void QtMaterialBrowserWindow::set_delete_folder_callback(DeleteFolderCallback callback) {
+  delete_folder_ = std::move(callback);
+}
+
+void QtMaterialBrowserWindow::set_move_folder_callback(MoveFolderCallback callback) {
+  move_folder_ = std::move(callback);
+}
+
+void QtMaterialBrowserWindow::set_move_materials_callback(MoveMaterialsCallback callback) {
+  move_materials_ = std::move(callback);
+}
+
 void QtMaterialBrowserWindow::set_presentation_state_changed_callback(
     PresentationStateChangedCallback callback) {
   presentation_state_changed_ = std::move(callback);
@@ -622,6 +961,7 @@ void QtMaterialBrowserWindow::apply_ui_scale(
     return;
   }
   ui_scale_metrics_ = metrics;
+  static_cast<MaterialFolderTree *>(folder_tree_)->apply_ui_scale(metrics);
   tile_slider_->setFixedWidth(metrics.px(150));
   apply_tile_metrics(tile_size());
   grid_view_->doItemsLayout();
@@ -629,9 +969,12 @@ void QtMaterialBrowserWindow::apply_ui_scale(
 }
 
 void QtMaterialBrowserWindow::restore_presentation_state(
-    QtMaterialBrowserViewMode view_mode, int tile_size) {
+    QtMaterialBrowserViewMode view_mode, int tile_size, bool sidebar_visible,
+    int sidebar_width) {
   set_view_mode(view_mode, false);
   set_tile_size(tile_size);
+  sidebar_width_ = std::clamp(sidebar_width, 80, 2000);
+  set_sidebar_visible(sidebar_visible, false);
 }
 
 QtMaterialBrowserViewMode QtMaterialBrowserWindow::view_mode() const {
@@ -640,6 +983,27 @@ QtMaterialBrowserViewMode QtMaterialBrowserWindow::view_mode() const {
 
 int QtMaterialBrowserWindow::tile_size() const {
   return tile_size_for_index(tile_slider_->value());
+}
+
+bool QtMaterialBrowserWindow::sidebar_visible() const {
+  return folders_button_->isChecked();
+}
+
+int QtMaterialBrowserWindow::sidebar_width() const {
+  return sidebar_width_;
+}
+
+void QtMaterialBrowserWindow::set_sidebar_visible(bool visible, bool notify) {
+  const bool changed = sidebar_visible() != visible || folder_tree_->isHidden() == visible;
+  const QSignalBlocker blocker(folders_button_);
+  folders_button_->setChecked(visible);
+  folder_tree_->setVisible(visible);
+  if (visible) {
+    splitter_->setSizes({sidebar_width_, std::max(1, splitter_->width() - sidebar_width_)});
+  }
+  if (notify && changed && presentation_state_changed_) {
+    presentation_state_changed_();
+  }
 }
 
 bool QtMaterialBrowserWindow::event(QEvent *event) {
@@ -664,6 +1028,16 @@ void QtMaterialBrowserWindow::refresh_view_mode_icons() {
   if (list_button_ != nullptr) {
     list_button_->setIcon(style()->standardIcon(
         QStyle::SP_FileDialogDetailedView, nullptr, this));
+  }
+  if (folders_button_ != nullptr) {
+    folders_button_->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
+  }
+  if (folder_tree_ != nullptr) {
+    for (QTreeWidgetItemIterator it(folder_tree_); *it != nullptr; ++it) {
+      (*it)->setIcon(0, style()->standardIcon(
+          (*it)->data(0, kFolderPathRole).toString() == QStringLiteral("Materials")
+              ? QStyle::SP_DirHomeIcon : QStyle::SP_DirIcon));
+    }
   }
 }
 
@@ -751,8 +1125,12 @@ void QtMaterialBrowserWindow::refresh_content_page() {
     return;
   }
   if (proxy_->rowCount() == 0) {
-    empty_label_->setText(model_->rowCount() == 0 ? labels_.empty_catalog
-                                                  : labels_.no_results);
+    const QString text = !search_->text().trimmed().isEmpty()
+        ? labels_.no_results
+        : selected_folder() != QStringLiteral("Materials")
+              ? labels_.empty_folder
+              : labels_.empty_catalog;
+    empty_label_->setText(text);
     content_stack_->setCurrentWidget(empty_label_);
     return;
   }
@@ -766,7 +1144,17 @@ void QtMaterialBrowserWindow::update_purpose_presentation() {
   const bool normal =
       purpose_ == QtMaterialBrowserPurpose::ActiveMaterial;
   setWindowTitle(normal ? labels_.window_title : labels_.picker_window_title);
-  file_menu_->menuAction()->setVisible(normal);
+  import_button_->setVisible(normal);
+  const auto selection_mode = normal ? QAbstractItemView::ExtendedSelection
+                                    : QAbstractItemView::SingleSelection;
+  grid_view_->setSelectionMode(selection_mode);
+  list_view_->setSelectionMode(selection_mode);
+  grid_view_->setDragEnabled(normal);
+  list_view_->setDragEnabled(normal);
+  folder_tree_->setDragEnabled(normal);
+  folder_tree_->setAcceptDrops(normal);
+  static_cast<MaterialFolderTree *>(folder_tree_)->organization_enabled = normal;
+  model_->set_drag_context(project_generation_, normal);
   update_accept_enabled();
 }
 
@@ -782,9 +1170,12 @@ void QtMaterialBrowserWindow::update_accept_enabled() {
 void QtMaterialBrowserWindow::select_material(
     const QuaderMaterialReference &reference) {
   QItemSelectionModel *selection = grid_view_->selectionModel();
-  selection->clearSelection();
-  selection->setCurrentIndex({}, QItemSelectionModel::NoUpdate);
+  if (selected_material() == reference) {
+    update_accept_enabled();
+    return;
+  }
   if (!reference.valid()) {
+    selection->clear();
     update_accept_enabled();
     return;
   }
@@ -793,12 +1184,224 @@ void QtMaterialBrowserWindow::select_material(
     const QtMaterialBrowserItem *item = item_for_index(index);
     if (item != nullptr && item->reference == reference) {
       selection->setCurrentIndex(
-          index, QItemSelectionModel::ClearAndSelect |
+          index, (purpose_ == QtMaterialBrowserPurpose::Picker
+                      ? QItemSelectionModel::ClearAndSelect
+                      : QItemSelectionModel::Select) |
                      QItemSelectionModel::Rows);
       return;
     }
   }
+  selection->clear();
   update_accept_enabled();
+}
+
+void QtMaterialBrowserWindow::set_selected_folder(QString folder) {
+  folder = normalized_folder(std::move(folder));
+  while (!folder.isEmpty()) {
+    for (QTreeWidgetItemIterator it(folder_tree_); *it != nullptr; ++it) {
+      if ((*it)->data(0, kFolderPathRole).toString() == folder) {
+        folder_tree_->setCurrentItem(*it);
+        return;
+      }
+    }
+    const qsizetype separator = folder.lastIndexOf(QLatin1Char('/'));
+    folder = separator < 0 ? QString{} : folder.left(separator);
+  }
+  folder_tree_->setCurrentItem(folder_tree_->topLevelItem(0));
+}
+
+void QtMaterialBrowserWindow::follow_moved_folder(const QString &source,
+                                                  const QString &destination) {
+  if (normalized_folder(source).isEmpty() ||
+      normalized_folder(destination).isEmpty()) {
+    return;
+  }
+  for (QTreeWidgetItemIterator it(folder_tree_); *it != nullptr; ++it) {
+    const QString path = (*it)->data(0, kFolderPathRole).toString();
+    if (path == source || path.startsWith(source + QLatin1Char('/'))) {
+      const QString replacement = destination + path.mid(source.size());
+      (*it)->setData(0, kFolderPathRole, replacement);
+    }
+  }
+}
+
+void QtMaterialBrowserWindow::rebuild_folder_tree() {
+  QString selection = selected_folder();
+  std::set<QString> expanded;
+  for (QTreeWidgetItemIterator it(folder_tree_); *it != nullptr; ++it) {
+    if ((*it)->isExpanded()) {
+      expanded.insert((*it)->data(0, kFolderPathRole).toString());
+    }
+  }
+  std::set<QString> paths(folders_.begin(), folders_.end());
+  for (const auto &material : model_->items()) {
+    QString path = material.project_relative_path;
+    path.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    const qsizetype separator = path.lastIndexOf(QLatin1Char('/'));
+    path = normalized_folder(path.left(std::max<qsizetype>(0, separator)));
+    if (!path.isEmpty() && path != QStringLiteral("Materials")) {
+      paths.insert(std::move(path));
+    }
+  }
+  for (const QString &path : std::vector<QString>(paths.begin(), paths.end())) {
+    QString parent = path;
+    while (parent.contains(QLatin1Char('/'))) {
+      parent.truncate(parent.lastIndexOf(QLatin1Char('/')));
+      if (parent != QStringLiteral("Materials")) {
+        paths.insert(parent);
+      }
+    }
+  }
+  std::vector<QString> sorted(paths.begin(), paths.end());
+  std::sort(sorted.begin(), sorted.end(), [](const QString &left, const QString &right) {
+    const int order = QString::compare(left, right, Qt::CaseInsensitive);
+    return order == 0 ? left < right : order < 0;
+  });
+  {
+    const QSignalBlocker blocker(folder_tree_);
+    folder_tree_->clear();
+    auto *all = new QTreeWidgetItem(folder_tree_, {labels_.all});
+    all->setData(0, kFolderPathRole, QStringLiteral("Materials"));
+    all->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDropEnabled);
+    all->setIcon(0, style()->standardIcon(QStyle::SP_DirHomeIcon));
+    std::map<QString, QTreeWidgetItem *> nodes;
+    for (const QString &path : sorted) {
+      const qsizetype separator = path.lastIndexOf(QLatin1Char('/'));
+      const QString parent = path.left(separator);
+      const QString name = path.mid(separator + 1);
+      QTreeWidgetItem *item = nullptr;
+      if (parent == QStringLiteral("Materials")) {
+        item = new QTreeWidgetItem(folder_tree_, {name});
+      } else {
+        const auto found = nodes.find(parent);
+        if (found == nodes.end()) {
+          continue;
+        }
+        item = new QTreeWidgetItem(found->second, {name});
+      }
+      item->setData(0, kFolderPathRole, path);
+      item->setToolTip(0, path);
+      item->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
+      item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
+                     Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled);
+      item->setExpanded(expanded.contains(path));
+      nodes.emplace(path, item);
+    }
+    set_selected_folder(std::move(selection));
+  }
+  proxy_->set_folder(selected_folder());
+  refresh_content_page();
+  update_accept_enabled();
+}
+
+void QtMaterialBrowserWindow::show_folder_menu(const QPoint &position) {
+  if (purpose_ != QtMaterialBrowserPurpose::ActiveMaterial) {
+    return;
+  }
+  if (auto *item = folder_tree_->itemAt(position)) {
+    folder_tree_->setCurrentItem(item);
+  }
+  const QString folder = selected_folder();
+  const std::uint64_t generation = project_generation_;
+  QMenu menu(this);
+  QAction *create = menu.addAction(labels_.new_folder);
+  create->setEnabled(static_cast<bool>(create_folder_));
+  QAction *rename = menu.addAction(labels_.rename_folder);
+  QAction *remove = menu.addAction(labels_.delete_folder);
+  const bool root = folder == QStringLiteral("Materials");
+  rename->setEnabled(!root && static_cast<bool>(rename_folder_));
+  remove->setEnabled(!root && static_cast<bool>(delete_folder_));
+  QPointer<QtMaterialBrowserWindow> guard(this);
+  QAction *chosen = menu.exec(folder_tree_->viewport()->mapToGlobal(position));
+  if (!guard || generation != project_generation_ ||
+      purpose_ != QtMaterialBrowserPurpose::ActiveMaterial) {
+    return;
+  }
+  if (chosen == remove && delete_folder_ && !root) {
+    delete_folder_(folder);
+    return;
+  }
+  if (chosen != create && chosen != rename) {
+    return;
+  }
+  bool accepted = false;
+  const QString name = QInputDialog::getText(
+      this, chosen == create ? labels_.new_folder : labels_.rename_folder,
+      labels_.folder_name, QLineEdit::Normal,
+      chosen == rename ? folder.mid(folder.lastIndexOf(QLatin1Char('/')) + 1)
+                       : QString{}, &accepted);
+  if (!guard || generation != project_generation_ || !accepted ||
+      purpose_ != QtMaterialBrowserPurpose::ActiveMaterial) {
+    return;
+  }
+  if (chosen == create && create_folder_) {
+    create_folder_(folder, name);
+  } else if (chosen == rename && rename_folder_ && !root) {
+    rename_folder_(folder, name);
+  }
+}
+
+bool QtMaterialBrowserWindow::receive_folder_drop(const QMimeData *data,
+                                                  const QString &destination,
+                                                  bool execute) {
+  if (data == nullptr || purpose_ != QtMaterialBrowserPurpose::ActiveMaterial ||
+      normalized_folder(destination).isEmpty()) {
+    return false;
+  }
+  if (data->hasFormat(QString::fromLatin1(kFolderDragMime))) {
+    QDataStream stream(data->data(QString::fromLatin1(kFolderDragMime)));
+    quint64 generation = 0;
+    QString source;
+    stream >> generation >> source;
+    if (stream.status() != QDataStream::Ok || !stream.atEnd() ||
+        generation != project_generation_ || !move_folder_ ||
+        source == QStringLiteral("Materials") || normalized_folder(source).isEmpty() ||
+        destination == source || destination.startsWith(source + QLatin1Char('/'))) {
+      return false;
+    }
+    bool source_exists = false;
+    for (QTreeWidgetItemIterator it(folder_tree_); *it != nullptr; ++it) {
+      source_exists |= (*it)->data(0, kFolderPathRole).toString() == source;
+    }
+    if (!source_exists) {
+      return false;
+    }
+    if (execute) {
+      move_folder_(source, destination, generation);
+    }
+    return true;
+  }
+  if (!data->hasFormat(QString::fromLatin1(kMaterialDragMime)) || !move_materials_) {
+    return false;
+  }
+  QDataStream stream(data->data(QString::fromLatin1(kMaterialDragMime)));
+  quint64 generation = 0;
+  QStringList identities;
+  QStringList paths;
+  stream >> generation >> identities >> paths;
+  if (stream.status() != QDataStream::Ok || !stream.atEnd() ||
+      generation != project_generation_ || identities.isEmpty() ||
+      identities.size() != paths.size()) {
+    return false;
+  }
+  std::vector<QuaderMaterialReference> references;
+  std::set<QString> seen;
+  for (qsizetype index = 0; index < identities.size(); ++index) {
+    const auto found = std::find_if(model_->items().begin(), model_->items().end(),
+        [&](const auto &item) {
+          return item.stable_id == identities[index] &&
+                 item.project_relative_path == paths[index] &&
+                 item.valid() && item.available && item.reference.project_owned();
+        });
+    if (found == model_->items().end() || !seen.insert(identities[index]).second) {
+      return false;
+    }
+    references.push_back(found->reference);
+  }
+  if (execute) {
+    move_materials_(std::move(references), destination, generation);
+  }
+  return true;
 }
 
 const QtMaterialBrowserItem *QtMaterialBrowserWindow::item_for_index(

@@ -249,6 +249,7 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system,
               : "Project Materials path is not a directory.",
         materials_root);
   }
+  catalog.folders_.push_back(materials_relative.value());
 
   std::vector<ProjectRelativePath> paths;
   std::filesystem::recursive_directory_iterator iterator(
@@ -256,7 +257,11 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system,
   const std::filesystem::recursive_directory_iterator end;
   for (; !error && iterator != end; iterator.increment(error)) {
     const std::filesystem::directory_entry &entry = *iterator;
-    if (!has_qmat_extension(entry.path())) {
+    const bool directory = entry.is_directory(error);
+    if (error) {
+      break;
+    }
+    if (!directory && !has_qmat_extension(entry.path())) {
       continue;
     }
     ProjectIoResult<ProjectRelativePath> relative =
@@ -266,7 +271,24 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system,
           relative.error().code, relative.error().message,
           relative.error().path);
     }
-    paths.push_back(relative.take_value());
+    if (directory) {
+      const auto physical =
+          scan_file_system.resolve_physical_location(relative.value());
+      if (!physical.ok()) {
+        return ProjectIoResult<ProjectMaterialCatalog>::failure(
+            physical.error().code, physical.error().message,
+            physical.error().path);
+      }
+      if (physical.value() != entry.path().lexically_normal()) {
+        return ProjectIoResult<ProjectMaterialCatalog>::failure(
+            ProjectIoErrorCode::PathCaseCollision,
+            "Material folders cannot be symbolic links or directory aliases.",
+            entry.path());
+      }
+      catalog.folders_.push_back(relative.take_value());
+    } else {
+      paths.push_back(relative.take_value());
+    }
   }
   if (error) {
     return ProjectIoResult<ProjectMaterialCatalog>::failure(
@@ -279,6 +301,17 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system,
                              const ProjectRelativePath &right) {
     return left.portable_case_key() < right.portable_case_key();
   });
+  std::ranges::sort(catalog.folders_, [](const ProjectRelativePath &left,
+                                        const ProjectRelativePath &right) {
+    return left.portable_case_key() < right.portable_case_key();
+  });
+  const auto folder_aliases =
+      scan_file_system.validate_no_path_aliases(catalog.folders_);
+  if (!folder_aliases.ok()) {
+    return ProjectIoResult<ProjectMaterialCatalog>::failure(
+        folder_aliases.error().code, folder_aliases.error().message,
+        folder_aliases.error().path);
+  }
   ProjectIoResult<void> aliases =
       validate_no_physical_aliases(scan_file_system, paths);
   if (!aliases.ok()) {
@@ -382,6 +415,10 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system,
   }
 
   std::uint64_t revision = 14'695'981'039'346'656'037ull;
+  for (const ProjectRelativePath &folder : catalog.folders_) {
+    revision = append_hash(revision, folder.portable_string());
+    revision = append_hash(revision, std::uint64_t{0});
+  }
   for (const ProjectMaterialCatalogEntry &entry : catalog.entries_) {
     revision = append_hash(revision, entry.material.id.str());
     revision = append_hash(revision, entry.path.portable_string());

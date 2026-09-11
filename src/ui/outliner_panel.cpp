@@ -12,6 +12,7 @@
 #include "diagnostics/profile.hpp"
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "scene/scene_document.hpp"
+#include "ui/qt_tree_relationship_presentation.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_panel.hpp"
 
@@ -309,7 +310,9 @@ public:
   using ContextMenuHandler = std::function<void(EntityId, QPoint)>;
   using SelectionGestureFinishedHandler = std::function<void()>;
 
-  explicit OutlinerTreeView(QWidget *parent = nullptr) : QTreeView(parent) {}
+  explicit OutlinerTreeView(QWidget *parent = nullptr) : QTreeView(parent) {
+    install_qt_tree_relationship_presentation(*this);
+  }
 
   ContextMenuHandler context_menu_handler;
   SelectionGestureFinishedHandler selection_gesture_finished_handler;
@@ -545,6 +548,10 @@ struct OutlinerPanel::Impl {
                          collapsed_entities_.erase(entity_id(index));
                        }
                      });
+  }
+
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    apply_ui_scale_to_qt_tree_relationship_presentation(*tree_, metrics);
   }
 
   void abandon_runtime() noexcept {
@@ -1375,6 +1382,10 @@ OutlinerPanel::OutlinerPanel(QWidget *parent)
 OutlinerPanel::~OutlinerPanel() = default;
 
 void OutlinerPanel::abandon_runtime() noexcept { impl_->abandon_runtime(); }
+
+void OutlinerPanel::apply_ui_scale(const QtUiScaleMetrics &metrics) {
+  impl_->apply_ui_scale(metrics);
+}
 
 void OutlinerPanel::refresh(UIContext &context) { impl_->refresh(context); }
 

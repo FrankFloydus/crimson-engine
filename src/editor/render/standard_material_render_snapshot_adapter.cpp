@@ -89,11 +89,17 @@ std::uint64_t ProjectSessionRenderMaterialResolver::revision() const noexcept {
          project_->standard_material_editor().scene_preview_revision();
 }
 
+ProjectAssetId ProjectSessionRenderMaterialResolver::canonical_material_id(
+    ProjectAssetId id) const {
+  return project_ != nullptr ? project_->canonical_material_id(id) : id;
+}
+
 std::optional<RenderProjectMaterialSnapshot>
 ProjectSessionRenderMaterialResolver::resolve(ProjectAssetId id) const {
   if (project_ == nullptr || !project_->has_project()) {
     return std::nullopt;
   }
+  id = canonical_material_id(id);
   const ProjectMaterialCatalogEntry *entry =
       project_->material_catalog().find(id);
   if (entry == nullptr) {

@@ -17,6 +17,7 @@
 #include "editor/selection/scene_selection_application.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
+#include "io/project/project_material_reference_resolver.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "scene/scene_transform.hpp"
 
@@ -210,7 +211,13 @@ std::vector<AssetId> sorted_asset_ids(const auto &assets) {
 
 MaterialReference remap_material_reference(
     MaterialReference source,
-    const std::unordered_map<AssetId, AssetId> &material_remap) {
+    const std::unordered_map<AssetId, AssetId> &material_remap,
+    const ProjectManifest *manifest) {
+  if (source.project_owned() && manifest != nullptr) {
+    return MaterialReference::project(
+        ProjectMaterialReferenceResolver::canonical_material_id(
+            *manifest, source.project_asset()));
+  }
   if (!source.embedded()) {
     return source;
   }
@@ -221,24 +228,27 @@ MaterialReference remap_material_reference(
 
 MaterialComponent remap_material_component(
     MaterialComponent source,
-    const std::unordered_map<AssetId, AssetId> &material_remap) {
-  source.material = remap_material_reference(source.material, material_remap);
+    const std::unordered_map<AssetId, AssetId> &material_remap,
+    const ProjectManifest *manifest) {
+  source.material =
+      remap_material_reference(source.material, material_remap, manifest);
   for (auto &[slot, material] : source.material_slots) {
     (void)slot;
-    material = remap_material_reference(material, material_remap);
+    material = remap_material_reference(material, material_remap, manifest);
   }
   return source;
 }
 
 void remap_snapshot_materials(
     DocumentEntitySnapshot &snapshot,
-    const std::unordered_map<AssetId, AssetId> &material_remap) {
+    const std::unordered_map<AssetId, AssetId> &material_remap,
+    const ProjectManifest *manifest) {
   if (snapshot.material.has_value()) {
     snapshot.material =
-        remap_material_component(*snapshot.material, material_remap);
+        remap_material_component(*snapshot.material, material_remap, manifest);
   }
   for (DocumentEntitySnapshot &child : snapshot.children) {
-    remap_snapshot_materials(child, material_remap);
+    remap_snapshot_materials(child, material_remap, manifest);
   }
 }
 
@@ -500,7 +510,7 @@ public:
     }
     return active->session_id == payload_.source_scene
                ? paste_linked(*active->session)
-               : paste_imported(*active->session);
+               : paste_imported(*active->session, project.manifest());
   }
 
   void note_ordinary_copy(SceneSessionId source_scene) {
@@ -667,7 +677,8 @@ private:
                : committed;
   }
 
-  CommandResult paste_imported(SceneSession &session) {
+  CommandResult paste_imported(SceneSession &session,
+                               const ProjectManifest *manifest) {
     std::string layer_error;
     std::optional<ClipboardLayerImportPlan> layer_plan =
         build_layer_import_plan(payload_, session.scene(), layer_error);
@@ -825,7 +836,7 @@ private:
         return rollback(clipboard_failure(
             "Instance definition layer remap is incomplete."));
       }
-      remap_snapshot_materials(definition, material_remap);
+      remap_snapshot_materials(definition, material_remap, manifest);
 
       std::unordered_map<EntityId, DocumentEntitySnapshot *> mesh_snapshots;
       collect_mesh_snapshots(definition, mesh_snapshots);

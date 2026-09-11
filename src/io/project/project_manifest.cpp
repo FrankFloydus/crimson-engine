@@ -6,7 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "io/project/project_manifest.hpp"
 
+#include "assets/default_material_catalog.hpp"
 #include "core/qstr.hpp"
+#include "io/project/project_material_reference_resolver.hpp"
 #include "io/qdr/qdr_atomic_write.hpp"
 #include "io/shared_file_read.hpp"
 
@@ -33,6 +35,7 @@ using Json = nlohmann::ordered_json;
 
 constexpr std::uintmax_t kMaximumManifestBytes = 4u * 1024u * 1024u;
 constexpr std::size_t kMaximumManifestScenes = 100'000u;
+constexpr std::size_t kMaximumDeletedMaterialIds = 100'000u;
 constexpr std::size_t kMaximumPortablePathBytes = 32'768u;
 
 bool non_whitespace_name(std::string_view value) {
@@ -129,7 +132,8 @@ ProjectIoResult<ProjectManifest> ProjectManifest::hydrate(
     std::vector<ProjectSceneCatalogEntry> scenes,
     std::vector<ProjectRelativePath> open_scene_paths,
     std::optional<ProjectRelativePath> active_scene_path,
-    std::optional<ProjectAssetId> active_material_id) {
+    std::optional<ProjectAssetId> active_material_id,
+    std::vector<ProjectAssetId> deleted_material_ids) {
   ProjectIoResult<ProjectManifest> created = create(std::move(id), std::move(name));
   if (!created.ok()) {
     return created;
@@ -150,6 +154,13 @@ ProjectIoResult<ProjectManifest> ProjectManifest::hydrate(
     return ProjectIoResult<ProjectManifest>::failure(
         workspace.error().code, workspace.error().message,
         workspace.error().path);
+  }
+  const ProjectIoResult<void> deleted_materials =
+      manifest.mark_materials_deleted(deleted_material_ids);
+  if (!deleted_materials.ok()) {
+    return ProjectIoResult<ProjectManifest>::failure(
+        deleted_materials.error().code, deleted_materials.error().message,
+        deleted_materials.error().path);
   }
   ProjectIoResult<void> active_material =
       manifest.set_active_material(std::move(active_material_id));
@@ -300,7 +311,50 @@ ProjectIoResult<void> ProjectManifest::set_active_material(
         ProjectIoErrorCode::InvalidUuid,
         "Active project material requires a valid UUID.");
   }
+  if (material_id.has_value()) {
+    material_id = ProjectMaterialReferenceResolver::canonical_material_id(
+        *this, *material_id);
+  }
   active_material_id_ = std::move(material_id);
+  return ProjectIoResult<void>::success();
+}
+
+bool ProjectManifest::is_material_deleted(
+    const ProjectAssetId &material_id) const noexcept {
+  return std::binary_search(deleted_material_ids_.begin(),
+                            deleted_material_ids_.end(), material_id);
+}
+
+ProjectIoResult<void> ProjectManifest::mark_materials_deleted(
+    std::span<const ProjectAssetId> material_ids) {
+  for (const ProjectAssetId &id : material_ids) {
+    if (!id.valid()) {
+      return ProjectIoResult<void>::failure(
+          ProjectIoErrorCode::InvalidUuid,
+          "Deleted project materials require valid UUIDs.");
+    }
+    if (id.str() == kDefaultProjectMaterialId) {
+      return ProjectIoResult<void>::failure(
+          ProjectIoErrorCode::InvalidArgument,
+          "The reserved Default Material cannot be deleted.");
+    }
+  }
+  std::vector<ProjectAssetId> candidate = deleted_material_ids_;
+  candidate.insert(candidate.end(), material_ids.begin(), material_ids.end());
+  std::sort(candidate.begin(), candidate.end());
+  candidate.erase(std::unique(candidate.begin(), candidate.end()),
+                  candidate.end());
+  if (candidate.size() > kMaximumDeletedMaterialIds) {
+    return ProjectIoResult<void>::failure(
+        ProjectIoErrorCode::InvalidArgument,
+        "Deleted project material identities exceed the manifest size limit.");
+  }
+  deleted_material_ids_ = std::move(candidate);
+  if (active_material_id_.has_value()) {
+    active_material_id_ =
+        ProjectMaterialReferenceResolver::canonical_material_id(
+            *this, *active_material_id_);
+  }
   return ProjectIoResult<void>::success();
 }
 
@@ -524,9 +578,11 @@ std::string ProjectManifestStore::serialize(const ProjectManifest &manifest) {
         std::string(manifest.active_material_id()->str());
   }
 
-  return Json{
+  Json root{
       {"format", std::string(kQuaderProjectManifestFormat)},
-      {"version", kQuaderProjectManifestVersion},
+      {"version", manifest.deleted_material_ids().empty()
+                      ? 2u
+                      : kQuaderProjectManifestVersion},
       {"project",
        Json{
            {"id", std::string(manifest.id().str())},
@@ -539,7 +595,17 @@ std::string ProjectManifestStore::serialize(const ProjectManifest &manifest) {
            {"activeScene", std::move(active_scene)},
            {"activeMaterial", std::move(active_material)},
        }},
-  }.dump(2);
+  };
+  if (!manifest.deleted_material_ids().empty()) {
+    Json deleted_material_ids = Json::array();
+    deleted_material_ids.get_ref<Json::array_t &>().reserve(
+        manifest.deleted_material_ids().size());
+    for (const ProjectAssetId &id : manifest.deleted_material_ids()) {
+      deleted_material_ids.push_back(std::string(id.str()));
+    }
+    root["deletedMaterialIds"] = std::move(deleted_material_ids);
+  }
+  return root.dump(2);
 }
 
 ProjectIoResult<ProjectManifest>
@@ -565,8 +631,8 @@ ProjectManifestStore::deserialize(std::string_view text) {
           ProjectIoErrorCode::UnsupportedFormat,
           "Project manifest version is not supported.");
     }
-    const std::uint32_t version =
-        root["version"].get<std::uint32_t>();
+    const std::uint64_t version =
+        root["version"].get<std::uint64_t>();
     if (version < kOldestQuaderProjectManifestVersion ||
         version > kQuaderProjectManifestVersion) {
       return ProjectIoResult<ProjectManifest>::failure(
@@ -670,10 +736,41 @@ ProjectManifestStore::deserialize(std::string_view text) {
       }
     }
 
+    std::vector<ProjectAssetId> deleted_material_ids;
+    if (version < 3u && root.contains("deletedMaterialIds")) {
+      return malformed_manifest(
+          "Deleted material identities require project manifest version 3.");
+    }
+    if (version >= 3u) {
+      if (!root.contains("deletedMaterialIds") ||
+          !root["deletedMaterialIds"].is_array() ||
+          root["deletedMaterialIds"].size() > kMaximumDeletedMaterialIds) {
+        return malformed_manifest(
+            "Deleted material identities are malformed or too numerous.");
+      }
+      const Json &deleted_json = root["deletedMaterialIds"];
+      deleted_material_ids.reserve(deleted_json.size());
+      std::unordered_set<ProjectAssetId, ProjectAssetIdHash> seen;
+      seen.reserve(deleted_json.size());
+      for (const Json &id_json : deleted_json) {
+        if (!id_json.is_string()) {
+          return malformed_manifest("Deleted material UUID must be a string.");
+        }
+        const std::optional<ProjectAssetId> id =
+            ProjectAssetId::parse(id_json.get<std::string>());
+        if (!id.has_value() || id->str() == kDefaultProjectMaterialId ||
+            !seen.insert(*id).second) {
+          return malformed_manifest(
+              "Deleted material UUID is invalid, reserved, or duplicated.");
+        }
+        deleted_material_ids.push_back(*id);
+      }
+    }
+
     return ProjectManifest::hydrate(
         project_id.take_value(), root["project"]["name"].get<std::string>(),
         std::move(scenes), std::move(open_scenes), std::move(active_scene),
-        std::move(active_material));
+        std::move(active_material), std::move(deleted_material_ids));
   } catch (const std::exception &exception) {
     return malformed_manifest(std::string("Could not parse project manifest: ") +
                               exception.what());

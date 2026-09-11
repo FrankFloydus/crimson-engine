@@ -376,6 +376,10 @@ public:
      */
     bool notify_mesh_payloads_changed(std::span<const EntityId> ids);
     bool set_material(EntityId id, MaterialComponent material);
+    /// Rewrites an existing stored binding during project reference migration.
+    /// Includes dormant bindings on instance roles without changing those roles.
+    bool replace_existing_material_reference_component(
+        EntityId id, MaterialComponent material);
     bool clear_material(EntityId id);
     bool set_texture_mapping(EntityId id, TextureMappingComponent mapping);
     bool clear_texture_mapping(EntityId id);

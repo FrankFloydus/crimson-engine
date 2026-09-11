@@ -13,6 +13,7 @@
 #include "editor/projection/mesh_projection_service.hpp"
 #include "io/project/project_manifest.hpp"
 #include "io/project/project_material_catalog.hpp"
+#include "io/project/project_material_reference_resolver.hpp"
 #include "io/project/qmat_codec.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/shared_file_read.hpp"
@@ -167,7 +168,7 @@ struct QuaderBridgeScene final {
   std::vector<LightStorage> lights;
   std::vector<MaterialStorage> materials;
   std::unordered_map<std::string, uint32_t> material_indices;
-  std::optional<quader::ProjectMaterialCatalog> legacy_material_catalog;
+  std::optional<quader::ProjectMaterialCatalog> material_catalog;
 };
 
 /** Independent encoded texture allocation with its portable image extension. */
@@ -178,11 +179,16 @@ struct QuaderBridgeBlob final {
 
 namespace {
 
-/** Registers an encountered binding using only its persisted source identity. */
+/** Registers effective identity without reading material or texture files. */
 [[nodiscard]] uint32_t material_index(QuaderBridgeScene &scene,
                                     MaterialReference reference) {
   if (!reference.valid()) {
     return QUADER_BRIDGE_NO_MATERIAL;
+  }
+  if (reference.project_owned()) {
+    reference = MaterialReference::project(
+        ProjectMaterialReferenceResolver::canonical_material_id(
+            scene.storage.manifest, reference.project_asset()));
   }
   const std::string id = reference.project_owned()
                              ? std::string(reference.project_asset().str())
@@ -334,6 +340,7 @@ void build_light_snapshot(QuaderBridgeScene &target) {
 
 [[nodiscard]] ProjectMaterialCatalogEntry read_project_material(
     QuaderBridgeScene &scene, ProjectAssetId id) {
+  std::optional<ProjectIoError> stale_dependency_error;
   for (const ProjectAssetReference &dependency : scene.source.project_asset_dependencies) {
     if (dependency.stable_id != id) {
       continue;
@@ -342,25 +349,40 @@ void build_light_snapshot(QuaderBridgeScene &target) {
             "Source material dependency has an incompatible asset kind.");
     auto decoded = QmatCodec::read(scene.storage.file_system, dependency.path);
     if (!decoded.ok()) {
-      fail(decoded.error());
+      // A moved asset can leave an older scene's path behind. Other read errors
+      // retain their meaning: malformed files and unsafe paths never fall back.
+      if (decoded.error().code != ProjectIoErrorCode::FileNotFound) {
+        fail(decoded.error());
+      }
+      stale_dependency_error = decoded.error();
+      break;
     }
-    require(decoded.value().material.id == id,
-            "Source material identity does not match its scene dependency.");
+    if (decoded.value().material.id != id) {
+      stale_dependency_error = ProjectIoError{
+          .code = ProjectIoErrorCode::AssetNotFound,
+          .message = "Source material identity does not match its scene dependency.",
+          .path = dependency.path.native_path()};
+      break;
+    }
     return {.material = std::move(decoded.value().material),
             .path = dependency.path,
             .file_size = decoded.value().file_size,
             .content_revision = decoded.value().content_revision};
   }
-  // Older QDR files may contain stable material IDs without dependency paths.
-  if (!scene.legacy_material_catalog.has_value()) {
+  // Legacy, relocated and permanently remapped references share one lazy scan.
+  // The catalog validates identity uniqueness and project-path containment.
+  if (!scene.material_catalog.has_value()) {
     auto catalog = ProjectMaterialCatalog::scan(scene.storage.file_system);
     if (!catalog.ok()) {
       fail(catalog.error());
     }
-    scene.legacy_material_catalog = catalog.take_value();
+    scene.material_catalog = catalog.take_value();
   }
-  const ProjectMaterialCatalogEntry *entry = scene.legacy_material_catalog->find(id);
+  const ProjectMaterialCatalogEntry *entry = scene.material_catalog->find(id);
   if (entry == nullptr) {
+    if (stale_dependency_error.has_value()) {
+      fail(*stale_dependency_error);
+    }
     fail("Source project material is unavailable: " + std::string(id.str()));
   }
   return *entry;

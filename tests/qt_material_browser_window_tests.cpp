@@ -7,11 +7,15 @@
 #include <gtest/gtest.h>
 
 #include "ui/qt_material_browser_window.hpp"
+#include "ui/qt_application_theme.hpp"
 
 #include <QAction>
 #include <QApplication>
 #include <QBuffer>
 #include <QCoreApplication>
+#include <QDataStream>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QImage>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
@@ -21,18 +25,28 @@
 #include <QMainWindow>
 #include <QMetaObject>
 #include <QMenu>
+#include <QMimeData>
 #include <QPalette>
+#include <QPainter>
 #include <QPixmap>
 #include <QProxyStyle>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSlider>
+#include <QSplitter>
 #include <QStackedWidget>
+#include <QStyleOption>
 #include <QTableView>
 #include <QToolButton>
+#include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 
+#include <algorithm>
+#include <cmath>
+#include <memory>
 #include <optional>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace quader {
@@ -106,6 +120,491 @@ public:
 
 QColor icon_center_color(const QIcon &icon) {
   return icon.pixmap(QSize(16, 16)).toImage().pixelColor(8, 8);
+}
+
+QTreeWidgetItem *folder_item(QTreeWidget &tree, const QString &path) {
+  for (QTreeWidgetItemIterator it(&tree); *it != nullptr; ++it) {
+    if ((*it)->data(0, Qt::UserRole).toString() == path) {
+      return *it;
+    }
+  }
+  return nullptr;
+}
+
+QtMaterialBrowserItem folder_material(std::string_view id, const QString &name,
+                                       const QString &path) {
+  QtMaterialBrowserItem material;
+  material.reference = QuaderMaterialReference::project(required_project_id(id));
+  material.stable_id = qt_material_reference_stable_id(material.reference);
+  material.name = name;
+  material.project_relative_path = path;
+  return material;
+}
+
+bool drop_on_folder(QTreeWidget &tree, QTreeWidgetItem &target,
+                    const QMimeData &mime) {
+  tree.scrollToItem(&target);
+  QCoreApplication::processEvents();
+  const QPoint position = tree.visualItemRect(&target).center();
+  QDragEnterEvent enter(position, Qt::MoveAction, &mime, Qt::LeftButton,
+                        Qt::NoModifier);
+  QCoreApplication::sendEvent(tree.viewport(), &enter);
+  QDropEvent drop(QPointF(position), Qt::MoveAction, &mime, Qt::LeftButton,
+                  Qt::NoModifier);
+  QCoreApplication::sendEvent(tree.viewport(), &drop);
+  return drop.isAccepted();
+}
+
+QImage render_tree_primitive(QStyle &style, QStyle::PrimitiveElement element,
+                             QStyle::State state,
+                             Qt::LayoutDirection direction,
+                             QSize logical_size, QRect option_rect,
+                             qreal device_pixel_ratio = 1.0) {
+  const QSize physical_size(
+      static_cast<int>(std::lround(logical_size.width() * device_pixel_ratio)),
+      static_cast<int>(std::lround(logical_size.height() * device_pixel_ratio)));
+  QImage image(physical_size, QImage::Format_ARGB32_Premultiplied);
+  image.setDevicePixelRatio(device_pixel_ratio);
+  image.fill(Qt::transparent);
+
+  QStyleOption option;
+  option.rect = option_rect;
+  option.state = state;
+  option.direction = direction;
+  option.palette.setColor(QPalette::All, QPalette::Midlight,
+                          QColor(82, 86, 94));
+  option.palette.setColor(QPalette::All, QPalette::Text, Qt::white);
+  QPainter painter(&image);
+  style.drawPrimitive(element, &option, &painter);
+  return image;
+}
+
+QImage render_branch(QStyle &style, QStyle::State state,
+                     Qt::LayoutDirection direction, QSize logical_size,
+                     qreal device_pixel_ratio = 1.0) {
+  return render_tree_primitive(
+      style, QStyle::PE_IndicatorBranch, state, direction, logical_size,
+      QRect(QPoint{}, logical_size), device_pixel_ratio);
+}
+
+QRect centered_square(QSize bounds, int extent) {
+  QRect square(QPoint{}, QSize(extent, extent));
+  square.moveCenter(QRect(QPoint{}, bounds).center());
+  return square;
+}
+
+QImage render_selected_item(QStyle &style, const QPalette &palette,
+                            bool branch_area) {
+  QImage image(80, 24, QImage::Format_ARGB32_Premultiplied);
+  image.fill(Qt::transparent);
+  QStyleOptionViewItem option;
+  option.rect = image.rect();
+  option.state = QStyle::State_Enabled | QStyle::State_Active |
+                 QStyle::State_Selected;
+  option.palette = palette;
+  option.showDecorationSelected = true;
+  QPainter painter(&image);
+  if (branch_area) {
+    style.drawPrimitive(QStyle::PE_PanelItemViewRow, &option, &painter);
+  } else {
+    style.drawControl(QStyle::CE_ItemViewItem, &option, &painter);
+  }
+  return image;
+}
+
+QRect physical_region(const QImage &image, const QRect &logical_region) {
+  const qreal ratio = image.devicePixelRatio();
+  const int left =
+      static_cast<int>(std::floor(logical_region.left() * ratio));
+  const int top =
+      static_cast<int>(std::floor(logical_region.top() * ratio));
+  const int right = static_cast<int>(std::ceil(
+                        (logical_region.right() + 1) * ratio)) -
+                    1;
+  const int bottom = static_cast<int>(std::ceil(
+                         (logical_region.bottom() + 1) * ratio)) -
+                     1;
+  return QRect(QPoint(left, top), QPoint(right, bottom))
+      .intersected(image.rect());
+}
+
+bool region_contains_ink(const QImage &image, const QRect &logical_region) {
+  const QRect physical = physical_region(image, logical_region);
+  for (int y = physical.top(); y <= physical.bottom(); ++y) {
+    for (int x = physical.left(); x <= physical.right(); ++x) {
+      if (image.pixelColor(x, y).alpha() != 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+void expect_regions_equal(const QImage &actual, const QImage &expected,
+                          const QRect &logical_region) {
+  ASSERT_EQ(actual.size(), expected.size());
+  ASSERT_EQ(actual.devicePixelRatio(), expected.devicePixelRatio());
+  const QRect physical = physical_region(actual, logical_region);
+  for (int y = physical.top(); y <= physical.bottom(); ++y) {
+    for (int x = physical.left(); x <= physical.right(); ++x) {
+      EXPECT_EQ(actual.pixel(x, y), expected.pixel(x, y))
+          << "pixel mismatch at (" << x << ", " << y << ")";
+    }
+  }
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     FolderTreePaintsRelationshipsWithFusionDisclosureAndApplicationSelection) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-tree-presentation-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  application.setQuitOnLastWindowClosed(false);
+
+  QPalette application_palette = application.palette();
+  const QColor harsh_highlight(167, 148, 221);
+  application_palette.setColor(QPalette::All, QPalette::Highlight,
+                               harsh_highlight);
+  application_palette.setColor(QPalette::All, QPalette::HighlightedText,
+                               QColor(23, 24, 28));
+  QApplication::setPalette(application_palette);
+  ASSERT_NE(QApplication::palette().resolveMask(), 0U);
+
+  QtMaterialBrowserWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  auto *tree = window.findChild<QTreeWidget *>(
+      QStringLiteral("materialBrowser.folderTree"));
+  ASSERT_NE(tree, nullptr);
+  ASSERT_NE(tree->style(), QApplication::style());
+  EXPECT_EQ(tree->style()->objectName(),
+            QStringLiteral("quaderTreeRelationshipPresentation"));
+  EXPECT_EQ(tree->palette().color(QPalette::Active, QPalette::Highlight),
+            harsh_highlight)
+      << "the presentation must not replace the tree or application palette";
+  EXPECT_EQ(QApplication::palette().color(QPalette::Active,
+                                          QPalette::Highlight),
+            harsh_highlight);
+
+  const QImage selected_item =
+      render_selected_item(*tree->style(), tree->palette(), false);
+  const QImage selected_branch_area =
+      render_selected_item(*tree->style(), tree->palette(), true);
+  EXPECT_EQ(selected_item.pixelColor(selected_item.rect().center()),
+            harsh_highlight);
+  EXPECT_EQ(selected_branch_area.pixelColor(
+                selected_branch_area.rect().center()),
+            harsh_highlight);
+
+  constexpr QStyle::State kCollapsedBranch =
+      QStyle::State_Enabled | QStyle::State_Active | QStyle::State_Item |
+      QStyle::State_Sibling | QStyle::State_Children;
+  const QSize branch_size(21, 21);
+  const QRect disclosure = centered_square(branch_size, 9);
+  for (const qreal ratio : {1.0, 2.0}) {
+    const QImage left_to_right =
+        render_branch(*tree->style(), kCollapsedBranch, Qt::LeftToRight,
+                      branch_size, ratio);
+    EXPECT_TRUE(region_contains_ink(left_to_right, QRect(16, 9, 5, 3)));
+    EXPECT_FALSE(region_contains_ink(left_to_right, QRect(0, 9, 5, 3)));
+    EXPECT_TRUE(region_contains_ink(left_to_right, QRect(9, 0, 3, 5)));
+    EXPECT_TRUE(region_contains_ink(left_to_right, QRect(9, 16, 3, 5)));
+    const QImage expected_right = render_tree_primitive(
+        *tree->style(), QStyle::PE_IndicatorArrowRight, kCollapsedBranch,
+        Qt::LeftToRight, branch_size, disclosure, ratio);
+    expect_regions_equal(left_to_right, expected_right, disclosure);
+
+    const QImage right_to_left =
+        render_branch(*tree->style(), kCollapsedBranch, Qt::RightToLeft,
+                      branch_size, ratio);
+    EXPECT_TRUE(region_contains_ink(right_to_left, QRect(0, 9, 5, 3)));
+    EXPECT_FALSE(region_contains_ink(right_to_left, QRect(16, 9, 5, 3)));
+    const QImage expected_left = render_tree_primitive(
+        *tree->style(), QStyle::PE_IndicatorArrowLeft, kCollapsedBranch,
+        Qt::RightToLeft, branch_size, disclosure, ratio);
+    expect_regions_equal(right_to_left, expected_left, disclosure);
+
+    const QImage open = render_branch(
+        *tree->style(), kCollapsedBranch | QStyle::State_Open,
+        Qt::LeftToRight, branch_size, ratio);
+    const QImage expected_down = render_tree_primitive(
+        *tree->style(), QStyle::PE_IndicatorArrowDown,
+        kCollapsedBranch | QStyle::State_Open, Qt::LeftToRight, branch_size,
+        disclosure, ratio);
+    expect_regions_equal(open, expected_down, disclosure);
+  }
+
+  const int unscaled_indentation = tree->indentation();
+  const QSize scaled_test_size(41, 41);
+  const QRect unscaled_disclosure = centered_square(scaled_test_size, 9);
+  const QImage unscaled_indicator =
+      render_branch(*tree->style(), QStyle::State_Children, Qt::LeftToRight,
+                    scaled_test_size);
+  const QImage expected_unscaled = render_tree_primitive(
+      *tree->style(), QStyle::PE_IndicatorArrowRight,
+      QStyle::State_Children, Qt::LeftToRight, scaled_test_size,
+      unscaled_disclosure);
+  expect_regions_equal(unscaled_indicator, expected_unscaled,
+                       unscaled_disclosure);
+
+  window.apply_ui_scale(QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(tree->indentation(), unscaled_indentation * 2);
+  const QImage scaled_indicator =
+      render_branch(*tree->style(), QStyle::State_Children, Qt::LeftToRight,
+                    scaled_test_size);
+  const QImage expected_scaled = render_tree_primitive(
+      *tree->style(), QStyle::PE_IndicatorArrowRight,
+      QStyle::State_Children, Qt::LeftToRight, scaled_test_size,
+      unscaled_disclosure);
+  expect_regions_equal(scaled_indicator, expected_scaled,
+                       unscaled_disclosure);
+  window.apply_ui_scale(QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(tree->indentation(), unscaled_indentation * 2);
+  window.apply_ui_scale(QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(tree->indentation(), unscaled_indentation);
+
+  constexpr QStyle::State kConnectedLeaf =
+      QStyle::State_Enabled | QStyle::State_Active | QStyle::State_Item |
+      QStyle::State_Sibling;
+  const QImage themed_connectors =
+      render_branch(*tree->style(), kConnectedLeaf, Qt::LeftToRight,
+                    branch_size);
+  EXPECT_EQ(themed_connectors.pixelColor(10, 1), QColor(82, 86, 94));
+
+  QApplication::setPalette(QPalette{});
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::palette().resolveMask(), 0U);
+  const QImage platform_connectors =
+      render_branch(*tree->style(), kConnectedLeaf, Qt::LeftToRight,
+                    branch_size);
+  EXPECT_EQ(platform_connectors.pixelColor(10, 1), Qt::white)
+      << "an unresolved application palette uses the platform text color for "
+         "high-contrast relationship lines";
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     FolderHierarchyFiltersDescendantsAndRetainsProjectPresentation) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-folders-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  QApplication::setPalette(
+      qt_obsidian_application_palette(QApplication::style()->standardPalette()));
+  application.setQuitOnLastWindowClosed(false);
+  QtMaterialBrowserWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  window.set_project_generation(10);
+  auto materials = std::vector<QtMaterialBrowserItem>{
+      folder_material("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+          QStringLiteral("Base"), QStringLiteral("Materials/base.qmat")),
+      folder_material("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+          QStringLiteral("Dev"), QStringLiteral("Materials/Dev/base.qmat")),
+      folder_material("cccccccc-cccc-cccc-cccc-cccccccccccc",
+          QStringLiteral("Oak"), QStringLiteral("Materials/Dev/Wood/oak.qmat")),
+      folder_material("dddddddd-dddd-dddd-dddd-dddddddddddd",
+          QStringLiteral("Oak other"), QStringLiteral("Materials/Development/oak.qmat")),
+  };
+  window.set_folders({QStringLiteral("Materials/Zebra"),
+                     QStringLiteral("Materials/Dev/Empty"),
+                     QStringLiteral("Materials/Dev/Wood"),
+                     QStringLiteral("../invalid"),
+                     QStringLiteral("Materials/../invalid")});
+  window.set_materials(materials);
+  auto *tree = window.findChild<QTreeWidget *>(QStringLiteral("materialBrowser.folderTree"));
+  auto *grid = window.findChild<QListView *>(QStringLiteral("materialBrowser.gridView"));
+  auto *search = window.findChild<QLineEdit *>(QStringLiteral("materialBrowser.search"));
+  auto *import_button = window.findChild<QPushButton *>(QStringLiteral("materialBrowser.import"));
+  auto *toggle = window.findChild<QToolButton *>(QStringLiteral("materialBrowser.folders"));
+  ASSERT_NE(tree, nullptr);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(search, nullptr);
+  ASSERT_NE(import_button, nullptr);
+  ASSERT_NE(toggle, nullptr);
+  EXPECT_EQ(tree->topLevelItem(0)->text(0), QStringLiteral("All"));
+  EXPECT_EQ(tree->topLevelItem(1)->text(0), QStringLiteral("Dev"));
+  EXPECT_EQ(tree->topLevelItem(2)->text(0), QStringLiteral("Development"));
+  EXPECT_EQ(tree->topLevelItem(3)->text(0), QStringLiteral("Zebra"));
+  ASSERT_NE(folder_item(*tree, QStringLiteral("Materials/Dev/Empty")), nullptr);
+  EXPECT_EQ(folder_item(*tree, QStringLiteral("Materials/../invalid")), nullptr);
+  EXPECT_EQ(grid->model()->rowCount(), 4);
+  window.set_selected_folder(QStringLiteral("Materials/Dev"));
+  auto *dev = folder_item(*tree, QStringLiteral("Materials/Dev"));
+  ASSERT_NE(dev, nullptr);
+  dev->setExpanded(true);
+  EXPECT_EQ(grid->model()->rowCount(), 2);
+  search->setText(QStringLiteral("OAK"));
+  ASSERT_EQ(grid->model()->rowCount(), 1);
+  EXPECT_EQ(grid->model()->index(0, 0).data().toString(), QStringLiteral("Oak"));
+  search->clear();
+  window.set_selected_folder(QStringLiteral("Materials/Dev/Empty"));
+  EXPECT_EQ(grid->model()->rowCount(), 0);
+  auto *empty = window.findChild<QLabel *>(QStringLiteral("materialBrowser.empty"));
+  ASSERT_NE(empty, nullptr);
+  EXPECT_EQ(empty->text(), QStringLiteral("No materials in this folder"));
+  search->setText(QStringLiteral("missing"));
+  EXPECT_EQ(empty->text(), QStringLiteral("No materials match this search"));
+  search->clear();
+  QString imported_to;
+  window.set_import_textures_callback([&](QString destination) {
+    imported_to = std::move(destination);
+  });
+  import_button->click();
+  EXPECT_EQ(imported_to, QStringLiteral("Materials/Dev/Empty"));
+  int resets = 0;
+  QObject::connect(grid->model(), &QAbstractItemModel::modelReset, &window,
+                   [&]() { ++resets; });
+  window.set_materials(materials);
+  EXPECT_EQ(resets, 0);
+  window.set_folders({QStringLiteral("Materials/Dev/Empty"),
+                     QStringLiteral("Materials/Dev/New"),
+                     QStringLiteral("Materials/Zebra")});
+  EXPECT_EQ(window.selected_folder(), QStringLiteral("Materials/Dev/Empty"));
+  EXPECT_TRUE(folder_item(*tree, QStringLiteral("Materials/Dev"))->isExpanded());
+  window.set_folders({QStringLiteral("Materials/Dev/New")});
+  EXPECT_EQ(window.selected_folder(), QStringLiteral("Materials/Dev"));
+  EXPECT_EQ(grid->model()->rowCount(), 2);
+  window.follow_moved_folder(QStringLiteral("Materials/Dev"), QStringLiteral("Materials/Art"));
+  materials[1].project_relative_path = QStringLiteral("Materials/Art/base.qmat");
+  materials[2].project_relative_path = QStringLiteral("Materials/Art/Wood/oak.qmat");
+  window.set_folders({QStringLiteral("Materials/Art/New")});
+  EXPECT_EQ(window.selected_folder(), QStringLiteral("Materials/Art"));
+  window.set_materials(materials);
+  EXPECT_EQ(window.selected_folder(), QStringLiteral("Materials/Art"));
+  EXPECT_TRUE(folder_item(*tree, QStringLiteral("Materials/Art"))->isExpanded());
+  int state_changes = 0;
+  window.set_presentation_state_changed_callback([&]() { ++state_changes; });
+  window.restore_presentation_state(QtMaterialBrowserViewMode::List, 64, false, 270);
+  EXPECT_FALSE(window.sidebar_visible());
+  EXPECT_TRUE(tree->isHidden());
+  EXPECT_EQ(window.sidebar_width(), 270);
+  EXPECT_EQ(state_changes, 0);
+  toggle->click();
+  EXPECT_TRUE(window.sidebar_visible());
+  EXPECT_FALSE(tree->isHidden());
+  EXPECT_EQ(state_changes, 1);
+  window.set_project_generation(10);
+  EXPECT_EQ(window.selected_folder(), QStringLiteral("Materials/Art"));
+  const QString screenshot_path = qEnvironmentVariable("QUADER_MATERIAL_BROWSER_SCREENSHOT");
+  if (!screenshot_path.isEmpty()) {
+    window.restore_presentation_state(QtMaterialBrowserViewMode::Grid, 128, true, 230);
+    window.resize(980, 600);
+    window.show();
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(window.grab().save(screenshot_path, "PNG"));
+  }
+  window.set_project_generation(11);
+  EXPECT_EQ(window.selected_folder(), QStringLiteral("Materials"));
+  EXPECT_EQ(tree->topLevelItemCount(), 1);
+  EXPECT_TRUE(window.sidebar_visible());
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     BothViewsDragMaterialBatchesAndTreeDropsRejectStaleOrCyclicIntent) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-drag-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QtMaterialBrowserWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  window.set_project_generation(27);
+  auto materials = std::vector<QtMaterialBrowserItem>{
+      folder_material("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+          QStringLiteral("A"), QStringLiteral("Materials/a.qmat")),
+      folder_material("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+          QStringLiteral("B"), QStringLiteral("Materials/b.qmat")),
+  };
+  window.set_materials(materials, materials[0].reference);
+  window.set_folders({QStringLiteral("Materials/Dev/Wood"), QStringLiteral("Materials/Other")});
+  window.show();
+  QCoreApplication::processEvents();
+  auto *tree = window.findChild<QTreeWidget *>(QStringLiteral("materialBrowser.folderTree"));
+  auto *grid = window.findChild<QListView *>(QStringLiteral("materialBrowser.gridView"));
+  auto *list = window.findChild<QTableView *>(QStringLiteral("materialBrowser.listView"));
+  ASSERT_NE(tree, nullptr);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(list, nullptr);
+  int material_moves = 0;
+  window.set_move_materials_callback([&](std::vector<QuaderMaterialReference> refs,
+                                        QString destination, std::uint64_t generation) {
+    EXPECT_EQ(refs.size(), 2);
+    EXPECT_EQ(refs[0], materials[0].reference);
+    EXPECT_EQ(refs[1], materials[1].reference);
+    EXPECT_EQ(destination, QStringLiteral("Materials/Other"));
+    EXPECT_EQ(generation, 27);
+    ++material_moves;
+  });
+  auto *destination = folder_item(*tree, QStringLiteral("Materials/Other"));
+  ASSERT_NE(destination, nullptr);
+  for (QAbstractItemView *view : std::vector<QAbstractItemView *>{grid, list}) {
+    view->selectionModel()->select(QItemSelection(view->model()->index(0, 0),
+                                                 view->model()->index(1, 0)),
+                                  QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    view->selectionModel()->setCurrentIndex(view->model()->index(1, 0), QItemSelectionModel::NoUpdate);
+    EXPECT_EQ(window.selected_material(), materials[1].reference);
+    window.set_active_material(materials[1].reference);
+    EXPECT_EQ(view->selectionModel()->selectedRows().size(), 2);
+    std::unique_ptr<QMimeData> mime(view->model()->mimeData(view->selectionModel()->selectedIndexes()));
+    ASSERT_NE(mime, nullptr);
+    EXPECT_TRUE(drop_on_folder(*tree, *destination, *mime));
+    EXPECT_EQ(view->model()->rowCount(), 2)
+        << "the owner publishes moves; a successful Qt drop does not remove source rows";
+  }
+  EXPECT_EQ(material_moves, 2);
+  std::unique_ptr<QMimeData> stale(grid->model()->mimeData(grid->selectionModel()->selectedIndexes()));
+  ASSERT_NE(stale, nullptr);
+  materials[0].project_relative_path = QStringLiteral("Materials/Dev/a.qmat");
+  window.set_materials(materials, materials[1].reference);
+  EXPECT_EQ(grid->selectionModel()->selectedRows().size(), 2);
+  destination = folder_item(*tree, QStringLiteral("Materials/Other"));
+  ASSERT_NE(destination, nullptr);
+  EXPECT_FALSE(drop_on_folder(*tree, *destination, *stale));
+  EXPECT_EQ(material_moves, 2);
+  int folder_moves = 0;
+  QString last_destination;
+  window.set_move_folder_callback([&](QString source, QString target, std::uint64_t generation) {
+    EXPECT_EQ(source, QStringLiteral("Materials/Dev"));
+    EXPECT_EQ(generation, 27);
+    last_destination = std::move(target);
+    ++folder_moves;
+  });
+  QByteArray bytes;
+  QDataStream stream(&bytes, QIODevice::WriteOnly);
+  stream << quint64{27} << QStringLiteral("Materials/Dev");
+  QMimeData folder_mime;
+  folder_mime.setData(QStringLiteral("application/x-quader-material-browser-folder"), bytes);
+  auto *dev = folder_item(*tree, QStringLiteral("Materials/Dev"));
+  auto *wood = folder_item(*tree, QStringLiteral("Materials/Dev/Wood"));
+  ASSERT_NE(dev, nullptr);
+  ASSERT_NE(wood, nullptr);
+  dev->setExpanded(true);
+  EXPECT_FALSE(drop_on_folder(*tree, *dev, folder_mime));
+  EXPECT_FALSE(drop_on_folder(*tree, *wood, folder_mime));
+  EXPECT_TRUE(drop_on_folder(*tree, *destination, folder_mime));
+  EXPECT_EQ(last_destination, QStringLiteral("Materials/Other"));
+  EXPECT_TRUE(drop_on_folder(*tree, *tree->topLevelItem(0), folder_mime));
+  EXPECT_EQ(last_destination, QStringLiteral("Materials"));
+  EXPECT_EQ(folder_moves, 2);
+  window.set_purpose(QtMaterialBrowserPurpose::Picker);
+  EXPECT_FALSE(grid->dragEnabled());
+  EXPECT_FALSE(list->dragEnabled());
+  EXPECT_FALSE(tree->acceptDrops());
+  EXPECT_EQ(grid->selectionMode(), QAbstractItemView::SingleSelection);
+  EXPECT_EQ(list->selectionMode(), QAbstractItemView::SingleSelection);
+  EXPECT_EQ(grid->selectionModel()->selectedRows().size(), 1);
+  EXPECT_FALSE(drop_on_folder(*tree, *destination, folder_mime));
+  EXPECT_EQ(folder_moves, 2);
+  window.set_purpose(QtMaterialBrowserPurpose::ActiveMaterial);
+  window.set_project_generation(28);
+  window.set_folders({QStringLiteral("Materials/Dev/Wood"), QStringLiteral("Materials/Other")});
+  destination = folder_item(*tree, QStringLiteral("Materials/Other"));
+  ASSERT_NE(destination, nullptr);
+  EXPECT_FALSE(drop_on_folder(*tree, *destination, folder_mime));
+  EXPECT_EQ(folder_moves, 2);
 }
 
 TEST(QtMaterialBrowserWindowTests,
@@ -187,7 +686,6 @@ TEST(QtMaterialBrowserWindowTests,
       .list = QStringLiteral("Details"),
       .tile_size = QStringLiteral("Tile size"),
       .tile_size_value = QStringLiteral("Tile size = %1 pixels"),
-      .file = QStringLiteral("Project File"),
       .import_textures = QStringLiteral("Bring textures in…"),
       .name_column = QStringLiteral("Material name"),
       .type_column = QStringLiteral("Kind"),
@@ -254,8 +752,8 @@ TEST(QtMaterialBrowserWindowTests,
       QStringLiteral("materialBrowser.tileSize"));
   auto *file_menu = window->findChild<QMenu *>(
       QStringLiteral("materialBrowser.fileMenu"));
-  auto *import_action = window->findChild<QAction *>(
-      QStringLiteral("materialBrowser.file.import"));
+  auto *import_button = window->findChild<QPushButton *>(
+      QStringLiteral("materialBrowser.import"));
   auto *accept_button = window->findChild<QPushButton *>(
       QStringLiteral("materialBrowser.accept"));
   ASSERT_NE(grid, nullptr);
@@ -266,19 +764,21 @@ TEST(QtMaterialBrowserWindowTests,
   ASSERT_NE(grid_button, nullptr);
   ASSERT_NE(list_button, nullptr);
   ASSERT_NE(slider, nullptr);
-  ASSERT_NE(file_menu, nullptr);
-  ASSERT_NE(import_action, nullptr);
+  EXPECT_EQ(file_menu, nullptr);
+  ASSERT_NE(import_button, nullptr);
   ASSERT_NE(accept_button, nullptr);
-  EXPECT_EQ(file_menu->title(), QStringLiteral("Project File"));
-  EXPECT_EQ(import_action->text(), QStringLiteral("Bring textures in…"));
+  EXPECT_EQ(import_button->text(), QStringLiteral("Bring textures in…"));
   EXPECT_EQ(accept_button->text(), QStringLiteral("Choose"));
   EXPECT_EQ(accept_button->accessibleName(), QStringLiteral("Choose"));
   EXPECT_TRUE(accept_button->isEnabled());
 
   int import_count = 0;
   window->set_import_textures_callback(
-      [&import_count]() { ++import_count; });
-  import_action->trigger();
+      [&import_count](const QString &destination) {
+        EXPECT_EQ(destination, QStringLiteral("Materials"));
+        ++import_count;
+      });
+  import_button->click();
   EXPECT_EQ(import_count, 1);
 
   EXPECT_EQ(slider->minimum(), 0);
@@ -292,8 +792,8 @@ TEST(QtMaterialBrowserWindowTests,
 
   QListView stock_grid;
   QTableView stock_list;
-  EXPECT_EQ(grid->selectionMode(), QAbstractItemView::SingleSelection);
-  EXPECT_EQ(list->selectionMode(), QAbstractItemView::SingleSelection);
+  EXPECT_EQ(grid->selectionMode(), QAbstractItemView::ExtendedSelection);
+  EXPECT_EQ(list->selectionMode(), QAbstractItemView::ExtendedSelection);
   EXPECT_EQ(grid->editTriggers(), stock_grid.editTriggers());
   EXPECT_EQ(list->editTriggers(), stock_list.editTriggers());
   ASSERT_EQ(grid->model(), list->model());
@@ -552,15 +1052,17 @@ TEST(QtMaterialBrowserWindowTests,
       QStringLiteral("materialBrowser.gridView"));
   auto *picker_accept = picker->findChild<QPushButton *>(
       QStringLiteral("materialBrowser.accept"));
-  auto *picker_file_menu = picker->findChild<QMenu *>(
-      QStringLiteral("materialBrowser.fileMenu"));
+  auto *picker_import = picker->findChild<QPushButton *>(
+      QStringLiteral("materialBrowser.import"));
   auto *picker_search = picker->findChild<QLineEdit *>(
       QStringLiteral("materialBrowser.search"));
   ASSERT_NE(picker_grid, nullptr);
   ASSERT_NE(picker_accept, nullptr);
-  ASSERT_NE(picker_file_menu, nullptr);
+  ASSERT_NE(picker_import, nullptr);
   ASSERT_NE(picker_search, nullptr);
-  EXPECT_FALSE(picker_file_menu->menuAction()->isVisible());
+  EXPECT_TRUE(picker_import->isHidden());
+  EXPECT_EQ(picker_grid->selectionMode(), QAbstractItemView::SingleSelection);
+  EXPECT_FALSE(picker_grid->dragEnabled());
   EXPECT_FALSE(picker_accept->isEnabled());
 
   int picker_activation_count = 0;

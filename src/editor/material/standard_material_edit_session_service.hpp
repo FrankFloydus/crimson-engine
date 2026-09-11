@@ -89,6 +89,8 @@ public:
   [[nodiscard]] StandardMaterialEditResult open(ProjectAssetId id);
   [[nodiscard]] StandardMaterialEditResult open(ProjectRelativePath path);
   [[nodiscard]] StandardMaterialEditResult close(bool discard_dirty = false);
+  /// Follows a committed file move without replacing the draft or its previews.
+  void retarget_saved_path(ProjectAssetId id, ProjectRelativePath path);
 
   [[nodiscard]] StandardMaterialEditResult set_name(std::string name);
   [[nodiscard]] StandardMaterialEditResult

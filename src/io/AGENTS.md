@@ -30,6 +30,13 @@ Standard v1/v2 parameters may specify `diffuseModel` as `burley` or `lambert`;
 missing values use Burley. Writers preserve the authored selection in v2, and unknown
 strings or non-string values are rejected. Strict named-image v3 remains Burley.
 
+Project manifest v3 stores permanent `deletedMaterialIds`; older v1/v2 projects remain readable
+and serialization stays v2 until the first material deletion. Deleted UUIDs resolve only to the
+reserved Default Material through `ProjectMaterialReferenceResolver`. Catalog lookup remains exact:
+deleted assets cannot be edited or reassigned. Never discard this metadata during manifest hydration.
+Material folder deletion coordinates saved scenes, live bindings and recovery before publication;
+see the [material ownership contract](../editor/material/README.md).
+
 Update focused IO tests and compatibility fixtures with format changes; cover user save/load and
 project identity through the existing project-session/API tests. Root verification rules apply.
 

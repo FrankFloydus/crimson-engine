@@ -389,6 +389,85 @@ TEST(QdrAtomicFileTransactionTests,
 }
 
 TEST(QdrAtomicFileTransactionTests,
+     BeforeReplaceCallbackSeesActualBackupPathAndUnchangedTarget) {
+  ScopedTempDirectory directory("before-replace-backup-journal");
+  const auto target = directory.path() / "scene.qdr";
+  write_text_file(target, "original scene");
+
+  quader_io::QdrAtomicFileTransaction transaction;
+  ASSERT_TRUE(transaction.prepare(target).ok);
+  const auto staging = transaction.staging_path();
+  ASSERT_TRUE(quader_io::write_qdr_text_atomic(staging, "replacement scene").ok);
+  std::filesystem::path recorded_backup;
+  std::size_t callback_count = 0u;
+  const auto published = transaction.publish(
+      [&](const std::filesystem::path &backup) {
+        ++callback_count;
+        EXPECT_FALSE(backup.empty());
+        EXPECT_EQ(backup, transaction.backup_path());
+        EXPECT_NE(backup, target);
+        EXPECT_EQ(backup.parent_path(), target.parent_path());
+        EXPECT_FALSE(transaction.published());
+        EXPECT_EQ(read_file(target), "original scene");
+        EXPECT_EQ(read_file(staging), "replacement scene");
+        recorded_backup = backup;
+        return quader_io::QdrAtomicWriteResult{true, {}};
+      });
+  ASSERT_TRUE(published.ok) << published.message;
+  EXPECT_EQ(callback_count, 1u);
+  EXPECT_EQ(recorded_backup, transaction.backup_path());
+  EXPECT_EQ(read_file(recorded_backup), "original scene");
+  EXPECT_EQ(read_file(target), "replacement scene");
+  const auto rolled_back = transaction.rollback();
+  ASSERT_TRUE(rolled_back.ok) << rolled_back.message;
+  EXPECT_EQ(read_file(target), "original scene");
+  EXPECT_FALSE(contains_temp_qdr_files(directory.path()));
+}
+
+TEST(QdrAtomicFileTransactionTests,
+     BeforeReplaceCallbackRejectionOrThrowPreservesTargetAndAllowsCleanup) {
+  ScopedTempDirectory directory("before-replace-rejection");
+  const auto target = directory.path() / "scene.qdr";
+  write_text_file(target, "original scene");
+
+  for (const bool throw_callback : {false, true}) {
+    SCOPED_TRACE(throw_callback);
+    quader_io::QdrAtomicFileTransaction transaction;
+    ASSERT_TRUE(transaction.prepare(target).ok);
+    const auto staging = transaction.staging_path();
+    ASSERT_TRUE(quader_io::write_qdr_text_atomic(staging, "replacement scene").ok);
+    std::size_t callback_count = 0u;
+    const auto published = transaction.publish(
+        [&](const std::filesystem::path &backup) -> quader_io::QdrAtomicWriteResult {
+          ++callback_count;
+          EXPECT_FALSE(backup.empty());
+          EXPECT_EQ(read_file(target), "original scene");
+          if (throw_callback) {
+            throw std::runtime_error("journal write threw");
+          }
+          return {false, "journal write rejected"};
+        });
+    EXPECT_FALSE(published.ok);
+    EXPECT_FALSE(published.message.empty());
+    if (!throw_callback) {
+      EXPECT_EQ(published.message, "journal write rejected");
+    }
+    EXPECT_EQ(callback_count, 1u);
+    EXPECT_TRUE(transaction.active());
+    EXPECT_FALSE(transaction.published());
+    EXPECT_TRUE(transaction.backup_path().empty());
+    EXPECT_EQ(read_file(target), "original scene");
+    EXPECT_EQ(read_file(staging), "replacement scene");
+    const auto rolled_back = transaction.rollback();
+    ASSERT_TRUE(rolled_back.ok) << rolled_back.message;
+    EXPECT_FALSE(transaction.active());
+    EXPECT_FALSE(std::filesystem::exists(staging));
+    EXPECT_EQ(read_file(target), "original scene");
+    EXPECT_FALSE(contains_temp_qdr_files(directory.path()));
+  }
+}
+
+TEST(QdrAtomicFileTransactionTests,
      RollbackPreservesExistingDestinationIdentityAndHardLinks) {
   ScopedTempDirectory directory("staged-rollback-hard-link");
   const std::filesystem::path target = directory.path() / "scene.qdr";

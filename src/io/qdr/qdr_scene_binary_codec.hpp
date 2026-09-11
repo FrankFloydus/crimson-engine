@@ -52,6 +52,14 @@ struct QdrSceneBinaryDecodeResult final {
   QdrSceneBinaryDecodeStats stats;
 };
 
+/// Project references read from validated metadata, including dormant bindings.
+struct QdrSceneBinaryDependencyDecodeResult final {
+  std::string scene_name;
+  std::vector<ProjectAssetId> material_ids;
+  std::vector<ProjectAssetReference> project_asset_dependencies;
+  QdrSceneBinaryDecodeStats stats;
+};
+
 [[nodiscard]] QdrSceneBinaryEncodeResult
 encode_qdr_scene_binary(const QdrProjectWriteSnapshot &snapshot);
 [[nodiscard]] QdrSceneBinaryEncodeResult encode_qdr_scene_binary(
@@ -61,6 +69,9 @@ encode_qdr_scene_binary(const QdrProjectWriteSnapshot &snapshot);
 [[nodiscard]] SceneContentDocument decode_qdr_scene_binary(
     const quader_io::QdrBinaryContainerReadResult &container);
 [[nodiscard]] QdrSceneBinaryDecodeResult decode_qdr_scene_binary_with_stats(
+    const quader_io::QdrBinaryContainerReadResult &container);
+[[nodiscard]] QdrSceneBinaryDependencyDecodeResult
+decode_qdr_scene_binary_dependencies(
     const quader_io::QdrBinaryContainerReadResult &container);
 
 } // namespace quader

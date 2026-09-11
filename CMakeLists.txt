@@ -396,6 +396,7 @@ add_library(quader_project_qdr_io STATIC
     src/io/project/project_types.cpp
     src/io/project/project_file_system.cpp
     src/io/project/project_manifest.cpp
+    src/io/project/project_material_reference_resolver.cpp
     src/io/project/project_material_catalog.cpp
     src/io/project/project_material_provisioner.cpp
     src/io/project/qmat_codec.cpp
@@ -481,8 +482,11 @@ endif()
 add_library(quader_project_session STATIC
     src/editor/instances/project_clipboard_service.cpp
     src/editor/material/material_presentation_service.cpp
+    src/editor/material/project_asset_dependency_service.cpp
     src/editor/material/project_image_decoder.cpp
     src/editor/material/project_material_import_service.cpp
+    src/editor/material/project_material_organization_service.cpp
+    src/editor/material/project_material_deletion_service.cpp
     src/editor/material/project_material_persistence.cpp
     src/editor/material/standard_material_edit_session_service.cpp
     src/editor/render/standard_material_render_snapshot_adapter.cpp
@@ -914,10 +918,11 @@ add_library(quader_ui STATIC
     src/ui/standard_material_preview_render_snapshot_adapter.cpp
     src/ui/qt_navigation_gizmo.cpp
     src/ui/qt_operation_input_hints.cpp
-    src/ui/qt_status_message.cpp
     src/ui/qt_project_home_page.cpp
     src/ui/qt_relative_pointer_input.cpp
     src/ui/qt_retained_message_box.cpp
+    src/ui/qt_status_message.cpp
+    src/ui/qt_tree_relationship_presentation.cpp
     src/ui/qt_scene_workspace.cpp
     src/ui/qt_selection_toolbar.cpp
     src/ui/qt_snapping_toolbar.cpp
@@ -1559,6 +1564,12 @@ if(QUADER_BUILD_TESTS)
         tests/io_qdr_tests.cpp
         tests/inspector_material_tests.cpp
         tests/project_material_behavior_tests.cpp
+        tests/project_asset_dependency_tests.cpp
+        tests/project_material_organization_tests.cpp
+        tests/project_material_deletion_tests.cpp
+        tests/project_material_folder_api_tests.cpp
+        tests/deleted_material_resolution_tests.cpp
+        tests/qdr_dependency_metadata_tests.cpp
         tests/project_material_manifest_tests.cpp
         tests/project_material_storage_tests.cpp
         tests/project_image_decoder_tests.cpp

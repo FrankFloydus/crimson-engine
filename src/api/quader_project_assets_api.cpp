@@ -11,7 +11,11 @@
 #include "api/quader_events_api.hpp"
 #include "api/quader_events_api_internal_access.hpp"
 #include "editor/material/material_presentation_service.hpp"
+#include "editor/material/project_asset_dependency_service.hpp"
 #include "editor/material/project_material_import_service.hpp"
+#include "editor/material/project_material_organization_service.hpp"
+#include "editor/material/project_material_deletion_service.hpp"
+#include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/session/project_session.hpp"
 
 #include <algorithm>
@@ -168,16 +172,7 @@ QuaderProjectAssetsApi::set_active_material(ProjectAssetId material_id) {
   QuaderApiVoidResult result =
       status(session_, changed.ok, changed.changed, changed.message);
   if (changed.ok && changed.changed && events_ != nullptr) {
-    const auto root_utf8 = project->root().u8string();
-    (void)QuaderEventsApiInternalAccess::publish(
-        *events_, QuaderEvent{
-                      .name = std::string(
-                          quader_event::kActiveProjectMaterialChanged),
-                      .project_id = project->manifest()->id(),
-                      .project_name = project->manifest()->name(),
-                      .project_root = std::string(root_utf8.begin(), root_utf8.end()),
-                      .project_asset_id = material_id,
-                  });
+    publish_active_material_changed();
   }
   return result;
 }
@@ -235,15 +230,19 @@ QuaderProjectAssetsApi::material_presentations() const {
   }
   SceneSession *scene =
       QuaderApiSessionInternalAccess::active_scene_session(session_);
+  auto snapshot = to_public_snapshot(
+      MaterialPresentationService::snapshot(*project, scene));
+  for (const ProjectRelativePath &folder : project->material_catalog().folders()) {
+    snapshot.material_folders.push_back(folder.portable_string());
+  }
   return quader_api_result_from_status(status(session_, true, false),
-                                       to_public_snapshot(
-                                           MaterialPresentationService::snapshot(
-                                               *project, scene)));
+                                       std::move(snapshot));
 }
 
 QuaderApiResult<QuaderProjectMaterialImportReport>
 QuaderProjectAssetsApi::import_textures_as_materials(
-    std::span<const std::filesystem::path> source_paths) {
+    std::span<const std::filesystem::path> source_paths,
+    std::string_view destination_folder) {
   ProjectSession *project =
       QuaderApiSessionInternalAccess::project_session(session_);
   if (project == nullptr || !project->has_project()) {
@@ -259,7 +258,7 @@ QuaderProjectAssetsApi::import_textures_as_materials(
 
   ProjectMaterialImportService importer(*project);
   ProjectMaterialImportReport imported =
-      importer.import_textures_as_materials(source_paths);
+      importer.import_textures_as_materials(source_paths, destination_folder);
 
   QuaderProjectMaterialImportReport result;
   result.imported.reserve(imported.imported.size());
@@ -286,6 +285,211 @@ QuaderProjectAssetsApi::import_textures_as_materials(
     publish_assets_changed();
   }
   return api_result;
+}
+
+QuaderApiVoidResult status(QuaderApiSession session,
+                           const ProjectSessionResult &result) {
+  std::string message = result.message;
+  for (const std::string &warning : result.warnings) {
+    if (!warning.empty()) {
+      message += message.empty() ? warning : " " + warning;
+    }
+  }
+  return status(session, result.ok, result.changed, std::move(message));
+}
+
+QuaderApiVoidResult QuaderProjectAssetsApi::create_material_folder(
+    std::string_view parent_folder, std::string_view name) {
+  auto *project = QuaderApiSessionInternalAccess::project_session(session_);
+  if (project == nullptr || !project->has_project()) {
+    return status(session_, false, false, "Open a project before creating material folders.");
+  }
+  const auto result = ProjectMaterialOrganizationService(*project).create_folder(parent_folder, name);
+  const auto api_result = status(session_, result);
+  if (result.ok && result.changed) {
+    publish_assets_changed();
+  }
+  return api_result;
+}
+
+QuaderApiVoidResult QuaderProjectAssetsApi::rename_material_folder(
+    std::string_view folder, std::string_view name) {
+  auto *project = QuaderApiSessionInternalAccess::project_session(session_);
+  if (project == nullptr || !project->has_project()) {
+    return status(session_, false, false, "Open a project before renaming material folders.");
+  }
+  const auto result = ProjectMaterialOrganizationService(*project).rename_folder(folder, name);
+  const auto api_result = status(session_, result);
+  if (result.ok && result.changed) {
+    publish_assets_changed();
+  }
+  return api_result;
+}
+
+QuaderApiVoidResult QuaderProjectAssetsApi::move_material_folder(
+    std::string_view folder, std::string_view destination_folder) {
+  auto *project = QuaderApiSessionInternalAccess::project_session(session_);
+  if (project == nullptr || !project->has_project()) {
+    return status(session_, false, false, "Open a project before moving material folders.");
+  }
+  const auto result = ProjectMaterialOrganizationService(*project).move_folder(folder, destination_folder);
+  const auto api_result = status(session_, result);
+  if (result.ok && result.changed) {
+    publish_assets_changed();
+  }
+  return api_result;
+}
+
+QuaderApiVoidResult QuaderProjectAssetsApi::move_materials(
+    std::span<const ProjectAssetId> material_ids, std::string_view destination_folder) {
+  auto *project = QuaderApiSessionInternalAccess::project_session(session_);
+  if (project == nullptr || !project->has_project()) {
+    return status(session_, false, false, "Open a project before moving materials.");
+  }
+  const auto result = ProjectMaterialOrganizationService(*project).move_materials(material_ids, destination_folder);
+  const auto api_result = status(session_, result);
+  if (result.ok && result.changed) {
+    publish_assets_changed();
+  }
+  return api_result;
+}
+
+QuaderApiResult<QuaderMaterialFolderDeletionPreview>
+QuaderProjectAssetsApi::preview_delete_material_folder(std::string_view folder) const {
+  auto *project = QuaderApiSessionInternalAccess::project_session(session_);
+  if (project == nullptr || !project->has_project()) {
+    return quader_api_result_from_status<QuaderMaterialFolderDeletionPreview>(
+        status(session_, false, false, "Open a project before deleting material folders."));
+  }
+  const auto preview = ProjectMaterialDeletionService(*project).preview_folder(folder);
+  return quader_api_result_from_status(status(session_, true, false),
+      QuaderMaterialFolderDeletionPreview{
+          .project_relative_path = preview.folder.portable_string(),
+          .revision = preview.revision,
+          .complete = preview.complete,
+          .material_ids = preview.material_ids,
+          .material_names = preview.material_names,
+          .affected_scenes = preview.affected_scenes,
+          .errors = preview.errors,
+          .folder_count = preview.folder_count,
+          .discards_material_draft = preview.discards_material_draft,
+      });
+}
+
+QuaderApiResult<QuaderProjectMaterialDependencySnapshot>
+QuaderProjectAssetsApi::material_dependencies(bool refresh_files) const {
+  auto *project = QuaderApiSessionInternalAccess::project_session(session_);
+  if (project == nullptr || !project->has_project()) {
+    return quader_api_result_from_status<QuaderProjectMaterialDependencySnapshot>(
+        status(session_, false, false, "Open a project before inspecting material dependencies."));
+  }
+  const auto source = project->dependencies().snapshot(refresh_files);
+  QuaderProjectMaterialDependencySnapshot result{
+      .project_id = source->project_id,
+      .revision = source->revision,
+      .complete = source->complete,
+      .errors = source->errors,
+  };
+  for (const auto &scene : source->scenes) {
+    result.scenes.push_back({
+        .scene_id = scene.scene_id,
+        .session_id = scene.session_id,
+        .project_relative_path = scene.path ? scene.path->portable_string() : std::string{},
+        .name = scene.display_name,
+        .live = scene.live,
+        .dirty = scene.dirty,
+        .material_ids = scene.material_ids,
+    });
+  }
+  for (const auto &material : source->materials) {
+    QuaderProjectMaterialDependencies item{
+        .id = material.id,
+        .project_relative_path = material.path ? material.path->portable_string() : std::string{},
+        .name = material.name,
+        .draft = material.draft,
+        .dirty = material.dirty,
+    };
+    for (const auto &texture : material.textures) {
+      std::string slot;
+      switch (texture.slot) {
+      case StandardMaterialTextureSlot::Albedo: slot = "albedo"; break;
+      case StandardMaterialTextureSlot::Roughness: slot = "roughness"; break;
+      case StandardMaterialTextureSlot::Metallic: slot = "metallic"; break;
+      case StandardMaterialTextureSlot::Normal: slot = "normal"; break;
+      }
+      item.textures.push_back({
+          .slot = std::move(slot),
+          .texture_id = texture.texture_id,
+          .project_relative_path = texture.path ? texture.path->portable_string() : std::string{},
+          .pending_source = texture.pending_source,
+      });
+    }
+    result.materials.push_back(std::move(item));
+  }
+  return quader_api_result_from_status(status(session_, true, false), std::move(result));
+}
+
+QuaderApiVoidResult QuaderProjectAssetsApi::delete_material_folder(
+    std::string_view folder, std::uint64_t expected_revision) {
+  auto *project = QuaderApiSessionInternalAccess::project_session(session_);
+  if (project == nullptr || !project->has_project()) {
+    return status(session_, false, false, "Open a project before deleting material folders.");
+  }
+  const auto previous_active = project->active_material_id();
+  const auto *draft = project->standard_material_editor().current();
+  const std::optional<StandardMaterialEditSnapshot> previous_draft =
+      draft != nullptr ? std::optional(*draft) : std::nullopt;
+  const auto result = ProjectMaterialDeletionService(*project).delete_folder(folder, expected_revision);
+  const auto api_result = status(session_, result);
+  if (result.ok && result.changed) {
+    std::vector<QuaderEvent> notifications;
+    const auto root_utf8 = project->root().u8string();
+    const auto make_event = [&](std::string_view name) {
+      return QuaderEvent{
+          .name = std::string(name),
+          .project_id = project->manifest()->id(),
+          .project_name = project->manifest()->name(),
+          .project_root = std::string(root_utf8.begin(), root_utf8.end()),
+          .project_asset_id = project->active_material_id(),
+      };
+    };
+    notifications.push_back(make_event(quader_event::kProjectAssetsChanged));
+    if (project->active_material_id() != previous_active) {
+      notifications.push_back(make_event(quader_event::kActiveProjectMaterialChanged));
+    }
+    if (previous_draft && !project->standard_material_editor().has_document()) {
+      auto event = make_event(quader_event::kStandardMaterialClosed);
+      event.project_asset_id = previous_draft->document.id;
+      event.material_edit_session_id = previous_draft->session_id;
+      event.material_name = previous_draft->document.name;
+      if (previous_draft->path) {
+        event.material_path = previous_draft->path->portable_string();
+      }
+      event.material_dirty = previous_draft->dirty;
+      notifications.push_back(std::move(event));
+    }
+    if (events_ != nullptr) {
+      for (QuaderEvent &event : notifications) {
+        (void)QuaderEventsApiInternalAccess::publish(*events_, std::move(event));
+      }
+    }
+  }
+  return api_result;
+}
+
+void QuaderProjectAssetsApi::publish_active_material_changed() {
+  auto *project = QuaderApiSessionInternalAccess::project_session(session_);
+  if (events_ == nullptr || project == nullptr || !project->has_project()) {
+    return;
+  }
+  const auto root_utf8 = project->root().u8string();
+  (void)QuaderEventsApiInternalAccess::publish(*events_, QuaderEvent{
+      .name = std::string(quader_event::kActiveProjectMaterialChanged),
+      .project_id = project->manifest()->id(),
+      .project_name = project->manifest()->name(),
+      .project_root = std::string(root_utf8.begin(), root_utf8.end()),
+      .project_asset_id = project->active_material_id(),
+  });
 }
 
 void QuaderProjectAssetsApi::publish_assets_changed() {

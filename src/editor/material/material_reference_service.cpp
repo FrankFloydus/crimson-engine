@@ -15,6 +15,7 @@
 #include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <algorithm>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -35,6 +36,18 @@ struct MaterialComponentEdit final {
   std::optional<MaterialComponent> before;
   std::optional<MaterialComponent> after;
 };
+
+/// Groups effective matches by the raw identity expected by the modeling owner.
+struct FaceMaterialReplacementBatch final {
+  MaterialReference source;
+  std::vector<ModelingFaceMaterialReplacementTarget> targets;
+};
+
+[[nodiscard]] MaterialReference resolved_reference(
+    MaterialReference reference,
+    const MaterialReferenceService::ReferenceResolver &resolve) {
+  return resolve ? resolve(reference) : reference;
+}
 
 [[nodiscard]] bool append_distinct_reference(
     std::vector<MaterialReference> &references, MaterialReference reference) {
@@ -219,19 +232,20 @@ scoped_material_surface_targets(
 [[nodiscard]] std::optional<MaterialComponent>
 replaced_material_component(const MaterialComponent *existing,
                             MaterialReference source,
-                            MaterialReference replacement) {
+                            MaterialReference replacement,
+                            const MaterialReferenceService::ReferenceResolver &resolve) {
   if (existing == nullptr) {
     return std::nullopt;
   }
   MaterialComponent desired = *existing;
   bool changed = false;
-  if (desired.material == source) {
+  if (resolved_reference(desired.material, resolve) == source) {
     desired.material = replacement;
     changed = true;
   }
   for (auto &[slot, reference] : desired.material_slots) {
     (void)slot;
-    if (reference == source) {
+    if (resolved_reference(reference, resolve) == source) {
       reference = replacement;
       changed = true;
     }
@@ -243,8 +257,10 @@ replaced_material_component(const MaterialComponent *existing,
 [[nodiscard]] std::optional<MaterialComponent>
 replaced_primary_material_component(const MaterialComponent *existing,
                                     MaterialReference source,
-                                    MaterialReference replacement) {
-  if (existing == nullptr || existing->material != source) {
+                                    MaterialReference replacement,
+                                    const MaterialReferenceService::ReferenceResolver &resolve) {
+  if (existing == nullptr ||
+      resolved_reference(existing->material, resolve) != source) {
     return std::nullopt;
   }
   MaterialComponent desired = *existing;
@@ -274,11 +290,11 @@ public:
   ReplaceMaterialReferencesCommand(
       SceneDocument &scene, ModelingSessionService &modeling,
       std::vector<MaterialComponentEdit> component_edits,
-      std::vector<ModelingFaceMaterialReplacementTarget> face_targets,
-      MaterialReference source, MaterialReference replacement)
+      std::vector<FaceMaterialReplacementBatch> face_batches,
+      MaterialReference replacement)
       : scene_(scene), modeling_(modeling),
         component_edits_(std::move(component_edits)),
-        face_targets_(std::move(face_targets)), source_(source),
+        face_batches_(std::move(face_batches)),
         replacement_(replacement) {}
 
   [[nodiscard]] const std::string &label() const override { return label_; }
@@ -311,10 +327,10 @@ public:
     }
 
     bool changed = !component_edits_.empty();
-    if (!face_targets_.empty()) {
+    for (const FaceMaterialReplacementBatch &batch : face_batches_) {
       const ModelingCommandResult face_result =
           modeling_.replace_material_references_on_faces(
-              face_targets_, source_, replacement_);
+              batch.targets, batch.source, replacement_);
       if (!face_result.ok) {
         return rollback_initial(
             face_result.message.empty()
@@ -373,8 +389,7 @@ private:
   SceneDocument &scene_;
   ModelingSessionService &modeling_;
   std::vector<MaterialComponentEdit> component_edits_;
-  std::vector<ModelingFaceMaterialReplacementTarget> face_targets_;
-  MaterialReference source_;
+  std::vector<FaceMaterialReplacementBatch> face_batches_;
   MaterialReference replacement_;
   ModelingSessionMemento before_memento_;
   ModelingSessionMemento after_memento_;
@@ -388,8 +403,9 @@ private:
 
 MaterialReferenceService::MaterialReferenceService(
     SceneDocument &scene, AssetRegistry &assets,
-    ModelingSessionService &modeling)
-    : scene_(&scene), assets_(&assets), modeling_(&modeling) {}
+    ModelingSessionService &modeling, ReferenceResolver resolve_reference)
+    : scene_(&scene), assets_(&assets), modeling_(&modeling),
+      resolve_reference_(std::move(resolve_reference)) {}
 
 std::vector<MaterialReference> MaterialReferenceService::used_materials(
     MaterialReferenceUsageScope scope) const {
@@ -402,7 +418,8 @@ std::vector<MaterialReference> MaterialReferenceService::used_materials(
         const std::optional<MaterialReference> material =
             face_material_reference(*scene_, *assets_, object.entity, face.id);
         if (material.has_value()) {
-          (void)append_distinct_reference(result, *material);
+          (void)append_distinct_reference(
+              result, resolved_reference(*material, resolve_reference_));
         }
       }
     }
@@ -418,7 +435,9 @@ std::vector<MaterialReference> MaterialReferenceService::used_materials(
       continue;
     }
     if (scene_entity_has_solid_curve_surface(*scene_, target.entity)) {
-      (void)append_distinct_reference(result, material_component->material);
+      (void)append_distinct_reference(
+          result, resolved_reference(material_component->material,
+                                     resolve_reference_));
       continue;
     }
     const MeshAsset *mesh = mesh_component != nullptr
@@ -429,7 +448,8 @@ std::vector<MaterialReference> MaterialReferenceService::used_materials(
     }
     for (const std::uint32_t slot : live_material_slots(*mesh)) {
       (void)append_distinct_reference(
-          result, material_component->material_for_slot(slot));
+          result, resolved_reference(material_component->material_for_slot(slot),
+                                     resolve_reference_));
     }
   }
   return result;
@@ -452,6 +472,7 @@ MaterialReferenceService::prepare_replacement(
         .message = "The replacement material is unavailable.",
     };
   }
+  source = resolved_reference(source, resolve_reference_);
   if (source == replacement) {
     return {.ok = true, .changed = false};
   }
@@ -463,7 +484,7 @@ MaterialReferenceService::prepare_replacement(
   }
 
   std::vector<MaterialComponentEdit> component_edits;
-  std::vector<ModelingFaceMaterialReplacementTarget> face_targets;
+  std::vector<FaceMaterialReplacementBatch> face_batches;
   if (scope == MaterialReferenceUsageScope::Selection &&
       modeling_->selection_mode() == ModelingSelectionMode::Face) {
     const ModelingSelectionExport selection = modeling_->export_selection();
@@ -471,7 +492,8 @@ MaterialReferenceService::prepare_replacement(
       for (const ModelingSelectionExportFace &face : object.selected_faces) {
         const std::optional<MaterialReference> material =
             face_material_reference(*scene_, *assets_, object.entity, face.id);
-        if (!material.has_value() || *material != source) {
+        if (!material.has_value() ||
+            resolved_reference(*material, resolve_reference_) != source) {
           continue;
         }
         if (scene_->is_effectively_locked(object.entity) ||
@@ -484,7 +506,15 @@ MaterialReferenceService::prepare_replacement(
                   "A matching material target is locked or read-only.",
           };
         }
-        face_targets.push_back({
+        auto batch = std::ranges::find_if(
+            face_batches, [&material](const FaceMaterialReplacementBatch &candidate) {
+              return candidate.source == *material;
+            });
+        if (batch == face_batches.end()) {
+          face_batches.push_back({.source = *material});
+          batch = std::prev(face_batches.end());
+        }
+        batch->targets.push_back({
             .modeling_object_id = object.modeling_object_id,
             .face_id = static_cast<int>(face.id),
         });
@@ -497,8 +527,9 @@ MaterialReferenceService::prepare_replacement(
       std::optional<MaterialComponent> desired =
           scene_entity_has_solid_curve_surface(*scene_, target.entity)
               ? replaced_primary_material_component(existing, source,
-                                                    replacement)
-              : replaced_material_component(existing, source, replacement);
+                                                    replacement, resolve_reference_)
+              : replaced_material_component(existing, source, replacement,
+                                            resolve_reference_);
       if (!desired.has_value()) {
         continue;
       }
@@ -519,7 +550,7 @@ MaterialReferenceService::prepare_replacement(
     }
   }
 
-  if (component_edits.empty() && face_targets.empty()) {
+  if (component_edits.empty() && face_batches.empty()) {
     return {.ok = true, .changed = false};
   }
   return {
@@ -527,7 +558,7 @@ MaterialReferenceService::prepare_replacement(
       .changed = true,
       .command = std::make_unique<ReplaceMaterialReferencesCommand>(
           *scene_, *modeling_, std::move(component_edits),
-          std::move(face_targets), source, replacement),
+          std::move(face_batches), replacement),
   };
 }
 

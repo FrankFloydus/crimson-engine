@@ -4,6 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#include "assets/default_material_catalog.hpp"
 #include "assets/material_document.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/session/project_session.hpp"
@@ -484,6 +485,133 @@ TEST_F(BridgeReaderTests, LegacyMaterialFingerprintsUseCatalogDecodedBytes) {
   QuaderBridgeMaterialView material{};
   ASSERT_EQ(api_->material_view(scene_, index, &material, &error_), 1);
   EXPECT_STREQ(material.source_relative_path, "Materials/surface.qmat");
+}
+
+TEST_F(BridgeReaderTests, MovedMaterialUsesUuidAndReportsItsCurrentSourceFingerprint) {
+  write_project_material();
+  add_scene(kFirstScene, "Scenes/first.qdr", make_document(true), kProjectMaterial);
+  const auto scene_fingerprint = fingerprint_file(root_ / "Scenes/first.qdr");
+  const auto moved_path = root_ / "Materials/Dev/Wood/surface.qmat";
+  ASSERT_TRUE(std::filesystem::create_directories(moved_path.parent_path()));
+  std::filesystem::rename(root_ / "Materials/surface.qmat", moved_path);
+  const auto expected = fingerprint_file(moved_path);
+
+  open_project();
+  open_scene();
+  const auto index = material_index(QUADER_BRIDGE_MATERIAL_PROJECT);
+  QuaderBridgeMaterialIdentity identity{};
+  ASSERT_EQ(api_->material_identity(scene_, index, &identity, &error_), 1);
+  EXPECT_STREQ(identity.id, kProjectMaterial);
+  QuaderBridgeMaterialView material{};
+  ASSERT_EQ(api_->material_view(scene_, index, &material, &error_), 1)
+      << error_.message;
+  EXPECT_STREQ(material.source_relative_path, "Materials/Dev/Wood/surface.qmat");
+  QuaderBridgeSourceFingerprint actual{};
+  ASSERT_EQ(api_->material_source_fingerprint(scene_, index, &actual, &error_), 1);
+  EXPECT_EQ(actual.byte_count, expected.byte_count);
+  EXPECT_EQ(actual.content_hash, expected.content_hash);
+  EXPECT_EQ(fingerprint_file(root_ / "Scenes/first.qdr").content_hash,
+            scene_fingerprint.content_hash);
+}
+
+TEST_F(BridgeReaderTests, ReusedDependencyPathResolvesOriginalUuidWithoutUsingNewOccupant) {
+  write_project_material();
+  add_scene(kFirstScene, "Scenes/first.qdr", make_document(true), kProjectMaterial);
+  const auto path = relative_path("Materials/surface.qmat");
+  auto material = QmatCodec::read(workspace_.file_system, path);
+  ASSERT_TRUE(material.ok()) << material.error().message;
+  ASSERT_TRUE(std::filesystem::create_directory(root_ / "Materials/Moved"));
+  std::filesystem::rename(root_ / "Materials/surface.qmat",
+                          root_ / "Materials/Moved/surface.qmat");
+  const auto expected = fingerprint_file(root_ / "Materials/Moved/surface.qmat");
+  material.value().material.id = *ProjectAssetId::parse(kMissingMaterial);
+  material.value().material.name = "Different material at the old path";
+  ASSERT_TRUE(QmatCodec::write_atomic(
+      workspace_.file_system, path, material.value().material).ok());
+
+  open_project();
+  open_scene();
+  const auto index = material_index(QUADER_BRIDGE_MATERIAL_PROJECT);
+  QuaderBridgeMaterialView view{};
+  ASSERT_EQ(api_->material_view(scene_, index, &view, &error_), 1) << error_.message;
+  EXPECT_STREQ(view.name, "Project surface");
+  EXPECT_STREQ(view.source_relative_path, "Materials/Moved/surface.qmat");
+  QuaderBridgeSourceFingerprint actual{};
+  ASSERT_EQ(api_->material_source_fingerprint(scene_, index, &actual, &error_), 1);
+  EXPECT_EQ(actual.content_hash, expected.content_hash);
+}
+
+TEST_F(BridgeReaderTests, MalformedDependencyDoesNotFallBackToRelocatedUuid) {
+  write_project_material();
+  add_scene(kFirstScene, "Scenes/first.qdr", make_document(true), kProjectMaterial);
+  ASSERT_TRUE(std::filesystem::create_directory(root_ / "Materials/Moved"));
+  std::filesystem::rename(root_ / "Materials/surface.qmat",
+                          root_ / "Materials/Moved/surface.qmat");
+  write_bytes(root_ / "Materials/surface.qmat", "malformed material");
+  open_project();
+  open_scene();
+  const auto index = material_index(QUADER_BRIDGE_MATERIAL_PROJECT);
+  QuaderBridgeMaterialView material{};
+  EXPECT_EQ(api_->material_view(scene_, index, &material, &error_), 0);
+  EXPECT_NE(std::string(error_.message).find("surface.qmat"), std::string::npos);
+}
+
+TEST_F(BridgeReaderTests, UnsafeDependencyCasingDoesNotFallBackToCatalog) {
+  write_project_material();
+  add_scene(kFirstScene, "Scenes/first.qdr", make_document(true), kProjectMaterial,
+            "Materials/SURFACE.qmat");
+  open_project();
+  open_scene();
+  const auto index = material_index(QUADER_BRIDGE_MATERIAL_PROJECT);
+  QuaderBridgeMaterialView material{};
+  EXPECT_EQ(api_->material_view(scene_, index, &material, &error_), 0);
+  EXPECT_NE(error_.message[0], '\0');
+}
+
+TEST_F(BridgeReaderTests, DeletedMaterialGroupsWithDefaultBeforeLazyDescriptorReads) {
+  const ProjectAssetId deleted = *ProjectAssetId::parse(kProjectMaterial);
+  const ProjectAssetId fallback = *ProjectAssetId::parse(kDefaultProjectMaterialId);
+  auto document = make_document();
+  MaterialComponent binding{.material = MaterialReference::project(deleted)};
+  binding.material_slots.emplace(1u, MaterialReference::project(fallback));
+  ASSERT_TRUE(document.scene().set_material(100u, std::move(binding)));
+  add_scene(kFirstScene, "Scenes/first.qdr", document, kProjectMaterial);
+  const std::array deleted_ids{deleted};
+  const auto marked = workspace_.manifest.mark_materials_deleted(deleted_ids);
+  ASSERT_TRUE(marked.ok()) << marked.error().message;
+  save_manifest();
+
+  // Neither QMAT exists yet: manifest tombstones alone determine effective
+  // identity and surface grouping, so material reuse still needs no asset reads.
+  open_project();
+  open_scene();
+  QuaderBridgeSceneView scene_view{};
+  ASSERT_EQ(api_->scene_view(scene_, &scene_view, &error_), 1);
+  ASSERT_EQ(scene_view.material_count, 1u);
+  QuaderBridgeMeshView mesh{};
+  ASSERT_EQ(api_->mesh_view(scene_, 0u, &mesh, &error_), 1);
+  ASSERT_EQ(mesh.surface_count, 1u);
+  EXPECT_EQ(mesh.surfaces[0].index_count, 6u);
+  QuaderBridgeMaterialIdentity identity{};
+  ASSERT_EQ(api_->material_identity(scene_, 0u, &identity, &error_), 1);
+  EXPECT_EQ(std::string_view(identity.id), kDefaultProjectMaterialId);
+  EXPECT_EQ(identity.kind, QUADER_BRIDGE_MATERIAL_PROJECT);
+
+  ProjectMaterialDocument default_material;
+  default_material.id = fallback;
+  default_material.name = kDefaultProjectMaterialName;
+  ASSERT_TRUE(std::filesystem::create_directory(root_ / "Materials"));
+  ASSERT_TRUE(QmatCodec::write_atomic(workspace_.file_system,
+      relative_path(kDefaultProjectMaterialPath), default_material).ok());
+  const auto expected = fingerprint_file(root_ / kDefaultProjectMaterialPath);
+  QuaderBridgeMaterialView material{};
+  ASSERT_EQ(api_->material_view(scene_, 0u, &material, &error_), 1) << error_.message;
+  EXPECT_EQ(std::string_view(material.name), kDefaultProjectMaterialName);
+  EXPECT_EQ(std::string_view(material.source_relative_path), kDefaultProjectMaterialPath);
+  QuaderBridgeSourceFingerprint actual{};
+  ASSERT_EQ(api_->material_source_fingerprint(scene_, 0u, &actual, &error_), 1);
+  EXPECT_EQ(actual.byte_count, expected.byte_count);
+  EXPECT_EQ(actual.content_hash, expected.content_hash);
 }
 
 TEST_F(BridgeReaderTests, EmptyCatalogHasNoDefaultScene) {

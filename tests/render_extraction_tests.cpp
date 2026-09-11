@@ -1621,6 +1621,104 @@ TEST(RenderSceneSnapshotTests,
 }
 
 TEST(RenderSceneSnapshotTests,
+     CanonicalProjectMaterialIdentityControlsBindingsAndRejectsMismatchedDescriptors) {
+  /// Models a host's tombstone mapping independently of project persistence.
+  class CanonicalMaterialResolver final : public RenderProjectMaterialResolver {
+  public:
+    std::uint64_t revision() const noexcept override { return 7u; }
+    ProjectAssetId canonical_material_id(ProjectAssetId id) const override {
+      return remap_enabled && id == deleted_id ? default_id : id;
+    }
+    std::optional<RenderProjectMaterialSnapshot>
+    resolve(ProjectAssetId) const override {
+      ++resolve_count;
+      return snapshot;
+    }
+    ProjectAssetId deleted_id;
+    ProjectAssetId default_id;
+    RenderProjectMaterialSnapshot snapshot;
+    bool remap_enabled = true;
+    mutable std::size_t resolve_count = 0u;
+  } resolver;
+  resolver.deleted_id =
+      *ProjectAssetId::parse("11441144-1144-4144-8144-114411441144");
+  resolver.default_id =
+      *ProjectAssetId::parse("1d8d1fd2-2953-4cb4-a66b-1f879259b50d");
+  resolver.snapshot = RenderProjectMaterialSnapshot{
+      .evaluation = RenderMaterialEvaluationSnapshot{
+          .project_material_id = resolver.default_id,
+          .kind = RenderMaterialEvaluationKind::Standard,
+          .identity_revision = 11u,
+          .content_revision = 13u,
+          .payload = RenderStandardMaterialEvaluationSnapshot{
+              .base_color = {0.25f, 0.5f, 0.75f},
+          },
+      },
+      .catalog_revision = 7u,
+  };
+  const MaterialReference deleted = MaterialReference::project(resolver.deleted_id);
+  const MaterialReference fallback = MaterialReference::project(resolver.default_id);
+  const MaterialComponent old_component{
+      .material = deleted, .material_slots = {{1u, deleted}}};
+  const MaterialComponent default_component{
+      .material = fallback, .material_slots = {{1u, fallback}}};
+  AssetRegistry assets;
+  const auto mapped = build_render_material_binding_snapshot(
+      assets, &old_component, &resolver);
+  const auto explicit_default = build_render_material_binding_snapshot(
+      assets, &default_component, &resolver);
+  ASSERT_TRUE(mapped.primary_material.present);
+  EXPECT_EQ(mapped.primary_material.reference, fallback);
+  EXPECT_EQ(mapped.component, default_component);
+  ASSERT_NE(mapped.material_for_slot(1u), nullptr);
+  EXPECT_EQ(mapped.material_for_slot(1u)->reference, fallback);
+  EXPECT_EQ(mapped.revision, explicit_default.revision);
+  EXPECT_FLOAT_EQ(mapped.primary_material.document.base_color.x, 0.25f);
+  EXPECT_EQ(old_component.material, deleted);
+
+  SceneDocument document;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId restored = document.create_entity("Restored material", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(restored, MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.set_material(restored, old_component));
+  const auto single = build_render_scene_snapshot(
+      document, assets, {.project_material_resolver = &resolver});
+  ASSERT_EQ(single.meshes.size(), 1u);
+  EXPECT_EQ(single.meshes.front().material_reference, fallback);
+  EXPECT_EQ(document.material(restored)->material, deleted);
+
+  const EntityId current = document.create_entity("Default material", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(current, MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.set_material(current, default_component));
+  const auto grouped = build_render_scene_snapshot(
+      document, assets, {.project_material_resolver = &resolver});
+  EXPECT_TRUE(grouped.meshes.empty());
+  ASSERT_EQ(grouped.instance_primitives.size(), 1u);
+  EXPECT_EQ(grouped.instance_primitives.front().occurrences.size(), 2u);
+  const std::size_t resolved_before = resolver.resolve_count;
+  const auto unchanged = build_render_scene_snapshot(
+      document, assets, {.previous = &grouped, .project_material_resolver = &resolver});
+  EXPECT_EQ(resolver.resolve_count, resolved_before);
+  EXPECT_EQ(unchanged.instance_primitives.size(), grouped.instance_primitives.size());
+
+  const auto previews = build_render_tool_preview_snapshot(
+      {ToolPreviewMesh{.material = old_component, .mesh = make_overlay_triangle_mesh()}},
+      assets, nullptr, &resolver);
+  ASSERT_EQ(previews.size(), 1u);
+  EXPECT_EQ(previews.front().material_reference, fallback);
+  EXPECT_EQ(previews.front().material.revision, explicit_default.revision);
+
+  resolver.remap_enabled = false;
+  EXPECT_FALSE(build_render_material_binding_snapshot(
+      assets, &old_component, &resolver).primary_material.present);
+  resolver.remap_enabled = true;
+  resolver.snapshot.evaluation.project_material_id =
+      *ProjectAssetId::parse("77557755-7755-4755-8755-775577557755");
+  EXPECT_FALSE(build_render_material_binding_snapshot(
+      assets, &old_component, &resolver).primary_material.present);
+}
+
+TEST(RenderSceneSnapshotTests,
      LightPropertyRefreshAvoidsMaterialResolutionAndMatchesFullExtraction) {
   SceneDocument document;
   AssetRegistry assets;
@@ -3206,7 +3304,7 @@ TEST(RenderOverlaySnapshotTests,
 
   constexpr int kModelingObjectId = 71;
   ModelingObjectRuntimeMap object_map;
-  object_map.bind(kModelingObjectId, entity);
+  ASSERT_TRUE(object_map.bind(kModelingObjectId, entity));
   const std::vector<quader_editor_core::PolygonObject> modeling_objects{
       quader_editor_core::PolygonObject{.id = kModelingObjectId},
   };

@@ -409,6 +409,13 @@ void SceneSession::mark_clean() {
   preview_content_checkpoint_.reset();
 }
 
+void SceneSession::mark_clean_after_external_reference_update(
+    SceneContentRevisionStamp previous_stamp) noexcept {
+  if (!preview_content_checkpoint_.has_value() && clean_stamp_ == previous_stamp) {
+    clean_stamp_ = content_revision_stamp();
+  }
+}
+
 void SceneSession::set_content_settled_observer(std::function<void(bool)> observer) {
   content_settled_observer_ = std::move(observer);
 }

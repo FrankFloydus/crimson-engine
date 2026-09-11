@@ -31,6 +31,11 @@ public:
   virtual ~RenderProjectMaterialResolver() = default;
 
   [[nodiscard]] virtual std::uint64_t revision() const noexcept = 0;
+  /// Maps retired identities without reading material data or changing owners.
+  [[nodiscard]] virtual ProjectAssetId
+  canonical_material_id(ProjectAssetId id) const {
+    return id;
+  }
   [[nodiscard]] virtual std::optional<RenderProjectMaterialSnapshot>
   resolve(ProjectAssetId id) const = 0;
 };

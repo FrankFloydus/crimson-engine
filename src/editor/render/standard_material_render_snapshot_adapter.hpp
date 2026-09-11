@@ -52,6 +52,8 @@ public:
       : project_(&project) {}
 
   [[nodiscard]] std::uint64_t revision() const noexcept override;
+  [[nodiscard]] ProjectAssetId
+  canonical_material_id(ProjectAssetId id) const override;
   [[nodiscard]] std::optional<RenderProjectMaterialSnapshot>
   resolve(ProjectAssetId id) const override;
 

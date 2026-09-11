@@ -44,9 +44,12 @@ class MaterialReferenceService final {
 public:
   using DestinationValidator =
       std::function<bool(const MaterialReference &)>;
+  using ReferenceResolver =
+      std::function<MaterialReference(MaterialReference)>;
 
   MaterialReferenceService(SceneDocument &scene, AssetRegistry &assets,
-                           ModelingSessionService &modeling);
+                           ModelingSessionService &modeling,
+                           ReferenceResolver resolve_reference = {});
 
   [[nodiscard]] std::vector<MaterialReference>
   used_materials(MaterialReferenceUsageScope scope) const;
@@ -60,6 +63,7 @@ private:
   SceneDocument *scene_ = nullptr;
   AssetRegistry *assets_ = nullptr;
   ModelingSessionService *modeling_ = nullptr;
+  ReferenceResolver resolve_reference_;
 };
 
 } // namespace quader

@@ -22,7 +22,7 @@ namespace quader {
 
 inline constexpr std::string_view kQuaderProjectManifestFormat =
     "quader.project";
-inline constexpr std::uint32_t kQuaderProjectManifestVersion = 2u;
+inline constexpr std::uint32_t kQuaderProjectManifestVersion = 3u;
 inline constexpr std::uint32_t kOldestQuaderProjectManifestVersion = 1u;
 
 /// Maps a persistent scene identity to its project-relative file location.
@@ -47,7 +47,8 @@ public:
       std::vector<ProjectSceneCatalogEntry> scenes,
       std::vector<ProjectRelativePath> open_scene_paths,
       std::optional<ProjectRelativePath> active_scene_path,
-      std::optional<ProjectAssetId> active_material_id = std::nullopt);
+      std::optional<ProjectAssetId> active_material_id = std::nullopt,
+      std::vector<ProjectAssetId> deleted_material_ids = {});
 
   [[nodiscard]] const ProjectId &id() const noexcept { return id_; }
   [[nodiscard]] const std::string &name() const noexcept { return name_; }
@@ -66,6 +67,17 @@ public:
   active_material_id() const noexcept {
     return active_material_id_;
   }
+  /// Sorted persistent identities whose effective material is always Default.
+  [[nodiscard]] std::span<const ProjectAssetId>
+  deleted_material_ids() const noexcept {
+    return deleted_material_ids_;
+  }
+  /// Tests permanent deletion without consulting paths or the material catalog.
+  [[nodiscard]] bool
+  is_material_deleted(const ProjectAssetId &material_id) const noexcept;
+  /// Permanently records validated material identities in one atomic edit.
+  [[nodiscard]] ProjectIoResult<void>
+  mark_materials_deleted(std::span<const ProjectAssetId> material_ids);
 
   [[nodiscard]] const ProjectSceneCatalogEntry *
   find_scene(const SceneId &id) const;
@@ -98,6 +110,7 @@ private:
   std::vector<ProjectRelativePath> open_scene_paths_;
   std::optional<ProjectRelativePath> active_scene_path_;
   std::optional<ProjectAssetId> active_material_id_;
+  std::vector<ProjectAssetId> deleted_material_ids_;
 };
 
 /// Bundles a validated project filesystem with its loaded manifest.

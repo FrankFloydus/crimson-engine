@@ -374,6 +374,7 @@ RenderMaterialBindingSnapshot build_render_material_binding_snapshot(
   snapshot.component = *material;
   snapshot.primary_material = build_render_material_asset_snapshot(
       assets, material->material, project_material_resolver);
+  snapshot.component.material = snapshot.primary_material.reference;
   snapshot.present = true;
 
   std::vector<std::uint32_t> slots;
@@ -389,6 +390,8 @@ RenderMaterialBindingSnapshot build_render_material_binding_snapshot(
         slot, build_render_material_asset_snapshot(
                   assets, material->material_slots.at(slot),
                   project_material_resolver));
+    snapshot.component.material_slots.at(slot) =
+        snapshot.material_slots.back().second.reference;
   }
 
   snapshot.revision = render_material_binding_signature(snapshot);
@@ -1069,8 +1072,7 @@ RenderSceneMeshRecord make_render_scene_mesh_record(
                     : RenderMeshAssetSnapshot{.mesh_id = component.mesh},
       .mesh_component = component,
       .material = material,
-      .material_reference =
-          scene_material ? scene_material->material : MaterialReference{},
+      .material_reference = material.primary_material.reference,
       .material_id = scene_material
                          ? scene_material->material.embedded_asset()
                          : kInvalidAssetId,
@@ -1135,8 +1137,7 @@ RenderSceneMeshRecord make_render_scene_curve_solid_record(
                          .double_sided = false,
                          .generate_collisions = false},
       .material = material,
-      .material_reference =
-          scene_material ? scene_material->material : MaterialReference{},
+      .material_reference = material.primary_material.reference,
       .material_id = scene_material
                          ? scene_material->material.embedded_asset()
                          : kInvalidAssetId,
@@ -1179,10 +1180,16 @@ RenderMaterialAssetSnapshot build_render_project_material_asset_snapshot(
     return snapshot;
   }
 
+  const ProjectAssetId canonical_id =
+      resolver->canonical_material_id(reference.project_asset());
+  if (!canonical_id.valid()) {
+    return snapshot;
+  }
+  snapshot.reference = MaterialReference::project(canonical_id);
   const std::optional<RenderProjectMaterialSnapshot> resolved =
       resolver->resolve(reference.project_asset());
   if (!resolved.has_value() ||
-      resolved->evaluation.project_material_id != reference.project_asset()) {
+      resolved->evaluation.project_material_id != canonical_id) {
     return snapshot;
   }
 
@@ -1699,7 +1706,7 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
         .source_object_id = mesh.source_object_id,
         .source_entity = mesh.source_entity,
         .visibility_entity = visibility_entity,
-        .material_reference = mesh.material.material,
+        .material_reference = material_snapshot.primary_material.reference,
         .material_id = mesh.material.material.embedded_asset(),
         .mesh = std::move(mesh.mesh),
         .material = std::move(material_snapshot),

@@ -27,6 +27,8 @@ namespace quader {
 class StandardMaterialEditSessionService;
 class ProjectClipboardService;
 class ProjectAutosaveService;
+class ProjectAssetDependencyService;
+class ProjectMaterialDeletionService;
 struct ProjectMaterialTextureSnapshot;
 
 /// Owns one heap-stable scene document resident in the project workspace.
@@ -96,6 +98,8 @@ public:
   recover_scene(const ProjectRelativePath &path, std::string display_name);
   [[nodiscard]] ProjectAutosaveService &autosave() noexcept;
   [[nodiscard]] const ProjectAutosaveService &autosave() const noexcept;
+  [[nodiscard]] ProjectAssetDependencyService &dependencies() noexcept;
+  [[nodiscard]] const ProjectAssetDependencyService &dependencies() const noexcept;
   [[nodiscard]] ProjectSessionResult close_scene(SceneSessionId id,
                                                  bool discard_dirty = false);
   [[nodiscard]] ProjectSessionResult
@@ -134,6 +138,9 @@ public:
   }
   [[nodiscard]] std::optional<ProjectAssetId>
   active_material_id() const noexcept;
+  /// Resolves persistent deletion without exposing project IO to consumers.
+  [[nodiscard]] ProjectAssetId
+  canonical_material_id(ProjectAssetId material_id) const;
   [[nodiscard]] ProjectIoResult<ProjectMaterialPreview>
   material_preview(ProjectAssetId material_id) const;
   [[nodiscard]] ProjectIoResult<ProjectMaterialTextureData>
@@ -167,6 +174,7 @@ public:
   }
 
 private:
+  friend class ProjectMaterialDeletionService;
   [[nodiscard]] ProjectSessionResult open_workspace(
       const std::filesystem::path &manifest_path, bool discard_existing_dirty,
       std::optional<ProjectRelativePath> required_scene,
@@ -230,6 +238,7 @@ private:
       standard_material_editor_;
   std::unique_ptr<ProjectClipboardService> clipboard_;
   std::unique_ptr<ProjectAutosaveService> autosave_;
+  std::unique_ptr<ProjectAssetDependencyService> dependencies_;
   std::filesystem::path resource_root_;
   std::filesystem::path empty_path_;
   RecentSceneStore recent_scene_store_;

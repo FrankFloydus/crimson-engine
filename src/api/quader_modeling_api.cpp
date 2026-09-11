@@ -29,11 +29,13 @@
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
+#include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/transform/mesh_arrangement_service.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "math/glm_bridge.hpp"
+#include "io/project/project_material_reference_resolver.hpp"
 #include "scene/scene_transform.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 
@@ -2472,12 +2474,36 @@ QuaderModelingApi::project_material_for_face(
                                                                   face_id);
   const QuaderApiVoidResult status = mutations_.run_modeling_result(
       std::move(query.command), "Resolve Face Material");
+  const ProjectSession *project =
+      QuaderApiSessionInternalAccess::project_session(session_);
+  if (status.ok() && project != nullptr && project->manifest() != nullptr) {
+    query.material = ProjectMaterialReferenceResolver::canonical_material_id(
+        *project->manifest(), query.material);
+  }
   return quader_api_result_from_status(
       status, QuaderFaceProjectMaterial{.id = query.material});
 }
 
 QuaderApiVoidResult QuaderModelingApi::apply_face_material_to_mesh(
     QuaderModelingObjectId object_id, QuaderElementId face_id) {
+  const ProjectSession *project =
+      QuaderApiSessionInternalAccess::project_session(session_);
+  if (project != nullptr && project->manifest() != nullptr) {
+    const auto source = scene_session(session_).modeling()
+                            .project_material_for_face(object_id, face_id);
+    if (source.command.ok &&
+        project->manifest()->is_material_deleted(source.material)) {
+      const auto canonical =
+          ProjectMaterialReferenceResolver::canonical_material_id(
+              *project->manifest(), source.material);
+      return mutations_.run_modeling_command(
+          std::make_unique<ApplyActiveMaterialToTargetHistoryCommand>(
+              scene_session(session_).modeling(), object_id, face_id,
+              MaterialReference::project(canonical),
+              ApplyActiveMaterialToTargetHistoryCommand::Scope::Mesh),
+          "Apply Face Material to Mesh");
+    }
+  }
   return mutations_.run_modeling_command(
       std::make_unique<ApplyFaceMaterialToMeshHistoryCommand>(
           scene_session(session_).modeling(), object_id, face_id),

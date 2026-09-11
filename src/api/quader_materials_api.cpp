@@ -12,6 +12,7 @@
 #include "editor/material/material_reference_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
+#include "io/project/project_material_reference_resolver.hpp"
 
 #include <utility>
 
@@ -51,8 +52,25 @@ to_internal_scope(QuaderMaterialUsageScope scope) {
   const ProjectSession *project =
       QuaderApiSessionInternalAccess::project_session(api_session);
   return project != nullptr &&
+         project->manifest() != nullptr &&
+         !project->manifest()->is_material_deleted(reference.project_asset()) &&
          project->material_catalog().find(reference.project_asset()) !=
              nullptr;
+}
+
+[[nodiscard]] MaterialReferenceService::ReferenceResolver
+reference_resolver(QuaderApiSession session) {
+  const ProjectSession *project =
+      QuaderApiSessionInternalAccess::project_session(session);
+  return [project](MaterialReference reference) {
+    if (!reference.project_owned() || project == nullptr ||
+        project->manifest() == nullptr) {
+      return reference;
+    }
+    return MaterialReference::project(
+        ProjectMaterialReferenceResolver::canonical_material_id(
+            *project->manifest(), reference.project_asset()));
+  };
 }
 
 } // namespace
@@ -73,7 +91,7 @@ QuaderMaterialsApi::used_materials(QuaderMaterialUsageScope scope) const {
   }
 
   MaterialReferenceService service(scene->scene(), scene->assets(),
-                                   scene->modeling());
+                                   scene->modeling(), reference_resolver(session_));
   const std::vector<MaterialReference> internal =
       service.used_materials(to_internal_scope(scope));
   std::vector<QuaderMaterialReference> references;
@@ -101,7 +119,7 @@ QuaderApiVoidResult QuaderMaterialsApi::replace_material_references(
   const MaterialReference internal_replacement =
       to_internal_reference(replacement);
   MaterialReferenceService service(scene->scene(), scene->assets(),
-                                   scene->modeling());
+                                   scene->modeling(), reference_resolver(session_));
   MaterialReferenceReplacementPreparation prepared =
       service.prepare_replacement(
           internal_source, internal_replacement, to_internal_scope(scope),

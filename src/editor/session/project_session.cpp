@@ -18,10 +18,13 @@
 #include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/material/project_image_decoder.hpp"
 #include "editor/material/project_material_texture_snapshot.hpp"
+#include "editor/material/project_asset_dependency_service.hpp"
+#include "editor/material/project_material_deletion_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "io/project/project_material_provisioner.hpp"
+#include "io/project/project_material_reference_resolver.hpp"
 #include "io/project/project_bridge_notifications.hpp"
 #include "io/qdr/qdr_atomic_write.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
@@ -158,6 +161,30 @@ project_material_references(const QdrProjectWriteSnapshot &snapshot) {
   return ids;
 }
 
+/// Normalizes saved and historical bindings without dropping dormant face slots.
+bool canonicalize_material_component(MaterialComponent &component,
+                                     const ProjectManifest &manifest) {
+  bool changed = false;
+  const auto canonicalize = [&](MaterialReference &reference) {
+    if (!reference.project_owned()) {
+      return;
+    }
+    const ProjectAssetId canonical =
+        ProjectMaterialReferenceResolver::canonical_material_id(
+            manifest, reference.project_asset());
+    if (canonical != reference.project_asset()) {
+      reference = MaterialReference::project(canonical);
+      changed = true;
+    }
+  };
+  canonicalize(component.material);
+  for (auto &[slot, reference] : component.material_slots) {
+    (void)slot;
+    canonicalize(reference);
+  }
+  return changed;
+}
+
 /// Reports validated scene snapshot extraction before an atomic QDR write.
 struct SceneWriteSnapshotResult final {
   bool ok = false;
@@ -167,7 +194,8 @@ struct SceneWriteSnapshotResult final {
 
 SceneWriteSnapshotResult scene_write_snapshot(
     const SceneSession &session,
-    const ProjectMaterialCatalog &materials) {
+    const ProjectMaterialCatalog &materials,
+    const ProjectManifest &manifest) {
   const SceneContentDocument &document = session.document();
   const SceneContentDocumentIdentityReport identity =
       document.validate_object_identity_invariants();
@@ -190,6 +218,13 @@ SceneWriteSnapshotResult scene_write_snapshot(
     return {.message = snapshot_result.error().message};
   }
   QdrProjectWriteSnapshot snapshot = snapshot_result.take_value();
+  if (!manifest.deleted_material_ids().empty()) {
+    for (QdrProjectEntityWriteSnapshot &entity : snapshot.entities) {
+      if (entity.material.has_value()) {
+        canonicalize_material_component(*entity.material, manifest);
+      }
+    }
+  }
   append_qdr_viewport_camera_pose(session, snapshot);
   for (const ProjectAssetId &id : project_material_references(snapshot)) {
     const ProjectMaterialCatalogEntry *material = materials.find(id);
@@ -252,6 +287,50 @@ std::optional<std::string> validate_scene_project_dependencies(
   return std::nullopt;
 }
 
+/// Applies permanent project aliases before checking persisted dependency records.
+std::optional<std::string> canonicalize_scene_project_materials(
+    QdrProjectReadResult &read, const ProjectManifest &manifest,
+    const ProjectMaterialCatalog &materials) {
+  if (manifest.deleted_material_ids().empty()) {
+    return std::nullopt;
+  }
+  SceneDocument &scene = read.document.scene();
+  for (const EntityId entity : scene.entities()) {
+    const MaterialComponent *existing = scene.material(entity);
+    if (existing == nullptr) {
+      continue;
+    }
+    MaterialComponent component = *existing;
+    if (canonicalize_material_component(component, manifest) &&
+        !scene.replace_existing_material_reference_component(
+            entity, std::move(component))) {
+      return "Could not replace a deleted project material reference.";
+    }
+  }
+
+  for (ProjectAssetReference &dependency : read.project_asset_dependencies) {
+    if (dependency.kind != ProjectAssetKind::Material) {
+      continue;
+    }
+    const ProjectAssetId canonical =
+        ProjectMaterialReferenceResolver::canonical_material_id(
+            manifest, dependency.stable_id);
+    if (canonical != dependency.stable_id) {
+      dependency.stable_id = canonical;
+      if (const ProjectMaterialCatalogEntry *entry = materials.find(canonical)) {
+        dependency.path = entry->path;
+      }
+    }
+  }
+  std::set<ProjectAssetId> canonical_dependencies;
+  std::erase_if(read.project_asset_dependencies,
+                [&](const ProjectAssetReference &dependency) {
+    return dependency.kind == ProjectAssetKind::Material &&
+           !canonical_dependencies.insert(dependency.stable_id).second;
+  });
+  return std::nullopt;
+}
+
 void rollback_new_project(
     const ProjectWorkspaceStorage &workspace,
     const ProjectMaterialProvisioningChanges &material_changes) {
@@ -278,9 +357,18 @@ ProjectSession::ProjectSession(std::filesystem::path recent_scene_storage)
       std::make_unique<StandardMaterialEditSessionService>(*this);
   clipboard_ = std::make_unique<ProjectClipboardService>();
   autosave_ = std::make_unique<ProjectAutosaveService>();
+  dependencies_ = std::make_unique<ProjectAssetDependencyService>(*this);
 }
 
 ProjectSession::~ProjectSession() = default;
+
+ProjectAssetDependencyService &ProjectSession::dependencies() noexcept {
+  return *dependencies_;
+}
+
+const ProjectAssetDependencyService &ProjectSession::dependencies() const noexcept {
+  return *dependencies_;
+}
 
 ProjectAutosaveService &ProjectSession::autosave() noexcept { return *autosave_; }
 
@@ -311,7 +399,8 @@ ProjectSessionResult ProjectSession::write_scene_recovery(
   if (std::filesystem::exists(absolute.value(), error) || error) {
     return failure("Autosave destination already exists or is unavailable.");
   }
-  SceneWriteSnapshotResult snapshot = scene_write_snapshot(session, material_catalog_);
+  SceneWriteSnapshotResult snapshot = scene_write_snapshot(
+      session, material_catalog_, workspace_->manifest);
   if (!snapshot.ok) {
     return failure(snapshot.message);
   }
@@ -340,6 +429,10 @@ ProjectSessionResult ProjectSession::recover_scene(
   QdrProjectReadResult read = QdrDocumentReader::read_project_document(absolute.value());
   if (!read.ok) {
     return failure(read.message.empty() ? "Recovery copy could not be read." : read.message);
+  }
+  if (const auto canonicalization_error = canonicalize_scene_project_materials(
+          read, workspace_->manifest, material_catalog_)) {
+    return failure(*canonicalization_error);
   }
   if (const auto dependency_error = validate_scene_project_dependencies(
           read.document, read.project_asset_dependencies, material_catalog_,
@@ -484,6 +577,10 @@ ProjectSessionResult ProjectSession::open_workspace(
   }
 
   ProjectWorkspaceStorage candidate = opened.take_value();
+  const auto recovered = ProjectMaterialDeletionService::recover(candidate);
+  if (!recovered.ok()) {
+    return failure(recovered.error().message);
+  }
   const ProjectManifest original_manifest = candidate.manifest;
   ProjectIoResult<ProjectMaterialCatalog> initial_catalog =
       ProjectMaterialCatalog::scan(candidate.file_system);
@@ -514,6 +611,11 @@ ProjectSessionResult ProjectSession::open_workspace(
   }
   std::optional<ProjectAssetId> requested_material =
       candidate.manifest.active_material_id();
+  if (requested_material.has_value()) {
+    requested_material =
+        ProjectMaterialReferenceResolver::canonical_material_id(
+            candidate.manifest, *requested_material);
+  }
   if (!requested_material.has_value() ||
       candidate_catalog.find(*requested_material) == nullptr) {
     requested_material = default_material;
@@ -535,6 +637,9 @@ ProjectSessionResult ProjectSession::open_workspace(
   std::vector<std::unique_ptr<OpenSceneSession>> scenes;
   std::vector<std::string> warnings(candidate_catalog.warnings().begin(),
                                     candidate_catalog.warnings().end());
+  if (!recovered.warning().empty()) {
+    warnings.push_back(recovered.warning());
+  }
   std::vector<ProjectRelativePath> restore_paths(
       candidate.manifest.open_scene_paths().begin(),
       candidate.manifest.open_scene_paths().end());
@@ -556,6 +661,12 @@ ProjectSessionResult ProjectSession::open_workspace(
         QdrDocumentReader::read_project_document(absolute.value());
     if (!read.ok) {
       warnings.push_back(path.portable_string() + ": " + read.message);
+      continue;
+    }
+    if (const auto canonicalization_error = canonicalize_scene_project_materials(
+            read, candidate.manifest, candidate_catalog)) {
+      warnings.push_back(path.portable_string() + ": " +
+                         *canonicalization_error);
       continue;
     }
     if (const std::optional<std::string> dependency_error =
@@ -691,6 +802,10 @@ ProjectSessionResult ProjectSession::open_scene(ProjectRelativePath path) {
   if (!read.ok) {
     return failure(read.message.empty() ? "Scene open failed." : read.message);
   }
+  if (const auto canonicalization_error = canonicalize_scene_project_materials(
+          read, workspace_->manifest, material_catalog_)) {
+    return failure(*canonicalization_error);
+  }
   if (const std::optional<std::string> dependency_error =
           validate_scene_project_dependencies(
               read.document, read.project_asset_dependencies,
@@ -802,7 +917,7 @@ ProjectSessionResult ProjectSession::save(SceneSessionId id) {
   }
   const SceneContentRevisionStamp stamp = scene->session->content_revision_stamp();
   SceneWriteSnapshotResult snapshot = scene_write_snapshot(
-      *scene->session, material_catalog_);
+      *scene->session, material_catalog_, workspace_->manifest);
   if (!snapshot.ok) {
     return failure(snapshot.message);
   }
@@ -864,7 +979,7 @@ ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
   SceneId new_scene_id = SceneId::generate();
   const SceneContentRevisionStamp stamp = scene->session->content_revision_stamp();
   SceneWriteSnapshotResult snapshot = scene_write_snapshot(
-      *scene->session, material_catalog_);
+      *scene->session, material_catalog_, workspace_->manifest);
   if (!snapshot.ok) {
     return failure(snapshot.message);
   }
@@ -1266,7 +1381,10 @@ ProjectSession::set_active_material(ProjectAssetId material_id) {
   if (!workspace_) {
     return failure("Open or create a project before selecting a material.");
   }
-  if (!material_id.valid() || material_catalog_.find(material_id) == nullptr) {
+  if (!material_id.valid() ||
+      ProjectMaterialReferenceResolver::canonical_material_id(
+          workspace_->manifest, material_id) != material_id ||
+      material_catalog_.find(material_id) == nullptr) {
     return failure("Project material is missing or unavailable.");
   }
   if (workspace_->manifest.active_material_id() == material_id) {
@@ -1305,7 +1423,10 @@ ProjectSessionResult ProjectSession::install_material_catalog(
   const std::optional<ProjectAssetId> requested =
       active_material.has_value() ? active_material
                                   : workspace_->manifest.active_material_id();
-  if (!requested.has_value() || material_catalog.find(*requested) == nullptr) {
+  if (!requested.has_value() ||
+      ProjectMaterialReferenceResolver::canonical_material_id(
+          workspace_->manifest, *requested) != *requested ||
+      material_catalog.find(*requested) == nullptr) {
     return failure("Active project material is missing from the new catalog.");
   }
 
@@ -1391,10 +1512,19 @@ ProjectSession::active_material_id() const noexcept {
     return std::nullopt;
   }
   const ProjectAssetId id =
-      *workspace_->manifest.active_material_id();
+      ProjectMaterialReferenceResolver::canonical_material_id(
+          workspace_->manifest, *workspace_->manifest.active_material_id());
   return material_catalog_.find(id) != nullptr
              ? std::optional<ProjectAssetId>(id)
              : std::nullopt;
+}
+
+ProjectAssetId ProjectSession::canonical_material_id(
+    ProjectAssetId material_id) const {
+  return workspace_
+             ? ProjectMaterialReferenceResolver::canonical_material_id(
+                   workspace_->manifest, material_id)
+             : material_id;
 }
 
 ProjectIoResult<ProjectMaterialPreview>
@@ -1404,8 +1534,8 @@ ProjectSession::material_preview(ProjectAssetId material_id) const {
         ProjectIoErrorCode::InvalidWorkspaceState,
         "No project is open.");
   }
-  return material_catalog_.read_preview(workspace_->file_system,
-                                        material_id);
+  material_id = canonical_material_id(material_id);
+  return material_catalog_.read_preview(workspace_->file_system, material_id);
 }
 
 ProjectIoResult<ProjectMaterialTextureData>
@@ -1416,8 +1546,9 @@ ProjectSession::material_texture(ProjectAssetId material_id,
         ProjectIoErrorCode::InvalidWorkspaceState,
         "No project is open.");
   }
+  material_id = canonical_material_id(material_id);
   return material_catalog_.read_texture(workspace_->file_system, material_id,
-                                        slot);
+                                      slot);
 }
 
 void ProjectSession::invalidate_material_textures() {
@@ -1431,6 +1562,7 @@ ProjectSession::material_texture_image(
   if (!workspace_) {
     return {};
   }
+  material_id = canonical_material_id(material_id);
   const ProjectMaterialCatalogEntry *entry = material_catalog_.find(material_id);
   const ProjectStandardMaterialDefinition *standard =
       entry != nullptr ? entry->material.standard_material() : nullptr;

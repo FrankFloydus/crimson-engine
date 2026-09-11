@@ -29,6 +29,10 @@ enum class QdrAtomicWriteDisposition : std::uint8_t {
   CreateNew,
 };
 
+/// Durably records an allocated rollback path before an existing file is replaced.
+using QdrAtomicBeforeReplace =
+    std::function<QdrAtomicWriteResult(const std::filesystem::path &backup_path)>;
+
 /**
  * Stages one native QDR file beside its final destination, reversibly publishes
  * it before wider durable state may reference it, and preserves any prior
@@ -50,7 +54,9 @@ public:
   prepare(const std::filesystem::path &target,
           QdrAtomicWriteDisposition disposition =
               QdrAtomicWriteDisposition::ReplaceExisting);
-  [[nodiscard]] QdrAtomicWriteResult publish();
+  /// The optional callback runs only for an existing target, before replacement.
+  [[nodiscard]] QdrAtomicWriteResult
+  publish(const QdrAtomicBeforeReplace &before_replace = {});
   [[nodiscard]] QdrAtomicWriteResult verify_published() const;
   [[nodiscard]] QdrAtomicWriteResult rollback();
   [[nodiscard]] QdrAtomicWriteResult commit();
@@ -94,6 +100,11 @@ private:
 
 using QdrAtomicWriteValidator =
     std::function<QdrAtomicWriteResult(const std::filesystem::path &temp_path)>;
+
+/// Moves a validated project file or folder without replacing a competing entry.
+[[nodiscard]] QdrAtomicWriteResult move_project_entry_no_replace(
+    const std::filesystem::path &source,
+    const std::filesystem::path &destination);
 
 [[nodiscard]] QdrAtomicWriteResult write_qdr_text_atomic(
         const std::filesystem::path& target,

@@ -41,11 +41,11 @@ void apply_shared_obsidian_roles(QPalette &palette) {
   palette.setColor(kAllGroups, QPalette::Dark, QColor(22, 23, 27));
   palette.setColor(kAllGroups, QPalette::Shadow, QColor(12, 13, 16));
 
-  // Muted amethyst marks interaction without tinting ordinary content. Its
-  // Fusion-derived focus outline and selected text retain accessible contrast.
-  palette.setColor(kAllGroups, QPalette::Highlight, QColor(167, 148, 221));
+  // Neutral charcoal keeps selection quiet across standard Qt views. Amethyst
+  // remains a distinct focus and interaction accent instead of tinting rows.
+  palette.setColor(kAllGroups, QPalette::Highlight, QColor(66, 69, 76));
   palette.setColor(kAllGroups, QPalette::HighlightedText,
-                   QColor(23, 24, 28));
+                   QColor(228, 230, 237));
   palette.setColor(kAllGroups, QPalette::Accent, QColor(167, 148, 221));
   palette.setColor(kAllGroups, QPalette::Link, QColor(185, 171, 231));
   palette.setColor(kAllGroups, QPalette::LinkVisited, QColor(192, 167, 210));
@@ -58,8 +58,8 @@ void apply_inactive_obsidian_roles(QPalette &palette) {
   palette.setColor(kGroup, QPalette::ButtonText, QColor(207, 211, 220));
   palette.setColor(kGroup, QPalette::PlaceholderText, QColor(143, 147, 158));
   palette.setColor(kGroup, QPalette::Button, QColor(40, 41, 48));
-  palette.setColor(kGroup, QPalette::Highlight, QColor(153, 141, 191));
-  palette.setColor(kGroup, QPalette::HighlightedText, QColor(23, 24, 28));
+  palette.setColor(kGroup, QPalette::Highlight, QColor(57, 59, 66));
+  palette.setColor(kGroup, QPalette::HighlightedText, QColor(207, 211, 220));
   palette.setColor(kGroup, QPalette::Accent, QColor(153, 141, 191));
   palette.setColor(kGroup, QPalette::Link, QColor(172, 159, 214));
   palette.setColor(kGroup, QPalette::LinkVisited, QColor(180, 157, 198));
@@ -80,8 +80,8 @@ void apply_disabled_obsidian_roles(QPalette &palette) {
   palette.setColor(kGroup, QPalette::Light, QColor(43, 45, 52));
   palette.setColor(kGroup, QPalette::Midlight, QColor(37, 39, 46));
   palette.setColor(kGroup, QPalette::Mid, QColor(26, 27, 32));
-  palette.setColor(kGroup, QPalette::Highlight, QColor(139, 132, 160));
-  palette.setColor(kGroup, QPalette::HighlightedText, QColor(23, 24, 28));
+  palette.setColor(kGroup, QPalette::Highlight, QColor(48, 49, 56));
+  palette.setColor(kGroup, QPalette::HighlightedText, QColor(150, 153, 164));
   palette.setColor(kGroup, QPalette::Accent, QColor(139, 132, 160));
   palette.setColor(kGroup, QPalette::Link, QColor(151, 143, 172));
   palette.setColor(kGroup, QPalette::LinkVisited, QColor(159, 140, 172));

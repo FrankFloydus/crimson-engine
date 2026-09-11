@@ -184,6 +184,10 @@ public:
   void set_document_replacement_finalizer(
       std::function<void(SceneSession &)> finalizer);
   void mark_clean();
+  /// Keeps a previously saved scene clean after an external reference rewrite,
+  /// without accepting or discarding any unrelated transient modeling preview.
+  void mark_clean_after_external_reference_update(
+      SceneContentRevisionStamp previous_stamp) noexcept;
   void mark_clean_at(SceneContentRevisionStamp stamp) noexcept;
 
 private:

@@ -327,7 +327,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(dock_source, "QDockWidget::close-button:hover");
   expect_contains(dock_source, "QDockWidget::float-button:hover");
   expect_contains(dock_source,
-                  "palette.color(QPalette::Active, QPalette::Highlight)");
+                  "palette.color(QPalette::Active, QPalette::Accent)");
   expect_contains(dock_source, "QDockWidget::close-button:pressed");
   expect_contains(dock_source, "QDockWidget::float-button:pressed");
   expect_contains(dock_source, "border: 2px solid %8");

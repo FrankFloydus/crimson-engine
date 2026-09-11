@@ -107,7 +107,9 @@ instance definitions that would omit placements fail explicitly.
 The mesh projection owner applies authored face and occurrence texture mapping on
 a detached payload. Source triangles retain counter-clockwise winding; consumers
 adapt winding and tangent generation to their target engine. Surfaces are grouped
-by source material identity. Unassigned surfaces use `QUADER_BRIDGE_NO_MATERIAL`.
+by effective source material identity. Manifest deletion tombstones resolve to the
+reserved Default Material UUID before material indexing and surface grouping.
+Unassigned surfaces use `QUADER_BRIDGE_NO_MATERIAL`.
 The material descriptor carries the remaining shared UV transformation; consumers
 can use the previously imported transformation when reusing an edited material.
 
@@ -119,8 +121,13 @@ that need importing. This permits material reuse when original source assets are
 unavailable.
 
 Descriptors use the canonical QMAT reader and validate recorded material identity.
-Legacy scene references without a dependency path use the existing material catalog
-as a lazy fallback. Standard material color factors are linear RGB; project albedo
+Legacy scene references without a dependency path and moved materials whose saved
+path is missing or now contains a different UUID use the existing material catalog
+as a lazy fallback, matching the exact effective UUID. Malformed sources and unsafe
+paths still fail. Descriptors and fingerprints report the validated current QMAT
+path and decoded bytes, including Default for deleted references; scene source
+fingerprints continue to identify the unchanged decoded QDR. Standard material
+color factors are linear RGB; project albedo
 textures are sRGB and PBR data textures are linear. Embedded material texture color
 spaces are exposed as authored and may need explicit target-engine handling.
 

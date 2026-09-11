@@ -3137,6 +3137,26 @@ bool SceneDocument::clear_material(EntityId id) {
   return true;
 }
 
+bool SceneDocument::replace_existing_material_reference_component(
+    EntityId id, MaterialComponent material) {
+  const entt::entity entity = require_entity(id);
+  if (entity == entt::null) {
+    return false;
+  }
+  MaterialComponent *current = registry_.try_get<MaterialComponent>(entity);
+  if (current == nullptr) {
+    return false;
+  }
+  if (*current == material) {
+    return true;
+  }
+  *current = std::move(material);
+  ++material_binding_revision_;
+  ++render_component_revision_;
+  mark_dirty(id, SceneModelingProjectionDomain::Structure);
+  return true;
+}
+
 bool SceneDocument::set_light(EntityId id, LightComponent light) {
   if (!std::isfinite(light.distance_attenuation) ||
       !light_component_metadata_is_valid(light)) {

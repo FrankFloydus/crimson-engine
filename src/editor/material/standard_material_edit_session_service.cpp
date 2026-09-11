@@ -83,6 +83,18 @@ StandardMaterialEditSessionService::current() const noexcept {
   return current_ ? &current_->snapshot : nullptr;
 }
 
+void StandardMaterialEditSessionService::retarget_saved_path(
+    ProjectAssetId id, ProjectRelativePath path) {
+  if (current_ && current_->snapshot.path.has_value() &&
+      current_->snapshot.document.id == id && current_->snapshot.path != path) {
+    current_->snapshot.path = std::move(path);
+    advance_draft_revision();
+    if (!current_->snapshot.dirty) {
+      current_->snapshot.clean_revision = current_->snapshot.draft_revision;
+    }
+  }
+}
+
 MaterialEditSessionId
 StandardMaterialEditSessionService::allocate_session_id() {
   ++generation_;
@@ -131,6 +143,10 @@ StandardMaterialEditSessionService::new_material() {
 
 StandardMaterialEditResult
 StandardMaterialEditSessionService::open(ProjectAssetId id) {
+  if (project_ != nullptr && project_->manifest() != nullptr &&
+      project_->manifest()->is_material_deleted(id)) {
+    return failure("This material was permanently deleted.");
+  }
   if (current_ && current_->snapshot.document.id == id) {
     return success(false, "Standard Material is already open.");
   }
@@ -631,6 +647,9 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
   if (!current_ || project_ == nullptr || !project_->has_project() ||
       project_->workspace() == nullptr) {
     return failure("Open a project and Standard Material before saving.");
+  }
+  if (project_->manifest()->is_material_deleted(current_->snapshot.document.id)) {
+    return failure("This material was permanently deleted and cannot be saved.");
   }
   if (!valid_material_path(path)) {
     return failure("Standard Materials must be saved below Materials/ as .qmat files.");

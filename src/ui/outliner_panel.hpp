@@ -12,6 +12,7 @@
 
 namespace quader {
 
+class QtUiScaleMetrics;
 struct UIContext;
 
 [[nodiscard]] bool outliner_selection_sync_required(
@@ -29,6 +30,7 @@ public:
   ~OutlinerPanel() override;
 
   void abandon_runtime() noexcept;
+  void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void refresh(UIContext &context);
 
 private:

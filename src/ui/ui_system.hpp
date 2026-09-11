@@ -228,7 +228,9 @@ private:
   [[nodiscard]] std::vector<QtMaterialPresentationItem>
   replacement_material_presentations() const;
   void validate_material_find_replace_context();
-  void import_material_textures();
+  void import_material_textures(QString destination_folder);
+  void delete_material_folder(QString folder);
+  void finish_material_folder_operation(const QuaderApiStatus &result);
   [[nodiscard]] bool allow_main_window_close();
   [[nodiscard]] bool panel_visible(UIPanelId id) const;
   [[nodiscard]] bool panel_presented(UIPanelId id) const;
@@ -437,6 +439,11 @@ private:
   };
 
   std::vector<QtMaterialPresentationItem> material_presentation_items_;
+  std::vector<QString> material_presentation_folders_;
+  std::string material_browser_project_identity_;
+  std::uint64_t material_browser_project_generation_ = 0u;
+  std::shared_ptr<std::atomic_uint64_t> material_browser_project_generation_signal_ =
+      std::make_shared<std::atomic_uint64_t>(0u);
   std::uint64_t material_presentation_signature_ = 0;
   std::uint64_t material_presentation_revision_ = 0;
   std::uint64_t material_presentation_catalog_revision_ = 0;

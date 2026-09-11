@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <limits>
 #include <system_error>
 #include <utility>
 
@@ -45,7 +46,8 @@ QString safe_filename_part(std::string_view source) {
 
 std::string readable_filename(std::string_view source_stem,
                                std::string_view fallback,
-                               std::string_view source_extension) {
+                               std::string_view source_extension,
+                               std::string_view collision_suffix = {}) {
   QString stem = safe_filename_part(source_stem);
   QString extension = safe_filename_part(source_extension);
   if (!extension.isEmpty() && extension.front() != QChar('.')) {
@@ -70,10 +72,15 @@ std::string readable_filename(std::string_view source_stem,
     chop_character(extension);
   }
   while (!stem.isEmpty() &&
-         stem.size() + extension.size() > kMaximumAssetFilenameCharacters) {
+         stem.size() + extension.size() +
+                 static_cast<qsizetype>(collision_suffix.size()) >
+             kMaximumAssetFilenameCharacters) {
     chop_character(stem);
   }
-  QString filename = stem + extension;
+  QString filename =
+      stem + QString::fromUtf8(collision_suffix.data(),
+                              static_cast<qsizetype>(collision_suffix.size())) +
+      extension;
   while (!filename.isEmpty() &&
          (filename.back() == QChar('.') || filename.back() == QChar(' '))) {
     filename.chop(1);
@@ -85,9 +92,7 @@ std::string readable_filename(std::string_view source_stem,
 ProjectIoResult<ProjectMaterialAssetDestination> make_unique_destination(
     const ProjectFileSystem &file_system, std::string_view directory,
     std::string_view source_stem, std::string_view fallback_stem,
-    std::string_view extension) {
-  const std::string filename =
-      readable_filename(source_stem, fallback_stem, extension);
+    std::string_view extension, bool numbered_collisions = false) {
 
   // Check the owning directory separately so a casing error in Materials or
   // Textures cannot be mistaken for a collision in the desired asset leaf.
@@ -103,12 +108,22 @@ ProjectIoResult<ProjectMaterialAssetDestination> make_unique_destination(
         resolved_parent.error().path);
   }
 
-  for (std::size_t attempt = 0u;
-       attempt < kMaximumUniqueDestinationAttempts; ++attempt) {
+  const std::size_t maximum_attempts =
+      numbered_collisions ? std::numeric_limits<std::size_t>::max()
+                          : kMaximumUniqueDestinationAttempts;
+  for (std::size_t attempt = 0u; attempt < maximum_attempts; ++attempt) {
     const ProjectAssetId id = ProjectAssetId::generate();
+    const std::string suffix =
+        numbered_collisions && attempt != 0u
+            ? "_" + std::to_string(attempt + 1u)
+            : std::string{};
+    const std::string filename =
+        readable_filename(source_stem, fallback_stem, extension, suffix);
     const std::string portable_path =
         std::string(directory) + "/" +
-        (attempt == 0u ? std::string{} : std::string(id.str()) + "/") +
+        (attempt == 0u || numbered_collisions
+             ? std::string{}
+             : std::string(id.str()) + "/") +
         filename;
     ProjectIoResult<ProjectRelativePath> relative =
         ProjectRelativePath::parse_portable(portable_path);
@@ -159,11 +174,60 @@ void append_rollback_error(std::string &message,
 
 } // namespace
 
+ProjectIoResult<std::filesystem::path>
+resolve_material_destination_folder(const ProjectFileSystem &file_system,
+                                    std::string_view destination_folder) {
+  const auto relative = ProjectRelativePath::parse_portable(destination_folder);
+  if (!relative.ok()) {
+    return ProjectIoResult<std::filesystem::path>::failure(
+        relative.error().code, relative.error().message, relative.error().path);
+  }
+  if (relative.value().portable_string() != destination_folder ||
+      (destination_folder != "Materials" &&
+       !destination_folder.starts_with("Materials/"))) {
+    return ProjectIoResult<std::filesystem::path>::failure(
+        ProjectIoErrorCode::InvalidRelativePath,
+        "Material destination must be an exact folder path under Materials.");
+  }
+  auto resolved = file_system.resolve(relative.value());
+  if (!resolved.ok()) {
+    return resolved;
+  }
+  const auto physical = file_system.resolve_physical_location(relative.value());
+  if (!physical.ok()) {
+    return physical;
+  }
+  if (physical.value() != resolved.value()) {
+    return ProjectIoResult<std::filesystem::path>::failure(
+        ProjectIoErrorCode::PathCaseCollision,
+        "Material folders must not use symbolic links or junction aliases.",
+        resolved.value());
+  }
+  std::error_code error;
+  const bool directory = std::filesystem::is_directory(resolved.value(), error);
+  if (error || !directory) {
+    return ProjectIoResult<std::filesystem::path>::failure(
+        error ? ProjectIoErrorCode::IoFailure
+              : ProjectIoErrorCode::DirectoryNotFound,
+        error ? "Could not inspect material destination folder: " + error.message()
+              : "Material destination folder does not exist.",
+        resolved.value());
+  }
+  return resolved;
+}
+
 ProjectIoResult<ProjectMaterialAssetDestination>
 make_unique_material_destination(const ProjectFileSystem &file_system,
-                                 std::string_view source_stem) {
-  return make_unique_destination(file_system, "Materials", source_stem,
-                                 "material", ".qmat");
+                                 std::string_view source_stem,
+                                 std::string_view destination_folder) {
+  const auto folder =
+      resolve_material_destination_folder(file_system, destination_folder);
+  if (!folder.ok()) {
+    return ProjectIoResult<ProjectMaterialAssetDestination>::failure(
+        folder.error().code, folder.error().message, folder.error().path);
+  }
+  return make_unique_destination(file_system, destination_folder, source_stem,
+                                 "material", ".qmat", true);
 }
 
 ProjectIoResult<ProjectMaterialAssetDestination>

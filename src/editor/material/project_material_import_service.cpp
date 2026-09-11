@@ -45,7 +45,8 @@ std::string with_rollback_diagnostic(
 
 ProjectMaterialImportReport
 ProjectMaterialImportService::import_textures_as_materials(
-    std::span<const std::filesystem::path> source_paths) const {
+    std::span<const std::filesystem::path> source_paths,
+    std::string_view destination_folder) const {
   ProjectMaterialImportReport report;
   if (project_ == nullptr || !project_->has_project() ||
       project_->workspace() == nullptr) {
@@ -59,6 +60,12 @@ ProjectMaterialImportService::import_textures_as_materials(
 
   const ProjectFileSystem &file_system =
       project_->workspace()->file_system;
+  const auto destination =
+      resolve_material_destination_folder(file_system, destination_folder);
+  if (!destination.ok()) {
+    report.message = destination.error().message;
+    return report;
+  }
   ProjectMaterialFileRollback rollback;
   std::vector<ProjectMaterialImportSuccess> pending_successes;
   pending_successes.reserve(source_paths.size());
@@ -116,7 +123,8 @@ ProjectMaterialImportService::import_textures_as_materials(
       continue;
     }
     ProjectIoResult<ProjectMaterialAssetDestination> material_destination =
-        make_unique_material_destination(file_system, name.value());
+        make_unique_material_destination(file_system, name.value(),
+                                         destination_folder);
     if (!material_destination.ok()) {
       if (!reject(material_destination.error().message)) {
         return report;

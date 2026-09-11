@@ -100,14 +100,13 @@ void expect_contrast(const QPalette &palette, QPalette::ColorGroup group,
             minimum);
 }
 
-QPalette dock_surface_palette(const QColor &surface,
-                              const QColor &highlight) {
+QPalette dock_surface_palette(const QColor &surface, const QColor &accent) {
   QPalette palette;
   for (const QPalette::ColorGroup group :
        {QPalette::Active, QPalette::Inactive}) {
     palette.setColor(group, QPalette::AlternateBase, surface);
     palette.setColor(group, QPalette::Button, surface);
-    palette.setColor(group, QPalette::Highlight, highlight);
+    palette.setColor(group, QPalette::Accent, accent);
   }
   return palette;
 }
@@ -682,7 +681,7 @@ TEST(QtUiScaleMetricsTests,
 }
 
 TEST(QtApplicationThemeTests,
-     DefinesLayeredSurfacesTextAndAmethystInteractionRoles) {
+     DefinesLayeredSurfacesNeutralSelectionAndAmethystInteractionRoles) {
   const QPalette palette =
       quader::qt_obsidian_application_palette(QPalette{});
 
@@ -701,8 +700,8 @@ TEST(QtApplicationThemeTests,
   expect_color(palette, QPalette::Active, QPalette::Mid, 0x23242a);
   expect_color(palette, QPalette::Active, QPalette::Dark, 0x16171b);
   expect_color(palette, QPalette::Active, QPalette::Shadow, 0x0c0d10);
-  expect_color(palette, QPalette::Active, QPalette::Highlight, 0xa794dd);
-  expect_color(palette, QPalette::Active, QPalette::HighlightedText, 0x17181c);
+  expect_color(palette, QPalette::Active, QPalette::Highlight, 0x42454c);
+  expect_color(palette, QPalette::Active, QPalette::HighlightedText, 0xe4e6ed);
   expect_color(palette, QPalette::Active, QPalette::Accent, 0xa794dd);
   expect_color(palette, QPalette::Active, QPalette::Link, 0xb9abe7);
   expect_color(palette, QPalette::Active, QPalette::LinkVisited, 0xc0a7d2);
@@ -711,9 +710,9 @@ TEST(QtApplicationThemeTests,
   expect_color(palette, QPalette::Inactive, QPalette::Text, 0xc9cdd7);
   expect_color(palette, QPalette::Inactive, QPalette::ButtonText, 0xcfd3dc);
   expect_color(palette, QPalette::Inactive, QPalette::Button, 0x282930);
-  expect_color(palette, QPalette::Inactive, QPalette::Highlight, 0x998dbf);
+  expect_color(palette, QPalette::Inactive, QPalette::Highlight, 0x393b42);
   expect_color(palette, QPalette::Inactive, QPalette::HighlightedText,
-               0x17181c);
+               0xcfd3dc);
   expect_color(palette, QPalette::Inactive, QPalette::Accent, 0x998dbf);
   expect_color(palette, QPalette::Inactive, QPalette::Link, 0xac9fd6);
 
@@ -725,9 +724,9 @@ TEST(QtApplicationThemeTests,
   expect_color(palette, QPalette::Disabled, QPalette::ButtonText, 0x90939e);
   expect_color(palette, QPalette::Disabled, QPalette::PlaceholderText,
                0x797d89);
-  expect_color(palette, QPalette::Disabled, QPalette::Highlight, 0x8b84a0);
+  expect_color(palette, QPalette::Disabled, QPalette::Highlight, 0x303138);
   expect_color(palette, QPalette::Disabled, QPalette::HighlightedText,
-               0x17181c);
+               0x9699a4);
   expect_color(palette, QPalette::Disabled, QPalette::Accent, 0x8b84a0);
   expect_color(palette, QPalette::Disabled, QPalette::Link, 0x978fac);
 }
@@ -746,8 +745,10 @@ TEST(QtApplicationThemeTests,
         << "row striping must remain quieter than content and selection";
     expect_contrast(palette, group, QPalette::Text, QPalette::AlternateBase,
                     4.5);
-    expect_contrast(palette, group, QPalette::Highlight,
-                    QPalette::AlternateBase, 3.0);
+    EXPECT_GT(contrast_ratio(palette.color(group, QPalette::Highlight),
+                             alternate),
+              contrast_ratio(base, alternate))
+        << "neutral selection must remain clearer than row striping";
   }
 }
 
@@ -788,20 +789,19 @@ TEST(QtApplicationThemeTests,
 }
 
 TEST(QtApplicationThemeTests,
-     KeepsInteractionAccentDistinctFromControlsInEveryState) {
+     KeepsAmethystInteractionAccentDistinctFromNeutralSelection) {
   const QPalette palette =
       quader::qt_obsidian_application_palette(QPalette{});
 
   for (const QPalette::ColorGroup group :
        {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
-    expect_contrast(palette, group, QPalette::Highlight, QPalette::Button,
-                    3.0);
+    expect_contrast(palette, group, QPalette::Accent, QPalette::Button, 3.0);
     EXPECT_GE(contrast_ratio(
-                  palette.color(group, QPalette::Highlight).darker(125),
+                  palette.color(group, QPalette::Accent).darker(125),
                   palette.color(group, QPalette::Button)),
               3.0)
-        << "Fusion's derived focus outline must remain distinct";
-    EXPECT_EQ(palette.color(group, QPalette::Accent),
+        << "the dedicated interaction accent must remain distinct";
+    EXPECT_NE(palette.color(group, QPalette::Accent),
               palette.color(group, QPalette::Highlight));
   }
 }
@@ -1055,17 +1055,16 @@ TEST(QtApplicationThemeTests,
 }
 
 TEST(QtApplicationThemeTests,
-     KeepsDockPressedOutlineDistinctAndPaintsScalableGlyphGeometry) {
+     KeepsDockPressedAccentDistinctAndPaintsScalableGlyphGeometry) {
   const QPalette palette =
       quader::qt_obsidian_application_palette(QPalette{});
   const QPalette light_palette =
       dock_surface_palette(QColor(245, 245, 245), QColor(0, 90, 180));
   for (const QPalette::ColorGroup group :
        {QPalette::Active, QPalette::Inactive}) {
-    expect_contrast(palette, group, QPalette::Highlight,
+    expect_contrast(palette, group, QPalette::Accent,
                     QPalette::AlternateBase, 3.0);
-    expect_contrast(palette, group, QPalette::Highlight, QPalette::Button,
-                    3.0);
+    expect_contrast(palette, group, QPalette::Accent, QPalette::Button, 3.0);
   }
 
   const QString style_sheet = quader::qt_dock_title_style_sheet(palette);
@@ -1074,7 +1073,7 @@ TEST(QtApplicationThemeTests,
           .arg(palette.color(QPalette::Active, QPalette::Button).name())));
   EXPECT_TRUE(style_sheet.contains(
       QStringLiteral("border: 2px solid %1")
-          .arg(palette.color(QPalette::Active, QPalette::Highlight).name())));
+          .arg(palette.color(QPalette::Active, QPalette::Accent).name())));
 
   for (const QPalette *glyph_palette : {&palette, &light_palette}) {
     for (const quader::QtDockTitleGlyph glyph : {

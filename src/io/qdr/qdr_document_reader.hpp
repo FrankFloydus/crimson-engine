@@ -58,6 +58,20 @@ struct QdrProjectReadResult {
     std::uint64_t source_content_hash = 0u;
 };
 
+/// Validated project references without decoding or compiling scene geometry.
+struct QdrProjectDependencyReadResult final {
+  bool ok = false;
+  std::string message;
+  std::vector<quader_io::QdrDiagnostic> diagnostics;
+  std::array<std::byte, 16> scene_uuid{};
+  std::string scene_name;
+  std::vector<ProjectAssetId> material_ids;
+  std::vector<ProjectAssetReference> project_asset_dependencies;
+  std::uint64_t source_byte_count = 0u;
+  std::uint64_t source_content_hash = 0u;
+  QdrProjectReadStats stats;
+};
+
 /**
  * Owns QDR Document Reader behavior within the QDR document persistence layer.
  */
@@ -67,6 +81,10 @@ public:
   deserialize_project_document(std::span<const std::byte> bytes);
   [[nodiscard]] static QdrProjectReadResult
   read_project_document(const std::filesystem::path &path);
+  [[nodiscard]] static QdrProjectDependencyReadResult
+  deserialize_project_dependencies(std::span<const std::byte> bytes);
+  [[nodiscard]] static QdrProjectDependencyReadResult
+  read_project_dependencies(const std::filesystem::path &path);
 };
 
 } // namespace quader

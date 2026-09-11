@@ -46,6 +46,10 @@ QtAuxiliaryWindowState::load(const std::filesystem::path &path) {
       settings.value(QStringLiteral("gridMode"), true).toBool();
   state.material_browser_tile_size =
       settings.value(QStringLiteral("tileSize"), 128).toInt();
+  state.material_browser_sidebar_visible =
+      settings.value(QStringLiteral("sidebarVisible"), true).toBool();
+  state.material_browser_sidebar_width =
+      settings.value(QStringLiteral("sidebarWidth"), 200).toInt();
   settings.endGroup();
 
   settings.beginGroup(QStringLiteral("StandardMaterialEditor"));
@@ -83,6 +87,8 @@ bool QtAuxiliaryWindowState::save(const std::filesystem::path &path) const {
   settings.setValue(QStringLiteral("geometry"), material_browser_geometry);
   settings.setValue(QStringLiteral("gridMode"), material_browser_grid_mode);
   settings.setValue(QStringLiteral("tileSize"), material_browser_tile_size);
+  settings.setValue(QStringLiteral("sidebarVisible"), material_browser_sidebar_visible);
+  settings.setValue(QStringLiteral("sidebarWidth"), material_browser_sidebar_width);
   settings.endGroup();
 
   settings.beginGroup(QStringLiteral("StandardMaterialEditor"));

@@ -42,6 +42,10 @@ MaterialPresentationSnapshot MaterialPresentationService::snapshot(
   result.materials.reserve(project_materials.size() + embedded_count);
 
   for (const ProjectMaterialCatalogEntry &entry : project_materials) {
+    if (project.manifest() != nullptr &&
+        project.manifest()->is_material_deleted(entry.material.id)) {
+      continue;
+    }
     const ProjectStandardMaterialDefinition *standard =
         entry.material.standard_material();
     MaterialPresentationItem item{

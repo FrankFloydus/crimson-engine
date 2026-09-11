@@ -13,6 +13,8 @@
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "ui/outliner_panel.hpp"
+#include "ui/qt_application_theme.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -21,18 +23,24 @@
 #include <QAbstractItemView>
 #include <QAction>
 #include <QApplication>
+#include <QColor>
 #include <QCoreApplication>
 #include <QContextMenuEvent>
+#include <QImage>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLayout>
 #include <QLineEdit>
+#include <QMenu>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QModelIndex>
-#include <QMenu>
 #include <QPersistentModelIndex>
+#include <QPainter>
+#include <QPalette>
 #include <QStyle>
-#include <QMimeData>
+#include <QStyleFactory>
+#include <QStyleOptionViewItem>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QTreeView>
@@ -132,6 +140,56 @@ void expect_selection(QTreeView &tree, const quader::SceneDocument &document,
   EXPECT_EQ(selected_widget_entities(tree), expected);
   EXPECT_EQ(sorted_entities(document.selected_entities()), expected);
   EXPECT_EQ(document.primary_selection(), primary);
+}
+
+QImage render_branch(QStyle &style, const QPalette &palette,
+                     QStyle::State state, Qt::LayoutDirection direction,
+                     qreal device_pixel_ratio = 1.0,
+                     const QWidget *widget = nullptr) {
+  constexpr QSize kLogicalSize{24, 24};
+  QImage image(
+      QSize(qRound(kLogicalSize.width() * device_pixel_ratio),
+            qRound(kLogicalSize.height() * device_pixel_ratio)),
+      QImage::Format_ARGB32_Premultiplied);
+  image.setDevicePixelRatio(device_pixel_ratio);
+  image.fill(Qt::transparent);
+
+  QPainter painter(&image);
+  QStyleOptionViewItem option;
+  option.rect = QRect(QPoint{}, kLogicalSize);
+  option.palette = palette;
+  option.direction = direction;
+  option.state = state;
+  style.drawPrimitive(QStyle::PE_IndicatorBranch, &option, &painter, widget);
+  painter.end();
+  return image;
+}
+
+int count_pixels(const QImage &image, const QColor &color) {
+  int count = 0;
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x) {
+      if (image.pixelColor(x, y) == color) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+int count_columns_with_color(const QImage &image, const QColor &color) {
+  int count = 0;
+  for (int x = 0; x < image.width(); ++x) {
+    bool found = false;
+    for (int y = 0; y < image.height(); ++y) {
+      if (image.pixelColor(x, y) == color) {
+        found = true;
+        break;
+      }
+    }
+    count += found ? 1 : 0;
+  }
+  return count;
 }
 
 
@@ -239,6 +297,16 @@ TEST_F(OutlinerPanelDropTests,
   expect_selection(*tree_, session_.scene(), {first, second}, second);
   EXPECT_EQ(session_.scene().world_transform_matrix(first).values, first_world.values);
   EXPECT_EQ(session_.scene().world_transform_matrix(second).values, second_world.values);
+
+  const QString screenshot_path = qEnvironmentVariable("QUADER_OUTLINER_SCREENSHOT");
+  if (!screenshot_path.isEmpty()) {
+    QApplication::setPalette(quader::qt_obsidian_application_palette(
+        QApplication::style()->standardPalette()));
+    panel_.resize(320, 360);
+    panel_.show();
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(panel_.grab().save(screenshot_path, "PNG"));
+  }
 
   ASSERT_TRUE(editor_.history().undo().ok());
   refresh();
@@ -377,6 +445,100 @@ TEST(OutlinerPanelTests, TreeFillsThePanelContentsRect) {
   EXPECT_EQ(tree->editTriggers(), QAbstractItemView::EditKeyPressed)
       << "double-click remains available for tree expansion; F2 and the "
          "context menu own rename";
+}
+
+TEST(OutlinerPanelTests,
+     RelationshipStyleRetainsFusionArrowsDirectionScaleAndPlatformPalette) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-outliner-relationship-style-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  const QColor connector(17, 121, 213);
+  const QColor arrow(229, 31, 71);
+  QPalette themed_palette = application.palette();
+  for (const QPalette::ColorGroup group :
+       {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
+    themed_palette.setColor(group, QPalette::Midlight, connector);
+    themed_palette.setColor(group, QPalette::Text, QColor(43, 211, 97));
+    themed_palette.setColor(group, QPalette::WindowText, arrow);
+  }
+  QApplication::setPalette(themed_palette);
+
+  quader::OutlinerPanel panel;
+  const quader::QtUiScaleMetrics ui_scale(1.5F, 7U);
+  panel.apply_ui_scale(ui_scale);
+  auto *tree = panel.findChild<QTreeView *>(QStringLiteral("outliner.tree"));
+  ASSERT_NE(tree, nullptr);
+  ASSERT_NE(tree->style(), nullptr);
+  EXPECT_EQ(tree->style()->objectName(),
+            QStringLiteral("quaderTreeRelationshipPresentation"));
+
+  std::unique_ptr<QStyle> stock_fusion(
+      QStyleFactory::create(QStringLiteral("fusion")));
+  ASSERT_NE(stock_fusion, nullptr);
+  const int design_indentation = stock_fusion->pixelMetric(
+      QStyle::PM_TreeViewIndentation, nullptr, tree);
+  EXPECT_EQ(tree->style()->pixelMetric(QStyle::PM_TreeViewIndentation, nullptr,
+                                      tree),
+            ui_scale.px(design_indentation));
+
+  constexpr QStyle::State kLeafState =
+      QStyle::State_Enabled | QStyle::State_Active | QStyle::State_Item |
+      QStyle::State_Sibling;
+  const QImage left_to_right =
+      render_branch(*tree->style(), themed_palette, kLeafState,
+                    Qt::LeftToRight, 1.0, tree);
+  const QImage right_to_left =
+      render_branch(*tree->style(), themed_palette, kLeafState,
+                    Qt::RightToLeft, 1.0, tree);
+  constexpr int kCenter = 11;
+  EXPECT_EQ(left_to_right.pixelColor(kCenter, 0), connector);
+  EXPECT_EQ(left_to_right.pixelColor(kCenter, 23), connector);
+  EXPECT_EQ(left_to_right.pixelColor(23, kCenter), connector);
+  EXPECT_EQ(left_to_right.pixelColor(0, kCenter), QColor(Qt::transparent));
+  EXPECT_EQ(right_to_left.pixelColor(0, kCenter), connector);
+  EXPECT_EQ(right_to_left.pixelColor(23, kCenter), QColor(Qt::transparent));
+
+  for (const QStyle::State expansion :
+       {QStyle::State_None, QStyle::State_Open}) {
+    const QStyle::State child_state =
+        kLeafState | QStyle::State_Children | expansion;
+    const QImage presented =
+        render_branch(*tree->style(), themed_palette, child_state,
+                      Qt::LeftToRight, 1.0, tree);
+    const QImage stock = render_branch(*stock_fusion, themed_palette,
+                                       child_state, Qt::LeftToRight);
+    int arrow_pixels = 0;
+    for (int y = kCenter - 4; y <= kCenter + 4; ++y) {
+      for (int x = kCenter - 4; x <= kCenter + 4; ++x) {
+        EXPECT_EQ(presented.pixelColor(x, y), stock.pixelColor(x, y));
+        arrow_pixels += presented.pixelColor(x, y).alpha() != 0 ? 1 : 0;
+      }
+    }
+    EXPECT_GT(arrow_pixels, 0)
+        << "the custom relationship painter must leave Fusion's disclosure "
+           "triangle intact";
+  }
+
+  const QImage high_dpi =
+      render_branch(*tree->style(), themed_palette, QStyle::State_Sibling,
+                    Qt::LeftToRight, 2.0, tree);
+  EXPECT_EQ(count_columns_with_color(high_dpi, connector), 1)
+      << "a cosmetic hierarchy spine remains one backing pixel wide";
+  EXPECT_GE(count_pixels(high_dpi, connector), high_dpi.height() - 2);
+
+  QApplication::setPalette(QPalette{});
+  QCoreApplication::processEvents();
+  const QPalette platform_palette = QApplication::palette();
+  const QImage platform_spine = render_branch(
+      *tree->style(), platform_palette,
+      QStyle::State_Enabled | QStyle::State_Active | QStyle::State_Sibling,
+      Qt::LeftToRight, 1.0, tree);
+  EXPECT_EQ(platform_spine.pixelColor(kCenter, 0),
+            platform_palette.color(QPalette::Active, QPalette::Text));
 }
 
 

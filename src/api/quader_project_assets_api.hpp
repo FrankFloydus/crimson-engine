@@ -15,8 +15,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace quader {
@@ -84,6 +86,59 @@ struct QuaderMaterialPresentationItem final {
 struct QuaderMaterialPresentationSnapshot {
   QuaderMaterialPresentationRevision revision;
   std::vector<QuaderMaterialPresentationItem> materials;
+  std::vector<std::string> material_folders;
+};
+
+/// Reviewed impact of permanently removing one project material folder.
+struct QuaderMaterialFolderDeletionPreview {
+  std::string project_relative_path;
+  std::uint64_t revision = 0u;
+  bool complete = false;
+  std::vector<ProjectAssetId> material_ids;
+  std::vector<std::string> material_names;
+  std::vector<std::string> affected_scenes;
+  std::vector<std::string> errors;
+  std::size_t folder_count = 0u;
+  bool discards_material_draft = false;
+};
+
+/// Scene usage preserves the saved and currently edited versions separately.
+struct QuaderProjectSceneMaterialDependencies {
+  SceneId scene_id;
+  std::optional<SceneSessionId> session_id;
+  std::string project_relative_path;
+  std::string name;
+  bool live = false;
+  bool dirty = false;
+  std::vector<ProjectAssetId> material_ids;
+};
+
+/// A material's saved or pending texture input, independent of any renderer.
+struct QuaderProjectMaterialTextureDependency {
+  std::string slot;
+  std::optional<ProjectAssetId> texture_id;
+  std::string project_relative_path;
+  std::optional<std::filesystem::path> pending_source;
+};
+
+/// Material-to-texture edges for either its saved asset or open draft.
+struct QuaderProjectMaterialDependencies {
+  ProjectAssetId id;
+  std::string project_relative_path;
+  std::string name;
+  bool draft = false;
+  bool dirty = false;
+  std::vector<QuaderProjectMaterialTextureDependency> textures;
+};
+
+/// Immutable project-wide dependency information; errors prevent safe deletion.
+struct QuaderProjectMaterialDependencySnapshot {
+  ProjectId project_id;
+  std::uint64_t revision = 0u;
+  bool complete = false;
+  std::vector<std::string> errors;
+  std::vector<QuaderProjectSceneMaterialDependencies> scenes;
+  std::vector<QuaderProjectMaterialDependencies> materials;
 };
 
 /// One project material created from an imported texture source.
@@ -123,13 +178,31 @@ public:
   /// Completes valid sources independently and reports per-file rejections.
   [[nodiscard]] QuaderApiResult<QuaderProjectMaterialImportReport>
   import_textures_as_materials(
-      std::span<const std::filesystem::path> source_paths);
+      std::span<const std::filesystem::path> source_paths,
+      std::string_view destination_folder = "Materials");
+
+  QuaderApiVoidResult create_material_folder(std::string_view parent_folder,
+                                             std::string_view name);
+  QuaderApiVoidResult rename_material_folder(std::string_view folder,
+                                             std::string_view name);
+  QuaderApiVoidResult move_material_folder(std::string_view folder,
+                                           std::string_view destination_folder);
+  QuaderApiVoidResult move_materials(std::span<const ProjectAssetId> material_ids,
+                                     std::string_view destination_folder);
+  [[nodiscard]] QuaderApiResult<QuaderProjectMaterialDependencySnapshot>
+  material_dependencies(bool refresh_files = false) const;
+  [[nodiscard]] QuaderApiResult<QuaderMaterialFolderDeletionPreview>
+  preview_delete_material_folder(std::string_view folder) const;
+  /// Rejects an obsolete preview instead of applying an unreviewed deletion.
+  QuaderApiVoidResult delete_material_folder(std::string_view folder,
+                                             std::uint64_t expected_revision);
 
   void rebind_session(QuaderApiSession session) { session_ = session; }
 
 private:
   void attach_events(QuaderEventsApi &events) { events_ = &events; }
   void publish_assets_changed();
+  void publish_active_material_changed();
 
   friend class QuaderProjectAssetsApiInternalAccess;
   QuaderApiSession session_;
