@@ -726,6 +726,112 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
+     ProductionPanelSelectionCursorTracksRingModifiersWithoutPointerMotion) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-selection-modifier-cursor-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  quader::QtViewportPanel panel;
+  panel.attach_workspace(session.viewport_workspace());
+  auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+  const QPointF local{400.0, 300.0};
+  const QPointF global{500.0, 400.0};
+  QEnterEvent enter(local, local, global);
+  QApplication::sendEvent(surface, &enter);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &focus);
+  const auto process_input = [&] {
+    panel.process_input(
+        editor, session.scene(), session.assets(), session.modeling(), {},
+        session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+  };
+  const auto key = [&](QEvent::Type type, int code,
+                       Qt::KeyboardModifiers previous_modifiers) {
+    QKeyEvent event(type, code, previous_modifiers);
+    QApplication::sendEvent(surface, &event);
+    process_input();
+  };
+  const auto expect_selection_cursor =
+      [&](quader::QtApplicationCursorVariant variant) {
+        ASSERT_EQ(surface->cursor().shape(), Qt::BitmapCursor);
+        EXPECT_EQ(surface->cursor().pixmap().toImage(),
+                  quader::qt_application_cursor_pixmap(
+                      variant, std::max<qreal>(1.0, surface->devicePixelRatio()))
+                      .toImage());
+      };
+  using Variant = quader::QtApplicationCursorVariant;
+  process_input();
+  expect_selection_cursor(Variant::Default);
+
+  // Exercise both modifier orders with the pre-transition masks Qt can send.
+  key(QEvent::KeyPress, Qt::Key_Control, Qt::NoModifier);
+  expect_selection_cursor(Variant::SelectionSubtract);
+  key(QEvent::KeyPress, Qt::Key_Alt, Qt::ControlModifier);
+  EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+  const auto ring_revision = surface->pointer_cursor_presentation_revision();
+  for (int idle = 0; idle < 4; ++idle) {
+    process_input();
+    EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+    EXPECT_EQ(surface->pointer_cursor_presentation_revision(), ring_revision);
+  }
+  key(QEvent::KeyRelease, Qt::Key_Alt,
+      Qt::ControlModifier | Qt::AltModifier);
+  expect_selection_cursor(Variant::SelectionSubtract);
+  key(QEvent::KeyRelease, Qt::Key_Control, Qt::ControlModifier);
+  expect_selection_cursor(Variant::Default);
+  key(QEvent::KeyPress, Qt::Key_Alt, Qt::NoModifier);
+  EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+  key(QEvent::KeyPress, Qt::Key_Control, Qt::AltModifier);
+  EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+  key(QEvent::KeyRelease, Qt::Key_Control,
+      Qt::ControlModifier | Qt::AltModifier);
+  EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+  key(QEvent::KeyRelease, Qt::Key_Alt, Qt::AltModifier);
+  expect_selection_cursor(Variant::Default);
+
+  key(QEvent::KeyPress, Qt::Key_Shift, Qt::NoModifier);
+  expect_selection_cursor(Variant::SelectionAdd);
+  key(QEvent::KeyPress, Qt::Key_Control, Qt::ShiftModifier);
+  expect_selection_cursor(Variant::SelectionSubtract);
+  key(QEvent::KeyPress, Qt::Key_Alt,
+      Qt::ControlModifier | Qt::ShiftModifier);
+  EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+  key(QEvent::KeyRelease, Qt::Key_Shift,
+      Qt::ControlModifier | Qt::ShiftModifier | Qt::AltModifier);
+  EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+
+  // A held ring click retains its traversal cursor after the modifiers lift.
+  QMouseEvent press(QEvent::MouseButtonPress, local, global,
+                    Qt::LeftButton, Qt::LeftButton,
+                    Qt::ControlModifier | Qt::AltModifier);
+  QApplication::sendEvent(surface, &press);
+  process_input();
+  process_input();
+  EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+  key(QEvent::KeyRelease, Qt::Key_Alt,
+      Qt::ControlModifier | Qt::AltModifier);
+  EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+  key(QEvent::KeyRelease, Qt::Key_Control, Qt::ControlModifier);
+  EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+  QMouseEvent release(QEvent::MouseButtonRelease, local, global,
+                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &release);
+  process_input();
+  process_input();
+  expect_selection_cursor(Variant::Default);
+}
+
+TEST(QtViewportSurfaceInputTests,
      ModifierOnlyKeysUpdateStationaryViewportInput) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

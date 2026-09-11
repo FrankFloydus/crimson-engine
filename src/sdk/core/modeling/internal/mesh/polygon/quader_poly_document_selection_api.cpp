@@ -1329,6 +1329,32 @@ std::vector<Edge> edge_loop_edges(const Document& document, Edge seed_edge, Elem
     append_interior_loop_direction(
         incidence_counts, faces_by_edge, edges_by_vertex, seed, seed.b,
         edges);
+    if (edges.size() == 1U) {
+        // A pole can leave the ordinary loop at its seed. Prefer the larger
+        // adjacent face perimeter: a cylinder rim follows its cap, while a
+        // longitudinal edge closes one side quad. Equal counts retain the
+        // authored adjacency order, independent of the picked face.
+        const auto seed_faces = faces_by_edge.find(edge_key(seed));
+        const Face* perimeter_face = nullptr;
+        if (seed_faces != faces_by_edge.end()) {
+            for (const std::size_t face_index : seed_faces->second) {
+                const Face* face = face_at_index(document, face_index);
+                if (face != nullptr &&
+                    (perimeter_face == nullptr ||
+                     face->vertices.size() > perimeter_face->vertices.size())) {
+                    perimeter_face = face;
+                }
+            }
+        }
+        if (perimeter_face != nullptr) {
+            edges.reserve(perimeter_face->vertices.size());
+            for (const Edge edge : face_edges(*perimeter_face)) {
+                if (edge != seed) {
+                    edges.push_back(edge);
+                }
+            }
+        }
+    }
     return edges;
 }
 

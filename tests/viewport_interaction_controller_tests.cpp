@@ -7,6 +7,7 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_command_ids.hpp"
 #include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "assets/curve_asset_payload.hpp"
 #include "assets/mesh_asset.hpp"
@@ -392,6 +393,94 @@ create_unit_box(ViewportInteractionHarness &harness) {
   EXPECT_TRUE(box.ok) << box.message;
   return box.value();
 }
+
+/// Exercises native picking against a capped cylinder's authored edge IDs.
+struct CylinderEdgeSelectionScenario final {
+  using EdgeId = std::pair<quader::QuaderElementId, quader::QuaderElementId>;
+
+  ViewportInteractionHarness harness;
+  quader_poly::Document document;
+  quader::QuaderModelingObjectRef object;
+
+  void initialize(int side_count) {
+    document = quader_poly::make_cylinder({.side_count = side_count});
+    const auto created = harness.editor.modeling().create_mesh(
+        quader::QuaderPolygonDocumentInternalAccess::from_backend(document),
+        {.name = "Viewport Cylinder Edge Selection"});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    object = created.value();
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Edge)
+                    .ok());
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+    harness.camera.set_view_direction({-0.15f, -0.4f, -1.0f});
+    harness.session.history().clear();
+  }
+
+  static EdgeId edge_id(quader::QuaderElementId a,
+                        quader::QuaderElementId b) {
+    return a < b ? EdgeId{a, b} : EdgeId{b, a};
+  }
+
+  static std::vector<EdgeId> perimeter(const quader_poly::Face &face) {
+    std::vector<EdgeId> edges;
+    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+      edges.push_back(edge_id(face.vertices[index],
+                             face.vertices[(index + 1u) % face.vertices.size()]));
+    }
+    std::sort(edges.begin(), edges.end());
+    return edges;
+  }
+
+  [[nodiscard]] quader::QVec2 midpoint(quader::QuaderElementId a,
+                                      quader::QuaderElementId b) const {
+    const auto vertex_position = [&](quader::QuaderElementId id) {
+      const auto vertex = std::find_if(
+          document.vertices.begin(), document.vertices.end(),
+          [&](const auto &candidate) { return candidate.id == id; });
+      EXPECT_NE(vertex, document.vertices.end());
+      return vertex == document.vertices.end() ? quader::QVec3{}
+                                               : vertex->position;
+    };
+    const auto projected = harness.camera.project_world_point(
+        (vertex_position(a) + vertex_position(b)) * 0.5f);
+    EXPECT_TRUE(projected.visible);
+    return projected.position;
+  }
+
+  [[nodiscard]] std::vector<EdgeId> selected_edges() const {
+    const auto selection = harness.session.modeling().export_selection();
+    std::vector<EdgeId> edges;
+    for (const auto &selected_object : selection.objects) {
+      if (selected_object.modeling_object_id != object.modeling_object_id) {
+        continue;
+      }
+      for (const auto &edge : selected_object.selected_edges) {
+        edges.push_back(edge_id(edge.a, edge.b));
+      }
+    }
+    std::sort(edges.begin(), edges.end());
+    return edges;
+  }
+
+  void expect_edge_hover_feedback(EdgeId edge, bool remove) const {
+    const quader::ViewportOverlayFrame overlay =
+        quader::test_support::visible_modeling_overlay_frame(
+            harness.session.modeling());
+    EXPECT_EQ(overlay.hover_target_selected, remove);
+    const auto hovered = std::find_if(
+        overlay.lines.begin(), overlay.lines.end(),
+        [&](const quader::ViewportOverlayLine &line) {
+          return line.layer == quader::ViewportOverlayLayer::HoverEdge &&
+                 line.element.object_id == object.modeling_object_id &&
+                 edge_id(line.element.edge_a, line.element.edge_b) == edge;
+        });
+    ASSERT_NE(hovered, overlay.lines.end());
+    EXPECT_EQ(hovered->color, remove ? quader::kOverlayRemoveWireColor
+                                     : quader::kOverlayHoverWireColor);
+  }
+};
 
 quader::QuaderModelingObjectRef
 create_box_at(ViewportInteractionHarness &harness, quader::QVec3 center) {
@@ -3331,7 +3420,7 @@ TEST(ViewportCurveMarqueeTests,
 }
 
 TEST(ViewportInteractionControllerTests,
-     OrthographicModifiedDoubleClicksRespectBlenderEdgeLoopPoleStopping) {
+     OrthographicModifiedDoubleClicksSelectAndRemoveThePoleFacePerimeter) {
   ViewportInteractionHarness harness;
   const auto box = create_unit_box(harness);
   ASSERT_TRUE(harness.editor.selection()
@@ -3347,7 +3436,7 @@ TEST(ViewportInteractionControllerTests,
 
   harness.click_selection(edge.position, 2);
   const auto loop = harness.editor.selection().summary();
-  ASSERT_EQ(loop.selected_edge_count, 1u);
+  ASSERT_EQ(loop.selected_edge_count, 4u);
   EXPECT_EQ(loop.active_object_id, box.modeling_object_id);
   EXPECT_EQ(loop.mode, quader::QuaderSelectionMode::Edge);
 
@@ -3361,7 +3450,7 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
-     CoalescedGizmoDoubleClickRespectsBlenderEdgeLoopPoleStopping) {
+     CoalescedGizmoDoubleClickSelectsThePoleFacePerimeterOnce) {
   ViewportInteractionHarness harness;
   (void)create_unit_box(harness);
   ASSERT_TRUE(harness.editor.selection()
@@ -3402,7 +3491,7 @@ TEST(ViewportInteractionControllerTests,
   harness.controller.handle_after_active_tool(
       harness.editor, combined, {}, before_combined);
   const auto loop = harness.editor.selection().summary();
-  EXPECT_EQ(loop.selected_edge_count, 1u);
+  EXPECT_EQ(loop.selected_edge_count, 4u);
 
   auto release = harness.frame(false, false, true, hit);
   release.left_click_count = 2;
@@ -5111,7 +5200,230 @@ TEST(ViewportInteractionControllerTests, ShortMoveGizmoClickKeepsEdgeSelection) 
 }
 
 TEST(ViewportInteractionControllerTests,
-     AltClickEdgeSelectsBlenderStyleLoopThroughViewportFallback) {
+     AltClickAndDoubleClickSelectTheCompleteCylinderCapPerimeter) {
+  for (const int side_count : {8, 32}) {
+    std::vector<CylinderEdgeSelectionScenario::EdgeId> first_gesture_edges;
+    for (const bool double_click : {false, true}) {
+      SCOPED_TRACE(side_count);
+      SCOPED_TRACE(double_click);
+      CylinderEdgeSelectionScenario scenario;
+      scenario.initialize(side_count);
+      auto &harness = scenario.harness;
+      const auto &side = scenario.document.faces[side_count / 4 - 1];
+      const auto expected =
+          CylinderEdgeSelectionScenario::perimeter(scenario.document.faces.back());
+      ASSERT_EQ(expected.size(), static_cast<std::size_t>(side_count));
+      const auto hit = scenario.midpoint(side.vertices[1], side.vertices[2]);
+      const auto content_revision =
+          harness.editor.selection().summary().content_revision;
+
+      if (double_click) {
+        harness.click_selection(hit);
+        ASSERT_EQ(scenario.selected_edges(),
+                  (std::vector<CylinderEdgeSelectionScenario::EdgeId>{
+                      CylinderEdgeSelectionScenario::edge_id(
+                          side.vertices[1], side.vertices[2])}));
+      }
+      harness.input.modifiers.alt = !double_click;
+      harness.click_selection(hit, double_click ? 2 : 1);
+
+      EXPECT_EQ(scenario.selected_edges(), expected);
+      const auto selected = harness.editor.selection().summary();
+      EXPECT_EQ(selected.active_object_id, scenario.object.modeling_object_id);
+      EXPECT_EQ(selected.mode, quader::QuaderSelectionMode::Edge);
+      EXPECT_EQ(selected.content_revision, content_revision);
+      if (double_click) {
+        EXPECT_EQ(scenario.selected_edges(), first_gesture_edges);
+      } else {
+        first_gesture_edges = scenario.selected_edges();
+      }
+
+      harness.click_selection(hit, double_click ? 2 : 1);
+      EXPECT_EQ(scenario.selected_edges(), expected);
+      EXPECT_EQ(harness.editor.selection().summary().content_revision,
+                content_revision);
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     AltClickAndDoubleClickSelectOneCylinderSideQuadFromItsVerticalEdge) {
+  for (const int side_count : {8, 32}) {
+    std::vector<CylinderEdgeSelectionScenario::EdgeId> first_gesture_edges;
+    for (const bool double_click : {false, true}) {
+      SCOPED_TRACE(side_count);
+      SCOPED_TRACE(double_click);
+      CylinderEdgeSelectionScenario scenario;
+      scenario.initialize(side_count);
+      auto &harness = scenario.harness;
+      const auto &side = scenario.document.faces[side_count / 4];
+      const auto seed = CylinderEdgeSelectionScenario::edge_id(
+          side.vertices[0], side.vertices[1]);
+      const auto first_quad = CylinderEdgeSelectionScenario::perimeter(side);
+      const auto second_quad = CylinderEdgeSelectionScenario::perimeter(
+          scenario.document.faces[side_count / 4 - 1]);
+      const auto hit = scenario.midpoint(seed.first, seed.second);
+
+      if (double_click) {
+        harness.click_selection(hit);
+        ASSERT_EQ(scenario.selected_edges(),
+                  (std::vector<CylinderEdgeSelectionScenario::EdgeId>{seed}));
+      }
+      harness.input.modifiers.alt = !double_click;
+      harness.click_selection(hit, double_click ? 2 : 1);
+
+      const auto selected = scenario.selected_edges();
+      EXPECT_TRUE(selected == first_quad || selected == second_quad);
+      EXPECT_EQ(selected.size(), 4u);
+      EXPECT_TRUE(std::binary_search(selected.begin(), selected.end(), seed));
+      if (double_click) {
+        EXPECT_EQ(selected, first_gesture_edges);
+      } else {
+        first_gesture_edges = selected;
+      }
+
+      harness.click_selection(hit, double_click ? 2 : 1);
+      EXPECT_EQ(scenario.selected_edges(), selected);
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     CtrlAltEdgeHoverNeverPublishesBlueRemovalFeedbackInEitherKeyOrder) {
+  constexpr int kSideCount = 16;
+  CylinderEdgeSelectionScenario scenario;
+  scenario.initialize(kSideCount);
+  auto &harness = scenario.harness;
+  const auto &side = scenario.document.faces[kSideCount / 4];
+  const auto seed = CylinderEdgeSelectionScenario::edge_id(
+      side.vertices[0], side.vertices[1]);
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_edge(scenario.object, seed.first, seed.second)
+                  .ok());
+  harness.input.mouse_local = scenario.midpoint(seed.first, seed.second);
+  harness.input.mouse_screen = harness.input.mouse_local;
+  ViewportSelectionWorkGateHarness work_gate(harness);
+  const auto selection_revision =
+      harness.editor.selection().summary().selection_revision;
+
+  const auto expect_feedback = [&](quader::ViewportModifiers modifiers,
+                                   bool remove) {
+    harness.input.modifiers = modifiers;
+    // Repeated stationary frames also exercise the real hover work cache.
+    for (int frame_index = 0; frame_index < 2; ++frame_index) {
+      SCOPED_TRACE(frame_index);
+      const auto frame = harness.frame();
+      const auto before =
+          harness.controller.handle_before_active_tool(harness.editor, frame);
+      harness.controller.handle_after_active_tool(
+          harness.editor, frame, {}, before, work_gate.hover_port());
+      scenario.expect_edge_hover_feedback(seed, remove);
+    }
+    EXPECT_EQ(scenario.selected_edges(),
+              (std::vector<CylinderEdgeSelectionScenario::EdgeId>{seed}));
+    EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+              selection_revision);
+  };
+
+  expect_feedback({}, false);
+  expect_feedback({.primary = true}, true);
+  expect_feedback({.primary = true, .alt = true}, false);
+  expect_feedback({.primary = true}, true);
+  expect_feedback({}, false);
+  expect_feedback({.alt = true}, false);
+  expect_feedback({.primary = true, .alt = true}, false);
+  expect_feedback({.alt = true}, false);
+}
+
+TEST(ViewportInteractionControllerTests,
+     HeldCtrlAltRingClickKeepsNormalEdgeFeedbackWhenAltIsReleased) {
+  for (const bool alt_and_click_in_same_frame : {false, true}) {
+    SCOPED_TRACE(alt_and_click_in_same_frame);
+    constexpr int kSideCount = 16;
+    CylinderEdgeSelectionScenario scenario;
+    scenario.initialize(kSideCount);
+    auto &harness = scenario.harness;
+    const auto &side = scenario.document.faces[kSideCount / 4];
+    const auto seed = CylinderEdgeSelectionScenario::edge_id(
+        side.vertices[0], side.vertices[1]);
+    ASSERT_TRUE(harness.editor.selection()
+                    .select_edge(scenario.object, seed.first, seed.second)
+                    .ok());
+    const auto hit = scenario.midpoint(seed.first, seed.second);
+    harness.input.mouse_local = hit;
+    harness.input.mouse_screen = hit;
+    harness.input.modifiers = {
+        .primary = true, .alt = !alt_and_click_in_same_frame};
+
+    harness.dispatch_frame(harness.frame());
+    scenario.expect_edge_hover_feedback(seed, alt_and_click_in_same_frame);
+    // Adding Alt and pressing LMB can arrive before another hover frame.
+    harness.input.modifiers = {.primary = true, .alt = true};
+    harness.dispatch_frame(harness.frame(true, true, false, hit));
+    scenario.expect_edge_hover_feedback(seed, false);
+    harness.input.modifiers = {.primary = true};
+    harness.dispatch_frame(harness.frame(false, true, false, hit));
+    scenario.expect_edge_hover_feedback(seed, false);
+    harness.dispatch_frame(harness.frame(false, false, true, hit));
+
+    std::vector<CylinderEdgeSelectionScenario::EdgeId> expected;
+    for (int index = 0; index < kSideCount; ++index) {
+      const auto &quad = scenario.document.faces[index];
+      expected.push_back(CylinderEdgeSelectionScenario::edge_id(
+          quad.vertices[0], quad.vertices[1]));
+    }
+    std::sort(expected.begin(), expected.end());
+    EXPECT_EQ(scenario.selected_edges(), expected);
+
+    harness.dispatch_frame(harness.frame());
+    scenario.expect_edge_hover_feedback(seed, true);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     CtrlAltClickSelectsTheCylinderEdgeRingWithThePressedModifiers) {
+  for (const bool release_modifiers_before_release : {false, true}) {
+    SCOPED_TRACE(release_modifiers_before_release);
+    constexpr int kSideCount = 16;
+    CylinderEdgeSelectionScenario scenario;
+    scenario.initialize(kSideCount);
+    auto &harness = scenario.harness;
+    const auto &side = scenario.document.faces[kSideCount / 4];
+    const auto hit = scenario.midpoint(side.vertices[0], side.vertices[1]);
+    std::vector<CylinderEdgeSelectionScenario::EdgeId> expected;
+    for (int index = 0; index < kSideCount; ++index) {
+      const auto &quad = scenario.document.faces[index];
+      expected.push_back(CylinderEdgeSelectionScenario::edge_id(
+          quad.vertices[0], quad.vertices[1]));
+    }
+    std::sort(expected.begin(), expected.end());
+    // An existing cap edge must be replaced, not removed or added to the ring.
+    ASSERT_TRUE(harness.editor.selection()
+                    .select_edge(scenario.object, side.vertices[1],
+                                 side.vertices[2])
+                    .ok());
+    harness.input.modifiers = {.primary = true, .alt = true};
+    harness.input.mouse_local = hit;
+    harness.input.mouse_screen = hit;
+
+    harness.dispatch_frame(harness.frame(true, true, false, hit));
+    EXPECT_NE(harness.controller.active_tool_pointer_cursor(
+                  harness.router.state().active_tool),
+              quader::ViewportPointerCursor::SelectionSubtract);
+    if (release_modifiers_before_release) {
+      harness.input.modifiers = {};
+      harness.dispatch_frame(harness.frame(false, true, false, hit));
+      EXPECT_NE(harness.controller.active_tool_pointer_cursor(
+                    harness.router.state().active_tool),
+                quader::ViewportPointerCursor::SelectionSubtract);
+    }
+    harness.dispatch_frame(harness.frame(false, false, true, hit));
+    EXPECT_EQ(scenario.selected_edges(), expected);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     AltClickEdgeSelectsThePoleFacePerimeterThroughViewportFallback) {
     ViewportInteractionHarness harness;
     (void)create_unit_box(harness);
 
@@ -5146,7 +5458,7 @@ TEST(ViewportInteractionControllerTests,
     const quader::QuaderSelectionSummary selection =
         harness.editor.selection().summary();
     EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Edge);
-    EXPECT_EQ(selection.selected_edge_count, 1u);
+    EXPECT_EQ(selection.selected_edge_count, 4u);
     EXPECT_EQ(selection.active_kind, quader::QuaderActiveSelectionKind::Edge);
 }
 

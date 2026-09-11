@@ -556,14 +556,111 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests,
 }
 
 TEST(QdrDocumentOperationInsertEdgeLoopTests,
-     EdgeLoopSelectionStopsAtValenceThreeCubePoles) {
+     EdgeLoopSelectionClosesTheFirstAdjacentQuadAtCubePoles) {
 	const Document document = make_cube({});
 	const std::vector<Edge> edges = document_edges(document);
 	ASSERT_FALSE(edges.empty());
 	const Edge seed = edges.front();
-	const std::array<Edge, 1> expected { seed };
+	const auto first_face = std::ranges::find_if(document.faces, [&](const Face& face) {
+		const std::vector<Edge> boundary = qdr_test::face_edges_for_test(face);
+		return std::ranges::find(boundary, seed) != boundary.end();
+	});
+	ASSERT_NE(first_face, document.faces.end());
+	const std::vector<Edge> expected = qdr_test::face_edges_for_test(*first_face);
 
 	expect_edge_set(edge_loop_edges(document, seed), expected);
+	for (const Face& face : document.faces) {
+		expect_edge_set(edge_loop_edges(document, seed, face.id), expected);
+	}
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     EdgeLoopSelectionFollowsBothCylinderCapPerimetersFromEveryRimEdge) {
+	for (const int side_count : { 8, 32 }) {
+		for (const bool flip_faces : { false, true }) {
+			const Document document = make_cylinder({
+				.width = 4.0F, .height = 6.0F, .depth = 2.0F,
+				.side_count = side_count, .flip_faces = flip_faces });
+			for (const Face& cap : document.faces) {
+				if (cap.vertices.size() != static_cast<std::size_t>(side_count)) {
+					continue;
+				}
+				const std::vector<Edge> expected = qdr_test::face_edges_for_test(cap);
+				for (const Edge seed : expected) {
+					SCOPED_TRACE(seed.a);
+					SCOPED_TRACE(seed.b);
+					expect_edge_set(edge_loop_edges(document, seed), expected);
+					// An edge picked from its side face must still follow the cap.
+					for (const Face& face : document.faces) {
+						const std::vector<Edge> face_boundary = qdr_test::face_edges_for_test(face);
+						if (std::ranges::find(face_boundary, seed) != face_boundary.end()) {
+							expect_edge_set(edge_loop_edges(document, seed, face.id), expected);
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     EdgeLoopSelectionClosesOneSideQuadFromEveryCylinderLongitudinalEdge) {
+	const Document document = make_cylinder({ .side_count = 16 });
+	for (const Edge seed : document_edges(document)) {
+		const Vertex* a = find_vertex(document, seed.a);
+		const Vertex* b = find_vertex(document, seed.b);
+		ASSERT_NE(a, nullptr);
+		ASSERT_NE(b, nullptr);
+		if (a->position.y == b->position.y) {
+			continue;
+		}
+		SCOPED_TRACE(seed.a);
+		SCOPED_TRACE(seed.b);
+		const std::vector<Edge> loop = edge_loop_edges(document, seed);
+		ASSERT_EQ(loop.size(), 4U);
+		EXPECT_EQ(loop.front(), seed);
+		EXPECT_TRUE(std::ranges::any_of(document.faces, [&](const Face& face) {
+			const std::vector<Edge> boundary = qdr_test::face_edges_for_test(face);
+			return boundary.size() == loop.size() &&
+			       std::ranges::all_of(boundary, [&](Edge edge) {
+				       return std::ranges::find(loop, edge) != loop.end();
+			       });
+		}));
+		EXPECT_EQ(edge_loop_edges(document, { seed.b, seed.a }), loop);
+
+		Selection selected;
+		select_edge_loop(document, selected, seed);
+		expect_edge_set(selected.edges, loop);
+		EXPECT_EQ(selected.active_edge, seed);
+		select_edge_loop(document, selected, seed, true);
+		EXPECT_TRUE(selected.edges.empty());
+	}
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     CylinderEdgeRingsRemainOppositeQuadTraversals) {
+	const Document document = make_cylinder({ .side_count = 16 });
+	std::vector<Edge> longitudinal_edges;
+	for (const Edge edge : document_edges(document)) {
+		if (find_vertex(document, edge.a)->position.y !=
+		    find_vertex(document, edge.b)->position.y) {
+			longitudinal_edges.push_back(edge);
+		}
+	}
+	ASSERT_EQ(longitudinal_edges.size(), 16U);
+	expect_edge_set(edge_ring_edges(document, longitudinal_edges.front()),
+	                longitudinal_edges);
+	const Face& side = document.faces.front();
+	ASSERT_EQ(side.vertices.size(), 4U);
+	std::vector<Edge> rim_pair;
+	for (const Edge edge : qdr_test::face_edges_for_test(side)) {
+		if (find_vertex(document, edge.a)->position.y ==
+		    find_vertex(document, edge.b)->position.y) {
+			rim_pair.push_back(edge);
+		}
+	}
+	ASSERT_EQ(rim_pair.size(), 2U);
+	expect_edge_set(edge_ring_edges(document, rim_pair.front()), rim_pair);
 }
 
 TEST(QdrDocumentOperationInsertEdgeLoopTests,

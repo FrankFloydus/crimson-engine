@@ -946,6 +946,21 @@ ViewportSelectionInteraction::pointer_edit_operation(
   };
 
   if (box_state_.active) {
+    // A stationary press still owns a traversal click. Once it becomes a
+    // marquee, its captured edit operation owns the selection and cursor.
+    if (!box_state_.dragging && !box_cycle_depth_ &&
+        box_pointer_.has_value()) {
+      const ModelingPickSelectRequest request{
+          .control_pressed = box_pointer_->modifiers.primary,
+          .shift_pressed = box_pointer_->modifiers.shift,
+          .alt_pressed = box_pointer_->modifiers.alt,
+      };
+      if (request.edge_traversal_requested(
+              to_modeling_selection_mode(frame.selection_state.summary.mode)) !=
+          ModelingEdgeSelectionTraversal::None) {
+        return std::nullopt;
+      }
+    }
     return box_cycle_depth_ ? from_modifiers(box_cycle_modifiers_) : box_edit_;
   }
   if (paint_selection_active_) {
@@ -1208,6 +1223,18 @@ void ViewportSelectionInteraction::handle_frame(
   };
   auto clear_hover = [&]() { publish_empty_hover(false); };
   auto clear_spatial_hover = [&]() { publish_empty_hover(true); };
+  auto preview_hover = [&](std::optional<ResolvedSelectionTarget> target) {
+    const ModelingCommandResult hover =
+        selection_owner(editor).preview_spatial_hover(
+            std::move(target),
+            pointer_edit_operation(frame) ==
+                quader_editor_core::SelectionEditOperation::Remove);
+    if (!hover.ok) {
+      LOG_ERROR("Viewport hover failed: {}",
+                hover.message.empty() ? "Hover failed." : hover.message);
+    }
+    hover_clear_state_ = HoverClearState::Armed;
+  };
 
   auto suppress_hover_after_selection =
       [&](QVec2 local_mouse,
@@ -1358,6 +1385,11 @@ void ViewportSelectionInteraction::handle_frame(
         box_pointer_->modifiers.primary, box_pointer_->modifiers.shift);
     quader_editor_core::begin_selection_box(
         box_state_, box_pointer_->press.local, box_edit_);
+    if (!pointer_edit_operation(frame).has_value()) {
+      // Alt and the ring press may arrive together after a Ctrl-only hover.
+      // Refresh its tint from the captured gesture without another spatial pick.
+      preview_hover(box_hovered_before_selection_);
+    }
     if (frame.input_router.state().active_tool == ViewportToolId::LassoSelect) {
       // Only a press resolves settings. Pointer motion retains this snapshot.
       const QuaderToolSettingsTarget settings = editor.tools().active_settings();
@@ -1590,7 +1622,8 @@ void ViewportSelectionInteraction::handle_frame(
                                        frame.input.mouse_local, hover_request,
                                        curve, &scene_surface_scratch_);
     if (hover == hover_suppressed_target_) {
-      if (!frame.input.modifiers.primary) {
+      if (pointer_edit_operation(frame) !=
+          quader_editor_core::SelectionEditOperation::Remove) {
         clear_hover();
         hover_suppressed_this_frame = true;
       }
@@ -1609,14 +1642,7 @@ void ViewportSelectionInteraction::handle_frame(
         resolve_selection_point_target(selection_owner(editor), frame,
                                        frame.input.mouse_local, hover_request,
                                        curve, &scene_surface_scratch_);
-    const ModelingCommandResult hover =
-        selection_owner(editor).preview_spatial_hover(
-            hover_target, frame.input.modifiers.primary);
-    if (!hover.ok) {
-      LOG_ERROR("Viewport hover failed: {}",
-                hover.message.empty() ? "Hover failed." : hover.message);
-    }
-    hover_clear_state_ = HoverClearState::Armed;
+    preview_hover(hover_target);
     return;
   }
 

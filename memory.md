@@ -328,8 +328,12 @@ Tests: [viewport workflows](tests/viewport_interaction_controller_tests.cpp),
 - Freeze the resolved physical chord and semantic action at press through deferred release, gizmo
   handoff, and click/double-click disambiguation. A modifier release must not reinterpret the gesture.
 - Edge loops use topological continuation; rings cross opposite quad edges. Picked-face context does
-  not choose a loop side. Repeated plain loop selection on an open-boundary seed can cycle to its
-  boundary component; ring and toggle behavior stay deterministic.
+  not choose a loop side. If an interior loop stays at its seed, use the perimeter of its adjacent
+  face with the most corners (ties keep authored adjacency order): cylinder rims select their cap,
+  longitudinal edges select a side quad. Preserve the ordinary walker when it finds a longer path.
+  Repeated plain loop selection on an open-boundary seed can cycle to its boundary component;
+  ring and toggle behavior stay deterministic. Coverage: `EdgeLoopSelection*` in
+  [loop tests](tests/modeling_domain/operation/qdr_document_operation_insert_edge_loop_tests.cpp).
 - Orthographic mesh-depth traversal shares the canonical occurrence collector and stable ordering.
   Selection changes do not reset its cursor; geometry, scope, visibility, ray direction, and policy
   changes do. Its edge-on fallback is specific to mesh depth cycling, not all-component picking.
