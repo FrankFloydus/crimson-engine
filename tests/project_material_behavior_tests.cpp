@@ -3144,6 +3144,19 @@ TEST(ProjectMaterialBehaviorTests,
   EXPECT_FALSE(first->encoded->empty());
   EXPECT_EQ(first->decoded->size(), 128u * 32u * 4u);
   EXPECT_NE(first->content_revision, 0u);
+  EXPECT_TRUE(first->texture_id.valid());
+  EXPECT_EQ(first->project_relative_path, "Textures/original.png");
+  EXPECT_EQ(first->detected_format, "png");
+  EXPECT_EQ(first->encoded_byte_size, first->encoded->size());
+  const auto albedo_info =
+      harness.project().material_albedo_texture_info(material);
+  ASSERT_TRUE(albedo_info.ok()) << albedo_info.error().message;
+  EXPECT_EQ(albedo_info.value().material_id, material);
+  EXPECT_EQ(albedo_info.value().texture, first);
+  EXPECT_EQ(albedo_info.value().project_relative_path.portable_string(),
+            "Textures/original.png");
+  EXPECT_EQ(albedo_info.value().absolute_path,
+            harness.root() / "Textures" / "original.png");
 
   ASSERT_TRUE(harness.editor().project_assets().set_active_material(material).ok());
   const auto box = harness.editor().modeling().create_box(

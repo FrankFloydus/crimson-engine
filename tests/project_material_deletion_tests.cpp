@@ -7,6 +7,7 @@
 #include "api/quader_editor_api.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "editor/material/project_asset_dependency_service.hpp"
+#include "editor/material/project_material_deletion_service.hpp"
 #include "editor/session/project_autosave_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "io/project/project_manifest.hpp"
@@ -27,9 +28,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -53,6 +56,10 @@ ProjectAssetId deletion_material_id() {
 
 ProjectAssetId surviving_material_id() {
   return *ProjectAssetId::parse("562895b1-c4ea-4581-b154-931c3fe17d03");
+}
+
+ProjectAssetId sibling_material_id() {
+  return *ProjectAssetId::parse("ca42ef4a-c6d4-4d20-85ea-ae859eb97012");
 }
 
 ProjectAssetId default_material_id() {
@@ -317,6 +324,56 @@ TEST_F(ProjectMaterialDeletionTests,
 }
 
 TEST_F(ProjectMaterialDeletionTests,
+       SameNamedScenesRemainDistinctWhileCleanSavedLivePairsCoalesce) {
+  ASSERT_NE(project_.active_scene(), nullptr);
+  project_.active_scene()->session->document().rename("Shared");
+  const auto first_box = create_box("First shared scene");
+  ASSERT_TRUE(first_box.ok()) << first_box.error_message();
+  std::filesystem::create_directories(root_ / "Scenes/First");
+  ASSERT_NO_FATAL_FAILURE(save_active("Scenes/First/Shared.qdr"));
+
+  const auto second_scene = editor_.scene_documents().new_scene();
+  ASSERT_TRUE(second_scene.ok()) << second_scene.error_message();
+  ASSERT_NE(project_.active_scene(), nullptr);
+  project_.active_scene()->session->document().rename("Shared");
+  const auto second_box = create_box("Second shared scene");
+  ASSERT_TRUE(second_box.ok()) << second_box.error_message();
+  std::filesystem::create_directories(root_ / "Scenes/Second");
+  ASSERT_NO_FATAL_FAILURE(save_active("Scenes/Second/Shared.qdr"));
+
+  const auto preview = editor_.project_assets().preview_delete_material_folder(
+      "Materials/Delete");
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  ASSERT_TRUE(preview.value().complete)
+      << ::testing::PrintToString(preview.value().errors);
+  ASSERT_EQ(preview.value().affected_scenes.size(), 2u)
+      << "clean saved/live pairs should produce one warning per scene";
+  std::set<std::tuple<std::string, bool, std::string, std::uint64_t>>
+      scene_records;
+  for (const auto &scene : preview.value().affected_scenes) {
+    scene_records.emplace(
+        scene.name, scene.live, scene.project_relative_path,
+        scene.session_id.has_value() ? scene.session_id->packed() : 0u);
+  }
+  EXPECT_EQ(scene_records.size(), 2u);
+  EXPECT_EQ(std::ranges::count_if(
+                preview.value().affected_scenes, [](const auto &scene) {
+                  return scene.project_relative_path ==
+                         "Scenes/First/Shared.qdr";
+                }),
+            1);
+  EXPECT_EQ(std::ranges::count_if(
+                preview.value().affected_scenes, [](const auto &scene) {
+                  return scene.project_relative_path ==
+                         "Scenes/Second/Shared.qdr";
+                }),
+            1);
+  EXPECT_TRUE(std::ranges::all_of(
+      preview.value().affected_scenes,
+      [](const auto &scene) { return scene.live; }));
+}
+
+TEST_F(ProjectMaterialDeletionTests,
        UndoClipboardSaveAndRecoveryKeepDeletedIdentitiesEffectivelyDefault) {
   const auto box = create_box("Historical wood");
   ASSERT_TRUE(box.ok()) << box.error_message();
@@ -420,6 +477,46 @@ TEST_F(ProjectMaterialDeletionTests, EmptyFoldersDeleteButRootAndDefaultAreProte
   EXPECT_TRUE(std::filesystem::exists(root_ / reserved->path.native_path()));
 }
 
+TEST_F(ProjectMaterialDeletionTests,
+       SelectedMaterialDeletionPreservesItsFolderAndSiblingFiles) {
+  ASSERT_TRUE(editor_.project().close().ok());
+  ASSERT_NO_FATAL_FAILURE(write_material(
+      "Materials/Delete/sibling.qmat", sibling_material_id(), "Sibling"));
+  ASSERT_TRUE(editor_.project().open(manifest_).ok());
+  if (!editor_.scene_documents().has_active_scene()) {
+    ASSERT_TRUE(editor_.scene_documents().new_scene().ok());
+  }
+  const auto box = create_box("Selected deletion");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_NO_FATAL_FAILURE(save_active());
+
+  ProjectMaterialDeletionService service(project_);
+  const std::array reserved{default_material_id()};
+  EXPECT_FALSE(service.preview_materials(reserved).complete);
+  const std::array duplicate{deletion_material_id(), deletion_material_id()};
+  EXPECT_FALSE(service.preview_materials(duplicate).complete);
+  const std::array selected{deletion_material_id()};
+  const auto preview = service.preview_materials(selected);
+  ASSERT_TRUE(preview.complete) << ::testing::PrintToString(preview.errors);
+  ASSERT_EQ(preview.material_ids, std::vector<ProjectAssetId>(selected.begin(),
+                                                              selected.end()));
+  const auto deleted = service.delete_materials(selected, preview.revision);
+  ASSERT_TRUE(deleted.ok) << deleted.message;
+  EXPECT_TRUE(deleted.changed);
+
+  EXPECT_TRUE(std::filesystem::is_directory(root_ / "Materials/Delete"));
+  EXPECT_FALSE(std::filesystem::exists(root_ / "Materials/Delete/wood.qmat"));
+  EXPECT_TRUE(std::filesystem::is_regular_file(
+      root_ / "Materials/Delete/sibling.qmat"));
+  EXPECT_EQ(project_.material_catalog().find(deletion_material_id()), nullptr);
+  EXPECT_NE(project_.material_catalog().find(sibling_material_id()), nullptr);
+  EXPECT_TRUE(project_.manifest()->is_material_deleted(deletion_material_id()));
+  EXPECT_FALSE(project_.manifest()->is_material_deleted(sibling_material_id()));
+  expect_deletion_material(project_.active_scene()->session->scene(),
+                           box.value().entity, default_material_id());
+  EXPECT_TRUE(std::filesystem::is_regular_file(root_ / "Textures/shared.png"));
+}
+
 TEST_F(ProjectMaterialDeletionTests, ConfirmationRejectsChangedSourcesAndAnotherFolder) {
   const auto box = create_box("Before preview");
   ASSERT_TRUE(box.ok());
@@ -441,6 +538,89 @@ TEST_F(ProjectMaterialDeletionTests, ConfirmationRejectsChangedSourcesAndAnother
   ASSERT_TRUE(refreshed.ok());
   EXPECT_NE(refreshed.value().revision, preview.value().revision);
   ASSERT_NO_FATAL_FAILURE(delete_folder());
+}
+
+TEST_F(ProjectMaterialDeletionTests,
+       PostQuarantineCatalogValidationRejectsConcurrentAddition) {
+  const std::array ids{deletion_material_id()};
+  const auto concurrent_id = *ProjectAssetId::parse(
+      "fc7b386b-e2c4-48ff-8432-c4320369311d");
+  ProjectMaterialDeletionService deletion(
+      project_, {.after_quarantine = [&] {
+        write_material("Materials/Keep/concurrent.qmat", concurrent_id,
+                       "Concurrent");
+      }});
+  const auto preview = deletion.preview_materials(ids);
+  ASSERT_TRUE(preview.complete)
+      << ::testing::PrintToString(preview.errors);
+
+  const auto deleted = deletion.delete_materials(ids, preview.revision);
+
+  EXPECT_FALSE(deleted.ok);
+  EXPECT_FALSE(deleted.changed);
+  EXPECT_NE(deleted.message.find("catalog changed"), std::string::npos);
+  EXPECT_TRUE(std::filesystem::is_regular_file(
+      root_ / "Materials/Delete/wood.qmat"));
+  EXPECT_TRUE(std::filesystem::is_regular_file(
+      root_ / "Materials/Keep/concurrent.qmat"));
+  EXPECT_FALSE(project_.manifest()->is_material_deleted(
+      deletion_material_id()));
+}
+
+TEST_F(ProjectMaterialDeletionTests,
+       PostQuarantineCatalogValidationRejectsSameCountIdentityReplacement) {
+  const std::array ids{deletion_material_id()};
+  const auto replacement_id = *ProjectAssetId::parse(
+      "f7f69006-dad1-43a3-b18d-942219d3cb44");
+  ProjectMaterialDeletionService deletion(
+      project_, {.after_quarantine = [&] {
+        ASSERT_TRUE(std::filesystem::remove(
+            root_ / "Materials/Keep/stone.qmat"));
+        write_material("Materials/Keep/replacement.qmat", replacement_id,
+                       "Replacement");
+      }});
+  const auto preview = deletion.preview_materials(ids);
+  ASSERT_TRUE(preview.complete)
+      << ::testing::PrintToString(preview.errors);
+
+  const auto deleted = deletion.delete_materials(ids, preview.revision);
+
+  EXPECT_FALSE(deleted.ok);
+  EXPECT_FALSE(deleted.changed);
+  EXPECT_NE(deleted.message.find("catalog content changed"),
+            std::string::npos);
+  EXPECT_TRUE(std::filesystem::is_regular_file(
+      root_ / "Materials/Delete/wood.qmat"));
+  EXPECT_FALSE(std::filesystem::exists(
+      root_ / "Materials/Keep/stone.qmat"));
+  EXPECT_TRUE(std::filesystem::is_regular_file(
+      root_ / "Materials/Keep/replacement.qmat"));
+}
+
+TEST_F(ProjectMaterialDeletionTests,
+       PostQuarantineCatalogValidationRejectsConcurrentContentChange) {
+  const std::array ids{deletion_material_id()};
+  ProjectMaterialDeletionService deletion(
+      project_, {.after_quarantine = [&] {
+        write_material("Materials/Keep/stone.qmat", surviving_material_id(),
+                       "Changed Stone");
+      }});
+  const auto preview = deletion.preview_materials(ids);
+  ASSERT_TRUE(preview.complete)
+      << ::testing::PrintToString(preview.errors);
+
+  const auto deleted = deletion.delete_materials(ids, preview.revision);
+
+  EXPECT_FALSE(deleted.ok);
+  EXPECT_FALSE(deleted.changed);
+  EXPECT_NE(deleted.message.find("catalog content changed"),
+            std::string::npos);
+  EXPECT_TRUE(std::filesystem::is_regular_file(
+      root_ / "Materials/Delete/wood.qmat"));
+  const auto changed = QmatCodec::decode(deletion_read_bytes(
+      root_ / "Materials/Keep/stone.qmat"));
+  ASSERT_TRUE(changed.ok()) << changed.error().message;
+  EXPECT_EQ(changed.value().name, "Changed Stone");
 }
 
 TEST_F(ProjectMaterialDeletionTests, UnmanagedFilesAndReferencedTexturesPreventDeletion) {
@@ -620,6 +800,219 @@ TEST_F(ProjectMaterialDeletionTests, PreparedJournalRestoresManifestAndQuarantin
   EXPECT_FALSE(project_.manifest()->is_material_deleted(deletion_material_id()));
   EXPECT_TRUE(std::filesystem::exists(root_ / "Materials/Delete/wood.qmat"));
   EXPECT_NE(project_.material_catalog().find(deletion_material_id()), nullptr);
+  EXPECT_FALSE(std::filesystem::exists(transaction));
+}
+
+TEST_F(ProjectMaterialDeletionTests,
+       PreparedMaterialJournalRestoresOnlyTheSelectedQmat) {
+  ASSERT_TRUE(editor_.project().close().ok());
+  auto workspace = ProjectManifestStore::open(manifest_);
+  ASSERT_TRUE(workspace.ok()) << workspace.error().message;
+  const auto baseline_manifest = deletion_read_bytes(manifest_);
+  const auto material_path = root_ / "Materials/Delete/wood.qmat";
+  const auto material_bytes = deletion_read_bytes(material_path);
+  const std::array ids{deletion_material_id()};
+  ASSERT_TRUE(workspace.value().manifest.mark_materials_deleted(ids).ok());
+  ASSERT_TRUE(ProjectManifestStore::save_atomic(workspace.value()).ok());
+  const auto replacement_manifest = deletion_read_bytes(manifest_);
+
+  const auto transaction = root_ / ".quader/material-deletions" /
+      "77d53503-d35a-41bf-95e6-a88265491091";
+  std::filesystem::create_directories(transaction / "materials");
+  ASSERT_NO_FATAL_FAILURE(deletion_write_bytes(transaction / "file-0.old",
+                                               baseline_manifest));
+  std::filesystem::rename(material_path,
+                          transaction / "materials/material-0.qmat");
+  const auto material_hash = quader_io::qdr_binary_content_hash(
+      std::as_bytes(std::span(material_bytes.data(), material_bytes.size())));
+  const nlohmann::json journal{
+      {"version", 2}, {"kind", "materials"},
+      {"project", workspace.value().manifest.id().str()},
+      {"state", "prepared"},
+      {"material_ids",
+       nlohmann::json::array({std::string(deletion_material_id().str())})},
+      {"material_files",
+       {{{"path", "Materials/Delete/wood.qmat"},
+         {"byte_count", material_bytes.size()},
+         {"content_hash", material_hash}}}},
+      {"files",
+       {deletion_recovery_file(manifest_.filename().generic_string(),
+                               "file-0.old", baseline_manifest,
+                               replacement_manifest)}}};
+  ASSERT_NO_FATAL_FAILURE(deletion_write_bytes(transaction / "journal.json",
+                                               journal.dump()));
+
+  const auto opened = editor_.project().open(manifest_);
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  EXPECT_FALSE(project_.manifest()->is_material_deleted(deletion_material_id()));
+  EXPECT_TRUE(std::filesystem::is_directory(root_ / "Materials/Delete"));
+  EXPECT_EQ(deletion_read_bytes(material_path), material_bytes);
+  EXPECT_NE(project_.material_catalog().find(deletion_material_id()), nullptr);
+  EXPECT_FALSE(std::filesystem::exists(transaction));
+}
+
+TEST_F(ProjectMaterialDeletionTests,
+       MaterialRecoveryPreservesUnjournaledQuarantineEntries) {
+  ASSERT_TRUE(editor_.project().close().ok());
+  auto workspace = ProjectManifestStore::open(manifest_);
+  ASSERT_TRUE(workspace.ok()) << workspace.error().message;
+  const auto baseline_manifest = deletion_read_bytes(manifest_);
+  const auto material_path = root_ / "Materials/Delete/wood.qmat";
+  const auto material_bytes = deletion_read_bytes(material_path);
+  const std::array ids{deletion_material_id()};
+  ASSERT_TRUE(workspace.value().manifest.mark_materials_deleted(ids).ok());
+  ASSERT_TRUE(ProjectManifestStore::save_atomic(workspace.value()).ok());
+  const auto replacement_manifest = deletion_read_bytes(manifest_);
+
+  const auto transaction = root_ / ".quader/material-deletions" /
+      "fc269461-82e6-4c7d-b535-b26153c05c63";
+  std::filesystem::create_directories(transaction / "materials");
+  ASSERT_NO_FATAL_FAILURE(deletion_write_bytes(transaction / "file-0.old",
+                                               baseline_manifest));
+  std::filesystem::rename(material_path,
+                          transaction / "materials/material-0.qmat");
+  ASSERT_NO_FATAL_FAILURE(deletion_write_bytes(
+      transaction / "materials/unexpected.bin", "Unjournaled content"));
+  const auto material_hash = quader_io::qdr_binary_content_hash(
+      std::as_bytes(std::span(material_bytes.data(), material_bytes.size())));
+  const nlohmann::json journal{
+      {"version", 2}, {"kind", "materials"},
+      {"project", workspace.value().manifest.id().str()},
+      {"state", "prepared"},
+      {"material_ids",
+       nlohmann::json::array({std::string(deletion_material_id().str())})},
+      {"material_files",
+       {{{"path", "Materials/Delete/wood.qmat"},
+         {"byte_count", material_bytes.size()},
+         {"content_hash", material_hash}}}},
+      {"files",
+       {deletion_recovery_file(manifest_.filename().generic_string(),
+                               "file-0.old", baseline_manifest,
+                               replacement_manifest)}}};
+  ASSERT_NO_FATAL_FAILURE(deletion_write_bytes(transaction / "journal.json",
+                                               journal.dump()));
+
+  const auto opened = editor_.project().open(manifest_);
+
+  EXPECT_FALSE(opened.ok());
+  EXPECT_NE(opened.error_message().find("unjournaled entry"),
+            std::string::npos);
+  EXPECT_EQ(deletion_read_bytes(manifest_), replacement_manifest);
+  EXPECT_FALSE(std::filesystem::exists(material_path));
+  EXPECT_EQ(deletion_read_bytes(transaction / "materials/material-0.qmat"),
+            material_bytes);
+  EXPECT_EQ(deletion_read_bytes(transaction / "materials/unexpected.bin"),
+            "Unjournaled content");
+  EXPECT_TRUE(std::filesystem::exists(transaction / "file-0.old"));
+  EXPECT_TRUE(std::filesystem::exists(transaction / "journal.json"));
+}
+
+TEST_F(ProjectMaterialDeletionTests,
+       CommittedMaterialRecoveryRequiresCurrentManifestTombstones) {
+  ASSERT_TRUE(editor_.project().close().ok());
+  auto workspace = ProjectManifestStore::open(manifest_);
+  ASSERT_TRUE(workspace.ok()) << workspace.error().message;
+  const auto baseline_manifest = deletion_read_bytes(manifest_);
+  ASSERT_EQ(nlohmann::json::parse(baseline_manifest)
+                .at("version")
+                .get<std::uint64_t>(),
+            2u);
+  const std::array ids{deletion_material_id()};
+  ASSERT_TRUE(workspace.value().manifest.mark_materials_deleted(ids).ok());
+  ASSERT_TRUE(ProjectManifestStore::save_atomic(workspace.value()).ok());
+  const auto replacement_manifest = deletion_read_bytes(manifest_);
+
+  const auto material_path = root_ / "Materials/Delete/wood.qmat";
+  const auto material_bytes = deletion_read_bytes(material_path);
+  const auto transaction = root_ / ".quader/material-deletions" /
+      "44428535-ce2f-4e8d-8d6d-b5d4b87ac75a";
+  std::filesystem::create_directories(transaction / "materials");
+  ASSERT_NO_FATAL_FAILURE(deletion_write_bytes(transaction / "file-0.old",
+                                               baseline_manifest));
+  std::filesystem::rename(material_path,
+                          transaction / "materials/material-0.qmat");
+  const auto material_hash = quader_io::qdr_binary_content_hash(
+      std::as_bytes(std::span(material_bytes.data(), material_bytes.size())));
+  const nlohmann::json journal{
+      {"version", 2}, {"kind", "materials"},
+      {"project", workspace.value().manifest.id().str()},
+      {"state", "committed"},
+      {"material_ids",
+       nlohmann::json::array({std::string(deletion_material_id().str())})},
+      {"material_files",
+       {{{"path", "Materials/Delete/wood.qmat"},
+         {"byte_count", material_bytes.size()},
+         {"content_hash", material_hash}}}},
+      {"files",
+       {deletion_recovery_file(manifest_.filename().generic_string(),
+                               "file-0.old", baseline_manifest,
+                               replacement_manifest)}}};
+  ASSERT_NO_FATAL_FAILURE(deletion_write_bytes(transaction / "journal.json",
+                                               journal.dump()));
+  ASSERT_NO_FATAL_FAILURE(deletion_write_bytes(manifest_, baseline_manifest));
+
+  const auto opened = editor_.project().open(manifest_);
+  EXPECT_FALSE(opened.ok());
+  EXPECT_EQ(deletion_read_bytes(manifest_), baseline_manifest);
+  EXPECT_FALSE(std::filesystem::exists(material_path));
+  EXPECT_EQ(deletion_read_bytes(transaction / "materials/material-0.qmat"),
+            material_bytes);
+  EXPECT_TRUE(std::filesystem::exists(transaction / "journal.json"));
+}
+
+TEST_F(ProjectMaterialDeletionTests,
+       CommittedMaterialRecoveryAcceptsNewerManifestWithTombstones) {
+  ASSERT_TRUE(editor_.project().close().ok());
+  auto workspace = ProjectManifestStore::open(manifest_);
+  ASSERT_TRUE(workspace.ok()) << workspace.error().message;
+  const auto baseline_manifest = deletion_read_bytes(manifest_);
+  const std::array ids{deletion_material_id()};
+  ASSERT_TRUE(workspace.value().manifest.mark_materials_deleted(ids).ok());
+  ASSERT_TRUE(ProjectManifestStore::save_atomic(workspace.value()).ok());
+  const auto replacement_manifest = deletion_read_bytes(manifest_);
+  ASSERT_TRUE(workspace.value().manifest
+                  .set_active_material(surviving_material_id())
+                  .ok());
+  ASSERT_TRUE(ProjectManifestStore::save_atomic(workspace.value()).ok());
+  const auto newer_manifest = deletion_read_bytes(manifest_);
+  ASSERT_NE(newer_manifest, replacement_manifest);
+
+  const auto material_path = root_ / "Materials/Delete/wood.qmat";
+  const auto material_bytes = deletion_read_bytes(material_path);
+  const auto transaction = root_ / ".quader/material-deletions" /
+      "3e69c90f-c534-492a-bbc9-18df3556b16c";
+  std::filesystem::create_directories(transaction / "materials");
+  ASSERT_NO_FATAL_FAILURE(deletion_write_bytes(transaction / "file-0.old",
+                                               baseline_manifest));
+  std::filesystem::rename(material_path,
+                          transaction / "materials/material-0.qmat");
+  const auto material_hash = quader_io::qdr_binary_content_hash(
+      std::as_bytes(std::span(material_bytes.data(), material_bytes.size())));
+  const nlohmann::json journal{
+      {"version", 2}, {"kind", "materials"},
+      {"project", workspace.value().manifest.id().str()},
+      {"state", "committed"},
+      {"material_ids",
+       nlohmann::json::array({std::string(deletion_material_id().str())})},
+      {"material_files",
+       {{{"path", "Materials/Delete/wood.qmat"},
+         {"byte_count", material_bytes.size()},
+         {"content_hash", material_hash}}}},
+      {"files",
+       {deletion_recovery_file(manifest_.filename().generic_string(),
+                               "file-0.old", baseline_manifest,
+                               replacement_manifest)}}};
+  ASSERT_NO_FATAL_FAILURE(deletion_write_bytes(transaction / "journal.json",
+                                               journal.dump()));
+
+  const auto opened = editor_.project().open(manifest_);
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  ASSERT_NE(project_.manifest(), nullptr);
+  EXPECT_TRUE(project_.manifest()->is_material_deleted(deletion_material_id()));
+  ASSERT_TRUE(project_.manifest()->active_material_id().has_value());
+  EXPECT_EQ(*project_.manifest()->active_material_id(), surviving_material_id());
+  EXPECT_EQ(deletion_read_bytes(manifest_), newer_manifest);
+  EXPECT_FALSE(std::filesystem::exists(material_path));
   EXPECT_FALSE(std::filesystem::exists(transaction));
 }
 

@@ -9,6 +9,7 @@
 #include "core/localization_service.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_standard_material_editor_window.hpp"
+#include "ui/qt_texture_info_window.hpp"
 
 #include <QAction>
 #include <QApplication>
@@ -33,6 +34,7 @@
 #include <QSlider>
 #include <QStatusBar>
 #include <QStyle>
+#include <QTableWidget>
 #include <QTimer>
 #include <QToolButton>
 #include <QWheelEvent>
@@ -694,12 +696,27 @@ TEST(QtStandardMaterialEditorWindowTests,
   EXPECT_FALSE(texture_inspector->testAttribute(Qt::WA_DeleteOnClose));
   EXPECT_FALSE(
       texture_inspector->windowFlags().testFlag(Qt::WindowMaximizeButtonHint));
-  auto *texture_information = texture_inspector->findChild<QLabel *>(
-      QStringLiteral("standardMaterialEditor.textureInspector.info"));
+  EXPECT_FALSE(
+      texture_inspector->windowFlags().testFlag(Qt::WindowMinimizeButtonHint));
+  auto *texture_information = texture_inspector->findChild<QTableWidget *>(
+      QStringLiteral("textureInfo.table"));
   auto *texture_canvas = texture_inspector->findChild<QWidget *>(
       QStringLiteral("standardMaterialEditor.textureInspector.canvas"));
+  auto *red_channel = texture_inspector->findChild<QToolButton *>(
+      QStringLiteral("textureInfo.channel.red"));
   ASSERT_NE(texture_information, nullptr);
   ASSERT_NE(texture_canvas, nullptr);
+  ASSERT_NE(red_channel, nullptr);
+  EXPECT_EQ(texture_information->rowCount(), 5);
+  EXPECT_EQ(texture_information->item(0, 0)->text(), QStringLiteral("name"));
+  EXPECT_EQ(texture_information->item(1, 0)->text(),
+            QStringLiteral("location"));
+  EXPECT_EQ(texture_information->item(2, 0)->text(),
+            QStringLiteral("format"));
+  EXPECT_EQ(texture_information->item(3, 0)->text(),
+            QStringLiteral("has alpha"));
+  EXPECT_EQ(texture_information->item(4, 0)->text(), QStringLiteral("size"));
+  EXPECT_TRUE(red_channel->isChecked());
   EXPECT_EQ(texture_canvas->minimumSize(), QSize(480, 360))
       << "a lazily created inspector must receive the current scale";
   window->apply_ui_scale(QtUiScaleMetrics(1.0F, 2U));
@@ -707,17 +724,21 @@ TEST(QtStandardMaterialEditorWindowTests,
   EXPECT_EQ(albedo_texture_preview->iconSize(), QSize(56, 56));
   EXPECT_EQ(albedo_path->margin(), 3);
   EXPECT_EQ(texture_canvas->minimumSize(), QSize(240, 180));
-  EXPECT_TRUE(texture_information->text().contains(
-      QStringLiteral("bronze_albedo.png")));
-  EXPECT_TRUE(texture_information->text().contains(QStringLiteral("RGBA8")));
-  EXPECT_TRUE(texture_information->text().contains(QStringLiteral("sRGB")));
+  EXPECT_EQ(texture_information->item(0, 1)->text(),
+            QStringLiteral("bronze_albedo.png"));
+  EXPECT_EQ(texture_information->item(1, 1)->text(),
+            QStringLiteral("Textures/bronze_albedo.png"));
+  EXPECT_EQ(texture_information->item(2, 1)->text(),
+            QStringLiteral("RGBA8"));
+  EXPECT_EQ(texture_information->item(3, 1)->checkState(), Qt::Unchecked);
   document.textures[0].project_relative_path =
       QStringLiteral("Textures/replaced_albedo.png");
   document.textures[0].content_revision = 2u;
   window->set_document(document);
-  EXPECT_TRUE(texture_information->text().contains(
-      QStringLiteral("replaced_albedo.png")));
-  EXPECT_TRUE(texture_information->text().contains(QStringLiteral("8 × 4")));
+  EXPECT_EQ(texture_information->item(0, 1)->text(),
+            QStringLiteral("replaced_albedo.png"));
+  EXPECT_EQ(texture_information->item(1, 1)->text(),
+            QStringLiteral("Textures/replaced_albedo.png"));
   const double texture_zoom_before =
       texture_canvas->property("zoom").toDouble();
   QWheelEvent texture_zoom(QPointF(30.0, 30.0), QPointF(30.0, 30.0), QPoint{},
@@ -744,8 +765,42 @@ TEST(QtStandardMaterialEditorWindowTests,
   EXPECT_DOUBLE_EQ(texture_canvas->property("panX").toDouble(),
                    inspected_pan_x);
 
-  document.textures[0].preview_image = {};
+  auto *retained_texture_inspector =
+      dynamic_cast<QtTextureInfoWindow *>(texture_inspector);
+  ASSERT_NE(retained_texture_inspector, nullptr);
+  const std::uint64_t rebuilds_before_close =
+      retained_texture_inspector->masked_image_rebuild_count();
+  EXPECT_TRUE(texture_inspector->close());
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(texture_inspector->isVisible());
+  EXPECT_FALSE(retained_texture_inspector->has_presentation());
+
+  document.textures[0].project_relative_path =
+      QStringLiteral("Textures/hidden_refresh.png");
+  document.textures[0].preview_image.fill(QColor(12, 34, 56, 78));
   document.textures[0].content_revision = 3u;
+  window->set_document(document);
+  QtStandardMaterialEditorLabels relabeled;
+  relabeled.texture_info_name = QStringLiteral("localized name");
+  window->set_labels(relabeled);
+  EXPECT_EQ(retained_texture_inspector->masked_image_rebuild_count(),
+            rebuilds_before_close)
+      << "hidden inspectors must not re-present or copy changed RGBA data";
+  EXPECT_FALSE(retained_texture_inspector->has_presentation());
+
+  albedo_texture_preview->click();
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(texture_inspector->isVisible());
+  EXPECT_TRUE(retained_texture_inspector->has_presentation());
+  EXPECT_GT(retained_texture_inspector->masked_image_rebuild_count(),
+            rebuilds_before_close);
+  EXPECT_EQ(texture_information->item(0, 0)->text(),
+            QStringLiteral("localized name"));
+  EXPECT_EQ(texture_information->item(0, 1)->text(),
+            QStringLiteral("hidden_refresh.png"));
+
+  document.textures[0].preview_image = {};
+  document.textures[0].content_revision = 4u;
   window->set_document(document);
   EXPECT_FALSE(texture_inspector->isVisible());
 

@@ -894,6 +894,9 @@ target_link_libraries(quader_editor_viewport
         quader_viewport_services)
 target_compile_features(quader_editor_viewport PUBLIC cxx_std_20)
 
+set(QUADER_MATERIAL_BROWSER_ICON_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/material_filter.png")
+
 add_library(quader_ui STATIC
     src/ui/console_panel.cpp
     src/ui/inspector_panel.cpp
@@ -913,6 +916,7 @@ add_library(quader_ui STATIC
     src/ui/qt_material_presentation.cpp
     src/ui/qt_multiresolution_icon.cpp
     src/ui/qt_material_preview_surface.cpp
+    src/ui/qt_texture_info_window.cpp
     src/ui/qt_standard_material_preview_image_cache.cpp
     src/ui/qt_standard_material_editor_window.cpp
     src/ui/standard_material_preview_render_snapshot_adapter.cpp
@@ -965,6 +969,11 @@ qt_add_resources(quader_ui "quader_selection_cursors"
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/cursors/selection_default.png"
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/cursors/selection_add.png"
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/cursors/selection_subtract.png")
+
+qt_add_resources(quader_ui "quader_material_browser_icons"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES ${QUADER_MATERIAL_BROWSER_ICON_FILES})
 
 quader_enable_common_pch(quader_ui)
 target_include_directories(quader_ui
@@ -1539,6 +1548,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_material_preview_surface_tests.cpp
         tests/qt_standard_material_preview_image_cache_tests.cpp
         tests/qt_standard_material_editor_window_tests.cpp
+        tests/qt_texture_info_window_tests.cpp
         tests/qt_navigation_gizmo_tests.cpp
         tests/qt_project_workspace_tests.cpp
         tests/qt_relative_pointer_input_tests.cpp

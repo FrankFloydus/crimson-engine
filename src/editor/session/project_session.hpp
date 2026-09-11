@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "editor/material/project_material_texture_snapshot.hpp"
 #include "editor/session/scene_session.hpp"
 #include "io/project/project_manifest.hpp"
 #include "io/project/project_material_catalog.hpp"
@@ -29,7 +30,6 @@ class ProjectClipboardService;
 class ProjectAutosaveService;
 class ProjectAssetDependencyService;
 class ProjectMaterialDeletionService;
-struct ProjectMaterialTextureSnapshot;
 
 /// Owns one heap-stable scene document resident in the project workspace.
 struct OpenSceneSession final {
@@ -150,6 +150,9 @@ public:
   [[nodiscard]] std::shared_ptr<const ProjectMaterialTextureSnapshot>
   material_texture_image(ProjectAssetId material_id,
                          StandardMaterialTextureSlot slot) const;
+  /// Resolves one committed albedo through validated project storage.
+  [[nodiscard]] ProjectIoResult<ProjectMaterialAlbedoTextureInfo>
+  material_albedo_texture_info(ProjectAssetId material_id) const;
   [[nodiscard]] std::uint64_t material_texture_revision() const noexcept {
     return material_texture_revision_;
   }

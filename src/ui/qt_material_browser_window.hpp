@@ -12,9 +12,11 @@
 #include <QAbstractTableModel>
 #include <QIcon>
 #include <QMainWindow>
+#include <QPointer>
 #include <QSize>
 #include <QSortFilterProxyModel>
 #include <QString>
+#include <QStringList>
 #include <QtTypes>
 
 #include <cstdint>
@@ -67,13 +69,74 @@ struct QtMaterialBrowserLabels final {
   QString delete_folder = QStringLiteral("Delete");
   QString folder_name = QStringLiteral("Folder name");
   QString empty_folder = QStringLiteral("No materials in this folder");
+  QString filter = QStringLiteral("Filter materials");
+  QString filter_title = QStringLiteral("Filter Materials");
+  QString filter_used = QStringLiteral("Used");
+  QString filter_not_used = QStringLiteral("Not Used");
+  QString filter_clear = QStringLiteral("Clear");
+  QString filter_apply = QStringLiteral("Apply");
+  QString filter_cancel = QStringLiteral("Cancel");
+  QString filtered_empty =
+      QStringLiteral("No materials match this usage filter");
+  QString usage_inspection_unavailable =
+      QStringLiteral("Material usage is currently unavailable");
+  QString copy_texture_name = QStringLiteral("Copy Texture Name");
+  QString copy_texture_path = QStringLiteral("Copy Texture Path");
+  QString open_file_location = QStringLiteral("Open File Location");
+  QString show_texture_info = QStringLiteral("Show Texture Info");
+  QString rename_material = QStringLiteral("Rename");
+  QString duplicate_material = QStringLiteral("Duplicate");
+  QString cut_material = QStringLiteral("Cut");
+  QString copy_material = QStringLiteral("Copy");
+  QString paste_material = QStringLiteral("Paste");
+  QString delete_material = QStringLiteral("Delete");
+  QString rename_material_title = QStringLiteral("Rename Material");
+  QString material_name = QStringLiteral("Material name");
 };
 
 enum class QtMaterialBrowserViewMode : std::uint8_t { Grid, List };
+enum class QtMaterialBrowserUsageMode : std::uint8_t { All, Used, NotUsed };
 /** Distinguishes active-material browsing from a modal material-picking workflow. */
 enum class QtMaterialBrowserPurpose : std::uint8_t {
   ActiveMaterial,
   Picker,
+};
+
+/** Immutable dependency presentation delivered only when its revision changes. */
+struct QtMaterialBrowserUsageSnapshot final {
+  std::uint64_t project_generation = 0;
+  std::uint64_t revision = 0;
+  bool complete = false;
+  std::vector<QuaderMaterialReference> used_materials;
+  QString error;
+
+  bool operator==(const QtMaterialBrowserUsageSnapshot &) const = default;
+};
+
+/** Enumerates semantic material and texture commands exposed by the card menu. */
+enum class QtMaterialBrowserAction : std::uint8_t {
+  CopyTextureName,
+  CopyTexturePath,
+  OpenFileLocation,
+  ShowTextureInfo,
+  Rename,
+  Duplicate,
+  Cut,
+  Copy,
+  Paste,
+  Delete,
+};
+
+/** Stable semantic intent emitted after a context-menu nested-loop fence. */
+struct QtMaterialBrowserActionRequest final {
+  QtMaterialBrowserAction action = QtMaterialBrowserAction::CopyTextureName;
+  QuaderMaterialReference target;
+  std::vector<QuaderMaterialReference> selected_materials;
+  QString destination_folder = QStringLiteral("Materials");
+  QString proposed_name;
+  std::uint64_t project_generation = 0;
+  std::uint64_t dependency_revision = 0;
+  std::uint64_t presentation_revision = 0;
 };
 
 /// Shared source model used by both material-browser views.
@@ -145,6 +208,15 @@ public:
 
   void set_search_text(QString text);
   void set_folder(QString project_relative_folder);
+  void set_usage_mode(QtMaterialBrowserUsageMode mode);
+  void set_used_material_ids(std::vector<QString> stable_ids, bool complete);
+  [[nodiscard]] QtMaterialBrowserUsageMode usage_mode() const noexcept {
+    return usage_mode_;
+  }
+  [[nodiscard]] bool usage_complete() const noexcept {
+    return usage_complete_;
+  }
+  [[nodiscard]] bool has_non_usage_match() const;
 
 protected:
   [[nodiscard]] bool
@@ -154,8 +226,15 @@ protected:
                               const QModelIndex &source_right) const override;
 
 private:
+  [[nodiscard]] bool accepts_row(int source_row,
+                                 const QModelIndex &source_parent,
+                                 bool include_usage) const;
+
   QString search_text_;
   QString folder_;
+  std::vector<QString> used_material_ids_;
+  QtMaterialBrowserUsageMode usage_mode_ = QtMaterialBrowserUsageMode::All;
+  bool usage_complete_ = false;
 };
 
 /**
@@ -176,6 +255,9 @@ public:
       std::function<void(QString, QString, std::uint64_t)>;
   using MoveMaterialsCallback = std::function<void(
       std::vector<QuaderMaterialReference>, QString, std::uint64_t)>;
+  using MaterialActionCallback =
+      std::function<void(QtMaterialBrowserActionRequest)>;
+  using UsageInspectionErrorCallback = std::function<void(QString)>;
   using PresentationStateChangedCallback = std::function<void()>;
 
   explicit QtMaterialBrowserWindow(QWidget *parent = nullptr);
@@ -190,6 +272,12 @@ public:
   void set_active_material(QuaderMaterialReference active_material);
   void set_folders(std::vector<QString> project_relative_folders);
   void set_project_generation(std::uint64_t generation);
+  void set_material_usage(QtMaterialBrowserUsageSnapshot snapshot);
+  [[nodiscard]] QtMaterialBrowserUsageMode usage_mode() const noexcept {
+    return usage_mode_;
+  }
+  void set_protected_material(QuaderMaterialReference material);
+  void set_material_paste_available(bool available);
   [[nodiscard]] QString selected_folder() const;
   void set_selected_folder(QString project_relative_folder);
   void follow_moved_folder(const QString &source, const QString &destination);
@@ -208,6 +296,9 @@ public:
   void set_delete_folder_callback(DeleteFolderCallback callback);
   void set_move_folder_callback(MoveFolderCallback callback);
   void set_move_materials_callback(MoveMaterialsCallback callback);
+  void set_material_action_callback(MaterialActionCallback callback);
+  void set_usage_inspection_error_callback(
+      UsageInspectionErrorCallback callback);
   void set_presentation_state_changed_callback(
       PresentationStateChangedCallback callback);
 
@@ -245,7 +336,16 @@ private:
   void accept_selected_material();
   void rebuild_folder_tree();
   void show_folder_menu(const QPoint &position);
+  void show_filter_popup();
+  void show_material_menu(const QModelIndex &target,
+                          const QPoint &global_position);
   void set_sidebar_visible(bool visible, bool notify);
+  void apply_usage_mode(QtMaterialBrowserUsageMode mode);
+  [[nodiscard]] std::vector<QuaderMaterialReference>
+  selected_materials() const;
+  [[nodiscard]] QStringList selected_material_ids() const;
+  [[nodiscard]] bool is_protected_material(
+      const QtMaterialBrowserItem &item) const;
   [[nodiscard]] bool receive_folder_drop(const QMimeData *data,
                                          const QString &destination,
                                          bool execute);
@@ -253,6 +353,8 @@ private:
   QtMaterialBrowserModel *model_ = nullptr;
   QtMaterialBrowserProxyModel *proxy_ = nullptr;
   QLineEdit *search_ = nullptr;
+  QToolButton *filter_button_ = nullptr;
+  QPointer<QWidget> filter_popup_;
   QToolButton *grid_button_ = nullptr;
   QToolButton *list_button_ = nullptr;
   QSlider *tile_slider_ = nullptr;
@@ -278,9 +380,16 @@ private:
   DeleteFolderCallback delete_folder_;
   MoveFolderCallback move_folder_;
   MoveMaterialsCallback move_materials_;
+  MaterialActionCallback material_action_;
   std::vector<QString> folders_;
+  QtMaterialBrowserUsageSnapshot usage_snapshot_;
+  QuaderMaterialReference protected_material_;
+  QtMaterialBrowserUsageMode usage_mode_ = QtMaterialBrowserUsageMode::All;
   std::uint64_t project_generation_ = 0;
+  std::uint64_t material_presentation_revision_ = 0;
+  std::uint64_t action_eligibility_revision_ = 0;
   int sidebar_width_ = 200;
+  bool material_paste_available_ = false;
   PresentationStateChangedCallback presentation_state_changed_;
   QtUiScaleMetrics ui_scale_metrics_;
 };

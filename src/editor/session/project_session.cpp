@@ -1573,6 +1573,12 @@ ProjectSession::material_texture_image(
   const ProjectAssetId texture_id = definition->value().id;
   if (const auto cached = material_texture_images_.find(texture_id);
       cached != material_texture_images_.end()) {
+    if (cached->second != nullptr &&
+        (cached->second->color_space != definition->value().color_space ||
+         cached->second->project_relative_path !=
+             definition->value().project_relative_path)) {
+      return {};
+    }
     return cached->second;
   }
 
@@ -1585,6 +1591,10 @@ ProjectSession::material_texture_image(
       auto image_data = decoded.take_value();
       result = std::make_shared<const ProjectMaterialTextureSnapshot>(
           ProjectMaterialTextureSnapshot{
+              .texture_id = texture_data.id,
+              .color_space = texture_data.color_space,
+              .project_relative_path =
+                  definition->value().project_relative_path,
               .content_revision = texture_data.content_revision,
               .encoded = std::make_shared<const std::vector<std::byte>>(
                   std::move(texture_data.encoded_bytes)),
@@ -1592,6 +1602,9 @@ ProjectSession::material_texture_image(
                   std::move(image_data.rgba8)),
               .width = image_data.width,
               .height = image_data.height,
+              .detected_format = std::move(image_data.detected_format),
+              .encoded_byte_size = image_data.encoded_byte_size,
+              .has_alpha_channel = image_data.has_alpha_channel,
           });
     }
   }
@@ -1599,6 +1612,73 @@ ProjectSession::material_texture_image(
   // while a selected face is presented. Catalog replacement retries resolution.
   material_texture_images_.emplace(texture_id, result);
   return result;
+}
+
+ProjectIoResult<ProjectMaterialAlbedoTextureInfo>
+ProjectSession::material_albedo_texture_info(ProjectAssetId material_id) const {
+  if (!workspace_) {
+    return ProjectIoResult<ProjectMaterialAlbedoTextureInfo>::failure(
+        ProjectIoErrorCode::InvalidWorkspaceState, "No project is open.");
+  }
+  material_id = canonical_material_id(material_id);
+  const ProjectMaterialCatalogEntry *entry = material_catalog_.find(material_id);
+  if (entry == nullptr) {
+    return ProjectIoResult<ProjectMaterialAlbedoTextureInfo>::failure(
+        ProjectIoErrorCode::AssetNotFound,
+        "Project material is not present in the catalog.");
+  }
+  const ProjectStandardMaterialDefinition *standard =
+      entry->material.standard_material();
+  if (standard == nullptr) {
+    return ProjectIoResult<ProjectMaterialAlbedoTextureInfo>::failure(
+        ProjectIoErrorCode::UnsupportedFormat,
+        "Project material is not a Standard Material.",
+        entry->path.native_path());
+  }
+  if (!standard->base_color_texture.has_value()) {
+    return ProjectIoResult<ProjectMaterialAlbedoTextureInfo>::failure(
+        ProjectIoErrorCode::AssetNotFound,
+        "Project Standard Material has no albedo texture.",
+        entry->path.native_path());
+  }
+  const ProjectMaterialTextureSlot &definition =
+      *standard->base_color_texture;
+  ProjectIoResult<ProjectRelativePath> relative =
+      ProjectRelativePath::parse_portable(definition.project_relative_path);
+  if (!relative.ok()) {
+    return ProjectIoResult<ProjectMaterialAlbedoTextureInfo>::failure(
+        relative.error().code, relative.error().message,
+        relative.error().path);
+  }
+  ProjectIoResult<std::filesystem::path> absolute =
+      workspace_->file_system.resolve_existing_file(relative.value());
+  if (!absolute.ok()) {
+    return ProjectIoResult<ProjectMaterialAlbedoTextureInfo>::failure(
+        absolute.error().code, absolute.error().message,
+        absolute.error().path);
+  }
+  std::shared_ptr<const ProjectMaterialTextureSnapshot> texture =
+      material_texture_image(material_id, StandardMaterialTextureSlot::Albedo);
+  if (texture == nullptr) {
+    return ProjectIoResult<ProjectMaterialAlbedoTextureInfo>::failure(
+        ProjectIoErrorCode::MaterialMalformed,
+        "Project material albedo texture could not be decoded.",
+        absolute.value());
+  }
+  if (texture->texture_id != definition.id ||
+      texture->color_space != definition.color_space ||
+      texture->project_relative_path != definition.project_relative_path) {
+    return ProjectIoResult<ProjectMaterialAlbedoTextureInfo>::failure(
+        ProjectIoErrorCode::DuplicateAsset,
+        "Project texture UUID resolves to conflicting texture metadata.",
+        absolute.value());
+  }
+  return ProjectIoResult<ProjectMaterialAlbedoTextureInfo>::success({
+      .material_id = material_id,
+      .project_relative_path = relative.take_value(),
+      .absolute_path = absolute.take_value(),
+      .texture = std::move(texture),
+  });
 }
 
 OpenSceneSession *ProjectSession::find(SceneSessionId id) {

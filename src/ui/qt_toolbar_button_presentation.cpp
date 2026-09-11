@@ -88,7 +88,7 @@ public:
     painter->fillRect(
         QRectF(bounds.left(), bounds.top() + bounds.height() - extent,
                bounds.width(), extent),
-        option->palette.brush(QPalette::Midlight));
+        option->palette.brush(QPalette::Dark));
   }
 
   void drawPrimitive(PrimitiveElement element, const QStyleOption *option,
@@ -109,7 +109,7 @@ public:
                        bounds.height())
               : QRectF(bounds.left(), bounds.center().y(), bounds.width(),
                        extent);
-      painter->fillRect(line, option->palette.brush(QPalette::Midlight));
+      painter->fillRect(line, option->palette.brush(QPalette::Dark));
       return;
     }
     if (element != PE_PanelButtonCommand || option == nullptr ||

@@ -35,10 +35,13 @@ void apply_shared_obsidian_roles(QPalette &palette) {
   palette.setColor(kAllGroups, QPalette::PlaceholderText,
                    QColor(148, 152, 164));
 
-  palette.setColor(kAllGroups, QPalette::Light, QColor(57, 59, 67));
-  palette.setColor(kAllGroups, QPalette::Midlight, QColor(50, 52, 60));
-  palette.setColor(kAllGroups, QPalette::Mid, QColor(35, 36, 42));
-  palette.setColor(kAllGroups, QPalette::Dark, QColor(22, 23, 27));
+  // Fusion resolves menu separators, frames, splitter handles, grid lines,
+  // toolbar separators, and Quader's custom panel edges through this ladder.
+  // Keep each step visibly distinct from the surrounding charcoal surfaces.
+  palette.setColor(kAllGroups, QPalette::Light, QColor(96, 99, 111));
+  palette.setColor(kAllGroups, QPalette::Midlight, QColor(82, 85, 96));
+  palette.setColor(kAllGroups, QPalette::Mid, QColor(68, 71, 81));
+  palette.setColor(kAllGroups, QPalette::Dark, QColor(51, 54, 63));
   palette.setColor(kAllGroups, QPalette::Shadow, QColor(12, 13, 16));
 
   // Neutral charcoal keeps selection quiet across standard Qt views. Amethyst
@@ -77,9 +80,9 @@ void apply_disabled_obsidian_roles(QPalette &palette) {
   palette.setColor(kGroup, QPalette::BrightText, QColor(179, 182, 192));
   palette.setColor(kGroup, QPalette::PlaceholderText, QColor(121, 125, 137));
 
-  palette.setColor(kGroup, QPalette::Light, QColor(43, 45, 52));
-  palette.setColor(kGroup, QPalette::Midlight, QColor(37, 39, 46));
-  palette.setColor(kGroup, QPalette::Mid, QColor(26, 27, 32));
+  palette.setColor(kGroup, QPalette::Light, QColor(75, 78, 88));
+  palette.setColor(kGroup, QPalette::Midlight, QColor(65, 68, 77));
+  palette.setColor(kGroup, QPalette::Mid, QColor(56, 59, 68));
   palette.setColor(kGroup, QPalette::Highlight, QColor(48, 49, 56));
   palette.setColor(kGroup, QPalette::HighlightedText, QColor(150, 153, 164));
   palette.setColor(kGroup, QPalette::Accent, QColor(139, 132, 160));

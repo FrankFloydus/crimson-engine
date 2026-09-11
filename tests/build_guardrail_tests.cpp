@@ -13,6 +13,7 @@
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <regex>
 #include <stdexcept>
 #include <string>
@@ -2922,6 +2923,83 @@ TEST(BuildGuardrailTests, SelectionToolbarIconsAreEmbeddedQtResources) {
   }
 }
 
+TEST(BuildGuardrailTests,
+     MaterialBrowserFilterIconIsEmbeddedAndMatchesGenerationEvidence) {
+  constexpr std::string_view kIconRelativePath =
+      "resources/icons/material_filter.png";
+  constexpr std::string_view kResourcePath =
+      ":/quader/icons/material_filter.png";
+  constexpr std::string_view kSourceIdentity =
+      "exec-964af5e5-a267-4b3f-a271-8c31876e0d97.png";
+  constexpr std::string_view kSha256 =
+      "9f8d203ef2fbd022eb7e42540eee729f0abc91975f326263a4cf807dbc6c3eab";
+  constexpr std::string_view kExactPrompt =
+      "> Use case: logo-brand\n"
+      "> Asset type: compact Qt material-browser toolbar filter icon\n"
+      "> Primary request: Create one original conventional centered "
+      "funnel/filter silhouette with a genuinely transparent background.\n"
+      "> Style/medium: crisp polished raster UI icon with a vector-like "
+      "silhouette\n"
+      "> Composition/framing: square canvas; one centered funnel filling "
+      "roughly 86% of the canvas; broad simple geometry legible at 16–20 "
+      "logical pixels\n"
+      "> Color palette: dark navy outline, pale silver/light-periwinkle fill, "
+      "and restrained flat one-step blue shading\n"
+      "> Constraints: preserve genuine transparent alpha outside the icon; "
+      "clean well-defined edges; no text; no watermark\n"
+      "> Avoid: glow, drop shadow, orange, extra objects, tiny details, "
+      "gradients beyond the restrained single shading step\n";
+
+  const std::filesystem::path icon_path = source_path(kIconRelativePath);
+  ASSERT_TRUE(std::filesystem::is_regular_file(icon_path));
+  EXPECT_GT(std::filesystem::file_size(icon_path), 512u);
+
+  std::array<unsigned char, 26> png_header{};
+  std::ifstream icon(icon_path, std::ios::binary);
+  ASSERT_TRUE(icon.is_open());
+  icon.read(reinterpret_cast<char *>(png_header.data()),
+            static_cast<std::streamsize>(png_header.size()));
+  ASSERT_EQ(icon.gcount(), static_cast<std::streamsize>(png_header.size()));
+  constexpr std::array<unsigned char, 8> kPngSignature = {
+      0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
+  EXPECT_TRUE(std::equal(kPngSignature.begin(), kPngSignature.end(),
+                         png_header.begin()));
+  EXPECT_EQ(png_header[24], 8u) << "the generated PNG must retain 8-bit data";
+  EXPECT_EQ(png_header[25], 6u)
+      << "PNG IHDR color type 6 is true RGBA, not a flattened RGB image";
+
+  const CommandResult digest = run_command_capture(
+      "cmake -E sha256sum " + quoted_process_argument(icon_path));
+  ASSERT_EQ(digest.exit_code, 0) << digest.output;
+  expect_contains(digest.output, std::string(kSha256));
+
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string browser_source =
+      read_source_file("src/ui/qt_material_browser_window.cpp");
+  const std::string provenance = read_source_file(
+      "resources/icons/material_filter_icon.provenance.md");
+  expect_contains(root_c_make,
+                  "qt_add_resources(quader_ui \"quader_material_browser_icons\"");
+  expect_contains(root_c_make, "PREFIX \"/quader/icons\"");
+  expect_contains(root_c_make, "BASE \"${CMAKE_CURRENT_SOURCE_DIR}/resources/icons\"");
+  expect_contains(root_c_make, std::string(kIconRelativePath));
+  expect_contains(browser_source, std::string(kResourcePath));
+  expect_contains(provenance, std::string(kSourceIdentity));
+  expect_contains(provenance, std::string(kSha256));
+
+  std::string normalized_provenance = provenance;
+  normalized_provenance.erase(
+      std::remove(normalized_provenance.begin(), normalized_provenance.end(),
+                  '\r'),
+      normalized_provenance.end());
+  constexpr std::string_view kPromptMarker = "Prompt:\n\n";
+  const std::size_t prompt_offset = normalized_provenance.find(kPromptMarker);
+  ASSERT_NE(prompt_offset, std::string::npos);
+  EXPECT_EQ(normalized_provenance.substr(prompt_offset + kPromptMarker.size()),
+            kExactPrompt)
+      << "the provenance must preserve the exact ImageGen prompt";
+}
+
 TEST(BuildGuardrailTests, ToolToolbarIconsAreEmbeddedQtResources) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
 
@@ -3445,6 +3523,8 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   ASSERT_NE(home_unchanged, std::string::npos);
   ASSERT_NE(home_setter, std::string::npos);
   EXPECT_LT(home_unchanged, home_setter);
+  expect_contains(show_home, "material_texture_info_window_->clear()");
+  expect_contains(show_home, "material_texture_info_window_->hide()");
   const std::size_t workspace_unchanged =
       show_workspace.find("if (!presentation_changed)");
   const std::size_t workspace_setter =

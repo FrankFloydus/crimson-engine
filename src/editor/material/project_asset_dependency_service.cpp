@@ -248,7 +248,9 @@ struct ProjectAssetDependencyService::State final {
         continue;
       }
       auto &cached = saved[entry.path];
-      if (refresh_files || cached.stamp != stamp || !cached.dependencies.ok) {
+      if (refresh_files || cached.stamp != stamp ||
+          (!cached.dependencies.ok &&
+           !cached.dependencies.dependency_data_available)) {
         ++work.saved_scene_read_count;
         ++work.fingerprint_read_count;
         cached.dependencies =
@@ -258,8 +260,10 @@ struct ProjectAssetDependencyService::State final {
       const auto &read = cached.dependencies;
       if (!read.ok) {
         candidate.errors.push_back(entry.path.portable_string() + ": " +
-                                   read.message);
-        continue;
+                                    read.message);
+        if (!read.dependency_data_available) {
+          continue;
+        }
       }
       candidate.sources.push_back({
           .path = entry.path,
@@ -291,6 +295,14 @@ struct ProjectAssetDependencyService::State final {
       if (open.session == nullptr) {
         candidate.errors.push_back("Cannot inspect scene '" + open.display_name +
                                    "': its document is unavailable.");
+        next.push_back({
+            .session_id = open.session_id,
+            .scene_id = open.scene_id,
+            .session = nullptr,
+            .path = open.path,
+            .display_name = open.display_name,
+            .dirty = open.dirty(),
+        });
         continue;
       }
       const auto stamp = open.session->content_revision_stamp();

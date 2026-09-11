@@ -44,6 +44,7 @@ class QWidget;
 namespace quader {
 
 class QtColorSwatchButton;
+class QtTextureInfoWindow;
 
 /// Selects one native File-menu command in the Standard Material editor.
 enum class QtStandardMaterialEditorFileAction : std::uint8_t {
@@ -139,6 +140,9 @@ struct QtStandardMaterialTexturePresentation final {
   QSize pixel_size;
   qint64 encoded_byte_size = 0;
   std::uint64_t content_revision = 0;
+  QString stable_texture_id;
+  QString absolute_path;
+  bool source_has_alpha = false;
 
   bool operator==(
       const QtStandardMaterialTexturePresentation &other) const noexcept {
@@ -147,6 +151,9 @@ struct QtStandardMaterialTexturePresentation final {
            color_space == other.color_space && pixel_size == other.pixel_size &&
            encoded_byte_size == other.encoded_byte_size &&
            content_revision == other.content_revision &&
+           stable_texture_id == other.stable_texture_id &&
+           absolute_path == other.absolute_path &&
+           source_has_alpha == other.source_has_alpha &&
            preview_image.isNull() == other.preview_image.isNull();
   }
 };
@@ -236,6 +243,17 @@ struct QtStandardMaterialEditorLabels final {
   QString texture_rotation_tooltip = QStringLiteral(
       "Rotate material UV coordinates around Center, after tiling and before Offset. Applies to every surface using this material.");
   QString texture_inspector = QStringLiteral("Texture Inspector");
+  QString texture_info_property = QStringLiteral("Property");
+  QString texture_info_value = QStringLiteral("Value");
+  QString texture_info_name = QStringLiteral("name");
+  QString texture_info_location = QStringLiteral("location");
+  QString texture_info_format = QStringLiteral("format");
+  QString texture_info_has_alpha = QStringLiteral("has alpha");
+  QString texture_info_size = QStringLiteral("size");
+  QString texture_info_red_channel = QStringLiteral("Red channel");
+  QString texture_info_green_channel = QStringLiteral("Green channel");
+  QString texture_info_blue_channel = QStringLiteral("Blue channel");
+  QString texture_info_alpha_channel = QStringLiteral("Alpha channel");
 };
 
 /**
@@ -325,6 +343,7 @@ public:
 
 protected:
   bool event(QEvent *event) override;
+  bool eventFilter(QObject *watched, QEvent *event) override;
   void closeEvent(QCloseEvent *event) override;
 
 private:
@@ -441,7 +460,7 @@ private:
   QGroupBox *texture_transform_group_ = nullptr;
   std::array<TextureTransformControls, kTextureTransformCount>
       texture_transform_controls_{};
-  QMainWindow *texture_inspector_window_ = nullptr;
+  QtTextureInfoWindow *texture_inspector_window_ = nullptr;
   std::optional<QtStandardMaterialTextureSlot> inspected_texture_slot_;
   QtUiScaleMetrics ui_scale_metrics_;
 

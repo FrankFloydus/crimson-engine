@@ -149,6 +149,7 @@ struct QuaderStandardMaterialPreviewTexture {
   std::uint32_t height = 0u;
   std::string detected_format;
   std::uintmax_t encoded_byte_size = 0u;
+  bool has_alpha_channel = false;
 };
 
 /// Complete public evaluation snapshot for the current Standard Material draft.

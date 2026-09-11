@@ -266,6 +266,7 @@ QuaderStandardMaterialDocumentsApi::preview() const {
         .height = texture.height,
         .detected_format = texture.detected_format,
         .encoded_byte_size = texture.encoded_byte_size,
+        .has_alpha_channel = texture.has_alpha_channel,
     };
   }
   return quader_api_result_from_status(status(session_, true, false),

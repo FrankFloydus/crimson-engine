@@ -228,6 +228,7 @@ TEST_F(ProjectImageDecoderTests, DecodesEveryTexturePickerStillImageFormat) {
     EXPECT_EQ(decoded.value().rgba8.size(),
               static_cast<std::size_t>(fixture.width) *
                   static_cast<std::size_t>(fixture.height) * 4u);
+    EXPECT_EQ(decoded.value().encoded_byte_size, encoded.size());
     const bool detected_format_matches =
         std::any_of(fixture.reader_formats.begin(),
                     fixture.reader_formats.end(), [&](std::string_view alias) {
@@ -237,6 +238,30 @@ TEST_F(ProjectImageDecoderTests, DecodesEveryTexturePickerStillImageFormat) {
     EXPECT_TRUE(detected_format_matches)
         << "Detected format: " << decoded.value().detected_format;
   }
+}
+
+TEST_F(ProjectImageDecoderTests,
+       PreservesSourceAlphaCapabilityBeforeRgbaConversion) {
+  QImage rgb(2, 2, QImage::Format_RGB888);
+  rgb.fill(QColor(30, 60, 90));
+  const std::vector<std::byte> rgb_bytes = encoded_image(std::move(rgb), "PNG");
+  const ProjectIoResult<ProjectDecodedImage> decoded_rgb =
+      ProjectImageDecoder::decode(rgb_bytes);
+  ASSERT_TRUE(decoded_rgb.ok()) << decoded_rgb.error().message;
+  EXPECT_FALSE(decoded_rgb.value().has_alpha_channel);
+  EXPECT_EQ(decoded_rgb.value().encoded_byte_size, rgb_bytes.size());
+  EXPECT_EQ(decoded_rgb.value().rgba8.size(), 16u);
+
+  QImage rgba(2, 2, QImage::Format_RGBA8888);
+  rgba.fill(QColor(30, 60, 90, 127));
+  const std::vector<std::byte> rgba_bytes =
+      encoded_image(std::move(rgba), "PNG");
+  const ProjectIoResult<ProjectDecodedImage> decoded_rgba =
+      ProjectImageDecoder::decode(rgba_bytes);
+  ASSERT_TRUE(decoded_rgba.ok()) << decoded_rgba.error().message;
+  EXPECT_TRUE(decoded_rgba.value().has_alpha_channel);
+  EXPECT_EQ(decoded_rgba.value().encoded_byte_size, rgba_bytes.size());
+  EXPECT_EQ(decoded_rgba.value().rgba8.size(), 16u);
 }
 
 TEST_F(ProjectImageDecoderTests, DecodesRgba8AndHonorsTheEightKBoundary) {

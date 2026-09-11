@@ -14,6 +14,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace quader {
@@ -54,6 +55,8 @@ struct QdrSceneBinaryDecodeResult final {
 
 /// Project references read from validated metadata, including dormant bindings.
 struct QdrSceneBinaryDependencyDecodeResult final {
+  bool fully_validated = true;
+  std::string validation_error;
   std::string scene_name;
   std::vector<ProjectAssetId> material_ids;
   std::vector<ProjectAssetReference> project_asset_dependencies;

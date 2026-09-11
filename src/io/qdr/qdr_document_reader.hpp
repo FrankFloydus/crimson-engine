@@ -61,6 +61,8 @@ struct QdrProjectReadResult {
 /// Validated project references without decoding or compiling scene geometry.
 struct QdrProjectDependencyReadResult final {
   bool ok = false;
+  /// True when a validated dependency projection survived a broader read error.
+  bool dependency_data_available = false;
   std::string message;
   std::vector<quader_io::QdrDiagnostic> diagnostics;
   std::array<std::byte, 16> scene_uuid{};

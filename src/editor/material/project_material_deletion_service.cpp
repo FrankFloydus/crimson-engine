@@ -23,6 +23,7 @@
 #include <iterator>
 #include <set>
 #include <stdexcept>
+#include <tuple>
 #include <unordered_set>
 
 namespace quader {
@@ -132,13 +133,107 @@ bool contains_any(std::span<const ProjectAssetId> ids,
 
 std::uint64_t confirmation_revision(
     const ProjectMaterialFolderDeletionPreview &preview,
-    std::uint64_t graph_revision) {
-  const std::string identity = preview.folder.portable_string() + ":" +
-                               std::to_string(graph_revision) + ":" +
-                               std::to_string(preview.folder_count);
+    const ProjectAssetDependencySnapshot &graph) {
+  const std::string identity =
+      std::string(graph.project_id.str()) + ":" +
+      std::to_string(graph.project_generation) + ":" +
+      preview.folder.portable_string() + ":" +
+      std::to_string(graph.revision) + ":" +
+      std::to_string(preview.folder_count);
   const auto hash = quader_io::qdr_binary_content_hash(
       std::as_bytes(std::span(identity.data(), identity.size())));
   return hash == 0u ? 1u : hash;
+}
+
+std::uint64_t confirmation_revision(
+    std::span<const ProjectAssetId> material_ids,
+    const ProjectAssetDependencySnapshot &graph) {
+  std::vector<ProjectAssetId> sorted(material_ids.begin(), material_ids.end());
+  std::ranges::sort(sorted);
+  std::string identity = std::string(graph.project_id.str()) + ":" +
+                         std::to_string(graph.project_generation) +
+                         ":materials:" + std::to_string(graph.revision);
+  for (const ProjectAssetId id : sorted) {
+    identity += ":";
+    identity += id.str();
+  }
+  const auto hash = quader_io::qdr_binary_content_hash(
+      std::as_bytes(std::span(identity.data(), identity.size())));
+  return hash == 0u ? 1u : hash;
+}
+
+template <typename Preview>
+void populate_dependency_effects(
+    Preview &preview, const ProjectAssetDependencySnapshot &graph,
+    const std::unordered_set<ProjectAssetId, ProjectAssetIdHash> &removed) {
+  for (const auto &material : graph.materials) {
+    if (material.draft && removed.contains(material.id)) {
+      preview.discards_material_draft =
+          preview.discards_material_draft || material.dirty;
+    }
+  }
+  std::vector<ProjectSceneAssetDependencies> affected;
+  std::vector<const ProjectSceneAssetDependencies *> candidates;
+  candidates.reserve(graph.scenes.size());
+  for (const auto &scene : graph.scenes) {
+    if (contains_any(scene.material_ids, removed)) {
+      candidates.push_back(&scene);
+    }
+  }
+  affected.reserve(candidates.size());
+  std::vector<bool> consumed(candidates.size(), false);
+  for (std::size_t index = 0u; index < candidates.size(); ++index) {
+    const ProjectSceneAssetDependencies &saved = *candidates[index];
+    if (saved.live || !saved.path.has_value()) {
+      continue;
+    }
+    std::optional<std::size_t> matching_live;
+    std::size_t saved_matches = 0u;
+    std::size_t live_matches = 0u;
+    for (std::size_t candidate_index = 0u;
+         candidate_index < candidates.size(); ++candidate_index) {
+      const ProjectSceneAssetDependencies &candidate =
+          *candidates[candidate_index];
+      if (candidate.scene_id != saved.scene_id ||
+          candidate.path != saved.path) {
+        continue;
+      }
+      if (candidate.live) {
+        ++live_matches;
+        matching_live = candidate_index;
+      } else {
+        ++saved_matches;
+      }
+    }
+    if (saved_matches == 1u && live_matches == 1u &&
+        matching_live.has_value()) {
+      const ProjectSceneAssetDependencies &live =
+          *candidates[*matching_live];
+      if (live.session_id.has_value() && !live.dirty &&
+          live.material_ids == saved.material_ids) {
+        affected.push_back(live);
+        consumed[index] = true;
+        consumed[*matching_live] = true;
+      }
+    }
+  }
+  for (std::size_t index = 0u; index < candidates.size(); ++index) {
+    if (!consumed[index]) {
+      affected.push_back(*candidates[index]);
+    }
+  }
+  std::ranges::sort(affected, [](const auto &left, const auto &right) {
+    const std::string left_path =
+        left.path.has_value() ? left.path->portable_string() : std::string{};
+    const std::string right_path = right.path.has_value()
+                                       ? right.path->portable_string()
+                                       : std::string{};
+    return std::tie(left.display_name, left.live, left_path, left.session_id,
+                    left.scene_id) <
+           std::tie(right.display_name, right.live, right_path,
+                    right.session_id, right.scene_id);
+  });
+  preview.affected_scenes = std::move(affected);
 }
 
 void normalize_reference(MaterialReference &reference,
@@ -215,6 +310,16 @@ struct LiveReplacement final {
   bool applied = false;
 };
 
+/// One material file moved under a durable transaction before publication.
+struct QuarantinedMaterialFile final {
+  ProjectRelativePath path;
+  std::filesystem::path original;
+  std::filesystem::path quarantine;
+  std::uint64_t byte_count = 0u;
+  std::uint64_t content_hash = 0u;
+  bool moved = false;
+};
+
 void validate_quarantined_folder(
     const ProjectFileSystem &file_system,
     const std::filesystem::path &quarantine,
@@ -269,6 +374,166 @@ void validate_quarantined_folder(
   }
   if (!expected_files.empty() || !expected_folders.empty()) {
     throw std::runtime_error("Material folder contents changed during deletion staging.");
+  }
+}
+
+void validate_material_source(
+    const ProjectFileSystem &file_system,
+    const ProjectAssetDependencySnapshot &graph,
+    QuarantinedMaterialFile &file) {
+  file.original = require_resolved(file_system, file.path);
+  const auto status = std::filesystem::symlink_status(file.original);
+  if (!std::filesystem::is_regular_file(status) ||
+      std::filesystem::is_symlink(status)) {
+    throw std::runtime_error("A selected material file is missing or is a filesystem link.");
+  }
+  std::error_code link_error;
+  const auto links = std::filesystem::hard_link_count(file.original, link_error);
+  if (link_error || links != 1u) {
+    throw std::runtime_error("Linked or aliased material files cannot be deleted.");
+  }
+  const auto source = std::ranges::find_if(graph.sources, [&](const auto &value) {
+    return value.path == file.path;
+  });
+  const auto bytes = read_bytes(file.original);
+  const auto hash = quader_io::qdr_binary_content_hash(
+      std::as_bytes(std::span(bytes.data(), bytes.size())));
+  if (source == graph.sources.end() || source->byte_count != bytes.size() ||
+      source->content_hash != hash) {
+    throw std::runtime_error("Material content changed after the deletion warning.");
+  }
+  file.byte_count = bytes.size();
+  file.content_hash = hash;
+}
+
+void validate_quarantined_materials(
+    std::span<const QuarantinedMaterialFile> materials) {
+  for (const auto &material : materials) {
+    if (!material.moved || std::filesystem::exists(material.original)) {
+      throw std::runtime_error("Material files changed during deletion staging.");
+    }
+    const auto status = std::filesystem::symlink_status(material.quarantine);
+    if (!std::filesystem::is_regular_file(status) ||
+        std::filesystem::is_symlink(status)) {
+      throw std::runtime_error("A quarantined material is missing or is a filesystem link.");
+    }
+    std::error_code link_error;
+    if (std::filesystem::hard_link_count(material.quarantine, link_error) != 1u ||
+        link_error) {
+      throw std::runtime_error(
+          "A quarantined material became linked or aliased.");
+    }
+    const auto bytes = read_bytes(material.quarantine);
+    const auto hash = quader_io::qdr_binary_content_hash(
+        std::as_bytes(std::span(bytes.data(), bytes.size())));
+    if (bytes.size() != material.byte_count || hash != material.content_hash) {
+      throw std::runtime_error("Material content changed during deletion staging.");
+    }
+  }
+}
+
+void validate_material_quarantine_entries(
+    const std::filesystem::path &directory,
+    std::span<const std::filesystem::path> expected_paths) {
+  const auto status = std::filesystem::symlink_status(directory);
+  if (!std::filesystem::exists(status)) {
+    return;
+  }
+  if (!std::filesystem::is_directory(status) ||
+      std::filesystem::is_symlink(status)) {
+    throw std::runtime_error(
+        "Material deletion quarantine is not a regular directory.");
+  }
+  std::set<std::filesystem::path> expected;
+  for (const auto &path : expected_paths) {
+    expected.insert(path.lexically_normal());
+  }
+  for (const auto &entry : std::filesystem::directory_iterator(directory)) {
+    const auto entry_status = entry.symlink_status();
+    if (!std::filesystem::is_regular_file(entry_status) ||
+        std::filesystem::is_symlink(entry_status) ||
+        expected.erase(entry.path().lexically_normal()) != 1u) {
+      throw std::runtime_error(
+          "Material deletion quarantine contains an unjournaled entry; "
+          "recovery preserved it for conflict resolution.");
+    }
+  }
+}
+
+void remove_validated_material_quarantine(
+    const std::filesystem::path &directory,
+    std::span<const std::filesystem::path> expected_paths) {
+  validate_material_quarantine_entries(directory, expected_paths);
+  for (const auto &path : expected_paths) {
+    if (!std::filesystem::exists(path)) {
+      continue;
+    }
+    std::error_code error;
+    if (!std::filesystem::remove(path, error) || error) {
+      throw std::runtime_error(
+          "Cannot destroy a validated quarantined material.");
+    }
+  }
+  if (!std::filesystem::exists(directory)) {
+    return;
+  }
+  std::error_code error;
+  if (!std::filesystem::remove(directory, error) || error) {
+    throw std::runtime_error(
+        "Material deletion quarantine changed during cleanup; recovery "
+        "preserved it for conflict resolution.");
+  }
+}
+
+std::vector<std::filesystem::path> quarantine_paths(
+    std::span<const QuarantinedMaterialFile> materials) {
+  std::vector<std::filesystem::path> paths;
+  paths.reserve(materials.size());
+  std::ranges::transform(materials, std::back_inserter(paths),
+                         &QuarantinedMaterialFile::quarantine);
+  return paths;
+}
+
+void validate_catalog_after_quarantine(
+    const ProjectMaterialCatalog &reviewed,
+    const ProjectMaterialCatalog &scanned,
+    const std::unordered_set<ProjectAssetId, ProjectAssetIdHash> &removed,
+    const ProjectRelativePath *removed_folder) {
+  const auto removed_entry_count = std::ranges::count_if(
+      reviewed.entries(), [&](const ProjectMaterialCatalogEntry &entry) {
+        return removed.contains(entry.material.id);
+      });
+  if (removed_entry_count != removed.size() ||
+      scanned.entries().size() + removed_entry_count !=
+          reviewed.entries().size()) {
+    throw std::runtime_error(
+        "Material catalog changed during deletion staging.");
+  }
+  for (const auto &before : reviewed.entries()) {
+    if (removed.contains(before.material.id)) {
+      if (scanned.find(before.material.id) != nullptr) {
+        throw std::runtime_error(
+            "A selected material remained in the catalog after quarantine.");
+      }
+      continue;
+    }
+    const auto *after = scanned.find(before.material.id);
+    if (after == nullptr || *after != before) {
+      throw std::runtime_error(
+          "Material catalog content changed during deletion staging.");
+    }
+  }
+  std::vector<ProjectRelativePath> expected_folders;
+  expected_folders.reserve(reviewed.folders().size());
+  std::ranges::copy_if(
+      reviewed.folders(), std::back_inserter(expected_folders),
+      [&](const ProjectRelativePath &folder) {
+        return removed_folder == nullptr ||
+               !within_folder(folder, *removed_folder);
+      });
+  if (!std::ranges::equal(expected_folders, scanned.folders())) {
+    throw std::runtime_error(
+        "Material folders changed during deletion staging.");
   }
 }
 
@@ -339,19 +604,63 @@ ProjectMaterialDeletionService::preview_folder(std::string_view folder) const {
           }
         }
       }
-      if (material.draft && removed.contains(material.id)) {
-        preview.discards_material_draft = material.dirty;
-      }
     }
-    std::set<std::string> affected;
-    for (const auto &scene : graph->scenes) {
-      if (contains_any(scene.material_ids, removed)) {
-        affected.insert(scene.display_name +
-                        (scene.live ? " (open)" : " (saved)"));
-      }
+    populate_dependency_effects(preview, *graph, removed);
+    preview.revision = confirmation_revision(preview, *graph);
+    preview.complete = graph->complete && preview.errors.empty();
+  } catch (const std::exception &error) {
+    preview.errors.push_back(error.what());
+  }
+  return preview;
+}
+
+ProjectMaterialDeletionPreview ProjectMaterialDeletionService::preview_materials(
+    std::span<const ProjectAssetId> material_ids) const {
+  ProjectMaterialDeletionPreview preview;
+  try {
+    if (!project_->workspace()) {
+      throw std::runtime_error("Open a project before deleting materials.");
     }
-    preview.affected_scenes.assign(affected.begin(), affected.end());
-    preview.revision = confirmation_revision(preview, graph->revision);
+    if (material_ids.empty()) {
+      throw std::runtime_error("Select at least one material to delete.");
+    }
+    const auto graph = project_->dependencies().snapshot(true);
+    preview.errors = graph->errors;
+    std::unordered_set<ProjectAssetId, ProjectAssetIdHash> removed;
+    removed.reserve(material_ids.size());
+    for (const ProjectAssetId id : material_ids) {
+      if (!id.valid()) {
+        throw std::runtime_error("Material deletion requires valid UUIDs.");
+      }
+      if (!removed.insert(id).second) {
+        throw std::runtime_error("The material deletion selection contains duplicate entries.");
+      }
+      if (id == default_id()) {
+        throw std::runtime_error("The reserved Default Material cannot be deleted.");
+      }
+      const auto *entry = project_->material_catalog().find(id);
+      if (entry == nullptr) {
+        throw std::runtime_error("A selected material is unavailable or was already deleted.");
+      }
+      const auto absolute = require_resolved(project_->workspace()->file_system,
+                                             entry->path);
+      const auto status = std::filesystem::symlink_status(absolute);
+      if (!std::filesystem::is_regular_file(status) ||
+          std::filesystem::is_symlink(status)) {
+        throw std::runtime_error(
+            "A selected material file is missing or is a filesystem link.");
+      }
+      std::error_code link_error;
+      if (std::filesystem::hard_link_count(absolute, link_error) != 1u ||
+          link_error) {
+        throw std::runtime_error(
+            "Linked or aliased material files cannot be deleted.");
+      }
+      preview.material_ids.push_back(id);
+      preview.material_names.push_back(entry->material.name);
+    }
+    populate_dependency_effects(preview, *graph, removed);
+    preview.revision = confirmation_revision(preview.material_ids, *graph);
     preview.complete = graph->complete && preview.errors.empty();
   } catch (const std::exception &error) {
     preview.errors.push_back(error.what());
@@ -361,19 +670,50 @@ ProjectMaterialDeletionService::preview_folder(std::string_view folder) const {
 
 ProjectSessionResult ProjectMaterialDeletionService::delete_folder(
     std::string_view folder, std::uint64_t preview_revision) const {
-  const auto preview = preview_folder(folder);
-  if (!preview.complete) {
-    return {.message = preview.errors.empty() ? "Material dependencies could not be inspected."
-                                             : preview.errors.front()};
+  const auto folder_preview = preview_folder(folder);
+  if (!folder_preview.complete) {
+    return {.message = folder_preview.errors.empty()
+                           ? "Material dependencies could not be inspected."
+                           : folder_preview.errors.front()};
   }
-  if (preview_revision == 0u || preview.revision != preview_revision) {
+  if (preview_revision == 0u || folder_preview.revision != preview_revision) {
     return {.message = "Material dependencies changed. Review a new deletion warning."};
   }
+  return delete_preview(
+      {.revision = folder_preview.revision,
+       .complete = folder_preview.complete,
+       .material_ids = folder_preview.material_ids,
+       .material_names = folder_preview.material_names,
+       .affected_scenes = folder_preview.affected_scenes,
+       .errors = folder_preview.errors,
+       .discards_material_draft = folder_preview.discards_material_draft},
+      &folder_preview);
+}
 
+ProjectSessionResult ProjectMaterialDeletionService::delete_materials(
+    std::span<const ProjectAssetId> material_ids,
+    std::uint64_t preview_revision) const {
+  const auto preview = preview_materials(material_ids);
+  if (!preview.complete) {
+    return {.message = preview.errors.empty()
+                           ? "Material dependencies could not be inspected."
+                           : preview.errors.front()};
+  }
+  if (preview_revision == 0u || preview.revision != preview_revision) {
+    return {.message =
+                "Material dependencies changed. Review a new deletion warning."};
+  }
+  return delete_preview(preview, nullptr);
+}
+
+ProjectSessionResult ProjectMaterialDeletionService::delete_preview(
+    const ProjectMaterialDeletionPreview &preview,
+    const ProjectMaterialFolderDeletionPreview *folder_preview) const {
   auto &workspace = *project_->workspace_;
   const auto &file_system = workspace.file_system;
   std::vector<StagedFile> staged;
   std::vector<LiveReplacement> live;
+  std::vector<QuarantinedMaterialFile> quarantined_materials;
   ProjectRelativePath transaction_relative;
   std::filesystem::path transaction_directory;
   std::filesystem::path original_folder;
@@ -395,12 +735,44 @@ ProjectSessionResult ProjectMaterialDeletionService::delete_folder(
                                         std::string(ProjectAssetId::generate().str()));
     transaction_directory = require_resolved(file_system, transaction_relative);
     std::filesystem::create_directories(transaction_directory);
-    original_folder = require_resolved(file_system, preview.folder);
-    quarantine = require_resolved(file_system,
-                                 require_path(transaction_relative.portable_string() + "/folder"));
-    journal = {{"version", 1}, {"project", workspace.manifest.id().str()},
-               {"folder", preview.folder.portable_string()}, {"state", "prepared"},
+    journal = {{"version", folder_preview != nullptr ? 1 : 2},
+               {"project", workspace.manifest.id().str()},
+               {"state", "prepared"},
                {"files", nlohmann::json::array()}};
+    if (folder_preview != nullptr) {
+      original_folder = require_resolved(file_system, folder_preview->folder);
+      quarantine = require_resolved(
+          file_system,
+          require_path(transaction_relative.portable_string() + "/folder"));
+      journal["folder"] = folder_preview->folder.portable_string();
+    } else {
+      journal["kind"] = "materials";
+      journal["material_ids"] = nlohmann::json::array();
+      journal["material_files"] = nlohmann::json::array();
+      std::filesystem::create_directories(transaction_directory / "materials");
+      quarantined_materials.reserve(preview.material_ids.size());
+      for (std::size_t index = 0u; index < preview.material_ids.size(); ++index) {
+        const auto *entry = project_->material_catalog_.find(
+            preview.material_ids[index]);
+        if (entry == nullptr) {
+          throw std::runtime_error(
+              "A selected material became unavailable before deletion.");
+        }
+        QuarantinedMaterialFile file{.path = entry->path};
+        const auto quarantine_relative = require_path(
+            transaction_relative.portable_string() + "/materials/material-" +
+            std::to_string(index) + ".qmat");
+        file.quarantine = require_resolved(file_system, quarantine_relative);
+        validate_material_source(file_system, *graph, file);
+        journal["material_ids"].push_back(
+            std::string(preview.material_ids[index].str()));
+        journal["material_files"].push_back(
+            {{"path", file.path.portable_string()},
+             {"byte_count", file.byte_count},
+             {"content_hash", file.content_hash}});
+        quarantined_materials.push_back(std::move(file));
+      }
+    }
 
     const auto stage = [&](ProjectRelativePath path, std::string_view bytes,
                            std::optional<SceneId> scene_id = std::nullopt,
@@ -519,24 +891,55 @@ ProjectSessionResult ProjectMaterialDeletionService::delete_folder(
         live.push_back(std::move(replacement));
       }
     }
-    const auto final_preview = preview_folder(folder);
-    if (!final_preview.complete || final_preview.revision != preview.revision) {
-      throw std::runtime_error("Project changed while preparing deletion. Review a new warning.");
+    const std::uint64_t final_revision = [&] {
+      if (folder_preview != nullptr) {
+        const auto final = preview_folder(
+            folder_preview->folder.portable_string());
+        return final.complete ? final.revision : 0u;
+      }
+      const auto final = preview_materials(preview.material_ids);
+      return final.complete ? final.revision : 0u;
+    }();
+    if (final_revision != preview.revision) {
+      throw std::runtime_error(
+          "Project changed while preparing deletion. Review a new warning.");
+    }
+    for (auto &material : quarantined_materials) {
+      validate_material_source(file_system, *graph, material);
     }
     write_journal(transaction_directory / "journal.json", journal);
     journal_written = true;
-    const auto moved = quader_io::move_project_entry_no_replace(original_folder, quarantine);
-    if (!moved.ok) {
-      throw std::runtime_error(moved.message);
+    if (folder_preview != nullptr) {
+      const auto moved = quader_io::move_project_entry_no_replace(
+          original_folder, quarantine);
+      if (!moved.ok) {
+        throw std::runtime_error(moved.message);
+      }
+      folder_moved = true;
+      validate_quarantined_folder(file_system, quarantine, *folder_preview,
+                                  project_->material_catalog_, *graph);
+    } else {
+      for (auto &material : quarantined_materials) {
+        const auto moved = quader_io::move_project_entry_no_replace(
+            material.original, material.quarantine);
+        if (!moved.ok) {
+          throw std::runtime_error(moved.message);
+        }
+        material.moved = true;
+      }
+      validate_quarantined_materials(quarantined_materials);
     }
-    folder_moved = true;
-    validate_quarantined_folder(file_system, quarantine, preview,
-                               project_->material_catalog_, *graph);
+    if (hooks_.after_quarantine) {
+      hooks_.after_quarantine();
+    }
     auto scanned = ProjectMaterialCatalog::scan(file_system);
     if (!scanned.ok()) {
       throw std::runtime_error(scanned.error().message);
     }
     ProjectMaterialCatalog candidate_catalog = scanned.take_value();
+    validate_catalog_after_quarantine(
+        project_->material_catalog_, candidate_catalog, removed,
+        folder_preview != nullptr ? &folder_preview->folder : nullptr);
     if (candidate_catalog.find(default_id()) == nullptr) {
       throw std::runtime_error("Default Material is unavailable after folder staging.");
     }
@@ -601,6 +1004,9 @@ ProjectSessionResult ProjectMaterialDeletionService::delete_folder(
         throw std::runtime_error(verified.message);
       }
     }
+    if (folder_preview == nullptr) {
+      validate_quarantined_materials(quarantined_materials);
+    }
     journal["state"] = "committed";
     write_journal(transaction_directory / "journal.json", journal);
     committed = true;
@@ -618,8 +1024,12 @@ ProjectSessionResult ProjectMaterialDeletionService::delete_folder(
     if (draft != nullptr && removed.contains(draft->document.id)) {
       (void)project_->standard_material_editor().close(true);
     }
-    result = {.ok = true, .changed = true,
-              .message = "Material folder permanently deleted; references use Default Material."};
+    result = {
+        .ok = true,
+        .changed = true,
+        .message = folder_preview != nullptr
+                       ? "Material folder permanently deleted; references use Default Material."
+                       : "Materials permanently deleted; references use Default Material."};
     bool cleanup_complete = true;
     for (auto &file : staged) {
       const auto finalized = file.transaction->commit();
@@ -641,6 +1051,11 @@ ProjectSessionResult ProjectMaterialDeletionService::delete_folder(
       }
     }
     if (cleanup_complete) {
+      if (folder_preview == nullptr) {
+        const auto paths = quarantine_paths(quarantined_materials);
+        remove_validated_material_quarantine(
+            transaction_directory / "materials", paths);
+      }
       remove_transaction_directory(file_system, transaction_relative);
     }
     return result;
@@ -651,7 +1066,8 @@ ProjectSessionResult ProjectMaterialDeletionService::delete_folder(
       }
       result.ok = true;
       result.changed = true;
-      result.message = "Material folder deletion committed; cleanup will resume when the project opens.";
+      result.message =
+          "Material deletion committed; cleanup will resume when the project opens.";
       result.warnings.push_back(error.what());
       return result;
     }
@@ -675,8 +1091,26 @@ ProjectSessionResult ProjectMaterialDeletionService::delete_folder(
         rollback_errors += " " + restored.message;
       }
     }
+    for (auto iterator = quarantined_materials.rbegin();
+         iterator != quarantined_materials.rend(); ++iterator) {
+      if (!iterator->moved) {
+        continue;
+      }
+      const auto restored = quader_io::move_project_entry_no_replace(
+          iterator->quarantine, iterator->original);
+      if (!restored.ok) {
+        rollback_errors += " " + restored.message;
+      } else {
+        iterator->moved = false;
+      }
+    }
     if (rollback_errors.empty() && !transaction_directory.empty()) {
       try {
+        if (folder_preview == nullptr) {
+          const auto paths = quarantine_paths(quarantined_materials);
+          remove_validated_material_quarantine(
+              transaction_directory / "materials", paths);
+        }
         remove_transaction_directory(file_system, transaction_relative);
       } catch (const std::exception &cleanup_error) {
         rollback_errors += " " + std::string(cleanup_error.what());
@@ -716,13 +1150,91 @@ ProjectMaterialDeletionService::recover(ProjectWorkspaceStorage &workspace) {
         continue;
       }
       const auto journal = nlohmann::json::parse(read_bytes(journal_path));
-      if (journal.at("version") != 1 ||
-          journal.at("project").get<std::string>() != workspace.manifest.id().str()) {
+      const int journal_version = journal.at("version").get<int>();
+      if ((journal_version != 1 && journal_version != 2) ||
+          journal.at("project").get<std::string>() !=
+              workspace.manifest.id().str()) {
         throw std::runtime_error("Material deletion recovery identity is invalid.");
       }
-      const auto folder = require_path(journal.at("folder").get<std::string>());
-      if (folder == require_path("Materials") || !within_folder(folder, require_path("Materials"))) {
-        throw std::runtime_error("Invalid folder in material deletion recovery.");
+      std::optional<ProjectRelativePath> folder;
+      struct RecoveryMaterialFile final {
+        ProjectRelativePath path;
+        std::filesystem::path original;
+        std::filesystem::path quarantine;
+        std::uint64_t byte_count = 0u;
+        std::uint64_t content_hash = 0u;
+      };
+      std::vector<RecoveryMaterialFile> material_files;
+      std::vector<ProjectAssetId> material_ids;
+      std::filesystem::path material_quarantine_directory;
+      std::vector<std::filesystem::path> material_quarantine_paths;
+      if (journal_version == 1) {
+        folder = require_path(journal.at("folder").get<std::string>());
+        if (*folder == require_path("Materials") ||
+            !within_folder(*folder, require_path("Materials"))) {
+          throw std::runtime_error("Invalid folder in material deletion recovery.");
+        }
+      } else {
+        if (journal.at("kind").get<std::string>() != "materials" ||
+            !journal.at("material_ids").is_array() ||
+            journal.at("material_ids").empty() ||
+            !journal.at("material_files").is_array() ||
+            journal.at("material_files").empty() ||
+            journal.at("material_ids").size() !=
+                journal.at("material_files").size()) {
+          throw std::runtime_error("Invalid material-file deletion recovery data.");
+        }
+        std::set<ProjectAssetId> recovered_ids;
+        material_ids.reserve(journal.at("material_ids").size());
+        for (const auto &encoded_id : journal.at("material_ids")) {
+          if (!encoded_id.is_string()) {
+            throw std::runtime_error(
+                "Invalid material UUID in deletion recovery.");
+          }
+          const auto id = ProjectAssetId::parse(
+              encoded_id.get<std::string>());
+          if (!id.has_value() || *id == default_id() ||
+              !recovered_ids.insert(*id).second) {
+            throw std::runtime_error(
+                "Invalid material UUID in deletion recovery.");
+          }
+          material_ids.push_back(*id);
+        }
+        std::set<std::string> recovered_paths;
+        std::size_t material_index = 0u;
+        material_quarantine_directory = require_resolved(
+            file_system,
+            require_path(relative.value().portable_string() + "/materials"));
+        for (const auto &file : journal.at("material_files")) {
+          auto path = require_path(file.at("path").get<std::string>());
+          std::string portable = path.portable_string();
+          std::ranges::transform(portable, portable.begin(), [](unsigned char value) {
+            return value >= 'A' && value <= 'Z'
+                       ? static_cast<char>(value - 'A' + 'a')
+                       : static_cast<char>(value);
+          });
+          if (!within_folder(path, require_path("Materials")) ||
+              !portable.ends_with(".qmat") ||
+              !recovered_paths.insert(portable).second) {
+            throw std::runtime_error(
+                "Invalid material path in deletion recovery.");
+          }
+          const auto quarantine_path = require_path(
+              relative.value().portable_string() + "/materials/material-" +
+              std::to_string(material_index) + ".qmat");
+          material_files.push_back({
+              .path = path,
+              .original = require_resolved(file_system, path),
+              .quarantine = require_resolved(file_system, quarantine_path),
+              .byte_count = file.at("byte_count").get<std::uint64_t>(),
+              .content_hash = file.at("content_hash").get<std::uint64_t>(),
+          });
+          material_quarantine_paths.push_back(
+              material_files.back().quarantine);
+          ++material_index;
+        }
+        validate_material_quarantine_entries(
+            material_quarantine_directory, material_quarantine_paths);
       }
       const auto state = journal.at("state").get<std::string>();
       if (state != "prepared" && state != "publishing" && state != "committed") {
@@ -823,13 +1335,58 @@ ProjectMaterialDeletionService::recover(ProjectWorkspaceStorage &workspace) {
         if (!found_publishing_path) {
           throw std::runtime_error("Interrupted material publication identifies no saved document.");
         }
-        const auto quarantine = require_resolved(
-            file_system, require_path(relative.value().portable_string() + "/folder"));
-        const auto destination = require_resolved(file_system, folder);
-        const bool restore_folder = std::filesystem::exists(quarantine);
-        if ((restore_folder && std::filesystem::exists(destination)) ||
-            (!restore_folder && !std::filesystem::is_directory(destination))) {
-          throw std::runtime_error("Material deletion recovery folder conflicts with current content.");
+        std::filesystem::path folder_quarantine;
+        std::filesystem::path folder_destination;
+        bool restore_folder = false;
+        std::vector<std::size_t> restore_materials;
+        if (folder.has_value()) {
+          folder_quarantine = require_resolved(
+              file_system,
+              require_path(relative.value().portable_string() + "/folder"));
+          folder_destination = require_resolved(file_system, *folder);
+          restore_folder = std::filesystem::exists(folder_quarantine);
+          if ((restore_folder && std::filesystem::exists(folder_destination)) ||
+              (!restore_folder &&
+               !std::filesystem::is_directory(folder_destination))) {
+            throw std::runtime_error(
+                "Material deletion recovery folder conflicts with current content.");
+          }
+        } else {
+          for (std::size_t index = 0u; index < material_files.size(); ++index) {
+            const auto &material = material_files[index];
+            const bool quarantined = std::filesystem::exists(material.quarantine);
+            const bool original = std::filesystem::exists(material.original);
+            if (quarantined == original) {
+              throw std::runtime_error(
+                  "Material deletion recovery file locations conflict with current content.");
+            }
+            const auto &source = quarantined ? material.quarantine
+                                             : material.original;
+            const auto source_status = std::filesystem::symlink_status(source);
+            if (!std::filesystem::is_regular_file(source_status) ||
+                std::filesystem::is_symlink(source_status)) {
+              throw std::runtime_error(
+                  "Material deletion recovery source is not a regular file.");
+            }
+            std::error_code link_error;
+            if (std::filesystem::hard_link_count(source, link_error) != 1u ||
+                link_error) {
+              throw std::runtime_error(
+                  "Material deletion recovery source is linked or aliased.");
+            }
+            const auto bytes = read_bytes(source);
+            const auto hash = quader_io::qdr_binary_content_hash(
+                std::as_bytes(std::span(bytes.data(), bytes.size())));
+            if (bytes.size() != material.byte_count ||
+                hash != material.content_hash) {
+              throw std::runtime_error(
+                  "A material changed after interrupted deletion; recovery "
+                  "preserved it for conflict resolution.");
+            }
+            if (quarantined) {
+              restore_materials.push_back(index);
+            }
+          }
         }
         // Validate every baseline and destination before the first restoration.
         std::vector<std::unique_ptr<quader_io::QdrAtomicFileTransaction>> restore_files;
@@ -857,10 +1414,30 @@ ProjectMaterialDeletionService::recover(ProjectWorkspaceStorage &workspace) {
         }
         if (restore_folder) {
           const auto restored = quader_io::move_project_entry_no_replace(
-              quarantine, destination);
+              folder_quarantine, folder_destination);
           if (!restored.ok) {
             throw std::runtime_error(restored.message);
           }
+        }
+        std::vector<std::size_t> restored_materials;
+        for (const std::size_t index : restore_materials) {
+          const auto &material = material_files[index];
+          const auto restored = quader_io::move_project_entry_no_replace(
+              material.quarantine, material.original);
+          if (!restored.ok) {
+            std::string compensation;
+            for (auto iterator = restored_materials.rbegin();
+                 iterator != restored_materials.rend(); ++iterator) {
+              const auto &completed = material_files[*iterator];
+              const auto reversed = quader_io::move_project_entry_no_replace(
+                  completed.original, completed.quarantine);
+              if (!reversed.ok) {
+                compensation += " " + reversed.message;
+              }
+            }
+            throw std::runtime_error(restored.message + compensation);
+          }
+          restored_materials.push_back(index);
         }
         for (const auto &transaction : restore_files) {
           const auto finalized = transaction->commit();
@@ -871,6 +1448,51 @@ ProjectMaterialDeletionService::recover(ProjectWorkspaceStorage &workspace) {
         }
         restored_manifest = true;
       } else {
+        if (journal_version == 2) {
+          auto reopened = ProjectManifestStore::open(workspace.manifest_path);
+          if (!reopened.ok() ||
+              reopened.value().manifest.id() != workspace.manifest.id()) {
+            throw std::runtime_error(
+                "Committed material deletion recovery cannot validate the "
+                "current project manifest.");
+          }
+          workspace.manifest = reopened.take_value().manifest;
+          if (std::ranges::any_of(
+                  material_ids, [&](const ProjectAssetId id) {
+                    return !workspace.manifest.is_material_deleted(id);
+                  })) {
+            throw std::runtime_error(
+                "Committed material deletion is absent from the current manifest; "
+                "recovery preserved quarantined materials.");
+          }
+        }
+        for (const auto &material : material_files) {
+          if (!std::filesystem::exists(material.quarantine)) {
+            continue;
+          }
+          const auto status = std::filesystem::symlink_status(
+              material.quarantine);
+          if (!std::filesystem::is_regular_file(status) ||
+              std::filesystem::is_symlink(status)) {
+            throw std::runtime_error(
+                "Committed material quarantine contains an invalid entry.");
+          }
+          std::error_code link_error;
+          if (std::filesystem::hard_link_count(material.quarantine,
+                                               link_error) != 1u ||
+              link_error) {
+            throw std::runtime_error(
+                "Committed material quarantine became linked or aliased.");
+          }
+          const auto bytes = read_bytes(material.quarantine);
+          const auto hash = quader_io::qdr_binary_content_hash(
+              std::as_bytes(std::span(bytes.data(), bytes.size())));
+          if (bytes.size() != material.byte_count ||
+              hash != material.content_hash) {
+            throw std::runtime_error(
+                "Committed material quarantine changed; recovery preserved it.");
+          }
+        }
         bool notifications_complete = true;
         auto catalog = ProjectMaterialCatalog::scan(file_system);
         if (!catalog.ok()) {
@@ -907,6 +1529,10 @@ ProjectMaterialDeletionService::recover(ProjectWorkspaceStorage &workspace) {
         if (!notifications_complete) {
           continue;
         }
+      }
+      if (journal_version == 2) {
+        remove_validated_material_quarantine(
+            material_quarantine_directory, material_quarantine_paths);
       }
       for (const auto &backup : obsolete_backups) {
         std::filesystem::remove(backup);

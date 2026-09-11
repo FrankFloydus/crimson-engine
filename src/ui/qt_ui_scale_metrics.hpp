@@ -65,6 +65,15 @@ public:
   pixelMetric(PixelMetric metric, const QStyleOption *option = nullptr,
               const QWidget *widget = nullptr) const override;
 
+  void drawControl(ControlElement element, const QStyleOption *option,
+                   QPainter *painter,
+                   const QWidget *widget = nullptr) const override;
+
+  [[nodiscard]] int
+  styleHint(StyleHint hint, const QStyleOption *option = nullptr,
+            const QWidget *widget = nullptr,
+            QStyleHintReturn *return_data = nullptr) const override;
+
 private:
   QtUiScaleMetrics metrics_;
   // Kept outside QProxyStyle's base-style chain so Fusion's internal

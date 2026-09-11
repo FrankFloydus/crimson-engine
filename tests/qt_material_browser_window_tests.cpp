@@ -12,11 +12,16 @@
 #include <QAction>
 #include <QApplication>
 #include <QBuffer>
+#include <QCheckBox>
+#include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QDataStream>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QImage>
+#include <QInputDialog>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLabel>
@@ -29,6 +34,7 @@
 #include <QPalette>
 #include <QPainter>
 #include <QPixmap>
+#include <QPointer>
 #include <QProxyStyle>
 #include <QPushButton>
 #include <QScrollBar>
@@ -40,6 +46,7 @@
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
+#include <QTimer>
 
 #include <algorithm>
 #include <cmath>
@@ -251,6 +258,34 @@ void expect_regions_equal(const QImage &actual, const QImage &expected,
           << "pixel mismatch at (" << x << ", " << y << ")";
     }
   }
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     FilterIconResourceRetainsVisibleAndTransparentRgbaPixels) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-filter-icon-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  const QImage icon(QStringLiteral(":/quader/icons/material_filter.png"));
+  ASSERT_FALSE(icon.isNull())
+      << "the material-browser filter icon must be registered as a Qt resource";
+  EXPECT_TRUE(icon.hasAlphaChannel());
+
+  bool has_transparent_pixel = false;
+  bool has_visible_pixel = false;
+  for (int y = 0; y < icon.height(); ++y) {
+    for (int x = 0; x < icon.width(); ++x) {
+      const int alpha = icon.pixelColor(x, y).alpha();
+      has_transparent_pixel = has_transparent_pixel || alpha == 0;
+      has_visible_pixel = has_visible_pixel || alpha > 0;
+    }
+  }
+  EXPECT_TRUE(has_transparent_pixel)
+      << "the generated asset must keep a genuinely transparent background";
+  EXPECT_TRUE(has_visible_pixel);
 }
 
 TEST(QtMaterialBrowserWindowTests,
@@ -605,6 +640,881 @@ TEST(QtMaterialBrowserWindowTests,
   ASSERT_NE(destination, nullptr);
   EXPECT_FALSE(drop_on_folder(*tree, *destination, folder_mime));
   EXPECT_EQ(folder_moves, 2);
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     UsageProxyCombinesFolderAndSearchAndFailsOpenWhenIncomplete) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-usage-proxy-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QtMaterialBrowserModel model;
+  const auto used_in_dev = folder_material(
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", QStringLiteral("Brick"),
+      QStringLiteral("Materials/Dev/brick.qmat"));
+  const auto unused_in_dev = folder_material(
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", QStringLiteral("Oak"),
+      QStringLiteral("Materials/Dev/Wood/oak.qmat"));
+  const auto used_elsewhere = folder_material(
+      "cccccccc-cccc-cccc-cccc-cccccccccccc", QStringLiteral("Steel"),
+      QStringLiteral("Materials/Other/steel.qmat"));
+  ASSERT_TRUE(model.set_items({used_in_dev, unused_in_dev, used_elsewhere}));
+
+  QtMaterialBrowserProxyModel proxy;
+  proxy.setSourceModel(&model);
+  proxy.set_folder(QStringLiteral("Materials/Dev"));
+  proxy.set_used_material_ids({used_elsewhere.stable_id, used_in_dev.stable_id},
+                              true);
+  proxy.set_usage_mode(QtMaterialBrowserUsageMode::Used);
+  ASSERT_EQ(proxy.rowCount(), 1);
+  EXPECT_EQ(proxy.index(0, 0).data().toString(), QStringLiteral("Brick"));
+
+  proxy.set_usage_mode(QtMaterialBrowserUsageMode::NotUsed);
+  ASSERT_EQ(proxy.rowCount(), 1);
+  EXPECT_EQ(proxy.index(0, 0).data().toString(), QStringLiteral("Oak"));
+  EXPECT_TRUE(proxy.has_non_usage_match());
+  proxy.set_search_text(QStringLiteral("brick"));
+  EXPECT_EQ(proxy.rowCount(), 0)
+      << "folder, search, and usage predicates must compose with AND";
+  EXPECT_TRUE(proxy.has_non_usage_match());
+
+  proxy.set_used_material_ids({used_in_dev.stable_id}, false);
+  ASSERT_EQ(proxy.rowCount(), 1)
+      << "an incomplete dependency snapshot must suspend usage filtering";
+  EXPECT_EQ(proxy.index(0, 0).data().toString(), QStringLiteral("Brick"));
+  proxy.set_search_text({});
+  EXPECT_EQ(proxy.rowCount(), 2);
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     UsageDialogStagesExclusiveChoiceAndResetsOnlyForANewProject) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-usage-dialog-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QtMaterialBrowserWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  window.set_project_generation(41);
+  auto used = folder_material("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                              QStringLiteral("Used"),
+                              QStringLiteral("Materials/used.qmat"));
+  auto unused = folder_material("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                                QStringLiteral("Unused"),
+                                QStringLiteral("Materials/unused.qmat"));
+  window.set_materials({used, unused});
+  window.set_material_usage({
+      .project_generation = 41,
+      .revision = 1,
+      .complete = true,
+      .used_materials = {used.reference},
+  });
+  auto *filter =
+      window.findChild<QToolButton *>(QStringLiteral("materialBrowser.filter"));
+  auto *grid =
+      window.findChild<QListView *>(QStringLiteral("materialBrowser.gridView"));
+  auto *empty =
+      window.findChild<QLabel *>(QStringLiteral("materialBrowser.empty"));
+  ASSERT_NE(filter, nullptr);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(empty, nullptr);
+  EXPECT_EQ(filter->toolButtonStyle(), Qt::ToolButtonIconOnly);
+  EXPECT_FALSE(filter->isChecked());
+
+  QTimer::singleShot(0, &window, [&]() {
+    auto *dialog = window.findChild<QDialog *>(
+        QStringLiteral("materialBrowser.filterDialog"));
+    ASSERT_NE(dialog, nullptr);
+    auto *used_box = dialog->findChild<QCheckBox *>(
+        QStringLiteral("materialBrowser.filterUsed"));
+    auto *not_used_box = dialog->findChild<QCheckBox *>(
+        QStringLiteral("materialBrowser.filterNotUsed"));
+    auto *apply = dialog->findChild<QPushButton *>(
+        QStringLiteral("materialBrowser.filterApply"));
+    ASSERT_NE(used_box, nullptr);
+    ASSERT_NE(not_used_box, nullptr);
+    ASSERT_NE(apply, nullptr);
+    used_box->click();
+    EXPECT_TRUE(used_box->isChecked());
+    EXPECT_FALSE(not_used_box->isChecked());
+    apply->click();
+  });
+  filter->click();
+  EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::Used);
+  EXPECT_TRUE(filter->isChecked());
+  ASSERT_EQ(grid->model()->rowCount(), 1);
+  EXPECT_EQ(grid->model()->index(0, 0).data().toString(),
+            QStringLiteral("Used"));
+
+  QTimer::singleShot(0, &window, [&]() {
+    auto *dialog = window.findChild<QDialog *>(
+        QStringLiteral("materialBrowser.filterDialog"));
+    ASSERT_NE(dialog, nullptr);
+    auto *not_used_box = dialog->findChild<QCheckBox *>(
+        QStringLiteral("materialBrowser.filterNotUsed"));
+    auto *cancel = dialog->findChild<QPushButton *>(
+        QStringLiteral("materialBrowser.filterCancel"));
+    ASSERT_NE(not_used_box, nullptr);
+    ASSERT_NE(cancel, nullptr);
+    not_used_box->click();
+    cancel->click();
+  });
+  filter->click();
+  EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::Used)
+      << "Cancel must preserve the previously applied choice";
+  EXPECT_TRUE(filter->isChecked());
+
+  QTimer::singleShot(0, &window, [&]() {
+    auto *dialog = window.findChild<QDialog *>(
+        QStringLiteral("materialBrowser.filterDialog"));
+    ASSERT_NE(dialog, nullptr);
+    auto *clear = dialog->findChild<QPushButton *>(
+        QStringLiteral("materialBrowser.filterClear"));
+    auto *apply = dialog->findChild<QPushButton *>(
+        QStringLiteral("materialBrowser.filterApply"));
+    ASSERT_NE(clear, nullptr);
+    ASSERT_NE(apply, nullptr);
+    clear->click();
+    apply->click();
+  });
+  filter->click();
+  EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::All);
+  EXPECT_FALSE(filter->isChecked());
+  EXPECT_EQ(grid->model()->rowCount(), 2);
+
+  int inspection_errors = 0;
+  window.set_usage_inspection_error_callback([&](const QString &error) {
+    EXPECT_EQ(error, QStringLiteral("Unreadable scene"));
+    ++inspection_errors;
+  });
+  window.set_material_usage({
+      .project_generation = 41,
+      .revision = 2,
+      .complete = true,
+  });
+  QTimer::singleShot(0, &window, [&]() {
+    auto *dialog = window.findChild<QDialog *>(
+        QStringLiteral("materialBrowser.filterDialog"));
+    ASSERT_NE(dialog, nullptr);
+    auto *used_box = dialog->findChild<QCheckBox *>(
+        QStringLiteral("materialBrowser.filterUsed"));
+    auto *apply = dialog->findChild<QPushButton *>(
+        QStringLiteral("materialBrowser.filterApply"));
+    ASSERT_NE(used_box, nullptr);
+    ASSERT_NE(apply, nullptr);
+    used_box->click();
+    apply->click();
+  });
+  filter->click();
+  EXPECT_EQ(grid->model()->rowCount(), 0);
+  EXPECT_EQ(empty->text(),
+            QStringLiteral("No materials match this usage filter"));
+
+  const QtMaterialBrowserUsageSnapshot incomplete{
+      .project_generation = 41,
+      .revision = 3,
+      .complete = false,
+      .error = QStringLiteral("Unreadable scene"),
+  };
+  window.set_material_usage(incomplete);
+  EXPECT_EQ(grid->model()->rowCount(), 2);
+  EXPECT_EQ(inspection_errors, 1);
+  window.set_material_usage(incomplete);
+  EXPECT_EQ(inspection_errors, 1)
+      << "one dependency revision reports its error only once";
+
+  window.set_material_usage({
+      .project_generation = 41,
+      .revision = 4,
+      .complete = true,
+  });
+  EXPECT_EQ(grid->model()->rowCount(), 0);
+  window.set_purpose(QtMaterialBrowserPurpose::Picker);
+  EXPECT_TRUE(filter->isHidden());
+  EXPECT_EQ(grid->model()->rowCount(), 2);
+  window.set_purpose(QtMaterialBrowserPurpose::ActiveMaterial);
+  EXPECT_EQ(grid->model()->rowCount(), 0);
+  EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::Used);
+
+  window.set_project_generation(42);
+  EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::All);
+  EXPECT_FALSE(filter->isChecked());
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     CatalogRefreshKeepsRestoredBatchSeparateFromNewActiveMaterial) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-browser-selection-refresh-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QtMaterialBrowserWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  auto oak = folder_material("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                             QStringLiteral("Oak"),
+                             QStringLiteral("Materials/oak.qmat"));
+  auto steel = folder_material("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                               QStringLiteral("Steel"),
+                               QStringLiteral("Materials/steel.qmat"));
+  auto oak_copy = folder_material("cccccccc-cccc-cccc-cccc-cccccccccccc",
+                                  QStringLiteral("Oak Copy"),
+                                  QStringLiteral("Materials/oak_copy.qmat"));
+  window.set_materials({oak, steel}, oak.reference);
+  auto *grid = window.findChild<QListView *>(
+      QStringLiteral("materialBrowser.gridView"));
+  auto *accept = window.findChild<QPushButton *>(
+      QStringLiteral("materialBrowser.accept"));
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(accept, nullptr);
+  const auto index_for = [grid](const QString &stable_id) {
+    for (int row = 0; row < grid->model()->rowCount(); ++row) {
+      const QModelIndex index = grid->model()->index(row, 0);
+      if (index.data(QtMaterialBrowserModel::StableIdRole).toString() ==
+          stable_id) {
+        return index;
+      }
+    }
+    return QModelIndex{};
+  };
+  const QModelIndex oak_index = index_for(oak.stable_id);
+  const QModelIndex steel_index = index_for(steel.stable_id);
+  ASSERT_TRUE(oak_index.isValid());
+  ASSERT_TRUE(steel_index.isValid());
+  QItemSelection batch;
+  batch.select(oak_index, oak_index);
+  batch.select(steel_index, steel_index);
+  grid->selectionModel()->select(batch, QItemSelectionModel::ClearAndSelect |
+                                            QItemSelectionModel::Rows);
+  grid->selectionModel()->setCurrentIndex(steel_index,
+                                          QItemSelectionModel::NoUpdate);
+
+  window.set_materials({oak, steel, oak_copy}, oak_copy.reference);
+
+  const QModelIndexList selected =
+      grid->selectionModel()->selectedRows(QtMaterialBrowserModel::NameColumn);
+  ASSERT_EQ(selected.size(), 2);
+  QStringList selected_ids;
+  for (const QModelIndex &index : selected) {
+    selected_ids.push_back(
+        index.data(QtMaterialBrowserModel::StableIdRole).toString());
+  }
+  EXPECT_TRUE(selected_ids.contains(oak.stable_id));
+  EXPECT_TRUE(selected_ids.contains(steel.stable_id));
+  EXPECT_FALSE(selected_ids.contains(oak_copy.stable_id));
+  EXPECT_EQ(grid->currentIndex()
+                .data(QtMaterialBrowserModel::StableIdRole)
+                .toString(),
+            oak_copy.stable_id);
+  EXPECT_EQ(window.selected_material(), oak_copy.reference);
+  EXPECT_TRUE(accept->isEnabled());
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     ContextActionsRejectClipboardProtectionAndCallbackChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-browser-action-fence-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QtMaterialBrowserWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  auto oak = folder_material("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                             QStringLiteral("Oak"),
+                             QStringLiteral("Materials/oak.qmat"));
+  oak.encoded_albedo = encoded_wide_preview();
+  oak.has_valid_albedo = true;
+  oak.editable = true;
+  window.set_project_generation(81);
+  window.set_material_usage({
+      .project_generation = 81,
+      .revision = 12,
+      .complete = true,
+  });
+  window.set_materials({oak}, oak.reference);
+  window.set_material_paste_available(true);
+  int first_callback_count = 0;
+  int replacement_callback_count = 0;
+  window.set_material_action_callback(
+      [&](QtMaterialBrowserActionRequest) { ++first_callback_count; });
+  window.resize(720, 480);
+  window.show();
+  QCoreApplication::processEvents();
+
+  auto *grid = window.findChild<QListView *>(
+      QStringLiteral("materialBrowser.gridView"));
+  ASSERT_NE(grid, nullptr);
+  const QModelIndex oak_index = grid->model()->index(0, 0);
+  ASSERT_TRUE(oak_index.isValid());
+  const auto send_context_menu = [&]() {
+    const QPoint position = grid->visualRect(oak_index).center();
+    QContextMenuEvent event(QContextMenuEvent::Mouse, position,
+                            grid->viewport()->mapToGlobal(position));
+    QCoreApplication::sendEvent(grid->viewport(), &event);
+  };
+
+  QTimer::singleShot(0, &window, [&]() {
+    auto *menu = window.findChild<QMenu *>(
+        QStringLiteral("materialBrowser.contextMenu"));
+    ASSERT_NE(menu, nullptr);
+    auto *paste = menu->findChild<QAction *>(
+        QStringLiteral("materialBrowser.action.paste"));
+    ASSERT_NE(paste, nullptr);
+    ASSERT_TRUE(paste->isEnabled());
+    window.set_material_paste_available(false);
+    menu->setActiveAction(paste);
+    QKeyEvent accept(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(menu, &accept);
+  });
+  send_context_menu();
+  EXPECT_EQ(first_callback_count, 0)
+      << "clipboard eligibility changed inside QMenu::exec";
+
+  window.set_material_paste_available(true);
+  QTimer::singleShot(0, &window, [&]() {
+    auto *menu = window.findChild<QMenu *>(
+        QStringLiteral("materialBrowser.contextMenu"));
+    ASSERT_NE(menu, nullptr);
+    auto *remove = menu->findChild<QAction *>(
+        QStringLiteral("materialBrowser.action.delete"));
+    ASSERT_NE(remove, nullptr);
+    ASSERT_TRUE(remove->isEnabled());
+    window.set_protected_material(oak.reference);
+    menu->setActiveAction(remove);
+    QKeyEvent accept(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(menu, &accept);
+  });
+  send_context_menu();
+  EXPECT_EQ(first_callback_count, 0)
+      << "protected-material eligibility changed inside QMenu::exec";
+
+  window.set_protected_material({});
+  QTimer::singleShot(0, &window, [&]() {
+    auto *menu = window.findChild<QMenu *>(
+        QStringLiteral("materialBrowser.contextMenu"));
+    ASSERT_NE(menu, nullptr);
+    auto *copy = menu->findChild<QAction *>(
+        QStringLiteral("materialBrowser.action.copy"));
+    ASSERT_NE(copy, nullptr);
+    window.set_material_action_callback([&](QtMaterialBrowserActionRequest) {
+      ++replacement_callback_count;
+    });
+    menu->setActiveAction(copy);
+    QKeyEvent accept(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(menu, &accept);
+  });
+  send_context_menu();
+  EXPECT_EQ(first_callback_count, 0);
+  EXPECT_EQ(replacement_callback_count, 0)
+      << "replacing the action owner inside QMenu::exec must reject intent";
+
+  window.set_material_action_callback(
+      [&](QtMaterialBrowserActionRequest) { ++first_callback_count; });
+  QTimer::singleShot(0, &window, [&]() {
+    auto *menu = window.findChild<QMenu *>(
+        QStringLiteral("materialBrowser.contextMenu"));
+    ASSERT_NE(menu, nullptr);
+    auto *rename = menu->findChild<QAction *>(
+        QStringLiteral("materialBrowser.action.rename"));
+    ASSERT_NE(rename, nullptr);
+    QTimer::singleShot(0, &window, [&]() {
+      auto *dialog = window.findChild<QInputDialog *>(
+          QStringLiteral("materialBrowser.renameDialog"));
+      ASSERT_NE(dialog, nullptr);
+      dialog->setTextValue(QStringLiteral("Oak Renamed"));
+      window.set_protected_material(oak.reference);
+      dialog->accept();
+    });
+    menu->setActiveAction(rename);
+    QKeyEvent accept(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(menu, &accept);
+  });
+  send_context_menu();
+  EXPECT_EQ(first_callback_count, 0)
+      << "rename eligibility changed inside QInputDialog::exec";
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     NestedMenusAndDialogsPermitBrowserDestruction) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-browser-nested-destruction-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  bool saw_filter = false;
+  {
+    QPointer<QtMaterialBrowserWindow> window =
+        new QtMaterialBrowserWindow();
+    window->setAttribute(Qt::WA_DontShowOnScreen, true);
+    auto *filter = window->findChild<QToolButton *>(
+        QStringLiteral("materialBrowser.filter"));
+    ASSERT_NE(filter, nullptr);
+    QTimer::singleShot(0, [&]() {
+      if (!window) {
+        return;
+      }
+      saw_filter = window->findChild<QDialog *>(
+                       QStringLiteral("materialBrowser.filterDialog")) !=
+                   nullptr;
+      delete window.data();
+    });
+    filter->click();
+    EXPECT_TRUE(window.isNull());
+  }
+  EXPECT_TRUE(saw_filter);
+
+  const auto make_window = []() {
+    QPointer<QtMaterialBrowserWindow> window =
+        new QtMaterialBrowserWindow();
+    window->setAttribute(Qt::WA_DontShowOnScreen, true);
+    auto oak = folder_material("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                               QStringLiteral("Oak"),
+                               QStringLiteral("Materials/oak.qmat"));
+    oak.editable = true;
+    window->set_materials({oak}, oak.reference);
+    window->set_material_action_callback(
+        [](QtMaterialBrowserActionRequest) {});
+    window->resize(720, 480);
+    window->show();
+    QCoreApplication::processEvents();
+    return window;
+  };
+  const auto send_context_menu = [](QListView *grid) {
+    const QModelIndex index = grid->model()->index(0, 0);
+    const QPoint position = grid->visualRect(index).center();
+    QContextMenuEvent event(QContextMenuEvent::Mouse, position,
+                            grid->viewport()->mapToGlobal(position));
+    QCoreApplication::sendEvent(grid->viewport(), &event);
+  };
+
+  bool saw_menu = false;
+  {
+    QPointer<QtMaterialBrowserWindow> window = make_window();
+    auto *grid = window->findChild<QListView *>(
+        QStringLiteral("materialBrowser.gridView"));
+    ASSERT_NE(grid, nullptr);
+    QTimer::singleShot(0, [&]() {
+      if (!window) {
+        return;
+      }
+      saw_menu = window->findChild<QMenu *>(
+                     QStringLiteral("materialBrowser.contextMenu")) !=
+                 nullptr;
+      delete window.data();
+    });
+    send_context_menu(grid);
+    EXPECT_TRUE(window.isNull());
+  }
+  EXPECT_TRUE(saw_menu);
+
+  bool saw_rename = false;
+  {
+    QPointer<QtMaterialBrowserWindow> window = make_window();
+    auto *grid = window->findChild<QListView *>(
+        QStringLiteral("materialBrowser.gridView"));
+    ASSERT_NE(grid, nullptr);
+    QTimer::singleShot(0, [&]() {
+      if (!window) {
+        return;
+      }
+      auto *menu = window->findChild<QMenu *>(
+          QStringLiteral("materialBrowser.contextMenu"));
+      if (menu == nullptr) {
+        delete window.data();
+        return;
+      }
+      auto *rename = menu->findChild<QAction *>(
+          QStringLiteral("materialBrowser.action.rename"));
+      if (rename == nullptr) {
+        delete window.data();
+        return;
+      }
+      QTimer::singleShot(0, [&]() {
+        if (!window) {
+          return;
+        }
+        saw_rename = window->findChild<QInputDialog *>(
+                         QStringLiteral("materialBrowser.renameDialog")) !=
+                     nullptr;
+        delete window.data();
+      });
+      menu->setActiveAction(rename);
+      QKeyEvent accept(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+      QApplication::sendEvent(menu, &accept);
+    });
+    send_context_menu(grid);
+    EXPECT_TRUE(window.isNull());
+  }
+  EXPECT_TRUE(saw_rename);
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     MaterialContextMenusPreserveBatchSelectionAndEmitStableIntent) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-context-menu-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QtMaterialBrowserWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  window.set_project_generation(71);
+  window.set_material_usage({
+      .project_generation = 71,
+      .revision = 19,
+      .complete = true,
+  });
+  auto default_material =
+      folder_material("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                      QStringLiteral("Default Material"),
+                      QStringLiteral("Materials/default_material.qmat"));
+  auto oak = folder_material("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                             QStringLiteral("Oak"),
+                             QStringLiteral("Materials/Wood/oak.qmat"));
+  auto steel = folder_material("cccccccc-cccc-cccc-cccc-cccccccccccc",
+                               QStringLiteral("Steel"),
+                               QStringLiteral("Materials/Metal/steel.qmat"));
+  auto corrupt = folder_material("dddddddd-dddd-dddd-dddd-dddddddddddd",
+                                 QStringLiteral("Corrupt"),
+                                 QStringLiteral("Materials/corrupt.qmat"));
+  for (QtMaterialBrowserItem *item : {&default_material, &oak, &steel,
+                                     &corrupt}) {
+    item->encoded_albedo = encoded_wide_preview();
+    item->has_valid_albedo = true;
+    item->editable = true;
+  }
+  corrupt.encoded_albedo = QByteArray("this is not an encoded image");
+  corrupt.thumbnail = make_qt_material_thumbnail(corrupt);
+  ASSERT_NE(corrupt.thumbnail, nullptr);
+  EXPECT_FALSE(corrupt.thumbnail->source_image_valid);
+  EXPECT_FALSE(corrupt.thumbnail->image.isNull());
+  corrupt.has_valid_albedo = corrupt.thumbnail->source_image_valid;
+  steel.editable = false;
+  window.set_materials({default_material, oak, steel, corrupt});
+  window.set_protected_material(default_material.reference);
+  window.set_material_paste_available(true);
+  std::vector<QtMaterialBrowserActionRequest> requests;
+  window.set_material_action_callback(
+      [&](QtMaterialBrowserActionRequest request) {
+        requests.push_back(std::move(request));
+      });
+  window.resize(900, 560);
+  window.show();
+  QCoreApplication::processEvents();
+
+  auto *grid =
+      window.findChild<QListView *>(QStringLiteral("materialBrowser.gridView"));
+  auto *list = window.findChild<QTableView *>(
+      QStringLiteral("materialBrowser.listView"));
+  auto *list_button =
+      window.findChild<QToolButton *>(QStringLiteral("materialBrowser.list"));
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(list, nullptr);
+  ASSERT_NE(list_button, nullptr);
+  EXPECT_EQ(grid->selectionBehavior(), QAbstractItemView::SelectRows);
+  const auto index_for = [](QAbstractItemView &view, const QString &stable_id) {
+    for (int row = 0; row < view.model()->rowCount(); ++row) {
+      const QModelIndex index = view.model()->index(row, 0);
+      if (index.data(QtMaterialBrowserModel::StableIdRole).toString() ==
+          stable_id) {
+        return index;
+      }
+    }
+    return QModelIndex{};
+  };
+  const auto send_context_menu = [](QAbstractItemView &view,
+                                    const QPoint &position) {
+    QContextMenuEvent event(QContextMenuEvent::Mouse, position,
+                            view.viewport()->mapToGlobal(position));
+    QCoreApplication::sendEvent(view.viewport(), &event);
+  };
+
+  const QModelIndex oak_grid = index_for(*grid, oak.stable_id);
+  const QModelIndex steel_grid = index_for(*grid, steel.stable_id);
+  ASSERT_TRUE(oak_grid.isValid());
+  ASSERT_TRUE(steel_grid.isValid());
+  QItemSelection batch;
+  batch.select(oak_grid, oak_grid);
+  batch.select(steel_grid, steel_grid);
+  grid->selectionModel()->select(batch, QItemSelectionModel::ClearAndSelect |
+                                            QItemSelectionModel::Rows);
+  grid->selectionModel()->setCurrentIndex(steel_grid,
+                                          QItemSelectionModel::NoUpdate);
+
+  bool inspected_order = false;
+  QTimer::singleShot(0, &window, [&]() {
+    auto *menu = window.findChild<QMenu *>(
+        QStringLiteral("materialBrowser.contextMenu"));
+    ASSERT_NE(menu, nullptr);
+    const QList<QAction *> actions = menu->actions();
+    ASSERT_EQ(actions.size(), 13);
+    EXPECT_EQ(actions[0]->objectName(),
+              QStringLiteral("materialBrowser.action.copyTextureName"));
+    EXPECT_EQ(actions[1]->objectName(),
+              QStringLiteral("materialBrowser.action.copyTexturePath"));
+    EXPECT_TRUE(actions[2]->isSeparator());
+    EXPECT_EQ(actions[3]->objectName(),
+              QStringLiteral("materialBrowser.action.openFileLocation"));
+    EXPECT_EQ(actions[4]->objectName(),
+              QStringLiteral("materialBrowser.action.showTextureInfo"));
+    EXPECT_TRUE(actions[5]->isSeparator());
+    EXPECT_EQ(actions[6]->objectName(),
+              QStringLiteral("materialBrowser.action.rename"));
+    EXPECT_EQ(actions[7]->objectName(),
+              QStringLiteral("materialBrowser.action.duplicate"));
+    EXPECT_EQ(actions[8]->objectName(),
+              QStringLiteral("materialBrowser.action.cut"));
+    EXPECT_EQ(actions[9]->objectName(),
+              QStringLiteral("materialBrowser.action.copy"));
+    EXPECT_EQ(actions[10]->objectName(),
+              QStringLiteral("materialBrowser.action.paste"));
+    EXPECT_TRUE(actions[11]->isSeparator());
+    EXPECT_EQ(actions[12]->objectName(),
+              QStringLiteral("materialBrowser.action.delete"));
+    for (int index : {0, 1, 3, 4, 6, 7, 8, 9, 10, 12}) {
+      EXPECT_TRUE(actions[index]->isEnabled());
+    }
+    inspected_order = true;
+    menu->setActiveAction(actions[9]);
+    QKeyEvent accept(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(menu, &accept);
+  });
+  send_context_menu(*grid, grid->visualRect(steel_grid).center());
+  EXPECT_TRUE(inspected_order);
+  ASSERT_EQ(requests.size(), 1);
+  EXPECT_EQ(requests.back().action, QtMaterialBrowserAction::Copy);
+  EXPECT_EQ(requests.back().target, steel.reference);
+  EXPECT_EQ(requests.back().selected_materials.size(), 2);
+  EXPECT_EQ(requests.back().destination_folder, QStringLiteral("Materials"));
+  EXPECT_EQ(requests.back().project_generation, 71);
+  EXPECT_EQ(requests.back().dependency_revision, 19);
+
+  const QModelIndex corrupt_grid = index_for(*grid, corrupt.stable_id);
+  ASSERT_TRUE(corrupt_grid.isValid());
+  grid->selectionModel()->setCurrentIndex(
+      corrupt_grid, QItemSelectionModel::ClearAndSelect |
+                        QItemSelectionModel::Rows);
+  QTimer::singleShot(0, &window, [&]() {
+    auto *menu = window.findChild<QMenu *>(
+        QStringLiteral("materialBrowser.contextMenu"));
+    ASSERT_NE(menu, nullptr);
+    const QList<QAction *> actions = menu->actions();
+    ASSERT_EQ(actions.size(), 13);
+    for (int index : {0, 1, 3, 4}) {
+      EXPECT_FALSE(actions[index]->isEnabled());
+    }
+    for (int index : {6, 7, 8, 9, 10, 12}) {
+      EXPECT_TRUE(actions[index]->isEnabled());
+    }
+    menu->close();
+  });
+  send_context_menu(*grid, grid->visualRect(corrupt_grid).center());
+  EXPECT_EQ(requests.size(), 1);
+
+  const QModelIndex default_grid = index_for(*grid, default_material.stable_id);
+  ASSERT_TRUE(default_grid.isValid());
+  batch.clear();
+  batch.select(default_grid, default_grid);
+  batch.select(oak_grid, oak_grid);
+  grid->selectionModel()->select(batch, QItemSelectionModel::ClearAndSelect |
+                                            QItemSelectionModel::Rows);
+  grid->selectionModel()->setCurrentIndex(oak_grid,
+                                          QItemSelectionModel::NoUpdate);
+  QTimer::singleShot(0, &window, [&]() {
+    auto *menu = window.findChild<QMenu *>(
+        QStringLiteral("materialBrowser.contextMenu"));
+    ASSERT_NE(menu, nullptr);
+    auto *duplicate = menu->findChild<QAction *>(
+        QStringLiteral("materialBrowser.action.duplicate"));
+    auto *cut = menu->findChild<QAction *>(
+        QStringLiteral("materialBrowser.action.cut"));
+    auto *copy = menu->findChild<QAction *>(
+        QStringLiteral("materialBrowser.action.copy"));
+    auto *remove = menu->findChild<QAction *>(
+        QStringLiteral("materialBrowser.action.delete"));
+    ASSERT_NE(duplicate, nullptr);
+    ASSERT_NE(cut, nullptr);
+    ASSERT_NE(copy, nullptr);
+    ASSERT_NE(remove, nullptr);
+    EXPECT_TRUE(duplicate->isEnabled());
+    EXPECT_FALSE(cut->isEnabled());
+    EXPECT_TRUE(copy->isEnabled());
+    EXPECT_FALSE(remove->isEnabled());
+    menu->close();
+  });
+  send_context_menu(*grid, grid->visualRect(oak_grid).center());
+  EXPECT_EQ(requests.size(), 1);
+
+  grid->selectionModel()->setCurrentIndex(oak_grid,
+                                          QItemSelectionModel::ClearAndSelect |
+                                              QItemSelectionModel::Rows);
+  QTimer::singleShot(0, &window, [&]() {
+    auto *menu = window.findChild<QMenu *>(
+        QStringLiteral("materialBrowser.contextMenu"));
+    ASSERT_NE(menu, nullptr);
+    EXPECT_EQ(grid->selectionModel()->selectedRows().size(), 1);
+    EXPECT_EQ(grid->currentIndex()
+                  .data(QtMaterialBrowserModel::StableIdRole)
+                  .toString(),
+              steel.stable_id);
+    menu->close();
+  });
+  send_context_menu(*grid, grid->visualRect(steel_grid).center());
+  ASSERT_EQ(grid->selectionModel()->selectedRows().size(), 1);
+  EXPECT_EQ(grid->currentIndex()
+                .data(QtMaterialBrowserModel::StableIdRole)
+                .toString(),
+            steel.stable_id);
+
+  list_button->click();
+  const QModelIndex oak_list = index_for(*list, oak.stable_id);
+  const QModelIndex steel_list = index_for(*list, steel.stable_id);
+  const QModelIndex corrupt_list = index_for(*list, corrupt.stable_id);
+  ASSERT_TRUE(oak_list.isValid());
+  ASSERT_TRUE(steel_list.isValid());
+  ASSERT_TRUE(corrupt_list.isValid());
+  batch.clear();
+  batch.select(oak_list, oak_list);
+  batch.select(steel_list, steel_list);
+  list->selectionModel()->select(batch, QItemSelectionModel::ClearAndSelect |
+                                            QItemSelectionModel::Rows);
+  list->selectionModel()->setCurrentIndex(steel_list,
+                                          QItemSelectionModel::NoUpdate);
+  QTimer::singleShot(0, &window, [&]() {
+    auto *menu = window.findChild<QMenu *>(
+        QStringLiteral("materialBrowser.contextMenu"));
+    ASSERT_NE(menu, nullptr);
+    auto *duplicate = menu->findChild<QAction *>(
+        QStringLiteral("materialBrowser.action.duplicate"));
+    ASSERT_NE(duplicate, nullptr);
+    menu->setActiveAction(duplicate);
+    QKeyEvent accept(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(menu, &accept);
+  });
+  send_context_menu(*list, list->visualRect(steel_list).center());
+  ASSERT_EQ(requests.size(), 2);
+  EXPECT_EQ(requests.back().action, QtMaterialBrowserAction::Duplicate);
+  EXPECT_EQ(requests.back().selected_materials.size(), 2);
+
+  list->selectionModel()->setCurrentIndex(
+      corrupt_list, QItemSelectionModel::ClearAndSelect |
+                        QItemSelectionModel::Rows);
+  QTimer::singleShot(0, &window, [&]() {
+    auto *menu = window.findChild<QMenu *>(
+        QStringLiteral("materialBrowser.contextMenu"));
+    ASSERT_NE(menu, nullptr);
+    const QList<QAction *> actions = menu->actions();
+    ASSERT_EQ(actions.size(), 13);
+    for (int index : {0, 1, 3, 4}) {
+      EXPECT_FALSE(actions[index]->isEnabled());
+    }
+    for (int index : {6, 7, 8, 9, 10, 12}) {
+      EXPECT_TRUE(actions[index]->isEnabled());
+    }
+    menu->close();
+  });
+  send_context_menu(*list, list->visualRect(corrupt_list).center());
+  EXPECT_EQ(requests.size(), 2);
+
+  QTimer::singleShot(0, &window, [&]() {
+    auto *menu = window.findChild<QMenu *>(
+        QStringLiteral("materialBrowser.contextMenu"));
+    ASSERT_NE(menu, nullptr);
+    ASSERT_EQ(menu->actions().size(), 1);
+    QAction *paste = menu->actions().front();
+    EXPECT_EQ(paste->objectName(),
+              QStringLiteral("materialBrowser.action.paste"));
+    EXPECT_TRUE(paste->isEnabled());
+    menu->setActiveAction(paste);
+    QKeyEvent accept(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(menu, &accept);
+  });
+  send_context_menu(*list, QPoint(-4, -4));
+  ASSERT_EQ(requests.size(), 3);
+  EXPECT_EQ(requests.back().action, QtMaterialBrowserAction::Paste);
+  EXPECT_FALSE(requests.back().target.valid());
+  EXPECT_EQ(requests.back().destination_folder, QStringLiteral("Materials"));
+
+  QTimer::singleShot(0, &window, [&]() {
+    auto *menu = window.findChild<QMenu *>(
+        QStringLiteral("materialBrowser.contextMenu"));
+    ASSERT_NE(menu, nullptr);
+    auto *copy = menu->findChild<QAction *>(
+        QStringLiteral("materialBrowser.action.copy"));
+    ASSERT_NE(copy, nullptr);
+    window.set_material_usage({
+        .project_generation = 71,
+        .revision = 20,
+        .complete = true,
+    });
+    menu->setActiveAction(copy);
+    QKeyEvent accept(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(menu, &accept);
+  });
+  send_context_menu(*list, list->visualRect(steel_list).center());
+  EXPECT_EQ(requests.size(), 3)
+      << "a dependency change inside QMenu::exec must reject stale intent";
+
+  QTimer::singleShot(0, &window, [&]() {
+    auto *menu = window.findChild<QMenu *>(
+        QStringLiteral("materialBrowser.contextMenu"));
+    ASSERT_NE(menu, nullptr);
+    auto *copy = menu->findChild<QAction *>(
+        QStringLiteral("materialBrowser.action.copy"));
+    ASSERT_NE(copy, nullptr);
+    window.set_project_generation(72);
+    menu->setActiveAction(copy);
+    QKeyEvent accept(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(menu, &accept);
+  });
+  send_context_menu(*list, list->visualRect(steel_list).center());
+  EXPECT_EQ(requests.size(), 3)
+      << "a project rebind inside QMenu::exec must reject stale intent";
+
+  auto *empty =
+      window.findChild<QLabel *>(QStringLiteral("materialBrowser.empty"));
+  ASSERT_NE(empty, nullptr);
+  ASSERT_FALSE(empty->isHidden());
+  window.set_material_paste_available(true);
+  QTimer::singleShot(0, &window, [&]() {
+    auto *menu = window.findChild<QMenu *>(
+        QStringLiteral("materialBrowser.contextMenu"));
+    ASSERT_NE(menu, nullptr);
+    ASSERT_EQ(menu->actions().size(), 1);
+    QAction *paste = menu->actions().front();
+    EXPECT_EQ(paste->objectName(),
+              QStringLiteral("materialBrowser.action.paste"));
+    EXPECT_TRUE(paste->isEnabled());
+    menu->setActiveAction(paste);
+    QKeyEvent accept(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(menu, &accept);
+  });
+  QContextMenuEvent empty_menu(
+      QContextMenuEvent::Mouse, empty->rect().center(),
+      empty->mapToGlobal(empty->rect().center()));
+  QCoreApplication::sendEvent(empty, &empty_menu);
+  ASSERT_EQ(requests.size(), 4);
+  EXPECT_EQ(requests.back().action, QtMaterialBrowserAction::Paste);
+  EXPECT_EQ(requests.back().project_generation, 72);
+  EXPECT_EQ(requests.back().dependency_revision, 0);
+
+  window.set_purpose(QtMaterialBrowserPurpose::Picker);
+  send_context_menu(*list, QPoint(-4, -4));
+  EXPECT_EQ(
+      window.findChild<QMenu *>(QStringLiteral("materialBrowser.contextMenu")),
+      nullptr);
+  EXPECT_EQ(requests.size(), 4);
 }
 
 TEST(QtMaterialBrowserWindowTests,

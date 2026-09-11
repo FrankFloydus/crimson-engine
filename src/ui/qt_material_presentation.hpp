@@ -31,6 +31,7 @@ namespace quader {
 struct QtMaterialThumbnail final {
   QImage image;
   QIcon icon;
+  bool source_image_valid = false;
 };
 
 /// Immutable, owner-supplied material presentation shared by retained Qt
@@ -46,6 +47,7 @@ struct QtMaterialPresentationItem final {
   QByteArray encoded_albedo;
   QColor fallback_color = Qt::white;
   std::uint64_t content_revision = 0;
+  bool has_valid_albedo = false;
   bool available = true;
   bool editable = false;
   std::shared_ptr<const QtMaterialThumbnail> thumbnail;

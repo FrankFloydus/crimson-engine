@@ -9,6 +9,7 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "assets/asset_registry.hpp"
+#include "assets/default_material_catalog.hpp"
 #include "core/logger.hpp"
 #include "core/scene_environment_catalog.hpp"
 #include "diagnostics/profile.hpp"
@@ -44,6 +45,7 @@
 #include "ui/qt_snapping_toolbar.hpp"
 #include "ui/qt_status_message.hpp"
 #include "ui/qt_texture_toolbar.hpp"
+#include "ui/qt_texture_info_window.hpp"
 #include "ui/qt_standard_material_editor_window.hpp"
 #include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
@@ -293,6 +295,33 @@ bool write_binary_file(const std::filesystem::path &path,
   }
   output.write(bytes.constData(), bytes.size());
   return output.good();
+}
+
+QString material_deletion_scene_label(
+    const QuaderProjectSceneMaterialDependencies &scene,
+    const LocalizationService &localization) {
+  const auto localized = [&localization](std::string_view key,
+                                          std::string_view fallback) {
+    return QString::fromStdString(localization.text(key, fallback));
+  };
+  QString source;
+  if (!scene.project_relative_path.empty()) {
+    source = localized(scene.live
+                           ? "ui.material_browser.delete.scene.open"
+                           : "ui.material_browser.delete.scene.saved",
+                       scene.live ? "open: %1" : "saved: %1")
+                 .arg(QString::fromStdString(scene.project_relative_path));
+  } else if (scene.session_id.has_value()) {
+    source = localized("ui.material_browser.delete.scene.open_session",
+                       "open session: %1")
+                 .arg(static_cast<qulonglong>(scene.session_id->packed()));
+  } else {
+    source = localized("ui.material_browser.delete.scene.identity",
+                       "scene: %1")
+                 .arg(QString::fromStdString(std::string(scene.scene_id.str())));
+  }
+  return QStringLiteral("%1 (%2)")
+      .arg(QString::fromStdString(scene.name), source);
 }
 
 } // namespace
@@ -657,6 +686,23 @@ bool UISystem::initialize(RenderSystem &render_system,
           finish_material_folder_operation(result);
         }
       });
+  if (const auto default_material =
+          ProjectAssetId::parse(kDefaultProjectMaterialId)) {
+    material_browser_window_->set_protected_material(
+        QuaderMaterialReference::project(*default_material));
+  }
+  material_browser_window_->set_material_action_callback(
+      [this](QtMaterialBrowserActionRequest request) {
+        handle_material_browser_action(std::move(request));
+      });
+  material_browser_window_->set_usage_inspection_error_callback(
+      [this](QString error) {
+        present_status_notification(
+            {.ok = false, .message = error.toStdString()}, 6000);
+      });
+  material_texture_info_window_ =
+      new QtTextureInfoWindow(main_window_.get(), initial_ui_metrics);
+  material_texture_info_window_->hide();
   material_browser_import_message_box_ =
       new QtRetainedMessageBox(material_browser_window_);
   material_browser_window_->hide();
@@ -1704,6 +1750,7 @@ void UISystem::install_runtime_hooks(
              qt_window_owns_command_input(command_palette_) ||
              qt_window_owns_command_input(settings_dialog_) ||
              qt_window_owns_command_input(material_browser_window_) ||
+             qt_window_owns_command_input(material_texture_info_window_) ||
              qt_window_owns_command_input(material_picker_window_) ||
              qt_window_owns_command_input(material_find_replace_dialog_) ||
              qt_window_owns_command_input(standard_material_editor_window_);
@@ -1829,16 +1876,25 @@ void UISystem::refresh_project_workspace(bool force) {
     const bool material_browser_visible =
         material_browser_window_ != nullptr &&
         material_browser_window_->isVisible();
+    const bool material_texture_info_visible =
+        material_texture_info_window_ != nullptr &&
+        material_texture_info_window_->isVisible();
     const bool material_consumer_visible =
         active_material_panel_visible ||
         panel_presented(UIPanelId::Inspector) ||
-        material_browser_visible ||
+        material_browser_visible || material_texture_info_visible ||
         (material_picker_window_ != nullptr &&
          material_picker_window_->isVisible()) ||
         (material_find_replace_dialog_ != nullptr &&
          material_find_replace_dialog_->isVisible());
     if (has_project && material_consumer_visible) {
       refresh_material_presentation_cache();
+    }
+    if (has_project && material_browser_visible) {
+      refresh_material_browser_usage();
+    }
+    if (has_project && material_texture_info_visible) {
+      refresh_material_texture_info();
     }
 
     if (has_project &&
@@ -1897,6 +1953,73 @@ void UISystem::refresh_active_material_panel(
   active_material_panel_presenter_.mark_presented(stamp);
 }
 
+void UISystem::refresh_material_browser_usage() {
+  if (material_browser_window_ == nullptr || editor_ == nullptr ||
+      !editor_->project().has_project()) {
+    return;
+  }
+  material_browser_window_->set_project_generation(
+      material_browser_project_generation_);
+  material_browser_window_->set_material_paste_available(
+      material_clipboard_.mode != MaterialClipboardMode::Empty &&
+      material_clipboard_.project_generation ==
+          material_browser_project_generation_ &&
+      !material_clipboard_.material_ids.empty());
+
+  const auto observed =
+      editor_->project_assets().material_dependency_revision();
+  if (!observed.succeeded()) {
+    return;
+  }
+  if (material_browser_dependency_revision_.has_value() &&
+      *material_browser_dependency_revision_ == observed.value()) {
+    return;
+  }
+  material_browser_dependency_revision_ = observed.value();
+
+  QtMaterialBrowserUsageSnapshot presentation{
+      .project_generation = material_browser_project_generation_,
+      .revision = observed.value().revision,
+      .complete = observed.value().complete,
+  };
+  const auto dependencies = editor_->project_assets().material_dependencies();
+  if (!dependencies.succeeded()) {
+    presentation.complete = false;
+    presentation.error = QString::fromStdString(dependencies.message);
+    material_browser_window_->set_material_usage(std::move(presentation));
+    return;
+  }
+
+  std::vector<ProjectAssetId> used;
+  for (const QuaderProjectSceneMaterialDependencies &scene :
+       dependencies.value().scenes) {
+    used.insert(used.end(), scene.material_ids.begin(),
+                scene.material_ids.end());
+  }
+  std::ranges::sort(used);
+  used.erase(std::unique(used.begin(), used.end()), used.end());
+  presentation.used_materials.reserve(used.size());
+  for (const ProjectAssetId id : used) {
+    presentation.used_materials.push_back(
+        QuaderMaterialReference::project(id));
+  }
+  presentation.complete =
+      presentation.complete && dependencies.value().complete;
+  if (!presentation.complete) {
+    QStringList errors;
+    for (const std::string &error : dependencies.value().errors) {
+      errors.push_back(QString::fromStdString(error));
+    }
+    presentation.error = errors.isEmpty()
+                             ? QString::fromStdString(localization_.text(
+                                   "ui.material_browser.filter.incomplete",
+                                   "Material usage could not be fully "
+                                   "inspected."))
+                             : errors.join(QLatin1Char('\n'));
+  }
+  material_browser_window_->set_material_usage(std::move(presentation));
+}
+
 void UISystem::invalidate_material_presentation_cache() {
   ++material_presentation_invalidation_generation_;
   material_presentation_cache_valid_ = false;
@@ -1946,6 +2069,16 @@ void UISystem::refresh_material_presentation_cache() {
     material_presentation_cache_valid_ = false;
     material_presentation_catalog_attempt_.reset();
     material_presentation_context_observation_.reset();
+    material_browser_dependency_revision_.reset();
+    material_clipboard_ = {};
+    material_texture_info_catalog_revision_ = 0u;
+    if (material_browser_window_ != nullptr) {
+      material_browser_window_->set_material_paste_available(false);
+    }
+    if (material_texture_info_window_ != nullptr) {
+      material_texture_info_window_->clear();
+      material_texture_info_window_->hide();
+    }
     if (presentation_changed) {
       ++material_presentation_catalog_revision_;
       ++material_presentation_revision_;
@@ -2095,6 +2228,8 @@ void UISystem::refresh_material_presentation_cache() {
         .editable = material.editable,
     };
     reuse_or_make_thumbnail(item);
+    item.has_valid_albedo =
+        item.thumbnail != nullptr && item.thumbnail->source_image_valid;
     next.push_back(std::move(item));
   }
 
@@ -2116,6 +2251,16 @@ void UISystem::refresh_material_presentation_cache() {
     material_browser_project_generation_ =
         material_browser_project_generation_signal_->fetch_add(1u,
             std::memory_order_acq_rel) + 1u;
+    material_browser_dependency_revision_.reset();
+    material_clipboard_ = {};
+    material_texture_info_catalog_revision_ = 0u;
+    if (material_browser_window_ != nullptr) {
+      material_browser_window_->set_material_paste_available(false);
+    }
+    if (material_texture_info_window_ != nullptr) {
+      material_texture_info_window_->clear();
+      material_texture_info_window_->hide();
+    }
   }
   mix(material_browser_project_generation_);
   mix_text(project.uuid);
@@ -2139,6 +2284,7 @@ void UISystem::refresh_material_presentation_cache() {
     mix_text(std::string_view(type.constData(), type.size()));
     mix(static_cast<std::uint64_t>(item.qmat_size_bytes));
     mix(item.content_revision);
+    mix(item.has_valid_albedo ? 1u : 0u);
     mix(static_cast<std::uint64_t>(item.fallback_color.rgba()));
     mix(item.available ? 1u : 0u);
     mix(item.editable ? 1u : 0u);
@@ -2393,6 +2539,10 @@ void UISystem::show_home() {
     standard_material_editor_window_->hide();
     standard_material_editor_window_->clear_document();
     standard_material_editor_presenter_.invalidate();
+  }
+  if (material_texture_info_window_ != nullptr) {
+    material_texture_info_window_->clear();
+    material_texture_info_window_->hide();
   }
   if (central_stack_ != nullptr && project_home_page_ != nullptr) {
     central_stack_->setCurrentWidget(project_home_page_);
@@ -2680,6 +2830,7 @@ void UISystem::shutdown() {
   console_panel_ = nullptr;
   settings_dialog_ = nullptr;
   material_browser_window_ = nullptr;
+  material_texture_info_window_ = nullptr;
   active_material_panel_ = nullptr;
   material_picker_window_ = nullptr;
   material_find_replace_dialog_ = nullptr;
@@ -2729,6 +2880,8 @@ void UISystem::shutdown() {
   inspector_material_query_presenter_.invalidate();
   material_browser_catalog_signature_ = 0;
   material_browser_active_reference_ = {};
+  material_browser_dependency_revision_.reset();
+  material_clipboard_ = {};
   material_find_replace_project_identity_.clear();
   material_find_replace_scene_id_ = 0;
   material_find_replace_scene_selection_revision_ = 0;
@@ -3932,6 +4085,7 @@ void UISystem::refresh_standard_material_editor() {
       target.project_relative_path =
           QString::fromStdWString(pending.filename().wstring());
       target.diagnostic = QString::fromStdWString(pending.wstring());
+      target.absolute_path = QString::fromStdWString(pending.wstring());
       continue;
     }
     const std::optional<QuaderStandardMaterialTextureReference> *saved =
@@ -3939,6 +4093,10 @@ void UISystem::refresh_standard_material_editor() {
     if (saved != nullptr && saved->has_value()) {
       target.project_relative_path =
           QString::fromStdString((*saved)->project_relative_path);
+      const std::filesystem::path absolute =
+          editor_->project().root() /
+          std::filesystem::path((*saved)->project_relative_path);
+      target.absolute_path = QString::fromStdWString(absolute.wstring());
     }
   }
   const QuaderApiResult<QuaderStandardMaterialPreviewInfo> preview =
@@ -3971,6 +4129,12 @@ void UISystem::refresh_standard_material_editor() {
       QtStandardMaterialTexturePresentation &presentation =
           document.textures[index];
       presentation.content_revision = texture.content_revision;
+      presentation.source_has_alpha = texture.has_alpha_channel;
+      if (texture.id.has_value()) {
+        const std::string_view texture_id = texture.id->str();
+        presentation.stable_texture_id = QString::fromUtf8(
+            texture_id.data(), static_cast<qsizetype>(texture_id.size()));
+      }
       if (texture.width <=
               static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
           texture.height <=
@@ -4451,6 +4615,48 @@ void UISystem::refresh_localized_chrome() {
         .delete_folder = text("ui.material_browser.delete_folder", "Delete"),
         .folder_name = text("ui.material_browser.folder_name", "Folder name"),
         .empty_folder = text("ui.material_browser.empty_folder", "No materials in this folder"),
+        .filter = text("ui.material_browser.filter", "Filter materials"),
+        .filter_title =
+            text("ui.material_browser.filter.title", "Filter Materials"),
+        .filter_used = text("ui.material_browser.filter.used", "Used"),
+        .filter_not_used =
+            text("ui.material_browser.filter.not_used", "Not Used"),
+        .filter_clear = text("ui.material_browser.filter.clear", "Clear"),
+        .filter_apply = text("ui.material_browser.filter.apply", "Apply"),
+        .filter_cancel =
+            text("ui.material_browser.filter.cancel", "Cancel"),
+        .filtered_empty = text(
+            "ui.material_browser.no_filter_results",
+            "No materials match the current filters"),
+        .usage_inspection_unavailable = text(
+            "ui.material_browser.filter.incomplete",
+            "Material usage could not be fully inspected."),
+        .copy_texture_name = text(
+            "ui.material_browser.context.copy_texture_name",
+            "Copy Texture Name"),
+        .copy_texture_path = text(
+            "ui.material_browser.context.copy_texture_path",
+            "Copy Texture Path"),
+        .open_file_location = text(
+            "ui.material_browser.context.open_file_location",
+            "Open File Location"),
+        .show_texture_info = text(
+            "ui.material_browser.context.show_texture_info",
+            "Show Texture Info"),
+        .rename_material =
+            text("ui.material_browser.context.rename", "Rename"),
+        .duplicate_material =
+            text("ui.material_browser.context.duplicate", "Duplicate"),
+        .cut_material = text("ui.material_browser.context.cut", "Cut"),
+        .copy_material = text("ui.material_browser.context.copy", "Copy"),
+        .paste_material =
+            text("ui.material_browser.context.paste", "Paste"),
+        .delete_material =
+            text("ui.material_browser.context.delete", "Delete"),
+        .rename_material_title = text(
+            "ui.material_browser.rename_material.title", "Rename Material"),
+        .material_name =
+            text("ui.material_browser.material_name", "Material name"),
     };
     if (material_browser_window_ != nullptr) {
       material_browser_window_->set_labels(labels);
@@ -4612,6 +4818,24 @@ void UISystem::refresh_localized_chrome() {
             .texture_inspector = text(
                 "ui.standard_material_editor.texture_inspector",
                 "Texture Inspector"),
+            .texture_info_property =
+                text("ui.texture_info.property", "Property"),
+            .texture_info_value = text("ui.texture_info.value", "Value"),
+            .texture_info_name = text("ui.texture_info.name", "Name"),
+            .texture_info_location =
+                text("ui.texture_info.location", "Location"),
+            .texture_info_format = text("ui.texture_info.format", "Format"),
+            .texture_info_has_alpha =
+                text("ui.texture_info.has_alpha", "Has alpha"),
+            .texture_info_size = text("ui.texture_info.size", "Size"),
+            .texture_info_red_channel =
+                text("ui.texture_info.channel.red", "Red channel"),
+            .texture_info_green_channel =
+                text("ui.texture_info.channel.green", "Green channel"),
+            .texture_info_blue_channel =
+                text("ui.texture_info.channel.blue", "Blue channel"),
+            .texture_info_alpha_channel =
+                text("ui.texture_info.channel.alpha", "Alpha channel"),
         });
     std::vector<QtStandardMaterialPreviewEnvironment> environments;
     environments.reserve(scene_environment_catalog().size());
@@ -4627,6 +4851,26 @@ void UISystem::refresh_localized_chrome() {
     }
     standard_material_editor_window_->set_preview_environments(
         std::move(environments));
+  }
+  if (material_texture_info_window_ != nullptr) {
+    material_texture_info_window_->set_labels(QtTextureInfoLabels{
+        .window_title = text("ui.texture_info.title", "Texture Info"),
+        .property = text("ui.texture_info.property", "Property"),
+        .value = text("ui.texture_info.value", "Value"),
+        .name = text("ui.texture_info.name", "Name"),
+        .location = text("ui.texture_info.location", "Location"),
+        .format = text("ui.texture_info.format", "Format"),
+        .has_alpha = text("ui.texture_info.has_alpha", "Has alpha"),
+        .size = text("ui.texture_info.size", "Size"),
+        .red_channel =
+            text("ui.texture_info.channel.red", "Red channel"),
+        .green_channel =
+            text("ui.texture_info.channel.green", "Green channel"),
+        .blue_channel =
+            text("ui.texture_info.channel.blue", "Blue channel"),
+        .alpha_channel =
+            text("ui.texture_info.channel.alpha", "Alpha channel"),
+    });
   }
 }
 
@@ -4760,6 +5004,9 @@ void UISystem::apply_ui_scale_to_retained_surfaces(
   }
   if (material_browser_window_ != nullptr) {
     material_browser_window_->apply_ui_scale(metrics);
+  }
+  if (material_texture_info_window_ != nullptr) {
+    material_texture_info_window_->apply_ui_scale(metrics);
   }
   if (material_picker_window_ != nullptr) {
     material_picker_window_->apply_ui_scale(metrics);
@@ -5043,6 +5290,463 @@ void UISystem::finish_material_folder_operation(const QuaderApiStatus &result) {
   }
 }
 
+void UISystem::show_material_texture_info(ProjectAssetId material_id,
+                                          bool activate) {
+  if (editor_ == nullptr || material_texture_info_window_ == nullptr ||
+      !editor_->project().has_project()) {
+    return;
+  }
+  const auto inspected =
+      editor_->project_assets().material_albedo_texture_info(material_id);
+  if (!inspected.succeeded()) {
+    material_texture_info_window_->clear();
+    material_texture_info_window_->hide();
+    present_status_notification(inspected, 6000);
+    return;
+  }
+  const QuaderProjectMaterialTextureInfo &texture = inspected.value();
+  if (texture.rgba8 == nullptr) {
+    material_texture_info_window_->clear();
+    material_texture_info_window_->hide();
+    present_status_notification(
+        {.ok = false,
+         .message = localization_.text(
+             "ui.material_browser.texture.no_pixels",
+             "The material albedo texture has no decoded pixels.")},
+        6000);
+    return;
+  }
+  const auto absolute_utf8 = texture.absolute_path.u8string();
+  const std::uint64_t dependency_revision =
+      material_browser_dependency_revision_.has_value()
+          ? material_browser_dependency_revision_->revision
+          : 0u;
+  const std::string material_identity(texture.material_id.str());
+  const std::string texture_identity(texture.texture_id.str());
+  const bool presented = material_texture_info_window_->present(
+      TextureInfoPresentation{
+          .context =
+              TextureInfoContext{
+                  .project_identity = material_browser_project_identity_,
+                  .activation_generation = material_browser_project_generation_,
+                  .dependency_revision = dependency_revision,
+                  .material_identity = material_identity,
+                  .texture_identity = texture_identity,
+              },
+          .name = texture.name,
+          .location =
+              std::string(absolute_utf8.begin(), absolute_utf8.end()),
+          .format = texture.format,
+          .width = texture.width,
+          .height = texture.height,
+          .encoded_byte_size = texture.encoded_size_bytes,
+          .source_has_alpha = texture.has_alpha_channel,
+          .rgba8 = std::span<const std::byte>(texture.rgba8->data(),
+                                             texture.rgba8->size()),
+          .content_revision = texture.content_revision,
+      });
+  if (!presented) {
+    material_texture_info_window_->clear();
+    material_texture_info_window_->hide();
+    present_status_notification(
+        {.ok = false,
+         .message = localization_.text(
+             "ui.material_browser.texture.invalid_pixels",
+             "The material albedo texture has invalid image data.")},
+        6000);
+    return;
+  }
+  material_texture_info_catalog_revision_ =
+      material_presentation_catalog_revision_;
+  material_texture_info_window_->show();
+  if (activate) {
+    material_texture_info_window_->raise();
+    material_texture_info_window_->activateWindow();
+  }
+}
+
+void UISystem::refresh_material_texture_info() {
+  if (material_texture_info_window_ == nullptr ||
+      !material_texture_info_window_->isVisible() ||
+      material_texture_info_catalog_revision_ ==
+          material_presentation_catalog_revision_) {
+    return;
+  }
+  const TextureInfoContext *context =
+      material_texture_info_window_->current_context();
+  const std::optional<ProjectAssetId> material_id =
+      context != nullptr
+          ? ProjectAssetId::parse(context->material_identity)
+          : std::nullopt;
+  const bool material_available =
+      material_id.has_value() &&
+      std::ranges::any_of(
+          material_presentation_items_, [&](const auto &material) {
+            return material.available && material.reference.project_owned() &&
+                   material.reference.project_asset == *material_id;
+          });
+  if (!material_available) {
+    material_texture_info_window_->clear();
+    material_texture_info_window_->hide();
+    material_texture_info_catalog_revision_ =
+        material_presentation_catalog_revision_;
+    return;
+  }
+  show_material_texture_info(*material_id, false);
+}
+
+void UISystem::handle_material_browser_action(
+    QtMaterialBrowserActionRequest request) {
+  if (editor_ == nullptr || material_browser_window_ == nullptr ||
+      !editor_->project().has_project() ||
+      request.project_generation != material_browser_project_generation_ ||
+      request.project_generation !=
+          material_browser_project_generation_signal_->load(
+              std::memory_order_acquire)) {
+    return;
+  }
+
+  const auto dependency_revision =
+      editor_->project_assets().material_dependency_revision();
+  if (!dependency_revision.succeeded() ||
+      request.dependency_revision != dependency_revision.value().revision ||
+      !material_browser_dependency_revision_.has_value() ||
+      *material_browser_dependency_revision_ != dependency_revision.value()) {
+    return;
+  }
+
+  std::vector<ProjectAssetId> selected;
+  selected.reserve(request.selected_materials.size());
+  for (const QuaderMaterialReference &reference :
+       request.selected_materials) {
+    if (!reference.project_owned()) {
+      return;
+    }
+    selected.push_back(reference.project_asset);
+  }
+  const auto select_created = [this](
+                                  const std::vector<QuaderProjectMaterialInfo>
+                                      &materials) {
+    if (!materials.empty() && editor_ != nullptr) {
+      (void)editor_->project_assets().set_active_material(
+          materials.front().id);
+    }
+  };
+  const auto inspect_target = [this, &request]()
+      -> std::optional<QuaderProjectMaterialTextureInfo> {
+    if (!request.target.project_owned()) {
+      return std::nullopt;
+    }
+    const auto result = editor_->project_assets().material_albedo_texture_info(
+        request.target.project_asset);
+    if (!result.succeeded()) {
+      present_status_notification(result, 6000);
+      return std::nullopt;
+    }
+    return result.value();
+  };
+
+  switch (request.action) {
+  case QtMaterialBrowserAction::CopyTextureName:
+  case QtMaterialBrowserAction::CopyTexturePath: {
+    const auto texture = inspect_target();
+    if (!texture.has_value()) {
+      return;
+    }
+    if (QClipboard *clipboard = QApplication::clipboard()) {
+      clipboard->setText(
+          request.action == QtMaterialBrowserAction::CopyTextureName
+              ? QString::fromStdString(texture->name)
+              : QString::fromStdWString(texture->absolute_path.wstring()));
+    }
+    return;
+  }
+  case QtMaterialBrowserAction::OpenFileLocation: {
+    const auto texture = inspect_target();
+    if (texture.has_value() &&
+        !platform_reveal_file(texture->absolute_path)) {
+      present_status_notification(
+          {.ok = false,
+           .message = localization_.text(
+               "ui.material_browser.texture.reveal_failed",
+               "Could not open the texture file location.")},
+          6000);
+    }
+    return;
+  }
+  case QtMaterialBrowserAction::ShowTextureInfo:
+    if (request.target.project_owned()) {
+      show_material_texture_info(request.target.project_asset);
+    }
+    return;
+  case QtMaterialBrowserAction::Rename: {
+    if (!request.target.project_owned()) {
+      return;
+    }
+    const auto result = editor_->project_assets().rename_material(
+        request.target.project_asset, request.proposed_name.toStdString());
+    finish_material_folder_operation(result);
+    return;
+  }
+  case QtMaterialBrowserAction::Duplicate: {
+    const auto result =
+        editor_->project_assets().duplicate_materials(selected);
+    if (result.succeeded()) {
+      select_created(result.value());
+    }
+    finish_material_folder_operation(result);
+    return;
+  }
+  case QtMaterialBrowserAction::Cut:
+  case QtMaterialBrowserAction::Copy: {
+    if (selected.empty()) {
+      return;
+    }
+    const auto catalog = editor_->project_assets().materials();
+    if (!catalog.succeeded()) {
+      finish_material_folder_operation(catalog);
+      return;
+    }
+    std::vector<MaterialClipboardSource> sources;
+    sources.reserve(selected.size());
+    for (const ProjectAssetId id : selected) {
+      const auto found = std::ranges::find(catalog.value(), id,
+                                          &QuaderProjectMaterialInfo::id);
+      if (found == catalog.value().end()) {
+        finish_material_folder_operation({
+            .ok = false,
+            .message = localization_.text(
+                "ui.material_browser.clipboard_stale",
+                "The material selection changed before it could be copied."),
+        });
+        return;
+      }
+      sources.push_back({
+          .id = found->id,
+          .project_relative_path = found->project_relative_path,
+          .content_revision = found->content_revision,
+      });
+    }
+    material_clipboard_ = {
+        .mode = request.action == QtMaterialBrowserAction::Cut
+                    ? MaterialClipboardMode::Cut
+                    : MaterialClipboardMode::Copy,
+        .project_generation = material_browser_project_generation_,
+        .material_ids = std::move(selected),
+        .sources = std::move(sources),
+    };
+    material_browser_window_->set_material_paste_available(true);
+    return;
+  }
+  case QtMaterialBrowserAction::Paste: {
+    if (material_clipboard_.mode == MaterialClipboardMode::Empty ||
+        material_clipboard_.project_generation !=
+            material_browser_project_generation_ ||
+        material_clipboard_.material_ids.empty()) {
+      material_clipboard_ = {};
+      material_browser_window_->set_material_paste_available(false);
+      return;
+    }
+    const auto catalog = editor_->project_assets().materials();
+    const bool clipboard_current = catalog.succeeded() &&
+        material_clipboard_.sources.size() ==
+            material_clipboard_.material_ids.size() &&
+        std::ranges::all_of(
+            material_clipboard_.sources,
+            [&](const MaterialClipboardSource &source) {
+              const auto found = std::ranges::find(
+                  catalog.value(), source.id, &QuaderProjectMaterialInfo::id);
+              return found != catalog.value().end() &&
+                     found->project_relative_path ==
+                         source.project_relative_path &&
+                     found->content_revision == source.content_revision;
+            });
+    if (!clipboard_current) {
+      material_clipboard_ = {};
+      material_browser_window_->set_material_paste_available(false);
+      finish_material_folder_operation({
+          .ok = false,
+          .message = localization_.text(
+              "ui.material_browser.clipboard_stale",
+              "The copied materials changed and can no longer be pasted."),
+      });
+      return;
+    }
+    if (material_clipboard_.mode == MaterialClipboardMode::Copy) {
+      const auto result = editor_->project_assets().copy_materials(
+          material_clipboard_.material_ids,
+          request.destination_folder.toStdString());
+      if (result.succeeded()) {
+        select_created(result.value());
+      }
+      finish_material_folder_operation(result);
+      return;
+    }
+    const auto result = editor_->project_assets().move_materials(
+        material_clipboard_.material_ids,
+        request.destination_folder.toStdString());
+    if (result.succeeded()) {
+      material_clipboard_ = {};
+      material_browser_window_->set_material_paste_available(false);
+    }
+    finish_material_folder_operation(result);
+    return;
+  }
+  case QtMaterialBrowserAction::Delete:
+    delete_materials(std::move(selected));
+    return;
+  }
+}
+
+void UISystem::delete_materials(std::vector<ProjectAssetId> material_ids) {
+  if (editor_ == nullptr || material_browser_import_message_box_ == nullptr ||
+      material_ids.empty() || !editor_->project().has_project() ||
+      material_browser_project_generation_ !=
+          material_browser_project_generation_signal_->load(
+              std::memory_order_acquire)) {
+    return;
+  }
+  const auto binding_generation = runtime_binding_generation_;
+  const auto project_generation = material_browser_project_generation_;
+  const QuaderProjectMetadata project = editor_->project().metadata();
+  const std::string project_identity = project.uuid + "|" +
+      editor_->project().manifest_path().generic_string();
+  const auto deletion_context_is_current =
+      [this, binding_generation, project_generation, project_identity]() {
+        if (editor_ == nullptr ||
+            binding_generation != runtime_binding_generation_ ||
+            project_generation != material_browser_project_generation_ ||
+            project_generation !=
+                material_browser_project_generation_signal_->load(
+                    std::memory_order_acquire) ||
+            !editor_->project().has_project()) {
+          return false;
+        }
+        const QuaderProjectMetadata current_project =
+            editor_->project().metadata();
+        const std::string current_project_identity =
+            current_project.uuid + "|" +
+            editor_->project().manifest_path().generic_string();
+        return current_project_identity == project_identity;
+      };
+  const auto preview_result =
+      editor_->project_assets().preview_delete_materials(material_ids);
+  if (!preview_result.succeeded()) {
+    finish_material_folder_operation(preview_result);
+    return;
+  }
+  const QuaderMaterialDeletionPreview &preview = preview_result.value();
+  if (!preview.complete) {
+    QStringList errors;
+    for (const std::string &error : preview.errors) {
+      errors.push_back(QString::fromStdString(error));
+    }
+    finish_material_folder_operation({
+        .ok = false,
+        .message =
+            errors.isEmpty()
+                ? localization_.text(
+                      "ui.material_browser.delete_material.incomplete",
+                      "The selected material dependencies could not be fully "
+                      "inspected.")
+                : errors.join(QLatin1Char('\n')).toStdString(),
+    });
+    return;
+  }
+  const auto text = [this](std::string_view key, std::string_view fallback) {
+    return QString::fromStdString(localization_.text(key, fallback));
+  };
+  QStringList details;
+  if (!preview.material_names.empty()) {
+    details.push_back(
+        text("ui.material_browser.delete.materials", "Materials:"));
+    for (const std::string &name : preview.material_names) {
+      details.push_back(QString::fromStdString(name));
+    }
+  }
+  if (!preview.affected_scenes.empty()) {
+    details.push_back(text(
+        "ui.material_browser.delete.scenes",
+        "References in these scenes will become Default Material:"));
+    for (const auto &scene : preview.affected_scenes) {
+      details.push_back(
+          material_deletion_scene_label(scene, localization_));
+    }
+  }
+  if (preview.discards_material_draft) {
+    details.push_back(text(
+        "ui.material_browser.delete.draft",
+        "The open material draft will be closed and its unsaved changes "
+        "discarded."));
+  }
+  details.push_back(text(
+      "ui.material_browser.delete.permanent",
+      "Deletion is permanent. Existing scene undo history remains available; "
+      "restored references to deleted materials use Default Material."));
+  const auto choice = material_browser_import_message_box_->present({
+      .icon = QMessageBox::Warning,
+      .object_name =
+          QStringLiteral("material_browser_delete_materials_message_box"),
+      .title = text("ui.material_browser.delete_material.title",
+                    "Delete Materials"),
+      .text = text("ui.material_browser.delete_material.question",
+                   "Delete %1 selected material(s)?")
+                  .arg(static_cast<qulonglong>(
+                      preview.material_ids.size())),
+      .informative_text = details.join(QLatin1Char('\n')),
+      .buttons = {{
+                      .button = QtRetainedMessageBoxButton::Primary,
+                      .object_name = QStringLiteral(
+                          "materialBrowserDeleteMaterialsMessageBox.delete"),
+                      .label = text(
+                          "ui.material_browser.delete.confirm",
+                          "Delete and Replace with Default"),
+                      .role = QMessageBox::DestructiveRole,
+                  },
+                  {
+                      .button = QtRetainedMessageBoxButton::Secondary,
+                      .object_name = QStringLiteral(
+                          "materialBrowserDeleteMaterialsMessageBox.cancel"),
+                      .label = text("ui.action.cancel", "Cancel"),
+                      .role = QMessageBox::RejectRole,
+                  }},
+      .default_button = QtRetainedMessageBoxButton::Secondary,
+      .escape_button = QtRetainedMessageBoxButton::Secondary,
+      .close_button = QtRetainedMessageBoxButton::Secondary,
+  });
+  if (choice != QtRetainedMessageBoxButton::Primary ||
+      !deletion_context_is_current()) {
+    return;
+  }
+  const auto result = editor_->project_assets().delete_materials(
+      preview.material_ids, preview.revision);
+  if (!deletion_context_is_current()) {
+    return;
+  }
+  if (result.succeeded()) {
+    const auto removed = [&preview](ProjectAssetId id) {
+      return std::ranges::find(preview.material_ids, id) !=
+             preview.material_ids.end();
+    };
+    if (std::ranges::any_of(material_clipboard_.material_ids, removed)) {
+      material_clipboard_ = {};
+      material_browser_window_->set_material_paste_available(false);
+    }
+    if (material_texture_info_window_ != nullptr) {
+      const TextureInfoContext *context =
+          material_texture_info_window_->current_context();
+      if (context != nullptr &&
+          std::ranges::any_of(preview.material_ids, [&](ProjectAssetId id) {
+            return context->material_identity == id.str();
+          })) {
+        material_texture_info_window_->clear();
+        material_texture_info_window_->hide();
+      }
+    }
+  }
+  finish_material_folder_operation(result);
+}
+
 void UISystem::delete_material_folder(QString folder) {
   if (editor_ == nullptr || material_browser_import_message_box_ == nullptr ||
       !editor_->project().has_project() || material_browser_project_generation_ !=
@@ -5050,6 +5754,26 @@ void UISystem::delete_material_folder(QString folder) {
     return;
   }
   const auto generation = runtime_binding_generation_;
+  const auto project_generation = material_browser_project_generation_;
+  const QuaderProjectMetadata project = editor_->project().metadata();
+  const std::string project_identity = project.uuid + "|" +
+      editor_->project().manifest_path().generic_string();
+  const auto deletion_context_is_current =
+      [this, generation, project_generation, project_identity]() {
+        if (editor_ == nullptr || generation != runtime_binding_generation_ ||
+            project_generation != material_browser_project_generation_ ||
+            project_generation !=
+                material_browser_project_generation_signal_->load(
+                    std::memory_order_acquire) ||
+            !editor_->project().has_project()) {
+          return false;
+        }
+        const QuaderProjectMetadata current_project =
+            editor_->project().metadata();
+        return current_project.uuid + "|" +
+                   editor_->project().manifest_path().generic_string() ==
+               project_identity;
+      };
   const auto preview_result =
       editor_->project_assets().preview_delete_material_folder(folder.toStdString());
   if (!preview_result.ok()) {
@@ -5086,8 +5810,9 @@ void UISystem::delete_material_folder(QString folder) {
   }
   if (!preview.affected_scenes.empty()) {
     details.push_back(text("ui.material_browser.delete.scenes", "References in these scenes will become Default Material:"));
-    for (const std::string &scene : preview.affected_scenes) {
-      details.push_back(QString::fromStdString(scene));
+    for (const auto &scene : preview.affected_scenes) {
+      details.push_back(
+          material_deletion_scene_label(scene, localization_));
     }
   }
   if (preview.discards_material_draft) {
@@ -5116,14 +5841,25 @@ void UISystem::delete_material_folder(QString folder) {
       .close_button = QtRetainedMessageBoxButton::Secondary,
   });
   if (choice != QtRetainedMessageBoxButton::Primary ||
-      generation != runtime_binding_generation_ || editor_ == nullptr) {
+      !deletion_context_is_current()) {
     return;
   }
   const auto result = editor_->project_assets().delete_material_folder(
       folder.toStdString(), preview.revision);
-  if (generation == runtime_binding_generation_) {
-    finish_material_folder_operation(result);
+  if (!deletion_context_is_current()) {
+    return;
   }
+  if (result.succeeded()) {
+    const auto removed = [&preview](ProjectAssetId id) {
+      return std::ranges::find(preview.material_ids, id) !=
+             preview.material_ids.end();
+    };
+    if (std::ranges::any_of(material_clipboard_.material_ids, removed)) {
+      material_clipboard_ = {};
+      material_browser_window_->set_material_paste_available(false);
+    }
+  }
+  finish_material_folder_operation(result);
 }
 
 void UISystem::import_material_textures(QString destination_folder) {

@@ -60,6 +60,7 @@ class QtCommandEventFilter;
 class QtCommandPalette;
 class QtMaterialFindReplaceDialog;
 class QtMaterialBrowserWindow;
+class QtTextureInfoWindow;
 class QtActiveMaterialPanel;
 class QtMaterialPreviewSurface;
 class QtRetainedMessageBox;
@@ -77,6 +78,7 @@ class QtTextureToolbar;
 class QtToolToolbar;
 class QtViewportDisplayToolbar;
 struct QtSettingsChange;
+struct QtMaterialBrowserActionRequest;
 class QtUiScaleApplicationController;
 class QtUiScaleMetrics;
 enum class QtStandardMaterialEditorFileAction : std::uint8_t;
@@ -206,6 +208,12 @@ private:
   void show_settings_dialog();
   void show_autosave_recovery();
   void show_material_browser();
+  void refresh_material_browser_usage();
+  void handle_material_browser_action(QtMaterialBrowserActionRequest request);
+  void show_material_texture_info(ProjectAssetId material_id,
+                                  bool activate = true);
+  void refresh_material_texture_info();
+  void delete_materials(std::vector<ProjectAssetId> material_ids);
   void show_material_find_replace();
   void show_material_find_replace(QuaderMaterialReference source);
   void show_material_picker(bool replacement_column);
@@ -258,6 +266,8 @@ private:
   QtSettingsDialog *settings_dialog_ = nullptr;
   std::uint64_t runtime_binding_generation_ = 0;
   QtMaterialBrowserWindow *material_browser_window_ = nullptr;
+  QtTextureInfoWindow *material_texture_info_window_ = nullptr;
+  std::uint64_t material_texture_info_catalog_revision_ = 0u;
   QtActiveMaterialPanel *active_material_panel_ = nullptr;
   QtMaterialBrowserWindow *material_picker_window_ = nullptr;
   QtMaterialFindReplaceDialog *material_find_replace_dialog_ = nullptr;
@@ -398,6 +408,22 @@ private:
   std::uint64_t material_presentation_invalidation_generation_ = 1;
   std::uint64_t material_browser_catalog_signature_ = 0;
   QuaderMaterialReference material_browser_active_reference_;
+  std::optional<QuaderProjectMaterialDependencyRevision>
+      material_browser_dependency_revision_;
+  enum class MaterialClipboardMode : std::uint8_t { Empty, Copy, Cut };
+  /** Captures the committed source identity fenced by the app-local clipboard. */
+  struct MaterialClipboardSource final {
+    ProjectAssetId id;
+    std::string project_relative_path;
+    std::uint64_t content_revision = 0u;
+  };
+  /** Retains repeatable copy or deferred cut intent for one project generation. */
+  struct MaterialClipboard final {
+    MaterialClipboardMode mode = MaterialClipboardMode::Empty;
+    std::uint64_t project_generation = 0u;
+    std::vector<ProjectAssetId> material_ids;
+    std::vector<MaterialClipboardSource> sources;
+  } material_clipboard_;
   /** Captures material identity and catalog revision shown by the active-material panel. */
   struct ActiveMaterialPanelPresentationStamp final {
     std::uint64_t catalog_revision = 0u;

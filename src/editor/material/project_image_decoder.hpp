@@ -27,6 +27,8 @@ struct ProjectDecodedImage final {
   std::uint32_t height = 0u;
   std::vector<std::byte> rgba8;
   std::string detected_format;
+  std::uintmax_t encoded_byte_size = 0u;
+  bool has_alpha_channel = false;
 };
 
 /// Validated external texture import while its original encoded bytes remain intact.

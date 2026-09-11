@@ -695,10 +695,10 @@ TEST(QtApplicationThemeTests,
   expect_color(palette, QPalette::Active, QPalette::ButtonText, 0xe4e6ed);
   expect_color(palette, QPalette::Active, QPalette::BrightText, 0xffffff);
   expect_color(palette, QPalette::Active, QPalette::PlaceholderText, 0x9498a4);
-  expect_color(palette, QPalette::Active, QPalette::Light, 0x393b43);
-  expect_color(palette, QPalette::Active, QPalette::Midlight, 0x32343c);
-  expect_color(palette, QPalette::Active, QPalette::Mid, 0x23242a);
-  expect_color(palette, QPalette::Active, QPalette::Dark, 0x16171b);
+  expect_color(palette, QPalette::Active, QPalette::Light, 0x60636f);
+  expect_color(palette, QPalette::Active, QPalette::Midlight, 0x525560);
+  expect_color(palette, QPalette::Active, QPalette::Mid, 0x444751);
+  expect_color(palette, QPalette::Active, QPalette::Dark, 0x33363f);
   expect_color(palette, QPalette::Active, QPalette::Shadow, 0x0c0d10);
   expect_color(palette, QPalette::Active, QPalette::Highlight, 0x42454c);
   expect_color(palette, QPalette::Active, QPalette::HighlightedText, 0xe4e6ed);

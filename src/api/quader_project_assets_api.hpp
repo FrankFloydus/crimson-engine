@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -89,20 +90,23 @@ struct QuaderMaterialPresentationSnapshot {
   std::vector<std::string> material_folders;
 };
 
-/// Reviewed impact of permanently removing one project material folder.
-struct QuaderMaterialFolderDeletionPreview {
+/// Validated full-resolution albedo data for one project material.
+struct QuaderProjectMaterialTextureInfo {
+  ProjectAssetId material_id;
+  ProjectAssetId texture_id;
+  std::string name;
   std::string project_relative_path;
-  std::uint64_t revision = 0u;
-  bool complete = false;
-  std::vector<ProjectAssetId> material_ids;
-  std::vector<std::string> material_names;
-  std::vector<std::string> affected_scenes;
-  std::vector<std::string> errors;
-  std::size_t folder_count = 0u;
-  bool discards_material_draft = false;
+  std::filesystem::path absolute_path;
+  std::string format;
+  std::uintmax_t encoded_size_bytes = 0u;
+  std::uint32_t width = 0u;
+  std::uint32_t height = 0u;
+  bool has_alpha_channel = false;
+  std::shared_ptr<const std::vector<std::byte>> rgba8;
+  std::uint64_t content_revision = 0u;
 };
 
-/// Scene usage preserves the saved and currently edited versions separately.
+/// One saved or live scene record affected by a material deletion.
 struct QuaderProjectSceneMaterialDependencies {
   SceneId scene_id;
   std::optional<SceneSessionId> session_id;
@@ -111,6 +115,30 @@ struct QuaderProjectSceneMaterialDependencies {
   bool live = false;
   bool dirty = false;
   std::vector<ProjectAssetId> material_ids;
+};
+
+/// Reviewed impact of permanently removing one project material folder.
+struct QuaderMaterialFolderDeletionPreview {
+  std::string project_relative_path;
+  std::uint64_t revision = 0u;
+  bool complete = false;
+  std::vector<ProjectAssetId> material_ids;
+  std::vector<std::string> material_names;
+  std::vector<QuaderProjectSceneMaterialDependencies> affected_scenes;
+  std::vector<std::string> errors;
+  std::size_t folder_count = 0u;
+  bool discards_material_draft = false;
+};
+
+/// Reviewed impact of permanently removing an explicit material selection.
+struct QuaderMaterialDeletionPreview {
+  std::uint64_t revision = 0u;
+  bool complete = false;
+  std::vector<ProjectAssetId> material_ids;
+  std::vector<std::string> material_names;
+  std::vector<QuaderProjectSceneMaterialDependencies> affected_scenes;
+  std::vector<std::string> errors;
+  bool discards_material_draft = false;
 };
 
 /// A material's saved or pending texture input, independent of any renderer.
@@ -139,6 +167,18 @@ struct QuaderProjectMaterialDependencySnapshot {
   std::vector<std::string> errors;
   std::vector<QuaderProjectSceneMaterialDependencies> scenes;
   std::vector<QuaderProjectMaterialDependencies> materials;
+};
+
+/// Cheap retained stamp for consumers that only need dependency invalidation.
+struct QuaderProjectMaterialDependencyRevision {
+  ProjectId project_id;
+  std::uint64_t project_generation = 0u;
+  std::uint64_t revision = 0u;
+  bool complete = false;
+
+  friend bool operator==(
+      const QuaderProjectMaterialDependencyRevision &,
+      const QuaderProjectMaterialDependencyRevision &) = default;
 };
 
 /// One project material created from an imported texture source.
@@ -171,6 +211,8 @@ public:
   QuaderApiVoidResult set_active_material(ProjectAssetId material_id);
   [[nodiscard]] QuaderApiResult<QuaderProjectMaterialPreview>
   material_preview(ProjectAssetId material_id) const;
+  [[nodiscard]] QuaderApiResult<QuaderProjectMaterialTextureInfo>
+  material_albedo_texture_info(ProjectAssetId material_id) const;
   [[nodiscard]] QuaderApiResult<QuaderMaterialPresentationRevision>
   material_presentation_revision() const;
   [[nodiscard]] QuaderApiResult<QuaderMaterialPresentationSnapshot>
@@ -189,6 +231,15 @@ public:
                                            std::string_view destination_folder);
   QuaderApiVoidResult move_materials(std::span<const ProjectAssetId> material_ids,
                                      std::string_view destination_folder);
+  [[nodiscard]] QuaderApiResult<QuaderProjectMaterialInfo>
+  rename_material(ProjectAssetId material_id, std::string_view new_name);
+  [[nodiscard]] QuaderApiResult<std::vector<QuaderProjectMaterialInfo>>
+  duplicate_materials(std::span<const ProjectAssetId> material_ids);
+  [[nodiscard]] QuaderApiResult<std::vector<QuaderProjectMaterialInfo>>
+  copy_materials(std::span<const ProjectAssetId> material_ids,
+                 std::string_view destination_folder);
+  [[nodiscard]] QuaderApiResult<QuaderProjectMaterialDependencyRevision>
+  material_dependency_revision() const;
   [[nodiscard]] QuaderApiResult<QuaderProjectMaterialDependencySnapshot>
   material_dependencies(bool refresh_files = false) const;
   [[nodiscard]] QuaderApiResult<QuaderMaterialFolderDeletionPreview>
@@ -196,6 +247,12 @@ public:
   /// Rejects an obsolete preview instead of applying an unreviewed deletion.
   QuaderApiVoidResult delete_material_folder(std::string_view folder,
                                              std::uint64_t expected_revision);
+  [[nodiscard]] QuaderApiResult<QuaderMaterialDeletionPreview>
+  preview_delete_materials(std::span<const ProjectAssetId> material_ids) const;
+  /// Rejects an obsolete preview instead of applying an unreviewed deletion.
+  QuaderApiVoidResult delete_materials(
+      std::span<const ProjectAssetId> material_ids,
+      std::uint64_t expected_revision);
 
   void rebind_session(QuaderApiSession session) { session_ = session; }
 

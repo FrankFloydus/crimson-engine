@@ -8,9 +8,11 @@
 
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_double_spin_box.hpp"
+#include "ui/qt_texture_info_window.hpp"
 
 #include <QAction>
 #include <QActionGroup>
+#include <QByteArray>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QColorDialog>
@@ -27,11 +29,8 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
-#include <QLocale>
 #include <QMenu>
 #include <QMenuBar>
-#include <QMouseEvent>
-#include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
 #include <QResizeEvent>
@@ -40,12 +39,10 @@
 #include <QSlider>
 #include <QSplitter>
 #include <QStatusBar>
-#include <QStringList>
 #include <QStyle>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
-#include <QWheelEvent>
 #include <QWidget>
 
 #include <algorithm>
@@ -66,10 +63,6 @@ constexpr int kScalarSliderScale = 100;
 constexpr int kLiveNumberDispatchIntervalMs = 16;
 constexpr int kTexturePreviewExtent = 64;
 constexpr int kTexturePreviewIconExtent = 56;
-constexpr int kTextureInspectorWidth = 720;
-constexpr int kTextureInspectorHeight = 620;
-constexpr double kMinimumTextureZoom = 0.1;
-constexpr double kMaximumTextureZoom = 64.0;
 
 /// Preserves the filename end while fitting a project texture path in its row.
 class ElidedPathLabel final : public QLabel {
@@ -112,191 +105,106 @@ private:
   QString placeholder_;
 };
 
-/// Paints one decoded texture with retained zoom and pan inspection state.
-class TextureInspectorCanvas final : public QWidget {
-public:
-  explicit TextureInspectorCanvas(QWidget *parent = nullptr) : QWidget(parent) {
-    setObjectName(
-        QStringLiteral("standardMaterialEditor.textureInspector.canvas"));
-    setFocusPolicy(Qt::StrongFocus);
-    setMinimumSize(240, 180);
-    refresh_properties();
+std::string utf8_bytes(const QString &text) {
+  const QByteArray bytes = text.toUtf8();
+  return std::string(bytes.constData(), static_cast<std::size_t>(bytes.size()));
+}
+
+QtTextureInfoLabels texture_info_labels(
+    const QtStandardMaterialEditorLabels &labels) {
+  return QtTextureInfoLabels{
+      .window_title = labels.texture_inspector,
+      .property = labels.texture_info_property,
+      .value = labels.texture_info_value,
+      .name = labels.texture_info_name,
+      .location = labels.texture_info_location,
+      .format = labels.texture_info_format,
+      .has_alpha = labels.texture_info_has_alpha,
+      .size = labels.texture_info_size,
+      .red_channel = labels.texture_info_red_channel,
+      .green_channel = labels.texture_info_green_channel,
+      .blue_channel = labels.texture_info_blue_channel,
+      .alpha_channel = labels.texture_info_alpha_channel,
+  };
+}
+
+bool present_texture_info(
+    QtTextureInfoWindow &window,
+    const QtStandardMaterialEditorDocument &document,
+    QtStandardMaterialTextureSlot slot,
+    const QtStandardMaterialEditorLabels &labels) {
+  const std::size_t index = static_cast<std::size_t>(slot);
+  if (index >= document.textures.size()) {
+    return false;
+  }
+  const QtStandardMaterialTexturePresentation &texture =
+      document.textures[index];
+  if (texture.preview_image.isNull()) {
+    return false;
   }
 
-  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
-    setMinimumSize(metrics.size(QSize(240, 180)));
-    updateGeometry();
+  QImage rgba8 = texture.preview_image;
+  if (rgba8.format() != QImage::Format_RGBA8888) {
+    rgba8 = rgba8.convertToFormat(QImage::Format_RGBA8888);
+  }
+  if (rgba8.isNull() || rgba8.width() <= 0 || rgba8.height() <= 0) {
+    return false;
   }
 
-  void set_image(QImage image) {
-    image_ = std::move(image);
-    reset_view();
+  const QString location = texture.absolute_path.isEmpty()
+                               ? texture.project_relative_path
+                               : texture.absolute_path;
+  const QFileInfo path_info(location);
+  QString file_name = path_info.fileName();
+  if (file_name.isEmpty()) {
+    file_name = location;
   }
-
-  void reset_view() {
-    zoom_ = 1.0;
-    pan_ = {};
-    refresh_properties();
-    update();
+  QString format =
+      texture.format.section(QStringLiteral("/"), 0, 0).trimmed();
+  if (format.isEmpty()) {
+    format = path_info.suffix();
   }
-
-protected:
-  void paintEvent(QPaintEvent *) override {
-    QPainter painter(this);
-    painter.fillRect(rect(), palette().brush(backgroundRole()));
-    if (image_.isNull()) {
-      return;
-    }
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    painter.translate(rect().center() + pan_);
-    painter.scale(zoom_, zoom_);
-    painter.drawImage(QPointF(-0.5 * image_.width(), -0.5 * image_.height()),
-                      image_);
+  const QSize pixel_size = texture.pixel_size.isValid()
+                               ? texture.pixel_size
+                               : rgba8.size();
+  if (pixel_size != rgba8.size()) {
+    return false;
   }
-
-  void mousePressEvent(QMouseEvent *event) override {
-    if (event->button() == Qt::LeftButton ||
-        event->button() == Qt::MiddleButton) {
-      panning_ = true;
-      previous_pointer_position_ = event->position();
-      event->accept();
-      return;
-    }
-    QWidget::mousePressEvent(event);
+  const qsizetype image_bytes = rgba8.sizeInBytes();
+  if (image_bytes <= 0) {
+    return false;
   }
+  const QString texture_identity =
+      texture.stable_texture_id.isEmpty()
+          ? texture.project_relative_path + QStringLiteral("#") +
+                QString::number(index)
+          : texture.stable_texture_id;
+  const std::uintmax_t encoded_byte_size =
+      texture.encoded_byte_size > 0
+          ? static_cast<std::uintmax_t>(texture.encoded_byte_size)
+          : 0u;
 
-  void mouseMoveEvent(QMouseEvent *event) override {
-    if (!panning_) {
-      QWidget::mouseMoveEvent(event);
-      return;
-    }
-    pan_ += event->position() - previous_pointer_position_;
-    previous_pointer_position_ = event->position();
-    refresh_properties();
-    update();
-    event->accept();
-  }
-
-  void mouseReleaseEvent(QMouseEvent *event) override {
-    if ((event->button() == Qt::LeftButton ||
-         event->button() == Qt::MiddleButton) &&
-        panning_) {
-      panning_ = false;
-      event->accept();
-      return;
-    }
-    QWidget::mouseReleaseEvent(event);
-  }
-
-  void mouseDoubleClickEvent(QMouseEvent *event) override {
-    if (event->button() == Qt::LeftButton ||
-        event->button() == Qt::MiddleButton) {
-      reset_view();
-      event->accept();
-      return;
-    }
-    QWidget::mouseDoubleClickEvent(event);
-  }
-
-  void wheelEvent(QWheelEvent *event) override {
-    const double zoom_factor = std::pow(1.0015, event->angleDelta().y());
-    zoom_ = std::clamp(zoom_ * zoom_factor, kMinimumTextureZoom,
-                       kMaximumTextureZoom);
-    refresh_properties();
-    update();
-    event->accept();
-  }
-
-private:
-  void refresh_properties() {
-    setProperty("zoom", zoom_);
-    setProperty("panX", pan_.x());
-    setProperty("panY", pan_.y());
-  }
-
-  QImage image_;
-  QPointF pan_;
-  QPointF previous_pointer_position_;
-  double zoom_ = 1.0;
-  bool panning_ = false;
-};
-
-/// Hosts the retained texture canvas and immutable file/format information.
-class TextureInspectorWindow final : public QMainWindow {
-public:
-  TextureInspectorWindow(QWidget *parent, const QtUiScaleMetrics &metrics)
-      : QMainWindow(parent, Qt::Tool),
-        canvas_(new TextureInspectorCanvas(this)),
-        information_(new QLabel(this)) {
-    setObjectName(QStringLiteral("standardMaterialEditor.textureInspector"));
-    setAttribute(Qt::WA_DeleteOnClose, false);
-    setWindowFlag(Qt::WindowMaximizeButtonHint, false);
-    resize(metrics.size(
-        QSize(kTextureInspectorWidth, kTextureInspectorHeight)));
-    setCentralWidget(canvas_);
-    information_->setObjectName(
-        QStringLiteral("standardMaterialEditor.textureInspector.info"));
-    information_->setAlignment(Qt::AlignCenter);
-    statusBar()->addPermanentWidget(information_, 1);
-    apply_ui_scale(metrics);
-  }
-
-  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
-    canvas_->apply_ui_scale(metrics);
-    if (centralWidget() != nullptr) {
-      centralWidget()->updateGeometry();
-    }
-    statusBar()->updateGeometry();
-  }
-
-  void present(const QtStandardMaterialTexturePresentation &texture,
-               const QString &window_title) {
-    setWindowTitle(window_title);
-    canvas_->set_image(texture.preview_image);
-    const QFileInfo path_info(texture.project_relative_path);
-    const QString file_name = path_info.fileName().isEmpty()
-                                  ? texture.project_relative_path
-                                  : path_info.fileName();
-    const QString format = texture.format.isEmpty()
-                               ? path_info.suffix().toUpper()
-                               : texture.format;
-    const QSize pixel_size = texture.pixel_size.isValid()
-                                 ? texture.pixel_size
-                                 : texture.preview_image.size();
-    qint64 byte_size = texture.encoded_byte_size;
-    if (byte_size <= 0 && pixel_size.isValid()) {
-      byte_size = static_cast<qint64>(pixel_size.width()) *
-                  static_cast<qint64>(pixel_size.height()) * 4;
-    }
-    QStringList parts;
-    if (!file_name.isEmpty()) {
-      parts.push_back(file_name);
-    }
-    QString interpretation = format;
-    if (!texture.color_space.isEmpty()) {
-      interpretation += interpretation.isEmpty()
-                            ? texture.color_space
-                            : QStringLiteral(" • ") + texture.color_space;
-    }
-    if (!interpretation.isEmpty()) {
-      parts.push_back(interpretation);
-    }
-    if (pixel_size.isValid()) {
-      parts.push_back(QStringLiteral("%1 × %2")
-                          .arg(pixel_size.width())
-                          .arg(pixel_size.height()));
-    }
-    if (byte_size > 0) {
-      parts.push_back(QLocale().formattedDataSize(byte_size, 1,
-                                                  QLocale::DataSizeIecFormat));
-    }
-    information_->setText(parts.join(QStringLiteral("  |  ")));
-  }
-
-private:
-  TextureInspectorCanvas *canvas_ = nullptr;
-  QLabel *information_ = nullptr;
-};
+  window.set_labels(texture_info_labels(labels));
+  return window.present(TextureInfoPresentation{
+      .context =
+          TextureInfoContext{
+              .activation_generation = document.session_generation,
+              .material_identity = utf8_bytes(document.stable_id),
+              .texture_identity = utf8_bytes(texture_identity),
+          },
+      .name = utf8_bytes(file_name),
+      .location = utf8_bytes(location),
+      .format = utf8_bytes(format),
+      .width = static_cast<std::uint32_t>(pixel_size.width()),
+      .height = static_cast<std::uint32_t>(pixel_size.height()),
+      .encoded_byte_size = encoded_byte_size,
+      .source_has_alpha = texture.source_has_alpha,
+      .rgba8 = std::span<const std::byte>(
+          reinterpret_cast<const std::byte *>(rgba8.constBits()),
+          static_cast<std::size_t>(image_bytes)),
+      .content_revision = texture.content_revision,
+  });
+}
 
 constexpr std::size_t texture_index(QtStandardMaterialTextureSlot slot) {
   return static_cast<std::size_t>(slot);
@@ -1028,6 +936,7 @@ void QtStandardMaterialEditorWindow::set_document(
   document_ = std::move(document);
   has_document_ = true;
   if (changed_document && texture_inspector_window_ != nullptr) {
+    texture_inspector_window_->clear();
     texture_inspector_window_->hide();
     inspected_texture_slot_.reset();
   }
@@ -1043,6 +952,7 @@ void QtStandardMaterialEditorWindow::clear_document() {
   document_ = {};
   has_document_ = false;
   if (texture_inspector_window_ != nullptr) {
+    texture_inspector_window_->clear();
     texture_inspector_window_->hide();
   }
   inspected_texture_slot_.reset();
@@ -1158,8 +1068,7 @@ void QtStandardMaterialEditorWindow::apply_ui_scale(
   invalidate_texture_preview_icons();
   refresh_document_controls();
   if (texture_inspector_window_ != nullptr) {
-    static_cast<TextureInspectorWindow *>(texture_inspector_window_)
-        ->apply_ui_scale(metrics);
+    texture_inspector_window_->apply_ui_scale(metrics);
   }
   properties_group_->updateGeometry();
   updateGeometry();
@@ -1211,6 +1120,16 @@ bool QtStandardMaterialEditorWindow::event(QEvent *event) {
   return handled;
 }
 
+bool QtStandardMaterialEditorWindow::eventFilter(QObject *watched,
+                                                 QEvent *event) {
+  if (watched == texture_inspector_window_ && event != nullptr &&
+      event->type() == QEvent::Hide) {
+    texture_inspector_window_->clear();
+    inspected_texture_slot_.reset();
+  }
+  return QMainWindow::eventFilter(watched, event);
+}
+
 void QtStandardMaterialEditorWindow::closeEvent(QCloseEvent *event) {
   if (active_albedo_dialog_ != nullptr) {
     abandon_interactions();
@@ -1224,6 +1143,7 @@ void QtStandardMaterialEditorWindow::closeEvent(QCloseEvent *event) {
     return;
   }
   if (texture_inspector_window_ != nullptr) {
+    texture_inspector_window_->clear();
     texture_inspector_window_->hide();
   }
   inspected_texture_slot_.reset();
@@ -1666,11 +1586,24 @@ void QtStandardMaterialEditorWindow::show_texture_inspector(
   }
   if (texture_inspector_window_ == nullptr) {
     texture_inspector_window_ =
-        new TextureInspectorWindow(this, ui_scale_metrics_);
+        new QtTextureInfoWindow(this, ui_scale_metrics_);
+    texture_inspector_window_->installEventFilter(this);
+    texture_inspector_window_->setObjectName(
+        QStringLiteral("standardMaterialEditor.textureInspector"));
+    if (auto *canvas = texture_inspector_window_->findChild<QWidget *>(
+            QStringLiteral("textureInfo.canvas"));
+        canvas != nullptr) {
+      canvas->setObjectName(
+          QStringLiteral("standardMaterialEditor.textureInspector.canvas"));
+    }
   }
   inspected_texture_slot_ = slot;
-  static_cast<TextureInspectorWindow *>(texture_inspector_window_)
-      ->present(document_.textures[index], labels_.texture_inspector);
+  if (!present_texture_info(*texture_inspector_window_, document_, slot,
+                            labels_)) {
+    texture_inspector_window_->clear();
+    inspected_texture_slot_.reset();
+    return;
+  }
   texture_inspector_window_->show();
   texture_inspector_window_->raise();
   texture_inspector_window_->activateWindow();
@@ -1681,15 +1614,25 @@ void QtStandardMaterialEditorWindow::refresh_texture_inspector() {
       !inspected_texture_slot_.has_value()) {
     return;
   }
+  if (!texture_inspector_window_->isVisible()) {
+    texture_inspector_window_->clear();
+    inspected_texture_slot_.reset();
+    return;
+  }
   const std::size_t index = texture_index(*inspected_texture_slot_);
   if (!has_document_ || index >= document_.textures.size() ||
       document_.textures[index].preview_image.isNull()) {
+    texture_inspector_window_->clear();
     texture_inspector_window_->hide();
     inspected_texture_slot_.reset();
     return;
   }
-  static_cast<TextureInspectorWindow *>(texture_inspector_window_)
-      ->present(document_.textures[index], labels_.texture_inspector);
+  if (!present_texture_info(*texture_inspector_window_, document_,
+                            *inspected_texture_slot_, labels_)) {
+    texture_inspector_window_->clear();
+    texture_inspector_window_->hide();
+    inspected_texture_slot_.reset();
+  }
 }
 
 void QtStandardMaterialEditorWindow::invalidate_texture_preview_icons() {

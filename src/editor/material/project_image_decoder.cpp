@@ -52,7 +52,8 @@ bool unsupported_high_dynamic_range(const QImage &image) noexcept {
   }
 }
 
-ProjectIoResult<ProjectDecodedImage> decode_reader(QImageReader &reader) {
+ProjectIoResult<ProjectDecodedImage>
+decode_reader(QImageReader &reader, std::uintmax_t encoded_byte_size) {
   if (!reader.canRead()) {
     return ProjectIoResult<ProjectDecodedImage>::failure(
         ProjectIoErrorCode::UnsupportedFormat,
@@ -99,6 +100,7 @@ ProjectIoResult<ProjectDecodedImage> decode_reader(QImageReader &reader) {
         ProjectIoErrorCode::UnsupportedFormat,
         "HDR floating-point textures are not supported yet.");
   }
+  const bool has_alpha_channel = image.hasAlphaChannel();
   image = image.convertToFormat(QImage::Format_RGBA8888);
   const std::uint64_t row_bytes =
       static_cast<std::uint64_t>(image.width()) * 4u;
@@ -115,6 +117,8 @@ ProjectIoResult<ProjectDecodedImage> decode_reader(QImageReader &reader) {
       .height = static_cast<std::uint32_t>(image.height()),
       .rgba8 = std::vector<std::byte>(static_cast<std::size_t>(total_bytes)),
       .detected_format = source_format.toStdString(),
+      .encoded_byte_size = encoded_byte_size,
+      .has_alpha_channel = has_alpha_channel,
   };
   for (int row = 0; row < image.height(); ++row) {
     std::memcpy(decoded.rgba8.data() +
@@ -138,8 +142,10 @@ ProjectImageDecoder::decode(std::span<const std::byte> encoded_bytes) {
   }
   QByteArray bytes(reinterpret_cast<const char *>(encoded_bytes.data()),
                    static_cast<qsizetype>(encoded_bytes.size()));
-  const auto decode = [&bytes](const QByteArray &format,
-                               bool decide_from_content) {
+  const auto encoded_byte_size = encoded_bytes.size();
+  const auto decode = [&bytes,
+                       encoded_byte_size](const QByteArray &format,
+                                          bool decide_from_content) {
     QBuffer buffer(&bytes);
     if (!buffer.open(QIODevice::ReadOnly)) {
       return ProjectIoResult<ProjectDecodedImage>::failure(
@@ -149,7 +155,7 @@ ProjectImageDecoder::decode(std::span<const std::byte> encoded_bytes) {
     QImageReader reader(&buffer, format);
     reader.setDecideFormatFromContent(decide_from_content);
     reader.setAutoTransform(false);
-    return decode_reader(reader);
+    return decode_reader(reader, encoded_byte_size);
   };
 
   const bool has_tga_footer = has_truevision_tga_footer(encoded_bytes);

@@ -161,6 +161,7 @@ deserialize_owned_project_dependencies(std::vector<std::byte> bytes) {
   result.material_ids = std::move(decoded.material_ids);
   result.project_asset_dependencies =
       std::move(decoded.project_asset_dependencies);
+  result.dependency_data_available = true;
   result.stats.logical_geometry_count = decoded.stats.logical_geometry_count;
   result.stats.metadata_access_ms = decoded.stats.metadata_access_ms;
   for (const quader_io::QdrBinaryChunk &chunk : container.chunks) {
@@ -168,6 +169,12 @@ deserialize_owned_project_dependencies(std::vector<std::byte> bytes) {
       result.stats.decompressed_bytes += chunk.raw_size;
       result.stats.decompression_ms += chunk.decompression_time_ms();
     }
+  }
+  if (!decoded.fully_validated) {
+    result.message = std::move(decoded.validation_error);
+    result.diagnostics.push_back(quader_io::qdr_make_error(
+        "qdr.binary.partial_dependency_read", "", result.message));
+    return result;
   }
   result.ok = true;
   return result;

@@ -55,6 +55,94 @@ constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
 constexpr std::uint16_t kSceneChunkSchemaVersion = 14u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
+/**
+ * Dependency-only view of the incompatible schema-10 dialect written by the
+ * retired bgfx branch. The fields inspected here retained their current wire
+ * positions; later entity fields deliberately remain opaque.
+ */
+struct RetiredSchema10DependencyEntity final : private flatbuffers::Table {
+  enum FlatBuffersVTableOffset : flatbuffers::voffset_t {
+    VT_ID = 4,
+    VT_EDITOR_OBJECT_ID = 8,
+    VT_MATERIAL = 26,
+  };
+
+  [[nodiscard]] std::uint64_t id() const {
+    return GetField<std::uint64_t>(VT_ID, 0u);
+  }
+
+  [[nodiscard]] const fb::MaterialComponent *material() const {
+    return GetPointer<const fb::MaterialComponent *>(VT_MATERIAL);
+  }
+
+  template <bool B = false>
+  [[nodiscard]] bool
+  Verify(flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<std::uint64_t>(verifier, VT_ID, 8u) &&
+           VerifyField<std::uint64_t>(verifier, VT_EDITOR_OBJECT_ID, 8u) &&
+           VerifyOffset(verifier, VT_MATERIAL) &&
+           verifier.VerifyTable(material()) && verifier.EndTable();
+  }
+};
+
+struct RetiredSchema10DependencyPayload final : private flatbuffers::Table {
+  enum FlatBuffersVTableOffset : flatbuffers::voffset_t {
+    VT_SCENE_ID = 4,
+    VT_SCENE_NAME = 6,
+    VT_ENTITIES = 14,
+    VT_ROOT_ENTITIES = 16,
+    VT_PROJECT_ASSET_DEPENDENCIES = 18,
+  };
+
+  [[nodiscard]] std::uint64_t scene_id() const {
+    return GetField<std::uint64_t>(VT_SCENE_ID, 0u);
+  }
+
+  [[nodiscard]] const flatbuffers::String *scene_name() const {
+    return GetPointer<const flatbuffers::String *>(VT_SCENE_NAME);
+  }
+
+  [[nodiscard]] const flatbuffers::Vector<
+      flatbuffers::Offset<RetiredSchema10DependencyEntity>> *
+  entities() const {
+    return GetPointer<const flatbuffers::Vector<
+        flatbuffers::Offset<RetiredSchema10DependencyEntity>> *>(VT_ENTITIES);
+  }
+
+  [[nodiscard]] const flatbuffers::Vector<std::uint64_t> *
+  root_entities() const {
+    return GetPointer<const flatbuffers::Vector<std::uint64_t> *>(
+        VT_ROOT_ENTITIES);
+  }
+
+  [[nodiscard]] const flatbuffers::Vector<
+      flatbuffers::Offset<fb::ProjectAssetDependency>> *
+  project_asset_dependencies() const {
+    return GetPointer<const flatbuffers::Vector<
+        flatbuffers::Offset<fb::ProjectAssetDependency>> *>(
+        VT_PROJECT_ASSET_DEPENDENCIES);
+  }
+
+  template <bool B = false>
+  [[nodiscard]] bool
+  Verify(flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<std::uint64_t>(verifier, VT_SCENE_ID, 8u) &&
+           VerifyOffset(verifier, VT_SCENE_NAME) &&
+           verifier.VerifyString(scene_name()) &&
+           VerifyOffset(verifier, VT_ENTITIES) &&
+           verifier.VerifyVector(entities()) &&
+           verifier.VerifyVectorOfTables(entities()) &&
+           VerifyOffsetRequired(verifier, VT_ROOT_ENTITIES) &&
+           verifier.VerifyVector(root_entities()) &&
+           VerifyOffset(verifier, VT_PROJECT_ASSET_DEPENDENCIES) &&
+           verifier.VerifyVector(project_asset_dependencies()) &&
+           verifier.VerifyVectorOfTables(project_asset_dependencies()) &&
+           verifier.EndTable();
+  }
+};
+
 [[nodiscard]] fb::Vec2 to_fb(QVec2 value) {
   return fb::Vec2(value.x, value.y);
 }
@@ -1091,6 +1179,17 @@ require_scene_metadata_chunk(
   return fb::GetScenePayload(bytes.data());
 }
 
+[[nodiscard]] const RetiredSchema10DependencyPayload *
+verify_retired_schema_10_dependency_payload(
+    std::span<const std::byte> bytes) {
+  flatbuffers::Verifier verifier(
+      reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size());
+  if (!verifier.VerifyBuffer<RetiredSchema10DependencyPayload>("QDRS")) {
+    return nullptr;
+  }
+  return flatbuffers::GetRoot<RetiredSchema10DependencyPayload>(bytes.data());
+}
+
 [[nodiscard]] const fb::GeometryPayload *verify_geometry_payload(
     std::span<const std::byte> bytes) {
   flatbuffers::Verifier verifier(
@@ -1707,8 +1806,9 @@ decode_scene_settings(const fb::SceneSettingsComponent &value,
   return settings;
 }
 
+template <typename Payload>
 [[nodiscard]] std::vector<ProjectAssetReference>
-decode_project_asset_dependencies(const fb::ScenePayload &payload) {
+decode_project_asset_dependencies(const Payload &payload) {
   std::vector<ProjectAssetReference> dependencies;
   std::set<std::string> stable_ids;
   const auto *stored_dependencies = payload.project_asset_dependencies();
@@ -2356,6 +2456,87 @@ void decode_entities(SceneContentDocument &document,
   }
 }
 
+[[nodiscard]] std::optional<QdrSceneBinaryDependencyDecodeResult>
+decode_retired_schema_10_dependency_projection(
+    const quader_io::QdrBinaryContainerReadResult &container,
+    const quader_io::QdrBinaryChunk &metadata,
+    std::string validation_error) {
+  if (metadata.schema_version != 10u) {
+    return std::nullopt;
+  }
+
+  bool has_retired_geometry = false;
+  for (const quader_io::QdrBinaryChunk &chunk : container.chunks) {
+    if (chunk.type !=
+        static_cast<std::uint32_t>(quader_io::QdrBinaryChunkType::Geometry)) {
+      continue;
+    }
+    if (chunk.schema_version != 2u) {
+      return std::nullopt;
+    }
+    (void)chunk.bytes();
+    has_retired_geometry = true;
+  }
+  if (!has_retired_geometry) {
+    return std::nullopt;
+  }
+
+  const RetiredSchema10DependencyPayload *payload =
+      verify_retired_schema_10_dependency_payload(metadata.bytes());
+  if (payload == nullptr) {
+    return std::nullopt;
+  }
+
+  std::set<EntityId> entity_ids;
+  std::set<ProjectAssetId> material_ids;
+  std::vector<ProjectAssetReference> project_asset_dependencies =
+      decode_project_asset_dependencies(*payload);
+  for (const ProjectAssetReference &reference : project_asset_dependencies) {
+    if (reference.kind == ProjectAssetKind::Material) {
+      material_ids.insert(reference.stable_id);
+    }
+  }
+
+  if (const auto *entities = payload->entities()) {
+    for (const RetiredSchema10DependencyEntity *entity : *entities) {
+      if (entity->id() == kInvalidEntityId ||
+          !entity_ids.insert(entity->id()).second) {
+        throw std::runtime_error(
+            "Retired QDR scene contains an invalid or duplicate entity id.");
+      }
+      if (const fb::MaterialComponent *stored = entity->material()) {
+        const MaterialComponent material = decode_material_component(*stored);
+        if (material.material.project_owned()) {
+          material_ids.insert(material.material.project_asset());
+        }
+        for (const auto &[slot, reference] : material.material_slots) {
+          (void)slot;
+          if (reference.project_owned()) {
+            material_ids.insert(reference.project_asset());
+          }
+        }
+      }
+    }
+  }
+
+  std::set<EntityId> root_ids;
+  for (const std::uint64_t root : *payload->root_entities()) {
+    if (root == kInvalidEntityId || !entity_ids.contains(root) ||
+        !root_ids.insert(root).second) {
+      throw std::runtime_error(
+          "Retired QDR scene contains an invalid root-entity list.");
+    }
+  }
+
+  return QdrSceneBinaryDependencyDecodeResult{
+      .fully_validated = false,
+      .validation_error = std::move(validation_error),
+      .scene_name = string_from_fb(payload->scene_name(), "Untitled Scene"),
+      .material_ids = {material_ids.begin(), material_ids.end()},
+      .project_asset_dependencies = std::move(project_asset_dependencies),
+  };
+}
+
 } // namespace
 
 QdrSceneBinaryEncodeResult
@@ -2502,7 +2683,22 @@ QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
   const auto metadata_started = std::chrono::steady_clock::now();
   const quader_io::QdrBinaryChunk &metadata =
       require_scene_metadata_chunk(container);
-  const fb::ScenePayload *payload = verify_scene_payload(metadata.bytes());
+  const fb::ScenePayload *payload = nullptr;
+  try {
+    payload = verify_scene_payload(metadata.bytes());
+  } catch (const std::runtime_error &error) {
+    std::optional<QdrSceneBinaryDependencyDecodeResult> recovered =
+        decode_retired_schema_10_dependency_projection(container, metadata,
+                                                       error.what());
+    if (!recovered.has_value()) {
+      throw;
+    }
+    recovered->stats.metadata_access_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - metadata_started)
+            .count();
+    return std::move(*recovered);
+  }
   QdrSceneBinaryDependencyDecodeResult result;
   result.scene_name = string_from_fb(payload->scene_name(), "Untitled Scene");
   result.project_asset_dependencies = decode_project_asset_dependencies(*payload);

@@ -95,6 +95,29 @@ void StandardMaterialEditSessionService::retarget_saved_path(
   }
 }
 
+void StandardMaterialEditSessionService::retarget_saved_material(
+    ProjectAssetId id, ProjectRelativePath path, std::string saved_name,
+    std::uint64_t source_content_revision) {
+  if (!current_ || !current_->snapshot.path.has_value() ||
+      current_->snapshot.document.id != id) {
+    return;
+  }
+  StandardMaterialEditSnapshot &snapshot = current_->snapshot;
+  if (snapshot.path == path && snapshot.document.name == saved_name &&
+      snapshot.source_content_revision == source_content_revision) {
+    return;
+  }
+  const bool was_clean = !snapshot.dirty;
+  snapshot.path = std::move(path);
+  snapshot.document.name = std::move(saved_name);
+  snapshot.source_content_revision = source_content_revision;
+  current_->automatic_name = false;
+  advance_draft_revision();
+  if (was_clean) {
+    snapshot.clean_revision = snapshot.draft_revision;
+  }
+}
+
 MaterialEditSessionId
 StandardMaterialEditSessionService::allocate_session_id() {
   ++generation_;
@@ -511,11 +534,12 @@ StandardMaterialEditResult StandardMaterialEditSessionService::import_texture(
                              : ProjectTextureColorSpace::Linear,
           .content_revision = current_->snapshot.draft_revision + 1u,
           .rgba8 = std::make_shared<const std::vector<std::byte>>(
-              value.decoded.rgba8),
+              std::move(value.decoded.rgba8)),
           .width = value.decoded.width,
           .height = value.decoded.height,
           .detected_format = value.decoded.detected_format,
-          .encoded_byte_size = value.encoded_bytes.size(),
+          .encoded_byte_size = value.decoded.encoded_byte_size,
+          .has_alpha_channel = value.decoded.has_alpha_channel,
       };
   current_->preview_errors[slot_index(slot)].reset();
   current_->pending[slot_index(slot)] = std::move(value);
@@ -608,16 +632,18 @@ StandardMaterialEditSessionService::texture_preview(
         decoded.error().code, decoded.error().message, decoded.error().path);
   }
   current_->preview_errors[index].reset();
+  ProjectDecodedImage image = decoded.take_value();
   current_->decoded_previews[index] = StandardMaterialTexturePreview{
       .id = texture.value().id,
       .color_space = texture.value().color_space,
       .content_revision = texture.value().content_revision,
       .rgba8 = std::make_shared<const std::vector<std::byte>>(
-          decoded.value().rgba8),
-      .width = decoded.value().width,
-      .height = decoded.value().height,
-      .detected_format = decoded.value().detected_format,
-      .encoded_byte_size = texture.value().encoded_bytes.size(),
+          std::move(image.rgba8)),
+      .width = image.width,
+      .height = image.height,
+      .detected_format = std::move(image.detected_format),
+      .encoded_byte_size = image.encoded_byte_size,
+      .has_alpha_channel = image.has_alpha_channel,
   };
   return ProjectIoResult<
       std::optional<StandardMaterialTexturePreview>>::success(

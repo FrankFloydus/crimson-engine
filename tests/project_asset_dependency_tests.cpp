@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/material/project_asset_dependency_service.hpp"
 
+#include "assets/default_material_catalog.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "io/project/qmat_codec.hpp"
@@ -16,6 +17,7 @@
 #include <QString>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -151,6 +153,73 @@ TEST_F(ProjectAssetDependencyTests,
   EXPECT_EQ(find_scene(*snapshot, unsaved_id, false), nullptr);
 }
 
+TEST_F(ProjectAssetDependencyTests,
+       CanonicalizesDeletedIdsInSavedAndLiveSceneRecords) {
+  const ProjectAssetId deleted = add_material("Deleted");
+  (void)add_binding(deleted);
+  auto *open = project_.active_scene();
+  ASSERT_NE(open, nullptr);
+  ASSERT_NE(open->session, nullptr);
+  ASSERT_TRUE(project_.save_as(open->session_id,
+                               relative_path("Scenes/Deleted.qdr"))
+                  .ok);
+  const SceneId scene_id = open->scene_id;
+
+  const auto before = dependencies_.snapshot(true);
+  ASSERT_TRUE(before->complete)
+      << (before->errors.empty() ? "" : before->errors.front());
+  const auto *saved_before = find_scene(*before, scene_id, false);
+  const auto *live_before = find_scene(*before, scene_id, true);
+  ASSERT_NE(saved_before, nullptr);
+  ASSERT_NE(live_before, nullptr);
+  EXPECT_EQ(material_set(*saved_before),
+            (std::set<ProjectAssetId>{deleted}));
+  EXPECT_EQ(material_set(*live_before),
+            (std::set<ProjectAssetId>{deleted}));
+
+  ProjectManifest manifest = *project_.manifest();
+  ASSERT_TRUE(manifest.mark_materials_deleted(std::array{deleted}).ok());
+  const std::filesystem::path manifest_path = project_.manifest_path();
+  const ProjectWorkspaceStorage *workspace = project_.workspace();
+  ASSERT_NE(workspace, nullptr);
+  const auto saved_manifest = ProjectManifestStore::save_atomic(
+      workspace->file_system, manifest_path, manifest);
+  ASSERT_TRUE(saved_manifest.ok()) << saved_manifest.error().message;
+  ASSERT_TRUE(project_.open(manifest_path, true).ok);
+
+  open = project_.active_scene();
+  ASSERT_NE(open, nullptr);
+  ASSERT_NE(open->session, nullptr);
+  auto &live_scene = open->session->scene();
+  const std::vector<EntityId> entities = live_scene.entities();
+  const auto bound_entity =
+      std::ranges::find_if(entities, [&live_scene](EntityId candidate) {
+        return live_scene.material(candidate) != nullptr;
+      });
+  ASSERT_NE(bound_entity, entities.end());
+  const EntityId entity = *bound_entity;
+  ASSERT_TRUE(live_scene.set_material(
+      entity, {.material = MaterialReference::project(deleted)}));
+  const MaterialComponent *raw_binding = live_scene.material(entity);
+  ASSERT_NE(raw_binding, nullptr);
+  ASSERT_TRUE(raw_binding->material.project_owned());
+  EXPECT_EQ(raw_binding->material.project_asset(), deleted);
+
+  const auto after = dependencies_.snapshot(true);
+  ASSERT_TRUE(after->complete)
+      << (after->errors.empty() ? "" : after->errors.front());
+  const auto *saved_after = find_scene(*after, scene_id, false);
+  const auto *live_after = find_scene(*after, scene_id, true);
+  ASSERT_NE(saved_after, nullptr);
+  ASSERT_NE(live_after, nullptr);
+  const ProjectAssetId default_material =
+      *ProjectAssetId::parse(kDefaultProjectMaterialId);
+  EXPECT_EQ(material_set(*saved_after),
+            (std::set<ProjectAssetId>{default_material}));
+  EXPECT_EQ(material_set(*live_after),
+            (std::set<ProjectAssetId>{default_material}));
+}
+
 TEST_F(ProjectAssetDependencyTests, InspectsRegisteredScenesAfterTheirTabsClose) {
   const auto id = add_material("Closed");
   (void)add_binding(id);
@@ -187,6 +256,31 @@ TEST_F(ProjectAssetDependencyTests, RetainsUnchangedSnapshotWithoutDiskOrEntityW
             work.live_scene_scan_count);
   EXPECT_GT(dependencies_.work_stats().saved_scene_read_count,
             work.saved_scene_read_count);
+}
+
+TEST_F(ProjectAssetDependencyTests,
+       RetainsIncompleteSnapshotWhenOpenSceneDocumentRemainsUnavailable) {
+  auto *open = project_.active_scene();
+  ASSERT_NE(open, nullptr);
+  ASSERT_NE(open->session, nullptr);
+  auto unavailable = std::move(open->session);
+
+  const auto first = dependencies_.snapshot(true);
+  EXPECT_FALSE(first->complete);
+  EXPECT_TRUE(std::ranges::any_of(first->errors, [](const auto &error) {
+    return error.find("its document is unavailable") != std::string::npos;
+  }));
+  const auto work = dependencies_.work_stats();
+
+  for (int index = 0; index < 20; ++index) {
+    const auto retained = dependencies_.snapshot();
+    EXPECT_EQ(retained.get(), first.get());
+    EXPECT_FALSE(retained->complete);
+    EXPECT_EQ(retained->errors, first->errors);
+  }
+  EXPECT_EQ(dependencies_.work_stats(), work);
+
+  open->session = std::move(unavailable);
 }
 
 TEST_F(ProjectAssetDependencyTests, ReusesSavedMetadataWhenOnlyLiveBindingsChange) {

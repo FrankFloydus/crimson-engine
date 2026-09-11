@@ -72,6 +72,7 @@ struct StandardMaterialTexturePreview final {
   std::uint32_t height = 0u;
   std::string detected_format;
   std::uintmax_t encoded_byte_size = 0u;
+  bool has_alpha_channel = false;
 };
 
 /// Owns one reusable Standard Material draft independently of saved catalog state.
@@ -91,6 +92,10 @@ public:
   [[nodiscard]] StandardMaterialEditResult close(bool discard_dirty = false);
   /// Follows a committed file move without replacing the draft or its previews.
   void retarget_saved_path(ProjectAssetId id, ProjectRelativePath path);
+  /// Reconciles a committed rename while preserving unrelated draft edits.
+  void retarget_saved_material(ProjectAssetId id, ProjectRelativePath path,
+                               std::string saved_name,
+                               std::uint64_t source_content_revision);
 
   [[nodiscard]] StandardMaterialEditResult set_name(std::string name);
   [[nodiscard]] StandardMaterialEditResult

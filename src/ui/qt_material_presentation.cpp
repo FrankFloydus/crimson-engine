@@ -83,11 +83,16 @@ bool retained_preview_satisfies(const QImage &image, QSize bounds) {
 }
 
 QImage decode_material_preview(const QtMaterialPresentationItem &item,
-                               QSize requested_bounds) {
+                               QSize requested_bounds,
+                               bool *source_image_valid = nullptr) {
+  bool valid_source = false;
   requested_bounds = bounded_preview_size(requested_bounds);
   if (item.thumbnail &&
       retained_preview_satisfies(item.thumbnail->image,
                                  requested_bounds)) {
+    if (source_image_valid != nullptr) {
+      *source_image_valid = item.thumbnail->source_image_valid;
+    }
     return item.thumbnail->image;
   }
 
@@ -103,15 +108,20 @@ QImage decode_material_preview(const QtMaterialPresentationItem &item,
       image = decode_encoded_preview(item.encoded_albedo, requested_bounds,
                                      true);
     }
+    valid_source = !image.isNull();
   }
   if (image.isNull() && item.thumbnail &&
       !item.thumbnail->image.isNull()) {
     image = item.thumbnail->image;
+    valid_source = item.thumbnail->source_image_valid;
   }
   if (image.isNull()) {
     const QSize fallback_size = requested_bounds.boundedTo(QSize(96, 96));
     image = QImage(fallback_size, QImage::Format_ARGB32_Premultiplied);
     image.fill(item.fallback_color);
+  }
+  if (source_image_valid != nullptr) {
+    *source_image_valid = valid_source;
   }
   return image;
 }
@@ -164,7 +174,9 @@ make_qt_material_thumbnail(const QtMaterialPresentationItem &item,
   maximum_dimension =
       std::clamp(maximum_dimension, 1, kMaximumPreviewRasterDimension);
   const QSize bounds(maximum_dimension, maximum_dimension);
-  thumbnail->image = decode_material_preview(item, bounds).scaled(
+  const QImage decoded =
+      decode_material_preview(item, bounds, &thumbnail->source_image_valid);
+  thumbnail->image = decoded.scaled(
       QSize(maximum_dimension, maximum_dimension), Qt::KeepAspectRatio,
       Qt::SmoothTransformation);
   thumbnail->icon = QIcon(QPixmap::fromImage(thumbnail->image));

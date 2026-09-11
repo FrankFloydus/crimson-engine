@@ -306,11 +306,6 @@ void QtViewportContextMenuPresenter::show(
   {
     QDR_PROFILE_SCOPE("Qt viewport context menu build");
     menu.setObjectName(QStringLiteral("viewport_operations_context_menu"));
-    menu.setStyleSheet(QStringLiteral(
-        "QMenu#viewport_operations_context_menu::separator {"
-        "height: 1px; background: palette(mid); margin: %1px %2px; }")
-                           .arg(ui_scale_metrics_.px(4))
-                           .arg(ui_scale_metrics_.px(8)));
     menu.setToolTipsVisible(true);
 
     const auto add_catalog_section =
