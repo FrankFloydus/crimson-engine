@@ -261,9 +261,6 @@ SceneContentRevisionStamp SceneSession::content_revision_stamp() const {
       .scene_revision = document_.scene().content_revision(),
       .asset_revision = document_.assets().revision(),
       .modeling_content_revision = modeling_->content_revision(),
-      .viewport_camera_pose_signature =
-          viewport_workspace_
-              .persisted_perspective_camera_pose_signature(),
   };
 }
 

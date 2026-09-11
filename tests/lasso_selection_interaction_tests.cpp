@@ -510,15 +510,32 @@ TEST(LassoSelectionInteractionTests,
 }
 
 TEST(LassoSelectionInteractionTests,
-     VertexLassoIncludesOccludedAndCoincidentVertices) {
+     VertexLassoIncludesOccludedAndCoincidentVerticesWithBackfacePickingOff) {
   LassoSelectionHarness harness;
   (void)harness.cube();
   (void)harness.cube();
+  harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::BackfaceSelection, false);
   ASSERT_TRUE(harness.editor.selection().set_mode(
       quader::QuaderSelectionMode::Vertex).ok());
   harness.router.set_selection_mode(quader::ViewportSelectionMode::Vertex);
   harness.loop();
   EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count, 16u);
+  EXPECT_FALSE(harness.controller.dragging());
+}
+
+TEST(LassoSelectionInteractionTests,
+     EdgeLassoIncludesOccludedAndCoincidentEdgesWithBackfacePickingOff) {
+  LassoSelectionHarness harness;
+  (void)harness.cube();
+  (void)harness.cube();
+  harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::BackfaceSelection, false);
+  ASSERT_TRUE(harness.editor.selection().set_mode(
+      quader::QuaderSelectionMode::Edge).ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+  harness.loop();
+  EXPECT_EQ(harness.editor.selection().summary().selected_edge_count, 24u);
   EXPECT_FALSE(harness.controller.dragging());
 }
 

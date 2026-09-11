@@ -868,7 +868,7 @@ TEST(ProjectSessionWorkspace,
 }
 
 TEST(ProjectSessionWorkspace,
-     SaveAndWorkspaceRestorePreservePerspectivePoseFromBeforeLocalVisibility) {
+     CameraNavigationStaysCleanAndExplicitSavePreservesPerspectivePose) {
   ScopedProjectSessionDirectory temporary("persisted-camera");
   const std::filesystem::path project_root =
       temporary.make_empty_child("PersistedCamera");
@@ -886,12 +886,14 @@ TEST(ProjectSessionWorkspace,
   camera.focus_origin(37.0f);
   camera.set_view_direction({-0.4f, -0.2f, -1.0f});
   const ViewportCameraPose expected = camera.pose();
-  EXPECT_TRUE(scene->dirty());
+  EXPECT_FALSE(scene->dirty())
+      << "viewport navigation is workspace state, not authored scene content";
 
   const std::array<ViewportLocalVisibilityEntityId, 1> members{1u};
   ASSERT_TRUE(workspace.enter_local_visibility(members, members));
   camera.focus_origin(91.0f);
   camera.set_view_direction({1.0f, 0.0f, 0.0f});
+  EXPECT_FALSE(scene->dirty());
   expect_vec3_near(scene->session->persisted_viewport_camera_pose().eye,
                    expected.eye);
 
@@ -924,6 +926,28 @@ TEST(ProjectSessionWorkspace,
   expect_vec3_near(actual.target, expected.target);
   expect_vec3_near(actual.up, expected.up);
   EXPECT_FALSE(restored_scene->dirty());
+
+  restored_scene->session->viewport_workspace()
+      .camera(ViewportPaneId::Perspective)
+      .focus_origin(52.0f);
+  EXPECT_FALSE(restored_scene->dirty())
+      << "navigating an opened scene must not create a save prompt";
+
+  QuaderEditorApi restored_editor(restored);
+  int close_prompts = 0;
+  restored_editor.scene_documents().set_runtime_hooks({
+      .confirm_dirty_scene =
+          [&close_prompts](const QuaderSceneDocumentInfo &,
+                           std::string_view) {
+            ++close_prompts;
+            return QuaderDirtySceneDecision::Cancel;
+          },
+  });
+  const QuaderApiVoidResult closed = restored_editor.project().close();
+  ASSERT_TRUE(closed.ok()) << closed.error_message();
+  EXPECT_TRUE(closed.changed());
+  EXPECT_EQ(close_prompts, 0)
+      << "closing after navigation alone must bypass dirty-scene confirmation";
 }
 
 TEST(ProjectSessionWorkspace, RejectsStaleIdsAcrossTabsAndProjects) {

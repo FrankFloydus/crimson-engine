@@ -3101,6 +3101,7 @@ ModelingToolStatus ModelingOverlayService::tool_status(
   status.insert_edge_loop_has_preview =
       runtime_status.insert_edge_loop_has_preview;
   status.knife_active = runtime_status.knife_active;
+  status.knife_has_active_stroke = runtime_status.knife_has_active_stroke;
   status.knife_has_current = runtime_status.knife_has_current;
   status.knife_can_commit = runtime_status.knife_can_commit;
   status.cut_active = runtime_status.cut_active;

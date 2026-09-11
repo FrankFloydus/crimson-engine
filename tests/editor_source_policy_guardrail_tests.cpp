@@ -492,27 +492,32 @@ TEST(ViewportToolGuardrailTests, UiShellHasNoDirectModalToolBranches) {
 }
 
 TEST(ViewportToolGuardrailTests,
-     PersistedCameraDirtyObservationIsSignatureGatedInTheFrameLoop) {
+     RuntimeCameraChangesAreNotObservedAsAuthoredDirtyState) {
   const std::string viewport_panel =
       read_source_file("src/ui/qt_viewport_panel.cpp");
-  const std::string observation = source_slice(
-      viewport_panel,
-      "void QtViewportPanel::observe_persisted_camera_change(",
-      "void QtViewportPanel::prepare_viewports(");
+  const std::string viewport_api =
+      read_source_file("src/api/quader_viewport_api.cpp");
+  const std::string editor_api =
+      read_source_file("src/api/quader_editor_api.cpp");
+  const std::string runtime_access = read_source_file(
+      "src/editor/viewport/quader_viewport_api_runtime_access.hpp");
+  const std::string workspace =
+      read_source_file("src/viewport/viewport_workspace_service.hpp");
 
-  const std::size_t signature_query =
-      observation.find("persisted_perspective_camera_pose_signature(");
-  const std::size_t unchanged_gate = observation.find(
-      "current_signature == observed_persisted_camera_signature_");
-  const std::size_t notify = observation.find(
-      "QuaderViewportApiRuntimeAccess::observe_persisted_camera_change(");
-  ASSERT_NE(signature_query, std::string::npos);
-  ASSERT_NE(unchanged_gate, std::string::npos);
-  ASSERT_NE(notify, std::string::npos);
-  EXPECT_LT(signature_query, unchanged_gate);
-  EXPECT_LT(unchanged_gate, notify);
-  EXPECT_EQ(observation.find("open_scenes()"), std::string::npos);
-  EXPECT_EQ(observation.find("commands().available()"), std::string::npos);
+  EXPECT_EQ(viewport_panel.find("persisted_camera"), std::string::npos);
+  EXPECT_EQ(viewport_panel.find("observe_dirty_state()"), std::string::npos);
+  EXPECT_EQ(viewport_api.find("persisted_camera_change_observer"),
+            std::string::npos);
+  EXPECT_EQ(viewport_api.find("observe_dirty_state()"), std::string::npos);
+  EXPECT_EQ(editor_api.find("attach_viewport_camera_dirty_observer"),
+            std::string::npos);
+  EXPECT_EQ(runtime_access.find("persisted_camera_change"),
+            std::string::npos);
+  EXPECT_EQ(workspace.find("persisted_perspective_camera_pose_signature"),
+            std::string::npos);
+  EXPECT_NE(workspace.find("persisted_perspective_camera_pose()"),
+            std::string::npos)
+      << "QDR saves still need access to the persisted camera pose";
 }
 
 TEST(ViewportToolGuardrailTests, TransformGizmoEligibilityLivesInViewportToolMetadata) {

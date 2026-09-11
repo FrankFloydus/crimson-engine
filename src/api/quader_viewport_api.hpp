@@ -80,7 +80,6 @@ private:
     [[nodiscard]] QuaderApiVoidResult unavailable(std::string message) const;
     [[nodiscard]] QuaderApiVoidResult
     runtime_status(bool changed, std::string message = {}) const;
-    void observe_persisted_camera_change() const;
 
     std::unique_ptr<Impl> impl_;
 };

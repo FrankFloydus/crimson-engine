@@ -267,14 +267,10 @@ public:
 };
 
 QuaderEditorApi::QuaderEditorApi(QuaderApiSession session)
-    : impl_(std::make_unique<Impl>(require_bound_editor_session(session))) {
-  attach_viewport_camera_dirty_observer();
-}
+    : impl_(std::make_unique<Impl>(require_bound_editor_session(session))) {}
 
 QuaderEditorApi::QuaderEditorApi(ProjectSession &project_session)
-    : impl_(std::make_unique<Impl>(project_session)) {
-  attach_viewport_camera_dirty_observer();
-}
+    : impl_(std::make_unique<Impl>(project_session)) {}
 
 QuaderEditorApi::~QuaderEditorApi() = default;
 
@@ -283,14 +279,6 @@ QuaderEditorApi& QuaderEditorApi::operator=(QuaderEditorApi&&) noexcept = defaul
 
 void QuaderEditorApi::rebind(QuaderApiSession session) {
   impl_->rebind(session);
-}
-
-void QuaderEditorApi::attach_viewport_camera_dirty_observer() {
-  Impl *const state = impl_.get();
-  QuaderViewportApiRuntimeAccess::set_persisted_camera_change_observer(
-      impl_->viewports, [state]() {
-        state->api.mutations().observe_dirty_state();
-      });
 }
 
 void QuaderEditorApi::set_scene_binding_changed_callback(

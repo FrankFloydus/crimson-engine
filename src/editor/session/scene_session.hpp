@@ -46,7 +46,6 @@ struct SceneContentRevisionStamp {
   std::uint64_t scene_revision = 0;
   std::uint64_t asset_revision = 0;
   std::uint64_t modeling_content_revision = 0;
-  std::uint64_t viewport_camera_pose_signature = 0;
 
   [[nodiscard]] bool
   operator==(const SceneContentRevisionStamp &) const = default;

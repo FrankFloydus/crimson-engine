@@ -576,8 +576,10 @@ ViewportSelectionApplyResult lasso_selection(
           frame.camera, frame.input.viewport_size),
       .points = points,
       .partial_intersection = partial_intersection,
-      .select_backfaces =
-          frame.settings.bool_value(ViewportBoolSettingId::BackfaceSelection),
+      // A lasso describes a screen-space region rather than a visibility pick.
+      // Include every component projected into that region, including the
+      // back-facing half of the same mesh hidden behind its front surface.
+      .select_backfaces = true,
       .near_plane = frame.camera.state().near_plane,
       .far_plane = frame.camera.state().far_plane,
   };

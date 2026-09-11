@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_command_event_filter.hpp"
 
+#include "api/quader_command_ids.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
@@ -27,12 +28,14 @@
 #include <QKeySequence>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QTabBar>
 #include <QTextEdit>
 #include <QWidget>
 #include <QWindow>
 
 #include <optional>
+#include <string_view>
 #include <utility>
 
 namespace quader {
@@ -74,6 +77,16 @@ QComboBox *focused_combo_box(QWidget *widget) {
        current = current->parentWidget()) {
     if (auto *combo = dynamic_cast<QComboBox *>(current)) {
       return combo;
+    }
+  }
+  return nullptr;
+}
+
+QLineEdit *focused_line_edit(QWidget *widget) {
+  for (QWidget *current = widget; current != nullptr;
+       current = current->parentWidget()) {
+    if (auto *line_edit = dynamic_cast<QLineEdit *>(current)) {
+      return line_edit;
     }
   }
   return nullptr;
@@ -242,6 +255,97 @@ bool focused_widget_owns_key_press(QWidget *focus_widget,
          standard_control_owns_key_press(focus_widget, event);
 }
 
+bool is_scene_document_save_command(std::string_view command_id) {
+  return command_id == quader_command::kSceneDocumentSave.string() ||
+         command_id == quader_command::kSceneDocumentSaveAs.string() ||
+         command_id == quader_command::kSceneDocumentSaveAll.string();
+}
+
+struct SettledEditorFocus final {
+  QPointer<QWidget> editor;
+  QPointer<QWidget> window;
+  QPointer<QLineEdit> line_editor;
+  QString line_editor_text;
+  int cursor_position = 0;
+  int selection_start = -1;
+  int selection_length = 0;
+  bool cursor_at_selection_start = false;
+  bool relinquished = false;
+};
+
+SettledEditorFocus settle_focused_editor(QWidget *focus_widget) {
+  SettledEditorFocus settled{
+      .editor = focus_widget,
+      .window = focus_widget != nullptr ? focus_widget->window() : nullptr,
+  };
+  if (focus_widget == nullptr) {
+    return settled;
+  }
+
+  if (QLineEdit *line_edit = focused_line_edit(focus_widget)) {
+    settled.line_editor = line_edit;
+    settled.line_editor_text = line_edit->text();
+    settled.cursor_position = line_edit->cursorPosition();
+    settled.selection_start = line_edit->selectionStart();
+    settled.selection_length = line_edit->selectedText().size();
+    settled.cursor_at_selection_start =
+        settled.selection_start >= 0 &&
+        settled.cursor_position == settled.selection_start;
+  }
+
+  if (QAbstractSpinBox *spin = focused_spin_box(focus_widget)) {
+    // Spin-box drafts are not necessarily interpreted by losing focus from
+    // their internal line edit. Commit the displayed value explicitly before
+    // the surrounding editor publishes editingFinished.
+    spin->interpretText();
+    if (settled.editor == nullptr) {
+      settled.relinquished = true;
+      return settled;
+    }
+  }
+
+  // Inspector line edits and item delegates publish their authored mutation
+  // from FocusOut/editingFinished. Saving before that synchronous settlement
+  // serializes the previous value and immediately leaves the project dirty.
+  settled.editor->clearFocus();
+  settled.relinquished =
+      settled.editor == nullptr || QApplication::focusWidget() != settled.editor;
+  return settled;
+}
+
+void restore_settled_editor_focus(const SettledEditorFocus &settled) {
+  if (!settled.relinquished || settled.editor == nullptr ||
+      settled.window == nullptr || QApplication::focusWidget() != nullptr ||
+      QApplication::activeModalWidget() != nullptr ||
+      QApplication::activePopupWidget() != nullptr ||
+      !settled.editor->isEnabled() || !settled.editor->isVisible() ||
+      settled.editor->window() != settled.window ||
+      !settled.window->isActiveWindow()) {
+    return;
+  }
+
+  // A save can close or replace a delegate editor, move focus deliberately,
+  // or open another input owner. Restore only the still-live editor in the
+  // unchanged active window when no newer focus decision has been made.
+  settled.editor->setFocus(Qt::OtherFocusReason);
+  if (settled.line_editor == nullptr ||
+      settled.line_editor->text() != settled.line_editor_text) {
+    return;
+  }
+  if (settled.selection_start < 0) {
+    settled.line_editor->setCursorPosition(settled.cursor_position);
+    return;
+  }
+  if (settled.cursor_at_selection_start) {
+    settled.line_editor->setSelection(
+        settled.selection_start + settled.selection_length,
+        -settled.selection_length);
+    return;
+  }
+  settled.line_editor->setSelection(settled.selection_start,
+                                    settled.selection_length);
+}
+
 } // namespace
 
 ViewportToolState
@@ -382,7 +486,15 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       return true;
     }
 
-    if (text_input_active) {
+    const bool text_input_sequence_was_pending =
+        text_input_active && text_input_sequence_pending_ &&
+        editor_->commands().has_pending_keybinding_chord();
+    if (text_input_active && !text_input_sequence_was_pending) {
+      // A prefix started in another owner must not continue inside a text
+      // editor. A sequence that began here remains authoritative so remapped
+      // multi-chord document saves can complete.
+      reset_pending_chord();
+    } else if (!text_input_active && text_input_sequence_pending_) {
       reset_pending_chord();
     }
     const bool native_tool_settings_editor_focused =
@@ -401,6 +513,17 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
           *chord, state, false, text_input_active,
           input_context);
     }();
+    text_input_sequence_pending_ =
+        text_input_active &&
+        dispatch.kind ==
+            QuaderViewportKeybindingDispatch::Kind::PendingChord;
+    if (text_input_sequence_was_pending &&
+        dispatch.kind == QuaderViewportKeybindingDispatch::Kind::NoMatch) {
+      // The prefix already consumed the sequence. Do not replay a mismatched
+      // continuation into the editor as unrelated text.
+      event->accept();
+      return true;
+    }
     if (outliner_sequence_pending &&
         dispatch.kind == QuaderViewportKeybindingDispatch::Kind::NoMatch) {
       // A mismatched continuation belongs to the sequence that consumed its
@@ -470,10 +593,19 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       event->accept();
       return true;
     case QuaderViewportKeybindingDispatch::Kind::Command: {
+      const std::optional<SettledEditorFocus> settled_focus =
+          text_input_active &&
+                  is_scene_document_save_command(dispatch.command_id)
+              ? std::optional<SettledEditorFocus>{
+                    settle_focused_editor(focus_widget)}
+              : std::nullopt;
       const QuaderApiVoidResult result = [&]() {
         QDR_PROFILE_SCOPE("Qt command execute keybinding");
         return editor_->commands().execute(dispatch.command_id);
       }();
+      if (settled_focus.has_value()) {
+        restore_settled_editor_focus(*settled_focus);
+      }
       if (!result.ok) {
         LOG_ERROR("Qt keybinding command failed: {}",
                   result.message.empty() ? "Command failed." : result.message);
@@ -554,6 +686,7 @@ bool QtCommandEventFilter::is_text_input_widget(const QWidget *widget) {
 }
 
 void QtCommandEventFilter::reset_pending_chord() {
+  text_input_sequence_pending_ = false;
   if (editor_ != nullptr && editor_->commands().has_pending_keybinding_chord()) {
     editor_->commands().reset_pending_keybinding_chord();
   }

@@ -3941,6 +3941,92 @@ TEST(QtViewportSurfaceInputTests,
   }
 }
 
+TEST(QtViewportSurfaceInputTests,
+     KnifeStartsWithinEightLogicalPixelsWithASmallPersistedPickRadius) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-knife-start-tolerance-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Knife tolerance box");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Back).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Knife).ok());
+
+  quader::ViewportSettings settings = quader::ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_float_value(
+      quader::ViewportFloatSettingId::PickEdgeRadius, 0.1f));
+  quader::QtViewportPanel panel;
+  panel.set_viewport_settings(settings);
+  panel.attach_workspace(session.viewport_workspace());
+  auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+  QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &enter);
+  QApplication::sendEvent(surface, &focus);
+  auto &camera = session.viewport_workspace().camera(
+      quader::ViewportPaneId::Perspective);
+  camera.focus_origin(5.0f);
+
+  const auto process = [&] {
+    panel.process_input(
+        editor, session.scene(), session.assets(), session.modeling(), {},
+        session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+  };
+  process();
+
+  const auto edge_middle = camera.project_world_point({1.0f, 0.0f, 1.0f});
+  const auto face_center = camera.project_world_point({0.0f, 0.0f, 1.0f});
+  ASSERT_TRUE(edge_middle.visible);
+  ASSERT_TRUE(face_center.visible);
+  const quader::QVec2 toward_face = face_center.position - edge_middle.position;
+  const float direction_length = std::sqrt(
+      toward_face.x * toward_face.x + toward_face.y * toward_face.y);
+  ASSERT_GT(direction_length, 0.0f);
+  constexpr float kOffsetLogicalPixels = 6.0f;
+  const float physical_offset =
+      kOffsetLogicalPixels *
+      panel.viewport_raster_scale(quader::ViewportPaneId::Perspective);
+  const quader::QVec2 offset_position =
+      edge_middle.position + toward_face * (physical_offset / direction_length);
+  const qreal device_pixel_ratio = surface->devicePixelRatio();
+  const QPointF local{offset_position.x / device_pixel_ratio,
+                      offset_position.y / device_pixel_ratio};
+  const QPointF global{surface->mapToGlobal(local.toPoint())};
+
+  QMouseEvent move(QEvent::MouseMove, local, global, Qt::NoButton,
+                   Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &move);
+  process();
+  ASSERT_TRUE(session.modeling().tool_status().knife_has_current)
+      << "The production 0.1 pick radius must retain an eight-logical-pixel "
+         "Knife seed tolerance";
+
+  QMouseEvent press(QEvent::MouseButtonPress, local, global, Qt::LeftButton,
+                    Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &press);
+  process();
+  EXPECT_TRUE(session.modeling().tool_status().knife_active);
+  EXPECT_TRUE(session.modeling().tool_status().knife_has_active_stroke);
+
+  QMouseEvent release(QEvent::MouseButtonRelease, local, global,
+                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &release);
+  process();
+  EXPECT_TRUE(session.modeling().tool_status().knife_active);
+}
+
 TEST(QtViewportSurfaceInputTests, RoundPrimitiveFootprintUsesNaturalHeightThroughPanel) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

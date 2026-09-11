@@ -216,7 +216,6 @@ private:
                               NativeViewportToolCoordinator &native_tools,
                               ViewportPointPlacementService *point_placement,
                               double delta_seconds);
-  void observe_persisted_camera_change(QuaderEditorApi &editor);
   bool sync_active_tool_from_editor(QuaderEditorApi &editor,
                                     ModelingSessionService &modeling,
                                     NativeViewportToolCoordinator &native_tools,
@@ -236,8 +235,6 @@ private:
   QtUiScaleMetrics ui_scale_metrics_;
   RenderSystem *render_system_ = nullptr;
   ViewportWorkspaceService *workspace_ = nullptr;
-  std::uint64_t observed_persisted_camera_signature_ = 0u;
-  bool persisted_camera_signature_valid_ = false;
   const ViewportSettings *viewport_settings_ = nullptr;
   LocalizationService *localization_ = nullptr;
   std::function<void(ProjectAssetId)> open_material_editor_callback_;

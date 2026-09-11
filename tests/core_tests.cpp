@@ -8893,6 +8893,42 @@ TEST(ViewportCameraTests,
 }
 
 TEST(ViewportCameraTests,
+     PanThenFreshOrbitKeepsTheNearbyPivotWhenItsAnchorIsFartherAway) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 0.0f},
+      .target = {0.0f, 0.0f, -5.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+
+  camera.begin_drag({400.0f, 300.0f}, ViewportDragMode::Pan,
+                    QVec3{0.0f, 0.0f, -5.0f});
+  camera.update_drag_delta({30.0f, 15.0f});
+  camera.end_drag();
+
+  const ViewportCameraPose panned_pose = camera.pose();
+  const QVec3 panned_target = camera.state().target;
+  const QVec3 forward = normalize(panned_pose.target - panned_pose.eye);
+  const QVec3 farther_surface = panned_pose.eye + forward * 100.0f;
+  ASSERT_TRUE(camera.project_world_point(farther_surface).visible);
+
+  constexpr float kOrbitPixels = 5.0f;
+  camera.begin_drag({400.0f, 300.0f}, ViewportDragMode::Orbit,
+                    farther_surface);
+  camera.update_drag_delta({kOrbitPixels, 0.0f});
+  camera.end_drag();
+
+  EXPECT_NEAR(camera.state().distance, 5.0f, 0.0001f);
+  expect_vec3_near(camera.state().target, panned_target);
+  const float expected_angle =
+      kOrbitPixels *
+      static_cast<float>(viewport_host_defaults().orbit_radians_per_pixel);
+  EXPECT_LE(length(camera.pose().eye - panned_pose.eye),
+            2.0f * 5.0f * std::sin(expected_angle * 0.5f) + 0.001f);
+}
+
+TEST(ViewportCameraTests,
      WheelAnchorRepairsPoisonedDepthAndRoundTripsAtSceneScale) {
   ViewportCameraController camera;
   camera.set_viewport_size(800.0f, 600.0f);
@@ -13311,19 +13347,22 @@ TEST(SceneSessionTests,
 }
 
 TEST(SceneSessionTests,
-     PerspectiveCameraPoseParticipatesInDirtyStateWhileLocalVisibilityUsesPreEntryPose) {
+     PerspectiveCameraNavigationStaysCleanWhileLocalVisibilityUsesPreEntryPose) {
   SceneSession session;
   ViewportWorkspaceService &workspace = session.viewport_workspace();
   ViewportCameraController &camera =
       workspace.camera(ViewportPaneId::Perspective);
+  camera.set_viewport_size(800.0f, 600.0f);
   session.mark_clean();
   const SceneContentRevisionStamp canonical_stamp =
       session.content_revision_stamp();
 
   camera.focus_origin(27.0f);
-  EXPECT_TRUE(session.dirty());
-  EXPECT_NE(session.content_revision_stamp(), canonical_stamp);
-  session.mark_clean();
+  camera.begin_drag({400.0f, 300.0f}, ViewportDragMode::Pan);
+  camera.update_drag_delta({30.0f, 15.0f});
+  camera.end_drag();
+  EXPECT_FALSE(session.dirty());
+  EXPECT_EQ(session.content_revision_stamp(), canonical_stamp);
   const ViewportCameraPose pre_local_visibility =
       session.persisted_viewport_camera_pose();
   const SceneContentRevisionStamp saved_stamp =
@@ -13365,7 +13404,7 @@ TEST(SceneSessionTests,
   source_camera.focus_origin(43.0f);
   source_camera.set_view_direction({-0.5f, -0.25f, -1.0f});
   const ViewportCameraPose expected = source_camera.pose();
-  ASSERT_TRUE(source.dirty());
+  ASSERT_FALSE(source.dirty());
   const std::optional<SceneSessionId> source_id =
       source_editor.scene_documents().active_scene_id();
   ASSERT_TRUE(source_id.has_value());
@@ -13400,7 +13439,7 @@ TEST(SceneSessionTests,
       session.viewport_workspace().camera(ViewportPaneId::Perspective);
   camera.focus_origin(54.0f);
   camera.set_view_direction({1.0f, -0.5f, 0.25f});
-  ASSERT_TRUE(session.dirty());
+  ASSERT_FALSE(session.dirty());
 
   session.replace_document(SceneContentDocument(
       SceneContentDocumentRecord{.id = 9u, .name = "Replacement"}));
@@ -22080,6 +22119,71 @@ TEST(ModelingSessionServiceTests,
 
   ASSERT_TRUE(point_bounds.has_value());
   EXPECT_NEAR(bounds_center(*point_bounds).x, 2.0f, 0.001f);
+}
+
+TEST(ModelingSessionServiceTests,
+     TransformDragBeginClearsFaceHoverFillBeforeScalePreview) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Scale Hover Overlay Box",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+
+  const ModelingRay front_face_ray{
+      .origin = {0.0f, 0.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  const ModelingCommandResult hover =
+      service.update_selection_hover(ModelingHoverRequest{
+          .ray = front_face_ray,
+          .selected_modifier_pressed = false,
+      });
+  ASSERT_TRUE(hover.ok) << hover.message;
+  ASSERT_TRUE(hover.changed);
+
+  const ModelingSelectionSummary picked =
+      service.pick_select(ModelingPickSelectRequest{
+          .ray = front_face_ray,
+          .click_count = 1,
+      });
+  ASSERT_EQ(picked.selected_face_count, 1u);
+  ASSERT_EQ(service.selection_hover_summary().target.kind,
+            ModelingActiveSelectionKind::Face);
+
+  const auto has_hover_face_fill = [](const ViewportOverlayFrame &frame) {
+    return std::any_of(frame.triangles.begin(), frame.triangles.end(),
+                       [](const ViewportOverlayTriangle &triangle) {
+                         return triangle.layer ==
+                                ViewportOverlayLayer::HoverFace;
+                       });
+  };
+  ASSERT_TRUE(has_hover_face_fill(visible_modeling_overlay_frame(service)));
+
+  const std::optional<QVec3> selection_center = service.selection_center();
+  ASSERT_TRUE(selection_center.has_value());
+  ModelingTransformDragBeginRequest begin_request =
+      test_x_move_drag_begin_request(*selection_center);
+  begin_request.tool = ModelingTransformTool::Scale;
+  const std::uint64_t content_revision = service.content_revision();
+  const std::uint64_t selection_revision = service.selection_revision();
+
+  const ModelingTransformDragPreview begin =
+      service.begin_transform_drag(begin_request);
+  ASSERT_TRUE(begin.ok) << begin.message;
+  EXPECT_TRUE(begin.active);
+  EXPECT_TRUE(begin.preview_driven);
+  EXPECT_FALSE(begin.changed)
+      << "clearing runtime hover must not report an authored mutation";
+  EXPECT_EQ(service.content_revision(), content_revision);
+  EXPECT_EQ(service.selection_revision(), selection_revision);
+  EXPECT_EQ(service.selection_hover_summary().target.kind,
+            ModelingActiveSelectionKind::None);
+  EXPECT_FALSE(has_hover_face_fill(visible_modeling_overlay_frame(service)));
 }
 
 TEST(ModelingSessionServiceTests,

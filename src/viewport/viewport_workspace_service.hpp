@@ -186,8 +186,6 @@ public:
   [[nodiscard]] const ViewportCameraController &
   camera(ViewportPaneId pane) const;
   [[nodiscard]] ViewportCameraPose persisted_perspective_camera_pose() const;
-  [[nodiscard]] std::uint64_t
-  persisted_perspective_camera_pose_signature() const;
   bool restore_persisted_perspective_camera_pose(
       const std::optional<ViewportCameraPose> &camera_pose);
   bool set_default_fly_speed(float speed);

@@ -23,7 +23,6 @@
 #include "editor/viewport/viewport_scene_projection.hpp"
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
-#include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
@@ -184,6 +183,8 @@ double viewport_component_pick_radius_pixels(double preference_radius) {
   constexpr double kPixelsPerPreferenceUnit = 40.0;
   return std::clamp(preference_radius * kPixelsPerPreferenceUnit, 2.0, 32.0);
 }
+
+constexpr double kKnifeEdgeStartMinimumRadiusLogicalPixels = 8.0;
 
 bool same_pane_placements(const std::vector<ViewportPanePlacement> &left,
                           const std::vector<ViewportPanePlacement> &right) {
@@ -572,7 +573,6 @@ void QtViewportPanel::shutdown() {
   if (workspace_ != nullptr) {
     workspace_->clear_pane_visibility();
   }
-  persisted_camera_signature_valid_ = false;
 }
 
 void QtViewportPanel::reset_interactions(QuaderEditorApi *editor,
@@ -604,7 +604,6 @@ void QtViewportPanel::abandon_interactions() {
   navigation_camera_owner_.reset();
   input_router_.reset();
   workspace_ = nullptr;
-  persisted_camera_signature_valid_ = false;
   active_tool_revision_valid_ = false;
   set_modal_tool_owns_viewport_snapshot(false);
   for (Pane &pane_state : panes_) {
@@ -662,9 +661,6 @@ void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
     set_modal_tool_owns_viewport_snapshot(false);
   }
   workspace_ = &workspace;
-  observed_persisted_camera_signature_ =
-      workspace.persisted_perspective_camera_pose_signature();
-  persisted_camera_signature_valid_ = true;
   for (Pane &pane_state : panes_) {
     pane_state.navigation_gizmo->set_camera(
         &workspace.camera(pane_state.id));
@@ -805,7 +801,6 @@ void QtViewportPanel::process_input(
     hide_primitive_feedback();
   }
   update_pointer_cursor_presentation();
-  observe_persisted_camera_change(editor);
   if (diagnostics_enabled) {
     g_viewport_probe.input_ms +=
         elapsed_milliseconds(input_start, ViewportProbeClock::now());
@@ -815,27 +810,6 @@ void QtViewportPanel::process_input(
 void QtViewportPanel::set_open_material_editor_callback(
     std::function<void(ProjectAssetId)> callback) {
   open_material_editor_callback_ = std::move(callback);
-}
-
-void QtViewportPanel::observe_persisted_camera_change(
-    QuaderEditorApi &editor) {
-  if (workspace_ == nullptr) {
-    persisted_camera_signature_valid_ = false;
-    return;
-  }
-  const std::uint64_t current_signature =
-      workspace_->persisted_perspective_camera_pose_signature();
-  if (!persisted_camera_signature_valid_) {
-    observed_persisted_camera_signature_ = current_signature;
-    persisted_camera_signature_valid_ = true;
-    return;
-  }
-  if (current_signature == observed_persisted_camera_signature_) {
-    return;
-  }
-  observed_persisted_camera_signature_ = current_signature;
-  QuaderViewportApiRuntimeAccess::observe_persisted_camera_change(
-      editor.viewports());
 }
 
 void QtViewportPanel::hide_primitive_feedback() {
@@ -3452,6 +3426,15 @@ void QtViewportPanel::process_viewport_input(
         settings.float_value(ViewportFloatSettingId::PickVertexRadius);
     const double edge_radius =
         settings.float_value(ViewportFloatSettingId::PickEdgeRadius);
+    double edge_screen_radius =
+        viewport_component_pick_radius_pixels(edge_radius);
+    if (input_router_.state().active_tool == ViewportToolId::Knife &&
+        !modeling.tool_status().knife_has_active_stroke) {
+      // Knife must begin on topology, so a small persisted general-picking
+      // radius still needs a practical UI-space target for the first edge.
+      edge_screen_radius = std::max(
+          edge_screen_radius, kKnifeEdgeStartMinimumRadiusLogicalPixels);
+    }
     const ViewportRay ray = camera.ray_from_viewport_point(mouse_local);
     return ModelingToolRayEvent{
         .screen_position = mouse_local,
@@ -3469,9 +3452,8 @@ void QtViewportPanel::process_viewport_input(
         .vertex_screen_radius =
             viewport_component_pick_radius_pixels(vertex_radius) *
             static_cast<double>(viewport_pixel_scale),
-        .edge_screen_radius =
-            viewport_component_pick_radius_pixels(edge_radius) *
-            static_cast<double>(viewport_pixel_scale),
+        .edge_screen_radius = edge_screen_radius *
+                              static_cast<double>(viewport_pixel_scale),
         .snap_enabled = resolved_grid_snap_enabled,
         .constrain_axis = input.modifiers.shift,
         .dragging = dragging,

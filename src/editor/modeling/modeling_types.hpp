@@ -752,6 +752,7 @@ struct ModelingToolStatus {
   bool insert_edge_loop_dragging = false;
   bool insert_edge_loop_has_preview = false;
   bool knife_active = false;
+  bool knife_has_active_stroke = false;
   bool knife_has_current = false;
   bool knife_can_commit = false;
   bool cut_active = false;

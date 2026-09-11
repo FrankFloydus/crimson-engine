@@ -10112,7 +10112,8 @@ TEST(ViewportInteractionControllerTests, PointLightRadiusApiUndoCancelsBeforePri
   EXPECT_FALSE(harness.session.document_commands().point_light_range_edit_active());
 }
 
-TEST(ViewportInteractionControllerTests, PointLightRadiusCancelPreservesConcurrentContentDirtyState) {
+TEST(ViewportInteractionControllerTests,
+     PointLightRadiusCancelPreservesAuthoredDirtyStateAndIgnoresCameraNavigation) {
   for (const bool change_camera : {false, true}) {
     ViewportInteractionHarness harness;
     const auto light = create_radius_test_light(harness);
@@ -10129,7 +10130,7 @@ TEST(ViewportInteractionControllerTests, PointLightRadiusCancelPreservesConcurre
     }
     ASSERT_TRUE(harness.editor.scene().finish_point_light_range_edit(begun.value(), true).ok());
     EXPECT_FLOAT_EQ(harness.editor.query().entity(light.id)->light.range, 2.0f);
-    EXPECT_TRUE(harness.session.dirty());
+    EXPECT_EQ(harness.session.dirty(), !change_camera);
   }
 }
 

@@ -274,12 +274,6 @@ ViewportWorkspaceService::persisted_perspective_camera_pose() const {
   return camera.pose();
 }
 
-std::uint64_t
-ViewportWorkspaceService::persisted_perspective_camera_pose_signature() const {
-  return viewport_camera_pose_persistence_signature(
-      persisted_perspective_camera_pose());
-}
-
 bool ViewportWorkspaceService::restore_persisted_perspective_camera_pose(
     const std::optional<ViewportCameraPose> &camera_pose) {
   const std::size_t index =

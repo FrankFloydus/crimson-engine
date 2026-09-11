@@ -4486,6 +4486,39 @@ TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithAndWithoutViewportFocus)
   EXPECT_EQ(save_all_dispatch.command_id,
             quader::quader_command::kSceneDocumentSaveAll.string());
 
+  const quader::QuaderViewportKeybindingDispatch text_focused_save_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+S"), state, false, true);
+  ASSERT_EQ(text_focused_save_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(text_focused_save_dispatch.command_id,
+            quader::quader_command::kSceneDocumentSave.string());
+
+  const quader::QuaderViewportKeybindingDispatch
+      text_focused_save_as_dispatch =
+          editor.commands().dispatch_viewport_input_binding(
+              single_input_chord("Ctrl+Alt+S"), state, false, true);
+  ASSERT_EQ(text_focused_save_as_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(text_focused_save_as_dispatch.command_id,
+            quader::quader_command::kSceneDocumentSaveAs.string());
+
+  const quader::QuaderViewportKeybindingDispatch
+      text_focused_save_all_dispatch =
+          editor.commands().dispatch_viewport_input_binding(
+              single_input_chord("Ctrl+Shift+S"), state, false, true);
+  ASSERT_EQ(text_focused_save_all_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(text_focused_save_all_dispatch.command_id,
+            quader::quader_command::kSceneDocumentSaveAll.string());
+
+  const quader::QuaderViewportKeybindingDispatch text_focused_undo_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Z"), state, false, true);
+  EXPECT_EQ(text_focused_undo_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch)
+      << "editing shortcuts must remain owned by the focused text editor";
+
   const quader::QuaderViewportKeybindingDispatch close_dispatch =
       editor.commands().dispatch_viewport_input_binding(
           single_input_chord("Ctrl+W"), state, false, false);

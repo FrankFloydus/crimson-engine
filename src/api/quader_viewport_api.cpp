@@ -25,7 +25,6 @@ public:
     ViewportWorkspaceService *workspace = &owned_workspace;
     ViewportLocalVisibilityService *local_visibility = nullptr;
     QuaderViewportRuntimeHooks hooks;
-    std::function<void()> persisted_camera_change_observer;
 };
 
 ViewportWorkspaceService& QuaderViewportApiRuntimeAccess::workspace(QuaderViewportApi& api) {
@@ -44,16 +43,6 @@ void QuaderViewportApiRuntimeAccess::bind_scene_workspace(
 void QuaderViewportApiRuntimeAccess::bind_scene_local_visibility(
     QuaderViewportApi &api, ViewportLocalVisibilityService &service) {
   api.impl_->local_visibility = &service;
-}
-
-void QuaderViewportApiRuntimeAccess::set_persisted_camera_change_observer(
-    QuaderViewportApi &api, std::function<void()> observer) {
-  api.impl_->persisted_camera_change_observer = std::move(observer);
-}
-
-void QuaderViewportApiRuntimeAccess::observe_persisted_camera_change(
-    QuaderViewportApi &api) {
-  api.observe_persisted_camera_change();
 }
 
 QuaderViewportApi::QuaderViewportApi()
@@ -144,11 +133,7 @@ ViewportView QuaderViewportApi::view(ViewportPaneId pane) const {
 
 QuaderApiVoidResult QuaderViewportApi::set_view(ViewportPaneId pane,
                                                 ViewportView view) {
-  const bool changed = impl_->workspace->set_view(pane, view);
-  if (changed && pane == ViewportPaneId::Perspective) {
-    observe_persisted_camera_change();
-  }
-  return runtime_status(changed);
+  return runtime_status(impl_->workspace->set_view(pane, view));
 }
 
 bool QuaderViewportApi::local_visibility_active() const {
@@ -183,41 +168,22 @@ QuaderApiVoidResult QuaderViewportApi::frame_all(ViewportPaneId pane) {
   if (impl_->local_visibility != nullptr) {
     (void)impl_->local_visibility->snapshot();
   }
-  QuaderApiVoidResult result =
-      impl_->hooks.frame_all
-          ? impl_->hooks.frame_all(pane)
-          : unavailable("Viewport camera runtime is not attached.");
-  if (result.ok() && result.changed() &&
-      pane == ViewportPaneId::Perspective) {
-    observe_persisted_camera_change();
-  }
-  return result;
+  return impl_->hooks.frame_all
+             ? impl_->hooks.frame_all(pane)
+             : unavailable("Viewport camera runtime is not attached.");
 }
 
 QuaderApiVoidResult QuaderViewportApi::frame_selection(ViewportPaneId pane) {
-  QuaderApiVoidResult result =
-      impl_->hooks.frame_selection
-          ? impl_->hooks.frame_selection(pane)
-          : unavailable("Viewport camera runtime is not attached.");
-  if (result.ok() && result.changed() &&
-      pane == ViewportPaneId::Perspective) {
-    observe_persisted_camera_change();
-  }
-  return result;
+  return impl_->hooks.frame_selection
+             ? impl_->hooks.frame_selection(pane)
+             : unavailable("Viewport camera runtime is not attached.");
 }
 
 QuaderApiVoidResult QuaderViewportApi::focus_origin(ViewportPaneId pane) {
-  QuaderApiVoidResult result;
   if (impl_->hooks.focus_origin) {
-    result = impl_->hooks.focus_origin(pane);
-  } else {
-    result = runtime_status(impl_->workspace->focus_origin(pane));
+    return impl_->hooks.focus_origin(pane);
   }
-  if (result.ok() && result.changed() &&
-      pane == ViewportPaneId::Perspective) {
-    observe_persisted_camera_change();
-  }
-  return result;
+  return runtime_status(impl_->workspace->focus_origin(pane));
 }
 
 bool QuaderViewportApi::can_spawn_window() const {
@@ -264,12 +230,6 @@ QuaderViewportApi::runtime_status(bool changed, std::string message) const {
       .mutation_kind =
           changed ? QuaderMutationKind::Runtime : QuaderMutationKind::None,
   };
-}
-
-void QuaderViewportApi::observe_persisted_camera_change() const {
-  if (impl_->persisted_camera_change_observer) {
-    impl_->persisted_camera_change_observer();
-  }
 }
 
 QuaderCameraHandle::QuaderCameraHandle(QuaderViewportApi& viewports, ViewportPaneId pane)

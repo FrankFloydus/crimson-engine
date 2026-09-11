@@ -6339,6 +6339,12 @@ public:
         !sdk_projection_adapter_.preview_active()) {
       clear_transform_drag_caches();
     }
+    if (result.ok && result.active) {
+      // Hover is presentation-only state. Its correctly constructed ClearHover
+      // runtime command cannot fail, and must not turn a neutral drag begin
+      // into an authored modeling mutation.
+      (void)clear_selection_hover();
+    }
     if (result.changed || drag_was_active != result.active) {
       invalidate_volatile_overlay_cache();
     }

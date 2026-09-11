@@ -105,6 +105,9 @@ Retention tests: [editor limits](tests/editor_history_limit_tests.cpp),
   Component collapse must survive undo/redo, save/open and subsequent editing without dropping faces.
 - Document replacement advances binding/revision epochs beyond the outgoing document. Preview dirty
   masking applies only to an uncontaminated checkpoint; unrelated edits remain dirty.
+- Perspective camera pose is explicit-save metadata, not authored content: navigation does not alter
+  `SceneContentRevisionStamp`, trigger autosave, or require a close prompt. Explicit Save still writes
+  the current persisted pose (or the pre-entry pose while Local Visibility is active).
 - ProjectAutosaveService writes changed open scenes, including inactive/unsaved tabs, beneath
   `.quader/autosave/` with readable scene/time filenames. Legacy UUID subfolders remain readable.
   Defaults: enabled, 2 minutes (Blender), 3 copies per scene.
@@ -289,9 +292,13 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
 - Backface filtering uses authored winding adjusted by the world determinant sign. It is independent
   of depth, select-through, culling, and marquee policy. Viewport requests inject the persisted
   preference; independent tools and public modeling defaults retain their explicit policy.
-- Lasso bypasses occluders while retaining backface, visibility, lock, clipping, and edit-scope
-  eligibility. Full containment checks complete projected geometry; groups require all eligible
-  descendants. Selection and its overlay share the boundary-inclusive even-odd region contract.
+- Lasso bypasses occluders and includes back-facing projected components while retaining visibility,
+  lock, clipping, and edit-scope eligibility. Full containment checks complete projected geometry;
+  groups require all eligible descendants. Selection and its overlay share the boundary-inclusive
+  even-odd region contract. Ordinary pick and hover continue to honor the backface preference.
+- Transform drag owns the active preview presentation once it begins. Clear semantic selection hover
+  on a successful drag begin so ordinary hover fills and edges cannot remain composited over the
+  selected transform preview; failed drag starts must leave hover feedback intact.
 - Inward-room radius hits may survive same-surface arbitration only for the exact rendered occurrence
   and geometry member. A sibling instance, different member, or different object remains an occluder.
 - Editable vertex markers and their outlines remain depth-tested inside inward-facing rooms.
@@ -324,7 +331,9 @@ Tests: [viewport workflows](tests/viewport_interaction_controller_tests.cpp),
   Selection changes do not reset its cursor; geometry, scope, visibility, ray direction, and policy
   changes do. Its edge-on fallback is specific to mesh depth cycling, not all-component picking.
 - Enabled exact-match global commands execute at the Qt event boundary so Save precedes synchronous
-  window-close preflight. Stateful chords and viewport input remain with the canonical router.
+  window-close preflight. A Save resolved while a main-editor field has focus settles that field
+  before serialization; ordinary text editing and auxiliary/modal window input remain locally owned.
+  Stateful chords and viewport input remain with the canonical router.
 - The Outliner resolves scene shortcuts through the canonical dispatcher using hover/focus ownership.
   Viewport frame focus-loss cleanup must preserve an Outliner-owned pending sequence, while real
   focus loss, text editing, or changing input owners clears it. Test a sequence across an idle
@@ -464,9 +473,11 @@ Tests: [transform/texture workflows](tests/editor_api_tests.cpp),
   bounds, statistics, and camera caches include its revision; removal of the last member exits it.
 - Tight world bounds transform actual vertices, not only a local AABB, and include every visible
   instance member. Multi-mesh selection retains each topology outline alongside the aggregate cage.
-- Camera target is the canonical navigation pivot. Perspective/orthographic shading choices are
-  session-only per-pane slots; temporary Alt-orbit orthographic snaps retain the perspective slot.
-  Explicitly selecting that same axis still transitions to a manual orthographic view.
+- Camera target is the canonical navigation pivot. A visible gesture anchor may repair a stale target
+  inward, but a farther surface must not inflate an already-valid nearby orbit radius. Perspective/
+  orthographic shading choices are session-only per-pane slots; temporary Alt-orbit orthographic
+  snaps retain the perspective slot. Explicitly selecting that same axis still transitions to a
+  manual orthographic view.
 
 Owners: [scene occurrence projection](src/scene/scene_mesh_occurrence_projection.cpp),
 [viewport workspace](src/viewport/viewport_workspace_service.cpp).

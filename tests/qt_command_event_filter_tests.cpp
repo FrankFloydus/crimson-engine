@@ -563,6 +563,118 @@ TEST(QtCommandEventFilterTests,
 }
 
 TEST(QtCommandEventFilterTests,
+     FocusedTextDraftSettlesBeforeRemappedMultiChordSaveAllSerializes) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-command-text-save-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  application.setQuitOnLastWindowClosed(false);
+
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const std::filesystem::path scene_path =
+      std::filesystem::path(temporary.path().toStdWString()) /
+      "focused-text-save.qdr";
+
+  quader::QuaderStandaloneEditor standalone =
+      quader::create_standalone_editor();
+  quader::QuaderEditorApi &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto object = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Before Focused Draft");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  const std::optional<quader::SceneSessionId> scene_id =
+      editor.scene_documents().active_scene_id();
+  ASSERT_TRUE(scene_id.has_value());
+  ASSERT_TRUE(
+      editor.scene_documents().save_as_native_path(*scene_id, scene_path).ok());
+  ASSERT_FALSE(editor.project().dirty());
+
+  // Exercise command identity instead of relying on the physical default.
+  ASSERT_TRUE(editor.commands()
+                  .set_shortcut(quader::quader_command::kSceneDocumentSaveAll,
+                                "Ctrl+Alt+K Ctrl+Alt+L")
+                  .ok());
+  quader::QtCommandEventFilter command_filter(editor, {});
+  application.installEventFilter(&command_filter);
+
+  QWidget editor_window;
+  editor_window.resize(320, 80);
+  QLineEdit name_editor(&editor_window);
+  name_editor.setGeometry(0, 0, 300, 32);
+  int committed_drafts = 0;
+  bool rename_succeeded = false;
+  QObject::connect(&name_editor, &QLineEdit::editingFinished, &editor_window,
+                   [&]() {
+                     ++committed_drafts;
+                     rename_succeeded =
+                         editor.scene()
+                             .rename(object.value().entity,
+                                     name_editor.text().toStdString())
+                             .ok();
+                   });
+
+  editor_window.show();
+  editor_window.activateWindow();
+  name_editor.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::focusWidget(), &name_editor);
+  name_editor.insert(QStringLiteral("Committed Before Save"));
+  name_editor.setSelection(0, QStringLiteral("Committed").size());
+  ASSERT_FALSE(editor.project().dirty())
+      << "the focused draft has not committed yet";
+
+  send_key_press(name_editor, Qt::Key_K,
+                 Qt::ControlModifier | Qt::AltModifier,
+                 QStringLiteral("k"));
+  EXPECT_TRUE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_EQ(committed_drafts, 0)
+      << "a save prefix must not settle the editor before it resolves";
+  EXPECT_FALSE(editor.project().dirty());
+
+  send_key_press(name_editor, Qt::Key_L,
+                 Qt::ControlModifier | Qt::AltModifier,
+                 QStringLiteral("l"));
+
+  ASSERT_EQ(committed_drafts, 1);
+  ASSERT_TRUE(rename_succeeded);
+  EXPECT_FALSE(editor.project().dirty())
+      << "the focus settlement and save must complete in one key event";
+  EXPECT_EQ(QApplication::focusWidget(), &name_editor)
+      << "a surviving main-window editor should regain focus after save";
+  EXPECT_EQ(name_editor.selectedText(), QStringLiteral("Committed"))
+      << "settling a save must not collapse the editor's text selection";
+
+  quader::QuaderStandaloneEditor reopened =
+      quader::create_standalone_editor();
+  ASSERT_TRUE(reopened.editor()
+                  .scene_documents()
+                  .open_native_path(scene_path)
+                  .ok());
+  bool saved_name_found = false;
+  for (const quader::QuaderEntitySnapshot &entity :
+       reopened.editor().query().entities()) {
+    saved_name_found |= entity.name == "Committed Before Save";
+  }
+  EXPECT_TRUE(saved_name_found)
+      << "the save must serialize the mutation published by editingFinished";
+
+  name_editor.setText(QStringLiteral("Undo stays native"));
+  name_editor.setCursorPosition(name_editor.text().size());
+  name_editor.insert(QStringLiteral(" draft"));
+  ASSERT_EQ(name_editor.text(), QStringLiteral("Undo stays native draft"));
+  send_key_press(name_editor, Qt::Key_Z, Qt::ControlModifier,
+                 QStringLiteral("z"));
+  EXPECT_EQ(name_editor.text(), QStringLiteral("Undo stays native"))
+      << "ordinary text Ctrl+Z must remain owned by QLineEdit";
+
+  application.removeEventFilter(&command_filter);
+}
+
+TEST(QtCommandEventFilterTests,
      CloseSceneRebindKeepsTheDispatchingApplicationFilterAlive) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

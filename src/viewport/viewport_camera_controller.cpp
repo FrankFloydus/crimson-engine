@@ -1036,6 +1036,14 @@ std::optional<QVec3> ViewportCameraController::rebase_navigation_depth(
   if (!std::isfinite(anchor_depth) || anchor_depth <= kMinCameraDistance) {
     return std::nullopt;
   }
+  // A gesture may begin over geometry behind the camera's current target.
+  // Keep a valid nearby target authoritative so that a fresh orbit cannot
+  // inflate its radius to the depth of that farther surface. Closer anchors
+  // still repair stale outward targets and preserve scene-scale navigation.
+  if (std::isfinite(state_.distance) && state_.distance > 0.0f &&
+      anchor_depth > state_.distance) {
+    return std::nullopt;
+  }
 
   const ViewportScreenPoint projected = project_world_point(navigation_anchor);
   if (!projected.visible || !std::isfinite(projected.position.x) ||

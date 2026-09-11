@@ -193,6 +193,12 @@ constexpr std::string_view global_command_keybinding_context() {
   return "!textInputActive";
 }
 
+constexpr std::string_view save_command_keybinding_context() {
+  // Saving is an application-level lifecycle action, not a text-editing
+  // action. Keep it available while a retained editor has keyboard focus.
+  return "true";
+}
+
 constexpr std::string_view undo_command_keybinding_context() {
   return global_command_keybinding_context();
 }
@@ -350,6 +356,11 @@ bool command_semantically_requires_viewport(std::string_view command_id) {
 
 std::string_view
 default_keybinding_context_for_command(std::string_view command_id) {
+  if (command_id == quader_command::kSceneDocumentSave.string() ||
+      command_id == quader_command::kSceneDocumentSaveAs.string() ||
+      command_id == quader_command::kSceneDocumentSaveAll.string()) {
+    return save_command_keybinding_context();
+  }
   if (command_id == quader_command::kEditClearSelection.string()) {
     return "(viewportFocus || outlinerFocus) && !textInputActive && "
            "!navigation.active && !modalTool.active && !activeTool.ownsViewport && "
@@ -2477,7 +2488,7 @@ void QuaderCommandsApi::Impl::register_commands() {
   register_command(
       quader_command::kSceneDocumentSaveAll, "Save All Scenes",
       [this] { return scene_documents_.save_all(); }, "Ctrl+Shift+S",
-      [this] { return scene_documents_.has_dirty_scenes(); });
+      [this] { return scene_documents_.has_active_scene(); });
   register_command(
       quader_command::kSceneDocumentClose, "Close Scene",
       [this] { return scene_documents_.close_active(); }, "Ctrl+W",
