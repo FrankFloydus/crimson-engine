@@ -3312,7 +3312,7 @@ void QtViewportPanel::process_viewport_input(
           .cut_dragging = current_tool_status.cut_dragging,
           .mirror_dragging = current_tool_status.mirror_dragging,
       })) {
-    if (!cancel_active_modal_tool(true)) {
+    if (!cancel_active_modal_tool(false)) {
       return;
     }
     cancel_consumed = true;

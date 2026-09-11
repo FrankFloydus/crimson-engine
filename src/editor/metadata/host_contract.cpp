@@ -1048,7 +1048,7 @@ std::span<const HostGestureDescriptor> gesture_descriptors()
       gesture("insert_edge_loop_gesture", "Insert Edge Loop Gesture",
               HostGestureTargetKind::Tool, "insert_edge_loop", 20,
               kInsertEdgeLoopTool, kHoverPrimaryDrag, kCancelEscape,
-              kBypassSnapModifier, true, false, false, false, true, true, false,
+              kBypassSnapModifier, true, false, false, false, true, true, true,
               false, true),
       gesture("knife_tool_gesture", "Knife Tool Gesture",
               HostGestureTargetKind::Tool, "knife", 30, kNifeTool,

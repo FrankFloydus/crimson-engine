@@ -52,9 +52,16 @@ InsertEdgeLoopSnapResult snap_insert_edge_loop_factor_result(
 		return result;
 	}
 
-	const double snapped_distance = snap_world_value(static_cast<double>(result.factor) * static_cast<double>(edge_length), grid_size);
 	const double edge_length_double = static_cast<double>(edge_length);
 	const double endpoint_epsilon = std::max(1.0e-6, edge_length_double * 1.0e-6);
+	// A grid step this large cannot produce an accepted interior lattice point.
+	// Keep a valid hovered edge actionable by falling back to its midpoint.
+	if (grid_size >= edge_length_double - endpoint_epsilon) {
+		result.factor = 0.5F;
+		return result;
+	}
+
+	const double snapped_distance = snap_world_value(static_cast<double>(result.factor) * edge_length_double, grid_size);
 	result.snapped_to_existing_edge =
 		snapped_distance <= endpoint_epsilon ||
 		snapped_distance >= edge_length_double - endpoint_epsilon;

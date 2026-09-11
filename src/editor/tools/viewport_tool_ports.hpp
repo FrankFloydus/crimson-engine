@@ -93,13 +93,15 @@ public:
 
 /**
  * Narrow cancel port used by viewport tools to unwind active modal runtime state.
+ * exit_tool distinguishes explicit cancellation from an interrupted gesture.
  */
 class ViewportToolCancelPort {
 public:
   virtual ~ViewportToolCancelPort() = default;
 
   [[nodiscard]] virtual ModelingCommandResult cancel_box() = 0;
-  [[nodiscard]] virtual ModelingCommandResult cancel_active_modal_tool() = 0;
+  [[nodiscard]] virtual ModelingCommandResult
+  cancel_active_modal_tool(bool exit_tool) = 0;
 };
 
 /**
@@ -215,7 +217,8 @@ public:
   [[nodiscard]] ModelingCommandResult cycle_cut_mode() override;
 
   [[nodiscard]] ModelingCommandResult cancel_box() override;
-  [[nodiscard]] ModelingCommandResult cancel_active_modal_tool() override;
+  [[nodiscard]] ModelingCommandResult
+  cancel_active_modal_tool(bool exit_tool) override;
 
   [[nodiscard]] ModelingSelectionSummary selection_summary() const override;
   void set_viewport_selection_mode(ViewportSelectionMode mode) override;

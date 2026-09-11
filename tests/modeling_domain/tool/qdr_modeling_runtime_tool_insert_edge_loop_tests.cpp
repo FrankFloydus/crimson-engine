@@ -25,7 +25,7 @@ TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopFactorSnapsToGrid)
 	EXPECT_NEAR(quader_editor_core::snap_insert_edge_loop_factor(cube, edge, 10.0F, 1.0, false), 0.99F, 0.0001);
 }
 
-TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopPreviewRejectsGridSnapsOntoExistingEdges) {
+TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopPreviewRejectsEndpointSnapsWhenGridStillFitsEdge) {
 	const quader_poly::Document cube = quader_poly::make_cube({});
 	EXPECT_FALSE(cube.faces.empty());
 	EXPECT_TRUE(cube.faces[0].vertices.size() >= 2);
@@ -42,6 +42,29 @@ TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopPreviewRejectsGrid
 		quader_editor_core::snap_insert_edge_loop_preview_factor(cube, edge, 0.04F, 1.0, false);
 	EXPECT_TRUE(free_slide.has_value());
 	EXPECT_NEAR(*free_slide, 0.04F, 0.0001);
+}
+
+TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopPreviewFallsBackToMidpointWhenGridHasNoInteriorPosition) {
+	const quader_poly::Document cube = quader_poly::make_cube({});
+	ASSERT_FALSE(cube.faces.empty());
+	ASSERT_TRUE(cube.faces[0].vertices.size() >= 2);
+	const quader_poly::Edge edge { cube.faces[0].vertices[0], cube.faces[0].vertices[1] };
+	const quader_poly::Vertex *start = quader_poly::find_vertex(cube, edge.a);
+	const quader_poly::Vertex *end = quader_poly::find_vertex(cube, edge.b);
+	ASSERT_TRUE(start != nullptr);
+	ASSERT_TRUE(end != nullptr);
+	const double edge_length = static_cast<double>(quader::length(end->position - start->position));
+	ASSERT_GT(edge_length, 0.0001);
+
+	for (const double grid_size : { edge_length, edge_length * 2.0 }) {
+		for (const float hovered_factor : { 0.04F, 0.49F, 0.96F }) {
+			const std::optional<float> resolved =
+				quader_editor_core::snap_insert_edge_loop_preview_factor(
+					cube, edge, hovered_factor, grid_size, true);
+			ASSERT_TRUE(resolved.has_value());
+			EXPECT_NEAR(*resolved, 0.5F, 0.0001);
+		}
+	}
 }
 
 TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopPreviewStoresSeedAndClearsHoverCandidate) {
@@ -72,7 +95,7 @@ TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopPreviewStoresSeedA
 	EXPECT_TRUE(hover.candidate_object_id == 3);
 }
 
-TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopPreviewClearsWhenSnappedDragReachesAnExistingEdge) {
+TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopLockedSeedRejectsLowerGridEndpointAndFallsBackForCoarseGrid) {
 	quader_editor_core::PolygonObject object;
 	object.id = 3;
 	object.document = quader_poly::make_cube({});
@@ -108,6 +131,13 @@ TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopPreviewClearsWhenS
 	EXPECT_TRUE(state.preview_lines.empty());
 	EXPECT_TRUE(hover.object_id == 3);
         EXPECT_TRUE(hover.kind == quader_editor_core::SelectionHoverKind::Edge);
+
+	const double edge_length = static_cast<double>(quader::length(end->position - start->position));
+	ASSERT_GT(edge_length, 0.0001);
+	EXPECT_TRUE(quader_editor_core::update_insert_edge_loop_locked_seed(
+		state, objects, hover, ray, edge_length, true, true));
+	EXPECT_NEAR(state.factor, 0.5F, 0.0001);
+	EXPECT_FALSE(state.preview_lines.empty());
 }
 
 TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopResetCanPreserveActiveOwnershipThroughRuntimeHelper) {

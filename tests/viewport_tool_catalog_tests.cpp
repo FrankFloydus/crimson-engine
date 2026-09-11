@@ -169,10 +169,13 @@ public:
   }
   ModelingCommandResult cycle_cut_mode() override { return {.ok = true}; }
   ModelingCommandResult cancel_box() override { return {.ok = true}; }
-  ModelingCommandResult cancel_active_modal_tool() override {
+  ModelingCommandResult cancel_active_modal_tool(bool exit_tool) override {
     ++cancellations;
+    last_cancel_exited_tool = exit_tool;
     return {.ok = false, .message = "Forced modal cancel failure."};
   }
+
+  bool last_cancel_exited_tool = false;
 
 private:
   ModelingCommandResult point_hover_result() const {
@@ -271,8 +274,8 @@ public:
     ++box_cancellations;
     return delegate_.cancel_box();
   }
-  ModelingCommandResult cancel_active_modal_tool() override {
-    return delegate_.cancel_active_modal_tool();
+  ModelingCommandResult cancel_active_modal_tool(bool exit_tool) override {
+    return delegate_.cancel_active_modal_tool(exit_tool);
   }
 
   int box_cancellations = 0;
@@ -1147,7 +1150,8 @@ TEST(ViewportToolRuntimeTests,
   EXPECT_EQ(state.active_tool, ViewportToolId::Pivot);
 }
 
-TEST(ViewportToolRuntimeTests, RuntimeRoutesToolEventsToActiveTool) {
+TEST(ViewportToolRuntimeTests,
+     RuntimeSynchronizesActualToolExitDespiteRetainIntent) {
     ViewportToolRuntime runtime;
     ViewportToolState state;
     ViewportCameraController camera;
@@ -1173,7 +1177,7 @@ TEST(ViewportToolRuntimeTests, RuntimeRoutesToolEventsToActiveTool) {
         ViewportToolEvent{
             .kind = ViewportToolEventKind::Cancel,
             .tool = ViewportToolId::Knife,
-            .exit_active_modal_tool = true,
+            .exit_active_modal_tool = false,
         });
 
     EXPECT_TRUE(result.handled);
@@ -2163,6 +2167,7 @@ TEST(ViewportToolRuntimeTests,
     EXPECT_FALSE(canceled.active_tool_changed);
     EXPECT_FALSE(canceled.sync_active_tool_from_modeling);
     EXPECT_EQ(failing_hover.cancellations, 1);
+    EXPECT_TRUE(failing_hover.last_cancel_exited_tool);
     EXPECT_EQ(failing_hover.invalidations, invalidations_before + 1);
     ASSERT_EQ(results.size(), 1U);
     EXPECT_FALSE(results.back().command.ok);
@@ -2705,6 +2710,13 @@ TEST(ViewportToolRuntimeTests,
       SCOPED_TRACE(valid_preview);
       ModelingPointerHistoryHarness harness;
       harness.initialize(tool);
+      ASSERT_TRUE(harness.editor.scene()
+                      .rename(harness.source.entity,
+                              "Redo Survives Modal Cancellation")
+                      .ok());
+      ASSERT_TRUE(harness.editor.history().undo().ok());
+      ASSERT_TRUE(harness.editor.tools().activate(tool).ok());
+      ASSERT_TRUE(harness.runtime.set_active_tool(harness.state, tool));
       const auto before = harness.documents();
       if (valid_preview) {
         harness.begin_preview();
@@ -2718,27 +2730,35 @@ TEST(ViewportToolRuntimeTests,
         }).handled);
       }
       EXPECT_EQ(harness.session.history().undo_count(), 0u);
+      EXPECT_EQ(harness.session.history().redo_count(), 1u);
       const auto canceled = harness.runtime.handle_active_tool_event(
           harness.state, harness.context,
           {.kind = ViewportToolEventKind::Cancel,
            .tool = tool,
            .exit_active_modal_tool = true});
       EXPECT_TRUE(canceled.handled);
-      EXPECT_EQ(canceled.active_tool_changed, tool == ViewportToolId::Cut);
-      EXPECT_EQ(canceled.sync_active_tool_from_modeling,
-                tool == ViewportToolId::Cut);
+      EXPECT_TRUE(canceled.active_tool_changed);
+      EXPECT_TRUE(canceled.sync_active_tool_from_modeling);
+      EXPECT_EQ(harness.state.active_tool, ViewportToolId::Select);
+      ASSERT_NE(harness.runtime.active_tool(), nullptr);
+      EXPECT_EQ(harness.runtime.active_tool()->viewport_tool(),
+                ViewportToolId::Select);
+      EXPECT_EQ(harness.editor.tools().active_tool(), "select");
       harness.expect_documents(before);
       EXPECT_EQ(harness.session.history().undo_count(), 0u);
-      EXPECT_EQ(harness.session.history().redo_count(), 0u);
+      EXPECT_EQ(harness.session.history().redo_count(), 1u);
       EXPECT_FALSE(harness.editor.history().can_undo());
+      EXPECT_TRUE(harness.editor.history().can_redo());
       if (tool == ViewportToolId::InsertEdgeLoop) {
-        EXPECT_EQ(harness.state.active_tool, tool);
-        EXPECT_EQ(harness.editor.tools().active_tool(), "insert_edge_loop");
-        EXPECT_FALSE(harness.session.modeling().tool_status().insert_edge_loop_dragging);
-        EXPECT_FALSE(harness.session.modeling().tool_status().insert_edge_loop_has_preview);
-        ASSERT_TRUE(harness.commit_pointer().handled);
-        EXPECT_EQ(harness.session.history().undo_count(), 1u);
+        const ModelingToolStatus status =
+            harness.session.modeling().tool_status();
+        EXPECT_FALSE(status.insert_edge_loop_dragging);
+        EXPECT_FALSE(status.insert_edge_loop_has_preview);
       }
+      ASSERT_TRUE(harness.editor.history().redo().ok());
+      EXPECT_EQ(harness.editor.query().entity(harness.source.entity)->name,
+                "Redo Survives Modal Cancellation");
+      harness.expect_documents(before);
     }
   }
 }

@@ -191,8 +191,8 @@ ModelingCommandResult ViewportModelingToolPortAdapter::cancel_box() {
 }
 
 ModelingCommandResult
-ViewportModelingToolPortAdapter::cancel_active_modal_tool() {
-  return modeling_.cancel_active_modal_tool();
+ViewportModelingToolPortAdapter::cancel_active_modal_tool(bool exit_tool) {
+  return modeling_.cancel_active_modal_tool(exit_tool);
 }
 
 ModelingSelectionSummary

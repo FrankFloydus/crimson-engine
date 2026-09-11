@@ -178,10 +178,13 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   command owner. SDK history alone does not register an editor Undo step. Transient modeling ports
   expose no implicit commit fallback; previews and cancellation do not publish history. Returning
   to Select without changing content must preserve the redo branch. Insert Edge Loop retains its
-  active tool after each single-cut acceptance and cancellation; only the completed gesture/preview
-  resets. Normal undo/redo clears its stale seed after successful restoration without exiting the
-  tool; failure compensation preserves transient state. Shared cancellation reports actual tool
-  changes instead of assuming every modal cancellation returns to Select.
+  active tool after each single-cut acceptance and non-command interruption; focus loss, navigation,
+  and outside-pointer cancellation reset only the completed gesture/preview. The explicit Cancel
+  Active Tool command (Escape by default) clears transient loop state and returns to Select while
+  retaining Edge component mode, content, history, and redo. Normal undo/redo clears its stale seed
+  after successful restoration without exiting the tool; failure compensation preserves transient
+  state. Shared cancellation reports actual tool changes instead of assuming every modal
+  cancellation returns to Select.
 
 Owners: [publication transaction](src/editor/modeling/services/modeling_host_publication_transaction.cpp),
 [object bindings](src/editor/modeling/runtime/modeling_object_binding_registry.cpp).

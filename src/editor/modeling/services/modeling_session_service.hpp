@@ -442,7 +442,7 @@ public:
   ModelingCommandResult clear_selection_hover();
   ModelingCommandResult cut_selected_meshes_by_hovered_face_plane();
   ModelingCommandResult activate_viewport_tool(ModelingViewportTool tool);
-  ModelingCommandResult cancel_active_modal_tool();
+  ModelingCommandResult cancel_active_modal_tool(bool exit_tool = true);
   ModelingCommandResult
   update_insert_edge_loop_hover(const ModelingToolRayEvent &event);
   ModelingCommandResult

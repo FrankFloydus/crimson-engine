@@ -6637,13 +6637,24 @@ public:
     return finish(set_active_runtime_tool(to_runtime(tool)));
   }
 
-  ModelingCommandResult cancel_active_modal_tool() {
+  ModelingCommandResult cancel_active_modal_tool(bool exit_tool = true) {
     switch (runtime_.active_tool()) {
     case quader_editor_core::ViewportInteractionTool::Box:
       return cancel_box();
-    case quader_editor_core::ViewportInteractionTool::InsertEdgeLoop:
-      return execute_runtime_command(
+    case quader_editor_core::ViewportInteractionTool::InsertEdgeLoop: {
+      ModelingCommandResult canceled = execute_runtime_command(
           RuntimeToolCommandService::cancel_insert_edge_loop(), false);
+      if (!canceled.ok || !exit_tool) {
+        return canceled;
+      }
+      ModelingCommandResult selected = set_active_runtime_tool(
+          quader_editor_core::ViewportInteractionTool::Select);
+      selected.changed = canceled.changed || selected.changed;
+      if (selected.message.empty()) {
+        selected.message = std::move(canceled.message);
+      }
+      return selected;
+    }
     case quader_editor_core::ViewportInteractionTool::Knife:
       runtime_.reset_knife_state();
       invalidate_selection_overlay_caches();
@@ -10797,8 +10808,9 @@ ModelingSessionService::activate_viewport_tool(ModelingViewportTool tool) {
   return impl_->activate_viewport_tool(tool);
 }
 
-ModelingCommandResult ModelingSessionService::cancel_active_modal_tool() {
-  return impl_->cancel_active_modal_tool();
+ModelingCommandResult
+ModelingSessionService::cancel_active_modal_tool(bool exit_tool) {
+  return impl_->cancel_active_modal_tool(exit_tool);
 }
 
 ModelingCommandResult ModelingSessionService::update_insert_edge_loop_hover(

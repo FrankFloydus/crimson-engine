@@ -1514,7 +1514,7 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
-     InsertEdgeLoopRepeatsPhysicalClicksAndRetainsToolAcrossInterruptions) {
+     InsertEdgeLoopRepeatsPhysicalClicksEscapeSelectsAndInterruptionsRetainTool) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-persistent-edge-loop-input-tests";
@@ -1593,21 +1593,12 @@ TEST(QtViewportSurfaceInputTests,
         << "Trailing release and idle frames must not insert another loop";
   }
   const auto inserted = document();
+  const auto history_before_interruptions = editor.history().snapshot();
   const auto hover = [&] {
     mouse(QEvent::MouseMove, point_at_height(0.75f));
     process();
     ASSERT_TRUE(session.modeling().tool_status().insert_edge_loop_has_preview);
   };
-  hover();
-  QKeyEvent escape_press(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
-  QKeyEvent escape_release(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
-  QApplication::sendEvent(surface, &escape_press);
-  QApplication::sendEvent(surface, &escape_release);
-  process();
-  expect_active();
-  EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_has_preview);
-  EXPECT_TRUE(quader_poly::has_same_geometry(document(), inserted));
-
   hover();
   QFocusEvent blur(QEvent::FocusOut);
   QApplication::sendEvent(surface, &blur);
@@ -1616,6 +1607,8 @@ TEST(QtViewportSurfaceInputTests,
   EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_dragging);
   EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_has_preview);
   EXPECT_TRUE(quader_poly::has_same_geometry(document(), inserted));
+  expect_history_unchanged(editor.history().snapshot(),
+                           history_before_interruptions);
   QApplication::sendEvent(surface, &focus);
   hover();
   QEvent leave(QEvent::Leave);
@@ -1632,6 +1625,9 @@ TEST(QtViewportSurfaceInputTests,
   EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_has_preview);
   EXPECT_TRUE(quader_poly::has_same_geometry(document(), inserted));
   EXPECT_EQ(session.history().undo_count(), 3u);
+  EXPECT_EQ(session.history().redo_count(), 0u);
+  expect_history_unchanged(editor.history().snapshot(),
+                           history_before_interruptions);
 
   QApplication::sendEvent(surface, &enter);
   QApplication::sendEvent(surface, &focus);
@@ -1646,13 +1642,28 @@ TEST(QtViewportSurfaceInputTests,
     expect_active();
     EXPECT_TRUE(quader_poly::has_same_geometry(document(), inserted));
     EXPECT_EQ(session.history().undo_count(), 3u);
+    EXPECT_EQ(session.history().redo_count(), 0u);
+    expect_history_unchanged(editor.history().snapshot(),
+                             history_before_interruptions);
   }
   hover();
-  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+  QKeyEvent escape_press(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QKeyEvent escape_release(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+  QApplication::sendEvent(surface, &escape_press);
+  QApplication::sendEvent(surface, &escape_release);
   process();
-  EXPECT_EQ(panel.tool_state().active_tool, quader::ViewportToolId::Move);
+  EXPECT_EQ(panel.tool_state().active_tool, quader::ViewportToolId::Select);
+  EXPECT_EQ(session.modeling().tool_status().active_tool,
+            quader::ModelingViewportTool::Select);
+  EXPECT_EQ(session.modeling().selection_mode(),
+            quader::ModelingSelectionMode::Edge);
   EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_has_preview);
+  EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_dragging);
+  EXPECT_TRUE(quader_poly::has_same_geometry(document(), inserted));
   EXPECT_EQ(session.history().undo_count(), 3u);
+  EXPECT_EQ(session.history().redo_count(), 0u);
+  expect_history_unchanged(editor.history().snapshot(),
+                           history_before_interruptions);
 }
 
 TEST(QtViewportSurfaceInputTests,

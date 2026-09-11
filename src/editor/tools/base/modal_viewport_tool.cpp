@@ -31,8 +31,8 @@ ModalViewportTool::cancel_active_modal_tool(ViewportToolContext &context,
   const ModelingViewportTool active_before = context.ports.preview != nullptr
       ? context.ports.preview->tool_status().active_tool : modeling_tool();
   const ModelingCommandResult cancel =
-      context.ports.cancel->cancel_active_modal_tool();
-  const bool active_tool_changed = exit_tool && context.ports.preview != nullptr &&
+      context.ports.cancel->cancel_active_modal_tool(exit_tool);
+  const bool active_tool_changed = context.ports.preview != nullptr &&
       context.ports.preview->tool_status().active_tool != active_before;
   if (!cancel.ok) {
     if (context.ports.command_result != nullptr) {
