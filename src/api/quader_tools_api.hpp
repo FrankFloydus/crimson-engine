@@ -45,6 +45,12 @@ public:
     QuaderApiVoidResult activate(ViewportToolId tool);
     [[nodiscard]] bool can_activate(std::string_view tool_id) const;
     [[nodiscard]] bool can_activate(ViewportToolId tool) const;
+    /** Enters primitive placement with the requested shape selected atomically. */
+    QuaderApiVoidResult
+    begin_primitive_creation(QuaderPrimitiveCreationShape shape);
+    /** Enters Curve creation without attaching to an already selected Curve. */
+    QuaderApiVoidResult begin_new_curve_creation();
+    [[nodiscard]] bool can_begin_new_curve_creation() const;
     /** Arms one-shot viewport placement for a Point or Directional light. */
     QuaderApiVoidResult begin_light_creation(QuaderLightType type);
     [[nodiscard]] QuaderToolSettingsTarget active_settings() const;

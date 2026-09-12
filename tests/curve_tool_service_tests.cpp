@@ -1816,6 +1816,66 @@ TEST(CurveToolServiceTests,
   EXPECT_EQ(harness.editor.tools().active_tool(), "select");
 }
 
+TEST(CurveToolServiceTests,
+     PublicBeginNewCurveDetachesSelectedCurveIntoAnEmptyDrawingSession) {
+  CurveToolHarness harness;
+  const QuaderModelingObjectRef existing = harness.make_curve();
+  ASSERT_EQ(harness.session.scene().primary_selection(), existing.entity);
+  ASSERT_NE(harness.session.scene().curve(existing.entity), nullptr);
+
+  const QuaderApiVoidResult started =
+      harness.editor.tools().begin_new_curve_creation();
+
+  ASSERT_TRUE(started.ok()) << started.error_message();
+  EXPECT_TRUE(started.changed());
+  CurveToolService &curve = harness.session.curve();
+  EXPECT_TRUE(curve.active());
+  EXPECT_TRUE(curve.drawing());
+  EXPECT_EQ(curve.point_count(), 0u);
+  EXPECT_FALSE(curve.has_editable_existing_curve());
+  EXPECT_EQ(curve.preview_state().entity, kInvalidEntityId);
+  EXPECT_TRUE(curve.preview_state().document.has_value());
+  EXPECT_EQ(harness.session.scene().primary_selection(), existing.entity)
+      << "starting a fresh draft must not rewrite object selection";
+  EXPECT_EQ(harness.editor.tools().active_tool(), "curve");
+  EXPECT_FALSE(curve.refresh().changed);
+  EXPECT_TRUE(curve.drawing());
+  EXPECT_FALSE(curve.has_editable_existing_curve());
+  ASSERT_TRUE(harness.editor.tools().cancel_active_tool_preview().ok());
+}
+
+TEST(CurveToolServiceTests,
+     PublicBeginNewCurveRejectsAndPreservesNonemptyDraftAndActiveDrag) {
+  CurveToolHarness harness;
+  ASSERT_TRUE(harness.editor.tools().begin_new_curve_creation().ok());
+  CurveToolService &curve = harness.session.curve();
+  harness.place({-2.0f, 0.0f, 0.0f});
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  const modeling::CurveDocument draft = *curve.preview_state().document;
+
+  const QuaderApiVoidResult nonempty =
+      harness.editor.tools().begin_new_curve_creation();
+  EXPECT_FALSE(nonempty.ok());
+  EXPECT_FALSE(nonempty.changed());
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  EXPECT_TRUE(curve.preview_state().document->has_same_geometry(draft));
+  EXPECT_EQ(curve.point_count(), 1u);
+  EXPECT_FALSE(harness.session.history().can_undo());
+
+  ASSERT_TRUE(curve.begin_point({2.0f, 0.0f, 0.0f}).ok);
+  const modeling::CurveDocument dragging = *curve.preview_state().document;
+  const QuaderApiVoidResult active_drag =
+      harness.editor.tools().begin_new_curve_creation();
+  EXPECT_FALSE(active_drag.ok());
+  EXPECT_FALSE(active_drag.changed());
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  EXPECT_TRUE(curve.preview_state().document->has_same_geometry(dragging));
+  EXPECT_TRUE(curve.dragging());
+  EXPECT_FALSE(harness.session.history().can_undo());
+  ASSERT_TRUE(curve.cancel_drag().ok);
+  ASSERT_TRUE(harness.editor.tools().cancel_active_tool_preview().ok());
+}
+
 TEST(CurveToolServiceTests, PendingClosureAndNewCurveDoNotDiscardAWorkingDraft) {
   CurveToolHarness harness;
   ASSERT_TRUE(harness.editor.tools().activate(kCurveToolId).ok());

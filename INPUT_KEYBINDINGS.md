@@ -86,6 +86,11 @@ Tool, selection-mode, grid, and ordinary viewport command bindings normally requ
 For example, `W` activates Move when idle and means Fly Forward during fly navigation. The router
 consumes semantic `ViewportInputActionKind`/`ViewportNavigationInput`, not Qt keys or physical chords.
 
+Cursor-position viewport launchers are semantic non-command targets resolved through that same
+dispatcher. The viewport adapter captures the initiating pane and pointer position, while the Qt
+presenter uses stack-local popup menus and revalidates the runtime, scene session, revisions, pane,
+and selected command after the nested popup loop returns. Menu actions do not own private shortcuts.
+
 Escape defaults to the shared Clear Selection command when the active tool's descriptor permits
 selection fallback, from the viewport or Outliner in every selection mode. The command context uses
 that capability rather than a tool-name list. Active transform drags, previews, and modal tools retain

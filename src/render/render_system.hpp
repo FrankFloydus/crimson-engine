@@ -25,6 +25,7 @@
 namespace filament {
 class Renderer;
 class Scene;
+class Texture;
 } // namespace filament
 
 namespace quader {
@@ -158,6 +159,8 @@ public:
     filament::Scene* scene_ = nullptr;
     FilamentEnvironmentLibrary environment_library_;
     FilamentMaterialLibrary material_library_;
+    // Borrowed by scene and preview material instances; destroyed at shutdown.
+    filament::Texture *solid_color_texture_ = nullptr;
     TextureRegistry texture_registry_;
     RenderFramePerformanceStats frame_performance_stats_;
     RenderPresentationFrameTracker presentation_frame_tracker_;

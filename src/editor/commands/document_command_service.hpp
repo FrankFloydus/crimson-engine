@@ -60,7 +60,8 @@ public:
     DocumentCreateEntityResult
     create_entity(std::string name, EntityKind kind = EntityKind::Generic,
                   EntityId parent = kInvalidEntityId,
-                  TransformComponent transform = TransformComponent{});
+                  TransformComponent transform = TransformComponent{},
+                  bool select_created = false);
     DocumentCommandResult destroy_entity(EntityId entity);
     DocumentCommandResult reparent_entity(EntityId entity, EntityId parent,
                                           bool preserve_world_transform = true);

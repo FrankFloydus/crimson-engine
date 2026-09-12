@@ -102,6 +102,7 @@
 #include "viewport/viewport_layout.hpp"
 #include "viewport/viewport_local_visibility.hpp"
 #include "viewport/viewport_settings.hpp"
+#include "viewport/viewport_shading_mode_conversions.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 #include "support/viewport_overlay_test_helpers.hpp"
 
@@ -8665,6 +8666,67 @@ TEST(ViewportWorkspaceServiceTests,
             ViewportShadingMode::Normal);
 }
 
+TEST(ViewportWorkspaceServiceTests,
+     FourPresentationModesRemainDistinctAndOwnedPerPane) {
+  constexpr std::array kPresentationModes{
+      ViewportShadingMode::Wireframe,
+      ViewportShadingMode::Solid,
+      ViewportShadingMode::Shaded,
+      ViewportShadingMode::Rendered,
+  };
+  ViewportWorkspaceService workspace;
+
+  for (const ViewportShadingMode mode : kPresentationModes) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    EXPECT_TRUE(viewport_shading_mode_is_valid(mode));
+    EXPECT_FALSE(viewport_shading_is_debug_view(mode));
+    EXPECT_TRUE(
+        workspace.set_shading_mode(ViewportPaneId::Perspective, mode));
+    EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective), mode);
+    EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Top),
+              ViewportShadingMode::Wireframe);
+  }
+
+  EXPECT_FALSE(viewport_shading_uses_rendered_materials(
+      ViewportShadingMode::Solid));
+  EXPECT_FALSE(viewport_shading_uses_rendered_materials(
+      ViewportShadingMode::Shaded));
+  EXPECT_TRUE(viewport_shading_uses_rendered_materials(
+      ViewportShadingMode::Rendered));
+  EXPECT_FALSE(
+      viewport_shading_uses_scene_lighting(ViewportShadingMode::Solid));
+  EXPECT_FALSE(
+      viewport_shading_uses_scene_lighting(ViewportShadingMode::Shaded));
+  EXPECT_TRUE(
+      viewport_shading_uses_scene_lighting(ViewportShadingMode::Rendered));
+  EXPECT_TRUE(viewport_shading_shows_light_gizmos(ViewportShadingMode::Solid));
+  EXPECT_TRUE(viewport_shading_shows_light_gizmos(ViewportShadingMode::Shaded));
+  EXPECT_TRUE(
+      viewport_shading_shows_light_gizmos(ViewportShadingMode::Rendered));
+  EXPECT_FALSE(
+      viewport_shading_shows_light_gizmos(ViewportShadingMode::Wireframe));
+}
+
+TEST(ViewportWorkspaceServiceTests,
+     PublicShadingConversionsPreserveFourNamedPresentations) {
+  constexpr std::array kConversions{
+      std::pair{QuaderShadingMode::Wireframe,
+                ViewportShadingMode::Wireframe},
+      std::pair{QuaderShadingMode::Solid, ViewportShadingMode::Solid},
+      std::pair{QuaderShadingMode::Shaded, ViewportShadingMode::Shaded},
+      std::pair{QuaderShadingMode::Rendered, ViewportShadingMode::Rendered},
+  };
+
+  for (const auto &[public_mode, viewport_mode] : kConversions) {
+    SCOPED_TRACE(static_cast<int>(viewport_mode));
+    EXPECT_EQ(quader_api_to_viewport_shading_mode(public_mode), viewport_mode);
+    EXPECT_EQ(quader_api_from_viewport_shading_mode(viewport_mode), public_mode);
+  }
+  EXPECT_EQ(QuaderShadingMode::Rendered, QuaderShadingMode::Material)
+      << "Rendered must remain compatible with the legacy Material value";
+  EXPECT_NE(QuaderShadingMode::Solid, QuaderShadingMode::Shaded);
+}
+
 TEST(ViewportCameraTests, OrbitPanAndZoomChangePose) {
   ViewportCameraController camera;
   const auto before = camera.pose();
@@ -10412,7 +10474,7 @@ TEST(ViewportInputRouterTests, OperationShortcutsMatchViewportContract) {
     ViewportShortcut shortcut;
   };
 
-  const std::array<ShortcutCase, 21> shortcuts{{
+  const std::array<ShortcutCase, 23> shortcuts{{
       {"Ctrl+A select all",
        test_router_shortcut(ViewportShortcutKind::SelectAll,
                             ViewportShortcutContext::Global)},
@@ -10448,6 +10510,10 @@ TEST(ViewportInputRouterTests, OperationShortcutsMatchViewportContract) {
        test_router_shortcut(ViewportShortcutKind::MergeCenter)},
       {"X delete popup",
        test_router_shortcut(ViewportShortcutKind::DeletePopup)},
+      {"Shift+A add popup",
+       test_router_shortcut(ViewportShortcutKind::AddPopup)},
+      {"Z shading popup",
+       test_router_shortcut(ViewportShortcutKind::ShadingPopup)},
       {"Shift+X mirror X", test_mirror_shortcut(ViewportMirrorAxis::X)},
       {"Shift+Y mirror Y", test_mirror_shortcut(ViewportMirrorAxis::Y)},
       {"Shift+Z mirror Z", test_mirror_shortcut(ViewportMirrorAxis::Z)},
@@ -10714,29 +10780,44 @@ TEST(ViewportInputRouterTests, FocusGateBlocksViewportToolHotkeys) {
 }
 
 TEST(ViewportInputRouterTests,
-     DeletePopupPreservesViewportFocusTextAndModalToolGates) {
-  ViewportInputRouter router;
-  ViewportCameraController camera;
-  ViewportInputFrame input;
-  input.viewport_size = {800.0f, 600.0f};
-  set_resolved_shortcut(
-      input, test_router_shortcut(ViewportShortcutKind::DeletePopup));
+     CursorPopupsPreserveViewportFocusTextNavigationAndModalToolGates) {
+  for (const ViewportShortcutKind popup_kind : {
+           ViewportShortcutKind::DeletePopup,
+           ViewportShortcutKind::AddPopup,
+           ViewportShortcutKind::ShadingPopup,
+       }) {
+    SCOPED_TRACE(static_cast<int>(popup_kind));
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    ViewportInputFrame input;
+    input.viewport_size = {800.0f, 600.0f};
+    set_resolved_shortcut(input, test_router_shortcut(popup_kind));
 
-  input.viewport_focused = false;
-  EXPECT_FALSE(router.handle_frame(input, camera).shortcut_handled);
+    input.viewport_focused = false;
+    EXPECT_FALSE(router.handle_frame(input, camera).shortcut_handled);
 
-  input.viewport_focused = true;
-  input.text_input_active = true;
-  EXPECT_FALSE(router.handle_frame(input, camera).shortcut_handled);
+    input.viewport_focused = true;
+    input.text_input_active = true;
+    EXPECT_FALSE(router.handle_frame(input, camera).shortcut_handled);
 
-  input.text_input_active = false;
-  const ViewportInputResult select_result = router.handle_frame(input, camera);
-  EXPECT_TRUE(select_result.shortcut_handled);
-  EXPECT_EQ(select_result.shortcut.kind, ViewportShortcutKind::DeletePopup);
+    input.text_input_active = false;
+    const ViewportInputResult idle_result = router.handle_frame(input, camera);
+    EXPECT_TRUE(idle_result.shortcut_handled);
+    EXPECT_EQ(idle_result.shortcut.kind, popup_kind);
 
-  router.set_active_tool(ViewportTool::kCut);
-  input.active_tool_blocks_focus_shortcuts = true;
-  EXPECT_FALSE(router.handle_frame(input, camera).shortcut_handled);
+    input.viewport_hovered = true;
+    set_navigation_pressed(input, ViewportInputActionKind::Orbit);
+    const ViewportInputResult navigation_result =
+        router.handle_frame(input, camera);
+    EXPECT_TRUE(navigation_result.navigation_active);
+    EXPECT_FALSE(navigation_result.shortcut_handled);
+
+    router.reset();
+    input.navigation_bindings = {};
+    router.set_active_tool(ViewportTool::kCut);
+    input.active_tool_blocks_focus_shortcuts = true;
+    EXPECT_FALSE(router.handle_frame(input, camera).shortcut_handled);
+  }
 }
 
 TEST(ViewportInputRouterTests, EscapeRequestsActiveToolCancel) {
@@ -10828,6 +10909,54 @@ TEST(ViewportHostContractAdapterTests, EmptyShortcutDoesNotMapToCommandTarget) {
   EXPECT_FALSE(
       viewport_command_target_id_for_router_shortcut(ViewportShortcut{})
           .has_value());
+}
+
+TEST(ViewportHostContractAdapterTests,
+     CursorPopupTargetsMapToViewportRouterShortcuts) {
+  for (const auto &[target_id, expected_kind] : {
+           std::pair{"viewport.add_popup", ViewportShortcutKind::AddPopup},
+           std::pair{"viewport.shading_popup",
+                     ViewportShortcutKind::ShadingPopup},
+       }) {
+    SCOPED_TRACE(target_id);
+    ViewportShortcut shortcut;
+    ASSERT_TRUE(viewport_router_shortcut_for_target_id(target_id, shortcut));
+    EXPECT_EQ(shortcut.kind, expected_kind);
+    EXPECT_EQ(shortcut.context, ViewportShortcutContext::Viewport);
+    EXPECT_FALSE(viewport_command_target_id_for_router_shortcut(shortcut)
+                     .has_value());
+  }
+}
+
+TEST(ViewportHostContractAdapterTests,
+     CreationLeafCommandsRemainOutsideGenericToolRouterDispatch) {
+  EXPECT_TRUE(viewport_target_requires_router_dispatch(
+      quader_tool_activation_command_target_id("move")));
+  for (const std::string &target_id : {
+           quader_tool_activation_command_target_id("create_box"),
+           quader_tool_activation_command_target_id("create_curve"),
+           quader_tool_activation_command_target_id("unknown_tool"),
+       }) {
+    SCOPED_TRACE(target_id);
+    EXPECT_FALSE(viewport_target_requires_router_dispatch(target_id));
+  }
+}
+
+TEST(ViewportHostContractAdapterTests,
+     LinearArrayZConstraintRemainsContextualAtWeightForty) {
+  const auto descriptors = viewport_input_action_binding_catalog();
+  const auto descriptor = std::find_if(
+      descriptors.begin(), descriptors.end(), [](const auto &candidate) {
+        return candidate.target_id == "viewport.linear_array.constraint_z";
+      });
+
+  ASSERT_NE(descriptor, descriptors.end());
+  EXPECT_EQ(descriptor->shortcut, "Z");
+  EXPECT_EQ(descriptor->context, ViewportInputBindingContext::LinearArrayTool);
+  EXPECT_EQ(descriptor->action, ViewportInputActionKind::ToolConstraintZ);
+  EXPECT_EQ(descriptor->weight, 40);
+  EXPECT_NE(descriptor->when.find("activeTool.linear_array"),
+            std::string_view::npos);
 }
 
 TEST(ViewportHostContractAdapterTests,

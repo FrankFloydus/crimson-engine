@@ -56,6 +56,23 @@ primitive_creation_shape(PrimitiveCreationKind kind) {
   return std::nullopt;
 }
 
+std::optional<PrimitiveCreationKind>
+primitive_creation_kind(QuaderPrimitiveCreationShape shape) {
+  switch (shape) {
+  case QuaderPrimitiveCreationShape::Box:
+    return PrimitiveCreationKind::Box;
+  case QuaderPrimitiveCreationShape::Cylinder:
+    return PrimitiveCreationKind::Cylinder;
+  case QuaderPrimitiveCreationShape::Cone:
+    return PrimitiveCreationKind::Cone;
+  case QuaderPrimitiveCreationShape::Sphere:
+    return PrimitiveCreationKind::Sphere;
+  case QuaderPrimitiveCreationShape::Torus:
+    return PrimitiveCreationKind::Torus;
+  }
+  return std::nullopt;
+}
+
 /// Identifies the owner whose active tool-settings revision is exposed.
 enum class ActiveToolSettingsSourceKind : std::uint8_t {
   Modeling,
@@ -1303,6 +1320,75 @@ bool QuaderToolsApi::can_activate(std::string_view tool_id) const {
 
 bool QuaderToolsApi::can_activate(ViewportToolId tool) const {
   return can_activate(viewport_tool_catalog_id(tool));
+}
+
+QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
+    QuaderPrimitiveCreationShape shape) {
+  QuaderApiMutationRunner mutations(session_);
+  SceneSession &session = scene_session(session_);
+  if (!mutations.available()) {
+    return quader_api_failure_status(session, "No scene is active.");
+  }
+  if (session.document_commands().property_edit_active()) {
+    return quader_api_failure_status(
+        session,
+        "Finish the active property edit before creating a primitive.");
+  }
+
+  const std::optional<PrimitiveCreationKind> kind =
+      primitive_creation_kind(shape);
+  if (!kind.has_value()) {
+    return quader_api_failure_status(session, "Unknown primitive shape.");
+  }
+
+  CommandResult canceled = command_unchanged_result();
+  if (!session.primitive_creation().active()) {
+    canceled =
+        session.native_tools().cancel_competing_state_for_tool_activation();
+    if (!canceled.ok) {
+      return api_status_from_command(session, canceled,
+                                     QuaderMutationKind::Runtime,
+                                     "Create Primitive");
+    }
+  }
+  CommandResult activated = session.primitive_creation().activate(*kind);
+  activated.changed = activated.changed || canceled.changed;
+  return api_status_from_command(session, activated,
+                                 QuaderMutationKind::Runtime,
+                                 "Create Primitive");
+}
+
+QuaderApiVoidResult QuaderToolsApi::begin_new_curve_creation() {
+  QuaderApiMutationRunner mutations(session_);
+  SceneSession &session = scene_session(session_);
+  if (!mutations.available()) {
+    return quader_api_failure_status(session, "No scene is active.");
+  }
+  if (session.document_commands().property_edit_active()) {
+    return quader_api_failure_status(
+        session, "Finish the active property edit before creating a Curve.");
+  }
+
+  CommandResult canceled = command_unchanged_result();
+  if (!session.curve().active()) {
+    canceled =
+        session.native_tools().cancel_competing_state_for_tool_activation();
+    if (!canceled.ok) {
+      return api_status_from_command(session, canceled,
+                                     QuaderMutationKind::Runtime,
+                                     "Create Curve");
+    }
+  }
+  CommandResult activated = session.curve().begin_new_curve();
+  activated.changed = activated.changed || canceled.changed;
+  return api_status_from_command(session, activated,
+                                 QuaderMutationKind::Runtime, "Create Curve");
+}
+
+bool QuaderToolsApi::can_begin_new_curve_creation() const {
+  const SceneSession &session = scene_session(session_);
+  return can_activate(ViewportToolId::Curve) &&
+         session.curve().can_begin_new_curve();
 }
 
 QuaderApiVoidResult

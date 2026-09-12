@@ -387,7 +387,14 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
   EXPECT_NE(shaded_source.find("texture(materialParams_baseColorTexture, uv)"),
             std::string::npos);
   EXPECT_NE(shaded_source.find(
-                "baseColor, baseSample.a * materialParams.baseColorFactor.a"),
+                "baseColor = baseSample.rgb * "
+                "materialParams.baseColorFactor.rgb"),
+            std::string::npos);
+  EXPECT_NE(shaded_source.find(
+                "sourceAlpha = baseSample.a * "
+                "materialParams.baseColorFactor.a"),
+            std::string::npos);
+  EXPECT_NE(shaded_source.find("vec4(baseColor, sourceAlpha)"),
             std::string::npos);
   EXPECT_NE(shaded_source.find(
                 "material.baseColor = vec4(edited.rgb * edited.a, edited.a)"),
@@ -531,6 +538,152 @@ TEST(QuaderMeshMaterialTests, ShadedPreviewBindsOnlyTheBaseColorSurfaceInput) {
                 "rendered_instance->setParameter(\"roughnessTexture\""),
             std::string::npos);
   EXPECT_EQ(source.find("wire_instance->setParameter(\"normalTexture\""),
+            std::string::npos);
+}
+
+TEST(QuaderMeshMaterialTests,
+     SolidPresentationUsesOnePerViewNeutralSamplerContract) {
+  const std::string material =
+      read_source_file("resources/materials/quader_mesh.mat");
+  const std::string binding =
+      read_source_file("src/render/material_binding_service.cpp");
+  const std::string preview =
+      read_source_file("src/render/material_preview_renderer.cpp");
+  const std::string textures =
+      read_source_file("src/render/texture_binding_service.cpp");
+  const std::string render_system_header =
+      read_source_file("src/render/render_system.hpp");
+  const std::string render_system_source =
+      read_source_file("src/render/render_system.cpp");
+  const std::string scene_bridge_source =
+      read_source_file("src/render/scene_render_bridge.cpp");
+  const std::string renderer_header =
+      read_source_file("src/render/viewport_renderer.hpp");
+  const std::string renderer_source =
+      read_source_file("src/render/viewport_renderer.cpp");
+
+  EXPECT_NE(material.find("name : solidColorTexture"), std::string::npos);
+  EXPECT_NE(material.find("getMaterialGlobal0().y >= 0.5"),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      material,
+      "if (solidPresentation) { baseColor = texture("
+      "materialParams_solidColorTexture, vec2(0.5)).rgb; "
+      "sourceAlpha = 1.0; } else { vec2 uv = applyTextureTransform("));
+  EXPECT_NE(material.find("materialParams_baseColorTexture"),
+            std::string::npos);
+  EXPECT_NE(material.find("materialParams.baseColorFactor"),
+            std::string::npos);
+  EXPECT_NE(material.find("baseColor = applySurfaceGrid(baseColor)"),
+            std::string::npos);
+  EXPECT_NE(material.find("applyInstanceEditContext("), std::string::npos);
+
+  EXPECT_EQ(count_occurrences(binding, "\"solidColorTexture\""), 2u)
+      << "both embedded and projected shaded materials need the sampler";
+  EXPECT_NE(binding.find("texture_binding_->solid_color_texture()"),
+            std::string::npos);
+  EXPECT_NE(preview.find(
+                "shaded_instance->setParameter(\"solidColorTexture\""),
+            std::string::npos);
+  EXPECT_NE(preview.find(
+                "wire_instance->setParameter(\"solidColorTexture\""),
+            std::string::npos);
+  EXPECT_NE(preview.find("filament::Texture &solid_color_texture"),
+            std::string::npos);
+  EXPECT_EQ(preview.find("setParameter(\"solidColorTexture\", "
+                         "fallback_textures[0]"),
+            std::string::npos)
+      << "previews must borrow the same RenderSystem-owned Solid texture";
+
+  EXPECT_TRUE(source_contains_compact(
+      render_system_source,
+      "resource_root_ / \"textures\" / \"default_texture.png\""));
+  EXPECT_EQ(count_occurrences(render_system_source, "default_texture.png"),
+            1u);
+  EXPECT_NE(render_system_source.find(
+                ".color_space = PngTextureColorSpace::Srgb"),
+            std::string::npos);
+  EXPECT_NE(render_system_source.find(".generate_mipmaps = true"),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      render_system_source,
+      "std::byte{181u}, std::byte{181u}, std::byte{181u}, "
+      "std::byte{255u}"));
+  EXPECT_NE(render_system_header.find(
+                "filament::Texture *solid_color_texture_ = nullptr"),
+            std::string::npos);
+  EXPECT_NE(render_system_source.find(
+                "engine_->destroy(solid_color_texture_)"),
+            std::string::npos);
+  EXPECT_GE(count_occurrences(render_system_source,
+                              "*solid_color_texture_"),
+            2u)
+      << "the scene bridge and material previews share one texture";
+  EXPECT_EQ(textures.find("default_texture.png"), std::string::npos);
+  EXPECT_NE(textures.find(
+                "solid_color_texture_ = &solid_color_texture"),
+            std::string::npos);
+  EXPECT_EQ(textures.find("destroy_texture(solid_color_texture_)"),
+            std::string::npos)
+      << "TextureBindingService only borrows the RenderSystem texture";
+  EXPECT_NE(scene_bridge_source.find(
+                "texture_binding_.initialize(engine, resource_root, "
+                "solid_color_texture)"),
+            std::string::npos);
+
+  EXPECT_NE(renderer_header.find("set_material_presentation("),
+            std::string::npos);
+  EXPECT_NE(renderer_header.find("solid_material_presentation_"),
+            std::string::npos);
+  EXPECT_NE(renderer_header.find("has_material_presentation_"),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      renderer_source,
+      "if (has_material_presentation_ && material_debug_mode_ == mode && "
+      "solid_material_presentation_ == solid) { return; }"));
+  EXPECT_TRUE(source_contains_compact(
+      renderer_source,
+      "float4{static_cast<float>(mode), solid ? 1.0f : 0.0f, "
+      "0.0f, 1.0f}"));
+  EXPECT_EQ(count_occurrences(renderer_source, "view_->setMaterialGlobal("),
+            1u)
+      << "debug and Solid state must be composed into one cached view global";
+}
+
+TEST(SceneRenderBridgeTests,
+     SolidAndShadedShareTheExistingEditorProxyLayer) {
+  const std::string layers =
+      read_source_file("src/render/render_layers.hpp");
+  const std::string mesh_header =
+      read_source_file("src/render/mesh_renderable_cache.hpp");
+  const std::string mesh_source =
+      read_source_file("src/render/mesh_renderable_cache.cpp");
+  const std::string instance_header =
+      read_source_file("src/render/instance_renderable_cache.hpp");
+  const std::string instance_source =
+      read_source_file("src/render/instance_renderable_cache.cpp");
+  const std::string preview_header =
+      read_source_file("src/render/tool_preview_renderable_cache.hpp");
+  const std::string preview_source =
+      read_source_file("src/render/tool_preview_renderable_cache.cpp");
+
+  EXPECT_EQ(layers.find("kViewportSolidSceneLayerMask"), std::string::npos);
+  EXPECT_EQ(mesh_header.find("solid_mesh_proxies_"), std::string::npos);
+  EXPECT_EQ(mesh_source.find("solid_mesh_proxies_"), std::string::npos);
+  EXPECT_EQ(instance_header.find("solid_instance_proxies_"),
+            std::string::npos);
+  EXPECT_EQ(instance_source.find("solid_instance_proxies_"),
+            std::string::npos);
+  EXPECT_EQ(preview_header.find("solid_preview_proxies_"),
+            std::string::npos);
+  EXPECT_EQ(preview_source.find("solid_preview_proxies_"),
+            std::string::npos);
+  EXPECT_NE(mesh_header.find("shaded_mesh_proxies_"), std::string::npos);
+  EXPECT_NE(mesh_source.find("kViewportShadedSceneLayerMask"),
+            std::string::npos);
+  EXPECT_NE(instance_source.find("kViewportShadedSceneLayerMask"),
+            std::string::npos);
+  EXPECT_NE(preview_source.find("kViewportShadedSceneLayerMask"),
             std::string::npos);
 }
 

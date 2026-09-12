@@ -19,6 +19,7 @@
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "scene/scene_bounds.hpp"
+#include "scene/scene_entity_naming.hpp"
 
 #include <optional>
 #include <string>
@@ -240,6 +241,18 @@ QuaderSceneApi::QuaderSceneApi(QuaderApiSession session, QuaderApiMutationRunner
 QuaderApiResult<QuaderEntityRef>
 QuaderSceneApi::create_entity(const QuaderCreateEntityArgs &args) {
   return mutations_.create_entity(args);
+}
+
+QuaderApiResult<QuaderEntityRef> QuaderSceneApi::create_empty() {
+  SceneSession &session = scene_session(session_);
+  return create_entity({
+      .name = SceneEntityNaming::next_name_for_kind(
+          session.scene(), SceneEntityKind::Empty),
+      .kind = QuaderEntityKind::Empty,
+      .parent = kInvalidEntityId,
+      .transform = {},
+      .select_created = true,
+  });
 }
 
 QuaderApiResult<QuaderEntityRef>

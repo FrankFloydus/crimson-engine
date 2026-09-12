@@ -614,9 +614,9 @@ TEST(CommandBehaviorContractTests,
   EXPECT_EQ(contracted, registered)
       << "The registry and explicit behavior-contract catalog diverged.";
 #ifndef NDEBUG
-  EXPECT_EQ(contracted.size(), 208u);
+  EXPECT_EQ(contracted.size(), 216u);
 #else
-  EXPECT_EQ(contracted.size(), 207u);
+  EXPECT_EQ(contracted.size(), 215u);
 #endif
 }
 
@@ -1037,7 +1037,7 @@ TEST(CommandBehaviorContractTests, ApprovedFingerprintCoversEveryCommand) {
 
 TEST(CommandBehaviorContractTests,
      SeededCommandSequencesPreserveEveryGlobalMutationLaw) {
-  constexpr std::array<std::string_view, 28> kSequenceCommands{
+  constexpr std::array<std::string_view, 29> kSequenceCommands{
       "edit.clear_selection",
       "select.all",
       "select.inverse",
@@ -1049,6 +1049,7 @@ TEST(CommandBehaviorContractTests,
       "viewport.view.front",
       "viewport.view.back",
       "viewport.shading.wireframe",
+      "viewport.shading.solid",
       "viewport.shading.shaded",
       "viewport.shading.rendered",
       "viewport.layout.single",

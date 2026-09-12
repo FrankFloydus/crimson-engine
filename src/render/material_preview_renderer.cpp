@@ -214,6 +214,7 @@ struct MaterialPreviewRenderer::Impl final {
   bool initialize(filament::Engine &new_engine,
                   filament::Material &shaded_mesh_material,
                   filament::Material &rendered_mesh_material,
+                  filament::Texture &solid_color_texture,
                   const std::filesystem::path &resource_root) {
     shutdown();
     engine = &new_engine;
@@ -265,6 +266,16 @@ struct MaterialPreviewRenderer::Impl final {
       return false;
     }
 
+    filament::TextureSampler solid_sampler(
+        filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
+        filament::TextureSampler::MagFilter::LINEAR,
+        filament::TextureSampler::WrapMode::REPEAT);
+    solid_sampler.setAnisotropy(kPreviewTextureAnisotropy);
+    shaded_instance->setParameter("solidColorTexture", &solid_color_texture,
+                                  solid_sampler);
+    wire_instance->setParameter("solidColorTexture", &solid_color_texture,
+                                solid_sampler);
+
     view->setName("Standard Material Preview");
     view->setScene(scene);
     view->setCamera(camera);
@@ -273,6 +284,8 @@ struct MaterialPreviewRenderer::Impl final {
     view->setDithering(filament::Dithering::TEMPORAL);
     view->setShadowingEnabled(false);
     view->setVisibleLayers(kViewportAllLayerMask, kViewportAllLayerMask);
+    view->setMaterialGlobal(
+        0u, filament::math::float4{0.0f, 0.0f, 0.0f, 1.0f});
     camera->setExposure(16.0f, 1.0f / 125.0f, 100.0f);
 
     environment.initialize(*engine, *scene, resource_root);
@@ -745,9 +758,11 @@ MaterialPreviewRenderer::~MaterialPreviewRenderer() = default;
 bool MaterialPreviewRenderer::initialize(
     filament::Engine &engine, filament::Material &shaded_mesh_material,
     filament::Material &rendered_mesh_material,
+    filament::Texture &solid_color_texture,
     const std::filesystem::path &resource_root) {
   return impl_->initialize(engine, shaded_mesh_material,
-                           rendered_mesh_material, resource_root);
+                           rendered_mesh_material, solid_color_texture,
+                           resource_root);
 }
 
 void MaterialPreviewRenderer::shutdown() { impl_->shutdown(); }

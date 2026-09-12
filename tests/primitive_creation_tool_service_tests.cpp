@@ -3360,6 +3360,85 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_TRUE(second.primitive_creation().cancel().ok);
 }
 
+TEST(PrimitiveCreationToolServiceTests,
+     PublicBeginPrimitiveCreationMapsEveryShapeWithoutCreatingContent) {
+  struct ShapeCase {
+    QuaderPrimitiveCreationShape api_shape;
+    PrimitiveCreationKind owner_kind;
+  };
+  constexpr ShapeCase kCases[] = {
+      {QuaderPrimitiveCreationShape::Box, PrimitiveCreationKind::Box},
+      {QuaderPrimitiveCreationShape::Cylinder,
+       PrimitiveCreationKind::Cylinder},
+      {QuaderPrimitiveCreationShape::Sphere, PrimitiveCreationKind::Sphere},
+      {QuaderPrimitiveCreationShape::Torus, PrimitiveCreationKind::Torus},
+      {QuaderPrimitiveCreationShape::Cone, PrimitiveCreationKind::Cone},
+  };
+
+  for (const ShapeCase &test_case : kCases) {
+    SCOPED_TRACE(static_cast<int>(test_case.api_shape));
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+
+    const QuaderApiVoidResult result =
+        editor.tools().begin_primitive_creation(test_case.api_shape);
+
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_TRUE(result.changed());
+    ASSERT_TRUE(session.primitive_creation().active_kind().has_value());
+    EXPECT_EQ(*session.primitive_creation().active_kind(),
+              test_case.owner_kind);
+    EXPECT_TRUE(session.modeling().objects().empty());
+    EXPECT_FALSE(session.history().can_undo());
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     PublicBeginPrimitiveCreationRejectsInvalidShapeAndPreservesActiveFootprint) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.tools()
+                  .begin_primitive_creation(QuaderPrimitiveCreationShape::Box)
+                  .ok());
+  ASSERT_TRUE(session.modeling()
+                  .begin_box_footprint({
+                      .ray = {.origin = {0.0f, 8.0f, 0.0f},
+                              .direction = {0.0f, -1.0f, 0.0f}},
+                      .grid_size = 1.0,
+                  })
+                  .ok);
+  const auto preview_before = session.modeling().box_preview(false);
+
+  const QuaderApiVoidResult during_footprint =
+      editor.tools().begin_primitive_creation(
+          QuaderPrimitiveCreationShape::Cylinder);
+  EXPECT_FALSE(during_footprint.ok());
+  EXPECT_FALSE(during_footprint.changed());
+  ASSERT_TRUE(session.primitive_creation().active_kind().has_value());
+  EXPECT_EQ(*session.primitive_creation().active_kind(),
+            PrimitiveCreationKind::Box);
+  EXPECT_EQ(session.modeling().box_preview(false).drag_state,
+            preview_before.drag_state);
+  EXPECT_TRUE(session.modeling().objects().empty());
+  EXPECT_FALSE(session.history().can_undo());
+
+  const QuaderApiVoidResult invalid = editor.tools().begin_primitive_creation(
+      static_cast<QuaderPrimitiveCreationShape>(99));
+  EXPECT_FALSE(invalid.ok());
+  EXPECT_FALSE(invalid.changed());
+  ASSERT_TRUE(session.primitive_creation().active_kind().has_value());
+  EXPECT_EQ(*session.primitive_creation().active_kind(),
+            PrimitiveCreationKind::Box);
+  EXPECT_EQ(session.modeling().box_preview(false).drag_state,
+            preview_before.drag_state);
+  EXPECT_TRUE(session.modeling().objects().empty());
+  EXPECT_FALSE(session.history().can_undo());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+}
+
 void activate_public_cylinder(QuaderToolsApi &tools) {
   ASSERT_TRUE(tools.activate(ViewportToolId::CreatePrimitive).ok());
   ASSERT_TRUE(tools.set_setting(kCreatePrimitiveToolId, kPrimitiveTypeSetting,

@@ -10,6 +10,7 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "editor/commands/asset_command_service.hpp"
 #include "render/filament_material_library.hpp"
+#include "render/png_texture_loader.hpp"
 #include "render/render_layers.hpp"
 #include "render/render_system.hpp"
 #include "render/scene_render_bridge.hpp"
@@ -51,6 +52,19 @@
 
 namespace quader {
 namespace {
+
+filament::Texture *create_test_solid_color_texture(
+    filament::Engine &engine) {
+  const std::array<std::byte, 4u> neutral_gray{
+      std::byte{181u}, std::byte{181u}, std::byte{181u}, std::byte{255u}};
+  return load_rgba_texture(
+      engine, neutral_gray, 1u, 1u,
+      PngTextureLoadOptions{
+          .color_space = PngTextureColorSpace::Srgb,
+          .generate_mipmaps = true,
+          .label = "light runtime Solid viewport texture",
+      });
+}
 
 /// Counts accepted presentation frames once, independently of surface count.
 struct VSyncRuntimeSample {
@@ -458,6 +472,7 @@ public:
     bridge_.shutdown();
     registry_.clear();
     materials_.shutdown();
+    if (solid_color_texture_) engine_->destroy(solid_color_texture_);
     if (swapchain_) engine_->destroy(swapchain_);
     if (renderer_) engine_->destroy(renderer_);
     if (scene_) engine_->destroy(scene_);
@@ -475,13 +490,16 @@ public:
         kWidth, kHeight, filament::SwapChain::CONFIG_READABLE);
     if (!scene_ || !renderer_ || !swapchain_ ||
         !materials_.initialize(*engine_, resources)) return false;
+    solid_color_texture_ = create_test_solid_color_texture(*engine_);
+    if (solid_color_texture_ == nullptr) return false;
     renderer_->setClearOptions({.clearColor = {0, 0, 0, 1}, .clear = true});
     bridge_.initialize(
         *engine_, *scene_, materials_.quader_mesh(),
         materials_.quader_mesh_lit(), materials_.vertex_color_overlay(),
         materials_.instance_selection_fill(), materials_.overlay_line(),
         materials_.selected_object_line(), materials_.edit_wire_line(),
-        materials_.overlay_point(), materials_.overlay_icon(), resources);
+        materials_.overlay_point(), materials_.overlay_icon(),
+        *solid_color_texture_, resources);
     view_.initialize(*engine_, *scene_, registry_, materials_.ground_grid(),
                      viewport_grid_layer_mask(0u),
                      ViewportRenderSurface::Swapchain);
@@ -634,6 +652,7 @@ private:
   filament::Scene *scene_ = nullptr;
   filament::Renderer *renderer_ = nullptr;
   filament::SwapChain *swapchain_ = nullptr;
+  filament::Texture *solid_color_texture_ = nullptr;
   FilamentMaterialLibrary materials_;
   TextureRegistry registry_;
   SceneRenderBridge bridge_;

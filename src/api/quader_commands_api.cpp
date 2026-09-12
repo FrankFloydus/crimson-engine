@@ -337,6 +337,12 @@ bool command_semantically_requires_viewport(std::string_view command_id) {
   return command_id.starts_with("modeling.") ||
          command_id.starts_with("select.") ||
          command_id.starts_with("viewport.") ||
+         command_id == quader_command::kToolsActivateCreateBox.string() ||
+         command_id == quader_command::kToolsActivateCreateCylinder.string() ||
+         command_id == quader_command::kToolsActivateCreateSphere.string() ||
+         command_id == quader_command::kToolsActivateCreateTorus.string() ||
+         command_id == quader_command::kToolsActivateCreateCone.string() ||
+         command_id == quader_command::kToolsActivateCreateCurve.string() ||
          command_id == quader_command::kToolsFlipPrimitiveFaces.string() ||
          command_id == quader_command::kToolsTogglePrimitiveCaps.string() ||
          command_id == quader_command::kToolsTogglePrimitiveHemisphere.string() ||
@@ -627,6 +633,9 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kSceneCreateDirectionalLight)) {
     return "Create Directional Light";
   }
+  if (is(quader_command::kSceneCreateEmpty)) {
+    return "Create Empty";
+  }
   if (is(quader_command::kSceneHideSelection)) {
     return "Hide Selected Objects";
   }
@@ -675,6 +684,9 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kViewportShadingWireframe)) {
     return "Set Viewport Shading to Wireframe";
   }
+  if (is(quader_command::kViewportShadingSolid)) {
+    return "Set Viewport Shading to Solid";
+  }
   if (is(quader_command::kViewportShadingShaded)) {
     return "Set Viewport Shading to Shaded";
   }
@@ -707,6 +719,24 @@ std::string explicit_keybinding_label(std::string_view command_id,
   }
   if (is(quader_command::kViewportGridReset)) {
     return "Reset Grid Size to 32";
+  }
+  if (is(quader_command::kToolsActivateCreateBox)) {
+    return "Activate Box Creation Tool";
+  }
+  if (is(quader_command::kToolsActivateCreateCylinder)) {
+    return "Activate Cylinder Creation Tool";
+  }
+  if (is(quader_command::kToolsActivateCreateSphere)) {
+    return "Activate Sphere Creation Tool";
+  }
+  if (is(quader_command::kToolsActivateCreateTorus)) {
+    return "Activate Torus Creation Tool";
+  }
+  if (is(quader_command::kToolsActivateCreateCone)) {
+    return "Activate Cone Creation Tool";
+  }
+  if (is(quader_command::kToolsActivateCreateCurve)) {
+    return "Activate New Curve Creation Tool";
   }
   if (const std::optional<std::string_view> tool_id =
           quader_tool_id_from_activation_command_target(command_id)) {
@@ -827,6 +857,9 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
   if (command_id == quader_command::kSceneCreateDirectionalLight.string()) {
     return stable();
   }
+  if (command_id == quader_command::kSceneCreateEmpty.string()) {
+    return stable();
+  }
   if (command_id == quader_command::kSceneHideSelection.string()) {
     return stable();
   }
@@ -872,6 +905,9 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
     return stable();
   }
   if (command_id == quader_command::kViewportShadingWireframe.string()) {
+    return stable();
+  }
+  if (command_id == quader_command::kViewportShadingSolid.string()) {
     return stable();
   }
   if (command_id == quader_command::kViewportShadingShaded.string()) {
@@ -2522,6 +2558,45 @@ void QuaderCommandsApi::Impl::register_commands() {
                    },
                    {}, [this] { return scene_documents_.has_active_scene(); });
   register_command(
+      quader_command::kSceneCreateEmpty, "Create Empty",
+      [this] {
+        return quader_api_status_from_result(api_.scene().create_empty());
+      },
+      {}, [this] { return scene_documents_.has_active_scene(); });
+  const auto register_primitive_creation_command =
+      [this](QuaderCommandId command_id, std::string label,
+             QuaderPrimitiveCreationShape shape) {
+        register_command(
+            command_id, std::move(label),
+            [this, shape] { return tools_.begin_primitive_creation(shape); },
+            {}, [this] {
+              return scene_documents_.has_active_scene() &&
+                     tools_.can_activate(ViewportToolId::CreatePrimitive);
+            });
+      };
+  register_primitive_creation_command(
+      quader_command::kToolsActivateCreateBox, "Create Box",
+      QuaderPrimitiveCreationShape::Box);
+  register_primitive_creation_command(
+      quader_command::kToolsActivateCreateCylinder, "Create Cylinder",
+      QuaderPrimitiveCreationShape::Cylinder);
+  register_primitive_creation_command(
+      quader_command::kToolsActivateCreateSphere, "Create Sphere",
+      QuaderPrimitiveCreationShape::Sphere);
+  register_primitive_creation_command(
+      quader_command::kToolsActivateCreateTorus, "Create Torus",
+      QuaderPrimitiveCreationShape::Torus);
+  register_primitive_creation_command(
+      quader_command::kToolsActivateCreateCone, "Create Cone",
+      QuaderPrimitiveCreationShape::Cone);
+  register_command(
+      quader_command::kToolsActivateCreateCurve, "Create Curve",
+      [this] { return tools_.begin_new_curve_creation(); }, {},
+      [this] {
+        return scene_documents_.has_active_scene() &&
+               tools_.can_begin_new_curve_creation();
+      });
+  register_command(
       quader_command::kSceneHideSelection, "Hide Selection",
       [this] {
         std::vector<QuaderSceneVisibilityEdit> edits;
@@ -2642,17 +2717,23 @@ void QuaderCommandsApi::Impl::register_commands() {
       },
       "F5");
   register_command(
-      quader_command::kViewportShadingShaded, "Shaded",
+      quader_command::kViewportShadingSolid, "Solid",
       [this] {
         return viewports_.set_shading_mode(viewports_.focused_pane(),
                                            QuaderShadingMode::Solid);
+      });
+  register_command(
+      quader_command::kViewportShadingShaded, "Shaded",
+      [this] {
+        return viewports_.set_shading_mode(viewports_.focused_pane(),
+                                           QuaderShadingMode::Shaded);
       },
       "F6");
   register_command(
       quader_command::kViewportShadingRendered, "Rendered",
       [this] {
         return viewports_.set_shading_mode(viewports_.focused_pane(),
-                                           QuaderShadingMode::Material);
+                                           QuaderShadingMode::Rendered);
       },
       "F7");
   register_command(
@@ -2967,6 +3048,16 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       stable_keybinding_localization_key("viewport.delete_popup"),
       QuaderKeybindingContextKind::Viewport,
       std::string(viewport_command_keybinding_context()));
+  register_keybinding_target_metadata(
+      viewport_input_action_target_id("add_popup"), "Open Add Menu",
+      stable_keybinding_localization_key("viewport.add_popup"),
+      QuaderKeybindingContextKind::Viewport,
+      std::string(viewport_command_keybinding_context()));
+  register_keybinding_target_metadata(
+      viewport_input_action_target_id("shading_popup"), "Open Shading Menu",
+      stable_keybinding_localization_key("viewport.shading_popup"),
+      QuaderKeybindingContextKind::Viewport,
+      std::string(viewport_command_keybinding_context()));
 
   for (const ViewportInputActionBindingDescriptor &descriptor :
        viewport_input_action_binding_catalog()) {
@@ -3044,6 +3135,12 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       std::string(viewport_command_keybinding_context()), 10);
   keybindings_.add_default_keybinding(
       viewport_input_action_target_id("delete_popup"), "X",
+      std::string(viewport_command_keybinding_context()), 10);
+  keybindings_.add_default_keybinding(
+      viewport_input_action_target_id("add_popup"), "Shift+A",
+      std::string(viewport_command_keybinding_context()), 10);
+  keybindings_.add_default_keybinding(
+      viewport_input_action_target_id("shading_popup"), "Z",
       std::string(viewport_command_keybinding_context()), 10);
   for (const ViewportInputActionBindingDescriptor &descriptor :
        viewport_input_action_binding_catalog()) {

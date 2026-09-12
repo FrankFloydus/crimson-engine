@@ -17,6 +17,7 @@ namespace filament {
 class Engine;
 class Material;
 class Renderer;
+class Texture;
 } // namespace filament
 
 namespace quader {
@@ -42,6 +43,7 @@ public:
   [[nodiscard]] bool initialize(
       filament::Engine &engine, filament::Material &shaded_mesh_material,
       filament::Material &rendered_mesh_material,
+      filament::Texture &solid_color_texture,
       const std::filesystem::path &resource_root);
   void shutdown();
 

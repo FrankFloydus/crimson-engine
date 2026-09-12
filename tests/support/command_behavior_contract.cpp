@@ -227,6 +227,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kSceneCreateDirectionalLight,
                Fixture::ProjectWithScene, kToolDomains,
                Outcome::ChangeRequired, UndoRepeat::None),
+      contract(quader_command::kSceneCreateEmpty,
+               Fixture::ProjectWithScene, kSceneMutationDomains,
+               Outcome::ChangeRequired, UndoRepeat::Undoable),
       contract(quader_command::kSceneLayersRemoveSelection,
                Fixture::LayeredObjectSelection,
                Domain::Document | Domain::Layers | Domain::History |
@@ -309,6 +312,8 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kViewportToggleTextureLockScale, Fixture::Viewport,
                Domain::Preferences, Outcome::ChangeRequired, UndoRepeat::None),
       contract(quader_command::kViewportShadingWireframe, Fixture::Viewport,
+               kViewportDomains, Outcome::ChangeRequired),
+      contract(quader_command::kViewportShadingSolid, Fixture::Viewport,
                kViewportDomains, Outcome::ChangeRequired),
       contract(quader_command::kViewportShadingShaded, Fixture::Viewport,
                kViewportDomains, Outcome::SuccessRequired),
@@ -726,6 +731,24 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kToolsActivateCreatePrimitive,
                Fixture::Viewport, kToolDomains, Outcome::SuccessRequired,
                UndoRepeat::None),
+      contract(quader_command::kToolsActivateCreateBox,
+               Fixture::Viewport, kToolDomains, Outcome::ChangeRequired,
+               UndoRepeat::None),
+      contract(quader_command::kToolsActivateCreateCylinder,
+               Fixture::Viewport, kToolDomains, Outcome::ChangeRequired,
+               UndoRepeat::None),
+      contract(quader_command::kToolsActivateCreateSphere,
+               Fixture::Viewport, kToolDomains, Outcome::ChangeRequired,
+               UndoRepeat::None),
+      contract(quader_command::kToolsActivateCreateTorus,
+               Fixture::Viewport, kToolDomains, Outcome::ChangeRequired,
+               UndoRepeat::None),
+      contract(quader_command::kToolsActivateCreateCone,
+               Fixture::Viewport, kToolDomains, Outcome::ChangeRequired,
+               UndoRepeat::None),
+      contract(quader_command::kToolsActivateCreateCurve,
+               Fixture::Viewport, kToolDomains | Domain::Selection,
+               Outcome::ChangeRequired, UndoRepeat::None),
       contract(quader_command::kToolsActivateExtrude,
                Fixture::SingleFaceSelection, kToolDomains,
                Outcome::SuccessRequired, UndoRepeat::None),
@@ -761,9 +784,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 208U);
+  static_assert(std::size(kContracts) == 216U);
 #else
-  static_assert(std::size(kContracts) == 207U);
+  static_assert(std::size(kContracts) == 215U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

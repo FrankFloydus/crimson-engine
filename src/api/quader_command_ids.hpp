@@ -73,6 +73,7 @@ inline constexpr QuaderCommandId kSceneCreatePointLight{
     "scene.create_point_light"};
 inline constexpr QuaderCommandId kSceneCreateDirectionalLight{
     "scene.create_directional_light"};
+inline constexpr QuaderCommandId kSceneCreateEmpty{"scene.create_empty"};
 inline constexpr QuaderCommandId kSceneLayersRemoveSelection{
     "scene.layers.remove_selection"};
 inline constexpr QuaderCommandId kSceneHideSelection{
@@ -143,6 +144,8 @@ inline constexpr QuaderCommandId kViewportToggleTextureLockScale{
     "viewport.toggle_texture_lock_scale"};
 inline constexpr QuaderCommandId kViewportShadingWireframe{
     "viewport.shading.wireframe"};
+inline constexpr QuaderCommandId kViewportShadingSolid{
+    "viewport.shading.solid"};
 inline constexpr QuaderCommandId kViewportShadingShaded{
     "viewport.shading.shaded"};
 inline constexpr QuaderCommandId kViewportShadingRendered{
@@ -379,6 +382,18 @@ inline constexpr QuaderCommandId kToolsActivateRotate{"tools.activate.rotate"};
 inline constexpr QuaderCommandId kToolsActivateScale{"tools.activate.scale"};
 inline constexpr QuaderCommandId kToolsActivateCreatePrimitive{
     "tools.activate.create_primitive"};
+inline constexpr QuaderCommandId kToolsActivateCreateBox{
+    "tools.activate.create_box"};
+inline constexpr QuaderCommandId kToolsActivateCreateCylinder{
+    "tools.activate.create_cylinder"};
+inline constexpr QuaderCommandId kToolsActivateCreateSphere{
+    "tools.activate.create_sphere"};
+inline constexpr QuaderCommandId kToolsActivateCreateTorus{
+    "tools.activate.create_torus"};
+inline constexpr QuaderCommandId kToolsActivateCreateCone{
+    "tools.activate.create_cone"};
+inline constexpr QuaderCommandId kToolsActivateCreateCurve{
+    "tools.activate.create_curve"};
 inline constexpr QuaderCommandId kToolsActivateExtrude{
     "tools.activate.extrude"};
 inline constexpr QuaderCommandId kToolsActivateInsertEdgeLoop{
@@ -443,6 +458,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kSceneDocumentPrevious,
     kSceneCreatePointLight,
     kSceneCreateDirectionalLight,
+    kSceneCreateEmpty,
     kSceneLayersRemoveSelection,
     kSceneHideSelection,
     kSceneUnhideHiddenObjects,
@@ -469,6 +485,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportToggleTextureLock,
     kViewportToggleTextureLockScale,
     kViewportShadingWireframe,
+    kViewportShadingSolid,
     kViewportShadingShaded,
     kViewportShadingRendered,
     kViewportLayoutSingle,
@@ -596,6 +613,12 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kToolsActivateRotate,
     kToolsActivateScale,
     kToolsActivateCreatePrimitive,
+    kToolsActivateCreateBox,
+    kToolsActivateCreateCylinder,
+    kToolsActivateCreateSphere,
+    kToolsActivateCreateTorus,
+    kToolsActivateCreateCone,
+    kToolsActivateCreateCurve,
     kToolsActivateExtrude,
     kToolsActivateInsertEdgeLoop,
     kToolsActivateKnife,

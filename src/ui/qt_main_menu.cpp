@@ -317,6 +317,9 @@ std::string menu_command_localization_key(QuaderCommandId command_id) {
   if (is(quader_command::kViewportShadingWireframe)) {
     return "viewport.shading.wireframe";
   }
+  if (is(quader_command::kViewportShadingSolid)) {
+    return "viewport.shading.solid";
+  }
   if (is(quader_command::kViewportShadingShaded)) {
     return "viewport.shading.shaded";
   }
@@ -693,11 +696,14 @@ struct QtMainMenu::Impl {
     if (same_command(command_id, quader_command::kViewportShadingWireframe)) {
       return focused_shading_is(QuaderShadingMode::Wireframe);
     }
-    if (same_command(command_id, quader_command::kViewportShadingShaded)) {
+    if (same_command(command_id, quader_command::kViewportShadingSolid)) {
       return focused_shading_is(QuaderShadingMode::Solid);
     }
+    if (same_command(command_id, quader_command::kViewportShadingShaded)) {
+      return focused_shading_is(QuaderShadingMode::Shaded);
+    }
     if (same_command(command_id, quader_command::kViewportShadingRendered)) {
-      return focused_shading_is(QuaderShadingMode::Material);
+      return focused_shading_is(QuaderShadingMode::Rendered);
     }
     return {};
   }

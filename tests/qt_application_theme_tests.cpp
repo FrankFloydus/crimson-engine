@@ -955,7 +955,7 @@ TEST(QtApplicationThemeTests,
 
   const int sample_x = toolbar.width() / 2;
   const QColor surface = toolbar.palette().color(QPalette::Window);
-  const QColor subtle_edge = toolbar.palette().color(QPalette::Midlight);
+  const QColor subtle_edge = toolbar.palette().color(QPalette::Dark);
   EXPECT_EQ(rendered.pixelColor(sample_x, 0), surface)
       << "the toolbar must erase Fusion's bright bevel below the menu line";
   EXPECT_EQ(rendered.pixelColor(sample_x, toolbar.height() - 1), subtle_edge);

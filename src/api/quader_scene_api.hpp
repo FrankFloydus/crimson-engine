@@ -137,6 +137,11 @@ public:
 
     QuaderApiResult<QuaderEntityRef>
     create_entity(const QuaderCreateEntityArgs &args);
+    /**
+     * Creates and selects one uniquely named root-level Empty as a single
+     * undoable document mutation.
+     */
+    QuaderApiResult<QuaderEntityRef> create_empty();
     QuaderApiResult<QuaderEntityRef> create_point_light(
         const QuaderCreatePointLightArgs &args = QuaderCreatePointLightArgs{});
     QuaderApiResult<QuaderEntityRef>

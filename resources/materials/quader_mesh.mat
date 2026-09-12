@@ -36,6 +36,10 @@ material {
             name : baseColorTexture
         },
         {
+            type : sampler2d,
+            name : solidColorTexture
+        },
+        {
             type : float4,
             name : baseColorFactor
         },
@@ -434,10 +438,22 @@ fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
 
-        vec2 uv = applyTextureTransform(
-                applyQuadUvInterpolation(vec2(getUV0().x, 1.0 - getUV0().y)));
-        vec4 baseSample = texture(materialParams_baseColorTexture, uv);
-        vec3 baseColor = baseSample.rgb * materialParams.baseColorFactor.rgb;
+        // Global 0 composes renderer-wide presentation: x is the rendered
+        // material diagnostic and y is this shaded material's Solid override.
+        bool solidPresentation = getMaterialGlobal0().y >= 0.5;
+        vec3 baseColor;
+        float sourceAlpha;
+        if (solidPresentation) {
+            baseColor = texture(
+                    materialParams_solidColorTexture, vec2(0.5)).rgb;
+            sourceAlpha = 1.0;
+        } else {
+            vec2 uv = applyTextureTransform(applyQuadUvInterpolation(
+                    vec2(getUV0().x, 1.0 - getUV0().y)));
+            vec4 baseSample = texture(materialParams_baseColorTexture, uv);
+            baseColor = baseSample.rgb * materialParams.baseColorFactor.rgb;
+            sourceAlpha = baseSample.a * materialParams.baseColorFactor.a;
+        }
         float lighting = mix(
                 1.0,
                 shadedModelingLighting(),
@@ -445,7 +461,7 @@ fragment {
         baseColor *= lighting;
         baseColor = applySurfaceGrid(baseColor);
         vec4 edited = applyInstanceEditContext(
-                vec4(baseColor, baseSample.a * materialParams.baseColorFactor.a),
+                vec4(baseColor, sourceAlpha),
                 materialParams.instanceEditContextColor,
                 materialParams.instanceEditDim * materialParams.instanceEditContextStrength,
                 materialParams.instanceEditContextTintAmount,

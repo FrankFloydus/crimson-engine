@@ -118,6 +118,94 @@ TEST(ProgrammaticApiTests, DocumentNoOpAndFailureReportNoChangedMutationKind) {
     EXPECT_EQ(failed.mutation_kind, quader::QuaderMutationKind::None);
 }
 
+TEST(ProgrammaticApiTests,
+     CreateEmptySelectsUniqueRootEntityAndUndoRedoRestoresSelectionAndIdentity) {
+    ProgrammaticApiHarness harness;
+    quader::QuaderApi& api = harness.api;
+
+    quader::QuaderCreateEntityArgs baseline_args;
+    baseline_args.name = "Prior Selection";
+    baseline_args.select_created = true;
+    const auto baseline = api.scene().create_entity(baseline_args);
+    ASSERT_TRUE(baseline.ok) << baseline.message;
+    const auto baseline_snapshot = api.query().entity(baseline.value.id);
+    ASSERT_TRUE(baseline_snapshot.has_value());
+    ASSERT_TRUE(baseline_snapshot->selected);
+
+    const auto first = api.scene().create_empty();
+    ASSERT_TRUE(first.ok) << first.message;
+    ASSERT_TRUE(first.changed);
+    const auto first_snapshot = api.query().entity(first.value.id);
+    ASSERT_TRUE(first_snapshot.has_value());
+    EXPECT_EQ(first_snapshot->name, "Empty");
+    EXPECT_EQ(first_snapshot->kind, quader::QuaderEntityKind::Empty);
+    EXPECT_TRUE(first_snapshot->selected);
+    EXPECT_TRUE(first_snapshot->active);
+    EXPECT_FALSE(first_snapshot->has_mesh);
+    EXPECT_FALSE(first_snapshot->has_curve);
+    EXPECT_FALSE(first_snapshot->has_light);
+    EXPECT_FLOAT_EQ(first_snapshot->transform.position.x, 0.0f);
+    EXPECT_FLOAT_EQ(first_snapshot->transform.position.y, 0.0f);
+    EXPECT_FLOAT_EQ(first_snapshot->transform.position.z, 0.0f);
+    EXPECT_FLOAT_EQ(first_snapshot->transform.rotation_euler.x, 0.0f);
+    EXPECT_FLOAT_EQ(first_snapshot->transform.rotation_euler.y, 0.0f);
+    EXPECT_FLOAT_EQ(first_snapshot->transform.rotation_euler.z, 0.0f);
+    EXPECT_FLOAT_EQ(first_snapshot->transform.scale.x, 1.0f);
+    EXPECT_FLOAT_EQ(first_snapshot->transform.scale.y, 1.0f);
+    EXPECT_FLOAT_EQ(first_snapshot->transform.scale.z, 1.0f);
+    const std::vector<quader::QuaderEntitySnapshot> entities =
+        api.query().entities();
+    const auto scene_root = std::ranges::find_if(
+        entities, [](const quader::QuaderEntitySnapshot &entity) {
+            return entity.is_scene_root;
+        });
+    ASSERT_NE(scene_root, entities.end());
+    EXPECT_EQ(first_snapshot->parent, scene_root->id);
+    const std::string first_uuid = first_snapshot->uuid;
+    const auto first_editor_object_id = first_snapshot->editor_object_id;
+
+    ASSERT_TRUE(api.history().undo().ok());
+    EXPECT_FALSE(api.query().entity(first.value.id).has_value());
+    const auto restored_baseline = api.query().entity(baseline.value.id);
+    ASSERT_TRUE(restored_baseline.has_value());
+    EXPECT_TRUE(restored_baseline->selected);
+    EXPECT_TRUE(restored_baseline->active);
+
+    ASSERT_TRUE(api.history().redo().ok());
+    const auto redone_first = api.query().entity(first.value.id);
+    ASSERT_TRUE(redone_first.has_value());
+    EXPECT_EQ(redone_first->uuid, first_uuid);
+    EXPECT_EQ(redone_first->editor_object_id, first_editor_object_id);
+    EXPECT_TRUE(redone_first->selected);
+    EXPECT_TRUE(redone_first->active);
+
+    const auto second = api.scene().create_empty();
+    ASSERT_TRUE(second.ok) << second.message;
+    const auto second_snapshot = api.query().entity(second.value.id);
+    ASSERT_TRUE(second_snapshot.has_value());
+    EXPECT_EQ(second_snapshot->name, "Empty_1");
+    EXPECT_TRUE(second_snapshot->selected);
+    EXPECT_TRUE(second_snapshot->active);
+    const std::string second_uuid = second_snapshot->uuid;
+    const auto second_editor_object_id = second_snapshot->editor_object_id;
+
+    ASSERT_TRUE(api.history().undo().ok());
+    EXPECT_FALSE(api.query().entity(second.value.id).has_value());
+    const auto restored_first = api.query().entity(first.value.id);
+    ASSERT_TRUE(restored_first.has_value());
+    EXPECT_TRUE(restored_first->selected);
+    EXPECT_TRUE(restored_first->active);
+
+    ASSERT_TRUE(api.history().redo().ok());
+    const auto redone_second = api.query().entity(second.value.id);
+    ASSERT_TRUE(redone_second.has_value());
+    EXPECT_EQ(redone_second->name, "Empty_1");
+    EXPECT_EQ(redone_second->uuid, second_uuid);
+    EXPECT_EQ(redone_second->editor_object_id, second_editor_object_id);
+    EXPECT_TRUE(redone_second->selected);
+    EXPECT_TRUE(redone_second->active);
+}
+
 TEST(ProgrammaticApiTests, ModelingNoOpAndFailureReportNoChangedMutationKind) {
     ProgrammaticApiHarness harness;
     quader::QuaderApi& api = harness.api;

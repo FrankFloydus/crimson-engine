@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDir>
@@ -132,6 +133,67 @@ TEST_F(QtFileMenuTests, RecoveryRoutesThroughTheFileMenuAndTracksAvailability) {
   EXPECT_FALSE(action->isEnabled());
   action->trigger();
   EXPECT_EQ(recovery_requests_, 1);
+}
+
+TEST_F(QtFileMenuTests,
+       ViewShadingMenuPresentsAndDispatchesFourExclusiveModesInOrder) {
+  auto *shading =
+      menu_bar_->findChild<QMenu *>(QStringLiteral("menu_view_shading"));
+  ASSERT_NE(shading, nullptr);
+
+  const QList<QAction *> actions = shading->actions();
+  ASSERT_EQ(actions.size(), 4);
+  menu_->refresh();
+  EXPECT_EQ(actions[0]->objectName(),
+            QStringLiteral("command_viewport_shading_wireframe"));
+  EXPECT_EQ(actions[1]->objectName(),
+            QStringLiteral("command_viewport_shading_solid"));
+  EXPECT_EQ(actions[2]->objectName(),
+            QStringLiteral("command_viewport_shading_shaded"));
+  EXPECT_EQ(actions[3]->objectName(),
+            QStringLiteral("command_viewport_shading_rendered"));
+  EXPECT_EQ(actions[0]->text(), QStringLiteral("Wireframe\tF5"));
+  EXPECT_EQ(actions[1]->text(), QStringLiteral("Solid"));
+  EXPECT_EQ(actions[2]->text(), QStringLiteral("Shaded\tF6"));
+  EXPECT_EQ(actions[3]->text(), QStringLiteral("Rendered\tF7"));
+
+  QActionGroup *group = actions.front()->actionGroup();
+  ASSERT_NE(group, nullptr);
+  EXPECT_TRUE(group->isExclusive());
+  for (QAction *action : actions) {
+    EXPECT_TRUE(action->isCheckable());
+    EXPECT_TRUE(action->shortcut().isEmpty());
+    EXPECT_EQ(action->actionGroup(), group);
+  }
+
+  EXPECT_FALSE(actions[0]->isChecked());
+  EXPECT_FALSE(actions[1]->isChecked());
+  EXPECT_TRUE(actions[2]->isChecked());
+  EXPECT_FALSE(actions[3]->isChecked());
+
+  actions[1]->trigger();
+  EXPECT_EQ(editor_->viewports().shading_mode(ViewportPaneId::Perspective),
+            QuaderShadingMode::Solid);
+  menu_->refresh();
+  EXPECT_TRUE(actions[1]->isChecked());
+
+  actions[3]->trigger();
+  EXPECT_EQ(editor_->viewports().shading_mode(ViewportPaneId::Perspective),
+            QuaderShadingMode::Rendered);
+  menu_->refresh();
+  EXPECT_TRUE(actions[3]->isChecked());
+
+  actions[0]->trigger();
+  EXPECT_EQ(editor_->viewports().shading_mode(ViewportPaneId::Perspective),
+            QuaderShadingMode::Wireframe);
+  menu_->refresh();
+  EXPECT_TRUE(actions[0]->isChecked());
+
+  actions[2]->trigger();
+  EXPECT_EQ(editor_->viewports().shading_mode(ViewportPaneId::Perspective),
+            QuaderShadingMode::Shaded);
+  menu_->refresh();
+  EXPECT_TRUE(actions[2]->isChecked());
 }
 
 TEST_F(QtFileMenuTests, RecentScenesRefreshOnlyWhenOpenedAndKeepFiveEntries) {

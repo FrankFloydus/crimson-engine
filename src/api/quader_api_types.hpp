@@ -967,6 +967,7 @@ struct QuaderCreateEntityArgs {
     QuaderEntityKind kind = QuaderEntityKind::Generic;
     EntityId parent = kInvalidEntityId;
     QuaderTransform transform;
+    bool select_created = false;
 };
 
 /**

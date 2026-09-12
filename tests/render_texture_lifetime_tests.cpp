@@ -7,11 +7,13 @@
 #include "render/filament_material_library.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_cache.hpp"
+#include "render/png_texture_loader.hpp"
 #include "render/texture_binding_service.hpp"
 
 #include <gtest/gtest.h>
 
 #include <QByteArray>
+#include <QImage>
 #include <QString>
 
 #include <filament/Camera.h>
@@ -42,6 +44,10 @@ public:
     materials_.shutdown();
     textures_.shutdown();
     library_.shutdown();
+    if (solid_color_texture_ != nullptr) {
+      engine_->destroy(solid_color_texture_);
+      solid_color_texture_ = nullptr;
+    }
     if (view_ != nullptr) {
       engine_->destroy(view_);
     }
@@ -73,7 +79,19 @@ public:
       return false;
     }
     scene_ = engine_->createScene();
-    textures_.initialize(*engine_, resource_root);
+    const std::array<std::byte, 4u> neutral_gray{
+        std::byte{181u}, std::byte{181u}, std::byte{181u}, std::byte{255u}};
+    solid_color_texture_ = load_rgba_texture(
+        *engine_, neutral_gray, 1u, 1u,
+        PngTextureLoadOptions{
+            .color_space = PngTextureColorSpace::Srgb,
+            .generate_mipmaps = true,
+            .label = "test Solid viewport texture",
+        });
+    if (solid_color_texture_ == nullptr) {
+      return false;
+    }
+    textures_.initialize(*engine_, resource_root, *solid_color_texture_);
     materials_.initialize(library_.quader_mesh(), library_.quader_mesh_lit(),
                           textures_);
     materials_.bind_scene({.scene_session_id = 1u});
@@ -133,6 +151,7 @@ private:
   MaterialBindingService materials_;
   MeshRenderableFactory factory_;
   MeshRenderableCache cache_;
+  filament::Texture *solid_color_texture_ = nullptr;
 };
 
 /// Owns immutable image and geometry inputs for render-cache lifecycle tests.
@@ -200,6 +219,31 @@ private:
 };
 
 TEST(RenderTextureLifetimeTests,
+     SolidTextureCenterMatchesTheGeneratedNeutralGrayFallback) {
+  const std::filesystem::path texture_path =
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "textures" /
+      "default_texture.png";
+  const QImage texture(QString::fromStdWString(texture_path.wstring()));
+  ASSERT_FALSE(texture.isNull());
+  ASSERT_GE(texture.width(), 2);
+  ASSERT_GE(texture.height(), 2);
+
+  const QColor neutral_gray(181, 181, 181, 255);
+  const int center_left = (texture.width() - 1) / 2;
+  const int center_right = texture.width() / 2;
+  const int center_top = (texture.height() - 1) / 2;
+  const int center_bottom = texture.height() / 2;
+  for (const QPoint sample : {QPoint(center_left, center_top),
+                              QPoint(center_right, center_top),
+                              QPoint(center_left, center_bottom),
+                              QPoint(center_right, center_bottom)}) {
+    EXPECT_EQ(texture.pixelColor(sample), neutral_gray);
+  }
+  EXPECT_NE(texture.pixelColor(0, 0), neutral_gray)
+      << "Solid must sample the neutral center instead of the authored border";
+}
+
+TEST(RenderTextureLifetimeTests,
      DiffuseModelUniformFollowsEmbeddedAndProjectedMaterialValues) {
   TextureLifetimeHarness harness;
   ASSERT_TRUE(harness.initialize());
@@ -244,6 +288,34 @@ TEST(RenderTextureLifetimeTests,
   EXPECT_EQ(missing_projected->getParameter<int>("diffuseModel"), 0);
   harness.materials().destroy_mesh_material_instance(harness.engine(),
                                                      missing_projected);
+}
+
+TEST(RenderTextureLifetimeTests,
+     SolidColorTextureIsBorrowedAndExcludedFromAssetCacheStats) {
+  TextureLifetimeHarness harness;
+  ASSERT_TRUE(harness.initialize());
+
+  filament::Texture *const solid_color =
+      harness.textures().solid_color_texture();
+  ASSERT_NE(solid_color, nullptr);
+  EXPECT_EQ(harness.stats().resource_count, 0u);
+  EXPECT_EQ(harness.stats().material_consumer_count, 0u);
+  EXPECT_EQ(harness.stats().upload_count, 0u);
+  EXPECT_EQ(harness.stats().destroy_count, 0u);
+
+  AssetRegistry assets;
+  filament::MaterialInstance *instance =
+      harness.materials().create_mesh_material_instance(assets, nullptr, true,
+                                                        true);
+  ASSERT_NE(instance, nullptr);
+  EXPECT_EQ(harness.stats().resource_count, 0u);
+  EXPECT_EQ(harness.stats().material_consumer_count, 0u)
+      << "the app-owned Solid sampler is not a document material pin";
+  harness.materials().destroy_mesh_material_instance(harness.engine(),
+                                                     instance);
+  harness.materials().bind_scene({.scene_session_id = 2u});
+  EXPECT_EQ(harness.textures().solid_color_texture(), solid_color);
+  EXPECT_EQ(harness.stats().resource_count, 0u);
 }
 
 TEST(RenderTextureLifetimeTests, ScalarUpdatesReuseTextureAcrossRetiredProxies) {

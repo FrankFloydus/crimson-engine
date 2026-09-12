@@ -159,8 +159,7 @@ void ViewportRenderer::initialize(filament::Engine &engine,
   view_->setPostProcessingEnabled(false);
   view_->setShadowingEnabled(true);
   view_->setShadowType(filament::ShadowType::PCF);
-  view_->setMaterialGlobal(
-      0u, filament::math::float4{0.0f, 0.0f, 0.0f, 1.0f});
+  set_material_presentation(ViewportMaterialDebugMode::None, false);
   overlay_view_ = engine_->createView();
   overlay_view_->setName("Main Viewport Overlays");
   overlay_view_->setScene(scene_);
@@ -482,17 +481,26 @@ void ViewportRenderer::set_shadowing_enabled(bool enabled) {
   shadowing_enabled_ = enabled;
 }
 
-void ViewportRenderer::set_material_debug_mode(
-    ViewportMaterialDebugMode mode) {
-  if (material_debug_mode_ == mode) {
+void ViewportRenderer::set_material_presentation(
+    ViewportMaterialDebugMode mode, bool solid) {
+  if (has_material_presentation_ && material_debug_mode_ == mode &&
+      solid_material_presentation_ == solid) {
     return;
   }
   material_debug_mode_ = mode;
+  solid_material_presentation_ = solid;
+  has_material_presentation_ = true;
   if (view_) {
     view_->setMaterialGlobal(
-        0u, filament::math::float4{static_cast<float>(mode), 0.0f, 0.0f,
-                                  1.0f});
+        0u,
+        filament::math::float4{static_cast<float>(mode), solid ? 1.0f : 0.0f,
+                               0.0f, 1.0f});
   }
+}
+
+void ViewportRenderer::set_material_debug_mode(
+    ViewportMaterialDebugMode mode) {
+  set_material_presentation(mode, solid_material_presentation_);
 }
 
 void ViewportRenderer::render(filament::Renderer& renderer) {
@@ -512,6 +520,9 @@ void ViewportRenderer::reset_presentation_cache() {
   camera_presentation_signature_.reset();
   scene_settings_presentation_signature_.reset();
   shadowing_enabled_.reset();
+  material_debug_mode_ = ViewportMaterialDebugMode::None;
+  solid_material_presentation_ = false;
+  has_material_presentation_ = false;
 }
 
 } // namespace quader

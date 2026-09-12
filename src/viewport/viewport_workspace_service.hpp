@@ -34,12 +34,15 @@ enum class ViewportShadingMode {
     Roughness,
     Metalness,
     Normal,
+    // Appended to preserve the numeric values of the existing modes.
+    Solid,
 };
 
 [[nodiscard]] constexpr bool
 viewport_shading_mode_is_valid(ViewportShadingMode mode) {
   switch (mode) {
   case ViewportShadingMode::Wireframe:
+  case ViewportShadingMode::Solid:
   case ViewportShadingMode::Shaded:
   case ViewportShadingMode::Rendered:
   case ViewportShadingMode::DiffuseOnly:
@@ -64,6 +67,7 @@ viewport_shading_is_debug_view(ViewportShadingMode mode) {
   case ViewportShadingMode::Normal:
     return true;
   case ViewportShadingMode::Wireframe:
+  case ViewportShadingMode::Solid:
   case ViewportShadingMode::Shaded:
   case ViewportShadingMode::Rendered:
     return false;
@@ -86,7 +90,8 @@ viewport_shading_uses_scene_lighting(ViewportShadingMode mode) {
 
 [[nodiscard]] constexpr bool
 viewport_shading_shows_light_gizmos(ViewportShadingMode mode) {
-  return mode == ViewportShadingMode::Shaded ||
+  return mode == ViewportShadingMode::Solid ||
+         mode == ViewportShadingMode::Shaded ||
          mode == ViewportShadingMode::Rendered;
 }
 

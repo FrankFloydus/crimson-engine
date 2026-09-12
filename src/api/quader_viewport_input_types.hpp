@@ -159,6 +159,8 @@ enum class ViewportShortcutKind {
     FlipHorizontal,
     FlipVertical,
     ApplyMaterial,
+    AddPopup,
+    ShadingPopup,
 };
 
 /**

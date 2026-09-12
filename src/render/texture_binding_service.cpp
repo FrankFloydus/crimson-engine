@@ -25,12 +25,14 @@ TextureBindingService::~TextureBindingService() {
 }
 
 void TextureBindingService::initialize(filament::Engine &engine,
-                                       std::filesystem::path resource_root) {
+                                       std::filesystem::path resource_root,
+                                       filament::Texture &solid_color_texture) {
   shutdown();
   engine_ = &engine;
   upload_count_ = 0u;
   destroy_count_ = 0u;
   resource_root_ = std::move(resource_root);
+  solid_color_texture_ = &solid_color_texture;
   fallback_albedo_texture_ =
       create_solid_texture(255, 255, 255, 255, TextureColorSpace::Srgb);
   fallback_roughness_texture_ =
@@ -60,6 +62,7 @@ void TextureBindingService::shutdown() {
     destroy_texture(fallback_roughness_texture_);
     destroy_texture(fallback_metallic_texture_);
     destroy_texture(fallback_normal_texture_);
+    solid_color_texture_ = nullptr;
     scene_binding_ = {};
     resource_root_.clear();
     engine_ = nullptr;

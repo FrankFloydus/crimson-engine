@@ -332,7 +332,8 @@ bool DocumentCommandService::entities_mutation_blocked(
 DocumentCreateEntityResult
 DocumentCommandService::create_entity(std::string name, EntityKind kind,
                                       EntityId parent,
-                                      TransformComponent transform) {
+                                      TransformComponent transform,
+                                      bool select_created) {
   if (!scene_transform_is_finite(transform)) {
     return invalid_create_result("Entity transform must be finite");
   }
@@ -349,12 +350,26 @@ DocumentCommandService::create_entity(std::string name, EntityKind kind,
         "Apply or cancel the active tool before parenting to its transient "
         "entity");
   }
+  if (select_created) {
+    const DocumentCommandResult canceled = cancel_active_property_edit();
+    if (!canceled.ok) {
+      DocumentCreateEntityResult result;
+      assign_document_command_status(result, canceled);
+      return result;
+    }
+  }
   auto command = std::make_unique<CreateEntityCommand>(scene_, std::move(name),
-                                                       kind, parent, transform);
+                                                       kind, parent, transform,
+                                                       select_created);
   CreateEntityCommand *created_command = command.get();
   DocumentCreateEntityResult result;
   assign_document_command_status(
-      result, execute_document_command(history_, std::move(command)));
+      result, execute_document_command(
+                  history_, with_checked_selection_publication(
+                                scene_, std::move(command),
+                                select_created
+                                    ? selection_publication_
+                                    : CheckedSelectionPublication{})));
   if (result.ok && result.changed) {
     result.entity = created_command->entity();
   }

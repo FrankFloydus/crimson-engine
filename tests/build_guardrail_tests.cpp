@@ -2284,6 +2284,7 @@ TEST(BuildGuardrailTests,
   expect_contains(tool, "src/editor/metadata/");
   expect_contains(tool, "resources/locales/");
   expect_contains(tool, "resources/ibl/");
+  expect_contains(tool, "modeling_assets|textures");
   expect_contains(tool, "CMakeLists");
   expect_contains(tool, "vcpkg\\.json");
   expect_contains(instruction_route, "AgentInstructionRoutingTests.*");
@@ -2451,12 +2452,17 @@ TEST(BuildGuardrailTests,
     std::string arguments;
     std::string app_preset;
     bool builds_tests;
+    std::string expected_filter;
   };
   const std::vector<Expectation> cases = {
-      {"-ChangedPath resources/locales/en-US.lang", "vs2026-release", true},
-      {"-ChangedPath FEATURE_IDEAS.md -IncludeApp", "vs2026-release", false},
+      {"-ChangedPath resources/locales/en-US.lang", "vs2026-release", true,
+       "LocalizationTests.*"},
+      {"-ChangedPath resources/textures/default_texture.png", "vs2026-release",
+       true, "QuaderMeshMaterialTests.*"},
+      {"-ChangedPath FEATURE_IDEAS.md -IncludeApp", "vs2026-release", false,
+       ""},
       {"-ChangedPath FEATURE_IDEAS.md -IncludeApp -AppBuildPreset vs2026-debug",
-       "vs2026-debug", false},
+       "vs2026-debug", false, ""},
   };
   for (const auto &test_case : cases) {
     SCOPED_TRACE(test_case.arguments);
@@ -2476,9 +2482,27 @@ TEST(BuildGuardrailTests,
       expect_contains_in_order(plan, {
           "cmake --build --preset vs2026-debug --target quader_guardrail_tests quader_tests",
           "cmake --build --preset vs2026-release --target quader",
-          "--gtest_filter=LocalizationTests.*"});
+          test_case.expected_filter});
       ASSERT_NE(second_build, std::string::npos);
       EXPECT_EQ(plan.find("cmake --build", second_build + 1), std::string::npos);
+      if (test_case.arguments.find("resources/textures/") !=
+          std::string::npos) {
+        const auto guardrail_start = plan.find("quader_guardrail_tests.exe");
+        const auto quader_start = plan.find("quader_tests.exe", guardrail_start);
+        ASSERT_NE(guardrail_start, std::string::npos) << plan;
+        ASSERT_NE(quader_start, std::string::npos) << plan;
+        const std::string guardrail_run =
+            plan.substr(guardrail_start, quader_start - guardrail_start);
+        const auto quader_end = plan.find('\n', quader_start);
+        const std::string quader_run =
+            plan.substr(quader_start, quader_end - quader_start);
+        expect_contains(
+            guardrail_run,
+            "BuildGuardrailTests."
+            "RuntimeResourceDeploymentIsDependencyTrackedAndSynchronizesOwnedDirs");
+        expect_contains(guardrail_run, "QuaderMeshMaterialTests.*");
+        expect_missing(quader_run, "QuaderMeshMaterialTests.*");
+      }
     } else {
       EXPECT_EQ(second_build, std::string::npos);
       expect_missing(plan, "--gtest_filter");
@@ -2641,6 +2665,13 @@ TEST(BuildGuardrailTests,
 TEST(BuildGuardrailTests,
      RuntimeResourceDeploymentIsDependencyTrackedAndSynchronizesOwnedDirs) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string resource_inputs = source_slice(
+      root_c_make, "set(QUADER_RUNTIME_RESOURCE_INPUTS",
+      "list(SORT QUADER_RUNTIME_RESOURCE_INPUTS)");
+  const std::string resource_deployment = source_slice(
+      root_c_make,
+      "add_custom_command(\n    OUTPUT \"${QUADER_RUNTIME_RESOURCE_STAMP}\"",
+      "add_custom_target(quader_runtime_resources");
 
   expect_contains(root_c_make, "QUADER_RUNTIME_RESOURCE_INPUTS");
   expect_contains(root_c_make, "CONFIGURE_DEPENDS");
@@ -2660,9 +2691,20 @@ TEST(BuildGuardrailTests,
                   "\"${QUADER_RUNTIME_RESOURCE_MANIFEST}\"");
   expect_contains(root_c_make,
                   "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt");
+  expect_contains(
+      root_c_make,
+      "set(QUADER_SOLID_VIEWPORT_TEXTURE\n"
+      "    \"${CMAKE_CURRENT_SOURCE_DIR}/resources/textures/"
+      "default_texture.png\")");
+  expect_contains(resource_inputs, "${QUADER_SOLID_VIEWPORT_TEXTURE}");
+  expect_contains(
+      resource_deployment,
+      "\"${QUADER_SOLID_VIEWPORT_TEXTURE}\"\n"
+      "            \"${QUADER_RUNTIME_DEPLOY_DIR}/textures/"
+      "default_texture.png\"");
 
   for (const std::string &owned_dir :
-       {"materials", "icons", "ibl", "locales"}) {
+       {"materials", "icons", "ibl", "locales", "textures"}) {
     expect_contains(root_c_make,
                     "${QUADER_RUNTIME_DEPLOY_DIR}/" + owned_dir);
   }
@@ -2722,6 +2764,8 @@ TEST(BuildGuardrailTests, QtWidgetsRuntimeAndLicenseEvidenceAreConfigured) {
   EXPECT_TRUE(std::filesystem::exists(source_path("resources/icons/logo.png")));
   EXPECT_TRUE(
       std::filesystem::exists(source_path("resources/icons/point_light.png")));
+  EXPECT_TRUE(std::filesystem::exists(
+      source_path("resources/textures/default_texture.png")));
   EXPECT_GT(std::filesystem::file_size(source_path("resources/icons/logo.png")),
             512u);
   EXPECT_GT(std::filesystem::file_size(
@@ -4110,6 +4154,7 @@ TEST(BuildGuardrailTests,
            "${QUADER_RUNTIME_DEPLOY_DIR}/icons",
            "${QUADER_RUNTIME_DEPLOY_DIR}/ibl",
            "${QUADER_RUNTIME_DEPLOY_DIR}/locales",
+           "${QUADER_RUNTIME_DEPLOY_DIR}/textures",
        }) {
     expect_contains(cleanup, std::string{"remove_directory\n            \""} +
                                  std::string{owned_runtime_directory} + "\"");

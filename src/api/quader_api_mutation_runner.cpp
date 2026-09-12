@@ -123,7 +123,7 @@ QuaderApiMutationRunner::create_entity(const QuaderCreateEntityArgs &args) {
   DocumentCreateEntityResult command =
       session.document_commands().create_entity(
           args.name, to_scene_entity_kind(args.kind), args.parent,
-          to_scene_transform(args.transform));
+          to_scene_transform(args.transform), args.select_created);
   const EntityId created_entity = command.entity;
 
   const QuaderApiVoidResult status =

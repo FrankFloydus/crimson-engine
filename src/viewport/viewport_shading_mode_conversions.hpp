@@ -19,6 +19,9 @@ quader_api_to_viewport_shading_mode(QuaderShadingMode mode) {
   case QuaderShadingMode::Material:
     return ViewportShadingMode::Rendered;
   case QuaderShadingMode::Solid:
+    return ViewportShadingMode::Solid;
+  case QuaderShadingMode::Shaded:
+    return ViewportShadingMode::Shaded;
   case QuaderShadingMode::XRay:
     return ViewportShadingMode::Shaded;
   case QuaderShadingMode::DiffuseOnly:
@@ -43,9 +46,11 @@ quader_api_from_viewport_shading_mode(ViewportShadingMode mode) {
   case ViewportShadingMode::Wireframe:
     return QuaderShadingMode::Wireframe;
   case ViewportShadingMode::Rendered:
-    return QuaderShadingMode::Material;
-  case ViewportShadingMode::Shaded:
+    return QuaderShadingMode::Rendered;
+  case ViewportShadingMode::Solid:
     return QuaderShadingMode::Solid;
+  case ViewportShadingMode::Shaded:
+    return QuaderShadingMode::Shaded;
   case ViewportShadingMode::DiffuseOnly:
     return QuaderShadingMode::DiffuseOnly;
   case ViewportShadingMode::SpecularOnly:
@@ -59,7 +64,7 @@ quader_api_from_viewport_shading_mode(ViewportShadingMode mode) {
   case ViewportShadingMode::Normal:
     return QuaderShadingMode::Normal;
   }
-  return QuaderShadingMode::Solid;
+  return QuaderShadingMode::Shaded;
 }
 
 } // namespace quader

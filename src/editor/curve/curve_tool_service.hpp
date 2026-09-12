@@ -91,6 +91,10 @@ public:
     return drag_.has_value() && drag_->appended_point;
   }
   [[nodiscard]] bool can_apply() const;
+  [[nodiscard]] bool can_begin_new_curve() const {
+    return !dragging() &&
+           (!active_ || !drawing_ || draft_.point_count() == 0u);
+  }
   [[nodiscard]] bool can_change_creation_kind() const;
   [[nodiscard]] bool can_reset_settings() const;
   /// True only for the retained, identity-checked existing Curve attachment.
@@ -117,6 +121,8 @@ public:
   CommandResult refresh();
   CommandResult cancel();
   CommandResult apply();
+  /** Activates a detached, empty creation session without discarding a draft. */
+  CommandResult begin_new_curve();
   CommandResult new_curve();
   CommandResult set_closed(bool closed);
   CommandResult set_solidify(bool enabled);

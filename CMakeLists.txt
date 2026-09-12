@@ -706,9 +706,12 @@ set(QUADER_DEFAULT_ALBEDO_TEXTURE "${QUADER_DEFAULT_MATERIAL_SOURCE_DIR}/default
 set(QUADER_DEFAULT_ROUGHNESS_TEXTURE "${QUADER_DEFAULT_MATERIAL_SOURCE_DIR}/default_roughness.png")
 set(QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE
     "${QUADER_DEFAULT_MATERIAL_SOURCE_DIR}/default_material.qmat")
+set(QUADER_SOLID_VIEWPORT_TEXTURE
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/textures/default_texture.png")
 quader_require_existing_path("${QUADER_DEFAULT_ALBEDO_TEXTURE}" "app-owned default material albedo texture")
 quader_require_existing_path("${QUADER_DEFAULT_ROUGHNESS_TEXTURE}" "app-owned default material roughness texture")
 quader_require_existing_path("${QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE}" "app-owned default project material template")
+quader_require_existing_path("${QUADER_SOLID_VIEWPORT_TEXTURE}" "app-owned Solid viewport texture")
 
 quader_register_filament_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh resources/materials/mesh_quad_uv.glsl resources/materials/instance_edit.glsl)
 quader_register_filament_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit resources/materials/mesh_quad_uv.glsl resources/materials/instance_edit.glsl)
@@ -946,6 +949,8 @@ add_library(quader_ui STATIC
     src/ui/qt_unsaved_confirmation_dialog.cpp
     src/ui/qt_viewport_context_menu.cpp
     src/ui/qt_viewport_delete_popup.cpp
+    src/ui/qt_viewport_quick_menu.hpp
+    src/ui/qt_viewport_quick_menu.cpp
     src/ui/qt_viewport_fly_navigation_hud.cpp
     src/ui/qt_viewport_edge_length_hud.cpp
     src/ui/qt_viewport_render_submission_policy.hpp
@@ -1355,6 +1360,7 @@ set(QUADER_RUNTIME_RESOURCE_INPUTS
     "${QUADER_DEFAULT_ALBEDO_TEXTURE}"
     "${QUADER_DEFAULT_ROUGHNESS_TEXTURE}"
     "${QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE}"
+    "${QUADER_SOLID_VIEWPORT_TEXTURE}"
     ${QUADER_FILAMENT_MATERIAL_OUTPUTS}
     ${QUADER_RUNTIME_IBL_INPUTS}
     ${QUADER_RUNTIME_LOCALE_INPUTS})
@@ -1394,6 +1400,8 @@ add_custom_command(
     COMMAND "${CMAKE_COMMAND}" -E remove_directory
             "${QUADER_RUNTIME_DEPLOY_DIR}/locales"
     COMMAND "${CMAKE_COMMAND}" -E remove_directory
+            "${QUADER_RUNTIME_DEPLOY_DIR}/textures"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
             "${QUADER_RUNTIME_DEPLOY_DIR}/fonts"
     COMMAND "${CMAKE_COMMAND}" -E remove_directory
             "${QUADER_RUNTIME_DEPLOY_DIR}/styles"
@@ -1411,6 +1419,8 @@ add_custom_command(
             "${QUADER_RUNTIME_DEPLOY_DIR}/materials/default"
     COMMAND "${CMAKE_COMMAND}" -E make_directory
             "${QUADER_RUNTIME_DEPLOY_DIR}/icons"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "${QUADER_RUNTIME_DEPLOY_DIR}/textures"
     ${QUADER_FILAMENT_MATERIAL_COPY_COMMANDS}
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/logo.png"
@@ -1433,6 +1443,9 @@ add_custom_command(
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE}"
             "${QUADER_RUNTIME_DEPLOY_DIR}/materials/default/default_material.qmat"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${QUADER_SOLID_VIEWPORT_TEXTURE}"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/textures/default_texture.png"
     COMMAND "${CMAKE_COMMAND}" -E make_directory
             "${QUADER_RUNTIME_DEPLOY_DIR}/licenses"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
@@ -1564,6 +1577,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_viewport_edge_length_hud_tests.cpp
         tests/qt_viewport_delete_popup_tests.cpp
         tests/qt_viewport_context_menu_tests.cpp
+        tests/qt_viewport_quick_menu_tests.cpp
         tests/qstr_tests.cpp
         tests/editor_api_tests.cpp
         tests/operation_input_hint_tests.cpp

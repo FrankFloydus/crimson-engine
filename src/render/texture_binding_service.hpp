@@ -39,7 +39,8 @@ public:
     ~TextureBindingService();
 
     void initialize(filament::Engine &engine,
-                    std::filesystem::path resource_root);
+                    std::filesystem::path resource_root,
+                    filament::Texture &solid_color_texture);
     void shutdown();
 
     bool initialized() const {
@@ -62,6 +63,11 @@ public:
 
     filament::Texture *fallback_normal_texture() const {
       return fallback_normal_texture_;
+    }
+
+    /** RenderSystem-owned neutral surface borrowed for Solid presentation. */
+    filament::Texture *solid_color_texture() const {
+      return solid_color_texture_;
     }
 
     // Every non-fallback texture is pinned by the material instance that uses it.
@@ -162,6 +168,8 @@ public:
     filament::Texture *fallback_roughness_texture_ = nullptr;
     filament::Texture *fallback_metallic_texture_ = nullptr;
     filament::Texture *fallback_normal_texture_ = nullptr;
+    // Outlives this scene binding and every material instance created from it.
+    filament::Texture *solid_color_texture_ = nullptr;
 };
 
 } // namespace quader

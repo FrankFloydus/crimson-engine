@@ -584,7 +584,8 @@ bool QtMaterialBrowserProxyModel::accepts_row(
            .contains(search_text_)) {
     return false;
   }
-  if (!include_usage || usage_mode_ == QtMaterialBrowserUsageMode::All) {
+  if (!include_usage || !usage_complete_ ||
+      usage_mode_ == QtMaterialBrowserUsageMode::All) {
     return true;
   }
   const QString stable_id =
@@ -898,7 +899,14 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   refresh_content_page();
 }
 
-QtMaterialBrowserWindow::~QtMaterialBrowserWindow() = default;
+QtMaterialBrowserWindow::~QtMaterialBrowserWindow() {
+  // A Qt::Popup child owns a native window and can outlive ordinary child
+  // teardown ordering. Retire it while the browser controls referenced by its
+  // dismissal callback are still intact.
+  if (filter_popup_) {
+    delete filter_popup_.data();
+  }
+}
 
 void QtMaterialBrowserWindow::set_labels(QtMaterialBrowserLabels labels) {
   labels_ = std::move(labels);
@@ -1063,6 +1071,10 @@ void QtMaterialBrowserWindow::set_material_usage(
                                 usage_snapshot_.complete);
   refresh_content_page();
   update_accept_enabled();
+  if (!usage_snapshot_.complete && !usage_snapshot_.error.isEmpty() &&
+      usage_inspection_error_) {
+    usage_inspection_error_(usage_snapshot_.error);
+  }
 }
 
 void QtMaterialBrowserWindow::set_protected_material(
@@ -1164,7 +1176,9 @@ void QtMaterialBrowserWindow::set_material_action_callback(
 }
 
 void QtMaterialBrowserWindow::set_usage_inspection_error_callback(
-    UsageInspectionErrorCallback) {}
+    UsageInspectionErrorCallback callback) {
+  usage_inspection_error_ = std::move(callback);
+}
 
 void QtMaterialBrowserWindow::set_presentation_state_changed_callback(
     PresentationStateChangedCallback callback) {

@@ -18,6 +18,7 @@
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_context_menu.hpp"
 #include "ui/qt_viewport_delete_popup.hpp"
+#include "ui/qt_viewport_quick_menu.hpp"
 #include "ui/qt_viewport_surface.hpp"
 #include "viewport/viewport_host_interaction_policy.hpp"
 #include "ui/viewport_hover_controller.hpp"
@@ -156,7 +157,7 @@ private:
     QMenu *display_menu = nullptr;
     QMenu *camera_menu = nullptr;
     QMenu *debug_view_menu = nullptr;
-    std::array<QAction *, 3> shading_actions = {};
+    std::array<QAction *, 4> shading_actions = {};
     std::array<QAction *, 7> camera_actions = {};
     std::array<QAction *, 6> debug_view_actions = {};
     QLabel *info_overlay = nullptr;
@@ -251,6 +252,7 @@ private:
   ViewportInteractionController interaction_controller_;
   QtViewportContextMenuPresenter context_menu_presenter_;
   QtViewportDeletePopupPresenter delete_popup_presenter_;
+  QtViewportQuickMenuPresenter quick_menu_presenter_;
   const SceneDocument *point_light_pick_cached_document_ = nullptr;
   std::uint64_t point_light_pick_cached_scene_revision_ = 0u;
   std::uint64_t point_light_pick_cached_selection_revision_ = 0u;

@@ -592,12 +592,12 @@ function Add-PathPlan {
         return
     }
 
-    if ($Path -match '^resources/(fonts|icons|materials|modeling_assets)/') {
+    if ($Path -match '^resources/(fonts|icons|materials|modeling_assets|textures)/') {
         Add-BuildTarget "quader" "runtime resource changed"
         Add-BuildTarget "quader_guardrail_tests" "runtime resource changed"
         Add-BuildTarget "quader_tests" "runtime resource changed"
-        Add-GuardrailTestsFilter "BuildGuardrailTests.QtWidgetsRuntimeAndLicenseEvidenceAreConfigured:BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime" "verify runtime resource packaging"
-        Add-QuaderTestsFilter "UI*:Ui*:Viewport*:QtViewportEdgeLengthHudTests.*:GroundGridMaterialTests.*:QuaderMeshMaterialTests.*" "verify runtime resource behavior"
+        Add-GuardrailTestsFilter "BuildGuardrailTests.QtWidgetsRuntimeAndLicenseEvidenceAreConfigured:BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime:BuildGuardrailTests.RuntimeResourceDeploymentIsDependencyTrackedAndSynchronizesOwnedDirs:GroundGridMaterialTests.*:QuaderMeshMaterialTests.*" "verify runtime resource packaging and material contracts"
+        Add-QuaderTestsFilter "UI*:Ui*:Viewport*:QtViewportEdgeLengthHudTests.*" "verify runtime resource behavior"
         return
     }
 

@@ -84,6 +84,7 @@ public:
                     filament::Material &edit_wire_line_material,
                     filament::Material &overlay_point_material,
                     filament::Material &overlay_icon_material,
+                    filament::Texture &solid_color_texture,
                     std::filesystem::path resource_root);
     void shutdown();
     void set_project_material_resolver(

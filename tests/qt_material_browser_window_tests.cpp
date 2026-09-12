@@ -20,6 +20,7 @@
 #include <QDialogButtonBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFrame>
 #include <QImage>
 #include <QInputDialog>
 #include <QItemSelectionModel>
@@ -726,15 +727,16 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_EQ(filter->toolButtonStyle(), Qt::ToolButtonIconOnly);
   EXPECT_FALSE(filter->isChecked());
 
-  QTimer::singleShot(0, &window, [&]() {
-    auto *dialog = window.findChild<QDialog *>(
-        QStringLiteral("materialBrowser.filterDialog"));
-    ASSERT_NE(dialog, nullptr);
-    auto *used_box = dialog->findChild<QCheckBox *>(
+  filter->click();
+  auto *popup = window.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  {
+    auto *used_box = popup->findChild<QCheckBox *>(
         QStringLiteral("materialBrowser.filterUsed"));
-    auto *not_used_box = dialog->findChild<QCheckBox *>(
+    auto *not_used_box = popup->findChild<QCheckBox *>(
         QStringLiteral("materialBrowser.filterNotUsed"));
-    auto *apply = dialog->findChild<QPushButton *>(
+    auto *apply = popup->findChild<QPushButton *>(
         QStringLiteral("materialBrowser.filterApply"));
     ASSERT_NE(used_box, nullptr);
     ASSERT_NE(not_used_box, nullptr);
@@ -743,46 +745,48 @@ TEST(QtMaterialBrowserWindowTests,
     EXPECT_TRUE(used_box->isChecked());
     EXPECT_FALSE(not_used_box->isChecked());
     apply->click();
-  });
-  filter->click();
+    application.processEvents();
+  }
   EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::Used);
   EXPECT_TRUE(filter->isChecked());
   ASSERT_EQ(grid->model()->rowCount(), 1);
   EXPECT_EQ(grid->model()->index(0, 0).data().toString(),
             QStringLiteral("Used"));
 
-  QTimer::singleShot(0, &window, [&]() {
-    auto *dialog = window.findChild<QDialog *>(
-        QStringLiteral("materialBrowser.filterDialog"));
-    ASSERT_NE(dialog, nullptr);
-    auto *not_used_box = dialog->findChild<QCheckBox *>(
+  filter->click();
+  popup = window.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  {
+    auto *not_used_box = popup->findChild<QCheckBox *>(
         QStringLiteral("materialBrowser.filterNotUsed"));
-    auto *cancel = dialog->findChild<QPushButton *>(
+    auto *cancel = popup->findChild<QPushButton *>(
         QStringLiteral("materialBrowser.filterCancel"));
     ASSERT_NE(not_used_box, nullptr);
     ASSERT_NE(cancel, nullptr);
     not_used_box->click();
     cancel->click();
-  });
-  filter->click();
+    application.processEvents();
+  }
   EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::Used)
       << "Cancel must preserve the previously applied choice";
   EXPECT_TRUE(filter->isChecked());
 
-  QTimer::singleShot(0, &window, [&]() {
-    auto *dialog = window.findChild<QDialog *>(
-        QStringLiteral("materialBrowser.filterDialog"));
-    ASSERT_NE(dialog, nullptr);
-    auto *clear = dialog->findChild<QPushButton *>(
+  filter->click();
+  popup = window.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  {
+    auto *clear = popup->findChild<QPushButton *>(
         QStringLiteral("materialBrowser.filterClear"));
-    auto *apply = dialog->findChild<QPushButton *>(
+    auto *apply = popup->findChild<QPushButton *>(
         QStringLiteral("materialBrowser.filterApply"));
     ASSERT_NE(clear, nullptr);
     ASSERT_NE(apply, nullptr);
     clear->click();
     apply->click();
-  });
-  filter->click();
+    application.processEvents();
+  }
   EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::All);
   EXPECT_FALSE(filter->isChecked());
   EXPECT_EQ(grid->model()->rowCount(), 2);
@@ -797,20 +801,21 @@ TEST(QtMaterialBrowserWindowTests,
       .revision = 2,
       .complete = true,
   });
-  QTimer::singleShot(0, &window, [&]() {
-    auto *dialog = window.findChild<QDialog *>(
-        QStringLiteral("materialBrowser.filterDialog"));
-    ASSERT_NE(dialog, nullptr);
-    auto *used_box = dialog->findChild<QCheckBox *>(
+  filter->click();
+  popup = window.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  {
+    auto *used_box = popup->findChild<QCheckBox *>(
         QStringLiteral("materialBrowser.filterUsed"));
-    auto *apply = dialog->findChild<QPushButton *>(
+    auto *apply = popup->findChild<QPushButton *>(
         QStringLiteral("materialBrowser.filterApply"));
     ASSERT_NE(used_box, nullptr);
     ASSERT_NE(apply, nullptr);
     used_box->click();
     apply->click();
-  });
-  filter->click();
+    application.processEvents();
+  }
   EXPECT_EQ(grid->model()->rowCount(), 0);
   EXPECT_EQ(empty->text(),
             QStringLiteral("No materials match this usage filter"));
@@ -1059,16 +1064,11 @@ TEST(QtMaterialBrowserWindowTests,
     auto *filter = window->findChild<QToolButton *>(
         QStringLiteral("materialBrowser.filter"));
     ASSERT_NE(filter, nullptr);
-    QTimer::singleShot(0, [&]() {
-      if (!window) {
-        return;
-      }
-      saw_filter = window->findChild<QDialog *>(
-                       QStringLiteral("materialBrowser.filterDialog")) !=
-                   nullptr;
-      delete window.data();
-    });
     filter->click();
+    saw_filter = window->findChild<QFrame *>(
+                     QStringLiteral("materialBrowser.filterPopup")) !=
+                 nullptr;
+    delete window.data();
     EXPECT_TRUE(window.isNull());
   }
   EXPECT_TRUE(saw_filter);

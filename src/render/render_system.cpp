@@ -9,11 +9,13 @@
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/material_preview_renderer.hpp"
+#include "render/png_texture_loader.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/viewport_renderer.hpp"
 
 #include <backend/platforms/VulkanPlatformWindows.h>
 #include <filament/Renderer.h>
+#include <filament/Texture.h>
 #include <math/vec4.h>
 
 #include <algorithm>
@@ -258,6 +260,27 @@ bool RenderSystem::initialize(void *native_window,
   if (!material_library_.initialize(*engine_, executable_dir)) {
     return fail("Unable to initialize Filament material library");
   }
+  solid_color_texture_ = load_png_texture(
+      *engine_, resource_root_ / "textures" / "default_texture.png",
+      PngTextureLoadOptions{
+          .color_space = PngTextureColorSpace::Srgb,
+          .generate_mipmaps = true,
+          .label = "Solid viewport texture",
+      });
+  if (solid_color_texture_ == nullptr) {
+    const std::array<std::byte, 4u> neutral_gray{
+        std::byte{181u}, std::byte{181u}, std::byte{181u}, std::byte{255u}};
+    solid_color_texture_ = load_rgba_texture(
+        *engine_, neutral_gray, 1u, 1u,
+        PngTextureLoadOptions{
+            .color_space = PngTextureColorSpace::Srgb,
+            .generate_mipmaps = true,
+            .label = "Solid viewport fallback texture",
+        });
+  }
+  if (solid_color_texture_ == nullptr) {
+    return fail("Unable to initialize Solid viewport texture");
+  }
   environment_library_.initialize(*engine_, *scene_, executable_dir);
 
   return true;
@@ -284,6 +307,10 @@ void RenderSystem::shutdown() {
     texture_registry_.clear();
     environment_library_.shutdown();
     material_library_.shutdown();
+    if (solid_color_texture_ != nullptr) {
+      engine_->destroy(solid_color_texture_);
+      solid_color_texture_ = nullptr;
+    }
     if (scene_) {
         engine_->destroy(scene_);
         scene_ = nullptr;
@@ -644,7 +671,8 @@ void RenderSystem::destroy_additional_surface(RenderSurfaceState &surface) {
 void RenderSystem::initialize_scene_render_bridge(
     SceneRenderBridge &render_bridge,
     const std::filesystem::path &executable_dir) {
-  if (engine_ == nullptr || scene_ == nullptr) {
+  if (engine_ == nullptr || scene_ == nullptr ||
+      solid_color_texture_ == nullptr) {
     return;
   }
 
@@ -656,7 +684,8 @@ void RenderSystem::initialize_scene_render_bridge(
                            material_library_.selected_object_line(),
                            material_library_.edit_wire_line(),
                            material_library_.overlay_point(),
-                           material_library_.overlay_icon(), executable_dir);
+                           material_library_.overlay_icon(),
+                           *solid_color_texture_, executable_dir);
 }
 
 void RenderSystem::initialize_viewport_renderer(
@@ -667,12 +696,14 @@ void RenderSystem::initialize_viewport_renderer(
 
 bool RenderSystem::initialize_material_preview_renderer(
     MaterialPreviewRenderer &preview_renderer) {
-  if (engine_ == nullptr || !material_library_.initialized()) {
+  if (engine_ == nullptr || !material_library_.initialized() ||
+      solid_color_texture_ == nullptr) {
     return false;
   }
   return preview_renderer.initialize(
       *engine_, material_library_.quader_mesh(),
-      material_library_.quader_mesh_lit(), resource_root_);
+      material_library_.quader_mesh_lit(), *solid_color_texture_,
+      resource_root_);
 }
 
 void RenderSystem::initialize_viewport_renderer(

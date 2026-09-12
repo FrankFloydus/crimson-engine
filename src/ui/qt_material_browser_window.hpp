@@ -381,6 +381,7 @@ private:
   MoveFolderCallback move_folder_;
   MoveMaterialsCallback move_materials_;
   MaterialActionCallback material_action_;
+  UsageInspectionErrorCallback usage_inspection_error_;
   std::vector<QString> folders_;
   QtMaterialBrowserUsageSnapshot usage_snapshot_;
   QuaderMaterialReference protected_material_;

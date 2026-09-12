@@ -4465,6 +4465,169 @@ TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
       shortcut));
 }
 
+TEST(EditorApiTests,
+     CursorPopupBindingsPreserveZPrecedenceModifiersAndPersistence) {
+  constexpr std::string_view kAddPopup = "viewport.add_popup";
+  constexpr std::string_view kShadingPopup = "viewport.shading_popup";
+  constexpr std::string_view kLinearArrayZ =
+      "viewport.linear_array.constraint_z";
+  const std::filesystem::path path =
+      keybinding_test_path("viewport-cursor-popups");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  (void)create_selected_box(editor, "Popup Shortcut History A");
+  (void)create_selected_box(editor, "Popup Shortcut History B");
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.history().can_undo());
+  ASSERT_TRUE(editor.history().can_redo());
+
+  EXPECT_EQ(editor.commands().shortcut_for(kAddPopup), "Shift+A");
+  EXPECT_EQ(editor.commands().shortcut_for(kShadingPopup), "Z");
+
+  const auto expect_popup = [](quader::QuaderEditorApi &owner,
+                               std::string_view binding,
+                               quader::ViewportShortcutKind expected) {
+    const quader::QuaderViewportKeybindingDispatch dispatch =
+        owner.commands().dispatch_viewport_input_binding(
+            single_input_chord(binding), {}, true, false);
+    ASSERT_EQ(dispatch.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut)
+        << binding;
+    EXPECT_EQ(dispatch.shortcut.kind, expected) << binding;
+  };
+  expect_popup(editor, "Shift+A", quader::ViewportShortcutKind::AddPopup);
+  expect_popup(editor, "Z", quader::ViewportShortcutKind::ShadingPopup);
+
+  for (const std::string_view binding : {"Shift+A", "Z"}) {
+    SCOPED_TRACE(binding);
+    EXPECT_EQ(editor.commands()
+                  .dispatch_viewport_input_binding(
+                      single_input_chord(binding), {}, false, false)
+                  .kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+    EXPECT_EQ(editor.commands()
+                  .dispatch_viewport_input_binding(
+                      single_input_chord(binding), {}, true, true)
+                  .kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+    EXPECT_EQ(editor.commands()
+                  .dispatch_viewport_input_binding(
+                      single_input_chord(binding), {}, true, false,
+                      {.navigation_active = true})
+                  .kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  }
+
+  quader::ViewportToolState linear_array_state{
+      .active_tool = quader::ViewportToolId::LinearArray,
+  };
+  const quader::QuaderViewportKeybindingDispatch linear_array_z =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Z"), linear_array_state, true, false);
+  ASSERT_EQ(
+      linear_array_z.kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::ViewportInputAction);
+  EXPECT_EQ(linear_array_z.action,
+            quader::ViewportInputActionKind::ToolConstraintZ);
+
+  const quader::QuaderViewportKeybindingDispatch mirror_z =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Shift+Z"), linear_array_state, true, false);
+  ASSERT_EQ(mirror_z.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(mirror_z.command_id,
+            quader::quader_command::kModelingMirrorSelectionZ.string());
+
+  const quader::QuaderViewportKeybindingDispatch undo =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Z"), linear_array_state, true, false);
+  ASSERT_EQ(undo.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(undo.command_id, quader::quader_command::kEditUndo.string());
+  const quader::QuaderViewportKeybindingDispatch redo =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Shift+Z"), linear_array_state, true,
+          false);
+  ASSERT_EQ(redo.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(redo.command_id, quader::quader_command::kEditRedo.string());
+
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *add = find_keybinding_catalog_entry(catalog, kAddPopup);
+  const auto *shading =
+      find_keybinding_catalog_entry(catalog, kShadingPopup);
+  ASSERT_NE(add, nullptr);
+  ASSERT_NE(shading, nullptr);
+  EXPECT_EQ(add->default_shortcut, "Shift+A");
+  EXPECT_EQ(shading->default_shortcut, "Z");
+  const quader::QuaderKeybindingAssignmentAnalysis z_conflicts =
+      editor.commands().analyze_shortcut_assignment(add->key, "Z");
+  ASSERT_TRUE(z_conflicts.ok) << z_conflicts.message;
+  const auto has_exact_conflict = [&](std::string_view target_id) {
+    return std::any_of(
+        z_conflicts.conflicts.begin(), z_conflicts.conflicts.end(),
+        [&](const quader::QuaderKeybindingCollision &collision) {
+          return collision.target_id == target_id &&
+                 collision.kind ==
+                     quader::QuaderKeybindingCollisionKind::ExactConflict;
+        });
+  };
+  EXPECT_TRUE(has_exact_conflict(kShadingPopup));
+  EXPECT_TRUE(has_exact_conflict(kLinearArrayZ));
+  const quader::QuaderApiVoidResult rejected_z =
+      editor.preferences().set_action_shortcut(
+          add->key, "Z", quader::QuaderKeybindingConflictPolicy::Reject);
+  EXPECT_FALSE(rejected_z.ok());
+  EXPECT_FALSE(rejected_z.changed());
+  EXPECT_EQ(editor.commands().shortcut_for(kAddPopup), "Shift+A");
+  EXPECT_EQ(editor.commands().shortcut_for(kShadingPopup), "Z");
+
+  ASSERT_TRUE(
+      editor.preferences().set_shortcut(kAddPopup, "Ctrl+Alt+F20").ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(kShadingPopup, "Ctrl+Alt+F21")
+                  .ok());
+  CommandTestHarness reloaded_harness;
+  quader::QuaderEditorApi &reloaded = reloaded_harness.editor;
+  ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(reloaded.commands().shortcut_for(kAddPopup), "Ctrl+Alt+F20");
+  EXPECT_EQ(reloaded.commands().shortcut_for(kShadingPopup), "Ctrl+Alt+F21");
+  EXPECT_EQ(reloaded.commands()
+                .dispatch_viewport_input_binding(single_input_chord("Shift+A"),
+                                                 {}, true, false)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(reloaded.commands()
+                .dispatch_viewport_input_binding(single_input_chord("Z"), {},
+                                                 true, false)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  expect_popup(reloaded, "Ctrl+Alt+F20",
+               quader::ViewportShortcutKind::AddPopup);
+  expect_popup(reloaded, "Ctrl+Alt+F21",
+               quader::ViewportShortcutKind::ShadingPopup);
+
+  ASSERT_TRUE(reloaded.preferences().remove_shortcut(kAddPopup).ok());
+  ASSERT_TRUE(reloaded.preferences().remove_shortcut(kShadingPopup).ok());
+  CommandTestHarness removed_harness;
+  quader::QuaderEditorApi &removed = removed_harness.editor;
+  ASSERT_TRUE(removed.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_TRUE(removed.commands().shortcut_for(kAddPopup).empty());
+  EXPECT_TRUE(removed.commands().shortcut_for(kShadingPopup).empty());
+
+  ASSERT_TRUE(removed.preferences().reset_shortcut(kAddPopup).ok());
+  ASSERT_TRUE(removed.preferences().reset_shortcut(kShadingPopup).ok());
+  CommandTestHarness reset_harness;
+  quader::QuaderEditorApi &reset = reset_harness.editor;
+  ASSERT_TRUE(reset.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(reset.commands().shortcut_for(kAddPopup), "Shift+A");
+  EXPECT_EQ(reset.commands().shortcut_for(kShadingPopup), "Z");
+  expect_popup(reset, "Shift+A", quader::ViewportShortcutKind::AddPopup);
+  expect_popup(reset, "Z", quader::ViewportShortcutKind::ShadingPopup);
+  std::filesystem::remove(path);
+}
+
 TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithAndWithoutViewportFocus) {
   const std::filesystem::path path =
       keybinding_test_path("global-command-shortcuts");
@@ -9712,6 +9875,88 @@ TEST(EditorApiTests,
   expect_specialized_disabled();
 }
 
+TEST(EditorApiTests,
+     CursorMenuLeafCommandsAreTypedRegisteredAndDeliberatelyUnassigned) {
+  struct ExpectedCommand {
+    quader::QuaderCommandId id;
+    std::string_view label;
+  };
+  constexpr std::array kExpected{
+      ExpectedCommand{quader::quader_command::kToolsActivateCreateBox,
+                      "Create Box"},
+      ExpectedCommand{quader::quader_command::kToolsActivateCreateCylinder,
+                      "Create Cylinder"},
+      ExpectedCommand{quader::quader_command::kToolsActivateCreateSphere,
+                      "Create Sphere"},
+      ExpectedCommand{quader::quader_command::kToolsActivateCreateTorus,
+                      "Create Torus"},
+      ExpectedCommand{quader::quader_command::kToolsActivateCreateCone,
+                      "Create Cone"},
+      ExpectedCommand{quader::quader_command::kToolsActivateCreateCurve,
+                      "Create Curve"},
+      ExpectedCommand{quader::quader_command::kSceneCreateEmpty,
+                      "Create Empty"},
+      ExpectedCommand{quader::quader_command::kViewportShadingSolid,
+                      "Solid"},
+  };
+
+  const std::filesystem::path path =
+      keybinding_test_path("cursor-menu-leaf-commands");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  const std::unordered_set<std::string> typed = typed_command_ids();
+  const std::unordered_set<std::string> registered =
+      available_command_ids(editor);
+  const std::vector<quader::QuaderKeybindingCatalogEntry> catalog =
+      editor.commands().keybinding_catalog();
+
+  for (const ExpectedCommand &expected : kExpected) {
+    SCOPED_TRACE(expected.id.string());
+    EXPECT_TRUE(typed.contains(std::string(expected.id.string())));
+    EXPECT_TRUE(registered.contains(std::string(expected.id.string())));
+    const std::optional<quader::QuaderCommandDescriptor> descriptor =
+        editor.commands().descriptor(expected.id);
+    ASSERT_TRUE(descriptor.has_value());
+    EXPECT_EQ(descriptor->label, expected.label);
+    EXPECT_TRUE(descriptor->shortcut.empty());
+
+    const quader::QuaderKeybindingCatalogEntry *entry =
+        find_keybinding_catalog_entry(catalog, expected.id.string());
+    ASSERT_NE(entry, nullptr);
+    EXPECT_TRUE(entry->shortcut.empty());
+    EXPECT_TRUE(entry->default_shortcut.empty());
+    EXPECT_TRUE(entry->unassigned);
+    EXPECT_FALSE(entry->customized);
+    EXPECT_EQ(entry->source, quader::QuaderKeybindingSourceKind::Default);
+  }
+
+  for (const quader::QuaderCommandId command : {
+           quader::quader_command::kToolsActivateCreateBox,
+           quader::quader_command::kToolsActivateCreateCylinder,
+           quader::quader_command::kToolsActivateCreateSphere,
+           quader::quader_command::kToolsActivateCreateTorus,
+           quader::quader_command::kToolsActivateCreateCone,
+           quader::quader_command::kToolsActivateCreateCurve,
+       }) {
+    EXPECT_FALSE(
+        quader::viewport_target_requires_router_dispatch(command.string()))
+        << command.string();
+  }
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(quader::quader_command::kToolsActivateCreateBox,
+                                "Ctrl+Alt+F22")
+                  .ok());
+  const quader::QuaderViewportKeybindingDispatch rebound_box =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Alt+F22"), {}, true, false);
+  ASSERT_EQ(rebound_box.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(rebound_box.command_id,
+            quader::quader_command::kToolsActivateCreateBox.string());
+  std::filesystem::remove(path);
+}
+
 TEST(EditorApiTests, CommandRegistryCoversEveryAppOperationAndViewportTool) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
@@ -12323,9 +12568,11 @@ TEST(EditorApiTests, GroupModeRightClickPickSelectsGroupBeforeContextDelete) {
 TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
+    static_assert(quader::QuaderShadingMode::Rendered ==
+                  quader::QuaderShadingMode::Material);
 
     EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
-              quader::QuaderShadingMode::Solid);
+              quader::QuaderShadingMode::Shaded);
     EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Top),
               quader::QuaderShadingMode::Wireframe);
 
@@ -12372,15 +12619,20 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
         editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
         quader::QuaderShadingMode::Wireframe);
     EXPECT_TRUE(
-        viewport.set_shading_mode(quader::QuaderShadingMode::Material).ok());
+        viewport.set_shading_mode(quader::QuaderShadingMode::Rendered).ok());
     EXPECT_EQ(
         editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
-        quader::QuaderShadingMode::Material);
+        quader::QuaderShadingMode::Rendered);
     EXPECT_TRUE(
         viewport.set_shading_mode(quader::QuaderShadingMode::Solid).ok());
     EXPECT_EQ(
         editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
         quader::QuaderShadingMode::Solid);
+    EXPECT_TRUE(
+        viewport.set_shading_mode(quader::QuaderShadingMode::Shaded).ok());
+    EXPECT_EQ(
+        editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
+        quader::QuaderShadingMode::Shaded);
     constexpr std::array<quader::QuaderShadingMode, 6> kDebugModes{
         quader::QuaderShadingMode::DiffuseOnly,
         quader::QuaderShadingMode::SpecularOnly,
@@ -12405,10 +12657,10 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
     EXPECT_EQ(editor.viewports().view(quader::ViewportPaneId::Perspective), quader::ViewportView::Top);
     EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
               quader::QuaderShadingMode::Wireframe);
-    EXPECT_TRUE(viewport.set_shading_mode(quader::QuaderShadingMode::Material).changed());
+    EXPECT_TRUE(viewport.set_shading_mode(quader::QuaderShadingMode::Rendered).changed());
     EXPECT_TRUE(viewport.set_view(quader::ViewportView::Front).changed());
     EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
-              quader::QuaderShadingMode::Material);
+              quader::QuaderShadingMode::Rendered);
     EXPECT_TRUE(editor.commands()
                     .execute(quader::quader_command::kViewportViewPerspective)
                     .ok());
@@ -12417,7 +12669,7 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
               quader::QuaderShadingMode::Normal);
     EXPECT_TRUE(viewport.set_view(quader::ViewportView::Top).changed());
     EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
-              quader::QuaderShadingMode::Material);
+              quader::QuaderShadingMode::Rendered);
     EXPECT_TRUE(viewport.set_view(quader::ViewportView::Perspective).changed());
 
     EXPECT_TRUE(viewport.camera().focus_origin().ok());
@@ -19514,14 +19766,19 @@ TEST(EditorApiTests,
                        quader::quader_command::kViewportShadingWireframe);
   EXPECT_EQ(editor.viewports().shading_mode(editor.viewports().focused_pane()),
             quader::QuaderShadingMode::Wireframe);
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kViewportShadingSolid)
+                  .ok());
+  EXPECT_EQ(editor.viewports().shading_mode(editor.viewports().focused_pane()),
+            quader::QuaderShadingMode::Solid);
   dispatch_and_execute("F6",
                        quader::quader_command::kViewportShadingShaded);
   EXPECT_EQ(editor.viewports().shading_mode(editor.viewports().focused_pane()),
-            quader::QuaderShadingMode::Solid);
+            quader::QuaderShadingMode::Shaded);
   dispatch_and_execute("F7",
                        quader::quader_command::kViewportShadingRendered);
   EXPECT_EQ(editor.viewports().shading_mode(editor.viewports().focused_pane()),
-            quader::QuaderShadingMode::Material);
+            quader::QuaderShadingMode::Rendered);
 
   dispatch_and_execute("Ctrl+1",
                        quader::quader_command::kViewportLayoutSingle);
@@ -19578,9 +19835,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 208u);
+  EXPECT_EQ(commands.size(), 216u);
 #else
-  EXPECT_EQ(commands.size(), 207u);
+  EXPECT_EQ(commands.size(), 215u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
@@ -19646,7 +19903,7 @@ TEST(EditorApiTests,
           [&](const std::string &target_id) {
             return !command_ids.contains(target_id);
           }));
-  EXPECT_EQ(non_command_target_count, 53u);
+  EXPECT_EQ(non_command_target_count, 55u);
 
   for (const std::string &typed_id : typed_command_ids()) {
     EXPECT_TRUE(actual_target_ids.contains(typed_id)) << typed_id;

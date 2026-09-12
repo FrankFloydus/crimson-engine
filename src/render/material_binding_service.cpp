@@ -280,6 +280,11 @@ MaterialBindingService::create_mesh_material_instance(
           *material_instance, assets, material, material_texture_slot::kBaseColor,
           texture_binding_->fallback_albedo_texture()),
       sampler);
+  if (editor_unlit) {
+    material_instance->setParameter("solidColorTexture",
+                                    texture_binding_->solid_color_texture(),
+                                    sampler);
+  }
   const QVec3 base_color =
       material ? material->base_color : QVec3{1.0f, 1.0f, 1.0f};
   material_instance->setParameter(
@@ -354,6 +359,11 @@ MaterialBindingService::create_mesh_material_instance(
           *material_instance, material, material_texture_slot::kBaseColor,
           texture_binding_->fallback_albedo_texture()),
       sampler);
+  if (editor_unlit) {
+    material_instance->setParameter("solidColorTexture",
+                                    texture_binding_->solid_color_texture(),
+                                    sampler);
+  }
   const QVec3 base_color = material && material->present
                                ? material->document.base_color
                                : QVec3{1.0f, 1.0f, 1.0f};

@@ -253,6 +253,8 @@ bool ViewportToolRuntime::handle_shortcut(const ViewportShortcut &shortcut,
     result.cancel_requested = true;
     return true;
   case ViewportShortcutKind::DeletePopup:
+  case ViewportShortcutKind::AddPopup:
+  case ViewportShortcutKind::ShadingPopup:
     return !active_tool_blocks_viewport_focus_shortcuts();
   case ViewportShortcutKind::DeleteSelection:
   case ViewportShortcutKind::SelectAll:

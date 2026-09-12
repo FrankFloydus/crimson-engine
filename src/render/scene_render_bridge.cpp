@@ -33,11 +33,12 @@ void SceneRenderBridge::initialize(
     filament::Material &edit_wire_line_material,
     filament::Material &overlay_point_material,
     filament::Material &overlay_icon_material,
+    filament::Texture &solid_color_texture,
     std::filesystem::path resource_root) {
   shutdown();
   engine_ = &engine;
   scene_ = &scene;
-  texture_binding_.initialize(engine, resource_root);
+  texture_binding_.initialize(engine, resource_root, solid_color_texture);
   material_binding_.initialize(shaded_mesh_material, rendered_mesh_material,
                                texture_binding_);
   mesh_factory_.initialize(engine, scene, material_binding_);

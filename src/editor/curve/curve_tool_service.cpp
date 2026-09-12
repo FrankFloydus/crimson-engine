@@ -676,6 +676,26 @@ CommandResult CurveToolService::apply() {
   return result;
 }
 
+CommandResult CurveToolService::begin_new_curve() {
+  if (!can_begin_new_curve()) {
+    return command_invalid_result("Finish or cancel the current curve first.");
+  }
+
+  const bool changed = !active_ || !drawing_ || entity_ != kInvalidEntityId ||
+                       modeling_object_id_ != -1 || !source_uuid_.empty();
+  if (!changed) {
+    // Treat the current selection stamp as observed so refresh() does not
+    // attach an intentionally bypassed selected Curve on the next frame.
+    observe_owner_revisions();
+    return command_unchanged_result();
+  }
+  active_ = true;
+  detach_source();
+  observe_owner_revisions();
+  invalidate(true);
+  return command_changed_result();
+}
+
 CommandResult CurveToolService::new_curve() {
   if (!active_) {
     return command_invalid_result("The Curve tool is not active.");

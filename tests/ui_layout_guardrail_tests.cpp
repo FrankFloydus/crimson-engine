@@ -1656,7 +1656,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(button_presentation,
                   "element == PE_IndicatorToolBarSeparator");
   expect_contains(button_presentation,
-                  "option->palette.brush(QPalette::Midlight)");
+                  "option->palette.brush(QPalette::Dark)");
   expect_contains(button_presentation,
                   "option->palette.brush(QPalette::Window)");
   expect_contains(button_presentation, "bounds.top()");

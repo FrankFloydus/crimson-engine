@@ -137,7 +137,7 @@ std::string viewport_grid_preset_target_id(int preset) {
 
 std::span<const ViewportShortcutTargetDescriptor>
 viewport_shortcut_target_catalog() {
-  static const std::array<ViewportShortcutTargetDescriptor, 32> kDescriptors{{
+  static const std::array<ViewportShortcutTargetDescriptor, 34> kDescriptors{{
       {"new_scene", quader_command::kSceneDocumentNew.string(),
        viewport_target_shortcut(ViewportShortcutKind::None,
                                 ViewportShortcutContext::Global)},
@@ -232,6 +232,10 @@ viewport_shortcut_target_catalog() {
        viewport_target_shortcut(ViewportShortcutKind::ToggleMaximized)},
       {"", "viewport.delete_popup",
        viewport_target_shortcut(ViewportShortcutKind::DeletePopup)},
+      {"", "viewport.add_popup",
+       viewport_target_shortcut(ViewportShortcutKind::AddPopup)},
+      {"", "viewport.shading_popup",
+       viewport_target_shortcut(ViewportShortcutKind::ShadingPopup)},
   }};
   return kDescriptors;
 }
@@ -949,6 +953,16 @@ bool viewport_shortcut_for_command_target_id(std::string_view target_id,
 }
 
 bool viewport_target_requires_router_dispatch(std::string_view target_id) {
+  const bool known_viewport_tool_target = [&]() {
+    const std::optional<std::string_view> tool_id =
+        quader_tool_id_from_activation_command_target(target_id);
+    if (!tool_id) {
+      return false;
+    }
+    ViewportToolId tool = ViewportToolId::Select;
+    return viewport_tool_from_contract_id(*tool_id, tool);
+  }();
+
   return viewport_view_for_command_target_id(target_id).has_value() ||
          target_id == quader_command::kViewportFocusAll.string() ||
          target_id == quader_command::kViewportFocusOrigin.string() ||
@@ -958,7 +972,9 @@ bool viewport_target_requires_router_dispatch(std::string_view target_id) {
          target_id == "viewport.cancel_active_tool" ||
          target_id == "viewport.toggle_maximized" ||
          target_id == "viewport.delete_popup" ||
-         quader_tool_id_from_activation_command_target(target_id).has_value() ||
+         target_id == "viewport.add_popup" ||
+         target_id == "viewport.shading_popup" ||
+         known_viewport_tool_target ||
          quader_selection_mode_id_from_command_target(target_id).has_value() ||
          quader_grid_preset_id_from_command_target(target_id).has_value();
 }
@@ -986,6 +1002,8 @@ bool viewport_shortcuts_match(const ViewportShortcut &lhs,
   case ViewportShortcutKind::ToggleMaximized:
   case ViewportShortcutKind::CancelActiveTool:
   case ViewportShortcutKind::DeletePopup:
+  case ViewportShortcutKind::AddPopup:
+  case ViewportShortcutKind::ShadingPopup:
   case ViewportShortcutKind::DeleteSelection:
   case ViewportShortcutKind::SelectAll:
   case ViewportShortcutKind::InvertSelection:

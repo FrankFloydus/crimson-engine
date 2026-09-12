@@ -210,8 +210,9 @@ constexpr std::array<ViewportView, 7> kViewportViews{
     ViewportView::Left,
 };
 
-constexpr std::array<ViewportShadingMode, 3> kShadingModes{
+constexpr std::array<ViewportShadingMode, 4> kShadingModes{
     ViewportShadingMode::Wireframe,
+    ViewportShadingMode::Solid,
     ViewportShadingMode::Shaded,
     ViewportShadingMode::Rendered,
 };
@@ -221,6 +222,8 @@ shading_command_id(ViewportShadingMode shading) {
   switch (shading) {
   case ViewportShadingMode::Wireframe:
     return quader_command::kViewportShadingWireframe;
+  case ViewportShadingMode::Solid:
+    return quader_command::kViewportShadingSolid;
   case ViewportShadingMode::Shaded:
     return quader_command::kViewportShadingShaded;
   case ViewportShadingMode::Rendered:
@@ -255,6 +258,8 @@ std::string_view shading_stable_id(ViewportShadingMode shading) {
   switch (shading) {
   case ViewportShadingMode::Wireframe:
     return "wireframe";
+  case ViewportShadingMode::Solid:
+    return "solid";
   case ViewportShadingMode::Shaded:
     return "shaded";
   case ViewportShadingMode::Rendered:
@@ -279,6 +284,8 @@ std::string_view shading_label(ViewportShadingMode shading) {
   switch (shading) {
   case ViewportShadingMode::Wireframe:
     return "Wireframe";
+  case ViewportShadingMode::Solid:
+    return "Solid";
   case ViewportShadingMode::Shaded:
     return "Shaded";
   case ViewportShadingMode::Rendered:
@@ -335,6 +342,7 @@ viewport_material_debug_mode(ViewportShadingMode shading) {
   case ViewportShadingMode::Normal:
     return ViewportMaterialDebugMode::Normal;
   case ViewportShadingMode::Wireframe:
+  case ViewportShadingMode::Solid:
   case ViewportShadingMode::Shaded:
   case ViewportShadingMode::Rendered:
     return ViewportMaterialDebugMode::None;
@@ -1144,7 +1152,9 @@ void QtViewportPanel::prepare_viewports(
     ViewportRenderer &renderer = pane_state.surface->renderer();
     renderer.set_instance_edit_context_active(
         instance_edit_context_active, settings);
-    renderer.set_material_debug_mode(viewport_material_debug_mode(shading));
+    renderer.set_material_presentation(
+        viewport_material_debug_mode(shading),
+        shading == ViewportShadingMode::Solid);
 
     if (const EntityId root = document.scene_root(); root != kInvalidEntityId) {
       if (const SceneSettingsComponent *scene_settings =
@@ -3058,8 +3068,17 @@ void QtViewportPanel::process_viewport_input(
       !preview_shortcut_consumed && result.shortcut_handled &&
       result.shortcut.kind == ViewportShortcutKind::DeletePopup &&
       localization_ != nullptr;
-  QPoint delete_popup_global_point;
-  if (show_delete_popup) {
+  const bool show_add_popup =
+      !preview_shortcut_consumed && result.shortcut_handled &&
+      result.shortcut.kind == ViewportShortcutKind::AddPopup &&
+      localization_ != nullptr;
+  const bool show_shading_popup =
+      !preview_shortcut_consumed && result.shortcut_handled &&
+      result.shortcut.kind == ViewportShortcutKind::ShadingPopup &&
+      localization_ != nullptr;
+  const bool show_quick_menu = show_add_popup || show_shading_popup;
+  QPoint shortcut_popup_global_point;
+  if (show_delete_popup || show_quick_menu) {
     const qreal scale =
         std::max<qreal>(pane_state.surface->devicePixelRatio(), 1.0);
     const QPoint local_point(
@@ -3067,7 +3086,7 @@ void QtViewportPanel::process_viewport_input(
                                      static_cast<float>(scale))),
         static_cast<int>(std::lround(input.mouse_local.y /
                                      static_cast<float>(scale))));
-    delete_popup_global_point = pane_state.surface->mapToGlobal(local_point);
+    shortcut_popup_global_point = pane_state.surface->mapToGlobal(local_point);
   }
 
   const bool suppress_hover_work =
@@ -3846,11 +3865,26 @@ void QtViewportPanel::process_viewport_input(
   }
   if (show_delete_popup &&
       delete_popup_presenter_.show(
-          *pane_state.surface_container, delete_popup_global_point, editor,
+          *pane_state.surface_container, shortcut_popup_global_point, editor,
           modeling, input_router_, *localization_,
           {.current_generation = &runtime_binding_generation_,
            .expected_generation = input_binding_generation})) {
     hover_controller_.invalidate();
+  }
+  if (show_quick_menu) {
+    (void)workspace_->focus_pane(*input_pane);
+    update_focused_pane_indicator();
+    if (quick_menu_presenter_.show(
+            show_add_popup ? QtViewportQuickMenuKind::Add
+                           : QtViewportQuickMenuKind::Shading,
+            *pane_state.surface_container, shortcut_popup_global_point,
+            *input_pane, workspace_->shading_mode(*input_pane), editor,
+            input_router_, *localization_,
+            {.current_generation = &runtime_binding_generation_,
+             .expected_generation = input_binding_generation})) {
+      hover_controller_.invalidate();
+      sync_pane_control_selection(pane_state);
+    }
   }
   if (runtime_binding_generation_ != input_binding_generation) {
     return;
@@ -3867,13 +3901,13 @@ void QtViewportPanel::process_viewport_input(
       !interaction_controller_.transform_gizmo_pointer_active() &&
       !interaction_controller_.point_light_range_pointer_active() &&
       !native_tools.pointer_dragging() &&
-      !show_context_menu && !show_delete_popup;
+      !show_context_menu && !show_delete_popup && !show_quick_menu;
   primitive_feedback_input_eligible_ =
       input.viewport_focused && !input.text_input_active &&
       !input.pointer_interaction_canceled && !result.navigation_active &&
       (input.viewport_hovered || interaction_controller_.primitive_creation_pointer_active()) &&
       editor.preferences().gizmos_visible() &&
-      !show_context_menu && !show_delete_popup;
+      !show_context_menu && !show_delete_popup && !show_quick_menu;
 }
 
 bool QtViewportPanel::sync_active_tool_from_editor(
