@@ -8,6 +8,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "core/localization_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
+#include "editor/input/quader_input_binding.hpp"
 #include "editor/metadata/operation_input_hint_catalog.hpp"
 #include "editor/session/project_session.hpp"
 #include "support/command_behavior_fixture.hpp"
@@ -142,11 +143,59 @@ TEST(OperationInputHintTests, OwnerRevisionTracksKindSelectionFootprintAndCancel
                                 QuaderOperationInputGesture::PrimaryClick));
 }
 
+TEST(OperationInputHintTests, UvPeelRoutesCompletionBeforeAnyGuideIsSelected) {
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.commands().execute(quader_command::kModelingUvPeel).ok());
+  EXPECT_EQ(editor.tools().active_tool(), "uv_peel");
+  EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Edge);
+
+  const auto hints = editor.tools().active_input_hints();
+  EXPECT_TRUE(contains_gesture(hints, QuaderOperationInputGesture::PrimaryClick));
+  EXPECT_TRUE(contains_gesture(hints, QuaderOperationInputGesture::ShiftPrimaryClick));
+  EXPECT_TRUE(contains_gesture(hints, QuaderOperationInputGesture::ControlPrimaryClick));
+  EXPECT_TRUE(contains_command(hints, QuaderCommandId{"viewport.modal_tool.finalize"}));
+  EXPECT_TRUE(contains_command(hints, QuaderCommandId{"viewport.cancel_active_tool"}));
+
+  ViewportToolState state;
+  state.active_tool = ViewportToolId::UvPeel;
+  state.selection_mode = ViewportSelectionMode::Edge;
+  const auto space = quader_input_parse_chord("Space");
+  const auto escape = quader_input_parse_chord("Escape");
+  ASSERT_TRUE(space.has_value());
+  ASSERT_TRUE(escape.has_value());
+  const auto finalize = editor.commands().dispatch_viewport_input_binding(
+      *space, state, true, false);
+  ASSERT_EQ(finalize.kind, QuaderViewportKeybindingDispatch::Kind::ViewportInputAction);
+  EXPECT_EQ(finalize.action, ViewportInputActionKind::ModalToolFinalize);
+  const auto cancel = editor.commands().dispatch_viewport_input_binding(
+      *escape, state, true, false);
+  ASSERT_EQ(cancel.kind, QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(cancel.shortcut.kind, ViewportShortcutKind::CancelActiveTool);
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                *space, state, true, false, {.navigation_active = true}).kind,
+            QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                *space, state, true, true).kind,
+            QuaderViewportKeybindingDispatch::Kind::NoMatch);
+
+  const auto settings_cancel =
+      editor.commands().dispatch_native_tool_settings_input_binding(*escape, state);
+  ASSERT_EQ(settings_cancel.kind, QuaderNativeToolSettingsDispatch::Kind::Intent);
+  EXPECT_EQ(settings_cancel.intent, QuaderNativeToolSettingsIntent::Cancel);
+  ASSERT_TRUE(editor.commands().execute_native_tool_settings_intent(settings_cancel.intent).ok());
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Edge);
+  EXPECT_FALSE(contains_command(editor.tools().active_input_hints(),
+                                QuaderCommandId{"viewport.cancel_active_tool"}));
+}
+
 TEST(OperationInputHintTests, AuditedViewportToolsPublishLocalizedActions) {
-  const std::array<std::string_view, 13> tool_ids{
+  const std::array<std::string_view, 14> tool_ids{
       "select",          "lasso_select", "move",   "rotate", "scale",
       "extrude",         "insert_edge_loop", "knife", "cut", "poly",
-      "mirror",          "pivot",        "linear_array"};
+      "mirror",          "pivot",        "linear_array", "uv_peel"};
   for (const std::string_view tool_id : tool_ids) {
     SCOPED_TRACE(tool_id);
     const auto hints = viewport_tool_input_hints(tool_id);
@@ -218,6 +267,46 @@ TEST_F(QtOperationInputHintTests, RebindingUnassignmentAndLocaleRefreshWithoutId
     return hint.badge == QStringLiteral("Shift+F") &&
            hint.label == QStringLiteral("Inverti");
   }));
+}
+
+TEST_F(QtOperationInputHintTests, UvPeelRetainsSelectionHintsAndTracksCompletionBindings) {
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::UvPeel).ok());
+  auto localization = localization_for();
+  QWidget parent;
+  QtOperationInputHints widget(&parent);
+  widget.refresh(editor.tools(), editor.commands(), localization);
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("LMB")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Shift + LMB")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Ctrl + LMB")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("MMB")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Space")));
+  const auto cancel = QuaderCommandId{"viewport.cancel_active_tool"};
+  const auto cancel_badge = QString::fromStdString(editor.commands().shortcut_for(cancel));
+  ASSERT_FALSE(cancel_badge.isEmpty());
+  EXPECT_TRUE(contains_badge(widget, cancel_badge));
+  const auto revision = widget.projection_revision();
+  const auto *items = widget.hints().data();
+  for (int frame = 0; frame < 20; ++frame) {
+    widget.refresh(editor.tools(), editor.commands(), localization);
+  }
+  EXPECT_EQ(widget.projection_revision(), revision);
+  EXPECT_EQ(widget.hints().data(), items);
+
+  ASSERT_TRUE(editor.commands().set_shortcut(cancel, "Ctrl+Alt+F20").ok());
+  widget.refresh(editor.tools(), editor.commands(), localization);
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Ctrl+Alt+F20")));
+  EXPECT_FALSE(contains_badge(widget, cancel_badge));
+  ASSERT_TRUE(editor.commands().remove_shortcut(cancel).ok());
+  widget.refresh(editor.tools(), editor.commands(), localization);
+  EXPECT_FALSE(contains_badge(widget, QStringLiteral("Ctrl+Alt+F20")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("LMB")));
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  widget.refresh(editor.tools(), editor.commands(), localization);
+  EXPECT_FALSE(contains_badge(widget, QStringLiteral("Space")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("LMB")));
 }
 
 TEST_F(QtOperationInputHintTests,

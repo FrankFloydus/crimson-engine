@@ -36,6 +36,7 @@ class SceneInstanceService;
 class SceneSurfaceQuery;
 class SceneStructuralLifecycleService;
 class SnapToFloorService;
+class UvPeelToolService;
 class ViewportLocalVisibilityService;
 class ViewportPointPlacementService;
 
@@ -132,6 +133,8 @@ public:
   const PathArrayToolService &path_array() const { return *path_array_; }
   CurveToolService &curve() { return *curve_; }
   const CurveToolService &curve() const { return *curve_; }
+  UvPeelToolService &uv_peel() { return *uv_peel_; }
+  const UvPeelToolService &uv_peel() const { return *uv_peel_; }
   PrimitiveCreationToolService &primitive_creation() {
     return *primitive_creation_;
   }
@@ -229,6 +232,7 @@ private:
   std::shared_ptr<PathArraySessionDefaults> path_array_defaults_;
   std::unique_ptr<PathArrayToolService> path_array_;
   std::unique_ptr<CurveToolService> curve_;
+  std::unique_ptr<UvPeelToolService> uv_peel_;
   std::unique_ptr<PrimitiveCreationToolService> primitive_creation_;
   std::unique_ptr<LightCreationToolService> light_creation_;
   std::unique_ptr<NativeViewportToolCoordinator> native_tools_;

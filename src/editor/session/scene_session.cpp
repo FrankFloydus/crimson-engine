@@ -24,6 +24,7 @@
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/tools/light_creation_tool_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
+#include "editor/tools/uv_peel_tool_service.hpp"
 #include "editor/session/viewport_local_visibility_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 
@@ -199,10 +200,11 @@ void SceneSession::rebuild_services() {
     return primitive_creation_ && primitive_creation_->active();
   });
   light_creation_ = std::make_unique<LightCreationToolService>();
+  uv_peel_ = std::make_unique<UvPeelToolService>(*history_, *selection_, *modeling_);
   native_tools_ = std::make_unique<NativeViewportToolCoordinator>(
       *pivot_, *linear_array_, *radial_array_, *path_array_,
       *primitive_creation_, *light_creation_,
-      *selection_, *modeling_, *curve_);
+      *selection_, *modeling_, *curve_, *uv_peel_);
   viewport_local_visibility_ =
       std::make_unique<ViewportLocalVisibilityService>(
           document_.scene(), document_.assets(), *modeling_, *instances_,
@@ -359,6 +361,7 @@ void SceneSession::replace_document_impl(
   viewport_local_visibility_->reset_for_document_replacement();
   modeling_->clear_transient_state_for_document_replacement();
   native_tools_->reset_transient_state();
+  (void)modeling_->set_uv_peel_options({});
   instance_edit_context_.clear();
   preview_content_checkpoint_.reset();
   document_commands_->abandon_property_edit();

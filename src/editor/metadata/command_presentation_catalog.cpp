@@ -603,8 +603,8 @@ constexpr CommandPresentationDescriptor kCatalog[]{
     // UV: the main menu is a curated modeling surface; lower-frequency scale,
     // shift, and face-flip variants remain searchable without crowding it.
     presentation(quader_command::kModelingUvPeel, Domain::UV,
-                 Group::Texture, 500u, kMenuViewportPalette,
-                 Palette::Searchable, Activation::Immediate, Danger::None,
+                 Group::Texture, 500u, kMenuViewportToolbarPalette,
+                 Palette::Searchable, Activation::InteractiveTool, Danger::None,
                  {}, kTextureKeywords, "tool_settings"),
     presentation(quader_command::kModelingTextureProjectCube,
                  Domain::UV, Group::Texture, 501u, kMenuPalette,

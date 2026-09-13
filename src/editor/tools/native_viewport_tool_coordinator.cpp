@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
+#include "editor/tools/uv_peel_tool_service.hpp"
 
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/path_array_tool_service.hpp"
@@ -73,11 +74,11 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
     PrimitiveCreationToolService &primitives,
     LightCreationToolService &light_creation,
     EditorSelectionService &selection, ModelingSessionService &modeling,
-    CurveToolService &curve)
+    CurveToolService &curve, UvPeelToolService &uv_peel)
     : pivot_(pivot), linear_array_(linear_array), radial_array_(radial_array),
       path_array_(path_array), primitives_(primitives),
       light_creation_(light_creation), selection_(selection),
-      modeling_(modeling), curve_(curve),
+      modeling_(modeling), curve_(curve), uv_peel_(uv_peel),
       curve_interaction_(
           std::make_unique<CurveViewportInteractionAdapter>(curve_)) {
   // Registration order preserves commit/cancel precedence. active_priority
@@ -247,6 +248,21 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
         pivot_.clear_quick_override();
       },
   });
+  (void)runtime_.register_native_lifecycle({
+      .tool = ViewportToolId::UvPeel,
+      .active_priority = 6,
+      .commit_label = "UV Peel",
+      .can_activate = [] { return true; },
+      .active = [&] { return uv_peel_.active(); },
+      .pending = [&] { return uv_peel_.active(); },
+      .pending_history_preview = [&] { return uv_peel_.active(); },
+      .blocks_modeling_content_mutation = [&] { return uv_peel_.active(); },
+      .blocks_document_mutation = [&](EntityId) { return uv_peel_.active(); },
+      .activate = [&](double) { return uv_peel_.activate(); },
+      .commit = [&] { return uv_peel_.apply(); },
+      .cancel = [&] { return uv_peel_.cancel(); },
+      .reset = [&] { (void)uv_peel_.cancel(); },
+  });
   assert(runtime_.native_lifecycle_catalog_complete());
 }
 
@@ -291,6 +307,7 @@ CommandResult NativeViewportToolCoordinator::refresh() {
   const CommandResult radial = radial_array_.refresh();
   const CommandResult path = path_array_.refresh();
   const CommandResult curve = curve_.refresh();
+  const CommandResult uv_peel = uv_peel_.refresh();
 
   if (linear.changed || path.changed ||
       (curve.changed && !curve_.dragging())) {
@@ -298,7 +315,8 @@ CommandResult NativeViewportToolCoordinator::refresh() {
   }
 
   const auto first_failure = [&]() -> const CommandResult * {
-    for (const CommandResult *candidate : {&linear, &radial, &path, &curve}) {
+    for (const CommandResult *candidate : {&linear, &radial, &path, &curve,
+                                           &uv_peel}) {
       if (!candidate->ok) {
         return candidate;
       }
@@ -308,7 +326,8 @@ CommandResult NativeViewportToolCoordinator::refresh() {
   return {
       .ok = first_failure == nullptr,
       .changed =
-          linear.changed || radial.changed || path.changed || curve.changed,
+          linear.changed || radial.changed || path.changed || curve.changed ||
+          uv_peel.changed,
       .message = first_failure != nullptr ? first_failure->message
                                           : std::string{},
   };
@@ -334,6 +353,32 @@ NativeViewportToolCoordinator::handle_pointer_frame(
     ViewportPointPlacementService *point_placement,
     ViewportCameraController &camera,
     const ViewportNativeToolInteractionFrame &frame) {
+  if (uv_peel_.active()) {
+    if (frame.input_result.cancel_requested) {
+      const CommandResult canceled = cancel_active();
+      return {.consumed = true,
+              .sync_active_tool = canceled.ok,
+              .invalidate_hover = canceled.changed,
+              .mark_overlay_dirty = canceled.changed,
+              .command_attempted = true,
+              .command_result = canceled};
+    }
+    if (frame.input.modal_tool_finalize_pressed &&
+        !frame.input.navigation_active && !frame.input_result.navigation_active &&
+        !frame.input.text_input_active && frame.input.viewport_focused &&
+        uv_peel_.preview_valid()) {
+      const CommandResult applied = commit_active();
+      return {.consumed = true,
+              .sync_active_tool = applied.ok,
+              .invalidate_hover = applied.changed,
+              .mark_overlay_dirty = applied.changed,
+              .command_attempted = true,
+              .command_result = applied};
+    }
+    // Edge picking and marquee selection own ordinary pointer frames. Gizmo
+    // availability comes from the UV Peel descriptor without consuming picks.
+    return {};
+  }
   return interaction_.handle_frame(*this, document, assets, &pivot_,
                                    &linear_array_, &radial_array_, &path_array_,
                                    &selection_, point_placement, camera, frame,

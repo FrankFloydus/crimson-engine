@@ -496,7 +496,8 @@ viewport_input_action_binding_catalog() {
           .context = ViewportInputBindingContext::ModalTool,
           .shortcut = "Space",
           .when = "viewportFocus && !textInputActive && "
-                  "(modalTool.active || activeTool.ownsViewport) && "
+                  "(modalTool.active || activeTool.ownsViewport || "
+                  "activeTool.uv_peel) && "
                   "!navigation.active",
           .weight = 30,
           .action = ViewportInputActionKind::ModalToolFinalize,

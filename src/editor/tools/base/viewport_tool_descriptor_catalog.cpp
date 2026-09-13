@@ -12,7 +12,7 @@
 namespace quader {
 namespace {
 
-constexpr std::array<ToolDescriptor, 17> kViewportToolDescriptors{{
+constexpr std::array<ToolDescriptor, 18> kViewportToolDescriptors{{
     {
         .tool = ViewportToolId::Select,
         .modeling_tool = ModelingViewportTool::Select,
@@ -141,6 +141,16 @@ constexpr std::array<ToolDescriptor, 17> kViewportToolDescriptors{{
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,
         .blocks_viewport_focus_shortcuts = true,
+    },
+    {
+        .tool = ViewportToolId::UvPeel,
+        .modeling_tool = ModelingViewportTool::Select,
+        .id = "uv_peel",
+        .label = "Guided UV Peel",
+        .kind = ToolKind::Modal,
+        .menu_group = ToolMenuGroup::Modeling,
+        .allows_selection_fallback = true,
+        .editor_owned_native_lifecycle = true,
     },
     {
         .tool = ViewportToolId::Pivot,

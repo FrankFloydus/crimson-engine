@@ -3363,7 +3363,7 @@ TEST(EditorApiTests,
   EXPECT_EQ(editor.query().modeling_objects().size(), 4u);
 }
 
-TEST(EditorApiTests, UvPeelCommandUsesTypedEdgeScopeAndUnassignedDefault) {
+TEST(EditorApiTests, UvPeelCommandActivatesBeforeSelectionAndPreservesOverrides) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   const std::filesystem::path path = keybinding_test_path("uv-peel-command");
@@ -3374,12 +3374,12 @@ TEST(EditorApiTests, UvPeelCommandUsesTypedEdgeScopeAndUnassignedDefault) {
   const auto descriptor = editor.commands().descriptor(kCommand);
   ASSERT_TRUE(descriptor.has_value());
   EXPECT_EQ(descriptor->label, "Guided UV Peel");
-  EXPECT_FALSE(descriptor->enabled);
+  EXPECT_TRUE(descriptor->enabled);
 
   const auto catalog = editor.commands().keybinding_catalog();
   const auto *entry = find_keybinding_catalog_entry(catalog, kCommand.string());
   ASSERT_NE(entry, nullptr);
-  EXPECT_EQ(entry->scope_id, "viewport.selection.edge");
+  EXPECT_EQ(entry->scope_id, "viewport.selection.any");
   EXPECT_EQ(entry->localization_key, "command.modeling.uv_peel");
   EXPECT_TRUE(entry->default_shortcut.empty());
   EXPECT_TRUE(entry->unassigned);
@@ -3397,10 +3397,12 @@ TEST(EditorApiTests, UvPeelCommandUsesTypedEdgeScopeAndUnassignedDefault) {
   const auto dispatch = editor.commands().dispatch_viewport_input_binding(
       chord, state, true, false);
   ASSERT_EQ(dispatch.kind,
-            quader::QuaderViewportKeybindingDispatch::Kind::Command);
-  EXPECT_EQ(dispatch.command_id, kCommand.string());
-  const auto executed = editor.commands().execute(dispatch.command_id);
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(dispatch.shortcut.kind, quader::ViewportShortcutKind::ActivateTool);
+  EXPECT_EQ(dispatch.shortcut.tool, quader::ViewportToolId::UvPeel);
+  const auto executed = editor.commands().execute(kCommand);
   EXPECT_TRUE(executed.ok()) << executed.error_message();
+  EXPECT_EQ(editor.tools().active_tool(), "uv_peel");
 
   EXPECT_EQ(editor.commands()
                 .dispatch_viewport_input_binding(
@@ -3415,13 +3417,15 @@ TEST(EditorApiTests, UvPeelCommandUsesTypedEdgeScopeAndUnassignedDefault) {
                 .dispatch_viewport_input_binding(chord, state, true, true)
                 .kind,
             quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  EXPECT_EQ(editor.tools().active_tool(), "select");
   ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
   state.selection_mode = quader::ViewportSelectionMode::Face;
-  EXPECT_FALSE(editor.commands().descriptor(kCommand)->enabled);
+  EXPECT_TRUE(editor.commands().descriptor(kCommand)->enabled);
   EXPECT_EQ(editor.commands()
                 .dispatch_viewport_input_binding(chord, state, true, false)
                 .kind,
-            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
 
   CommandTestHarness reloaded;
   ASSERT_TRUE(reloaded.editor.commands().set_keybinding_storage_path(path).ok());

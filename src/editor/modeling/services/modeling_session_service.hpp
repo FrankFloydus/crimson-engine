@@ -216,6 +216,13 @@ public:
   [[nodiscard]] std::uint64_t uv_peel_settings_revision() const;
   [[nodiscard]] ModelingUvPeelSettings uv_peel_settings() const;
   ModelingCommandResult set_uv_peel_options(const ModelingUvPeelOptions &options);
+  /// Updates the live UV candidate once per changed owner revision.
+  ModelingCommandResult refresh_uv_peel_preview();
+  [[nodiscard]] bool uv_peel_preview_active() const;
+  [[nodiscard]] bool uv_peel_preview_valid() const;
+  [[nodiscard]] std::string uv_peel_preview_error() const;
+  ModelingCommandResult commit_uv_peel_preview();
+  ModelingCommandResult cancel_uv_peel_preview();
   ModelingCommandResult peel_uv(const ModelingUvPeelRequest &request);
   /// Invalidates queued edge requests while retaining scene-local peel options.
   void invalidate_uv_peel_selection();

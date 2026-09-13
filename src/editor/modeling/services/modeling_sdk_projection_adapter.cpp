@@ -610,6 +610,7 @@ private:
   /// selection edit is applied to its committed base document.
   struct PreviewSelectionEditState {
     bool active = false;
+    bool uv_peel = false;
     bool ok = true;
     std::string message;
     quader_editor_core::EditorOperationId operation{};
@@ -4682,7 +4683,7 @@ public:
     const ModelingSelectionProjectionSnapshot &projected =
         selection_projection_snapshot();
     ModelingPickSelectRequest effective_request = request;
-    if (preview_edit.active) {
+    if (preview_edit.active && !preview_edit.uv_peel) {
       effective_request.preserve_selection_on_miss = true;
     }
     const ModelingSelectionProjectionApplyResult applied =
@@ -4745,7 +4746,7 @@ public:
     const quader_editor_core::RectangleSelectionState effective_baseline =
         [&]() {
           QDR_PROFILE_SCOPE("Box selection resolve SDK baseline");
-          return preview_edit.active
+          return preview_edit.active && !preview_edit.uv_peel
                      ? selection.rectangle_selection_state(projected)
                      : baseline;
         }();
@@ -5227,42 +5228,8 @@ public:
   [[nodiscard]] ModelingCommandResult apply_uv_peel(
       std::span<const ModelingUvPeelTarget> targets,
       const ModelingUvPeelOptions &options) {
-    if (selection_mode_ != ModelingSelectionMode::Edge) {
-      return failure("UV Peel requires edge selection mode.");
-    }
-    if (targets.empty()) {
-      return failure("Select one or more edge guides first.");
-    }
     std::vector<ObjectId> objects;
-    objects.reserve(targets.size());
-    for (const auto &target : targets) {
-      const auto object = sdk_object(target.modeling_object_id);
-      if (!object.has_value() || target.edges.empty() ||
-          std::ranges::find(objects, *object) != objects.end()) {
-        return failure("The selected UV Peel targets are no longer valid.");
-      }
-      objects.push_back(*object);
-    }
-    Result<std::vector<PolygonDocument>> documents =
-        session_.document_copies(objects);
-    if (!documents.ok()) {
-      return failure(documents.error_message());
-    }
-    std::vector<modeling::UvPeelTarget> portable_targets;
-    portable_targets.reserve(targets.size());
-    for (std::size_t index = 0; index < targets.size(); ++index) {
-      const auto &target = targets[index];
-      portable_targets.push_back({
-          .key = static_cast<std::uint64_t>(target.modeling_object_id),
-          .document = &documents.value()[index],
-          .edges = target.edges,
-          .active_edge = target.active_edge,
-          .world_from_local = to_sdk(target.world_from_local),
-          .sampling_from_local = to_sdk(target.sampling_from_local),
-      });
-    }
-    Result<modeling::PreparedUvPeel> prepared =
-        modeling::prepare_uv_peel(portable_targets, options);
+    auto prepared = prepare_uv_peel_documents(targets, options, objects);
     if (!prepared.ok()) {
       return failure(prepared.error_message());
     }
@@ -5271,6 +5238,59 @@ public:
     }
     return publish_prepared_documents(objects, prepared.value().documents,
                                       "UV Peel failed.");
+  }
+
+  [[nodiscard]] bool uv_peel_preview_active() const noexcept {
+    return preview_active() && active_preview_operation_id_ == "uv_peel";
+  }
+
+  void set_uv_peel_preview_selection_refresh_handler(
+      std::function<ModelingCommandResult()> handler,
+      std::function<void()> before_suspend,
+      std::function<void()> after_suspend,
+      std::function<bool()> tool_active) {
+    uv_peel_preview_selection_refresh_handler_ = std::move(handler);
+    uv_peel_preview_before_selection_suspend_ = std::move(before_suspend);
+    uv_peel_preview_after_selection_suspend_ = std::move(after_suspend);
+    uv_peel_preview_tool_active_ = std::move(tool_active);
+  }
+
+  [[nodiscard]] ModelingCommandResult refresh_uv_peel_preview(
+      std::span<const ModelingUvPeelTarget> targets,
+      const ModelingUvPeelOptions &options) {
+    if (preview_active() && !uv_peel_preview_active()) {
+      return failure("Apply or cancel the active preview before UV Peel.");
+    }
+    const auto preview = session_.preview_summary();
+    if (preview.active && !preflight_preview_mutation(preview.id)) {
+      return failure("UV Peel preview participants changed outside this preview.");
+    }
+    std::vector<ObjectId> objects;
+    auto prepared = prepare_uv_peel_documents(
+        targets, options, objects,
+        preview.active ? std::optional{preview.id} : std::nullopt);
+    if (!prepared.ok()) {
+      return failure(prepared.error_message());
+    }
+    PreparedMeshPreviewBatch batch;
+    batch.changed = prepared.value().changed;
+    batch.updates.reserve(objects.size());
+    for (auto &document : prepared.value().documents) {
+      const auto object = sdk_object(static_cast<int>(document.key));
+      if (!object.has_value()) {
+        return failure("A prepared UV Peel target is no longer live.");
+      }
+      batch.updates.push_back({
+          .object = *object,
+          .document = std::move(document.document),
+          .receipt = std::move(document.receipt),
+      });
+    }
+    return preview.active
+               ? update_prepared_mesh_preview_transaction(std::move(batch),
+                                                          "UV Peel failed.", true)
+               : begin_prepared_mesh_preview_transaction(
+                     objects, std::move(batch), "uv_peel");
   }
 
   [[nodiscard]] ModelingCommandResult assign_material_slot_to_objects(
@@ -8195,13 +8215,90 @@ public:
   }
 
 private:
+  [[nodiscard]] Result<modeling::PreparedUvPeel> prepare_uv_peel_documents(
+      std::span<const ModelingUvPeelTarget> targets,
+      const ModelingUvPeelOptions &options, std::vector<ObjectId> &objects,
+      std::optional<PreviewId> preview = std::nullopt) {
+    const auto invalid = [](std::string message) {
+      return Result<modeling::PreparedUvPeel>::failure(modeling::make_error(
+          modeling::ErrorCode::InvalidArgument, std::move(message)));
+    };
+    if (selection_mode_ != ModelingSelectionMode::Edge) {
+      return invalid("UV Peel requires edge selection mode.");
+    }
+    if (targets.empty()) {
+      return invalid("Select one or more edge guides first.");
+    }
+    objects.reserve(targets.size());
+    for (const auto &target : targets) {
+      const auto object = sdk_object(target.modeling_object_id);
+      if (!object.has_value() || target.edges.empty() ||
+          std::ranges::find(objects, *object) != objects.end()) {
+        return invalid("The selected UV Peel targets are no longer valid.");
+      }
+      objects.push_back(*object);
+    }
+    std::vector<PolygonDocument> documents;
+    documents.reserve(objects.size());
+    if (preview.has_value()) {
+      for (const ObjectId object : objects) {
+        auto document = session_.preview_base_document_copy(*preview, object);
+        if (!document.ok()) return invalid(document.error_message());
+        documents.push_back(std::move(document).value());
+      }
+    } else {
+      auto copied = session_.document_copies(objects);
+      if (!copied.ok()) return invalid(copied.error_message());
+      documents = std::move(copied).value();
+    }
+    std::vector<modeling::UvPeelTarget> portable_targets;
+    portable_targets.reserve(targets.size());
+    for (std::size_t index = 0; index < targets.size(); ++index) {
+      const auto &target = targets[index];
+      portable_targets.push_back({
+          .key = static_cast<std::uint64_t>(target.modeling_object_id),
+          .document = &documents[index],
+          .edges = target.edges,
+          .active_edge = target.active_edge,
+          .world_from_local = to_sdk(target.world_from_local),
+          .sampling_from_local = to_sdk(target.sampling_from_local),
+      });
+    }
+    ++stats_.uv_peel_preparation_count;
+    return modeling::prepare_uv_peel(portable_targets, options);
+  }
+
   [[nodiscard]] PreviewSelectionEditState
   suspend_operation_preview_for_selection_edit() {
     PreviewSelectionEditState state;
+    if (uv_peel_selection_edit_in_progress_) {
+      return state;
+    }
     if (!preview_active()) {
+      if (uv_peel_preview_tool_active_ && uv_peel_preview_tool_active_()) {
+        // A tool awaiting its first valid guide has no SDK candidate to suspend,
+        // but canonical selection must still synchronously rebuild its preview.
+        state.active = true;
+        state.uv_peel = true;
+        uv_peel_selection_edit_in_progress_ = true;
+      }
       return state;
     }
     state.active = true;
+    if (uv_peel_preview_active()) {
+      state.uv_peel = true;
+      if (uv_peel_preview_before_selection_suspend_) {
+        uv_peel_preview_before_selection_suspend_();
+      }
+      const auto canceled = cancel_translate_preview();
+      if (uv_peel_preview_after_selection_suspend_) {
+        uv_peel_preview_after_selection_suspend_();
+      }
+      state.ok = canceled.ok;
+      state.message = canceled.message;
+      uv_peel_selection_edit_in_progress_ = canceled.ok;
+      return state;
+    }
     if (!active_preview_operation_.has_value() ||
         !active_preview_settings_.has_value()) {
       state.ok = false;
@@ -8224,8 +8321,14 @@ private:
     if (!state.active) {
       return result;
     }
-    const ModelingCommandResult rebuilt =
-        begin_operation_preview(state.operation, state.settings);
+    if (state.uv_peel) {
+      uv_peel_selection_edit_in_progress_ = false;
+    }
+    const ModelingCommandResult rebuilt = state.uv_peel
+        ? (uv_peel_preview_selection_refresh_handler_
+               ? uv_peel_preview_selection_refresh_handler_()
+               : ModelingCommandResult{.ok = true})
+        : begin_operation_preview(state.operation, state.settings);
     if (!rebuilt.ok) {
       return {.ok = false,
               .changed = result.changed,
@@ -11660,24 +11763,31 @@ private:
       return failure(std::move(error));
     }
 
+    return begin_prepared_mesh_preview_transaction(
+        object_ids, std::move(*prepared), operation_id);
+  }
+
+  [[nodiscard]] ModelingCommandResult begin_prepared_mesh_preview_transaction(
+      std::span<const ObjectId> object_ids, PreparedMeshPreviewBatch prepared,
+      std::string_view operation_id) {
     if (!capture_mesh_preview_host_baseline(object_ids)) {
       return failure("Bounded SDK preview baseline is unavailable.");
     }
     Result<PreviewId> begun = session_.begin_preview_transaction(
-        std::string(operation_id), std::move(prepared->updates));
+        std::string(operation_id), std::move(prepared.updates));
     if (!begun.ok()) {
       mesh_preview_host_baseline_.reset();
       return failure(begun.error_message());
     }
     if (!activate_mesh_preview_host_baseline(begun.value()) ||
         fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
-        (prepared->changed && !project_preview_object(true))) {
+        (prepared.changed && !project_preview_object(true))) {
       return abort_preview_publication(
           begun.value(), "SDK operation preview publication failed.");
     }
 
-    preview_changed_ = prepared->changed;
-    active_preview_deleted_vertex_count_ = prepared->deleted_vertex_count;
+    preview_changed_ = prepared.changed;
+    active_preview_deleted_vertex_count_ = prepared.deleted_vertex_count;
     active_preview_operation_id_ = std::string(operation_id);
     ++stats_.preview_publication_count;
     if (!acknowledge_preview_owner_fence()) {
@@ -11688,9 +11798,9 @@ private:
     return {
         .ok = true,
         .changed = preview_changed_,
-        .message = prepared->message.empty()
+        .message = prepared.message.empty()
                        ? "SDK operation preview started."
-                       : std::move(prepared->message),
+                       : std::move(prepared.message),
     };
   }
 
@@ -11723,20 +11833,31 @@ private:
       return failure(std::move(error));
     }
 
+    return update_prepared_mesh_preview_transaction(
+        std::move(*prepared), fallback_message);
+  }
+
+  [[nodiscard]] ModelingCommandResult update_prepared_mesh_preview_transaction(
+      PreparedMeshPreviewBatch prepared, std::string_view fallback_message,
+      bool prepared_change_is_semantic = false) {
+    const auto preview = session_.preview_summary();
     Result<OperationResult> updated = session_.update_preview_transaction(
-        preview.id, std::move(prepared->updates));
+        preview.id, std::move(prepared.updates));
     if (!updated.ok()) {
       return failure(updated.error_message());
     }
     const bool publish_host_projection =
-        preview_changed_ || prepared->changed || updated.value().changed;
+        preview_changed_ || prepared.changed || updated.value().changed;
     if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
         (publish_host_projection && !project_preview_object())) {
       return abort_preview_publication(
           preview.id, "SDK operation preview publication failed.");
     }
-    active_preview_deleted_vertex_count_ = prepared->deleted_vertex_count;
-    preview_changed_ = prepared->changed || updated.value().changed;
+    active_preview_deleted_vertex_count_ = prepared.deleted_vertex_count;
+    // UV preparation compares against the original document. The update
+    // receipt instead reports whether the displayed candidate changed.
+    preview_changed_ = prepared.changed ||
+                       (!prepared_change_is_semantic && updated.value().changed);
     ++stats_.preview_publication_count;
     if (!acknowledge_preview_owner_fence()) {
       return abort_preview_publication(
@@ -11745,9 +11866,9 @@ private:
     }
     return {.ok = updated.value().success,
             .changed = updated.value().changed,
-            .message = prepared->message.empty()
+            .message = prepared.message.empty()
                            ? std::string(fallback_message)
-                           : std::move(prepared->message)};
+                           : std::move(prepared.message)};
   }
 
   [[nodiscard]] DocumentMutation preview_mutation_for(
@@ -12436,6 +12557,11 @@ private:
   AssetId curve_preview_asset_id_ = kInvalidAssetId;
   CurvePreviewSharingProof curve_preview_sharing_proof_;
   bool preview_changed_ = false;
+  std::function<ModelingCommandResult()> uv_peel_preview_selection_refresh_handler_;
+  std::function<void()> uv_peel_preview_before_selection_suspend_;
+  std::function<void()> uv_peel_preview_after_selection_suspend_;
+  std::function<bool()> uv_peel_preview_tool_active_;
+  bool uv_peel_selection_edit_in_progress_ = false;
   std::vector<TransientTransformParticipant>
       transient_transform_payload_participants_;
   bool transient_transform_payload_active_ = false;
@@ -12836,6 +12962,26 @@ ModelingCommandResult ModelingSdkProjectionAdapter::transfer_face_texture(
 ModelingSelectedUvPeelSnapshot
 ModelingSdkProjectionAdapter::selected_uv_peel_edges() const {
   return impl_->selected_uv_peel_edges();
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::refresh_uv_peel_preview(
+    std::span<const ModelingUvPeelTarget> targets,
+    const ModelingUvPeelOptions &options) {
+  return impl_->refresh_uv_peel_preview(targets, options);
+}
+
+bool ModelingSdkProjectionAdapter::uv_peel_preview_active() const noexcept {
+  return impl_->uv_peel_preview_active();
+}
+
+void ModelingSdkProjectionAdapter::set_uv_peel_preview_selection_refresh_handler(
+    std::function<ModelingCommandResult()> handler,
+    std::function<void()> before_suspend,
+    std::function<void()> after_suspend,
+    std::function<bool()> tool_active) {
+  impl_->set_uv_peel_preview_selection_refresh_handler(
+      std::move(handler), std::move(before_suspend), std::move(after_suspend),
+      std::move(tool_active));
 }
 
 ModelingCommandResult ModelingSdkProjectionAdapter::apply_uv_peel(

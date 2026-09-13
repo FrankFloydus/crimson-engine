@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
+#include "editor/session/scene_session.hpp"
 #include "support/command_behavior_contract.hpp"
 #include "support/command_behavior_fixture.hpp"
 #include "support/command_observable_state.hpp"
@@ -892,14 +893,14 @@ TEST(CommandBehaviorContractTests,
 }
 
 TEST(CommandBehaviorContractTests,
-     UvPeelPreservesGeometryAndSelectionWithExactHistoryAndStickyRepeat) {
+     UvPeelActivationPreviewsBeforeOneCommitWithExactHistoryAndStickyRepeat) {
   const CommandBehaviorContract *contract =
       find_command_behavior_contract(quader_command::kModelingUvPeel.string());
   ASSERT_NE(contract, nullptr);
   EXPECT_EQ(contract->fixture, CanonicalCommandFixture::UvPeelEdgeSelection);
   EXPECT_EQ(contract->outcome, CommandOutcomePolicy::ChangeRequired);
   EXPECT_EQ(contract->undo_repeat,
-            CommandUndoRepeatPolicy::UndoableAndRepeatable);
+            CommandUndoRepeatPolicy::BeginPreview);
   std::unique_ptr<CommandBehaviorFixture> fixture =
       CommandBehaviorFixture::create(*contract);
   QuaderEditorApi &editor = fixture->editor();
@@ -920,6 +921,7 @@ TEST(CommandBehaviorContractTests,
   ASSERT_TRUE(descriptor->enabled);
   const auto before = capture_command_observable_state(editor);
   const auto external_before = fixture->external_call_count();
+  const auto undo_count_before = fixture->native_scene().history().undo_count();
   const auto result = editor.commands().execute(quader_command::kModelingUvPeel);
   ASSERT_TRUE(result.ok()) << result.error_message();
   ASSERT_TRUE(result.changed());
@@ -927,6 +929,9 @@ TEST(CommandBehaviorContractTests,
   expect_global_command_laws(*contract, *descriptor, before, after,
                             external_before, fixture->external_call_count(),
                             result, editor, true);
+  EXPECT_EQ(editor.tools().active_tool(), "uv_peel");
+  EXPECT_TRUE(editor.tools().active_settings().preview_active);
+  EXPECT_EQ(fixture->native_scene().history().undo_count(), undo_count_before);
   EXPECT_EQ(before.domain(CommandObservableDomain::Selection),
             after.domain(CommandObservableDomain::Selection));
   EXPECT_EQ(before.domain(CommandObservableDomain::Scene),
@@ -957,6 +962,12 @@ TEST(CommandBehaviorContractTests,
     EXPECT_EQ(peeled.index_count, original.index_count);
     EXPECT_EQ(peeled.material_slot, original.material_slot);
   }
+
+  const auto applied = editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  ASSERT_TRUE(applied.changed());
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_EQ(fixture->native_scene().history().undo_count(), undo_count_before + 1u);
 
   const QuaderUvPeelOptions changed_options{
       .axis = QuaderUvPeelAxis::V,

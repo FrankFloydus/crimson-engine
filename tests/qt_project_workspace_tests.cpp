@@ -314,7 +314,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 18);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 19);
   QToolButton *scale_metric_probe = nullptr;
   for (QToolButton *candidate :
        selection_toolbar.findChildren<QToolButton *>()) {
@@ -334,7 +334,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 60), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 18);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 19);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
             baseline_button_margin * 2);
@@ -345,7 +345,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 18);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 19);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
             baseline_button_margin);

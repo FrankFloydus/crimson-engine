@@ -377,6 +377,7 @@ add_library(quader_editor_services STATIC
     src/editor/session/scene_session.cpp
     src/editor/session/viewport_local_visibility_service.cpp
     src/editor/tools/native_viewport_tool_coordinator.cpp
+    src/editor/tools/uv_peel_tool_service.cpp
     src/editor/transform/mesh_arrangement_service.cpp
     src/editor/transform/scene_transform_drag_service.cpp
     src/editor/commands/document/scene_texture_mapping_plan.cpp
@@ -1115,6 +1116,7 @@ set(QUADER_TOOL_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_cut.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_poly.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_mirror.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_uv_peel.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_linear_array.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_radial_array.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_path_array.png")
@@ -1540,6 +1542,7 @@ if(QUADER_BUILD_TESTS)
         tests/path_array_compound_preview_tests.cpp
         tests/path_array_layout_tests.cpp
         tests/path_array_tool_service_tests.cpp
+        tests/uv_peel_tool_service_tests.cpp
         tests/path_array_ui_catalog_tests.cpp
         tests/math_types_tests.cpp
         tests/mesh_arrangement_tests.cpp

@@ -67,6 +67,7 @@ struct ModelingSdkProjectionStats {
   std::uint64_t selection_summary_build_count = 0;
   std::uint64_t face_texture_summary_build_count = 0;
   std::uint64_t uv_peel_summary_build_count = 0;
+  std::uint64_t uv_peel_preparation_count = 0;
   std::uint64_t full_scene_reset_count = 0;
   std::uint64_t scene_import_document_count = 0;
   std::uint64_t targeted_scene_sync_count = 0;
@@ -475,6 +476,17 @@ public:
   [[nodiscard]] ModelingCommandResult apply_uv_peel(
       std::span<const ModelingUvPeelTarget> targets,
       const ModelingUvPeelOptions &options);
+  /// Reuses one retained SDK baseline for all edge-guided UV candidates.
+  [[nodiscard]] ModelingCommandResult refresh_uv_peel_preview(
+      std::span<const ModelingUvPeelTarget> targets,
+      const ModelingUvPeelOptions &options);
+  [[nodiscard]] bool uv_peel_preview_active() const noexcept;
+  /// Rebuilds from canonical guides after selection suspends the UV candidate.
+  void set_uv_peel_preview_selection_refresh_handler(
+      std::function<ModelingCommandResult()> handler,
+      std::function<void()> before_suspend = {},
+      std::function<void()> after_suspend = {},
+      std::function<bool()> tool_active = {});
   [[nodiscard]] std::optional<SceneBounds> selection_bounds() const;
   [[nodiscard]] std::vector<EntityId> selected_entities() const;
   [[nodiscard]] EntityId active_selected_entity() const;

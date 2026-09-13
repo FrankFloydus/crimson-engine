@@ -371,7 +371,7 @@ default_keybinding_context_for_command(std::string_view command_id) {
     return "(viewportFocus || outlinerFocus) && !textInputActive && "
            "!navigation.active && !modalTool.active && !activeTool.ownsViewport && "
            "!transformDrag.active && !operationPreview.active && "
-           "selection.allowedByTool";
+           "!activeTool.uv_peel && selection.allowedByTool";
   }
   if (command_id == quader_command::kViewportFrameSelection.string()) {
     return unobstructed_viewport_keybinding_context();
@@ -2419,17 +2419,6 @@ void QuaderCommandsApi::Impl::register_commands() {
                                        ? kSelectionModeObject | kSelectionModeFace
                                        : kSelectionModeFace);
   }
-  register_command(
-      quader_command::kModelingUvPeel, "Guided UV Peel",
-      [this] {
-        const auto settings = api_.modeling().uv_peel_settings();
-        return api_.modeling().peel_uv(
-            {.options = settings.options,
-             .selection_token = settings.selection_token});
-      },
-      {}, [this] { return api_.modeling().uv_peel_settings().editable; });
-  set_keybinding_selection_modes(quader_command::kModelingUvPeel.string(),
-                                 kSelectionModeEdge);
 #ifndef NDEBUG
   register_command(quader_command::kDevCopySelectionJson,
                    "Dev: Copy Selection JSON",
@@ -2926,7 +2915,10 @@ void QuaderCommandsApi::Impl::register_commands() {
           return viewport_tool_available(tool_kind) &&
                  tools_.can_activate(tool_kind);
         });
-    if (tool->viewport_tool() == ViewportToolId::Knife) {
+    if (tool->viewport_tool() == ViewportToolId::Knife ||
+        tool->viewport_tool() == ViewportToolId::UvPeel) {
+      // Peel activates before guides are selected and intentionally has no
+      // default shortcut; existing assignments keep their canonical command.
       set_keybinding_selection_modes(activation_command, kSelectionModeAny);
     } else if (tool->viewport_tool() == ViewportToolId::PathArray) {
       // Path Array starts from one selected Curve, which is exposed through
@@ -3035,7 +3027,7 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       QuaderKeybindingContextKind::ModalTool,
       "viewportFocus && !textInputActive && !navigation.active && "
       "(modalTool.active || activeTool.ownsViewport || "
-      "transformDrag.active)",
+      "transformDrag.active || activeTool.uv_peel)",
       {}, "tools.cancel");
   register_keybinding_target_metadata(
       viewport_input_action_target_id("toggle_maximized"),
@@ -3128,7 +3120,7 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       viewport_input_action_target_id("cancel_active_tool"), "Escape",
       "viewportFocus && !textInputActive && !navigation.active && "
       "(modalTool.active || activeTool.ownsViewport || "
-      "transformDrag.active)",
+      "transformDrag.active || activeTool.uv_peel)",
       10);
   keybindings_.add_default_keybinding(
       viewport_input_action_target_id("toggle_maximized"), "Space",

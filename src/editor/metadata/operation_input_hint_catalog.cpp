@@ -138,6 +138,9 @@ viewport_tool_input_hints(std::string_view tool_id) {
   } else if (tool_id == "select") {
     append_selection_click_hints(hints);
     append_selection_keybinding_hints(hints);
+  } else if (tool_id == "uv_peel") {
+    append_selection_click_hints(hints);
+    append_modal_completion_hints(hints);
   } else if (tool_id == "move" || tool_id == "rotate" ||
              tool_id == "scale" || tool_id == "extrude") {
     const std::string_view key =

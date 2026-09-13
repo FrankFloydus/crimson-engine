@@ -376,13 +376,6 @@ private:
     friend bool operator==(const FaceTexturePresentationStamp &,
                            const FaceTexturePresentationStamp &) = default;
   };
-  /** Captures UV peel settings and shortcut inputs shown by retained controls. */
-  struct UvPeelPresentationStamp final {
-    QuaderUvPeelRevision settings;
-    std::uint64_t keybindings_revision = 0u;
-    friend bool operator==(const UvPeelPresentationStamp &,
-                           const UvPeelPresentationStamp &) = default;
-  };
 
   RetainedUiPresenter<OutlinerPresentationStamp> outliner_presenter_;
   RetainedUiPresenter<LayersPresentationStamp> layers_presenter_;
@@ -393,7 +386,6 @@ private:
       toolbar_transform_presenter_;
   RetainedUiPresenter<ToolSettingsPresentationStamp> tool_settings_presenter_;
   RetainedUiPresenter<FaceTexturePresentationStamp> face_texture_presenter_;
-  RetainedUiPresenter<UvPeelPresentationStamp> uv_peel_presenter_;
   QuaderEditorApi *project_workspace_events_editor_ = nullptr;
   std::vector<QuaderEventSubscription>
       project_workspace_event_subscriptions_;

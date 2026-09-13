@@ -722,7 +722,7 @@ struct QtMainMenu::Impl {
 
   QAction *add_tool_action(QMenu &menu, const ViewportTool &tool,
                            QuaderCommandId command_id,
-                           CommandPresentationDomain presentation_domain) {
+                           std::optional<CommandPresentationDomain> presentation_domain) {
     QAction *action = menu.addAction(
         action_text(context.localization, tool_localization_key(tool),
                     tool.label(), tool.shortcut()));
@@ -756,8 +756,14 @@ struct QtMainMenu::Impl {
   QAction *add_presented_command_action(
       QMenu &menu, const CommandPresentationDescriptor &presentation) {
     if (const ViewportTool *tool = tool_for_command(presentation.command_id)) {
+      // Peel enters Edge mode itself, so its UV menu category must not
+      // prevent activation before the user has selected guides.
+      const std::optional<CommandPresentationDomain> operand_domain =
+          tool->viewport_tool() == ViewportToolId::UvPeel
+              ? std::nullopt
+              : std::optional{presentation.domain};
       return add_tool_action(menu, *tool, presentation.command_id,
-                             presentation.domain);
+                             operand_domain);
     }
     const std::optional<QuaderCommandDescriptor> command =
         context.editor.get().commands().descriptor(presentation.command_id);

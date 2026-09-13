@@ -26,6 +26,7 @@
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
+#include "editor/tools/uv_peel_tool_service.hpp"
 #include "scene/scene_document.hpp"
 #include "math/glm_bridge.hpp"
 
@@ -35,6 +36,7 @@
 #include <array>
 #include <cmath>
 #include <optional>
+#include <limits>
 #include <cstdlib>
 #include <string>
 #include <string_view>
@@ -82,6 +84,7 @@ enum class ActiveToolSettingsSourceKind : std::uint8_t {
   LinearArray,
   Pivot,
   Curve,
+  UvPeel,
 };
 
 /// Couples a settings owner identity with its monotonic presentation revision.
@@ -118,6 +121,14 @@ MaterialReference active_project_material(QuaderApiSession session) {
 
 ActiveToolSettingsSource
 active_tool_settings_source(const SceneSession &session) {
+  const UvPeelToolService &uv_peel = session.uv_peel();
+  if (uv_peel.active()) {
+    return {
+        .identity = &uv_peel,
+        .revision = uv_peel.tool_settings_revision(),
+        .kind = ActiveToolSettingsSourceKind::UvPeel,
+    };
+  }
   const PathArrayToolService &path_array = session.path_array();
   if (path_array.active()) {
     return {
@@ -531,6 +542,65 @@ QuaderToolSettingControl action_control(std::string id, std::string label) {
       .id = std::move(id),
       .label = std::move(label),
   };
+}
+
+QuaderToolSettingsTarget uv_peel_tool_settings_target(
+    const UvPeelToolService &uv_peel) {
+  const ModelingUvPeelOptions options = uv_peel.options();
+  QuaderToolSettingsTarget result{
+      .active = true,
+      .preview_active = uv_peel.preview_valid(),
+      .tool_id = "uv_peel",
+      .title = "Guided UV Peel",
+      .description =
+          "Select edge chains to guide U or V texture flow across adjacent "
+          "faces, adjust the preview, then Apply or Cancel. Connected patches "
+          "are mapped independently and can overlap.",
+      .can_reset = true,
+      .apply_visible = true,
+      .can_apply = uv_peel.preview_valid(),
+      .can_cancel = true,
+      .status_message = uv_peel.preview_valid() ? std::string{}
+                                                : uv_peel.preview_error(),
+  };
+  result.controls.push_back(choice_control(
+      "uv_peel.axis", "Axis",
+      options.axis == ModelingUvPeelAxis::U ? "u" : "v",
+      {{.id = "u", .label = "U", .value = 0.0},
+       {.id = "v", .label = "V", .value = 1.0}},
+      QuaderToolSettingChoicePresentation::Dropdown));
+  auto world_space = toggle_control("uv_peel.world_space", "World Density",
+                                    options.world_space);
+  world_space.tooltip =
+      "Use one tile per 64 displayed map units along the guide before Repeat "
+      "and Offset. Quad strips normalize transverse lanes to the widest span. "
+      "Turn off to fit each guide and its transverse span to one tile; the "
+      "guide stays at the offset and opposite sides use opposite signs.";
+  result.controls.push_back(std::move(world_space));
+  const auto append_number = [&result](std::string id, std::string label,
+                                       double value, std::string tooltip) {
+    auto control = number_control(
+        std::move(id), std::move(label), value,
+        -std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+        0.1, QuaderToolSettingNumberInteraction::Continuous,
+        QuaderToolSettingNumberPresentation::SpinBoxOnly);
+    control.tooltip = std::move(tooltip);
+    result.controls.push_back(std::move(control));
+  };
+  append_number("uv_peel.u_repeat", "U Repeat", options.u_repeat,
+                "Multiply U repetitions after World Density or per-patch normalization. Larger values make the texture smaller.");
+  append_number("uv_peel.v_repeat", "V Repeat", options.v_repeat,
+                "Multiply V repetitions after World Density or per-patch normalization. Larger values make the texture smaller.");
+  append_number("uv_peel.u_offset", "U Offset (tiles)", options.u_offset,
+                "Shift the generated U coordinates in texture tiles after Repeat. One unit equals a full texture tile.");
+  append_number("uv_peel.v_offset", "V Offset (tiles)", options.v_offset,
+                "Shift the generated V coordinates in texture tiles after Repeat. One unit equals a full texture tile.");
+  for (auto &control : result.controls) {
+    control.label_key = "tool_settings." + control.id;
+    control.number_positive_only = control.id == "uv_peel.u_repeat" ||
+                                   control.id == "uv_peel.v_repeat";
+  }
+  return result;
 }
 
 QuaderToolSettingsTarget
@@ -1429,6 +1499,9 @@ QuaderToolsApi::begin_light_creation(QuaderLightType type) {
 
 QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
   const SceneSession &session = scene_session(session_);
+  if (session.uv_peel().active()) {
+    return uv_peel_tool_settings_target(session.uv_peel());
+  }
   if (session.path_array().active()) {
     return path_array_tool_settings_target(session.path_array());
   }
@@ -1533,6 +1606,33 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  QuaderToolSettingEditOptions
                                                      options) {
   SceneSession &session = scene_session(session_);
+  if (session.uv_peel().active()) {
+    if (!tool_id.empty() && tool_id != "uv_peel") {
+      return quader_api_failure_status(
+          session, "Tool setting does not belong to UV Peel.");
+    }
+    ModelingUvPeelOptions peel_options = session.uv_peel().options();
+    if (name == "uv_peel.axis" && (value == 0.0 || value == 1.0)) {
+      peel_options.axis = value == 0.0 ? ModelingUvPeelAxis::U
+                                       : ModelingUvPeelAxis::V;
+    } else if (name == "uv_peel.world_space" &&
+               (value == 0.0 || value == 1.0)) {
+      peel_options.world_space = value == 1.0;
+    } else if (name == "uv_peel.u_repeat") {
+      peel_options.u_repeat = value;
+    } else if (name == "uv_peel.v_repeat") {
+      peel_options.v_repeat = value;
+    } else if (name == "uv_peel.u_offset") {
+      peel_options.u_offset = value;
+    } else if (name == "uv_peel.v_offset") {
+      peel_options.v_offset = value;
+    } else {
+      return quader_api_failure_status(session, "Invalid UV Peel setting.");
+    }
+    return api_status_from_command(
+        session, session.uv_peel().set_options(peel_options),
+        QuaderMutationKind::Runtime, "Set UV Peel Setting");
+  }
   if (session.path_array().active()) {
     if (!tool_id.empty() && tool_id != kPathArrayToolId) {
       return quader_api_failure_status(
@@ -1859,6 +1959,12 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  std::string_view name,
                                                  std::string_view value) {
   SceneSession &session = scene_session(session_);
+  if (session.uv_peel().active() && name == "uv_peel.axis") {
+    if (value != "u" && value != "v") {
+      return quader_api_failure_status(session, "Invalid UV Peel axis.");
+    }
+    return set_setting(tool_id, name, value == "u" ? 0.0 : 1.0);
+  }
   if ((tool_id.empty() || tool_id == kRadialArrayToolId) &&
       name == kRadialArrayModeSetting) {
     if (value != "total" && value != "spacing") {
@@ -1953,6 +2059,11 @@ QuaderApiVoidResult QuaderToolsApi::execute_action(std::string_view tool_id,
 
 QuaderApiVoidResult QuaderToolsApi::reset_active_settings() {
   SceneSession &session = scene_session(session_);
+  if (session.uv_peel().active()) {
+    return api_status_from_command(
+        session, session.uv_peel().reset_settings(),
+        QuaderMutationKind::Runtime, "Reset UV Peel Settings");
+  }
   if (session.path_array().active()) {
     return api_status_from_command(
         session, session.path_array().reset_settings(),

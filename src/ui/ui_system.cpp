@@ -1057,7 +1057,6 @@ void UISystem::install_runtime_hooks(
   tool_settings_presenter_.invalidate();
   active_material_panel_presenter_.invalidate();
   face_texture_presenter_.invalidate();
-  uv_peel_presenter_.invalidate();
   standard_material_editor_presenter_.invalidate();
   status_presenter_.invalidate();
   status_selection_presenter_.invalidate();
@@ -2891,7 +2890,6 @@ void UISystem::shutdown() {
   material_picker_presentation_revision_ = 0;
   tool_settings_presenter_.invalidate();
   face_texture_presenter_.invalidate();
-  uv_peel_presenter_.invalidate();
   standard_material_editor_presenter_.invalidate();
   status_presenter_.invalidate();
   status_selection_presenter_.invalidate();
@@ -3123,17 +3121,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       tool_settings_panel_->refresh_texture_settings();
       face_texture_presenter_.mark_presented(texture_stamp);
     }
-    const QuaderUvPeelRevision peel_revision =
-        editor_->modeling().uv_peel_settings_revision();
-    const UvPeelPresentationStamp peel_stamp{
-        .settings = peel_revision,
-        .keybindings_revision = keybindings_revision,
-    };
-    if (uv_peel_presenter_.needs_refresh(peel_stamp)) {
-      QDR_PROFILE_SCOPE("UI refresh UV Peel settings presentation");
-      tool_settings_panel_->refresh_uv_peel_settings();
-      uv_peel_presenter_.mark_presented(peel_stamp);
-    }
+
   }
   {
     QDR_PROFILE_SCOPE("UI synchronize status bar");

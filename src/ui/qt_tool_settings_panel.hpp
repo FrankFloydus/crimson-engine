@@ -40,8 +40,6 @@ public:
   void refresh();
   /** Refreshes both face sections behind owner and preference revision gates. */
   void refresh_texture_settings();
-  /** Refreshes selected-edge UV Peel controls behind their owner revision gate. */
-  void refresh_uv_peel_settings();
   [[nodiscard]] bool has_active_target() const;
   /**
    * Returns whether a local numeric edit is still in progress or waiting to

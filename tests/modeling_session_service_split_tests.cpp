@@ -5283,6 +5283,242 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(service.uv_peel_settings().selected_edge_count, 2u);
 }
 
+TEST(ModelingSessionServiceSplitTests,
+     UvPeelPreviewPreservesAnUnrelatedCollapsedAuthoredFace) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  auto document = service_uv_peel_strip_document();
+  const std::array vertices{
+      quader_poly::add_vertex(document, {4.0f, 0.0f, 0.0f}),
+      quader_poly::add_vertex(document, {5.0f, 0.0f, 0.0f}),
+      quader_poly::add_vertex(document, {6.0f, 0.0f, 0.0f}),
+  };
+  const int collapsed_id = quader_poly::add_face(document, vertices, 3u);
+  auto *collapsed = quader_poly::find_face(document, collapsed_id);
+  ASSERT_NE(collapsed, nullptr);
+  collapsed->uvs = {{0.2f, 0.8f}, {0.7f, 0.4f}, {0.9f, 0.1f}};
+  const auto original_face = *collapsed;
+  const auto mesh = service.create_mesh({
+      .document = std::move(document), .name = "Strip with collapsed face",
+  });
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+  ASSERT_TRUE(service.set_component_selection({
+      .modeling_object_id = mesh.object.modeling_object_id,
+      .mode = ModelingSelectionMode::Edge,
+      .edges = {{2, 5}},
+      .active_kind = ModelingActiveSelectionKind::Edge,
+      .active_edge = {2, 5},
+  }).ok);
+  ASSERT_TRUE(service.refresh_uv_peel_preview().ok);
+  ASSERT_TRUE(service.uv_peel_preview_valid()) << service.uv_peel_preview_error();
+  const auto result = service.commit_uv_peel_preview();
+  ASSERT_TRUE(result.ok) << result.message;
+  const auto authored = assets.mesh(scene.mesh(mesh.object.entity)->mesh)
+                            ->authored_polygon_document;
+  ASSERT_NE(authored, nullptr);
+  const auto *retained = quader_poly::find_face(*authored, collapsed_id);
+  ASSERT_NE(retained, nullptr);
+  EXPECT_EQ(retained->vertices, original_face.vertices);
+  EXPECT_EQ(retained->material_slot, original_face.material_slot);
+  ASSERT_EQ(retained->uvs.size(), original_face.uvs.size());
+  for (std::size_t index = 0; index < retained->uvs.size(); ++index) {
+    EXPECT_FLOAT_EQ(retained->uvs[index].x, original_face.uvs[index].x);
+    EXPECT_FLOAT_EQ(retained->uvs[index].y, original_face.uvs[index].y);
+  }
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     UvPeelPreviewRebuildsCanonicalGuidesAndSkipsUnchangedSolves) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto mesh = service.create_mesh({
+      .document = service_uv_peel_strip_document(), .name = "Peel strip",
+  });
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+  ASSERT_TRUE(service.set_component_selection({
+      .modeling_object_id = mesh.object.modeling_object_id,
+      .mode = ModelingSelectionMode::Edge,
+      .edges = {{2, 5}},
+      .active_kind = ModelingActiveSelectionKind::Edge,
+      .active_edge = {2, 5},
+  }).ok);
+  const AssetId original_mesh = scene.mesh(mesh.object.entity)->mesh;
+  const auto original = assets.mesh(original_mesh)->authored_polygon_document;
+  ASSERT_TRUE(service.set_uv_peel_options({.world_space = false}).ok);
+  ASSERT_TRUE(service.refresh_uv_peel_preview().ok);
+  ASSERT_TRUE(service.uv_peel_preview_active());
+  ASSERT_TRUE(service.uv_peel_preview_valid()) << service.uv_peel_preview_error();
+  EXPECT_FALSE(service.operation_preview_active());
+  EXPECT_TRUE(service.uv_peel_settings().editable);
+  const auto stable = service.modeling_sdk_projection_stats_for_tests();
+  const auto stable_revision = service.uv_peel_settings_revision();
+  for (int index = 0; index < 20; ++index) {
+    EXPECT_TRUE(service.refresh_uv_peel_preview().ok);
+    EXPECT_EQ(service.uv_peel_settings_revision(), stable_revision);
+  }
+  const auto unchanged = service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(unchanged.uv_peel_preparation_count, stable.uv_peel_preparation_count);
+  EXPECT_EQ(unchanged.uv_peel_summary_build_count, stable.uv_peel_summary_build_count);
+  EXPECT_EQ(unchanged.preview_publication_count, stable.preview_publication_count);
+
+  ASSERT_TRUE(service.set_component_selection({
+      .modeling_object_id = mesh.object.modeling_object_id,
+      .mode = ModelingSelectionMode::Edge,
+      .edges = {{1, 4}},
+      .active_kind = ModelingActiveSelectionKind::Edge,
+      .active_edge = {1, 4},
+  }).ok);
+  EXPECT_TRUE(service.uv_peel_preview_valid()) << service.uv_peel_preview_error();
+  const auto selected = service.uv_peel_settings();
+  EXPECT_EQ(selected.selected_edge_count, 1u);
+  ASSERT_TRUE(service.cancel_uv_peel_preview().ok);
+  EXPECT_FALSE(service.uv_peel_preview_active());
+  EXPECT_EQ(service.selection_mode(), ModelingSelectionMode::Edge);
+  EXPECT_EQ(service.uv_peel_settings().selection_token, selected.selection_token);
+  EXPECT_EQ(scene.mesh(mesh.object.entity)->mesh, original_mesh);
+  EXPECT_EQ(assets.mesh(original_mesh)->authored_polygon_document, original);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     UvPeelPreviewDeselectRestoresUvsAndKeepsToolAwaitingGuides) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto mesh = service.create_mesh({
+      .document = service_uv_peel_strip_document(), .name = "Peel strip",
+  });
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+  ASSERT_TRUE(service.set_component_selection({
+      .modeling_object_id = mesh.object.modeling_object_id,
+      .mode = ModelingSelectionMode::Edge,
+      .edges = {{2, 5}},
+      .active_kind = ModelingActiveSelectionKind::Edge,
+      .active_edge = {2, 5},
+  }).ok);
+  const AssetId original_mesh = scene.mesh(mesh.object.entity)->mesh;
+  const auto original = assets.mesh(original_mesh)->authored_polygon_document;
+  ASSERT_TRUE(service.refresh_uv_peel_preview().ok);
+  ASSERT_TRUE(service.uv_peel_preview_valid()) << service.uv_peel_preview_error();
+  ASSERT_TRUE(service.clear_selection().ok);
+  EXPECT_TRUE(service.uv_peel_preview_active());
+  EXPECT_FALSE(service.uv_peel_preview_valid());
+  EXPECT_FALSE(service.uv_peel_preview_error().empty());
+  EXPECT_EQ(service.uv_peel_settings().selected_edge_count, 0u);
+  EXPECT_EQ(scene.mesh(mesh.object.entity)->mesh, original_mesh);
+  EXPECT_EQ(assets.mesh(original_mesh)->authored_polygon_document, original);
+  EXPECT_FALSE(service.commit_uv_peel_preview().ok);
+  ASSERT_TRUE(service.set_component_selection({
+      .modeling_object_id = mesh.object.modeling_object_id,
+      .mode = ModelingSelectionMode::Edge,
+      .edges = {{1, 4}},
+      .active_kind = ModelingActiveSelectionKind::Edge,
+      .active_edge = {1, 4},
+  }).ok);
+  // Selection itself must restore a valid candidate; there is no render tick
+  // between this new guide and the settings panel's next readiness query.
+  EXPECT_TRUE(service.uv_peel_preview_valid()) << service.uv_peel_preview_error();
+  EXPECT_TRUE(service.cancel_uv_peel_preview().ok);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     UvPeelPreviewPublicationFailureRestoresAllTargetsAndSharedBindings) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto first = service.create_mesh({
+      .document = service_uv_peel_strip_document(), .name = "First strip",
+  });
+  const auto second = service.create_mesh({
+      .document = service_uv_peel_strip_document(), .name = "Second strip",
+  });
+  ASSERT_TRUE(first.ok) << first.message;
+  ASSERT_TRUE(second.ok) << second.message;
+  for (const auto *created : {&first, &second}) {
+    ASSERT_TRUE(service.set_component_selection({
+        .modeling_object_id = created->object.modeling_object_id,
+        .mode = ModelingSelectionMode::Edge,
+        .edges = {{2, 5}},
+        .edit = created == &first ? ModelingSelectionEdit::Replace
+                                 : ModelingSelectionEdit::Add,
+        .active_kind = ModelingActiveSelectionKind::Edge,
+        .active_edge = {2, 5},
+    }).ok);
+  }
+  const AssetId first_mesh = scene.mesh(first.object.entity)->mesh;
+  const AssetId second_mesh = scene.mesh(second.object.entity)->mesh;
+  const EntityId shared = scene.create_entity("Shared consumer", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(shared, {.mesh = first_mesh}));
+  const auto original_first = assets.mesh(first_mesh)->authored_polygon_document;
+  const auto original_second = assets.mesh(second_mesh)->authored_polygon_document;
+  const auto mesh_ids = assets.mesh_ids();
+  const auto content_revision = service.content_revision();
+  const auto selection_revision = service.selection_revision();
+  service.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::PreviewSceneNotify);
+  ASSERT_TRUE(service.refresh_uv_peel_preview().ok);
+  EXPECT_TRUE(service.uv_peel_preview_active());
+  EXPECT_FALSE(service.uv_peel_preview_valid());
+  EXPECT_FALSE(service.uv_peel_preview_error().empty());
+  EXPECT_EQ(service.content_revision(), content_revision);
+  EXPECT_EQ(service.selection_revision(), selection_revision);
+  EXPECT_EQ(assets.mesh_ids(), mesh_ids);
+  EXPECT_EQ(scene.mesh(first.object.entity)->mesh, first_mesh);
+  EXPECT_EQ(scene.mesh(second.object.entity)->mesh, second_mesh);
+  EXPECT_EQ(scene.mesh(shared)->mesh, first_mesh);
+  EXPECT_EQ(assets.mesh(first_mesh)->authored_polygon_document, original_first);
+  EXPECT_EQ(assets.mesh(second_mesh)->authored_polygon_document, original_second);
+  service.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  ASSERT_TRUE(service.set_uv_peel_options({.u_offset = 0.25}).ok);
+  ASSERT_TRUE(service.refresh_uv_peel_preview().ok);
+  EXPECT_TRUE(service.uv_peel_preview_valid()) << service.uv_peel_preview_error();
+  ASSERT_TRUE(service.cancel_uv_peel_preview().ok);
+  EXPECT_EQ(scene.mesh(shared)->mesh, first_mesh);
+  EXPECT_EQ(assets.mesh(first_mesh)->authored_polygon_document, original_first);
+  EXPECT_EQ(assets.mesh(second_mesh)->authored_polygon_document, original_second);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     UvPeelPreviewCommitFailureRetainsCandidateForRetry) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto mesh = service.create_mesh({
+      .document = service_uv_peel_strip_document(), .name = "Peel strip",
+  });
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+  ASSERT_TRUE(service.set_component_selection({
+      .modeling_object_id = mesh.object.modeling_object_id,
+      .mode = ModelingSelectionMode::Edge,
+      .edges = {{2, 5}},
+      .active_kind = ModelingActiveSelectionKind::Edge,
+      .active_edge = {2, 5},
+  }).ok);
+  ASSERT_TRUE(service.refresh_uv_peel_preview().ok);
+  ASSERT_TRUE(service.uv_peel_preview_valid()) << service.uv_peel_preview_error();
+  const AssetId candidate_mesh = scene.mesh(mesh.object.entity)->mesh;
+  const auto candidate = assets.mesh(candidate_mesh)->authored_polygon_document;
+  service.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::CommittedSceneNotify);
+  const auto failed = service.commit_uv_peel_preview();
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  EXPECT_TRUE(service.uv_peel_preview_active());
+  EXPECT_TRUE(service.uv_peel_preview_valid());
+  EXPECT_EQ(scene.mesh(mesh.object.entity)->mesh, candidate_mesh);
+  EXPECT_EQ(assets.mesh(candidate_mesh)->authored_polygon_document, candidate);
+  service.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  const auto committed = service.commit_uv_peel_preview();
+  ASSERT_TRUE(committed.ok) << committed.message;
+  EXPECT_TRUE(committed.changed);
+  EXPECT_FALSE(service.uv_peel_preview_active());
+  EXPECT_EQ(assets.mesh(scene.mesh(mesh.object.entity)->mesh)->authored_polygon_document,
+            candidate);
+}
+
 
 namespace curve_projection {
 

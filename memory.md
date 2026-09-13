@@ -633,6 +633,12 @@ Tests: [normal behavior](tests/modeling_domain/operation/qdr_document_operation_
   restores Curve subselection exactly. Layout-only edits do not rescan source hierarchy/texture plans.
 - Solidified Curves participate in the shared material-surface policy. Material-only changes rebind
   without retessellation; eligibility changes advance material-binding revision, point edits do not.
+- Guided UV Peel is a native toolbar tool: activate into Edge mode, select guides, preview,
+  then Apply or Cancel through the shared lifecycle. Selection edits rebuild the UV preview
+  from committed coordinates; invalid or empty guides restore them without ending the tool.
+  Apply records one UV history entry and captured repeat options; Cancel keeps selected guides
+  and scene-local settings. Returning the candidate to original UVs must preserve redo history.
+  Contracts: [tool workflows](tests/uv_peel_tool_service_tests.cpp).
 - Guided UV Peel orders selected connected edge guides and walks opposite edges through quads on
   both sides, including front/back bands and quad end caps. Stop at a boundary, non-quad or the
   starting directed edge. Never restrict structured Peel to incident faces or n-gon rim cases.

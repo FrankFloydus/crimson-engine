@@ -28,4 +28,22 @@ private:
   ModelingUvPeelRequest request_;
 };
 
+/// Accepts the displayed candidate while undo retains the original UV document.
+class CommitUvPeelPreviewHistoryCommand final : public ModelingMementoCommand {
+public:
+  explicit CommitUvPeelPreviewHistoryCommand(ModelingSessionService &modeling)
+      : ModelingMementoCommand(modeling, "UV Peel") {}
+
+private:
+  ModelingSessionMemento capture_before_memento() override {
+    auto baseline = modeling().capture_active_preview_history_memento();
+    return baseline.valid() ? std::move(baseline)
+                            : modeling().capture_history_memento();
+  }
+
+  ModelingCommandResult execute_initial() override {
+    return modeling().commit_uv_peel_preview();
+  }
+};
+
 } // namespace quader

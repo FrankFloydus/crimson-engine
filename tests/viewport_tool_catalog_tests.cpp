@@ -402,6 +402,12 @@ TEST(ViewportToolCatalogTests,
     state.active_tool = descriptor.tool;
     const auto dispatch = editor.commands().dispatch_viewport_input_binding(
         chords->front(), state, true, false);
+    if (descriptor.tool == ViewportToolId::UvPeel) {
+      EXPECT_EQ(dispatch.kind,
+                QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+      EXPECT_EQ(dispatch.shortcut.kind, ViewportShortcutKind::CancelActiveTool);
+      continue;
+    }
     if (!descriptor.allows_selection_fallback) {
       EXPECT_NE(dispatch.command_id, kClearSelection.string());
       continue;
@@ -416,6 +422,59 @@ TEST(ViewportToolCatalogTests,
                           }),
               conflicts.end());
   }
+}
+
+TEST(ViewportToolCatalogTests,
+     UvPeelLifecycleLeavesOrdinaryPointerFramesToEdgeSelection) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const ViewportTool *tool = find_viewport_tool(ViewportToolId::UvPeel);
+  ASSERT_NE(tool, nullptr);
+  EXPECT_EQ(tool->kind(), ToolKind::Modal);
+  EXPECT_TRUE(tool->descriptor().editor_owned_native_lifecycle);
+  EXPECT_TRUE(tool->allows_selection_fallback());
+  EXPECT_FALSE(tool->owns_viewport());
+  EXPECT_FALSE(tool->supports_transform_gizmo());
+  EXPECT_FALSE(tool->blocks_viewport_focus_shortcuts());
+  EXPECT_EQ(tool->modeling_tool(), ModelingViewportTool::Select);
+  EXPECT_TRUE(tool->shortcut().empty());
+
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::UvPeel).ok());
+  EXPECT_EQ(session.modeling().selection_mode(), ModelingSelectionMode::Edge);
+  EXPECT_EQ(session.modeling().tool_status().active_tool,
+            ModelingViewportTool::Select);
+  ViewportInputFrame input;
+  input.viewport_hovered = true;
+  input.viewport_focused = true;
+  ViewportInputResult result;
+  ViewportCameraController camera;
+  const auto ordinary_frame = session.native_tools().handle_pointer_frame(
+      session.scene(), session.assets(), &session.point_placement(), camera,
+      {.input = input,
+       .input_result = result,
+       .left_pressed = true,
+       .left_down = true});
+  EXPECT_FALSE(ordinary_frame.consumed);
+  EXPECT_FALSE(ordinary_frame.blocks_transform_gizmo);
+  EXPECT_FALSE(ordinary_frame.command_attempted);
+  EXPECT_FALSE(session.native_tools().pointer_dragging());
+  EXPECT_EQ(session.native_tools().active_tool_id(), "uv_peel");
+
+  // Unlike viewport-owning modal tools, Peel reaches this native boundary for
+  // Escape directly. It must cancel even before the first guide is selected.
+  result.cancel_requested = true;
+  const auto canceled = session.native_tools().handle_pointer_frame(
+      session.scene(), session.assets(), &session.point_placement(), camera,
+      {.input = input, .input_result = result});
+  EXPECT_TRUE(canceled.consumed);
+  EXPECT_TRUE(canceled.sync_active_tool);
+  EXPECT_TRUE(canceled.command_attempted);
+  EXPECT_TRUE(canceled.command_result.ok);
+  EXPECT_TRUE(canceled.command_result.changed);
+  EXPECT_FALSE(session.native_tools().has_pending_tool());
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Edge);
 }
 
 TEST(ViewportToolCatalogTests,
@@ -987,7 +1046,8 @@ TEST(ViewportToolRuntimeTests,
              .left_down = exercises_pointer_gesture,
              .pointer_drag_threshold_pixels = 4.0f});
       }
-      if (scenario.interruption == Interruption::Escape) {
+      if (scenario.interruption == Interruption::Escape &&
+          descriptor.tool != ViewportToolId::UvPeel) {
         const QuaderApiVoidResult canceled =
             editor.tools().cancel_active_tool_preview();
         ASSERT_TRUE(canceled.ok()) << canceled.error_message();

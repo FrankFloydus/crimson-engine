@@ -58,7 +58,7 @@ private:
     std::string_view tool_id;
   };
 
-  std::array<ToolAction, 17> tool_actions_{};
+  std::array<ToolAction, 18> tool_actions_{};
   QAction *curve_action_ = nullptr;
   QAction *transform_space_action_ = nullptr;
   bool synchronization_valid_ = false;

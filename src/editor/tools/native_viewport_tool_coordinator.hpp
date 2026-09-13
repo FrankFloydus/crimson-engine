@@ -31,6 +31,7 @@ class PathArrayToolService;
 class PivotToolService;
 class PrimitiveCreationToolService;
 class RadialArrayToolService;
+class UvPeelToolService;
 
 /**
  * Borrows one coherent, owner-derived view of native-tool presentation state.
@@ -63,7 +64,8 @@ public:
                                 LightCreationToolService &light_creation,
                                 EditorSelectionService &selection,
                                 ModelingSessionService &modeling,
-                                CurveToolService &curve);
+                                CurveToolService &curve,
+                                UvPeelToolService &uv_peel);
   NativeViewportToolCoordinator(const NativeViewportToolCoordinator &) = delete;
   NativeViewportToolCoordinator &
   operator=(const NativeViewportToolCoordinator &) = delete;
@@ -151,6 +153,7 @@ private:
   EditorSelectionService &selection_;
   ModelingSessionService &modeling_;
   CurveToolService &curve_;
+  UvPeelToolService &uv_peel_;
   ViewportToolRuntime runtime_;
   ViewportNativeToolInteraction interaction_;
   std::unique_ptr<ViewportCurveInteractionPort> curve_interaction_;

@@ -542,8 +542,8 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
 
       contract(quader_command::kModelingUvPeel,
                Fixture::UvPeelEdgeSelection,
-               kTextureDomains, Outcome::ChangeRequired,
-               UndoRepeat::UndoableAndRepeatable),
+               kPreviewDomains | Domain::Assets | Domain::Viewport,
+               Outcome::ChangeRequired, UndoRepeat::BeginPreview),
 
       contract(quader_command::kModelingTextureAlignToGrid,
                Fixture::TextureFaceSelection,

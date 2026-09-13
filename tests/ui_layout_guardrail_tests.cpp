@@ -1106,10 +1106,14 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(tool, "number_dispatch_lifecycle_is_current(");
   expect_contains(tool, "active_settings_revision()");
   expect_contains(tool, "active_tool_revision()");
-  expect_contains(tool,
-                  "flush_pending_number_dispatches();\n"
-                  "      const QuaderApiVoidResult result =\n"
-                  "          editor_->tools().commit_active_tool_preview()");
+  const std::string apply = source_slice(
+      tool, "QObject::connect(apply_button_, &QPushButton::clicked",
+      "QObject::connect(cancel_button_, &QPushButton::clicked");
+  const std::size_t preview_flush = apply.find("flush_pending_number_dispatches()");
+  const std::size_t preview_commit = apply.find("commit_active_tool_preview()");
+  ASSERT_NE(preview_flush, std::string::npos);
+  ASSERT_NE(preview_commit, std::string::npos);
+  EXPECT_LT(preview_flush, preview_commit);
   expect_contains(tool,
                   "void clear_controls() {\n"
                   "    // Stop old control-owned timers");
@@ -1192,7 +1196,7 @@ TEST(UiLayoutGuardrailTests,
 
   const std::string refresh = std::string(source_slice(
       panel, "  void refresh_texture_settings(bool force = false)",
-      "  void refresh_uv_peel_settings(bool force = false)"));
+      "  [[nodiscard]] bool has_active_target() const"));
   const std::size_t revision = refresh.find("face_texture_settings_revision()");
   const std::size_t gate = refresh.find("*texture_revision_ == revision");
   const std::size_t summary = refresh.find("face_texture_settings()");
@@ -1245,82 +1249,58 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     UvPeelRetainsEdgeControlsBehindOwnerGateAndRejectsStaleDrafts) {
+     UvPeelUsesDescriptorSettingsAndSharedPreviewLifecycleBehindOwnerGate) {
   const std::string header =
       read_source_file("src/ui/qt_tool_settings_panel.hpp");
   const std::string panel =
       read_source_file("src/ui/qt_tool_settings_panel.cpp");
   const std::string ui = read_source_file("src/ui/ui_system.cpp");
-  expect_contains(header, "void refresh_uv_peel_settings()");
-  expect_contains(panel, "QStringLiteral(\"tool_settings.section.uv_peel\")");
-  EXPECT_EQ(count_occurrences(panel, "build_uv_peel_controls();"), 1u);
+  const std::string api = read_source_file("src/api/quader_tools_api.cpp");
+  expect_missing(header, "refresh_uv_peel_settings");
+  expect_missing(panel, "tool_settings.section.uv_peel");
+  expect_missing(panel, "build_uv_peel_controls");
+  expect_missing(panel, "modeling().peel_uv(");
+  expect_missing(panel, "modeling().set_uv_peel_options(");
+  expect_missing(ui, "uv_peel_presenter_");
+  expect_contains(api, "QuaderToolSettingNumberPresentation::SpinBoxOnly");
+  expect_contains(panel, "QuaderToolSettingNumberPresentation::SpinBoxOnly");
+  expect_contains(panel, "control.number_positive_only");
+  expect_contains(panel, "has_invalid_number_draft()");
+  expect_contains(panel, "apply_button_->setFocusPolicy(Qt::TabFocus)");
 
-  const std::string refresh = source_slice(
-      panel, "  void refresh_uv_peel_settings(bool force = false)",
-      "  [[nodiscard]] bool has_active_target() const");
-  const std::size_t revision = refresh.find("uv_peel_settings_revision()");
-  const std::size_t gate = refresh.find("*uv_peel_revision_ == revision");
-  const std::size_t summary = refresh.find("uv_peel_settings()");
-  const std::size_t visibility = refresh.find("uv_peel_section_->setVisible");
-  const std::size_t shortcut = refresh.find("commands().shortcut_for(");
-  ASSERT_NE(revision, std::string::npos);
-  ASSERT_NE(gate, std::string::npos);
-  ASSERT_NE(summary, std::string::npos);
-  ASSERT_NE(visibility, std::string::npos);
-  ASSERT_NE(shortcut, std::string::npos);
-  EXPECT_LT(revision, gate);
-  EXPECT_LT(gate, summary);
-  EXPECT_LT(summary, visibility);
-  EXPECT_LT(summary, shortcut);
-  EXPECT_EQ(count_occurrences(refresh, "uv_peel_settings()"), 1u);
-  expect_contains(refresh,
-                  "uv_peel_keybindings_revision_ == keybindings_revision");
-  expect_contains(refresh, "const bool visible = settings.selected_edge_count > 0");
-  expect_contains(refresh, "*uv_peel_draft_revision_ != revision");
-  expect_contains(refresh, "if (!binding.editing)");
-  expect_contains(refresh, "control->isEnabled() != settings.editable");
-  expect_contains(refresh, "uv_peel_apply_->toolTip() != tooltip");
-  expect_missing(refresh, "active_tool");
-  expect_missing(refresh, "commands().available()");
-  expect_missing(refresh, "export_selection()");
-  expect_missing(refresh, "show_panel(");
-  expect_missing(refresh, "raise()");
+  const std::string apply = source_slice(
+      panel, "QObject::connect(apply_button_, &QPushButton::clicked",
+      "QObject::connect(cancel_button_, &QPushButton::clicked");
+  const auto validation = apply.find("has_invalid_number_draft()");
+  const auto flush = apply.find("flush_pending_number_dispatches()");
+  const auto rebind_check = apply.find("generation != binding_generation_");
+  const auto commit = apply.find("commit_active_tool_preview()");
+  ASSERT_NE(validation, std::string::npos);
+  ASSERT_NE(flush, std::string::npos);
+  ASSERT_NE(rebind_check, std::string::npos);
+  ASSERT_NE(commit, std::string::npos);
+  EXPECT_LT(validation, flush);
+  EXPECT_LT(flush, rebind_check);
+  EXPECT_LT(rebind_check, commit);
 
-  const std::string flush = source_slice(
-      panel, "  bool flush_uv_peel_options()",
-      "  void discard_uv_peel_dispatch()");
-  EXPECT_LT(flush.find("uv_peel_settings_revision()"),
-            flush.find("editor_->modeling().set_uv_peel_options("));
-  expect_contains(flush, "uv_peel_invalid_draft()");
-  expect_contains(flush, "*uv_peel_draft_revision_");
-  const std::string dispatch = source_slice(
-      panel, "  void dispatch_uv_peel()", "  void build_texture_actions()");
-  const std::size_t action = dispatch.find("editor_->modeling().peel_uv(");
-  ASSERT_NE(action, std::string::npos);
-  EXPECT_LT(dispatch.find("*uv_peel_revision_ != revision"),
-            dispatch.find("flush_uv_peel_options()"));
-  EXPECT_LT(dispatch.find("flush_uv_peel_options()"), action);
-  EXPECT_LT(dispatch.find("selection_token != selection_token"), action);
-  expect_contains(dispatch, ".options = uv_peel_settings_->options");
-  expect_contains(dispatch,
-                  ".selection_token = uv_peel_settings_->selection_token");
-  expect_missing(dispatch, "commands().execute(");
-  expect_missing(dispatch, "history()");
-  expect_contains(panel, "uv_peel_apply_->setFocusPolicy(Qt::TabFocus)");
-  expect_contains(panel, "uv_peel_world_space_->setFocusPolicy(Qt::TabFocus)");
-  expect_contains(panel, "if (!localized_text_dirty_)");
+  const std::string lifecycle = source_slice(
+      panel, "  [[nodiscard]] bool number_dispatch_lifecycle_is_current(",
+      "  [[nodiscard]] bool vector3_dispatch_lifecycle_is_current(");
+  expect_contains(lifecycle, "binding_generation_ != lifecycle.binding_generation");
+  expect_contains(lifecycle, "active_settings_revision()");
+  expect_contains(lifecycle, "active_tool_revision()");
 
   const std::string frame = source_slice(
-      ui, "    const QuaderUvPeelRevision peel_revision =",
-      "    QDR_PROFILE_SCOPE(\"UI synchronize status bar\")");
-  EXPECT_LT(frame.find("uv_peel_presenter_.needs_refresh(peel_stamp)"),
-            frame.find("tool_settings_panel_->refresh_uv_peel_settings()"));
-  expect_contains(frame, ".keybindings_revision = keybindings_revision");
-  expect_contains(frame, "uv_peel_presenter_.mark_presented(peel_stamp)");
-  expect_missing(frame, "numeric_interaction_active");
-  expect_missing(frame, "modeling().uv_peel_settings()");
-  expect_missing(frame, "show_panel(");
-  expect_missing(frame, "raise()");
+      ui, "    const ToolSettingsPresentationStamp stamp{",
+      "    const QuaderFaceTextureRevision revision =");
+  const auto gate = frame.find("tool_settings_presenter_.needs_refresh(stamp)");
+  const auto refresh = frame.find("tool_settings_panel_->refresh()");
+  ASSERT_NE(gate, std::string::npos);
+  ASSERT_NE(refresh, std::string::npos);
+  EXPECT_LT(gate, refresh);
+  expect_contains(frame, ".active_settings_revision = frame_tool_settings_revision");
+  expect_contains(frame, "tool_settings_presenter_.mark_presented(stamp)");
+  expect_missing(frame, "active_settings()");
   expect_missing(panel, "commands().available()");
 }
 
@@ -1860,6 +1840,17 @@ TEST(UiLayoutGuardrailTests,
   // Only the icon is drawn locally; native button painting remains unchanged.
   expect_missing(toolbar, "paintEvent(");
   expect_contains(toolbar, "QIcon curve_tool_icon(const QPalette &palette)");
+  expect_contains(toolbar, "{ViewportToolId::UvPeel, \":/quader/icons/tool_uv_peel.png\"}");
+  expect_contains(toolbar, "refresh_curve_tool_icon()");
+  expect_contains(toolbar, "QEvent::PaletteChange");
+  const std::size_t mirror = toolbar.find("{ViewportToolId::Mirror,");
+  const std::size_t peel = toolbar.find("{ViewportToolId::UvPeel,");
+  const std::size_t linear_array = toolbar.find("{ViewportToolId::LinearArray,");
+  ASSERT_NE(mirror, std::string::npos);
+  ASSERT_NE(peel, std::string::npos);
+  ASSERT_NE(linear_array, std::string::npos);
+  EXPECT_LT(mirror, peel);
+  EXPECT_LT(peel, linear_array);
   expect_contains(toolbar, "QPainter painter(&pixmap)");
   expect_contains(toolbar, "palette.color(QPalette::ButtonText)");
 }

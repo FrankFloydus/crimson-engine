@@ -1478,6 +1478,18 @@ public:
         preview_checkpoint_hooks_(std::move(preview_checkpoint_hooks)) {
     selection_service_.set_app_selection_mode_provider(
         [this]() { return app_selection_mode_; });
+    sdk_projection_adapter_.set_uv_peel_preview_selection_refresh_handler(
+        [this]() {
+          uv_peel_preview_cache_key_.reset();
+          return refresh_uv_peel_preview();
+        },
+        [this]() {
+          observe_preview_content_checkpoint(uv_peel_preview_checkpoint_active_);
+        },
+        [this]() {
+          record_preview_content_checkpoint(uv_peel_preview_checkpoint_active_);
+        },
+        [this]() { return uv_peel_preview_active_; });
     sdk_projection_adapter_.set_modeling_object_world_transform_resolver(
         [this](int modeling_object_id) {
           return modeling_object_world_transform(modeling_object_id);
@@ -1497,6 +1509,9 @@ public:
   }
 
   ~Impl() {
+    if (uv_peel_preview_active_) {
+      (void)cancel_uv_peel_preview();
+    }
     if (transform_drag_active() || structural_drag_checkpoint_active_) {
       (void)cancel_transform_drag();
     }
@@ -2700,7 +2715,8 @@ public:
       settings.block_reason = ModelingUvPeelBlockReason::TargetUnavailable;
       settings.disabled_reason = std::move(target_error);
     } else if (settings.selected_edge_count != 0u &&
-               uv_peel_cache_key_->preview_active) {
+               uv_peel_cache_key_->preview_active &&
+               !sdk_projection_adapter_.uv_peel_preview_active()) {
       settings.editable = false;
       settings.block_reason = ModelingUvPeelBlockReason::PreviewActive;
       settings.disabled_reason =
@@ -2716,11 +2732,156 @@ public:
     return uv_peel_context_.set_options(options);
   }
 
+  [[nodiscard]] bool uv_peel_preview_active() const {
+    return uv_peel_preview_active_;
+  }
+
+  [[nodiscard]] bool uv_peel_preview_valid() const {
+    return uv_peel_preview_active_ && uv_peel_preview_valid_;
+  }
+
+  [[nodiscard]] std::string uv_peel_preview_error() const {
+    return uv_peel_preview_error_;
+  }
+
+  ModelingCommandResult refresh_uv_peel_preview() {
+    const auto key = texture_settings_cache_key(uv_peel_context_.revision());
+    if (uv_peel_preview_active_ && uv_peel_preview_cache_key_ == key) {
+      return {.ok = true};
+    }
+    if (sdk_projection_adapter_.preview_active() &&
+        !sdk_projection_adapter_.uv_peel_preview_active()) {
+      return {.ok = false,
+              .message = "Apply or cancel the active preview before UV Peel."};
+    }
+    begin_preview_content_checkpoint(uv_peel_preview_checkpoint_active_);
+    observe_preview_content_checkpoint(uv_peel_preview_checkpoint_active_);
+    uv_peel_preview_active_ = true;
+    const auto settings = uv_peel_settings();
+    const auto unavailable = [this](std::string reason,
+                                    bool changed = false) -> ModelingCommandResult {
+      if (sdk_projection_adapter_.uv_peel_preview_active()) {
+        const auto restored = sdk_projection_adapter_.cancel_operation_preview();
+        record_preview_content_checkpoint(uv_peel_preview_checkpoint_active_);
+        if (!restored.ok) return restored;
+        changed = changed || restored.changed;
+      }
+      uv_peel_preview_valid_ = false;
+      uv_peel_preview_error_ = reason.empty()
+          ? "Select one or more editable edge guides first." : std::move(reason);
+      // Presentation synchronization can advance its scene-local context token.
+      // Capture after both restoration and synchronization to avoid self-triggered solves.
+      (void)uv_peel_settings();
+      uv_peel_preview_cache_key_ =
+          texture_settings_cache_key(uv_peel_context_.revision());
+      if (changed) invalidate_selection_overlay_caches();
+      return {.ok = true, .changed = changed};
+    };
+    if (!settings.editable) {
+      return unavailable(settings.disabled_reason);
+    }
+    std::vector<ModelingUvPeelTarget> targets;
+    if (auto error = resolve_uv_peel_targets(targets); !error.empty()) {
+      return unavailable(std::move(error));
+    }
+    const auto result = sdk_projection_adapter_.refresh_uv_peel_preview(
+        targets, settings.options);
+    record_preview_content_checkpoint(uv_peel_preview_checkpoint_active_);
+    if (!result.ok) {
+      return unavailable(result.message, result.changed);
+    }
+    uv_peel_preview_valid_ = true;
+    uv_peel_preview_error_.clear();
+    uv_peel_preview_options_ = settings.options;
+    (void)uv_peel_settings();
+    uv_peel_preview_cache_key_ =
+        texture_settings_cache_key(uv_peel_context_.revision());
+    if (result.changed) invalidate_selection_overlay_caches();
+    return result;
+  }
+
+  ModelingCommandResult commit_uv_peel_preview() {
+    if (!uv_peel_preview_active_) {
+      return {.ok = false, .message = "UV Peel is not active."};
+    }
+    const auto refreshed = refresh_uv_peel_preview();
+    if (!refreshed.ok) return refreshed;
+    if (!uv_peel_preview_valid_) {
+      return {.ok = false, .message = uv_peel_preview_error_};
+    }
+    observe_preview_content_checkpoint(uv_peel_preview_checkpoint_active_);
+    const auto result = sdk_projection_adapter_.commit_operation_preview();
+    record_preview_content_checkpoint(uv_peel_preview_checkpoint_active_);
+    if (!result.ok) return result;
+    finish_preview_content_checkpoint(uv_peel_preview_checkpoint_active_,
+                                      !result.changed);
+    uv_peel_preview_active_ = false;
+    uv_peel_preview_valid_ = false;
+    uv_peel_preview_error_.clear();
+    uv_peel_preview_cache_key_.reset();
+    if (result.changed) {
+      auto &repeat = history_bridge_.repeat_last_action();
+      repeat.last_action_kind = quader_editor_core::RepeatableActionKind::UvPeel;
+      repeat.last_uv_peel = uv_peel_preview_options_;
+      repeat.pending_preview_operation.reset();
+      invalidate_selection_overlay_caches();
+    }
+    return result;
+  }
+
+  ModelingCommandResult cancel_uv_peel_preview() {
+    observe_preview_content_checkpoint(uv_peel_preview_checkpoint_active_);
+    ModelingCommandResult result{.ok = true};
+    if (sdk_projection_adapter_.uv_peel_preview_active()) {
+      result = sdk_projection_adapter_.cancel_operation_preview();
+      record_preview_content_checkpoint(uv_peel_preview_checkpoint_active_);
+      if (!result.ok) return result;
+    }
+    finish_preview_content_checkpoint(uv_peel_preview_checkpoint_active_, true);
+    uv_peel_preview_active_ = false;
+    uv_peel_preview_valid_ = false;
+    uv_peel_preview_error_.clear();
+    uv_peel_preview_cache_key_.reset();
+    if (result.changed) invalidate_selection_overlay_caches();
+    return result;
+  }
+
+  /// Resolves the same eligibility and instance sampling frames for direct and live Peel.
+  [[nodiscard]] std::string resolve_uv_peel_targets(
+      std::vector<ModelingUvPeelTarget> &targets) const {
+    const ModelingInstanceEditScope scope = uv_peel_cache_key_->instance_scope;
+    targets.reserve(uv_peel_selection_cache_.objects.size());
+    for (const auto &object : uv_peel_selection_cache_.objects) {
+      const auto world = modeling_object_world_transform(object.modeling_object_id);
+      const EntityId occurrence =
+          scope.active() && scene_.containing_instance_definition(object.entity) ==
+                                scope.definition
+              ? scope.occurrence
+              : kInvalidEntityId;
+      const auto sampling =
+          effective_texture_sampling_from_local(scene_, object.entity, occurrence);
+      if (!world.has_value() || !sampling.has_value()) {
+        return "A selected UV Peel mesh has no usable texture mapping frame.";
+      }
+      targets.push_back({
+          .modeling_object_id = object.modeling_object_id,
+          .edges = object.edges,
+          .active_edge = object.active_edge,
+          .world_from_local = *world,
+          .sampling_from_local = *sampling,
+      });
+    }
+    return {};
+  }
+
   void invalidate_uv_peel_selection() {
     uv_peel_context_.invalidate_selection();
   }
 
   ModelingCommandResult peel_uv(const ModelingUvPeelRequest &request) {
+    if (uv_peel_preview_active_) {
+      return {.ok = false, .message = "Apply or cancel UV Peel before another peel."};
+    }
     const ModelingUvPeelSettings settings = uv_peel_settings();
     if (!settings.editable) {
       return {.ok = false,
@@ -2738,29 +2899,9 @@ public:
       return {.ok = false, .message = options.error_message()};
     }
 
-    const ModelingInstanceEditScope scope = uv_peel_cache_key_->instance_scope;
     std::vector<ModelingUvPeelTarget> targets;
-    targets.reserve(uv_peel_selection_cache_.objects.size());
-    for (const auto &object : uv_peel_selection_cache_.objects) {
-      const auto world = modeling_object_world_transform(object.modeling_object_id);
-      const EntityId occurrence =
-          scope.active() && scene_.containing_instance_definition(object.entity) ==
-                                scope.definition
-              ? scope.occurrence
-              : kInvalidEntityId;
-      const auto sampling =
-          effective_texture_sampling_from_local(scene_, object.entity, occurrence);
-      if (!world.has_value() || !sampling.has_value()) {
-        return {.ok = false,
-                .message = "A selected UV Peel mesh has no usable texture mapping frame."};
-      }
-      targets.push_back({
-          .modeling_object_id = object.modeling_object_id,
-          .edges = object.edges,
-          .active_edge = object.active_edge,
-          .world_from_local = *world,
-          .sampling_from_local = *sampling,
-      });
+    if (auto error = resolve_uv_peel_targets(targets); !error.empty()) {
+      return {.ok = false, .message = std::move(error)};
     }
     ModelingCommandResult result =
         sdk_projection_adapter_.apply_uv_peel(targets, options.value());
@@ -3287,6 +3428,9 @@ public:
   }
 
   void clear_transient_state_for_document_replacement() {
+    if (uv_peel_preview_active_) {
+      (void)cancel_uv_peel_preview();
+    }
     face_texture_context_.invalidate();
     uv_peel_context_.invalidate_selection();
     if (transform_drag_active()) {
@@ -3304,6 +3448,9 @@ public:
   }
 
   void reset_from_scene() {
+    if (uv_peel_preview_active_) {
+      (void)cancel_uv_peel_preview();
+    }
     face_texture_context_.invalidate();
     uv_peel_context_.invalidate_selection();
     // Group selection is scene-owned even though the polygon runtime represents
@@ -6182,6 +6329,9 @@ public:
   }
 
   ModelingCommandResult cancel_transform_preview() {
+    if (uv_peel_preview_active_) {
+      return cancel_uv_peel_preview();
+    }
     if (!structural_preview_transaction_.has_value()) {
       ModelingCommandResult result =
           sdk_projection_adapter_.cancel_translate_preview();
@@ -9926,6 +10076,12 @@ private:
   mutable std::uint64_t uv_peel_presented_revision_ = 0;
   mutable ModelingSelectedUvPeelSnapshot uv_peel_selection_cache_;
   mutable ModelingUvPeelSettings uv_peel_settings_cache_;
+  bool uv_peel_preview_active_ = false;
+  bool uv_peel_preview_checkpoint_active_ = false;
+  bool uv_peel_preview_valid_ = false;
+  std::string uv_peel_preview_error_;
+  ModelingUvPeelOptions uv_peel_preview_options_;
+  std::optional<TextureSettingsCacheKey> uv_peel_preview_cache_key_;
   std::function<std::optional<QVec2>(MaterialReference)> face_texture_extent_provider_;
   std::function<std::uint64_t()> face_texture_extent_revision_provider_;
   std::function<double()> face_texture_rotation_step_provider_;
@@ -10172,6 +10328,30 @@ ModelingCommandResult ModelingSessionService::set_uv_peel_options(
 ModelingCommandResult ModelingSessionService::peel_uv(
     const ModelingUvPeelRequest &request) {
   return impl_->peel_uv(request);
+}
+
+ModelingCommandResult ModelingSessionService::refresh_uv_peel_preview() {
+  return impl_->refresh_uv_peel_preview();
+}
+
+bool ModelingSessionService::uv_peel_preview_active() const {
+  return impl_->uv_peel_preview_active();
+}
+
+bool ModelingSessionService::uv_peel_preview_valid() const {
+  return impl_->uv_peel_preview_valid();
+}
+
+std::string ModelingSessionService::uv_peel_preview_error() const {
+  return impl_->uv_peel_preview_error();
+}
+
+ModelingCommandResult ModelingSessionService::commit_uv_peel_preview() {
+  return impl_->commit_uv_peel_preview();
+}
+
+ModelingCommandResult ModelingSessionService::cancel_uv_peel_preview() {
+  return impl_->cancel_uv_peel_preview();
 }
 
 void ModelingSessionService::invalidate_uv_peel_selection() {

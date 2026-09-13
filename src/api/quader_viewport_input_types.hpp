@@ -31,6 +31,7 @@ enum class ViewportToolId {
     Curve,
     PathArray,
     LassoSelect,
+    UvPeel,
 };
 
 /**

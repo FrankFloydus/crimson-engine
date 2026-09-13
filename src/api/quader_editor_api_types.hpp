@@ -158,10 +158,12 @@ enum class QuaderToolSettingNumberInteraction {
  * SliderSpinBox keeps the established paired slider and text field. A
  * DragSpinner exposes discrete side steps plus a horizontally scrubbable
  * central value that becomes a text editor after a stationary click.
+ * SpinBoxOnly retains a full-range floating input without a slider.
  */
 enum class QuaderToolSettingNumberPresentation {
   SliderSpinBox,
   DragSpinner,
+  SpinBoxOnly,
 };
 
 /**
@@ -223,6 +225,8 @@ struct QuaderToolSettingControl {
   std::array<QuaderToolSettingNumberComponent, 3> vector3_components;
   // Optional presentation key; the writable setting identity remains id.
   std::string label_key;
+  // Reject nonpositive drafts without clamping the numeric editor's range.
+  bool number_positive_only = false;
 };
 
 /**
@@ -240,6 +244,8 @@ struct QuaderToolSettingsTarget {
   bool apply_visible = false;
   bool can_apply = false;
   bool can_cancel = false;
+  // Dynamic owner feedback; rendered without replaying a notification sound.
+  std::string status_message;
 };
 
 /**

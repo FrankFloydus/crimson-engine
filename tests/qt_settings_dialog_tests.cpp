@@ -4336,7 +4336,7 @@ TEST(QtMainMenuTests,
   const QList<QAction *> uv_actions = uv_menu->actions();
   ASSERT_EQ(uv_actions.size(), 10);
   EXPECT_EQ(uv_actions[0]->objectName(),
-            QStringLiteral("command_modeling_uv_peel"));
+            QStringLiteral("tool_uv_peel"));
   EXPECT_EQ(uv_actions[1], uv_projection_menu->menuAction());
   EXPECT_TRUE(uv_actions[2]->isSeparator());
   EXPECT_EQ(uv_actions[3], uv_align_menu->menuAction());
@@ -4440,7 +4440,7 @@ TEST(QtMainMenuTests,
   auto *dissolve_edges = menu_bar.findChild<QAction *>(
       QStringLiteral("command_modeling_dissolve_edges"));
   auto *uv_peel = menu_bar.findChild<QAction *>(
-      QStringLiteral("command_modeling_uv_peel"));
+      QStringLiteral("tool_uv_peel"));
   auto *project_texture_cube = menu_bar.findChild<QAction *>(
       QStringLiteral("command_modeling_texture_project_cube"));
   auto *extract_faces = menu_bar.findChild<QAction *>(
@@ -4578,7 +4578,7 @@ TEST(QtMainMenuTests,
        QuaderSelectionMode::Edge},
       {soften_edge_normals, quader_command::kModelingSoftenEdgeNormals,
        QuaderSelectionMode::Edge},
-      {uv_peel, quader_command::kModelingUvPeel, QuaderSelectionMode::Edge},
+      {uv_peel, quader_command::kModelingUvPeel, std::nullopt},
       {extract_faces, quader_command::kModelingExtractFaces,
        QuaderSelectionMode::Face},
       {thicken_faces, quader_command::kModelingThickenFaces,
@@ -4631,7 +4631,7 @@ TEST(QtMainMenuTests,
           uv_projection_menu->actions().contains(action);
       const bool presentation_domain_matches =
           action == uv_peel
-              ? mode == QuaderSelectionMode::Edge
+              ? true
               : is_projection
                     ? mode == QuaderSelectionMode::Object ||
                           mode == QuaderSelectionMode::Face
@@ -4659,7 +4659,7 @@ TEST(QtMainMenuTests,
   EXPECT_FALSE(harden_edge_normals->isEnabled());
   EXPECT_FALSE(soften_edge_normals->isEnabled());
   EXPECT_FALSE(invert_faces->isEnabled());
-  EXPECT_FALSE(uv_peel->isEnabled());
+  EXPECT_TRUE(uv_peel->isEnabled());
   EXPECT_TRUE(project_texture_cube->isEnabled());
   EXPECT_FALSE(align_texture_to_grid->isEnabled());
   const std::optional<QuaderCommandDescriptor> shared_face_shading =
@@ -4709,7 +4709,7 @@ TEST(QtMainMenuTests,
   ASSERT_TRUE(QMetaObject::invokeMethod(uv_menu, "aboutToShow",
                                         Qt::DirectConnection));
   EXPECT_TRUE(shade_faces_smooth->isEnabled());
-  EXPECT_FALSE(uv_peel->isEnabled());
+  EXPECT_TRUE(uv_peel->isEnabled());
   EXPECT_TRUE(project_texture_cube->isEnabled());
   EXPECT_TRUE(align_texture_to_grid->isEnabled());
 

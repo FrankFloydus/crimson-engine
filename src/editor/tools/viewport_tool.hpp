@@ -210,6 +210,7 @@ public:
   static constexpr ViewportToolId kCut = ViewportToolId::Cut;
   static constexpr ViewportToolId kPoly = ViewportToolId::Poly;
   static constexpr ViewportToolId kMirror = ViewportToolId::Mirror;
+  static constexpr ViewportToolId kUvPeel = ViewportToolId::UvPeel;
   static constexpr ViewportToolId kPivot = ViewportToolId::Pivot;
   static constexpr ViewportToolId kLinearArray = ViewportToolId::LinearArray;
   static constexpr ViewportToolId kRadialArray = ViewportToolId::RadialArray;

@@ -32,6 +32,9 @@ quader_modeling_command_target_id(std::string_view action_id) {
 
 inline std::string
 quader_tool_activation_command_target_id(std::string_view tool_id) {
+  if (tool_id == "uv_peel") {
+    return quader_modeling_command_target_id("uv_peel");
+  }
   return quader_prefixed_command_target(
       kQuaderToolActivationCommandTargetPrefix, tool_id);
 }
@@ -60,6 +63,9 @@ quader_command_target_suffix(std::string_view target_id,
 
 inline std::optional<std::string_view>
 quader_tool_id_from_activation_command_target(std::string_view target_id) {
+  if (target_id == "modeling.uv_peel") {
+    return "uv_peel";
+  }
   return quader_command_target_suffix(target_id,
                                       kQuaderToolActivationCommandTargetPrefix);
 }

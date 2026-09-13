@@ -2727,7 +2727,8 @@ QuaderUvPeelSettings QuaderModelingApi::uv_peel_settings() const {
     result.block_reason = QuaderUvPeelBlockReason::TargetUnavailable;
     break;
   }
-  if (result.selected_edge_count != 0u && session.native_tools().has_pending_tool()) {
+  if (result.selected_edge_count != 0u && session.native_tools().has_pending_tool() &&
+      !session.modeling().uv_peel_preview_active()) {
     result.editable = false;
     result.block_reason = QuaderUvPeelBlockReason::PreviewActive;
     result.disabled_reason = "Apply or cancel the active tool before UV Peel.";
